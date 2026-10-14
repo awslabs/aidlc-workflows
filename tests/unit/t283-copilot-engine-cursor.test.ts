@@ -353,8 +353,7 @@ function invokeTracked(
 }
 
 describe("t283 engine-owned continuation cursor", () => {
-  // Old property: one race winner, one "no longer current" error. New property:
-  // one race winner (part 2); the loser is re-sent part 1, never an error.
+  // One race winner (part 2); the loser is re-sent part 1, never an error.
   test("pre-state receipts use the bare-space cursor and have one race winner", async () => {
     const installed = project(HARNESSES[0], { withState: false });
     const first = invoke(installed, "next", [
@@ -394,8 +393,7 @@ describe("t283 engine-owned continuation cursor", () => {
     );
   });
 
-  // Old property: the first use of a token advanced, the second errored. New
-  // property: the first use advances to part 2; the second is answered as a
+  // The first use advances to part 2; the second is answered as a
   // bare `next` (a restart at part 1 with the same receipt) on every harness.
   test("all shipped harnesses advance one current receipt exactly once", () => {
     for (const harness of HARNESSES) {
@@ -423,8 +421,7 @@ describe("t283 engine-owned continuation cursor", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // Old property: exactly one winner, one stale error, marker advanced once. New
-  // property: both racers receive the same part 2 (the loser reads the winner's
+  // Both racers receive the same part 2 (the loser reads the winner's
   // successor from the marker), never an error, and the marker advanced once.
   test("two real processes racing one receipt have exactly one winner on every harness", async () => {
     for (const harness of HARNESSES) {
@@ -450,8 +447,7 @@ describe("t283 engine-owned continuation cursor", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // Old property: one winner, one stale error, owner preserved. New property:
-  // both racers receive the committed successor and the Copilot owner is
+  // Both racers receive the committed successor and the Copilot owner is
   // preserved.
   test("Copilot session-owned markers use the same one-winner cursor", async () => {
     const harness = HARNESSES.find((entry) => entry.name === "copilot")!;
@@ -465,10 +461,10 @@ describe("t283 engine-owned continuation cursor", () => {
     expect(marker(installed).owner_session).toBe("cursor-owner");
   });
 
-  // Old property: each token advanced once, its replay errored, the final
-  // run-stage was tokenless. New property: each receipt advances once along the
-  // chain, the final run-stage carries no receipt, and a replay of any consumed
-  // receipt afterwards re-answers the run-stage (never an earlier part).
+  // Each receipt advances once along the chain, the final run-stage carries no
+  // receipt, and a replay of any consumed receipt afterwards is answered as a
+  // bare `next`: here that re-transports the rules from part 1, since the
+  // run-stage cannot be re-answered with its rules.
   test("every delivered receipt advances once and the final run-stage carries no receipt", () => {
     for (const harness of HARNESSES) {
       const installed = project(harness);
@@ -522,12 +518,11 @@ describe("t283 engine-owned continuation cursor", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // Old property: under a tracked Copilot attempt a consumed receipt was
-  // refused with a stale-attempt error naming `next`, and the recovery `next`
-  // re-sent part one anyway. New property: it is answered exactly as a tracked
-  // `next` is, and the attempt it was claimed under binds that answer for the
-  // adapter to settle. A tracked `next` never re-answers from the marker, so
-  // both after run-stage and mid-delivery that answer is part one again.
+  // A consumed receipt under a tracked Copilot attempt is answered exactly as a
+  // tracked `next` is, and the attempt it was claimed under binds that answer
+  // for the adapter to settle. A tracked `next` never re-answers from the
+  // marker, so both after run-stage and mid-delivery that answer is part one
+  // again.
   test("a consumed receipt under a tracked Copilot attempt is answered exactly as a tracked next is", () => {
     const harness = HARNESSES.find((entry) => entry.name === "copilot")!;
     const installed = project(harness);
@@ -572,8 +567,7 @@ describe("t283 engine-owned continuation cursor", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // Old property: after marker damage exactly one racer won and one got the
-  // stale error. New property: both racers are answered identically and never
+  // After marker damage both racers are answered identically and never
   // with an error; the marker is rebuilt or advanced exactly once for this
   // harness and names the receipt both of them hold.
   test("missing, malformed, oversized, v1, legacy, and migrated markers recover once", async () => {
@@ -750,7 +744,6 @@ describe("t283 engine-owned continuation cursor", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("fresh next emits no work directive when cursor reset publication contends", () => {
-    // Include initial publication, then the unchanged production lock retry loop.
     const installed = project(HARNESSES[0]);
     invoke(installed, "next");
     // Removing the marker makes publication genuinely necessary, which is the
@@ -821,10 +814,9 @@ describe("t283 engine-owned continuation cursor", () => {
     expect(existsSync(lockDir)).toBe(true);
   });
 
-  // Old property: a crashed hold was reaped and the retried token advanced once,
-  // its replay erroring; a write failure after commit left the replay stale. New
-  // property: the same cardinality with the replay answered as a restart at
-  // part 1 (never an error, never part 2 again).
+  // A crashed hold is reaped and the retried token advances once; a write
+  // failure after commit leaves the receipt consumed. In both cases the replay
+  // is answered as a restart at part 1 (never an error, never part 2 again).
   test("crash boundaries preserve retry cardinality without production test seams", () => {
     const harness = HARNESSES[0];
 

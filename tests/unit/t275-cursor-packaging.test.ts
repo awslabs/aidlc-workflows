@@ -104,7 +104,6 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       cwd: REPO_ROOT,
     });
     if (r.status !== 0) {
-      // Surface the script's path-level mismatch list.
       console.error(r.stderr);
     }
     expect(r.status).toBe(0);
@@ -208,7 +207,6 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         if (m) targets.add(m[1]);
       }
     }
-    // Every wired target has a real arm in the adapter switch.
     const adapter = readFileSync(join(ENGINE, "hooks", "aidlc-cursor-adapter.ts"), "utf-8");
     for (const target of targets) {
       expect(adapter, `adapter handles "${target}"`).toContain(`case "${target}":`);
@@ -679,7 +677,6 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       );
       expect(readFileSync(join(project, "AGENTS.md"), "utf-8")).toBe("# Keep me\n");
       expect(existsSync(join(project, ".cursor", "tools"))).toBe(false);
-      // The step it names: with the file moved aside, the installer runs.
       renameSync(join(project, ".cursor", "rules", "aidlc.mdc"), join(project, "my-aidlc.mdc"));
       const again = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), project], {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -739,7 +736,7 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       );
       expect(switchSpace.status, switchSpace.stderr).toBe(0);
 
-      // Simulate an install made by the reviewed pre-receipt installer.
+      // Simulate an install made by the pre-receipt installer.
       rmSync(join(project, ".cursor", "aidlc-install.json"), { force: true });
       const managed = join(project, ".cursor", "hooks", "aidlc-cursor-adapter.ts");
       const projectMemory = join(
@@ -1019,7 +1016,6 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       );
       expect(readFileSync(externalFile, "utf-8")).toBe("# Outside\n");
       expect(existsSync(join(fileProject, ".cursor", "tools"))).toBe(false);
-      // The step it names: with a regular file in place of the link, it runs.
       unlinkSync(join(fileProject, "AGENTS.md"));
       writeFileSync(join(fileProject, "AGENTS.md"), "# Outside\n");
       const replaced = spawnSync("bun", [join(CURSOR_ROOT, "install.ts"), fileProject], {

@@ -17,12 +17,11 @@
 //     after produces:.
 //   - validate: a valid kebab list passes; a non-kebab entry is rejected with
 //     the field-named error; the unknown-key rule does NOT fire for the key.
-//   - compile: the SHIPPED graph carries optional_produces on exactly the two
-//     annotated Construction stages (functional-design, infrastructure-design)
-//     and their produces[] no longer lists the conditional artifact.
-//   - registry: artifactsRegistry() still contains both conditional names and
-//     producersOf resolves them to their producer stage (the union keeps the
-//     vocabulary whole; t66's 122-artifact pin depends on it).
+//   - compile: the SHIPPED graph carries optional_produces on functional-design
+//     and its produces[] does not list the conditional artifact.
+//   - registry: artifactsRegistry() still contains frontend-components and
+//     infrastructure-specification, and producersOf resolves them to their
+//     producer stages.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
@@ -63,7 +62,6 @@ outputs: b
 # body
 `;
 
-// The same stage with NO optional_produces key at all.
 const WITHOUT_OPTIONAL = `---
 slug: functional-design
 phase: construction

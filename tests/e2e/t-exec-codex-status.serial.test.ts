@@ -7,18 +7,11 @@
 // driver (no tmux, no painted screen; the model's final message + the
 // project's on-disk state are the observables).
 //
-// MR-6-PROVEN (2026-06-12, codex-cli 0.139.0 on Bedrock): the same rig shape
-// ran a FULL poc workflow (INIT → 7 stages → Completed, 43 audit rows) with
-// hooks live — transcript archived in the journey write-up. This test pins
-// the cheap status journey so CI can re-verify the shipped tree end-to-end
-// without burning a whole workflow.
+// This test pins the cheap status journey so CI can re-verify the shipped tree
+// end-to-end without burning a whole workflow.
 //
 // SCOPE: the no-state case ONLY (status with no workflow = print-directive
-// terminal arm — turn-stable). With an ACTIVE workflow the conductor may
-// legitimately resume it inside the same exec turn (the forwarding loop lives
-// in-turn), so a with-state "status is read-only" assert is not turn-stable
-// here; that contract holds on the interactive TUI, where turn boundaries are
-// human-paced.
+// terminal arm - turn-stable).
 //
 // What this proves on the SHIPPED tree, structurally:
 //   - skill discovery at .agents/skills/aidlc under a real codex session;
@@ -145,8 +138,6 @@ describe("t-exec-codex-status — $aidlc --status on the shipped dist/codex via 
       await withCodexFixture(root, () => rmSync(root, { recursive: true, force: true }), () => {
         const r = execCodex(proj, home, "Use the $aidlc skill to run: /aidlc --status");
         expect(r.rc, codexExecDiagnostic(r)).toBe(0);
-        // The engine's no-workflow status text, surfaced verbatim by the
-        // print-directive terminal arm.
         expect(r.out.toLowerCase().includes("no active"), codexExecDiagnostic(r)).toBe(true);
         // Read-only: the status path must not scaffold a workspace. The
         // hooks-health heartbeat dir is hook plumbing (the byte-shared Stop

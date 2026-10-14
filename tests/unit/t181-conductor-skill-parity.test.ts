@@ -29,7 +29,6 @@
 // gating the authored source covers every tree.
 
 import { describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
@@ -69,7 +68,6 @@ const BARE_INIT = /(^|[^-\w])--init\b/;
 // The workspace-anchor conductor vocabulary every shipped SKILL must define.
 const REQUIRED_TOKENS = [
   "intent-create", // run-then-continue creation verb (replaced `init`)
-  "stage-protocol-swarm.md", // conditional swarm transport + --repo contract
   "offer a second intent", // P4-completion new-work conductor prose
   "intent and space verbs", // frontmatter utilities tail
 ];
@@ -96,13 +94,13 @@ const LEARNINGS_QUESTION_TOKENS = [
   "never infer `Nothing to add`",
 ];
 
-const CONFIG_ALIAS_TOKENS = [
-  "--config [section]",
-  "**In-session configuration (`--config [section]`).**",
-  "config <section> --show --json",
-  "config <section> <explicit value flags> --yes",
+// The in-session configuration steps ride the engine's own --config print
+// (aidlc-orchestrate.ts), so every harness gets them from one place.
+const CONFIG_PRINT_TOKENS = [
+  "--show --json",
+  "<explicit value flags> --yes",
   "Never invent values",
-  "do not call `next`",
+  "advance, resume, or run any workflow stage",
 ];
 
 const APPROVAL_REPORT_TOKEN = '--result approved --user-input "Approve"';
@@ -114,10 +112,9 @@ const ENSEMBLE_TOKENS = [
   "Say the step's line for the person first, in the same message as your first reads",
   "do what the step's reading instruction says: one file at a time, waiting for every result",
   "nothing is loaded until you have read it",
-  "an isolated run, a settled swarm, a wave, or the ordinary step with its gate",
+  "an isolated run, or the ordinary step with its gate (a settled swarm and a wave follow the module the step names)",
   'deliver the stage\'s rules per `stage-protocol.md` § "For subagent stages" step 2',
   "paste the step's brief lines into every agent brief",
-  "stage-protocol-ensemble.md",
   '--result skipped --reason "<specific reason>"',
 ];
 
@@ -161,9 +158,6 @@ const SUMMARY_STOP_SKILL_TOKENS = [
   "before running the stage body or writing its outputs",
   "checkpoint-specific `aidlc-log.ts decision` / `answer` pair with `--single`",
   "only after that separate human turn and receipt",
-  "PRE-GENERATION SUMMARY STOP",
-  "before artifact generation, reviewer, learnings, or approval",
-  "--checkpoint summary-confirmation --questions-file",
   '`--unit "<directive.unit>"`',
   "`--single`",
   '**"What should change?"**',
@@ -183,21 +177,14 @@ const SUMMARY_STOP_ANNEX_TOKENS = [
   '**"What should change?"**',
 ];
 
-const P3_EVIDENCE_DIR = join(
-  REPO_ROOT,
-  "tests",
-  "evidence",
-  "p3-kiro-routing",
-);
-
 function stageTableRows(body: string): string[] {
   const lines = body.split(/\r?\n/);
   const start = lines.indexOf("## Stage Graph");
   if (start < 0) return [];
+  // tables.md ends with the stage graph; a rule after it ends it otherwise.
   const end = lines.findIndex((line, index) => index > start && line === "---");
-  if (end < 0) return [];
   return lines
-    .slice(start, end)
+    .slice(start, end < 0 ? lines.length : end)
     .filter((line) => line.startsWith("|"))
     .slice(2);
 }
@@ -286,25 +273,18 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
-  test("every shipped conductor SKILL carries the in-session config contract", () => {
+  test("every shipped conductor SKILL names --config and the engine's print carries its steps", () => {
     const missing: string[] = [];
-    const blocks = new Map<string, string[]>();
     for (const rel of skills) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
-      for (const token of CONFIG_ALIAS_TOKENS) {
-        if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
-      }
-      const start = body.indexOf("**In-session configuration");
-      const end = body.indexOf("**Autonomous reviewer boundary.**");
-      expect(start, `${rel} lacks config alias block`).toBeGreaterThan(-1);
-      expect(end, `${rel} lacks config alias end anchor`).toBeGreaterThan(start);
-      // The doctor is named the way each harness's entry is typed ($aidlc on Codex).
-      const block = body.slice(start, end).trim().replaceAll("$aidlc --doctor", "/aidlc --doctor");
-      blocks.set(block, [...(blocks.get(block) ?? []), rel]);
+      if (!body.includes("--config [section]")) missing.push(`${rel}  missing: --config [section]`);
+      if (body.includes("**In-session configuration")) missing.push(`${rel}  still carries the config steps`);
+    }
+    const orchestrate = readFileSync(join(REPO_ROOT, "core", "tools", "aidlc-orchestrate.ts"), "utf-8");
+    for (const token of CONFIG_PRINT_TOKENS) {
+      if (!orchestrate.includes(token)) missing.push(`the --config print  missing: ${token}`);
     }
     expect(missing).toEqual([]);
-    expect([...blocks.values()]).toHaveLength(1);
-    expect([...blocks.values()][0]).toEqual(skills);
   });
 
   test("every shipped conductor composer.md separates in-flight deltas from stock routing", () => {
@@ -500,19 +480,13 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "core/templates/onboarding-harness.md",
       ...HARNESS_MATRIX.map((harness) => `harness/${harness.name}/onboarding.fills.ts`),
     ];
+    // The onboarding every chat loads is the one place for the checks (#1330):
+    // a plain chat turn has only it, and the skill no longer repeats it.
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
-      for (const tok of [
-        "**The person's checks, off or on when they ask.**",
-        "never refuse, never ask them to type it",
-        "Asking for the guards or the checks as a whole to be off (\"turn the guards off\") is Guard Policy `off`",
-        ...PHRASE_AND_LINE,
-      ]) {
-        if (!body.includes(tok)) problems.push(`${rel}  missing: ${tok}`);
+      if (readFileSync(join(REPO_ROOT, rel), "utf-8").includes("**The person's checks, off or on when they ask.**")) {
+        problems.push(`${rel}  repeats the onboarding's checks`);
       }
     }
-    // A plain chat turn has only the onboarding, not the skill, so it carries
-    // the three places, both commands, and the skill's table, row for row.
     const onboarding = readFileSync(join(REPO_ROOT, "core/templates/onboarding-harness.md"), "utf-8");
     const table = (body: string) => {
       const start = body.indexOf("| Check | This piece of work: key | This project or machine: switch |");
@@ -524,7 +498,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       ...PHRASE_AND_LINE,
       "Where it applies is what they say: this piece of work, this project, or this machine.",
       "`{{INVOKE}} config flags --bypass <switch> --local --yes`",
-      "`{{INVOKE}} engine config set <key> <on|off>`",
+      "`{{INVOKE}} engine config set <key> <on|off> --person-words '<their words>'`",
     ]) {
       if (!onboarding.includes(tok)) problems.push(`core/templates/onboarding-harness.md  missing: ${tok}`);
     }
@@ -533,11 +507,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         problems.push(`${rel}  still carries: ${WIDEN_SAY}`);
       }
     }
+    if (table(onboarding) === "") problems.push("core/templates/onboarding-harness.md  has no check table");
     for (const rel of skills) {
-      const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
-      if (table(body) === "" || table(body) !== table(onboarding)) {
-        problems.push(`${rel}  check table differs from the onboarding's`);
-      }
+      if (table(readFileSync(join(REPO_ROOT, rel), "utf-8")) !== "") problems.push(`${rel}  repeats the check table`);
     }
     for (const rel of prose) {
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
@@ -666,15 +638,14 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
 
   test("every shipped conductor SKILL carries new work on in the same chat, with no stop or restart", () => {
     const failures: string[] = [];
+    // The engine's creation step says to go on, and its clean-chat line is an offer, said once.
+    const orchestrate = readFileSync(join(REPO_ROOT, "core", "tools", "aidlc-orchestrate.ts"), "utf-8");
+    for (const token of ["then re-run \\`next\\` to continue.", "To start this in a clean chat instead, "]) {
+      if (!orchestrate.includes(token)) failures.push(`core/tools/aidlc-orchestrate.ts  missing: ${token}`);
+    }
     for (const harness of HARNESS_MATRIX) {
       const rel = `harness/${harness.name}/skills/aidlc/SKILL.md`;
       const body = readFileSync(join(REPO_ROOT, rel), "utf-8");
-      for (const token of [
-        "Then re-run `next` and carry on into the new work's first stage in this chat.",
-        "it is an option for the person, never a stop.",
-      ]) {
-        if (!body.includes(token)) failures.push(`${rel}  missing: ${token}`);
-      }
       for (const stale of [
         "**run-then-stop**",
         "STOP and hand off to a fresh session",
@@ -765,7 +736,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
 
   // From live runs: on "please review Unit 1 again" the agent reviewed in chat,
   // hand-wrote a review file, or started the stage again, because the rule lived
-  // only in the reviewer protocol, which a mid-chat request never opens.
+  // only in the reviewer protocol, which a mid-chat request never opens. The
+  // request says the person asked (--person-asked), a yes to the approval's
+  // offer of a check included, so it runs past the stage's passes.
   test("every shipped conductor SKILL and the protocol record a review the person asks for through AI-DLC", () => {
     const missing: string[] = [];
     for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
@@ -773,7 +746,8 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       for (const token of [
         "When they ask for a review of a stage or of a Unit",
         "record it through AI-DLC the first time they ask, under every Guard Policy",
-        "engine log review --stage <slug> --reviewer <the stage's reviewer> --iteration <next>",
+        "engine log review --stage <slug> --reviewer <the stage's reviewer> --iteration <next> --person-asked`",
+        'or yes to "Do you want me to have the new approach checked before you decide?")',
         "aidlc-common/protocols/stage-protocol-reviewer.md` says.",
         "Never review it in chat yourself, never write a review file by hand, never start the stage again with " +
           "`next --stage` to get one, and never offer to change the Guard Policy for it.",
@@ -943,8 +917,8 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         .map((file) => readFileSync(join(REPO_ROOT, file), "utf-8"))
         .join("\n");
       for (const setter of [
-        "run `{{INVOKE}} engine config set guard-policy <value>` yourself",
-        "running `{{INVOKE}} engine config set summary-confirmation off` yourself",
+        "run `{{INVOKE}} engine config set guard-policy <value> --person-words '<their words>'` yourself",
+        "running `{{INVOKE}} engine config set summary-confirmation off --person-words '<their words>'` yourself",
       ]) {
         if (!body.includes(setter)) found.push(`${rel}  missing: ${setter}`);
       }
@@ -1033,12 +1007,12 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   });
 
   test("every harness Stage Graph table matches the canonical generated table", () => {
-    const canonicalRel = "harness/claude/skills/aidlc/SKILL.md";
+    const canonicalRel = "harness/claude/skills/aidlc/tables.md";
     const canonical = stageTableRows(
       readFileSync(join(REPO_ROOT, canonicalRel), "utf-8"),
     );
     expect(canonical.length).toBeGreaterThan(0);
-    for (const rel of skills) {
+    for (const rel of skills.map((skill) => skill.replace(/SKILL\.md$/, "tables.md"))) {
       expect(stageTableRows(readFileSync(join(REPO_ROOT, rel), "utf-8")), rel)
         .toEqual(canonical);
     }
@@ -1097,14 +1071,14 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     for (const anchor of [
       "**Isolated stage-runner branch.**",
       "| `run-stage` |",
-      "**Per-unit batch waves (optional).**",
+      "**Per-unit batch waves.**",
     ]) {
       const nextAnchor =
         anchor === "**Isolated stage-runner branch.**"
           ? "For an isolated run's reviewer"
           : anchor === "| `run-stage` |"
             ? "| `ask` |"
-            : "`directive.mode` selects";
+            : "### Harness notes";
       const cliStart = cli.indexOf(anchor);
       const ideStart = ide.indexOf(anchor);
       expect(cliStart, `Kiro CLI missing ${anchor}`).toBeGreaterThan(-1);
@@ -1129,10 +1103,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
 
       const skill = read(`${skillRoot}/SKILL.md`);
       expect(skill, skillRoot).not.toMatch(residualPaste);
-      for (const anchor of ["| `run-stage` |", "**Per-unit batch waves (optional).**"]) {
-        const instruction = skill.split("\n").find((line) => line.startsWith(anchor));
-        expect(instruction, `${skillRoot}: ${anchor}`).toContain(citation);
-      }
+      const instruction = skill.split("\n").find((line) => line.startsWith("| `run-stage` |"));
+      expect(instruction, `${skillRoot}: run-stage`).toContain(citation);
+      expect(read(`${protocolRoot}/stage-protocol-wave.md`), protocolRoot).toContain(citation);
 
       const ensemble = read(`${protocolRoot}/stage-protocol-ensemble.md`);
       // The Kiro CLI subsection runs to the next heading; a shipped tree
@@ -1214,13 +1187,12 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
       expect(read(join(tree.protocols, "stage-protocol-construction.md")), tree.label).not.toMatch(stalePaste);
 
+      if (tree.label !== "core") expect(read(join(tree.protocols, "stage-protocol-wave.md")), tree.label).toContain(citation);
       for (const skill of tree.skills) {
         expect(read(skill), skill).not.toMatch(stalePaste);
-        for (const anchor of ["| `run-stage` |", "**Per-unit batch waves (optional).**"]) {
-          const line = read(skill).split("\n").find((entry) => entry.startsWith(anchor));
-          expect(line, `${skill}: ${anchor}`).toBeDefined();
-          expect(line, `${skill}: ${anchor}`).toContain(citation);
-        }
+        const line = read(skill).split("\n").find((entry) => entry.startsWith("| `run-stage` |"));
+        expect(line, `${skill}: run-stage`).toBeDefined();
+        expect(line, `${skill}: run-stage`).toContain(citation);
       }
     }
   });
@@ -1229,7 +1201,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   // A Unit approval after a re-check or a redo the person asked for asks once:
   // its line takes the place of the usual question, never follows it.
   test("a re-checked or redone Unit's approval is one question", () => {
-    const construction = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol-construction.md"), "utf-8")
+    const construction = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol-checkpoint.md"), "utf-8")
       .replace(/\s+/g, " ");
     expect(construction).toContain(
       'its line takes the place of "Approve this completed <unit>?" after "Verified with `<full command>` (exit 0).", ' +
@@ -1336,7 +1308,7 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
   // A live run asked "Does this all look correct" while the summary sat folded
   // inside tool output: the person must read what they confirm.
   test("the summary the person confirms is on screen with its question, on every harness", () => {
-    const protocol = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"), "utf-8");
+    const protocol = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol-summary.md"), "utf-8");
     expect(protocol).toContain(
       "The person confirms what they can read: the bullets sit in the question itself, or right above it in the same " +
         "message, as the question-rendering annex shows; never only in a tool's output or a file.",
@@ -1359,9 +1331,6 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       // The question arrives rendered (numbers, Other and the reply hint are the
       // step's); the row and the annex say to show it as given and act on a pick.
       for (const token of [
-        "sole route authority",
-        "unselected-intent clone",
-        "Only before the first engine response",
         "never replace it, drop or add a choice, add a recommendation, or run another tool or read state first",
         "Say the step's numbered question as given",
         'a trailing "or tell me" does not replace it',
@@ -1613,87 +1582,6 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
-  test("retained native Windows evidence proves completed CLI and IDE routing", () => {
-    const manifest = readFileSync(join(P3_EVIDENCE_DIR, "README.md"), "utf-8");
-    const hashes: Record<string, string> = {
-      "windows-kiro-routing-cli.log":
-        "465b2cb860a748d4af7189a16409914f6a134d62b7824e75bd39d390450324f7",
-      "windows-kiro-routing-cli.ndjson":
-        "034b783b3389ab002dc8f5714023d618363600bb4205e826a2314631ce89a600",
-      "windows-kiro-routing-ide.log":
-        "f76c3e7ba1a8b4bb8ea9d313dca33d072baa6ea95826391115900da98c6b4ceb",
-      "windows-kiro-routing-ide.ndjson":
-        "d776cbe91f870fcda0b558657e1fcafeccd8f32190793bfb9e7cd5ce18937252",
-    };
-    for (const [file, expected] of Object.entries(hashes)) {
-      const body = readFileSync(join(P3_EVIDENCE_DIR, file));
-      expect(createHash("sha256").update(body).digest("hex"), file).toBe(
-        expected,
-      );
-      expect(manifest).toContain(`${expected}  ${file}`);
-    }
-
-    const cliLog = readFileSync(
-      join(P3_EVIDENCE_DIR, "windows-kiro-routing-cli.log"),
-      "utf-8",
-    );
-    expect(cliLog).toContain(" 2 pass");
-    expect(cliLog).toContain(" 0 fail");
-    const cliEvents = readFileSync(
-      join(P3_EVIDENCE_DIR, "windows-kiro-routing-cli.ndjson"),
-      "utf-8",
-    )
-      .trim()
-      .split(/\r?\n/)
-      .map((line) => JSON.parse(line) as Record<string, unknown>);
-    const cliResults = cliEvents.filter((event) => event.event === "result");
-    expect(cliResults).toHaveLength(2);
-    for (const result of cliResults) {
-      expect(result.stopReason).toBe("end_turn");
-      expect(result.toolCalls).toBe(1);
-    }
-    const cliToolCalls = cliEvents.filter((event) => event.event === "tool_call");
-    expect(cliToolCalls).toHaveLength(2);
-    expect(
-      cliToolCalls.every((event) =>
-        String(event.title).includes("aidlc-orchestrate.ts next")
-      ),
-    ).toBe(true);
-    expect(
-      cliToolCalls.some((event) => String(event.title).includes("intent --json")),
-    ).toBe(false);
-
-    const ideLog = readFileSync(
-      join(P3_EVIDENCE_DIR, "windows-kiro-routing-ide.log"),
-      "utf-8",
-    );
-    expect(ideLog).toContain(" 1 pass");
-    expect(ideLog).toContain(" 0 fail");
-    const ide = JSON.parse(
-      readFileSync(
-        join(P3_EVIDENCE_DIR, "windows-kiro-routing-ide.ndjson"),
-        "utf-8",
-      ),
-    ) as {
-      platform?: string;
-      completed_turn?: boolean;
-      intent_query_present?: boolean;
-      directive?: {
-        ask_type?: string;
-        numbered_prose_question?: string;
-      };
-      ordered_lists?: string[][];
-    };
-    expect(ide.platform).toBe("win32");
-    expect(ide.completed_turn).toBe(true);
-    expect(ide.intent_query_present).toBe(false);
-    expect(ide.directive?.ask_type).toBe("new-work-routing");
-    expect(ide.directive?.numbered_prose_question).toContain("4. **Other**");
-    expect(ide.ordered_lists).toHaveLength(1);
-    expect(ide.ordered_lists?.[0]).toHaveLength(4);
-    expect(ide.ordered_lists?.[0]?.[3]).toContain("Other");
-  });
-
   test("prose renderers remap file-backed source letters to numbered prose", () => {
     const missing: string[] = [];
     for (const harness of ["cursor", "kiro", "kiro-ide"]) {
@@ -1702,11 +1590,8 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         `harness/${harness}/skills/aidlc/question-rendering.md`;
       const skill = readFileSync(join(REPO_ROOT, skillRel), "utf-8");
       const annex = readFileSync(join(REPO_ROOT, annexRel), "utf-8");
-      if (!skill.includes("interactive presentation remaps")) {
-        missing.push(`${skillRel}  missing remap instruction`);
-      }
-      if (!skill.includes("user never answers with file letters")) {
-        missing.push(`${skillRel}  missing no-letter answer rule`);
+      if (!skill.includes("per `question-rendering.md`")) {
+        missing.push(`${skillRel}  does not send questions to the annex`);
       }
       if (!annex.includes("remap those choices to numbered prose")) {
         missing.push(`${annexRel}  missing numbered file-choice rule`);
@@ -1812,6 +1697,26 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       if (!protocol.includes(rule)) stale.push(`stage-protocol.md  missing: ${rule}`);
     }
     expect(stale).toEqual([]);
+  });
+
+  test("a fresh questions file groups its questions by who would answer them", () => {
+    // A stage's questions mixed the product owner's with the developer's in the
+    // stage file's topic order, so each person read every question to find
+    // theirs. The protocol now names the trade on each question and keeps each
+    // trade's questions together, behind the questions they depend on.
+    const protocol = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"), "utf-8")
+      .replace(/\s+/g, " ");
+    const missing = [
+      "name for each question the one trade whose decision it is, after the question number",
+      "Only `Q<n>.` is fixed; the trade, like the title, is in the conversation language.",
+      "`## Q<n>. [<trade>] <title>`",
+      "the question that decides comes first, even when a trade then appears twice",
+      "The stage file's topic order is what to cover, not the order to write;",
+      "anyone may answer any question, and it never skips one or leaves it to you",
+      "never reorder or renumber an existing questions file (a redo the person asked for starts a fresh one)",
+      "give a follow-up question the next unused number and its trade, at the end",
+    ].filter((rule) => !protocol.includes(rule));
+    expect(missing).toEqual([]);
   });
 
   test("a bare re-entry carries on: no surface offers the old resume menu", () => {

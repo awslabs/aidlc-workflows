@@ -137,7 +137,6 @@ function kiroRecord(home: string, session: string, entries: Array<Record<string,
 const typedEntry = (content: string) => ({ type: "user", content, _meta: { kiro: { userMessageTag: "prompt_0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b" } } });
 const syntheticEntry = (content: string, reason: string) => ({ type: "user", content, _meta: { kiro: { syntheticUserMessageReason: reason } } });
 
-// No session override, no presence bypass, an attended driver, the test's HOME.
 function cleanEnv(home: string): NodeJS.ProcessEnv {
   return {
     HOME: home,
@@ -214,7 +213,6 @@ describe("a prompt the host injected is not the person's turn", () => {
       expect(humanTurns(project.dir)).toBe(0);
       expectHostRow(project.dir, 0, "kiro sub-agent synthesis", "template");
       expect(hostTurns(project.dir)[0]).not.toContain("Sub-agent synthesis");
-      // Nothing of the person's rides on it: no message record either.
       expect(messageRecords(project.dir)).toBe(0);
       agentApproves(project, "kiro", false);
 
@@ -333,7 +331,6 @@ describe("a prompt the host injected is not the person's turn", () => {
       expect(humanTurns(project.dir)).toBe(1);
       expectHostRow(project.dir, 0, "kiro workflow brief", "template");
       expectHostRow(project.dir, 1, "kiro workflow brief", "template");
-      // The step is a side worker: not the chat, not started, no turn open.
       expect(readFileSync(currentSession, "utf-8").trim()).toBe(chat);
       expect(existsSync(join(sessions, `${step}.binding.json`))).toBe(false);
       expect(readdirSync(sessions).some((name) => name.includes(step))).toBe(false);

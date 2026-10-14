@@ -96,7 +96,6 @@ function editTeamPractices(proj: string): void {
 }
 
 function next(proj: string, args: string[] = []): Json {
-  // The agent's proposal step follows the plan proposal print, as it does live.
   const result = followProposal(runOrchestrateNext(ORCH, proj, args), ORCH, proj);
   expect(result.directive, result.stderr).not.toBeNull();
   return result.directive as Json;
@@ -162,7 +161,6 @@ describe("t-rules-travel-with-steps: a person-facing field says what to do with 
     expect(directive.stage_validity, JSON.stringify(directive).slice(0, 400)).toBeDefined();
     const note = String(directive.stage_validity_note);
     expect(note.startsWith(STAGE_VALIDITY_SAY)).toBe(true);
-    // A yes to the redo question reopens the stage the warning names.
     expect(note).toMatch(/ If their next reply says yes to it, run `[^`]*aidlc-orchestrate\.ts next --stage practices-discovery` and follow the step it returns\.$/);
   });
 
@@ -174,10 +172,8 @@ describe("t-rules-travel-with-steps: a person-facing field says what to do with 
 
   test("an engine question says it is the person's to answer", () => {
     const proj = finishedPractices("strict (set by you)");
-    // New work with no plan named: the plan question.
     const directive = next(proj, ["--new-intent", "fix the login redirect"]);
     expect(directive.kind, JSON.stringify(directive).slice(0, 300)).toBe("ask");
-    // The plan offer's note is the shared one plus its own clause ("Use a different plan" needs the plan named).
     expect(String(directive.question_note).startsWith(QUESTION_NOTE)).toBe(true);
     expect(String(directive.question_note)).toContain('Their "Use a different plan" answer needs the plan named');
   });
@@ -283,7 +279,6 @@ describe("t-rules-travel-with-steps: the notes and their checks", () => {
     const own = add({ kind: "ask", ask_type: "guard-recovery", question: "q", agent_work: true }, "bun x.ts");
     expect(own.question_note).toBeUndefined();
     expect(add({ kind: "ask", ask_type: "unit-paused", question: "q" }, "bun x.ts").question_note).toBe(questionNote("bun x.ts"));
-    // The plan offer's note is its own variant: the shared note plus the clause for "Use a different plan".
     expect(add({ kind: "ask", ask_type: "scope-confirm", question: "q" }, "bun x.ts").question_note).toBe(planOfferQuestionNote("bun x.ts"));
     // AIDA #2094 F1: with no skill the plan question's answer had no recording
     // step, so "looks good, build it" got the same question again.

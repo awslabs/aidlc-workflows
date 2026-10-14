@@ -250,6 +250,8 @@ describe("next takes the person's own /aidlc line when the agent's command carri
     const asked = await next(proj, "kiro-ide", []);
     const id = requestId(String(asked.directive.confirm_command ?? ""));
     expect(id, asked.out).toBeDefined();
+    // The person goes ahead with the plan.
+    await say(proj, "1", "kiro-ide");
     const { directive, out } = await next(proj, "kiro-ide", ["--scope", "bugfix", "--request", id!]);
     expect(directive.kind, out).toBe("print");
     expect(directive.message ?? "").toContain(`intent create --scope bugfix --request ${id}`);

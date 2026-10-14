@@ -107,7 +107,6 @@ beforeEach(() => {
 });
 
 afterAll(() => {
-	// Best-effort cleanup; a leftover temp dir must not fail the suite.
 	for (const dir of tempRoots) {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -335,7 +334,6 @@ describe("t345 the dispatcher clears a superseded detail file on a passing fire"
 		const passed = fire(outputPath);
 		expect(passed.result).toBe("passed");
 		expect(passed.note).toBeUndefined();
-		// Before this guard the failure's report was still here.
 		expect(passed.detailFiles).toEqual([]);
 	});
 
@@ -367,7 +365,6 @@ describe("t345 the dispatcher clears a superseded detail file on a passing fire"
 		const passed = rows.filter((row) => row.includes("**Event**: SENSOR_PASSED"));
 		expect(fired).toHaveLength(2);
 		expect(passed).toHaveLength(2);
-		// The fire that named the Unit carries it on both rows; the one that did not is as before.
 		expect(fired[0]).toContain("**Unit**: alpha");
 		expect(passed[0]).toContain("**Unit**: alpha");
 		expect(fired[1]).not.toContain("**Unit**:");

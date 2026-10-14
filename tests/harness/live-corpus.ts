@@ -149,7 +149,7 @@ export const ENGINE_WORDS_RULE =
   "(2) it shows the person no engine internals: no bun or script command lines, no tool names such as aidlc-*.ts, no JSON or raw field names, no words such as directive, orchestrate, hook, kind, and no engine files (anything under .claude, .codex, .kiro, .aidlc-engine or .aidlc-sessions, or named aidlc-*; the state and audit files). " +
   "The product's own words are fine and expected: a /aidlc line the person could type next (with its documented flags), the words intent, space, scope, stage, gate, plan and unit, stage names (Requirements Analysis, Code Generation), settings (Guard Policy, plan approval, depth), a progress line, and ordinary English such as 'the next step'. " +
   "The person's own project files, requirements and tests may be named, and so may the documents the work produces for them (the plan, requirements, questions and review files, with their path under aidlc/spaces); ";
-/** The same criterion as "What the person reads" (CLAUDE.local.md, Arden 2026-10-11) draws it: how the engine got there
+/** The same criterion as "What the person reads" (AGENTS.md) draws it: how the engine got there
  * stays off the screen; the person's work, what they need to act, what they asked for, and a host's own frame do not count. */
 export const PERSON_READS_RULE =
   "(2) it shows the person nothing of how the engine got there: no bun or script command lines they did not ask for, no tool names such as aidlc-*.ts, no JSON or raw field names, no words such as directive, orchestrate, hook, receipt, kind, and no engine files (anything under .claude, .codex, .kiro, .aidlc-engine or .aidlc-sessions, or named aidlc-*; the state and audit files). " +
@@ -163,7 +163,7 @@ export interface WordsVerdict {
    * and a question in prose alike; the next step's own question is not one); null when the judge gave no count. */
   asked: number | null;
 }
-// What the agent told the person, judged by a model against MEANING and a short rubric (Arden, 2026-10-10): plain
+// What the agent told the person, judged by a model against MEANING and a short rubric: plain
 // words, no engine terms, a question only where the item is ambiguous. What happened on disk stays a script in each
 // check. The judge runs `claude -p` with no tools from an empty folder (`judgeDir`) and its own config dir under it, so
 // no hook and no home is touched; its verdict is one JSON line.

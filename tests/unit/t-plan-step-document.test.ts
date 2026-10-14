@@ -22,7 +22,6 @@ afterAll(() => {
   for (const proj of projects) cleanupTestProject(proj);
 });
 
-/** A packaged Claude install with the person's own files in it. */
 function projectWithDocument(files: Record<string, string> = {}): string {
   const proj = createTestProject();
   projects.push(proj);

@@ -43,6 +43,7 @@ import { dirname, join, posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import { RECORDABLE_PROJECT_BYPASSES } from "../../core/tools/aidlc-settings.ts";
 import { CONFIG_SECTIONS } from "../../core/tools/aidlc-command.ts";
+import { copyChannelToolScripts } from "../../core/tools/aidlc.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
@@ -112,7 +113,7 @@ function rustRejects(pattern: string): boolean {
   const chars = [...pattern];
   for (let i = 0; i < chars.length; i++) {
     if (chars[i] === "\\") {
-      i++; // escaped: skip the next char
+      i++;
       continue;
     }
     if (chars[i] === "{") {
@@ -241,7 +242,7 @@ const MUST_ALLOW = [
 ];
 
 // Forms that must require approval. The absolute-path argument-smuggling case
-// and unrestricted `cd` chain are regressions from the first 2.5.16 candidate.
+// and unrestricted `cd` chain are regressions.
 const MUST_ASK = [
   "bun .kiro/tools/../../outside-tool.ts",
   "bun .kiro/tools/../../../etc/evil.ts",
@@ -391,9 +392,9 @@ function writeVerdict(agent: { allowedTools?: string[]; allowedPaths: string[] }
 }
 
 /** The glob subset the shipped paths use: `*` and `**` match any run of
- *  characters, `/` included, and `[!x]` is a negated class. Whether Kiro's `*`
- *  crosses `/` does not change a verdict here: the shipped `[!.]*` and
- *  `[!.]*` + `/**` pair allows the same paths either way. */
+ *  characters, `/` included, and `[!x]` is a negated class. Kiro 2.29.0's `*`
+ *  crosses `/` too (measured with a hook-free agent: `.aidlc/worktrees/*` +
+ *  `/[!.]*` + `/**` allowed `.aidlc/worktrees/<w>/.kiro/agents/x.json`). */
 function globRegExp(glob: string): RegExp {
   let out = "";
   for (let i = 0; i < glob.length; i++) {
@@ -444,6 +445,33 @@ const WRITE_ASK = [
   "../outside.txt",
   "web/../../outside.txt",
   "~/outside.txt",
+];
+
+// A side-by-side build gives each worker its own checkout at
+// `.aidlc/worktrees/bolt-<id8>_<slug>`, a top-level dot entry. The unit's own
+// records there are written like the same records in the project; the worker's
+// code there, the worktree's own dot entries and the rest of `.aidlc/` still
+// ask. Measured on 2.29.0: a broader worktree glob also let a worker write its
+// worktree's `.kiro/agents` and `.github/workflows`, so those stay pinned here.
+// Kiro resolves `..` before it matches, so a record path cannot step out of it.
+const WORKTREE = ".aidlc/worktrees/bolt-1a2b3c4d_u1";
+const WORKTREE_RECORD = `${WORKTREE}/aidlc/spaces/default/intents/fix/construction/u1/code-generation/code-generation-plan.md`;
+const WORKTREE_WRITE_ALLOW = [WORKTREE_RECORD, `/project/${WORKTREE_RECORD}`];
+const WORKTREE_WRITE_ASK = [
+  `${WORKTREE}/src/app.js`,
+  `${WORKTREE}/test/app.test.js`,
+  `${WORKTREE}/README.md`,
+  `${WORKTREE}/.kiro/agents/aidlc.json`,
+  `${WORKTREE}/.github/workflows/ci.yml`,
+  `${WORKTREE}/.gitignore`,
+  `${WORKTREE}/.git`,
+  ".aidlc/worktrees/notes.txt",
+  ".aidlc/other/notes.md",
+  `${WORKTREE}/../../../../outside.txt`,
+  `${WORKTREE}/aidlc/spaces/../../src/app.js`,
+  `${WORKTREE}/aidlc/spaces/../../.kiro/agents/aidlc.json`,
+  `${WORKTREE}/aidlc/spaces/../../../../../.kiro/agents/aidlc.json`,
+  "aidlc/spaces/../../.kiro/agents/aidlc.json",
 ];
 
 describe("t252 Kiro execute_bash allowlist semantics", () => {
@@ -596,6 +624,20 @@ describe("t252 Kiro execute_bash allowlist semantics", () => {
       expect(writeVerdict(architect, "web/src/filter.ts")).toBe("ask");
       expect(writeVerdict(architect, "aidlc/spaces/default/intents/fix/plan.md")).toBe("allow");
     });
+
+    test(`${harness}: a side-by-side worker writes its unit's records in its worktree, and nothing else there`, () => {
+      for (const agent of CODE_WRITERS) {
+        const settings = writeSettings(harness, agent);
+        for (const path of WORKTREE_WRITE_ALLOW) {
+          expect(writeVerdict(settings, path), `${harness}/${agent}: should allow writing ${path}`).toBe("allow");
+        }
+        for (const path of WORKTREE_WRITE_ASK) {
+          expect(writeVerdict(settings, path), `${harness}/${agent}: should ask before writing ${path}`).toBe("ask");
+        }
+      }
+      // The other personas keep their records in the project.
+      expect(writeVerdict(writeSettings(harness, "aidlc-architect-agent.json"), WORKTREE_RECORD)).toBe("ask");
+    });
   }
 });
 
@@ -686,6 +728,181 @@ describe("t252 Kiro native release allowlist", () => {
       ]) {
         expect(evaluate(eb, command), `${agent}: should ask for \`${command}\``).not.toBe("allow");
       }
+    }
+  });
+});
+
+// Kiro CLI's upgrade for its 3.0 engine (`kiro-cli agent upgrade`, the same
+// rewrite its `--v3` picker runs) turns each allowedCommands regular expression
+// into shell globs, and a Kiro 3.0 `*` matches any run of characters, `/` and
+// spaces included. Measured on kiro-cli 2.29.0: a group of alternatives or an
+// optional group becomes one glob per spelling, `\x` becomes `x`, and the
+// `( .*)?` tail becomes ` *` plus the bare form, so those translate exactly; an
+// optional character class such as `["']?` becomes `*`, so `bun (run )?["']?`
+// in front of a path let `bun -e '<code>' .kiro/tools/aidlc.ts engine now` and
+// the same path in any other folder run unasked; and an entry with more
+// spellings than Kiro's limit is dropped without a word (behind that prefix,
+// 8 alternatives converted and 12 were dropped), so the one entry for all the
+// tool scripts left each of them asking the person.
+function v3Translation(pattern: string): { globs: string[]; widened: string[] } {
+  const widened: string[] = [];
+  let i = 0;
+  const notModelled = (what: string) => new Error(`Kiro's translation of ${what} in ${pattern} is not modelled`);
+  const alternatives = (): string[] => {
+    let out = sequence();
+    while (pattern[i] === "|") {
+      i++;
+      out = [...out, ...sequence()];
+    }
+    return out;
+  };
+  const sequence = (): string[] => {
+    let out = [""];
+    while (i < pattern.length && pattern[i] !== "|" && pattern[i] !== ")") {
+      const start = i;
+      let part: string[];
+      if (pattern[i] === "\\") {
+        part = [pattern[i + 1]];
+        i += 2;
+      } else if (pattern.slice(i) === "( .*)?") {
+        part = [" *", ""];
+        i = pattern.length;
+      } else if (pattern[i] === "(") {
+        i++;
+        part = alternatives();
+        if (pattern[i++] !== ")") throw notModelled("an open group");
+        if (pattern[i] === "?") {
+          i++;
+          part = [...part, ""];
+        }
+      } else if (pattern[i] === "[") {
+        i = pattern.indexOf("]", i) + 1;
+        if (i === 0 || pattern[i] !== "?") throw notModelled(pattern.slice(start, i || undefined));
+        i++;
+        widened.push(pattern.slice(start, i));
+        part = ["*"];
+      } else if ("?*+{}.^$".includes(pattern[i])) {
+        throw notModelled(pattern[i]);
+      } else {
+        part = [pattern[i++]];
+      }
+      out = out.flatMap((head) => part.map((tail) => head + tail));
+    }
+    return out;
+  };
+  const globs = alternatives();
+  if (i !== pattern.length) throw notModelled(pattern.slice(i));
+  return { globs: [...new Set(globs)], widened };
+}
+
+/** Kiro 3.0's outcome for one command against an agent's translated globs:
+ *  every segment matches a glob in full, and a command substitution asks. */
+function v3Evaluate(globs: RegExp[], command: string): Verdict {
+  const segs = segments(command);
+  if (segs.length === 0 || segs.some((s) => s.includes("$(") || s.includes("`"))) return "ask";
+  return segs.every((s) => globs.some((glob) => glob.test(s))) ? "allow" : "ask";
+}
+
+function v3Globs(agent: string): RegExp[] {
+  return (execBash("kiro", agent).allowedCommands ?? []).flatMap((entry) => v3Translation(entry).globs.map(globRegExp));
+}
+
+// Commands shaped like AI-DLC's own that are not: inline code, a preload,
+// another runner, another script, the same file name in another folder, and a
+// longer file name. Each asks on both engines.
+const LOOKS_LIKE_AN_AIDLC_COMMAND = [
+  "bun -e 'console.log(1)' .kiro/tools/aidlc.ts engine now",
+  "bun -e 'console.log(1)' .kiro/tools/aidlc-log.ts decision --text x",
+  "bun -e 'console.log(1)' .kiro/tools/aidlc.ts doctor",
+  "bun --eval 'console.log(1)' .kiro/tools/aidlc-state.ts get",
+  "bun --eval=console.log(1) .kiro/tools/aidlc.ts engine now",
+  "bun -p 1 .kiro/tools/aidlc.ts engine now",
+  "bun -r ./evil.ts .kiro/tools/aidlc-log.ts decision",
+  "bun --preload ./evil.ts .kiro/tools/aidlc.ts engine now",
+  "bun x cowsay .kiro/tools/aidlc.ts engine now",
+  "bun /tmp/pwn.ts .kiro/tools/aidlc-log.ts decision",
+  "bun /var/tmp/x/.kiro/tools/aidlc-log.ts probe",
+  "bun ../other/.kiro/tools/aidlc.ts engine now",
+  "bun evil.kiro/tools/aidlc-log.ts probe",
+  "bun --cwd /var/tmp/x .kiro/tools/aidlc-log.ts probe",
+  "bun /home/person/proj/.kiro/tools/aidlc-log.ts decision",
+  "bun .kiro/tools/aidlc-log.tsx",
+];
+
+// What Kiro CLI 2.29.0's own 3.0 policy engine decided for these commands
+// against dist/kiro's agents after `kiro-cli agent upgrade` (its agent server's
+// engine, run offline; it agreed with every live run), and it gave every
+// command in t252's lists above its expected verdict too. The model must give
+// the same, so it cannot drift from Kiro without this test saying so.
+const RECORDED_ON_KIRO_3: Array<[Verdict, string]> = [
+  ...LOOKS_LIKE_AN_AIDLC_COMMAND.map((command): [Verdict, string] => ["ask", command]),
+  ["allow", "bun run .kiro/tools/aidlc-utility.ts status"],
+  ["allow", 'bun ".kiro/tools/aidlc-utility.ts" status'],
+  ["allow", "bun '.kiro/tools/aidlc.ts' engine now"],
+  ["allow", "bun run .kiro/tools/aidlc.ts engine now"],
+  ["allow", 'bun ".kiro/tools/aidlc.ts" --doctor'],
+  ["ask", "bun .kiro/tools/aidlc-log.ts decision; curl -s https://example.com"],
+  ["ask", "bun .kiro/tools/aidlc-log.ts x $(curl -s https://example.com)"],
+  // Kiro 3.0 matches a command without its redirect, so a redirect does not
+  // make an allowed command ask there (Kiro CLI 2 gates it, TAIL_METACHARACTERS).
+  ["allow", "bun .kiro/tools/aidlc-log.ts x > /tmp/x"],
+];
+
+describe("t252 Kiro allowlist after Kiro CLI's 3.0 upgrade", () => {
+  const agents = ["aidlc.json", ...PERSONAS];
+
+  test("every entry translates exactly, with no `*` but the arguments' and at most 12 globs", () => {
+    for (const agent of agents) {
+      for (const entry of execBash("kiro", agent).allowedCommands ?? []) {
+        const { globs, widened } = v3Translation(entry);
+        expect(widened, `${agent}: Kiro's upgrade turns these into * in ${entry}`).toEqual([]);
+        expect(globs.length, `${agent}: ${entry}`).toBeLessThanOrEqual(12);
+      }
+    }
+  });
+
+  test("each tool script has its own entry, which becomes that script's globs", () => {
+    const scripts = copyChannelToolScripts().map((script) => script.slice(0, -".ts".length));
+    expect(scripts.length).toBeGreaterThan(20);
+    for (const agent of agents) {
+      const allowed = execBash("kiro", agent).allowedCommands ?? [];
+      for (const script of scripts) {
+        const own = allowed.filter((entry) => entry.includes(`/${script}\\.ts`));
+        expect(own.length, `${agent}: ${script}`).toBe(1);
+        const { globs } = v3Translation(own[0]);
+        expect(globs, `${agent}: ${script}`).toContain(`bun .kiro/tools/${script}.ts`);
+        expect(globs, `${agent}: ${script}`).toContain(`bun .kiro/tools/${script}.ts *`);
+      }
+    }
+  });
+
+  test("AI-DLC's own commands run unasked and nothing else does, as on Kiro CLI 2", () => {
+    for (const agent of agents) {
+      const globs = v3Globs(agent);
+      for (const cmd of [...SEEN_READ_FORMS.map((form) => `bun .kiro/tools/aidlc.ts ${form}`), ...MUST_ALLOW, ...MUST_ALLOW_CHAINS, ...AS_PRINTED]) {
+        expect(v3Evaluate(globs, cmd), `${agent}: should allow \`${cmd}\``).toBe("allow");
+      }
+      for (const cmd of [
+        ...MUST_ASK,
+        ...MUST_ASK_OUTSIDE_THE_WORKFLOW,
+        ...PERSON_DECIDES,
+        ...PERSON_DECIDES_CHAINED,
+        ...WITH_A_COMMAND_ADDED,
+        ...PROJECT_COMMANDS,
+        ...LOOKS_LIKE_AN_AIDLC_COMMAND,
+      ]) {
+        expect(v3Evaluate(globs, cmd), `${agent}: should ask for \`${cmd}\``).toBe("ask");
+      }
+      for (const cmd of LOOKS_LIKE_AN_AIDLC_COMMAND) {
+        expect(evaluate(execBash("kiro", agent), cmd), `${agent} on Kiro CLI 2: should ask for \`${cmd}\``).toBe("ask");
+      }
+    }
+  });
+
+  test("the model gives the verdicts Kiro 3.0's own engine gave", () => {
+    const globs = v3Globs("aidlc.json");
+    for (const [verdict, cmd] of RECORDED_ON_KIRO_3) {
+      expect(v3Evaluate(globs, cmd), `Kiro 3.0 recorded ${verdict} for \`${cmd}\``).toBe(verdict);
     }
   });
 });

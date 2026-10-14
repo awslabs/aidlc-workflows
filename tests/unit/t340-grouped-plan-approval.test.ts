@@ -372,7 +372,7 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
     },
   );
 
-  test("a swarm command under a preload or a launcher waits; a project folder in the environment is the engine's own; beside it, a write is judged by where it lands", () => {
+  test("a swarm command under a launcher runs while the plans hold, under a preload of a hook it waits; a project folder in the environment is the engine's own; beside it, a write is judged by where it lands", () => {
     const pd = fixture();
     const foreign = join(pd, "foreign-project");
     const route = `engine swarm prepare --batch 1 --units alpha,beta --base main --project-dir "${pd}"`;
@@ -393,14 +393,17 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
         `${command} 2> swarm-error.txt`,
       );
       // A project folder named in the shell's own environment is the engine's to
-      // judge (its --project-dir is on the line); a launcher such as `env` is a
-      // wrapper, and the installed engine is not run as it is.
+      // judge (its --project-dir is on the line). A launcher such as `env` is a
+      // wrapper, so its writes cannot be seen: while both plans hold it runs, as
+      // in a serial build once the plan is approved.
       judgedByTheirWrites.push(
         `AIDLC_PROJECT_DIR="${foreign}" ${command}`,
         `CLAUDE_PROJECT_DIR="${foreign}" ${command}`,
+        `env AIDLC_PROJECT_DIR="${foreign}" ${command}`,
       );
-      refused.push(`env AIDLC_PROJECT_DIR="${foreign}" ${command}`);
     }
+    // A preload of a hook is runtime integrity's to refuse (a tool call cannot invoke
+    // a hook), whatever the plans say.
     refused.push(
       `bun --preload .claude/hooks/aidlc-record-human-turn.ts .claude/tools/aidlc.ts ${route}`,
       `bun -r .claude/hooks/aidlc-record-human-turn.ts .claude/tools/aidlc.ts ${route}`,

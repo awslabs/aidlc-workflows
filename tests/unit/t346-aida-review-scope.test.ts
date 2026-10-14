@@ -311,7 +311,7 @@ describe("t346 AIDA incremental review scope", () => {
     expect(body.indexOf("**P1: Finding number 2**")).toBeGreaterThan(-1);
     expect(body.indexOf("## Deferred (outside the review scope)")).toBeGreaterThan(body.indexOf("**P2: Finding number 3**"));
 
-    // The only finding is deferred and the scores permit merge: the decision is re-derived.
+    // The only finding is deferred and no blocking finding remains: the decision is re-derived.
     const sole = parseStructuredReview(review([{ priority: "P1", category: "correctness", evidence: [diffLine(42)] }], { readiness: 5, risk: 1 }, CHANGE), BASE, HEAD, MANIFEST, METADATA, INCREMENTAL);
     expect(sole.findings).toEqual([]);
     expect(sole.decision.action).toBe("merge");
@@ -330,12 +330,10 @@ describe("t346 AIDA incremental review scope", () => {
     expect(advisoryOnly.findings).toHaveLength(1);
     expect(advisoryOnly.deferred).toHaveLength(1);
 
-    // Full mode defers nothing and says why the head was reviewed in full.
     const full = parseStructuredReview(review([{ priority: "P1", category: "correctness", evidence: [diffLine(42)] }], { readiness: 2, risk: 4 }, CHANGE), BASE, HEAD, MANIFEST, METADATA, FULL);
     expect(full.deferred).toEqual([]);
     expect(full.findings).toHaveLength(1);
     expect(renderReview(full, CONTEXT_ID).body).toContain("Scope: **full head** (first review of this pull request).");
-    // No scope at all renders exactly as before.
     expect(renderReview(parseStructuredReview(review([], { readiness: 5, risk: 1 }, MERGE), BASE, HEAD, MANIFEST, METADATA), CONTEXT_ID).body).not.toContain("Scope:");
   });
 

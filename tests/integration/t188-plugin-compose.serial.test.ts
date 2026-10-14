@@ -879,7 +879,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
 
   // A project installed with `config`, then composed: a same-release refresh is
   // not a conflict on any harness. Copilot keeps its skills and agents outside
-  // the harness folder (.github/), where the composed scope row in SKILL.md and
+  // the harness folder (.github/), where the composed scope row in tables.md and
   // the plugin's runners used to read as local edits (exit 4, "locally modified
   // or unowned"); Claude Code and opencode passed the same check. Codex keeps
   // its skills in .agents/, where compose writes the plugin's runners and their
@@ -918,8 +918,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         : harness === "codex"
           ? join(project, ".agents", "skills")
           : join(project, harnessByName(harness).manifest.harnessDir, "skills");
-      const skill = readFileSync(join(skillsRoot, "aidlc", "SKILL.md"), "utf-8");
-      expect(skill).toContain("test-pro-validation");
+      const tables = readFileSync(join(skillsRoot, "aidlc", "tables.md"), "utf-8");
+      expect(tables).toContain("test-pro-validation");
       expect(existsSync(join(skillsRoot, "test-pro-validation", "SKILL.md"))).toBe(true);
 
       const planned = config("--yes", "--dry-run", "--json");
@@ -931,7 +931,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       const refreshed = config("--yes");
       expect(refreshed.status, `${refreshed.stdout}${refreshed.stderr}`).toBe(0);
       // The composed row and the plugin's runner survive the refresh.
-      expect(readFileSync(join(skillsRoot, "aidlc", "SKILL.md"), "utf-8")).toContain("test-pro-validation");
+      expect(readFileSync(join(skillsRoot, "aidlc", "tables.md"), "utf-8")).toContain("test-pro-validation");
       expect(existsSync(join(skillsRoot, "test-pro-validation", "SKILL.md"))).toBe(true);
     },
   );
@@ -1083,8 +1083,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(out.evScreen.find((row) => row.stage === "build-and-test")?.priorSource).toBe("shipped");
   });
 
-  test("compose refreshes SKILL.md Stage Graph with plugin stages", () => {
-    const skill = readFileSync(join(project, ".claude", "skills", "aidlc", "SKILL.md"), "utf-8");
+  test("compose refreshes the Stage Graph in tables.md with plugin stages", () => {
+    const skill = readFileSync(join(project, ".claude", "skills", "aidlc", "tables.md"), "utf-8");
     const begin = skill.indexOf(STAGE_TABLE_BEGIN);
     const end = skill.indexOf(STAGE_TABLE_END, begin);
     expect(begin).toBeGreaterThanOrEqual(0);

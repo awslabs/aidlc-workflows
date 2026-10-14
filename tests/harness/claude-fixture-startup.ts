@@ -20,7 +20,7 @@ const STARTUP_STATE =
 // Claude's first-run theme chooser, shown when the profile's onboarding
 // preseed did not land (run 36294830398 waited out its whole budget on it).
 const THEME_CHOOSER = /Choose the text style that looks best with your terminal/;
-// The onboarding step after the theme (run 36299980723): an acknowledgement.
+// The onboarding step after the theme: an acknowledgement.
 const SECURITY_NOTES = /Security notes:[\s\S]*Press Enter to continue/;
 
 export function clearOwnedClaudeFixtureStartup(
@@ -71,9 +71,9 @@ export function clearOwnedClaudeFixtureStartup(
       }
       continue;
     } else if (/trust this folder/i.test(pane)) {
-      // Current Claude paints the trust options unnumbered with No selected
-      // (run 36306452238), so "1" answers nothing. Navigate by the painted
-      // selection as for the permissions menu; a numbered menu keeps "1".
+      // Current Claude paints the trust options unnumbered with No selected, so "1"
+      // answers nothing. Navigate by the painted selection as for the permissions
+      // menu; a numbered menu keeps "1".
       const navigation = claudeTrustNavigation(pane);
       if (navigation === null) {
         modal = "trust";

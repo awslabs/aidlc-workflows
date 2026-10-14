@@ -247,7 +247,7 @@ function encodeKeys(keys: string, applicationCursor: boolean): string {
     else if (data.length === 1 &&
       data.toUpperCase().charCodeAt(0) >= 64 && data.toUpperCase().charCodeAt(0) <= 95) {
       data = String.fromCharCode(data.toUpperCase().charCodeAt(0) & 31);
-    } else return keys; // Unknown names retain the existing literal fallback.
+    } else return keys; // Unknown names retain the literal fallback.
   } else if (shift && data.length === 1) {
     data = data.toUpperCase();
   }

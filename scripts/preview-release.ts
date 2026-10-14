@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Shared shape of a preview publication: the tag message that binds a preview
 // tag in the publication repository to its source commit, and the plan record
-// the authorize job hands to the promote job.
+// the validate job hands to the release job.
 import { readFileSync } from "node:fs";
 import {
   parseVersion,

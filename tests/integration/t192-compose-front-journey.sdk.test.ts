@@ -97,7 +97,6 @@ function activeState(proj: string): string {
   return readFileSync(join(intentsDir, rec, "aidlc-state.md"), "utf-8");
 }
 
-/** The plan the state runs: each stage line's EXECUTE/SKIP suffix. */
 function planOf(state: string): Record<string, string> {
   const plan: Record<string, string> = {};
   for (const m of state.matchAll(/^- \[.\] (\S+) \u2014 (EXECUTE|SKIP)\b/gm)) plan[m[1]] = m[2];
@@ -128,15 +127,11 @@ describe("t192 front composer journey (/aidlc compose -> approve -> creation, sd
 
         const r = await drive(proj, APPROVE_ALL, INIT_STATE_SUMMARY, deadlineMs);
 
-        // (a) the gate fired - the approve/edit/reject turn-stop.
         expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
-        // (b) the creation ran in the SAME drive (one /aidlc invocation).
         assertToolResultContains(r, "Bash", INIT_STATE_SUMMARY);
-        // (c) nothing was added to the scope library.
         expect(readdirSync(scopesDir).filter((f) => f.endsWith(".md")).length).toBe(11);
         expect(Object.keys(JSON.parse(readFileSync(gridPath, "utf-8")) as Grid).length).toBe(11);
         expect(existsSync(join(proj, "aidlc", "scopes"))).toBe(false);
-        // (d) the work runs a stock scope with its own plan.
         const state = activeState(proj);
         const scope = /^- \*\*Scope\*\*: (\S+)$/m.exec(state)?.[1] ?? "";
         expect(STOCK_SCOPES.has(scope)).toBe(true);
@@ -178,7 +173,6 @@ describe("t192 front composer journey (/aidlc compose -> approve -> creation, sd
         if (savedName === undefined) throw new Error("No saved scope in grid");
         expect(existsSync(join(proj, "aidlc", "scopes", `${savedName}.md`))).toBe(true);
         assertComposedScopeSettings(assertComposedScopeFile(scopesDir, savedName));
-        // The saved scope is the plan the work runs.
         const state = activeState(proj);
         const plan = planOf(state);
         const saved = grid[savedName].stages ?? {};

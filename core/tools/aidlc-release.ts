@@ -42,7 +42,20 @@ export type ReleaseManifest = {
   sourceDigest?: string;
   distributions: Array<{ name: string; productName: string }>;
   assets: ReleaseAsset[];
+  // What this release's own lifecycle can do. Older releases omit the field,
+  // and older readers ignore it.
+  capabilities?: string[];
 };
+
+// A release that can be installed and removed as root with --allow-root.
+// Root installs are refused for releases without it, so a root install can
+// always be removed by the release it activates.
+export const ROOT_LIFECYCLE_CAPABILITY = "root-lifecycle";
+
+export function releaseSupportsRootLifecycle(manifest: Pick<ReleaseManifest, "capabilities">): boolean {
+  return Array.isArray(manifest.capabilities) &&
+    manifest.capabilities.includes(ROOT_LIFECYCLE_CAPABILITY);
+}
 
 export function releaseRuntimeAsset(version: string): string {
   return `aidlc-runtime-${requireVersion(version)}.tar.gz`;
@@ -93,16 +106,28 @@ function validateSelectedAsset(asset: ReleaseAsset, version: string): void {
 export class ReleaseUnavailableError extends Error {
   constructor(
     message: string,
-    readonly code?: "preview-api-required" | "preview-unpublished",
+    readonly code?:
+      | "preview-api-required"
+      | "preview-unpublished"
+      | "preview-list-too-large",
   ) {
     super(message);
     this.name = "ReleaseUnavailableError";
   }
 }
 
+export class ReleaseDownloadSizeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReleaseDownloadSizeError";
+  }
+}
+
 const MAX_ASSET_BYTES = 1024 * 1024 * 1024;
 const MAX_METADATA_BYTES = 1024 * 1024;
-const MAX_RELEASE_LIST_PAGES = 10;
+const RELEASE_LIST_PAGE_SIZE = 20;
+const MAX_RELEASE_LIST_PAGE_BYTES = 4 * 1024 * 1024;
+const MAX_RELEASE_LIST_PAGES = 25;
 const PROGRESS_WIDTH = 72;
 const PROVENANCE_BUNDLE = "aidlc-release.intoto.jsonl";
 const DEFAULT_RELEASE_REPOSITORY = "awslabs/aidlc-workflows";
@@ -325,6 +350,17 @@ export function readReleaseManifest(directory: string): ReleaseManifest {
     )
   ) {
     throw new Error("version.json contains an invalid release source identity");
+  }
+  if (
+    manifest.capabilities !== undefined &&
+    (
+      !Array.isArray(manifest.capabilities) ||
+      manifest.capabilities.some((capability) =>
+        typeof capability !== "string" || !/^[a-z0-9][a-z0-9-]*$/.test(capability)
+      )
+    )
+  ) {
+    throw new Error("version.json contains invalid capabilities");
   }
   if (!Array.isArray(manifest.distributions) || manifest.distributions.length === 0) {
     throw new Error("version.json contains no distributions");
@@ -576,7 +612,7 @@ async function fetchBytes(
     }
     const length = Number(response.headers.get("content-length") || 0);
     if (Number.isFinite(length) && length > maxBytes) {
-      throw new Error(`${redact(url)} exceeds the ${maxBytes} byte download limit`);
+      throw new ReleaseDownloadSizeError(`${redact(url)} exceeds the ${maxBytes} byte download limit`);
     }
     if (!response.body) {
       throw new ReleaseUnavailableError(`${redact(url)} returned an empty response body`);
@@ -592,7 +628,7 @@ async function fetchBytes(
       bytes += chunk.value.byteLength;
       if (bytes > maxBytes) {
         await reader.cancel();
-        throw new Error(`${redact(url)} exceeds the ${maxBytes} byte download limit`);
+        throw new ReleaseDownloadSizeError(`${redact(url)} exceeds the ${maxBytes} byte download limit`);
       }
       chunks.push(chunk.value);
     }
@@ -651,6 +687,9 @@ async function download(
 // `v` plus a preview id. Stable discovery never comes through here (it is the
 // `latest/download` redirect), and a preview lookup never falls back to stable:
 // every API or transport failure, rate limiting included, is "unavailable".
+// GitHub lists releases newest first, so the first page that holds a preview
+// holds the newest one; reading on would spend more of the 60 unauthenticated
+// requests an hour and of doctor's 750 ms refresh.
 export async function resolvePreviewVersion(options: {
   baseUrl?: string;
   apiUrl?: string;
@@ -666,18 +705,32 @@ export async function resolvePreviewVersion(options: {
   const timeoutMs = options.timeoutMs ?? DEFAULT_SUBPROCESS_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
   let newest: string | undefined;
-  let next: string | null = `${listUrl}?per_page=100`;
+  let next: string | null = `${listUrl}?per_page=${RELEASE_LIST_PAGE_SIZE}`;
   for (let page = 0; next && page < MAX_RELEASE_LIST_PAGES; page++) {
-    const { bytes, headers } = await fetchBytes(next, {
-      timeoutMs: remainingTimeout(deadline, `${PREVIEW_CHANNEL} release list`),
-      caBundle: settings.caBundle,
-      maxBytes: MAX_METADATA_BYTES,
-      contentTypes: ["application/json"],
-      reportedTimeoutMs: timeoutMs,
-      allowQuery: true,
-      headers: GITHUB_API_HEADERS,
-      notFound: `${redact(listUrl)} returned HTTP 404; the release repository has no releases API`,
-    });
+    let bytes: Buffer;
+    let headers: Headers;
+    try {
+      ({ bytes, headers } = await fetchBytes(next, {
+        timeoutMs: remainingTimeout(deadline, `${PREVIEW_CHANNEL} release list`),
+        caBundle: settings.caBundle,
+        maxBytes: MAX_RELEASE_LIST_PAGE_BYTES,
+        contentTypes: ["application/json"],
+        reportedTimeoutMs: timeoutMs,
+        allowQuery: true,
+        headers: GITHUB_API_HEADERS,
+        notFound: `${redact(listUrl)} returned HTTP 404; the release repository has no releases API`,
+      }));
+    } catch (error) {
+      if (error instanceof ReleaseDownloadSizeError) {
+        throw new ReleaseUnavailableError(
+          `could not list ${PREVIEW_CHANNEL} releases: the release list is too large ` +
+            `to download. To update now, run \`aidlc update --version <id>\` with a ` +
+            `${PREVIEW_CHANNEL} id from https://github.com/awslabs/aidlc-workflows/releases`,
+          "preview-list-too-large",
+        );
+      }
+      throw error;
+    }
     let listed: unknown;
     try {
       listed = JSON.parse(bytes.toString("utf-8"));
@@ -705,6 +758,7 @@ export async function resolvePreviewVersion(options: {
       const version = tag.slice(1);
       if (!newest || compareVersions(version, newest) > 0) newest = version;
     }
+    if (newest) break;
     const link = headers.get("link") ?? "";
     next = /<([^>]+)>;\s*rel="next"/.exec(link)?.[1] ?? null;
   }

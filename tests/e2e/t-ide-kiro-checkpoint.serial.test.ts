@@ -1,9 +1,7 @@
 // covers: file:core/tools/aidlc-state.ts
 //
-// t-ide-kiro-checkpoint.serial.test.ts - the FIRST live test that drives the Kiro
-// IDE (the Electron desktop app), not the Kiro CLI. Every existing live Kiro test
-// drives the CLI over ACP (t-acp-kiro-*) or over a tmux TUI (t-tui-kiro-*); NONE
-// drives the GUI app. This is the gap, and it is the enforcement surface for the
+// t-ide-kiro-checkpoint.serial.test.ts - a live test that drives the Kiro IDE (the
+// Electron desktop app), not the Kiro CLI. It is the enforcement surface for the
 // human-presence gate (a HUMAN_TURN event recorded on each human chat turn + a
 // preToolUse hard-block that refuses a model-fabricated approval while a checkpoint
 // gate is open with no HUMAN_TURN since the last gate resolution).
@@ -16,36 +14,33 @@
 // tui-drive.ts - Playwright was rejected (see kiro-ide-driver.ts header).
 //
 // NAMING (load-bearing): the file is `t-ide-kiro-*`, NOT `t-tui-*`. run-tests.ts
-// holds every `t-tui*` e2e file behind the tmux `t-tui-preflight` capability gate;
-// a `t-tui-*` name would wrongly SKIP this CDP/no-tmux test on every tmux-less box.
+// holds every `t-tui*` e2e file behind the `t-tui-preflight` terminal capability gate;
+// a `t-tui-*` name would wrongly gate this CDP test on an unrelated terminal substrate.
 // The `t-ide-` prefix runs it in the first/non-TUI band, the same way
 // `t-exec-codex-*` and `t-acp-kiro-*` dodge the gate. Each IDE launch owns a
 // private profile and an OS-assigned debug port, including across worker copies.
 //
 // LIVE: uses real Kiro IDE (Bedrock credits). Gated behind AIDLC_KIRO_IDE_LIVE=1,
-// which does NOT auto-default (only AIDLC_TUI_LIVE self-defaults, run-tests.ts:
-// 261-262) - an unset var SKIPS, it never silent-greens. This adds a SIXTH live
-// gate var; per CLAUDE.local.md it must be set EXPLICITLY in any slice command or
-// the test skips green (a false green - it exercises nothing).
+// which does NOT auto-default (only AIDLC_TUI_LIVE self-defaults, in run-tests.ts) -
+// an unset var SKIPS, it never silent-greens, so it must be set EXPLICITLY in any
+// slice command or the test skips green (a false green - it exercises nothing).
 //
-// SEED-PROFILE (RESOLVED, the seed spike under the private tmp working area): a fresh
-// Kiro user-data-dir hits the "Import configuration" onboarding wall and never reaches
-// chat. The skip is ONE global-state flag (kiroAgent.onboarding.onboardingCompleted).
-// The generated seed contains ZERO credentials; a signed-in Kiro host remains required.
-// We GENERATE the minimal seed from constants at setup (generateKiroIdeSeed), so nothing
-// sensitive is copied or committed. AIDLC_KIRO_IDE_SEED may still point at a
-// developer-supplied user-data-dir to override; absent, the generated seed is used.
+// SEED-PROFILE: a fresh Kiro user-data-dir hits the "Import configuration"
+// onboarding wall and never reaches chat. The skip is ONE global-state flag
+// (kiroAgent.onboarding.onboardingCompleted). The generated seed contains ZERO
+// credentials; a signed-in Kiro host remains required. We GENERATE the minimal
+// seed from constants at setup (generateKiroIdeSeed), so nothing sensitive is
+// copied or committed. AIDLC_KIRO_IDE_SEED may still point at a developer-supplied
+// user-data-dir to override; absent, the generated seed is used.
 //
 // SHAPE OF THE REPRO (constructed, not organic): the fault is intermittent and
 // emerges deep into a long session; a deterministic test cannot reproduce the
-// organic drift, so we CONSTRUCT it (the fix-spike approach): seed a real
-// STAGE_AWAITING_APPROVAL gate, send ONE human prompt that tells the model to
-// approve the open gate and then - in the SAME un-ended turn, with no further human
-// input - advance and fabricate an approval of the next auto-opened gate. The first
-// approval is backed by the one HUMAN_TURN the prompt recorded and commits (emitting
-// GATE_APPROVED); the second finds NO HUMAN_TURN after that GATE_APPROVED and is
-// REFUSED by the core gate (and the preToolUse hook hard-blocks the tool call
-// besides). One human turn commits at most one gate.
+// organic drift, so we CONSTRUCT it: seed a real STAGE_AWAITING_APPROVAL gate, send
+// ONE human prompt ("Approve") that answers the open gate, then - with no further
+// human input - open the next gate and attempt its approval directly from the test.
+// The first approval is backed by the one HUMAN_TURN the prompt recorded and commits
+// (emitting GATE_APPROVED); the second finds NO HUMAN_TURN after that GATE_APPROVED
+// and is REFUSED by the core gate. One human turn commits at most one gate.
 
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, fileCleanupReserveMs } from "../harness/test-budget.ts";
 import { beforeEach, describe, expect, test } from "bun:test";
@@ -155,10 +150,10 @@ function makeSeedDir(): string {
 
 // The committed stage slug = the gate open in state-mid-inception.md (Current Stage:
 // requirements-analysis, the gate the human approves). The blocked slug = the Next
-// Stage (code-generation), whose gate the first approve's reentrant advance opens and
-// which the same-turn fabricated approval targets after the first gate commits. The
-// constructed repro only needs the two to differ; pinned to the fixture's stage pair
-// (tests/fixtures/state-mid-inception.md Current/Next Stage fields).
+// Stage (code-generation), whose gate the test opens with `gate-start` after the first
+// approve's reentrant advance and which the test's fabricated approval then targets.
+// The constructed repro only needs the two to differ; pinned to the fixture's stage
+// pair (tests/fixtures/state-mid-inception.md Current/Next Stage fields).
 const COMMITTED_SLUG = "requirements-analysis";
 const BLOCKED_SLUG = "code-generation";
 
@@ -213,7 +208,6 @@ function seedBindableWorkspace(sandbox: string): void {
   runGit(sandbox, ["commit", "-qm", "seed bindable workspace"]);
 }
 
-/** Construct the real gate shape the live journey claims to exercise. */
 function seedApprovalGate(sandbox: string): void {
   seedGateFor(sandbox, COMMITTED_SLUG);
 }
@@ -403,8 +397,8 @@ function installNextGateReviewFixture(sandbox: string): void {
 }
 
 function skipReason(): string | null {
-  // Order mirrors t-tui-kiro-status:56-68 - env gate (token/credit guard) first,
-  // then platform, then binary, then the shipped distributable. The seed is no longer
+  // Order mirrors t-tui-kiro-status skipReason - env gate (token/credit guard) first,
+  // then platform, then binary, then the shipped distributable. The seed is not
   // a gate: it is generated from constants when AIDLC_KIRO_IDE_SEED is unset.
   if (process.env.AIDLC_KIRO_IDE_LIVE !== "1") {
     return "set AIDLC_KIRO_IDE_LIVE=1 to run the live Kiro IDE journey (uses Kiro credits)";
@@ -779,7 +773,7 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
       // actually reads - mint on UserPromptSubmit, block on PreToolUse) + a real open
       // gate via the mid-inception state fixture plus seedApprovalGate. The committed
       // slug is that stage; the blocked slug is the next stage's gate, opened by the
-      // second explicit report command after the first approve auto-advances.
+      // test's explicit gate-start command after the first approve auto-advances.
       const sandbox = setupTuiProject({
         harness: "kiro-ide",
         withState: "state-mid-inception.md",
@@ -788,21 +782,17 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
       seedBindableWorkspace(sandbox);
       seedApprovalGate(sandbox);
       // The second stage needs fresh review evidence after its STAGE_STARTED.
-      // Prepare only that prerequisite; the model must still open the gate.
+      // Prepare only that prerequisite; the test must still open the gate.
       installNextGateReviewFixture(sandbox);
       if (DIAGNOSTICS_PATH) {
         writeFileSync(join(sandbox, "aidlc", ".aidlc-hook-debug"), "");
       }
 
-      // One human prompt forces the constructed same-turn cascade: approve the open
-      // gate (legit - the prompt recorded one HUMAN_TURN), then in the SAME un-ended
-      // turn advance and re-approve the next gate (fabricated - no HUMAN_TURN follows
-      // the first GATE_APPROVED, so the ledger check refuses it).
       // WHY THE MODEL IS ONLY ASKED FOR THE LEGITIMATE HALF.
       //
-      // This prompt used to demand two approvals in one turn: the open gate
-      // (legitimate) and the next stage's (fabricated). The conductor now
-      // REFUSES the pair outright, and it is right to. Its own words from a live
+      // A prompt that demands two approvals in one turn, the open gate
+      // (legitimate) and the next stage's (fabricated), makes the conductor
+      // REFUSE the pair outright, and it is right to. Its own words from a live
       // run: "A report --stage X --result approved is only valid when a next
       // call this turn actually opened stage X ... Reporting it approved would
       // fabricate progress across stages that never ran." That is the shipped
@@ -811,17 +801,17 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
       // then burned its whole 36-minute budget waiting for a commit that was
       // never coming. Ordering the model to skip `next` does not help either:
       // with this fixture's gate open, `next` answers with a fresh run-stage for
-      // the stage that is awaiting approval (aidlc-orchestrate.ts:5233-5246
-      // diverts to the gate only when presenting it is NOT executable), so the
+      // the stage that is awaiting approval (aidlc-orchestrate.ts diverts to
+      // the gate only when presenting it is NOT executable), so the
       // conductor either refuses or redoes the stage.
       //
       // So the model is asked for the one thing it can legitimately do, and the
       // fabricated approval is driven by the test below. The live value is
-      // unchanged where it matters: a real desktop app, the real mint hook, and
-      // a real commit through the real engine. What moves is only WHO attempts
-      // the fabrication, and the refusal it must meet is the same code path.
+      // a real desktop app, the real mint hook, and a real commit through the
+      // real engine. Only WHO attempts the fabrication differs, and the refusal
+      // it must meet is the same code path.
       // The prompt is the HUMAN'S ANSWER to the open gate, which is what a person
-      // actually types, and the only shape the conductor will act on. Two earlier
+      // actually types, and the only shape the conductor will act on. Two other
       // shapes were tried live and both were refused on principle, quoting the
       // engine discipline and a stored learning back at us: naming the two report
       // commands ("Reporting it approved would fabricate progress across stages
@@ -1003,8 +993,6 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
         // match the prompts exactly, which is the property this pins.
         expect(humanTurnCount(sandbox)).toBe(humanPrompts);
 
-        // The committed (legit, human-present) gate recorded exactly one GATE_APPROVED
-        // in the real handleApprove audit ledger.
         expect(gateApprovedCountFor(sandbox, COMMITTED_SLUG)).toBe(1);
 
         // The fabricated same-turn approval was REFUSED - no HUMAN_TURN follows
@@ -1065,13 +1053,13 @@ describe("t-ide-kiro-checkpoint (live Kiro IDE: human-presence gate enforced on 
         // focuses + verifies the text landed + retries before Enter.
         await typeAndSubmit(
           t,
-          // Numbered, one command per line, and explicitly not combinable. The
-          // previous wording listed them semicolon-separated on a single line,
-          // which reads as one shell command; a model that runs the line once
-          // produces ONE continuation whose output carries all five labels, and
-          // completedContinuationLabels then never sees five separate
-          // "Output: <label> Exit Code: 0" results. The ratio this test measures
-          // needs five real continuations, so the prompt has to forbid batching.
+          // Numbered, one command per line, and explicitly not combinable. Listing
+          // them semicolon-separated on a single line reads as one shell command; a
+          // model that runs the line once produces ONE continuation whose output
+          // carries all five labels, and completedContinuationLabels then never sees
+          // five separate "Output: <label> Exit Code: 0" results. The ratio this test
+          // measures needs five real continuations, so the prompt has to forbid
+          // batching.
           "Run five separate shell tool calls, exactly one command per call, in " +
             "this order, without pausing or asking me anything between them. Do " +
             "not combine them into one command and do not use semicolons.\n" +

@@ -287,7 +287,6 @@ describe("t296 first-run config setup walk", () => {
       "none",
       "--yes",
     ];
-    // Naming the section explicitly still has no provider question to ask.
     expect(run(kiroScaffold, path, env, "n\n").status).toBe(0);
     const section = run(
       ["config", "providers", "--project-dir", path, "--harness", "kiro"],
@@ -518,15 +517,15 @@ describe("t296 first-run config setup walk", () => {
     expect(rerun.stdout).toContain(
       "The workspace shell is incomplete, so no section is walked until it is rebuilt",
     );
-    // The old advice was a bare `aidlc config`, which is this very command. This
-    // is a Bun-invoking projection, which has no installed runtime to refresh
-    // from, so the rebuild also fetches the copy runtime for its release, never
-    // the native bytes that would swap its channel.
+    // A bare `aidlc config` would rerun this very command. This is a Bun-invoking
+    // projection, which has no installed runtime to refresh from, so the rebuild
+    // also fetches the copy runtime for its release, never the native bytes that
+    // would swap its channel.
     expect(rerun.stdout).toMatch(
       /workspace\s+bun \.claude\/tools\/aidlc\.ts config --harness claude --download/,
     );
     expect(rerun.stdout).not.toMatch(/^\s+trust\s+/m);
-    // The trust issue itself now names the same rebuild, not the bare rerun.
+    // The trust issue itself names the same rebuild, not the bare rerun.
     const trust = run(
       ["config", "trust", "--project-dir", path, "--show", "--json"],
       path,
@@ -581,7 +580,7 @@ describe("t296 first-run config setup walk", () => {
       AWS_ACCESS_KEY_ID: "test-access",
       AWS_SECRET_ACCESS_KEY: "test-secret",
     });
-    // Models is walked first now: settings layer, then 1 to pick a preset, then
+    // Models is walked first: settings layer, then 1 to pick a preset, then
     // balanced. Providers follows with region and profile. Recording the preset
     // is the point of the walk: without it every agent inherits the session.
     const result = run(

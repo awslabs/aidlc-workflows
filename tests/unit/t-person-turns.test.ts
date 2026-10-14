@@ -7,7 +7,9 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { cleanupTestProject, createTestProject, seedBoltDag, seededAuditShard } from "../harness/fixtures.ts";
 import {
+  expectPersonFirst,
   nextPersonTurnCarriesPicks,
+  PersonTurnError,
   PersonTurnLedger,
   startPersonTurnSession,
   submittedToPersonTurnSession,
@@ -34,8 +36,7 @@ function ledgerFolder(): string {
 }
 
 let clock = 0;
-function row(project: string, event: string, fields: Record<string, string> = {}): void {
-  const shard = seededAuditShard(project);
+function row(project: string, event: string, fields: Record<string, string> = {}, shard = seededAuditShard(project)): void {
   mkdirSync(dirname(shard), { recursive: true });
   const at = new Date(Date.UTC(2026, 9, 4, 12, 0, clock++)).toISOString().replace(/\.\d{3}Z$/, "Z");
   const lines = Object.entries(fields).map(([name, value]) => `**${name}**: ${value}`);
@@ -48,6 +49,29 @@ function project(): string {
   row(dir, "WORKFLOW_STARTED");
   return dir;
 }
+
+// The runner never retries a file that fails with this error (tests/lib/file-retry.ts),
+// so every person-turn failure must be one: the drives' unbacked-decision failure and
+// a test's own "the person came first" check alike.
+describe("person-turn failures carry their own error", () => {
+  test("an unbacked decision fails as a PersonTurnError", () => {
+    const failure = unbackedFailure("The SDK drive", ["GATE_APPROVED at 00:00"]);
+    expect(failure).toBeInstanceOf(PersonTurnError);
+    expect(failure.name).toBe("PersonTurnError");
+  });
+
+  test("expectPersonFirst passes when the person came first, and fails as a PersonTurnError when not", () => {
+    expect(() => expectPersonFirst(true, "work was started before the person answered")).not.toThrow();
+    let thrown: unknown;
+    try {
+      expectPersonFirst(false, "work was started before the person answered");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(PersonTurnError);
+    expect((thrown as Error).message).toBe("work was started before the person answered");
+  });
+});
 
 describe("person-turn check", () => {
   test("an approval the agent recorded with no turn after the gate opened is flagged", () => {
@@ -133,6 +157,25 @@ describe("person-turn check", () => {
     expect(problems[1]).toContain("QUESTION_ANSWERED requirements-analysis");
   });
 
+  // The engine's own check of the quote (log answer --on-instruction), so a
+  // quote the engine records is one the drive finds, punctuation aside.
+  test("a choice left to the agent is backed by its quote whatever the punctuation, and not by words cut from it", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("Honestly, it\u2019s up to you!");
+    row(dir, "DECISION_RECORDED", { Stage: "intent-capture" });
+    row(dir, "QUESTION_ANSWERED", {
+      Stage: "intent-capture", Details: "Q1: A",
+      "Answer Source": "chosen by the agent as the person asked", Instruction: "it's up to you.",
+    });
+    expect(drive.unbacked()).toEqual([]);
+    row(dir, "QUESTION_ANSWERED", {
+      Stage: "intent-capture", Details: "Q2: A",
+      "Answer Source": "chosen by the agent as the person asked", Instruction: "honestly up to you",
+    });
+    expect(drive.unbacked()).toHaveLength(1);
+  });
+
   test("an answer needs a turn after its question opened; another stage's turn does not count", () => {
     const dir = project();
     const drive = new PersonTurnLedger(dir);
@@ -146,6 +189,23 @@ describe("person-turn check", () => {
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain("QUESTION_ANSWERED user-stories");
     expect(problems[0]).toContain('recorded words "picked by the agent"');
+  });
+
+  test("a row in a shard that began during the drive is backed only by the turn sent just before it began, or a later one", () => {
+    // A fresh clone writes a shard of its own; this one's name sorts first, so it is read first.
+    const dir = project();
+    const clone = join(dirname(seededAuditShard(dir)), "aaaa-000000000000.md");
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("/aidlc --scope classic build it");
+    row(dir, "DECISION_RECORDED", { Stage: "requirements-analysis" });
+    drive.sent("Guide me", 1);
+    row(dir, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: "Guide me" });
+    drive.sent("Approve Plan");
+    row(dir, "PLAN_APPROVAL_RECORDED", { Stage: "code-generation", Details: "Approve Plan" }, clone);
+    expect(drive.unbacked()).toEqual([]);
+    // A second one with no turn since has nothing behind it.
+    row(dir, "PLAN_APPROVAL_RECORDED", { Stage: "code-generation", Details: "Approve Plan" }, clone);
+    expect(drive.unbacked()).toHaveLength(1);
   });
 
   test("a project type the agent changed with no turn after the work started is flagged", () => {

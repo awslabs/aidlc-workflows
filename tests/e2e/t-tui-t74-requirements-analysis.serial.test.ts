@@ -1,27 +1,23 @@
 // covers: stage:inception/requirements-analysis
 //
-// t-tui-t74-requirements-analysis.serial.tui.test.ts — drive the
+// t-tui-t74-requirements-analysis.serial.test.ts - drive the
 // requirements-analysis Inception stage through a REAL claude TUI and prove the
 // stage commits its artefacts + advances workflow state ON DISK, answering every
-// rendered AskUserQuestion gate by keystroke. A faithful PATTERN-B port of the
-// bash journey tests/integration/t74-stage-requirements-analysis.sh, which
-// AUTO-APPROVED the requirements gate headlessly, so the interactive review
-// a real user lives (answering the questions menu, then the approval gate) was
-// NEVER exercised. This rewrite answers the painted gates with the shared
-// `answer-gate` primitive, terminating on the on-disk requirements artefact.
+// rendered AskUserQuestion gate by keystroke. This answers the painted gates with
+// the shared `answer-gate` primitive, terminating on approval AND advancement in
+// state.
 //
-// WHAT IT PROVES (equal-or-stronger than the .sh on the same on-disk surface):
-//   The .sh seeds a brownfield Todo app, mid-inception state (Current Stage ==
+// WHAT IT PROVES:
+//   The fixture seeds a brownfield Todo app, mid-inception state (Current Stage ==
 //   requirements-analysis — a redo jump, so aidlc-jump does NOT terminate; the
 //   stage's own gate runs, approve auto-advances to the next in-scope stage), and
 //   4 pre-seeded reverse-engineering artefacts. After the stage runs it asserts:
-//     1  requirements-analysis directory created          -> covered by terminator + dir read
+//     1  requirements-analysis directory created
 //     2  a requirements artefact exists (not the questions file)
 //     3  requirements artefact > 200 bytes
 //     4  requirements artefact has markdown (^#) headings
-//     5/6 Todo / React|TypeScript mentions               -> SKIP in .sh (LLM varies); NOT ported
-//                                                            as a hard assert (would weaken to chase
-//                                                            green) — left to the LLM-content tier.
+//     5/6 Todo / React|TypeScript mentions are not hard assertions because
+//         LLM output varies; they are left to the LLM-content tier.
 //     7  a questions file exists
 //     8  the questions file has >0 [Answer]: tags filled  (the interactive answers landed)
 //     9  state marks `[x] requirements-analysis`
@@ -66,9 +62,8 @@
 //   correct behaviour.
 //
 // REACHABILITY: a full requirements-analysis run is several minutes of real LLM
-// turns plus two gate round-trips; the per-gate/overall timeouts are HANG
-// BACKSTOPS (answer-gate errors loud, never "concludes done"). The .sh ran with
-// AIDLC_TEST_TIMEOUT=900; this honours the same convention.
+// turns plus gate round-trips; the overall timeout is a HANG
+// BACKSTOP (answer-gate errors loud, never "concludes done").
 //
 // COST: spends real Bedrock tokens (minutes-long LLM turns). Gated behind
 // AIDLC_TUI_LIVE=1 so a bare `--e2e` on a laptop SKIPs it; selected TUI substrate/claude/
@@ -104,9 +99,9 @@ const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude");
 const { bin: DRIVE_BIN, prefix: DRIVE_PREFIX } = resolveTuiRuntime(DRIVER);
 
-// Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds; the .sh set 900 and
+// Honour the suite's AIDLC_TEST_TIMEOUT convention (seconds;
 // the integration tier sets 600). A full requirements-analysis run-through is
-// several minutes of real LLM turns plus two gates, so the bun:test cap is
+// several minutes of real LLM turns plus gates, so the bun:test cap is
 // generous.
 const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
 const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
@@ -192,9 +187,9 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
     `requirements-analysis run-through writes requirements.md + advances state on disk${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
       const session = `aidlc_tui_t74_${process.pid}`;
-      // Mirror the .sh setup_integration_project: brownfield Todo app, mid-inception
+      // Brownfield Todo app, mid-inception
       // state (Current Stage == requirements-analysis, a redo jump), 4 pre-seeded
-      // RE artefacts, and a seeded audit.md the workflow appends to.
+      // RE artefacts, and a seeded audit the workflow appends to.
       const sandbox = setupTuiProject({
         withState: "state-mid-inception.md",
         projectDescription: PROJECT_DESCRIPTION,
@@ -240,7 +235,7 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
 
         // --- submit the stage jump --------------------------------------------
         // The slash command has spaces -> send literally with no auto-Enter, then
-        // Enter as a named key (the template's exact two-step). The fixture's
+        // Enter as a named key. The fixture's
         // Current Stage already equals the target, so aidlc-jump treats this as a
         // redo and does NOT terminate — the stage's own gate runs interactively.
         drive([
@@ -294,18 +289,16 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
               "--project-dir",
               sandbox,
               // Terminate on the POST-APPROVAL state signal, not the requirements.md
-              // file. The artefact is written at Step 5 (generation), but the stage
+              // file. The artefact is written at the generation step, but the stage
               // is only marked `[x]` / Last Completed Stage / Current-Stage-advanced
-              // at Step 7 (approval). Terminating on the file stopped the answer-gate
-              // BEFORE the approval gate (verified live 2026-06-06: terminator met
-              // after 7 answers, requirements.md present, but `[x] requirements-
-              // analysis` was false — the t73 terminator-race). Verified 2026-09-13:
-              // handleApprove writes Last Completed Stage first (aidlc-state.ts:5719),
-              // BEFORE handleAdvance writes Current Stage (aidlc-state.ts:4506).
-              // The loop polls disk first and the test kills the session ~60 ms
-              // after termination; waiting only for the first write killed approve
-              // mid-flight (GATE_APPROVED present, no next-stage STAGE_STARTED).
-              // Require BOTH approval and advancement for assertions 9/10/11
+              // at the approval step. Terminating on the file stopped the answer-gate
+              // BEFORE the approval gate (terminator met after 7 answers, requirements.md
+              // present, but `[x] requirements-analysis` was false - the t73 terminator
+              // race). handleApprove writes Last Completed Stage first (aidlc-state.ts),
+              // BEFORE handleAdvance writes Current Stage. The loop polls disk first and
+              // the test kills the session ~60 ms after termination; waiting only for the
+              // first write killed approve mid-flight (GATE_APPROVED present, no next-stage
+              // STAGE_STARTED). Require BOTH approval and advancement for assertions 9/10/11
               // (the `[x]` mark, Current-Stage-advanced, completed>4).
               "--until-state-field",
               "Last Completed Stage=^requirements-analysis$",
@@ -328,14 +321,11 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         pollTimer = undefined;
         expect(gateRc).toBe(0);
 
-        // --- assert ON DISK (the .sh's surface, equal-or-stronger) ------------
+        // --- assert ON DISK ------------
         const reqDir = join(seededRecordDir(sandbox), "inception", "requirements-analysis");
 
-        // .sh test 1: requirements-analysis directory created.
         expect(existsSync(reqDir)).toBe(true);
 
-        // .sh test 2: a requirements artefact exists that is NOT the questions
-        // file (the same -name "*requirements*" -not -name "*questions*" filter).
         const entries = readdirSync(reqDir);
         const reqFiles = entries.filter(
           (f) => /requirements/i.test(f) && !/questions/i.test(f) && f.endsWith(".md"),
@@ -344,59 +334,54 @@ describe("t-tui-t74-requirements-analysis (answering AUQ gates commits the requi
         const reqPath = join(reqDir, reqFiles[0]);
         const reqBody = readFileSync(reqPath, "utf8");
 
-        // .sh test 3: requirements artefact > 200 bytes (byte length, not char).
+        // Requirements artefact > 200 bytes (byte length, not char).
         expect(Buffer.byteLength(reqBody, "utf8")).toBeGreaterThan(200);
 
-        // .sh test 4: requirements artefact has at least one markdown (^#) heading.
         expect(/^#/m.test(reqBody)).toBe(true);
 
-        // .sh tests 5/6 (Todo / React|TypeScript mentions) are SKIP in the .sh
-        // because LLM output varies — NOT ported as hard asserts (the IRON RULE:
+        // Todo / React|TypeScript mentions are not hard assertions
+        // because LLM output varies (the IRON RULE:
         // asserting LLM phrasing would force a soften-to-green). Left to the
         // LLM-content tier.
 
-        // .sh test 7: a questions file exists.
         const questionsFiles = entries.filter((f) => /questions/i.test(f) && f.endsWith(".md"));
         expect(questionsFiles.length).toBeGreaterThanOrEqual(1);
         const questionsBody = readFileSync(join(reqDir, questionsFiles[0]), "utf8");
 
-        // .sh test 8: the questions file has >0 [Answer]: tags filled — the proof
-        // the interactive gate answers actually landed on disk (the whole point of
-        // this rewrite: a REAL keystroke-answered gate, not an auto-approve).
+        // The questions file has >0 [Answer]: tags filled - the proof
+        // the interactive gate answers actually landed on disk:
+        // a REAL keystroke-answered gate, not an auto-approve.
         const answerCount = (questionsBody.match(/\[Answer\]:/g) ?? []).length;
         expect(answerCount).toBeGreaterThan(0);
 
-        // .sh tests 9-11: state advanced.
+        // State advancement.
         const stateMd = readFileSync(seededStateFile(sandbox), "utf8");
 
-        // test 9: state marks `[x] requirements-analysis` (case-insensitive, the
-        // .sh's grep -qi '\[x\] requirements-analysis').
         expect(/\[x\][ \t]*requirements-analysis/i.test(stateMd)).toBe(true);
 
-        // test 10: Current Stage advanced PAST requirements-analysis. The fixture
+        // Current Stage advanced PAST requirements-analysis. The fixture
         // seeds Current Stage == requirements-analysis; after the gate's approve
         // auto-advances, the Current Stage line must no longer name it.
         const currentLine =
           stateMd.split("\n").find((l) => /Current Stage/i.test(l)) ?? "";
         expect(currentLine).not.toMatch(/requirements-analysis/i);
 
-        // test 11: completed count > 4 (3 init + RE + requirements). The .sh counts
-        // lines matching `^- [x]` (`grep -c '^\- \[x\]'`).
+        // Completed count > 4 (3 init + RE + requirements).
         const completedCount = (stateMd.match(/^- \[x\]/gm) ?? []).length;
         expect(completedCount).toBeGreaterThan(4);
 
-        // .sh test 12: the pre-seeded RE artifacts are still intact (not
+        // The pre-seeded RE artifacts are still intact (not
         // overwritten) in the canonical space-level codekb directory.
         const reDir = seededCodekbDir(sandbox);
         expect(existsSync(reDir)).toBe(true);
         const reCount = readdirSync(reDir).filter((f) => f.endsWith(".md")).length;
         expect(reCount).toBeGreaterThan(3);
 
-        // --- ADDED on-disk strengthening (audit emission the .sh did not check) -
+        // --- on-disk audit emission -
         // The interactive stage commit emits STAGE_COMPLETED (and the gate emits
-        // GATE_APPROVED). The .sh asserted only state lines; this also pins the
-        // audit emission the interactive path produces, on the same surface
-        // the workshop port asserts (`**Event**: <type>` line, aidlc-audit.ts:258).
+        // GATE_APPROVED). This also pins the
+        // audit emission the interactive path produces
+        // (`**Event**: <type>` line, aidlc-audit.ts appendAuditEntry).
         const auditMd = readAllAuditShards(sandbox);
         const auditLines = auditMd.split("\n");
         const stageCompleted = auditLines.filter((l) =>

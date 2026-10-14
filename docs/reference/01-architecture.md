@@ -505,7 +505,10 @@ prompt. On Kiro IDE it also reads Kiro's Workflows switch
 sub-agent tool from chats; `core/tools/aidlc-kiro-ide-workflows.ts` changes that
 one JSONC key on the person's answer (`--kiro-workflows`, setup, `config --yes`,
 or the once-per-machine chat ask from session start) and keeps the answer in the
-install root's `kiro-ide-workflows` marker. On Windows it also reads Kiro's
+install root's `kiro-ide-workflows` marker. A settings file it cannot read as
+JSONC is reported as unknown, never as off (trust, setup, doctor), and session
+start tells the chat once per error, keeping the file's path and fingerprint in
+the `kiro-ide-settings-error-told` marker. On Windows it also reads Kiro's
 default terminal profile (`terminal.integrated.defaultProfile.windows`): in
 Command Prompt the agent's AI-DLC commands split the person's words and every
 command reports exit code -1, so `core/tools/aidlc-kiro-ide-terminal.ts` sets
@@ -660,8 +663,10 @@ out-of-band Bun-shaped `aidlc-copy-runtime-X.Y.Z.tar.gz` and each
 uploads that candidate without signing. Unix and Windows lifecycle jobs verify
 its checksums and test it. The `update-from-previous` job, on Linux, macOS and
 Windows, installs the last stable release with its own installer, sets up a
-project for every harness, runs `aidlc update` to the candidate, and checks that
-each project's hooks, `aidlc config --yes` refresh and doctor still work. A
+project for every harness with the person's work waiting at a gate, runs
+`aidlc update` to the candidate, and checks that each project's hooks,
+`aidlc config --yes` refresh and doctor still work, and that the person picks
+their work up at that gate with nothing asked again. A
 stable release does not publish when it fails; a preview publishes with a
 warning in its notes. `publish` downloads the same candidate, re-verifies
 it, attests it, adds the exported `aidlc-release.intoto.jsonl` bundle, validates
@@ -762,10 +767,18 @@ dist/claude/.claude/
     |   +-- stage-protocol-recovery.md
     |   +-- stage-protocol-governance.md
     |   +-- stage-protocol-reviewer.md
+    |   +-- stage-protocol-reviewer-unit.md
+    |   +-- stage-protocol-reviewer-repair.md
     |   +-- stage-protocol-ensemble.md
+    |   +-- stage-protocol-collaborators.md
     |   +-- stage-protocol-construction.md
+    |   +-- stage-protocol-checkpoint.md
+    |   +-- stage-protocol-loopback.md
+    |   +-- stage-protocol-wave.md
     |   +-- stage-protocol-swarm.md
     |   +-- stage-protocol-learnings.md
+    |   +-- stage-protocol-summary.md
+    |   +-- stage-protocol-sensors.md
     +-- stages/
         +-- initialization/
         |   +-- workspace-scaffold.md
@@ -916,13 +929,16 @@ length and PID are validated; process handles are closed on every path.
 Creation times stay lossless in PID receipts. Each parent must predate its child,
 so a recycled parent PID cannot join the walk to a newer process. Receipts
 without a verified Windows creation time do not establish session ownership.
-Lookup failure, an ambiguous parent edge, or exhaustion of the existing
-50 ms / 64-ancestor budget yields no ancestry session; null barriers and the
+Lookup failure, an ambiguous parent edge, or exhaustion of the
+2-second / 64-ancestor limit yields no ancestry session; null barriers and the
 negative cache retain their existing behavior. Linux reads `/proc` for each hop; macOS
 reads the whole process table (pid, parent, `lstart`) with one `ps` call per walk and
-every hop from it, so a deep chain fits the same budget and the recorded start times
+every hop from it, and the recorded start times
 are the strings a per-pid lookup prints. One process reuses that table for up to a
-second (the negative cache's window); a SessionStart write clears it.
+second (the negative cache's window); a SessionStart write clears it. The limit
+is the same on every OS and only bounds a walk that cannot finish (a `ps` that
+never answers): a walk ends as soon as it has its answer, a few milliseconds on
+an idle machine, and on a busy one it finishes instead of losing the chat.
 
 Multiple Kiro IDE chats
 and opencode sessions can still share one process; process ancestry cannot
@@ -979,7 +995,7 @@ readers read the rows they share once (`copiedAuditBlocks` in
 
 7. **Flat agent files** -- Each agent is a single `.md` file in `agents/` (not a subdirectory with `agent.md` + `knowledge/`). This simplifies the structure and makes agents discoverable. Methodology knowledge lives separately in `knowledge/[agent]/`.
 
-8. **Scope-driven adaptive depth** -- Eleven named scopes (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, classic, workshop, express) plus a plan the agent proposes from freeform words determine which stages execute and at what depth. Each scope is a `.claude/scopes/aidlc-<name>.md` file (identity); membership is a per-stage `scopes:` frontmatter tag, transposed at compile into the EXECUTE/SKIP grid (`.claude/tools/data/scope-grid.json`, authoritative) and compiled into a summary table in SKILL.md (informational). The plan proposal step hands each scope's `keywords` from its `.md` frontmatter to the agent as hints; no tool matches them. The user can override at any approval gate.
+8. **Scope-driven adaptive depth** -- Eleven named scopes (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, classic, workshop, express) plus a plan the agent proposes from freeform words determine which stages execute and at what depth. Each scope is a `.claude/scopes/aidlc-<name>.md` file (identity); membership is a per-stage `scopes:` frontmatter tag, transposed at compile into the EXECUTE/SKIP grid (`.claude/tools/data/scope-grid.json`, authoritative) and compiled into a summary table in `tables.md` beside the orchestrator skill (informational). The plan proposal step hands each scope's `keywords` from its `.md` frontmatter to the agent as hints; no tool matches them. The user can override at any approval gate.
 
 9. **Rules stay method, not reference** -- The active space memory layer (`aidlc/spaces/<active-space>/memory/`, pulled in via the `.claude/rules/aidlc.md` @-import stub) holds the framework's working defaults and the guardrails. Everything else (verification, brownfield safeguards, audit format, adaptive patterns) lives in `knowledge/aidlc-shared/` or the static/conditional protocol files. This prevents context bloat in non-AI-DLC conversations since rules are always loaded.
 

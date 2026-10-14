@@ -125,8 +125,43 @@ function copiedProject(harness: string): string {
   return proj;
 }
 
+// A copy set up as the guide says, before its first chat: the project's own
+// config from the copy runtime. `before` runs first (a release copy runtime
+// ships no team.md or project.md; the first /aidlc writes them).
+function configuredProject(harness: string, before?: (proj: string) => void): string {
+  const proj = copiedProject(harness);
+  before?.(proj);
+  const machine = mkdtempSync(join(realpathSync(tmpdir()), "aidlc-t-rules-machine-"));
+  projects.push(machine);
+  const config = spawnSync(process.execPath, [
+    join(proj, HARNESS_DIR[harness], "tools", "aidlc.ts"),
+    "config", "--from", join(REPO_ROOT, "dist", harness), "--harness", harness, "--yes",
+  ], {
+    cwd: proj,
+    encoding: "utf-8",
+    env: { ...childEnv({}), AIDLC_INSTALL_ROOT: join(machine, "share", "aidlc"), AIDLC_BIN_DIR: join(machine, "bin") },
+  });
+  expect(config.status, `${config.stdout}${config.stderr}`).toBe(0);
+  return proj;
+}
+
 function memoryFile(proj: string, name: string): string {
   return join(proj, "aidlc", "spaces", "default", "memory", name);
+}
+
+// The release copy runtime has no team.md or project.md; the first /aidlc
+// writes the shipped templates, which carry no rule of their own.
+function withoutTeamFiles(proj: string): Record<string, string> {
+  const kept: Record<string, string> = {};
+  for (const name of ["team.md", "project.md"]) {
+    kept[name] = readFileSync(memoryFile(proj, name), "utf-8");
+    rmSync(memoryFile(proj, name));
+  }
+  return kept;
+}
+
+function writeBack(proj: string, kept: Record<string, string>): void {
+  for (const [name, text] of Object.entries(kept)) writeFileSync(memoryFile(proj, name), text);
 }
 
 // A team practice the stage's rules now carry (substantive, so it is in the bundle).
@@ -274,7 +309,6 @@ describe("Claude Code: the memory the host loaded at the chat's last load", () =
     const sid = randomUUID();
     const env = { AIDLC_SESSION_OVERRIDE: sid, CLAUDE_CODE_SESSION_ID: sid, CLAUDECODE: "1" };
     await sessionStart(proj, "claude", sid, "startup");
-    // The chat's first step hands it the text once.
     expect(sentInFull(await next(proj, "claude", env))).toBe(true);
     const first = await next(proj, "claude", env);
     expect(pointerOnly(first), JSON.stringify(first.final).slice(0, 400)).toBe(true);
@@ -306,7 +340,6 @@ describe("Claude Code: the memory the host loaded at the chat's last load", () =
     await sessionStart(proj, "claude", sid, "startup");
     expect(sentInFull(await next(proj, "claude", env))).toBe(true);
     expect(pointerOnly(await next(proj, "claude", env))).toBe(true);
-    // A resume with the files unchanged keeps the pointer.
     await sessionStart(proj, "claude", sid, "resume");
     expect(pointerOnly(await next(proj, "claude", env))).toBe(true);
 
@@ -321,17 +354,44 @@ describe("Claude Code: the memory the host loaded at the chat's last load", () =
       AIDLC_SESSION_OVERRIDE: forked, CLAUDE_CODE_SESSION_ID: forked, CLAUDECODE: "1",
     }))).toBe(true);
 
-    // The command runs in another chat than the one recorded.
     const other = randomUUID();
     await sessionStart(proj, "claude", other, "startup");
     expect(sentInFull(await next(proj, "claude", {
       AIDLC_SESSION_OVERRIDE: other, CLAUDE_CODE_SESSION_ID: randomUUID(), CLAUDECODE: "1",
     }))).toBe(true);
-    // No session start recorded for this chat at all.
     const unseen = randomUUID();
     expect(sentInFull(await next(proj, "claude", {
       AIDLC_SESSION_OVERRIDE: unseen, CLAUDE_CODE_SESSION_ID: unseen, CLAUDECODE: "1",
     }))).toBe(true);
+  });
+
+  // #1330: the first chat after setup used to get the text on every step,
+  // because its session start wrote the copy the import reads after Claude had
+  // read the import. config writes it first now.
+  test("the first chat after config holds what it loaded: the text once, then the pointer", async () => {
+    const proj = configuredProject("claude");
+    const sid = randomUUID();
+    const env = { AIDLC_SESSION_OVERRIDE: sid, CLAUDE_CODE_SESSION_ID: sid, CLAUDECODE: "1" };
+    await sessionStart(proj, "claude", sid, "startup");
+    expect(sentInFull(await next(proj, "claude", env))).toBe(true);
+    expect(pointerOnly(await next(proj, "claude", env))).toBe(true);
+  });
+
+  test("a template the first /aidlc writes is not a rule of the step: no text every step, before or after a resume", async () => {
+    let kept: Record<string, string> = {};
+    const proj = configuredProject("claude", (dir) => {
+      kept = withoutTeamFiles(dir);
+    });
+    const sid = randomUUID();
+    const env = { AIDLC_SESSION_OVERRIDE: sid, CLAUDE_CODE_SESSION_ID: sid, CLAUDECODE: "1" };
+    await sessionStart(proj, "claude", sid, "startup");
+    writeBack(proj, kept);
+    const first = await next(proj, "claude", env);
+    expect(sentInFull(first)).toBe(true);
+    expect(first.final.rules_in_context?.some((path) => /\/(team|project)\.md$/.test(path))).toBe(false);
+    expect(pointerOnly(await next(proj, "claude", env))).toBe(true);
+    await sessionStart(proj, "claude", sid, "resume");
+    expect(pointerOnly(await next(proj, "claude", env))).toBe(true);
   });
 
   test("an import that does not name a rule file of the stage: the text", async () => {
@@ -465,7 +525,6 @@ describe("Codex: this thread was given the bundle and nothing since could have d
       // The model asked for a small output budget: Codex kept each rule's ends.
       const cut = await next(proj, "codex", env, { ...rollout, cut: true });
       expect(sentInFull(cut)).toBe(true);
-      // The thread holds only part of the text: all of it again, and again.
       const again = await next(proj, "codex", env, { ...rollout, cut: true });
       expect(sentInFull(again)).toBe(true);
       // The chat's first step also carried the conductor persona, so the rules
@@ -474,7 +533,6 @@ describe("Codex: this thread was given the bundle and nothing since could have d
       // the team's memory grows.
       expect(again.results.length > 1, `parts when grown=${grown}`).toBe(grown);
       expect(sentInFull(await next(proj, "codex", env, rollout))).toBe(true);
-      // A whole copy is in the rollout now.
       expect(pointerOnly(await next(proj, "codex", env, rollout))).toBe(true);
     }
   });
@@ -592,7 +650,6 @@ describe("Kiro IDE: the chat holds the steering file it captured when it started
       expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(sid))), command).toBe(true);
       expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(sid))), command).toBe(true);
     }
-    // A bare step noted and caught up leaves the record alone.
     await card("execute_bash", "aidlc engine orchestrate next");
     await card("execute_bash", "aidlc engine orchestrate next 2>&1");
     expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
@@ -623,7 +680,6 @@ describe("Kiro IDE: the chat holds the steering file it captured when it started
     // A's turn ends: C alone runs, and C holds the file.
     await kiroIdeStop(proj, a);
     expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(c)))).toBe(true);
-    // A command from a chat with no open turn: the text.
     await kiroIdeStop(proj, c);
     expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(c)))).toBe(true);
   });
@@ -635,6 +691,43 @@ describe("Kiro IDE: the chat holds the steering file it captured when it started
     expect(sentInFull(await next(proj, "kiro-ide", { ...inKiroIde(sid), KIRO_SESSION_ID: sid }))).toBe(true);
     expect(pointerOnly(await next(proj, "kiro-ide", { ...inKiroIde(sid), KIRO_SESSION_ID: sid }))).toBe(true);
     expect(sentInFull(await next(proj, "kiro-ide", { ...inKiroIde(sid), KIRO_SESSION_ID: kiroChat() }))).toBe(true);
+  });
+
+  // #1330: the first chat after setup got the text on every step.
+  test("the first chat after config holds its steering file: the text once, then the pointer", async () => {
+    const proj = configuredProject("kiro-ide");
+    const sid = kiroChat();
+    await kiroIdePrompt(proj, sid);
+    expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
+    expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
+    await kiroIdeStop(proj, sid);
+  });
+
+  // The engine's memory copy is for the other tools' includes; nothing on the
+  // Kiro IDE tree reads it, so writing it at a chat's start changes nothing
+  // that chat holds.
+  test("a memory copy written at a chat's start is not a reload of its steering file", async () => {
+    const proj = await kiroIdeProject();
+    rmSync(join(proj, "aidlc", "active-memory", "org.md"));
+    const sid = kiroChat();
+    await kiroIdePrompt(proj, sid);
+    expect(existsSync(join(proj, "aidlc", "active-memory", "org.md"))).toBe(true);
+    expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
+    expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
+    await kiroIdeStop(proj, sid);
+  });
+
+  test("a template the first /aidlc writes is not a rule of the step: no text every step", async () => {
+    let kept: Record<string, string> = {};
+    const proj = configuredProject("kiro-ide", (dir) => {
+      kept = withoutTeamFiles(dir);
+    });
+    const sid = kiroChat();
+    await kiroIdePrompt(proj, sid);
+    writeBack(proj, kept);
+    expect(sentInFull(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
+    expect(pointerOnly(await next(proj, "kiro-ide", inKiroIde(sid)))).toBe(true);
+    await kiroIdeStop(proj, sid);
   });
 
   test("a fresh clone without the file, or a memory too large to put in every chat: the text", async () => {
@@ -747,8 +840,7 @@ describe("the conductor persona reaches every chat that works on the workflow", 
     const sid = randomUUID();
     const env = { AIDLC_SESSION_OVERRIDE: sid, CLAUDE_CODE_SESSION_ID: sid, CLAUDECODE: "1" };
     await sessionStart(proj, "claude", sid, "startup");
-    // Mid-workflow (the fixture has finished stages behind it), so the old rule
-    // sent nothing here.
+    // Mid-workflow (the fixture has finished stages behind it).
     expect(personaSent(await next(proj, "claude", env))).toBe(true);
     expect(personaSent(await next(proj, "claude", env))).toBe(false);
 
@@ -758,7 +850,6 @@ describe("the conductor persona reaches every chat that works on the workflow", 
     expect(personaSent(await next(proj, "claude", env))).toBe(true);
     expect(personaSent(await next(proj, "claude", env))).toBe(false);
 
-    // Another chat on the same piece of work gets its own copy, once.
     const second = randomUUID();
     const secondEnv = { AIDLC_SESSION_OVERRIDE: second, CLAUDE_CODE_SESSION_ID: second, CLAUDECODE: "1" };
     await sessionStart(proj, "claude", second, "startup");
@@ -772,7 +863,6 @@ describe("the conductor persona reaches every chat that works on the workflow", 
     expect(personaSent(await next(proj, "claude", env))).toBe(true);
     expect(personaSent(await next(proj, "claude", env))).toBe(false);
 
-    // An updated install's persona reaches a chat that already had the old one.
     editPersona(proj, "claude", "- Say the step, never the machinery.");
     const updated = await next(proj, "claude", env);
     expect(personaSent(updated)).toBe(true);

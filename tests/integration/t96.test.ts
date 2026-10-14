@@ -68,7 +68,7 @@ import { dirname, join } from "node:path";
 import { DEFAULT_SPACE, REPO_ROOT, toPortablePath } from "../harness/fixtures.ts";
 import { auditFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
-// P9: with no intent cursor seeded, compile resolves the BARE space record root
+// With no intent cursor seeded, compile resolves the BARE space record root
 // (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/. State,
 // runtime-graph, and the per-clone audit SHARD live under it (no flat
 // aidlc-docs/ fallback); the compiled parent memory_path uses the bare space
@@ -104,10 +104,10 @@ afterAll(() => {
 });
 
 /**
- * make_project_with_audit (t96.sh:69-83): fresh temp project with the
- * state-construction.md fixture as aidlc-state.md and the named audit
- * fixture (under FIXTURES_DIR) as audit.md. toPortablePath mirrors the .sh's
- * bun_path cygpath conversion so the embedded paths round-trip on Windows.
+ * makeProjectWithAudit: fresh temp project with the state-construction.md
+ * fixture as aidlc-state.md and the named audit fixture (under FIXTURES_DIR)
+ * in the audit shard resolved by auditFilePath. toPortablePath performs the
+ * cygpath conversion so the embedded paths round-trip on Windows.
  */
 function makeProjectWithAudit(auditFixtureName: string): string {
   const proj = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t96f-")));
@@ -122,7 +122,6 @@ function makeProjectWithAudit(auditFixtureName: string): string {
   return proj;
 }
 
-/** run_compile (t96.sh:85-87): invoke the shipped runtime compile command. */
 function runCompile(proj: string): void {
   const res = spawnSync(BUN, [RUNTIME_TS, "--project-dir", proj, "compile"], {
     encoding: "utf-8",
@@ -141,7 +140,6 @@ function readGraph(proj: string): any {
   return JSON.parse(readFileSync(graphPath(proj), "utf-8"));
 }
 
-/** The code-generation stage row — the construction-phase stage the audit fixtures drive. */
 // biome-ignore lint/suspicious/noExplicitAny: test reads arbitrary graph shape
 function codeGen(proj: string): any {
   return readGraph(proj).stages.find(
@@ -159,8 +157,6 @@ describe("t96 aidlc-runtime compile — instances[] populator (migrated from t96
     const proj = makeProjectWithAudit("audit-single-bolt.md");
     runCompile(proj);
     const row = codeGen(proj);
-    // .sh: `'instances' in row === false`. STRONGER: the optional key is
-    // absent entirely (undefined), not merely falsy.
     expect("instances" in row).toBe(false);
     expect(row.instances).toBeUndefined();
     expect(row.outcome).toBe("approved");
@@ -175,13 +171,10 @@ describe("t96 aidlc-runtime compile — instances[] populator (migrated from t96
     expect(row.started_at).toBeNull();
     expect(row.agent).toBeNull();
     expect(row.memory_path).not.toBeNull();
-    // STRONGER than the .sh's `!= "null"`: exact parent memory.md path
-    // (P9 reroots it under the bare space record prefix).
     expect(row.memory_path).toBe(
       `${RP}/construction/code-generation/memory.md`,
     );
     expect(row.sensor_firings).toEqual([]);
-    // STRONGER: completed_at + per-Bolt memory fields nulled on the parent too.
     expect(row.completed_at).toBeNull();
     expect(row.memory_entries).toBeNull();
     expect(row.memory_breakdown).toBeNull();
@@ -258,11 +251,10 @@ describe("t96 aidlc-runtime compile — instances[] populator (migrated from t96
   });
 
   // --- 9. Outcome rollup — pending mix -> parent pending ------------------
-  // Strip pay's STATE_MERGED + AUDIT_MERGED + BOLT_COMPLETED blocks from the
-  // temp project's audit COPY (mirrors the .sh's `bun -e` block filter), so
-  // pay has STATE_FORKED but no merge / no fail -> outcome:pending. Parent
-  // then rolls up to pending (no failures, >=1 pending). The fixture source
-  // under tests/fixtures/** is untouched.
+  // Strip pay's STATE_MERGED + AUDIT_MERGED + BOLT_COMPLETED blocks from the temp
+  // project's audit COPY, so pay has STATE_FORKED but no merge / no fail ->
+  // outcome:pending. Parent then rolls up to pending (no failures, >=1 pending).
+  // The fixture source under tests/fixtures/** is untouched.
   test("9: outcome rollup pending-mix -> pay:pending, parent:pending", () => {
     const proj = makeProjectWithAudit("audit-3-bolts-parallel.md");
     const path = auditPath(proj);
@@ -292,8 +284,7 @@ describe("t96 aidlc-runtime compile — instances[] populator (migrated from t96
   // Re-stamp the three STATE_FORKED Timestamps so pay forks earliest, then
   // auth, then cart (non-alphabetical chronological order). Output
   // instances[] must still read [auth, cart, pay] (L6: ordering is by slug,
-  // not by fork timestamp). Mirrors the .sh's `bun -e` re-stamp on the temp
-  // project's audit COPY.
+  // not by fork timestamp).
   test("10: alphabetical ordering stable across shuffled STATE_FORKED timestamps -> [auth, cart, pay]", () => {
     const proj = makeProjectWithAudit("audit-3-bolts-parallel.md");
     const path = auditPath(proj);

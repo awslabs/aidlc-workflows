@@ -32,8 +32,6 @@ describe("t200 reviewer Date field carries a sourcing instruction", () => {
     test(`${agent}: template names where the time comes from and forbids guessing`, () => {
       const body = readFileSync(join(AIDLC_SRC, rel), "utf-8");
       const dateLines = body.split("\n").filter((l) => l.startsWith("**Date:**"));
-      // Exactly one Date line (the template), and it is no longer the bare
-      // format-only placeholder.
       expect(dateLines.length).toBe(1);
       expect(dateLines[0]).not.toBe("**Date:** [ISO timestamp]");
       // The sourcing instruction: the engine's clock, handed over in the
@@ -73,9 +71,9 @@ describe("t200 reviewer Date field carries a sourcing instruction", () => {
     test(`${agent}: template states the heading rule before the review is written`, () => {
       // A verdict is refused when the review carries a second top-level
       // heading, and a reviewer writing a structured document reaches for one
-      // by habit. The constraint used to appear only in the refusal, by which
-      // point the whole file has to be rewritten — so the template the reviewer
-      // reads FIRST has to carry it.
+      // by habit. If the constraint appears only in the refusal, the whole file
+      // has to be rewritten - so the template the reviewer reads FIRST has to
+      // carry it.
       const body = readFileSync(join(AIDLC_SRC, rel), "utf-8");
       const guidance = body.slice(0, body.indexOf("Use this exact format:"));
       expect(guidance).toContain("only top-level heading");

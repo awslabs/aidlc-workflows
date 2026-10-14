@@ -3,10 +3,10 @@
 // What AI-DLC's SessionStart and UserPromptSubmit hooks tell the agent has to
 // reach it on Claude Code. Claude Code reads that context only from
 // hookSpecificOutput and drops a top-level additionalContext without a word,
-// so for a long time a new chat never learned its own Runtime Session id, the
-// state of the work, or a switched-off check. Each case asks the agent to echo
-// what its context says through one Bash call and asserts on that tool result,
-// never on the agent's prose. SPENDS TOKENS.
+// so a new chat would never learn its own Runtime Session id, the state of the
+// work, or a switched-off check. Each case asks the agent to echo what its
+// context says through one Bash call and asserts on that tool result, never on
+// the agent's prose. SPENDS TOKENS.
 
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";

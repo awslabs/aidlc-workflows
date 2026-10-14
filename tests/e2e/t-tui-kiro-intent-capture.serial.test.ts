@@ -219,8 +219,8 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         });
         // --- launch kiro-cli chat in the seeded sandbox -----------------------
         // The shipped .kiro/settings/cli.json makes `aidlc` the workspace
-        // default agent, so a bare chat lands on the conductor (D-5, verified
-        // in the Wave 4 smoke). --trust-all-tools: see TRUST POSTURE above.
+        // default agent, so a bare chat lands on the conductor. --trust-all-tools:
+        // see TRUST POSTURE above.
         expect(
           drive([
             "start",
@@ -265,7 +265,7 @@ describe("t-tui-kiro-intent-capture (numbered-prose gates on the shipped dist/ki
         // letter labels on disk but are presented and answered with numbers.
         // Later prompts receive explicit summary, learnings, and approval
         // responses so a bare numeric answer cannot be mistaken for prose.
-        // Per-iteration: wait up to 240s for the idle footer (a long LLM turn),
+        // Per-iteration: wait for the idle footer within the remaining work time,
         // then check disk BEFORE answering so we stop the instant the approve
         // lands (and never answer the auto-advanced next stage's gate).
         const deadline = Date.now() + remainingWorkMs();

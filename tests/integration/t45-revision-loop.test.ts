@@ -1,28 +1,27 @@
 // covers: cli:aidlc-state(gate-start,reject,revise,approve), function:handleGateStart, function:handleReject, function:handleRevise, function:handleApprove
 //
-// t45 — revision-loop on a gated stage. Migrated from
-// tests/integration/t45-revision-loop.sh (TAP plan 10).
+// t45 - revision-loop on a gated stage.
 //
 // Mechanism: cli. The subject is the gate -> reject -> revise -> gate cycle
 // driven end-to-end across multiple `aidlc-state.ts` subcommand invocations,
 // asserted against (a) the checkbox / Revision Count fields it writes to
-// aidlc-state.md and (b) the cumulative audit trail it appends to audit.md.
+// aidlc-state.md and (b) the cumulative audit trail it appends.
 // Each transition is a CLI subcommand that terminates with process.exit on a
 // state-machine guard failure (validateSlugInState, aidlc-state.ts:661) and
 // writes its event row via the audit lock — a PROCESS boundary. An in-process
 // twin would lose the multi-invocation accumulation seam (each transition
-// re-reads state + appends one locked audit block) and the exit-code contract
-// the .sh's `set -e` relied on. So we SPAWN the real tool via the BUN runtime
-// against the .ts path (spawnSync(BUN, [STATE, ...])), exactly as the .sh did.
+// re-reads state + appends one locked audit block) and the exit-code contract.
+// So we SPAWN the real tool via the BUN runtime against the .ts path
+// (spawnSync(BUN, [STATE, ...])).
 //
 // Source under test (dist/claude/.claude/tools/aidlc-state.ts):
-//   :677 handleGateStart(slug) — [-] -> [?]; emits STAGE_AWAITING_APPROVAL
-//   :811 handleReject(slug, --feedback) — [?] -> [R]; increments Revision Count
-//          (:825-828); emits GATE_REJECTED + STAGE_REVISING (:837-842)
-//   :852 handleRevise(slug) — [R] -> [?]; emits STAGE_AWAITING_APPROVAL
-//          ("Re-entering gate after revision", :868-871)
-//   :717 handleApprove(slug, --user-input) — [?] -> [x]; emits GATE_APPROVED +
-//          STAGE_COMPLETED, then auto-advances (delegates handleAdvance, :775).
+//   handleGateStart(slug) - [-] -> [?]; emits STAGE_AWAITING_APPROVAL
+//   handleReject(slug, --feedback) - [?] -> [R]; increments Revision Count;
+//          emits GATE_REJECTED + STAGE_REVISING
+//   handleRevise(slug) - [R] -> [?]; emits STAGE_AWAITING_APPROVAL
+//          ("Re-entering gate after revision")
+//   handleApprove(slug, --user-input) - [?] -> [x]; emits GATE_APPROVED +
+//          STAGE_COMPLETED, then auto-advances (delegates handleAdvance).
 //          For bugfix scope, requirements-analysis is NOT the final EXECUTE
 //          stage (code-generation + build-and-test follow), so the final
 //          approve emits GATE_APPROVED exactly once and lands [x].
@@ -30,31 +29,17 @@
 // State + audit contract (verified against a live cycle on bugfix scope):
 //   - bugfix `init` leaves requirements-analysis at `[-] ... — EXECUTE`.
 //     The checkbox line carries the trailing ` — EXECUTE` suffix, so checkbox
-//     assertions match the `- [X] requirements-analysis` PREFIX (the .sh used
-//     anchored regex `^- \[X\] requirements-analysis`, prefix-equivalent).
+//     assertions match the `- [X] requirements-analysis` PREFIX.
 //   - Revision Count is the `- **Revision Count**: N` field line.
-//   - audit.md event rows carry the RAW event type on the `**Event**: <TYPE>`
+//   - audit event rows carry the RAW event type on the `**Event**: <TYPE>`
 //     line (the multi-word EVENT_HEADINGS value goes on the `## ` heading,
 //     aidlc-audit.ts:117-139,254); count_event greps the **Event** line.
 //
-// Old TAP -> new test parity (1:1, every .sh assertion -> a named test):
-//   .sh assert 1  (Revision Count=1 after first reject)        -> "cycle 1: reject increments Revision Count to 1"
-//   .sh assert 2  (checkbox becomes [R] after reject)          -> "cycle 1: reject flips checkbox to [R]"
-//   .sh assert 3  (checkbox flips back to [?] after revise)    -> "cycle 2: revise flips checkbox back to [?]"
-//   .sh assert 4  (Revision Count=2 after second reject)       -> "cycle 2: second reject increments Revision Count to 2"
-//   .sh assert 5  (Revision Count=3 after third reject)        -> "cycle 3: third reject increments Revision Count to 3"
-//   .sh assert 6  (final approve lands [x])                    -> "final: approve after 3 rejections lands [x]"
-//   .sh assert 7  (GATE_REJECTED fires 3x)                     -> "audit: GATE_REJECTED fires exactly 3x"
-//   .sh assert 8  (STAGE_REVISING fires 3x)                    -> "audit: STAGE_REVISING fires exactly 3x"
-//   .sh assert 9  (STAGE_AWAITING_APPROVAL fires 4x)           -> "audit: STAGE_AWAITING_APPROVAL fires 4x (1 gate-start + 3 revise)"
-//   .sh assert 10 (GATE_APPROVED fires once)                   -> "audit: GATE_APPROVED fires exactly once"
-//
-// STRONGER than the .sh: a single full cycle is driven in beforeAll and the
-// per-assertion intermediate Revision Count / checkbox states are captured at
-// the moment they were written (snapshots taken between transitions), so the
-// twin proves the field had the expected value AT THAT STEP, not merely at the
-// end. Each transition's exit code is also asserted 0 (the .sh leaned on
-// `set -e` to abort the run on any non-zero; here we assert it explicitly).
+// A single full cycle is driven in beforeAll and the per-assertion intermediate
+// Revision Count / checkbox states are captured at the moment they were written
+// (snapshots taken between transitions), so the test proves the field had the
+// expected value AT THAT STEP, not merely at the end. Each transition's exit
+// code is also asserted 0.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import {
@@ -82,7 +67,7 @@ import {
   resetAidlcEnv,
 } from "../harness/fixtures.ts";
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -93,8 +78,8 @@ const SLUG = "requirements-analysis";
 
 let proj: string;
 
-// P4: intent-create writes state into the created intent's per-intent record dir
-// (aidlc/spaces/<space>/intents/<slug>-<id8>/), not the flat aidlc-docs/. After
+// intent-create writes state into the created intent's per-intent record dir
+// (aidlc/spaces/<space>/intents/<YYMMDD>-<slug>/), not the flat aidlc-docs/. After
 // the init the active-intent cursor points at the created record, so every later
 // gate-start/reject/revise/approve (default-resolving the active intent)
 // reads/writes THAT record — recordDirOf follows the cursor and resolves it for
@@ -116,8 +101,8 @@ function recordDirOf(p: string): string {
   return join(p, "aidlc-docs");
 }
 
-// Audit is written as per-clone shards under <record>/audit/<host>-<pid>.md
-// (Stage B). Concatenate every shard for a content read; fall back to the flat
+// Audit is written as per-clone shards under <record>/audit/<host>-<token>.md.
+// Concatenate every shard for a content read; fall back to the flat
 // aidlc-docs/audit.md for a seeded-flat / pre-migration project.
 function readAudit(p: string): string {
   const auditDir = join(recordDirOf(p), "audit");
@@ -131,7 +116,6 @@ function readAudit(p: string): string {
   return existsSync(flat) ? readFileSync(flat, "utf-8") : "";
 }
 
-/** Run an aidlc-state.ts subcommand against the project; assert exit 0. */
 function state(args: string[]): void {
   const r = spawnSync(BUN, [STATE, ...args, "--project-dir", proj], {
     encoding: "utf-8",
@@ -223,14 +207,13 @@ function checkboxMarker(content: string): string | null {
   return m ? m[1] : null;
 }
 
-/** count_event (t45:62-64): rows whose `**Event**: <TYPE>` line is exactly TYPE. */
 function countEvent(event: string): number {
   return readAudit(proj)
     .split("\n")
     .filter((l) => l === `**Event**: ${event}`).length;
 }
 
-// Snapshots captured between transitions so each .sh assertion checks the
+// Snapshots captured between transitions so each assertion checks the
 // value AT THE STEP IT WAS ASSERTED, not just the terminal state.
 const snap: {
   rc1?: string | null;

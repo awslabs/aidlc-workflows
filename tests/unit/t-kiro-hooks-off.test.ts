@@ -47,7 +47,6 @@ const REPLY = "aidlc-record-human-turn";
 
 let proj: string;
 
-// A Kiro IDE project: the shipped hook files and the conductor agent file.
 function seedKiroIde(): void {
   const hooks = join(proj, ".kiro", "hooks");
   mkdirSync(hooks, { recursive: true });
@@ -118,7 +117,6 @@ describe("t-kiro-hooks-off: a hook the person switched off in Kiro is said once 
     expect(off).toHaveLength(1);
     expect(off[0]).toMatchObject({ name: GUARD, file: `.kiro/hooks/${GUARD}.json`, since: "2026-10-06T23:09:18.000Z" });
     expect(off[0].protects).toContain("approvals, the approved plan");
-    // The file is left as the person set it.
     expect(readFileSync(join(proj, ".kiro", "hooks", `${GUARD}.json`), "utf-8")).toContain('"enabled": false');
     expect(kiroHooksOff(proj, ".claude")).toEqual([]);
   });
@@ -162,7 +160,6 @@ describe("t-kiro-hooks-off: a hook the person switched off in Kiro is said once 
     expect(notices.some((line) => line.startsWith("AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks since")), JSON.stringify(first)).toBe(true);
     const second = nextDirective();
     expect(((second.change_notices as string[] | undefined) ?? []).some((line) => line.includes("Agent Hooks"))).toBe(false);
-    // Back on, then off again later: a new change, said again.
     switchOn(GUARD);
     expect(((nextDirective().change_notices as string[] | undefined) ?? []).some((line) => line.includes("Agent Hooks"))).toBe(false);
     switchOff(GUARD, new Date("2026-10-07T01:00:00.000Z"));

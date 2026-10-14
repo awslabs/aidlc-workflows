@@ -63,6 +63,7 @@ import {
   CLAUDE_HOST_TEMPLATES,
   auditBlockField,
   carryPendingPersonLines,
+  classifyTerminalCommand,
   claudeTranscriptOrigin,
   clearSessionIntentHandoff,
   emptyPickerResult,
@@ -96,6 +97,7 @@ import {
   stripRecommendedDecorator,
   suppliedTurnOrigin,
   swarmWorkerWorktreeMeta,
+  terminalCommandRelay,
   type TurnOrigin,
   validSessionId,
   withAuditLock,
@@ -458,6 +460,24 @@ function pickedLabels(toolResponse: unknown): string[] {
 //
 // What the agent should hear from this turn is printed once, as one context
 // line: Claude Code reads a single hook response, and two lines make it drop both.
+// The help a typed help request gets rides last, and only while the whole line
+// fits what a host takes from a hook (Claude Code keeps 10,000 characters of a
+// field); past that the agent runs the help itself, as with no hook.
+const PROMPT_CONTEXT_MAX_CHARS = 9_500;
+
+// The help, handed to the agent with the person's own line when that line asks
+// for it and nothing else (the engine's own reading of a typed command), so the
+// agent shows it with no command to run. Only AI-DLC's own help: a help typed
+// after a command family (`knowledge help`) is that family's, and its command
+// runs as before.
+async function helpRelay(typedPrompt: string, projectDir: string, sessionId: string): Promise<string | null> {
+  const entryWords = aidlcEntryWords(typedPrompt);
+  if (entryWords === null) return null;
+  const command = classifyTerminalCommand(splitKiroCommandArgs(entryWords), projectDir, sessionId || undefined);
+  if (command?.subcommand !== "help" || command.source !== "read-only-flag") return null;
+  const { renderHelpText } = await import("../tools/aidlc-utility.ts");
+  return terminalCommandRelay(typedPrompt.trim(), renderHelpText());
+}
 //
 // What the PERSON hears does not travel that way. A host may fold hook output
 // away, an adapter may drop it, and an agent may not pass it on, which is how a
@@ -468,8 +488,9 @@ function pickedLabels(toolResponse: unknown): string[] {
 async function run(input: string): Promise<number> {
   const notes: string[] = [];
   const forThePerson: Array<() => void> = [];
+  const handover: { help: string | null } = { help: null };
   try {
-    return await respond(input, notes, forThePerson);
+    return await respond(input, notes, forThePerson, handover);
   } finally {
     for (const queue of forThePerson) {
       try {
@@ -478,11 +499,19 @@ async function run(input: string): Promise<number> {
         // A line the person may miss never blocks their turn.
       }
     }
+    if (handover.help !== null && [...notes, handover.help].join("\n").length <= PROMPT_CONTEXT_MAX_CHARS) {
+      notes.push(handover.help);
+    }
     if (notes.length > 0) process.stdout.write(hookContextLine("UserPromptSubmit", notes.join("\n")));
   }
 }
 
-async function respond(input: string, notes: string[], forThePerson: Array<() => void>): Promise<number> {
+async function respond(
+  input: string,
+  notes: string[],
+  forThePerson: Array<() => void>,
+  handover: { help: string | null },
+): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
   let sessionId = "";
@@ -504,6 +533,9 @@ try {
   // `origin`; Claude Code's transcript is read here; anything unknown is a
   // person (kiroTurnOrigin, claudeTranscriptOrigin in aidlc-lib.ts).
   let turnOrigin: TurnOrigin = { kind: "person" };
+  // An adapter whose own prompt hook runs a command the person typed and hands
+  // the agent its output (Kiro's) says so; the help is then left to it.
+  let relaysTerminalOutput = false;
   try {
     const parsed = JSON.parse(input) as {
       hook_event_name?: unknown;
@@ -519,7 +551,9 @@ try {
       origin?: unknown;
       prompt_id?: unknown;
       transcript_path?: unknown;
+      relays_terminal_output?: unknown;
     };
+    relaysTerminalOutput = parsed.relays_terminal_output === true;
     if (typeof parsed.session_id === "string") sessionId = validSessionId(parsed.session_id.trim()) ?? "";
     questionText = extractQuestionText(parsed.tool_input ?? parsed.toolInput);
     // A host that wraps the person's turn in its own context (Kiro Crew) hands
@@ -599,6 +633,16 @@ try {
   // the conversational marker still land, as under AIDLC_UNATTENDED=1.
   const workerWorktree = swarmWorkerWorktreeMeta(projectDir) !== null;
   const personHere = mintAllowed && !workerWorktree;
+  // A help request the person typed is answered here, before any work exists
+  // or this chat joins one, on every host that hands this hook's line to the
+  // agent (Claude Code, Codex). A host's own turn never gets it.
+  if (personHere && promptSubmitted && typedPrompt && turnOrigin.kind !== "host" && !relaysTerminalOutput) {
+    try {
+      handover.help = await helpRelay(typedPrompt, projectDir, sessionId);
+    } catch {
+      // The agent runs the help itself, as with no hook.
+    }
+  }
   // The message record: proof that a person said this in this chat, and
   // exactly what they said (aidlc-message-store.ts). Written before the
   // state-file gate so a message before any work exists is kept, and for a

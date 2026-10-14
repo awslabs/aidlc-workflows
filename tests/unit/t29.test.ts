@@ -73,7 +73,7 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-sync-workflow-state.ts");
 const MID_IDEATION = join(FIXTURES_DIR, "state-mid-ideation.md");
 
@@ -83,11 +83,6 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-/**
- * create_hook_test_project (t29:25-30): a fresh temp project whose .claude is a
- * symlink to the shipped AIDLC_SRC, so the hook can resolve
- * <projectDir>/.claude/tools/aidlc-utility.ts. State seeded separately.
- */
 function hookProject(): string {
   const proj = createTestProject();
   tempDirs.push(proj);
@@ -95,9 +90,9 @@ function hookProject(): string {
   return proj;
 }
 
-// P9 per-intent layout: state + heartbeat re-root under the default intent's
-// record (seedStateFile seeds it so the active-intent cursor resolves; the hook
-// and the set-status tool it shells out to both anchor under that record).
+// Per-intent layout: state + heartbeat live under the default intent's record
+// (seedStateFile seeds it so the active-intent cursor resolves; the hook and
+// the setStatus implementation it calls both anchor under that record).
 const statePath = (p: string): string => seededStateFile(p);
 const heartbeatPath = (p: string): string =>
   join(seededRecordDir(p), ".aidlc-engine/hooks-health", "sync-workflow-state.last");
@@ -107,7 +102,6 @@ interface HookResult {
   out: string;
 }
 
-/** Pipe the PostToolUse JSON on stdin with CLAUDE_PROJECT_DIR set, like the .sh's `echo '<json>' | CLAUDE_PROJECT_DIR=<p> bun "$HOOK"`. */
 function runHook(proj: string, json: string): HookResult {
   const res = spawnSync(BUN, [HOOK], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -127,7 +121,6 @@ function stateField(proj: string, label: string): string {
 }
 
 describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-statusline.sh, plan 7)", () => {
-  // --- T1: in_progress + [slug] -> Current Stage updated to that slug ---
   test("1: updates Current Stage on in_progress with [slug]", () => {
     const p = hookProject();
     seedStateFile(p, MID_IDEATION); // Current Stage starts as feasibility
@@ -135,12 +128,10 @@ describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-status
       p,
       '{"tool_name":"TaskUpdate","tool_input":{"taskId":"t1","status":"in_progress","activeForm":"Running Scope Definition [scope-definition]"}}',
     );
-    expect(r.status).toBe(0); // STRONGER: the .sh discarded the hook exit code
-    // STRONGER than `assert_grep 'Current Stage.*scope-definition'`: exact value.
+    expect(r.status).toBe(0);
     expect(stateField(p, "Current Stage")).toBe("scope-definition");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // --- T2: status=completed -> hook returns early, state untouched ---
   test("2: skips when status is completed", () => {
     const p = hookProject();
     seedStateFile(p, MID_IDEATION);
@@ -149,13 +140,11 @@ describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-status
       p,
       '{"tool_name":"TaskUpdate","tool_input":{"taskId":"t1","status":"completed"}}',
     );
-    // .sh: md5 before == md5 after. Byte-equality is the same observable.
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
-    // STRONGER: the status guard returns before the heartbeat write.
+    // The status guard returns before the heartbeat write.
     expect(existsSync(heartbeatPath(p))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // --- T3: no activeForm -> hook returns early, state untouched ---
   test("3: skips when no activeForm", () => {
     const p = hookProject();
     seedStateFile(p, MID_IDEATION);
@@ -168,7 +157,6 @@ describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-status
     expect(existsSync(heartbeatPath(p))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // --- T4: activeForm without a [slug] suffix -> hook returns early ---
   test("4: skips when activeForm has no [slug]", () => {
     const p = hookProject();
     seedStateFile(p, MID_IDEATION);
@@ -184,13 +172,11 @@ describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-status
   // --- T5: no state file -> hook exits 0 (won't fire before handleInit) ---
   test("5: exits 0 when no state file", () => {
     const p = hookProject();
-    // No seedStateFile: the project has aidlc-docs/ but no aidlc-state.md.
     const r = runHook(
       p,
       '{"tool_name":"TaskUpdate","tool_input":{"taskId":"t1","status":"in_progress","activeForm":"Running Feasibility [feasibility]"}}',
     );
     expect(r.status).toBe(0);
-    // STRONGER: the hook never creates the state file on this path.
     expect(existsSync(statePath(p))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -206,7 +192,6 @@ describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-status
     expect(readFileSync(statePath(p), "utf-8")).toBe(before);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // --- T6: Lifecycle Phase pulled from the stage graph (code-generation -> CONSTRUCTION) ---
   test("6: updates Lifecycle Phase from stage graph", () => {
     const p = hookProject();
     seedStateFile(p, MID_IDEATION); // Lifecycle Phase starts as IDEATION
@@ -214,26 +199,23 @@ describe("t29 aidlc-sync-workflow-state hook (migrated from t29-hook-sync-status
       p,
       '{"tool_name":"TaskUpdate","tool_input":{"taskId":"t1","status":"in_progress","activeForm":"Running Code Generation [code-generation]"}}',
     );
-    // STRONGER than `assert_grep 'Lifecycle Phase.*CONSTRUCTION'`: exact value.
     // set-status uppercases findStageBySlug("code-generation").phase ("construction").
     expect(stateField(p, "Lifecycle Phase")).toBe("CONSTRUCTION");
     // And it advances Current Stage in the same write (same set-status call).
     expect(stateField(p, "Current Stage")).toBe("code-generation");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // --- T7: a qualifying fire writes the health heartbeat ---
   test("7: writes health heartbeat", () => {
     const p = hookProject();
     seedStateFile(p, MID_IDEATION);
-    // The hook removes/recreates nothing — the heartbeat starts absent.
     expect(existsSync(heartbeatPath(p))).toBe(false);
     runHook(
       p,
       '{"tool_name":"TaskUpdate","tool_input":{"taskId":"t1","status":"in_progress","activeForm":"Running Feasibility [feasibility]"}}',
     );
     expect(existsSync(heartbeatPath(p))).toBe(true);
-    // STRONGER: the .sh only checked existence; the heartbeat is a non-empty
-    // ISO-8601 UTC timestamp (isoTimestamp(), aidlc-lib.ts:1452).
+    // The heartbeat is a non-empty ISO-8601 UTC timestamp (isoTimestamp(),
+    // aidlc-lib.ts).
     const hb = readFileSync(heartbeatPath(p), "utf-8");
     expect(hb).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

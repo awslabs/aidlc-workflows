@@ -90,7 +90,10 @@ import {
   writeFileAtomic,
   REPO_NAME_REGEX,
   entrySkillInvocation,
+  asksForHelp,
+  printUsageAndExit,
 } from "./aidlc-lib.js";
+import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
 import { captureCodeGenerationDiscardApproval } from "./aidlc-testing-posture.ts";
 
 // kebab-case slug shape: lowercase letter, then lowercase letters / digits /
@@ -590,10 +593,10 @@ function validateSlug(slug: string | undefined): string {
 }
 
 function validateStrategy(strategy: string | undefined): string {
-  if (!strategy) error("Missing --strategy <squash|merge|rebase>");
+  if (!strategy) error(`Missing --strategy <${[...VALID_STRATEGIES].join("|")}>`);
   if (!VALID_STRATEGIES.has(strategy)) {
     error(
-      `Invalid --strategy: "${strategy}". Must be one of: squash, merge, rebase.`
+      `Invalid --strategy: "${strategy}". Must be one of: ${[...VALID_STRATEGIES].join(", ")}.`
     );
   }
   return strategy;
@@ -634,6 +637,8 @@ function resolveRepoTarget(
 //
 // Usage: aidlc-worktree create --slug <slug> --base <branch> [--repo <name>]
 //                              [--intent <dir>] [--space <name>]
+//                              [--swarm-unit <unit> --swarm-batch <n>
+//                               --swarm-stage <slug> --swarm-floor <floor>]
 //
 // --repo (P7): the sibling repo to fork the worktree inside (a multi-repo intent
 // requires it; a single-repo intent infers the lone repo; a legacy intent with no
@@ -4053,17 +4058,17 @@ function handleList(_args: string[]): void {
 // --- Subcommand: verify ---
 //
 // Usage: aidlc-worktree verify --event <WORKTREE_*> --slug <slug>
-//                              [--max-age-seconds <n>]
+//                              [--max-age-seconds <n>] [--intent <dir>] [--space <name>]
 //
 // Greps `aidlc-docs/audit.md` for the most recent block matching both
 // `**Event**: <event>` and `**Bolt slug**: <slug>`. Read-only — no audit
 // emission. The orchestrator's deterministic post-dispatch backstop.
 function handleVerify(args: string[]): void {
   const flags = parseFlags(args);
-  if (!flags.event) error("Missing --event <WORKTREE_CREATED|WORKTREE_MERGED|WORKTREE_DISCARDED>");
+  if (!flags.event) error(`Missing --event <${[...VALID_VERIFY_EVENTS].join("|")}>`);
   if (!VALID_VERIFY_EVENTS.has(flags.event)) {
     error(
-      `Invalid --event: "${flags.event}". Must be one of: WORKTREE_CREATED, WORKTREE_MERGED, WORKTREE_DISCARDED.`
+      `Invalid --event: "${flags.event}". Must be one of: ${[...VALID_VERIFY_EVENTS].join(", ")}.`
     );
   }
   const slug = validateSlug(flags.slug);
@@ -4128,7 +4133,7 @@ function handleVerify(args: string[]): void {
 
 // --- Subcommand: info ---
 //
-// Usage: aidlc-worktree info --slug <slug>
+// Usage: aidlc-worktree info --slug <slug> [--intent <dir>] [--space <name>]
 //
 // Reads the latest WORKTREE_CREATED audit block for `slug`. Its Branch name and
 // Worktree path are repository content, validated against the selected intent's
@@ -4274,6 +4279,70 @@ function findLatestEvent(
   return { timestamp: newest.timestamp, block: newest.block };
 }
 
+// --- Usage ---
+
+// What `--help` prints (#2449), from the same value and flag lists the
+// subcommands check, so the usage cannot drift from what they accept.
+const FLAG_VALUES: Record<string, string> = {
+  parked: " <stamp>",
+  "older-than": " <days>",
+  repo: " <name>",
+  intent: " <intent>",
+  space: " <space>",
+  raw: "",
+};
+
+function worktreeUsage(subcommand: string | undefined): string {
+  const invoke = (verb: string) => aidlcDispatcherInvocation(`worktree ${verb}`);
+  const selector = "--repo <name>, --intent <intent>, --space <space>";
+  const recoveryOptions = (verb: string) =>
+    RECOVERY_FLAGS[verb]
+      .filter((flag) => flag !== "slug" && flag !== "project-dir")
+      .map((flag) => `--${flag}${FLAG_VALUES[flag] ?? " <value>"}`)
+      .join(", ");
+  const usage: Record<string, string[]> = {
+    create: [
+      `${invoke("create")} --slug <slug> --base <branch>`,
+      "  Creates the Bolt's worktree on a new branch from --base. Required: --slug, --base.",
+      "  A swarm Unit's worktree also takes --swarm-unit, --swarm-batch, --swarm-stage and --swarm-floor, all four together.",
+      `  Options: ${selector}`,
+    ],
+    merge: [
+      `${invoke("merge")} --slug <slug> --target <branch> --strategy ${[...VALID_STRATEGIES].join("|")}`,
+      "  Merges the Bolt's branch into --target and removes its worktree. Required: --slug, --target, --strategy.",
+      `  Options: --message <text>, ${selector}`,
+    ],
+    discard: [
+      `${invoke("discard")} --slug <slug>`,
+      "  Parks the Bolt's attempt in Git, then removes its worktree. Required: --slug.",
+      `  Options: ${selector}`,
+    ],
+    restore: [
+      `${invoke("restore")} --slug <slug>`,
+      "  Checks out a parked attempt again, the newest unless --parked names one. Required: --slug.",
+      `  Options: ${recoveryOptions("restore")}`,
+    ],
+    purge: [
+      `${invoke("purge")} --slug <slug>`,
+      "  Deletes the Bolt's parked attempts: all, the one --parked names, or those older than --older-than. Required: --slug.",
+      `  Options: ${recoveryOptions("purge")}`,
+    ],
+    list: [`${invoke("list")}`, "  Lists the Bolt worktrees."],
+    verify: [
+      `${invoke("verify")} --event ${[...VALID_VERIFY_EVENTS].join("|")} --slug <slug>`,
+      "  Checks that the event was recorded for the Bolt. Required: --event, --slug.",
+      "  Options: --max-age-seconds <n> (default 60), --intent <intent>, --space <space>",
+    ],
+    info: [
+      `${invoke("info")} --slug <slug>`,
+      "  Prints the Bolt's worktree path and branch. Required: --slug.",
+      `  Options: ${recoveryOptions("info")}`,
+    ],
+  };
+  if (subcommand !== undefined && usage[subcommand]) return usage[subcommand].join("\n");
+  return Object.values(usage).map((lines) => lines.join("\n")).join("\n\n");
+}
+
 // --- CLI entry point ---
 
 let projectDir: string | undefined;
@@ -4292,6 +4361,8 @@ export function main(argv: string[]): void {
   }
 
   const subcommand = filteredArgs[0];
+  if (subcommand === undefined || asksForHelp([subcommand])) printUsageAndExit(worktreeUsage(undefined));
+  if (asksForHelp(filteredArgs.slice(1))) printUsageAndExit(worktreeUsage(subcommand));
 
   try {
     const validFlags = RECOVERY_FLAGS[subcommand];

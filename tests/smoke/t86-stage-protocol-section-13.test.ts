@@ -31,15 +31,15 @@ describe("t86 conditional learnings module and audit event", () => {
   });
 
   test("aidlc-audit CLI accepts MEMORY_EMPTY (registered in the live VALID_EVENT_TYPES Set) [.sh test 4 — data half, STRONGER]", () => {
-    // VALID_EVENT_TYPES is a module-private const (aidlc-audit.ts:19), so we
+    // VALID_EVENT_TYPES is a module-private const (aidlc-audit.ts), so we
     // exercise the real validity gate: an event NOT in the Set causes
-    // appendAuditEntry to throw and the CLI to exit non-zero with an error JSON
-    // (the t18 contract). MEMORY_EMPTY MUST be accepted — exit 0, appended:true.
-    // createTestProject seeds the per-intent record + active-intent cursor;
-    // seedStateFile writes the record's aidlc-state.md so the cursor RESOLVES
-    // (the active-intent cursor only binds a record that has state). Then a bare
-    // `aidlc-audit append` lands in <record>/audit/<host>-<clone>.md (P9 — no flat
-    // aidlc-docs/audit.md). Read the appended event back off the shard dir.
+    // appendAuditEntry to throw and the CLI to exit non-zero with an error JSON.
+    // MEMORY_EMPTY MUST be accepted - exit 0, appended:true. createTestProject
+    // seeds the per-intent record + active-intent cursor; seedStateFile writes the
+    // record's aidlc-state.md so the cursor RESOLVES (the active-intent cursor only
+    // binds a record that has state). Then a bare `aidlc-audit append` lands in
+    // <record>/audit/<host>-<clone>.md. Read the appended event back off the shard
+    // dir.
     const proj = createTestProject();
     seedStateFile(proj, "state-mid-ideation.md");
     try {

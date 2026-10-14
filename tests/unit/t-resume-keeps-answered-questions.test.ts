@@ -26,7 +26,6 @@ afterEach(() => {
 
 const QUESTIONS = "requirements-analysis-questions.md";
 
-// A bugfix at Requirements Analysis, its questions file as the case needs.
 function project(policy: "off" | "strict", questions: string | null): string {
   const proj = createOrchestrationTestProject();
   created.push(proj);
@@ -89,7 +88,6 @@ describe("t-resume-keeps-answered-questions: a stage whose questions are answere
         expect(directive.stage).toBe("requirements-analysis");
         expect(directive.questions_answered?.path)
           .toEndWith(`inception/requirements-analysis/${QUESTIONS}`);
-        // The file is left exactly as the person answered it.
         expect(readFileSync(join(seededRecordDir(proj), "inception", "requirements-analysis", QUESTIONS), "utf-8"))
           .toBe(answered);
       });

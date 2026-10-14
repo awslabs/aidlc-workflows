@@ -1,7 +1,6 @@
 // covers: function:appendAuditEntry, function:appendAuditEntryUnlocked, function:handleAppend, cli:aidlc-audit(append-error,append-json,append-raw)
 //
-// t18 — aidlc-audit.ts audit-append behaviour. Migrated from
-// tests/unit/t18-tool-audit.sh (13 TAP assertions, 16 bun spawns).
+// t18 - aidlc-audit.ts audit-append behaviour.
 // Mechanism: none (import the tool's exported functions and call them in
 // process; zero LLM, zero tokens). Three CLI-shell contracts that exercise
 // the process.exit / stdout / stderr seam — or a non-exported handler —
@@ -9,30 +8,30 @@
 // is lost.
 //
 // Source under test (dist/claude/.claude/tools/aidlc-audit.ts):
-//   :199 appendAuditEntry(eventType, fields, projectDir)
+//   appendAuditEntry(eventType, fields, projectDir)
 //          => { appended: true; event: string; timestamp: string }
 //          - throws Error on invalid event type (before any disk side effect)
 //          - throws Error on lock-acquire failure
 //          - acquires + releases the audit lock around the write
-//   :228 appendAuditEntryUnlocked(eventType, fields, projectDir)
+//   appendAuditEntryUnlocked(eventType, fields, projectDir)
 //          => same return; lock-already-held variant (no lock acquisition)
-//   :266 handleAppend(eventType, fields, projectDir): void
+//   handleAppend(eventType, fields, projectDir): void
 //          - calls appendAuditEntry, writes JSON.stringify(result)+"\n" to stdout
-//   :277 handleAppendRaw(heading, body, projectDir): void   (NOT exported — CLI only)
+//   handleAppendRaw(heading, body, projectDir): void   (NOT exported - CLI only)
 //
 // File-format contract written by appendAuditEntry / appendAuditEntryUnlocked
 // (aidlc-audit.ts:239-257), exercised below against the real bytes on disk:
 //   - first write to a missing file prepends "# AI-DLC Audit Log\n"
-//     (ensureAuditFile, :174)
+//     (appendAuditBlockAtPath)
 //   - each entry: "\n## <heading>\n**Timestamp**: <ts>\n**Event**: <type>\n"
 //     then one "**<key>**: <value>\n" per field, then "\n---\n"
-//   - heading is EVENT_HEADINGS[eventType] || eventType (:108, :239)
+//   - heading is EVENT_HEADINGS[eventType] || eventType
 //   - timestamp is isoTimestamp(): YYYY-MM-DDTHH:MM:SSZ (aidlc-lib.ts:1441)
 //
 // Test-design note (house style): assert the OBSERVABLE behavioural contract
-// the .sh asserted — return values, thrown errors, and the literal bytes
-// written to audit.md — never re-implementation of the formatter. Each
-// assertion hard-codes the expected literal independently of the source.
+// (return values, thrown errors, and the literal bytes written to the audit
+// shard), never re-implementation of the formatter. Each assertion hard-codes
+// the expected literal independently of the source.
 //
 // Old TAP -> new test parity (1:1, no guarantee dropped):
 //   .sh test 1  (creates audit.md if missing)        -> "creates audit.md when missing"
@@ -71,11 +70,10 @@ const TOOL = fileURLToPath(
   new URL("../../dist/claude/.claude/tools/aidlc-audit.ts", import.meta.url),
 );
 
-// P9: the flat aidlc-docs/audit.md is retired. With no per-intent record seeded,
-// appendAuditEntry resolves the bare SPACE record root's per-clone shard
-// (auditFilePath, which ensureAuditFile mkdir -p's on first write). A bare temp
-// dir suffices — the shell is created lazily by the first append. Each test gets
-// a fresh dir and tears it down.
+// With no per-intent record seeded, appendAuditEntry resolves the bare SPACE
+// record root's per-clone shard (auditFilePath, which appendAuditBlockAtPath
+// mkdir -p's on first write). A bare temp dir suffices - the shell is created
+// lazily by the first append. Each test gets a fresh dir and tears it down.
 function makeProject(): string {
   return mkdtempSync(join(tmpdir(), "aidlc-t18-"));
 }
@@ -99,8 +97,7 @@ function withProject(fn: (proj: string) => void): void {
 describe("appendAuditEntry() — file creation + bytes (in-process)", () => {
   test("creates audit.md when missing [.sh test 1]", () => {
     withProject((proj) => {
-      // audit.md does not exist yet (makeProject only creates the dir). The
-      // .sh did `rm -f audit.md` first; here it never existed, same precondition.
+      // The audit shard does not exist yet (makeProject only creates the dir).
       expect(existsSync(auditPath(proj))).toBe(false);
       appendAuditEntry("STAGE_COMPLETED", { Stage: "workspace-scaffold" }, proj);
       expect(existsSync(auditPath(proj))).toBe(true);
@@ -137,9 +134,7 @@ describe("appendAuditEntry() — file creation + bytes (in-process)", () => {
         proj,
       );
       const body = readFileSync(auditPath(proj), "utf-8");
-      // .sh test 4a: Stage field value present, as a **Stage**: line.
       expect(body.includes("**Stage**: intent-capture")).toBe(true);
-      // .sh test 4b: Details field value present, as a **Details**: line.
       expect(body.includes("**Details**: Q&A done")).toBe(true);
     });
   });
@@ -148,8 +143,8 @@ describe("appendAuditEntry() — file creation + bytes (in-process)", () => {
     withProject((proj) => {
       const result = appendAuditEntry("HEALTH_CHECKED", { Details: "All pass" }, proj);
       const body = readFileSync(auditPath(proj), "utf-8");
-      // Same regex the .sh grepped for: YYYY-MM-DDTHH:MM:SSZ (isoTimestamp
-      // strips millis). Assert on disk bytes AND the returned timestamp.
+      // YYYY-MM-DDTHH:MM:SSZ (isoTimestamp strips millis). Assert on disk bytes AND
+      // the returned timestamp.
       const isoRe = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/;
       expect(isoRe.test(body)).toBe(true);
       expect(body.includes(`**Timestamp**: ${result.timestamp}`)).toBe(true);
@@ -162,8 +157,6 @@ describe("appendAuditEntry() — file creation + bytes (in-process)", () => {
       appendAuditEntry("STAGE_STARTED", { Stage: "workspace-scaffold" }, proj);
       appendAuditEntry("STAGE_COMPLETED", { Stage: "workspace-scaffold" }, proj);
       const body = readFileSync(auditPath(proj), "utf-8");
-      // .sh counted lines starting with "---" (grep -c "^---"). Each block
-      // closes with "\n---\n", so two appends => two such lines.
       const sepLines = body.split("\n").filter((l) => l === "---").length;
       expect(sepLines).toBe(2);
     });
@@ -184,7 +177,6 @@ describe("appendAuditEntry() — event-type heading + validation (in-process)", 
     withProject((proj) => {
       appendAuditEntry("WORKSPACE_SCANNED", { Details: "Greenfield" }, proj);
       const body = readFileSync(auditPath(proj), "utf-8");
-      // EVENT_HEADINGS["WORKSPACE_SCANNED"] === "Workspace Scanned".
       expect(body.includes("## Workspace Scanned")).toBe(true);
     });
   });
@@ -203,10 +195,9 @@ describe("appendAuditEntry() — event-type heading + validation (in-process)", 
 
   test("appendAuditEntry throws on an invalid event type [.sh test 6 — logic half]", () => {
     withProject((proj) => {
-      // The .sh asserted the CLI prints "error"; the underlying contract is
-      // that the core function REJECTS an unknown event. Verify the throw
-      // AND that nothing was written (validate-before-emit: the guard runs
-      // before ensureAuditFile / appendFileSync).
+      // The core function REJECTS an unknown event. Verify the throw AND that
+      // nothing was written (validate-before-emit: validateAuditEntry runs before
+      // appendAuditBlockAtPath).
       expect(() =>
         appendAuditEntry("INVALID_EVENT", {}, proj),
       ).toThrow(/Invalid event type: INVALID_EVENT/);
@@ -218,7 +209,7 @@ describe("appendAuditEntry() — event-type heading + validation (in-process)", 
     withProject((proj) => {
       // handleAppend is the exported wrapper that the CLI 'append' subcommand
       // calls. It writes JSON.stringify(result)+"\n" to stdout. Capture the
-      // write to assert the exact JSON contract the .sh grepped for.
+      // write to assert the exact JSON contract.
       const original = process.stdout.write.bind(process.stdout);
       let captured = "";
       process.stdout.write = (chunk: string | Uint8Array) => {
@@ -231,7 +222,6 @@ describe("appendAuditEntry() — event-type heading + validation (in-process)", 
         process.stdout.write = original;
       }
       expect(captured.includes('"appended":true')).toBe(true);
-      // The same JSON must be valid and carry the event back.
       const parsed = JSON.parse(captured.trim());
       expect(parsed.appended).toBe(true);
       expect(parsed.event).toBe("WORKFLOW_STARTED");
@@ -245,15 +235,12 @@ describe("appendAuditEntry() — event-type heading + validation (in-process)", 
 // tests above already cover:
 //   - test 6 (CLI half): jsonError() writes {"error":...} to STDERR and
 //     process.exit(1). The in-process function throws; only the CLI
-//     translates that throw into the "error" string the .sh grepped for.
+//     translates that throw into the "error" string.
 //   - test 7 (CLI half): the 'append' subcommand prints the success JSON to
 //     STDOUT through process.stdout — a process-boundary contract.
 //   - test 9: append-raw routes through handleAppendRaw, which is NOT exported
 //     (CLI-only). The custom-heading contract can only be exercised through
 //     the spawned binary.
-//
-// They are kept as spawns deliberately (env-seam), preserving the exact
-// guarantees the .sh had for these three rows.
 describe("aidlc-audit CLI shell (Bun.spawnSync env seam)", () => {
   test("append CLI emits error JSON on stderr for an invalid event [.sh test 6 — CLI half]", () => {
     withProject((proj) => {
@@ -265,7 +252,6 @@ describe("aidlc-audit CLI shell (Bun.spawnSync env seam)", () => {
       });
       const merged =
         new TextDecoder().decode(r.stdout) + new TextDecoder().decode(r.stderr);
-      // .sh: assert_contains "$OUT" "error" (OUT = stdout+stderr).
       expect(merged.includes("error")).toBe(true);
       expect(r.exitCode).not.toBe(0);
     });

@@ -238,7 +238,9 @@ export function approvalRows(project: string) {
   return readAuditShardEvents(project).filter((entry) => entry.event === "PLAN_APPROVAL_RECORDED");
 }
 
-/** Compare every receipt, including any newly minted one, with the actual human approval. */
+/** Every receipt file, including any newly minted one, keyed by name, so a
+ * caller can compare the set before and after a step.
+ */
 export function receiptFiles(project: string): Record<string, string> {
   const dir = join(sessionsDir(project), "plan-approval");
   if (!existsSync(dir)) return {};

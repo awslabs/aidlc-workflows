@@ -66,7 +66,6 @@ const state = (proj: string, args: string[], extra: Record<string, string> = {})
   run(STATE, [...args, "--project-dir", proj], { AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", ...extra });
 const events = (proj: string, name: string) => readAuditShardEvents(proj).filter((row) => row.event === name);
 
-// `report` as the agent runs it.
 function report(proj: string, args: string[], extra: Record<string, string> = {}): Record<string, unknown> {
   const r = run(ORCHESTRATE, ["report", ...args, "--project-dir", proj], extra);
   const line = r.out.split("\n").find((entry) => entry.startsWith("{"));
@@ -74,7 +73,6 @@ function report(proj: string, args: string[], extra: Record<string, string> = {}
   return JSON.parse(line as string) as Record<string, unknown>;
 }
 
-// What the person types, through the real UserPromptSubmit route every harness uses.
 function says(proj: string, prompt: string): void {
   const env: Record<string, string | undefined> = {
     ...process.env,
@@ -94,7 +92,6 @@ function says(proj: string, prompt: string): void {
   expect(result.status, result.stderr).toBe(0);
 }
 
-// The stage's outputs exist and the agent asked the reviewer, who never answered.
 function reviewAskedNeverFinished(proj: string): void {
   const dir = join(seededRecordDir(proj), "inception", SLUG);
   mkdirSync(dir, { recursive: true });

@@ -660,6 +660,7 @@ describe("t278 engine-emitted wave contract", () => {
       "api",
       "web",
     ]);
+    expect(directive.protocol_modules).toContain("wave");
 
     const api = directive.wave?.entries[0] as WaveEntry;
     const web = directive.wave?.entries[1] as WaveEntry;
@@ -916,7 +917,6 @@ describe("t278 engine-emitted wave contract", () => {
       const after = next(proj).directive;
       expect(after.wave, JSON.stringify(after)).toBeUndefined();
       expect(after.gate).toBe(true);
-      // The gate opens and says the change once.
       const opened = spawnSync(BUN, [ORCH, "report", "--stage", "functional-design", "--result", "awaiting-approval", "--project-dir", proj], {
         timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8",
         env: { ...process.env, AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
@@ -999,7 +999,6 @@ describe("t278 engine-emitted wave contract", () => {
     delete env.AIDLC_STOP_HOOK_PROBE;
     markHumanTurn(proj);
     expect(freezeWrite(proj, artifact).status).toBe(2);
-    // What a probe of `next` sees is the own-work ask the refusal left.
     const probed = runOrchestrateNext(ORCH, proj, [], { env: { ...env, AIDLC_STOP_HOOK_PROBE: "1" } });
     expect(probed.directive, probed.out).toMatchObject({ kind: "ask", ask_type: "guard-recovery", agent_work: true });
     // The hook's probe runs the project's own tree.
@@ -1033,7 +1032,6 @@ describe("t278 engine-emitted wave contract", () => {
       expect(handedBack.stdout, `${tree}: ${handedBack.stderr}\n${traces()}`).toContain('"decision":"block"');
       expect(handedBack.stdout).toContain("AI-DLC is carrying on with Functional Design for alpha.");
     }
-    // Handed back, the agent's own `next` is that same own-work ask.
     const asked = JSON.stringify(runOrchestrateNext(ORCH, proj, [], { env }).directive);
     expect(asked).toContain('"agent_work":true');
     expect(asked).toContain("--result revised");
@@ -1704,52 +1702,51 @@ describe("t278 engine-emitted wave contract", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
+// The wave contract left the /aidlc skill for the wave module the step names
+// (`wave` in directive.protocol_modules), shipped in every harness tree.
 function expectWaveProse(body: string): void {
-  expect(body).toContain("**Per-unit batch waves (optional).**");
+  expect(body).toContain("**Per-unit batch waves (optional, stage-major only).**");
   expect(body).toContain("directive.wave");
-  // The row branches by what the step is (a wave before the ordinary step with its gate), in its own words.
-  expect(body).toContain(
-    "an isolated run, a settled swarm, a wave, or the ordinary step with its gate",
-  );
-  expect(body).toContain("parent Unit fields are only a projection");
-  expect(body).toContain("every `inline_context_paths` file");
+  expect(body).toContain("the parent Unit fields are compatibility projections of the first entry");
+  expect(body).toContain("`inline_context_paths`");
   expect(body).toContain("`context_warnings`");
   expect(body).toContain("entry.required_produces");
   expect(body).toContain("completion_required");
-  expect(body).toContain("entry.unit_memory_path");
+  expect(body).toContain("`unit_memory_path`");
   expect(body).toContain("retry-required");
   expect(body).toContain("repair-required");
   expect(body).toContain("recovery-required");
   expect(body).toContain("escalation-required");
-  expect(body).toContain("`--retry-pending`");
+  expect(body).toContain("--retry-pending");
   expect(body).toContain("emits `UNIT_COMPLETED`");
-  expect(body).toContain("Code Generation and unit-major iteration never carry a wave");
+  expect(body).toContain("Code Generation remains wave-ineligible");
   expect(body).not.toContain(
     "read `bolt_dag.batches` from the intent's `runtime-graph.json`",
   );
 }
 
 describe("t278 wave protocol parity", () => {
-  test("authored and generated conductor skills carry the current engine contract", () => {
+  test("every shipped wave module carries the engine contract, and the skill leaves it there", () => {
     for (const harness of HARNESS_MATRIX) {
-      const authored = readFileSync(
+      const wave = readFileSync(
+        join(harness.engineRoot, "aidlc-common", "protocols", "stage-protocol-wave.md"),
+        "utf-8",
+      );
+      expectWaveProse(wave);
+      expect(wave).toContain(
+        'Deliver the stage\'s rules per `stage-protocol.md` § "For subagent stages" step 2.',
+      );
+      expect(wave).toContain("Reviewer dispatches remain serialized where the single reviewer-scope record is enforced");
+      for (const skill of [
         join(harness.authoredRoot, "skills", "aidlc", "SKILL.md"),
-        "utf-8",
-      );
-      const generated = readFileSync(
         join(harness.skillsRoot, "aidlc", "SKILL.md"),
-        "utf-8",
-      );
-      expectWaveProse(authored);
-      expectWaveProse(generated);
-      for (const body of [authored, generated]) {
-        expect(body).toContain(
-          'Deliver the stage\'s rules per `stage-protocol.md` § "For subagent stages" step 2.',
-        );
+      ]) {
+        const body = readFileSync(skill, "utf-8");
+        expect(body, skill).not.toContain("**Per-unit batch waves (optional).**");
+        if (harness.name === "kiro" || harness.name === "kiro-ide") {
+          expect(body, skill).toContain("Every `entry.unit_memory_path` is engine-created and output-only.");
+        }
       }
-      expect(authored).toContain(
-        "Serialize reviews wherever the single reviewer-scope record is enforced",
-      );
     }
   });
 
@@ -1762,7 +1759,7 @@ describe("t278 wave protocol parity", () => {
         "core",
         "aidlc-common",
         "protocols",
-        "stage-protocol-construction.md",
+        "stage-protocol-wave.md",
       ),
       "utf-8",
     );

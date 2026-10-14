@@ -14,34 +14,22 @@
 // aidlc-graph.ts:1063 (runCompileCheck) / :1127 (the `compile --check` CLI
 // branch). This file pins that contract in-process.
 //
-// The `compile --check` comparison, transcribed from the source so the test
-// asserts the REAL behaviour, not a re-implementation:
-//   runCompileCheck() {
-//     const { json } = compileStageGraph();
-//     const onDisk = readFileSync(stageGraphPath(), "utf-8");  // :1065
-//     if (json === onDisk) return;                              // :1066 — STRICT ===
-//     ... process.exit(1)
-//   }
-//   stageGraphPath() = process.env.AIDLC_STAGE_GRAPH
-//                      ?? join(DATA_DIR, "stage-graph.json");   // :152-153
-//   DATA_DIR = join(__FILE_DIR, "data");                        // :136
-// So the shipped default location is
+// The shipped default location is
 //   dist/claude/.claude/tools/data/stage-graph.json
 // and the comparison is a STRICT byte-identity of the UTF-8 contents (the
-// emitter appends exactly one trailing "\n" at canonicalStageGraphJson:867,
-// which is present on disk — verified `tail -c 3` => "\n ] \n").
+// emitter appends exactly one trailing "\n" in canonicalStageGraphJson, which is
+// present on disk).
 //
-// Test-design note (house style, per tests/unit/t69-worktree-path.sh and the
-// sibling t106.none.test.ts): assert the OBSERVABLE CONTRACT, never re-derive
-// the expected output. We do NOT reconstruct the canonical JSON ourselves —
-// that would only catch deletion. Instead we read the SHIPPED artifact off
-// disk (the same file `compile --check` reads) and assert byte-identity, plus
-// determinism across two calls. A real regression — a field-order change, a
-// dropped stage, a resolver edit that alters rules_in_context / sensors_
-// applicable, an accidental whitespace/indent shift, a missing trailing
-// newline — makes compileStageGraph().json diverge from the committed
-// stage-graph.json and turns this red, exactly as `compile --check` would
-// exit 1 in CI.
+// Test-design note (house style): assert the OBSERVABLE CONTRACT, never
+// re-derive the expected output. We do NOT reconstruct the canonical JSON
+// ourselves - that would only catch deletion. Instead we read the SHIPPED
+// artifact off disk (the same file `compile --check` reads) and assert
+// byte-identity, plus determinism across two calls. A real regression - a
+// field-order change, a dropped stage, a resolver edit that alters
+// rules_in_context / sensors_applicable, an accidental whitespace/indent shift,
+// a missing trailing newline - makes compileStageGraph().json diverge from the
+// generated stage-graph.json and turns this red, exactly as `compile --check`
+// would exit 1 in CI.
 //
 // Source-path discipline: compileStageGraph() and stageGraphPath() honour the
 // AIDLC_STAGE_GRAPH / AIDLC_STAGES_DIR / AIDLC_RULES_DIR / AIDLC_SENSORS_DIR
@@ -70,7 +58,7 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 
 // Drop any graph the lib.ts loader may have cached under a prior env state, so
-// compileStageGraph()'s bootstrap (loadStageGraph, aidlc-graph.ts:888) reads
+// compileStageGraph()'s bootstrap (loadStageGraphAll in aidlc-graph.ts) reads
 // the default shipped stage-graph.json afresh.
 __resetGraphCache();
 
@@ -78,7 +66,7 @@ __resetGraphCache();
 // default (DATA_DIR/stage-graph.json). Resolved relative to this test file via
 // import.meta.dir so the read is cwd-independent. We read the raw UTF-8 bytes
 // (string) and compare with strict === — mirroring runCompileCheck's
-// `json === onDisk` at aidlc-graph.ts:1066.
+// byte comparison in aidlc-graph.ts.
 const SHIPPED_GRAPH_PATH = join(
   import.meta.dir,
   "..",
@@ -94,9 +82,9 @@ const SHIPPED_GRAPH_RAW = readFileSync(SHIPPED_GRAPH_PATH, "utf-8");
 describe("compileStageGraph() golden-master (compile --check contract)", () => {
   test("recompiles BYTE-FOR-BYTE identical to the shipped stage-graph.json", () => {
     // The load-bearing assertion. This is precisely what `aidlc-graph.ts
-    // compile --check` enforces in CI (runCompileCheck, :1063-1071): compile
-    // from the YAML stage files in-process, then assert the emitted `.json`
-    // string equals the committed artifact on disk, byte for byte. Any drift
+    // compile --check` enforces for the stage graph in CI (runCompileCheck):
+    // compile from the YAML stage files in-process, then assert the emitted `.json`
+    // string equals the generated artifact on disk, byte for byte. Any drift
     // — reordered fields, a renamed/dropped/added stage, a rules_in_context
     // or sensors_applicable resolver change, an indent or trailing-newline
     // shift — diverges here and would exit 1 under `compile --check`.
@@ -105,16 +93,16 @@ describe("compileStageGraph() golden-master (compile --check contract)", () => {
   });
 
   test("emits the canonical single trailing newline (no double / missing \\n)", () => {
-    // canonicalStageGraphJson appends exactly one "\n" (aidlc-graph.ts:867),
+    // canonicalStageGraphJson appends exactly one "\n" (aidlc-graph.ts),
     // and `compile --check` does a strict byte compare — so the on-disk file
     // must end with a single newline, no more, no less. process.stdout.write
-    // vs console.log byte-parity (see the `export` handler comment at :1160)
+    // vs console.log byte-parity (see the `export` handler comment)
     // is the same class of trap; pin it here for the compile path too.
     const { json } = compileStageGraph();
     expect(json.endsWith("\n")).toBe(true);
     expect(json.endsWith("\n\n")).toBe(false);
     // And the shipped file matches that exact shape (guards a stray editor
-    // newline appended to the committed artifact that would break --check).
+    // newline appended to the generated artifact that would break --check).
     expect(SHIPPED_GRAPH_RAW.endsWith("\n")).toBe(true);
     expect(SHIPPED_GRAPH_RAW.endsWith("\n\n")).toBe(false);
   });
@@ -124,9 +112,10 @@ describe("compileStageGraph() golden-master (compile --check contract)", () => {
     // re-serialising the shipped file with the same 2-space indent reproduces
     // the compiled body. This catches a compile that emits malformed JSON
     // while still happening to byte-match a malformed on-disk file, and pins
-    // the 2-space-indent canonical form (JSON.stringify(v, null, 2) at :867).
+    // the 2-space-indent canonical form (JSON.stringify(v, null, 2) in
+    // canonicalStageGraphJson).
     const { json } = compileStageGraph();
-    const parsed = JSON.parse(json); // throws if not valid JSON
+    const parsed = JSON.parse(json);
     expect(Array.isArray(parsed)).toBe(true);
     // Reconstruct the canonical body (indent 2) + the single trailing newline
     // the emitter adds, and assert it equals the compiled string. This pins
@@ -141,8 +130,8 @@ describe("compileStageGraph() determinism", () => {
     // contract to be meaningful: if compile were order-sensitive (e.g.
     // readdirSync iteration leaking into output, or Map iteration order
     // affecting rules_in_context), CI would flap. The stages.sort by
-    // numericStageOrder (:954) and the FIELD_ORDER pin (:186) are what make
-    // this hold; assert it directly.
+    // numericStageOrder and the FIELD_ORDER pin are what make this hold; assert it
+    // directly.
     const a = compileStageGraph().json;
     const b = compileStageGraph().json;
     expect(b).toBe(a);
@@ -152,8 +141,7 @@ describe("compileStageGraph() determinism", () => {
     // compileStageGraph returns { json, stages }; the JSON is the canonical
     // serialisation of those stages. A regression that returned an empty
     // stages array but a stale cached json (or vice versa) would slip past a
-    // pure byte check. Assert the two halves of the return agree on count and
-    // on the canonical text.
+    // pure byte check. Assert the two halves of the return agree on count.
     const { json, stages } = compileStageGraph();
     expect(stages.length).toBeGreaterThan(0);
     const parsed = JSON.parse(json) as unknown[];

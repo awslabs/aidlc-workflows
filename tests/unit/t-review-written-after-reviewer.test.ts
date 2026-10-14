@@ -133,7 +133,6 @@ function review(verdict: "READY" | "NOT-READY", note = "Fixture review."): strin
   );
 }
 
-/** The reviewer writes its review (the file the request named). */
 function reviewerWrites(file: string, text: string): void {
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, text, "utf-8");
@@ -205,7 +204,6 @@ describe("a review file changed after the reviewer finished records as an edited
     expect(completion[0]).toContain("**Verdict**: READY");
     expect(completion[0]).toContain("**Review Edited After Reviewer**: yes");
     expect(reviewCompletionEdited(completion[0])).toBe(true);
-    // Strict accepts nothing: no CHANGE_ACCEPTED row; the gate carries the line instead.
     expect(blocks(p, "CHANGE_ACCEPTED")).toHaveLength(0);
     const gate = gateStart(p);
     expect(gate).toContain("change_notices");

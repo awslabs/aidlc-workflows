@@ -1,8 +1,8 @@
 // covers: harness-instrument:ci-windows-lanes
 //
-// Pins the three advisory Windows lanes ci.yml gained after the PR 1369 review:
-// the documented install.ps1 one-liner under Windows PowerShell 5.1, the hook
-// contracts with Git Bash removed from PATH, and the smoke tier inside WSL 1.
+// Pins the three advisory Windows lanes in ci.yml: the documented install.ps1
+// one-liner under Windows PowerShell 5.1, the hook contracts with Git Bash
+// removed from PATH, and the smoke tier inside WSL 1.
 // Each lane follows the cross-OS convention (merge queue and manual runs, not
 // PR pushes), pins its actions by commit, uses the runner's generous timeout
 // hierarchy, and stays out of the required summary job until it has a first
@@ -175,7 +175,6 @@ describe("t-ci-windows-lanes", () => {
     expect(bun.shell).toBe("wsl-bash {0}");
     expect(bun.run).toContain("https://github.com/oven-sh/bun/releases/download/bun-v1.4.2/bun-linux-x64.zip");
     expect(bun.run).toContain('echo "36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913  $archive" | sha256sum -c -');
-    // No unpinned install script.
     expect(bun.run).not.toContain("bun.sh/install");
     expect(bun.run).toContain('test "$("$HOME/.bun/bin/bun" --version)" = 1.4.2');
     const smoke = step(job, "Run the smoke tier, hook units and a compiled binary inside WSL");
@@ -238,7 +237,6 @@ describe("t-ci-windows-lanes", () => {
     const commands = run.split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("#"));
     expect(commands.filter((line) => /install\.sh|\$AIDLC_BIN_DIR\/aidlc"/.test(line) && !line.startsWith("as_user "))).toEqual([]);
     expect(run.trimEnd().endsWith('exit "$result"')).toBe(true);
-    // Evidence is sanitized by the Windows side before upload.
     expect(step(job, "Sanitize WSL evidence")).toMatchObject({ shell: "powershell", run: "bun scripts/ci-sanitize-logs.ts tmp/ci-wsl" });
     expect(step(job, "Preserve WSL evidence").with).toMatchObject({ name: "ci-wsl-Windows", path: "tmp/ci-wsl/" });
   });

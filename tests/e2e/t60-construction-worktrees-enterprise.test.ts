@@ -77,16 +77,15 @@ import {
   cleanupTestProject,
   createTestProject,
 } from "../harness/fixtures.ts";
-// P4: init CREATES a per-intent record; state lives under
-// aidlc/spaces/<space>/intents/<slug>-<id8>/ and audit is SHARDED per clone
+// Intent creation CREATES a per-intent record; state lives under
+// aidlc/spaces/<space>/intents/<YYMMDD>-<slug>/ and audit is SHARDED per clone
 // under <record>/audit/. Read state through the resolved record dir and audit
-// through the shipped merge helper (default-resolves the active intent, falls
-// back to flat aidlc-docs for a not-yet-created project).
+// through the shipped merge helper (default-resolves the active intent).
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 const SCOPE_GRID = join(AIDLC_SRC, "tools", "data", "scope-grid.json");
@@ -101,10 +100,10 @@ afterEach(() => {
 });
 
 /**
- * setup_construction_project (helper :39): a bare temp project with aidlc-docs/,
- * then `aidlc-utility init --force --scope <scope>` so aidlc-state.md exists
- * (both the orchestrator and dispatch-event probe that path). We spawn the real
- * init tool, exactly as the helper shelled out to `bun aidlc-utility.ts init`.
+ * A bare temp project with aidlc-docs/, then `aidlc-utility intent-create
+ * --force --scope <scope>` so the per-intent aidlc-state.md exists (both the
+ * orchestrator and dispatch-event resolve that record). We spawn the real
+ * creation tool.
  */
 function setupConstructionProject(scope: string): string {
   const proj = createTestProject();
@@ -123,7 +122,6 @@ function setupConstructionProject(scope: string): string {
   return proj;
 }
 
-/** Parse the shipped scope-grid.json (the same file the .sh require()'d). */
 function gridStageMode(scope: string, stage: string): string {
   const grid = JSON.parse(readFileSync(SCOPE_GRID, "utf-8")) as Record<
     string,
@@ -134,7 +132,7 @@ function gridStageMode(scope: string, stage: string): string {
   return entry.stages[stage] ?? "UNDEFINED";
 }
 
-// P4: resolve the created intent's record dir from the active-space + active-intent
+// Resolve the created intent's record dir from the active-space + active-intent
 // cursors (a record dir is the one holding aidlc-state.md), falling back to the
 // flat aidlc-docs/ layout for a not-yet-created project.
 function recordDirOf(p: string): string {
@@ -157,7 +155,7 @@ function statePath(proj: string): string {
   return join(recordDirOf(proj), "aidlc-state.md");
 }
 
-/** Merged audit-shard text for the created intent (P4 shards audit per clone). */
+/** Merged audit-shard text for the created intent (audit is sharded per clone). */
 function auditText(proj: string): string {
   return readAllAuditShards(proj);
 }
@@ -177,22 +175,16 @@ function blockForEvent(proj: string, event: string): string {
 }
 
 describe("t60 Construction worktrees per scope — enterprise (cli)", () => {
-  // .sh test 1 (helper assert_scope_codegen_mode "enterprise" "EXECUTE")
   test("scope-grid.json: enterprise code-generation = EXECUTE [.sh test 1]", () => {
-    // The compiled grid entry's code-generation mode is the per-scope codegen
-    // mode the .sh asserted via assert_scope_codegen_mode. EXECUTE = the
-    // Construction codegen stage runs for this scope.
     expect(gridStageMode(SCOPE, "code-generation")).toBe("EXECUTE");
   });
 
-  // .sh test 3 (inline grid read: enterprise.practices-discovery == EXECUTE)
   test("scope-grid.json: enterprise practices-discovery = EXECUTE (skeleton-on) [.sh test 3]", () => {
     // enterprise has the full Inception phase; practices-discovery EXECUTEs,
-    // which drives the skeleton-on stance (the .sh's "drives skeleton-on" note).
+    // which drives the skeleton-on stance.
     expect(gridStageMode(SCOPE, "practices-discovery")).toBe("EXECUTE");
   });
 
-  // .sh test 2 (helper assert_dispatch_event_runs_for_scope)
   test("dispatch-event MERGE_DISPATCH_INVOKED emits cleanly for enterprise [.sh test 2]", () => {
     const proj = setupConstructionProject(SCOPE);
     const slug = `t-${SCOPE}-bolt-1`;
@@ -212,22 +204,20 @@ describe("t60 Construction worktrees per scope — enterprise (cli)", () => {
       ],
       { timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS), encoding: "utf-8" },
     );
-    // Clean exit + the emit-only stdout contract (aidlc-bolt.ts:683).
+    // Clean exit + the emit-only stdout contract (aidlc-bolt.ts handleDispatchEvent).
     expect(r.status).toBe(0);
     const parsed = JSON.parse((r.stdout ?? "").trim());
     expect(parsed.emitted).toBe("MERGE_DISPATCH_INVOKED");
     expect(parsed.slug).toBe(slug);
 
-    // STRONGER than the .sh's two independent greps: the INVOKED audit block
-    // carries the event, the exact Bolt slug, AND the practices-excerpt field,
-    // all co-located in the SAME `\n---\n`-delimited block.
+    // The INVOKED audit block carries the event, the exact Bolt slug, AND the
+    // practices-excerpt field, all co-located in the SAME `\n---\n`-delimited block.
     const block = blockForEvent(proj, "MERGE_DISPATCH_INVOKED");
     expect(block).toContain("**Event**: MERGE_DISPATCH_INVOKED");
     expect(block).toContain(`**Bolt slug**: ${slug}`);
     expect(block).toContain(`**Practices section excerpt**: scope=${SCOPE}`);
   });
 
-  // .sh test 4 (inline: MERGE_DISPATCH_RETURNED post-call bracket emit)
   test("dispatch-event MERGE_DISPATCH_RETURNED brackets the dispatch (post-call emit) [.sh test 4]", () => {
     const proj = setupConstructionProject(SCOPE);
     const slug = `t-${SCOPE}-bolt-1`;
@@ -264,8 +254,8 @@ describe("t60 Construction worktrees per scope — enterprise (cli)", () => {
     expect(parsed.emitted).toBe("MERGE_DISPATCH_RETURNED");
     expect(parsed.slug).toBe(slug);
 
-    // STRONGER: the RETURNED block carries the slug + Strategy/Target/Confidence
-    // fields co-located (aidlc-bolt.ts:698-704), not merely the event name.
+    // The RETURNED block carries the slug + Strategy/Target/Confidence fields
+    // co-located (aidlc-bolt.ts handleDispatchEvent), not merely the event name.
     const block = blockForEvent(proj, "MERGE_DISPATCH_RETURNED");
     expect(block).toContain("**Event**: MERGE_DISPATCH_RETURNED");
     expect(block).toContain(`**Bolt slug**: ${slug}`);
@@ -282,11 +272,9 @@ describe("t60 Construction worktrees per scope — enterprise (cli)", () => {
     expect(returnedIdx).toBeGreaterThan(invokedIdx);
   });
 
-  // .sh test 5 (inline: v7 state has the three v0.4.0 fields)
   test("v7 state carries the three v0.4.0 fields after init --scope enterprise [.sh test 5]", () => {
     const proj = setupConstructionProject(SCOPE);
     const state = readFileSync(statePath(proj), "utf-8");
-    // STRONGER: pin State Version 7 in addition to the three field labels.
     expect(state).toContain("**State Version**: 8");
     expect(state).toContain("**Worktree Path**:");
     expect(state).toContain("**Bolt Refs**:");

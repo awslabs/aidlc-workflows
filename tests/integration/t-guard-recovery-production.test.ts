@@ -923,7 +923,6 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     // Before the plan is approved, completing Code Generation is refused by the
     // plan-approval guard in every spelling, the per-tool script included.
     p.deniedReport("approved", ["--user-input", "Approve"], "code-generation", "plan-approval-guard");
-    // Resume canonical planning through a fresh next.
     directive = json(p.tool("orchestrate", ["next"]));
     for (let steps = 0; directive.kind === "load-steering" && steps < 40; steps++) {
       directive = json(p.tool("orchestrate", ["continue", directive.continue_token as string]));

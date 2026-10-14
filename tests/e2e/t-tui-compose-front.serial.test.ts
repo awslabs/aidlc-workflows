@@ -144,7 +144,6 @@ describe("t-tui compose front journey (live claude TUI)", () => {
         });
         expect(gateRc).toBe(0);
 
-        // No scope file was written: the stock library only.
         const scopesDir = join(sandbox, ".claude", "scopes");
         const scopeFiles = readdirSync(scopesDir).filter(
           (f) => f.startsWith("aidlc-") && f.endsWith(".md"),
@@ -155,7 +154,6 @@ describe("t-tui compose front journey (live claude TUI)", () => {
         ) as Record<string, unknown>;
         expect(Object.keys(grid).every((k) => STOCK_SCOPES.has(k))).toBe(true);
 
-        // The created state runs a stock scope with the plan composed for it.
         const stateMd = readFileSync(stateFilePathFor(sandbox), "utf8");
         const scope = /^- \*\*Scope\*\*: (\S+)$/m.exec(stateMd)?.[1] ?? "";
         expect(STOCK_SCOPES.has(scope)).toBe(true);

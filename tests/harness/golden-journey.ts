@@ -14,6 +14,11 @@
 //
 // The test drives with driveAidlc (sdk-drive.ts), which already fails a drive
 // whose agent records a decision the person did not make (person-turns.ts).
+//
+// The person keeps stock settings: Claude Code's default permission mode and
+// the project's shipped settings. Every prompt is answered yes; a prompt for
+// AI-DLC's own command or record, or a write outside the project, is a
+// problem (stock-permissions.ts), and the other prompts are listed.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
@@ -21,6 +26,7 @@ import { join, relative } from "node:path";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { parseDirectiveOutput } from "./directive-output.ts";
 import { declaredScope, expectedStages, sourceStages } from "./scope-run.ts";
+import { claudePromptProblems } from "./stock-permissions.ts";
 import {
   type AnswerSpec,
   type AskUserQuestionItem,
@@ -93,6 +99,8 @@ export interface GoldenRun {
   planAsked: number;
   /** Whether the person's own words were used. */
   ownWordsUsed: boolean;
+  /** Prompts the person met that were theirs to decide (the project's own commands). */
+  prompts: string[];
 }
 
 function norm(text: string): string {
@@ -196,6 +204,8 @@ export class GoldenPerson {
   driveOptions(): DriveOptions {
     return {
       projectDir: this.j.proj,
+      permissionMode: "default",
+      settingSources: ["user", "project", "local"],
       persistSession: true,
       captureStopHooks: true,
       answerScript: { kind: "pick", pick: (q) => this.pick(q) },
@@ -212,7 +222,13 @@ export class GoldenPerson {
     const problems = [...this.problems];
     if (drive.timedOut) problems.push(`the journey ran out of time at ${this.stageNow()}`);
     if (!approved(this.j.proj, this.j.lastStage)) problems.push(`${this.j.lastStage} was never approved (the journey ended at ${this.stageNow()})`);
-    return { drive, start: this.start, person: this.said, problems, planAsked: this.planAsked, ownWordsUsed: this.ownWordsUsed };
+    const prompts = claudePromptProblems(drive.permissionRequests ?? [], this.j.proj);
+    problems.push(...prompts.problems);
+    if (prompts.listed.length) console.log(`Prompts the person decided on stock settings:\n  ${prompts.listed.join("\n  ")}`);
+    return {
+      drive, start: this.start, person: this.said, problems, planAsked: this.planAsked, ownWordsUsed: this.ownWordsUsed,
+      prompts: prompts.listed,
+    };
   }
 
   private stageNow(): string {

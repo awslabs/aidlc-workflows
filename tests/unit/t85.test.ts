@@ -98,7 +98,7 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const TOOL = join(
   REPO_ROOT,
   "dist",
@@ -117,10 +117,9 @@ afterAll(() => {
 
 interface CliResult {
   status: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string; // combined stdout+stderr
 }
 
-/** Spawn `bun aidlc-utility.ts doctor --project-dir <p>`. Mirrors `bun "$UTIL" doctor --project-dir "$PROJ"`. */
 function doctor(p: string): CliResult {
   const res = spawnSync(BUN, [TOOL, "doctor", "--verbose", "--project-dir", p], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -132,10 +131,6 @@ function doctor(p: string): CliResult {
   };
 }
 
-/**
- * Fresh project seeded with audit-sample.md + state-mid-ideation.md.
- * Mirrors create_test_project + seed_audit_file + seed_state_file per case.
- */
 function seededProject(): string {
   const p = createTestProject();
   tempDirs.push(p);
@@ -144,14 +139,13 @@ function seededProject(): string {
   return p;
 }
 
-// P9 per-intent layout: state lives in the active intent's record (seedStateFile
+// Per-intent layout: state lives in the active intent's record (seedStateFile
 // seeds it so the cursor resolves for the spawned doctor tool).
 const statePath = (p: string): string => seededStateFile(p);
 
 /**
  * Replace the entire `- **Practices Affirmed Timestamp**: …` bullet line with
- * the given value. Mirrors the .sh's
- * `sed_i 's|^- \*\*Practices Affirmed Timestamp\*\*:.*$|- **Practices Affirmed Timestamp**: <v>|'`.
+ * the given value.
  */
 function setAffirmedTimestamp(p: string, value: string): void {
   const f = statePath(p);
@@ -165,7 +159,6 @@ function setAffirmedTimestamp(p: string, value: string): void {
 
 /**
  * Delete the entire `- **Practices Affirmed Timestamp**:` bullet line.
- * Mirrors the .sh's `sed_i '/^- \*\*Practices Affirmed Timestamp\*\*:/d'`.
  */
 function deleteAffirmedTimestamp(p: string): void {
   const f = statePath(p);
@@ -176,35 +169,30 @@ function deleteAffirmedTimestamp(p: string): void {
   writeFileSync(f, kept, "utf-8");
 }
 
-/** N days ago as an ISO-8601 Z timestamp (replaces the .sh's `date -u -v-Nd`). */
+/** N days ago as an ISO-8601 Z timestamp. */
 function isoDaysAgo(n: number): string {
   const d = new Date(Date.now() - n * 24 * 60 * 60 * 1000);
   return d.toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 describe("t85 aidlc-utility doctor — practices staleness (migrated from t85-doctor-practices-staleness.sh, plan 6)", () => {
-  // --- Test 1: empty/template-default placeholder -> never affirmed (info) ---
   test("1: empty/template-default Practices Affirmed Timestamp -> never affirmed (informational)", () => {
     // state-mid-ideation.md ships with the bare template default (empty value
-    // after the colon) — no mutation needed, matching the .sh.
+    // after the colon) - no mutation needed.
     const p = seededProject();
     const r = doctor(p);
     expect(r.out).toContain(
       "Practices staleness: never affirmed (informational)",
     );
-    // STRONGER: the passing-check ok verdict is rendered for this row.
     expect(r.out).toMatch(
       /ok {4}Practices staleness: never affirmed \(informational\)/,
     );
   });
 
-  // --- Test 2: affirmed within 90 days -> day count, NO advisory ---
   test("2: affirmed within 90 days reports day count without advisory", () => {
     const p = seededProject();
     setAffirmedTimestamp(p, isoDaysAgo(30));
     const r = doctor(p);
-    // Same two observables as the .sh: a day-count line AND no "advisory"
-    // on the practices-staleness line.
     expect(r.out).toMatch(/Practices staleness: affirmed \d+ days? ago$/m);
     const practicesLine = r.out
       .split("\n")
@@ -213,33 +201,26 @@ describe("t85 aidlc-utility doctor — practices staleness (migrated from t85-do
     expect(practicesLine).not.toContain("advisory");
   });
 
-  // --- Test 3: affirmed beyond 90 days -> advisory pass=true ---
   test("3: affirmed > 90 days is advisory pass=true with explanatory label", () => {
     const p = seededProject();
     setAffirmedTimestamp(p, isoDaysAgo(180));
     const r = doctor(p);
-    // pass=true (ok on the practices-staleness line) but carries "advisory"
-    // AND the threshold value "> 90 days".
     expect(r.out).toMatch(
       /ok {4}Practices staleness: affirmed \d+ days ago \(advisory/,
     );
     expect(r.out).toContain("> 90 days");
   });
 
-  // --- Test 4: invalid ISO string -> ✗ readable + doctor exits 1 ---
   test("4: invalid ISO 8601 timestamp is flagged readable (✗, exit 1)", () => {
     const p = seededProject();
     setAffirmedTimestamp(p, "not-a-real-iso-string");
     const r = doctor(p);
     expect(r.out).toContain("Practices staleness: timestamp unreadable");
     expect(r.out).toContain("not-a-real-iso-string");
-    // STRONGER: this is the only failing check the .sh exercises, so
-    // failed > 0 -> doctor exits 1 (aidlc-utility.ts:1385). The .sh swallowed
-    // $? with `|| true`; we pin it.
+    // A failing check means failed > 0 -> doctor exits 1 (aidlc-doctor.ts main).
     expect(r.status).toBe(1);
   });
 
-  // --- Test 5: missing field entirely -> never affirmed (informational) ---
   test("5: missing Practices Affirmed Timestamp field treated as never-affirmed (informational)", () => {
     const p = seededProject();
     deleteAffirmedTimestamp(p);
@@ -247,13 +228,11 @@ describe("t85 aidlc-utility doctor — practices staleness (migrated from t85-do
     expect(r.out).toContain(
       "Practices staleness: never affirmed (informational)",
     );
-    // STRONGER: the ok verdict is asserted.
     expect(r.out).toMatch(
       /ok {4}Practices staleness: never affirmed \(informational\)/,
     );
   });
 
-  // --- Test 6: future-dated timestamp -> advisory pass with clock-skew label ---
   test("6: future-dated timestamp is advisory pass with clock-skew label", () => {
     const p = seededProject();
     setAffirmedTimestamp(p, "2099-01-01T00:00:00Z");

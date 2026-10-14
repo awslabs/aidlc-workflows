@@ -21,7 +21,19 @@ Release assets cover:
 - Windows x64
 
 Native installs are per-user. The Unix installer refuses root and does not need
-`sudo`. Windows installation targets the account running PowerShell. Run it
+`sudo`. Where root is the only user, such as a container image without `USER`,
+a CI container job, or a cloud agent sandbox whose setup script runs as root,
+pass `--allow-root` (or set `AIDLC_ALLOW_ROOT=1`) to install under root's own
+`$HOME`. The opt-in is still refused under `sudo` (`SUDO_USER` is set), when
+`$HOME` is unset or not owned by root (a symlinked home is followed), and when
+`AIDLC_BIN_DIR` or `AIDLC_INSTALL_ROOT` points outside root's home, so
+`sudo sh install.sh` from a normal account keeps failing and a root install never
+becomes system-wide. A release from before `--allow-root` cannot uninstall
+itself as root; installing it, or activating it as root with `aidlc use`,
+`update` or `rollback`, proceeds with a warning that names the way to remove it
+later: its own `aidlc update`, then `aidlc uninstall --allow-root`.
+`aidlc uninstall` takes the same `--allow-root` opt-in with the same limits.
+Windows installation targets the account running PowerShell. Run it
 from a normal PowerShell window. A window opened with "Run as administrator"
 under UAC is warned that installing as administrator is less safe, because
 another program running as the same account could interfere with files the
@@ -108,15 +120,17 @@ stable `%LOCALAPPDATA%\aidlc\bin\aidlc.cmd` shim. After successful verification
 and installation, the installer registers that bin directory in the current
 account's persistent User PATH, preserving existing entries and avoiding
 duplicates on reruns. It also updates the current PowerShell process and
-notifies Windows of the environment change for new terminals. If another
-session cannot find `aidlc`, open a new terminal; restart the terminal app or
-IDE if needed.
+notifies Windows of the environment change, so programs started afterwards
+find `aidlc`. A terminal app or IDE that was already open (Kiro, VS Code,
+Cursor) keeps the PATH it started with: quit it fully and reopen it before using
+`aidlc` or AI-DLC's hooks there. A new tab or Reload Window inside it is not
+enough.
 It does not change Machine PATH or edit a PowerShell profile.
 
 Successful human output starts with `Installed`, the version, the account,
 and the installed command path. Next, run `aidlc config` from your project
-directory. Restart guidance applies only if another terminal or IDE cannot
-find the command.
+directory. When the installer added the PATH entry, it also says to quit and
+reopen any terminal app or IDE that was already open.
 
 The installer writes `windows-path.json` under the install root only when it
 adds a User PATH entry. This ownership record survives reruns, including
@@ -196,6 +210,7 @@ installation uses `status: "failed"`, exit code 1, `data.installed: true`, and
 | `--ca-bundle <absolute-path>` | `-CaBundle <absolute-path>` | Use a custom CA bundle |
 | `--profile <absolute-path>` | Not available | Transactionally add the Unix PATH block |
 | Not available | `-NoModifyPath` | Skip persistent User PATH and current-process PATH changes; print a direct command |
+| `--allow-root` (or `AIDLC_ALLOW_ROOT=1`) | Not available | Install as root where root is the only user (container, CI job, agent sandbox). Still refused under `sudo`, with `$HOME` unset or not owned by root, and with `AIDLC_BIN_DIR` or `AIDLC_INSTALL_ROOT` outside root's home. A release from before `--allow-root` is installed with a warning, because it cannot uninstall itself as root |
 | `--yes` | `-Yes` | Automation mode; it does not bypass integrity checks. On Windows it also replaces an `aidlc` in the bin directory that AI-DLC did not write, keeping that file as a backup |
 | `--quiet` | `-Quiet` | Suppress progress and emit one result line |
 | `--json` | `-Json` | Suppress progress and emit one schema-versioned JSON result |
@@ -341,10 +356,12 @@ sweep. It checks only the non-interactive hook PATH, host trust files, and
 recorded provider actions; it does not spawn the harness CLI or contact a
 provider. The transaction still exits 0. Non-TTY human output names every
 outstanding item and the exact `aidlc config runtime`, `aidlc config trust`, or
-`aidlc config providers --check` follow-up. Codex's own hook trust is the one
-item no AI-DLC command gives: its line names the step in Codex instead (type
-`/hooks`, press `t` to trust all, then press Esc). JSON includes
-`data.outstandingActions`, where such an item also carries that `step`. Quiet output stays one line when clean and appends
+`aidlc config providers --check` follow-up. Two items have no AI-DLC command
+that does them, so their line names the person's own step instead: Codex's own
+hook trust (in Codex, type `/hooks`, press `t` to trust all, then press Esc),
+and on Kiro IDE a settings file with an error (fix the error in the file it
+names; its `command`, `config trust --check`, only checks the result). JSON
+includes `data.outstandingActions`, where such an item also carries that `step`. Quiet output stays one line when clean and appends
 one outstanding-actions line when follow-up is required, plus one `Warning:`
 line for each ignore rule that hides committed records.
 
@@ -603,7 +620,9 @@ Claude Opus 4.8. Where you set the model and effort depends on the harness:
 - **Kiro CLI:** the session model and its one effort. `aidlc config models`
   saves them in your personal Kiro settings (a preset sets the effort:
   `minimal` low, `balanced` medium, `thorough` extra-high); `/model` and
-  `/effort` change them inside Kiro. Recommended setup keeps an effort you
+  `/effort` change them inside Kiro. A `/model` switch reaches the agents the
+  conductor dispatches only once you save it with
+  `/model set-current-as-default`. Recommended setup keeps an effort you
   already saved for your model. On Kiro IDE's row setup saves Kiro CLI's
   session model only. See
   [Session model and effort](harnesses/kiro-cli.md#session-model-and-effort).
@@ -804,7 +823,10 @@ projects; while it is on, AI-DLC's reviews and helpers do not run).
 the file. While Workflows is on and you have not answered on this computer,
 setup asks once and `aidlc config --yes` turns it off; your answer is kept in
 `kiro-ide-workflows` in the AI-DLC install folder, so no other project asks
-again. See [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers).
+again. When that settings file has an error AI-DLC cannot read past, Kiro may
+still read Workflows as on, so `--show` says it could not be read, `--check`
+and setup warn until the file reads again (whatever you answered before), and
+the next Kiro IDE chat tells you once; fix the error in that file. See [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers).
 
 On Windows, Kiro IDE runs its agent's commands in your default terminal profile
 (`terminal.integrated.defaultProfile.windows` in Kiro's user settings). While
@@ -1070,6 +1092,11 @@ Refresh preserves:
   the `package.json`, `.gitignore`, and `node_modules/` (links included)
   opencode writes under `.opencode/` at its first start: config never copies,
   owns, or removes these
+- the agent files in `.kiro/agents` that Kiro CLI upgraded for its 3.0 engine
+  (Kiro keeps each file it replaced beside it as `.json.bak`): a refresh keeps
+  them as Kiro left them, says so in one line, and brings in the rest of the
+  release; `aidlc config --harness kiro --force` takes the release's versions,
+  and Kiro upgrades them again the next time it starts on its 3.0 engine
 
 Under `aidlc/`, install and refresh copy only those seeds. The clone identity,
 sessions, engine health, and other per-machine state are never copied from the
@@ -1510,6 +1537,15 @@ aidlc config --project-dir "$PWD" --harness claude --mcp none --quiet
 aidlc doctor --project-dir "$PWD" --quiet
 ```
 
+A CI container job or agent sandbox that runs as root, with root as its only
+user, adds `--allow-root` to the installer line. The pinned version must be a
+release that ships `--allow-root`: the recipe runs that tag's own `install.sh`,
+and an older one rejects the flag as an unknown argument.
+
+```bash
+sh "$tmp/install.sh" --version "$version" --quiet --yes --allow-root
+```
+
 ## Harness Selection
 
 Harness selection belongs to `aidlc config --harness <name>`. Machine-level
@@ -1801,6 +1837,11 @@ script, to download that exact `aidlc-copy-runtime-X.Y.Z.tar.gz`, verify its
 command. Without network access, the error's `offline:` line names the file
 to fetch elsewhere and pass with `--from`.
 
+When a refresh (`config` with `--from` or `--download`) brings in files from a
+newer release than the project's own tool, that release's own config runs the
+command as you typed it, and a `Note:` line names the release whose tool ran
+it. A same or older release is refreshed by the project's own tool.
+
 The archive is assembled from the freshly regenerated Bun projections under
 `dist/`. Its generated hooks and tools invoke the included TypeScript through
 Bun. The native installers and lifecycle commands instead consume
@@ -1870,7 +1911,9 @@ run preserves an earlier record, so that entry is still removed on uninstall.
 At a terminal, uninstall says what it removes and keeps, then proceeds; without
 a terminal it needs `--yes`. It refuses filesystem, home, shared-system, and
 project roots, as well as root-owned, package-manager-owned, or
-mixed-ownership commands. On Windows, a bound file list and expected checksums
+mixed-ownership commands. A root install made with `--allow-root` is removed
+with `aidlc uninstall --allow-root` (or `AIDLC_ALLOW_ROOT=1`); the opt-in is
+refused under `sudo` and when `$HOME` is not owned by root. On Windows, a bound file list and expected checksums
 are recorded before cleanup is scheduled. The worker rechecks paths and hashes,
 refuses reparse points, and deletes files individually after the running command
 exits; uninstall is done when the `aidlc` command is no longer found. An

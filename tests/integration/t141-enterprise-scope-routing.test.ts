@@ -1,6 +1,6 @@
 // covers: scope:enterprise
 //
-// MR9 live scope-routing journey. The deterministic scope transpose and runner
+// Live scope-routing journey. The deterministic scope transpose and runner
 // tests already prove the enterprise scope data compiles; this test drives a
 // real `/aidlc --scope enterprise <description>` turn through the SDK and asserts the
 // routing as data: creation stdout, state fields, and audit events. It stops at
@@ -8,11 +8,6 @@
 // proves live conductor-to-tool routing without spending a full workflow. (The
 // legacy `--init` flag is retired: passed through, it became the intent's
 // description and invited the conductor to ask what it meant.)
-//
-// Enterprise is the representative comprehensive v0.6.0 scope here: it was
-// still UNCOVERED in the registry on the MR8 base, while the lower-depth scope
-// families already had live or deterministic claims. This moves a real shipped
-// scope off zero without inventing custom scope units.
 
 import {
   liveCaseTimeoutMs,

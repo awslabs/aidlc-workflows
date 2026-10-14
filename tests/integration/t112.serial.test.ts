@@ -92,7 +92,6 @@ function failingBunTest(i: number, cases = 1): string {
   return `import { expect, test } from "bun:test";\n\n${bodies.join("\n")}`;
 }
 
-// A trivially-passing Bun file: one green assertion, exit 0 => PASS.
 function passingBunTest(j: number): string {
   return `import { expect, test } from "bun:test";\n\ntest("seeded pass ${j}", () => {\n  expect(1).toBe(1);\n});\n`;
 }
@@ -200,7 +199,6 @@ function driveRunner(
 }
 
 describe("run-tests.sh exit code equals number of failed files (harness calibration)", () => {
-  // The core invariant: for N failing files, the runner must exit N.
   for (const n of [0, 1, 2, 3]) {
     test(`${n} failing file(s) + 2 passing => exits ${n}`, () => {
       const { code } = driveRunner(n, 2);

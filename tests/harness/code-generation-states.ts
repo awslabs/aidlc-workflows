@@ -8,8 +8,7 @@
 // guard, does every refusal name a way past the guard admits, and are the
 // developer dispatch and a source write refused before the approval and
 // admitted after it. The helpers here are the plan-approval ask test's
-// (tests/unit/t-plan-approval-ask.test.ts), kept apart so that file stays
-// another PR's rebase surface.
+// (tests/unit/t-plan-approval-ask.test.ts).
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";

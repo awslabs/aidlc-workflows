@@ -13,9 +13,9 @@
 // layout):
 //   WRITE SIDE - compile recorded memory_path as `<bare-space-prefix>/<phase>/
 //     <slug>/memory.md`, dropping the active intent's record dir
-//     (aidlc/spaces/<sp>/intents/<slug>-<id8>). The state advance transition had
-//     the same 2-arg relativeMemoryPath call. surface then join()'d that against
-//     projectDir and missed the real diary, surfacing zero candidates.
+//     (aidlc/spaces/<sp>/intents/<YYMMDD>-<label>). The state advance transition
+//     had the same 2-arg relativeMemoryPath call. surface then join()'d that
+//     against projectDir and missed the real diary, surfacing zero candidates.
 //   READ SIDE - surface extracted the phase as memRel.split("/")[1], which under
 //     the workspace prefix is "spaces", not the real phase. The robust extraction
 //     is the third-from-last segment: memory_path always ends
@@ -25,11 +25,11 @@
 // the read-side fix degrades correctly there too - the third case pins it.
 //
 // A THIRD DEFECT PINNED - surface hard-failed when runtime-graph.json did not
-// exist at all. Only the rebuild-stage-graph hook writes that (gitignored,
-// machine-local) file, and only on a transition-class command; §13 runs BEFORE
-// the `orchestrate report --result awaiting-approval` that is the first such
-// command in a workflow, so the FIRST gated stage always found it absent and the
-// mandatory ritual was stranded behind a bare "not found". surface now recomputes
+// exist at all. The rebuild-stage-graph hook writes that (gitignored,
+// machine-local) file on a transition-class command; the learnings ritual runs
+// BEFORE the `orchestrate report --result awaiting-approval` that is the first
+// such command in a workflow, so the FIRST gated stage found it absent and the
+// mandatory ritual was stranded behind a bare "not found". surface recomputes
 // memory_path exactly as compile derives it, quietly. The absence cases below
 // therefore deliberately skip compile; a malformed graph must still fail.
 //
@@ -69,7 +69,7 @@ import {
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const RUNTIME_TS = join(AIDLC_SRC, "tools", "aidlc-runtime.ts");
 const LEARNINGS_TS = join(AIDLC_SRC, "tools", "aidlc-learnings.ts");
 const LOG_TS = join(AIDLC_SRC, "tools", "aidlc-log.ts");
@@ -175,7 +175,6 @@ describe("t199 per-intent memory path (write + read)", () => {
         encoding: "utf-8",
       }).status,
     ).toBe(0);
-    // Seed memory.md at the per-intent record path the row now records.
     const diaryDir = join(seededRecordDir(pd), "inception", "user-stories");
     mkdirSync(diaryDir, { recursive: true });
     writeFileSync(join(diaryDir, "memory.md"), memoryDiary());
@@ -189,7 +188,6 @@ describe("t199 per-intent memory path (write + read)", () => {
     const out = JSON.parse(s.stdout);
     // The phase is the real one (inception), NOT "spaces" (the old front-index bug).
     expect(out.phase).toBe("inception");
-    // The diary was resolved: one Interpretations entry -> one candidate.
     expect(out.candidates.length).toBe(1);
   }, TIMEOUT);
 
@@ -270,7 +268,6 @@ describe("t199 per-intent memory path (write + read)", () => {
   // ===========================================================================
   test("surface extracts the right phase from a legacy flat memory_path", () => {
     const pd = mkWorkspaceProject();
-    // Overwrite the runtime-graph with a flat-layout row (no per-intent prefix).
     const rec = seededRecordDir(pd);
     writeFileSync(
       join(rec, "runtime-graph.json"),

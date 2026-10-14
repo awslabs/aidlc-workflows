@@ -416,7 +416,7 @@ On every topology the conductor is the bus: agents never invoke each other —
 only the conductor delegates. The writing model mirrors a real working
 session: everyone writes their own work, the owner collates and edits. Each
 dispatched support agent writes a contribution file
-(`contributions/<agent-slug>.md`, `stage-protocol-ensemble.md` §11 shape with the
+(`contributions/<agent-slug>.md`, `stage-protocol-collaborators.md` shape with the
 identity-marker first line); the lead alone edits the stage's `produces[]`
 artifacts; pipeline links advance the artifacts directly instead. On mob and
 subagent-with-supports stages the contribution files are the completion
@@ -625,7 +625,7 @@ The fixed order means a stage's sensor bindings and learning-loop pointer
 always have a place of their own. See [Sensor
 System](07-sensor-system.md) for the `## Sensors` binding semantics and
 the pull-import model. Shared sensor behavior is defined once in
-`stage-protocol.md` section 14, while `stage-protocol-learnings.md` section 13 defines the diary and ritual only when `directive.protocol_modules` lists `learnings`; otherwise skip both.
+`stage-protocol-sensors.md`, while `stage-protocol-learnings.md` section 13 defines the diary and ritual only when `directive.protocol_modules` lists `learnings`; otherwise skip both.
 The `## Sensors` and `## Learn` headings are checked by
 `t87-stage-compartment-headers` across all 33 stages; `## Steps` is in every
 stage but has no test of its own.

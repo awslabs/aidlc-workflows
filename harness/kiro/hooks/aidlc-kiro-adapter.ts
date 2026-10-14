@@ -56,8 +56,7 @@ import {
   classifyTerminalCommand,
   readNextLine,
   decodeHarnessPlainText,
-  fenceCommandOutput,
-  relayAsTextBlock,
+  terminalCommandRelay,
   presenceFloorHolds,
   hookDebug,
   hostEnvelopeTurnText,
@@ -653,6 +652,8 @@ if (target === "verb-intercept") {
         prompt: invocation.typed,
         templates: KIRO_CLI_HOST_TEMPLATES,
       }),
+      // This seam runs a command the person typed and hands its output over below.
+      relays_terminal_output: true,
     });
     preface = hookContextText(recorded.stdout);
   } catch { /* presence best-effort - record-human-turn never blocks the turn */ }
@@ -812,11 +813,7 @@ if (target === "verb-intercept") {
   const typed = cmd.source === "read-only-flag"
     ? `--${cmd.subcommand}`
     : (cmd.display ?? [cmd.subcommand, ...forwarded].join(" "));
-  process.stdout.write(
-    preface +
-    `The command \`/aidlc ${typed}\` has already run; it carries no workflow work. Its output is below. Your only action this turn: relay that output to the user ${relayAsTextBlock(out)}, then stop. Do not run \`aidlc-orchestrate.ts next\`. Do not advance, resume, or run any workflow stage.\n\n` +
-      fenceCommandOutput(out),
-  );
+  process.stdout.write(preface + terminalCommandRelay(`/aidlc ${typed}`, out));
   return 0;
 }
 

@@ -13,14 +13,12 @@
 // ONLY by the AIDLC_TUI_LIVE tui half — regenerate the registry greens-only,
 // after a watched live green, never on a skipped run.
 //
-// t-tui-custom-harness — the Phase-5 Harness-Engineer journey: the ONE genuine
+// t-tui-custom-harness - the Harness-Engineer journey: the ONE genuine
 // {sdk, tui} TWO-DRIVER test (§5-B). It calls BOTH driveAidlc() (sdk) AND spawns
 // tui-drive.ts (tui) over ONE customHarness project, so the derive-by-driver
-// registry (Phase 0 mechanismsOf) reads the set {sdk, tui} — the concrete
-// two-driver case the old single-label filename suffix could not express. The
-// journey is driven the way a human drives it (answer
-// the gate by keystroke), and the sdk half is a genuine one-shot read of the
-// tool-emitted audit.
+// registry (mechanismsOf) reads the set {sdk, tui}. The journey is driven the
+// way a human drives it (answer the gate by keystroke), and the sdk half is a
+// genuine one-shot read of the tool-emitted audit.
 //
 // WHAT A HARNESS ENGINEER DOES (docs/harness-engineering/00-overview.md): reshape the
 // framework WITHOUT code by editing DATA — a custom scope (which stages run),
@@ -29,7 +27,7 @@
 // knowledge that reaches that agent, bound sensors, and rules. The customHarness
 // fixture (tests/harness/custom-harness.ts) seeds a `data-migration` scope with
 // a TWO-STAGE CHAIN — the schema-snapshot stage (2.0, produces the `source-schema`
-// artefact) -> the migration-plan stage (2.9, consumes `source-schema`, produces
+// artefact) -> the migration-plan stage (2.10, consumes `source-schema`, produces
 // the `migration-strategy` artefact), both inception — plus a custom
 // `Data Migration Agent`, a custom knowledge playbook, a `schema-validator`
 // sensor, and a unique project-rule marker. Note the slug≠ artefact split
@@ -37,25 +35,19 @@
 // DELIVERABLE). "Harness Engineer" is the PERSONA; data-migration is the
 // realistic domain workflow they define.
 //
-// THE GAP IT FILLS (§3b L-PERSONA). The "edit resolves at compile" half + every
-// error mode live in the deterministic sibling (t-custom-harness-compile,
-// tests/integration/, no tokens). What was UNBUILT — and what THIS file proves —
-// is the "the agent actually SEES the custom harness in a REAL run" half: a grep
-// across the suite for "seed a custom scope/sensor/rule then drive /aidlc to
-// prove the agent picks it up" returned zero tests.
-//
 // THE SURFACES it proves the agent sees in a real run, each as DETERMINISTIC
 // DATA (never graded LLM prose):
-//   1. CUSTOM SCOPE ROUTES ITS STAGES — sdk: the init tool, driven by the real
-//      orchestrator, records Scope=data-migration and routes to the custom head
+//   1. CUSTOM SCOPE ROUTES ITS STAGES - sdk: the intent-create tool, driven by the
+//      real orchestrator, records Scope=data-migration and routes to the custom head
 //      stage (WORKSPACE_INITIALISED audit Details + Scope field; Current
 //      Stage=schema-snapshot in state). schema-snapshot is the lowest non-init
 //      EXECUTE in the scope, so init routes straight to it (the reachability
 //      keystone — see the fixture header).
 //   2. CUSTOM SENSOR FIRES — tui: answering the stage gate(s) by keystroke makes
-//      the orchestrator write a produced artefact under aidlc-docs/, which trips
-//      the custom sensor's matches glob while a custom stage is active ->
-//      SENSOR_FIRED audit row + a detail dir under aidlc-docs/.aidlc-engine/sensors/.
+//      the orchestrator write a produced artefact under the intent record, which
+//      trips the custom sensor's matches glob while a custom stage is active ->
+//      SENSOR_FIRED audit row (the detail dir under <record>/.aidlc-engine/sensors/
+//      is written only when a sensor FAILS; see SURFACE 2 in the tui journey).
 //      (This is provable only by a real human-driven run that actually answers
 //      the gate so the artefact lands, which is the point.)
 //   3. CUSTOM RULE REACHES THE AGENT — two ways, both data: (a) the compiled
@@ -74,13 +66,6 @@
 // artefact appearing on disk. migration-plan consumes what schema-snapshot
 // produces, so reaching migration-plan's artefact proves the chain executed in
 // order: the produce->consume edge is honoured at runtime, not just at compile.
-//
-// FINDING F1 (verified, surfaced — not softened). A custom scope is NOT
-// recognized by NAME in freeform dispatch: detect-scope keyword-matches the
-// `keywords[]` list, not the scope KEY, so `/aidlc data-migration ...` as
-// freeform returns the default `feature` scope, NOT data-migration. The
-// deterministic setup path is `aidlc-utility.ts init --scope data-migration`;
-// the live halves then resume that custom-scope state.
 //
 // SOURCE-PINNED FACTS (verify-never-guess; each read off disk before coding):
 //   - custom harness recipe + reachability (init auto-completes init-phase
@@ -180,8 +165,8 @@ function steeringDiagnostics(results: CapturedToolResult[]): string {
   return JSON.stringify({ issuedTokenCount: issued.size, commands: rows.slice(-12) });
 }
 
-// Wedge-ceiling, never a budget (the timer lesson): one generous cap; pass on
-// the on-disk signal, not the clock. Matches the suite convention.
+// Wedge-ceiling, never a budget: one generous cap; pass on the on-disk signal,
+// not the clock. Matches the suite convention.
 const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
 // Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
 const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
@@ -246,7 +231,7 @@ function skipReason(): string | null {
 const SKIP_REASON = skipReason();
 
 /** Extract every audit event-type string from the active intent's audit shards,
- *  in order. P9 shards the audit per clone under <record>/audit/. */
+ *  in order. The audit is sharded per clone under <record>/audit/. */
 function auditEvents(proj: string): string[] {
   return readAllAuditShards(proj)
     .split("\n")
@@ -283,15 +268,13 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
         sensors_applicable?: Array<{ id: string }>;
       }>;
       const node = graph.find((s) => s.slug === SNAPSHOT_STAGE_SLUG);
-      // VACUOUS-PASS GUARD: the custom stage must exist in the compiled graph.
       expect(node).toBeDefined();
       const rulePaths = (node?.rules_in_context ?? []).map((r) => r.path);
-      // The method relocated (P5/fe7f470) to the harness-neutral workspace-root
+      // The method lives in the harness-neutral workspace-root
       // aidlc/spaces/default/memory/ tree (neutral basenames). The compile bakes
       // the neutral display path; verified against the actual emitted array
       // ["…/org.md","…/team.md","…/project.md","…/phases/inception.md"].
       expect(rulePaths).toContain("aidlc/spaces/default/memory/project.md");
-      // the project rule FILE carries the unique custom-rule marker
       const rule = readFileSync(
         join(proj, "aidlc", "spaces", "default", "memory", "project.md"),
         "utf8",
@@ -322,7 +305,6 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
           { timeout: remainingWorkMs(), cwd: proj, encoding: "utf8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj } },
         );
         expect(init.status).toBe(0);
-        // sanity: the seeded state really does point Current Stage at the custom slug
         const state = readFileSync(stateFilePathFor(proj), "utf8");
         expect(stateField(state, "Current Stage")).toBe(SNAPSHOT_STAGE_SLUG);
         expect(stateField(state, "Active Agent")).toBe(CUSTOM_AGENT_SLUG);
@@ -350,8 +332,8 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
         ]);
         expect(startup.rc).toBe(0);
         // The custom stage is in INCEPTION — wait for the workflow statusline.
-        // P9: the orientation prefix ("<intent-slug> · ") sits between [AIDLC] and
-        // the phase, so match with .* rather than a contiguous gap.
+        // The orientation prefix (the intent slug and a middle-dot separator) sits
+        // between [AIDLC] and the phase, so match with .* rather than a contiguous gap.
         const sawMarker = waitFor(session, "\\[AIDLC\\].*INCEPTION", remainingWorkMs(), 1000);
         const pane = drive(["capture", "--session", session]).stdout;
         if (!sawMarker) {
@@ -359,7 +341,6 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
             `workflow statusline "[AIDLC] INCEPTION" never painted.\n---- pane ----\n${pane}\n--------------`,
           );
         }
-        // THE ASSERTION: the raw custom slug renders after the "> " stage marker.
         expect(pane).toContain(`> ${SNAPSHOT_STAGE_SLUG}`);
         expect(pane).toContain(`-- ${CUSTOM_AGENT_DISPLAY}`);
       } finally {
@@ -389,9 +370,9 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
   // ===================== sdk journey (surface 1) =========================
   // Drive creation-init through the real SDK prompt. The SDK surface asserts the
   // invariant routing seam: a custom scope is accepted by the live conductor,
-  // the init tool records it, and the first post-init stage is the custom head
-  // stage (`schema-snapshot`). We stop immediately after that Bash tool_result;
-  // the full custom stage body is the TUI half below.
+  // the intent-create tool records it, and the first post-init stage is the
+  // custom head stage (`schema-snapshot`). We stop immediately after that Bash
+  // tool_result; the full custom stage body is the TUI half below.
   test.skipIf(SKIP_REASON !== null)(
     `[sdk] the custom scope initializes and routes to the custom workflow in a real run${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
@@ -413,13 +394,12 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
             resultIncludes: `First post-init stage: ${SNAPSHOT_STAGE_SLUG}`,
           },
         });
-        // The custom scope was accepted + recorded — the scope ROUTED.
         assertAuditEvent(r, "WORKFLOW_STARTED");
         assertAuditEvent(r, "WORKSPACE_INITIALISED");
         const state = r.stateFile ?? "";
         expect(stateField(state, "Scope")).toBe(CUSTOM_SCOPE);
-        // The init-emitted WORKSPACE_INITIALISED block names the custom HEAD stage
-        // as the routing target — deterministic tool stdout, emitted pre-gate,
+        // The intent-create-emitted WORKSPACE_INITIALISED block names the custom HEAD
+        // stage as the routing target - deterministic tool stdout, emitted pre-gate,
         // INVARIANT regardless of how far the auto-driven run advanced. This is
         // the airtight "the custom scope routed to the custom workflow" proof.
         const auditMd = readAllAuditShards(sdkProj);
@@ -490,11 +470,11 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
 
   // ===================== tui journey (surfaces 2 + 3b + 4-in-motion + chain) ===
   // Drive the REAL claude TUI through BOTH custom-stage gates by KEYSTROKE.
-  // Answering makes the orchestrator write each produced artefact
-  // under aidlc-docs/ — those writes trip the custom sensor while a custom stage
-  // is active (SENSOR_FIRED), the artefacts cite the custom rule marker (the rule
-  // reached the agent), and reaching the migration-strategy artefact proves the
-  // produce->consume chain ran in order. Terminate on the terminal artefact,
+  // Answering makes the orchestrator write each produced artefact under the
+  // active intent's record - those writes trip the custom sensor while a custom
+  // stage is active (SENSOR_FIRED), the artefacts cite the custom rule marker (the
+  // rule reached the agent), and reaching the migration-strategy artefact proves
+  // the produce->consume chain ran in order. Terminate on the terminal artefact,
   // never a wait-timeout.
   test.skipIf(SKIP_REASON !== null)(
     `[tui] the agent runs the chained custom stages, fires the sensor + cites the rule${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
@@ -582,13 +562,12 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
 
         // --- SURFACE 2: the custom sensor fired on the artefact write(s) ------
         // The custom sensor is wired to BOTH stages and its matches glob covers
-        // the aidlc-docs tree, so each stage's artefact write trips it: SENSOR_FIRED
+        // the intent-record tree, so each stage's artefact write trips it: SENSOR_FIRED
         // is the deterministic proof the harness engineer's custom sensor ran in a
-        // real execution, and this is the FIRST live driver of that
-        // audit event.
+        // real execution.
         //
-        // FINDING (verified against aidlc-sensor.ts:267-271 + :319-326 + :581 — NOT
-        // softened): a sensor's DETAIL FILE under aidlc-docs/.aidlc-engine/sensors/<stage>/
+        // FINDING (verified against aidlc-sensor.ts handleFire + emitTerminal - NOT
+        // softened): a sensor's DETAIL FILE under <record>/.aidlc-engine/sensors/<stage>/
         // is written ONLY when the sensor FAILS (the "Detail path" audit field is
         // likewise emitted only in the SENSOR_FAILED branch). The reused
         // required-sections sensor PASSES on these well-formed artefacts (they carry
@@ -597,7 +576,6 @@ describe("t-tui-custom-harness (the {sdk,tui} two-driver journey)", () => {
         // not happen on the golden path. The honest passing-sensor signal is the
         // SENSOR_FIRED audit ROW naming the custom stage + the artefact output path.
         const events = auditEvents(tuiProj);
-        // VACUOUS-PASS GUARD: the audit recorded events at all.
         expect(events.length).toBeGreaterThan(0);
         const auditMd = readAllAuditShards(tuiProj);
         const firedBlocks = auditMd

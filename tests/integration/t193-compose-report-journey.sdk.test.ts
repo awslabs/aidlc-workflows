@@ -5,19 +5,20 @@
 // `/aidlc compose --report <path>` makes the engine's Branch 4c print carry
 // the report-triage instruction; the dispatched composer reads the file,
 // triages findings (auto-fixable vs human-decision), and composes a compact
-// fix-and-ship grid - which for a bug-shaped scan should ROUTE TO THE STOCK
-// `bugfix` SCOPE rather than minting a new one (the persona's prefer-stock
-// rule; the fixture is 5 code-level findings on a brownfield Todo app, the
-// canonical bugfix shape).
+// fix-and-ship grid - which for a bug-shaped scan should ROUTE TO A STOCK
+// `bugfix` OR `security-patch` SCOPE rather than minting a new one (the
+// persona's prefer-stock rule; the fixture is 5 code-level findings on a
+// brownfield Todo app, the canonical bugfix shape).
 //
 // Journey (one interactive run, stopped at the creation):
 //   drive:     `/aidlc compose --report scan-report-sample.json` on a fresh
 //              BROWNFIELD project (the fixture stub) with the report copied in.
-//   conductor: dispatch -> triage -> proposal (matched: bugfix) -> gate
-//              (answerScript approves) -> NO scope write (stock match) ->
-//              same-turn creation on bugfix.
-//   disk:      NO new scope file (still 10 + 10 - the matched path skips the
-//              write); a created intent whose state carries Scope: bugfix.
+//   conductor: dispatch -> triage -> proposal (matched: bugfix or
+//              security-patch) -> gate (answerScript approves) -> NO scope
+//              write (stock match) -> same-turn creation on the matched scope.
+//   disk:      NO new scope file (still 11 + 11 - the matched path skips the
+//              write); a created intent whose state carries Scope: bugfix or
+//              security-patch.
 //
 // The deterministic halves are pinned by t198 (the --report flag parses,
 // value not leaked). This proves the LIVE triage->route->creation arc.
@@ -164,7 +165,6 @@ describe("t193 report composer journey (/aidlc compose --report, sdk live)", () 
         assertToolResultContains(r, "Bash", "scan report at");
         assertToolResultContains(r, "Bash", "scan-report-sample.json");
 
-        // The gate fired and the creation ran in the SAME drive.
         expect(r.askedQuestions.length).toBeGreaterThanOrEqual(1);
         assertToolResultContains(r, "Bash", INIT_STATE_SUMMARY);
 

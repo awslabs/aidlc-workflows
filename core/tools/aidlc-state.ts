@@ -52,6 +52,7 @@ import {
   CONSTRUCTION_POLICY_RECOVERY,
   latestPersonTurn,
   leftOutLine,
+  PERSON_ASKED_SKIP_REASON,
   auditShardName,
   appendSlug,
   appendUnderHeading,
@@ -159,6 +160,7 @@ import {
   parseRefsList,
   parseStateStageSuffixes,
   pipelineLinkEvidence,
+  pipelineLinkWayOn,
   effectiveSupportAgentsForProject,
   producesArtifactFile,
   readAllAuditShards,
@@ -1190,7 +1192,7 @@ function handleSet(args: string[]): void {
 function handleSetConstructionVerificationCommand(args: string[]): void {
   const fromFile = args.length === 2 && args[0] === "--command-file";
   if (!fromFile && (args.length !== 1 || args[0] === "--command-file")) {
-    error('Usage: aidlc-state.ts set-construction-verification-command --command-file <record-relative path> (or one positional command argument).');
+    error('Usage: aidlc-state.ts set-construction-verification-command --command-file <path in the record> (or one positional command argument).');
   }
   const pd = resolveProjectDir(projectDir);
   const command = fromFile
@@ -5177,10 +5179,8 @@ function verifyPipelineLinkPrecondition(
   );
   const message =
     `Cannot complete "${stage.slug}" because these pipeline handoffs have not been ` +
-      `recorded for the current run: ${missing.join(", ")}. Run aidlc-log.ts link after ` +
-      `each agent returns` +
-      `${evidence.repos.length > 0 ? " with --repo <repo>" : ""}, or set ` +
-      `AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run in-flight pipeline.`;
+      `recorded for the current run: ${missing.join(", ")}. ` +
+      pipelineLinkWayOn(pd, stage.slug, { repos: evidence.repos.length > 0 });
   const content = readStateFile(pd);
   refuseStateGuard(pd, content, stage, {
     code: "PIPELINE_EVIDENCE_MISSING",
@@ -6366,8 +6366,8 @@ function sensorStateAtGate(pd: string, stage: GateStage): string {
 
 // What the person hears when a gate opens, or is shown again, while a check
 // still fails on a declared output (#2201): one line per failing check, in
-// plain words (the agent corrects from the detail file the stage protocol's
-// section 14 names), at most three lines and then a count. The orchestrator carries
+// plain words (the agent corrects from the detail file the sensors protocol
+// module names), at most three lines and then a count. The orchestrator carries
 // them in the gate reply's `narration`, beside what the stage produced, which
 // every harness's agent says to the person with the approval question. Nothing
 // is re-fired; a check that passed later, or never ran, says nothing, and an
@@ -7781,6 +7781,9 @@ function handleSkip(args: string[]): void {
     } catch (e) {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
+    // A Unit's step the person asked to skip spends what they typed for it:
+    // their words were the skip. The agent's own skip leaves them kept.
+    if (reason === PERSON_ASKED_SKIP_REASON) clearGateWords(pd);
     if (approvedBehind) {
       console.log(JSON.stringify({ slug, unit, new_state: "unit-skipped", stage_state: "completed" }));
       return;
@@ -7840,14 +7843,16 @@ function handleSkip(args: string[]): void {
     error("aidlc-state.ts skip --route requires a nonblank --reason <text>.");
   }
   // A stage waiting at its approval gate may be skipped only once its plan
-  // row says SKIP: the person decided it no longer applies (they said the
-  // work is a new project), so the gate closes as skipped, not approved.
-  const planSkips = parseStateStageSuffixes(content).get(slug) === "SKIP";
+  // row says SKIP (the person decided it no longer applies: they said the
+  // work is a new project) or the person asked to skip it, so the gate
+  // closes as skipped, not approved.
+  const personDecided = parseStateStageSuffixes(content).get(slug) === "SKIP" ||
+    reason === PERSON_ASKED_SKIP_REASON;
   validateSlugInState(content, slug, [
     "in-progress",
     "revising",
     "skipped",
-    ...(planSkips ? ["awaiting-approval" as const] : []),
+    ...(personDecided ? ["awaiting-approval" as const] : []),
   ]);
   const currentStage = getField(content, "Current Stage");
   if (currentStage !== slug) {

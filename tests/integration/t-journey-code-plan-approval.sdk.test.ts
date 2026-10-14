@@ -184,7 +184,6 @@ function engineSaid(result: DriveResult, text: string | RegExp): boolean {
     (typeof text === "string" ? t.resultText.includes(text) : text.test(t.resultText)));
 }
 
-// The plan question as a picker: it offers both approving and changing the plan.
 function isPlanQuestion(menu: CapturedAskUserQuestion): boolean {
   const labels = menu.questions.flatMap((q) => q.options.map((o) => o.label));
   return labels.some((l) => /approve/i.test(l)) && labels.some((l) => /change/i.test(l));
@@ -219,7 +218,7 @@ describe.skipIf(
       const turnEnds: Array<{ turn: number; approvals: number; parked: number; state: string }> = [];
       const replies = [SKIP_QUESTION, SKIP_DEPLOYMENT, APPROVE_AND_STOP];
 
-      // Chat 1: the plan is written and asked about; the person's two messages.
+      // Chat 1: the plan is written and asked about; the person's messages.
       const chat1 = await driveAidlc("/aidlc", {
         projectDir: proj,
         persistSession: true,
@@ -245,16 +244,12 @@ describe.skipIf(
       expect(turnEnds.length, `turns that ended: ${turnEnds.length}; pickers: ${JSON.stringify(pickers)}`).toBe(4);
       const [asked, afterQuestion, afterSkip] = turnEnds;
 
-      // While the plan waited, nothing was approved, and the question about
-      // plan approval changed nothing.
       for (const end of [asked, afterQuestion, afterSkip]) expect(end.approvals).toBe(0);
       expect(afterQuestion.state).toContain("- **Plan Approval**: on (from scope bugfix)");
       expect(rowsOf(proj, "CEREMONY_SET"), "plan approval was switched").toEqual([]);
       expect(stageMode(afterQuestion.state, "build-and-test")).toBe("EXECUTE");
-      // The skip the person typed was done at once, with the plan still waiting.
       expect(stageMode(afterSkip.state, "deployment-execution"), "the typed skip was not done").toBe("SKIP");
 
-      // "approve the plan, but let's stop there for today": approved as theirs, then stopped.
       const approvals = rowsOf(proj, "PLAN_APPROVAL_RECORDED");
       expect(approvals, `plan approvals after chat 1; pickers: ${JSON.stringify(pickers)}`).toHaveLength(1);
       expect(auditBlockField(approvals[0].block, "Person Reply") ?? "").toContain("approve the plan");

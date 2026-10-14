@@ -4,8 +4,8 @@
 // have actually captured for that harness. This intentionally does not claim
 // that every captured tool has a matcher. Kiro CLI is excluded because its
 // agent-v1 matchers use glob and canonical-name/alias-family semantics; t148
-// and PR #788 own that coverage with live-captured alias evidence. Claude is
-// excluded because the repository has no captured Claude hook payload fixture.
+// owns that coverage with live-captured alias evidence. Claude is excluded
+// because the repository has no captured Claude hook payload fixture.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";

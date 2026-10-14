@@ -70,8 +70,8 @@ it this way, never as Request Changes.
 `## Loop-Back Log` whose latest entry has a planned fix but the audit shows
 no matching `STAGE_JUMPED` (Target: code-generation) after it, and no
 unit-tagged `GATE_REJECTED` (Stage: code-generation) for a unit the fix names, the session
-died between logging and jumping — re-execute the jump per the construction
-protocol module (`aidlc-common/protocols/stage-protocol-construction.md`),
+died between logging and jumping — re-execute the jump per the loop-back
+protocol module (`aidlc-common/protocols/stage-protocol-loopback.md`),
 "Build-and-Test failure loop-back", rather than re-diagnosing. When the fix
 names several units and only some have that row after it, reopen the others
 the same way before going on. On any resume,

@@ -1,6 +1,6 @@
 // covers: hook:aidlc-session-start (writeCurrentSessionId), tool:aidlc-utility handleIntent (re-stamp), tool:aidlc-utility handleSpace (re-stamp), lib:readCurrentSessionId/writeCurrentSessionId/writeSessionIntentUuid, function:writeSessionIntentHandoff, function:readSessionIntentHandoff, function:recordSessionIntentSwitch, function:NO_PRIOR_INTENT, function:LONE_INTENT_PREFIX
 //
-// t173 — the M2 SELF-SWITCH RE-STAMP. The P8 resume rebind (t169) stamps a
+// t173 - the SELF-SWITCH RE-STAMP. The resume rebind (t169) stamps a
 // session→intent UUID keyed by session_id (which only the session-start hook
 // sees) and OFFERS a rebind on resume when the stamp drifts from the live
 // cursor. BUG: an in-conversation `/aidlc intent <slug>` switch moves the cursor
@@ -9,7 +9,7 @@
 // rebind nag ("was working X, switch back?") even though THIS conversation
 // deliberately switched.
 //
-// FIX: the hook records the live conversation in a fixed-name `.current-session`
+// The hook records the live conversation in a fixed-name `.current-session`
 // marker on EVERY fire; the switch tool reads that marker and re-stamps the
 // live session's record to the switched-to intent.
 //   - Self-switch: the marker names THIS session, so the re-stamp follows the
@@ -87,7 +87,6 @@ function fire(p: string, source: string, sessionId: string): FireResult {
   return { exitCode: r.exitCode, context };
 }
 
-/** Fire one of the shipped hooks with a JSON payload. */
 function hook(p: string, name: string, payload: Record<string, unknown>): { exitCode: number } {
   const r = Bun.spawnSync({
     cmd: [BUN, join(AIDLC_SRC, "hooks", name)],

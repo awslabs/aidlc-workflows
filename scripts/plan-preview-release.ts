@@ -121,7 +121,6 @@ export async function listPreviewTags(client: ApiClient, repository: string): Pr
   return versions.sort(compareVersions);
 }
 
-// The newest published (non-draft) preview release, or null.
 export async function newestPublishedPreview(
   client: ApiClient,
   repository: string,

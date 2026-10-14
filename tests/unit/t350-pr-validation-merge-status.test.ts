@@ -171,7 +171,6 @@ describe.skipIf(!toolsAvailable)("t350 Fail by Label keeps the do-not-merge lock
   });
 
   test("labels that cannot be read fail closed", () => {
-    // A merge group whose ref names no PR, and one whose API read returns nothing.
     const noNumber = runJob(FAIL_BY_LABEL, { GITHUB_EVENT_NAME: "merge_group", GITHUB_REF: "refs/heads/main" });
     expect(noNumber.status, noNumber.out).toBe(1);
     expect(noNumber.out).toContain("PR labels unavailable");

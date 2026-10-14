@@ -1,4 +1,3 @@
-// Shared startup fixes carried forward from the isolated parallel-worker work.
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

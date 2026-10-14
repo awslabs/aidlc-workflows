@@ -89,7 +89,6 @@ function tmp(): string {
   return d;
 }
 
-/** Write a file, creating parent dirs. Path segments are joined under `root`. */
 function put(root: string, rel: string[], body: string): void {
   const full = join(root, ...rel);
   mkdirSync(join(full, ".."), { recursive: true });
@@ -323,7 +322,7 @@ describe("t203 nested-project detection (bounded recursive fallback)", () => {
   });
 });
 
-// P4: intent-create writes state into the created intent's per-intent record dir.
+// intent-create writes state into the created intent's per-intent record dir.
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -340,7 +339,6 @@ function recordDirOf(p: string): string {
   return join(p, "aidlc-docs");
 }
 
-/** Create a scope on a bare (empty, Greenfield) scaffolded project. */
 function runIntentCreate(scope: string): { stderr: string; stateFile: string } {
   const p = createTestProject();
   tempDirs.push(p);
@@ -357,17 +355,14 @@ function runIntentCreate(scope: string): { stderr: string; stateFile: string } {
 describe("t203 greenfield advisory (incremental scopes, no routing override)", () => {
   test("bugfix on an empty workspace stays Greenfield, RE SKIP, and emits the stderr advisory", () => {
     const { stderr, stateFile } = runIntentCreate("bugfix");
-    // Routing is UNCHANGED: still Greenfield, reverse-engineering still SKIPs.
     expect(stateFile).toContain("- **Project Type**: Greenfield");
     // The greenfield RE-skip annotation in the Stages-to-Skip row. The shipped
     // annotation joins slug and reason with an em dash, so match the two ends
     // rather than transcribing the punctuation.
     expect(stateFile).toMatch(/\(reverse-engineering .* greenfield\)/);
     expect(stateFile).toMatch(/- \[ \] reverse-engineering .* SKIP/);
-    // The advisory fired on stderr (not stdout).
     expect(stderr).toContain('scope "bugfix"');
     expect(stderr.toLowerCase()).toContain("greenfield");
-    // It names the way to say so: the project-type flag (or plain words).
     expect(stderr).toContain("--project-type brownfield");
   });
 
@@ -395,7 +390,6 @@ const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
 const CURSOR_RELEASE = join(REPO_ROOT, "dist-release", "cursor");
 const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
 
-/** An empty git folder set up with `aidlc config --harness cursor`. */
 function configuredForCursor(): string {
   const d = tmp();
   expect(spawnSync("git", ["init", "-q", d]).status).toBe(0);

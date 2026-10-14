@@ -47,7 +47,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 |------------------|------------|
 | `Checksum mismatch for <asset>.` or `<asset>: checksum mismatch` | Stop. Do not reuse the downloaded directory. Download the complete release asset set and `checksums.txt` again from the same release. |
 | `command not found: aidlc` after `install.sh` | Add the installer-reported bin directory to `PATH` (normally `export PATH="$HOME/.local/bin:$PATH"`), open a new shell, and run `aidlc doctor`. |
-| `aidlc` is not recognized after `install.ps1` | The default install registers User PATH for the account that ran PowerShell. If another session cannot find it, open a new terminal; restart the terminal app or IDE if needed. With [`-NoModifyPath`](18-install-and-lifecycle.md#windows-powershell), use the printed direct command (normally `& "$env:LOCALAPPDATA\aidlc\bin\aidlc.cmd" config`) or rerun the installer without that switch to register PATH. |
+| `aidlc` is not recognized after `install.ps1` | The default install registers User PATH for the account that ran PowerShell. A terminal app or IDE that was already open during the install (Kiro, VS Code, Cursor) keeps the PATH it started with: quit it fully and reopen it. A new tab or Reload Window inside it is not enough. With [`-NoModifyPath`](18-install-and-lifecycle.md#windows-powershell), use the printed direct command (normally `& "$env:LOCALAPPDATA\aidlc\bin\aidlc.cmd" config`) or rerun the installer without that switch to register PATH. |
 | `aidlc` works in PowerShell or CMD but not in Git Bash (or another MSYS shell) | Those shells resolve a command with Unix `execvp` rules and ignore `PATHEXT`, so a bare `aidlc` never finds `aidlc.cmd`. The installer writes an extensionless `aidlc` launcher beside `aidlc.cmd` in the bin directory (normally `%LOCALAPPDATA%\aidlc\bin`) precisely so the bare name resolves in these shells; if it is missing, rerun the installer or `aidlc use <version>` (from PowerShell or CMD, where `aidlc` already resolves) to rewrite it. One known cause of a hook that `/hooks` lists as registered yet never fires on Windows is this: the hook shell cannot resolve `aidlc`. `aidlc doctor` shows it as a failed `Windows launcher (Git Bash)` row that names the step to take. **If a file named `aidlc` that AI-DLC did not write (for example an earlier hand-made forwarder) is already in that bin directory, the installer, `aidlc update` and `aidlc use` ask once at a terminal whether to replace it, and keep your file as `aidlc.bak-<time>` beside it. `--yes` (`-Yes` for the installer) answers yes. Without a terminal or `--yes`, they leave the file as it is and say to move it aside. A directory named `aidlc` there is never replaced: remove or rename it, then rerun the installer or `aidlc use <version>`.** |
 | `This PowerShell window is running as administrator` | For the safest install, answer N, open PowerShell normally (not "Run as administrator"), and run the installer again. To continue as administrator anyway, answer y, or pass `-Yes` to the installer. `aidlc uninstall` asks nothing: it prints the same warning and goes ahead, so for the safest uninstall run it from a normal PowerShell window. AI-DLC is per-user and does not need admin rights. The built-in Administrator on Windows Server and other sessions without UAC elevation see no warning. |
 | Windows install reports a PATH conflict | The files are installed, but persistent PATH selects another command. Use the printed full command path for `config`, or resolve the reported conflict. JSON reports `status: "warning"` and `data.ready: false` even though the exit code is 0. |
@@ -305,7 +305,7 @@ If Cursor keeps asking you to approve the same plan, or says your choice did not
 
 ### Reviewer tool calls refused ("This review cannot open ...")
 
-During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths (the stage-protocol-reviewer.md section 12a read-scope bound); the refusal names the current unit and directs the reviewer to the supplied files and that unit's own path, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), `/aidlc config set guard.reviewer-scope off` lowers just the reviewer read-scope check for the piece of work you are on (recorded as a `GUARD_DISABLED` audit row, back on for the next one), and `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables that read-scope enforcement machine-wide; the prose bound still governs under either. Neither setting permits a claimed team checkout to write another Unit's `construction/` subtree. A general request in chat does not lower the read-scope check: type the switch above and the agent runs the setter for it. Changing scope alone never lowers the running policy. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-engine/reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
+During a per-unit Construction review, the reviewer-scope hook refuses the dispatched reviewer's tool calls that reach into sibling units' `construction/` paths (the read-scope bound in stage-protocol-reviewer-unit.md); the refusal names the current unit and directs the reviewer to the supplied files and that unit's own path, and each refusal records a `REVIEWER_SCOPE_BLOCKED` audit row. If your own source tree contains a `construction/` directory unrelated to AI-DLC units (so legitimate reviewer reads are being refused), `/aidlc config set guard.reviewer-scope off` lowers just the reviewer read-scope check for the piece of work you are on (recorded as a `GUARD_DISABLED` audit row, back on for the next one), and `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables that read-scope enforcement machine-wide; the prose bound still governs under either. Neither setting permits a claimed team checkout to write another Unit's `construction/` subtree. A general request in chat does not lower the read-scope check: type the switch above and the agent runs the setter for it. Changing scope alone never lowers the running policy. A reviewer being refused with NO review in flight means a stale dispatch record - check `/aidlc --doctor`'s hook-drop counters (`reviewer-scope.drops`) and delete `<record>/.aidlc-engine/reviewer-dispatch.json` if present (records older than 6 hours are ignored and cleaned automatically).
 
 Ordinary filters such as `grep latency construction/U03-scoring/nfr.md | grep endpoint` are allowed because the second `grep` searches the piped text. A pipe does not exempt commands that still traverse files: recursive `grep`, `rg --files`, and `rg -f -` still need an in-scope search root or, for `rg`, a glob constrained to the current unit. Pattern files supplied with `-f` must also be in scope. When a pathless command falls back to `.` and is refused, the message identifies that root as implicit.
 
@@ -548,6 +548,20 @@ output-document bytes does not clear audit-recorded artifact staleness. After a
 session restart, retry the same pending request before replacing the Review
 section. The gate remains closed until the matching verdict is recorded.
 
+### A directory source manifest is refused because it contains ignored output
+
+**Symptom**: A directory claim such as `src/` answers with
+`contains ignored application source "src/main.js.map"` after a build.
+
+Git ignore rules alone do not remove files from the review source boundary.
+For generated output outside that boundary, add its exact path (or its output
+directory) to `exclude` in the repo root's `.aidlc-source-paths.json`, for
+example `{"version":1,"exclude":["src/main.js.map"]}`, then retry the review.
+The directory claim can still cover the source beside it. A registered `paths`
+entry takes precedence over `exclude`, and other ignored files still inside
+the boundary retain the refusal. Exact-file claims must still name admissible
+source; an exclusion does not make ignored output review evidence.
+
 ### Code Generation cannot complete because files changed that no Unit covers
 
 **Symptom**: Approving Code Generation answers with "N changes made during Code
@@ -609,7 +623,12 @@ If you are asked again, check what changed and which rule applies:
 
 The question names what it is about. Other code moving after approval (a `git
 pull`, another Unit landing) never asks again: the build continues and you hear
-one line naming the files. Nor does anything between your answer and the build:
+which files moved. The exception is a build of Units in parallel under
+`strict`: a change after you approved (your edit or commit, a `git pull`) asks
+again before the Units are set up, and stops the next Unit from landing until
+you undo it or set Guard Policy `relaxed` (see
+[Guard Policy](13-customization.md#guard-policy)). Nor does anything between
+your answer and the build:
 a long chat compacting its context, parking the work and resuming it, or another
 question coming up first. Say "review the plan" if you want to look again first,
 including right after any of those: the plan is shown for approval again before

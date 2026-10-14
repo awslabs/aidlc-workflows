@@ -34,12 +34,13 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
+  checkReleaseJourneyTurn,
   doctorChecks,
+  expectPersonFirstInJourney,
   hooksRanProblems,
   RELEASE_JOURNEY_TURNS,
   type ReleaseJourneyReport,
   releaseJourneyEvidence,
-  releaseJourneyProblems,
   runReleaseJourney,
   setupReleaseJourneyProject,
 } from "../harness/release-journey.ts";
@@ -144,7 +145,7 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
             }
             if (!ended) report.problems.push(`"${line}" was still running when the journey's time ran out`);
             report.turns.push({ line, seconds: Math.round((Date.now() - started) / 1000) });
-            if (ended) report.problems.push(...releaseJourneyProblems(project.proj, index + 1).map((problem) => `after "${line}": ${problem}`));
+            if (ended) checkReleaseJourneyTurn(report, project.proj, index + 1, line);
             if (report.problems.length) break;
           }
           if (!report.problems.length) {
@@ -159,6 +160,7 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
       } finally {
         assertTuiDriveKill(drive(["kill", "--session", session]), session);
       }
+      expectPersonFirstInJourney(report);
       expect(report.problems).toEqual([]);
       rmSync(project.root, { recursive: true, force: true });
     },

@@ -106,7 +106,7 @@ describe("t258 ars arithmetic pin (in-process)", () => {
   });
 
   test("exact half-point composite rounds by the formula, not by IEEE drift", () => {
-    // 0.25*0.03 + 0.15*0.83 + 0.10*0.73 = 0.75 + 12.45 + 7.3 = 20.5 exactly,
+    // 100*(0.25*0.03 + 0.15*0.83 + 0.10*0.73) = 0.75 + 12.45 + 7.3 = 20.5 exactly,
     // but the IEEE sum of those terms is 20.499999999999996 - rounding the
     // raw sum would report 20 / Near-direct, one band below the documented
     // arithmetic, on the one figure the gate table bolds.
@@ -205,7 +205,6 @@ describe("t258 ars arithmetic pin (in-process)", () => {
     expect(() => computeArs({ iae: 0, csu: 0.4004, ve: 0, r: 0, ua: 0 })).toThrow(
       "--csu must have at most two decimals"
     );
-    // Two decimals, one decimal, and integers all stay legal.
     for (const v of [0, 0.29, 0.3, 0.07, 1]) {
       expect(() => computeArs({ iae: v, csu: 0, ve: 0, r: 0, ua: 0 })).not.toThrow();
     }
@@ -241,7 +240,6 @@ describe("t258 ars arithmetic pin (in-process)", () => {
     const priors = loadArsPriors();
     expect(priors.schemaVersion).toBe(1);
     const r = computeArs(PERSONA_EXAMPLE);
-    // 32 stages screened, none falling through to the no-prior branch.
     expect(r.evScreen.length).toBeGreaterThanOrEqual(32);
     expect(r.evScreen.filter((x) => x.screen === "no-prior")).toHaveLength(0);
     // Table 2 carries one row per screened stage plus its two header lines.
@@ -479,7 +477,6 @@ describe("t258 stage-authored priors (spawn)", () => {
       expect(unprior?.reason).toBe(
         "no entry in ars-priors.json and no ars: block on the stage - not screenable"
       );
-      // Core rows keep their provenance and their numbers.
       expect(r.evScreen.find((x) => x.stage === "intent-capture")?.priorSource).toBe("shipped");
       expect(r.evScreen.find((x) => x.stage === "build-and-test")?.priorSource).toBe("shipped");
 
@@ -526,7 +523,6 @@ describe("t258 stage-authored priors (spawn)", () => {
       expect(any.screenGrid["t258-brownfield"]).toBe("EXECUTE");
       expect(any.evScreen.find((x) => x.stage === "t258-unscreenable")?.screen).toBe("no-cost-prior");
       expect(any.screenGrid["t258-unscreenable"]).toBe("SKIP");
-      // The reason names the stage's own declaration, not the shipped table.
       expect(any.evScreen.find((x) => x.stage === "t258-unscreenable")?.reason).toBe(
         "the stage's ars: block declares no cost - not numerically screenable; human judgment at the gate"
       );

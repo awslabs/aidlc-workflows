@@ -1,4 +1,4 @@
-// covers: function:artifactFilename
+// covers: function:artifactFilename, stage:construction/functional-design
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -181,6 +181,23 @@ describe("t281 traceability artifact contract", () => {
       expect(frontmatter.outputs).toContain("traceability.json");
     }
   });
+
+  // #1086: the acceptance criteria functional-design traces are defined only in
+  // stories.md. The stage declares it (optional: refactor and a skipped User
+  // Stories leave it out), Step 1 reads it, the functional spec names it so the
+  // stage's upstream check finds it cited, and the Sensors summary mirrors it.
+  test("functional-design declares and reads stories.md, where the criteria it traces are defined", () => {
+    const source = readFileSync(join(STAGES, "construction", "functional-design.md"), "utf-8").replace(/\r\n/g, "\n");
+    const frontmatter = parseStageFrontmatter(source);
+    const consumes = frontmatter.consumes as Array<{ artifact: string; required: boolean }>;
+    expect(consumes).toContainEqual({ artifact: "stories", required: false });
+    expect(String(frontmatter.inputs)).toContain("user-stories stories.md (if produced)");
+    const body = source.replace(/^---\n[\s\S]*?\n---\n/, "");
+    expect(body).toContain("`<record>/inception/user-stories/stories.md` (if it exists)");
+    expect(body).toContain("When `stories.md` exists, name it beside the stories (`USx.y`) this Unit implements.");
+    const targets = body.match(/^Upstream targets: (.+)\.$/m)?.[1].split(", ").map((slug) => slug.replaceAll("`", ""));
+    expect(targets).toEqual(consumes.map((consume) => consume.artifact));
+  });
 });
 
 describe("t281 runtime schema and status validation", () => {
@@ -316,6 +333,54 @@ describe("t281 upstream and target verification", () => {
     out = run(proj, "units-generation", file);
     expect(out.result.pass).toBe(false);
     expect(out.result.gaps).toContain("US1.2");
+  });
+
+  // Units Generation writes Markdown, and an agent often sets IDs and
+  // directories in inline code, several Units to a cell (#2488).
+  test("story-map cells in inline code, several Units to a cell, still join", () => {
+    const proj = project();
+    seedUserStories(proj);
+    seedUnits(proj);
+    write(proj, "inception/units-generation/unit-of-work-story-map.md", [
+      "# Story Map",
+      "",
+      "| Story | Primary Unit | Participating Units |",
+      "|---|---|---|",
+      "| `US1.1` Sign in | `U1` / `u1-auth` | `U1` / `u1-auth`; `U2` / `u2-profile` |",
+      "| `US1.2` Edit profile | `U2` / `u2-profile` | `U2` / `u2-profile` |",
+    ].join("\n"));
+    const file = trace(proj, "inception/units-generation/traceability.json", {
+      stage: "units-generation",
+      upstream_ids: ["US1.1", "US1.2"],
+      coverage: [
+        { id: "US1.1", status: "OK", target: "U1" },
+        { id: "US1.2", status: "OK", target: "u2-profile" },
+      ],
+    });
+    const out = run(proj, "units-generation", file);
+    expect(out.result.reason).toBeUndefined();
+    expect(out.result.invalid_targets).toEqual([]);
+    expect(out.result.pass).toBe(true);
+
+    // u2-profile owns US1.2 and shares US1.1, which reaches it only through the
+    // inline-code, several-Units cell: its Functional Design traces both.
+    write(proj, "construction/u2-profile/functional-design/rules.md", "# Rules\n\n- BR1.1 Profile rules\n");
+    const scoped = ["AC1.1.1", "AC1.1.2", "AC1.2.1"];
+    const scopedFile = trace(proj, "construction/u2-profile/functional-design/traceability.json", {
+      upstream_ids: scoped,
+      coverage: scoped.map((id) => ({ id, status: "OK", target: "BR1.1" })),
+    });
+    const traced = run(proj, "functional-design", scopedFile);
+    expect(traced.result.reason).toBeUndefined();
+    expect(traced.result.pass).toBe(true);
+
+    trace(proj, "construction/u2-profile/functional-design/traceability.json", {
+      upstream_ids: ["AC1.1.2", "AC1.2.1"],
+      coverage: ["AC1.1.2", "AC1.2.1"].map((id) => ({ id, status: "OK", target: "BR1.1" })),
+    });
+    const short = run(proj, "functional-design", scopedFile);
+    expect(short.result.pass).toBe(false);
+    expect(short.result.missing_from_upstream_ids).toEqual(["AC1.1.1"]);
   });
 
   // The stage guidance names each Unit's construction directory `u{n}-{description}`,
@@ -530,6 +595,47 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     const out = run(proj, "functional-design", file);
     expect(out.result.pass).toBe(false);
     expect(out.result.reason).toContain('no stories in unit-of-work-story-map.md map to unit "u1-auth"');
+  });
+
+  // #1086: the story map assigns whole stories to Units, so a Unit traces every
+  // criterion of each story mapped to it. A shared story's criterion another
+  // Unit delivers is N/A with that reason; leaving it out, or giving N/A no
+  // reason, is a finding.
+  test("functional-design asks a Unit for every criterion of its stories, a shared story's included", () => {
+    const proj = project();
+    seedUserStories(proj);
+    seedUnits(proj);
+    write(proj, "inception/units-generation/unit-of-work-story-map.md", [
+      "# Story Map",
+      "",
+      "| Story | Unit ID | Directory |",
+      "|---|---|---|",
+      "| US1.1 | U1 | u1-auth |",
+      "| US1.2 | U1 | u1-auth |",
+      "| US1.2 | U2 | u2-profile |",
+    ].join("\n"));
+    write(proj, "construction/u1-auth/functional-design/rules.md", "# Rules\n\n- BR1.1 Validate credentials\n- BR1.2 Rate-limit failures\n");
+    const own = [
+      { id: "AC1.1.1", status: "OK", target: "BR1.1" },
+      { id: "AC1.1.2", status: "OK", target: "BR1.2" },
+    ];
+    const table = (coverage: Array<{ id: string; status: string; target?: string }>) =>
+      trace(proj, "construction/u1-auth/functional-design/traceability.json", {
+        stage: "functional-design",
+        unit: "u1-auth",
+        upstream_ids: coverage.map((entry) => entry.id),
+        coverage,
+      });
+    let out = run(proj, "functional-design", table([...own, { id: "AC1.2.1", status: "N/A", target: "delivered by u2-profile" }]));
+    expect(out.result.pass, out.result.reason).toBe(true);
+
+    out = run(proj, "functional-design", table(own));
+    expect(out.result.pass).toBe(false);
+    expect(out.result.missing_from_upstream_ids).toEqual(["AC1.2.1"]);
+
+    out = run(proj, "functional-design", table([...own, { id: "AC1.2.1", status: "N/A" }]));
+    expect(out.result.pass).toBe(false);
+    expect(out.result.invalid_entries).toEqual(["coverage:AC1.2.1: status N/A requires a non-empty target"]);
   });
 
   test("code-generation verifies workspace-relative target files", () => {
@@ -813,6 +919,25 @@ describe("t281 zero-Unit plans: every per-Unit stage", () => {
     expect(out.result.pass).toBe(false);
     expect(out.result.invalid_targets).toContain("FR2: target BR9.9 is absent from rules.md");
     expect(out.result.orphans).toContain("BR1.2");
+  });
+
+  // #1086: only the story map says which stories, and so which criteria, are
+  // this work's; with stories.md but no story map the stage traces every FR.
+  test("functional-design with stories.md but no story map traces every FR in requirements.md", () => {
+    const proj = project();
+    seedUserStories(proj);
+    write(proj, "construction/functional-design/rules.md", "# Rules\n\n- BR1.1 Validate credentials\n- BR1.2 Lock after failures\n");
+    const file = trace(proj, "construction/functional-design/traceability.json", {
+      stage: "functional-design",
+      upstream_ids: ["FR1", "FR2"],
+      coverage: [
+        { id: "FR1", status: "OK", target: "BR1.1" },
+        { id: "FR2", status: "OK", target: "BR1.2" },
+      ],
+    });
+    const out = run(proj, "functional-design", file);
+    expect(out.result.missing_from_upstream_ids).toEqual([]);
+    expect(out.result.pass, out.result.reason).toBe(true);
   });
 
   test("nfr-requirements traces the NFRs in requirements.md", () => {

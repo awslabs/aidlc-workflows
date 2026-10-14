@@ -1,50 +1,39 @@
 // covers: subcommand:aidlc-bolt:start
 //
-// t46 — parallel-bolt concurrency. Migrated from
-// tests/integration/t46-parallel-bolt.sh (TAP plan 5). The .sh forked 5
-// concurrent `bun aidlc-bolt.ts start` OS processes racing on a single
-// audit.md and proved the cross-process audit lock prevents lost writes /
-// half-writes / separator corruption, with successful process exits.
+// t46 - parallel-bolt concurrency. The test forks 5 concurrent `bun
+// aidlc-bolt.ts start` OS processes racing on a single audit shard and proves
+// the cross-process audit lock prevents lost writes / half-writes / separator
+// corruption, with successful process exits.
 //
 // Mechanism: cli (REQUIRED — not none). The guarantee under test is
-// CROSS-PROCESS serialisation of audit.md appends. The lock is a real
+// CROSS-PROCESS serialisation of audit appends. The lock is a real
 // filesystem mkdir-EEXIST lock (acquireAuditLock's shared acquisition backstop
 // and 100ms retry cadence), and only separate OS
 // processes exercise it — an in-process loop would share one Bun runtime,
 // trip the AUDIT_LOCK_DEPTH reentrancy counter (aidlc-lib.ts:567), and prove
-// nothing about concurrency. So the twin SPAWNS 5 real `bun aidlc-bolt.ts
-// start` processes via Bun.spawn and races them, exactly as the .sh forked
-// `bun "$BOLT" start ... &`. spawnCount = all.
+// nothing about concurrency. So the test SPAWNS 5 real `bun aidlc-bolt.ts
+// start` processes via Bun.spawn and races them. spawnCount = all.
 //
 // Source under test:
 //   dist/claude/.claude/tools/aidlc-bolt.ts
-//     :149 handleStart — validates --name/--batch, then emitAudit("BOLT_STARTED",
+//     handleStart - validates --name/--batch, then emitAudit("BOLT_STARTED",
 //          { "Bolt names": <name>, "Batch number": <batch>,
-//            "Walking skeleton": <bool> }) via appendAuditEntry (:197).
+//            "Walking skeleton": <bool> }) via appendAuditEntry.
 //   dist/claude/.claude/tools/aidlc-audit.ts
-//     :214 appendAuditEntry — acquireAuditLock → appendAuditEntryUnlocked →
+//     appendAuditEntry - acquireAuditLock -> appendAuditEntryUnlocked ->
 //          releaseAuditLock (the locked critical section each process enters).
-//     :254 heading = EVENT_HEADINGS["BOLT_STARTED"] = "Bolt Started" (:153);
+//     heading = EVENT_HEADINGS["BOLT_STARTED"] = "Bolt Started";
 //          each block = "\n## Bolt Started\n**Timestamp**: <iso>\n**Event**:
 //          BOLT_STARTED\n**Bolt names**: <name>\n...\n\n---\n".
 //
-// Fixture discipline (mirrors the .sh): a fresh temp project with an
-// aidlc-docs/ dir, seeded with audit-sample.md (3 `---` separators) + a
-// mid-ideation state file so any accidental error path lands cleanly. Torn
+// Fixture discipline: a fresh temp project seeded with audit-sample.md (3 `---`
+// separators), a mid-ideation state file so any accidental error path lands
+// cleanly, and a fixed clone-id so all 5 processes share one audit shard. Torn
 // down in afterEach. Nothing written under tests/fixtures/**.
 //
-// Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
-//   .sh 1 (elapsed < 10s ceiling)                       -> "completes under the 10s lock-timeout ceiling"
-//   .sh 2 (5 BOLT_STARTED entries, no lost writes)      -> "all 5 BOLT_STARTED entries land (no lost writes)"
-//   .sh 3 (each name appears once)                    -> "each Unit display name appears exactly once"
-//   .sh 4 (#Event == #heading, no half-writes)          -> "every BOLT_STARTED has a matching heading (no half-writes)"
-//   .sh 5 (separator count == fixture + 5)              -> "separator count == fixture (3) + 5 bolts == 8"
-//
-// All five assertions are computed off the real bytes on disk after the race,
-// the same surfaces the .sh grepped. Several are STRONGER: test 3 asserts
-// EXACTLY one occurrence per name (the .sh only grepped presence); test 4
-// asserts the two counts equal AND both equal 5 (the .sh only asserted the
-// counts equal).
+// All five assertions are computed off the real bytes on disk after the race.
+// Test 3 asserts EXACTLY one occurrence per name; test 4 asserts the two counts
+// equal AND both equal 5.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -75,7 +64,7 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
 
 interface RaceResult {
@@ -118,11 +107,11 @@ let current: { proj: string } | null = null;
 
 /**
  * Fork 5 concurrent `bun aidlc-bolt.ts start --name unit-<i> --batch 1
- * --walking-skeleton false` processes against one audit.md (mirrors the .sh's
- * `for i in 1..5; bun "$BOLT" start ... &` + wait). Returns the post-race
- * bytes + wall-clock elapsed. Uses Bun.spawn (async, non-blocking launch) so
- * all 5 are genuinely in flight before any awaits — a true race, not a serial
- * loop. resetAidlcEnv() first so a leaked default scope can't shift behaviour.
+ * --walking-skeleton false` processes against one audit shard. Returns the
+ * post-race bytes + wall-clock elapsed. Uses Bun.spawn (async, non-blocking
+ * launch) so all 5 are genuinely in flight before any awaits - a true race, not a
+ * serial loop. resetAidlcEnv() runs first so a leaked default scope can't
+ * shift behaviour.
  */
 async function raceFiveBolts(): Promise<RaceResult> {
   resetAidlcEnv();
@@ -130,7 +119,7 @@ async function raceFiveBolts(): Promise<RaceResult> {
   current = { proj };
   seedAuditFile(proj);
   // Bolt-start doesn't require state, but emitError's workflow check does;
-  // seed it so any accidental error path lands cleanly (mirrors the .sh).
+  // seed it so any accidental error path lands cleanly.
   seedStateFile(proj, join(FIXTURES_DIR, "state-mid-ideation.md"));
   // Pre-seed a stable clone-id so all 5 racing processes resolve the SAME
   // per-clone audit shard (the cross-process audit-lock serialisation under test
@@ -199,8 +188,8 @@ async function raceFiveBolts(): Promise<RaceResult> {
 }
 
 // Run the race once per test (each test gets a fresh project + fresh race) so
-// a single test failing can't poison the others, matching the .sh's single
-// race feeding 5 independent greps. Teardown removes the temp project.
+// a single test failing can't poison the others. Teardown removes the temp
+// project.
 let race: RaceResult;
 
 beforeEach(async () => {
@@ -221,8 +210,7 @@ describe("t46 parallel-bolt — 5 racing aidlc-bolt start processes (migrated fr
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("all 5 BOLT_STARTED entries land (no lost writes) [.sh 2]", () => {
-    // The .sh: grep -cE '^\*\*Event\*\*: BOLT_STARTED'. Count exactly 5 — a
-    // lost write under the race would drop this below 5.
+    // Count exactly 5 - a lost write under the race would drop this below 5.
     const eventCount = race.body
       .split("\n")
       .filter((l) => l === "**Event**: BOLT_STARTED").length;
@@ -239,10 +227,9 @@ describe("t46 parallel-bolt — 5 racing aidlc-bolt start processes (migrated fr
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("every BOLT_STARTED has a matching heading (no half-writes) [.sh 4]", () => {
-    // The .sh compared #'**Event**: BOLT_STARTED' to #'## Bolt Started': any
-    // half-written block would diverge the counts. STRONGER: assert equal AND
-    // both == 5 (a coherent-but-short pair would pass the .sh's equality but
-    // fail here).
+    // Compare #'**Event**: BOLT_STARTED' to #'## Bolt Started': any half-written
+    // block would diverge the counts. Assert equal AND both == 5 (a
+    // coherent-but-short pair would pass equality but fail here).
     const lines = race.body.split("\n");
     const eventCount = lines.filter(
       (l) => l === "**Event**: BOLT_STARTED",
@@ -254,8 +241,8 @@ describe("t46 parallel-bolt — 5 racing aidlc-bolt start processes (migrated fr
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("separator count == fixture (3) + 5 bolts == 8 [.sh 5]", () => {
-    // The .sh: expected = #'^---$' in audit-sample.md (3) + 5. Each well-formed
-    // block closes with a standalone "---", so 5 clean appends add exactly 5.
+    // Each well-formed block closes with a standalone "---", so 5 clean appends
+    // add exactly 5.
     const fixtureDashes = readFileSync(
       join(FIXTURES_DIR, "audit-sample.md"),
       "utf-8",
@@ -263,7 +250,7 @@ describe("t46 parallel-bolt — 5 racing aidlc-bolt start processes (migrated fr
       .split("\n")
       .filter((l) => l === "---").length;
     const actualDashes = race.body.split("\n").filter((l) => l === "---").length;
-    expect(fixtureDashes).toBe(3); // pin the fixture precondition the .sh relied on
+    expect(fixtureDashes).toBe(3); // pin the fixture precondition
     expect(actualDashes, race.diagnostic).toBe(fixtureDashes + 5);
     expect(actualDashes, race.diagnostic).toBe(8);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

@@ -141,12 +141,10 @@ function setupCodexJourney(): WorkspaceJourney {
       `[shell_environment_policy]`,
       `exclude = ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"]`,
       ``,
-      // Space switches repoint the project's native memory include. Like the
-      // front-compose fixture, grant only this project's protected .codex dir;
-      // headless exec cannot ask for permission to update config.toml.
-      `[sandbox_workspace_write]`,
-      `writable_roots = ${JSON.stringify([join(root, ".codex")])}`,
-      ``,
+      // The shipped workspace-write sandbox, with no extra writable root: a
+      // person on stock settings has none, and the space verbs write nothing
+      // under .codex/ (measured 2026-10-14), so a refusal there is a prompt
+      // that person meets.
       `[projects.${JSON.stringify(root)}]`,
       `trust_level = "trusted"`,
       ``,

@@ -95,7 +95,6 @@ function gitIn(dir: string, ...args: string[]) {
   });
 }
 
-// The active space's knowledge folder in a fixture project.
 const DOCUMENTS = "aidlc/spaces/default/knowledge/documents";
 const DOCUMENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -167,8 +166,6 @@ describe("t329 project-description and document-input boundaries", () => {
       ]) {
         expect(flat, `${file}: ${phrase}`).toContain(phrase);
       }
-      // The retired rules: one terminal block, refuse anything after it, and
-      // never look a file name up.
       for (const retired of [
         "exactly one terminal",
         "Reject additional markers",
@@ -469,7 +466,6 @@ describe("t329 project-description and document-input boundaries", () => {
     );
     expect(payload.content_notice).toContain("UNTRUSTED DATA");
 
-    // A name with no extension matches on the stem, ignoring case.
     writeRequest(dir, "VISION");
     const stem = run(dir);
     expect(stem.status, stem.stderr).toBe(0);
@@ -533,7 +529,6 @@ describe("t329 project-description and document-input boundaries", () => {
     const found = run(dir);
     expect(found.status, found.stderr).toBe(0);
     expect(JSON.parse(found.stdout).path).toBe("config/vision.md");
-    // A named secret file is not looked up either.
     writeFileSync(join(dir, "config", "api-credentials.md"), "secret\n");
     writeRequest(dir, "api-credentials.md");
     expect(run(dir).status).not.toBe(0);
@@ -554,7 +549,6 @@ describe("t329 project-description and document-input boundaries", () => {
       expect(looked.status, `${name}: ${looked.stdout}`).not.toBe(0);
       expect(looked.stdout).toBe("");
     }
-    // A folder that says it holds secrets keeps even a document out.
     for (const folder of ["credentials", "secrets"]) {
       mkdirSync(join(dir, folder));
       writeFileSync(join(dir, folder, "vision.md"), "# not a vision\n");
@@ -690,7 +684,6 @@ describe("t329 project-description and document-input boundaries", () => {
     expect(error).not.toContain("/aidlc knowledge onboard");
     expect(existsSync(join(dir, DOCUMENTS))).toBe(false);
 
-    // Other binary input has no text to read, onboarded or not.
     writeFileSync(join(dir, "blob.bin"), Buffer.from([0, 1, 2, 3]));
     writeRequest(dir, "blob.bin");
     const blob = runOnboard(dir);
@@ -729,7 +722,6 @@ describe("t329 project-description and document-input boundaries", () => {
     expect(index.documents.map((row) => [row.id, row.source.path])).toEqual([
       [payload.document_id, "documents/brief.pdf"],
     ]);
-    // The knowledge command's own onboarding ran, audit event included.
     const audit = [...new Bun.Glob("aidlc/spaces/default/**/audit/*.md").scanSync({ cwd: dir, dot: true })]
       .map((file) => readFileSync(join(dir, file), "utf-8"))
       .join("\n");

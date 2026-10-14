@@ -76,3 +76,34 @@ catch { $failure = $_.Exception.Message }
     if (!accepted) expect(outcome.failure).toBeTruthy();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
+
+// The sandbox setup runs elevated on a fresh Windows runner and cannot be
+// faked here, so its shape is pinned: a setup that exits non-zero runs once
+// more on the same host, a timeout or an unfinished drain fails closed at
+// once, and both runs' logs reach the failure evidence.
+describe("Windows Codex sandbox setup", () => {
+  const provisioning = (source.match(/^function Invoke-CodexProvisioning\([\s\S]*?^\}/m)?.[0] ?? "").replaceAll("\r\n", "\n");
+
+  test("runs a setup that exited non-zero once more, and fails only when both did", () => {
+    const loop = provisioning.indexOf("foreach ($attempt in 1, 2) {");
+    expect(loop).toBeGreaterThan(0);
+    expect(provisioning.match(/\[Diagnostics\.Process\]::Start\(\$info\)/g)).toHaveLength(1);
+    expect(provisioning.indexOf("[Diagnostics.Process]::Start($info)")).toBeGreaterThan(loop);
+    expect(provisioning).toContain("if ($process.ExitCode -eq 0) { return }");
+    expect(provisioning.trimEnd()).toEndWith("throw 'Trusted Codex provisioning failed; retain sandbox.log, never sandbox-secrets.'\n}");
+  });
+
+  test("a timeout or an unfinished output drain still fails closed on the first run", () => {
+    for (const refusal of ["throw 'Codex provisioning timed out", "throw 'Codex provisioning output drain timed out"]) {
+      expect(provisioning.indexOf(refusal)).toBeGreaterThan(provisioning.indexOf("foreach ($attempt in 1, 2) {"));
+      expect(provisioning.indexOf(refusal)).toBeLessThan(provisioning.indexOf("if ($process.ExitCode -eq 0) { return }"));
+    }
+  });
+
+  test("both runs' logs are on the failure evidence list", () => {
+    expect(provisioning).toContain("'codex-setup.attempt-2'");
+    expect(source).toContain(
+      "(Join-Path $stateRoot 'codex-setup.attempt-2.stdout.log'), (Join-Path $stateRoot 'codex-setup.attempt-2.stderr.log'),",
+    );
+  });
+});

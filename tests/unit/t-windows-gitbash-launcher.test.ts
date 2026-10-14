@@ -91,10 +91,10 @@ describe("windows extensionless git bash launcher", () => {
     }
   });
 
-  // Finding-closing behavioral test: the assertions above pin the SHAPE of the
-  // forwarder, but nothing proved it actually LAUNCHES. The Windows-gated tests
-  // run only in the merge queue (PR CI is Linux-only), so the launch path was
-  // unexercised on the PR gate. This test runs the forwarder through a POSIX sh
+  // Behavioral test: the assertions above pin the SHAPE of the forwarder, but
+  // do not prove it actually LAUNCHES. The Windows-gated tests run only in the
+  // merge queue (PR CI is Linux-only), so the launch path needs coverage on
+  // the PR gate. This test runs the forwarder through a POSIX sh
   // (Git Bash's on Windows) against a stub aidlc.cmd, proving sibling
   // resolution, verbatim arg forwarding, and exit-code passthrough on EVERY
   // runner, including the Linux PR gate and the Windows merge queue. Git Bash
@@ -132,12 +132,11 @@ describe("windows extensionless git bash launcher", () => {
       });
 
       expect(run.status).toBe(7);
-      // Exactly three args survived as distinct, boundaries intact.
       expect(run.stdout).toContain(windows ? 'line=[hello "two words" ""]' : "argc=3");
       expect(run.stdout).toContain("arg=[hello]");
       expect(run.stdout).toContain("arg=[two words]");
       expect(run.stdout).toContain("arg=[]");
-      // The v2 regression: no GNU-tr "unescaped backslash" warning on stderr.
+      // No GNU-tr "unescaped backslash" warning on stderr.
       expect(run.stderr ?? "").not.toContain("backslash");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -145,16 +144,14 @@ describe("windows extensionless git bash launcher", () => {
   });
 
   test.skipIf(NO_POSIX_SH)("the forwarder normalises a backslash $0 to slashes (v3 loop)", () => {
-    // Exercises the v3 parameter-expansion normalisation loop — the whole
-    // reason for this revision — as a standalone shell snippet, so a
-    // backslash-separated $0 (what a Windows resolved path looks like) is
-    // proven to convert to slashes. A real exec cannot be used here: a
+    // Exercises the parameter-expansion normalisation loop as a standalone shell
+    // snippet, so a backslash-separated $0 (what a Windows resolved path looks
+    // like) is proven to convert to slashes. A real exec cannot be used here: a
     // backslash path is not a real file on the POSIX host the test runs on, so
     // we run the loop body directly against a fixed input and assert the
     // normalised result. The loop is lifted verbatim from the rendered body
     // (asserted identical to windowsPosixShim() below).
     const body = windowsPosixShim();
-    // Pull the lines from `norm=''` through `self="$norm$self"` — the loop.
     const lines = body.split("\n");
     const start = lines.findIndex((l) => l === "norm=''");
     const end = lines.findIndex((l) => l === 'self="$norm$self"');
@@ -185,7 +182,6 @@ describe("windows extensionless git bash launcher", () => {
     for (const prev of previousWindowsPosixShims()) {
       expect(windowsPosixLauncherBodyIsOwned(prev)).toBe(true);
     }
-    // A user-authored / foreign body is NOT owned.
     expect(windowsPosixLauncherBodyIsOwned("#!/bin/sh\necho hi\n")).toBe(false);
     // A near-miss (current body with one byte changed) is NOT owned — exact match.
     expect(windowsPosixLauncherBodyIsOwned(windowsPosixShim() + " ")).toBe(false);
@@ -211,9 +207,7 @@ describe("windows extensionless git bash launcher", () => {
       "esac",
       "",
     ].join("\n");
-    // The frozen v2 body is present in the allowlist, verbatim…
     expect(previousWindowsPosixShims()).toContain(v2);
-    // …and the shared predicate recognises it as installer-owned.
     expect(windowsPosixLauncherBodyIsOwned(v2)).toBe(true);
     // Guard the contract itself: the current body must never be dropped from
     // recognition, and every historical entry must remain non-empty LF scripts.
@@ -260,7 +254,6 @@ describe("windows extensionless git bash launcher", () => {
     // file. Guards against a marker bump self-locking activation.
     const previous = previousWindowsPosixShims();
     expect(previous.length).toBeGreaterThan(0);
-    // Each entry is a real LF POSIX forwarder, not the current one.
     for (const body of previous) {
       expect(body.startsWith("#!/bin/sh\n")).toBe(true);
       expect(body.includes("\r")).toBe(false);
@@ -371,7 +364,6 @@ describe("windows extensionless git bash launcher", () => {
         expect(readFileSync(launcher, "utf-8")).toBe(own);
         expect(backups()).toEqual([]);
 
-        // At a terminal, "n" leaves it as well.
         const declined = lifecycle(["use", AIDLC_VERSION], { AIDLC_TEST_CONFIG_TTY: "1" }, "n\n");
         expect(declined.status).toBe(1);
         expect(declined.stdout).toContain(

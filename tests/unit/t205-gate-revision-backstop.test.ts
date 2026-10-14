@@ -16,20 +16,21 @@
 // The predicate (unrecordedRevisionSinceGateOpen), all four conjuncts required,
 // over one chronological interleave of six event types across every shard:
 //   1. an anchor exists: the LAST ORGANIC (non-Recovered) STAGE_AWAITING_APPROVAL
-//      for the slug, else the LAST STAGE_STARTED for it (report synthesizes a
-//      Recovered=true gate row right before approve when the conductor skipped
-//      gate-start; anchoring there would empty the window - scenario 9),
+//      for the slug or the LAST STAGE_STARTED for it, whichever is later (report
+//      synthesizes a Recovered=true gate row right before approve when the
+//      conductor skipped gate-start; anchoring there would empty the window -
+//      scenario 9),
 //   2. no GATE_REJECTED for the slug after that anchor (else the verb ran),
 //   3. a HUMAN_TURN after the anchor (the human responded at the gate),
 //   4. an ARTIFACT_CREATED/ARTIFACT_UPDATED to a declared produces file AFTER the
-//      FIRST post-anchor HUMAN_TURN (the human-turn pivot excludes the reviewer's
-//      pre-response `## Review` append - the critical false-positive guard).
+//      FIRST post-anchor HUMAN_TURN and BEFORE the LAST one (the approving turn),
+//      which excludes a pre-response reviewer write and post-approval notes (the
+//      critical false-positive guard).
 // With the STAGE_STARTED fallback anchor, a produces write must ALSO precede the
 // first post-anchor HUMAN_TURN (mid-stage coaching before any production is not
 // a revision - scenario 10). Fail-open everywhere; codekb stages covered via
-// producesArtifactFile's repo-scoped codekb arm (scenarios 12 and 13 - they
-// were previously excluded outright, which left a revised reverse-engineering
-// gate with Revision Count 0); off-switch AIDLC_SKIP_REVISION_BACKSTOP=1.
+// producesArtifactFile's repo-scoped codekb arm (scenarios 12 and 13);
+// off-switch AIDLC_SKIP_REVISION_BACKSTOP=1.
 //
 // This is a PROCESS-boundary test: it spawns the real dist tools (state, audit,
 // orchestrate) and drives the real audit-logger hook over stdin, so the audit
@@ -40,8 +41,8 @@
 // (the suite sets it globally). Scenario 7 keeps it set to prove the off-switch.
 //
 // Source under test (dist/claude/.claude/):
-//   tools/aidlc-state.ts handleApprove (backstop block), unrecordedRevisionSinceGateOpen,
-//     producesArtifactFile;
+//   tools/aidlc-state.ts handleApprove (backstop block), unrecordedRevisionSinceGateOpen;
+//   tools/aidlc-lib.ts producesArtifactFile;
 //   tools/aidlc-orchestrate.ts handleReport (production approval dispatcher);
 //   hooks/aidlc-write-audit-log.ts (emits ARTIFACT_UPDATED with the production File shape);
 //   tools/aidlc-audit.ts append (records the HUMAN_TURN event).
@@ -300,8 +301,6 @@ function fireArtifact(proj: string, absFile: string): void {
   spawnSync(BUN, [HOOK], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), input: json, encoding: "utf-8", env });
 }
 
-// Absolute path of a stage artifact under the seeded record:
-// <record>/ideation/feasibility/<name>.md.
 function feasibilityArtifact(proj: string, name: string): string {
   return join(seededRecordDir(proj), "ideation", "feasibility", `${name}.md`);
 }
@@ -321,7 +320,6 @@ function field(proj: string, name: string): string {
   return guarded(proj, ["get", name]).out.trim();
 }
 
-// Count audit blocks with `**Event**: <ev>` in the merged shard buffer.
 function eventCount(proj: string, ev: string): number {
   return readAllAuditShards(proj)
     .split("\n")
@@ -350,7 +348,6 @@ function auditBlocks(proj: string): AuditBlock[] {
   return out;
 }
 
-// Read the seeded state file content (checkbox assertions).
 function stateContent(proj: string): string {
   return readFileSync(seededStateFile(proj), "utf-8");
 }
@@ -399,10 +396,8 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(rejected[0].recovered).toBe(true);
     expect(revising.length).toBe(1);
     expect(revising[0].recovered).toBe(true);
-    // The approval still commits.
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     expect(eventCount(proj, "STAGE_COMPLETED")).toBeGreaterThanOrEqual(1);
-    // Stage marked complete.
     expect(stateContent(proj)).toContain(`- [x] ${slug}`);
 
     // Event order: original gate-open < backfilled reject < backfilled re-entry
@@ -438,18 +433,18 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
 
-  // --- Scenario 3: THE critical false-positive guard. The reviewer appends its
-  // `## Review` to the PRIMARY artifact BEFORE the human responds at the gate,
-  // firing an ARTIFACT_UPDATED. Because that write precedes the first post-anchor
-  // HUMAN_TURN, conjunct 4 (artifact AFTER the first human turn) fails -> NO
-  // backfill. Without the human-turn pivot this would be a spurious reject.
+  // --- Scenario 3: THE critical false-positive guard. A write to the PRIMARY
+  // artifact BEFORE the human responds at the gate (the legacy reviewer `## Review`
+  // append) fires an ARTIFACT_UPDATED. Because that write precedes the first
+  // post-anchor HUMAN_TURN, conjunct 4 (artifact AFTER the first human turn) fails
+  // -> NO backfill. Without the human-turn pivot this would be a spurious reject.
   test("3: reviewer append before the human turn is NOT mistaken for a revision", () => {
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
     guarded(proj, ["gate-start", slug]); // anchor
-    // Reviewer edits the primary artifact BEFORE any human turn.
+    // The primary artifact is edited BEFORE any human turn.
     fireArtifact(proj, feasibilityArtifact(proj, PRIMARY_ARTIFACT));
-    recordHumanTurn(proj); // human responds AFTER the reviewer append
+    recordHumanTurn(proj); // human responds AFTER the artifact edit
     const r = guarded(proj, ["approve", slug, "--user-input", "approved"]);
     expect(r.rc).toBe(0);
     expect(field(proj, "Revision Count")).toBe("0");
@@ -524,13 +519,12 @@ describe("t205: approve-time gate-revision backstop", () => {
     recordHumanTurn(proj);
     const r = guarded(proj, ["approve", slug, "--user-input", "approved"]);
     expect(r.rc).toBe(0);
-    // Count unchanged (no backfill), and no Recovered reject was added.
     expect(field(proj, "Revision Count")).toBe("1");
     const recoveredRejects = auditBlocks(proj).filter(
       (b) => b.event === "GATE_REJECTED" && b.recovered,
     );
     expect(recoveredRejects.length).toBe(0);
-    expect(eventCount(proj, "GATE_REJECTED")).toBe(1); // the one real reject only
+    expect(eventCount(proj, "GATE_REJECTED")).toBe(1);
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
 
@@ -625,13 +619,13 @@ describe("t205: approve-time gate-revision backstop", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
   });
 
-  // --- Scenario 9: the COMMON shape of the bug (PR review finding). The
-  // conductor skips gate-start AND reject: STAGE_STARTED; initial production
-  // (ARTIFACT_CREATED); human requests changes (HUMAN_TURN); revision
-  // (ARTIFACT_UPDATED); human approves (HUMAN_TURN); report auto-injects
-  // `gate-start --recovered` right before approve. The synthesized Recovered
-  // gate row postdates everything, so anchoring on it would empty the window;
-  // the predicate must skip it and anchor on STAGE_STARTED -> backfill fires.
+  // --- Scenario 9: the COMMON shape of the bug. The conductor skips gate-start
+  // AND reject: STAGE_STARTED; initial production (ARTIFACT_CREATED); human
+  // requests changes (HUMAN_TURN); revision (ARTIFACT_UPDATED); human approves
+  // (HUMAN_TURN); report auto-injects `gate-start --recovered` right before
+  // approve. The synthesized Recovered gate row postdates everything, so
+  // anchoring on it would empty the window; the predicate must skip it and
+  // anchor on STAGE_STARTED -> backfill fires.
   test("9: no organic gate-start - the Recovered row is not the anchor, backfill fires", () => {
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
@@ -706,7 +700,6 @@ describe("t205: approve-time gate-revision backstop", () => {
         `**Timestamp**: 2000-01-01T00:00:${String(index).padStart(2, "0")}Z`,
       )
     );
-    // Keep header + first events in main; last two event blocks go to the clone.
     const cut = blocks.length - 2;
     writeFileSync(mainShard, blocks.slice(0, cut).join("\n---\n"), "utf-8");
     writeFileSync(

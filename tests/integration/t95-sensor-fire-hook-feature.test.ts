@@ -98,15 +98,15 @@ import { stateDigest } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-run-sensors.ts");
 
-// P9 per-intent layout: the sensor-fire hook's active-workflow gate resolves
+// Per-intent layout: the sensor-fire hook's active-workflow gate resolves
 // state via stateFilePath() and the audit trail via auditFilePath() — under the
-// active intent's record. The FRAMEWORK sensor `matches` glob was widened to
-// `**/{aidlc-docs,intents}/**` (the per-intent record arm + the legacy aidlc-docs
-// arm for a pre-migration project), so a trigger fires from EITHER a legacy
-// aidlc-docs/ path OR a per-intent intents/<record>/ path (see C1a vs C1a-intents).
+// active intent's record. The FRAMEWORK markdown sensors are gate-fired
+// (fire_on: gate), so the hook skips them on a write from EITHER a legacy
+// aidlc-docs/ path OR a per-intent intents/<record>/ path (see C1a vs
+// C1a-intents).
 const PINNED_CLONE_ID = "testcloneid95";
 function pinnedShardName(): string {
   const host =
@@ -124,9 +124,9 @@ afterAll(() => {
   for (const d of tempDirs) cleanupTestProject(d);
 });
 
-// The mock dispatcher (t95:60-88): records argv to T95_SPAWN_LOG and exits per
-// T95_STUB_MODE. Written to <proj>/.claude/tools/aidlc-sensor.ts — the path the
-// hook joins at :195 — so the real hook spawns OUR stub.
+// The mock dispatcher: records argv to T95_SPAWN_LOG and exits per
+// T95_STUB_MODE. Written to <proj>/.claude/tools/aidlc-sensor.ts - the path
+// the hook joins in fireSensors - so the real hook spawns OUR stub.
 const MOCK_DISPATCHER = `// @ts-nocheck
 // t95 mock dispatcher: record argv and exit per T95_STUB_MODE.
 import { writeFileSync, appendFileSync, existsSync, mkdirSync } from "node:fs";
@@ -151,8 +151,8 @@ process.stdout.write('{"pass":true}\\n');
 process.exit(0);
 `;
 
-/** make_project (t95:90-96): per-intent workspace shell + the mock dispatcher +
- *  a pinned clone-id (so a later makeProjectActive's shard path is deterministic). */
+/** makeProject: per-intent workspace shell + the mock dispatcher + a pinned
+ *  clone-id (so a later makeProjectActive's shard path is deterministic). */
 function makeProject(): string {
   const proj = createTestProject();
   tempDirs.push(proj);
@@ -167,8 +167,9 @@ function makeProject(): string {
   return proj;
 }
 
-/** make_project_active (t95:100-110): project + state.md into the record (active
- *  stage, so the cursor resolves) + the resolved audit SHARD (the :100 gate). */
+/** makeProjectActive: project + aidlc-state.md into the record (active stage,
+ *  so the cursor resolves) + the resolved audit SHARD (the hook's pre-init
+ *  guard). */
 function makeProjectActive(slug = "requirements-analysis"): string {
   const proj = makeProject();
   mkdirSync(seededRecordDir(proj), { recursive: true });
@@ -209,8 +210,6 @@ interface SynthSensor {
   default_severity?: "advisory" | "blocking";
 }
 
-/** synth_graph (t95:132-159): a graph carrying sensors_applicable[], one stage
- * unless `extra` adds more. */
 function synthGraph(
   proj: string,
   slug: string,
@@ -260,11 +259,6 @@ interface HookRun {
   out: string;
 }
 
-/**
- * run_hook_with (t95:112-128): pipe PostToolUse Write JSON on stdin with
- * CLAUDE_PROJECT_DIR, AIDLC_STAGE_GRAPH, T95_SPAWN_LOG, T95_STUB_MODE and the
- * optional AIDLC_SENSOR_TIMEOUT_MS seam set, against the real hook.
- */
 function runHook(
   proj: string,
   filePath: string,
@@ -352,8 +346,7 @@ describe("t95 sensor-fire hook — single & multi-entry fire (mechanism cli — 
       { graph },
     );
     const argv = spawnArgvs(proj)[0];
-    // STRONGER than the .sh's substring grep: "fire" is the argv element right
-    // after [bun, <sensor.ts>].
+    // "fire" is the argv element right after [bun, <sensor.ts>].
     expect(argv[2]).toBe("fire");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -374,8 +367,6 @@ describe("t95 sensor-fire hook — single & multi-entry fire (mechanism cli — 
       { graph },
     );
     const argv = spawnArgvs(proj)[0];
-    // STRONGER: the flag and its value are adjacent (ordered pair), not merely
-    // both present somewhere.
     const i = argv.indexOf("--stage");
     expect(i).toBeGreaterThan(-1);
     expect(argv[i + 1]).toBe("requirements-analysis");
@@ -403,8 +394,6 @@ describe("t95 sensor-fire hook — single & multi-entry fire (mechanism cli — 
     const argv = spawnArgvs(proj)[0];
     const i = argv.indexOf("--output-path");
     expect(i).toBeGreaterThan(-1);
-    // STRONGER: the .sh only checked the flag is present; assert the value is
-    // the exact file_path the hook was driven with.
     expect(argv[i + 1]).toBe(fp);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -504,7 +493,6 @@ describe("t95 sensor-fire hook — multi-glob filtering at the stage level (mech
     runHook(proj, join(proj, "aidlc-docs", "foo.md"), { graph });
     const ids = spawnArgvs(proj).map((a) => a[3]);
     expect(spawnArgvs(proj).length).toBe(2);
-    // STRONGER than the .sh count-only check: assert WHICH two fired.
     expect(ids).toContain("required-sections");
     expect(ids).toContain("upstream-coverage");
     expect(ids).not.toContain("linter");
@@ -536,8 +524,9 @@ describe("t95 sensor-fire hook — error recovery is advisory (always exit 0) (m
   test("C5a: hook exits 0 even when the subprocess times out (G5 advisory) [.sh test 12]", () => {
     const proj = makeProjectActive("requirements-analysis");
     const graph = singleWriteGraph(proj, "requirements-analysis");
-    // AIDLC_SENSOR_TIMEOUT_MS=2000 overrides the 90s default; the stub sleeps
-    // 5000ms (T95_STUB_MODE=slow) so the spawn is SIGTERM'd.
+    // AIDLC_SENSOR_TIMEOUT_MS=2000 overrides the EXTENDED_SUBPROCESS_TIMEOUT_MS
+    // default; the stub sleeps 5000ms (T95_STUB_MODE=slow) so the spawn is
+    // SIGTERM'd.
     const r = runHook(
       proj,
       join(proj, "aidlc-docs", "inception", "requirements-analysis", "intent.md"),
@@ -555,7 +544,7 @@ describe("t95 sensor-fire hook — error recovery is advisory (always exit 0) (m
       { graph, mode: "slow", timeoutMs: "2000" },
     );
     // The failure event must ACTUALLY FIRE (§6-E): the drops file exists and
-    // names the SIGTERM-timeout drop the hook records at :238-243.
+    // names the SIGTERM-timeout drop the hook records in fireSensors.
     expect(existsSync(dropsPath(proj))).toBe(true);
     const drops = readFileSync(dropsPath(proj), "utf-8");
     expect(drops).toContain("subprocess killed by SIGTERM");
@@ -583,7 +572,7 @@ describe("t95 sensor-fire hook — error recovery is advisory (always exit 0) (m
       { graph, mode: "fail-exit-1" },
     );
     // The failure event must ACTUALLY FIRE (§6-E): the drop names the non-zero
-    // exit the hook records at :250-256.
+    // exit the hook records in fireSensors.
     expect(existsSync(dropsPath(proj))).toBe(true);
     const drops = readFileSync(dropsPath(proj), "utf-8");
     expect(drops).toContain("dispatcher exit 1");
@@ -593,8 +582,8 @@ describe("t95 sensor-fire hook — error recovery is advisory (always exit 0) (m
   test("C7: hook stdout never carries a {decision: block} payload (advisory contract) [.sh test 16]", () => {
     const proj = makeProjectActive("requirements-analysis");
     const graph = singleWriteGraph(proj, "requirements-analysis");
-    // The .sh captured stdout only (2>/dev/null). spawnSync separates streams;
-    // assert the hook never emits a decision JSON on stdout.
+    // spawnSync separates streams; assert the hook never emits a decision JSON on
+    // stdout.
     const json = JSON.stringify({
       tool_name: "Write",
       tool_input: {
@@ -644,6 +633,4 @@ describe("t95 sensor-fire hook — heartbeat & skipped-file accounting (mechanis
     expect(m2).toBeGreaterThan(m1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // C9a/C9b (the Test-Run-mode sensor-fire skip -> sensor-fire.skipped
-  // accounting) were dropped per #369 when the test-run mechanism was removed.
 });

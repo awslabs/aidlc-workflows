@@ -1283,6 +1283,10 @@ describe("t293 config models CLI", () => {
     ], project, { ...runtimeEnv(), ...seam.env });
     expect(saved.status, saved.stdout + saved.stderr).toBe(0);
     expect(saved.stdout).toContain("  model    claude-sonnet-4.6");
+    // A model picked inside Kiro is the chat's alone until it is saved.
+    expect(saved.stdout).toContain(
+      "or inside Kiro with /model, then /model set-current-as-default to save it.",
+    );
     expect(kiroWrites(seam.writes)).toEqual([["settings", "chat.defaultModel", "claude-sonnet-4.6"]]);
     expect(existsSync(projectSettingsPath(project))).toBe(false);
 
@@ -1292,6 +1296,24 @@ describe("t293 config models CLI", () => {
     ], claude, { ...runtimeEnv(), ...seam.env });
     expect(refused.status).toBe(2);
     expect(refused.stdout + refused.stderr).toContain("--session-model applies to Kiro projects only");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("on Kiro CLI --show says the session model is the saved one, not a /model switch", () => {
+    const note =
+      "On Kiro CLI your session model is the one saved in your Kiro settings: agents start on it, and a /model switch changes only the chat you are in until you save it with /model set-current-as-default.";
+    const project = install("kiro");
+    const shown = run(["config", "models", "--project-dir", project, "--show"], project, runtimeEnv());
+    expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+    expect(shown.stdout).toContain("All 14 agents inherit your session model and effort, except:");
+    expect(shown.stdout).toContain(`  Note: ${note}`);
+    const json = run(["config", "models", "--project-dir", project, "--show", "--json"], project, runtimeEnv());
+    expect((JSON.parse(json.stdout) as { data: { notes: string[] } }).data.notes).toEqual([note]);
+
+    // Kiro IDE runs every agent on its own model picker, so its row has no such line.
+    const ide = install("kiro-ide");
+    const elsewhere = run(["config", "models", "--project-dir", ide, "--show"], ide, runtimeEnv());
+    expect(elsewhere.status, elsewhere.stdout + elsewhere.stderr).toBe(0);
+    expect(elsewhere.stdout).not.toContain("set-current-as-default");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("Kiro IDE's row saves Kiro CLI's session model and no effort, whatever preset is recorded", () => {
@@ -1332,7 +1354,9 @@ describe("t293 config models CLI", () => {
     const saved = run(args, project, { ...runtimeEnv(), ...seam.env });
     expect(saved.status, saved.stdout + saved.stderr).toBe(0);
     expect(saved.stdout).toContain("Kiro CLI uses it in every project; Kiro IDE uses its own model picker:");
-    expect(saved.stdout).toContain("inside Kiro CLI with /model");
+    expect(saved.stdout).toContain(
+      "inside Kiro CLI with /model, then /model set-current-as-default to save it.",
+    );
     expect(saved.stdout).not.toContain("They apply to every Kiro project you open");
     expect(saved.stdout).toContain("saved the Kiro CLI session model");
 

@@ -278,8 +278,8 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
       expect(composerProposalErrors("enterprise", given, "relaxed", enterpriseNearest)).toEqual([
         'Stock scope "enterprise" defaults Guard Policy to strict, but the proposal shows relaxed. Show strict, or propose it as custom.',
       ]);
-      // Settings no longer bind a matched plan (the CLI test below covers reviews
-      // above bugfix's cap); only the grid and the Guard Policy do.
+      // The grid, the Guard Policy and a lowered plan_approval bind a matched plan;
+      // other settings do not (the CLI test below covers reviews above bugfix's cap).
       const bugfixNearest = nearestStockScopes(loadScopeMapping().bugfix.stages);
       expect(composerProposalErrors("bugfix", given, "relaxed", bugfixNearest)).toEqual([]);
       const [grid] = composerProposalErrors("express", given, "off", featureNearest);
@@ -373,10 +373,8 @@ describe("t349 (5) a matched plan applies its changes to this piece of work only
     expect(state).toContain("- **Review Override**: adversarial");
     withEnvAndFreshCaches(POLICY_ENV, () => {
       expect(resolveCeremony("learnings", "bugfix", state).value).toBe("on");
-      // Full reviews on stock bugfix, without changing its scope or stages.
       expect(resolveReviewClass("adversarial", "bugfix", state)).toBe("adversarial");
     });
-    // Stock bugfix itself is untouched and no composed scope was written.
     expect(existsSync(join(proj, "aidlc", "scopes")) ? readdirSync(join(proj, "aidlc", "scopes")) : []).toEqual([]);
   });
 });
@@ -601,7 +599,7 @@ describe("t349 (9) a review level set for the work replaces its scope's ceiling"
       expect(resolveReviewClass("adversarial", "express", set("advisory"))).toBe("advisory");
       expect(resolveReviewClass("advisory", "bugfix", set("adversarial"))).toBe("advisory");
       expect(resolveReviewClass("adversarial", "feature", set("none"))).toBe("none");
-      // No override: the scope's cap applies as before.
+      // No override: the scope's cap applies.
       expect(resolveReviewClass("adversarial", "bugfix", "")).toBe("advisory");
       expect(resolveReviewClass(undefined, "feature", set("adversarial"))).toBe("none");
     });
@@ -651,7 +649,7 @@ describe("t349 (9) a review level set for the work replaces its scope's ceiling"
     withEnvAndFreshCaches(POLICY_ENV, () => {
       expect(resolveReviewClass("adversarial", "feature", readFileSync(statePath, "utf-8"))).toBe("adversarial");
     });
-    // On feature, adversarial is the scope's own level, so it clears too (the old reset still works there).
+    // On feature, adversarial is the scope's own level, so it clears too.
     run(["config-change", "--review", "none"]);
     run(["config-change", "--review", "adversarial"]);
     expect(override()).toBe("");
@@ -710,11 +708,11 @@ describe("t349 (9) a review level set for the work replaces its scope's ceiling"
         const res = runOrchestrateNext(ORCH, proj, [flag, value], { cwd: proj, env: process.env });
         const line = res.out.split("\n").find((entry) => entry.trim().startsWith("{"));
         const directive = JSON.parse(line ?? "{}") as { kind?: unknown; message?: unknown };
-        // A value this engine's own table does not hold is a reading step now
+        // A value this engine's own table does not hold is a reading step
         // (t-three-ways-to-read-a-line): the words it does hold are named, and
         // the value is shown as a quoted string. The security contract this
-        // case exists for is unchanged and checked below: nothing of theirs is
-        // a command, and an unheld value never runs.
+        // case exists for is checked below: nothing of theirs is a command, and
+        // an unheld value never runs.
         expect(directive.kind, `${flag} ${value}`).toBe("print");
         const message = String(directive.message);
         expect(message, `${flag} ${value}`).toContain(words.replace(/[<>]/g, ""));

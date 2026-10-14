@@ -9,12 +9,10 @@
 // workflow with stage progress, and no heartbeat at all in that record. There
 // is no stop when the run is unattended, when the person switched the presence
 // check off, when the conversation has not joined the record, or when a link
-// on the way to the status files keeps any heartbeat from being written. A
-// record whose newest stage or gate event is still within the heartbeat
-// staleness slack is "no evidence yet", not hooks-off: on the first turn of a
-// fresh project, `intent-create` writes the whole init phase before the
-// harness's own hook on the agent's shell command has had a turn to run for
-// the `next` that immediately follows it (#2263).
+// on the way to the status files keeps any heartbeat from being written. On
+// the first turn of a fresh project the host's hook beats before the record
+// exists, and `intent-create && next` as one command leave no beat in it; that
+// beat of the turn that created the record counts for it (#2263).
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -164,15 +162,8 @@ function run(proj: string, argv: string[], env: NodeJS.ProcessEnv, input = "") {
   return { code: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 
-// Backdates every audit event's `**Timestamp**:` line so the workflow's
-// newest stage or gate event is older than the hook-liveness slack
-// `hooksOffStop` now waits out before concluding a never-fired record is
-// hooks-off (#2263): on a real first turn, `intent-create` writes its whole
-// init phase in the same breath that creates the record, before this
-// harness's own hook on the agent's shell command has had a turn to run for
-// the `next` that follows it. These tests assert what happens once that
-// chance has passed and still nothing fired, so they age the record instead
-// of waiting out the slack for real.
+// Backdates every audit event's `**Timestamp**:` line, so a record reads as
+// one whose first turn passed long ago with no heartbeat anywhere.
 function age(proj: string): void {
   const intentsRoot = join(proj, "aidlc", "spaces", "default", "intents");
   const old = new Date(Date.now() - 10 * 60 * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
@@ -196,9 +187,6 @@ function intentCreate(proj: string, h: Harness): void {
     "fix the flag parser",
   ], attendedEnv());
   expect(r.code, r.stderr).toBe(0);
-  // The stop waits for the slack to pass before reading a never-fired record
-  // as hooks-off; age the just-written stage events past it so these tests
-  // exercise that state instead of the fresh "no evidence yet" one.
   age(proj);
 }
 
@@ -221,6 +209,55 @@ function beat(proj: string, hook: string): void {
   writeFileSync(join(dir, `${hook}.last`), new Date().toISOString(), "utf-8");
 }
 
+const iso = (ms: number): string => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z");
+const intentsRoot = (proj: string, space = "default"): string => join(proj, "aidlc", "spaces", space, "intents");
+
+// A beat the host's hook writes before any record is selected: the space's
+// pre-workflow folder.
+function spaceBeat(proj: string, hook: string, atMs: number, space = "default"): void {
+  const dir = join(intentsRoot(proj, space), ".aidlc-engine", "hooks-health");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${hook}.last`), new Date(atMs).toISOString(), "utf-8");
+}
+
+function recordBeat(proj: string, record: string, hook: string, atMs: number, space = "default"): void {
+  const dir = join(intentsRoot(proj, space), record, ".aidlc-engine", "hooks-health");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${hook}.last`), new Date(atMs).toISOString(), "utf-8");
+}
+
+function activeRecord(proj: string, space = "default"): string {
+  return readFileSync(join(intentsRoot(proj, space), "active-intent"), "utf-8").trim();
+}
+
+function auditShards(proj: string): string[] {
+  const shards: string[] = [];
+  for (const space of readdirSync(join(proj, "aidlc", "spaces"))) {
+    const root = intentsRoot(proj, space);
+    if (!existsSync(root)) continue;
+    for (const rel of readdirSync(root, { recursive: true }).map(String)) {
+      if (rel.replace(/\\/g, "/").match(/\/audit\/[^/]+\.md$/)) shards.push(join(root, rel));
+    }
+  }
+  return shards.sort();
+}
+
+// `intent-create` as the agent runs it, with no hook of this harness between it
+// and the `next` after it; its audit then reads as written at `atMs` (now when
+// absent), so a case can place it before or after a beat.
+function createAt(proj: string, h: Harness, atMs?: number, label = "hooks off"): void {
+  const r = run(proj, [
+    join(proj, h.dir, "tools", "aidlc-utility.ts"),
+    "intent-create", "--scope", "bugfix", "--label", label, "--arguments", "fix the flag parser",
+  ], attendedEnv());
+  expect(r.code, r.stderr).toBe(0);
+  if (atMs === undefined) return;
+  for (const shard of auditShards(proj)) {
+    const text = readFileSync(shard, "utf-8");
+    writeFileSync(shard, text.replace(/^\*\*Timestamp\*\*: .*/gm, `**Timestamp**: ${iso(atMs)}`), "utf-8");
+  }
+}
+
 describe("next stops with the agent's step when the engine knows the hooks never ran", () => {
   for (const h of HARNESSES) {
     test(`${h.name}: the agent is told its own step and the exact line; a heartbeat lets next run`, () => {
@@ -238,31 +275,124 @@ describe("next stops with the agent's step when the engine knows the hooks never
     });
   }
 
-  // #2263: the first `next` right after `intent-create`, both run as separate
-  // processes with no heartbeat yet, is not read as hooks-off. On a real
-  // first turn this harness's own hook on the agent's shell command has not
-  // had a turn to run for the `next` call yet either; the record's newest
-  // stage event is still within the staleness slack, so this is "no evidence
-  // yet", not "never fired".
+  // #2263: on a first turn the host's hook beats before the record exists, in
+  // the space's pre-workflow folder, and `intent-create && next` run as one
+  // shell command leave no beat in the new record. That beat is the turn that
+  // created it, so it counts for it, and the stop needs no wait.
   for (const h of HARNESSES) {
-    test(`${h.name}: a fresh first turn is not read as hooks-off before the slack has passed`, () => {
+    test(`${h.name}: the creating command's beat, before the record existed, counts for it`, () => {
       const proj = installed(h);
-      const r = run(proj, [
-        join(proj, h.dir, "tools", "aidlc-utility.ts"),
-        "intent-create",
-        "--scope",
-        "bugfix",
-        "--label",
-        "hooks off",
-        "--arguments",
-        "fix the flag parser",
-      ], attendedEnv());
-      expect(r.code, r.stderr).toBe(0);
-      // No age(): the stage events `intent-create` just wrote are as fresh as
-      // they are on a real first turn.
+      const began = Date.now();
+      spaceBeat(proj, "plan-approval-guard", began - 2000);
+      createAt(proj, h, began);
       expect(isStop(next(proj, h))).toBe(false);
     });
   }
+
+  // With no beat anywhere, the hooks did not run for this chat: the stop comes
+  // at the first `next` after creation, not five minutes later.
+  for (const h of HARNESSES) {
+    test(`${h.name}: with no heartbeat anywhere, the stop comes at the first next after creation`, () => {
+      const proj = installed(h);
+      createAt(proj, h);
+      expect(isStop(next(proj, h))).toBe(true);
+    });
+  }
+
+  test("a pre-workflow beat from more than the slack before the record began does not count", () => {
+    const proj = installed(HARNESSES[0]);
+    spaceBeat(proj, "plan-approval-guard", Date.now() - 6 * 60 * 1000);
+    createAt(proj, HARNESSES[0]);
+    expect(isStop(next(proj, HARNESSES[0]))).toBe(true);
+  });
+
+  // New work beside existing work, chained: the turn's beat landed in the
+  // record the chat was on, and the cursor has moved to the new one.
+  test("new work beside other work, chained: the beat in the record the chat was on counts", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    const began = Date.now();
+    createAt(proj, h, began, "first work");
+    const first = activeRecord(proj);
+    createAt(proj, h, began, "second work");
+    expect(activeRecord(proj)).not.toBe(first);
+    recordBeat(proj, first, "plan-approval-guard", began - 2000);
+    expect(isStop(next(proj, h))).toBe(false);
+  });
+
+  // The creation beat speaks for the first turn only: a record that moved on
+  // more than the slack past it with no beat of its own reads as hooks-off.
+  test("counted at creation, then the work moves on past the slack with no beat of its own: the stop", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    const began = Date.now() - 10 * 60 * 1000;
+    spaceBeat(proj, "plan-approval-guard", began - 2000);
+    createAt(proj, h, began);
+    // Its newest stage event is now.
+    const shard = auditShards(proj).at(-1)!;
+    const text = readFileSync(shard, "utf-8");
+    const at = text.lastIndexOf(`**Timestamp**: ${iso(began)}`);
+    writeFileSync(shard, `${text.slice(0, at)}**Timestamp**: ${iso(Date.now())}${text.slice(at + `**Timestamp**: ${iso(began)}`.length)}`, "utf-8");
+    expect(isStop(next(proj, h))).toBe(true);
+  });
+
+  // Nor for long: hooks off in this chat, a beat from another chat with hooks
+  // on just before the record began, and the work parked at a gate since (a
+  // refusal writes no stage or gate event): past the slack, the stop.
+  test("only another turn's beat, more than the slack ago, and the work parked since: the stop", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    const began = Date.now() - 6 * 60 * 1000;
+    spaceBeat(proj, "plan-approval-guard", began - 2000);
+    createAt(proj, h, began);
+    expect(isStop(next(proj, h))).toBe(true);
+  });
+
+  test("in a space of its own, the space's pre-workflow beat counts", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    const utility = join(proj, h.dir, "tools", "aidlc-utility.ts");
+    expect(run(proj, [utility, "space-create", "platform"], attendedEnv()).code).toBe(0);
+    expect(run(proj, [utility, "space", "switch", "platform"], attendedEnv()).code).toBe(0);
+    const began = Date.now();
+    spaceBeat(proj, "plan-approval-guard", began - 2000, "platform");
+    createAt(proj, h, began);
+    expect(isStop(next(proj, h))).toBe(false);
+  });
+
+  // A fresh space, chained: `space-create`, `space switch`, `intent-create`
+  // and `next` as one command, so the turn's beat landed in the space it left,
+  // in its pre-workflow folder or in the record the chat was on there.
+  for (const where of ["default's pre-workflow folder", "the record it was on in default"]) {
+    test(`a new space, chained: the turn's beat in ${where} counts`, () => {
+      const h = HARNESSES[0];
+      const proj = installed(h);
+      const utility = join(proj, h.dir, "tools", "aidlc-utility.ts");
+      const began = Date.now();
+      if (where === "default's pre-workflow folder") {
+        spaceBeat(proj, "plan-approval-guard", began - 1000);
+      } else {
+        createAt(proj, h, began, "first work");
+        recordBeat(proj, activeRecord(proj), "plan-approval-guard", began - 1000);
+      }
+      expect(run(proj, [utility, "space-create", "platform"], attendedEnv()).code).toBe(0);
+      expect(run(proj, [utility, "space", "switch", "platform"], attendedEnv()).code).toBe(0);
+      createAt(proj, h, began);
+      expect(activeRecord(proj, "platform")).not.toBe("");
+      expect(isStop(next(proj, h))).toBe(false);
+    });
+  }
+
+  test("doctor reads the creating command's beat as the hooks having run", () => {
+    const h = HARNESSES[0];
+    const proj = installed(h);
+    const began = Date.now() - 60 * 1000;
+    spaceBeat(proj, "plan-approval-guard", began - 2000);
+    createAt(proj, h, began);
+    const doctor = run(proj, [join(proj, h.dir, "tools", "aidlc-utility.ts"), "doctor", "--verbose"], attendedEnv());
+    expect(doctor.stdout).toMatch(/ok {4}Hooks last fired: plan-approval-guard /);
+    expect(doctor.stdout).not.toContain("Hooks have never executed");
+  });
 
   // Kiro IDE's agent, told both lines with "In Kiro IDE" and "In Kiro CLI or an
   // ACP client", showed the Kiro CLI one in Kiro IDE (live on 1.2.37, #2167).

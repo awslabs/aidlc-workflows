@@ -91,11 +91,22 @@ async function gone(pid: number, timeoutMs: number): Promise<boolean> {
   return true;
 }
 
+// The job's members once they are `expected` (in any order), or as they are
+// when the bound passes: Windows can still list a process that has just exited.
+async function settledMembers(containment: SdkProcessContainment, expected: number[]): Promise<number[]> {
+  const deadline = Date.now() + NATIVE_PROCESS_TERMINATE_TIMEOUT_MS;
+  const wanted = [...expected].sort((a, b) => a - b).join(",");
+  for (;;) {
+    const listed = containment.memberPids();
+    if ([...listed].sort((a, b) => a - b).join(",") === wanted || Date.now() >= deadline) return listed;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 function forceKill(pid: number): void {
   try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
 }
 
-/** Kill every recorded orphan and wait until each has really exited. */
 async function reapOrphans(): Promise<void> {
   for (const pid of orphans.splice(0)) {
     forceKill(pid);
@@ -156,7 +167,6 @@ describe("SDK contained bootstrap contract", () => {
     ]);
     orphans.push(child.pid!);
     const output = collect(child);
-    // Not released: nothing runs, nothing reaches stdout, the bootstrap waits.
     await new Promise((resolve) => setTimeout(resolve, 400));
     expect(child.exitCode).toBeNull();
     expect(output.stdout()).toBe("");
@@ -170,7 +180,6 @@ describe("SDK contained bootstrap contract", () => {
   test("never starts the command when its parent is gone before the release", async () => {
     const dir = scratchDir("aidlc-sdk-bootstrap-");
     const marker = join(dir, "started");
-    // A parent that has already exited: its PID is gone by the time the poll runs.
     const goneParent = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" });
     await exited(goneParent);
     const child = spawnBootstrap(join(dir, "never-written"), goneParent.pid!, [
@@ -282,7 +291,7 @@ describe.skipIf(process.platform !== "win32")("SDK process containment (Windows 
     for (const pid of [bootstrapPid, hello.pid, hello.grandchild]) {
       expect(await gone(pid, NATIVE_PROCESS_TERMINATE_TIMEOUT_MS), `pid ${pid}`).toBe(true);
     }
-    expect(containment.memberPids()).toEqual([]);
+    expect(await settledMembers(containment, [])).toEqual([]);
     const report = await containment.terminate({ graceMs: 0 });
     expect(report).toMatchObject({
       bootstrapPid, bootstrapExited: true, sdkKillEndedTree: true,
@@ -315,7 +324,7 @@ describe.skipIf(process.platform !== "win32")("SDK process containment (Windows 
     expect(await gone(hello.pid, NATIVE_PROCESS_TERMINATE_TIMEOUT_MS)).toBe(true);
     expect(await gone(bootstrapPid, NATIVE_PROCESS_TERMINATE_TIMEOUT_MS)).toBe(true);
     expect(alive(hello.grandchild)).toBe(true);
-    expect(containment.memberPids()).toEqual([hello.grandchild]);
+    expect(await settledMembers(containment, [hello.grandchild])).toEqual([hello.grandchild]);
 
     const report = await containment.terminate({ graceMs: 0 });
     expect(report).toMatchObject({
@@ -323,7 +332,7 @@ describe.skipIf(process.platform !== "win32")("SDK process containment (Windows 
       membersBeforeTerminate: [hello.grandchild], terminated: true, survivors: [],
     });
     expect(await gone(hello.grandchild, NATIVE_PROCESS_TERMINATE_TIMEOUT_MS)).toBe(true);
-    expect(containment.memberPids()).toEqual([]);
+    expect(await settledMembers(containment, [])).toEqual([]);
     expect(describeSdkContainment(report)).toContain(`members=[${hello.grandchild}] terminated=true job verified empty`);
     expect(() => containment.spawn({
       command: process.execPath, args: ["--version"], env: {}, signal: new AbortController().signal,

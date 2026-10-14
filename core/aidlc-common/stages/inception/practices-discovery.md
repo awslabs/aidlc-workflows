@@ -126,7 +126,7 @@ Each dispatched support agent writes:
 
 The first line must be `**Collaborator:** <agent-slug>`, followed by
 `## Contribution` and `## Positions` as defined by
-`stage-protocol-ensemble.md` §11. Collect every dispatched collaborator's file
+`stage-protocol-collaborators.md`. Collect every dispatched collaborator's file
 before the interview. Their presence and identity markers are deterministic
 completion evidence checked by the engine.
 

@@ -1,6 +1,6 @@
 // covers: render-surface:statusline-colour
 //
-// t-tui-render-colour.serial.tui.test.ts — the statusline context-window COLOUR
+// t-tui-render-colour.serial.test.ts - the statusline context-window COLOUR
 // branch (§5-C render row, §7 Phase 3), proven through the hook bytes and a REAL
 // terminal render.
 //
@@ -180,8 +180,8 @@ describe("t-tui-render statusline COLOUR branch (live turn populates ctx:%, ANSI
           "--ready-pattern", "\\[AIDLC\\].*IDEATION", "--timeout-ms", String(remainingWorkMs()),
         ]);
         expect(startup.rc).toBe(0);
-        // P9: orientation prefix ("<intent-slug> · ") sits between [AIDLC] and the
-        // phase, so match with .* rather than a contiguous gap.
+        // The orientation prefix (the intent slug and a middle-dot separator) sits
+        // between [AIDLC] and the phase, so match with .* rather than a contiguous gap.
         expect(waitFor(session, "\\[AIDLC\\].*IDEATION", remainingWorkMs(), 1000)).toBe(true);
 
         // --- submit a trivial prompt to consume context (populate ctx:%) ------

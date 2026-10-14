@@ -22,7 +22,6 @@ const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
 const SESSION = "01995000-7a11-7000-8000-000000000001";
 
-/** The directive fields these cases read. */
 interface Emitted {
   kind: string;
   ask_type?: string;
@@ -107,7 +106,6 @@ function reply(proj: string, prompt: string, session = SESSION): string {
   return result.stdout ?? "";
 }
 
-// What the agent runs after reading the person's reply: the choice they made.
 function answer(
   proj: string,
   details: string,
@@ -131,7 +129,6 @@ function answer(
   };
 }
 
-/** The setter as the agent runs it after reading the line. */
 function configSet(proj: string, args: string[]): { status: number; out: string } {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", ...args, "--project-dir", proj], {
     cwd: proj,
@@ -182,7 +179,6 @@ describe("t-plan-switch-with-words: a switch typed with the person's reply to th
       expect(said).not.toContain("AIDLC Guard Policy");
       expect(policy(proj)).toBe("strict (from scope poc)");
       expect(lastTurn(proj)).not.toContain("**Reply**: command");
-      // Their words are a reply, so the choice they made is recorded at once.
       const recorded = answer(proj, "Approve Plan");
       expect(recorded.code, recorded.message).toBe(0);
       // The setting typed with it is for this work: the agent runs the setter.

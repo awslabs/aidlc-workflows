@@ -91,28 +91,25 @@ const LIVE_WORK_TIMEOUT_MS = Number.isFinite(TIMEOUT_S) && TIMEOUT_S > 0
 const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 // Known-answer literals from the SHIPPED handler / fixture (see header).
-const SCANNED_EVENT = "WORKSPACE_SCANNED"; // aidlc-utility.ts:1914
-const PROJECT_TYPE = "Greenfield"; // detectWorkspace :1666 for the bare-README stub
-const STATE_VERSION = "8"; // aidlc-utility.ts state template (hard literal)
-const COMPLETED_INIT = "3"; // init-phase stage count (:2009 -> :2071)
-const INIT_STDOUT_TYPE_LINE = "Project type: Greenfield"; // verbatim init stdout :2151
+const SCANNED_EVENT = "WORKSPACE_SCANNED"; // aidlc-utility.ts handleIntentCreateStateBuild
+const PROJECT_TYPE = "Greenfield"; // detectWorkspace for the bare-README stub
+const STATE_VERSION = "8"; // aidlc-utility.ts state template (CURRENT_STATE_VERSION)
+const COMPLETED_INIT = "3"; // init-phase stage count (handleIntentCreateStateBuild)
+const INIT_STDOUT_TYPE_LINE = "Project type: Greenfield"; // verbatim creation stdout (handleIntentCreateStateBuild)
 const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STDOUT_TYPE_LINE } as const;
 
-/** Count `- [x]` completed-stage lines in a state-file string (mirrors the .sh's
- *  `grep -c '^\- \[x\]'`). */
 function countCompletedCheckboxes(stateText: string): number {
   return stateText.split("\n").filter((l) => /^- \[x\]/.test(l)).length;
 }
 
 describe("t70 /aidlc creation on a greenfield stub (sdk)", () => {
   // -------------------------------------------------------------------------
-  // P4: the user-facing --init is retired; naming a scope on a fresh workspace
-  // CREATES the first intent (the engine NAMES intent-create, the conductor runs
-  // it). The deterministic creation tool classifies the greenfield-todo stub and
-  // writes aidlc-state.md into the CREATED intent's record. Every .sh state-grep is
-  // re-expressed against the on-disk per-intent state fields / the typed audit
-  // event / the verbatim tool stdout. No seeded state (a clean greenfield creation,
-  // not a migration).
+  // Naming a scope on a fresh workspace CREATES the first intent (the engine
+  // NAMES intent-create, the conductor runs it). The deterministic creation tool
+  // classifies the greenfield-todo stub and writes aidlc-state.md into the
+  // CREATED intent's record. Assertions use the on-disk per-intent state fields /
+  // the typed audit event / the verbatim tool stdout. No seeded state (a clean
+  // greenfield creation).
   // -------------------------------------------------------------------------
   test(
     "greenfield classification writes Project Type=Greenfield to the created intent's state; WORKSPACE_SCANNED fires; no gate",
@@ -122,8 +119,7 @@ describe("t70 /aidlc creation on a greenfield stub (sdk)", () => {
       // the default seeded intent record so the engine AUTO-CREATES a new intent
       // over the stub and the scan fires (a pre-seeded record would make the
       // engine resolve the existing intent and ask to pick one, skipping the
-      // scan - same fix as t71-brownfield). The creation path has no
-      // gate (it prints state and STOPs).
+      // scan). The driver stops after the creation stdout.
       const proj = setupIntegrationProject({
         withGreenfieldStub: true,
         noAidlcDocs: true,
@@ -137,53 +133,43 @@ describe("t70 /aidlc creation on a greenfield stub (sdk)", () => {
           stopAfterToolResult: STOP_AFTER_INIT,
         });
 
-        // The init path RAN: the deterministic init tool fired via Bash and its
+        // The creation path RAN: the deterministic creation tool fired via Bash and its
         // verbatim stdout carries the classification line. assertToolResultContains
-        // fails loudly if Bash never fired (no vacuous pass) — this is the
-        // deterministic stand-in for the .sh's run_claude exit semantics, and it
-        // pins the same Greenfield classification on the TOOL's own stdout.
+        // fails loudly if Bash never fired (no vacuous pass), and it pins the
+        // Greenfield classification on the TOOL's own stdout.
         assertToolResultContains(r, "Bash", INIT_STDOUT_TYPE_LINE);
 
-        // .sh test 1: state file still exists. sdk-drive reads aidlc-state.md off
-        // disk post-run; r.stateFile is the verbatim contents (undefined if absent).
+        // sdk-drive reads aidlc-state.md off disk post-run; r.stateFile is the
+        // verbatim contents (undefined if absent).
         expect(r.stateFile).toBeDefined();
         const stateAfter = readStateFile(proj);
         expect(stateAfter).toBeDefined();
 
-        // .sh test 3: Project Type is greenfield. Exact value (not [Gg] regex):
-        // detectWorkspace returns "Greenfield" for the bare-README stub (:1666).
+        // detectWorkspace returns "Greenfield" for the bare-README stub.
         assertStateField(r, "Project Type", PROJECT_TYPE);
 
-        // .sh test 8 (negative): Project Type is NOT brownfield. Complements test
-        // 3 — the field value must not match /brownfield/i.
         const projectTypeValue = readStateField(stateAfter as string, "Project Type");
         expect(projectTypeValue).toBeDefined();
         expect(projectTypeValue).not.toMatch(/brownfield/i);
 
-        // .sh test 4: audit has WORKSPACE_SCANNED. Typed-event parse over the
-        // `**Event**:` lines (stronger than a substring grep of audit.md).
         assertAuditEvent(r, SCANNED_EVENT);
 
-        // .sh test 7: State Version is 7. Exact (the template hard-codes `7` :2051).
         assertStateField(r, "State Version", STATE_VERSION);
 
-        // .sh test 6: Project Root is populated. The template now writes a
-        // project-relative marker (`.`) rather than the absolute projectDir, so
-        // the committed state carries no machine-local absolute path (#937). The
-        // real root is re-derived at runtime; the field is only an unreached
-        // fallback that resolve()s relative to cwd.
+        // The template writes a project-relative marker (`.`) rather than the
+        // absolute projectDir, so the committed state carries no machine-local
+        // absolute path (#937). The real root is re-derived at runtime; the field is
+        // only an unreached fallback that resolve()s relative to cwd.
         assertStateFieldPath(r, "Project Root", ".");
 
-        // .sh test 2 + test 5: the Completed counter equals the [x] count AND
-        // that count is >= 3 (all three init stages complete after --force reinit).
-        // Known answer: completedInit === init-phase stage count === 3 (:2009),
-        // written to the Completed field (:2071); init stages are marked [x] (:1996).
-        // Assert the field is exactly "3", the on-disk [x] count is exactly 3, and
-        // they agree (the .sh's internal-consistency check) — and >= 3 (test 5).
+        // The Completed counter equals the [x] count AND that count is >= 3 (all
+        // three init stages complete after creation). Known answer: completedInit ===
+        // init-phase stage count === 3, written to the Completed field; init stages
+        // are marked [x] by handleIntentCreateStateBuild.
         assertStateField(r, "Completed", COMPLETED_INIT);
         const xCount = countCompletedCheckboxes(stateAfter as string);
-        expect(xCount).toBe(Number.parseInt(COMPLETED_INIT, 10)); // == 3 (tests 2+5)
-        expect(xCount).toBeGreaterThanOrEqual(3); // .sh test 5 floor, explicitly
+        expect(xCount).toBe(Number.parseInt(COMPLETED_INIT, 10));
+        expect(xCount).toBeGreaterThanOrEqual(3);
       } finally {
         cleanupTestProject(proj);
       }

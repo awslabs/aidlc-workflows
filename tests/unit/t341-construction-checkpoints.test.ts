@@ -18,7 +18,7 @@ import * as childProcess from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { join, normalize } from "node:path";
+import { join, normalize, relative } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   approveConstructionCheckpoint,
@@ -31,6 +31,7 @@ import {
 import {
   approvedConstructionUnits,
   authorizedVerificationCommand,
+  recordRelativeFileName,
   verificationCommandDetails,
   artifactFilename,
   auditBlockField,
@@ -805,6 +806,57 @@ describe("t341 verification command consent", () => {
     expect(readAuditShardEvents(dir).some((row) => row.event === "DECISION_RECORDED" || row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A live run on Windows wrote the file to <record>/verification-command.txt and
+  // named it that way, from the project folder; the record prefix was joined
+  // twice and the file was not found (#2451). It is the same file, so it is read
+  // under that name, with either slash, and in full; a name that climbs out of
+  // the record is not.
+  test("the record's command file named from the project folder, or in full, is the same file", () => {
+    const dir = project();
+    const root = seededRecordDir(dir);
+    writeFileSync(join(root, "verification-command.txt"), "bun test\n");
+    const fromProject = relative(dir, join(root, "verification-command.txt"));
+    const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--session", "t341-command-file"];
+    for (const file of [fromProject, fromProject.replaceAll("/", "\\"), `./${fromProject}`, `.\\${fromProject.replaceAll("/", "\\")}`, join(root, "verification-command.txt")]) {
+      const decision = cli(dir, "log", ["decision", ...identity, "--command-file", file, "--decision", "Use this command?", "--options", "Approve,Request Changes"]);
+      expect(decision.code, `${file}: ${decision.out}`).toBe(0);
+    }
+    submitCommandChoice(dir, "t341-command-file", "Approve");
+    const answer = cli(dir, "log", ["answer", ...identity, "--command-file", fromProject, "--details", "Approve"]);
+    expect(answer.code, answer.out).toBe(0);
+    const setter = cli(dir, "state", ["set-construction-verification-command", "--command-file", fromProject.replaceAll("/", "\\")]);
+    expect(setter.code, setter.out).toBe(0);
+    expect(authorizedVerificationCommand(dir, readFileSync(seededStateFile(dir), "utf-8"))).toEqual(verificationCommandDetails("bun test"));
+    writeFileSync(join(dir, "outside.txt"), "bun test\n");
+    for (const file of [`${relative(dir, root)}/../../outside.txt`, "outside.txt", join(dir, "outside.txt")]) {
+      const refused = cli(dir, "state", ["set-construction-verification-command", "--command-file", file]);
+      expect(refused.code, file).not.toBe(0);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The one helper the command, answer-text and batch readers share: every
+  // spelling of a file in the record is its record-relative name, and a `..`
+  // part or a file outside the record is left for the reader to refuse.
+  test("recordRelativeFileName names a record file the same way however it is spelled", () => {
+    const dir = project();
+    const root = seededRecordDir(dir);
+    const fromProject = relative(dir, join(root, "plan", "batch.json"));
+    const back = (path: string) => path.replaceAll("/", "\\");
+    for (const spelled of [
+      "plan/batch.json", "./plan/batch.json", "plan/./batch.json", back("./plan/batch.json"),
+      fromProject, back(fromProject), `./${fromProject}`, `.\\${back(fromProject)}`, join(root, "plan", "batch.json"),
+    ]) {
+      expect(recordRelativeFileName(dir, root, spelled), spelled).toBe("plan/batch.json");
+    }
+    for (const [spelled, left] of [
+      ["plan/../batch.json", "plan/../batch.json"],
+      [`${fromProject}/../../x.json`, `${fromProject}/../../x.json`.replaceAll("\\", "/")],
+      ["outside.json", "outside.json"],
+    ]) {
+      expect(recordRelativeFileName(dir, root, spelled), spelled).toBe(left);
+    }
+  });
+
   test("command files must stay in the record without symlinks and satisfy byte and command limits", () => {
     const dir = project();
     const root = seededRecordDir(dir);
@@ -819,7 +871,6 @@ describe("t341 verification command consent", () => {
     symlinkSync(join(root, "command.txt"), join(root, "command-link.txt"));
     const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--session", "t341-command-file"];
     for (const file of [
-      join(root, "command.txt"),
       "commands/../command.txt",
       "redirect/command.txt",
       "command-link.txt",

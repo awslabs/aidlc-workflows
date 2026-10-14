@@ -121,7 +121,7 @@ import {
   saveRestartRequest,
   takeRestartRequest,
 } from "./aidlc-question-store.ts";
-import { latestMessage } from "./aidlc-message-store.ts";
+import { latestMessage, noReplySince } from "./aidlc-message-store.ts";
 import { aidlcEntryWords } from "./aidlc-reply-reader.ts";
 import {
   type AskDirective,
@@ -179,6 +179,7 @@ import {
   CHANGE_CONTROL_FIELD,
   CEREMONY_FLAGS,
   CEREMONY_KEYS,
+  guardFenceConfigKey,
   guardFenceFromConfigKey,
   guardPolicyMemoryStrictRefusal,
   memoryGuardPolicyDeclarations,
@@ -283,6 +284,9 @@ import {
   openPendingDecision,
   parseCheckboxes,
   parseGuardPolicy,
+  PERSON_WORDS_FILL,
+  PERSON_WORDS_SLOT,
+  plannedStages,
   resolveGuardPolicy,
   guardPolicyAcceptsChanges,
   type GuardPolicy,
@@ -290,6 +294,7 @@ import {
   humanPresenceGuardDisabled,
   isNonAnswer,
   commandAtPersonsTerminal,
+  unattendedHumanPresenceHint,
   personSpokeSinceGate,
   planApprovalAskIsOpen,
   planApprovalRuntimeFile,
@@ -302,6 +307,7 @@ import {
   isPlainObject,
   parseCeremonySetting,
   pipelineLinkEvidence,
+  pipelineLinkWayOn,
   parseBoltDag,
   type KnowledgeCommand,
   parseKnowledgeCommand,
@@ -314,13 +320,11 @@ import {
   parseTeamBoardArgs,
   parseWorkspaceCommand,
   isWorkspaceNoun,
-  nextArgsCarryRequestWords,
-  ORCHESTRATOR_VERBS,
-  WORKSPACE_VERBS,
   type NextLineReading,
-  nextTokenKind,
+  beforeDelimiter,
   readNextLine,
-  READ_ONLY_FLAGS,
+  readNextTokens,
+  readOrchestratorLauncherOptions,
   REQUEST_TEXT_DIR,
   readKiroIdeLegacyPlanApprovalHost,
   readAllAuditShards,
@@ -396,7 +400,6 @@ import {
   harnessDir,
   hookActivation,
   hookChildEnv,
-  HOOK_HEARTBEAT_STALE_SLACK_MS,
   hookLiveness,
   hooksOffAgentStep,
   OWN_TERMINAL_PRESENCE_STEP,
@@ -440,6 +443,10 @@ import {
   noReviewerNotice,
   findStageBySlug,
   withPersonsWordsFirst,
+  PERSON_ASKED_SKIP_REASON,
+  readUnitSourceManifest,
+  unitPlainName,
+  unitSkippedItsCode,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
@@ -526,6 +533,7 @@ import {
 import {
   approvedPlanChangeLine,
   codeGenerationIssuance,
+  codeGenerationResume,
   codeGenerationResumeNarration,
   codeGenerationStartNarration,
   notePlanApprovalOverrideOffered,
@@ -540,6 +548,7 @@ import {
   planApprovalEnv,
   planApprovalOffForOpenRequest,
   settingsKeptSince,
+  settingTheirs,
   switchKeptForNextWork,
   resolvePlanApprovalSetting,
 } from "./aidlc-guard-switch.ts";
@@ -859,20 +868,9 @@ function hooksOffStop(
       return step();
     }
     const workflow = { intent: selection.intent, space: selection.space };
-    const liveness = hookLiveness(projectDir, undefined, workflow);
-    if (!liveness.neverFired) return null;
-    // The stop asks the agent to edit a settings file, so it waits for the
-    // same staleness slack `stale` already uses before concluding "no
-    // heartbeat yet" means "never fired": on the first turn of a fresh
-    // project, `intent-create` writes this workflow's newest stage event in
-    // the same breath that creates the record, before this harness's own hook
-    // on the agent's shell command -- the thing that is supposed to beat the
-    // engine to the heartbeat -- has had a turn to run for the command that
-    // follows it. Treating that as proof the hooks are off is a false
-    // positive (#2263). `hookHealthNotice`'s advisory line and `doctor`'s
-    // diagnostic read the same liveness without this grace: only the hard
-    // stop that interrupts the agent's turn waits it out.
-    if (Date.now() - liveness.newestStageOrGateEvent!.timestampMs <= HOOK_HEARTBEAT_STALE_SLACK_MS) return null;
+    // A first turn's beat lands before its record exists; hookLiveness counts
+    // it for the record (#2263), so a never-fired record is the stop at once.
+    if (!hookLiveness(projectDir, undefined, workflow).neverFired) return null;
     if (hookStatusPathLinked(projectDir, workflow.intent, workflow.space)) return null;
   } catch {
     // An unreadable record proves nothing about the hooks.
@@ -998,7 +996,7 @@ function namedRestartRequest(
   // Every `--request` value before `--`, where `next`'s own parser reads the
   // flag too, so a kept id named beside another is still read as one; words
   // after `--` are the person's.
-  const flagArgs = args.includes("--") ? args.slice(0, args.indexOf("--")) : args;
+  const flagArgs = beforeDelimiter(args);
   const kept = flagArgs.flatMap((arg, i) => {
     const candidate = flagArgs[i + 1] ?? "";
     if (arg !== "--request" || !isQuestionId(candidate)) return [];
@@ -1310,7 +1308,34 @@ function sayPendingPersonLines(requested: Directive, transported: Directive): ((
   return pending.said;
 }
 
+// A Unit's review reads the per-Unit review rules. Many routes set the Unit
+// after the step is built, so the module is named as the step goes out.
+function nameUnitReviewModule(directive: Directive): void {
+  if (directive.kind !== "run-stage" || typeof directive.unit !== "string") return;
+  const modules = directive.protocol_modules;
+  const at = modules?.indexOf("reviewer") ?? -1;
+  if (modules && at >= 0 && !modules.includes("reviewer-unit")) modules.splice(at + 1, 0, "reviewer-unit");
+}
+
+// The summary confirmation and the sensor rules come with their ceremony on
+// every shape a step can take, so they are named as the step goes out.
+function nameCeremonyModules(directive: Directive): void {
+  if (directive.kind !== "run-stage") return;
+  const named: ProtocolModule[] = [];
+  // A shown-again gate, a checkpoint and settled swarm bookkeeping ask no stage questions.
+  const asks = !directive.gate_only && !directive.construction_checkpoint && !directive.swarm_checkpoint &&
+    !directive.swarm_settled;
+  if (directive.ceremony?.summary_confirmation === "on" && asks) named.push("summary");
+  if (directive.ceremony?.sensors === "on") named.push("sensors");
+  if (named.length === 0) return;
+  const modules = directive.protocol_modules ?? [];
+  for (const module of named) if (!modules.includes(module)) modules.push(module);
+  directive.protocol_modules = modules;
+}
+
 function prepareEmission(directive: Directive): PreparedEmission {
+  nameUnitReviewModule(directive);
+  nameCeremonyModules(directive);
   const requested = directive;
   // Read before the notices below can copy the directive. A guard-recovery
   // ask whose ways on are the conductor's own work (agent_work) is no question
@@ -2792,11 +2817,23 @@ function resumeAgain(flags: ParsedFlags): string {
   return ["next --resume", ...typedSettingModifiers(flags).map((modifier) => `--${modifier}`)].join(" ");
 }
 
-function configSetCommand(modifiers: string[]): string {
+function configSetCommand(modifiers: string[], personWords = false): string {
   return [
     aidlcDispatcherInvocation(`config set ${modifiers[0]}`),
     ...modifiers.slice(1).map((modifier) => `--${modifier}`),
+    ...(personWords ? [`--person-words '${PERSON_WORDS_SLOT}'`] : []),
   ].join(" ");
+}
+
+// A setting the person's own line did not carry (the agent read it from their
+// words) is theirs only with those words (settingTheirs), so a step that names
+// the setter for it names the flag for the agent to fill with the reply that
+// asked. A depth, test strategy or review level names no one, so needs no words.
+function settingNeedsTheirWords(projectDir: string, modifiers: readonly string[]): boolean {
+  return modifiers.some((modifier) => {
+    const [key, value] = modifier.split(" ");
+    return !["depth", "test-strategy", "review"].includes(key) && !routedSettingTheirs(projectDir, [key], value);
+  });
 }
 
 // Settings typed with a description while other work exists ride on each
@@ -3379,7 +3416,8 @@ function openGateReplyDirective(stage: string, requestId: string, folder: string
       `if it asks for changes, run \`${orchestrate} report --stage ${shellArg(stage)} --result rejected ` +
       `--user-input "Request Changes"\`. Then follow what it returns. If it asks about what the stage found or ` +
       `produced, answer it from the files in ${folder ? `${folder}/` : "the stage's folder"}, then ask the approval ` +
-      "question again. If it is about something else, such as new " +
+      `question again. If it asks to skip this stage, run \`${orchestrate} next --skip ${shellArg(stage)}\` and ` +
+      "follow what it returns. If it is about something else, such as new " +
       `work or a change to the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: ` +
       "the engine kept their words and asks them where that work belongs. If you cannot tell which it is, ask the " +
       "person in one short question and follow their answer.",
@@ -3416,7 +3454,8 @@ function openQuestionReplyDirective(stage: string, block: string, requestId: str
   return printDirective(
     `Stage "${stage}" has a question you asked that the person has not answered yet. Read their reply. ` +
       `If it answers that question, ${answer}, then carry on with "${stage}" from where you asked and run bare ` +
-      `\`${orchestrate} next\` the next time you need the engine. If it is about something else, such as new work ` +
+      `\`${orchestrate} next\` the next time you need the engine. If it asks to skip this stage, run ` +
+      `\`${orchestrate} next --skip ${shellArg(stage)}\` and follow what it returns. If it is about something else, such as new work ` +
       `or a change to the plan, run \`${orchestrate} next --request ${requestId}\` and follow what it returns: the ` +
       "engine kept their words and asks them where that work belongs. If you cannot tell which it is, ask the " +
       "person in one short question and follow their answer.",
@@ -3431,6 +3470,8 @@ function openPlanQuestionReplyDirective(
   requestId: string,
   undo = "",
   settings: string[] = [],
+  // A setting read from their words: the setter names those words.
+  needsWords = false,
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   // Settings typed on the same line ("/aidlc --guard-policy off approve the
@@ -3439,7 +3480,8 @@ function openPlanQuestionReplyDirective(
   // words describe it, where the routing answer carries them.
   const typed = settings.length > 0
     ? ` The line also carries ${settings.map((modifier) => `\`--${modifier}\``).join(" ")}: if the words answer the ` +
-      `question, those settings are for this work, so run \`${configSetCommand(settings)}\` first and print its output ` +
+      `question, those settings are for this work, so run \`${configSetCommand(settings, needsWords)}\`` +
+      `${needsWords ? `${PERSON_WORDS_FILL},` : ""} first and print its output ` +
       "verbatim; if the words are new work, the settings ride with them."
     : "";
   const answer = editing
@@ -3448,7 +3490,8 @@ function openPlanQuestionReplyDirective(
       `they made with \`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval ` +
       `--details "<their choice>"\`, then run bare \`${orchestrate} next\`.${typed}`;
   return printDirective(
-    `${undo}${answer} If it is about something else, such as new work or a change to the plan, run ` +
+    `${undo}${answer} If it asks to skip Code Generation, run \`${orchestrate} next --skip code-generation\` and ` +
+      "follow what it returns. If it is about something else, such as new work or a change to the plan, run " +
       `\`${orchestrate} next --request ${requestId}\` and follow what it returns: the engine kept their words and asks ` +
       "them where that work belongs. If you cannot tell which it is, ask the person in one short question and follow " +
       "their answer.",
@@ -4723,8 +4766,7 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   }
   // Behind the delimiter `--config` is one of their words, like every other
   // token there, so the scan for this engine's own flag stops at the mark.
-  const beforeMark = args.indexOf("--");
-  const configIndex = (beforeMark < 0 ? args : args.slice(0, beforeMark)).indexOf("--config");
+  const configIndex = beforeDelimiter(args).indexOf("--config");
   if (configIndex >= 0) {
     const trailing = args.slice(configIndex + 1);
     if (
@@ -4780,25 +4822,23 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   // engine does not take and the word after it: `intent` drops those (nothing
   // on the line is acted on), the record keeps them.
   const wordTokens: string[] = [];
-  const requestWords = nextArgsCarryRequestWords(args);
-  let literalIntent = false;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (literalIntent) {
+  // Which token is a flag, which is a flag's value and which is theirs is
+  // readNextTokens in aidlc-lib.ts, the one reading the seams ask too. It reads
+  // only the tokens in front of the `--` mark, so neither the mark nor a word
+  // behind it is ever a flag's value.
+  const read = readNextTokens(args);
+  for (const { role, token: a, value } of read.tokens) {
+    if (role === "word") {
+      // Among the person's own words a flag-shaped token is one of their words,
+      // never noise (#847), and so is a utility flag ("add a --version flag
+      // ..."). Use the standard `--` delimiter when a task must contain a token
+      // that is otherwise a recognized AIDLC flag (for example
+      // `compose -- --scope`).
       intentWords.push(a);
-      // Theirs on the record too: the delimiter marks the words as the person's,
-      // so leaving them out of `wordTokens` made the record of what they said
-      // omit the request itself when a token earlier on the line was untaken.
       wordTokens.push(a);
       continue;
     }
-    if (a === "--") {
-      literalIntent = true;
-      continue;
-    }
-    // Among the person's own words a utility flag is part of their request
-    // ("add a --version flag ..."), kept as one of its words below.
-    if (READ_ONLY_FLAGS.has(a) && !requestWords) {
+    if (role === "read-only") {
       flags.readOnly = a;
       continue;
     }
@@ -4808,19 +4848,9 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
     // Kept as a fixed allowlist (mirrored by classifyTerminalCommand in
     // aidlc-lib.ts) so an arbitrary token can never ride the read-only path
     // into the tool. The value of `--output` is the following non-flag token.
-    if (
-      flags.readOnly === "--doctor" &&
-      (a === "--export" || a === "--output" || a === "--verbose")
-    ) {
+    if (role === "doctor-arg") {
       flags.readOnlyArgs = flags.readOnlyArgs ?? [];
-      flags.readOnlyArgs.push(a);
-      if (a === "--output") {
-        const next = args[i + 1];
-        if (next !== undefined && !next.startsWith("--")) {
-          flags.readOnlyArgs.push(next);
-          i++;
-        }
-      }
+      flags.readOnlyArgs.push(a, ...(value === undefined ? [] : [value]));
       continue;
     }
     // A LEADING `compose` verb forces the composer (front on a fresh workspace,
@@ -4832,7 +4862,7 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
     // positional token counts, so freeform prose containing "compose"
     // mid-sentence stays intent text. Any text after the verb is the compose
     // request (falls through to intentWords).
-    if (i === 0 && a === "compose") {
+    if (role === "compose") {
       flags.compose = true;
       continue;
     }
@@ -4848,20 +4878,20 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
     // text instead, a misspelt setting became part of the work's name while
     // the check they asked to drop stayed on, and nothing said so.
     // Which tokens this engine takes is NEXT_FLAGS in aidlc-lib.ts, read here
-    // through nextTokenKind, so a flag missing from that table can never be
+    // through readNextTokens, so a flag missing from that table can never be
     // taken by the branches below and a harness seam reading a line before any
     // agent sees it gets the same answer. After the `--` delimiter nothing
-    // reaches here (the loop keeps it as theirs), and one quoted argument
+    // reaches here (the words behind it are theirs), and one quoted argument
     // holding a sentence is not flag-shaped, so `--help flag for the reverser`
-    // is still what they asked for.
-    if (nextTokenKind(a, args[i + 1]) === "untaken") {
+    // is still what they asked for. Each flag below comes with the value the
+    // table says it takes: `value` is undefined when nothing it can take
+    // follows it.
+    if (role === "untaken") {
       flags.untakenFlag ??= a;
       wordTokens.push(a);
-      const value = args[i + 1];
-      if (value !== undefined && !value.startsWith("--")) {
+      if (value !== undefined) {
         flags.untakenFlagValue ??= value;
         wordTokens.push(value);
-        i++;
       }
     } else if (a === "--resume") {
       flags.resume = true;
@@ -4870,39 +4900,30 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
     } else if (a === "--new-intent") {
       flags.newIntent = true;
     } else if (a === "--request") {
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = "--request requires <8-hex id>.";
       } else {
         flags.request = value;
-        i++;
       }
     } else if (a === "--continue") {
       flags.continue = true;
     } else if (a === "--record") {
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = "--record requires <record selector>.";
       } else {
         flags.record = value;
-        i++;
       }
-    } else if (a === "--scope" && i + 1 < args.length) {
-      flags.scope = args[i + 1];
-      i++;
-    } else if (a === "--stage" && i + 1 < args.length) {
-      flags.stage = args[i + 1];
-      i++;
-    } else if (a === "--phase" && i + 1 < args.length) {
-      flags.phase = args[i + 1];
-      i++;
+    } else if (a === "--scope" && value !== undefined) {
+      flags.scope = value;
+    } else if (a === "--stage" && value !== undefined) {
+      flags.stage = value;
+    } else if (a === "--phase" && value !== undefined) {
+      flags.phase = value;
     } else if (a === "--unit") {
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = `--unit needs the unit's name: for example \`${entrySkillInvocation()} --stage nfr-design --unit beta\`.`;
       } else {
         flags.jumpUnit = value;
-        i++;
       }
     } else if (a === "--every-unit") {
       flags.everyUnit = true;
@@ -4912,18 +4933,15 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       // The agent's plan for a proposal step. A word outside the plan table is
       // the value reading step (readNextLine, before this loop); a missing
       // value is the agent's own slip, said to the agent in routeNext.
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.propose = "";
       } else {
         flags.propose = value.toLowerCase();
-        i++;
       }
     } else if (a === "--depth" || a === "--test-strategy") {
       // Checked here, like --review: the value is echoed into the command the
       // conductor runs, so only the three level words may pass.
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = `${a} requires <minimal|standard|comprehensive>.`;
       } else {
         const word = value.toLowerCase();
@@ -4935,23 +4953,19 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
         } else {
           flags.testStrategy = word;
         }
-        i++;
       }
     } else if (a === "--project-type") {
       // Echoed into the creation or reclassify command, so only the two words pass.
-      const value = args[i + 1];
       const word = value?.toLowerCase();
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = "--project-type requires <greenfield|brownfield>.";
       } else {
         if (word === "greenfield" || word === "brownfield") flags.projectType = word;
         else flags.parseError = `--project-type requires <greenfield|brownfield>; received "${value}".`;
-        i++;
       }
     } else if (a === "--skip" || a === "--add") {
       // Stage slugs echoed into the creation command: each must name a stage.
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = `${a} requires <stage,...>.`;
       } else {
         const slugs = splitSlugList(value);
@@ -4962,21 +4976,17 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
           flags.planChanges ??= { skip: [], add: [] };
           flags.planChanges[a === "--skip" ? "skip" : "add"].push(...slugs);
         }
-        i++;
       }
     } else if (a === "--plan-name") {
       // Echoed into the creation command, so only a plain kebab name passes.
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = "--plan-name requires <name>.";
       } else {
         if (PLAN_NAME_PATTERN.test(value)) flags.planName = value;
         else flags.parseError = `--plan-name takes lowercase letters, digits and hyphens; received "${value}".`;
-        i++;
       }
     } else if (a === "--review") {
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = "--review requires <adversarial|advisory|none>.";
       } else {
         // Checked here, like the ceremony flags: the value is echoed into the
@@ -4987,12 +4997,10 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
         } else {
           flags.parseError = `--review requires <adversarial|advisory|none>; received "${value}".`;
         }
-        i++;
       }
     } else if (a === "--guard-policy" || a === "--change-control") {
       if (a === "--change-control") noteGuardPolicyRename();
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = `${a} requires <strict|relaxed|off>.`;
       } else {
         const parsed = parseGuardPolicy(value);
@@ -5002,19 +5010,16 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
         } else {
           flags.changeControl = parsed;
         }
-        i++;
       }
     } else if (a.startsWith("--") && guardFenceFromConfigKey(a.slice(2)) !== null) {
       // A check typed for this piece of work (`--guard.review-freeze off`), never
       // part of the request. `guard.plan-approval` is another way to say plan approval.
       const fence = guardFenceFromConfigKey(a.slice(2))!;
-      const value = args[i + 1];
       const word = value?.toLowerCase();
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = `${a} requires <on|off>.`;
       } else if (word !== "on" && word !== "off") {
         flags.parseError = `${a} requires <on|off>; received "${value}".`;
-        i++;
       } else {
         if (fence === "plan-approval") {
           flags.ceremony ??= {};
@@ -5023,12 +5028,10 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
           flags.fences ??= {};
           flags.fences[fence] = word;
         }
-        i++;
       }
     } else if (CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === a)) {
       const key = CEREMONY_KEYS.find((key) => CEREMONY_FLAGS[key] === a)!;
-      const value = args[i + 1];
-      if (value === undefined || value.startsWith("--")) {
+      if (value === undefined) {
         flags.parseError = `${a} requires <on|off>.`;
       } else {
         const parsed = parseCeremonySetting(value);
@@ -5038,33 +5041,27 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
           flags.ceremony ??= {};
           flags.ceremony[key] = parsed;
         }
-        i++;
       }
     } else if (a === "--new-scope") {
       flags.newScope = true;
-    } else if (a === "--report" && i + 1 < args.length) {
+    } else if (a === "--report" && value !== undefined) {
       // CONSUME the value: an unrecognized valued flag would leak its value
       // into the freeform intent text (the path would read as intent words).
-      flags.report = args[i + 1];
-      i++;
-    } else if (a === "--claim" && i + 1 < args.length) {
-      flags.claim = args[i + 1];
-      i++;
+      flags.report = value;
+    } else if (a === "--claim" && value !== undefined) {
+      flags.claim = value;
     } else if (a === "--claim") {
       flags.parseError = "--claim requires <unit>.";
-    } else if (a === "--release" && i + 1 < args.length) {
-      flags.release = args[i + 1];
-      i++;
+    } else if (a === "--release" && value !== undefined) {
+      flags.release = value;
     } else if (a === "--release") {
       flags.parseError = "--release requires <unit>.";
-    } else if (a === "--team" && i + 1 < args.length) {
-      flags.claimTeam = args[i + 1];
-      i++;
+    } else if (a === "--team" && value !== undefined) {
+      flags.claimTeam = value;
     } else if (a === "--team") {
       flags.parseError = "--team requires <label>.";
-    } else if (a === "--rhythm" && i + 1 < args.length) {
-      flags.claimRhythm = args[i + 1];
-      i++;
+    } else if (a === "--rhythm" && value !== undefined) {
+      flags.claimRhythm = value;
     } else if (a === "--rhythm") {
       flags.parseError = "--rhythm requires <per-stage|unit-end>.";
     } else if (a === "--init" || a === "--force") {
@@ -5077,13 +5074,19 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       flags.retiredFlags ??= [];
       flags.retiredFlags.push(a);
     } else {
-      // Among the person's own words a flag-shaped token is one of their words,
-      // never noise (#847). Use the standard `--` delimiter when a task must
-      // contain a token that is otherwise a recognized AIDLC flag (for example
-      // `compose -- --scope`).
+      // A flag of the table that no branch above reads (t-next-flag-table pins
+      // that there is none) stays one of their words rather than being dropped.
       intentWords.push(a);
       wordTokens.push(a);
     }
+  }
+  const literalIntent = read.literal !== null;
+  if (read.literal !== null) {
+    intentWords.push(...read.literal);
+    // Theirs on the record too: the delimiter marks the words as the person's,
+    // so leaving them out of `wordTokens` made the record of what they said
+    // omit the request itself when a token earlier on the line was untaken.
+    wordTokens.push(...read.literal);
   }
   // A leading valid scope token is positional scope syntax, even when a
   // description follows it (`/aidlc bugfix Fix duplicate todos`). Peel only
@@ -5389,6 +5392,11 @@ function createPrintDirective(
   if ((flags.planChanges?.skip.length || flags.planChanges?.add.length) && flags.planName) {
     cmd.push(`--plan-name ${flags.planName}`);
   }
+  // A setting read from their words names those words, as Branch 5's does.
+  const named = cmd.filter((part) => /^--(guard-policy|guard\.[a-z-]+|sensors|learnings|summary-confirmation|plan-approval|collaborators) /.test(part))
+    .map((part) => part.slice(2));
+  const unnamed = settingNeedsTheirWords(projectDir, named);
+  if (unnamed) cmd.push(`--person-words '${PERSON_WORDS_SLOT}'`);
   // Disclose the ceremony on the print: an explicitly named scope creates
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
@@ -5400,7 +5408,8 @@ function createPrintDirective(
   // New work, like the first, carries on in this chat: the creation binds the
   // chat to the new work, so the next `next` runs its first stage.
   const directive = printDirective(
-    `${runCmd} to start the ${flags.newIntent ? "new intent" : "workflow"}${cost}, then re-run \`next\` to continue.${labelHint}`,
+    `${runCmd} to start the ${flags.newIntent ? "new intent" : "workflow"}${cost}${unnamed ? PERSON_WORDS_FILL : ""}, ` +
+      `then re-run \`next\` to continue.${labelHint}`,
   );
   // The user named a scope (or one was inferred and confirmed), so the spoken
   // line can say what is being set up and how much process that means, with the
@@ -5515,7 +5524,7 @@ function routedGuardPolicyNote(flags: ParsedFlags, projectDir: string, question:
     // What the setting does comes with its name, as it does on the check line beside it.
     return flags.scope !== undefined && scopeGuardPolicyDefault(flags.scope) === value
       ? ""
-      : `${guardPolicyNamed()} is ${value} for the new work (set by you).`;
+      : `${guardPolicyNamed()} is ${value} for the new work${routedSettingTheirs(projectDir, ["guard-policy"], value) ? " (set by you)" : ""}.`;
   }
   const target = question.askedAbout?.targets.length === 1 ? question.askedAbout.targets[0] : undefined;
   let askedState: string | null = null;
@@ -5606,7 +5615,20 @@ function routedFencesNote(flags: ParsedFlags, projectDir: string): string {
   } catch {
     locked = true;
   }
-  return locked ? "" : `${checksAre(typed)} off for the new work (set by you).`;
+  const theirs = routedSettingTheirs(projectDir, typed.map((fence) => guardFenceConfigKey(fence)), "off");
+  return locked ? "" : `${checksAre(typed)} off for the new work${theirs ? " (set by you)" : ""}.`;
+}
+
+// Whether every setting a routed line carries is the person's on record, by the
+// setter's own rule (settingTheirs): their typed line or their own terminal.
+function routedSettingTheirs(projectDir: string, keys: readonly string[], value: string): boolean {
+  let session: string | null = null;
+  try {
+    session = resolveInvokingSessionId(projectDir);
+  } catch {
+    session = null;
+  }
+  return keys.every((key) => settingTheirs(projectDir, session, key, value) !== null);
 }
 
 // The composer-dispatch print for a compose request (the adaptive-workflows
@@ -5679,11 +5701,13 @@ function composeDispatchDirective(
       "This is mode in-flight, not matched/custom routing: preserve the current scope, depth, frozen actions, and full effective grid; stock-distance rankings are advisory only and MUST NOT trigger stock-grid adoption. Return the exact approved command delta as changes.skip and changes.add arrays.",
       "A request to turn sensors, learnings, summary confirmation, collaborators, plan approval, or reviews on or off is not a stage flip: the composer returns it as settingsChanges (plan_approval only as on: the person turns plan approval off in their own words, never through the composer), typed values you show on the approval gate under \"Also suggested by the composer\" and apply only when the human approves them, by running next with the matching flags, following its directive, and relaying the output (a setting the human asks for in plain chat, without compose, you apply directly with next); build each flag yourself from its fixed name (sensors to --sensors, learnings to --learnings, summary_confirmation to --summary-confirmation, plan_approval to --plan-approval, collaborators to --collaborators, review to --review) and a value that is exactly one of its allowed words (on or off; adversarial, advisory, or none), and if any key or value is anything else apply nothing and re-dispatch the composer; never paste composer text into a command. A review level set for the piece of work replaces its scope's ceiling, so full reviews is --review adversarial and changes no stages. When the composer reports a kill switch set on this machine: if config get shows AIDLC_DISABLE_<NAME> in <file>, run config flags --clear-bypass AIDLC_DISABLE_<NAME> --yes when the person asks and say the line it prints; if it shows env AIDLC_DISABLE_<NAME>, say in one line that starting the editor or CLI without that variable turns it back on, and never look for where it is set: shell startup files, environment listings, and harness settings files can hold credentials.",
       "When the composer returns empty changes.skip and changes.add and no settingsChanges, write no marker, present no approval gate, and run no recompose: relay its answer and stop. When it returns only settingsChanges, write the marker and present them on the gate (Approve / Reject): on approve, delete the marker, then apply them by running next with the matching flags, which ends the turn; run no recompose. A request with both offers Approve all / Approve stages only / Reject: on Approve all, run ONE recompose carrying the stage delta and the settingsChanges as its matching flags, so both land in the same write, then delete the marker (leave summary confirmation off out of it, because recompose refuses that lowering; after it lands, run " +
-        `\`${aidlcDispatcherInvocation("config set summary-confirmation off")}\`` +
-        " yourself, which carries out their approval); on Approve stages only, run the recompose without them and delete the marker; on reject, delete the marker and apply nothing.",
+        `\`${aidlcDispatcherInvocation("config set summary-confirmation off")} --person-words '${PERSON_WORDS_SLOT}'\`` +
+        ` yourself, which carries out their approval${PERSON_WORDS_FILL}); on Approve stages only, run the recompose without them and delete the marker; on reject, delete the marker and apply nothing.`,
       "BEFORE presenting the gate, write the pending-proposal marker `aidlc/.aidlc-compose-pending` (any content) so the turn can end at the gate; on approve run `" +
         aidlcDispatcherInvocation("recompose") +
-        " [--skip <changes.skip>] [--add <changes.add>] [approved setting flags]` (join each nonempty array with commas; omit the flag when its approved array is empty, never pass a bare --skip or --add) and DELETE the marker; on reject/edit-then-resolve delete the marker too. Never write scope registry files for an in-flight proposal.",
+        ` [--skip <changes.skip>] [--add <changes.add>] [approved setting flags --person-words '${PERSON_WORDS_SLOT}']\`` +
+        " (join each nonempty array with commas; omit the flag when its approved array is empty, never pass a bare --skip or --add; " +
+        `with setting flags, ${PERSON_WORDS_SLOT} is the person's reply that approved them, word for word) and DELETE the marker; on reject/edit-then-resolve delete the marker too. Never write scope registry files for an in-flight proposal.`,
     );
   } else {
     parts.push(
@@ -7228,6 +7252,14 @@ function buildRunStageDirective(
   const protocolModules: ProtocolModule[] = [];
   if (directive.reviewer && directive.review_class) {
     protocolModules.push("reviewer");
+    // A review that can repair: an adversarial one, or the one stale-receipt
+    // recovery Guard Policy strict allows.
+    if (
+      directive.review_class === "adversarial" ||
+      !codekbCtx || !guardPolicyAcceptsChanges(codekbCtx.projectDir, stateContent)
+    ) {
+      protocolModules.push("reviewer-repair");
+    }
   }
   if (
     node.mode === "subagent" ||
@@ -7237,8 +7269,18 @@ function buildRunStageDirective(
   ) {
     protocolModules.push("ensemble");
   }
+  // Contribution files and mob rounds apply only when support agents are
+  // dispatched; an inline stage adopts its supports in the lead's own chat.
+  if (effectiveSupports.length > 0 && node.mode !== "inline") {
+    protocolModules.push("collaborators");
+  }
   if (node.phase === "construction") {
     protocolModules.push("construction");
+  }
+  // A Build and Test failure can loop back to Code Generation, and a reopened
+  // Code Generation runs by the same procedure.
+  if (node.slug === "code-generation" || node.slug === "build-and-test") {
+    protocolModules.push("loopback");
   }
   // The learnings ritual runs at a gate's first showing, never again for a
   // revision of it (stage-protocol.md, Request Changes).
@@ -8551,6 +8593,22 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       emit(freshWorkOfferDirective(flags, questionDir, flags.propose, found.id, found.newWork === true || flags.newIntent === true));
       return;
     }
+    // The plan is the person's to pick: an answer to the plan question that
+    // picks one (a plan, the tailored plan, or the question's own) needs a
+    // message of theirs after the question was asked, as a stage gate needs
+    // their reply after it was shown.
+    if (
+      found.origin === "front" && (flags.scope || flags.positionalScope || flags.compose) &&
+      !humanPresenceGuardDisabled() && !commandAtPersonsTerminal() &&
+      noReplySince(questionDir, engineSessionId ?? null, found.createdAt)
+    ) {
+      emit(printDirective(
+        "Nothing was started: the person has not answered the plan question yet, and the plan is theirs to pick. " +
+          "Show them the question as it was given and end your turn." +
+          unattendedHumanPresenceHint(questionDir),
+      ));
+      return;
+    }
   }
 
   // A routing question's compose answer carries the settings typed with its
@@ -9345,10 +9403,17 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       stateContent && source === "state" && flags.scope && validScopes().has(flags.scope) &&
       !flags.stage && !flags.phase && !startsNewWork && !composesInFlight && !flags.intent?.trim()
     ) {
-      const parts = [`--scope ${scopeArg(flags.scope)}`, ...typedSettingModifiers(flags).map((modifier) => `--${modifier}`)];
+      const typed = typedSettingModifiers(flags);
+      // A setting read from their words names those words, as Branch 5's does.
+      const unnamed = settingNeedsTheirWords(pd, typed);
+      const parts = [
+        `--scope ${scopeArg(flags.scope)}`, ...typed.map((modifier) => `--${modifier}`),
+        ...(unnamed ? [`--person-words '${PERSON_WORDS_SLOT}'`] : []),
+      ];
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
-      emit(flags.planChanges ? planChangeDirective(flags.planChanges, command, null) : turnEndingPrint(
-        `Run \`${command}\` to change scope, then print its output verbatim and stop.`,
+      const fill = unnamed ? PERSON_WORDS_FILL : "";
+      emit(flags.planChanges ? planChangeDirective(flags.planChanges, command, null, false, null, fill) : turnEndingPrint(
+        `Run \`${command}\` to change scope${fill}, then print its output verbatim and stop.`,
       ));
       return;
     }
@@ -9385,8 +9450,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // through the config setter, then the reshape is composed.
     const reshapeSettings = routingCompose && inFlight ? typedSettingModifiers(flags) : [];
     if (reshapeSettings.length > 0 && question) {
+      const unnamed = settingNeedsTheirWords(pd, reshapeSettings);
       emit(printDirective(
-        `Run \`${configSetCommand(reshapeSettings)}\` to apply the settings typed with this request to the work being reshaped, ` +
+        `Run \`${configSetCommand(reshapeSettings, unnamed)}\` to apply the settings typed with this request to the work being reshaped` +
+          `${unnamed ? PERSON_WORDS_FILL : ""}, ` +
           `then run \`${aidlcToolInvocation("orchestrate")} next compose --request ${question.id}\` and follow what it returns.`,
       ));
       return;
@@ -9563,7 +9630,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // workflow's scope. Otherwise state remains authoritative and any supplied
     // settings still take the config-only path below.
     const currentStateScope = getField(stateContent, "Scope") ?? "";
-    const plan = { scope: currentStateScope, stateContent };
+    const plan = {
+      scope: currentStateScope,
+      stateContent,
+      walk: planChanges ? planChangeWalk(pd, currentStateScope, stateContent) : null,
+    };
     // Words typed with a differing scope may be new work or the reason for
     // the change: Branch 9c asks which, so they are never dropped.
     const scopeWithWords = Boolean(flags.intent) && !planChanges && !flags.resume;
@@ -9581,17 +9652,21 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     ) {
       const parts = [`--scope ${scopeArg(flags.scope)}`];
       for (const modifier of modifiers) parts.push(`--${modifier}`);
+      // A setting read from their words names those words, as Branch 5's does.
+      const unnamed = settingNeedsTheirWords(pd, modifiers);
+      if (unnamed) parts.push(`--person-words '${PERSON_WORDS_SLOT}'`);
       const command = `${aidlcDispatcherInvocation("scope change")} ${parts.join(" ")}`;
+      const fill = unnamed ? PERSON_WORDS_FILL : "";
       withdrawSettingWords(pd);
       // On finished work the change starts the first stage the new scope adds
       // after the last one (the tool reads the same predicate), so nothing
       // waits on the person: the agent carries on into it instead of ending
       // the turn, as a setting over running work does (#2261).
       const reopensFinishedWork = stageReopenedByScopeChange(stateContent, flags.scope) !== null;
-      emit(planChanges ? planChangeDirective(planChanges, command, null, planApprovalAskIsOpen(pd), stillParked) : keptWhilePlanWaits(
+      emit(planChanges ? planChangeDirective(planChanges, command, null, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
         reopensFinishedWork
-          ? printDirective(`Run \`${command}\` to change scope, then print its output verbatim and re-run next to carry on with the work.`)
-          : turnEndingPrint(`Run \`${command}\` to change scope, then ${verbatimThenStop}`),
+          ? printDirective(`Run \`${command}\` to change scope${fill}, then print its output verbatim and re-run next to carry on with the work.`)
+          : turnEndingPrint(`Run \`${command}\` to change scope${fill}, then ${verbatimThenStop}`),
         planApprovalAskIsOpen(pd),
       ));
       return;
@@ -9627,13 +9702,17 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       return;
     }
     if (modifiers.length > 0 && !describedWork) {
-      const command = configSetCommand(modifiers);
+      // A stage change beside the setting keeps its own step, which names
+      // their words for the setter as this one does.
+      const unnamed = settingNeedsTheirWords(pd, modifiers);
+      const command = configSetCommand(modifiers, unnamed);
+      const fill = unnamed ? PERSON_WORDS_FILL : "";
       withdrawSettingWords(pd);
-      emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd), stillParked) : keptWhilePlanWaits(
+      emit(planChanges ? planChangeDirective(planChanges, command, plan, planApprovalAskIsOpen(pd), stillParked, fill) : keptWhilePlanWaits(
         pickedUpIfTurnEnds(
           settingPrint(
-            `Run \`${command}\` to update the configuration, then ${verbatimThenStop}`,
-            `Run \`${command}\` to update the configuration, then print its output verbatim and re-run next to carry on with the work.`,
+            `Run \`${command}\` to update the configuration${fill}, then ${verbatimThenStop}`,
+            `Run \`${command}\` to update the configuration${fill}, then print its output verbatim and re-run next to carry on with the work.`,
           ),
         ),
         planApprovalAskIsOpen(pd),
@@ -9848,8 +9927,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       return;
     }
     if (settingBeforeWork) {
-      const kept = `Run \`${configSetCommand(typedBeforeWork)}\` to keep these settings for the piece of work the person starts ` +
-        `next, then print its output verbatim and ${thenWait}`;
+      const unnamed = settingNeedsTheirWords(pd, typedBeforeWork);
+      const kept = `Run \`${configSetCommand(typedBeforeWork, unnamed)}\` to keep these settings for the piece of work the person starts ` +
+        `next${unnamed ? PERSON_WORDS_FILL : ""}, then print its output verbatim and ${thenWait}`;
       emit(pickFollows ? printDirective(kept) : turnEndingPrint(kept));
       return;
     }
@@ -9974,7 +10054,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
           undefined, routingSettings(carriedRoutingFlags(flags)),
         );
-        emit(openPlanQuestionReplyDirective(planQuestion.editing, words.id, undo, typedSettingModifiers(flags)));
+        const settings = typedSettingModifiers(flags);
+        emit(openPlanQuestionReplyDirective(planQuestion.editing, words.id, undo, settings, settingNeedsTheirWords(pd, settings)));
         return;
       }
     }
@@ -10470,6 +10551,7 @@ function applyGateOnlyShape(
     (module) =>
       module !== "reviewer" &&
       module !== "ensemble" &&
+      module !== "collaborators" &&
       module !== "learnings",
   );
   if (directive.construction_policy) {
@@ -10601,7 +10683,9 @@ function applyConstructionCheckpointShape(
     directive.consumes = rechecked.consumes;
     directive.produces = rechecked.produces;
   }
-  directive.protocol_modules = checkpoint.rereview ? ["reviewer", "construction"] : ["construction"];
+  directive.protocol_modules = checkpoint.rereview
+    ? ["reviewer", "reviewer-repair", "construction", "checkpoint"]
+    : ["construction", "checkpoint"];
   // A checkpoint the person approves offers one learnings ritual for the
   // stages it covers, as a stage's own approval gate does. A re-check of
   // changed code asks only for the approval, and so does a checkpoint whose
@@ -10634,7 +10718,7 @@ function applySwarmCheckpointShape(
   delete directive.review_artifact;
   delete directive.review_class;
   delete directive.reviewer_max_iterations;
-  directive.protocol_modules = ["construction", "swarm"];
+  directive.protocol_modules = ["construction", "checkpoint", "swarm"];
 }
 
 // Try to handle an eligible autonomous swarm stage, returning true (and emitting)
@@ -10871,11 +10955,16 @@ function tryEmitSwarm(
             : node.reviewer_max_iterations ?? 2,
       }
     : {};
+  // A swarm batch verifies with the checkpoint's command and can replay a
+  // Build and Test loop-back.
   const protocolModules: ProtocolModule[] = [
-    ...(node.reviewer ? (["reviewer"] as const) : []),
+    ...(node.reviewer ? (["reviewer", "reviewer-unit", "reviewer-repair"] as const) : []),
     "construction",
+    "checkpoint",
+    "loopback",
     "swarm",
   ];
+  if (ceremonyPolicyValues(scope, stateContent).sensors === "on") protocolModules.push("sensors");
   const resumeExisting = stateContent !== null && checkpointPolicyEnabled(stateContent) &&
     swarmRevisionNeedsPreparation(projectDir, slug, pendingBatch, pendingUnits);
   if (repos.length === 1) {
@@ -11182,7 +11271,7 @@ function unitReceiptOnlyStep(
     ? resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent)
     : "none";
   if (reviewClass === "none") {
-    if (!unitFirstStageAttempt(projectDir, node.slug, unit, stateContent)) return null;
+    if (!unitWorkIsThisAttempts(projectDir, node.slug, unit, stateContent)) return null;
   } else {
     const review = freshReviewReceipts(projectDir, stateContent, node, { reviewClass });
     // Only final verdicts are kept, the same evidence `unit complete` accepts.
@@ -11194,7 +11283,7 @@ function unitReceiptOnlyStep(
       // keeps it; a later attempt's files are not evidence of work done, as
       // with reviews off.
       if (review.unitStale.has(unit) || review.unitStaleProgress.has(unit)) return null;
-      if (!unitFirstStageAttempt(projectDir, node.slug, unit, stateContent)) return null;
+      if (!unitWorkIsThisAttempts(projectDir, node.slug, unit, stateContent)) return null;
       return unitReviewStep(projectDir, node, unit, review);
     }
   }
@@ -11252,6 +11341,22 @@ function unitFirstStageAttempt(projectDir: string, slug: string, unit: string, s
     projectDir, slug, unitMajor, unit, undefined, unitScopedLifecycleFloors(stateContent),
   );
   return /^(?:WORKFLOW_STARTED|STAGE_STARTED):[^#]+#1$/.test(floor);
+}
+
+// True when the Unit's files on disk are this attempt's, so the record it
+// still owes is the step, not the stage body. The stage's first attempt is
+// one proof. Code Generation carries its own for any attempt, a reopen
+// included (#2487): its build started on the plan approved in this attempt
+// (the approval is read against the Unit's current floor, and that build
+// clears the ticks an earlier attempt left), every step is ticked with the
+// files it names present, and its Step 5 source manifest reads as the review
+// command will read it, so the step it names can run.
+function unitWorkIsThisAttempts(projectDir: string, slug: string, unit: string, stateContent: string): boolean {
+  if (unitFirstStageAttempt(projectDir, slug, unit, stateContent)) return true;
+  if (slug !== "code-generation") return false;
+  const built = codeGenerationResume(projectDir, { unit });
+  return built !== null && built.from === "ticks" && built.next === null && built.missing.length === 0 &&
+    readUnitSourceManifest(projectDir, slug, unit).ok;
 }
 
 // `next` for a Unit that owes only its completion receipt: that step, then
@@ -11445,6 +11550,7 @@ function attachBoundedWave(
     );
   }
   directive.wave = { batch_index: wave.batch_index, entries };
+  directive.protocol_modules = [...(directive.protocol_modules ?? []), "wave"];
   if (directive.ceremony.learnings === "on") {
     for (const entry of entries) {
       bootstrapDirectiveMemory(entry.unit_memory_path, codekbCtx);
@@ -12733,7 +12839,7 @@ function unitMajorWalkStep(
       const stop = unitStageStop(projectDir, stateContent, k, u, kinds?.get(u) ?? null, recordPrefix, codekbCtx, ledger);
       if (stop) return stop;
     }
-    if (checkpoints && stateContent) {
+    if (checkpoints && stateContent && !unitSkippedItsCode(projectDir, stateContent, u)) {
       const kind = constructionCheckpointKind(stateContent, u, allUnits);
       const checkpoint = resolveConstructionCheckpoint(projectDir, u, kind, stateContent, routingEvidenceFor(projectDir, stateContent));
       if (!checkpoint.approved) return { kind: "checkpoint", unit: u, checkpoint };
@@ -12841,6 +12947,35 @@ function unitMajorFinishedWalk(
   const last = block.at(-1);
   if (!last || at(currentSlug) <= at(last.slug)) return null;
   return { step: { kind: "covered" }, block, context };
+}
+
+// Where the solo Unit walk has a Unit, for a plan change the person typed:
+// that Unit, the step it is on and how (working on it, or stopped at its
+// summary, paused on it, or at its checkpoint), the walk's steps in order, and
+// whether another Unit still owes the step (so "this Unit" and "every Unit
+// from here" differ). Null when the walk is not on a Unit.
+type PlanChangeWalk = {
+  stage: string;
+  unit: string;
+  at: "work" | "summary" | "paused" | "checkpoint";
+  steps: string[];
+  others: boolean;
+};
+function planChangeWalk(projectDir: string, scope: string, stateContent: string): PlanChangeWalk | null {
+  const current = (getField(stateContent, "Current Stage") ?? "").trim();
+  const walk = current === "" ? null : unitMajorWalkBeat(projectDir, scope, stateContent, current);
+  if (walk === null || walk.step.kind === "covered") return null;
+  const steps = walk.block.map((step) => step.slug);
+  if (walk.step.kind === "checkpoint") return { stage: "", unit: walk.step.unit, at: "checkpoint", steps, others: true };
+  if (walk.step.kind === "paused") {
+    return { stage: walk.step.stage, unit: walk.step.checkpoint.unit, at: "paused", steps, others: true };
+  }
+  const { stage, unit } = walk.step;
+  const done = new Set(unitsWithStageWork(projectDir, stage, walk.context));
+  const skipped = unitSkippedUnits(projectDir, stage.slug, undefined, stateContent);
+  const others = walk.context.units.some((u) => u !== unit && !done.has(u) && !skipped.has(u) &&
+    !kindVacuous(stage, walk.context.kinds?.get(u) ?? null));
+  return { stage: stage.slug, unit, at: walk.step.kind, steps, others };
 }
 
 // What the stage-work check needs about the Unit DAG, resolved once per call.
@@ -13684,11 +13819,6 @@ function keptWhilePlanWaits<T extends Directive>(directive: T, planWaits: boolea
   return directive;
 }
 
-// The reason the step below hands the agent for a started stage the person
-// asked to skip. report reads its own token back: that skip is the person's,
-// so it gives no reason of its own (the step already said the one line).
-const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
-
 // A typed `--skip`/`--add` on a running workflow. The person named the
 // stages, so recompose applies them straight away (after any scope or setting
 // command typed with them), and one line says what changed and the way back;
@@ -13699,8 +13829,9 @@ const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
 // gate. Approve first, and the next stage had started before the skip reached
 // recompose, which refused it as no longer pending; skip first, and this step
 // ended the turn before the approval was recorded, so the person approved
-// twice. So: a named stage that has already started (or is being revised) is
-// skipped where it stands, through the report that routes forward, whatever
+// twice. So: a named stage that has already started (or is being revised, or
+// waits at its own approval question) is skipped where it stands, through the
+// report that routes forward, whatever
 // kind of stage it is (the report's reason is the engine's own token for the
 // person's skip; recompose only reaches stages ahead), and the work goes on,
 // or ends on the last stage; and at an open gate the step hands the agent the
@@ -13708,13 +13839,16 @@ const PERSON_ASKED_SKIP_REASON = "the person asked to skip it";
 function planChangeDirective(
   changes: PlanChanges,
   before: string | null,
-  plan: { scope: string; stateContent: string } | null,
+  plan: { scope: string; stateContent: string; walk?: PlanChangeWalk | null } | null,
   // The code plan's question is open: it stays the open step, so what the
   // person says next is kept as their answer to it.
   planWaits = false,
   // Parked work stays parked: the one line ends by saying so.
   stillParked: string | null = null,
+  // What the agent puts in place of a slot `before` names (their words).
+  beforeFill = "",
 ): PrintDirective {
+  const filled = beforeFill === "" ? "" : `${beforeFill},`;
   const kept = (directive: PrintDirective): PrintDirective => keptWhilePlanWaits(directive, planWaits);
   const end = " Then stop.";
   const parkedTail = stillParked === null ? "" : ` ${stillParked}`;
@@ -13741,53 +13875,153 @@ function planChangeDirective(
     : "";
   if (skip.length === 0 && add.length === 0) {
     return kept(turnEndingPrint(
-      `${before ? `Run \`${before}\` and print its output verbatim, then tell` : "Tell"} the person in one line: ` +
+      `${before ? `Run \`${before}\`${filled} and print its output verbatim, then tell` : "Tell"} the person in one line: ` +
         `"${noted} The plan is unchanged.${parkedTail}"${end}${resume}`,
     ));
   }
   // Where the work stands: the current stage, started or waiting at its gate.
   const current = plan === null ? "" : (getField(plan.stateContent, "Current Stage") ?? "").trim();
   const currentState = current === "" ? undefined : parseCheckboxes(plan!.stateContent).find((c) => c.slug === current)?.state;
-  const started = (currentState === "in-progress" || currentState === "revising") && skip.includes(current)
+  const started = (currentState === "in-progress" || currentState === "revising" ||
+      currentState === "awaiting-approval") && skip.includes(current)
     ? current
     : null;
   const gateOpen = currentState === "awaiting-approval" && !skip.includes(current) ? current : null;
-  const planSkip = skip.filter((slug) => slug !== started);
+  // On the Unit walk Current Stage stays on the walk's first step while a
+  // Unit is on a later one: the step the Unit is working on is skipped for
+  // that Unit where it stands, or, when the person means every Unit from
+  // here, taken off the plan; another step of the walk named here, or any step
+  // while the Unit is stopped (at a summary, paused, at its checkpoint), is a
+  // plan change, which covers every Unit.
+  const walk = plan?.walk ?? null;
+  const unitStep = walk?.at === "work" && skip.includes(walk.stage) && walk.stage !== started ? walk : null;
+  const everyUnit = walk === null ? [] : skip.filter((slug) =>
+    slug !== started && walk.steps.includes(slug) && (slug !== unitStep?.stage || unitStep.others));
+  // The walk steps a one-Unit request cannot be carried out for here: those
+  // the Unit has not reached, or every one while it is stopped.
+  const notHere = walk === null ? [] : everyUnit.filter((slug) =>
+    walk.at !== "work" || walk.steps.indexOf(slug) > walk.steps.indexOf(walk.stage));
+  const unitName = walk === null ? "" : unitPlainName(walk.unit);
+  const unitIsAt = walk === null ? ""
+    : walk.at === "summary" ? `done with ${name(walk.stage)} and at its summary`
+    : walk.at === "paused" ? `paused on ${name(walk.stage)}`
+    : walk.at === "checkpoint" ? "at its checkpoint"
+    : `on ${name(walk.stage)}`;
+  const planSkip = skip.filter((slug) => slug !== started && (unitStep === null || slug !== unitStep.stage || unitStep.others));
   const flips = (skipped: string[], added: string[]): string => [
     ...(skipped.length > 0 ? [`--skip ${skipped.join(",")}`] : []),
     ...(added.length > 0 ? [`--add ${added.join(",")}`] : []),
   ].join(" ");
+  // The person's own skip: recompose carries it out over its check that later
+  // stages keep what they read, as a stage skipped where it stands is.
+  const replan = (skipped: string[]): string =>
+    `${aidlcDispatcherInvocation("recompose")} ${flips(skipped, add)}` +
+    (skipped.length > 0 ? ` --reason ${shellArg(PERSON_ASKED_SKIP_REASON)}` : "");
+  const skipName = (slug: string): string =>
+    unitStep !== null && !unitStep.others && slug === unitStep.stage
+      ? `${name(slug)} for the ${unitName} Unit`
+      : everyUnit.includes(slug) ? `${name(slug)} for every Unit from here` : name(slug);
+  const listed = (names: string[]): string =>
+    names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
   const summary = [
-    ...(skip.length > 0 ? [`skipped ${named(skip)}`] : []),
+    ...(skip.length > 0 ? [`skipped ${listed(skip.map(skipName))}`] : []),
     ...(add.length > 0 ? [`added ${named(add)}`] : []),
   ].join(" and ");
+  const startedSkip = started === null ? null
+    : `${aidlcToolInvocation("orchestrate")} report --stage ${started} --result skipped ` +
+      `--reason ${shellArg(PERSON_ASKED_SKIP_REASON)}`;
+  const unitSkip = unitStep === null ? null
+    : `${aidlcToolInvocation("orchestrate")} report --stage ${unitStep.stage} --unit ${unitStep.unit} --result skipped ` +
+      `--reason ${shellArg(PERSON_ASKED_SKIP_REASON)}`;
+  const forTheUnit = unitStep === null ? ""
+    : `It can still be run for that Unit with \`${entrySkillInvocation()} --stage ${unitStep.stage} --unit ${unitStep.unit}\`.`;
+  // The Unit's own step named while another Unit still owes it, or with
+  // another walk step: the agent reads from the person's words whether they
+  // mean that Unit only or every Unit from here, and asks once only when their
+  // words do not say.
+  if (unitStep !== null && (unitStep.others || notHere.length > 0)) {
+    const runs = (list: (string | null)[]): string =>
+      list.filter((c): c is string => c !== null).map((c) => `\`${c}\``).join(", then ");
+    // For that Unit only: its own step is skipped for it, another walk step
+    // named with it is left for that Unit to skip when it gets there, and any
+    // other change is made for the plan; the line names each.
+    const rest = planSkip.filter((slug) => slug !== unitStep.stage);
+    const restWalk = rest.filter((slug) => walk!.steps.includes(slug));
+    const restOther = rest.filter((slug) => !walk!.steps.includes(slug));
+    // With no other Unit left to take it, the Unit's own step is skipped for
+    // it either way.
+    const onlyUnit = runs([unitSkip, restOther.length > 0 || add.length > 0 ? replan(restOther) : null, startedSkip]);
+    const fromHere = runs([unitStep.others ? null : unitSkip, replan(planSkip), startedSkip]);
+    const step = name(unitStep.stage);
+    const added = add.length > 0 ? `; added ${named(add)}` : "";
+    const stillGet = unitStep.others
+      ? `; the other Units still get ${rest.length > 0 || add.length > 0 ? step : "it"}`
+      : "";
+    const onlyLine = `Skipped ${listed([`${step} for the ${unitName} Unit`, ...restOther.map(name)])}${added}${stillGet}. ` +
+      `${forTheUnit}${restOther.length > 0 || add.length > 0 ? " You can undo the rest any time." : ""}` +
+      (restWalk.length > 0
+        ? ` ${listed(restWalk.map(name))} can be skipped for one Unit while that Unit is working on it.`
+        : "");
+    const walkNamed = planSkip.filter((slug) => walk!.steps.includes(slug));
+    const otherNamed = planSkip.filter((slug) => !walk!.steps.includes(slug));
+    const everyLine = `Skipped ${unitStep.others ? "" : `${step} for the ${unitName} Unit, and `}` +
+      `${listed(walkNamed.map(name))} for every Unit from here` +
+      `${otherNamed.length > 0 ? `, and ${listed(otherNamed.map(name))}` : ""}${added}. ` +
+      (unitStep.others ? "You can undo that any time." : `${forTheUnit} You can undo the rest any time.`);
+    // What their words must say: for which Units the step that waits on them.
+    const asked = unitStep.others ? step : listed(restWalk.map(name));
+    return kept(turnEndingPrint(
+      `${before === null ? "" : `Run \`${before}\`${filled} and print its output verbatim. `}` +
+        `The person asked to skip ${listed(skip.map(name))}, and the ${unitName} Unit is on ${step} now. ` +
+        `If their words mean the ${unitName} Unit only, run ${onlyUnit}, then tell the person in one line: ` +
+        `"${onlyLine}${parkedTail}" ` +
+        "and re-run `next` to carry on with the work. " +
+        `If they mean every Unit from here, the ${unitName} Unit included, run ${fromHere}, then tell the person ` +
+        `in one line: "${everyLine}${parkedTail}" and stop. ` +
+        `If their words do not say which, ask them once: "Skip ${asked} for the ${unitName} Unit only, or for every ` +
+        "Unit from here?\" and stop. Do not show a command's output. If a command refuses, tell the person in plain " +
+        "words why it could not, and the way it names to do it instead, then stop. If they later ask to undo " +
+        `skipping it for every Unit, run \`${aidlcDispatcherInvocation("recompose")} ${flips(add, planSkip)}\`.${resume}`,
+    ));
+  }
   const commands: { command: string; why: string }[] = [];
+  if (unitSkip !== null) {
+    commands.push({ command: unitSkip, why: `to skip ${name(unitStep!.stage)} for the ${unitName} Unit` });
+  }
   if (planSkip.length > 0 || add.length > 0) {
     commands.push({
-      command: `${aidlcDispatcherInvocation("recompose")} ${flips(planSkip, add)}`,
+      command: replan(planSkip),
       why: "to change this workflow's remaining stages as the person asked",
     });
   }
-  if (started !== null) {
-    commands.push({
-      command: `${aidlcToolInvocation("orchestrate")} report --stage ${started} --result skipped ` +
-        `--reason ${shellArg(PERSON_ASKED_SKIP_REASON)}`,
-      why: `to skip ${name(started)}, which has already started`,
-    });
+  if (startedSkip !== null) {
+    commands.push({ command: startedSkip, why: `to skip ${name(started!)}, which has already started` });
   }
   const run = commands
     .map(({ command, why }, at) => `${at === 0 && before === null ? "Run" : "then run"} \`${command}\` ${why}`)
     .join(", ");
-  const lead = before === null ? run : `Run \`${before}\` and print its output verbatim, ${run}`;
+  // A step of the walk the Unit is not working on: the plan change covers
+  // every Unit, so a request for one Unit is answered, not carried out as all.
+  const aheadNote = notHere.length === 0 ? ""
+    : `${listed(notHere.map(name))} ${notHere.length === 1 ? "is a step" : "are steps"} each Unit takes, so this ` +
+      "change covers every Unit. If the person's words mean one Unit only, run nothing and tell them in one line: " +
+      `"${listed(notHere.map(name))} can be skipped for one Unit while that Unit is working on it; the ${unitName} Unit is ` +
+      `${unitIsAt} now." and stop. Otherwise: `;
+  const lead = `${aheadNote}${before === null ? run : `Run \`${before}\`${filled} and print its output verbatim, ${run}`}`;
   // The way back: a plan flip is undone by the opposite flip while the work
   // runs; a stage skipped where it stood is run on its own, the route
-  // recompose itself names for a skipped stage. A way back after the person's
-  // own action is a plain fact that names the command, never a line telling
-  // them to type it (t-offers-are-plain-questions).
-  const onItsOwn = `${entrySkillInvocation()} --stage <stage> --single`;
-  const wayBack = started === null
-    ? "You can undo that any time."
-    : `${skip.length === 1 ? "It" : "Either one"} can still be run on its own with \`${onItsOwn}\`.`;
+  // recompose itself names for a skipped stage, and a Unit's step skipped for
+  // that Unit is reopened for it. A way back after the person's own action is
+  // a plain fact that names the command, never a line telling them to type it
+  // (t-offers-are-plain-questions).
+  // Each command names its stage, so it can be typed as shown.
+  const onItsOwn = skip.map((slug) => `\`${entrySkillInvocation()} --stage ${slug} --single\``);
+  const anyOf = onItsOwn.length <= 1 ? onItsOwn.join("") : `${onItsOwn.slice(0, -1).join(", ")} or ${onItsOwn.at(-1)}`;
+  const wayBack = unitStep !== null
+    ? forTheUnit
+    : started === null
+      ? "You can undo that any time."
+      : `${skip.length === 1 ? "It" : skip.length === 2 ? "Either one" : "Any of them"} can still be run on its own with ${anyOf}.`;
   const line = `"${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ${wayBack}${noted ? ` ${noted}` : ""}${parkedTail}"`;
   const undo = `If they later ask to undo it, run \`${aidlcDispatcherInvocation("recompose")} ${flips(add, planSkip)}\`.`;
   const message =
@@ -13795,7 +14029,7 @@ function planChangeDirective(
     "If a command refuses, tell the person in plain words why it could not, and the way it names to do it " +
     "instead, then stop. " +
     `Otherwise tell the person in one line: ${line}`;
-  if (started !== null) {
+  if (started !== null || unitStep !== null) {
     // Parked work stays parked: the line already says so and asks whether to
     // pick it back up, so the turn ends on that question instead of carrying
     // on with the work the person paused.
@@ -14971,8 +15205,7 @@ function checkEnsembleEvidence(
     message:
       `Cannot present "${slug}" for approval because collaborator notes are missing or ` +
       `incomplete: ${missing.join("; ")}. Ask each named collaborator to write ` +
-      `${contributionPath} with **Collaborator:** <agent-slug> on the first line, then try again. ` +
-      `Set AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run stage whose files were lost.`,
+      `${contributionPath} with **Collaborator:** <agent-slug> on the first line, then try again.`,
   };
 }
 
@@ -15001,14 +15234,7 @@ function checkPipelineLinkEvidence(
     ok: false,
     message:
       `${refusal}: ${missing.join(", ")}. ` +
-      `Re-run \`${aidlcToolInvocation("orchestrate")} next${singleRun ? ` --single --stage ${slug}` : ""}\` ` +
-      `and dispatch the missing pipeline links in their declared order, carrying the human's revision feedback. ` +
-      (guardPolicyAcceptsChanges(pd)
-        ? ""
-        : "Rejection starts a new attempt: earlier scans and receipts cannot certify this revision, even for a targeted artifact edit. ") +
-      `After each link returns, run \`${aidlcToolInvocation("log")} link --stage ${slug} ` +
-      `--link <agent>${evidence.repos.length > 0 ? " --repo <repo>" : ""}` +
-      `${singleRun ? " --single" : ""}\`. Do not re-stamp an old handoff or disable evidence checks to reopen the gate.`,
+      pipelineLinkWayOn(pd, slug, { repos: evidence.repos.length > 0, singleRun }),
   };
 }
 
@@ -15773,17 +15999,6 @@ function approvalProgressLine(stateContent: string, approvedSlug: string, scope:
     `(${overall} overall) | ${phase}. Next: ${next.name}`;
 }
 
-// The stages the plan runs after Initialization, in run order: every one that
-// finished, and every one not skipped that the plan executes. The progress line
-// and each stage's start line count from this one list.
-function plannedStages(stateContent: string, scope: string): GraphStage[] {
-  const boxes = parseCheckboxes(stateContent);
-  const runs = (slug: string) =>
-    checkboxStateOf(boxes, slug) === "completed" ||
-    (checkboxStateOf(boxes, slug) !== "skipped" && effectivePlanAction(slug, scope, stateContent) === "EXECUTE");
-  return loadGraph().filter((stage) => stage.enabled !== false && stage.phase !== "initialization" && runs(stage.slug));
-}
-
 // " (stage 3 of 9)" for a stage the plan runs, "" for one it does not.
 function stageOfPlan(slug: string, scope: string, stateContent: string | null): string {
   if (!stateContent) return "";
@@ -16001,8 +16216,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // reading still needs a CONDITIONAL stage.
     const personAsked = reason === PERSON_ASKED_SKIP_REASON;
     if (node.execution !== "CONDITIONAL" && planAction !== "SKIP" && !personAsked) {
+      // The person's own skip goes through the step that names this report
+      // with the engine's reason, so the refusal names that step.
       emit(errorDirective(
-        `Stage "${slug}" is execution: ${node.execution}; only a CONDITIONAL stage can report skipped.`,
+        `Stage "${slug}" is execution: ${node.execution}; only a CONDITIONAL stage can report skipped. ` +
+          `If the person asked to skip it, run \`${aidlcToolInvocation("orchestrate")} next --skip ${slug}\`: ` +
+          `its step skips it the way they asked${readConstructionIteration(stateContent) === "unit-major" && isPerUnit(node)
+            ? ", for one Unit only or for every Unit"
+            : ""}.`,
       ));
       return;
     }
@@ -16027,8 +16248,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         return;
       }
       // Files already written for this unit are its work for the stage;
-      // skipping would drop them from the stage's approval.
-      if (unitsWithStageWork(pd, beat.stage, beat.context).includes(beat.unit)) {
+      // skipping would drop them from the stage's approval, so only the
+      // person's own skip does that.
+      if (!personAsked && unitsWithStageWork(pd, beat.stage, beat.context).includes(beat.unit)) {
         emit(errorDirective(
           `Cannot skip "${slug}" for unit "${beat.unit}": that unit's files for this step are ` +
             "already written. Finish the step for that unit instead, then continue with " +
@@ -16088,14 +16310,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // A Current Stage skip marks the stage skipped for every unit. Under
     // unit-major the walk may already have finished units' work for it (the
     // late gate still has to approve that work), so refuse it then. Once the
-    // person's plan no longer runs the stage (they changed scope), the skip
-    // goes through and the Units' files stay as they are.
+    // person's plan no longer runs the stage (they changed scope), or they
+    // asked to skip it, the skip goes through and the Units' files stay as
+    // they are.
     const unitsDone =
       readConstructionIteration(stateContent) === "unit-major" &&
       node.phase === "construction" && isPerUnit(node)
         ? unitsWithStageWork(pd, node, unitWorkContext(pd))
         : [];
-    if (unitsDone.length > 0 && planAction !== "SKIP") {
+    if (unitsDone.length > 0 && planAction !== "SKIP" && !personAsked) {
       emit(errorDirective(
         `Cannot skip "${slug}": ${unitNames(unitsDone)} already ` +
           `${unitsDone.length === 1 ? "has" : "have"} this step's files, and skipping the step ` +
@@ -16105,13 +16328,13 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       return;
     }
     // A stage at its open gate is skipped only when the plan no longer runs
-    // it (the person said the work is a new project): their decision closes
-    // the gate as skipped.
+    // it (the person said the work is a new project) or the person asked to
+    // skip it: their decision closes the gate as skipped.
     if (
       stageCheckbox.state !== "in-progress" &&
       stageCheckbox.state !== "revising" &&
       stageCheckbox.state !== "skipped" &&
-      !(stageCheckbox.state === "awaiting-approval" && planAction === "SKIP")
+      !(stageCheckbox.state === "awaiting-approval" && (planAction === "SKIP" || personAsked))
     ) {
       emit(errorDirective(
         `Stage "${slug}" is ${stageCheckbox.state}; only an active, revising, or interrupted skipped stage can be routed as skipped.`,
@@ -17454,15 +17677,18 @@ function nextArgsWithRequestFile(
   args: readonly string[],
   projectDir: string,
 ): { args: string[]; spend(): void } | string {
-  const at = args.indexOf("--request-file");
+  // The flag counts only in front of the `--` mark: behind it the token is one
+  // of the person's words ("add a --request-file option"), as every flag is.
+  const options = beforeDelimiter(args);
+  const at = options.indexOf("--request-file");
   if (at < 0) return { args: [...args], spend: () => {} };
   const usage =
     `--request-file needs a file directly inside ${REQUEST_TEXT_DIR}/ in this project, for example ` +
     `${REQUEST_TEXT_DIR}/request.txt.`;
-  const file = args[at + 1];
+  const file = options[at + 1];
   const rest = [...args.slice(0, at), ...args.slice(at + 2)];
   if (file === undefined || file.startsWith("--")) return usage;
-  if (rest.includes("--request-file")) return "Pass --request-file once.";
+  if (beforeDelimiter(rest).includes("--request-file")) return "Pass --request-file once.";
   if (rest.includes("--")) return "Pass the request either after -- or with --request-file, not both.";
   const relativePath = file.replaceAll("\\", "/");
   const parts = relativePath.split("/");
@@ -17501,72 +17727,17 @@ function nextArgsWithRequestFile(
 
 // --- CLI entry point ---
 
-/**
- * The words that make a `next` line this engine's own command in a fixed shape
- * rather than a request of the person's: the workspace commands, this
- * orchestrator's own verbs, its configuration verb and its help. A line that
- * opens with one of these carries no word of theirs, so its options are its own
- * wherever they sit.
- */
-const NEXT_OWN_COMMAND_WORDS: ReadonlySet<string> = new Set([
-  ...WORKSPACE_VERBS,
-  ...ORCHESTRATOR_VERBS,
-  "config",
-  "help",
-]);
-
-/**
- * Where a request of the person's own begins on a `next` line: at its first
- * bare word. This engine's own `--project-dir` rides ahead of that word, which
- * is where every caller puts it, so among their words the same token is a word
- * of their request and nothing of theirs is read as a folder to work in. The
- * `--` mark already separates their words itself.
- */
-function requestWordsBeginAt(rawArgs: readonly string[]): number {
-  if (rawArgs[0] !== "next") return Number.POSITIVE_INFINITY;
-  for (let i = 1; i < rawArgs.length; i++) {
-    const token = rawArgs[i];
-    if (token === "--") return Number.POSITIVE_INFINITY;
-    if (token.startsWith("-")) {
-      // A token after a flag is that flag's value, never a word of theirs.
-      if (rawArgs[i + 1] !== undefined && !rawArgs[i + 1].startsWith("-")) i++;
-      continue;
-    }
-    return NEXT_OWN_COMMAND_WORDS.has(token) ? Number.POSITIVE_INFINITY : i;
-  }
-  return Number.POSITIVE_INFINITY;
-}
-
 export function main(argv: string[]): void {
   const rawArgs = argv;
 
-  // Extract --project-dir (mirrors aidlc-jump.ts / aidlc-state.ts).
-  const requestFrom = requestWordsBeginAt(rawArgs);
-  let projectDir: string | undefined;
-  let attemptId: string | undefined;
-  let conflictingAttemptId = false;
-  const filteredArgs: string[] = [];
-  let literalArgs = false;
-  for (let i = 0; i < rawArgs.length; i++) {
-    if (rawArgs[i] === "--") {
-      literalArgs = true;
-      filteredArgs.push(rawArgs[i]);
-    } else if (
-      !literalArgs && i < requestFrom && rawArgs[i] === "--project-dir" && i + 1 < rawArgs.length
-    ) {
-      projectDir = rawArgs[i + 1];
-      i++;
-    } else if (!literalArgs && rawArgs[i] === "--aidlc-attempt-id" && i + 1 < rawArgs.length) {
-      const candidate = rawArgs[i + 1];
-      if (/^[A-Za-z0-9._:-]{1,128}$/.test(candidate)) {
-        if (attemptId !== undefined && attemptId !== candidate) conflictingAttemptId = true;
-        attemptId = candidate;
-      }
-      i++;
-    } else {
-      filteredArgs.push(rawArgs[i]);
-    }
-  }
+  // Extract --project-dir and the attempt id (mirrors aidlc-jump.ts /
+  // aidlc-state.ts), the one way a Copilot claim reads them too.
+  const {
+    args: filteredArgs,
+    projectDir,
+    attemptId,
+    conflictingAttemptId,
+  } = readOrchestratorLauncherOptions(rawArgs);
 
   const subcommand = filteredArgs[0];
   let subArgs = filteredArgs.slice(1);

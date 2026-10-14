@@ -1,18 +1,15 @@
 // covers: subcommand:aidlc-bolt:start, subcommand:aidlc-bolt:complete, subcommand:aidlc-bolt:abort, subcommand:aidlc-bolt:fail
 // covers: function:renderEngineInvocation
 //
-// t77 — aidlc-bolt.ts v0.4.0 milestone 11 worktree-flag lifecycle. Migrated from
-// tests/unit/t77-bolt-worktree-flags.sh (TAP plan 28; no `# covers:` header —
-// covers ids derived from the four subcommands the .sh exercises through the
-// --worktree / --merge / --discard / --slug flags).
+// t77 - aidlc-bolt.ts worktree-flag lifecycle.
 //
-// Mechanism: CLI (spawnSync of the real aidlc-bolt.ts via BUN). Every .sh
+// Mechanism: CLI (spawnSync of the real aidlc-bolt.ts via BUN). Every
 // assertion lives on a process-boundary seam that an in-process import cannot
 // reach faithfully:
 //   - exit codes from `error()` (emitError) and `failJson()` (process.exit(1)),
 //   - the JSON envelopes printed to STDOUT (success {forked|merged|discarded}
 //     tokens AND the failure shape {ok,slug,stage,reason,detail}),
-//   - the audit.md bytes written by the spawned state-fork / audit-fork
+//   - the audit shard bytes written by the spawned state-fork / audit-fork
 //     sibling subprocesses (STATE_FORKED / AUDIT_FORKED emitted *inside* those
 //     children, not in this process), and
 //   - the forked worktree state file the state-fork child writes.
@@ -22,60 +19,26 @@
 // so the contract is only observable end-to-end through the spawned binary.
 //
 // Source under test (dist/claude/.claude/tools/aidlc-bolt.ts):
-//   :149 handleStart  — --worktree requires --slug (:163), rejects csv --name
-//                       (:166); validates state shape before BOLT_STARTED
-//                       (:176); emits BOLT_STARTED (:197) THEN delegates to
-//                       state-fork (:222) → audit-fork (:240) → fragment-fork
-//                       (:261). Success stdout carries forked:[STATE_FORKED,
-//                       AUDIT_FORKED,RUNTIME_GRAPH_FORKED] (:293). On a sibling
-//                       failure: failBolt() BOLT_FAILED recovery row (:230,847)
-//                       + failJson("start-worktree",...) (:231).
-//   :307 handleComplete — --merge requires --slug (:320), rejects csv --name
-//                       (:323); emits BOLT_COMPLETED then state-merge (:371) →
-//                       audit-merge (:390) → fragment-merge (:412); success
-//                       stdout merged:[STATE_MERGED,AUDIT_MERGED,
-//                       RUNTIME_GRAPH_MERGED] (:443). state-merge removes the
-//                       slug from main's Bolt Refs.
-//   :457 handleFail   — --name + --error required; --slug optional, recorded as
-//                       the **Bolt slug** audit field (:467) for halt-and-ask
-//                       correlation.
-//   :498 handleAbort  — --name + --slug + --reason all required; emits
-//                       BOLT_FAILED with **Reason**: aborted (:539-544) — no
-//                       new event type; default (no --discard) preserves the
-//                       worktree, stdout discarded:false (:555).
-//   :868 failJson     — prints {ok:false,slug,stage,reason,detail} JSON and
+//   handleStart    - --worktree requires --slug, rejects csv --name; validates
+//                    state shape before BOLT_STARTED; emits BOLT_STARTED THEN
+//                    delegates to state-fork -> audit-fork -> fragment-fork.
+//                    Success stdout carries forked:[STATE_FORKED,AUDIT_FORKED,
+//                    RUNTIME_GRAPH_FORKED]. On a sibling failure: failBolt()
+//                    BOLT_FAILED recovery row + failJson("start-worktree",...).
+//   handleComplete - --merge requires --slug, rejects csv --name; emits
+//                    BOLT_COMPLETED then state-merge -> audit-merge ->
+//                    fragment-merge; success stdout merged:[STATE_MERGED,
+//                    AUDIT_MERGED,RUNTIME_GRAPH_MERGED]. state-merge removes
+//                    the slug from main's Bolt Refs.
+//   handleFail     - --name + --error required; --slug optional, recorded as
+//                    the **Bolt slug** audit field for halt-and-ask correlation.
+//   handleAbort    - --name + --slug + --reason all required; emits BOLT_FAILED
+//                    with **Reason**: aborted - no new event type; default (no
+//                    --discard) preserves the worktree and reports
+//                    discarded:false on stdout.
+//   failJson       - prints {ok:false,slug,stage,reason,detail} JSON and
 //                       process.exit(1). The five-field halt-and-ask envelope.
 //   aidlc-lib.ts worktreePath(pd, id8, slug) locates the intent-scoped Bolt.
-//
-// Old TAP -> new test parity (28 .sh assertions; 1:1, several STRONGER):
-//   .sh T1  (start --worktree no --slug exits 1)        -> "start --worktree without --slug exits 1"
-//   .sh T2  (start --worktree rejects csv --name)       -> "start --worktree rejects csv --name"
-//   .sh T3  (start --worktree happy exits 0)            -> "start --worktree happy path exits 0 + reports slug"
-//   .sh T4  (stdout forked sequence)                    -> "stdout reports forked:[STATE_FORKED,AUDIT_FORKED,RUNTIME_GRAPH_FORKED]"
-//   .sh T5  (BOLT_STARTED in audit)                     -> "BOLT_STARTED emitted to audit"
-//   .sh T6  (STATE_FORKED in audit)                     -> "STATE_FORKED emitted by the milestone 9 fork primitive"
-//   .sh T7  (AUDIT_FORKED in audit)                     -> "AUDIT_FORKED emitted by the milestone 10 audit-fork primitive"
-//   .sh T8  (BOLT_STARTED precedes STATE_FORKED)        -> "atomicity ordering: BOLT_STARTED precedes STATE_FORKED"
-//   .sh T9  (main Bolt Refs contains slug post-fork)    -> "main Bolt Refs contains the slug after fork"
-//   .sh T10 (worktree state file forked)                -> "forked worktree state file exists"
-//   .sh T11 (readonly start --worktree exits 1)         -> "start --worktree fails on readonly state (exit 1)"
-//   .sh T12 (envelope ok:false on failure)              -> "failure envelope ok:false"
-//   .sh T13 (envelope stage=start-worktree)             -> "failure envelope stage=start-worktree"
-//   .sh T14 (complete --merge no --slug exits 1)        -> "complete --merge without --slug exits 1"
-//   .sh T15 (complete --merge round-trip exits 0)       -> "complete --merge round-trip exits 0"
-//   .sh T16 (stdout merged sequence)                    -> "stdout reports merged:[STATE_MERGED,AUDIT_MERGED,RUNTIME_GRAPH_MERGED]"
-//   .sh T17 (merge removes slug from Bolt Refs)         -> "merge removes the slug from main Bolt Refs"
-//   .sh T18 (abort no --slug exits 1)                   -> "abort without --slug exits 1"
-//   .sh T19 (abort no --reason exits 1)                 -> "abort without --reason exits 1"
-//   .sh T20 (abort emits BOLT_FAILED)                   -> "abort emits BOLT_FAILED (no new event type)"
-//   .sh T21 (abort records Reason=aborted)              -> "abort BOLT_FAILED carries Reason: aborted"
-//   .sh T22 (abort default reports discarded:false)     -> "abort default stdout reports discarded:false"
-//   .sh T23 (fail --slug records Bolt slug)             -> "fail --slug records the Bolt slug audit field"
-//   .sh T24 (regression: plain start leaves Bolt Refs)  -> "regression: start without --worktree leaves Bolt Refs unchanged"
-//   .sh T25 (envelope contains slug field)              -> "failure envelope contains slug field"
-//   .sh T26 (envelope reason field non-empty)           -> "failure envelope reason field is non-empty"
-//   .sh T27 (envelope detail field non-empty prose)     -> "failure envelope detail field is non-empty user-facing prose"
-//   .sh T28 (default abort preserves worktree dir)      -> "default abort (no --discard) preserves the worktree directory"
 
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
@@ -111,15 +74,14 @@ import {
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
 
 interface Run {
   status: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string; // combined stdout+stderr
 }
 
-/** spawnSync the real aidlc-bolt.ts, capturing combined stdout+stderr. */
 function runBolt(args: string[]): Run {
   const res = spawnSync(BUN, [TOOL, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   return {
@@ -129,9 +91,8 @@ function runBolt(args: string[]): Run {
 }
 
 /**
- * Mirror the .sh setup_v7_project helper: a v7 state fixture + the audit
- * sample, optionally pre-creating the worktree dir so the milestone 9 fork primitive
- * does not reject (setup_v7_project's `with_worktree` arg, t77.sh:42-44).
+ * A v7 state fixture + the audit sample, optionally pre-creating the worktree
+ * dir so the fork primitive does not reject.
  */
 function setupV7Project(withWorktree?: string): string {
   const proj = createTestProject();
@@ -148,9 +109,10 @@ function setupV7Project(withWorktree?: string): string {
 function statePath(proj: string): string {
   return seededStateFile(proj);
 }
-// Audit is now a per-clone SHARD DIR — the tool writes its own <host>-<clone>.md
-// shard alongside seedAuditFile's fixture.md. Readers glob audit/*.md and merge,
-// so the exact-line `**Event**:` matches below still work on the concatenation.
+// Audit is a per-clone SHARD DIR; the fixture pins the clone id, so the tool
+// writes into the shard seedAuditFile seeded. Readers glob audit/*.md and
+// merge, so the exact-line `**Event**:` matches below still work on the
+// concatenation.
 function readAudit(proj: string): string {
   const dir = seededAuditDir(proj);
   let names: string[];
@@ -193,8 +155,8 @@ describe("t77 aidlc-bolt worktree flags — start --worktree (migrated from t77-
       "--project-dir", proj,
     ]);
     expect(r.status).toBe(1);
-    // STRONGER: the .sh only checked exit 1; pin the diagnostic so a future
-    // refactor can't make an unrelated error pass this row.
+    // Pin the diagnostic so a future refactor can't make an unrelated error pass
+    // this row.
     expect(r.out).toContain("--worktree requires --slug");
   });
 
@@ -205,7 +167,6 @@ describe("t77 aidlc-bolt worktree flags — start --worktree (migrated from t77-
       "--slug", "foo", "--project-dir", proj,
     ]);
     expect(r.status).toBe(1);
-    // STRONGER: pin the single-bolt-only diagnostic (aidlc-bolt.ts:166).
     expect(r.out).toContain("requires a single bolt name");
   });
 
@@ -216,7 +177,6 @@ describe("t77 aidlc-bolt worktree flags — start --worktree (migrated from t77-
       "--slug", "happy", "--project-dir", proj,
     ]);
     expect(r.status).toBe(0);
-    // STRONGER: also assert the success envelope carries slug:"happy".
     const parsed = JSON.parse(r.out.trim());
     expect(parsed.slug).toBe("happy");
   });
@@ -230,7 +190,6 @@ describe("t77 aidlc-bolt worktree flags — start --worktree (migrated from t77-
     expect(r.out).toContain(
       '"forked":["STATE_FORKED","AUDIT_FORKED","RUNTIME_GRAPH_FORKED"]',
     );
-    // STRONGER: structurally pin the array, not just the substring.
     const parsed = JSON.parse(r.out.trim());
     expect(parsed.forked).toEqual([
       "STATE_FORKED", "AUDIT_FORKED", "RUNTIME_GRAPH_FORKED",
@@ -244,7 +203,6 @@ describe("t77 aidlc-bolt worktree flags — start --worktree (migrated from t77-
       "--slug", "happy", "--project-dir", proj,
     ]);
     const audit = readAudit(proj);
-    // Mirrors `grep "^\*\*Event\*\*: BOLT_STARTED"`.
     expect(
       audit.split("\n").some((l) => l === "**Event**: BOLT_STARTED"),
     ).toBe(true);
@@ -281,7 +239,6 @@ describe("t77 aidlc-bolt worktree flags — start --worktree (migrated from t77-
       "--slug", "happy", "--project-dir", proj,
     ]);
     const lines = readAudit(proj).split("\n");
-    // Mirror the .sh's `tail -1` of each match: the LAST occurrence index.
     let bs = -1;
     let sf = -1;
     lines.forEach((l, i) => {
@@ -317,10 +274,10 @@ describe("t77 aidlc-bolt worktree flags — start --worktree (migrated from t77-
 });
 
 describe("t77 — start --worktree failure envelope (readonly state)", () => {
-  // The .sh chmods main state 444 so the state-fork child can read it but
-  // fails to WRITE the updated Bolt Refs back — state-fork exits 1, so
-  // handleStart routes through failJson("start-worktree",...). One run drives
-  // T11-T13 + T25-T27 (six assertions on the same envelope).
+  // Chmod main state 444 so the state-fork child can read it but fails to WRITE
+  // the updated Bolt Refs back - state-fork exits 1, so handleStart routes
+  // through failJson("start-worktree",...). One run drives six assertions on
+  // the same envelope.
   function readonlyEnvelope(slug: string): { run: Run; env: Record<string, unknown> } {
     const proj = track(setupV7Project(slug));
     chmodSync(statePath(proj), 0o444);
@@ -373,7 +330,6 @@ describe("t77 — start --worktree failure envelope (readonly state)", () => {
   test("failure envelope detail field is non-empty user-facing prose [.sh T27]", () => {
     const { env } = readonlyEnvelope("envtest");
     expect(typeof env.detail).toBe("string");
-    // Mirror the .sh's `${#DETAIL} -gt 5` length floor.
     expect((env.detail as string).length).toBeGreaterThan(5);
   });
 });
@@ -386,7 +342,6 @@ describe("t77 — complete --merge", () => {
       "--project-dir", proj,
     ]);
     expect(r.status).toBe(1);
-    // STRONGER: pin the merge-requires-slug diagnostic (aidlc-bolt.ts:320).
     expect(r.out).toContain("--merge requires --slug");
   });
 
@@ -396,7 +351,7 @@ describe("t77 — complete --merge", () => {
       "start", "--name", "Round", "--batch", "1", "--worktree",
       "--slug", "round", "--project-dir", proj,
     ]);
-    expect(start.status).toBe(0); // precondition: fork must succeed
+    expect(start.status).toBe(0);
     const r = runBolt([
       "complete", "--name", "Round", "--batch", "1", "--merge",
       "--slug", "round", "--project-dir", proj,
@@ -433,7 +388,6 @@ describe("t77 — complete --merge", () => {
       "complete", "--name", "Round", "--batch", "1", "--merge",
       "--slug", "round", "--project-dir", proj,
     ]);
-    // Mirror the .sh: the FIRST Bolt Refs line must no longer carry the slug.
     const refsLine =
       readFileSync(statePath(proj), "utf-8")
         .split("\n")
@@ -480,7 +434,6 @@ describe("t77 — abort", () => {
       "--reason", "user changed mind", "--project-dir", proj,
     ]);
     const audit = readAudit(proj);
-    // Mirror `grep '\*\*Reason\*\*: aborted'`.
     expect(audit.includes("**Reason**: aborted")).toBe(true);
   });
 
@@ -653,7 +606,6 @@ main(process.argv.slice(2));
     expect(parsed.reason).toBe("aborted");
     expect(parsed.abort_reason).toBe("default-pres test");
     expect(parsed).not.toHaveProperty("restore_hint");
-    // Worktree directory survives a default abort (no --discard).
     expect(existsSync(wtDir)).toBe(true);
   });
 });
@@ -666,7 +618,6 @@ describe("t77 — fail --slug (milestone 12 halt-and-ask correlation)", () => {
       "--error", "broke", "--project-dir", proj,
     ]);
     const audit = readAudit(proj);
-    // Mirror `grep '\*\*Bolt slug\*\*: fail-slug'`.
     expect(audit.includes("**Bolt slug**: fail-slug")).toBe(true);
   });
 });

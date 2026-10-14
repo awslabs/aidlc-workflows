@@ -72,7 +72,6 @@ interface Emitted {
 }
 
 function next(proj: string, args: string[] = []): { d: Emitted; out: string } {
-  // The agent's proposal step follows the plan proposal print, as it does live.
   const options = { env: env(proj) };
   const result = followProposal(runOrchestrateNext(ORCHESTRATE, proj, args, options), ORCHESTRATE, proj, options);
   expect(result.directive, result.out).not.toBeNull();
@@ -90,7 +89,6 @@ function emptyProject(): string {
   return proj;
 }
 
-/** Work already under way in this chat. */
 function openWork(): string {
   const proj = createOrchestrationTestProject();
   created.push(proj);
@@ -102,7 +100,6 @@ function openWork(): string {
   return proj;
 }
 
-/** Every question the engine kept a copy of, by id. */
 function questions(proj: string): Array<{ id: string; text: string; origin: string }> {
   const dir = join(proj, "aidlc", ".aidlc-sessions", "questions");
   if (!existsSync(dir)) return [];
@@ -136,9 +133,7 @@ describe("their reply to the plan offer reaches that offer", () => {
     expect(String(answered.d.question ?? ""), answered.out).not.toContain(reply);
     expect(answered.d.kind, answered.out).toBe("print");
     expect(answered.d.narration, answered.out).toBeUndefined();
-    // It carries that question's own commands, by its id.
     expect(String(answered.d.message)).toContain(offerId!);
-    // And nothing new was asked of them.
     expect(questions(proj).length).toBe(2);
     cleanupTestProject(created.pop());
   });
@@ -180,11 +175,9 @@ describe("a plan word at the start of their sentence", () => {
     expect(d.kind, out).toBe("print");
     expect(d.narration, out).toBeUndefined();
     expect(d.ask_type, out).toBeUndefined();
-    // The plan reading, and their words reading, each as a command to run.
     expect(String(d.message)).toContain("--scope bugfix");
     expect(String(d.message)).toContain("Fix duplicate todos");
     expect(String(d.message)).toContain("--");
-    // Nothing was created and nothing was asked of them.
     expect(activeIntent(proj)).toBe("");
     expect(questions(proj).length).toBe(0);
   });
@@ -194,7 +187,6 @@ describe("a plan word at the start of their sentence", () => {
     const { d, out } = next(proj, ["classic", "car", "rental", "website"]);
     expect(d.kind, out).toBe("print");
     expect(String(d.message)).toContain("classic car rental website");
-    // One re-run marked as theirs keeps every word.
     const asked = next(proj, ["--", "classic car rental website"]);
     expect(asked.d.kind, asked.out).toBe("ask");
     expect(String(asked.d.question)).toContain("classic car rental website");
@@ -216,8 +208,6 @@ describe("a plan word at the start of their sentence", () => {
     expect(String(d.message), out).toContain("/aidlc feature <the task>");
     expect(activeIntent(proj)).toBe("");
     expect(questions(proj).length).toBe(0);
-    // Their words, as the agent re-runs them: the plan question is about the
-    // whole line, and nothing of a feature workflow is said with it.
     const asked = next(proj, ["--", "feature flags"]);
     expect(asked.d.kind, asked.out).toBe("ask");
     expect(String(asked.d.question)).toContain("feature flags");
@@ -238,10 +228,10 @@ describe("a plan word at the start of their sentence", () => {
   });
 
   test("the three ways a harness hands that line over read the same", () => {
-    // Settled with the conductor 2026-10-10: the person's sentence opening with
-    // a plan's name is the same reading step however it arrives, and the plan
-    // named in its own argument (what the orchestrator skill asks the agent
-    // for) is the reading already made, so it acts.
+    // The person's sentence opening with a plan's name is the same reading
+    // step however it arrives, and the plan named in its own argument (what
+    // the orchestrator skill asks the agent for) is the reading already made,
+    // so it acts.
     const line = "classic car rental website";
     const split = splitKiroCommandArgs(line);
     for (const argv of [split, [line]]) {
@@ -292,11 +282,9 @@ describe("a word that is also one of the engine's nouns", () => {
     const { d, out } = next(proj, splitKiroCommandArgs(line));
     expect(d.kind, out).toBe("print");
     expect(d.narration, out).toBeUndefined();
-    // Their whole line, and the way to keep it as theirs.
     expect(String(d.message)).toContain(line);
     expect(String(d.message)).toContain("--");
     expect(String(d.message)).toContain(noun);
-    // Nothing switched.
     expect(activeIntent(proj)).toBe(before);
     cleanupTestProject(created.pop());
   });
@@ -355,11 +343,9 @@ describe("their own words in a command the step names are one quoted argument", 
     // argument, so no separator, substitution or redirection of theirs is
     // syntax when the agent runs it.
     expect(message, out).toContain(`-- '${said}'`);
-    // And nothing of theirs is left bare after a delimiter anywhere.
     for (const after of message.split(" -- ").slice(1)) {
       expect(after.startsWith("'") || after.startsWith("`"), message).toBe(true);
     }
-    // Their words are still all there, and nothing ran.
     expect(message).toContain(said);
     expect(activeIntent(proj)).toBe("");
     cleanupTestProject(created.pop());
@@ -382,7 +368,6 @@ describe("their own words in a command the step names are one quoted argument", 
 describe("a reply reaches no question but the one in front of them", () => {
   test("with a question open in another chat too, their words stay their request", () => {
     const proj = emptyProject();
-    // The first chat's offer, then a second chat's offer for its own request.
     const first = next(proj, ["build a small notes app for my team"]);
     expect(first.d.ask_type, first.out).toBe("compose-offer");
     // The second chat names a plan, which is a line this engine reads exactly,

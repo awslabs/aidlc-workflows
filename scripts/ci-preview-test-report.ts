@@ -1,5 +1,5 @@
 // Renders the nightly preview's Full Suite report and stages it into the preview
-// notes. Preview publication no longer waits for a passing suite, so the run
+// notes. Preview publication does not wait for a passing suite, so the run
 // summary and the published notes carry the failing jobs and test cases instead.
 // Nor does it wait for the update from the last release: a failure there opens
 // the notes with a warning and a line in the report.
@@ -26,7 +26,6 @@ export const FAILED_UPDATE_WARNING =
   "> **Warning:** Updating from the last release to this preview failed in its checks. Stay on your release or wait for the next preview.\n\n";
 const TRUNCATED_NOTES = "\n- ...report truncated; the run summary has the full report.\n";
 
-/** What failed for a preview that still publishes. */
 export interface PreviewFailures {
   suite: boolean;
   /** The preview run, when the update from the last release failed in it. */
@@ -228,7 +227,6 @@ export function renderReport(options: {
   return report;
 }
 
-/** The report's section for an update from the last release that failed. */
 export function updateReport(runUrl: string): string {
   return `## Update from the last release\n\n\`aidlc update\` from the last release to this preview **failed** in ${link("the preview run", runUrl)}.\n`;
 }

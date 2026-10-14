@@ -1,35 +1,33 @@
 // covers: hook:aidlc-statusline
 //
-// t168 — the P8 statusline ORIENTATION PREFIX. The statusline always tells the
+// t168 - the statusline ORIENTATION PREFIX. The statusline always tells the
 // user which world they're in: `[AIDLC] <space> · <intent-slug> · <phase> …`.
 // Two invisibility rules (vision §3 / §11.2) keep it out of the single-team
 // user's face:
 //   - the "<space> ·" segment renders ONLY when more than one space exists
 //     (listSpaces() always reports at least the always-present "default", so a
 //     single-team user — exactly one space — never sees the word "space");
-//   - the intent SLUG renders whenever a per-intent record is active; on the
-//     flat-legacy / pre-auto-create layout activeIntent() returns null, so the
-//     prefix is empty and the line reads exactly as it did before the move.
+//   - the intent SLUG renders whenever a per-intent record is active; without a
+//     resolved record activeIntent() returns null, so the prefix is empty.
 //
-// WHY CLI (process-boundary, not in-process): the SUBJECT is a hook. The render
-// runs at module top level on `await main()` and writes the painted line to
-// stdout; the orientation prefix is built from the active-space/active-intent
-// cursors + the on-disk registry, none reachable by importing a function. So
-// this twin SPAWNS the real shipped hook with the workspace JSON on stdin (the
-// same shape Claude Code pipes), exactly like t61's runStatusline helper.
+// WHY CLI (process-boundary, not in-process): the SUBJECT is a hook. Its CLI
+// reads the workspace JSON on stdin and writes the painted line to stdout; the
+// orientation prefix is built from the active-space/active-intent cursors + the
+// on-disk registry. So this twin SPAWNS the real shipped hook with the workspace
+// JSON on stdin (the same shape Claude Code pipes), exactly like t61's
+// runStatusline helper.
 //
 // SEEDING the per-intent workspace layout: createIntent() (aidlc-lib.ts) is the
 // real deterministic primitive that mints a record dir under
-// aidlc/spaces/<space>/intents/<slug>-<id8>/, appends the intents.json row, and
-// sets the active-intent cursor — exactly the on-disk shape activeIntent()/
+// aidlc/spaces/<space>/intents/<YYMMDD>-<label>/, appends the intents.json row,
+// and sets the active-intent cursor - exactly the on-disk shape activeIntent()/
 // listIntents()/orientationPrefix() read. We seed through it (not by hand) so
 // the test tracks the real layout, then overwrite the record's aidlc-state.md
 // with a phase-bearing body so the render reaches the orientation branch.
 //
-// Empty-state: a project with no record (no creation) hits the hook's :233 no-op
-// gate (stateFilePath resolves the flat fallback, which is absent) and paints
-// the bare "[AIDLC] ready" — proving the prefix never leaks onto the no-workflow
-// line and the pre-auto-create workspace renders cleanly, not an error.
+// Empty-state: a project without a state file hits the hook's no-state gate and
+// paints the bare "[AIDLC] ready" - proving the prefix never leaks onto the
+// no-workflow line.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -54,7 +52,7 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const HOOK = join(AIDLC_SRC, "hooks", "aidlc-statusline.ts");
 
 let proj: string;
@@ -66,7 +64,6 @@ afterEach(() => {
   cleanupTestProject(proj);
 });
 
-/** Spawn the per-shipped statusline hook with the workspace JSON on stdin. */
 function runStatusline(p: string, sessionId?: string): string {
   const r = Bun.spawnSync({
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -83,9 +80,9 @@ function runStatusline(p: string, sessionId?: string): string {
 
 /**
  * Create an intent in `space` and write a CONSTRUCTION-phase state body into its
- * record dir so the statusline reaches the orientation render branch. Returns
- * the created intent's slug. The state body mirrors the t61 seedState shape (a
- * phase + stage so phaseProgress/extractField resolve a non-"ready" line).
+ * record dir so the statusline reaches the orientation render branch. The state
+ * body mirrors the t61 seedState shape (a phase + stage so
+ * phaseProgress/extractField resolve a non-"ready" line).
  */
 function seedIntent(p: string, slug: string, space: string): void {
   const created = createIntent(p, slug, space, "feature");
@@ -116,20 +113,19 @@ describe("t168 statusline orientation prefix (mechanism cli — spawned hook + p
   });
 
   test("two spaces: shows `<space> · <intent> · <phase>` once >1 space exists", () => {
-    // Create one intent in "default", then create a second space "teamB" with an
+    // Create one intent in "default", then create a second space "team-b" with an
     // active intent and point both cursors at it. Now listSpaces().length === 2,
     // so the space token appears.
     seedIntent(proj, "checkout-flow", "default");
     seedIntent(proj, "export-bug", "team-b");
-    setActiveSpaceCursor(proj, "team-b"); // active space → team-b
+    setActiveSpaceCursor(proj, "team-b");
     const out = runStatusline(proj);
-    // team-b's active intent is export-bug → "team-b · export-bug · CONSTRUCTION".
     expect(out).toContain("team-b · export-bug · CONSTRUCTION");
   });
 
   test("empty state (no record) paints the bare `[AIDLC] ready` — no prefix leak", () => {
-    // No creation: stateFilePath resolves the flat fallback (absent) → the hook's
-    // no-state gate paints "[AIDLC] ready", with no orientation prefix.
+    // No state file is seeded, so the hook's no-state gate paints "[AIDLC] ready",
+    // with no orientation prefix.
     const out = runStatusline(proj);
     expect(out).toContain("[AIDLC] ready");
     expect(out).not.toContain(" · ");

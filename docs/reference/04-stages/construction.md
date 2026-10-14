@@ -245,7 +245,7 @@ current batch until every applicable Unit has all of that evidence, then permits
 a dependent batch or the single stage gate. Waves never apply under
 `Construction Iteration: unit-major`; harnesses without a parallel dispatch
 primitive process the entries serially. See
-`stage-protocol-construction.md` § "Per-unit batch waves" for the full contract.
+`stage-protocol-wave.md` § "Per-unit batch waves" for the full contract.
 
 **Parallel batches.** Follow the exact dependency-ready Units emitted by the
 engine. Explicit stage-major/swarm execution can dispatch eligible Code
@@ -298,8 +298,8 @@ post-merge child. See [Swarm prepare](../../guide/12-cli-commands.md#aidlc-engin
 regardless of autonomy mode. Options are retry (re-run just the failed
 Unit), skip (mark `[S]` and continue — dependents may also fail), or abort.
 Successful siblings in a parallel batch keep their `[x]` status and
-artifacts. See `stage-protocol-construction.md` §§ "Unit and skeleton checkpoints" and
-"Halt-and-ask on failure" for the canonical procedures.
+artifacts. See `stage-protocol-checkpoint.md` and `stage-protocol-construction.md`
+§ "Halt-and-ask on failure" for the canonical procedures.
 The ordinary failure-prompt Abort pauses Construction with the worktree
 preserved. A stale-review recovery abort explicitly carrying `--discard` instead
 parks tracked and non-ignored untracked files and reviewed source refs, then
@@ -356,7 +356,7 @@ legacy name and require the selected intent's exact `WORKTREE_DISCARDED`
 | Lead Agent        | aidlc-architect-agent                                                                                   |
 | support_agents    | aidlc-developer-agent                                                                                   |
 | mode              | inline                                                                                            |
-| Inputs            | unit-of-work.md, unit-of-work-story-map.md, requirements.md, domain design artifacts         |
+| Inputs            | unit-of-work.md, unit-of-work-story-map.md, stories.md (if produced), requirements.md, domain design artifacts |
 | Outputs           | `<record>/construction/{unit-name}/functional-design/` -- functional-spec.md, rules.md, entities.md, traceability.json, CONDITIONAL: frontend-components.md (per Unit kind) |
 
 ### Purpose
@@ -369,13 +369,14 @@ feasibility input.
 
 - Unit definition from `<record>/inception/units-generation/unit-of-work.md`
 - Assigned stories from `<record>/inception/units-generation/unit-of-work-story-map.md`
+- Acceptance criteria of those stories from `<record>/inception/user-stories/stories.md` (if produced)
 - Requirements from `<record>/inception/requirements-analysis/requirements.md`
 - Domain design artifacts from `<record>/inception/domain-design/`
 
 ### Steps
 
-1. **Read Unit Context** -- Read the unit definition, assigned stories,
-   requirements, and domain design artifacts.
+1. **Read Unit Context** -- Read the unit definition, assigned stories and
+   their acceptance criteria, requirements, and domain design artifacts.
 
 2. **Create Functional Design Plan** -- Analyze the unit's scope and create a
    questions file at
@@ -429,7 +430,7 @@ feasibility input.
 | rules.md        | Decision rules, validation logic, constraints, policies, conditional behavior |
 | entities.md       | Entities, relationships, data structures, attributes, lifecycle states   |
 | frontend-components.md   | (CONDITIONAL) Component hierarchy, props/state, interaction flows, form validation, API integration |
-| traceability.json        | Every acceptance criterion assigned to the Unit mapped to the `BRx.y` rules in rules.md |
+| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR), each `OK` to `BRx.y` rules in rules.md, `N/A` or `Deferred` with its reason, or `GAP` |
 
 Which files a Unit gets follows its kind: a `ui` Unit gets no entities.md or
 rules.md, only a `ui` Unit gets frontend-components.md, and a `packaging`
@@ -1013,7 +1014,10 @@ This stage has a **two-part structure**: planning followed by generation.
    thereby approved. Testing Posture, scope, strategy, or project type changes
    follow that same rule. Other code moving after approval never asks again on
    any Guard Policy: the build continues with one `change_notices` line naming
-   the files. A different intent or target, a new attempt, or missing actual
+   the files. A swarm under `strict` is the exception for the person's own
+   files: prepare refuses until the plan is approved again, and the source
+   landing refuses the same change until it is undone or Guard Policy is
+   `relaxed`. A different intent or target, a new attempt, or missing actual
    initial approval still requires its own approval. After a rejected gate (the
    Code Generation completion gate, a Unit checkpoint, or a swarm batch
    checkpoint), while the plan is still the one approved before, `next` first
@@ -1281,7 +1285,10 @@ with the aidlc-devsecops-agent providing security testing expertise.
   tests in CI before merge." line, or a memory note's "CI execution before
   merge") is a target only when the plan runs CI Pipeline (`ci-pipeline` listed
   as `EXECUTE` and not `[S]` in `aidlc-state.md`); otherwise it is recorded
-  `N/A` with that reason and is never a failure
+  `N/A` with that reason and is never a failure. While CI Pipeline is still
+  ahead (`[ ]`), the target is CI Pipeline's to meet: recorded `N/A` with Owning
+  Stage `ci-pipeline` and the reason that CI Pipeline, later in the plan, sets up
+  CI to run these tests before merge, never a failure
 
 ### Steps
 
@@ -1325,8 +1332,8 @@ with the aidlc-devsecops-agent providing security testing expertise.
      Evidence, Owning Stage, and Verdict
    - Applicable targets begin `Pending`; `N/A` is valid only when the
      source-complete inventory found no applicable measurable target, or for a
-     target the plan makes inapplicable (the CI obligation of a plan that runs
-     no CI Pipeline)
+     target the plan makes inapplicable here (the CI obligation of a plan that
+     runs no CI Pipeline or has it still ahead)
    - Readiness assessment (build-ready, test-ready, deployment-ready)
    - Known limitations or outstanding items
 
@@ -1390,14 +1397,14 @@ with the aidlc-devsecops-agent providing security testing expertise.
        `## Loop-Back Log`: record the diagnosis + impact-estimated fix, reopen
        code-generation via the engine for the Unit(s) the fix names (every Unit
        only when the cause spans them all), and replay forward through its
-       settlement-aware route per the construction protocol module
-       (`aidlc-common/protocols/stage-protocol-construction.md`),
+       settlement-aware route per the loop-back protocol module
+       (`aidlc-common/protocols/stage-protocol-loopback.md`),
        "Build-and-Test failure loop-back". The failed run's gate is not
        presented; its enabled learnings ritual defers to the eventual passing run. When the `learnings` module is absent, no diary or ritual runs.
     4. **Halt-and-ask** -- gated/unset mode, bound exhausted, or no
        identifiable fix: log the failure and present the halt-and-ask
-       question from the construction protocol module
-       (`aidlc-common/protocols/stage-protocol-construction.md`) -- the
+       question from the loop-back protocol module
+       (`aidlc-common/protocols/stage-protocol-loopback.md`) -- the
        impact-estimated 3-option variant (Retry with fix [estimated impact] /
        Accept failure / Abort) when a candidate fix exists, or the no-fix
        2-option variant (Accept failure / Abort) when rung 2 found none.
@@ -1492,8 +1499,8 @@ Strictly 2-option: Approve / Request Changes.
   approach choice, the stage classifies and estimates the impact of a fix, then either runs
   the bounded autonomous loop-back to code-generation (max 3, counted by the
   append-only `## Loop-Back Log` in test-results.md) or presents the impact-estimated
-  halt-and-ask question. See the construction protocol module
-  (`aidlc-common/protocols/stage-protocol-construction.md`),
+  halt-and-ask question. See the loop-back protocol module
+  (`aidlc-common/protocols/stage-protocol-loopback.md`),
   "Build-and-Test failure loop-back". Re-entry is settlement-aware, asks for
   Plan Approval again on the repaired plan while `plan_approval` is on (the
   earlier approval belongs to the previous attempt), and cannot reach its gate until every applicable Code

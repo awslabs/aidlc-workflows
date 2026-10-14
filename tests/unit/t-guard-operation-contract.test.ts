@@ -319,7 +319,6 @@ describe("the answers an open recovery ask admits", () => {
       .toBe("bun .claude/tools/aidlc-utility.ts config-change --review advisory");
     expect(guardOperationMatchesEngineArgs(advisory, ["engine", "config", "set", "review", "advisory"])).toBe(true);
     expect(guardOperationMatchesEngineArgs(advisory, ["engine", "config", "set", "review", "none"])).toBe(false);
-    // Neither is one of the Plan Approval recovery shapes.
     expect(isGuardRecoveryEngineInvocation(reopenArgs)).toBe(false);
     expect(isGuardRecoveryEngineInvocation(["engine", "config", "set", "review", "advisory"])).toBe(false);
   });

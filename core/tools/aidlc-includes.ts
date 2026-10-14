@@ -14,10 +14,11 @@
 //   - Copilot: @-import lines in AI-DLC's part of the root AGENTS.md.
 //   - Codex has no include: the engine hands each step its rules.
 //
-// Every include names ONE fixed, git-ignored location, aidlc/active-memory/
+// Every include but Kiro IDE's (kiroIdeSteering reads the memory files
+// themselves) names ONE fixed, git-ignored location, aidlc/active-memory/
 // (ACTIVE_MEMORY_DIR): a copy of the active space's memory files that the
-// engine refreshes (refreshActiveMemory) at session start, on a space switch or
-// space create, when a specialist is dispatched, and with each step whose rules
+// engine refreshes (refreshActiveMemory) at session start, on a space switch,
+// when a specialist is dispatched, and with each step whose rules
 // it sends in full. So a space switch changes no tracked file: the committed
 // includes are the same for every teammate, and each person's copy follows
 // their own gitignored active-space cursor. (Why a copy and not a link: Windows
@@ -236,7 +237,7 @@ export function trackedKiroIdeSteeringAsk(projectDir: string): string {
     "On no, leave it. Do not ask again.";
 }
 
-// --- The copy every harness include reads ------------------------------------
+// --- The copy harness includes read ------------------------------------------
 
 /** Where the harness includes read the active space's method from: a copy of
  *  `aidlc/spaces/<space>/memory/`, git-ignored and refreshed by the engine. */
@@ -266,7 +267,6 @@ function utf8Text(path: string): string | null {
   }
 }
 
-// What the copy of a memory file holds: the header line, then the file.
 function copiedText(projectDir: string, space: string, rel: string): string | null {
   const text = utf8Text(join(spaceMemoryDir(projectDir, space), rel));
   return text === null ? null : `${activeMemoryCopyHeader(space, rel)}${text}`;

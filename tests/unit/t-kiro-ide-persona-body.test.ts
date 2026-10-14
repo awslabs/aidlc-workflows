@@ -84,12 +84,12 @@ describe("the Kiro IDE lead reads the persona without its tool permissions", () 
   // A lead told the inline persona loads from the agent file reads the 32 KB
   // file as well, and the saving goes: the Kiro IDE tree says to read the file
   // the roster names.
-  test("the Kiro IDE skill and ensemble binding send the lead to the roster's persona file", () => {
+  test("the Kiro IDE skill never sends the lead to the agent file, and the ensemble binding sends it to the roster's persona file", () => {
     const skill = readFileSync(join(KIRO_IDE, "skills", "aidlc", "SKILL.md"), "utf-8");
     const ensemble = readFileSync(join(KIRO_IDE, "aidlc-common", "protocols", "stage-protocol-ensemble.md"), "utf-8");
     expect(skill).not.toContain("personas load inline from `.kiro/agents/");
     expect(ensemble).not.toContain("persona framing loaded from its `.md` file under `.kiro/agents/`");
-    expect(skill).toContain("personas load inline from the persona file `directive.inline_context_paths` names");
+    // The skill leaves the persona's place to the step: its inline_context_paths names the file.
     expect(ensemble).toContain("persona framing loaded from the persona file `directive.inline_context_paths` names");
   });
 });

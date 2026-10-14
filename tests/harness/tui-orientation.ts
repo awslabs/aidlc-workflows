@@ -64,7 +64,7 @@ function drive(driver: string, args: string[], env: NodeJS.ProcessEnv, deadlineM
 // Gate: the watched live-TUI tier (AIDLC_TUI_LIVE) + the selected substrate.
 // Claude is needed on every platform; the distributable +
 // the fixture must be present. A creds-less / binary-less machine SKIPs with a
-// reason — never a hard fail (the P10 live-leg posture).
+// reason - never a hard fail.
 export function absentReason({ command }: { command: readonly [string, ...string[]] }): string | null {
   if (process.env.AIDLC_TUI_LIVE !== "1") {
     return "set AIDLC_TUI_LIVE=1 to run the live Claude TUI orientation render (watched tier)";

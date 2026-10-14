@@ -1,8 +1,11 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import {
   KIRO_WORKFLOWS_ISSUE_ID,
+  KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID,
   kiroWorkflowsFix,
   kiroWorkflowsIssueMessage,
+  kiroWorkflowsUnreadableFix,
+  kiroWorkflowsUnreadableMessage,
   readKiroIdeWorkflows,
   readKiroWorkflowsAnswer,
   type KiroWorkflowsAnswer,
@@ -38,6 +41,7 @@ import {
   jsonFileText,
   jsoncRootMembers,
   jsoncSettingValue,
+  kiroUpgradedAgentFile,
   managedBlockIsSafe,
   managedBlockMarkers,
   mergeBlock,
@@ -257,7 +261,7 @@ export type TrustStatus = {
   files: string[];
   issues: DiagnosticIssue[];
   /** Kiro IDE only: its Workflows switch and the person's answer on this machine. */
-  kiroWorkflows?: { enabled: boolean; settingsPath: string; answer: KiroWorkflowsAnswer | null };
+  kiroWorkflows?: { enabled: boolean; readable: boolean; settingsPath: string; answer: KiroWorkflowsAnswer | null };
   /** Kiro IDE on Windows only: whether its terminal is Command Prompt, and the person's answer on this machine. */
   kiroTerminal?: { commandPrompt: boolean; profile: string | null; settingsPath: string; answer: KiroTerminalAnswer | null };
 };
@@ -2814,7 +2818,22 @@ export function trustStatus(
   let kiroWorkflows: TrustStatus["kiroWorkflows"];
   if (harness === "kiro-ide") {
     const state = readKiroIdeWorkflows(env);
-    kiroWorkflows = { enabled: state.enabled, settingsPath: state.settingsPath, answer: readKiroWorkflowsAnswer() };
+    kiroWorkflows = {
+      enabled: state.enabled,
+      readable: state.readable,
+      settingsPath: state.settingsPath,
+      answer: readKiroWorkflowsAnswer(),
+    };
+    // A file AI-DLC cannot read may hold Workflows on whatever the person
+    // answered before, so it is named while the file stays that way, as doctor does.
+    if (!state.readable) {
+      issues.push({
+        id: KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID,
+        message: kiroWorkflowsUnreadableMessage(),
+        remediation: kiroWorkflowsUnreadableFix(state.settingsPath),
+        severity: "warn",
+      });
+    }
     if (state.enabled && kiroWorkflows.answer === null) {
       issues.push({
         id: KIRO_WORKFLOWS_ISSUE_ID,
@@ -2891,6 +2910,16 @@ export function shellOnlyRuntimes(
     .map((binary) => binary.name);
 }
 
+// The runtime fixes setup asks the person for, at its top line and its end
+// alike. A runtime found on this shell's PATH needs nothing from a harness
+// started from a terminal; the doctor says what to do if its hooks never run.
+export function runtimeFixesNeeded(diagnostics: RuntimeDiagnostics): DiagnosticIssue[] {
+  return runtimeIssues({
+    ...diagnostics,
+    binaries: diagnostics.binaries.filter((binary) => binary.status !== "interactive-only"),
+  });
+}
+
 export function postApplyOutstandingActions(
   projectDir: string,
   harnessDir: string,
@@ -2909,13 +2938,7 @@ export function postApplyOutstandingActions(
       ...options.runtime,
       includeHarnessCli: false,
     });
-    // A runtime found on this shell's PATH needs nothing from a harness started
-    // from a terminal; the doctor says what to do if its hooks never run.
-    const needed = {
-      ...diagnostics,
-      binaries: diagnostics.binaries.filter((binary) => binary.status !== "interactive-only"),
-    };
-    actions.push(...runtimeIssues(needed).map((issue) => ({
+    actions.push(...runtimeFixesNeeded(diagnostics).map((issue) => ({
       section: "runtime" as const,
       id: issue.id,
       message: issue.message,
@@ -2936,6 +2959,17 @@ export function postApplyOutstandingActions(
           id: issue.id,
           message: issue.message,
           command: `${invoke} config trust --kiro-workflows off`,
+        };
+      }
+      // No AI-DLC command repairs the file: the step is the person's, and the
+      // command only checks the result.
+      if (issue.id === KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID) {
+        return {
+          section: "trust" as const,
+          id: issue.id,
+          message: issue.message,
+          command: `${invoke} config trust --check`,
+          step: issue.remediation,
         };
       }
       if (issue.id === KIRO_TERMINAL_ISSUE_ID) {
@@ -3395,8 +3429,8 @@ export function kiroIdeWorkflowsDoctorCheck(
     return {
       pass: false,
       severity: "warn",
-      label: `Kiro Workflows: ${state.settingsPath} could not be read as JSONC`,
-      fix: "correct the file, or in Kiro run Disable Workflows from the Command Palette",
+      label: kiroWorkflowsUnreadableMessage(),
+      fix: kiroWorkflowsUnreadableFix(state.settingsPath),
     };
   }
   if (!state.enabled) return { pass: true, label: "Kiro Workflows is off" };
@@ -3859,8 +3893,18 @@ export function frameworkFilesDoctorCheck(
     // The instruction row reports a missing or unreadable record.
     return { pass: true, label: "AI-DLC files: not checked, no record of what AI-DLC wrote" };
   }
-  const changed = changedFrameworkFiles(projectDir, selected.harnessDir, selected.harness, baseline);
-  if (changed.length === 0) return { pass: true, label: "AI-DLC files: unchanged since AI-DLC wrote them" };
+  const differ = changedFrameworkFiles(projectDir, selected.harnessDir, selected.harness, baseline);
+  // Config keeps an agent file Kiro upgraded for its 3.0 engine: not the person's change.
+  const upgraded = differ.filter((rel) => kiroUpgradedAgentFile(projectDir, rel));
+  const changed = differ.filter((rel) => !upgraded.includes(rel));
+  if (changed.length === 0) {
+    const kept = upgraded.length === 0
+      ? ""
+      : `, apart from ${upgraded.length} agent ${
+        upgraded.length === 1 ? "file" : "files"
+      } Kiro upgraded for its 3.0 engine, which config keeps`;
+    return { pass: true, label: `AI-DLC files: unchanged since AI-DLC wrote them${kept}` };
+  }
   const invoke = invocationForHarness(selected.harnessDir);
   const one = changed.length === 1;
   const shown = changed.slice(0, 10).join(", ");

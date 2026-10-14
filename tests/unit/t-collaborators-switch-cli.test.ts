@@ -76,7 +76,6 @@ function runNext(proj: string, args: string[]): Record<string, unknown> {
   return directiveOf(followProposal(runOrchestrateNext(ORCH, proj, args, options), ORCH, proj, options).out);
 }
 
-// An answer command the engine printed, run the way the agent runs it.
 function runEmitted(proj: string, command: string): Record<string, unknown> {
   return runNext(proj, command.slice(command.indexOf(" next ") + 6).split(" "));
 }
@@ -110,7 +109,6 @@ describe("t-collaborators-cli a switch typed with the request reaches the work",
     removeWorkspaceRecord(proj);
     const ask = runNext(proj, ["--collaborators", "on", "Fix the login crash when the session expires"]);
     expect(ask.ask_type).toBe("scope-confirm");
-    // The preview counts collaborators as on for this work.
     expect(String(ask.question)).not.toContain("lead agent only");
     expect(String(ask.confirm_command)).toContain("--collaborators on");
     const created = runEmitted(proj, String(ask.confirm_command));

@@ -1110,24 +1110,31 @@ function Invoke-CodexProvisioning([string]$NativeDirectory, [string]$CodexHomePa
         CODEX_HOME = $CodexHomePath; CODEX_MANAGED_PACKAGE_ROOT = $NativeDirectory; CI = 'true'; USERNAME = $env:USERNAME; USERDOMAIN = $env:COMPUTERNAME
     }
     foreach ($key in $clean.Keys) { $info.EnvironmentVariables[$key] = $clean[$key] }
-    $process = [Diagnostics.Process]::Start($info)
-    try {
-        $stdout = $process.StandardOutput.ReadToEndAsync()
-        $stderr = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit($testBudgets.NATIVE_FIXTURE_SETUP_TIMEOUT_MS)) {
-            # Stop only our exact process object. Preparation fails closed; a
-            # timed-out administrator setup makes this ephemeral runner unusable.
-            $process.Kill()
-            if (-not $process.WaitForExit((Get-CleanupTimeoutMs $testBudgets.NATIVE_PROCESS_CLEANUP_TIMEOUT_MS))) { throw 'Codex provisioning retirement unconfirmed; discard this ephemeral runner.' }
-            throw 'Codex provisioning timed out; discard this ephemeral runner.'
-        }
-        if (-not [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($stdout, $stderr), (Get-CleanupTimeoutMs $testBudgets.NATIVE_OUTPUT_DRAIN_TIMEOUT_MS))) {
-            throw 'Codex provisioning output drain timed out; discard this ephemeral runner.'
-        }
-        [IO.File]::WriteAllText((Join-Path $stateRoot 'codex-setup.stdout.log'), $stdout.GetAwaiter().GetResult())
-        [IO.File]::WriteAllText((Join-Path $stateRoot 'codex-setup.stderr.log'), $stderr.GetAwaiter().GetResult())
-        if ($process.ExitCode -ne 0) { throw 'Trusted Codex provisioning failed; retain sandbox.log, never sandbox-secrets.' }
-    } finally { $process.Dispose() }
+    # A setup that exits non-zero runs once more on this fresh host: what its
+    # first run made is ours, and the second run's logs sit beside the first's.
+    # A timeout or an unfinished output drain still fails closed at once.
+    foreach ($attempt in 1, 2) {
+        $process = [Diagnostics.Process]::Start($info)
+        try {
+            $stdout = $process.StandardOutput.ReadToEndAsync()
+            $stderr = $process.StandardError.ReadToEndAsync()
+            if (-not $process.WaitForExit($testBudgets.NATIVE_FIXTURE_SETUP_TIMEOUT_MS)) {
+                # Stop only our exact process object. Preparation fails closed; a
+                # timed-out administrator setup makes this ephemeral runner unusable.
+                $process.Kill()
+                if (-not $process.WaitForExit((Get-CleanupTimeoutMs $testBudgets.NATIVE_PROCESS_CLEANUP_TIMEOUT_MS))) { throw 'Codex provisioning retirement unconfirmed; discard this ephemeral runner.' }
+                throw 'Codex provisioning timed out; discard this ephemeral runner.'
+            }
+            if (-not [Threading.Tasks.Task]::WaitAll([Threading.Tasks.Task[]]@($stdout, $stderr), (Get-CleanupTimeoutMs $testBudgets.NATIVE_OUTPUT_DRAIN_TIMEOUT_MS))) {
+                throw 'Codex provisioning output drain timed out; discard this ephemeral runner.'
+            }
+            $log = if ($attempt -eq 1) { 'codex-setup' } else { 'codex-setup.attempt-2' }
+            [IO.File]::WriteAllText((Join-Path $stateRoot "$log.stdout.log"), $stdout.GetAwaiter().GetResult())
+            [IO.File]::WriteAllText((Join-Path $stateRoot "$log.stderr.log"), $stderr.GetAwaiter().GetResult())
+            if ($process.ExitCode -eq 0) { return }
+        } finally { $process.Dispose() }
+    }
+    throw 'Trusted Codex provisioning failed; retain sandbox.log, never sandbox-secrets.'
 }
 
 function Get-CodexGuiBootstrap([string[]]$ChildSids = $codexSandboxSids) {
@@ -2766,6 +2773,7 @@ function Save-PreparationFailure($Failure, [bool]$IncludeLaunchLogs) {
         $diagnostics = @(
             (Join-Path $stateRoot 'codex-parent-context.json'),
             (Join-Path $stateRoot 'codex-setup.stdout.log'), (Join-Path $stateRoot 'codex-setup.stderr.log'),
+            (Join-Path $stateRoot 'codex-setup.attempt-2.stdout.log'), (Join-Path $stateRoot 'codex-setup.attempt-2.stderr.log'),
             (Join-Path $stateRoot 'codex-station-task\prepare.result.json'),
             (Join-Path $stateRoot 'codex-station-task\cleanup.result.json')
         )

@@ -76,6 +76,7 @@ import {
   TestBudgetExhaustedError,
 } from "./test-budget.ts";
 import { PersonTurnLedger, unbackedFailure } from "./person-turns.ts";
+import type { PermissionRequest } from "./stock-permissions.ts";
 import { recordWindowsFolderHolderVerdict } from "./windows-folder-holders.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 
@@ -187,6 +188,14 @@ export interface DriveResult {
   stopHooks?: CapturedStopHook[];
   /** What each SessionStart hook printed for the session (the SDK always reports it). */
   sessionStarts?: string[];
+  /** What each UserPromptSubmit hook printed, when capturePromptHooks was set. */
+  promptHooks?: string[];
+  /**
+   * Every request Claude Code put to canUseTool other than AskUserQuestion:
+   * what a person on the drive's permission mode and settings would be asked.
+   * Empty under the default bypassPermissions.
+   */
+  permissionRequests?: PermissionRequest[];
 }
 
 // ---------------------------------------------------------------------------
@@ -519,6 +528,8 @@ export interface DriveOptions {
   settledTaskReportWaitMs?: number;
   /** Capture every Stop hook verdict into DriveResult.stopHooks. */
   captureStopHooks?: boolean;
+  /** Capture what every UserPromptSubmit hook printed into DriveResult.promptHooks. */
+  capturePromptHooks?: boolean;
   /**
    * End the drive, as a person closing the session would, as soon as this
    * returns true. Checked after every tool result with the results so far, so
@@ -684,6 +695,28 @@ async function removeEphemeralConfigDir(path: string): Promise<void> {
 }
 
 /**
+ * The model service failed under the drive: Claude Code ended the run on an
+ * API error that is the service's (throttled, a server error, the connection
+ * dropped), not one the run caused. The runner reads the name and says the
+ * failure is infrastructure (tests/lib/file-retry.ts modelApiFailed).
+ */
+export class ModelApiError extends Error {
+  override name = "ModelApiError";
+}
+
+// Claude Code's words for a run that ended on the service's API error. A 4xx
+// the request caused (a prompt too long, a bad key, our own abort) is not one.
+const SERVICE_API_ERROR =
+  /^Claude Code returned an error result: API Error: (?:(?:429|5\d\d)\b|The socket connection was closed|Connection error|The system encountered an unexpected error)/;
+
+/** The SDK's failure, as a ModelApiError when it is the model service's. */
+export function driveFailure(error: unknown): unknown {
+  return error instanceof Error && SERVICE_API_ERROR.test(error.message)
+    ? new ModelApiError(error.message, { cause: error })
+    : error;
+}
+
+/**
  * Drive a single AIDLC prompt through the Claude Agent SDK and return a fully
  * structured result. This is the one entry point tests use instead of the old
  * run_claude shell fixture.
@@ -739,9 +772,11 @@ export async function driveAidlc(
 
   const toolResults: CapturedToolResult[] = [];
   const askedQuestions: CapturedAskUserQuestion[] = [];
+  const permissionRequests: PermissionRequest[] = [];
   const turns: DriveTurnEnd[] = [];
   const stopHooks: CapturedStopHook[] = [];
   const sessionStarts: string[] = [];
+  const promptHooks: string[] = [];
   // toolUseID -> { toolName, input } so we can join tool_use to its later
   // synthetic-user tool_result block.
   const pendingTools = new Map<
@@ -864,7 +899,8 @@ export async function driveAidlc(
         // Each drive has its own config directory. Natural-completion tests
         // need the transcript that Stop hooks inspect before accepting a stop.
         persistSession: opts.persistSession ?? false,
-        ...(opts.captureStopHooks ? { includeHookEvents: true } : {}),
+        // The SDK reports a hook other than SessionStart only when asked.
+        ...(opts.captureStopHooks || opts.capturePromptHooks ? { includeHookEvents: true } : {}),
         ...(sdkSettings.model ? { model: sdkSettings.model } : {}),
         ...(Object.keys(sdkSettings.env).length > 0 ? { env: sdkSettings.env } : {}),
         ...(containment
@@ -932,7 +968,13 @@ export async function driveAidlc(
               updatedInput: { ...(input as object), answers },
             };
           }
-          // Everything else passes through unchanged (Bash/Write/Edit/Skill/...).
+          // Everything else passes through unchanged (Bash/Write/Edit/Skill/...),
+          // noted as a prompt a person on these settings would have met.
+          const asked = input as Record<string, unknown>;
+          permissionRequests.push({ toolName, input: asked });
+          writeSdkTrace(tracePath, "permission_request", {
+            toolName, command: asked.command, file_path: asked.file_path ?? asked.notebook_path ?? asked.path,
+          });
           return { behavior: "allow", updatedInput: input };
         },
       },
@@ -950,6 +992,9 @@ export async function driveAidlc(
         trackDriveTask(pendingTasks, m, settledTasks);
         if (m.subtype === "hook_response" && m.hook_event === "SessionStart" && typeof m.stdout === "string") {
           sessionStarts.push(m.stdout);
+        }
+        if (m.subtype === "hook_response" && m.hook_event === "UserPromptSubmit" && typeof m.stdout === "string") {
+          promptHooks.push(m.stdout);
         }
         if (m.subtype === "hook_response" && m.hook_event === "Stop") {
           const stop = capturedStopHook(m, turn);
@@ -1133,7 +1178,7 @@ export async function driveAidlc(
       writeSdkTrace(tracePath, "error", {
         message: err instanceof Error ? err.message : String(err),
       });
-      throw err;
+      throw driveFailure(err);
     }
   } finally {
     if (timer) clearTimeout(timer);
@@ -1202,6 +1247,8 @@ export async function driveAidlc(
     turns,
     stopHooks,
     sessionStarts,
+    ...(opts.capturePromptHooks ? { promptHooks } : {}),
+    permissionRequests,
   };
 
   // Attach post-run file reads when they exist (read straight off disk so the

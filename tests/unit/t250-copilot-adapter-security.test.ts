@@ -123,7 +123,8 @@ function stubHookBody(hookName: string, exitCode = 0, stderr = ""): string {
 const QUESTION_STORE_STUB = `export function keptRestartRun(_p: string, _args: readonly string[]): null { return null; }\n`;
 const AUDIT_TOOL_STUB = `export function appendAuditEntry(_k: string, _d: unknown, _p: string): void {}\nexport function appendSubagentPromptUnmatched(_p: string, _r: unknown): void {}\nexport function appendCoordinationStoodAside(_p: string, _r: unknown): boolean { return false; }\n`;
 const LIB_TOOL_STUB = `import { join } from "node:path";
-export { boundDirectiveMessage } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};
+// The engine's own reading of a line is pure, so the rig uses the real one.
+export { beforeDelimiter, boundDirectiveMessage, nextLineFlags, readOrchestratorLauncherOptions } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};
 export function stateFilePath(projectDir: string): string {
   return join(projectDir, ".aidlc-state-absent.json");
 }
@@ -1677,7 +1678,7 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     };
     for (const root of roots) walk(join(REPO_ROOT, root));
     expect(families.size).toBeGreaterThan(40);
-    for (const named of ["engine log decision", "engine log answer", "engine log review", "engine runtime summary", "engine intent list", "engine learnings persist", "engine testing-posture verify", "engine state lookup"]) {
+    for (const named of ["engine log decision", "engine log answer", "engine log review", "engine runtime summary", "engine orchestrate park", "engine learnings persist", "engine testing-posture verify", "engine state lookup"]) {
       expect(families.has(named), named).toBe(true);
     }
     const s = scratch();
@@ -2021,7 +2022,12 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         // Not asked for: the host still asks.
         expect(decision(command), command).toBeUndefined();
       }
-      // Another setting, or the switch with anything joined to it, keeps the prompt.
+      // The person's words beside the switch (--person-words) are still that switch.
+      expect(decision("aidlc engine config set guard.review-freeze off --person-words 'turn the review freeze off'",
+        "guard.review-freeze=off")).toBe("allow");
+      expect(decision("aidlc engine config set guard.review-freeze off --person-words-file .aidlc-engine/answer-text/answer.txt",
+        "guard.review-freeze=off")).toBe("allow");
+      // Another setting, or the switch with anything else joined to it, keeps the prompt.
       expect(decision("aidlc engine config set depth Minimal")).toBeUndefined();
       expect(decision("aidlc engine config set guard.review-freeze off --global", "guard.review-freeze=off")).toBeUndefined();
     } finally {
