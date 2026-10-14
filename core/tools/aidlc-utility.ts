@@ -3842,20 +3842,6 @@ export function harnessTreeVersionsCheck(projectDir: string): DoctorCheck | null
   };
 }
 
-// The refresh that rewrites this project's harness files, or undefined when no
-// harness is found: naming the harness takes the refresh transaction, where a
-// bare `config` on a configured project takes the interactive walk, which
-// rewrites nothing.
-function projectRefreshCommand(projectDir: string): string | undefined {
-  let selected: string | undefined;
-  try {
-    selected = discoverProjectHarnesses(projectDir)[0]?.distribution;
-  } catch {
-    // An unreadable projection is reported by its own checks, not here.
-  }
-  return selected ? workspaceShellRefreshCommand(harnessDir(), selected) : undefined;
-}
-
 export async function collectDoctorReport(
   projectDir: string,
   extraChecks: readonly DoctorCheck[] = [],
@@ -5104,7 +5090,17 @@ export async function collectDoctorReport(
     // on the copy channel that refresh needs `--from` as well; the shared
     // renderer spells both channels so this row, the setup map, and the trust
     // issue agree.
-    fix: `run \`${projectRefreshCommand(projectDir) ?? workspaceShellRefreshCommand(harnessDir(), "<name>")}\` in the project root to recreate the harness tree and workspace shell`,
+    fix: (() => {
+      let selected: string | undefined;
+      try {
+        selected = discoverProjectHarnesses(projectDir)[0]?.distribution;
+      } catch {
+        // An unreadable projection is reported by its own checks, not here.
+      }
+      return `run \`${
+        workspaceShellRefreshCommand(harnessDir(), selected ?? "<name>")
+      }\` in the project root to recreate the harness tree and workspace shell`;
+    })(),
   });
 
   // 5b. The copy every harness include reads (aidlc/active-memory/)
@@ -7103,7 +7099,7 @@ export async function collectDoctorReport(
   // and managed .gitignore drift when a manifest exists. All are advisory;
   // severity:"warn" rows remain visible without changing the exit code.
   try {
-    for (const row of workspaceManifestChecks(projectDir, projectRefreshCommand(projectDir))) results.push(row);
+    for (const row of workspaceManifestChecks(projectDir)) results.push(row);
   } catch {
     // Advisory only; a scan failure must not hide the main doctor report.
   }

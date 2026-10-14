@@ -23,7 +23,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { workspaceManifestChecks } from "../../core/tools/aidlc-workspace-doctor.ts";
@@ -124,8 +124,8 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     const request = rows.find((r) => r.label.startsWith("Request folder:"));
     expect(request).toMatchObject({ pass: false, severity: "warn" });
     expect(request?.label).toContain("files in aidlc/.aidlc-request-text/ hold your own requests (1 that git tracks)");
-    expect(request?.label).toContain("in the project folder, take the tracked ones out of git, keeping the files: `git rm --cached -r -f -- aidlc/.aidlc-request-text/`");
-    expect(request?.label).not.toContain("refresh AI-DLC");
+    expect(request?.fix).toContain("in the project folder, take the tracked ones out of git, keeping the files: `git rm --cached -r -f -- aidlc/.aidlc-request-text/`, then commit and push the removal");
+    expect(request?.fix).not.toContain("refresh AI-DLC");
     // While the request row stands, the records row gives no commit command:
     // `git add aidlc/` would take the tracked request in.
     writeFileSync(join(ws, "aidlc", "note.md"), "a record\n", "utf-8");
@@ -147,18 +147,15 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     const rows = workspaceManifestChecks(ws);
     let request = rows.find((r) => r.label.startsWith("Request folder:"));
     expect(request?.label).toContain("hold your own requests (1 not ignored)");
-    expect(request?.label).toContain("make .gitignore ignore the folder: refresh AI-DLC, and check no later rule of yours un-ignores it");
-    expect(request?.label).not.toContain("git rm --cached");
+    expect(request?.fix).toBe("add the line `aidlc/.aidlc-request-text/` to .gitignore, and check no later rule of yours un-ignores it, then commit and push the .gitignore change");
+    expect(request?.fix).not.toContain("git rm --cached");
     // The workspace row never asks to commit it.
     expect(rows[0].label).toContain("no uncommitted changes under aidlc/");
     // Tracked and not ignored: refresh first, then untrack.
     g("add", "aidlc");
     g("commit", "-q", "-m", "earlier commit");
     request = workspaceManifestChecks(ws).find((r) => r.label.startsWith("Request folder:"));
-    expect(request?.label).toMatch(/\(1 that git tracks\); make \.gitignore ignore the folder: .*, then in the project folder, take the tracked ones out of git, keeping the files: `git rm --cached -r -f -- aidlc\/\.aidlc-request-text\/`/);
-    // Doctor passes the refresh that names the harness (a bare `config` takes the walk).
-    request = workspaceManifestChecks(ws, "aidlc config --harness claude").find((r) => r.label.startsWith("Request folder:"));
-    expect(request?.label).toContain("refresh AI-DLC (`aidlc config --harness claude`), and check no later rule of yours un-ignores it");
+    expect(request?.fix).toMatch(/^add the line `aidlc\/\.aidlc-request-text\/` to \.gitignore, .*, then in the project folder, take the tracked ones out of git, keeping the files: `git rm --cached -r -f -- aidlc\/\.aidlc-request-text\/`/);
   });
 
   test("a project below its repository root, and a request named with a space and Korean, are never asked to be committed", () => {
@@ -169,6 +166,69 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     const rows = workspaceManifestChecks(project);
     expect(rows[0].label).toContain("no uncommitted changes under aidlc/");
     expect(rows.find((r) => r.label.startsWith("Request folder:"))?.label).toContain("(1 not ignored)");
+  });
+
+  test("a request taken out of git but not committed yet is still named, with commit and push", () => {
+    const ws = freshGitWorkspace();
+    const g = (...args: string[]) => spawnSync("git", ["-C", ws, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    mkdirSync(join(ws, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(ws, "aidlc", ".aidlc-request-text", "request.txt"), "my words\n", "utf-8");
+    g("add", "aidlc");
+    g("commit", "-q", "-m", "earlier commit");
+    writeFileSync(join(ws, ".gitignore"), "aidlc/.aidlc-request-text/\n", "utf-8");
+    // The step the row named, run by the person.
+    expect(g("rm", "--cached", "-r", "-f", "-q", "--", "aidlc/.aidlc-request-text/").status).toBe(0);
+    const request = workspaceManifestChecks(ws).find((r) => r.label.startsWith("Request folder:"));
+    expect(request?.label).toContain("(1 taken out of git, not committed yet)");
+    expect(request?.fix).toBe("commit and push the removal");
+    // With only the removal left, the records row gives its command again.
+    writeFileSync(join(ws, "aidlc", "note.md"), "a record\n", "utf-8");
+    expect(workspaceManifestChecks(ws)[0].label).toContain("`git add aidlc/ && git commit && git push`");
+    rmSync(join(ws, "aidlc", "note.md"));
+    g("commit", "-q", "-m", "untrack the request");
+    expect(workspaceManifestChecks(ws).some((r) => r.label.startsWith("Request folder:"))).toBe(false);
+  });
+
+  test("doctor run from another folder shows the steps as the fix, with the line to add", () => {
+    const project = freshGitWorkspace();
+    cpSync(join(REPO_ROOT, "dist", "claude"), project, { recursive: true });
+    // A .gitignore part from before the request folder was ignored.
+    const gitignore = join(project, ".gitignore");
+    writeFileSync(gitignore, readFileSync(gitignore, "utf-8").replace("aidlc/.aidlc-request-text/\n", ""), "utf-8");
+    mkdirSync(join(project, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(project, "aidlc", ".aidlc-request-text", "request.txt"), "my words\n", "utf-8");
+    const elsewhere = mkdtempSync(join(tmpdir(), "aidlc-t256-elsewhere-"));
+    tmpRoots.push(elsewhere);
+    const doctor = spawnSync(process.execPath, [join(project, ".claude", "tools", "aidlc-doctor.ts"), "--project-dir", project], {
+      cwd: elsewhere,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    const out = `${doctor.stdout}${doctor.stderr}`;
+    const row = out.split("\n").findIndex((line) => line.includes("Request folder:"));
+    expect(row, out).toBeGreaterThan(-1);
+    const fix = out.split("\n")[row + 1] ?? "";
+    expect(fix, out).toContain("add the line `aidlc/.aidlc-request-text/` to .gitignore");
+    expect(fix, out).not.toContain("add --verbose");
+  });
+
+  test("a request taken out of git before the folder is ignored counts once and keeps the ignore step", () => {
+    const repo = freshGitWorkspace();
+    const g = (...args: string[]) => spawnSync("git", ["-C", repo, ...args], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    const project = join(repo, "app");
+    mkdirSync(join(project, "aidlc", ".aidlc-request-text"), { recursive: true });
+    writeFileSync(join(project, "aidlc", ".aidlc-request-text", "request.txt"), "my words\n", "utf-8");
+    g("add", "app");
+    g("commit", "-q", "-m", "earlier commit");
+    expect(g("rm", "--cached", "-r", "-f", "-q", "--", "app/aidlc/.aidlc-request-text/").status).toBe(0);
+    const request = workspaceManifestChecks(project).find((r) => r.label.startsWith("Request folder:"));
+    expect(request?.label).toContain("hold your own requests (1 taken out of git, not committed yet)");
+    expect(request?.fix).toMatch(/^add the line `aidlc\/\.aidlc-request-text\/` to \.gitignore, .*, then commit and push the removal and the \.gitignore change$/);
+    // The removed file is still on disk and not ignored: `git add aidlc/` would take it back in.
+    writeFileSync(join(project, "aidlc", "note.md"), "a record\n", "utf-8");
+    const records = workspaceManifestChecks(project)[0].label;
+    expect(records).toContain("1 uncommitted change(s) under aidlc/");
+    expect(records).not.toContain("git add aidlc/");
   });
 
   test("every tracked request is tried against the ignore rules, not only the first", () => {
@@ -183,7 +243,7 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
     writeFileSync(join(ws, ".gitignore"), "aidlc/.aidlc-request-text/*.txt\n", "utf-8");
     const request = workspaceManifestChecks(ws).find((r) => r.label.startsWith("Request folder:"));
     expect(request?.label).toContain("(2 that git tracks)");
-    expect(request?.label).toContain("make .gitignore ignore the folder");
+    expect(request?.fix).toContain("add the line `aidlc/.aidlc-request-text/` to .gitignore");
   });
 
   test("an ignored, untracked request file gets no row, and other aidlc/ changes still count", () => {

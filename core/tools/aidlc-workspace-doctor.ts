@@ -43,7 +43,7 @@ export interface DoctorCheck {
  * install or a bare test fixture has no repos.json, so W2/W3 skip silently and
  * no manifest-specific rows are added.
  */
-export function workspaceManifestChecks(projectDir: string, refreshCommand?: string): DoctorCheck[] {
+export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   const results: DoctorCheck[] = [];
   const syncCmd = aidlcToolInvocation("workspace-sync");
 
@@ -65,42 +65,59 @@ export function workspaceManifestChecks(projectDir: string, refreshCommand?: str
   const entries = (bytes: Uint8Array): string[] =>
     [...new Set(new TextDecoder().decode(bytes).split("\0").filter(Boolean))];
   let requestRow: DoctorCheck | null = null;
+  let requestBlocksCommit = false;
   try {
     const trackedProc = git(["ls-files", "-z", "--", REQUEST_TEXT_DIR]);
     const untrackedProc = git(["ls-files", "-z", "--others", "--exclude-standard", "--", REQUEST_TEXT_DIR]);
+    // Taken out of git but not committed yet: teammates still get the file.
+    const removedProc = git(["diff", "--cached", "--relative", "--no-renames", "--name-only", "-z", "--diff-filter=D", "--", REQUEST_TEXT_DIR]);
     // A conflicted file is listed once per stage.
     const tracked = trackedProc.exitCode === 0 ? entries(trackedProc.stdout) : [];
-    const untracked = untrackedProc.exitCode === 0 ? entries(untrackedProc.stdout).length : 0;
-    if (tracked.length + untracked > 0) {
-      // An untracked file git shows is not ignored; every tracked one is tried
-      // against the ignore rules as if untracked.
-      const ignoredProc = untracked > 0 || tracked.length === 0
+    const removedList = removedProc.exitCode === 0 ? entries(removedProc.stdout) : [];
+    // A removed file still on disk and not ignored is counted once, as removed.
+    const untracked = untrackedProc.exitCode === 0
+      ? entries(untrackedProc.stdout).filter((path) => !removedList.includes(path)).length
+      : 0;
+    const removed = removedList.length;
+    if (tracked.length + untracked + removed > 0) {
+      // A file git shows as untracked is not ignored; every tracked or removed
+      // one is tried against the ignore rules as if untracked.
+      const tried = [...tracked, ...removedList];
+      const ignoredProc = untracked > 0 || tried.length === 0
         ? null
-        : git(["check-ignore", "--no-index", "--stdin", "-z"], `${tracked.join("\0")}\0`);
-      const ignored = ignoredProc !== null && entries(ignoredProc.stdout).length === tracked.length;
+        : git(["check-ignore", "--no-index", "--stdin", "-z"], `${tried.join("\0")}\0`);
+      const ignored = ignoredProc !== null && entries(ignoredProc.stdout).length === tried.length;
       const held = [
         ...(tracked.length > 0 ? [`${tracked.length} that git tracks`] : []),
         ...(untracked > 0 ? [`${untracked} not ignored`] : []),
+        ...(removed > 0 ? [`${removed} taken out of git, not committed yet`] : []),
       ];
       const steps = [
+        // The line itself, not a refresh: a copied install refreshes from the
+        // release it is on, which may predate the line.
         ...(ignored
           ? []
-          : [
-            "make .gitignore ignore the folder: refresh AI-DLC" +
-            `${refreshCommand ? ` (\`${refreshCommand}\`)` : ""}, and check no later rule of yours un-ignores it`,
-          ]),
+          : [`add the line \`${REQUEST_TEXT_DIR}/\` to .gitignore, and check no later rule of yours un-ignores it`]),
         ...(tracked.length > 0
           ? [
             `in the project folder, take the tracked ones out of git, keeping the files: ` +
-            `\`git rm --cached -r -f -- ${REQUEST_TEXT_DIR}/\`, then commit`,
+            `\`git rm --cached -r -f -- ${REQUEST_TEXT_DIR}/\``,
           ]
           : []),
+        // The removal, and the ignore rule, reach teammates' clones only once pushed.
+        ...(tracked.length + removed > 0
+          ? [ignored ? "commit and push the removal" : "commit and push the removal and the .gitignore change"]
+          : ["commit and push the .gitignore change"]),
       ];
+      // `git add aidlc/` would take a request in while git tracks one, shows
+      // one, or holds a removed one the folder does not ignore; a staged
+      // removal in an ignored folder leaves the records row its command.
+      requestBlocksCommit = tracked.length + untracked > 0 || (removed > 0 && !ignored);
       requestRow = {
         pass: false,
         severity: "warn",
-        label: `Request folder: files in ${REQUEST_TEXT_DIR}/ hold your own requests (${held.join(", ")}); ` +
-          steps.join(", then "),
+        label: `Request folder: files in ${REQUEST_TEXT_DIR}/ hold your own requests (${held.join(", ")})`,
+        fix: steps.join(", then "),
       };
     }
   } catch (e) {
@@ -150,7 +167,7 @@ export function workspaceManifestChecks(projectDir: string, refreshCommand?: str
           severity: "warn",
           label:
             `Workspace records: ${dirty.length} uncommitted change(s) under aidlc/ (advisory - the shared records travel by git; ` +
-            (requestRow?.pass === false
+            (requestBlocksCommit
               ? "commit & push them so teammates get them once the request folder below is out of git)"
               : "commit & push so teammates get them: `git add aidlc/ && git commit && git push`)"),
         });
