@@ -1275,8 +1275,8 @@ change. See
    consumed - an advisory normal-flow budget is exactly one pass, so a counted
    cut-off would exhaust it without any review happening), and a second
    incomplete attempt records the terminal receipt `--verdict NOT-READY` with no
-   review file, and the brief names it "The review did not finish, so nothing
-   was checked." (followed by the conductor's `--fallback-finding` reason when
+   review file, and the brief names it "The review did not finish, so there is
+   no review result to rely on." (followed by the conductor's `--fallback-finding` reason when
    the reviewer's reply said why) - the gate is reached with a concrete finding, never
    presented on (or deadlocked by) a silently missing verdict. That receipt
    is no reviewer's verdict: the logger marks its row `Review Finished: no`,

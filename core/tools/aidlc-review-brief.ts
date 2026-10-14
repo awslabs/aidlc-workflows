@@ -2073,7 +2073,7 @@ function unitOwnApproval(projectDir: string, unit: string): boolean {
 // What the person reads for a review that did not finish, with the reason the
 // conductor gives when it knows one.
 function unfinishedReviewFinding(reason?: string): string {
-  const said = "The review did not finish, so nothing was checked.";
+  const said = "The review did not finish, so there is no review result to rely on.";
   const why = reason?.trim() ?? "";
   if (why === "") return said;
   return `${said} ${why.charAt(0).toUpperCase()}${why.slice(1)}${/[.!?]$/.test(why) ? "" : "."}`;
@@ -2162,9 +2162,11 @@ export function renderReviewBrief(
           : "No blocking concerns were found.";
   // `stale` also covers a conductor edit that self-invalidated the receipt, so naming
   // only upstream change misleads; the accurate cause is appended below either way.
+  // A review that did not finish is neither a completed review nor a re-check.
+  const unfinishedReview = contexts.some((context) => context.incompleteReview);
   const why = {
-    first: contexts.some((context) => context.incompleteReview) ? "First review did not finish." : "First review completed.",
-    revision: "Revision re-checked.",
+    first: unfinishedReview ? "First review did not finish." : "First review completed.",
+    revision: unfinishedReview ? "Revision re-check did not finish." : "Revision re-checked.",
     stale: "Re-check required: the previous review receipt is no longer valid.",
   }[reason];
 
