@@ -8,7 +8,7 @@
 // function:isReviewRecordRelativePath, function:readReviewRecord,
 // function:latestReviewRecordRefs, function:mergeReviewRecordsFromDelta,
 // function:reviewRecordMatchesCompletion, function:pairedReviewRecordForCompletion,
-// function:completionCarriesVerifiedReview
+// function:completionCarriesVerifiedReview, function:stageGateReportCommand
 //
 // t271 — engine-enforced review iteration ceiling (aidlc-log review).
 //
@@ -68,8 +68,10 @@ import {
   guardAttemptState,
   reviewRequestReplaces,
   latestReviewRecordRefs,
+  markHumanTurn,
   mergeReviewRecordsFromDelta,
   REVIEW_RECORD_MAX_BYTES,
+  turnMarkersShowConversational,
   readAllAuditShards,
   readReviewRecord,
   reviewArtifactFingerprint,
@@ -478,6 +480,65 @@ describe("t271 review iteration ceiling", () => {
     const audit = readAllAuditShards(proj);
     const rows = audit.match(/\*\*Event\*\*: REVIEW_REQUESTED/g) ?? [];
     expect(rows.length).toBe(1);
+  });
+
+  // #2400: on Kiro IDE the verdict came back with no step, the agent ended its
+  // turn after READY, and the gate was never shown. The verdict's output names
+  // the next step: the gate when no pass follows, the next pass when one does.
+  test("a recorded verdict names the agent's next step: the gate after the last pass, the next pass otherwise", () => {
+    const note = (stdout: string): string | undefined =>
+      (JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}") as { agent_note?: string }).agent_note;
+    for (const verdict of ["READY", "NOT-READY"] as const) {
+      const proj = seedProject("feature"); // requirements-analysis is advisory and in progress
+      const request = [
+        "--stage", "requirements-analysis",
+        "--reviewer", "aidlc-product-lead-agent",
+        "--iteration", "1",
+      ];
+      expect(runReview(proj, request).status).toBe(0);
+      // The person's reply arrives; on the hosts with no transcript the Stop
+      // hook reads the turn from the marks, and the verdict is the stage's
+      // work going on, not chat.
+      markHumanTurn(proj);
+      expect(turnMarkersShowConversational(proj)).toBe(true);
+      const recorded = runReview(proj, [...request, "--verdict", verdict]);
+      expect(recorded.status, recorded.stderr).toBe(0);
+      expect(turnMarkersShowConversational(proj)).toBe(false);
+      const step = note(recorded.stdout);
+      expect(step, `${verdict}: ${recorded.stdout}`).toBeDefined();
+      expect(step).toContain("report --stage requirements-analysis --result awaiting-approval");
+      expect(step).toContain("learnings");
+      expect(step).toContain("Do not end the turn");
+      // Agent-facing only: no verdict token, nothing for the person to read.
+      expect(step).not.toContain(verdict === "READY" ? "READY" : "NOT-READY");
+    }
+
+    // An adversarial stage-level pass with passes left is followed by the
+    // next pass, not the gate.
+    const proj = seedProject("feature");
+    const sf = seededStateFile(proj);
+    writeFileSync(sf, readFileSync(sf, "utf-8").replace("- [ ] code-generation", "- [-] code-generation"));
+    const iterationOnly = { AIDLC_SKIP_SOURCE_FRESHNESS: "1" };
+    const first = ["--stage", "code-generation", "--reviewer", "aidlc-architecture-reviewer-agent", "--iteration", "1"];
+    expect(runReview(proj, first, iterationOnly).status).toBe(0);
+    const repairs = runReview(proj, [...first, "--verdict", "NOT-READY"], iterationOnly);
+    expect(repairs.status, repairs.stderr).toBe(0);
+    const again = note(repairs.stdout);
+    expect(again, repairs.stdout).toContain("--iteration 2");
+    expect(again).not.toContain("--result awaiting-approval");
+    expect(again).toContain("Do not end the turn");
+
+    // A Unit's review keeps the step its own directive names.
+    const unitProj = seedProject("feature");
+    writeReviewedArtifact(unitProj, "code-generation", "plan\n", "unit-alpha");
+    const unit = [
+      "--stage", "code-generation", "--reviewer", "aidlc-architecture-reviewer-agent",
+      "--unit", "unit-alpha", "--iteration", "1",
+    ];
+    expect(runReview(unitProj, unit).status).toBe(0);
+    const unitVerdict = runReview(unitProj, [...unit, "--verdict", "READY"]);
+    expect(unitVerdict.status, unitVerdict.stderr).toBe(0);
+    expect(note(unitVerdict.stdout)).toBeUndefined();
   });
 
   test("a gate rejection resets the ordinal, so a stale --iteration is corrected rather than refused as over budget", () => {

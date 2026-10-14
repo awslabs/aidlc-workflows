@@ -1,4 +1,4 @@
-// covers: function:markHumanTurn, function:markEngineTouch, function:turnMarkersShowConversational, function:humanTurnMarkerPath, function:engineTouchMarkerPath, function:markTurnEnd, function:turnEndIsOpen, function:turnEndMarkerPath
+// covers: function:markHumanTurn, function:markEngineTouch, function:turnMarkersShowConversational, function:humanTurnMarkerPath, function:engineTouchMarkerPath, function:markTurnEnd, function:turnEndIsOpen, function:turnEndMarkerPath, function:markStageWorkLogged
 //
 // The turn-shape marker family: the transcript-free reading of the Stop hook's
 // tier-3 conversational carve-out. On harnesses that deliver no
@@ -557,4 +557,72 @@ describe("t259 a switch leaves the engine mark on the work it selects", () => {
     expect(switched.status, switched.stderr).toBe(0);
     expect(existsSync(engineTouchMarkerPath(proj, record, "other"))).toBe(true);
   });
+});
+
+// #2400, Kiro IDE: the turn after the person answered the stage's questions
+// recorded the answer, requested the review and recorded READY, all through
+// `aidlc log`, then ended before the gate. The marks still read the person's
+// prompt as the newest thing, so the Stop hook let it go as chat. A log call
+// that recorded the stage's work leaves the engine mark; one that recorded
+// nothing, a read, and a logged question (which waits on the person) do not.
+describe("t259 the stage's work recorded through log leaves the engine mark", () => {
+  test("a recorded log answer leaves the mark; a refused one, `log answers` and `log decision` do not", async () => {
+    const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+    tempDirs.push(proj);
+    // The same reading under any host the suite runs in: no agent host's
+    // variables, no presence switch, and the person's turns come through the
+    // prompt hook, so the presence check runs as it does in a chat.
+    const env: Record<string, string | undefined> = Object.fromEntries(
+      Object.entries(process.env).filter(([key]) =>
+        !/^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_|AIDLC_)/i.test(key) && key !== "TERM_PROGRAM"),
+    );
+    env.CLAUDE_PROJECT_DIR = proj;
+    const log = (...args: string[]) =>
+      spawnSync(process.execPath, [".claude/tools/aidlc.ts", "engine", "log", ...args], { cwd: proj, encoding: "utf-8", env });
+    const person = (prompt: string) => {
+      const replied = spawnSync(process.execPath, [".claude/tools/aidlc.ts", "engine", "hook", "record-human-turn"], {
+        cwd: proj, encoding: "utf-8", env,
+        input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t259-log", prompt }),
+      });
+      expect(replied.status, `${replied.stdout}${replied.stderr}`).toBe(0);
+    };
+    markEngineTouch(proj);
+    await Bun.sleep(20);
+    person("Which team should own the scraper?");
+    await Bun.sleep(20);
+    expect(turnMarkersShowConversational(proj)).toBe(true);
+
+    // A refused answer records nothing: no mark.
+    const refused = log("answer", "--stage", "feasibility", "--checkpoint", "no-such-checkpoint", "--details", "Team A");
+    expect(refused.status, refused.stdout).not.toBe(0);
+    expect(refused.stdout).not.toContain("emitted");
+    expect(turnMarkersShowConversational(proj)).toBe(true);
+    // A read records nothing.
+    const read = log("answers", "--stage", "feasibility");
+    expect(read.status, read.stderr).toBe(0);
+    expect(turnMarkersShowConversational(proj)).toBe(true);
+    // A logged question waits on the person; its own carve-out lets the turn end.
+    const asked = log("decision", "--stage", "feasibility", "--decision", "Which team?", "--options", "Team A,Team B");
+    expect(asked.status, asked.stderr).toBe(0);
+    expect(turnMarkersShowConversational(proj)).toBe(true);
+    // The answer before the person replied to the question is refused, and
+    // the refusal tells the agent to show the question and end its turn: the
+    // turn is still the person's to answer, so the stop stays allowed.
+    const early = log("answer", "--stage", "feasibility", "--details", "Team A");
+    expect(early.status, early.stdout).not.toBe(0);
+    expect(early.stderr).toContain("came before this question was logged");
+    expect(early.stderr).toContain("end your turn");
+    expect(turnMarkersShowConversational(proj)).toBe(true);
+
+    // The person replies (the prompt hook moves the human mark), and the
+    // answer recorded after it is the stage's work going on.
+    await Bun.sleep(20);
+    person("Team A");
+    expect(turnMarkersShowConversational(proj)).toBe(true);
+    await Bun.sleep(20);
+    const answered = log("answer", "--stage", "feasibility", "--details", "Team A");
+    expect(answered.status, answered.stderr).toBe(0);
+    expect(answered.stdout).toContain('"emitted":"QUESTION_ANSWERED"');
+    expect(turnMarkersShowConversational(proj)).toBe(false);
+  }, 120_000);
 });

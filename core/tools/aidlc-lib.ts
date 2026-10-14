@@ -27933,8 +27933,9 @@ export function stopHookDir(projectDir: string, intent?: string, space?: string)
 //   .aidlc-engine/human-turn   - touched by the UserPromptSubmit mint, once per human
 //                         prompt, alongside the HUMAN_TURN ledger event.
 //   .aidlc-engine/engine-touch - touched by aidlc-orchestrate on every ADVANCING
-//                         invocation (`next` / `report` / `park`), and by
-//                         `intent create` for the work it creates.
+//                         invocation (`next` / `report` / `park`), by
+//                         `intent create` for the work it creates, and by a
+//                         `log answer|review|link` that recorded a row.
 //
 //   conversational  <=>  mtime(.aidlc-engine/human-turn) > mtime(.aidlc-engine/engine-touch)
 //
@@ -28122,19 +28123,21 @@ export function turnEndIsOpen(projectDir: string, intent?: string, space?: strin
 
 // Record that the workflow engine was ADVANCED (not merely probed). Called from
 // orchestrate's `next` / `report` / `park`, from `intent create` for the work it
-// creates, and from the intent and space switches for the work they select (a
+// creates, from the intent and space switches for the work they select (a
 // record with no mark, made before the markers shipped or freshly cloned, would
 // otherwise read every later plain question as the engine's unfinished turn on
-// the transcript-free hosts). A no-op in three cases: when STOP_HOOK_PROBE_ENV
-// is set (the Stop hook's own probe, see above), for read-only utility routing
-// (excluded at the call site), and before creation.
+// the transcript-free hosts), and through markStageWorkLogged (below) from a
+// `log answer` / `log review` / `log link` that recorded a row. A no-op in
+// three cases: when STOP_HOOK_PROBE_ENV is set (the Stop hook's own probe, see
+// above), for read-only utility routing (excluded at the call site), and
+// before creation.
 //
 // KNOWN COVERAGE GAP — the marker sees LESS than the transcript predicate does.
 // isEngineToolCall (below) counts as engagement any non-read-only aidlc-jump /
 // aidlc-bolt / aidlc-swarm invocation and the mutating aidlc-state verbs
 // (approve, advance, skip, set, …). NONE of those tools touch this marker: the
-// only writers are orchestrate's three subcommands, intent create and the two
-// switches. So on a transcript-free
+// only writers are orchestrate's three subcommands, intent create, the two
+// switches and the stage-work log verbs. So on a transcript-free
 // harness a conductor that runs, say, `aidlc-jump` — mutating the stage pointer
 // and emitting audit — and then ends its turn without consulting the engine
 // reads as CONVERSATIONAL here, while the same turn BLOCKS on Claude/Codex where
@@ -28152,6 +28155,63 @@ export function markEngineTouch(projectDir: string, intent?: string, space?: str
   if (isReadOnlyEngineProbe()) return;
   if (!workflowIsCreated(projectDir, intent, space)) return;
   touchTurnMarker(projectDir, "engine-touch", intent, space);
+}
+
+// --- Stage work recorded through `aidlc log` (the conversational carve-out) ---
+//
+// A turn that answers the stage's questions, requests its review and records
+// the verdict does all of it through `log answer` / `log review` (and a
+// pipeline stage's `log link`), with no `next` or `report`. Such a turn is the
+// stage's work in flight, not chat: one that ends before the gate is a bail
+// mid-stage, and the carve-out must not release it (#2400). This is the ONE
+// rule for both evidence paths of the carve-out, kept here rather than in
+// isEngineEngagementSegment, which also feeds the forwarding-loop and
+// runtime-compile detectors:
+//
+//   - marker path (Kiro IDE, Kiro CLI, opencode): aidlc-log calls
+//     markStageWorkLogged after its subcommand wrote an audit row;
+//   - transcript path (Claude Code, Codex): the Stop hook counts a call
+//     isStageWorkLogCall names whose own correlated result
+//     stageWorkLogRecorded proves recorded.
+//
+// Only a call that RECORDED counts. A refusal (no pending question, "no new
+// human reply has arrived", a review the logger refused) recorded nothing, and
+// several of them tell the agent to end its turn, so the stop stays allowed.
+// `log decision` is not here: a logged question waits on the person, which the
+// pending-decision carve-out already lets end the turn. `log answers` is a read.
+const STAGE_WORK_LOG_VERBS: ReadonlySet<string> = new Set(["answer", "review", "link"]);
+
+// Marker path: the engine mark for a `log` subcommand that recorded a row.
+export function markStageWorkLogged(verb: string | undefined, projectDir: string, intent?: string, space?: string): void {
+  if (verb === undefined || !STAGE_WORK_LOG_VERBS.has(verb)) return;
+  markEngineTouch(projectDir, intent, space);
+}
+
+// Transcript path, the call: a shell command that runs one of the verbs, in
+// the native (`aidlc engine log review`), source-dispatcher (`bun
+// <harness>/tools/aidlc.ts engine log review`) or legacy (`aidlc-log.ts
+// review`) spelling.
+export function isStageWorkLogCall(name: string, input: unknown): boolean {
+  if (!isShellToolName(name)) return false;
+  const text = shellCommandText(input);
+  if (text === null) return false;
+  const verbs = canonicalEngineCommand(text)
+    .matchAll(/(?:\baidlc[ \t]+(?:engine[ \t]+)?log|\baidlc-log(?:\.ts)?["']?)[ \t]+([a-z-]+)/g);
+  for (const match of verbs) if (STAGE_WORK_LOG_VERBS.has(match[1] as string)) return true;
+  return false;
+}
+
+// Transcript path, the result: the call's output carries the `emitted` row it
+// recorded. Every recording outcome of the three verbs prints one; a refusal,
+// a skip and a print-only answer do not. The output is the text a transcript
+// keeps (a string, a Codex JSON string, or Claude text parts).
+export function stageWorkLogRecorded(output: unknown): boolean {
+  const text = typeof output === "string"
+    ? output
+    : Array.isArray(output)
+      ? output.map((part) => isPlainObject(part) && typeof part.text === "string" ? part.text : "").join("\n")
+      : "";
+  return /\\?"emitted\\?"\s*:\s*\\?"[A-Z][A-Z_]*\\?"/.test(text);
 }
 
 // The engine mark for the work an intent or space switch selects. Written only
@@ -31740,6 +31800,16 @@ export function requestChangesReportCommand(projectDir: string, stage: string, u
   }
   return renderEngineInvocation(
     { route: "orchestrate", args: requestChangesReportArgs(stage, unit, teamGate) },
+    { harnessDir: harnessDir() },
+  );
+}
+
+// The report that shows a stage's approval gate, rendered for this checkout:
+// `awaiting-approval` the first time (and again while it is open), `revised`
+// after a revision.
+export function stageGateReportCommand(stage: string, result: "awaiting-approval" | "revised"): string {
+  return renderEngineInvocation(
+    { route: "orchestrate", args: ["report", "--stage", stage, "--result", result] },
     { harnessDir: harnessDir() },
   );
 }

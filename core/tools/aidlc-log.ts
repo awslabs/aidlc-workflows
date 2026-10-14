@@ -29,6 +29,10 @@ import {
   NoGuardRecoveryAskError,
   recordGuardRecoveryChoice,
   requestChangesReportCommand,
+  stageGateReportCommand,
+  markStageWorkLogged,
+  terminalReviewVerdict,
+  isAutonomousConstructionGate,
   releaseTakenGuardRecoveryReply,
   assertNoSymlinkInChainOrThrow,
   codekbRepoName,
@@ -320,10 +324,15 @@ function emitAudit(
 ): void {
   if (holdsAuditLock(pd, intent, space)) {
     appendAuditEntryUnlocked(eventType, fields, pd, intent, space);
-    return;
+  } else {
+    appendAuditEntry(eventType, fields, pd, intent, space);
   }
-  appendAuditEntry(eventType, fields, pd, intent, space);
+  recordedRow = true;
 }
+
+// This run wrote an audit row: main() then leaves the engine mark for a
+// stage-work verb (markStageWorkLogged). A refusal exits before main() reads it.
+let recordedRow = false;
 
 // --- Flag parsing ---
 
@@ -3012,6 +3021,64 @@ function removeParentReviewerDispatch(
   }
 }
 
+// The agent's next step after a stage's verdict is recorded (#2400). The
+// verdict used to come back with no step, so an agent that took it as the end
+// of the work ended its turn before the approval gate, and on a host that
+// ignores the Stop hook (Kiro IDE) nothing put it back on track. Whether
+// another pass follows is the engine's own terminal rule (terminalReviewVerdict),
+// and the gate's command is the report the stage protocol names. A Unit's
+// review, an isolated single-stage run, an autonomous Construction gate and a
+// stage no longer in flight keep the step their own directive names: no note.
+function reviewVerdictStep(
+  pd: string,
+  flags: Record<string, string>,
+  verdict: string,
+  iteration: number,
+  context: {
+    state: string;
+    node: { slug: string; phase: string; for_each?: string; reviewer_max_iterations?: number };
+    reviewClass: ReviewClass | null;
+  },
+): string | null {
+  const { state, node, reviewClass } = context;
+  if (flags.unit !== undefined || flags.single === "true" || reviewClass === null || reviewClass === "none") return null;
+  if (node.phase === "initialization") return null;
+  const terminal = terminalReviewVerdict(
+    verdict,
+    String(iteration),
+    reviewClass,
+    node.reviewer_max_iterations ?? 2,
+  ) !== null;
+  const box = parseCheckboxes(state).find((row) => row.slug === flags.stage)?.state;
+  if (!terminal) {
+    if (box !== "in-progress" && box !== "revising") return null;
+    const again = renderReviewRequestCommand({
+      projectDir: pd,
+      stage: flags.stage,
+      reviewer: flags.reviewer,
+      iteration: iteration + 1,
+    });
+    return "The reviewer asked for repairs and another review pass follows: fix what its findings name (a " +
+      `review that did not finish names nothing to fix), then request the next pass with \`${again}\`, in this ` +
+      "turn, as the reviewer protocol says. Do not end the turn here.";
+  }
+  if (node.phase === "construction" && isAutonomousConstructionGate(state, node, pd)) return null;
+  if (box === "in-progress") {
+    return "The review is recorded and no further pass follows it, so the stage goes on to its approval gate in " +
+      "this turn, as the stage protocol says: say the completion summary; when this stage's directive lists the " +
+      "learnings module, ask its question first, which ends the turn; otherwise run " +
+      `\`${stageGateReportCommand(flags.stage, "awaiting-approval")}\`, print the review brief and ask the approval ` +
+      "question. Do not end the turn before the person has a question to answer.";
+  }
+  if (box === "awaiting-approval" || box === "revising") {
+    const result = box === "revising" ? "revised" : "awaiting-approval";
+    return "The review is recorded and no further pass follows it, so show the approval gate again in this turn: " +
+      `run \`${stageGateReportCommand(flags.stage, result)}\`, print the review brief and ask the approval ` +
+      "question, as the stage protocol says. Do not end the turn before the gate is shown.";
+  }
+  return null;
+}
+
 function handleReview(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -3186,6 +3253,7 @@ function handleReview(args: string[]): void {
       node,
       attempt,
       budget,
+      reviewClass,
       receipts,
       autonomousCandidate,
       requireRequiredArtifacts,
@@ -3964,10 +4032,13 @@ function handleReview(args: string[]): void {
   let recordPath: string | null = null;
   let reviewMarkdown: string | null = null;
   const verdictChangeNotices: string[] = [];
+  // What the verdict was recorded against, for the step it hands the agent.
+  const recorded: { context?: ReturnType<typeof loadContext> } = {};
 
   try {
     withAuditLock(pd, () => {
       const context = loadContext(false, false);
+      recorded.context = context;
       const {
         node,
         attempt,
@@ -4542,9 +4613,13 @@ function handleReview(args: string[]): void {
   // review's own record; another Unit's review keeps its window.
   removeParentReviewerDispatch(pd, { reviewer: flags.reviewer, stage: flags.stage, unit: flags.unit });
 
+  const agentNote = recorded.context === undefined
+    ? null
+    : reviewVerdictStep(pd, flags, verdict, iteration, recorded.context);
   console.log(JSON.stringify({
     emitted: "REVIEW_COMPLETED",
     stage: flags.stage,
+    ...(agentNote !== null ? { agent_note: agentNote } : {}),
     ...(recordPath !== null ? { reviewRecord: recordPath } : {}),
     ...(reviewMarkdown !== null ? { reviewMarkdown } : {}),
     ...(verdictChangeNotices.length > 0 ? { change_notices: verdictChangeNotices } : {}),
@@ -4639,6 +4714,16 @@ export function main(argv: string[]): void {
         break;
       default:
         error(`Unknown subcommand: ${subcommand}. Valid: decision, answer, answers, link, review`);
+    }
+    // The stage's work went on through the record, not through `next`: on the
+    // hosts with no transcript, the Stop hook reads that from the engine mark.
+    // Advisory: a mark that is not written never fails the recorded answer.
+    if (recordedRow) {
+      try {
+        markStageWorkLogged(subcommand, resolveProjectDir(projectDir));
+      } catch {
+        // The row is recorded either way.
+      }
     }
   } catch (e) {
     // A Plan Approval source-drift refusal is the human sentence; the

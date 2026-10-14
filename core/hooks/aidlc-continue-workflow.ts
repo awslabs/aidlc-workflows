@@ -117,7 +117,10 @@
 //      the engine, so nothing there is released by it. An unattended driver
 //      (AIDLC_UNATTENDED=1) has nobody present, and a prompt it submits reads as
 //      a person's, so under autonomy it keeps the old guard. It only ever
-//      ALLOWS; it can never block more.
+//      ALLOWS; it can never block more. Both paths count a `log answer` /
+//      `log review` / `log link` that recorded a row as engagement (the stage's
+//      work in flight, #2400), from the one rule beside markEngineTouch
+//      (markStageWorkLogged, isStageWorkLogCall, stageWorkLogRecorded).
 //        NOT FULL PARITY. The marker path answers the same question more
 //        COARSELY than the transcript: it is blind to aidlc-jump / aidlc-bolt /
 //        aidlc-swarm and the mutating aidlc-state verbs, which the transcript
@@ -194,6 +197,8 @@ import {
   personRepliedSincePresentation,
   hookChildEnv,
   isEngineToolCall,
+  isStageWorkLogCall,
+  stageWorkLogRecorded,
   isShellToolName,
   shellCommandText,
   hooksHealthDir,
@@ -1163,6 +1168,9 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
     role: "user" | "assistant";
     engineCall: boolean;
     humanPrompt: boolean;
+    // A stage-work `log answer|review|link` call (isStageWorkLogCall): engaged
+    // only once its own result proves it recorded (stageWorkLogRecorded).
+    stageWorkLog?: boolean;
     call?: { id: string | null; name: string; input: unknown };
     result?: { id: string | null; output: unknown; failed: boolean };
   };
@@ -1172,12 +1180,14 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
     typeof value === "string" && value.trim().length > 0 ? value : null;
   const recordCall = (id: unknown, name: string, input: unknown): void => {
     const engineCall = isEngineToolCall(name, input);
+    const stageWorkLog = isStageWorkLogCall(name, input);
     const normalizedId = callId(id);
-    if (engineCall && normalizedId !== null) engineCallIds.add(normalizedId);
+    if ((engineCall || stageWorkLog) && normalizedId !== null) engineCallIds.add(normalizedId);
     turns.push({
       role: "assistant",
       engineCall,
       humanPrompt: false,
+      ...(stageWorkLog ? { stageWorkLog } : {}),
       // All IDs participate in duplicate detection; only engine inputs are
       // needed for result validation.
       call: { id: normalizedId, name, input: engineCall ? input : undefined },
@@ -1372,8 +1382,18 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
   // every other engine call after the human prompt still requires continuation.
   for (let i = lastHumanIdx + 1; i < turns.length; i++) {
     const turn = turns[i];
-    if (!turn.engineCall) continue;
     const call = turn.call;
+    // The stage's work recorded through `aidlc log` is engagement, but only on
+    // its own result's proof that it recorded: a refused call (one that tells
+    // the agent to end its turn among them) leaves the turn as it was.
+    if (turn.stageWorkLog && call?.id && callsById.get(call.id)?.length === 1) {
+      const results = resultsById.get(call.id);
+      if (results?.length === 1 && results[0] > i) {
+        const result = turns[results[0]].result;
+        if (result && !result.failed && stageWorkLogRecorded(result.output)) return false;
+      }
+    }
+    if (!turn.engineCall) continue;
     if (call?.id && callsById.get(call.id)?.length === 1) {
       const results = resultsById.get(call.id);
       if (results?.length === 1 && results[0] > i) {
@@ -1405,7 +1425,8 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
 //     transcript and expose no turn history to a hook at all, so the same
 //     predicate is reconstructed from two files the framework already writes on
 //     the relevant seams - `.aidlc-engine/human-turn` (the UserPromptSubmit mint) and
-//     `.aidlc-engine/engine-touch` (every advancing aidlc-orchestrate invocation). A
+//     `.aidlc-engine/engine-touch` (every advancing aidlc-orchestrate invocation,
+//     and a `log answer|review|link` that recorded a row). A
 //     human turn NEWER than the last engine advance is the marker spelling of
 //     "answered with zero engine calls".
 //
