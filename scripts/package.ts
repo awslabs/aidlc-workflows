@@ -1198,16 +1198,18 @@ function expandClaudeToolAllows(treeRoot: string, m: HarnessManifest): void {
 // dispatcher's engine commands, each dispatcher command a copy channel
 // pre-approves exactly as AI-DLC runs it (copyChannelDispatcherCommands), and
 // the tool scripts it pre-approves (copyChannelToolScripts), bare or followed
-// by arguments, never a longer file name, one entry each: Kiro's upgrade for
-// its 3.0 engine turns every entry into globs and drops one with an
-// alternation group (kiro-cli 2.29.0). A script behind a machine-changing
-// command, and any config command but the read-only forms, then waits for the
-// person in Kiro CLI. Both trees get it; the native rewrite then turns every
-// bun entry into the one trusted prefix.
+// by arguments, never a longer file name, one entry each, with the path bare
+// or in either quote spelled out: Kiro's upgrade for its 3.0 engine turns each
+// spelling into its own glob, an optional quote into a `*` that also matches
+// `/`, and drops an entry with more spellings than its limit (kiro-cli
+// 2.29.0). A script behind a machine-changing command, and any config command
+// but the read-only forms, then waits for the person in Kiro CLI. Both trees
+// get it; the native rewrite then turns every bun entry into the one trusted
+// prefix.
 function expandKiroToolAllows(treeRoot: string, m: HarnessManifest): void {
   if (m.name !== "kiro") return;
   const agentsDir = join(treeRoot, "agents");
-  const prefix = (dir: string) => `bun (run )?["']?${dir}/`;
+  const bun = (path: string) => `bun (run )?(${path}|"${path}"|'${path}')`;
   let expanded = 0;
   for (const file of walk(agentsDir).filter((path) => path.endsWith(".json"))) {
     const value = JSON.parse(readFileSync(file, "utf-8")) as {
@@ -1224,11 +1226,11 @@ function expandKiroToolAllows(treeRoot: string, m: HarnessManifest): void {
       const tools = `${match[1]}/tools`;
       const scripts = copyChannelToolScripts().map((script) => escapeRegExp(script.slice(0, -".ts".length)));
       return [
-        `${prefix(tools)}aidlc\\.ts["']? engine( .*)?`,
+        `${bun(`${tools}/aidlc\\.ts`)} engine( .*)?`,
         ...copyChannelDispatcherCommands().map((command) =>
-          `${prefix(tools)}aidlc\\.ts["']? ${escapeRegExp(command)}`
+          `${bun(`${tools}/aidlc\\.ts`)} ${escapeRegExp(command)}`
         ),
-        ...scripts.map((script) => `${prefix(tools)}${script}\\.ts["']?( .*)?`),
+        ...scripts.map((script) => `${bun(`${tools}/${script}\\.ts`)}( .*)?`),
       ];
     });
     value.toolsSettings!.execute_bash!.allowedCommands = next;
