@@ -13,17 +13,15 @@ and the applicable method sections below.
 
 ## Mandatory consolidated-summary checkpoint
 
-This checkpoint applies only when `directive.ceremony.summary_confirmation === "on"`. When it is `"off"`, generate directly from the answers: no summary-confirmation prompt, confirmation entry, or receipt. Required stage questions and other human decisions, including Plan Approval and the stage approval gate, are unchanged.
-
-After guided or chat file-backed Q&A (and whenever a stage definition requires
-it explicitly, such as Requirements Analysis), the stage protocol requires a
-separate confirmation before any stage artifact is generated. Append or update
-`## Consolidated Summary Confirmation` in the questions file with the summary,
-the prompt, both options without A/B file-letter prefixes, and a blank
-`[Answer]:` tag, then render the two semantic options through
-`ask_user_question`. The question's own text starts with the summary bullets, so
-the person reads what they confirm in the picker itself; the recorded decision
-stays the last line alone:
+Read and follow [Question Format]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#3-question-format),
+**Step 3a**, including its application to Steps 3b/3c, the checkpoint itself in
+the [summary protocol module]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol-summary.md),
+and the
+[Conversation event logging checklist]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#mandatory-conversation-event-logging-checklist).
+Apply the native mapping below to its normative confirmation spec. The
+question's own text starts with the summary bullets, so the person reads what
+they confirm in the picker itself; the recorded decision stays the last line
+alone:
 
 ```
 ask_user_question({
@@ -39,22 +37,9 @@ ask_user_question({
 })
 ```
 
-This is a mandatory human checkpoint, not the stage approval gate. Before
-rendering it, run the checkpoint-specific `aidlc-log.ts decision` command from
-`SKILL.md`, including the exact `--questions-file` and any `--unit` / `--single`
-identity. END THE TURN after presenting it and wait for the user's response.
-Then persist `[Answer]: Looks correct` or `[Answer]: Request changes` exactly
-and run the matching checkpoint-specific `aidlc-log.ts answer` command. Strip
-any source letter, punctuation, and option description before writing:
-`[Answer]: A. Looks correct`, `[Answer]: 1. Looks correct`, `[Answer]: A`, and
-a self-selected answer are invalid. On Request changes, when their reply
-already says what should change, those words are the feedback; otherwise ask
-**"What should change?"** and END THE TURN again, and do not update any answer
-until that feedback arrives. Then record the feedback, update the affected
-answers, reset this tag to blank, and present the consolidated summary again.
-Do not generate the artifact until the file contains the human's explicit
-`[Answer]: Looks correct` and the receipt command succeeds. Never merge this
-checkpoint with the later reviewer, learnings, or approval steps.
+On Request changes, when their reply already says what should change, those
+words are the feedback; otherwise ask **"What should change?"** and END THE
+TURN, and do not update any answer until that feedback arrives.
 
 ## Mechanism
 
