@@ -47,7 +47,7 @@ install runs its hooks and commands through `aidlc` and does not call `bun`. On
 Windows, it installs for the current account, registers the bin directory in
 persistent User PATH, and updates the current PowerShell process. Run it from a
 normal PowerShell window; one opened with "Run as administrator" gets a warning
-and a prompt, since installing as administrator is less safe. If another session cannot find `aidlc`, open a new terminal.
+and a prompt, since installing as administrator is less safe. A terminal app or IDE that was already open (Kiro, VS Code, Cursor) keeps the PATH it started with, so quit and reopen it before using `aidlc` there; a new tab inside it is not enough.
 Use [`-NoModifyPath`](18-install-and-lifecycle.md#windows-powershell) to skip
 both PATH changes and invoke the printed direct command instead. On macOS,
 Linux, or WSL, apply the installer's PATH instruction if `aidlc` is not found.

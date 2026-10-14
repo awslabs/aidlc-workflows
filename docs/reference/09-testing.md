@@ -718,7 +718,12 @@ Windows runner timing out cases) may have run up to 45 minutes and
 still gets its one retry; `retries.json` marks it `caseTimeoutsOnly`. The rule lives in
 `tests/lib/file-retry.ts`, shared with the isolated live retry. A crash or
 nonzero exit without failed cases, a file that executed no cases, a file that
-ran past its deadline, and a second failure are never retried. Only a retry that passes every case the
+ran past its deadline, and a second failure are never retried. Neither is a
+person-turn failure: a case that fails with the drives' `PersonTurnError`
+(`tests/harness/person-turns.ts`: a decision recorded as the person's with no
+reply of theirs behind it, or work started before they answered) keeps its file
+red with a `NO RETRY` line, because a pass on a second attempt would hide the
+break a person would meet. Only a retry that passes every case the
 first attempt ran replaces the first failure: a second failure, or a retry that
 skips one of those cases or executes none, stays a failure.
 The retry starts only after the first attempt's evidence is moved aside whole;
@@ -1696,7 +1701,12 @@ stops dispatch and marks remaining files incomplete.
 fresh state, while retaining both attempts under `e2e-artifacts/<file>/attempt-N`.
 (Without `--isolated-files`, the same flag retries smoke, unit and integration
 files in a fresh process; the merge queue uses that, as described above.)
-Timeouts, incomplete evidence and cleanup failures are not retried. Passing
+Timeouts, incomplete evidence, cleanup failures and person-turn failures are
+not retried; a person-turn failure also prints a `Person-turn failure` error
+line. A pass on the retry prints a `Flaky live test` warning. The Windows live
+job keeps the isolated child's output out of its log, so it says both lines
+from the collected `e2e-results.json` (`bun scripts/ci-retry-report.ts --live
+tests/logs`), in fixed words and the test file's name only. Passing
 files are not rerun. Each shard retains its authenticated isolation and required
 capability preflights. Manual `--family FAMILY --test <repository-path>` selects
 only that file on its declared platforms while preserving its shard identity.

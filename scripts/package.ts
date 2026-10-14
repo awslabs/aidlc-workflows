@@ -1322,7 +1322,7 @@ function rewriteNativeOnboarding(value: string, exactReads = false): string {
   return value
     .replace(
       /^- \*\*bun\*\*:.*$/gm,
-      "- **Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available.",
+      "- **Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available. If `aidlc` is not found in this tool, give the person both fixes in one line, then end your turn without installing anything or working around it: if AI-DLC was installed while this tool was open, quit the tool fully and reopen it (a new tab or reloaded window is not enough); otherwise the installer's bin folder is not on PATH (an install with `-NoModifyPath`, or a Unix install whose PATH line was not applied), so add the folder the installer printed to PATH, or rerun the installer without `-NoModifyPath`, then reopen the tool.",
     )
     .replace(
       /^- \*\*Hook permissions\*\*:.*$/gm,

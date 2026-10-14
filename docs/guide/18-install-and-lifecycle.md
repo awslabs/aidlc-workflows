@@ -108,15 +108,17 @@ stable `%LOCALAPPDATA%\aidlc\bin\aidlc.cmd` shim. After successful verification
 and installation, the installer registers that bin directory in the current
 account's persistent User PATH, preserving existing entries and avoiding
 duplicates on reruns. It also updates the current PowerShell process and
-notifies Windows of the environment change for new terminals. If another
-session cannot find `aidlc`, open a new terminal; restart the terminal app or
-IDE if needed.
+notifies Windows of the environment change, so programs started afterwards
+find `aidlc`. A terminal app or IDE that was already open (Kiro, VS Code,
+Cursor) keeps the PATH it started with: quit it fully and reopen it before using
+`aidlc` or AI-DLC's hooks there. A new tab or Reload Window inside it is not
+enough.
 It does not change Machine PATH or edit a PowerShell profile.
 
 Successful human output starts with `Installed`, the version, the account,
 and the installed command path. Next, run `aidlc config` from your project
-directory. Restart guidance applies only if another terminal or IDE cannot
-find the command.
+directory. When the installer added the PATH entry, it also says to quit and
+reopen any terminal app or IDE that was already open.
 
 The installer writes `windows-path.json` under the install root only when it
 adds a User PATH entry. This ownership record survives reruns, including

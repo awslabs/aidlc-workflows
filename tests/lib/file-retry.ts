@@ -1,5 +1,5 @@
 import { existsSync, renameSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 /**
  * The one rule for re-running a failed test file once. A retry is earned only
@@ -8,6 +8,9 @@ import { join } from "node:path";
  * a file that executed no cases, or a file too long to repeat within the run.
  * A case that ran past its own case timeout is a failed case; a file whose
  * only failures are such timeouts may be longer and still earn its retry.
+ * A person-turn failure never earns one: a run that saw AI-DLC act for the
+ * person found the break a person would meet, and a pass on a second attempt
+ * would hide it.
  */
 export interface RetryEvidence {
   status: "PASS" | "FAIL" | "SKIP";
@@ -18,6 +21,8 @@ export interface RetryEvidence {
   wallTimeMs: number;
   /** Every failed case failed by running past its case timeout. */
   caseTimeoutsOnly?: boolean;
+  /** A case failed a person-turn check: AI-DLC acted for the person (`personTurnFailed`). */
+  personTurnFailure?: boolean;
 }
 
 /** Isolated live files: one Bedrock-backed journey can take most of an hour. */
@@ -41,8 +46,30 @@ export const RETRY_DEADLINE_RESERVE_MS = 5 * 60_000;
 export function retryEligible(first: RetryEvidence, maxWallMs: number, remainingMs = Number.POSITIVE_INFINITY): boolean {
   const wallLimit = first.caseTimeoutsOnly === true && maxWallMs === ORDINARY_RETRY_MAX_MS ? CASE_TIMEOUT_RETRY_MAX_MS : maxWallMs;
   return first.status === "FAIL" && first.cases.failed > 0 && first.evidenceComplete === true &&
-    !first.cleanupError && !first.timedOut && first.wallTimeMs <= wallLimit &&
+    !first.cleanupError && !first.timedOut && first.personTurnFailure !== true && first.wallTimeMs <= wallLimit &&
     remainingMs > RETRY_DEADLINE_RESERVE_MS;
+}
+
+/**
+ * True when a case failed a person-turn check (tests/harness/person-turns.ts).
+ * Bun 1.4 writes the error's name as the JUnit failure type; Bun 1.3 writes
+ * every thrown error as `AssertionError`, so the error's own header line,
+ * which every Bun prints for an uncaught error, counts too.
+ */
+export function personTurnFailed(xml: string, output = ""): boolean {
+  return [...xml.matchAll(/<(failure|error)\b([^>]*)>/g)].some((match) => /\btype="PersonTurnError"/.test(match[2])) ||
+    /^PersonTurnError: /m.test(output);
+}
+
+/** The line a live file that passed only on its second attempt gets, on every OS. */
+export function flakyLiveLine(file: string): string {
+  return `::warning title=Flaky live test::${basename(file)} passed on its second attempt; both attempts are retained.`;
+}
+
+/** The line a file that failed a person-turn check gets, on every OS. */
+export function personTurnLine(file: string): string {
+  return `::error title=Person-turn failure::${basename(file)} found AI-DLC acting for the person ` +
+    "(a decision recorded as theirs with no reply of theirs behind it, or work started before they answered).";
 }
 
 /** True when a JUnit report has failed cases and every one ran past its case timeout (bun writes `type="TimeoutError"`). */

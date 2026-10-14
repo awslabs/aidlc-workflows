@@ -8529,10 +8529,20 @@ describe("t243 projection channel", () => {
           expect(allowed.some((command) => command.includes(`aidlc ${namespace}`))).toBe(false);
         }
       }
-      expect(readFileSync(join(root, ".kiro", "steering", "aidlc-onboarding.md"), "utf-8"))
-        .toContain(
-          "**Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available.",
-        );
+      const kiroOnboarding = readFileSync(join(root, ".kiro", "steering", "aidlc-onboarding.md"), "utf-8");
+      expect(kiroOnboarding).toContain(
+        "**Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available.",
+      );
+      // aidlc not found has two causes, and the agent gives both fixes: a tool
+      // opened before the install keeps its old PATH (restart it), while an
+      // install that left PATH alone needs the bin folder added, which a
+      // restart never does (#2396).
+      expect(kiroOnboarding).toContain(
+        "if AI-DLC was installed while this tool was open, quit the tool fully and reopen it (a new tab or reloaded window is not enough)",
+      );
+      expect(kiroOnboarding).toContain(
+        "otherwise the installer's bin folder is not on PATH (an install with `-NoModifyPath`, or a Unix install whose PATH line was not applied), so add the folder the installer printed to PATH, or rerun the installer without `-NoModifyPath`, then reopen the tool.",
+      );
     }
     // The unified Kiro row carries its native grant in the Markdown
     // conductor's permissions, not in .vscode settings Kiro IDE 1.x ignores.
