@@ -389,7 +389,52 @@ export type FixtureRelease = {
   tag_name: string;
   prerelease: boolean;
   draft?: boolean;
+  bodyBytes?: number;
+  assetCount?: number;
 };
+
+const RELEASE_FIXTURE_DEFAULT_PER_PAGE = 30;
+const RELEASE_FIXTURE_ASSET_COUNT = 15;
+const RELEASE_FIXTURE_ASSET_RECORD_BYTES = 1737;
+
+function paddedReleaseRecord(release: FixtureRelease, id: number): Record<string, unknown> {
+  const assetCount = release.assetCount ?? RELEASE_FIXTURE_ASSET_COUNT;
+  const assets = Array.from({ length: assetCount }, (_, index) => {
+    const base = {
+      id: id * 1000 + index,
+      name: `asset-${index}.bin`,
+      uploader: { login: "x".repeat(80) },
+    };
+    const pad = RELEASE_FIXTURE_ASSET_RECORD_BYTES - JSON.stringify(base).length;
+    return { ...base, note: "a".repeat(Math.max(0, pad)) };
+  });
+  return {
+    id,
+    tag_name: release.tag_name,
+    prerelease: release.prerelease,
+    draft: release.draft ?? false,
+    ...(release.bodyBytes !== undefined ? { body: "n".repeat(release.bodyBytes) } : {}),
+    ...(release.assetCount !== undefined || release.bodyBytes !== undefined ? { assets } : {}),
+  };
+}
+
+function releaseListPage(
+  releases: readonly FixtureRelease[],
+  listUrl: string,
+  query: URLSearchParams,
+): { body: string; link: string | null } {
+  const perPage = Math.max(1, Number(query.get("per_page") || RELEASE_FIXTURE_DEFAULT_PER_PAGE));
+  const page = Math.max(1, Number(query.get("page") || 1));
+  const start = (page - 1) * perPage;
+  const slice = releases.slice(start, start + perPage);
+  const records = slice.map((release, index) => paddedReleaseRecord(release, start + index + 1));
+  const hasNext = start + perPage < releases.length;
+  const nextUrl = `${listUrl}?per_page=${perPage}&page=${page + 1}`;
+  return {
+    body: JSON.stringify(records),
+    link: hasNext ? `<${nextUrl}>; rel="next"` : null,
+  };
+}
 
 function contentType(name: string): string {
   if (name === "version.json") return "application/json";
@@ -419,12 +464,17 @@ export function serveReleaseFixture(
         if (fault.kind === "api-failure") {
           return Response.json({ message: "API rate limit exceeded" }, { status: fault.status });
         }
-        return Response.json(releases.map((release, index) => ({
-          id: index + 1,
-          tag_name: release.tag_name,
-          prerelease: release.prerelease,
-          draft: release.draft ?? false,
-        })));
+        const { body, link } = releaseListPage(
+          releases,
+          `http://127.0.0.1:${port}/api/releases`,
+          url.searchParams,
+        );
+        return new Response(body, {
+          headers: {
+            "content-type": "application/json",
+            ...(link ? { link } : {}),
+          },
+        });
       }
       if (fault.kind === "redirect" && !url.pathname.startsWith("/fixture-assets/")) {
         return Response.redirect(

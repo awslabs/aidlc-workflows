@@ -93,16 +93,28 @@ function validateSelectedAsset(asset: ReleaseAsset, version: string): void {
 export class ReleaseUnavailableError extends Error {
   constructor(
     message: string,
-    readonly code?: "preview-api-required" | "preview-unpublished",
+    readonly code?:
+      | "preview-api-required"
+      | "preview-unpublished"
+      | "preview-list-too-large",
   ) {
     super(message);
     this.name = "ReleaseUnavailableError";
   }
 }
 
+export class ReleaseDownloadSizeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReleaseDownloadSizeError";
+  }
+}
+
 const MAX_ASSET_BYTES = 1024 * 1024 * 1024;
 const MAX_METADATA_BYTES = 1024 * 1024;
-const MAX_RELEASE_LIST_PAGES = 10;
+const RELEASE_LIST_PAGE_SIZE = 20;
+const MAX_RELEASE_LIST_PAGE_BYTES = 4 * 1024 * 1024;
+const MAX_RELEASE_LIST_PAGES = 25;
 const PROGRESS_WIDTH = 72;
 const PROVENANCE_BUNDLE = "aidlc-release.intoto.jsonl";
 const DEFAULT_RELEASE_REPOSITORY = "awslabs/aidlc-workflows";
@@ -576,7 +588,7 @@ async function fetchBytes(
     }
     const length = Number(response.headers.get("content-length") || 0);
     if (Number.isFinite(length) && length > maxBytes) {
-      throw new Error(`${redact(url)} exceeds the ${maxBytes} byte download limit`);
+      throw new ReleaseDownloadSizeError(`${redact(url)} exceeds the ${maxBytes} byte download limit`);
     }
     if (!response.body) {
       throw new ReleaseUnavailableError(`${redact(url)} returned an empty response body`);
@@ -592,7 +604,7 @@ async function fetchBytes(
       bytes += chunk.value.byteLength;
       if (bytes > maxBytes) {
         await reader.cancel();
-        throw new Error(`${redact(url)} exceeds the ${maxBytes} byte download limit`);
+        throw new ReleaseDownloadSizeError(`${redact(url)} exceeds the ${maxBytes} byte download limit`);
       }
       chunks.push(chunk.value);
     }
@@ -666,18 +678,32 @@ export async function resolvePreviewVersion(options: {
   const timeoutMs = options.timeoutMs ?? DEFAULT_SUBPROCESS_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
   let newest: string | undefined;
-  let next: string | null = `${listUrl}?per_page=100`;
+  let next: string | null = `${listUrl}?per_page=${RELEASE_LIST_PAGE_SIZE}`;
   for (let page = 0; next && page < MAX_RELEASE_LIST_PAGES; page++) {
-    const { bytes, headers } = await fetchBytes(next, {
-      timeoutMs: remainingTimeout(deadline, `${PREVIEW_CHANNEL} release list`),
-      caBundle: settings.caBundle,
-      maxBytes: MAX_METADATA_BYTES,
-      contentTypes: ["application/json"],
-      reportedTimeoutMs: timeoutMs,
-      allowQuery: true,
-      headers: GITHUB_API_HEADERS,
-      notFound: `${redact(listUrl)} returned HTTP 404; the release repository has no releases API`,
-    });
+    let bytes: Buffer;
+    let headers: Headers;
+    try {
+      ({ bytes, headers } = await fetchBytes(next, {
+        timeoutMs: remainingTimeout(deadline, `${PREVIEW_CHANNEL} release list`),
+        caBundle: settings.caBundle,
+        maxBytes: MAX_RELEASE_LIST_PAGE_BYTES,
+        contentTypes: ["application/json"],
+        reportedTimeoutMs: timeoutMs,
+        allowQuery: true,
+        headers: GITHUB_API_HEADERS,
+        notFound: `${redact(listUrl)} returned HTTP 404; the release repository has no releases API`,
+      }));
+    } catch (error) {
+      if (error instanceof ReleaseDownloadSizeError) {
+        throw new ReleaseUnavailableError(
+          `could not list ${PREVIEW_CHANNEL} releases: the release list is too large ` +
+            `to download. To update now, run \`aidlc update --version <id>\` with a ` +
+            `${PREVIEW_CHANNEL} id from https://github.com/awslabs/aidlc-workflows/releases`,
+          "preview-list-too-large",
+        );
+      }
+      throw error;
+    }
     let listed: unknown;
     try {
       listed = JSON.parse(bytes.toString("utf-8"));
