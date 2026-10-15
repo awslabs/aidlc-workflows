@@ -72,6 +72,7 @@ import {
   readAllAuditShards,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+import { writeLearningsSelections } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -431,10 +432,10 @@ describe("t97 surface (cli)", () => {
 // assertions (23/24/25) spawn the CLI twice and grep the real on-disk bytes.
 // =====================================================================
 describe("t97 persist (cli, idempotency-sensitive)", () => {
+  // The picks' file goes where `learnings surface` names it for their space,
+  // intent, and stage: the only place persist reads it (#1592).
   function writeSel(pd: string, body: string): string {
-    const p = join(pd, "sel.json");
-    writeFileSync(p, body, "utf-8");
-    return p;
+    return writeLearningsSelections(pd, JSON.parse(body));
   }
 
   test("project learning -> cid marker, practice under routed heading, RULE_LEARNED audit row", () => {
@@ -500,8 +501,13 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
   test("framework-distribution sensor manifest path -> exit 1", () => {
     const pd = mkproj("p21");
     mkdirSync(join(pd, "dist", "claude", ".claude", "sensors"), { recursive: true });
+    // The picks' file sits where surface names it for the project persist runs
+    // against, so the refusal below is the framework-tier one this case names.
+    const frameworkProject = join(pd, "dist", "claude");
+    mkdirSync(join(frameworkProject, "aidlc", "spaces", "default", "intents"), { recursive: true });
+    writeFileSync(join(frameworkProject, "aidlc", "spaces", "default", "intents", "aidlc-state.md"), "# AI-DLC State Tracking\n- **Current Stage**: user-stories\n- **Scope**: feature\n", "utf-8");
     const sel = writeSel(
-      pd,
+      frameworkProject,
       `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [
   { "candidate_id": "c9", "type": "sensor", "origin_stage": "user-stories",
     "manifest_fields": { "id": "bad", "kind": "deterministic", "command": "x", "default_severity": "advisory", "description": "d", "matches": "**/*" } } ] }
@@ -515,9 +521,9 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
         "--selections-json",
         sel,
         "--project-dir",
-        join(pd, "dist", "claude"),
-      ]).rc,
-    ).toBe(1);
+        frameworkProject,
+      ]),
+    ).toMatchObject({ rc: 1, stderr: expect.stringContaining("under the framework distribution") });
   });
 
   test("free-text -> Source: user_addition + Candidate-ID free_text_1", () => {
@@ -656,31 +662,26 @@ describe("t97 persist sensor bind keeps the stage header whole (cli)", () => {
     const stagesRoot = join(pd, ".claude", "skills", "aidlc", "stages");
     const stageFile = join(stagesRoot, "inception", "user-stories.md");
     writeFileSync(stageFile, before, "utf-8");
-    const sel = join(pd, "sel.json");
-    writeFileSync(
-      sel,
-      JSON.stringify({
-        stage_slug: "user-stories",
-        space: "default",
-        intent: null,
-        selections: [
-          {
-            candidate_id: "c5",
-            type: "sensor",
-            origin_stage: "user-stories",
-            manifest_fields: {
-              id: ID,
-              kind: "deterministic",
-              command: `bun .claude/tools/aidlc-sensor.ts fire ${ID}`,
-              default_severity: "advisory",
-              description: "Checks AC format",
-              matches: "**/user-stories/**",
-            },
+    const sel = writeLearningsSelections(pd, {
+      stage_slug: "user-stories",
+      space: "default",
+      intent: null,
+      selections: [
+        {
+          candidate_id: "c5",
+          type: "sensor",
+          origin_stage: "user-stories",
+          manifest_fields: {
+            id: ID,
+            kind: "deterministic",
+            command: `bun .claude/tools/aidlc-sensor.ts fire ${ID}`,
+            default_severity: "advisory",
+            description: "Checks AC format",
+            matches: "**/user-stories/**",
           },
-        ],
-      }),
-      "utf-8",
-    );
+        },
+      ],
+    });
     const res = runCli(
       ["persist", "--slug", "user-stories", "--selections-json", sel, "--project-dir", pd],
       { env: { AIDLC_STAGES_DIR: stagesRoot } },
