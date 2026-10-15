@@ -136,7 +136,13 @@ Distribution coverage is split by contract:
   without failing the preview workflow.
 - `t-ci-preview-test-report.test.ts` covers the preview's Full Suite report:
   failing files and cases from each artifact's own run (never the runner's
-  fixture runs), failed jobs, inert markup, and the report size budget.
+  fixture runs), failed jobs, inert markup, the report size budget, and the
+  answers corpus section (read from the live artifacts' last attempt, on a pass
+  and a failure, kept out of the published notes).
+- `t-live-answers-nightly.test.ts` covers the answers corpus's nightly run: the
+  date rotation, the switch that opens it in the Claude SDK live job, a miss
+  reported but not owed while a drive that throws still fails, and the summary
+  the nightly report reads back.
 - `t-ci-full-suite-evidence.test.ts` covers the stable release Full Suite gate:
   which earlier runs may supply evidence, which results qualify for the exact
   tagged commit, the fallback to running the suite, and the `release.yml` wiring
@@ -955,7 +961,7 @@ What people type after `/aidlc`, and in plain chat once work is under way: one i
 
 ### Answers Corpus: `tests/fixtures/aidlc-answers/corpus.json`
 
-What people reply to every question AI-DLC asks them: one item per reply at the state where that question is open (the stage gate, the gate with Accept as-is, a blocking-sensor question, the code plan question, the Unit and batch checkpoints, the verification command, a Construction policy change, the summary confirmation, a stage question the agent asked, the interaction-mode question, the routing question, the plan offer and scope confirmation, the record pick, the project-type question, a paused Unit, a guard-recovery ask, re-entry, a reopened stage, the learnings question, a jump target), with `meaning` (what the person means), `reader` (`tool` when the reply is an exact pick as the options were shown, `agent` otherwise), `expected.engine` (the choice a tool may record from the reply alone, the words that must be kept, the engine's step) and `expected.end` (what the person ends with after a real agent acted, for the live check). Replies are typed in plain chat, typed after `/aidlc` or `$aidlc`, or picked in the question box. Items whose expectation needs a change not merged yet carry `after` and are skipped until it lands. The shared mechanics live in `tests/harness/aidlc-answers-corpus.ts`; `tests/unit/t-aidlc-answers-corpus.test.ts` runs every item through each host's human-turn hook, then the engine's step and the agent's answer command (`AIDLC_ANSWERS_ONLY=<ids>` narrows a run, `AIDLC_ANSWERS_PARALLEL` sets the pool). `tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts` drives a sample through real agents on demand (`AIDLC_ANSWERS_LIVE=1`): the real agent shows the question first (a bare `/aidlc` at the fixture's state), then the person replies in chat, after `/aidlc`, or in the question box; the script judges what is on disk against `expected.end` (the choice recorded with the person's words beside it, the message record, a question asked twice), a model judges what the agent told the person against `meaning` and `says`, and a report with a score per question and every miss with its transcript excerpt lands under `AIDLC_ANSWERS_REPORT_DIR`. The two live checks share `tests/harness/live-corpus.ts` (gates, the seeded sample, scratch projects and homes, the home digests, the model judge, the report).
+What people reply to every question AI-DLC asks them: one item per reply at the state where that question is open (the stage gate, the gate with Accept as-is, a blocking-sensor question, the code plan question, the Unit and batch checkpoints, the verification command, a Construction policy change, the summary confirmation, a stage question the agent asked, the interaction-mode question, the routing question, the plan offer and scope confirmation, the record pick, the project-type question, a paused Unit, a guard-recovery ask, re-entry, a reopened stage, the learnings question, a jump target), with `meaning` (what the person means), `reader` (`tool` when the reply is an exact pick as the options were shown, `agent` otherwise), `expected.engine` (the choice a tool may record from the reply alone, the words that must be kept, the engine's step) and `expected.end` (what the person ends with after a real agent acted, for the live check). Replies are typed in plain chat, typed after `/aidlc` or `$aidlc`, or picked in the question box. Items whose expectation needs a change not merged yet carry `after` and are skipped until it lands. The shared mechanics live in `tests/harness/aidlc-answers-corpus.ts`; `tests/unit/t-aidlc-answers-corpus.test.ts` runs every item through each host's human-turn hook, then the engine's step and the agent's answer command (`AIDLC_ANSWERS_ONLY=<ids>` narrows a run, `AIDLC_ANSWERS_PARALLEL` sets the pool). `tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts` drives a sample through real agents on demand (`AIDLC_ANSWERS_LIVE=1`): the real agent shows the question first (a bare `/aidlc` at the fixture's state), then the person replies in chat, after `/aidlc`, or in the question box; the script judges what is on disk against `expected.end` (the choice recorded with the person's words beside it, the message record, a question asked twice), a model judges what the agent told the person against `meaning` and `says`, and a report with a score per question and every miss with its transcript excerpt, and a summary for the nightly report, lands under `AIDLC_ANSWERS_REPORT_DIR`. The nightly runs it too, in the Claude SDK family's Linux live job, where no switch of its own reaches the file: on GitHub Actions with `AIDLC_CLAUDE_SDK_LIVE=1` it drives Claude Code only, one item per question chosen by a date rotation (night N of the rotation from 2026-10-15 drives each question's item N modulo the question's item count, in corpus order, so every item comes round within as many nights as the largest question has items), and it reports every miss without failing (`NIGHTLY_MISSES_FAIL` in the file makes misses fail it, as on demand). A drive that throws, a run that drives no item, or a changed real home still fails the file. The nightly report's Answers corpus section shows the result (see [Nightly full-suite matrix and provisioning](#nightly-full-suite-matrix-and-provisioning)). The two live checks share `tests/harness/live-corpus.ts` (gates, the seeded sample and the nightly's rotation, scratch projects and homes, the home digests, the model judge, the report and its summary).
 
 ## State Fixtures
 
@@ -1025,6 +1031,7 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 | `AIDLC_ANSWERS_HARNESSES` | `claude,codex,kiro` | Which agents the live answers check drives. |
 | `AIDLC_ANSWERS_SAMPLE` | `2` | Items per question for the live answers check, or a comma list of item ids. |
 | `AIDLC_ANSWERS_SEED` | `1` | Seed of the live answers check's sample, so a re-run drives the same items. |
+| `AIDLC_ANSWERS_REPORT_DIR` | `aidlc-answers-live` in the run's log folder (`AIDLC_TEST_LOG_DIR`, else `tests/logs`) | Where the live answers check writes its report, its transcripts and the summary the nightly report reads. |
 | `AIDLC_INPUT_REPORT_DIR` | `tests/logs/aidlc-input-live` | Where the live input check writes its report (a score per category and every miss with its transcript excerpt). |
 | `AIDLC_INPUT_ONLY` | unset | Comma list of corpus item ids that narrows the unit input check (`tests/unit/t-aidlc-input-corpus.test.ts`). |
 | `AIDLC_INPUT_PARALLEL` | `6` | Fixture pool size of the unit input check. |
@@ -1567,6 +1574,12 @@ matrix again; Full Suite owns its test coverage. A failing Full Suite does not
 stop the preview build. The `Release tests` job renders a report of the failed
 legs, failed jobs and failing test cases with `scripts/ci-preview-test-report.ts`.
 It writes the report to the run summary and a `preview-test-report` artifact.
+Passing or failing, the report ends with the answers corpus's nightly reading
+(`### Answers corpus`): the replies that passed, the misses by kind (setup,
+the check's own when the agent never showed the question; record, question,
+words) and each missed item by id, from the summary the live check
+leaves in its `full-suite-live-*` artifact, or a line that none was there. That
+section is report-only and never goes into the published notes.
 The published preview notes then open with a warning and end with that report.
 The planned notes stay whole. The report, and when even that leaves no room the
 warning, gives way first, so a failing suite never stops a preview whose planned
@@ -1737,8 +1750,9 @@ After authorization and dependency installation, the plan emits `--matrix
 linux`, `--matrix macos` and `--matrix windows` as the dynamic matrices of the
 `live_linux`, `live_macos` and `live_windows` jobs. Each row's `shard: N/M`
 selects a duration-balanced group for its family/platform. Each OS has two Claude
-SDK (four on Linux, which alone runs the golden journeys), three Claude TUI, one
-Codex, one Copilot and one opencode shard: 26 live harness jobs in all. Timing weights in
+SDK (five on Linux, which alone runs the golden journeys and the answers corpus,
+the corpus on a shard of its own), three Claude TUI, one Codex, one Copilot and one
+opencode shard: 27 live harness jobs in all. Timing weights in
 `tests/live-shard-weights.json` are scheduling hints;
 discovery still assigns every eligible file exactly once per platform. Each OS
 has its own concurrency cap: four Linux, two macOS and three Windows live jobs.
@@ -1810,7 +1824,7 @@ generic plugin helper does not claim coverage for every provider it supports.
 Unit gate-fixture tests are deterministic, not live families. `PLATFORM_ONLY`
 names the files that run on some platforms only, and, with no platform, the
 on-demand checks that open only with a switch of their own that no live job sets
-(the input and answers corpus checks); it never hides a skipped case inside a
+(the input corpus check); it never hides a skipped case inside a
 selected file. All live provider legs use `--require-coverage`;
 release-contract files retain platform-conditional cases and do not use that flag.
 

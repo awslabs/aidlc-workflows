@@ -34,9 +34,9 @@ export type VerificationFamily = (typeof VERIFICATION_FAMILIES)[number];
 export const LIVE_SHARD_COUNTS: Partial<Record<LiveFamily, number>> = {
   "claude-sdk": 2, "claude-tui": 3, codex: 1, copilot: 1, opencode: 1, "release-contract": 1,
 };
-/** More shards where a family's files run on one OS only (the golden journeys run on Linux). */
+/** More shards where a family's files run on one OS only (the golden journeys and the answers corpus run on Linux). */
 export const LIVE_PLATFORM_SHARD_COUNTS: Partial<Record<LiveFamily, Partial<Record<NodeJS.Platform, number>>>> = {
-  "claude-sdk": { linux: 4 },
+  "claude-sdk": { linux: 5 },
 };
 
 export function liveShardCount(family: LiveFamily, platform: NodeJS.Platform): number {
@@ -103,9 +103,11 @@ export const PLATFORM_ONLY: Record<string, readonly NodeJS.Platform[]> = {
   // The golden journeys run nightly on Linux; stage logic is the same on every OS.
   "tests/integration/t-journey-golden-bugfix.sdk.test.ts": ["linux"],
   "tests/integration/t-journey-golden-poc.sdk.test.ts": ["linux"],
-  // On demand only: these open with their own switch (AIDLC_INPUT_LIVE,
-  // AIDLC_ANSWERS_LIVE), which no live job sets, so no platform runs them.
-  "tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts": [],
+  // The answers corpus opens on the family's gate in a live job too: one item
+  // per question a night, by a date rotation, on Linux (its own shard).
+  "tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts": ["linux"],
+  // On demand only: this opens with its own switch (AIDLC_INPUT_LIVE), which no
+  // live job sets, so no platform runs it.
   "tests/e2e/t-live-aidlc-input-corpus.serial.test.ts": [],
 };
 

@@ -1,8 +1,9 @@
 // The shared mechanics of the live corpus checks (tests/e2e/t-live-aidlc-input-corpus.serial.test.ts and
 // tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts): which real agents a run drives and each one's gate, a seeded
-// sample, the scratch project and scratch home per harness, the real homes listed and hashed, the model judge of what
-// the agent told the person, and the report (a score per group, every miss with its transcript excerpt, the transcripts
-// as one JSON line each). What each check judges on disk stays in its own file.
+// sample or the nightly's rotation, the scratch project and scratch home per harness, the real homes listed and hashed,
+// the model judge of what the agent told the person, and the report (a score per group, every miss with its transcript
+// excerpt, the transcripts as one JSON line each, a summary for the nightly report). What each check judges on disk
+// stays in its own file.
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
@@ -69,6 +70,28 @@ export function sampleByGroup<T extends { id: string }>(pool: T[], spec: string,
   return out;
 }
 
+/** A Full Suite live job of the Claude SDK family: no switch of a check's own reaches the file there (the job's sandbox
+ * passes the family's gate alone), so a corpus check that runs nightly opens on this. */
+export function inNightly(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.GITHUB_ACTIONS === "true" && env.AIDLC_CLAUDE_SDK_LIVE === "1";
+}
+
+/** The first night of the nightly's rotation, a UTC date. */
+export const ROTATION_START = "2026-10-15";
+/** Nights since ROTATION_START, counted by UTC date. */
+export function nightOf(now: Date): number {
+  return Math.floor((now.getTime() - Date.parse(`${ROTATION_START}T00:00:00Z`)) / 86_400_000);
+}
+
+/** One item of each group of `pool` on night `night`: a group's items in pool order, one a night, so every item comes
+ * round within as many nights as the largest group has items. */
+export function rotateByGroup<T>(pool: T[], night: number, group: (item: T) => string): T[] {
+  return [...new Set(pool.map(group))].map((name) => {
+    const of = pool.filter((i) => group(i) === name);
+    return of[((night % of.length) + of.length) % of.length];
+  });
+}
+
 /** The build of the tool a harness drives, as the tool reports it ("unknown" when it cannot be asked). */
 export function toolVersion(harness: LiveHarness): string {
   const bin = harness === "claude" ? "claude" : harness === "codex" ? process.env.AIDLC_CODEX_BIN ?? "codex" : "kiro-cli";
@@ -109,6 +132,14 @@ export const drivesHome = (home: string, harnesses: readonly LiveHarness[]): boo
 
 export interface Transcript { tools: string[]; text: string; asks: number | null; raw?: string }
 export interface LiveOutcome<T> { item: T; harness: LiveHarness; prompt: string; failures: string[]; endSummary: string; transcript: Transcript }
+
+/** One item driven: its outcome kept for the report, and the misses its test owes, none when the run only reports
+ * them. A drive that throws (the check itself could not run) fails the item either way. */
+export async function liveItem<T>(drive: () => Promise<LiveOutcome<T>>, outcomes: LiveOutcome<T>[], reportOnly: boolean): Promise<{ outcome: LiveOutcome<T>; owed: string[] }> {
+  const outcome = await drive();
+  outcomes.push(outcome);
+  return { outcome, owed: reportOnly ? [] : outcome.failures };
+}
 
 export interface LiveProject { proj: string; home?: string; cleanup: () => void }
 /** A scratch project on the harness's shipped tree, with a scratch home where the driver takes one (Codex). */
@@ -228,19 +259,58 @@ export interface LiveReport<T extends { id: string; meaning: string }> {
   /** The bracketed label after an item's id in the misses section. */
   label: (o: LiveOutcome<T>) => string;
   sampleLine: string;
+  /** True when a miss is reported only and does not fail the run (the nightly's run). */
+  reportOnly?: boolean;
   /** The real homes hashed before the run. */
   homes: Map<string, HomeDigest>;
   drives: (home: string) => boolean;
 }
-export function writeLiveReport<T extends { id: string; meaning: string }>(report: LiveReport<T>): void {
+
+/** One harness's run in brief, written beside its report as SUMMARY-<harness>-<sha>-<stamp>.json for the nightly report
+ * (scripts/ci-preview-test-report.ts reads it). */
+export interface LiveSummary {
+  title: string;
+  harness: LiveHarness;
+  sha: string;
+  stamp: string;
+  sample: string;
+  reportOnly: boolean;
+  items: number;
+  passed: number;
+  misses: Record<MissKind, number>;
+  missed: { id: string; group: string; kinds: MissKind[] }[];
+}
+/** The check's own misses ("setup:", "drive:" lines: the agent never showed the question, or the drive could not account
+ * for a decision) apart from the agent's three kinds. */
+type MissKind = "setup" | "record" | "question" | "words";
+const checksOwn = (failure: string): boolean => /^(setup|drive): /.test(failure);
+export function liveSummary<T extends { id: string; meaning: string }>(report: LiveReport<T>, harness: LiveHarness, sha: string, stamp: string): LiveSummary {
+  const mine = report.outcomes.filter((o) => o.harness === harness);
+  const missed = mine.filter((o) => o.failures.length > 0).map((o) => {
+    const agents = o.failures.filter((f) => !checksOwn(f));
+    const kinds = missKinds(agents);
+    return {
+      id: o.item.id, group: report.group(o),
+      kinds: [...(agents.length < o.failures.length ? ["setup" as const] : []), ...(["record", "question", "words"] as const).filter((k) => kinds[k])],
+    };
+  });
+  const count = (kind: MissKind) => missed.filter((m) => m.kinds.includes(kind)).length;
+  return {
+    title: report.title, harness, sha, stamp, sample: report.sampleLine, reportOnly: report.reportOnly === true, items: mine.length,
+    passed: mine.length - missed.length, misses: { setup: count("setup"), record: count("record"), question: count("question"), words: count("words") }, missed,
+  };
+}
+
+export function writeLiveReport<T extends { id: string; meaning: string }>(report: LiveReport<T>): LiveSummary[] {
   const { outcomes } = report;
-  if (outcomes.length === 0) return;
+  if (outcomes.length === 0) return [];
+  const summaries: LiveSummary[] = [];
   mkdirSync(report.dir, { recursive: true });
   const sha = spawnSync("git", ["rev-parse", "--short", "HEAD"], { cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) }).stdout.trim();
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   for (const harness of [...new Set(outcomes.map((o) => o.harness))]) {
     const mine = outcomes.filter((o) => o.harness === harness);
-    const lines = [`# ${report.title}: ${harness} at ${sha} (${stamp})`, "", `${report.sampleLine} Items driven: ${mine.length}.`,
+    const lines = [`# ${report.title}: ${harness} at ${sha} (${stamp})`, "", `${report.sampleLine} Items driven: ${mine.length}.${report.reportOnly ? " Report-only: a miss does not fail the run." : ""}`,
       `Driven: ${harness} ${toolVersion(harness)}. The judge of the words: claude ${toolVersion("claude")}.`, "", `## Score per ${report.groupName}`, "", `Misses are counted three ways: record (${report.recordMeans}), question (one the item did not allow), words (engine words in what the agent told the person). One miss can count in several.`, "", `| ${report.groupName} | pass | total | record | question | words |`, "|---|---|---|---|---|---|"];
     for (const name of [...new Set(mine.map(report.group))]) {
       const rows = mine.filter((o) => report.group(o) === name);
@@ -265,5 +335,9 @@ export function writeLiveReport<T extends { id: string; meaning: string }>(repor
     // Every transcript as judged, one JSON line per item, so the words can be re-read without driving the agents again.
     const rows = mine.map((o) => JSON.stringify({ id: o.item.id, prompt: o.prompt, failures: o.failures, end: o.endSummary, asks: o.transcript.asks, text: o.transcript.text, tools: o.transcript.tools }));
     writeFileSync(join(report.dir, `TRANSCRIPTS-${harness}-${sha}-${stamp}.jsonl`), `${rows.join("\n")}\n`, "utf-8");
+    const summary = liveSummary(report, harness, sha, stamp);
+    writeFileSync(join(report.dir, `SUMMARY-${harness}-${sha}-${stamp}.json`), `${JSON.stringify(summary)}\n`, "utf-8");
+    summaries.push(summary);
   }
+  return summaries;
 }
