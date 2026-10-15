@@ -373,11 +373,12 @@ regions, and the non-interactive hook runtime. With one detected harness, the
 wizard names it and offers three choices: recommended defaults, six-step
 customization, or exit with nothing written. Multiple detected harnesses get a
 numbered harness picker first; no detected harness gets the complete picker
-without a default. A Kiro CLI at 2.24.1 or later counts for both Kiro rows; the
-wizard then prefers Kiro IDE (`kiro-ide`), whose `.kiro/settings/cli.json` pins
-Kiro's v3 engine, to Kiro CLI (`kiro`). Other detected harnesses keep their
-order, a harness editor's own terminal still comes first, and the picker's list
-and numbers stay the same.
+without a default. A Kiro CLI at 2.24.1 or later counts for both Kiro
+harnesses. The picker lists `kiro` as Kiro CLI (V2): it pins no engine and is
+built for Kiro CLI's v2 engine. It lists `kiro-ide` as Kiro, for Kiro IDE and
+Kiro CLI on its v3 engine. Of the two, Kiro CLI (V2) comes first, so Enter
+takes it unless an earlier detected harness leads the list or setup runs in a
+harness editor's own terminal, whose harness comes first.
 
 Before any setup choices, the wizard probes the project filesystem using
 temporary files and directories, then removes them. It checks transaction

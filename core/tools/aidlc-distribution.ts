@@ -56,6 +56,8 @@ export type ProjectionDescriptor = {
   schemaVersion: 1;
   distribution: string;
   productName: string;
+  choiceName?: string;
+  choiceNote?: string;
   configNextStep: string;
   firstRunSteps?: string[];
   editorTerminalApp?: string;
@@ -352,6 +354,16 @@ export function jsonEntriesIsSafe(integration: Pick<RootIntegration, "path" | "p
   return integration.policy === "json-entries";
 }
 
+// The lists pad a name to 16 columns, so a name leaves at least one space.
+const CHOICE_NAME = /^[A-Za-z0-9][A-Za-z0-9 .,()+-]{0,14}$/;
+const CHOICE_NOTE = /^[A-Za-z0-9][A-Za-z0-9 .,()+-]{0,59}$/;
+
+/** Whether a harness-list name and note are text the lists can show; the packager and the reader both ask. */
+export function harnessChoiceTextIsPlain(text: { choiceName?: unknown; choiceNote?: unknown }): boolean {
+  return (text.choiceName === undefined || (typeof text.choiceName === "string" && CHOICE_NAME.test(text.choiceName))) &&
+    (text.choiceNote === undefined || (typeof text.choiceNote === "string" && CHOICE_NOTE.test(text.choiceNote)));
+}
+
 export function validateProjectionDescriptor(
   root: string,
   stamp: ProjectionStamp,
@@ -369,6 +381,10 @@ export function validateProjectionDescriptor(
     descriptor.configNextStep.trim().length === 0
   ) {
     throw new Error(`${root}: projection identity is invalid`);
+  }
+  // Shown in the harness lists as they are, so only plain words reach the terminal.
+  if (!harnessChoiceTextIsPlain(descriptor)) {
+    throw new Error(`${root}: projection harness-list text is invalid`);
   }
   if (
     (descriptor.firstRunSteps !== undefined &&

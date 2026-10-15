@@ -194,7 +194,7 @@ export const HARNESS_PRODUCT_NAMES: Readonly<Record<ModelHarness, string>> = Obj
   copilot: "GitHub Copilot",
   cursor: "Cursor",
   kiro: "Kiro CLI",
-  "kiro-ide": "Kiro IDE",
+  "kiro-ide": "Kiro",
   opencode: "opencode",
 });
 

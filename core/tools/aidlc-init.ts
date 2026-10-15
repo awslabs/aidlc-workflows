@@ -7527,14 +7527,14 @@ function selectSource(
   if (configInputIsTty()) {
     process.stdout.write("Select a harness for this project:\n\n");
     for (const [index, candidate] of versionFiltered.entries()) {
-      process.stdout.write(
-        `  ${index + 1}. ${candidate.descriptor.productName}\n`,
-      );
+      const note = candidate.descriptor.choiceNote;
+      if (note) writeMenuRow(`  ${index + 1}. ${choiceName(candidate).padEnd(16)}`, note);
+      else process.stdout.write(`  ${index + 1}. ${choiceName(candidate)}\n`);
     }
     const selected = versionFiltered[
       promptChoice("Harness", versionFiltered.length) - 1
     ];
-    process.stdout.write(`Using ${selected.descriptor.productName}.\n`);
+    process.stdout.write(`Using ${choiceName(selected)}.\n`);
     return selected;
   }
   throw new Error(
@@ -7993,20 +7993,11 @@ function detectedCandidateChoices(
   candidates: readonly InstalledSourceCandidate[],
   detection: FirstRunDetection,
 ): InstalledSourceCandidate[] {
+  // Both Kiro trees count a supported `kiro-cli`; when both are found, a
+  // release's own list puts Kiro CLI (V2) first, so it is the default.
   const detected = candidates.filter((candidate) =>
     detection.harnesses[candidate.stamp.distribution]?.found
   );
-  // Both Kiro rows count a supported `kiro-cli`. The kiro-ide row pins Kiro's
-  // v3 engine in its settings/cli.json and the kiro row pins none, so Kiro
-  // picks that row's engine; when both are found, kiro-ide comes first of the
-  // two. Every other harness keeps its order, and the editor lead below still
-  // comes first.
-  const kiro = detected.findIndex((candidate) => candidate.stamp.distribution === "kiro");
-  const kiroIde = detected.findIndex((candidate) => candidate.stamp.distribution === "kiro-ide");
-  if (kiro !== -1 && kiroIde > kiro) {
-    const [preferred] = detected.splice(kiroIde, 1);
-    detected.splice(kiro, 0, preferred);
-  }
   // In the terminal of a harness's own editor, that harness leads: it is
   // chosen outright when no other harness CLI is found, and is the default
   // when one is.
@@ -8028,12 +8019,17 @@ function renderHarnessChoices(
       ...(!detected?.found && detected?.probed === false ? ["not probed"] : []),
       ...(candidate.stamp.distribution === defaultDistribution ? ["default"] : []),
     ];
-    process.stdout.write(
-      `    ${index + 1}. ${candidate.descriptor.productName.padEnd(16)}${
-        tags.length > 0 ? `(${tags.join(", ")})` : ""
-      }\n`,
-    );
+    const note = [
+      ...(tags.length > 0 ? [`(${tags.join(", ")})`] : []),
+      ...(candidate.descriptor.choiceNote ? [candidate.descriptor.choiceNote] : []),
+    ].join("  ");
+    writeMenuRow(`    ${index + 1}. ${choiceName(candidate).padEnd(16)}`, note);
   }
+}
+
+// The name the harness lists show for a candidate.
+function choiceName(candidate: InstalledSourceCandidate): string {
+  return candidate.descriptor.choiceName ?? candidate.descriptor.productName;
 }
 
 function chooseHarness(
@@ -8053,7 +8049,7 @@ function chooseHarness(
     defaultIndex && defaultIndex > 0 ? defaultIndex : undefined,
   );
   const candidate = candidates[selected - 1];
-  process.stdout.write(`  Using ${candidate.descriptor.productName}.\n\n`);
+  process.stdout.write(`  Using ${choiceName(candidate)}.\n\n`);
   return candidate;
 }
 
@@ -8831,7 +8827,7 @@ function customizeFirstRun(
         "  Detected on this machine: ",
         `${
           detected.length > 0
-            ? detected.map((item) => item.descriptor.productName).join(", ")
+            ? detected.map(choiceName).join(", ")
             : "none"
         }.`,
       );
@@ -8861,7 +8857,7 @@ function customizeFirstRun(
     if (step === 2) {
       const distribution = choices.candidate.stamp.distribution;
       // Kiro IDE's row asks only when kiro-cli is there to read; without it
-      // the step says model access comes with Kiro IDE, as before.
+      // the step says model access comes with Kiro.
       if (distribution === "kiro-ide" && choices.kiro === undefined) choices.kiro = kiroSessionFor(distribution);
       if (distribution === "kiro-ide" && choices.kiro) {
         process.stdout.write("  Step 2 of 6 - Session model\n");
@@ -9039,7 +9035,7 @@ function customizeFirstRun(
   for (let step = 1; step <= 6; step++) editStep(step);
   while (true) {
     process.stdout.write("  Your choices - Enter to apply, or a number to change:\n");
-    process.stdout.write(`    1. Harness      ${choices.candidate.descriptor.productName}\n`);
+    process.stdout.write(`    1. Harness      ${choiceName(choices.candidate)}\n`);
     const kiroCli = choices.candidate.stamp.distribution === "kiro";
     // A harness changed to a Kiro row here has not visited step 2: show the
     // session it would keep, read now; step 2 is one number away. Kiro IDE's

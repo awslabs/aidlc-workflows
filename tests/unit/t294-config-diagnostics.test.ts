@@ -6343,7 +6343,7 @@ process.exit(0);
     const show = run([...args, "--show"], project, env);
     expect(show.status, show.stdout + show.stderr).toBe(0);
     expect(show.stdout).toContain(
-      "Model access: comes with Kiro IDE; AI-DLC configures no model provider",
+      "Model access: comes with Kiro; AI-DLC configures no model provider",
     );
     expect(show.stdout).toContain("Legacy provider answer present and ignored;");
     expect(show.stdout).toContain("config providers --reset");
