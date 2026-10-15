@@ -896,7 +896,8 @@ a conversation outside the selected workflow writes nothing into it and is not h
 by its gates, while runtime integrity, direct lifecycle-command refusals and the
 claimed-checkout write bound still apply. The engine treats such a conversation as
 having no active intent (`next` asks which intent to work on; `continue`, `report`
-and `park` refuse). When participation cannot be decided because a sibling-only
+and `park` refuse with a step for the agent: list the work, select the one the request is for, run the
+same command again). When participation cannot be decided because a sibling-only
 worktree's delegated metadata is malformed or stale, no workflow is selected: hooks
 write nothing, the reviewer read scope fails open, gates do not stand aside so
 Plan Approval refuses mutations, and the engine refuses with the file to repair
