@@ -47,7 +47,8 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 
@@ -158,8 +159,8 @@ function findProjectRoot(filePath: string): string | null {
 // its major: the project chose that version and its config together (an
 // ESLint 8 reads the .eslintrc.* it ships with; the pin cannot), and it is
 // already provisioned and never needs the bunx download cache. The one
-// exception keeps the case the pin was added for: a flat eslint.config.* at
-// the project root or above beside an install older than 9 takes the pin,
+// exception keeps the case the pin was added for: a flat eslint.config.*
+// governing the linted file beside an install older than 9 takes the pin,
 // which can read it.
 const ESLINT_SPEC = "eslint@10";
 const FLAT_CONFIG_FILES = [
@@ -197,28 +198,36 @@ function governingFlatConfig(dir: string): string | null {
 	}
 }
 
-// The node_modules/eslint the Node lookup from cwd finds first, a link or not.
-// Bun resolves a package no node_modules holds from its own install cache, a
-// copy that cannot run: only a resolution that is this entry counts.
-function nodeModulesEslint(cwd: string): string | null {
-	let dir = resolve(cwd);
-	for (;;) {
-		const manifest = join(dir, "node_modules", "eslint", "package.json");
-		if (existsSync(manifest)) return realpathSync(manifest);
-		const parent = dirname(dir);
-		if (parent === dir) return null;
-		dir = parent;
-	}
+// Bun resolves a package no node_modules or NODE_PATH holds from its own
+// install cache, a copy that cannot run; every other resolution (node_modules,
+// a link out of it, NODE_PATH) is an install the project chose.
+function bunInstallCache(): string {
+	const explicit = process.env.BUN_INSTALL_CACHE_DIR?.trim();
+	if (explicit) return explicit;
+	return join(process.env.BUN_INSTALL?.trim() || join(homedir(), ".bun"), "install", "cache");
 }
 
-export function localEslintPath(cwd: string): string | null {
+function inBunInstallCache(path: string): boolean {
+	let cache: string;
+	try {
+		cache = realpathSync(bunInstallCache());
+	} catch {
+		return false;
+	}
+	const rel = relative(cache, realpathSync(path));
+	return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+// governing is the flat config that governs the linted file, the one the
+// runtime choice reads too; localEslintPath alone resolves it from cwd.
+function projectEslint(cwd: string, governing: string | null): string | null {
 	try {
 		const manifestPath = createRequire(join(cwd, "package.json")).resolve("eslint/package.json");
-		if (nodeModulesEslint(cwd) !== realpathSync(manifestPath)) return null;
+		if (inBunInstallCache(manifestPath)) return null;
 		const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
 		if (manifest.name !== "eslint" || typeof manifest.version !== "string") return null;
 		const major = Number(manifest.version.split(".")[0]);
-		if (major < 9 && governingFlatConfig(cwd)) return null;
+		if (major < 9 && governing) return null;
 		const cli = join(dirname(manifestPath), "bin", "eslint.js");
 		return existsSync(cli) ? cli : null;
 	} catch {
@@ -226,11 +235,8 @@ export function localEslintPath(cwd: string): string | null {
 	}
 }
 
-// ESLint loads a TypeScript flat config through jiti under Node, which neither
-// the pin nor a project without jiti provides, and natively under Bun, which
-// every install already runs on.
-function typeScriptFlatConfigGoverns(filePath: string): boolean {
-	return /\.[mc]?ts$/.test(governingFlatConfig(dirname(resolve(filePath))) ?? "");
+export function localEslintPath(cwd: string): string | null {
+	return projectEslint(cwd, governingFlatConfig(cwd));
 }
 
 function jitiBeside(cli: string): boolean {
@@ -243,20 +249,17 @@ function jitiBeside(cli: string): boolean {
 }
 
 function invokeEslint(args: string[], cwd: string, filePath: string) {
-	const local = localEslintPath(cwd);
-	const underBun = typeScriptFlatConfigGoverns(filePath) && !(local && jitiBeside(local));
-	// A native install has no bunx of its own; its executable is Bun when told to
-	// be, and only that run is told: ESLint under Node and the project's config
-	// and plugins it loads keep the environment the project set.
-	const native = compiledExecutable();
-	const options = { encoding: "utf-8" as const, timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS, cwd, env: process.env };
-	const asBun = { ...options, env: { ...process.env, BUN_BE_BUN: "1" } };
+	const governing = governingFlatConfig(dirname(resolve(filePath)));
+	const local = projectEslint(cwd, governing);
+	// ESLint loads a TypeScript flat config through jiti under Node, which
+	// neither the pin nor a project without jiti provides, and natively under
+	// Bun. Only a copy install runs on Bun; a native one keeps Node.
+	const underBun = /\.[mc]?ts$/.test(governing ?? "") && !(local && jitiBeside(local));
+	const options = { encoding: "utf-8" as const, timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS, cwd };
 	// ESLint's published executable uses Node too. Naming its installed file
 	// avoids both PATH-shadowed eslint binaries and per-TMPDIR bunx installs.
-	if (local && !underBun) return spawnSync("node", [local, ...args], options);
-	if (local) return native ? spawnSync(native, [local, ...args], asBun) : spawnSync(process.execPath, [local, ...args], options);
+	if (local) return spawnSync(underBun && !compiledExecutable() ? process.execPath : "node", [local, ...args], options);
 	const runtime = underBun ? ["--bun"] : [];
-	if (native) return spawnSync(native, ["x", ...runtime, ESLINT_SPEC, ...args], asBun);
 	return spawnSync("bunx", [...runtime, ESLINT_SPEC, ...args], options);
 }
 

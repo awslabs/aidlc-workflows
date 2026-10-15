@@ -804,7 +804,7 @@ describe("t92 Group C: FAILED real round-trip per sensor", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
-// Fake ESLint 8 CLI: records its argv and its BUN_BE_BUN beside itself and
+// Fake ESLint 8 CLI: records its argv beside itself and
 // answers the sensor's three calls (version probe, config probe, lint) the way
 // ESLint 8 does on a project whose .eslintrc names a rule it cannot load.
 const FAKE_ESLINT_8_CLI = [
@@ -812,7 +812,6 @@ const FAKE_ESLINT_8_CLI = [
   'const path = require("node:path");',
   "const args = process.argv.slice(2);",
   'fs.appendFileSync(path.join(__dirname, "calls.log"), JSON.stringify(args) + "\\n");',
-  'fs.appendFileSync(path.join(__dirname, "env.log"), JSON.stringify(process.env.BUN_BE_BUN ?? null) + "\\n");',
   'if (args[0] === "--version") { process.stdout.write("v8.57.1\\n"); process.exit(0); }',
   'if (args[0] === "--print-config") { process.stdout.write("{}\\n"); process.exit(0); }',
   "process.stdout.write(JSON.stringify([{ filePath: args[args.length - 1], errorCount: 1, warningCount: 0, messages: [",
@@ -941,9 +940,9 @@ describe("t92 local ESLint resolution", () => {
     lintWithFakeEslint8(proj, cli);
   });
 
-  // Stands in for Bun's install-cache copy: a resolution that no node_modules
-  // on the lookup path from the project holds is no install of the project's.
-  test("an eslint the resolver finds outside the project's node_modules lookup keeps the pinned fallback", () => {
+  // Stands in for Bun's install-cache copy: a resolution inside Bun's install
+  // cache is no install of the project's.
+  test("an eslint the resolver finds in Bun's install cache keeps the pinned fallback", () => {
     const proj = mkdtempSync(join(tmpdir(), "aidlc-t92-cache-eslint-"));
     tempDirs.push(proj);
     writeFileSync(join(proj, "package.json"), '{"private":true}\n');
@@ -959,7 +958,7 @@ describe("t92 local ESLint resolution", () => {
     const res = spawnSync(BUN, ["--no-install", "-e", probe(join(TOOLS_DIR, "aidlc-sensor-linter.ts"))], {
       encoding: "utf-8",
       cwd: proj,
-      env: { ...process.env, NODE_PATH: cache },
+      env: { ...process.env, NODE_PATH: cache, BUN_INSTALL_CACHE_DIR: cache },
       timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
     });
     expect(res.status, res.stderr).toBe(0);
@@ -968,13 +967,17 @@ describe("t92 local ESLint resolution", () => {
     expect(local).toBeNull();
   });
 
-  // Only a native executable told to be Bun runs as Bun: ESLint under Node and
-  // the project's config and plugins it loads keep the project's environment.
-  test("a native install runs the project's ESLint under Node without BUN_BE_BUN", () => {
-    const { proj, cli } = localEslintProject("8.57.1", ".eslintrc.cjs");
-    const { BUN_BE_BUN: _set, ...env } = process.env;
-    lintWithFakeEslint8(proj, cli, { ...env, AIDLC_COMPILED_EXECUTABLE: join(proj, "aidlc-never-run") });
-    expect(readFileSync(join(dirname(cli), "env.log"), "utf-8").trim().split("\n")).toEqual(["null", "null", "null"]);
+  // A shared install named through NODE_PATH lies outside every node_modules
+  // ancestor, yet it is the one the project configured.
+  test("an eslint 8 on NODE_PATH with .eslintrc: the sensor runs that install and reports its finding", () => {
+    const proj = mkdtempSync(join(tmpdir(), "aidlc-t92-node-path-eslint-"));
+    const shared = mkdtempSync(join(tmpdir(), "aidlc-t92-shared-eslint-"));
+    tempDirs.push(proj, shared);
+    writeFileSync(join(proj, "package.json"), '{"private":true}\n');
+    writeFileSync(join(proj, ".eslintrc.cjs"), "module.exports = {};\n");
+    mkdirSync(join(shared, "eslint", "bin"), { recursive: true });
+    writeFileSync(join(shared, "eslint", "package.json"), JSON.stringify({ name: "eslint", version: "8.57.1" }));
+    lintWithFakeEslint8(proj, join(realpathSync(shared), "eslint", "bin", "eslint.js"), { ...process.env, NODE_PATH: shared });
   });
 });
 
@@ -1020,9 +1023,9 @@ describe("t92 TypeScript flat config", () => {
     expect(verdict.violations[0].rule).toBe("no-var");
   }
 
-  // Stands in for bunx, or for a native executable told to be Bun, so the
-  // pinned command runs offline: it accepts only the expected leading argv,
-  // then runs the lockfile ESLint under Bun with the remaining arguments.
+  // Stands in for bunx so the pinned command runs offline: it accepts only the
+  // expected leading argv, then runs the lockfile ESLint under Bun with the
+  // remaining arguments.
   function bunShim(dir: string, name: string, prefix: string[]): string {
     const shim = join(dir, name);
     const expected = prefix.join(" ");
@@ -1030,7 +1033,6 @@ describe("t92 TypeScript flat config", () => {
       shim,
       [
         "#!/bin/sh",
-        `[ "$BUN_BE_BUN" = "${name === "bunx" ? "" : "1"}" ] || exit 64`,
         `case "$*" in "${expected} "*) ;; *) exit 64 ;; esac`,
         `shift ${prefix.length}`,
         `exec "${BUN}" "${REPO_ESLINT_CLI}" "$@"`,
@@ -1055,12 +1057,46 @@ describe("t92 TypeScript flat config", () => {
     expectNoVarFinding(runLinter(file, proj, { ...env, PATH: `${bin}:${process.env.PATH}` }));
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test.skipIf(process.platform === "win32")("a native install runs the pin through its own executable as Bun", () => {
-    const { proj, file } = tsConfigProject("eslint.config.cts", false);
+  // The version decision reads the config that governs the linted file, as the
+  // runtime choice does: a nested TypeScript config beside the package root's
+  // ESLint 8 and .eslintrc takes the pin, under Bun.
+  test.skipIf(process.platform === "win32")("a nested TypeScript config beside the root's eslint 8 takes the pinned fallback", () => {
+    const proj = mkdtempSync(join(tmpdir(), "aidlc-t92-nested-ts-config-"));
+    const bin = mkdtempSync(join(tmpdir(), "aidlc-t92-bunx-"));
+    tempDirs.push(proj, bin);
+    writeFileSync(join(proj, "package.json"), '{"private":true}\n');
+    writeFileSync(join(proj, ".eslintrc.cjs"), "module.exports = {};\n");
+    mkdirSync(join(proj, "node_modules", "eslint", "bin"), { recursive: true });
+    writeFileSync(join(proj, "node_modules", "eslint", "package.json"), JSON.stringify({ name: "eslint", version: "8.57.1" }));
+    writeFileSync(join(proj, "node_modules", "eslint", "bin", "eslint.js"), FAKE_ESLINT_8_CLI);
+    mkdirSync(join(proj, "web"));
+    writeFileSync(join(proj, "web", "eslint.config.mts"), TS_FLAT_CONFIGS["eslint.config.mts"]);
+    const file = join(proj, "web", "sample.js");
+    writeFileSync(file, "var total = 1;\nconsole.log(total);\n");
+    bunShim(bin, "bunx", ["--bun", "eslint@10"]);
+    const { AIDLC_COMPILED_EXECUTABLE: _native, ...env } = process.env;
+    expectNoVarFinding(runLinter(file, proj, { ...env, PATH: `${bin}:${process.env.PATH}` }));
+    expect(existsSync(join(proj, "node_modules", "eslint", "bin", "calls.log"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A native install's executable is never run as Bun: the fallback is bunx, as
+  // before, and the project's own ESLint keeps Node.
+  test.skipIf(process.platform === "win32")("a native install never runs its own executable for ESLint", () => {
     const bin = mkdtempSync(join(tmpdir(), "aidlc-t92-native-"));
     tempDirs.push(bin);
-    const native = bunShim(bin, "aidlc", ["x", "--bun", "eslint@10"]);
-    expectNoVarFinding(runLinter(file, proj, { ...process.env, AIDLC_COMPILED_EXECUTABLE: native }));
+    const native = join(bin, "aidlc");
+    writeFileSync(native, `#!/bin/sh\necho "$*" >> "${join(bin, "native.log")}"\nexit 64\n`);
+    writeFileSync(join(bin, "bunx"), `#!/bin/sh\necho "$*" >> "${join(bin, "bunx.log")}"\nexit 1\n`);
+    chmodSync(native, 0o755);
+    chmodSync(join(bin, "bunx"), 0o755);
+    const env = { ...process.env, AIDLC_COMPILED_EXECUTABLE: native, PATH: `${bin}:${process.env.PATH}` };
+    const fallback = tsConfigProject("eslint.config.cts", false);
+    const unavailable = runLinter(fallback.file, fallback.proj, env);
+    expect(unavailable.status, `${unavailable.stdout}${unavailable.stderr}`).toBe(127);
+    expect(readFileSync(join(bin, "bunx.log"), "utf-8").trim()).toBe("--bun eslint@10 --version");
+    const local = tsConfigProject("eslint.config.mts", true);
+    expect(runLinter(local.file, local.proj, env).status).not.toBe(0);
+    expect(existsSync(join(bin, "native.log"))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A monorepo's root config governs the nested package whose package.json is
