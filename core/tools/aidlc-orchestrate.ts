@@ -5313,8 +5313,8 @@ function planProposalDirective(
   // agent reads which, so the tool does not call them new work.
   const opening = finished === undefined
     ? `The person asked for new work: ${words} No plan is chosen for it yet. Read what they describe and propose `
-    : `The person said: ${words} ${finishedWorkReading(finished)} If they describe new work, no plan is chosen for ` +
-      "it yet, so propose ";
+    : `The person said: ${words} ${finishedWorkReading(finished, typedSettingsFirst(flags, pd))} If they describe new ` +
+      "work, no plan is chosen for it yet, so propose ";
   return printDirective(
     `${opening}the plan below that fits it: run ` +
       `\`${next} --propose <plan> --request ${question.id}\` and it returns the question to show them (go ahead, ` +
@@ -5346,10 +5346,20 @@ function finishedUnselectedWork(pd: string): FinishedWorkHere | undefined {
   return records.length === 0 ? undefined : { records, selected: false };
 }
 
-// The way back to a stage of finished work, beside the plan step.
-function finishedWorkReading({ records, selected }: FinishedWorkHere): string {
+// The settings typed with the words, set before the stage step: a jump takes
+// none of them, so they would be dropped without a word.
+function typedSettingsFirst(flags: ParsedFlags, pd: string): string {
+  const typed = typedSettingModifiers(flags);
+  if (typed.length === 0) return "";
+  const unnamed = settingNeedsTheirWords(pd, typed);
+  return `\`${configSetCommand(typed, unnamed)}\`${unnamed ? PERSON_WORDS_FILL : ""} and say the line it prints, then `;
+}
+
+// The way back to a stage of finished work, beside the plan step; `settings`
+// is the step that sets what the person typed with the words, or "".
+function finishedWorkReading({ records, selected }: FinishedWorkHere, settings: string): string {
   const named = records.map(({ label, record }) => label === record ? `\`${record}\`` : `\`${label}\` (record: \`${record}\`)`);
-  const stage = `\`${aidlcToolInvocation("orchestrate")} next --stage <stage slug>\` (add \`--unit <unit>\` or ` +
+  const stage = `${settings}\`${aidlcToolInvocation("orchestrate")} next --stage <stage slug>\` (add \`--unit <unit>\` or ` +
     "`--every-unit` when they named a Unit or every Unit) and follow what it returns.";
   if (records.length === 1) {
     const select = selected ? "" : `\`${aidlcDispatcherInvocation("intent")} ${records[0].record}\`, then `;

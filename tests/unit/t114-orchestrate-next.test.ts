@@ -1445,6 +1445,19 @@ describe("t114 new description over a finished workflow -> new work (#1535)", ()
     expect(message).toStartWith("The person asked for new work: ");
   });
 
+  // A jump takes no settings (--review beside --stage is refused), so the way
+  // back sets what they typed first, or it would be dropped without a word.
+  test("a setting typed with the words rides the way back, set before the stage step", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    rmSync(join(intents(), "active-intent"), { force: true });
+    const message = proposalPrint(["--review", "none", GO_BACK]);
+    const select = message.indexOf(`intent ${DEFAULT_RECORD_DIR}\``);
+    const set = message.indexOf("config set review none` and say the line it prints, then `");
+    const stage = message.indexOf("next --stage <stage slug>`");
+    expect({ select: select >= 0, set: set > select, stage: stage > set }).toEqual({ select: true, set: true, stage: true });
+  });
+
   test("new work the person confirmed beside finished work gets the plan step alone", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, COMPLETED);
