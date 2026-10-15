@@ -25,6 +25,9 @@ the person chooses it.
 Business and data understanding → data preparation → modeling → evaluation →
 deployment → monitoring and maintenance. Quality and risk assessment apply
 throughout; return to an earlier stage when evidence calls for a revision.
+The shipped `knowledge/aidlc-shared/aws-mlops-crisp-mlq.md` reference defines
+the operating method locally. `tools/aws-mlops-crisp-mlq.ts` owns its versioned
+phase/evidence mapping; per-phase advisory coverage complements numeric checks.
 
 ## Platform dependency
 

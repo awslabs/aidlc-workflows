@@ -14,7 +14,7 @@ consumes:
   - artifact: aws-mlops-methodology-selection
     required: true
 requires_stage: [aws-mlops-methodology-selection]
-sensors: [required-sections, upstream-coverage]
+sensors: [required-sections, upstream-coverage, aws-mlops-crisp-mlq]
 scopes: [aws-mlops-crisp-mlq]
 ars:
   targets: [iae, ua, r]
@@ -28,6 +28,11 @@ outputs: aws-mlops-business-data.md and aws-mlops-quality-contract.md
 Follow the active stage protocol. Read shared and data-scientist knowledge.
 
 ## Steps
+
+Read `{{HARNESS_DIR}}/knowledge/aidlc-shared/aws-mlops-crisp-mlq.md` and the
+phase contract in `{{HARNESS_DIR}}/tools/aws-mlops-crisp-mlq.ts` before work.
+Use the supplied requirements and per-task quality loop even without prior
+knowledge of the method.
 
 ### Step 1: Establish business success
 
@@ -63,6 +68,13 @@ Use `{{INVOKE}} engine orchestrate report --stage aws-mlops-business-data --resu
 Use the stage protocol's revision/gate flow for judgment decisions.
 
 ## Sensors
+
+Before reporting completion, add `## Quality Assurance` to the primary output
+and write its adjacent `.crisp-mlq.json` coverage record following the local
+reference. Cover every requirement in this stage's contract, including aligned
+business/ML/economic criteria, feasibility and measured data evidence.
+Keep unavailable work pending. The advisory `aws-mlops-crisp-mlq` sensor checks
+coverage and risk records; it does not verify their truth.
 
 Import `required-sections` and `upstream-coverage`. Evidence is measured data,
 source references and the approved quality contract, not a guessed algorithm.

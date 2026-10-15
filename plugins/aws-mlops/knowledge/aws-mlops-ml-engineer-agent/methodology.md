@@ -1,6 +1,10 @@
 # Reproducible ML execution
 
 Read `aidlc-shared/aws-mlops.md` for shared architecture and methodology.
+For CRISP-ML(Q), read `aidlc-shared/aws-mlops-crisp-mlq.md` and
+`tools/aws-mlops-crisp-mlq.ts`. Keep model-phase evidence separate from
+platform-fixture commissioning; carry the reference's quality loop into
+deployment, recovery and recurring operations.
 
 ## Pipelines
 

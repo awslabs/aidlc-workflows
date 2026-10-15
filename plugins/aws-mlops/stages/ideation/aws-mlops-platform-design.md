@@ -33,6 +33,11 @@ Follow the active stage protocol. Use shared AWS MLOps knowledge.
 
 ## Steps
 
+Read `{{HARNESS_DIR}}/knowledge/aidlc-shared/aws-mlops-crisp-mlq.md` for a
+CRISP-ML(Q) model or its supporting platform. Design support for its phase
+contracts and quality loop. Architecture proposals do not complete model-phase
+evidence. Other selected methods retain their own requirements.
+
 ### Step 1: Resolve platform context
 
 For a new platform, discover AWS accounts/region, team roles, existing network,

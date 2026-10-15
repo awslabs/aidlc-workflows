@@ -11,8 +11,10 @@ with a methodology chosen by the person. The initial implemented method is
 - `aws-mlops-crisp-mlq`: business/data understanding, reproducible preparation
   and training, evaluation, deployment, monitoring and maintenance.
 - Ten ML-specific stages, two specialist personas, additive contributions to
-  core stages, shared/per-agent knowledge, and an advisory evidence sensor.
+  core stages, shared/per-agent knowledge, and two advisory evidence sensors.
 - A read-only methodology catalog with explicit available/planned status.
+- A local CRISP-ML(Q) operating reference, revision `1.0.0`, with source-section
+  traceability and 20 operational requirements across the six model phases.
 
 The plugin supplies workflow instructions and checks. Running those workflows
 creates project-specific IaC, code and AWS pipelines. Adding this plugin to the
@@ -83,6 +85,54 @@ check. The engine remains the owner of human approvals. The sensor makes no
 network calls and cannot verify AWS execution or authenticate a choice.
 
 ## Evidence and operational boundaries
+
+### Method context and phase quality
+
+The model receives the
+[local CRISP-ML(Q) reference](knowledge/aidlc-shared/aws-mlops-crisp-mlq.md)
+through AI-DLC's shared knowledge roster. Phase instructions also explicitly
+name it and the mapping owned by `tools/aws-mlops-crisp-mlq.ts`. Repository tests
+verify that the reference reaches all six model phases on all seven harnesses,
+including core requirements work; no conductor or core-loader change is required.
+
+The reference supplies goals, task instructions, acceptance evidence, revision
+paths, and the requirements → task risks → mitigation → verification loop.
+Each model phase writes an adjacent `.crisp-mlq.json` coverage record in addition
+to the normal Markdown artifact and existing numeric JSON. The methodology
+sensor checks IDs, reference revision, pending/failed evidence and risk records.
+Platform deployment/monitoring use explicit commissioning non-applicability
+records, so a platform fixture is not reported as a model's acceptance.
+
+This is our operating adaptation of the cited publication. The sensors verify
+records and numeric consistency; methodological fidelity and evidence truth still
+need review. General ML expertise remains necessary; prior recall of the method
+is not the source of its requirements.
+
+### Controlled checks with different models
+
+Normal repository tests exercise the benchmark scorer using synthetic inputs
+and skip live model calls. To run six controlled cases on each installed CLI:
+
+```bash
+AIDLC_MLOPS_LIVE=1 bun test plugins/aws-mlops/tests/crisp-mlq-live.test.ts
+```
+
+The checks use the person's existing Claude/Codex authentication and provider.
+They supply the same local reference and cases, ask for structured recommendations,
+and preserve reports/transcripts under ignored `tests/logs/aws-mlops-methodology/`.
+They do not run a project workflow or contact SageMaker. Each CLI has a bounded
+timeout; Claude has a $2 per-call budget cap. These calls spend model tokens.
+
+Use `AIDLC_MLOPS_CLAUDE_MODEL` and `AIDLC_MLOPS_CODEX_MODEL` to select specific
+models supported by your providers; otherwise each CLI uses its configured
+default. `AIDLC_MLOPS_REPORT_DIR` changes the report directory;
+`AIDLC_MLOPS_LIVE_TIMEOUT_MS` sets a finite per-call timeout up to ten minutes.
+The report records requested/reported model identities and hashes of the
+reference/prompt. Confirm the identities differ before claiming multi-model
+coverage. Missing auth or a failed response is a failure, not a synthetic pass.
+Deterministic action/coverage scores require review of the explanations as well.
+
+### Execution evidence
 
 Local SDK compilation, IaC synth and fixtures are distinct from in-AWS runs.
 Cloud jobs and deployment follow the project's recorded authorization, budget

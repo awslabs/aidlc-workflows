@@ -27,6 +27,11 @@ Follow the active stage protocol for questions, recorded decisions and completio
 
 ## Steps
 
+Read `{{HARNESS_DIR}}/knowledge/aidlc-shared/aws-mlops-crisp-mlq.md` when
+explaining the available CRISP-ML(Q) profile. This file supplies the local
+operating method; a citation or a model's prior familiarity is not its delivery.
+For another chosen method, retain its identity and availability as recorded.
+
 ### Step 1: Read the person's existing choices
 
 Use the initiating request and recorded answers. Explicitly choosing

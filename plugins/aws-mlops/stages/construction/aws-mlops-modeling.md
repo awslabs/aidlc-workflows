@@ -18,7 +18,7 @@ consumes:
   - artifact: aws-mlops-quality-contract
     required: true
 requires_stage: [aws-mlops-data-preparation]
-sensors: [required-sections, upstream-coverage]
+sensors: [required-sections, upstream-coverage, aws-mlops-crisp-mlq]
 scopes: [aws-mlops-crisp-mlq]
 ars:
   targets: [ve, r]
@@ -32,6 +32,11 @@ outputs: aws-mlops-modeling.md
 Follow the active stage protocol and approved experiment/execution policy.
 
 ## Steps
+
+Read `{{HARNESS_DIR}}/knowledge/aidlc-shared/aws-mlops-crisp-mlq.md` and the
+phase contract in `{{HARNESS_DIR}}/tools/aws-mlops-crisp-mlq.ts` before work.
+Apply its quality loop to candidate selection, all applicable model-quality
+dimensions, method reproducibility and measured result variability.
 
 ### Step 1: Establish the experiment
 
@@ -59,6 +64,11 @@ Use `{{INVOKE}} engine orchestrate report --stage aws-mlops-modeling --result <o
 Selecting a candidate is not approving production deployment.
 
 ## Sensors
+
+Before reporting completion, add `## Quality Assurance` to the primary output
+and write its adjacent `.crisp-mlq.json` coverage record following the local
+reference. Cover every contract requirement and justify the optional techniques'
+inapplicability when unused. Import the advisory `aws-mlops-crisp-mlq` sensor.
 
 `required-sections` and `upstream-coverage` check reported outputs and inputs.
 

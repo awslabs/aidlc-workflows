@@ -1,6 +1,10 @@
 # Scientific quality
 
 Read `aidlc-shared/aws-mlops.md` for the shared method and AWS architecture.
+For CRISP-ML(Q), also read `aidlc-shared/aws-mlops-crisp-mlq.md` and the
+current phase's contract in `tools/aws-mlops-crisp-mlq.ts`. Use the supplied
+operating reference rather than filling methodological gaps from memory.
+Maintain the task-specific requirements → risks → mitigation → evidence loop.
 
 ## Experiment protocol
 

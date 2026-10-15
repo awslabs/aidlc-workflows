@@ -18,7 +18,7 @@ consumes:
   - artifact: build-and-test-summary
     required: true
 requires_stage: [aws-mlops-lifecycle-design, build-and-test, ci-pipeline]
-sensors: [required-sections, upstream-coverage]
+sensors: [required-sections, upstream-coverage, aws-mlops-crisp-mlq]
 scopes: [aws-mlops-crisp-mlq]
 ars:
   targets: [ve, r]
@@ -32,6 +32,11 @@ outputs: aws-mlops-data-preparation.md
 Follow the active stage protocol and the approved lifecycle design.
 
 ## Steps
+
+Read `{{HARNESS_DIR}}/knowledge/aidlc-shared/aws-mlops-crisp-mlq.md` and the
+phase contract in `{{HARNESS_DIR}}/tools/aws-mlops-crisp-mlq.ts` before work.
+Apply its quality loop to selection, cleaning, feature construction, units,
+train-only fitting and protected splits.
 
 ### Step 1: Resolve code and actual input versions
 
@@ -62,6 +67,11 @@ Use normal revisions to correct failed data checks without changing accepted
 criteria merely to make them pass.
 
 ## Sensors
+
+Before reporting completion, add `## Quality Assurance` to the primary output
+and write its adjacent `.crisp-mlq.json` coverage record following the local
+reference. Include all contract requirements and actual checks; proposals and
+missing data remain pending. Import the advisory `aws-mlops-crisp-mlq` sensor.
 
 `required-sections` and `upstream-coverage` check the document and input references.
 

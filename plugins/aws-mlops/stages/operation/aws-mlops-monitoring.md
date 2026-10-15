@@ -18,7 +18,7 @@ consumes:
   - artifact: aws-mlops-quality-contract
     required: false
 requires_stage: [aws-mlops-deployment]
-sensors: [required-sections, upstream-coverage]
+sensors: [required-sections, upstream-coverage, aws-mlops-crisp-mlq]
 scopes: [aws-mlops-platform, aws-mlops-crisp-mlq]
 ars:
   targets: [ve, r]
@@ -33,6 +33,12 @@ Follow the active stage protocol. Recurring operations run in AWS without an
 ongoing AI session.
 
 ## Steps
+
+Read `{{HARNESS_DIR}}/knowledge/aidlc-shared/aws-mlops-crisp-mlq.md` and
+`{{HARNESS_DIR}}/tools/aws-mlops-crisp-mlq.ts`. For a model, apply the
+maintenance contract and quality loop to signals, labeled outcomes, updates,
+feedback effects and update costs. Unavailable ground truth leaves predictive
+quality unmeasured; recurring training preserves the recorded promotion policy.
 
 ### Step 1: Verify monitoring
 
@@ -71,6 +77,14 @@ Use `{{INVOKE}} engine orchestrate report --stage aws-mlops-monitoring --result 
 The handoff explicitly separates commissioned behavior and remaining checks.
 
 ## Sensors
+
+For a model, add `## Quality Assurance` to the primary output and write its
+adjacent `.crisp-mlq.json` coverage record using the local reference and every
+maintenance requirement. Import the advisory `aws-mlops-crisp-mlq` sensor.
+For the platform profile, write the same side input with `schema_version: 1`,
+`methodology: crisp-mlq`, the current `reference_revision`, this exact `stage`,
+`profile: platform`, `applicability: platform-commissioning` and a `rationale`
+explaining that the fixture verifies monitoring plumbing, not predictive quality.
 
 `required-sections` and `upstream-coverage` check outputs and upstream references.
 

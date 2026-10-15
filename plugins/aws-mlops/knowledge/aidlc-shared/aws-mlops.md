@@ -22,6 +22,12 @@ stop or scope-change mechanisms; never silently substitute CRISP-ML(Q).
 
 ## CRISP-ML(Q) mapping
 
+Read `aidlc-shared/aws-mlops-crisp-mlq.md`, the versioned local operating
+reference, before applying this method. Its task instructions and quality loop
+are the context to use even when the model has never encountered CRISP-ML(Q).
+The authoritative requirement/stage/evidence mapping is
+`tools/aws-mlops-crisp-mlq.ts`; the table below is only a navigation overview.
+
 | Method phase | Initial plugin implementation |
 | --- | --- |
 | Business and data understanding | `aws-mlops-business-data` and core requirements |
@@ -72,6 +78,8 @@ State what is proposed, locally checked, executed in AWS, and pending. Reference
 to runs, artifacts and measurements must be real. The plugin's advisory evidence
 sensor validates reported structure and numeric consistency, not cloud existence
 or the truth of an agent's account. The engine owns human approvals.
+The separate methodology sensor checks per-phase coverage and risk records;
+neither a source link nor passing either sensor establishes full conformance.
 
 The person decides business success, architecture/budget tradeoffs, and
 deployment/retraining authority. Record existing answers and policy once; use

@@ -35,6 +35,11 @@ Follow the active stage protocol.
 
 ## Steps
 
+Read `{{HARNESS_DIR}}/knowledge/aidlc-shared/aws-mlops-crisp-mlq.md` for the
+supporting lifecycle. Verify platform support for versioned phase records and
+risk/evidence capture using synthetic fixtures. These checks demonstrate
+plumbing, not the business model's six-phase acceptance.
+
 ### Step 1: Check infrastructure and code
 
 Run the delivered project's meaningful static/unit tests: IaC synth and

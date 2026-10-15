@@ -24,7 +24,7 @@ consumes:
   - artifact: rollback-runbook
     required: true
 requires_stage: [environment-provisioning, deployment-pipeline, aws-mlops-evaluation, aws-mlops-platform-validation]
-sensors: [required-sections, upstream-coverage]
+sensors: [required-sections, upstream-coverage, aws-mlops-crisp-mlq]
 scopes: [aws-mlops-platform, aws-mlops-crisp-mlq]
 ars:
   targets: [r, ve]
@@ -38,6 +38,11 @@ outputs: aws-mlops-deployment.md
 Follow the active stage protocol and existing environment/deployment authority.
 
 ## Steps
+
+Read `{{HARNESS_DIR}}/knowledge/aidlc-shared/aws-mlops-crisp-mlq.md` and
+`{{HARNESS_DIR}}/tools/aws-mlops-crisp-mlq.ts`. For the model profile, apply
+the deployment contract and quality loop, including actual serving tests,
+user acceptance and fallback evidence. Platform commissioning stays distinct.
 
 ### Step 1: Resolve release readiness
 
@@ -77,6 +82,14 @@ record pending work and use the protocol's existing skip/revision mechanisms.
 Use `{{INVOKE}} engine orchestrate report --stage aws-mlops-deployment --result <outcome>`.
 
 ## Sensors
+
+For a model, add `## Quality Assurance` to the primary output and write its
+adjacent `.crisp-mlq.json` coverage record using the local reference and every
+deployment requirement. Import the advisory `aws-mlops-crisp-mlq` sensor.
+For the platform profile, write the same side input with `schema_version: 1`,
+`methodology: crisp-mlq`, the current `reference_revision`, this exact `stage`,
+`profile: platform`, `applicability: platform-commissioning` and a `rationale`
+explaining that commissioning does not claim a business model's acceptance.
 
 `required-sections` and `upstream-coverage` check artifact shape and references.
 

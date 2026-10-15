@@ -6,6 +6,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { testPluginComposition } from "../../../dist/claude/.claude/tools/aidlc-plugin-test.ts";
 import { hooksHealthDir } from "../../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { capInlineContextPaths, shippedInlineContextEntries } from "../../../dist/claude/.claude/tools/aidlc-inline-context.ts";
+import type { GraphStage } from "../../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { HARNESS_MATRIX } from "../../../tests/harness/harness-matrix.ts";
 import { runOrchestrateNext } from "../../../tests/harness/fixtures.ts";
 import {
@@ -18,6 +20,7 @@ import {
   remainingOperationTimeoutMs,
 } from "../../../tests/harness/test-budget.ts";
 import { methodologies } from "../tools/aws-mlops-methodologies.ts";
+import { crispMlqPhases, crispMlqReference } from "../tools/aws-mlops-crisp-mlq.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const pluginRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -25,13 +28,6 @@ const repoRoot = join(pluginRoot, "..", "..");
 const scratch = mkdtempSync(join(tmpdir(), "aidlc-aws-mlops-compose-"));
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
-interface Stage {
-  slug: string;
-  enabled?: boolean;
-  requires_stage: string[];
-  consumes: Array<{ artifact: string; required: boolean }>;
-  lead_agent: string;
-}
 type Grid = Record<string, { stages: Record<string, string> }>;
 
 test("authored plugin satisfies the shared schema and reference validator", () => {
@@ -49,7 +45,7 @@ describe("all shipped harnesses", () => {
       });
       expect(fixture.dropLogs).toBe("");
       const engine = join(fixture.projectDir, harness.manifest.harnessDir);
-      const graph = JSON.parse(readFileSync(join(engine, "tools/data/stage-graph.json"), "utf-8")) as Stage[];
+      const graph = JSON.parse(readFileSync(join(engine, "tools/data/stage-graph.json"), "utf-8")) as GraphStage[];
       const grid = JSON.parse(readFileSync(join(engine, "tools/data/scope-grid.json"), "utf-8")) as Grid;
       const baseline = JSON.parse(readFileSync(join(harness.engineRoot, "tools/data/scope-grid.json"), "utf-8")) as Grid;
       const stage = (slug: string) => graph.find((entry) => entry.slug === slug);
@@ -107,6 +103,26 @@ describe("all shipped harnesses", () => {
       expect(stage("code-generation")?.requires_stage).toContain("aws-mlops-lifecycle-design");
       expect(stage("aws-mlops-modeling")?.lead_agent).toBe("aws-mlops-data-scientist-agent");
       expect(stage("aws-mlops-monitoring")?.lead_agent).toBe("aws-mlops-ml-engineer-agent");
+      const methodPath = `${harness.manifest.harnessDir}/${crispMlqReference.knowledge_file}`;
+      for (const phase of crispMlqPhases) {
+        const node = stage(phase.stage);
+        if (!node) throw new Error(`Missing method stage: ${phase.stage}`);
+        const warnings: string[] = [];
+        const roster = shippedInlineContextEntries(node, engine, harness.manifest.harnessDir, warnings, "Standard");
+        const delivered = capInlineContextPaths(roster.map((entry) => entry.rel));
+        expect(warnings).toEqual([]);
+        expect(delivered.paths, phase.stage).toContain(methodPath);
+        expect(delivered.omitted, phase.stage).toBe(0);
+        expect(readFileSync(join(engine, crispMlqReference.knowledge_file), "utf-8"))
+          .toContain(`Reference revision: **${crispMlqReference.revision}**`);
+        expect(node.sensors_applicable.map((sensor) => sensor.id)).toContain("aws-mlops-crisp-mlq");
+      }
+      // Reused core inline stages receive the same shared reference, not only
+      // the two new specialist personas.
+      const requirements = stage("requirements-analysis");
+      if (!requirements) throw new Error("Missing core requirements stage");
+      expect(shippedInlineContextEntries(requirements, engine, harness.manifest.harnessDir)
+        .map((entry) => entry.rel)).toContain(methodPath);
       const catalog = spawnSync(process.execPath, [join(engine, "tools/aws-mlops-methodologies.ts")], {
         cwd: fixture.projectDir,
         encoding: "utf-8",
@@ -127,7 +143,7 @@ describe("all shipped harnesses", () => {
         expect(disable.status, `${disable.stdout}${disable.stderr}`).toBe(0);
         const after = JSON.parse(readFileSync(join(engine, "tools/data/scope-grid.json"), "utf-8")) as Grid;
         expect(after["aws-mlops-crisp-mlq"]).toBeUndefined();
-        const disabled = JSON.parse(readFileSync(join(engine, "tools/data/stage-graph.json"), "utf-8")) as Stage[];
+        const disabled = JSON.parse(readFileSync(join(engine, "tools/data/stage-graph.json"), "utf-8")) as GraphStage[];
         expect(disabled.find((entry) => entry.slug === "aws-mlops-evaluation")?.enabled).toBe(false);
         expect(disabled.find((entry) => entry.slug === "code-generation")?.requires_stage)
           .not.toContain("aws-mlops-lifecycle-design");
@@ -183,5 +199,6 @@ for (const scope of ["aws-mlops-platform", "aws-mlops-crisp-mlq"]) {
     expect(next.status, next.out).toBe(0);
     expect(next.directive?.kind, next.out).toBe("run-stage");
     expect(next.directive?.stage).toBe("aws-mlops-methodology-selection");
+    expect(next.directive?.inline_context_paths).toContain(`.claude/${crispMlqReference.knowledge_file}`);
   });
 }

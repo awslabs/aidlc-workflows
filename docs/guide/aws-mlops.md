@@ -80,6 +80,27 @@ choice records, incomplete lineage, invalid numeric results and unmet declared
 thresholds. It is advisory by default and does not verify that referenced cloud
 jobs or human decisions actually occurred.
 
+CRISP-ML(Q) has a
+[local operating reference](../../plugins/aws-mlops/knowledge/aidlc-shared/aws-mlops-crisp-mlq.md),
+revision `1.0.0`. It supplies phase goals, tasks, evidence and correction paths
+along with quality/risk assessment in every phase. The publication's section
+references are mapped to 20 plugin requirements in
+`plugins/aws-mlops/tools/aws-mlops-crisp-mlq.ts`. This is a documented AWS adaptation,
+not a conformance certification or a requirement that the model recall the paper.
+
+The shared knowledge loader supplies the reference to the phase's workers.
+Each of the six model phases records requirement coverage and task-specific
+risks in an adjacent `.crisp-mlq.json` file. A second advisory sensor reports
+missing coverage, stale reference revisions, pending/failed work and incomplete
+risk evidence. Platform commissioning is explicitly scoped separately.
+
+The plugin also includes six controlled scenarios for comparing model responses
+with the same supplied reference. Live calls are opt-in, spend model tokens and
+use existing CLI providers; the
+[plugin test instructions](../../plugins/aws-mlops/README.md#controlled-checks-with-different-models)
+explain the command and reports. Structural tests, model-response checks and
+actual AWS workflow execution are separate evidence.
+
 Distinguish proposed architecture, local tests, AWS executions and pending work.
 Running the plugin's repository tests proves workflow composition and sensor
 behavior; it does not prove a platform has been deployed.

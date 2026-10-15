@@ -27,8 +27,11 @@ AI-DLC is designed to adapt to your team's needs. This chapter covers settings o
 The optional [AWS MLOps plugin](aws-mlops.md) adds a reusable SageMaker
 platform profile and an initial CRISP-ML(Q) model profile. The person chooses
 the methodology explicitly; CRISP-DM, TDSP, SEMMA and KDD are planned profiles.
-Its shared AWS capabilities, specialist agents, knowledge and advisory evidence
-check extend the workflow through the additive plugin mechanism.
+Its shared AWS capabilities, specialist agents, versioned local methodology
+reference and advisory evidence/phase-coverage checks extend the workflow through
+the additive plugin mechanism. The method is supplied as context rather than
+depending on the model's prior familiarity; see the plugin's controlled
+multi-model test instructions in its guide.
 
 ---
 

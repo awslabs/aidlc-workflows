@@ -18,7 +18,7 @@ consumes:
   - artifact: aws-mlops-quality-contract
     required: true
 requires_stage: [aws-mlops-modeling]
-sensors: [required-sections, upstream-coverage, aws-mlops-evidence]
+sensors: [required-sections, upstream-coverage, aws-mlops-evidence, aws-mlops-crisp-mlq]
 scopes: [aws-mlops-crisp-mlq]
 ars:
   targets: [ve, r]
@@ -32,6 +32,11 @@ outputs: aws-mlops-evaluation.md
 Follow the active stage protocol. Preserve the accepted evaluation contract.
 
 ## Steps
+
+Read `{{HARNESS_DIR}}/knowledge/aidlc-shared/aws-mlops-crisp-mlq.md` and the
+phase contract in `{{HARNESS_DIR}}/tools/aws-mlops-crisp-mlq.ts` before work.
+Apply its quality loop to protected testing, slice/robustness evidence and the
+business/ML/economic comparison. Revisions use the engine's existing mechanisms.
 
 ### Step 1: Evaluate the actual candidate
 
@@ -91,6 +96,11 @@ policy; this evaluation does not fabricate either approval.
 Use `{{INVOKE}} engine orchestrate report --stage aws-mlops-evaluation --result <outcome>`.
 
 ## Sensors
+
+Before reporting completion, add `## Quality Assurance` to the primary output
+and write adjacent `aws-mlops-evaluation.crisp-mlq.json` covering this phase's
+requirements and risk record. Preserve `aws-mlops-evaluation.json` for numeric
+checks. The advisory `aws-mlops-crisp-mlq` sensor owns coverage, not thresholds.
 
 `aws-mlops-evidence` verifies reported numeric thresholds and lineage fields.
 It cannot prove measurement truth, criterion completeness or cloud existence.

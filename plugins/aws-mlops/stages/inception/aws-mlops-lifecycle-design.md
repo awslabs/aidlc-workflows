@@ -37,6 +37,12 @@ Follow the active stage protocol. Resolve the person-selected method and profile
 
 ## Steps
 
+Read `{{HARNESS_DIR}}/knowledge/aidlc-shared/aws-mlops-crisp-mlq.md` and
+`{{HARNESS_DIR}}/tools/aws-mlops-crisp-mlq.ts` when designing that lifecycle.
+Assign each phase requirement to implementation, verification and artifact
+ownership. Preserve business/ML/economic criteria and per-task risk mitigation.
+Planning a check is distinct from executing it.
+
 ### Step 1: Specify data and experiment contracts
 
 For a model, define schema/validation, immutable dataset and split manifests,
