@@ -47,7 +47,7 @@ const ANY_CHAT = [
   "**Saving a plan for next time.**",
   "Mid-workflow, when the human asks in plain chat to turn sensors, learnings, summary confirmation, or reviews on or off, or plan approval on, just do it",
   "A review level set for the piece of work replaces its scope's ceiling",
-  "After turning sensors or learnings on, check it with",
+  "When that output says `AIDLC_DISABLE_<NAME>=1` is set in the environment, never look for where it is set",
   "to skip plan approval, the harness records it and creation turns it off",
 ];
 
