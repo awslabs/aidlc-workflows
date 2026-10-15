@@ -73,6 +73,7 @@ import {
   auditBlockField,
   currentSwarmSourceMergeChain,
   gitCommitSourceListing,
+  guardRecoveryAskFromRefusalText,
   readAllAuditShards,
   readWorkspaceSourceSnapshot,
   sourceBaselineAuditFields,
@@ -2445,6 +2446,11 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     ]);
     expect(refused.rc).not.toBe(0);
     expect(refused.out).toContain("project source changed after");
+    // That one recovery review is the agent's own step, naming the pass it takes.
+    const ask = guardRecoveryAskFromRefusalText((JSON.parse(refused.out) as { error: string }).error);
+    expect(ask?.agent_work, refused.out).toBe(true);
+    expect(ask?.remedies.map((remedy) => remedy.op)).toEqual(["start-recovery-review"]);
+    expect(ask?.remedies[0]?.action).toMatch(/`bun [^`]*aidlc-log(?:\.ts)? review --stage code-generation --reviewer [^`]* --iteration 2 /);
 
     recordReview(proj);
     const audit = readAllAuditShards(proj);

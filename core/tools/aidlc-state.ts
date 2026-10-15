@@ -4348,8 +4348,8 @@ function verifyStageArtifacts(
     const message =
       `${reviewerPreconditionPrefix(stage.slug, action)}: none of its declared artifacts exist ` +
         `under the intent's record directory. The stage protocol requires ${stage.name} ` +
-        `to produce output before the gate. Produce the artifacts before completing. ` +
-        `(declared: ${(stage.produces ?? []).join(", ") || "none"})`;
+        `to produce output before the gate. Produce the artifacts ` +
+        `(declared: ${(stage.produces ?? []).join(", ") || "none"}), then run the same report again.`;
     refuseStateGuard(pd, stateContent ?? readStateFile(pd), stage, {
       code: "REQUIRED_ARTIFACTS_MISSING",
       blockedAction: action,
@@ -4365,8 +4365,7 @@ function verifyStageArtifacts(
         `workspace tree. In a git workspace this means no uncommitted change and no ` +
         `code in the last commit; otherwise no source file exists. Planning docs alone ` +
         `do not satisfy ${stage.name} - write the code to the workspace (a source change ` +
-        `not committed yet counts, as does code in the last commit), or the person can ` +
-        `choose Request Changes and say what is missing.`;
+        `not committed yet counts, as does code in the last commit), then run the same report again.`;
     refuseStateGuard(pd, stateContent ?? readStateFile(pd), stage, {
       code: "REQUIRED_SOURCE_WORK_MISSING",
       blockedAction: action,
@@ -6029,7 +6028,7 @@ function verifyTeamUnitGateEvidence(
     if (missing.length > 0) {
       const message =
         `Refusing gate for unit "${context.unit}" of "${stage.slug}": required ` +
-        `artifacts are missing (${missing.join(", ")}).`;
+        `artifacts are missing (${missing.join(", ")}). Write them, then run the same report again.`;
       refuseStateGuard(pd, content, stage, {
         code: "REQUIRED_ARTIFACTS_MISSING",
         blockedAction: action,

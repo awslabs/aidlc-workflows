@@ -2339,6 +2339,106 @@ describe("AttemptView projections and refusal streaks", () => {
     expect(again.remedies.map((remedy) => remedy.label)).toEqual(["Decide at approval", "Request Changes"]);
   });
 
+  // A stage reported before its outputs or its code exist: writing them is the
+  // agent's step, which the refusal's own sentence names. Build and Test has no
+  // reviewer, so a review request was never a way on there.
+  test("a stage whose outputs or code are missing is the agent's to write, never a review request", () => {
+    const cases = [
+      {
+        code: "REQUIRED_ARTIFACTS_MISSING",
+        stage: "build-and-test",
+        name: "Build and Test",
+        sentence: "Cannot present \"build-and-test\" for approval: none of its declared artifacts exist. Produce the " +
+          "artifacts (declared: build-instructions), then run the same report again.",
+        reviewCoverage: "missing" as const,
+      },
+      {
+        code: "REQUIRED_SOURCE_WORK_MISSING",
+        stage: "code-generation",
+        name: "Code Generation",
+        sentence: "Cannot present \"code-generation\" for approval: no source work is evident. Write the code to the " +
+          "workspace, then run the same report again.",
+        reviewCoverage: "current" as const,
+      },
+    ];
+    for (const c of cases) {
+      const attempt = {
+        recovery: "available" as const,
+        summaryCoverage: "current" as const,
+        reviewCoverage: c.reviewCoverage,
+        sourceCoverage: "current" as const,
+      };
+      const refusal = (marker: "-" | "?" | "R" | " ") => evaluateGuardRefusal({
+        code: c.code,
+        blockedAction: "present-approval-gate",
+        stage: c.stage,
+        stateContent: `# AI-DLC State\n- **Scope**: classic\n- [${marker}] ${c.stage} \u2014 EXECUTE\n`,
+        invariant: "Every applicable required output exists before certification.",
+        userMessage: c.sentence,
+        attempt,
+        humanAuthority: { freshTurn: false, unattended: false },
+      });
+      for (const marker of ["-", "?", "R"] as const) {
+        expect(refusal(marker).remedies[0], `${c.code} ${marker}`).toMatchObject({
+          op: "produce-stage-output", action: c.sentence, requiresHuman: false, executableNow: true,
+          interaction: "external-work",
+        });
+        expect(refusal(marker).remedies.map((remedy) => remedy.op), `${c.code} ${marker}`).not.toContain("request-review");
+      }
+      expect(refusal(" ").remedies.find((remedy) => remedy.op === "produce-stage-output")?.executableNow).toBe(false);
+      expect(refusal("-").remedies.map((remedy) => remedy.op), c.code).toEqual(["produce-stage-output", "request-changes"]);
+      const { first, again } = ownThenTheirs(refusal("-"), attempt);
+      expect(first.agent_work, c.code).toBe(true);
+      expect(first.remedies.map((remedy) => [remedy.op, remedy.action])).toEqual([["produce-stage-output", c.sentence]]);
+      expect(again.agent_work, c.code).toBeUndefined();
+      expect(again.question).toBe(`${c.name} still can't go ahead as things stand: which way would you like to go on?`);
+      expect(again.remedies.map((remedy) => remedy.op)).toEqual(["request-changes"]);
+    }
+  });
+
+  // The source changed after its review, which a changed output already has:
+  // the one recovery review is the agent's step, and it names its request so it
+  // lands in one go. A source this machine cannot read is not a review's to fix.
+  test("the source changed after its review: the one recovery review is the agent's, naming its request", () => {
+    const request = "bun .claude/tools/aidlc-log.ts review --stage code-generation --reviewer " +
+      "aidlc-architecture-reviewer-agent --iteration 2 --project-dir /tmp/t331-source";
+    const attempt = (sourceCoverage: "stale" | "unreadable", reviewCoverage: "current" | "stale" = "current") => ({
+      recovery: "available" as const,
+      summaryCoverage: "current" as const,
+      reviewCoverage,
+      sourceCoverage,
+      requestReview: request,
+    });
+    const refusal = (code: string, input: ReturnType<typeof attempt>) => evaluateGuardRefusal({
+      code,
+      blockedAction: "present-approval-gate",
+      stage: "code-generation",
+      stateContent: "# AI-DLC State\n- **Scope**: enterprise\n- [-] code-generation \u2014 EXECUTE\n",
+      invariant: "The current source remains covered by reviewer evidence.",
+      userMessage: "Cannot complete \"code-generation\" because the project source changed after the reviewer reviewed it.",
+      attempt: input,
+      humanAuthority: { freshTurn: false, unattended: false },
+    });
+    const stale = refusal("SOURCE_REVIEW_STALE", attempt("stale"));
+    expect(stale.remedies.map((remedy) => remedy.op)).toEqual(["start-recovery-review", "request-changes"]);
+    expect(stale.remedies[0]).toMatchObject({ requiresHuman: false, executableNow: true, interaction: "external-work" });
+    expect(stale.remedies[0].action).toContain(`run \`${request}\``);
+    expect(stale.remedies[0].action).toContain("`recordVerdict`");
+    const { first, again } = ownThenTheirs(stale, attempt("stale"));
+    expect(first.agent_work).toBe(true);
+    expect(first.remedies.map((remedy) => remedy.op)).toEqual(["start-recovery-review"]);
+    expect(again.agent_work).toBeUndefined();
+    expect(again.question).toBe("Code Generation still can't go ahead as things stand: which way would you like to go on?");
+    expect(again.remedies.map((remedy) => remedy.op)).toEqual(["request-changes"]);
+    // A changed output's recovery review names its request the same way.
+    const output = refusal("ARTIFACT_REVIEW_STALE", attempt("stale", "stale"));
+    expect(output.remedies[0].op).toBe("start-recovery-review");
+    expect(output.remedies[0].action).toContain(`run \`${request}\``);
+    // The person keeps today's way when the source cannot be read.
+    expect(refusal("SOURCE_REVIEW_STALE", attempt("unreadable")).remedies.map((remedy) => remedy.op))
+      .toEqual(["request-changes"]);
+  });
+
   test("every way on put to the person reads in plain words; the agent's own carry none", () => {
     const humanAuthority = { freshTurn: false, unattended: false };
     const current = {
@@ -2406,6 +2506,11 @@ describe("AttemptView projections and refusal streaks", () => {
       // A solo unit-major walk with beta on Code Generation.
       { ...base, stage: "code-generation", unit: "beta", stateContent: walk(), attempt: { ...current, reviewCoverage: "missing" } },
       { ...base, stage: "code-generation", unit: "beta", stateContent: walk("in-progress"), attempt: spentBudget },
+      {
+        ...base, code: "REVIEW_BUDGET_EXHAUSTED", stage: "code-generation", unit: "beta",
+        stateContent: walk("in-progress"), attempt: spentBudget,
+      },
+      { ...base, code: "REQUIRED_ARTIFACTS_MISSING", stateContent: state("-"), attempt: current },
     ];
     const seen = new Set<string>();
     // The stage protocol's reserved words, the bookkeeping the person has no use
@@ -3036,7 +3141,9 @@ describe("the gate a spent review budget offers is a step the walk accepts", () 
 
   // Part way through the Unit's step (`unit start` recorded it), no gate opens
   // yet, and an approved stage (design stage by stage, then one Unit at a time)
-  // offers only a stage-wide reset. The ways on are that Unit's own.
+  // offers only a stage-wide reset. The ways on are that Unit's own. The cap
+  // refused a pass nobody asked for, so finishing the step with the review it
+  // has is the agent's own step; a repeat offers the person both.
   test("part way through a Unit's step it offers finishing or redoing that step for the Unit", () => {
     const midStep = checkpointWalk(true)
       .replace("- **Unit Stage**: code-generation", "- **Unit Stage**: code-generation\n- **Unit State**: in-progress");
@@ -3044,14 +3151,37 @@ describe("the gate a spent review budget offers is a step the walk accepts", () 
     for (const [stateContent, lifecycle] of [[midStep, "in-progress"], [approved, "completed"]] as const) {
       const refusal = budgetRefusal(stateContent);
       expect(refusal.state).toBe(lifecycle);
-      expect(refusal.remedies.slice(0, 2).map((remedy) => remedy.op), lifecycle)
-        .toEqual(["record-unit-completion", "reopen-unit-step"]);
+      expect(refusal.remedies.slice(0, 3).map((remedy) => remedy.op), lifecycle)
+        .toEqual(["finish-unit-step", "record-unit-completion", "reopen-unit-step"]);
       expect(gate(refusal), lifecycle).toBeUndefined();
-      const [finish, redo] = refusal.remedies;
+      const [own, finish, redo] = refusal.remedies;
+      expect(own, lifecycle).toMatchObject({ requiresHuman: false, executableNow: true, interaction: "external-work" });
+      expect(own.label, lifecycle).toBeUndefined();
+      expect(own.operation, lifecycle).toBeUndefined();
+      expect(own.action, lifecycle).toMatch(/`bun [^`]*aidlc-state(?:\.ts)? unit complete --stage code-generation --unit extra`/);
       expect(finish.executableNow, lifecycle).toBe(true);
       expect(finish.interaction, lifecycle).toBe("command");
       expect(finish.command, lifecycle).toMatch(/aidlc-state(?:\.ts)? unit complete --stage code-generation --unit extra$/);
       expect(redo.command, lifecycle).toMatch(/aidlc-jump(?:\.ts)? reopen --target code-generation --units extra$/);
     }
+    const project = mkdtempSync(join(tmpdir(), "aidlc-guard-unit-step-"));
+    projects.push(project);
+    const refusal = budgetRefusal(midStep);
+    const attempt = {
+      recovery: "available" as const,
+      summaryCoverage: "current" as const,
+      reviewCoverage: "current" as const,
+      sourceCoverage: "current" as const,
+      reviewBudget: { used: 1, limit: 1 },
+    };
+    const first = recordGuardRefusal(project, refusal, attempt).ask;
+    const again = recordGuardRefusal(project, refusal, attempt).ask;
+    expect(validateDirective(first).valid).toBe(true);
+    expect(validateDirective(again).valid).toBe(true);
+    expect(first.agent_work).toBe(true);
+    expect(first.remedies.map((remedy) => remedy.op)).toEqual(["finish-unit-step"]);
+    expect(again.agent_work).toBeUndefined();
+    expect(again.remedies.map((remedy) => remedy.label))
+      .toEqual(["Finish with the review it has", "Do this step again for the Unit", "Request Changes"]);
   });
 });

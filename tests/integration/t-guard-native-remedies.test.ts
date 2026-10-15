@@ -425,11 +425,17 @@ function restartFixture(harness: Harness = HARNESS_RUNTIMES[0], projection: Proj
     .replace("- **Lifecycle Phase**: INCEPTION", "- **Lifecycle Phase**: CONSTRUCTION")
     .replace("- [-] requirements-analysis — EXECUTE", "- [x] requirements-analysis — EXECUTE")
     .replace("- [ ] code-generation — EXECUTE", "- [R] code-generation — EXECUTE"));
-  // The lifecycle fixture starts mid-revision; the owning report emits and
-  // publishes the real recovery ask. Subsequent selections use actual hooks.
-  const ask = json(p.tool("orchestrate", [
+  // The lifecycle fixture starts mid-revision with no outputs written; the
+  // owning report emits the real recovery ask. The first time, writing the
+  // outputs is the agent's own step; the same report again puts the ways on to
+  // the person and publishes the ask. Subsequent selections use actual hooks.
+  const report = () => json(p.tool("orchestrate", [
     "report", "--stage", "code-generation", "--result", "revised",
   ]));
+  const own = report();
+  expect(own).toMatchObject({ kind: "ask", ask_type: "guard-recovery", agent_work: true });
+  expect((own.remedies as GuardRefusal["remedies"])[0]?.op).toBe("produce-stage-output");
+  const ask = report();
   expect(ask).toMatchObject({ kind: "ask", ask_type: "guard-recovery", stage: "code-generation" });
   const remedy = (ask.remedies as GuardRefusal["remedies"]).find((entry) => entry.op === "redo-jump")!;
   expect(remedy.operation).toEqual({ kind: "restart-stage", stage: "code-generation" });

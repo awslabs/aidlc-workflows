@@ -10787,7 +10787,9 @@ const GUARD_REMEDY_ANSWER_ROUTES: Record<GuardRemedyOp, GuardRemedyAnswerPhases 
   "abort-bolt": null,
   "record-unit-completion": null,
   // The conductor's own work only, as present-findings-at-gate.
+  "finish-unit-step": null,
   "dispatch-pipeline-links": null,
+  "produce-stage-output": null,
   "repair-source-boundary": { afterPick: reviewRoute },
   // Present the summary (its prompt checkpoint) on the pick; record the
   // confirmation once the person gave it.
@@ -31320,8 +31322,13 @@ export const GUARD_REMEDY_OPS = [
   // Record a Unit's missing UNIT_COMPLETED receipt from the artifacts already
   // on disk, when the gate needs it and the Unit's work is done.
   "record-unit-completion",
+  // record-unit-completion's finish as the conductor's own step: the review cap
+  // refused a pass nobody asked for part way through a Unit's step.
+  "finish-unit-step",
   // Dispatch the pipeline links the stage has not recorded, and record each.
   "dispatch-pipeline-links",
+  // Write the outputs or the code a stage was reported without.
+  "produce-stage-output",
   "repair-source-boundary",
   "reconfirm-summary",
   "unset-unattended",
@@ -31391,7 +31398,8 @@ export interface GuardAttemptState {
   requestReview?: string;
   summaryCoverage: "current" | "stale" | "missing";
   reviewCoverage: "current" | "stale" | "missing";
-  sourceCoverage: "current" | "stale" | "missing" | "unbindable";
+  // "unreadable": this machine could not read the source to compare it.
+  sourceCoverage: "current" | "stale" | "missing" | "unbindable" | "unreadable";
 }
 
 export interface GuardHumanAuthorityState {
@@ -32045,6 +32053,19 @@ export function evaluateGuardRefusal(
         executableNow: openForWork || state === "revising",
       });
     }
+    // The stage was reported before its outputs or its code exist: writing
+    // them is the conductor's own step, which the refusal's sentence names.
+    // No review or reset produces them.
+    const missingOutput = input.code === "REQUIRED_ARTIFACTS_MISSING" ||
+      input.code === "REQUIRED_SOURCE_WORK_MISSING";
+    if (missingOutput) {
+      remedies.push({
+        op: "produce-stage-output",
+        action: input.userMessage,
+        requiresHuman: false,
+        executableNow: openForWork || state === "revising",
+      });
+    }
     if (input.attempt.pendingReview) {
       if (
         input.attempt.pendingReview.verdictRecordable !== false &&
@@ -32133,7 +32154,14 @@ export function evaluateGuardRefusal(
       ? unitStepInProgress(input)
       : null;
     if (midStep !== null) {
-      remedies.push(finishUnitStepRemedy(input.stage, midStep), reopenUnitStepRemedy(input.stage, midStep));
+      const finish = finishUnitStepRemedy(input.stage, midStep);
+      // The cap refused a pass nobody asked for, as at a gate below: finishing
+      // the step with the review it has is the conductor's own step. A repeat
+      // still offers the person both.
+      if (input.code === "REVIEW_BUDGET_EXHAUSTED") {
+        remedies.push({ op: "finish-unit-step", action: finish.action, requiresHuman: false, executableNow: true });
+      }
+      remedies.push(finish, reopenUnitStepRemedy(input.stage, midStep));
     } else if (
       !reviewBudgetAvailable &&
       input.attempt.reviewCoverage === "current" &&
@@ -32178,16 +32206,20 @@ export function evaluateGuardRefusal(
       !input.attempt.pendingReview &&
       !input.attempt.repairReview &&
       !input.attempt.nextReview;
+    // The source changed after a review that still stands for the output: the
+    // one recovery review clears it, as it clears a changed output.
+    const sourceRecovery = input.code === "SOURCE_REVIEW_STALE" && input.attempt.sourceCoverage === "stale";
     if (
       input.attempt.recovery === "available" &&
-      input.attempt.reviewCoverage === "stale" &&
+      (input.attempt.reviewCoverage === "stale" || sourceRecovery) &&
       noReviewInFlight
     ) {
       remedies.push({
         op: "start-recovery-review",
-        action:
-          "Start the one stale-review recovery review against the current " +
-          "artifact and source state.",
+        action: reviewRequestAction(
+          "Start the one stale-review recovery review against the current artifact and source state",
+          input.attempt.requestReview,
+        ),
         requiresHuman: false,
         executableNow: input.attempt.summaryCoverage === "current" && openForWork,
       });
@@ -32195,7 +32227,8 @@ export function evaluateGuardRefusal(
       reviewBudgetAvailable &&
       input.attempt.reviewCoverage === "missing" &&
       noReviewInFlight &&
-      !pipelineLinks
+      !pipelineLinks &&
+      !missingOutput
     ) {
       remedies.push({
         op: "request-review",
@@ -32491,11 +32524,13 @@ export function guardAttemptState(
     sourceCoverage:
       receipts?.sourceStaleReason === "boundary-unbindable"
         ? "unbindable"
-        : receipts?.sourceStale
-          ? "stale"
-          : receipts?.newestSourceFingerprint
-            ? "current"
-            : "missing",
+        : receipts?.sourceStaleReason === "source-unreadable"
+          ? "unreadable"
+          : receipts?.sourceStale
+            ? "stale"
+            : receipts?.newestSourceFingerprint
+              ? "current"
+              : "missing",
   };
   return {
     attempt,
