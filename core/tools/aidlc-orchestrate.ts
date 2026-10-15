@@ -6440,8 +6440,10 @@ function readUnitOwnership(stateContent: string | null): "team" | null {
 // so the per-unit loop, the approve-side coverage guard, and the swarm fan-out
 // never truncate a multi-unit plan because a hook failed to refresh the graph.
 // Three states:
-//   ok        - batches resolved (healed=true when recomputed; a heal writes
-//               one stderr note, since the compile hook should have run).
+//   ok        - batches resolved, recomputed when the cache is stale. A
+//               heal says nothing: a fresh clone has no graph until the
+//               next transition compiles one, and hooks that never run are
+//               reported by next's hooks-off stop and by doctor.
 //   none      - no dependency artifact: a genuine zero-unit scope; callers
 //               keep the single-iteration degrade byte-identical.
 //   malformed - the artifact exists but its fenced units block does not
@@ -6452,13 +6454,7 @@ function readUnitOwnership(stateContent: string | null): "team" | null {
 type BoltBatchesResolution = BoltDagResolution;
 
 function resolveBoltBatches(projectDir: string, evidence?: ConstructionEvidence): BoltBatchesResolution {
-  const resolution = evidence?.dag ?? resolveBoltDag(projectDir);
-  if (resolution.state === "ok" && resolution.healed) {
-    process.stderr.write(
-      `aidlc-orchestrate: runtime-graph.json bolt_dag is missing or stale; recomputed ${resolution.batches.length} unit batch(es) from unit-of-work-dependency.md (check the rebuild-stage-graph hook)\n`,
-    );
-  }
-  return resolution;
+  return evidence?.dag ?? resolveBoltDag(projectDir);
 }
 
 // True when `node` is the SKELETON-GATE stage for `scope` — the FIRST
@@ -13657,7 +13653,7 @@ function emitUnitMajorRunStage(
 
   // Resolve the DAG and kind map once. A stale graph can heal from the
   // dependency artifact; threading this immutable result through every
-  // fallback prevents repeated reads/warnings and preserves healed unit kinds.
+  // fallback prevents repeated reads and preserves healed unit kinds.
   if (resolution.state !== "ok" || resolution.batches.flat().length === 0) {
     emitPerUnitRunStage(
       node,
