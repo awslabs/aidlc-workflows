@@ -346,6 +346,12 @@ export function backOnLine(
   // At the person's own terminal the line names the command instead.
   const atTerminal = commandAtPersonsTerminal(env) ? stillOffLine(projectDir, name, "keeps", env) : null;
   if (atTerminal !== null) return `${atTerminal}${alsoCleared}`;
+  // Every file's switch counts, so a line naming one of two holders would send them to half the way back.
+  if (by.includes("project") && by.includes("global")) {
+    return `The project's shared settings in ${basename(settingsPathForTarget(projectDir, "project"))} and this machine's ` +
+      `settings in ${settingsPathForTarget(projectDir, "global")} keep ${subject.said} off. Changing both changes it.` +
+      alsoCleared;
+  }
   return (by.includes("project")
     ? `The project's shared settings in ${basename(settingsPathForTarget(projectDir, "project"))} keep ${subject.said} ` +
       "off for everyone on this project. Changing that file changes it."

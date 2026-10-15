@@ -192,6 +192,26 @@ describe("t-back-on-clears-your-own-switch: back on while a settings file keeps 
     expect(readFileSync(w.file("project"), "utf-8")).toBe(shared);
   });
 
+  test("the shared file and the machine's both keep it off: the line names both, since changing one leaves it off", () => {
+    const w = workspace();
+    w.off("AIDLC_DISABLE_PLAN_APPROVAL_GUARD", "project");
+    w.off("AIDLC_DISABLE_PLAN_APPROVAL_GUARD", "global");
+    const shared = readFileSync(w.file("project"), "utf-8");
+    const machine = readFileSync(w.file("global"), "utf-8");
+    const both =
+      `The project's shared settings in aidlc.settings.json and this machine's settings in ${w.file("global")} ` +
+      `keep ${PLAN} off. Changing both changes it.`;
+    expect(w.backOn("plan-approval", "turn plan approval back on")).toBe(both);
+    expect(readFileSync(w.file("project"), "utf-8")).toBe(shared);
+    expect(readFileSync(w.file("global"), "utf-8")).toBe(machine);
+    // With their own entry on top as well, theirs is cleared and both shared holders are still named.
+    w.off("AIDLC_DISABLE_PLAN_APPROVAL_GUARD", "local");
+    expect(w.backOn("plan-approval", "turn plan approval back on")).toBe(
+      `${both} The entry in aidlc.settings.local.json is cleared too.`,
+    );
+    expect(w.recorded("local")).toEqual([]);
+  });
+
   test("the machine's file keeps it off: one line names it, and it is never changed from this request", () => {
     const w = workspace();
     w.off("AIDLC_DISABLE_PLAN_APPROVAL_GUARD", "global");
