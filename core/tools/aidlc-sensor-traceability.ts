@@ -587,15 +587,8 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
     } else {
       addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR, ID_PATTERNS.NFR], "requirements.md"));
     }
-    const nfrDir = constructionDir(docsDir, unit, "nfr-requirements");
-    for (const name of ["performance-requirements.md", "security-requirements.md", "scalability-requirements.md", "reliability-requirements.md"]) {
-      const path = join(nfrDir, name);
-      if (existsSync(path)) {
-        const read = readText(path);
-        if (read.content !== null) {
-          for (const id of extractIds(read.content, [ID_PATTERNS.NFR_DETAIL])) result.ids.add(id);
-        }
-      }
+    for (const id of detailedNfrIds(constructionDir(docsDir, unit, "nfr-requirements"), NFR_REQUIREMENT_FILES) ?? []) {
+      result.ids.add(id);
     }
     const brPath = join(constructionDir(docsDir, unit, "functional-design"), "rules.md");
     if (existsSync(brPath)) {
@@ -728,10 +721,11 @@ function readTable(path: string, label: string): { data?: TraceabilityData; reas
 
 // Build and Test's cross-Unit coverage: every requirement in requirements.md and,
 // when User Stories ran, every criterion in stories.md, each built by an `OK`
-// row whose file exists in some Code Generation table. A requirement is built by
-// its own row; else through its sub-requirements (NFR1 through a Unit's NFR1.1);
-// else, with stories, through every criterion of the stories User Stories traced
-// it to, because Code Generation then traces criteria, not requirements.
+// row whose file exists in some Code Generation table. A requirement with
+// sub-requirements (NFR1 over a Unit's NFR1.1) is built when each Unit has built
+// its own, and a row for the parent alone does not cover them; else it is built
+// by its own row; else, with stories, through every criterion of the stories
+// User Stories traced it to, because Code Generation then traces criteria.
 // `uncovered` comes before the per-ID rows so a host that cuts long output keeps it.
 function finalCoverage(projectDir: string): FinalCoverage {
   const docsDir = recordDir(projectDir);
@@ -770,34 +764,50 @@ function finalCoverage(projectDir: string): FinalCoverage {
   const folders = existsSync(construction)
     ? readdirSync(construction, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()
     : [];
-  const tables = [
-    { owner: "code-generation", path: join(construction, "code-generation", "traceability.json") },
-    ...folders.map((owner) => ({ owner, path: join(construction, owner, "code-generation", "traceability.json") })),
-  ].filter((table) => existsSync(table.path));
-  if (tables.length === 0) reasons.push(`no Code Generation traceability.json under ${construction}`);
+  const owners = [
+    { owner: "code-generation", dir: construction },
+    ...folders.filter((folder) => folder !== "code-generation").map((owner) => ({ owner, dir: join(construction, owner) })),
+  ];
 
   const projectRoot = resolve(projectDir);
+  const add = (map: Map<string, string[]>, key: string, value: string) => map.set(key, [...(map.get(key) ?? []), value]);
   const builtIn = new Map<string, string[]>();
   const badTargets = new Map<string, string[]>();
-  const traced = new Set<string>();
-  for (const table of tables) {
-    const read = readTable(table.path, `${table.owner} Code Generation traceability.json`);
+  // Each owner's own built IDs and the sub-requirements it owes: the NFRx.y its
+  // NFR Requirements wrote (what Code Generation's own check asks of it) and any
+  // its table lists. The same NFRx.y in two Units is two requirements.
+  const builtBy = new Map<string, Set<string>>();
+  const owed = new Map<string, Set<string>>();
+  let tables = 0;
+  for (const { owner, dir } of owners) {
+    const children = new Set(detailedNfrIds(join(dir, "nfr-requirements"), NFR_REQUIREMENT_FILES) ?? []);
+    const built = new Set<string>();
+    owed.set(owner, children);
+    builtBy.set(owner, built);
+    const path = join(dir, "code-generation", "traceability.json");
+    if (!existsSync(path)) continue;
+    tables++;
+    const read = readTable(path, `${owner} Code Generation traceability.json`);
     if (!read.data) {
       if (read.reason) reasons.push(read.reason);
       continue;
     }
-    for (const id of read.data.upstream_ids) traced.add(id);
+    for (const id of [...read.data.upstream_ids, ...read.data.coverage.map((entry) => entry.id)]) {
+      if (tracedParent(id)) children.add(id);
+    }
     for (const entry of read.data.coverage) {
-      traced.add(entry.id);
       if (entry.status !== "OK") continue;
       const problem = codeTargetProblem(projectRoot, entry.target);
       if (problem) {
-        badTargets.set(entry.id, [...(badTargets.get(entry.id) ?? []), `${table.owner}: ${entry.id}: ${problem}`]);
+        add(badTargets, entry.id, `${owner}: ${entry.id}: ${problem}`);
+        add(badTargets, `${owner}: ${entry.id}`, `${owner}: ${entry.id}: ${problem}`);
       } else {
-        builtIn.set(entry.id, [...(builtIn.get(entry.id) ?? []), `${table.owner}: ${normalizePath(entry.target?.trim() ?? "")}`]);
+        built.add(entry.id);
+        add(builtIn, entry.id, `${owner}: ${normalizePath(entry.target?.trim() ?? "")}`);
       }
     }
   }
+  if (tables === 0) reasons.push(`no Code Generation traceability.json under ${construction}`);
 
   // A story with no criteria cannot show it is built, so it stands for itself.
   const criteriaOrStory = (story: string): string[] => {
@@ -806,13 +816,27 @@ function finalCoverage(projectDir: string): FinalCoverage {
   };
   const coverage: FinalRow[] = [];
   for (const id of reported) {
+    const parts: string[] = [];
+    const partsNotBuilt: string[] = [];
+    for (const [owner, children] of owed) {
+      for (const child of children) {
+        if (tracedParent(child) !== id) continue;
+        parts.push(`${owner}: ${child}`);
+        if (!builtBy.get(owner)?.has(child)) partsNotBuilt.push(`${owner}: ${child}`);
+      }
+    }
+    if (parts.length > 0) {
+      coverage.push(partsNotBuilt.length === 0
+        ? { id, covered: true, through: parts }
+        : { id, covered: false, through: parts, not_built: partsNotBuilt });
+      continue;
+    }
     const built = builtIn.get(id);
     if (built) {
       coverage.push({ id, covered: true, built_in: built });
       continue;
     }
-    let through = [...traced].filter((candidate) => tracedParent(candidate) === id);
-    if (through.length === 0) through = [...(storyTargets.get(id) ?? [])].flatMap(criteriaOrStory);
+    const through = [...(storyTargets.get(id) ?? [])].flatMap(criteriaOrStory);
     if (through.length === 0) {
       coverage.push({ id, covered: false });
       continue;

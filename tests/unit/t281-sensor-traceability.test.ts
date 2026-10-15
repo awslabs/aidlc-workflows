@@ -1672,7 +1672,7 @@ describe("t281 Build and Test: every requirement and criterion is built", () => 
     expect(out.coverage.map((entry) => entry.id)).toEqual(["FR1.1", "FR1.2", "FR2.1", "NFR1", "AC1.1.1", "AC1.1.2", "AC1.2.1"]);
     expect(row(out, "FR1.1")).toEqual({ id: "FR1.1", covered: true, through: ["AC1.1.1", "AC1.1.2"] });
     expect(row(out, "FR2.1")).toEqual({ id: "FR2.1", covered: true, through: ["AC1.2.1"] });
-    expect(row(out, "NFR1")).toEqual({ id: "NFR1", covered: true, through: ["NFR1.1", "NFR1.2"] });
+    expect(row(out, "NFR1")).toEqual({ id: "NFR1", covered: true, through: ["u1-auth: NFR1.1", "u2-profile: NFR1.2"] });
     expect(row(out, "AC1.2.1")).toEqual({ id: "AC1.2.1", covered: true, built_in: ["u2-profile: src/profile/reset.ts"] });
   });
 
@@ -1706,7 +1706,7 @@ describe("t281 Build and Test: every requirement and criterion is built", () => 
     expect(out.pass).toBe(true);
     expect(out.coverage.map((entry) => entry.id)).toEqual(["FR1.1", "FR1.2", "FR2.1", "NFR1"]);
     expect(row(out, "FR1.1")).toEqual({ id: "FR1.1", covered: true, built_in: ["code-generation: src/app.ts"] });
-    expect(row(out, "NFR1")).toEqual({ id: "NFR1", covered: true, through: ["NFR1.1"] });
+    expect(row(out, "NFR1")).toEqual({ id: "NFR1", covered: true, through: ["code-generation: NFR1.1"] });
 
     trace(proj, "construction/code-generation/traceability.json", {
       stage: "code-generation",
@@ -1720,8 +1720,47 @@ describe("t281 Build and Test: every requirement and criterion is built", () => 
     out = runFinal(proj);
     expect(out.pass).toBe(false);
     expect(out.uncovered).toEqual(["FR1.2", "FR2.1", "NFR1"]);
-    expect(row(out, "NFR1")).toEqual({ id: "NFR1", covered: false, through: ["NFR1.1"], not_built: ["NFR1.1"] });
+    expect(row(out, "NFR1")).toEqual({ id: "NFR1", covered: false, through: ["code-generation: NFR1.1"], not_built: ["code-generation: NFR1.1"] });
     expect(out.reason).toContain("FR2.1: target file does not exist: src/missing.ts");
+  });
+
+  test("a Unit owes the NFRx.y its NFR Requirements wrote, even when its table leaves one out or carries the parent row", () => {
+    const proj = project();
+    seedStoryPath(proj, { status: "OK", target: "src/profile/reset.ts" });
+    write(proj, "construction/u2-profile/nfr-requirements/security-requirements.md", "# Security\n\n- NFR1.2 Sign reset links\n- NFR1.3 Expire reset links\n");
+    let out = runFinal(proj);
+    expect(out.uncovered).toEqual(["NFR1"]);
+    expect(row(out, "NFR1")).toEqual({
+      id: "NFR1",
+      covered: false,
+      through: ["u1-auth: NFR1.1", "u2-profile: NFR1.2", "u2-profile: NFR1.3"],
+      not_built: ["u2-profile: NFR1.3"],
+    });
+
+    // The same ID in two Units is two requirements: one Unit's built NFR1.1
+    // does not stand in for another's.
+    write(proj, "construction/u2-profile/nfr-requirements/security-requirements.md", "# Security\n\n- NFR1.1 Rate-limit reset requests\n- NFR1.2 Sign reset links\n");
+    out = runFinal(proj);
+    expect(row(out, "NFR1")?.not_built).toEqual(["u2-profile: NFR1.1"]);
+
+    const direct = project();
+    write(direct, "inception/requirements-analysis/requirements.md", GROUPED);
+    write(direct, "construction/nfr-requirements/security-requirements.md", "# Security\n\n- NFR1.1 Hash passwords\n- NFR1.2 Lock out\n");
+    source(direct, "src/app.ts");
+    const ids = ["FR1.1", "FR1.2", "FR2.1", "NFR1", "NFR1.1"];
+    trace(direct, "construction/code-generation/traceability.json", {
+      stage: "code-generation",
+      upstream_ids: ids,
+      coverage: ids.map((id) => ({ id, status: "OK", target: "src/app.ts" })),
+    });
+    out = runFinal(direct);
+    expect(out.uncovered).toEqual(["NFR1"]);
+    expect(row(out, "NFR1")).toEqual({
+      id: "NFR1",
+      covered: false,
+      through: ["code-generation: NFR1.1", "code-generation: NFR1.2"],
+      not_built: ["code-generation: NFR1.2"],
+    });
   });
 
   test("a missing input is said, never read as built", () => {

@@ -41,9 +41,10 @@ Deterministic element-level verification of each stage's JSON coverage table:
 
 Build and Test's coverage gate runs the same tool with `--stage build-and-test`
 and no output path. It reads every Code Generation table and prints each
-requirement and acceptance criterion as built or not: a requirement without a
-row of its own is built through its sub-requirements or, when User Stories ran,
-through the criteria of the stories User Stories traced it to.
+requirement and acceptance criterion as built or not: a requirement with
+sub-requirements is built when each Unit has built its own, a row for the
+parent alone not covering them; otherwise by its own row or, when User Stories
+ran, through the criteria of the stories User Stories traced it to.
 
 ## Expected JSON schema
 

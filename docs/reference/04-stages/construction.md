@@ -1465,9 +1465,10 @@ with the aidlc-devsecops-agent providing security testing expertise.
     through its `FR{n}.{m}` IDs) and every `AC` in `stories.md` (when User
     Stories ran), each built when a stage-level or per-unit Code Generation
     `traceability.json` covers it `OK` with an existing target file. A
-    requirement without a row of its own is built through its sub-requirements
-    (`NFR1` through a Unit's `NFR1.1`) or, when User Stories ran, through every
-    acceptance criterion of the stories User Stories traced it to. Write
+    requirement with sub-requirements is built when each Unit has built its own
+    (the `NFR1.x` its NFR Requirements wrote; a row for `NFR1` alone does not
+    cover them); otherwise by its own row or, when User Stories ran, through
+    every acceptance criterion of the stories User Stories traced it to. Write
     `cross-unit-traceability.md` from that output with the verdict, per-ID
     coverage and every uncovered ID; an uncovered ID is a finding shown at the
     approval gate.
