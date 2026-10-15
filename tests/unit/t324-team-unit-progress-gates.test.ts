@@ -16,12 +16,14 @@ import {
   findStageBySlug,
   freshReviewReceipts,
   isTeamUnitOwnership,
+  markHumanTurn,
   parseCheckboxes,
   readAllAuditShards,
   readAuditShardEvents,
   readUnitGateRhythm,
   UNIT_GATE_RHYTHM_FIELD,
   UNIT_OWNERSHIP_FIELD,
+  turnEndIsOpen,
   unitCompletedReceipts,
   unitGateStatus,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -1022,6 +1024,22 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(auditBlockField(row("GATE_REJECTED"), "Feedback")).toBe(typed);
     expect(auditBlockField(row("GATE_REJECTED"), "Conductor Summary")).toBe("Split the entities");
     expect(auditBlockField(row("STAGE_REVISING"), "Feedback")).toBe(typed);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A live run (Codex): the person asked for another review at an open gate,
+  // the agent showed the gate again, and the Stop hook carried the turn on into
+  // a second showing. The report that shows a team Unit's open gate again ends
+  // the turn as the stage's does, until the person writes.
+  test("a team Unit gate shown again by its report ends the turn", () => {
+    const proj = seedProject({ ownership: "team" }, ["alpha"]);
+    settleBody(proj, runNext(proj));
+    expect(runNext(proj)).toMatchObject({ stage: "functional-design", unit: "alpha", gate: true });
+    const args = ["--stage", "functional-design", "--unit", "alpha", "--result", "awaiting-approval"];
+    expect(runReport(proj, args).kind).toBe("print");
+    markHumanTurn(proj);
+    Bun.sleepSync(20);
+    expect(runReport(proj, args).message).toBe('Unit "alpha" gate for "functional-design" is already awaiting approval.');
+    expect(turnEndIsOpen(proj)).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A conductor that reports a team Unit gate complete before asking it gets

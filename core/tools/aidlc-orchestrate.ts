@@ -16553,8 +16553,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         !humanPresenceGuardDisabled();
       const sequence: string[][] = [];
       if (flags.result === "awaiting-approval") {
+        // The Unit's gate shown again ends the turn, as the stage's does below.
         if (status === "awaiting-approval") {
-          emit(printDirective(
+          emit(turnEndingPrint(
             `Unit "${unit}" gate for "${slug}" is already awaiting approval.`,
           ));
           return;
