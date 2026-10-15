@@ -7,15 +7,15 @@
 // + res.stderr, plus on the audit shards the tool writes - the
 // PROCESS boundary, not in-process handler calls. An in-process twin
 // would lose the exit-code half (Tests 5-8 rely on the tool's
-// error() -> emitError -> process.exit(1) shell, aidlc-lib.ts:1546) AND the
+// error() -> emitError -> process.exit(1) shell, aidlc-lib.ts) AND the
 // resume-JSON-to-stdout half (Test 9).
 //
 // AUDIT EVENT UNIT: this test file credits the RECOVERY_COMPLETED audit event
 // (covers KEY audit:RECOVERY_COMPLETED). The tool emits it via emitAudit(pd,
-// "RECOVERY_COMPLETED", {Choice, "Current Stage"}) at aidlc-state.ts:990; the
+// "RECOVERY_COMPLETED", {Choice, "Current Stage"}) at aidlc-state.ts; the
 // audit block renders `## Recovery Completed` / `**Event**: RECOVERY_COMPLETED`
 // / `**Choice**: <c>` / `**Current Stage**: <s>` per EVENT_HEADINGS
-// (aidlc-audit.ts:150) + appendAuditEntryUnlocked (aidlc-audit.ts:256-267).
+// (aidlc-audit.ts) + appendAuditEntryUnlocked (aidlc-audit.ts).
 //
 // CONTRACT (aidlc-state.ts handleAcknowledgeCompaction + handleResume):
 //   - acknowledge-compaction --choice <continue|review|restart> emits

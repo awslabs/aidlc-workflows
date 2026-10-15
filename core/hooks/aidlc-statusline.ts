@@ -1,5 +1,5 @@
 // Status line: Display aidlc workflow position in the terminal status area
-// Registered via statusLine setting in settings.json
+// Registered via statusLine setting in .claude/settings.local.json
 // Invoked via: {{INVOKE}} engine statusline
 import {
   existsSync,
@@ -438,8 +438,8 @@ const STAGE_DISPLAY: Record<string, string> = {
   "feedback-optimization": "Feedback & Optimization",
 };
 
-// Agent display names derive from `.claude/agents/*.md` frontmatter via
-// loadAgents(). The `orchestrator` pseudo-entry is seeded explicitly —
+// Agent display names derive from the harness's `agents/*.md` frontmatter via
+// loadAgentDisplayMap(). The `orchestrator` pseudo-entry is seeded explicitly -
 // state files can carry `Active Agent: orchestrator` during orchestrator-
 // driven transitions, but there's no corresponding agent file.
 function agentDisplayMap(projectDir: string): Record<string, string> {
@@ -541,8 +541,7 @@ export function fmtTokens(n: number): string {
 // null/zero/unknown (e.g. only unknown models), render tokens only - NEVER a
 // fabricated "$0". Renders ONLY when the ledger exists and carries data: an
 // install without the Claude fold hook (Kiro/Codex/opencode, or an upstream
-// session that never folded) sees no ledger and gets "", so the statusline is
-// byte-unchanged from before this feature.
+// session that never folded) sees no ledger and gets "".
 //
 // The ledger advances on each fold, so this segment reflects usage through the
 // last folded turn - it can lag the in-flight turn by up to one fold. That is
@@ -616,10 +615,8 @@ function buildRightSide(
 //   - the "<space> ·" segment renders ONLY when more than one space exists
 //     (listSpaces() always reports at least the always-present "default", so a
 //     single-team user — exactly one space — never sees the word "space");
-//   - the intent slug renders whenever a per-intent record is active. On the
-//     flat-legacy / pre-auto-create layout activeIntent() returns null, so the
-//     prefix is empty and the line reads exactly as it did before the workspace
-//     move (a flat project is unchanged).
+//   - the intent slug renders whenever a per-intent record is active; with no
+//     record resolved (the flat-legacy layout) the prefix is empty.
 // The intent SLUG comes from the registry (rename-stable) when the active
 // record has a registry row; otherwise it falls back to the record dir name
 // minus its `-id8` disambiguator (an orphan / hand-created record).
@@ -653,9 +650,6 @@ function printLine(left: string, right: { plain: string; formatted: string }): v
 }
 
 async function main(stdinText: string): Promise<void> {
-  // Skip stdin read when stdin is a TTY — Claude Code always pipes JSON,
-  // never runs the statusline with a terminal attached. Without this guard
-  // a direct run / test / debug-mode pipeline would block on terminal input.
   let input: Input = {};
   try {
     input = stdinText ? JSON.parse(stdinText) : {};
@@ -737,6 +731,8 @@ async function main(stdinText: string): Promise<void> {
 }
 
 export async function run(input: string): Promise<number> {
+  // Claude Code always pipes JSON and never runs the statusline with a terminal
+  // attached, so a terminal on stdin carries no payload.
   await main(process.stdin.isTTY ? "" : input);
   return 0;
 }

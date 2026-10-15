@@ -23,15 +23,15 @@
 //     BOLT_FAILED with `Failed Bolt`, `Error summary`, and (when --slug given)
 //     a `Bolt slug` field. It does NOT spawn aidlc-worktree, NEVER
 //     emits WORKTREE_DISCARDED, and touches no disk beyond the audit append —
-//     THIS is the preservation guarantee (comment block aidlc-bolt.ts:22-24,
-//     493-497: "halt-and-ask preserves the worktree by default").
-//   - dist/claude/.claude/tools/aidlc-worktree.ts handleInfo (:672) — reads the
+//     THIS is the preservation guarantee (aidlc-bolt.ts comment block:
+//     "halt-and-ask preserves the worktree by default").
+//   - dist/claude/.claude/tools/aidlc-worktree.ts handleInfo - reads the
 //     latest WORKTREE_CREATED block for the slug and prints {"path":...} JSON;
 //     it resolves the live path EVEN AFTER the failure (the create block is
 //     still the latest WORKTREE_CREATED, untouched by fail).
 //
 // FIXTURE: aidlc-worktree.ts runs real git and asserts it is invoked from the
-// main checkout (assertNotSiblingWorktree, aidlc-worktree.ts:101). So the
+// main checkout (assertNotSiblingWorktree, aidlc-worktree.ts). So the
 // fixture is an ACTUAL git repo on `main` with one commit plus aidlc-docs/ —
 // setupWorktreeFixture (tests/harness/fixtures.ts, ported from
 // tests/lib/worktree-helpers.sh). The .sh additionally `mkdir -p aidlc-docs`;

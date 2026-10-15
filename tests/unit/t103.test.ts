@@ -9,7 +9,7 @@
 //       spawning `bun aidlc-utility.ts doctor --project-dir <proj>` with
 //       AIDLC_RULES_DIR / AIDLC_STAGE_GRAPH pointed at inline fixtures, then
 //       checking the health-check stdout. doctor's process.exit(failed>0?1:0)
-//       (aidlc-utility.ts:1385) means a clean fixture exits 0 and a fixture
+//       (aidlc-utility.ts) means a clean fixture exits 0 and a fixture
 //       that trips an unrelated check exits 1; we assert on the advisory LABEL
 //       lines (the observable under test) and never pin doctor's exit code.
 //

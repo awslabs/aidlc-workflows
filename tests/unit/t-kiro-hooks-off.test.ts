@@ -124,7 +124,9 @@ describe("t-kiro-hooks-off: a hook the person switched off in Kiro is said once 
     const off = kiroHooksOff(proj);
     expect(off).toHaveLength(1);
     expect(off[0]).toMatchObject({ name: GUARD, file: `.kiro/hooks/${GUARD}.json`, since: "2026-10-06T23:09:18.000Z" });
-    expect(off[0].protects).toContain("approvals, the approved plan");
+    expect(off[0].protects).toContain("the approved plan, reviewed work");
+    // The engine holds every approval to the person's reply whether this card runs or not.
+    expect(off[0].protects).not.toContain("approvals");
     expect(readFileSync(join(proj, ".kiro", "hooks", `${GUARD}.json`), "utf-8")).toContain('"enabled": false');
     expect(kiroHooksOff(proj, ".claude")).toEqual([]);
   });

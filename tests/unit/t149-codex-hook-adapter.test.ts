@@ -1103,15 +1103,12 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         tool_name: "Bash",
         tool_input: {
           command:
-            "bun .codex/tools/aidlc-state.ts reject feasibility",
+            "bun .codex/tools/aidlc.ts engine hook record-human-turn",
         },
       });
       expect(r.code).toBe(2);
       expect(r.stdout).toBe("");
-      expect(r.stderr).toContain(
-        "Stage status cannot be changed with aidlc-state.ts reject",
-      );
-      expect(r.stderr).toContain("aidlc-orchestrate.ts report");
+      expect(r.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1652,16 +1649,16 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
 
   // --- Stop-hook conversational carve-out on Codex (issue #365 cross-harness) ---
   //
-  // Codex's stop adapter (case "continue-workflow", aidlc-codex-adapter.ts:336-343) pipes the
+  // Codex's stop adapter (case "continue-workflow", aidlc-codex-adapter.ts) pipes the
   // RAW stdin verbatim to the core hook, and Codex's stop payload carries a real
   // transcript_path (a date-sharded `rollout-*.jsonl`) + stop_hook_active. So the
-  // core hook's conversational carve-out (tier 3, aidlc-continue-workflow.ts:886-904) fires
+  // core hook's conversational carve-out (tier 3, aidlc-continue-workflow.ts) fires
   // from the actual transcript, classifying the ending turn:
   //   - human's last prompt answered with NO loop-advancing engine call -> ALLOW.
   //   - a loop-advancing aidlc-orchestrate call after that prompt -> BLOCK.
   //   - a READ-ONLY query (next --status) is NOT engagement -> still ALLOW.
   // The core hook detects the Codex format by the rollout-*.jsonl path shape
-  // (aidlc-continue-workflow.ts:792), so the transcript file the test writes MUST be named
+  // (aidlc-continue-workflow.ts), so the transcript file the test writes MUST be named
   // rollout-*.jsonl and live in the scratch dir (the adapter reads a REAL file).
   // The seeded brownfield-feature state (Current Stage requirements-analysis [-],
   // not [?]/[R], no questions file) yields a pending run-stage and trips none of
@@ -1670,7 +1667,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
 
   /** Write a Codex rollout transcript (response_item shape) and return its path.
    *  `assistant` is either a plain message turn or a function_call turn - the two
-   *  shapes the core hook's Codex reader classifies (aidlc-continue-workflow.ts:582-645). */
+   *  shapes the core hook's Codex reader classifies (aidlc-continue-workflow.ts). */
   function writeCodexTranscript(
     dir: string,
     humanPrompt: string,
@@ -1986,14 +1983,13 @@ describe("t149 Codex guard-tool-call runs the four PreToolUse checks in one proc
     }
   });
 
-  test("2: a direct state transition is refused with the state-transition guard's own words", () => {
+  test("2: a tool call that invokes a hook is refused with the state-transition guard's own words", () => {
     const dir = scratchProject(false);
     try {
-      const r = runAdapter(dir, "guard-tool-call", shellCall(dir, "bun .codex/tools/aidlc-state.ts reject feasibility"));
+      const r = runAdapter(dir, "guard-tool-call", shellCall(dir, "bun .codex/tools/aidlc.ts engine hook record-human-turn"));
       expect(r.code).toBe(2);
       expect(r.stdout).toBe("");
-      expect(r.stderr).toContain("Stage status cannot be changed with aidlc-state.ts reject");
-      expect(r.stderr).toContain("aidlc-orchestrate.ts report");
+      expect(r.stderr).toContain("AIDLC runtime records and hooks belong to the harness");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

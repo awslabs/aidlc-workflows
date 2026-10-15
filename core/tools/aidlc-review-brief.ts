@@ -13,6 +13,7 @@ import {
   ENGINE_DIR,
   attemptEventDefinitelyBefore,
   auditBlockField,
+  changesSinceLastReview,
   constructionCheckpointsApply,
   errorMessage,
   extractMarkdownSection,
@@ -2013,7 +2014,8 @@ export function reviewInvalidationDetails(
 
 /**
  * The CHANGE_ACCEPTED rows for reviewed content of `stageSlug` in the current
- * attempt: the human line each carried and the paths it named, oldest first.
+ * attempt that no later finished review of the same work covered: the human
+ * line each carried and the paths it named, oldest first.
  */
 export function acceptedReviewChanges(
   projectDir: string,
@@ -2026,17 +2028,16 @@ export function acceptedReviewChanges(
     readAuditShardEvents(projectDir),
     stageSlug,
   );
+  const events = attemptView.events.filter((event) => attemptEventAfterFrontier(attemptView.floor, event));
+  // The final gate of a per-Unit stage pairs each change with its own Unit's reviews.
+  const units = unit !== undefined
+    ? [unit]
+    : [...new Set(events.filter((event) => event.event === "CHANGE_ACCEPTED")
+      .map((event) => auditBlockField(event.block, "Unit") ?? undefined))];
+  const unseen = new Set(units.flatMap((each) => changesSinceLastReview(projectDir, events, stageSlug, each)));
   const accepted: Array<{ notice: string; changed: string[] | null }> = [];
-  for (const event of attemptView.events) {
-    if (
-      event.event !== "CHANGE_ACCEPTED" ||
-      !attemptEventAfterFrontier(attemptView.floor, event) ||
-      auditBlockField(event.block, "Stage") !== stageSlug ||
-      auditBlockField(event.block, "Checkpoint") !== "review-receipt" ||
-      (unit !== undefined && auditBlockField(event.block, "Unit") !== unit)
-    ) {
-      continue;
-    }
+  for (const event of events) {
+    if (!unseen.has(event)) continue;
     const changed = auditBlockField(event.block, "Changed");
     accepted.push({
       notice: auditBlockField(event.block, "Details") ?? "Reviewed content changed after it was reviewed.",
@@ -2157,34 +2158,25 @@ export function renderReviewBrief(
         : contexts.some((context) => context.verdict === "NOT-READY")
           ? "The review did not complete with actionable findings."
           : "No blocking concerns were found.";
-  // `stale` also covers a conductor edit that self-invalidated the receipt, so naming
-  // only upstream change misleads; the accurate cause is appended below either way.
-  // A review that did not finish is neither a completed review nor a re-check.
-  const unfinishedReview = contexts.some((context) => context.incompleteReview);
-  const why = {
-    first: unfinishedReview ? "First review did not finish." : "First review completed.",
-    revision: unfinishedReview ? "Revision re-check did not finish." : "Revision re-checked.",
-    stale: "Re-check required: the previous review receipt is no longer valid.",
-  }[reason];
-
+  // No "why now" label: which pass this is changes nothing the person decides,
+  // and the record keeps it (the review rows' iteration and who asked). The
+  // reason still selects the stale lines below.
   const lines = [
     `**Stage:** ${stage.name}`,
     `**Review outcome:** ${outcome}`,
-    `**Why now:** ${why}`,
   ];
-  // Reviewed content that changed after the receipt and was accepted under
-  // Change Control `relaxed` (the ledger's CHANGE_ACCEPTED rows for this stage
-  // in the current attempt). The verdict above is the reviewer's; these lines
-  // tell the human what moved since it was recorded.
+  // Reviewed content that changed after the review and was kept under a relaxed
+  // or off Guard Policy, and that no later finished review covered. The verdict
+  // above is the reviewer's; this tells the person what it did not see. The
+  // paths say it; the change's own sentence is said only when there are none.
   // The final gate of a per-Unit stage omits --unit and says every Unit's change.
   const changesFor = stage.for_each === "unit-of-work" ? unit : undefined;
   for (const accepted of acceptedReviewChanges(projectDir, stage.slug, changesFor)) {
-    lines.push(`**Reviewed content differs:** ${accepted.notice}`);
-    if (accepted.changed !== null) {
-      lines.push(
-        `**Changed after review:** ${accepted.changed.map((path) => `\`${path}\``).join(", ")}`,
-      );
-    }
+    lines.push(
+      accepted.changed !== null
+        ? `**Changed after review:** ${accepted.changed.map((path) => `\`${path}\``).join(", ")}`
+        : `**Reviewed content differs:** ${accepted.notice}`,
+    );
   }
   if (reason === "stale") {
     const invalidation = reviewInvalidationDetails(

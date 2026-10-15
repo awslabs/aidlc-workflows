@@ -50,7 +50,7 @@
 // the first stage step of the seeded work (stopWhen, so a red ends in about a
 // minute instead of working that intent to the timeout), so no
 // stage body of the new intent is executed. Gated on claude-CLI presence
-// (run-tests.ts:274 — the file calls driveAidlc(), so claude-gate.ts marks it
+// (run-tests.ts - the file calls driveAidlc(), so claude-gate.ts marks it
 // SDK-dependent and the runner skips-with-reason when claude is absent; never a
 // hard fail).
 

@@ -5,8 +5,8 @@
 // res.stderr, plus on the audit shards the tool writes - the PROCESS boundary,
 // not in-process handleDispatchEvent calls. An in-process twin would lose the
 // exit-code half the invalid-arg cases rely on: the tool's error() path is
-// process.exit(1) via emitError (aidlc-bolt.ts:838-842 ->
-// aidlc-lib.ts:1504-1546), and the JSON-ack-to-stdout half (console.log of
+// process.exit(1) via emitError (aidlc-bolt.ts ->
+// aidlc-lib.ts), and the JSON-ack-to-stdout half (console.log of
 // `{"emitted":"..."}`).
 //
 // SUBCOMMAND UNIT: this file credits the single subcommand unit it
@@ -15,7 +15,7 @@
 // one subcommand across its three --event variants (INVOKED / RETURNED /
 // FALLBACK) plus the dispatch error arm.
 //
-// CONTRACT (aidlc-bolt.ts:660-734, handleDispatchEvent):
+// CONTRACT (aidlc-bolt.ts, handleDispatchEvent):
 //   - --event + --slug always required (Missing --event / Missing --slug).
 //   - MERGE_DISPATCH_INVOKED: requires --practices-excerpt; emits fields
 //     {Bolt slug, Practices section excerpt}.
@@ -26,7 +26,7 @@
 //     {Bolt slug, Fallback reason, Defaults applied}.
 //   - Unknown --event -> "Invalid --event: ...".
 //   Every variant prints `{"emitted":"<EVENT>","slug":"<slug>"}` on stdout
-//   and writes one audit block via appendAuditEntry (aidlc-audit.ts:240-272:
+//   and writes one audit block via appendAuditEntry (aidlc-audit.ts:
 //   `**Event**: <type>` then `**<key>**: <value>` lines, blocks separated by
 //   `\n---\n`).
 //

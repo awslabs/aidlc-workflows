@@ -189,8 +189,8 @@ Each call owns its checkout. Default PR CI includes Linux integration; the merge
 queue and expanded manual CI also run deterministic E2E. Ordinary nightly and
 release Full Suite runs do not repeat those tiers or production-guard jobs.
 
-Hosted live coverage uses 26 jobs: on each existing OS, two Claude SDK shards
-(four on Linux), three Claude TUI shards, one Codex shard, one Copilot CLI shard
+Hosted live coverage uses 27 jobs: on each existing OS, two Claude SDK shards
+(five on Linux), three Claude TUI shards, one Codex shard, one Copilot CLI shard
 and one opencode shard. Each shard runs
 at most two files concurrently, restoring the checkout and application home
 between files and retrying only a failed file after confirmed cleanup. Platform

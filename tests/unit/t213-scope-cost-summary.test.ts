@@ -20,7 +20,6 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  ceremonyOffClause,
   ceremonyOffList,
   gridCostSummary,
   scopeCostSummary,
@@ -177,7 +176,7 @@ describe("t213 edge cases", () => {
   });
 });
 
-describe("t213 scope policy cost clauses", () => {
+describe("t213 scope policy off lists", () => {
   test("effective ceremony labels respect supplied policy without changing scope defaults", () => {
     expect(ceremonyOffList("classic", {
       sensors: "on", learnings: "on", summary_confirmation: "on", plan_approval: "on", collaborators: "on",
@@ -193,27 +192,16 @@ describe("t213 scope policy cost clauses", () => {
       sensors: "off", learnings: "off", summary_confirmation: "off", plan_approval: "on", collaborators: "on",
     });
     expect(disabled).toEqual(["sensors", "learnings ritual", "summary confirmation"]);
-    expect(ceremonyOffClause({ ...scopeCostSummary("classic")!, off: disabled })).toBe(
-      "; no sensors, learnings ritual, or summary confirmation",
-    );
-  });
-
-  test("classic previews every omitted ceremony without hiding stage approvals", () => {
-    const summary = scopeCostSummary("classic")!;
-    expect(summary.gates).toBeGreaterThan(0);
-    expect(ceremonyOffClause(summary)).toBe(
-      "; no summary confirmation; lead agent only",
-    );
   });
 
   // Express is the lightest run and says so in its own frontmatter: it is
-  // the one scope that declares every ceremony off, so its clause names every
+  // the one scope that declares every ceremony off, so its list names every
   // one of them. Feature keeps the first four on but, like every scope except
-  // enterprise, ships collaborators off, so its clause names that alone.
+  // enterprise, ships collaborators off, so its list names that alone.
   test("express omits reviewers and all five ceremonies, while feature omits only collaborators", () => {
-    expect(ceremonyOffClause(scopeCostSummary("express")!)).toBe(
-      "; no reviewers, sensors, learnings ritual, summary confirmation, or plan approval; lead agent only",
-    );
-    expect(ceremonyOffClause(scopeCostSummary("feature")!)).toBe("; lead agent only");
+    expect(scopeCostSummary("express")?.off).toEqual([
+      "reviewers", "sensors", "learnings ritual", "summary confirmation", "plan approval", "collaborators",
+    ]);
+    expect(scopeCostSummary("feature")?.off).toEqual(["collaborators"]);
   });
 });

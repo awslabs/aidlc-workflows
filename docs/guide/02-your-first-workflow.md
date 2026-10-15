@@ -106,9 +106,8 @@ rather than the request.
 
 The agent reads your request and proposes a plan: a ready-made set of stages
 for this kind of work. The question names the plan, how many stages and
-approval gates it has, how many stages repeat for each unit of work in
-Construction, and whether support agents take part (`lead agent only` when
-they do not). For the inventory API the agent proposed `mvp`, 19 stages; a
+approval gates it has, and how many stages repeat for each unit of work in
+Construction. For the inventory API the agent proposed `mvp`, 19 stages; a
 `feature` plan runs all 33. You can:
 
 - go ahead with the proposed plan;
@@ -203,7 +202,6 @@ aidlc/spaces/default/intents/261013-inventory-rest-api/ideation/intent-capture/.
 
 Stage: Intent Capture & Framing
 Review outcome: Concerns remain for your decision.
-Why now: First review completed.
 
 | ID   | Severity | Where                                      | Status |
 |------|----------|--------------------------------------------|--------|
@@ -241,10 +239,8 @@ on the revision process.
 After approval, a progress line appears:
 
 ```text
-Progress: 1/19 in-scope stages complete (4/33 overall) | 1/4 IDEATION. Next: Feasibility & Constraints
+Progress: 1 of 19 stages done. Next: Feasibility & Constraints.
 ```
-
-The overall count includes the three initialization stages.
 
 ### Remaining Ideation Stages
 
@@ -360,7 +356,7 @@ sequenceDiagram
 
 ### Subagent Delegation
 
-Four stages dispatch to background subagents — 2.1 Reverse Engineering (pipeline: developer scan, then architect synthesis-and-write), 2.2 Practices Discovery (subagent hub-and-spoke: lead draft, three mutually blind support reviews, human interview, lead integration), 2.4 User Stories (mob: collaborators contribute in parallel, and judgment-call disagreements may surface to you mid-stage), and 3.5 Code Generation (subagent). Practices Discovery deliberately brings you into the room between the spokes and final integration; the User Stories mob may also surface judgment calls mid-stage. Those support agents take part when collaborators are on (the `collaborators` setting, shipped on only for `enterprise`; `/aidlc --collaborators on` turns it on for one piece of work). With collaborators off, the scope line says `lead agent only` and each of these stages runs its lead alone: the developer both scans the code and writes the code knowledge base, Practices Discovery goes from the lead's draft straight to your interview, and User Stories has no mob round. Workspace detection (0.2) runs deterministically inside `aidlc-utility intent-create` rather than as a subagent.
+Four stages dispatch to background subagents: 2.1 Reverse Engineering (pipeline: developer scan, then architect synthesis-and-write), 2.2 Practices Discovery (subagent hub-and-spoke: lead draft, three mutually blind support reviews, human interview, lead integration), 2.4 User Stories (mob: collaborators contribute in parallel, and judgment-call disagreements may surface to you mid-stage), and 3.5 Code Generation (subagent). Practices Discovery deliberately brings you into the room between the spokes and final integration; the User Stories mob may also surface judgment calls mid-stage. Those support agents take part when collaborators are on (the `collaborators` setting, shipped on only for `enterprise`; `/aidlc --collaborators on` turns it on for one piece of work). With collaborators off, each of these stages runs its lead alone: the developer both scans the code and writes the code knowledge base, Practices Discovery goes from the lead's draft straight to your interview, and User Stories has no mob round. Workspace detection (0.2) runs deterministically inside `aidlc-utility intent-create` rather than as a subagent.
 
 ```mermaid
 sequenceDiagram

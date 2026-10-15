@@ -1105,7 +1105,7 @@ describe("t148 dist/kiro file structure", () => {
     // so they must not send a Kiro IDE user to /aidlc while the chat is still on
     // Default.
     const readme = readFileSync(join(REPO_ROOT, "README.md"), "utf-8");
-    expect(readme.split("\n").find((line) => line.startsWith("| Kiro IDE >= 1.1.70 / Kiro CLI >= 2.24.1 (v3) |"))).toContain(
+    expect(readme.split("\n").find((line) => line.startsWith("| Kiro: Kiro IDE >= 1.1.70 / Kiro CLI >= 2.24.1 (v3) |"))).toContain(
       "| Open the project in Kiro IDE and choose **aidlc** in the chat panel's agent picker, or run `kiro-cli` |",
     );
     expect(readme).toContain("In Kiro IDE, first choose **aidlc**\nin the chat panel's agent picker.");
@@ -1117,8 +1117,8 @@ describe("t148 dist/kiro file structure", () => {
       .find((line) => line.startsWith("| Kiro IDE |"));
     expect(lifecycleRow).toBe(`| Kiro IDE | ${next[0].toUpperCase()}${next.slice(1)} |`);
     const gettingStarted = read("01-getting-started.md");
-    expect(gettingStarted).toContain("| Kiro IDE | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker | `/aidlc` |");
-    expect(gettingStarted).toContain("| Kiro IDE | Open the configured project, then choose **aidlc** in the chat panel's agent picker |");
+    expect(gettingStarted).toContain("| Kiro (Kiro IDE, Kiro CLI on v3) | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker, or run `kiro-cli` in the project | `/aidlc` |");
+    expect(gettingStarted).toContain("| Kiro (Kiro IDE, Kiro CLI on v3) | Open the configured project, then choose **aidlc** in the chat panel's agent picker, or start `kiro-cli` in the project |");
     const doctorSteps = read("harnesses", "kiro-ide.md").split(/\n\s*\n/).filter((paragraph) => /\brun\s+`\/aidlc --doctor`/.test(paragraph));
     expect(doctorSteps.length).toBeGreaterThanOrEqual(2);
     for (const paragraph of doctorSteps) expect(paragraph).toContain("agent picker");

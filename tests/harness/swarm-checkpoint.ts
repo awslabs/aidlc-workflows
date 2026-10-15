@@ -179,12 +179,23 @@ export function addSubmodule(pd: string): void {
   git(pd, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "vendor/sub"]);
 }
 
-export function fixture(units = ["alpha"], command: string | null = CHECK, withSubmodule = false): string {
+// With `repo`, a workspace of several repositories: its roof holds the records
+// and is no repository, and the Units' code is in that one recorded sibling.
+export function fixture(units = ["alpha"], command: string | null = CHECK, withSubmodule = false, repo: string | null = null): string {
   const pd = setupWorktreeFixture();
   projects.push(pd);
+  const code = repo === null ? pd : join(pd, repo);
+  if (repo !== null) {
+    mkdirSync(code);
+    git(code, ["init", "-q", "-b", "main"]);
+    // The test identity setupWorktreeFixture gave the roof's repository, which goes.
+    for (const key of ["user.name", "user.email"]) git(code, ["config", key, git(pd, ["config", key])]);
+    rmSync(join(pd, ".git"), { recursive: true, force: true });
+    rmSync(join(pd, "README.md"));
+  }
   // ISOLATED_GIT_ENV drops the global config, so this new repository gets no
   // long-path support from the runner. Nested Bolt worktrees exceed MAX_PATH.
-  if (process.platform === "win32") git(pd, ["config", "core.longpaths", "true"]);
+  if (process.platform === "win32") git(code, ["config", "core.longpaths", "true"]);
   seedAidlcMemory(pd);
   writeFileSync(seededStateFile(pd), `# State
 ## Project Information
@@ -225,9 +236,15 @@ export function fixture(units = ["alpha"], command: string | null = CHECK, withS
     "aidlc/spaces/*/intents/active-intent", "aidlc/spaces/*/intents/*/audit/",
     "aidlc/spaces/*/intents/*/runtime-graph.json", "aidlc/spaces/*/intents/*/.aidlc-*", "",
   ].join("\n"));
+  if (repo !== null) {
+    const registry = join(pd, "aidlc", "spaces", "default", "intents", "intents.json");
+    const entries = JSON.parse(readFileSync(registry, "utf-8"));
+    entries[0].repos = [repo];
+    writeFileSync(registry, JSON.stringify(entries));
+  }
   seedBoltDagBatches(pd, [units, ["later"]]);
-  mkdirSync(join(pd, "src"), { recursive: true });
-  for (const unit of units) writeFileSync(join(pd, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
+  mkdirSync(join(code, "src"), { recursive: true });
+  for (const unit of units) writeFileSync(join(code, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
   if (withSubmodule) addSubmodule(pd);
   const baseline = writeBaselineSourceSnapshot(pd, STAGE, workspaceSourceListing(pd)!);
   appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature", "Source Baseline": baseline }, pd);
@@ -235,8 +252,8 @@ export function fixture(units = ["alpha"], command: string | null = CHECK, withS
   if (command !== null) recordCommand(pd, command);
   publish(pd, units);
   for (const unit of units) plan(pd, unit);
-  git(pd, ["add", "-A"]);
-  git(pd, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", "swarm fixture"]);
+  git(code, ["add", "-A"]);
+  git(code, ["-c", "user.name=AI-DLC Tests", "-c", "user.email=tests@example.com", "commit", "-qm", "swarm fixture"]);
   for (const unit of units) approvePlan(pd, unit);
   return pd;
 }

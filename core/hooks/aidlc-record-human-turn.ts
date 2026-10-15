@@ -12,13 +12,13 @@
 // The hook records the person's message whole and applies nothing: a setting
 // typed as a flag is the agent's to read and the setter's to apply, once the
 // agent runs the command `next` names.
-// appendAuditEntryUnlocked resolves the active intent from the on-disk cursor. No workflow state means nothing
-// to gate, so the hook skips ledger writes (same self-gate as
-// aidlc-session-start.ts) - otherwise every prompt in a project that carries the
-// harness shell but never ran the framework would scaffold and grow audit
-// shards. The gate fails open on an empty ledger, so skipping the mint there is
-// safe. The mint is fail-open (try/catch, exit 0): a mint failure must never
-// block the human's turn.
+// appendAuditEntryUnlocked uses the workflow selection enterHookWorkflow pins
+// for this chat. No workflow state means nothing to gate, so the hook skips
+// ledger writes (same self-gate as aidlc-session-start.ts) - otherwise every
+// prompt in a project that carries the harness shell but never ran the
+// framework would scaffold and grow audit shards. The gate fails open on an
+// empty ledger, so skipping the mint there is safe. The mint is fail-open
+// (try/catch, exit 0): a mint failure must never block the human's turn.
 //
 // The same seam also touches the .aidlc-engine/human-turn marker (markHumanTurn). The
 // ledger event serves the human-presence GATE; the marker serves the Stop hook's
@@ -45,8 +45,7 @@
 // This is the same doctrine the engine already applies elsewhere — an unattended
 // autonomous Construction run "has no human at the gate", which is why
 // aidlc-utility refuses scope changes and plan re-shapes and aidlc-state refuses
-// park under it. This closes the one path where an unattended turn still
-// manufactured a human.
+// park under it.
 //
 // Fail direction: the flag can only ever WITHHOLD authority. If it leaks into an
 // interactive shell the human's approvals get refused until it is unset —
@@ -55,8 +54,7 @@
 //
 // The MARKER is deliberately still written. It is not an authority signal, and
 // suppressing it would change the Stop hook's conversational carve-out, which is
-// a separate behaviour with its own tests. Reviewers who want the marker
-// suppressed too should say so — it is a one-line follow-on, not a silent choice.
+// a separate behaviour with its own tests.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -124,7 +122,7 @@ import { MESSAGE_PICKER_MAX_CHARS, MESSAGE_TEXT_MAX_CHARS, saveMessage, type Sto
 // parser, and everything after them is the person's words. A prompt that does
 // not start with the entry word is words only. A line the parser refuses keeps
 // the words and no settings: the record proves what was said; the command
-// itself is refused later, as today. `command` is structure the parse holds: an
+// itself is refused later. `command` is structure the parse holds: an
 // `/aidlc` line with no words after its flags, with its words behind `--` (the
 // person marked them as the work), or one the parser refused is a command to
 // AIDLC and no reply to an open question; any line with words after the entry
@@ -250,7 +248,6 @@ function singlePickerQuestion(value: unknown): Record<string, unknown> | null {
   return question !== null && typeof question === "object" ? question as Record<string, unknown> : null;
 }
 
-// The option labels of a single-question picker, as strings or `{label}`.
 function extractOptionLabels(value: unknown): string[] | null {
   const question = singlePickerQuestion(value);
   if (question === null) return null;
@@ -369,9 +366,11 @@ function pickedGateLabel(text: string, picker: PlanApprovalPickerQuestion | unde
 // reply by its question; Codex keys it by the question's id, with a list of
 // picks (its adapter passes the box's reply as picker_reply). Nothing here
 // reads meaning into the reply.
-// What the box carried back: one entry per question it asked, in the order shown, `reply` null where the person left
-// a question blank (AIDA F8 on #2107: an entry only for answered questions read "asked and left blank" as "never
-// asked"). A pick for a question the box did not list follows them. Strings are cut to the store's limit.
+// What the box carried back: one entry per question it asked, in the order
+// shown, `reply` null where the person left a question blank (#2107: an entry
+// only for answered questions read "asked and left blank" as "never asked"). A
+// pick for a question the box did not list follows them. Strings are cut to the
+// store's limit.
 function pickerReplies(
   input: string,
   limit = Number.POSITIVE_INFINITY,
@@ -667,7 +666,8 @@ try {
         ? noWords
         : { ...noWords, words: humanResponseText.trim() || null };
       const full = promptSubmitted ? typedPrompt : humanResponseText;
-      // Every stored string is cut (AIDA F5 on #2107: uncut words once put a record past the reader's cap).
+      // Every stored string is cut (#2107: uncut words once put a record past the
+      // reader's cap).
       const picker = promptSubmitted ? null : pickerReplies(input, MESSAGE_PICKER_MAX_CHARS);
       const words = parsed.words !== null && parsed.words.length > MESSAGE_TEXT_MAX_CHARS
         ? parsed.words.slice(0, MESSAGE_TEXT_MAX_CHARS)
@@ -800,8 +800,6 @@ try {
           // "/aidlc --guard-policy off approve the plan") are a reply.
           appendAuditEntryUnlocked("HUMAN_TURN", {
             ...(sessionId ? { Session: sessionId } : {}),
-            // Who sent it and how, so a host's turn and a person's are told
-            // apart in the record from now on.
             Origin: "person",
             ...(promptSubmitted ? { Source: "typed" } : pickerQuestion !== undefined ? { Source: "picker" } : {}),
             ...(notAReply || answersEngineQuestion ? { Reply: COMMAND_TURN_REPLY } : {}),
@@ -881,7 +879,7 @@ try {
           if (fileAnswer !== null) notes.push(fileAnswer);
         }
       } catch {
-        // Their words stay on the line; the agent reads them as before.
+        // Their words stay on the line; the agent reads them.
       }
       try {
         // A reply the engine's guard-recovery ask took as its answer is that

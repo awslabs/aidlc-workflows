@@ -1,7 +1,7 @@
 // SessionStart hook: Emit session events (SESSION_STARTED / SESSION_RESUMED)
 // and inject workflow context for the model on resume/compaction.
 //
-// Session events are hook-owned because only Claude Code knows when a
+// Session events are hook-owned because only the harness knows when a
 // conversation begins. Workflow events are state-tool-owned and live on a
 // separate stream. See docs/reference/12-state-machine.md.
 //
@@ -158,7 +158,7 @@ if (!process.stdin.isTTY) {
       }
     }
   } catch {
-    // stdin read itself failed — treat as startup (no payload available)
+    // Payload processing failed - retain the source parsed so far.
   }
 }
 
@@ -174,8 +174,10 @@ try {
 }
 
 // Record the live conversation on EVERY fire, including a pre-workflow start.
-// intent-create reads this marker and binds an unstamped session to the first
-// intent it creates. Separate from the per-session intent stamp below.
+// Tools with no session of their own fall back to it (intent switch, archive,
+// recompose settings); intent-create never reads it: the creating chat is bound
+// from the session it resolves, else from the creation receipt the PostToolUse
+// hook consumes. Separate from the per-session intent stamp below.
 if (sessionId) {
   writeCurrentSessionId(projectDir, sessionId);
   try {
@@ -189,8 +191,8 @@ if (sessionId) {
 }
 
 // Resolve one session-local workflow target before any state read. An existing
-// binding wins; a first-seen session inherits the shared cursors and records
-// that fallback immediately, including an intent:null cold workspace.
+// binding supplies the target; classifyFirstContact below decides participation
+// before the selection is recorded, including an intent:null cold workspace.
 const preExistingBinding =
   sessionId ? readSessionBinding(projectDir, sessionId) : null;
 const preExistingStamp =
@@ -230,7 +232,6 @@ const joinsByStamp = stampedTarget !== null && isBindableIntentRecordName(stampe
 const contact = stampedTarget ? null : classifyFirstContact(projectDir, resolved);
 const joined = joinsByStamp || (contact?.joined ?? false);
 const selection = joined ? resolved : { ...resolved, intent: null, binding: null };
-// The record a previously bound conversation can rejoin explicitly.
 const rejoinRecord =
   !joined && resolved.intent !== null && preExistingBinding?.intent === resolved.intent
     ? resolved
@@ -241,7 +242,7 @@ function bindingSource(): SessionBindingSource | undefined {
     return resolved.intent === null ? preExistingBinding?.source ?? "none" : "unjoined";
   }
   if (joinsByStamp) return "stamp";
-  // An unchanged binding keeps its source, and an absent one stays absent.
+  // An unchanged binding keeps its source.
   if (preExistingBinding?.space === selection.space && preExistingBinding.intent === selection.intent) {
     return preExistingBinding.source;
   }
@@ -266,7 +267,6 @@ ensureActiveSpaceCursor(projectDir);
 // it (its chats read the steering file); every other host read its include
 // when the chat loaded.
 let includeRepointed = addRootBlocks(projectDir).length > 0;
-// The copied files that were behind before this start wrote them.
 let copyBehind: string[] = [];
 try {
   copyBehind = activeMemoryCopyDrift(projectDir, selection.space);
@@ -360,12 +360,12 @@ if (sessionId && !rebindCheckOnly) {
 
 const stateFile = stateFilePathForSelection(projectDir, selection);
 
-// No workflow joined — retain only the session identity recorded above.
+// No joined workflow state - return setup context without a session event.
 if (!existsSync(stateFile)) {
   if (sessionId) {
     let rejoin = "";
-    // The per-prompt rebind probe relays an offer through a blocking channel, so
-    // it offers a given rejoin once.
+    // The per-prompt rebind probe queues a selection notice, so it offers a given
+    // rejoin once.
     const rejoinSignature = rejoinRecord?.intent ? `rejoin:${rejoinRecord.space}/${rejoinRecord.intent}` : "";
     const offerNow = rejoinSignature !== "" &&
       (!rebindCheckOnly || readSessionRebindOffer(projectDir, sessionId) !== rejoinSignature);
@@ -408,7 +408,6 @@ if (!existsSync(stateFile)) {
   return 0;
 }
 
-// Write health heartbeat
 const healthDir = hooksHealthDir(
   projectDir,
   selection.intent ?? undefined,
@@ -469,19 +468,19 @@ if (eventType && process.env.AIDLC_SESSION_ANCHOR === "1") {
   }
 }
 
-// --- Resume rebind (P8) -------------------------------------------------------
+// --- Resume rebind ------------------------------------------------------------
 //
 // A conversation works ONE intent; the active-intent cursor is durable + shared
 // across sessions. So resuming an A-chat after the cursor moved to B would
 // inject B's context silently (vision §3, the central multi-space hazard). We
-// fix it with a per-session→intent stamp (aidlc/.aidlc-sessions/<id>):
+// fix it with a per-session binding and intent stamp (aidlc/.aidlc-sessions/):
 //   - On a STARTED-class event, stamp the working intent's UUID for this
 //     session so a later resume can detect a cursor drift.
-//   - On RESUMED, if the stamped UUID differs from the live cursor AND still
-//     names a real intent, OFFER a rebind. The offer is a print directive in
-//     additionalContext. The stamp follows the live intent by default (the No
-//     path); on Yes, the named intent-switch command moves both cursor and stamp
-//     back together. No session_id (TTY/empty stdin) → no-op.
+//   - On RESUMED, if the owned UUID (the binding's, else the stamp's) differs
+//     from the live cursor AND still names a real intent, OFFER a rebind. The
+//     offer is a print directive in additionalContext. On No, the session keeps
+//     working its bound intent; on Yes, the named intent-switch command moves
+//     the shared cursor back. No session_id (TTY/empty stdin) -> no-op.
 const activeSp = activeSpace(projectDir);
 const liveDir = activeIntent(projectDir, activeSp);
 const liveUuid = activeIntentUuid(projectDir, activeSp);
@@ -539,8 +538,8 @@ if (sessionId) {
       clearSessionRebindOffer(projectDir, sessionId);
     }
 
-    // A binding owns attribution. Without one, preserve the legacy stamp that
-    // follows the live cursor after the offer.
+    // A binding owns attribution. Without one, a legacy stamp that still resolves
+    // is kept; otherwise the stamp follows the live cursor after the offer.
     if (binding && selectedUuid) {
       writeSessionIntentUuid(projectDir, sessionId, selectedUuid);
     } else if (binding && stampedUuid) {
@@ -573,7 +572,6 @@ if (rebindCheckOnly) {
   return 0;
 }
 
-// Read and parse state file for context injection
 const content = readFileSync(stateFile, "utf-8");
 
 const phase = getField(content, "Lifecycle Phase") ?? "unknown";
@@ -615,7 +613,6 @@ const unitLine = activeUnit
       : "")
   : "";
 
-// Check for compaction recovery breadcrumb
 const recoveryFile = recoveryFilePath(
   projectDir,
   selection.intent ?? undefined,

@@ -6,7 +6,7 @@
 // row doctor reconciles), AND a pre-git failure (read-only audit directory) exits
 // non-zero WITHOUT touching git or the audit. The covers UNIT credited is
 // subcommand:aidlc-worktree:create — the create subcommand whose ordering
-// guarantee is the whole point of this test (aidlc-worktree.ts:181-202).
+// guarantee is the whole point of this test (aidlc-worktree.ts).
 //
 // MECHANISM: every observable is taken at the PROCESS
 // boundary — SPAWN the real binary via spawnSync (BUN + the tool .ts path) and
@@ -16,13 +16,13 @@
 // twin would lose them.
 //
 // FIXTURE: aidlc-worktree.ts asserts it runs from the main checkout
-// (assertNotSiblingWorktree, aidlc-worktree.ts:101) and runs real git, so each
+// (assertNotSiblingWorktree, aidlc-worktree.ts) and runs real git, so each
 // case needs an ACTUAL git repo on `main` with one commit plus an aidlc-docs/
 // dir. setupWorktreeFixture (tests/harness/fixtures.ts) builds exactly that;
 // the tool is spawned with cwd = the fixture so `git rev-parse
 // --show-toplevel` resolves to the main checkout. Each case ALSO seeds
 // aidlc-docs/aidlc-state.md (from the state-mid-ideation.md fixture) because
-// emitError (aidlc-lib.ts:1513) only appends ERROR_LOGGED when
+// emitError (aidlc-lib.ts) only appends ERROR_LOGGED when
 // existsSync(stateFilePath) is true — without the state file the ERROR_LOGGED
 // row is silently skipped per emitError's best-effort policy, exactly as the
 // .sh's comment (lines 13-15) explains. cleanupWorktreeFixture restores perms

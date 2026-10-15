@@ -47,7 +47,7 @@ const ANY_CHAT = [
   "**Saving a plan for next time.**",
   "Mid-workflow, when the human asks in plain chat to turn sensors, learnings, summary confirmation, or reviews on or off, or plan approval on, just do it",
   "A review level set for the piece of work replaces its scope's ceiling",
-  "After turning one on, check it with",
+  "When that output says `AIDLC_DISABLE_<NAME>=1` is set in the environment, never look for where it is set",
   "to skip plan approval, the harness records it and creation turns it off",
 ];
 
@@ -106,6 +106,8 @@ describe("the composer block loads only when a plan is being composed", () => {
       for (const phrase of ANY_CHAT) {
         if (!skill.includes(phrase)) gaps.push(`${label}: SKILL.md lost ${phrase}`);
       }
+      // The setter clears the person's own local switch itself; an agent clear would also clear the team's file.
+      if (skill.includes("config flags --clear-bypass")) gaps.push(`${label}: SKILL.md tells the agent to clear a switch itself`);
     }
     expect(gaps).toEqual([]);
   });

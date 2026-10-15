@@ -17,7 +17,7 @@
 //   creation 1: `/aidlc --scope poc "first thing"` on a fresh workspace -> the engine
 //            NAMES intent-create, the conductor runs it; handleIntentCreate mints
 //            the first per-intent record + writes its state + emits WORKFLOW_STARTED
-//            (utility.ts:2065) into that record's audit shard. Baseline captured.
+//            (utility.ts) into that record's audit shard. Baseline captured.
 //   creation 2: a direct `intent-create` invocation -> a SECOND creation. There is
 //            NO re-init guard (handleIntentCreate has no "already exists" die() -
 //            a second creation just mints another intent). It adds a SECOND record
@@ -25,11 +25,11 @@
 //            WORKFLOW_STARTED. The FIRST record survives untouched.
 //
 // Known-answer literals (read from the SHIPPED handler, not guessed):
-//   - creation dispatch:            engine NAMES `intent create --scope <scope>` (aidlc-orchestrate.ts:302)
-//   - NO re-init guard:          handleIntentCreate (aidlc-utility.ts:1986) — no "already exists" die()
+//   - creation dispatch:            engine NAMES `intent create --scope <scope>` (aidlc-orchestrate.ts)
+//   - NO re-init guard:          handleIntentCreate (aidlc-utility.ts) - no "already exists" die()
 //   - second creation mints a 2nd intent:  createIntent appends a 2nd registry row + record dir + cursor flip
-//   - WORKFLOW_STARTED on every creation:  aidlc-utility.ts:2065
-//   - State initialized summary: "State initialized:" (aidlc-utility.ts:2376)
+//   - WORKFLOW_STARTED on every creation:  aidlc-utility.ts
+//   - State initialized summary: "State initialized:" (aidlc-utility.ts)
 //   - init-stage [x] markers:    "[x] workspace-scaffold" (init phase marker always [x])
 //
 // It SPENDS TOKENS - creation 1 drives the real /aidlc on Opus/Bedrock (x1);

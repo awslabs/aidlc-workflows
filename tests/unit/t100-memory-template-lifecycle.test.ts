@@ -11,8 +11,8 @@
 //     expected literals independently of the parser source.
 //   - Cases 14-16 prove the advance/approve stdout-JSON `memory_path` key. That
 //     key is only observable on the CLI's process.stdout (handleAdvance writes
-//     JSON.stringify(...) to console.log, aidlc-state.ts:483-495), and approve
-//     inherits it via handleAdvance delegation (aidlc-state.ts:775). The
+//     JSON.stringify(...) to console.log, aidlc-state.ts), and approve
+//     inherits it via handleAdvance delegation (aidlc-state.ts). The
 //     process boundary is the contract, so these SPAWN the real tool via the
 //     bun runtime — mechanism cli. An in-process twin would lose the
 //     console.log/stdout seam.
@@ -24,7 +24,7 @@
 //     strings (lowercase-q "## Open questions"), column 0, no leading/trailing
 //     whitespace; seed examples must be SINGLE-LINE HTML comments; the
 //     ownership header is a verbatim blockquote.
-//   - parseMemoryHeadings(raw) (aidlc-lib.ts:1072) — counts non-blank,
+//   - parseMemoryHeadings(raw) (aidlc-lib.ts) - counts non-blank,
 //     non-excluded lines under each of the four canonical headings; blockquote
 //     lines, single-line HTML comments, and blank lines are excluded; a
 //     raw-line exact heading match means whitespace-padded variants count

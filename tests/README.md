@@ -138,8 +138,8 @@ bash tests/run-tests.sh --integration -P 8 --filter "^t-(scope-run|scope-host|gu
 bash tests/run-tests.sh --all --parallel 4
 bash tests/run-tests.sh --integration -P 8
 
-# Run one deterministic unit shard. CI uses twelve isolated serial shards.
-bash tests/run-tests.sh --unit --shard 1/12
+# Run one deterministic unit shard. CI uses sixteen isolated serial shards.
+bash tests/run-tests.sh --unit --shard 1/16
 
 # Inspect isolated e2e selection without running tests or generating dist.
 bash tests/run-tests.sh --debug -P 8 --e2e --e2e-plan
@@ -194,8 +194,8 @@ Use the shared profiles in `tests/harness/test-budget.ts` for native startup
 and multi-worktree cases (one hour). These ceilings tolerate variable
 runner load and do not delay successful operations. Explicit deadline and
 performance calibration tests keep their own bounds.
-PR CI runs Linux smoke, twelve weighted unit shards, and deterministic integration.
-Full Suite runs smoke, the same twelve unit shards, integration, and isolated
+PR CI runs Linux smoke, sixteen weighted unit shards, and deterministic integration.
+Full Suite runs smoke, the same sixteen unit shards, integration, and isolated
 E2E on Linux/macOS/Windows. Integration and E2E have independent jobs per OS
 with fresh Bun runner processes. Each call checks out its supplied commit,
 installs frozen dependencies with Bun 1.4.2, packages the projections, and runs
@@ -214,7 +214,7 @@ POSIX unit jobs check for tmux and install it with apt/Homebrew when absent;
 Linux unit jobs also require zsh. The merge queue, and manual CI with
 `platform_regressions=true`, expand this same matrix to all three OSes and add the separate E2E jobs,
 without a preceding Linux pass or another broad regression slice. It includes
-all unit regressions through the same twelve shards and provisioning. Only the
+all unit regressions through the same sixteen shards and provisioning. Only the
 merge queue reruns a smoke, unit or integration file whose assertions failed,
 once, in a fresh process; a pass on that attempt shows a `Flaky test` warning
 and is listed in the run's `retries.json`. PR CI never retries.
@@ -284,8 +284,8 @@ Windows release-contract job also runs. An unchanged preview skips publication,
 but still requires successful tests before reporting that intentional skip.
 
 Live matrices use bounded, duration-balanced shards on the existing platforms: two
-Claude SDK (four on Linux, which alone runs the golden journeys), three Claude
-TUI, one Codex, one Copilot and one opencode shard per OS (**26 live jobs**). Linux allows four
+Claude SDK (five on Linux, which alone runs the golden journeys and the answers
+corpus), three Claude TUI, one Codex, one Copilot and one opencode shard per OS (**27 live jobs**). Linux allows four
 concurrent live jobs, macOS two and Windows three. Each shard uses up to two
 isolated file workers; Windows Codex files remain serial. A worker starts each
 file/attempt from the original checkout snapshot and fresh home, temporary

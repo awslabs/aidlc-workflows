@@ -7,10 +7,9 @@
 // directory, deregisters the worktree from git, and emits a WORKTREE_DISCARDED
 // audit-of-intent row carrying Reason: agent-discard and the Bolt slug; a
 // second discard is idempotent (exits 0 silently per the PR-7 contract,
-// aidlc-worktree.ts:470-480); and `info` still resolves the worktree path from
+// aidlc-worktree.ts); and `info` still resolves the worktree path from
 // the audit (audit-of-intent semantics — info reads the most-recent
-// WORKTREE_CREATED audit block, not the live filesystem, aidlc-worktree.ts
-// :685-722).
+// WORKTREE_CREATED audit block, not the live filesystem, aidlc-worktree.ts).
 //
 // MECHANISM: this is a .cli file, so every observable is taken at the PROCESS
 // boundary — SPAWN the real binary via spawnSync (BUN + the tool .ts path) and
@@ -23,7 +22,7 @@
 // read for the deregistration assertion.
 //
 // FIXTURE: aidlc-worktree.ts asserts it runs from the main checkout
-// (assertNotSiblingWorktree, aidlc-worktree.ts:101) and runs real git, so the
+// (assertNotSiblingWorktree, aidlc-worktree.ts) and runs real git, so the
 // case needs an ACTUAL git repo on `main` with one commit plus an aidlc-docs/
 // dir. setupWorktreeFixture (tests/harness/fixtures.ts) builds exactly that;
 // the tool is spawned with cwd = the fixture so `git rev-parse --show-toplevel`
@@ -57,7 +56,7 @@
 //   .sh a7 (l48)  assert_eq RC 0  second discard idempotent
 //                   -> Test "3": status === 0 (STRONGER: also asserts the JSON
 //                      reports emitted:null / reason "already-discarded", the
-//                      no-re-emit contract at aidlc-worktree.ts:470-480, and that
+//                      no-re-emit contract at aidlc-worktree.ts, and that
 //                      no SECOND WORKTREE_DISCARDED row was written)
 //   .sh a8 (l55)  assert_contains INFO_OUT '"path":'  info resolves from audit
 //                   -> Test "4": info stdout contains '"path":' (STRONGER:

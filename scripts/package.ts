@@ -101,7 +101,7 @@ import {
 import { copyChannelDispatcherCommands, copyChannelToolScripts, ROUTES, TOOLS } from "../core/tools/aidlc.ts";
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 import { BUILD_VERSION_ENV, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
-import { copyStartsWithout, sha256Bytes, writtenRootIntegration } from "../core/tools/aidlc-distribution.ts";
+import { copyStartsWithout, harnessChoiceTextIsPlain, sha256Bytes, writtenRootIntegration } from "../core/tools/aidlc-distribution.ts";
 import { kiroIdeSteering } from "../core/tools/aidlc-includes.ts";
 import { SHIPPED_FORMAT_DOCS } from "../core/tools/aidlc-inline-context.ts";
 import { AIDLC_SETTINGS_SCHEMA } from "../core/tools/aidlc-settings.ts";
@@ -627,6 +627,9 @@ function writeSettingsSchemaData(treeRoot: string): void {
 }
 
 function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManifest): void {
+  if (!harnessChoiceTextIsPlain(m)) {
+    throw new Error(`[${m.name}] choiceName or choiceNote is not text the harness lists can show`);
+  }
   const rootIntegrationPaths = new Set(m.rootIntegrations.map((item) => item.path));
   if (rootIntegrationPaths.size !== m.rootIntegrations.length) {
     throw new Error(`[${m.name}] duplicate root integration path`);
@@ -706,6 +709,8 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
     schemaVersion: 1,
     distribution: m.name,
     productName: m.productName,
+    ...(m.choiceName ? { choiceName: m.choiceName } : {}),
+    ...(m.choiceNote ? { choiceNote: m.choiceNote } : {}),
     configNextStep: m.configNextStep,
     ...(m.firstRunSteps ? { firstRunSteps: m.firstRunSteps } : {}),
     ...(m.editorTerminalApp ? { editorTerminalApp: m.editorTerminalApp } : {}),

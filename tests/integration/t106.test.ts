@@ -9,7 +9,7 @@
 // runtime-graph.json that `compile` writes — the PROCESS boundary, not an
 // in-process summarize() call. An in-process twin would lose the
 // missing-graph exit-1 shell (handleSummary's process.exit(1) at
-// aidlc-runtime.ts:1233) that the .sh's Case-C `$?` arm relies on.
+// aidlc-runtime.ts) that the .sh's Case-C `$?` arm relies on.
 //
 // summary reads ONLY the materialised runtime-graph.json — it never re-walks
 // audit — so each case must `compile` a synthetic audit first to produce the

@@ -43,6 +43,9 @@ const PERSONA_AGENTS = [
 const manifest: HarnessManifest = {
   name: "kiro",
   productName: "Kiro CLI",
+  // This tree's agents are built for Kiro CLI's v2 engine; the kiro-ide tree,
+  // listed as Kiro, is the one for Kiro IDE and Kiro CLI on v3.
+  choiceName: "Kiro CLI (V2)",
   configNextStep: "run `kiro-cli chat`, then `/aidlc --doctor`",
   // Kiro CLI's engines read disjoint hook registrations. This tree registers
   // its hooks in the agent JSON `hooks` block, which the v2 engine runs while

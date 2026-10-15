@@ -1303,7 +1303,6 @@ interface PowerShellCommand {
   // The command name, or null for an expression or a computed name.
   name: string | null;
   args: CmdletArg[];
-  // Receives pipeline input.
   piped: boolean;
 }
 
@@ -1424,7 +1423,6 @@ function readPowerShell(
     const wordStart = i;
     const { word, end } = powerShellWord(command, i, nested);
     if (end === i) {
-      // A character no word takes: skip it.
       i++;
       continue;
     }
@@ -1507,7 +1505,6 @@ function isNullDevice(raw: string): boolean {
   return raw === "/dev/null" || (process.platform === "win32" && /^nul$/i.test(raw));
 }
 
-// Commands that change the shell's working directory for the commands after them.
 export const SHELL_DIRECTORY_CHANGES = new Set(["cd", "pushd", "chdir", "set-location", "sl"]);
 const MAX_SHELL_ROOTS = 64;
 
@@ -1589,7 +1586,7 @@ function withoutRedirections(segment: string): string {
 /**
  * The directories the shell can be in when the command's writes run: `cwd`,
  * and each literal `cd`/`pushd`/`chdir`/`Set-Location` target resolved from
- * every directory collected anywhere in the command. A bare `cd` or `chdir`
+ * every directory collected so far in the command. A bare `cd` or `chdir`
  * (options and redirections aside) and a leading `~`, `$HOME` or `${HOME}`
  * name $HOME (see shellHomes). The order of the segments, loops, functions, subshells and
  * pipelines is not modelled, so a write can also be read from a directory it
@@ -1622,7 +1619,6 @@ export function shellDirectoryRoots(
       roots.splice(oldest, 1);
     }
   };
-  // A literal operand is read from every directory collected so far.
   const change = (operand: string) => {
     const next = new Set<string>();
     for (const root of roots) {
@@ -1801,7 +1797,7 @@ function shellWriteTargetsFrom(
   };
 
   // The destination/in-place operands one command writes. Commands that also
-  // have read-only source operands contribute only those.
+  // have read-only source operands contribute only their write operands.
   const invocationTargets = (commandName: string, args: string[]): void => {
     if (commandName === "dd") {
       for (const arg of args) if (arg.startsWith("of=")) add(arg);
@@ -2058,7 +2054,6 @@ function shellWriteTargetsFrom(
   return [...new Set(out)];
 }
 
-/** Target paths of a write-tool call. */
 export function writeTargets(
   toolName: string,
   toolInput: Record<string, unknown> | undefined,

@@ -29,9 +29,9 @@
 //     time; "security-patch".stages maps each stage to EXECUTE|SKIP).
 //   - STAGE_STARTED is emitted for EXECUTE stages ONLY (aidlc-utility.ts init
 //     stages + aidlc-state.ts advance); a SKIP stage gets a `[ ] <slug> — SKIP`
-//     state row and NO STAGE_STARTED block (audit-format.md:33; the t53 thesis,
+//     state row and NO STAGE_STARTED block (audit-format.md; the t53 thesis,
 //     here generalised across the derived SKIP set).
-//   - the audit STAGE_STARTED `**Stage**:` field names the slug (audit-format.md:33).
+//   - the audit STAGE_STARTED `**Stage**:` field names the slug (audit-format.md).
 //   - greenfield downgrades reverse-engineering EXECUTE->SKIP at runtime
 //     (aidlc-utility.ts) — a stage that is EXECUTE in the mapping but SKIP at
 //   runtime on greenfield. We run on a greenfield project and use only the

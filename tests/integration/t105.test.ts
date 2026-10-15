@@ -5,17 +5,17 @@
 // SPAWNING the utility CLI via node:child_process spawnSync (BUN +
 // aidlc-utility.ts) against AIDLC_RULES_DIR fixtures and the seed
 // stage-graph (AIDLC_STAGE_GRAPH), exactly as the .sh's run_doctor helper
-// did (t105:41-47). The contract under test is the PROCESS boundary plus
+// did (t105). The contract under test is the PROCESS boundary plus
 // the side effect the tool writes — the paired-coverage advisory row on
 // stdout and the GUARDRAIL_LOADED block appended to aidlc-docs/audit.md.
 // An in-process twin would lose the audit-file write (doctor calls
 // appendAuditEvent -> appendAuditEntry, which self-creates the file/dir
-// under projectDir, aidlc-audit.ts:186-196) and the process.exit shell the
+// under projectDir, aidlc-audit.ts) and the process.exit shell the
 // .sh swallowed with `|| true` (doctor exits 1 on any failed check,
-// aidlc-utility.ts:1385). So all cases stay spawn-based.
+// aidlc-utility.ts). So all cases stay spawn-based.
 //
-// GUARDRAIL_LOADED contract (aidlc-utility.ts:1348-1352, audit row shape at
-// aidlc-audit.ts:251-267, heading map :173):
+// GUARDRAIL_LOADED contract (aidlc-utility.ts; audit row shape and heading map in
+// aidlc-audit.ts):
 //   ## Guardrail Loaded
 //   **Event**: GUARDRAIL_LOADED
 //   **Scope**: all
@@ -23,10 +23,10 @@
 //   **Rule count**: <N>   (N = pairedRules.length = loadRules() count over
 //                          AIDLC_RULES_DIR)
 // Emitted once per doctor run, in BOTH the needing>0 branch and the
-// needing==0 (no-sensor-bound) branch (utility.ts:1335-1352 — the emit sits
+// needing==0 (no-sensor-bound) branch (utility.ts - the emit sits
 // AFTER the branch and always fires).
 //
-// Paired-coverage label contract (utility.ts:1333-1346): P/(M-X) fraction
+// Paired-coverage label contract (utility.ts): P/(M-X) fraction
 // where M = rules carrying frontmatter.pairing, X = feedforward-only count,
 // needing = M-X, P = rules whose pairing sensor id (aidlc- stripped) resolves
 // in the seed graph's sensors_applicable set. needing==0 -> the
@@ -53,7 +53,7 @@
 //       (Scope==="all", Path===".claude/rules/", Rule count==="3"). The .sh's
 //       `grep "^\*\*Path\*\*: .claude/rules/"` is a regex whose `.` is any-char;
 //       we assert the exact literal ".claude/rules/" (the tool writes it
-//       literally, utility.ts:1350).
+//       literally, utility.ts).
 //   - .sh case 6 no-pairing fixture -> stdout
 //       "Paired sensor coverage: no sensor-bound rules (0 feedforward-only)"
 //       AND audit has GUARDRAIL_LOADED -> test 6: both preserved; STRONGER —

@@ -803,7 +803,7 @@ describe("t296 first-run config setup walk", () => {
     const hosts = [
       ["copilot", ".aidlc", "GitHub Copilot"],
       ["cursor", ".cursor", "Cursor"],
-      ["kiro-ide", ".kiro", "Kiro IDE"],
+      ["kiro-ide", ".kiro", "Kiro"],
     ] as const;
     const env = hookPathEnv("aidlc", true);
     for (const [harness, dir, product] of hosts) {
@@ -827,7 +827,7 @@ describe("t296 first-run config setup walk", () => {
       expect(providers, harness).not.toContain("provider access unverified");
       expect(providers, harness).toContain(
         harness === "kiro-ide"
-          ? "model access comes with Kiro IDE; nothing for AI-DLC to configure"
+          ? "model access comes with Kiro; nothing for AI-DLC to configure"
           : harness === "cursor"
           ? "model access comes with your Cursor session; to use your own Amazon Bedrock access in the Cursor IDE instead, run `"
           : `model access comes with your ${product} session; to use your own Amazon Bedrock access instead, run \``,

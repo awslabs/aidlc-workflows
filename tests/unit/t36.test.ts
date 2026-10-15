@@ -7,11 +7,11 @@
 // / the audit shards it appends to - the PROCESS boundary, not an in-process
 // handleScopeChange() call. An in-process twin would lose the exit-code half
 // Tests 4 & 5 rely on: the tool's reject path is die() ->
-// emitError() -> process.exit(1) (aidlc-utility.ts:74-84 -> aidlc-lib.ts:1546),
+// emitError() -> process.exit(1) (aidlc-utility.ts -> aidlc-lib.ts),
 // only observable across the process boundary.
 //
 // CONTRACT:
-//   - handleScopeChange (aidlc-utility.ts:2193-2350):
+//   - handleScopeChange (aidlc-utility.ts):
 //       * `--scope` required -> die("--scope is required for scope-change")
 //         when absent.
 //       * unknown target -> die(`Unknown scope: ${newScope}. ...`) before any
@@ -27,7 +27,7 @@
 //   - The 11 canonical scopes are exactly the keys of loadScopeMapping():
 //     enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch,
 //     classic, workshop, express.
-//   - Audit row shape (aidlc-audit.ts:256-267): a `## Scope Changed` heading,
+//   - Audit row shape (aidlc-audit.ts): a `## Scope Changed` heading,
 //     then `**Timestamp**:`, `**Event**: SCOPE_CHANGED`, then one
 //     `**<key>**: <value>` line per field, terminated by `---`. Here we count
 //     the event row and read the Old Scope field block-scoped.

@@ -40,18 +40,10 @@ not reach AI-DLC's record, so if it answered one of its questions, you will be
 asked that question again" (true whoever sent it: with no payload, nobody
 knows whether it was the person's or one Kiro made). Both field spellings are
 accepted. Acquisition is gated to the payload-dependent targets,
-including `plan-approval-guard`, `review-freeze`, `state-transition-guard`, the per-tool-call approval floor
-(`enforce-approval-gate`, which on 1.x reads the invoking chat's `session_id` so
-that concurrent chats are held by their own gates), the two terminal-command
+including `plan-approval-guard`, `review-freeze`, `state-transition-guard`, the two terminal-command
 targets, plus `session-start` and `continue-workflow` for their modern
 `session_id`, and `record-human-turn` for the exact approval response. Every
-other target touches neither channel and keeps its zero-latency path. The
-approval floor runs on every `PreToolUse`; on 1.x its payload arrives and the
-channel closes with the call, so the normal path does not wait, and only a
-channel that never closes holds it until the ceiling. A 0.12 payload carries no
-`session_id`, so the floor uses the identity derived from the IDE host
-instance: every chat in that host shares it and is judged by the gates of the
-workflow it is bound to.
+other target touches neither channel and keeps its zero-latency path.
 
 The legacy environment variable name does not imply raw user text: the measured
 0.12 contract is camelCase JSON. A promptSubmit payload without a `prompt`
@@ -146,16 +138,13 @@ relayed when it exits 2; stdout from a PreToolUse hook never reaches the model.
 Several PreToolUse hooks run one after another in file-name order, every one
 runs even after an earlier one blocks, and a block from a hook between two
 others still delivers its reason. Kiro IDE shows one "Run Command Hook" card
-for every hook run, so AI-DLC registers its five tool-call checks as one hook,
+for every hook run, so AI-DLC registers its four tool-call checks as one hook,
 `aidlc-guard-tool-call`, which runs them as Kiro ran the separate hooks: in the
-same order (`enforce-approval-gate`, `plan-approval-guard`, `review-freeze`,
-`state-transition-guard`, `terminal-command-guard`), each for the tools its
-own registration selected, every one even after an earlier one refuses. The
-call is refused when any check refuses, with each refusal's text once and
-nothing from a check that let it through (#2022). So `terminal-command-guard`
-runs no terminal command while the approval gate is waiting for the person:
-the gate check refuses the call, and the command would otherwise still act.
-Its matcher leaves out only the reads in the adapter's tool-name table, which
+same order (`plan-approval-guard`, `review-freeze`, `state-transition-guard`,
+`terminal-command-guard`), each for the tools its own registration selected,
+every one even after an earlier one refuses. The call is refused when any check
+refuses, with each refusal's text once and nothing from a check that let it
+through (#2022). Its matcher leaves out only the reads in the adapter's tool-name table, which
 cannot answer an approval or change the workspace; a name the table does not
 know, such as Kiro's own background `memory` tool, still reaches the checks.
 On 1.1.14 the PreToolUse `fs_write` input is `{path, text}`, and the shell

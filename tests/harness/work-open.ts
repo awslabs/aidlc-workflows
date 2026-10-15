@@ -11,9 +11,10 @@
 // gate, an answer asked for again, their approval, the next stage or a file.
 //
 // The check runs this file once per project, side by side (see the end of the
-// file): the person's work opens, the file writes <harness>.parked and waits
-// for the check to write `updated`, then carries the work on and writes
-// <harness>.json with what the person lost.
+// file), with the machine folder of the person's install, or `copy` for a
+// project that runs its own copied tool: the person's work opens, the file
+// writes <harness>.parked and waits for the check to write `updated`, then
+// carries the work on and writes <harness>.json with what the person lost.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -38,7 +39,7 @@ export interface OpenWork {
 }
 
 /** The person's day on the previous release: a bugfix up to its open Requirements gate, then a stop for the day. */
-export function openWork(harness: "claude" | HostName, proj: string, base: NodeJS.ProcessEnv, launcher: string[]): OpenWork {
+export function openWork(harness: "claude" | HostName, proj: string, base: NodeJS.ProcessEnv, launcher: string[] | null): OpenWork {
   const setup = untrackedRoots(proj);
   const host = hostFor(harness, proj, base);
   host.launcher = launcher;
@@ -202,6 +203,11 @@ export interface WorkResult {
   problems: string[];
 }
 
+/** The person's `aidlc` for a machine folder, or none on a copied project, whose agent runs `bun <dir>/tools/...`. */
+export function launcherFor(machine: string): string[] | null {
+  return machine === "copy" ? null : installedAidlc(machine);
+}
+
 function work(argv: string[]): number {
   const [harness, proj, machine, signals, until] = argv;
   const done = (stage: WorkResult["stage"], problems: string[]) => {
@@ -211,7 +217,7 @@ function work(argv: string[]): number {
   const deadline = Number(until);
   let open: OpenWork;
   try {
-    open = openWork(harness as "claude" | HostName, proj, process.env, installedAidlc(machine));
+    open = openWork(harness as "claude" | HostName, proj, process.env, launcherFor(machine));
   } catch (error) {
     return done("open", [error instanceof Error ? error.message : String(error)]);
   }
@@ -220,8 +226,8 @@ function work(argv: string[]): number {
     if (Date.now() >= deadline) return done("resume", ["the update never came, so the work was not carried on"]);
     Bun.sleepSync(250);
   }
-  // The update moved the machine to the candidate's binary.
-  open.host.launcher = installedAidlc(machine);
+  // The update moved the machine to the candidate's binary; a copy refreshed its own tool in place.
+  open.host.launcher = launcherFor(machine);
   return done("resume", resumeWork(open));
 }
 

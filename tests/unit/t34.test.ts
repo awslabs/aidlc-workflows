@@ -8,21 +8,21 @@
 // res.status / res.stderr exactly as the .sh asserted on $?, plus on the
 // audit.md the tool writes through emitError -> appendAuditEntry. The
 // contract under test is the PROCESS boundary (every tool CLI's error()
-// helper routes through emitError, aidlc-lib.ts:1504-1547, which appends one
+// helper routes through emitError, aidlc-lib.ts, which appends one
 // ERROR_LOGGED block to the active workflow's audit.md best-effort, no-ops if
 // no state file exists, and exits 1). An in-process emitError twin would lose
 // the process.exit(1) half (Test 5) AND the cross-process recursion-guard
 // behaviour (Test 11: the guard is process-local, so two fresh processes must
 // yield two rows) — so all cases stay spawn-based.
 //
-// AUDIT-ROW SHAPE (confirmed against aidlc-audit.ts:256-267 emitter +
-// aidlc-lib.ts:1528-1538 field map): emitError writes a block whose lines are
+// AUDIT-ROW SHAPE (confirmed against aidlc-audit.ts emitter +
+// aidlc-lib.ts field map): emitError writes a block whose lines are
 //   **Event**: ERROR_LOGGED
 //   **Tool**: <tool>            (e.g. aidlc-state)
 //   **Command**: <tool> <argv>  (process.argv.slice(2).join(" "), built from the
-//                                FULL argv — confirmed aidlc-state.ts:1713 — so the
+//                                FULL argv - confirmed aidlc-state.ts - so the
 //                                trailing --project-dir <p> survives into the row;
-//                                main() at :106-110 splices only its own local args
+//                                main() splices only its own local args
 //                                copy, NOT process.argv)
 //   **Error**: <msg>            (e.g. "Unknown subcommand: ...")
 //
@@ -60,7 +60,7 @@
 //       does not over-guard across processes) (same observable).
 //   - .sh Test 12 ERROR_LOGGED survives taxonomy validation     -> Test 12:
 //       errorLoggedCount === 1 (the row actually lands; regression guard for
-//       ERROR_LOGGED's presence in VALID_EVENT_TYPES, aidlc-audit.ts:65)
+//       ERROR_LOGGED's presence in VALID_EVENT_TYPES, aidlc-audit.ts)
 //       (same observable) + STRONGER: assert the surfaced JSON error on stderr
 //       so the swallowed-write path can't pass on a missing row alone.
 //

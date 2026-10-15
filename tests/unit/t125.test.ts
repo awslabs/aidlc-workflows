@@ -1,14 +1,14 @@
 // covers: invariant:audit-first-atomicity
 //   sub-ids (one per state-mutating + audit-emitting handler):
-//     invariant:audit-first-atomicity:approve            (handleApprove   :675)
-//     invariant:audit-first-atomicity:reject             (handleReject    :769)
-//     invariant:audit-first-atomicity:skip               (handleSkip      :839)
-//     invariant:audit-first-atomicity:advance            (handleAdvance   :275)
-//     invariant:audit-first-atomicity:gate-start         (handleGateStart :635)
-//     invariant:audit-first-atomicity:complete-workflow  (handleCompleteWorkflow :520)
-//     invariant:audit-first-atomicity:reuse-artifact     (handleReuseArtifact    :1307, audit-only)
+//     invariant:audit-first-atomicity:approve            (handleApprove)
+//     invariant:audit-first-atomicity:reject             (handleReject)
+//     invariant:audit-first-atomicity:skip               (handleSkip)
+//     invariant:audit-first-atomicity:advance            (handleAdvance)
+//     invariant:audit-first-atomicity:gate-start         (handleGateStart)
+//     invariant:audit-first-atomicity:complete-workflow  (handleCompleteWorkflow)
+//     invariant:audit-first-atomicity:reuse-artifact     (handleReuseArtifact, audit-only)
 //   plus a FINDING-pinning block:
-//     finding:finalize-is-not-audit-first  (handleFinalize :456 emits NO audit)
+//     finding:finalize-is-not-audit-first  (handleFinalize emits NO audit)
 //
 // t125 — audit-first atomicity invariant sweep.
 // Mechanism: none (Bun.spawnSync of aidlc-state.ts against a temp project on
@@ -31,8 +31,8 @@
 //
 // FAULT INJECTION (reused verbatim from t17 Test 65, ~line 620). The seeded
 // audit.md FILE is replaced by a DIRECTORY at the same path. aidlc-audit.ts
-// appends via appendFileSync(path, block) (aidlc-audit.ts:257); ensureAuditFile
-// (:174) sees existsSync(path) === true for the directory and returns it
+// appends via appendFileSync(path, block) (aidlc-audit.ts); ensureAuditFile
+// sees existsSync(path) === true for the directory and returns it
 // unchanged, so appendFileSync throws EISDIR. This is uid-independent — "append
 // to a directory" is a kernel-enforced type error, not a permission check, so
 // it fails identically for root and non-root (the old chmod 0444 approach was
@@ -47,7 +47,7 @@
 // (a)+(b) together are the audit-first guarantee: emit failed ⇒ no state write.
 //
 // FINDING — handleFinalize is NOT audit-first because it emits NO audit at all.
-// handleFinalize (:456) calls writeStateFile(:508) with zero emitAudit() calls
+// handleFinalize calls writeStateFile with zero emitAudit() calls
 // in its body (grep-verified). It is therefore outside the audit-first contract:
 // under the same EISDIR injection it exits ZERO and MUTATES state. That is the
 // CORRECT behaviour for a handler that emits nothing — there is no audit row to

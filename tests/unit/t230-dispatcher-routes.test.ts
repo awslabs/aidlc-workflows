@@ -2474,7 +2474,7 @@ describe("t230 native review-brief dispatch", () => {
         if (command === "review") {
           expect(output).toContain("**Stage:** Requirements Analysis");
           expect(output).toContain("**Review outcome:** Concerns remain for your decision.");
-          expect(output).toContain("**Why now:** First review completed.");
+          expect(output).not.toContain("Why now");
           expect(output).toContain("**Approve**");
           expect(output).toContain("**Request Changes**");
         }
@@ -3528,12 +3528,12 @@ describe("t230 dispatcher hook routing", () => {
       session_id: "t230-guard-deny",
       cwd: projectDir,
       tool_name: "Bash",
-      tool_input: { command: "bun .claude/tools/aidlc-state.ts approve intent-capture" },
+      tool_input: { command: "bun .claude/tools/aidlc.ts engine hook record-human-turn" },
     });
     const claude = viaDispatcher(["engine", "hook", "state-transition-guard"], projectDir, { AIDLC_HARNESS_NAME: "claude" }, input);
     expect(claude.exitCode, claude.stderr.toString("utf-8")).toBe(2);
     const reason = claude.stderr.toString("utf-8").trim();
-    expect(reason).toContain("Stage status cannot be changed");
+    expect(reason).toContain("AIDLC runtime records and hooks belong to the harness");
     expect(JSON.parse(claude.stdout.toString("utf-8"))).toEqual({
       hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
     });
@@ -3542,7 +3542,7 @@ describe("t230 dispatcher hook routing", () => {
     const kiro = viaDispatcher(["engine", "hook", "state-transition-guard"], projectDir, { AIDLC_HARNESS_NAME: "kiro" }, input);
     expect(kiro.exitCode).toBe(2);
     expect(kiro.stdout.toString("utf-8")).toBe("");
-    expect(kiro.stderr.toString("utf-8")).toContain("Stage status cannot be changed");
+    expect(kiro.stderr.toString("utf-8")).toContain("AIDLC runtime records and hooks belong to the harness");
   });
 
   test("statusline dispatches to run(input) and renders a line", () => {

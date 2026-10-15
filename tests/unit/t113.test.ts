@@ -5,17 +5,17 @@
 // once per case, importing validateDirective from aidlc-directive.ts and
 // stringifying the ValidationResult as "VALID" / "INVALID:<errors joined by |>"
 // so bash could grep it. The module is a PURE contract — "no emit, no consume,
-// reads/writes NO state, no I/O" (aidlc-directive.ts:9) — so every one of the
+// reads/writes NO state, no I/O" (aidlc-directive.ts) - so every one of the
 // 30 behavioural assertions can be exercised in-process by importing and
 // CALLING validateDirective directly. The .ts file does have an
-// `if (import.meta.main)` CLI self-check (aidlc-directive.ts:396), but the .sh
+// `if (import.meta.main)` CLI self-check (aidlc-directive.ts), but the .sh
 // never drives the CLI seam — it always imports validateDirective via `bun -e`.
 // So this is a `.none.test.ts` (mechanism = none): pure function calls, zero
 // subprocess, zero LLM, zero tokens.
 //
 // PARITY NOTE on the .sh "VALID" / "INVALID:..." string protocol: the original
 // reduced the ValidationResult discriminated union to a single line via the
-// run_validator helper (t113-directive-schema.sh:60-67) so bash could grep it.
+// run_validator helper (t113-directive-schema.sh) so bash could grep it.
 // In-process we assert the union directly — `result.valid` (boolean) and either
 // `result.data` (on success) or `result.errors` (string[]) on failure.
 //   - assert_eq "$OUT" "VALID"            -> expect(result.valid).toBe(true)

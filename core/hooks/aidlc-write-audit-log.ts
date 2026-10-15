@@ -1,10 +1,10 @@
 // PostToolUse hook: Emit ARTIFACT_CREATED / ARTIFACT_UPDATED when files under
 // the active intent record or active space codekb tree are written or edited.
-// Distinguishes CREATE vs UPDATE by checking whether the target file existed
-// before the Write/Edit.
+// Distinguishes CREATE vs UPDATE using the tool and, for Write,
+// a post-write comparison of modification and creation timestamps.
 //
 // Receives JSON on stdin from Claude Code. No-op if no audit.md exists (no
-// active workflow in this cwd) to preserve the existing "only log when
+// active workflow in this cwd) to preserve the "only log when
 // relevant" behaviour.
 import { existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
@@ -53,13 +53,12 @@ export async function run(input: string): Promise<number> {
 async function recordArtifact(input: string, projectDir: string): Promise<number> {
 hookDebug(projectDir, "write-audit-log", "invoked", { projectDir, cwd: process.cwd() });
 
-// Write health heartbeat
 const healthDir = hooksHealthDir(projectDir);
 writeHookStatusFile(healthDir, "write-audit-log.last", isoTimestamp());
 
-// Read JSON from stdin. If stdin is a TTY (interactive shell, test harness
-// running under `bash -x`-inheriting pipeline), no JSON is coming — exit
-// cleanly instead of blocking on the terminal read.
+// Parse the hook input. If stdin is a TTY (interactive shell, test harness
+// running under `bash -x`-inheriting pipeline), no JSON is expected - exit
+// cleanly.
 if (process.stdin.isTTY) {
   hookDebug(projectDir, "write-audit-log", "exit: stdin isTTY");
   return 0;
@@ -142,7 +141,7 @@ if (!existsSync(auditFile)) {
 }
 
 // Extract the context breadcrumb: the path relative to the record root (the
-// per-intent record dir on the new layout, or the flat `aidlc-docs/` root),
+// per-intent record dir, or the bare space record root with no intent),
 // or "codekb > <repo> > <name>" for a codekb write. Prefer the root prefixes;
 // fall back to the `aidlc-docs/` anchor for a flat-legacy write that didn't
 // match either root.
@@ -173,7 +172,6 @@ let eventType: string;
 if (tool === "Edit") {
   eventType = "ARTIFACT_UPDATED";
 } else {
-  // Write or any other create-capable tool: check if file was net-new.
   let isNew = false;
   try {
     const { statSync } = await import("node:fs");

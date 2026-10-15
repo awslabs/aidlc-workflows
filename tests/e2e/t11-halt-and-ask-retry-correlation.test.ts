@@ -13,10 +13,10 @@
 // MECHANISM: every observable is taken at the PROCESS boundary.
 // `aidlc-worktree info` parses the latest WORKTREE_CREATED audit
 // block, writes JSON to STDOUT via console.log, and process.exit(1)s on a
-// miss (aidlc-worktree.ts:672-723). `aidlc-bolt fail` emits a BOLT_FAILED
-// audit row through appendAuditEntry (aidlc-bolt.ts:457-483). `aidlc-worktree
+// miss (aidlc-worktree.ts). `aidlc-bolt fail` emits a BOLT_FAILED
+// audit row through appendAuditEntry (aidlc-bolt.ts). `aidlc-worktree
 // create` runs REAL `git worktree add` after the audit-of-intent emit
-// (aidlc-worktree.ts:156-214). The retry-in-place invariant + the on-disk
+// (aidlc-worktree.ts). The retry-in-place invariant + the on-disk
 // audit accumulation are genuine side-effects of running the real binaries
 // against real git; an in-process twin would lose the process-exit seam and
 // the multi-spawn audit-accumulation contract. So SPAWN the real tools via
@@ -24,7 +24,7 @@
 // JSON.
 //
 // FIXTURE: aidlc-worktree.ts asserts it runs from the main checkout
-// (assertNotSiblingWorktree, aidlc-worktree.ts:162) and runs real git, so the
+// (assertNotSiblingWorktree, aidlc-worktree.ts) and runs real git, so the
 // case needs an ACTUAL git repo on `main` with one commit plus a per-intent
 // record. setupWorktreeFixture (tests/harness/fixtures.ts) builds exactly that;
 // the tools are spawned with cwd = the fixture so `git rev-parse

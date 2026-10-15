@@ -10,7 +10,7 @@
 // has SHED the dead guardrail-learning model (superseded by the §13 Learnings
 // Ritual in stage-protocol.md). The honest covers id is therefore the
 // structural INVARIANT under test, declared free-form like
-// t12's `invariant:` id (tests/integration/t12-state-fixture-validation.test.ts:1)
+// t12's `invariant:` id (tests/integration/t12-state-fixture-validation.test.ts)
 // and t125's invariant ids — invariant ids are descriptive claims, not joined
 // to an enumerated subcommand/function unit.
 //
@@ -26,20 +26,20 @@
 //     (KNOWLEDGE_DIR; the verification methodology the governance file points at)
 //
 // Behavioural contract verified against the shipped file
-// (stage-protocol-governance.md:4,6,10,12,14,19,29,30-32,20):
-//   :10  "## 13. Phase Boundary Verification" heading present
-//   :4   "supplement to `stage-protocol.md`" — names the parent protocol
+// (stage-protocol-governance.md):
+//   - "## 13. Phase Boundary Verification" heading present
+//   - "supplement to `stage-protocol.md`" - names the parent protocol
 //   --   the dead §12 guardrail-learning model is GONE: no
 //        "Guardrail Learning Protocol", no "NEVER/ALWAYS" format, no
 //        "GUARDRAIL_LEARNED" emission anywhere in the file
-//   :14  "### When to verify" subsection
-//   :19  "### Verification process" subsection
-//   :29  "### Phase boundary checks" subsection
-//   :12  the three phase-transition stage pairs co-located on one line each:
+//   - "### When to verify" subsection
+//   - "### Verification process" subsection
+//   - "### Phase boundary checks" subsection
+//   - the three phase-transition stage pairs co-located on one line each:
 //          approval-handoff → reverse-engineering   (Ideation→Inception)
 //          delivery-planning → functional-design     (Inception→Construction)
 //          ci-pipeline → deployment-pipeline          (Construction→Operation)
-//   :20  "verification.md" referenced as the methodology file
+//   - "verification.md" referenced as the methodology file
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";

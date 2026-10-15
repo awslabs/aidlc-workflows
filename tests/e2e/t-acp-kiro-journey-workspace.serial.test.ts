@@ -31,9 +31,9 @@
 //   * Beats 4-5 (space-create teamB · switch · intent creation in teamB · switch back) now
 //     ALSO drive through the production `aidlc` conductor — the d44828b engine fix
 //     routes the workspace navigation verbs through `next`: a LEADING
-//     `space`/`space-create`/`intent` token (parseNextFlags aidlc-orchestrate.ts:276,
-//     WORKSPACE_VERBS:146) maps to a TERMINAL print directive naming
-//     `bun .kiro/tools/aidlc-utility.ts <verb> [<arg>]` (handleNext Branch 1b ~:921,
+//     `space`/`space-create`/`intent` token (parseNextFlags aidlc-orchestrate.ts,
+//     WORKSPACE_VERBS) maps to a TERMINAL print directive naming
+//     `bun .kiro/tools/aidlc-utility.ts <verb> [<arg>]` (handleNext Branch 1b,
 //     placed BEFORE state inspection so it works with or without an active workflow
 //     — it never advances a workflow). The `aidlc` agent's prompt rule (3) — "When a
 //     directive is a print whose message names a command to run, run THAT EXACT
