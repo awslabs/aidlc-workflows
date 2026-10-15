@@ -74,6 +74,18 @@ describe("the read scope", () => {
     ]);
   });
 
+  test("an absolute path is read from the project, and the Unit's own folder in any letter case", () => {
+    const project = "/work/construction/notes";
+    expect(reviewCopyExcludes("alpha", [
+      `${project}/aidlc/spaces/default/intents/261015-notes/construction/beta/functional-design/api.md`,
+    ], project)).toEqual([
+      "aidlc/spaces/*/intents/*/construction/alpha/**",
+      "aidlc/spaces/*/intents/*/construction/beta/functional-design/api.md",
+    ]);
+    expect(reviewCopyExcludes("U01", ["construction/u01/functional-design/api.md"]))
+      .toEqual(["aidlc/spaces/*/intents/*/construction/U01/**"]);
+  });
+
   test("a path that cannot be written as an exact pattern makes no copy", () => {
     expect(reviewCopyExcludes("alpha", ["construction/beta/*.md"])).toBeNull();
     expect(reviewCopyExcludes("alpha", ['construction/beta/a"b.md'])).toBeNull();
@@ -121,6 +133,13 @@ describe("the copy's text", () => {
     expect(copy).toContain('\r\ndisplay_name: "Reviewer (this review)"\r\n');
     expect(copy).toContain('      effect: allow\r\n    - capability: fs_read\r\n');
     expect(copy.endsWith("---\r\n\r\nBody")).toBe(true);
+  });
+
+  test("a display name that is not plain words is left as it is", () => {
+    const text = (display: string) => ["---", "name: r", `display_name: ${display}`, "permissions:", "  rules:",
+      "    - capability: shell", "      effect: allow", "---", ""].join("\n");
+    expect(renderReviewCopy(text("[Arch] Reviewer"), COPY, [])).toContain("\ndisplay_name: [Arch] Reviewer\n");
+    expect(renderReviewCopy(text("Reviewer: architecture"), COPY, [])).toContain("\ndisplay_name: Reviewer: architecture\n");
   });
 
   test("a file without permissions.rules in the shipped shape makes no copy", () => {
