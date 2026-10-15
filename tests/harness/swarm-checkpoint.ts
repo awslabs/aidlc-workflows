@@ -186,10 +186,12 @@ export function fixture(units = ["alpha"], command: string | null = CHECK, withS
   projects.push(pd);
   const code = repo === null ? pd : join(pd, repo);
   if (repo !== null) {
-    rmSync(join(pd, ".git"), { recursive: true, force: true });
-    rmSync(join(pd, "README.md"));
     mkdirSync(code);
     git(code, ["init", "-q", "-b", "main"]);
+    // The test identity setupWorktreeFixture gave the roof's repository, which goes.
+    for (const key of ["user.name", "user.email"]) git(code, ["config", key, git(pd, ["config", key])]);
+    rmSync(join(pd, ".git"), { recursive: true, force: true });
+    rmSync(join(pd, "README.md"));
   }
   // ISOLATED_GIT_ENV drops the global config, so this new repository gets no
   // long-path support from the runner. Nested Bolt worktrees exceed MAX_PATH.
