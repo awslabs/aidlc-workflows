@@ -17964,9 +17964,17 @@ export function main(argv: string[]): void {
   engineUnjoined = unjoined;
   if (unjoined) {
     if (commandKind !== "next") {
-      emit(errorDirective(
+      // The agent's next step, so a print: every harness stops on an `error`.
+      // The record's name stays out, as in the dispatch refusal: a record from a
+      // clone is a teammate's, and its name can carry words addressed to the
+      // agent. The listing names it as data.
+      const intent = aidlcDispatcherInvocation("intent");
+      emit(printDirective(
         `This conversation has not joined ${resolvedSelection.intent === null ? "a workflow in this workspace" : "the selected workflow"}, ` +
-          `so \`${subcommand}\` cannot advance it. Select the intent with the intent command first.`,
+          `so \`${subcommand}\` cannot advance it. If the person's request is for work here, run \`${intent} list\`, ` +
+          `then \`${intent} <record>\` with the record name it lists for that work, then run the same \`${subcommand}\` ` +
+          "again and follow what it returns. If you cannot tell which work their request is for, ask them once in " +
+          "plain words, then stop.",
       ));
       return;
     }
