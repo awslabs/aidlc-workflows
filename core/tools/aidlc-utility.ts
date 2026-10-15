@@ -10547,12 +10547,20 @@ function handleCodekbSnapshot(
               `source, leaving that one out.`),
       );
     }
+    // The commit the Run Record names, so the scan agent runs no git for it.
+    // git finds the repository above a project folder too.
+    const head = spawnSync("git", ["rev-parse", "--verify", "-q", "HEAD"], {
+      cwd: repoDir,
+      encoding: "utf-8",
+      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
     return {
       repo,
       store: `${relativeCodekbDir(projectDir, repo, space)}/`,
       paths,
       store_generation: codekbStoreGeneration(storeDir),
       source_fingerprint: sourceFingerprint,
+      head_commit: head.status === 0 ? head.stdout.trim() : "unknown",
     };
   });
   if (flags.json === "true") {
@@ -10562,7 +10570,8 @@ function handleCodekbSnapshot(
   process.stdout.write(
     `STORE_GENERATION ${snapshot.store_generation}\n` +
       `SOURCE_FINGERPRINT ${snapshot.source_fingerprint}\n` +
-      `SOURCE_PATHS ${snapshot.paths.join(",")}\n`,
+      `SOURCE_PATHS ${snapshot.paths.join(",")}\n` +
+      `HEAD_COMMIT ${snapshot.head_commit}\n`,
   );
 }
 

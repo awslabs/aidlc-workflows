@@ -178,7 +178,7 @@ before one stage-level lifecycle report.
 
    ```text
    $ aidlc engine workspace codekb-snapshot --repo shop-api --paths ./ --json
-   {"repo":"shop-api","store":"aidlc/spaces/default/codekb/shop-api/","paths":["./"],"store_generation":"none","source_fingerprint":"git:bc8ac8583f61da1edd5bdc681a9db722a937848b"}
+   {"repo":"shop-api","store":"aidlc/spaces/default/codekb/shop-api/","paths":["./"],"store_generation":"none","source_fingerprint":"git:bc8ac8583f61da1edd5bdc681a9db722a937848b","head_commit":"0107291c4e5f2a8b9d3e6f1a7c8b2d4e5f6a7b8c"}
    ```
 
    The architect synthesizes scan results into the 9 output artifacts (see
