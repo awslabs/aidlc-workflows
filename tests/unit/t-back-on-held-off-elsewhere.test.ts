@@ -171,6 +171,30 @@ describe("t-back-on-held-off-elsewhere: back on for this piece of work while a s
     expect(out).not.toContain("back on for this piece of work");
     expect(out).toContain("is still off: aidlc.settings.local.json keeps it off for this project.");
     expect(out).toEndWith(CLEAR_OFFER);
+    // Yes: cleared there, and their own "on" for this piece of work stands, so
+    // nothing asks it again.
+    said("yes, clear it");
+    const cleared = run(["config", "flags", "--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--yes"]);
+    expect(cleared).toContain("is on again for this project.");
+    expect(cleared).not.toContain("?");
+    expect(run(["engine", "config", "get", "guard.review-freeze"])).toStartWith("on");
+  });
+
+  test("off for this piece of work, then the whole project, then back on: one yes clears it, with no second question", () => {
+    const { run, said } = workspace();
+    said("turn the review freeze check off");
+    const off = run(["engine", "config", "set", "guard.review-freeze", "off", "--person-words", "turn the review freeze check off"]);
+    expect(off).toEndWith("Do you want it off for the whole project instead?");
+    said("yes");
+    run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes"]);
+    said("turn it back on");
+    const on = run(["engine", "config", "set", "guard.review-freeze", "on", "--person-words", "turn it back on"]);
+    expect(on).toEndWith(CLEAR_OFFER);
+    said("yes");
+    const cleared = run(["config", "flags", "--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--yes"]);
+    expect(cleared).toContain("is on again for this project.");
+    expect(cleared).not.toContain("?");
+    expect(run(["engine", "config", "get", "guard.review-freeze"])).toStartWith("on");
   });
 
   test("the environment keeps it off: said, with the way back, and nothing offered the agent cannot do", () => {
