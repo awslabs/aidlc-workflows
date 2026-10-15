@@ -2474,7 +2474,7 @@ describe("t230 native review-brief dispatch", () => {
         if (command === "review") {
           expect(output).toContain("**Stage:** Requirements Analysis");
           expect(output).toContain("**Review outcome:** Concerns remain for your decision.");
-          expect(output).toContain("**Why now:** First review completed.");
+          expect(output).not.toContain("Why now");
           expect(output).toContain("**Approve**");
           expect(output).toContain("**Request Changes**");
         }

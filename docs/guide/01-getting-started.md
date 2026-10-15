@@ -573,7 +573,6 @@ aidlc/spaces/default/intents/261013-inventory-rest-api/ideation/intent-capture/.
 
 Stage: Intent Capture & Framing
 Review outcome: Concerns remain for your decision.
-Why now: First review completed.
 
 | ID   | Severity | Where                                      | Status |
 |------|----------|--------------------------------------------|--------|

@@ -284,7 +284,9 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(readAllAuditShards(proj)).not.toContain("Recovery: stale-receipt");
   });
 
-  test("the gate presentation says the reviewed content differs and lists the diff", () => {
+  // The change's own sentence is the line the gate's report already says; the
+  // review block names the paths once.
+  test("the gate presentation names what changed after the review, once", () => {
     const proj = project("relaxed");
     recordReadyReview(proj);
     expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
@@ -292,11 +294,70 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
     const brief = run(BRIEF_TOOL, ["review", "--stage", STAGE, "--why", "first"], proj);
     expect(brief.status, brief.stderr).toBe(0);
-    expect(brief.stdout).toContain(
-      `**Reviewed content differs:** ${artifactRelative(proj)} changed after the Requirements Analysis review; carrying on.`,
-    );
     expect(brief.stdout).toContain(`**Changed after review:** \`${artifactRelative(proj)}\``);
+    expect(brief.stdout).not.toContain("Reviewed content differs");
+    expect(brief.stdout.split(artifactRelative(proj)).length - 1).toBe(2);
     expect(brief.stdout).toContain("**Decision options:**");
+  });
+
+  // A live run (Codex, E15-X): the person took the offer, the re-check reviewed
+  // exactly the changed requirements, and the gate after it still said they
+  // changed after the review.
+  test("a review after the change covered it: the gate says nothing about the change", () => {
+    const proj = project("relaxed");
+    recordReadyReview(proj);
+    expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
+    editReviewedArtifact(proj);
+    expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
+    expect(acceptedRows(proj)).toHaveLength(1);
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    const again = ["review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "2", "--person-asked"];
+    const requested = run(LOG_TOOL, again, proj);
+    expect(requested.status, requested.stderr).toBe(0);
+    appendFileSync(
+      artifact(proj),
+      `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${REVIEWER}\n**Iteration:** 2\n\n### Findings\n\nNo blocking findings.\n`,
+      "utf-8",
+    );
+    const completed = run(LOG_TOOL, [...again, "--verdict", "READY"], proj);
+    expect(completed.status, completed.stderr).toBe(0);
+    const brief = run(BRIEF_TOOL, ["review", "--stage", STAGE, "--why", "revision"], proj);
+    expect(brief.status, brief.stderr).toBe(0);
+    expect(brief.stdout).not.toContain("Changed after review");
+    expect(brief.stdout).not.toContain("Reviewed content differs");
+  });
+
+  test("a re-check that did not finish covers nothing: the change line stays", () => {
+    const proj = project("relaxed");
+    recordReadyReview(proj);
+    expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
+    editReviewedArtifact(proj);
+    expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    const again = ["review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", "2", "--person-asked"];
+    for (const args of [again, [...again, "--retry-pending"], [...again, "--verdict", "NOT-READY"]]) {
+      const logged = run(LOG_TOOL, args, proj);
+      expect(logged.status, logged.stderr).toBe(0);
+    }
+    const brief = run(BRIEF_TOOL, ["review", "--stage", STAGE, "--why", "revision"], proj);
+    expect(brief.status, brief.stderr).toBe(0);
+    expect(brief.stdout).toContain("The review did not finish");
+    expect(brief.stdout).toContain(`**Changed after review:** \`${artifactRelative(proj)}\``);
+  });
+
+  // A hand edit names no file, so its sentence is the one line.
+  test("a change with no paths keeps its sentence as the one line", () => {
+    const proj = project("relaxed");
+    recordReadyReview(proj);
+    expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
+    appendFileSync(artifact(proj), "\nA requirement added by hand.\n", "utf-8");
+    expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
+    const brief = run(BRIEF_TOOL, ["review", "--stage", STAGE, "--why", "first"], proj);
+    expect(brief.status, brief.stderr).toBe(0);
+    expect(brief.stdout).toContain(
+      "**Reviewed content differs:** The Requirements Analysis documents changed after they were reviewed; carrying on.",
+    );
+    expect(brief.stdout).not.toContain("Changed after review");
   });
 
   // An edit made in an editor leaves no write record, so no file can be named:

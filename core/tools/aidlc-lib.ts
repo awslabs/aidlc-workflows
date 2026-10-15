@@ -6761,12 +6761,11 @@ export function reviewCheckOffer(
       : [...new Set(attempt.filter((event) => event.event === "REVIEW_COMPLETED")
         .map((event) => auditBlockField(event.block, "Unit") ?? undefined))];
     for (const each of units) {
-      const mine = attempt.filter((event) => (auditBlockField(event.block, "Unit") ?? undefined) === each);
-      const review = mine.filter((event) => event.event === "REVIEW_COMPLETED").at(-1);
-      const change = mine.filter((event) =>
-        event.event === "CHANGE_ACCEPTED" && auditBlockField(event.block, "Checkpoint") === "review-receipt" &&
+      const reviewed = attempt.some((event) =>
+        event.event === "REVIEW_COMPLETED" && (auditBlockField(event.block, "Unit") ?? undefined) === each);
+      const change = changesSinceLastReview(projectDir, attempt, stage.slug, each).filter((event) =>
         ![null, "", "(paths unavailable)"].includes(auditBlockField(event.block, "Changed"))).at(-1);
-      if (!review || !change || !attemptEventDefinitelyBefore(review, change)) continue;
+      if (!reviewed || !change) continue;
       const used = reviewAttemptAccounting(
         projectDir, reviewAttemptWindow(projectDir, state, stage, rows), state, stage, stage.reviewer, each, undefined,
         { eventFilter: (row) => reviewAttemptEventMatchesCurrentClaim(projectDir, state, each, row) },
@@ -6777,6 +6776,25 @@ export function reviewCheckOffer(
     return null;
   }
   return null;
+}
+
+// The kept changes to a stage's reviewed work (its CHANGE_ACCEPTED rows at the
+// review receipt), for one Unit or for the stage itself, that came after the
+// latest finished review of the same work: what no review has seen. A review
+// that did not finish saw nothing. `events` are the attempt's rows, in order.
+export function changesSinceLastReview(
+  projectDir: string,
+  events: ReadonlyArray<AuditShardEvent>,
+  stage: string,
+  unit: string | undefined,
+): AuditShardEvent[] {
+  const mine = events.filter((event) =>
+    auditBlockField(event.block, "Stage") === stage && (auditBlockField(event.block, "Unit") ?? undefined) === unit);
+  const review = mine.filter((event) =>
+    event.event === "REVIEW_COMPLETED" && !reviewCompletionDidNotFinish(projectDir, event.block)).at(-1);
+  return mine.filter((event) =>
+    event.event === "CHANGE_ACCEPTED" && auditBlockField(event.block, "Checkpoint") === "review-receipt" &&
+    (review === undefined || attemptEventDefinitelyBefore(review, event)));
 }
 
 // What the person hears about a finished stage that is behind something it
