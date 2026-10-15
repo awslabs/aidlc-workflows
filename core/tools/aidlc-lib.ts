@@ -38212,6 +38212,18 @@ export function isKiroConductorAgentFile(name: string): boolean {
   return KIRO_CONDUCTOR_AGENT_FILES.includes(basename(name));
 }
 
+/**
+ * The components of a reviewer-scope exempt entry from its `construction`
+ * component on (the first, compared in any letter case), or null when the
+ * entry never enters a construction folder. The reviewer-scope hook matches
+ * exempt entries by this suffix, and the Kiro reviewer copy renders them by it.
+ */
+export function constructionSuffixComponents(entry: string): string[] | null {
+  const comps = normalizedPathComponents(entry);
+  const at = comps.findIndex((c) => c.toLowerCase() === "construction");
+  return at === -1 ? null : comps.slice(at);
+}
+
 // A reviewer copy one review request writes on Kiro (kiro-ide) when the
 // reviewer read-scope preview feature is on (aidlc-kiro-review-copy.ts): the
 // installed reviewer with that review's read scope added, named from the

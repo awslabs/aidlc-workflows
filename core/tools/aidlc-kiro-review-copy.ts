@@ -12,18 +12,19 @@
 // derived from the request id, which is what binds it to one request.
 
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { PREVIEW_CHANNEL, versionChannel } from "./aidlc-channel.ts";
 import {
-  agentsDir,
   decideFence,
+  constructionSuffixComponents,
   installedHarnessName,
-  normalizedPathComponents,
+  recordHookDrop,
   resolveProjectFlag,
   scopedReviewCopyName,
   swarmWorkerWorktreeMeta,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
+import { resolveHarnessPath } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 /** The environment variable that turns preview features on, as a comma list. */
@@ -58,18 +59,22 @@ const CONSTRUCTION_GLOB = "aidlc/spaces/*/intents/*/construction";
 /**
  * The `exclude` entries for one review: the unit's own subtree, then each exempt
  * path that lies in another unit's folder, by its part from `construction/` on
- * (how the reviewer-scope hook matches an exempt entry). Null when a unit or an
- * exempt path cannot be written as an exact pattern.
+ * (the suffix the reviewer-scope hook matches exempt entries by). An absolute
+ * path inside the project is read from the project, so a folder above it that
+ * happens to be named `construction` is not taken for the Units' folder. Null
+ * when the unit or an exempt path cannot be written as an exact pattern.
  */
-export function reviewCopyExcludes(unit: string, exempt: readonly string[]): string[] | null {
-  if (unit.length === 0 || GLOB_CHARS.test(unit) || unquotable(unit) || unit.includes("/")) return null;
+export function reviewCopyExcludes(unit: string, exempt: readonly string[], projectDir?: string): string[] | null {
+  if (unit === "" || unit === "." || unit === ".." || GLOB_CHARS.test(unit) || unquotable(unit) || unit.includes("/")) {
+    return null;
+  }
   const excludes = [`${CONSTRUCTION_GLOB}/${unit}/**`];
   for (const entry of exempt) {
-    const comps = normalizedPathComponents(entry);
-    const at = comps.findIndex((c) => c.toLowerCase() === "construction");
-    if (at === -1) continue;
-    const rest = comps.slice(at + 1);
-    if (rest.length === 0 || rest[0] === unit) continue;
+    const inProject = projectDir !== undefined && isAbsolute(entry) ? relative(projectDir, entry) : "";
+    const suffix = constructionSuffixComponents(inProject !== "" && !inProject.startsWith("..") ? inProject : entry);
+    if (suffix === null) continue;
+    const rest = suffix.slice(1);
+    if (rest.length === 0 || rest[0].toLowerCase() === unit.toLowerCase()) continue;
     if (rest.some((c) => GLOB_CHARS.test(c) || unquotable(c) || c === "..")) return null;
     const pattern = `${CONSTRUCTION_GLOB}/${rest.join("/")}`;
     if (!excludes.includes(pattern)) excludes.push(pattern);
@@ -99,9 +104,12 @@ export function renderReviewCopy(reviewerText: string, copyName: string, exclude
   const displayAt = front.findIndex((line) => /^display_name:/.test(line));
   if (displayAt !== -1) {
     const value = front[displayAt].slice("display_name:".length).trim();
+    // A double-quoted name takes the words inside its quotes; a plain one only
+    // when it is plain words, so the result is always a quoted YAML string.
+    // Any other form is left as it is.
     const quoted = /^"(.*)"$/.exec(value);
     if (quoted) front[displayAt] = `display_name: "${quoted[1]} (this review)"`;
-    else if (value.length > 0 && !/^['|>&*!%@`#]/.test(value)) front[displayAt] = `display_name: ${value} (this review)`;
+    else if (/^[A-Za-z0-9][^"\\#:]*$/.test(value)) front[displayAt] = `display_name: "${value} (this review)"`;
   }
 
   const permissionsAt = front.findIndex((line) => /^permissions:\s*$/.test(line));
@@ -123,12 +131,20 @@ export function renderReviewCopy(reviewerText: string, copyName: string, exclude
   return [lines[0], ...front, ...lines.slice(end)].join(eol);
 }
 
+// The installed agents folder (agentsDir's), checked for a link on the way that
+// would lead the copy's write or removal somewhere else.
+function writableAgentsDir(projectDir: string): string {
+  return process.env.AIDLC_AGENTS_DIR ?? resolveHarnessPath(["agents"], { mutable: true, projectDir });
+}
+
 /**
  * Write this review's reviewer copy and return its agent name for the conductor
- * to dispatch, or null when this review is dispatched to the reviewer itself: the feature is off, the project is not on
- * Kiro (kiro-ide), the review is not a Unit's, it runs in a parallel batch's
- * worktree, the reviewer read-scope check stands aside for this work, or the
- * copy cannot be written. Never refuses: the review goes on either way.
+ * to dispatch, or null when this review is dispatched to the reviewer itself:
+ * the feature is off, the project is not on Kiro (kiro-ide), the review is not a
+ * Unit's, it runs in a parallel batch's worktree, the reviewer read-scope check
+ * stands aside for this work, or the copy cannot be written. Never refuses: the
+ * review goes on either way. A copy the feature asked for but could not write
+ * leaves a line among the reviewer-scope drops doctor counts.
  */
 export function prepareReviewCopy(
   projectDir: string,
@@ -139,31 +155,36 @@ export function prepareReviewCopy(
   if (!review.unit || !previewFeatureOn(REVIEWER_READ_SCOPE_FEATURE, env, build.version)) return null;
   const copyName = scopedReviewCopyName(review.requestId);
   if (copyName === null) return null;
+  const skipped = (why: string): null => {
+    recordHookDrop(projectDir, "reviewer-scope", `reviewer copy for ${review.reviewer} (unit ${review.unit}) not written: ${why}`);
+    return null;
+  };
   try {
     if (installedHarnessName(projectDir) !== "kiro-ide") return null;
     if (swarmWorkerWorktreeMeta(projectDir) !== null) return null;
     if (resolveProjectFlag("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK", env, projectDir) === "1") return null;
     if (decideFence(projectDir, "reviewer-scope").decision === "stand-aside") return null;
-    const excludes = reviewCopyExcludes(review.unit, review.exempt);
-    if (excludes === null) return null;
-    if (!/^[a-z0-9][a-z0-9-]*$/.test(review.reviewer)) return null;
-    const reviewerPath = join(agentsDir(), `${review.reviewer}.md`);
-    if (!existsSync(reviewerPath)) return null;
+    const excludes = reviewCopyExcludes(review.unit, review.exempt, projectDir);
+    if (excludes === null) return skipped("the unit or an exempt path holds a character a pattern cannot carry");
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(review.reviewer)) return skipped("the reviewer name is not a plain agent name");
+    const agents = writableAgentsDir(projectDir);
+    const reviewerPath = join(agents, `${review.reviewer}.md`);
+    if (!existsSync(reviewerPath)) return skipped(`${reviewerPath} is missing`);
     const text = renderReviewCopy(readFileSync(reviewerPath, "utf-8"), copyName, excludes);
-    if (text === null) return null;
-    writeFileAtomic(join(agentsDir(), `${copyName}.md`), text);
+    if (text === null) return skipped(`${reviewerPath} has no permissions.rules list in the installed shape`);
+    writeFileAtomic(join(agents, `${copyName}.md`), text);
     return copyName;
-  } catch {
-    return null;
+  } catch (e) {
+    return skipped(e instanceof Error ? e.message : String(e));
   }
 }
 
 /** Remove the reviewer copy of a request, if one was written. Best effort. */
-export function removeReviewCopy(requestId: string | null | undefined): void {
+export function removeReviewCopy(projectDir: string, requestId: string | null | undefined): void {
   const copyName = requestId ? scopedReviewCopyName(requestId) : null;
   if (copyName === null) return;
   try {
-    rmSync(join(agentsDir(), `${copyName}.md`), { force: true });
+    rmSync(join(writableAgentsDir(projectDir), `${copyName}.md`), { force: true });
   } catch {
     // A copy left behind is dispatched by nobody: its request is closed.
   }

@@ -52,6 +52,7 @@ import {
   acquireAuditLock,
   auditFilePath,
   type ClaudeCodeHookInput,
+  constructionSuffixComponents,
   decideFence,
   errorMessage,
   guardStandAsideSpeaks,
@@ -208,10 +209,8 @@ function canonicalSuffix(comps: string[]): string {
 // when the entry never enters construction/ (those entries are irrelevant to
 // the matcher - non-construction paths are always allowed).
 function exemptSuffixOf(entry: string): string | null {
-  const comps = normalizedPathComponents(entry);
-  const i = constructionIndex(comps);
-  if (i === -1) return null;
-  return canonicalSuffix(comps.slice(i));
+  const comps = constructionSuffixComponents(entry);
+  return comps === null ? null : canonicalSuffix(comps);
 }
 
 // Judge one construction/ occurrence: the first path segment after the

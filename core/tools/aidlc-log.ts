@@ -3935,7 +3935,7 @@ function handleReview(args: string[]): void {
     // On Kiro (kiro-ide), with the reviewer read-scope preview feature on, this
     // review's reviewer is dispatched as a copy that carries its read scope; a
     // replaced request's copy goes with it.
-    if (replaces !== null) removeReviewCopy(replaces);
+    if (replaces !== null) removeReviewCopy(pd, replaces);
     const dispatchAgent = requestId === null ? null : prepareReviewCopy(pd, {
       requestId,
       reviewer: flags.reviewer,
@@ -4573,7 +4573,7 @@ function handleReview(args: string[]): void {
   // review's own record; another Unit's review keeps its window.
   removeParentReviewerDispatch(pd, { reviewer: flags.reviewer, stage: flags.stage, unit: flags.unit });
   // The verdict closes the request, so its reviewer copy (Kiro preview) goes too.
-  removeReviewCopy(fields["Request Id"]);
+  removeReviewCopy(pd, fields["Request Id"]);
 
   console.log(JSON.stringify({
     emitted: "REVIEW_COMPLETED",

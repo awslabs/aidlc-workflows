@@ -79,6 +79,7 @@ describe("the read scope", () => {
     expect(reviewCopyExcludes("alpha", ['construction/beta/a"b.md'])).toBeNull();
     expect(reviewCopyExcludes("al*", [])).toBeNull();
     expect(reviewCopyExcludes("", [])).toBeNull();
+    expect(reviewCopyExcludes("..", [])).toBeNull();
   });
 
   test("the hook and the copy read .. the same way", () => {
@@ -96,7 +97,7 @@ describe("the copy's text", () => {
     expect(copy).not.toBeNull();
     const front = copy!.split("\n---\n")[0];
     expect(front).toContain(`\nname: ${COPY}\n`);
-    expect(front).toContain("\ndisplay_name: Architecture Reviewer (this review)\n");
+    expect(front).toContain('\ndisplay_name: "Architecture Reviewer (this review)"\n');
     expect(front.endsWith([
       "    - capability: fs_read",
       "      effect: deny",
@@ -161,7 +162,7 @@ describe("writing and removing the copy", () => {
     expect(readFileSync(join(p, ".kiro", "agents", `${REVIEWER}.md`), "utf-8")).toBe(readFileSync(SHIPPED_REVIEWER, "utf-8"));
     _resetAgentsForTests();
     expect(loadAgents().map((agent) => agent.slug)).toEqual([REVIEWER]);
-    removeReviewCopy(REQUEST);
+    removeReviewCopy(p, REQUEST);
     expect(existsSync(copy)).toBe(false);
   });
 

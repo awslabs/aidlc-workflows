@@ -106,10 +106,11 @@ export async function run(input: string): Promise<number> {
   // evidence is found as the reviewer's, and keeps the copy's name beside it.
   // Only a copy whose request is still open is read this way.
   let dispatchAgent: string | null = null;
+  let openRequests: ReturnType<typeof openReviewRequests> | null = null;
   if (isScopedReviewCopy(agentType)) {
     try {
-      const request = openReviewRequests(readAuditShardEvents(projectDir, intent, space))
-        .find((open) => scopedReviewCopyName(open.requestId) === agentType);
+      openRequests = openReviewRequests(readAuditShardEvents(projectDir, intent, space));
+      const request = openRequests.find((open) => scopedReviewCopyName(open.requestId) === agentType);
       if (request) {
         dispatchAgent = agentType;
         agentType = request.reviewer;
@@ -134,7 +135,7 @@ export async function run(input: string): Promise<number> {
   try {
     const record = recordDir(projectDir, intent, space);
     if (record !== null) {
-      const digests = openReviewRequests(readAuditShardEvents(projectDir, intent, space))
+      const digests = (openRequests ?? openReviewRequests(readAuditShardEvents(projectDir, intent, space)))
         .filter((request) => request.reviewer === agentType)
         .map((request) => ({
           reviewFile: request.reviewFile,
