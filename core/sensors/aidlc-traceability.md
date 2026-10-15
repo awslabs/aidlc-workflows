@@ -39,6 +39,12 @@ Deterministic element-level verification of each stage's JSON coverage table:
 6. Derives functional-design orphans from `rules.md` rather than
    trusting only the self-reported `reverse` array.
 
+Build and Test's coverage gate runs the same tool with `--stage build-and-test`
+and no output path. It reads every Code Generation table and prints each
+requirement and acceptance criterion as built or not: a requirement without a
+row of its own is built through its sub-requirements or, when User Stories ran,
+through the criteria of the stories User Stories traced it to.
+
 ## Expected JSON schema
 
 ```json
