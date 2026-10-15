@@ -156,7 +156,7 @@ describe("a refresh keeps the agent files Kiro upgraded for its 3.0 engine", () 
     const row = frameworkFilesDoctorCheck(project, ".kiro");
     expect(row.pass, row.label).toBe(true);
     expect(row.label).toBe(
-      "AI-DLC files: unchanged since AI-DLC wrote them, apart from 15 agent files Kiro upgraded for its 3.0 engine, which config keeps",
+      "AI-DLC files: unchanged since AI-DLC wrote them, apart from 15 agent files Kiro upgraded for its 3.0 engine",
     );
 
     // The next refresh finds the same files and keeps them again.
