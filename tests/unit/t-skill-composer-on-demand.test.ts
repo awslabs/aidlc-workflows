@@ -106,6 +106,8 @@ describe("the composer block loads only when a plan is being composed", () => {
       for (const phrase of ANY_CHAT) {
         if (!skill.includes(phrase)) gaps.push(`${label}: SKILL.md lost ${phrase}`);
       }
+      // The setter clears the person's own local switch itself; an agent clear would also clear the team's file.
+      if (skill.includes("config flags --clear-bypass")) gaps.push(`${label}: SKILL.md tells the agent to clear a switch itself`);
     }
     expect(gaps).toEqual([]);
   });

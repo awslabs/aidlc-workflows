@@ -117,8 +117,7 @@ describe("t-back-on-clears-your-own-switch: back on while a settings file keeps 
     const out = w.backOn("plan-approval", "turn plan approval back on");
     expect(out).toBe(
       "The plan approval check (it shows you the plan before any code is written) is back on: " +
-        "aidlc.settings.local.json had kept it off for this project, and that entry is cleared. " +
-        "You can turn it off for the project again any time.",
+        "aidlc.settings.local.json had kept it off for this project, and that entry is cleared.",
     );
     // Only that entry: the file keeps everything else it records.
     expect(w.recorded("local")).toEqual(["AIDLC_DISABLE_USAGE_TRACKING"]);
@@ -133,8 +132,7 @@ describe("t-back-on-clears-your-own-switch: back on while a settings file keeps 
     w.off("AIDLC_DISABLE_SUMMARY_CONFIRMATION", "local");
     expect(w.backOn("summary-confirmation", "turn summary confirmation back on")).toBe(
       "The summary confirmation (it reads your words back to you before the work goes on) is back on: " +
-        "aidlc.settings.local.json had kept it off for this project, and that entry is cleared. " +
-        "You can turn it off for the project again any time.",
+        "aidlc.settings.local.json had kept it off for this project, and that entry is cleared.",
     );
     expect(w.recorded("local")).toEqual([]);
     expect(w.run(["engine", "config", "get", "summary-confirmation"])).toStartWith("on");
@@ -145,8 +143,7 @@ describe("t-back-on-clears-your-own-switch: back on while a settings file keeps 
     w.off("AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "local");
     expect(w.typed("/aidlc --guard.review-freeze on")).toBe(
       "The review freeze check (it stops edits to work you already approved) is back on: " +
-        "aidlc.settings.local.json had kept it off for this project, and that entry is cleared. " +
-        "You can turn it off for the project again any time.",
+        "aidlc.settings.local.json had kept it off for this project, and that entry is cleared.",
     );
     expect(w.recorded("local")).toEqual([]);
     expect(w.run(["engine", "config", "get", "guard.review-freeze"])).toStartWith("on");
@@ -158,8 +155,7 @@ describe("t-back-on-clears-your-own-switch: back on while a settings file keeps 
     const sensors = w.backOn("sensors", "turn the sensors back on");
     expect(sensors).not.toContain("Sensors changed");
     expect(sensors).toBe(
-      "Sensors are back on: aidlc.settings.local.json had kept them off for this project, and that entry is cleared. " +
-        "You can turn them off for the project again any time.",
+      "Sensors are back on: aidlc.settings.local.json had kept them off for this project, and that entry is cleared.",
     );
     expect(w.run(["engine", "config", "get", "sensors"])).toStartWith("on");
     w.off("AIDLC_DISABLE_LEARNINGS", "project");
@@ -248,8 +244,7 @@ describe("t-back-on-clears-your-own-switch: back on while a settings file keeps 
     w.off("AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "local");
     expect(w.run(["engine", "config", "set", "guard.review-freeze", "on"], terminal)).toBe(
       "The review freeze check (it stops edits to work you already approved) is back on: " +
-        "aidlc.settings.local.json had kept it off for this project, and that entry is cleared. " +
-        "You can turn it off for the project again any time.",
+        "aidlc.settings.local.json had kept it off for this project, and that entry is cleared.",
     );
     expect(w.recorded("local")).toEqual([]);
     w.off("AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "project");

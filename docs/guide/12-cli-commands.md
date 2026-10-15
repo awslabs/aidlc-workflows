@@ -1711,7 +1711,7 @@ The other way round, when you turn a check back on for this piece of work while
 a switch still keeps it off, your own `aidlc.settings.local.json` entry for it is
 cleared and the line says so in place of the setting's own line, for example:
 
-> The review freeze check (it stops edits to work you already approved) is back on: aidlc.settings.local.json had kept it off for this project, and that entry is cleared. You can turn it off for the project again any time.
+> The review freeze check (it stops edits to work you already approved) is back on: aidlc.settings.local.json had kept it off for this project, and that entry is cleared.
 
 The project's shared `aidlc.settings.json` and this machine's settings file are
 not changed from that request: the line names the file and says that changing it

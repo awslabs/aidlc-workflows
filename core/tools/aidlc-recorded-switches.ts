@@ -340,7 +340,7 @@ export function backOnLine(
   }
   if (by.every((target) => target === "local")) {
     return `${capitalized(subject.said)} ${subject.is} back on: ${local} had kept ${subject.it} off for this project, ` +
-      `and that entry is cleared. You can turn ${subject.it} off for the project again any time.`;
+      `and that entry is cleared.`;
   }
   const alsoCleared = by.includes("local") ? ` The entry in ${local} is cleared too.` : "";
   // At the person's own terminal the line names the command instead.
