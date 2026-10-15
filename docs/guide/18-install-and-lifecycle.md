@@ -510,6 +510,7 @@ aidlc config models --agent architect --effort xhigh --model provider/raw-id --p
 aidlc config models --check
 aidlc config models --reset --project --yes
 aidlc config models --session-model claude-opus-4.8   # Kiro CLI: your personal session model
+aidlc config models --agent-models on --yes            # Kiro, preview release: write one agent's own model and effort
 ```
 
 A change ends with what changed, its undo command and who picks it up (plus

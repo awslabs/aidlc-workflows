@@ -356,8 +356,9 @@ under `tools/data/`:
 
 - `harness.json` is runtime configuration: distribution identity, product
   name, next-step text, harness/rules directories, and mutable project choices
-  such as plugin selection and the optional `runtime`, `providers`, `trust`,
-  and `project` records. Model policy and flags are not kept here: they live in
+  such as plugin selection, the optional `runtime`, `providers`, `trust`,
+  and `project` records, and on kiro-ide the `agentModels` preview choice
+  (`on`/`off`, read only on a preview release). Model policy and flags are not kept here: they live in
   `aidlc.settings.json` (the project), `aidlc.settings.local.json` (this
   checkout) and the machine settings file, and a `harness.json` that still
   carries `models` or `flags` is refused with a line saying to remove them and

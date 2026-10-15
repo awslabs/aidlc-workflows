@@ -524,37 +524,40 @@ ask in chat to turn the reviewer read-scope check on for the work (or type
 On Kiro every AI-DLC agent runs on your chat's model and effort: the model you
 pick in Kiro IDE, or Kiro CLI's session model. Kiro can run a delegated agent
 on its own model and effort, for example a reviewer on another model family,
-and a preview build can set that for one agent. To get a preview build, run
-`aidlc config --channel preview` and then `aidlc update`;
-`aidlc config --channel stable` and `aidlc update --channel stable` go back
-([Release Channels](../18-install-and-lifecycle.md#release-channels)). Then, in
-a terminal:
+and a project on a preview release can set that for one agent. To get a
+preview build, run `aidlc config --channel preview` and then `aidlc update`,
+then `aidlc config` in the project; `aidlc config --channel stable` and
+`aidlc update --channel stable` go back
+([Release Channels](../18-install-and-lifecycle.md#release-channels)). Then:
 
 ```bash
-export AIDLC_PREVIEW_FEATURES=agent-models
+aidlc config models --agent-models on --yes
 aidlc config models --agent architecture-reviewer --model gpt-5.6-terra --effort high --project --yes
 ```
 
-(in PowerShell, `$env:AIDLC_PREVIEW_FEATURES = "agent-models"`; name both
-preview features as `reviewer-read-scope,agent-models`). When you ask the
-agent in chat to set it instead, it runs the same command from Kiro, so the
-variable has to be in Kiro's own environment: export it in a terminal, then
-start Kiro IDE or `kiro-cli` from that terminal. AI-DLC records the
-choice in `aidlc.settings.json` and writes `model:` and `effortLevel:` into that
-agent's `.kiro/agents/aidlc-architecture-reviewer-agent.md`; a Unit's reviewer
-copy keeps them. Kiro reads them when it next dispatches the agent, in a chat
-that is already open too. The model must be one your Kiro offers
+The first command turns the feature on for this project and records that in
+`.kiro/tools/data/harness.json`, so every later `aidlc config` run keeps it,
+from a terminal or from a chat request alike. Running a pin with
+`AIDLC_PREVIEW_FEATURES=agent-models` set in the environment (in PowerShell,
+`$env:AIDLC_PREVIEW_FEATURES = "agent-models"`) turns it on the same way.
+AI-DLC records the model and effort in `aidlc.settings.json` and writes
+`model:` and `effortLevel:` into that agent's
+`.kiro/agents/aidlc-architecture-reviewer-agent.md`; a Unit's reviewer copy
+keeps them. Kiro reads them when it next dispatches the agent, in a chat that
+is already open too. The model must be one your Kiro offers
 (`kiro-cli chat --list-models`, or Kiro IDE's model picker): one it does not
 offer can fail that agent's dispatch. An effort the model does not take runs
 at the model's own default, and an agent given a model but no effort runs at
 that model's default effort, not your chat's. `--model default` and
 `--effort default` take them out again. A preset or a group effort
 (`--preset`, `--reviewing-effort`) still changes nothing on Kiro, and the
-conductor keeps your chat's model. The switch is read when `aidlc config`
-writes the files: a later `aidlc config` run without it takes the lines out and
-says so, and `aidlc config models --check` reports a line left behind.
-`effortLevel` is not in Kiro's documentation. Measured on Kiro CLI 2.31.1 on its
-v3 engine and Kiro IDE 1.3.0. It does nothing in a stable build.
+conductor keeps your chat's model. `aidlc config models --agent-models off`
+takes every agent's lines out and keeps the recorded models and efforts, so
+`--agent-models on` puts them back; off holds even with the variable set.
+`aidlc config models --check` reports a line that does not match. A project on
+a stable release writes none of them, whatever is recorded. `effortLevel` is
+not in Kiro's documentation. Measured on Kiro CLI 2.31.1 on its v3 engine and
+Kiro IDE 1.3.0.
 
 ### Kiro's Workflows feature stops AI-DLC's reviews and helpers
 
