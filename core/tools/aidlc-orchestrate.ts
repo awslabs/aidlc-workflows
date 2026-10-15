@@ -166,6 +166,7 @@ import {
   approvedConstructionUnits,
   approvedTogetherFollowers,
   approvesTogetherStages,
+  openGateApprovesTogether,
   attemptEventDefinitelyBefore,
   attemptEventIsCrossShardTied,
   artifactFilename,
@@ -9683,6 +9684,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       scope: currentStateScope,
       stateContent,
       walk: planChanges ? planChangeWalk(pd, currentStateScope, stateContent) : null,
+      together: planChanges ? openGateApprovesTogether(pd, (getField(stateContent, "Current Stage") ?? "").trim()) : [],
     };
     // Words typed with a differing scope may be new work or the reason for
     // the change: Branch 9c asks which, so they are never dropped.
@@ -13888,7 +13890,8 @@ function keptWhilePlanWaits<T extends Directive>(directive: T, planWaits: boolea
 function planChangeDirective(
   changes: PlanChanges,
   before: string | null,
-  plan: { scope: string; stateContent: string; walk?: PlanChangeWalk | null } | null,
+  // `together`: the stages the open gate's one question named, when it named several.
+  plan: { scope: string; stateContent: string; walk?: PlanChangeWalk | null; together?: string[] } | null,
   // The code plan's question is open: it stays the open step, so what the
   // person says next is kept as their answer to it.
   planWaits = false,
@@ -14073,11 +14076,20 @@ function planChangeDirective(
       : `${skip.length === 1 ? "It" : skip.length === 2 ? "Either one" : "Any of them"} can still be run on its own with ${anyOf}.`;
   const line = `"${summary.charAt(0).toUpperCase()}${summary.slice(1)}. ${wayBack}${noted ? ` ${noted}` : ""}${parkedTail}"`;
   const undo = `If they later ask to undo it, run \`${aidlcDispatcherInvocation("recompose")} ${flips(add, planSkip)}\`.`;
+  // The question named the stages after the skipped one too, and the same
+  // reply can approve them: "skip Functional Design and approve the rest".
+  const rest = started !== null && currentState === "awaiting-approval"
+    ? (plan?.together ?? []).filter((slug) => slug !== started && !skip.includes(slug))
+    : [];
+  const approveRest = rest.length === 0 ? ""
+    : ` If their message also approved the rest of that question (${named(rest)}), then run ` +
+      `\`${aidlcToolInvocation("orchestrate")} report --stage ${rest[0]} --result approved --user-input Approve\`, ` +
+      "which approves them together.";
   const message =
     `${lead}, and do not show ${commands.length > 1 ? "their" : "its"} output: the one line below says what changed. ` +
     "If a command refuses, tell the person in plain words why it could not, and the way it names to do it " +
     "instead, then stop. " +
-    `Otherwise tell the person in one line: ${line}`;
+    `Otherwise tell the person in one line: ${line}${approveRest}`;
   if (started !== null || unitStep !== null) {
     // Parked work stays parked: the line already says so and asks whether to
     // pick it back up, so the turn ends on that question instead of carrying

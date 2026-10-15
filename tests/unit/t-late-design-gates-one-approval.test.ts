@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, audit:GATE_APPROVED, audit:STAGE_AWAITING_APPROVAL, function:approvesTogetherStages, function:approvedTogetherCover
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, audit:GATE_APPROVED, audit:STAGE_AWAITING_APPROVAL, function:approvesTogetherStages, function:approvedTogetherCover, function:planChangeDirective, function:openGateApprovesTogether
 //
 // CLI-contract test: when Construction runs one Unit at a time (unit-major) and
 // Unit checkpoints are off, the per-Unit stages' approvals that come due after
@@ -21,7 +21,9 @@
 //   7. no shipped prose still describes the late per-stage cascade;
 //   8. a reply another question used, or a question put since, approves nothing;
 //   9. autonomous Construction and team-owned Units keep one turn, one gate;
-//  10. the learnings question surfaces each listed stage; any other stage is still refused.
+//  10. the learnings question surfaces each listed stage; any other stage is still refused;
+//  11. "skip Functional Design and approve the rest": the skip step names the approval of the
+//      rest, which approves them together; a skip alone leaves them to their question.
 //
 // SOURCE UNDER TEST (dist/claude/.claude/tools/): aidlc-orchestrate.ts next and
 // report, aidlc-state.ts gate-start and approve, through the spawned engine.
@@ -345,6 +347,39 @@ function currentStage(proj: string): string | undefined {
   return /\*\*Current Stage\*\*:\s*(\S+)/.exec(readFileSync(seededStateFile(proj), "utf-8"))?.[1];
 }
 
+const SESSION = "01995000-7a11-7000-8000-00000000c0de";
+
+function chatEnv(proj: string): NodeJS.ProcessEnv {
+  return { ...engineEnv(), CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_SESSION_OVERRIDE: SESSION };
+}
+
+// What the person types at the question, through the human-turn hook every harness uses.
+function says(proj: string, prompt: string): void {
+  const res = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+    cwd: proj,
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
+    env: { ...chatEnv(proj), AIDLC_UNATTENDED: "0" },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  if ((res.status ?? -1) !== 0) throw new Error(`human-turn hook failed: ${res.stdout ?? ""}${res.stderr ?? ""}`);
+}
+
+// The agent runs a command the engine's step names, as it names it.
+function runNamed(proj: string, command: string): Directive {
+  const words = [...command.matchAll(/'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2]);
+  expect(words.slice(0, 2)).toEqual(["bun", words[1]]);
+  const tool = join(AIDLC_SRC, "tools", String(words[1]).replace(/^\.claude\/tools\//, ""));
+  const r = spawnSync(BUN, [tool, ...words.slice(2), "--project-dir", proj], {
+    cwd: proj,
+    env: chatEnv(proj),
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(r.status, `${command}\n${r.stdout}${r.stderr}`).toBe(0);
+  return JSON.parse((r.stdout ?? "").split("\n").find((line) => line.trim().startsWith("{")) ?? "{}") as Directive;
+}
+
 function openFirstGate(proj: string): { gate: Directive; opened: Directive } {
   const gate = runNext(proj);
   const opened = runReport(proj, ["--stage", "functional-design", "--result", "awaiting-approval"]);
@@ -517,6 +552,42 @@ describe("t-late-design-gates-one-approval: one question for the late stage appr
       expect(refused.status).not.toBe(0);
       expect(refused.stderr).toContain("slug mismatch");
     }
+  });
+
+  // "skip Functional Design and approve the rest" at the one question: the
+  // skip was carried out and the approval dropped, so the other stages were
+  // asked about again.
+  for (const [said, skipped, rest] of [
+    ["skip Functional Design and approve the rest", ["functional-design"], BLOCK.slice(1)],
+    ["skip Functional Design and NFR Requirements, approve the rest", ["functional-design", "nfr-requirements"], BLOCK.slice(2)],
+  ] as const) {
+    test(`11: "${said}" skips ${skipped.length === 1 ? "it" : "them"} and approves the rest together`, () => {
+      const proj = seedBuiltProject({ checkpoints: "disabled" });
+      openFirstGate(proj);
+      says(proj, said);
+      const step = runOrchestrateNext(ORCH, proj, ["--skip", skipped.join(",")], { env: chatEnv(proj) }).directive as Directive;
+      const message = String(step.message);
+      const named = [...message.matchAll(/`(bun [^`]+)`/g)].map((m) => m[1]).filter((c) => !c.includes("--single"));
+      const approve = named.find((c) => c.includes("--result approved"));
+      expect(approve, message).toBe(`bun .claude/tools/aidlc-orchestrate.ts report --stage ${rest[0]} --result approved --user-input Approve`);
+      // The agent read their message as also approving the rest: every named command, in order.
+      for (const command of named.filter((c) => !c.includes("--add"))) runNamed(proj, command);
+      expect(rows(proj, "GATE_APPROVED").map((r) => r.stage)).toEqual([...rest]);
+      expect(rows(proj, "STAGE_SKIPPED").map((r) => r.stage)).toContain("functional-design");
+      expect(currentStage(proj)).toBe("build-and-test");
+    });
+  }
+
+  test("11b: \"skip Functional Design\" alone leaves the rest to their question", () => {
+    const proj = seedBuiltProject({ checkpoints: "disabled" });
+    openFirstGate(proj);
+    says(proj, "skip Functional Design");
+    const step = runOrchestrateNext(ORCH, proj, ["--skip", "functional-design"], { env: chatEnv(proj) }).directive as Directive;
+    const skip = /`(bun [^`]+--result skipped[^`]*)`/.exec(String(step.message))?.[1];
+    runNamed(proj, String(skip));
+    expect(rows(proj, "GATE_APPROVED").length).toBe(0);
+    const again = runOrchestrateNext(ORCH, proj, [], { env: chatEnv(proj) }).directive as Directive;
+    expect(again.approve_together?.stages?.map((st) => st.slug)).toEqual(BLOCK.slice(1));
   });
 
   test("7: no shipped prose still describes the late per-stage cascade", () => {
