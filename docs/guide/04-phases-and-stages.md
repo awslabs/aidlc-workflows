@@ -261,7 +261,9 @@ checkpoints**. Each Unit completes its applicable design stages and Code
 Generation before the next. Runtime order follows `unit-of-work-dependency.md`;
 `bolt-plan.md` records delivery grouping and rationale without replacing that DAG.
 
-With skeleton-on, the first DAG Unit is the smallest working integrated slice.
+Delivery Planning can record an [explicit serial order and named proof](12-cli-commands.md#explicit-serial-build-order-and-a-named-integrated-proof)
+after prerequisite Units without changing the dependencies. Without that plan,
+with skeleton-on, the first DAG Unit is the smallest working integrated slice.
 Its code must run through a real end-to-end check, and you approve the verified
 skeleton before later Units begin. This happens even if you explicitly choose
 stage-major order. A first design-stage review alone is not a working skeleton.

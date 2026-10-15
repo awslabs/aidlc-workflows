@@ -276,7 +276,9 @@ requires another recorded human approval. If a greenfield project has no runnabl
 check yet, you may defer selection; the first checkpoint asks before running any
 verification. The conductor never invents or auto-approves a command.
 
-With skeleton-on, the first DAG Unit is the smallest working integrated slice.
+Delivery Planning can record an [explicit serial order and named proof](12-cli-commands.md#explicit-serial-build-order-and-a-named-integrated-proof)
+after prerequisite Units. Without that optional plan, with skeleton-on, the
+first DAG Unit is the smallest working integrated slice.
 It completes its design and code, including your Plan Approval and required
 summary confirmations. The recorded, human-authorized project check then
 demonstrates the slice end to end, and the approval question shows **Verified

@@ -80,6 +80,17 @@ This stage plans the Bolt sequence — the order in which Units of Work are exec
 **Definitions for this stage:**
 - **Bolt** — per `stage-protocol.md` Glossary: the planned Construction delivery slice from this stage (2.9): one or more Units with a Definition of Done, a confidence hypothesis, and ownership. The engine does not consume `bolt-plan.md` for Unit grouping or walk order; runtime batches come from `unit-of-work-dependency.md`. A **Batch** is the group of Units that build concurrently (runtime; from that 2.7 artifact).
 
+An explicit serial Construction plan can select an ordered permutation of the
+DAG and a named integrated proof after its prerequisites. After the person
+confirms those choices, record them before Construction with
+`aidlc engine state set-construction-plan --proof <unit> --units <comma-separated-units>`.
+This requires solo, serial, unit-major work with checkpoints and skeleton-on.
+The typed setter validates the genuine dependencies; do not invent edges to
+force an economic preference. Every unit through the named proof requires
+human completion approval. The proof also binds its prerequisite evidence.
+Without this optional plan, the default first-DAG-unit behavior below applies.
+A document alone never changes execution order.
+
 These definitions are for YOU. They are not written to be read out, and the user
 has not seen them. Every one of them names something that is about to appear in
 the questions you ask and the artifacts you write, so the first time a term

@@ -123,6 +123,18 @@ open gate with no approval in it leaves the gate open for their answer.
 
 ### Unit and skeleton checkpoints
 
+An explicit `Construction Plan` can choose a dependency-valid serial order
+and a named proof after prerequisite Units. Follow the emitted order; every
+Unit through that proof still needs human approval. A pause holds the normal
+route. Skipping work or jumping never fabricates a passing proof: if the
+plan is no longer satisfiable, preserve the person's instruction and revise
+or retire the plan. Use `aidlc engine state set-construction-plan --retire`
+only when the person chooses to return to dependency order. This retains
+work and evidence without granting verification or autonomy. Only an untouched
+suffix can be reordered after work begins. An explicit incompatible execution
+policy change retires the plan atomically and reports that consequence.
+The first-DAG-unit rules below describe work without this optional plan.
+
 With checkpoints enabled, skeleton-on runs the **first DAG Unit through every
 applicable per-unit stage, including Code Generation, before later Units**,
 even when the surrounding iteration choice is stage-major. Plan that Unit as

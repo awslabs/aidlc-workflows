@@ -61,6 +61,7 @@ import {
   workspaceSourceFingerprint,
   workspaceSourceListing,
   writeUnitSourceSnapshot,
+  unitDependencyPath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
@@ -239,6 +240,105 @@ function pass(project: string, kind: "unit" | "skeleton" = "unit", unit = "alpha
 function approvals(project: string) {
   return readAuditShardEvents(project).filter((row) => row.event === "GATE_APPROVED");
 }
+
+function namedProofProject(autonomous = false): string {
+  const dir = project(autonomous);
+  const plan = JSON.stringify({ version: 1, units: ["alpha", "beta"], proof_unit: "beta" });
+  writeFileSync(seededStateFile(dir), readFileSync(seededStateFile(dir), "utf8").replace("## Runtime State", `## Runtime State\n- **Construction Execution**: serial\n- **Construction Plan**: ${plan}`));
+  const path = unitDependencyPath(dir);
+  mkdirSync(join(path, ".."), { recursive: true });
+  writeFileSync(path, "# Dependencies\n\n```yaml\nunits:\n  - name: alpha\n    depends_on: []\n  - name: beta\n    depends_on: [alpha]\n```\n");
+  return dir;
+}
+
+function approveNamedProof(dir: string): void {
+  pass(dir, "unit", "alpha");
+  human(dir, "unit");
+  expect(approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint").approved).toBe(true);
+  pass(dir, "skeleton", "beta");
+  const asked = cli(dir, "bolt", ["checkpoint", "--action", "ask", "--unit", "beta", "--kind", "skeleton", "--session", "named-proof"]);
+  expect(asked.code, asked.out).toBe(0);
+  submitCommandChoice(dir, "named-proof", "Approve");
+  expect(approveConstructionCheckpoint(dir, "beta", "skeleton", "Approve", "named-proof").approved).toBe(true);
+}
+
+describe("named integrated proof", () => {
+  test("reopening an unrelated prefix blocks new admission without erasing a finished proof", () => {
+    const dir = namedProofProject();
+    const path = unitDependencyPath(dir);
+    writeFileSync(path, readFileSync(path, "utf8").replace("depends_on: [alpha]", "depends_on: []"));
+    approveNamedProof(dir);
+    writeFileSync(join(dir, "src/alpha.ts"), "export const alpha = 42;\n");
+    const proof = resolveConstructionCheckpoint(dir, "beta", "skeleton");
+    expect(proof.approved).toBe(true);
+    expect(proof.ready).toBe(false);
+  });
+
+  test("retirement recognizes finished ordinary work while keeping the new proof obligation separate", () => {
+    const dir = namedProofProject();
+    approveNamedProof(dir);
+    submitCommandChoice(dir, "retire-plan", "Switch to stage-major work.");
+    const changed = cli(dir, "state", ["set-construction-iteration", "stage-major"]);
+    expect(changed.code, changed.out).toBe(0);
+    expect(resolveConstructionCheckpoint(dir, "alpha", "unit").approved).toBe(true);
+    expect(resolveConstructionCheckpoint(dir, "alpha", "skeleton").approved).toBe(false);
+    expect(resolveConstructionCheckpoint(dir, "beta", "unit").approved).toBe(true);
+    // Recognition as ordinary completion no longer asserts an integrated
+    // result about alpha, while beta's own unchanged evidence still applies.
+    writeFileSync(join(dir, "src/alpha.ts"), "export const alpha = 42;\n");
+    expect(resolveConstructionCheckpoint(dir, "beta", "unit").approved).toBe(true);
+    writeFileSync(join(dir, "src/beta.ts"), "export const beta = 42;\n");
+    expect(resolveConstructionCheckpoint(dir, "beta", "unit").approved).toBe(false);
+  });
+
+  test("prerequisite changes while verification runs invalidate its result", () => {
+    const dir = namedProofProject();
+    pass(dir, "unit", "alpha");
+    human(dir, "unit");
+    approveConstructionCheckpoint(dir, "alpha", "unit", "Approve", "t341-checkpoint");
+    recordCommand(dir, writeCheck(dir, "require('node:fs').writeFileSync('src/alpha.ts', 'export const alpha = 99;\\n');\n"));
+    const proof = verifyConstructionCheckpoint(dir, "beta", "skeleton");
+    expect(proof.verified).toBe(false);
+    expect(proof.approved).toBe(false);
+  });
+
+  test("direct APIs enforce kind and prerequisite approval", () => {
+    const dir = namedProofProject();
+    expect(() => resolveConstructionCheckpoint(dir, "beta", "unit")).toThrow("skeleton");
+    expect(() => resolveConstructionCheckpoint(dir, "alpha", "skeleton")).toThrow("unit");
+    const proof = resolveConstructionCheckpoint(dir, "beta", "skeleton");
+    expect(proof.ready).toBe(false);
+    expect(proof.errors.join(" ")).toContain('approve "alpha"');
+    expect(() => verifyConstructionCheckpoint(dir, "beta", "skeleton")).toThrow();
+  });
+
+  test("an existing autonomy grant cannot approve the pre-proof prefix", () => {
+    const dir = namedProofProject(true);
+    pass(dir, "unit", "alpha");
+    expect(resolveConstructionCheckpoint(dir, "alpha", "unit").human_required).toBe(true);
+    expect(() => approveConstructionCheckpoint(dir, "alpha", "unit")).toThrow();
+    expect(resolveConstructionCheckpoint(dir, "beta", "skeleton").approved).toBe(false);
+  });
+
+  test("real human-approved proof binds prerequisite evidence and survives reload", () => {
+    const dir = namedProofProject();
+    approveNamedProof(dir);
+    const before = resolveConstructionCheckpoint(dir, "beta", "skeleton");
+    expect(before.prerequisite_fingerprint).toBeDefined();
+    expect(resolveConstructionCheckpoint(dir, "beta", "skeleton", undefined, loadConstructionEvidence(dir)).approved).toBe(true);
+    writeFileSync(join(dir, "src/alpha.ts"), "export const alpha = 42;\n");
+    const changed = resolveConstructionCheckpoint(dir, "beta", "skeleton");
+    expect(changed.prerequisite_fingerprint).not.toBe(before.prerequisite_fingerprint);
+    expect(changed.approved).toBe(false);
+    expect(changed.verified).toBe(false);
+  });
+
+  test("skipped proof never joins approved units", () => {
+    const dir = namedProofProject();
+    appendAuditEntry("UNIT_SKIPPED", { Stage: "code-generation", Unit: "beta", Reason: "person skipped the proof", "Run floor": latestMainWorkflowStageRunFloorForProject(dir, "code-generation", true, "beta") }, dir);
+    expect(approvedConstructionUnits(dir, readFileSync(seededStateFile(dir), "utf8")).has("beta")).toBe(false);
+  });
+});
 
 describe("t341 Construction checkpoint verification and evidence", () => {
   test("routing evidence cannot carry approval across a different state or intent record", () => {

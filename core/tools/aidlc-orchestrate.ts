@@ -1,3 +1,4 @@
+import { constructionProofUnit, parseConstructionPlan, resolveConstructionPlan } from "./aidlc-construction-plan.ts";
 // The orchestration engine — the deterministic "what's next?" answerer that
 // stands BESIDE the prose orchestrator (skills/aidlc/SKILL.md), not inside it.
 // Nothing in SKILL.md calls this file yet; it is exercised only by its own
@@ -7218,7 +7219,7 @@ function buildRunStageDirective(
       const approved = approvedConstructionUnits(codekbCtx.projectDir, stateContent, evidence);
       const mode = getField(stateContent, AUTONOMY_MODE_FIELD)?.trim();
       const skeletonApproved = !constructionSkeletonOn(stateContent) ||
-        approved.has(dag.batches.flat()[0]);
+        approved.has(constructionProofUnit(stateContent, dag.batches.flat()) ?? "");
       const unitMajor = readConstructionIteration(stateContent) === "unit-major";
       directive.construction_policy = {
         iteration: unitMajor ? "unit-major" : "stage-major",
@@ -10925,6 +10926,7 @@ function tryEmitSwarm(
 ): boolean {
   const node = nodeForSlug(slug);
   if (!node) return false;
+  if (node.phase === "construction" && stateContent) resolveConstructionPlan(projectDir, stateContent);
   // An actual walking skeleton finishes and is reviewed before parallel work.
   if (
     stateContent && checkpointPolicyEnabled(stateContent) &&
@@ -10933,7 +10935,7 @@ function tryEmitSwarm(
     const dag = resolveBoltBatches(projectDir, routingEvidenceFor(projectDir, stateContent));
     if (
       dag.state === "ok" && dag.units.length > 0 &&
-      !approvedConstructionUnits(projectDir, stateContent, routingEvidenceFor(projectDir, stateContent)).has(dag.batches.flat()[0])
+      !approvedConstructionUnits(projectDir, stateContent, routingEvidenceFor(projectDir, stateContent)).has(constructionProofUnit(stateContent, dag.batches.flat()) ?? "")
     ) return false;
   }
   const batches = eligibleAutonomousSwarmBatches(node, scope, stateContent, projectDir);
@@ -12908,6 +12910,7 @@ function unitMajorWalkStep(
   codekbCtx: CodekbCtx,
   checkpoints: boolean,
 ): UnitMajorWalkStep {
+  const customPlan = stateContent !== null && parseConstructionPlan(getField(stateContent, "Construction Plan")) !== null;
   const ledgers = new Map<string, UnitLedger>(
     block.map((k) => [k.slug, unitLedgerFor(projectDir, k.slug)]),
   );
@@ -12931,7 +12934,7 @@ function unitMajorWalkStep(
       const stop = unitStageStop(projectDir, stateContent, k, u, kinds?.get(u) ?? null, recordPrefix, codekbCtx, ledger);
       if (stop) return stop;
     }
-    if (checkpoints && stateContent && !unitSkippedItsCode(projectDir, stateContent, u)) {
+    if (checkpoints && stateContent && (customPlan || !unitSkippedItsCode(projectDir, stateContent, u))) {
       const kind = constructionCheckpointKind(stateContent, u, allUnits);
       const checkpoint = resolveConstructionCheckpoint(projectDir, u, kind, stateContent, routingEvidenceFor(projectDir, stateContent));
       if (!checkpoint.approved) return { kind: "checkpoint", unit: u, checkpoint };
@@ -12939,10 +12942,11 @@ function unitMajorWalkStep(
     return null;
   };
   const waiting: UnitMajorWalkStep[] = [];
-  const order = [...units.filter((u) => inProgress.has(u)), ...units.filter((u) => !inProgress.has(u))];
+  const order = customPlan ? units : [...units.filter((u) => inProgress.has(u)), ...units.filter((u) => !inProgress.has(u))];
   for (const u of order) {
     const pause = setAside.get(u);
     if (pause) {
+      if (customPlan) return pause;
       if (stopFor(pause.checkpoint.setAsideFor ?? u) === null) return pause;
       waiting.push(pause);
       continue;
@@ -12999,7 +13003,7 @@ function unitMajorWalkBeat(
   if (resolution.state !== "ok" || resolution.batches.flat().length === 0) return null;
   const block = constructionUnitMajorBlock(scope, stateContent, checkpoints);
   if (!block.some((n) => n.slug === node.slug)) return null;
-  const units = resolution.batches.flat();
+  const units = resolveConstructionPlan(projectDir, stateContent, resolution).units;
   const recordPrefix = engineRelativeRecordDir(projectDir);
   const codekbCtx = codekbCtxFor(projectDir);
   const step = unitMajorWalkStep(
@@ -13140,7 +13144,7 @@ function unitWorkContext(projectDir: string): UnitWorkContext | null {
   const resolution = resolveBoltBatches(projectDir);
   if (resolution.state !== "ok") return null;
   return {
-    units: resolution.batches.flat(),
+    units: resolveConstructionPlan(projectDir, readStateFile(projectDir), resolution).units,
     kinds: resolution.unitKinds,
     recordPrefix: engineRelativeRecordDir(projectDir),
     codekbCtx: codekbCtxFor(projectDir),
@@ -13669,8 +13673,9 @@ function emitUnitMajorRunStage(
   }
   const checkpoints = stateContent !== null &&
     checkpointPolicyEnabled(stateContent) && !teamOwnership;
-  const allUnits = resolution.batches.flat();
-  const units = skeletonOnly ? allUnits.slice(0, 1) : allUnits;
+  const plan = stateContent ? resolveConstructionPlan(projectDir, stateContent, resolution) : null;
+  const allUnits = plan?.units ?? resolution.batches.flat();
+  const units = skeletonOnly ? allUnits.slice(0, plan?.custom ? allUnits.indexOf(plan.proofUnit!) + 1 : 1) : allUnits;
 
   const block = constructionUnitMajorBlock(scope, stateContent, teamOwnership || checkpoints);
   // Defensive: if the current node is not itself an active block stage (e.g. it
@@ -13817,6 +13822,7 @@ function emitForSlug(
   projectDir: string,
 ): void {
   const node = nodeForSlug(slug);
+  if (node?.phase === "construction" && stateContent) resolveConstructionPlan(projectDir, stateContent);
   if (node && isPerUnit(node)) {
     if (
       stateContent && checkpointPolicyEnabled(stateContent) &&
@@ -13826,7 +13832,7 @@ function emitForSlug(
       const dag = resolveBoltBatches(projectDir, routingEvidenceFor(projectDir, stateContent));
       if (
         dag.state === "ok" && dag.units.length > 0 &&
-        !approvedConstructionUnits(projectDir, stateContent, routingEvidenceFor(projectDir, stateContent)).has(dag.batches.flat()[0])
+        !approvedConstructionUnits(projectDir, stateContent, routingEvidenceFor(projectDir, stateContent)).has(constructionProofUnit(stateContent, dag.batches.flat()) ?? "")
       ) {
         emitUnitMajorRunStage(
           node, projectType, scope, stateContent, recordPrefix, codekbCtx, projectDir, true,

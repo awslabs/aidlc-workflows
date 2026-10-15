@@ -716,7 +716,7 @@ async function main(stdinText: string): Promise<void> {
 
   let output = `[AIDLC] ${prefix}${phase}`;
   const units = phase === "CONSTRUCTION"
-    ? unitProgress(dirname(stateFile), extractField(state, "Construction Iteration"))
+    ? unitProgress(dirname(stateFile), extractField(state, "Construction Iteration"), extractField(state, "Construction Plan"))
     : null;
   if (units) {
     output += ` Unit ${units.current} of ${units.total}`;

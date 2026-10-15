@@ -627,7 +627,15 @@ Units and how to ask for teams. Work with recorded repos is never asked: the
 first step carries `teamsAcrossReposLine` instead, the line the setter's
 refusal also says.
 
-When skeleton-on applies, the first DAG Unit must be planned as the smallest
+With an explicit versioned `Construction Plan`, the shared resolver validates
+the chosen dependency-valid order and named proof for serial solo unit-major
+work. Direct checkpoint calls enforce the same identity and prefix readiness.
+The named proof fingerprints transitive prerequisite evidence; approvals through
+that Unit require human input. Skips never satisfy this proof. Policy changes
+can explicitly retire the plan; untouched suffix revisions retain earlier
+approvals. See [the CLI contract](../guide/12-cli-commands.md#explicit-serial-build-order-and-a-named-integrated-proof).
+
+Without an explicit plan, when skeleton-on applies, the first DAG Unit must be planned as the smallest
 working integrated slice. It completes its applicable per-unit stages before
 later Units even under stage-major. The engine then emits a `run-stage` with
 `construction_checkpoint`: `{kind, unit, stages, fingerprint, ready, verified,

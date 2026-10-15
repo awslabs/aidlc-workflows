@@ -331,4 +331,16 @@ describe("t168 statusline counts Units in a Unit walk", () => {
     expect(out).toContain("0/2");
     expect(out).not.toContain(" of 2 ");
   });
+
+  test("a named integrated proof counts as a completed Unit in progress", () => {
+    const state = seedWalk(proj, "unit-major", ["u1-note-store", "u2-note-tags"]);
+    const plan = JSON.stringify({ version: 1, units: ["u1-note-store", "u2-note-tags"], proof_unit: "u2-note-tags" });
+    writeFileSync(state, readFileSync(state, "utf8") + `\n- **Construction Plan**: ${plan}\n`);
+    const audit = join(dirname(state), "audit", "shard.md");
+    const body = readFileSync(audit, "utf8");
+    const last = body.lastIndexOf("Checkpoint**: construction-unit");
+    writeFileSync(audit, body.slice(0, last) + body.slice(last).replace("Checkpoint**: construction-unit", "Checkpoint**: walking-skeleton"));
+    const out = runStatusline(proj);
+    expect(out).not.toContain("Unit 2 of 2");
+  });
 });

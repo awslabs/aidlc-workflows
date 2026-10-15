@@ -41,6 +41,7 @@ import {
   reviewArtifactFingerprint, authorizedConstructionPolicyChange, auditBlockField, readAuditShardEvents, setField, unitCompletedReceipts,
   hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts, getField, REDO_REUSE_SOURCE,
   _resetScopeMappingForTests, constructionCheckpointGaps,
+  unitDependencyPath,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -133,6 +134,118 @@ function cover(p: string, unit: string, selected = stages, receipts = true) {
     }
   }
 }
+
+function namedPlanFixture(order = ["beta", "alpha"], proof = "alpha", dependencies?: Record<string, string[]>): string {
+  const p = fixture({ stance: "on" });
+  // These route fixtures exercise completion approval; summary interviews
+  // have their own suites and would require invented answers for every Unit.
+  writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf8").replace("## Runtime State", "## Runtime State\n- **Summary Confirmation**: off"));
+  const dependencyFile = unitDependencyPath(p);
+  mkdirSync(dirname(dependencyFile), { recursive: true });
+  writeFileSync(dependencyFile, "# Dependencies\n\n```yaml\nunits:\n" +
+    [...order].sort().map((unit) => `  - name: ${unit}\n    depends_on: [${(dependencies?.[unit] ?? []).join(", ")}]`).join("\n") + "\n```\n");
+  for (const unit of order) writeFileSync(join(p, "src", `${unit}.ts`), `export const ${unit} = 1;\n`);
+  policyHuman(p, "Use the explicit build order and named proof.");
+  const configured = policyCli(p, "state", ["set-construction-plan", "--proof", proof, "--units", order.join(",")]);
+  expect(configured.status, `${configured.stdout}${configured.stderr}`).toBe(0);
+  return p;
+}
+
+describe("explicit Construction plan routing", () => {
+  test("an untouched suffix can move while finished approvals remain recognized", () => {
+    const p = namedPlanFixture(["alpha", "beta", "gamma", "delta"], "beta");
+    cover(p, "alpha");
+    approve(p, "alpha");
+    cover(p, "beta");
+    approve(p, "beta", "skeleton");
+    policyHuman(p, "Build delta before gamma.");
+    const moved = policyCli(p, "state", ["set-construction-plan", "--proof", "beta", "--units", "alpha,beta,delta,gamma"]);
+    expect(moved.status, `${moved.stdout}${moved.stderr}`).toBe(0);
+    expect(routed(p).unit).toBe("delta");
+    const before = readFileSync(seededStateFile(p), "utf8");
+    policyHuman(p, "Move beta before alpha.");
+    const refused = policyCli(p, "state", ["set-construction-plan", "--proof", "beta", "--units", "beta,alpha,delta,gamma"]);
+    expect(refused.status).not.toBe(0);
+    expect(readFileSync(seededStateFile(p), "utf8")).toBe(before);
+  });
+
+  test("a scope change retires an incompatible inherited proof policy in its own write", () => {
+    const p = namedPlanFixture();
+    writeFileSync(seededStateFile(p), setField(readFileSync(seededStateFile(p), "utf8"), "Skeleton Stance", "scope-dependent"));
+    policyHuman(p, "Use express scope.");
+    const changed = policyCli(p, "utility", ["scope-change", "--scope", "express"]);
+    expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
+    const state = readFileSync(seededStateFile(p), "utf8");
+    expect(getField(state, "Scope")).toBe("express");
+    expect(getField(state, "Construction Plan")).toBe("retired");
+    expect(changed.stdout).toContain("retires");
+  });
+
+  test("direct completion checks reject incompatible persisted plan state", () => {
+    const p = namedPlanFixture();
+    const incompatible = setField(readFileSync(seededStateFile(p), "utf8"), "Construction Checkpoints", "disabled");
+    expect(() => constructionCheckpointGaps(p, incompatible, findStageBySlug("code-generation")!)).toThrow("explicit Construction plan");
+  });
+
+  test("walks all ten Units in the chosen order with the fourth as the proof", () => {
+    const order = ["u1", "u2", "u3", "u5", "u4", "u6", "u7", "u8", "u9", "u10"];
+    const p = namedPlanFixture(order, "u5", {
+      u1: [], u2: ["u1"], u3: ["u1"], u4: ["u3"], u5: ["u1", "u3"],
+      u6: ["u4", "u5"], u7: ["u6"], u8: ["u6"], u9: ["u7", "u8"], u10: ["u2", "u9"],
+    });
+    for (const unit of order) {
+      expect(routed(p).unit).toBe(unit);
+      cover(p, unit);
+      const directive = routed(p);
+      const checkpoint = directive.construction_checkpoint;
+      expect(checkpoint?.unit, JSON.stringify(directive)).toBe(unit);
+      expect(checkpoint?.kind).toBe(unit === "u5" ? "skeleton" : "unit");
+      approve(p, unit, unit === "u5" ? "skeleton" : "unit");
+    }
+    expect(routed(p).construction_policy?.completion_only).toBe(true);
+  });
+
+  test("a later in-progress Unit cannot displace the chosen first Unit", () => {
+    const p = namedPlanFixture();
+    appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: "alpha", Mode: "serial", "Run floor": latestMainWorkflowStageRunFloorForProject(p, "functional-design", true, "alpha") }, p);
+    expect(routed(p).unit).toBe("beta");
+  });
+
+  test("a paused prefix cannot be bypassed with set-aside", () => {
+    const p = namedPlanFixture();
+    const start = policyCli(p, "state", ["unit", "start", "--stage", "functional-design", "--unit", "beta"]);
+    expect(start.status, `${start.stdout}${start.stderr}`).toBe(0);
+    const pause = policyCli(p, "state", ["unit", "pause", "--stage", "functional-design", "--unit", "beta", "--reason", "waiting", "--next-action", "resume beta", "--set-aside-for", "alpha"]);
+    expect(pause.status, `${pause.stdout}${pause.stderr}`).toBe(0);
+    const result = routed(p);
+    expect(result.kind).not.toBe("run-stage");
+    expect(JSON.stringify(result)).toContain("beta");
+  });
+
+  test("retirement preserves evidence without granting approval or autonomy", () => {
+    const p = namedPlanFixture();
+    cover(p, "beta");
+    approve(p, "beta");
+    const before = readAuditShardEvents(p).filter((row) => row.event === "GATE_APPROVED").length;
+    policyHuman(p, "Retire this explicit plan.");
+    const result = policyCli(p, "state", ["set-construction-plan", "--retire"]);
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    expect(getField(readFileSync(seededStateFile(p), "utf8"), "Construction Plan")).toBe("retired");
+    expect(readAuditShardEvents(p).filter((row) => row.event === "GATE_APPROVED")).toHaveLength(before);
+    expect(routed(p).construction_policy?.offer_autonomy).toBe(false);
+  });
+
+  test("an explicit incompatible policy change retires the plan atomically", () => {
+    const p = namedPlanFixture();
+    policyHuman(p, "Switch to stage-major work.");
+    const result = policyCli(p, "state", ["set-construction-iteration", "stage-major"]);
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    const state = readFileSync(seededStateFile(p), "utf8");
+    expect(getField(state, "Construction Plan")).toBe("retired");
+    expect(getField(state, "Construction Iteration")).toBe("stage-major");
+    expect(`${result.stdout}`).toContain("retires");
+  });
+});
 
 // The step `next` routes, seen as a route check: it records nothing, so a
 // bookkeeping stage gate is seen as it is instead of being settled.

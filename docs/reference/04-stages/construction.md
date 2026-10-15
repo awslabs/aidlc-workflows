@@ -47,7 +47,10 @@ Existing workflows without the checkpoint setting keep the legacy first-stage
 review; their late stage approvals, like those of work with checkpoints off, come
 as one question.
 
-For eligible checkpoint work with skeleton-on, the first DAG Unit is the
+An [explicit serial Construction plan](../../guide/12-cli-commands.md#explicit-serial-build-order-and-a-named-integrated-proof)
+can name a proof after prerequisite Units. Every Unit through that proof keeps
+human completion approval, and the proof binds prerequisite evidence.
+Without that plan, for eligible checkpoint work with skeleton-on, the first DAG Unit is the
 smallest working integrated slice. It completes its applicable stages, including
 Code Generation, before later Units even with stage-major selected. Its real
 end-to-end project check must pass, and a human must approve that verified

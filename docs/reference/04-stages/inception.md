@@ -1078,7 +1078,10 @@ names) / **Request Changes**.
   defines the Units; `unit-of-work-dependency.md` is the DAG the Construction
   engine walks. New source-producing solo Unit workflows default to unit-major,
   serial execution with verified Unit checkpoints. When skeleton-on applies,
-  the first resolved DAG Unit must form the smallest working integrated slice.
+  the first resolved DAG Unit must form the smallest working integrated slice,
+  unless Delivery Planning records an explicit serial order and named proof
+  with `state set-construction-plan`. That optional plan preserves the real
+  DAG and requires human approval through the named proof.
   Explicit stage-major choices and legacy, design-only, and team-owned paths
   remain valid; the Bolt plan cannot reorder the actual DAG.
 - **2.7 is ALWAYS when in scope.** In the compiled scope grid, 2.7 and 2.9 travel
@@ -1399,7 +1402,9 @@ grouping or walk order. Runtime batches are computed from
 
 For new source-producing solo Unit workflows, the default is **unit-major,
 serial execution with verified checkpoints**. Each Unit finishes its applicable
-per-unit stages before the next. With skeleton-on, the first DAG Unit must
+per-unit stages before the next. An explicit serial Construction plan can name
+a later proof after prerequisites; see [the CLI contract](../../guide/12-cli-commands.md#explicit-serial-build-order-and-a-named-integrated-proof).
+Without that plan, with skeleton-on, the first DAG Unit must
 produce a working integrated slice, pass the recorded, human-authorized
 end-to-end verification command, and receive human skeleton approval before
 later Units start, even with stage-major chosen.

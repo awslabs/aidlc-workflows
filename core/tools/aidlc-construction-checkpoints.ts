@@ -3,6 +3,7 @@
  * the engine owns when to present a checkpoint and which Unit is the skeleton.
  */
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { constructionProofUnit, parseConstructionPlan, resolveConstructionPlan } from "./aidlc-construction-plan.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, readSync, rmdirSync, unlinkSync } from "node:fs";
@@ -14,7 +15,6 @@ import { APPROVAL_GATE_CHOICES, exactOptionPick } from "./aidlc-reply-reader.ts"
 import {
   activeIntentUuid,
   attemptEventDefinitelyBefore,
-  constructionSkeletonOn,
   auditBlockField,
   authorizedVerificationCommand,
   verificationCommandRecovery,
@@ -111,7 +111,7 @@ export function constructionCheckpointKind(
   unit: string,
   allUnits: readonly string[],
 ): ConstructionCheckpointKind {
-  return constructionSkeletonOn(stateContent) && unit === allUnits[0] ? "skeleton" : "unit";
+  return unit === constructionProofUnit(stateContent, allUnits) ? "skeleton" : "unit";
 }
 
 export interface ConstructionCheckpointProof {
@@ -145,6 +145,7 @@ export interface ConstructionCheckpoint {
   verified: boolean;
   approved: boolean;
   human_required: boolean;
+  prerequisite_fingerprint?: string;
   enabled: boolean;
   ready: boolean;
   errors: string[];
@@ -291,6 +292,7 @@ export interface ConstructionEvidence {
   lifecycle: Map<string, UnitLifecycleSnapshot>;
   receipts: Map<string, FreshReviewReceipts>;
   approvedUnits?: Set<string>;
+  planCheckpoints?: Map<string, ConstructionCheckpoint>;
 }
 
 export function loadConstructionEvidence(projectDir: string, stateContent?: string): ConstructionEvidence {
@@ -653,6 +655,7 @@ function snapshot(
   stateContent?: string,
   sharedEvidence?: ConstructionEvidence,
   personAllows = false,
+  historicalProofBinding?: string,
 ): Snapshot {
   const unitError = validateUnitName(unit);
   if (unitError) throw new Error(unitError);
@@ -665,6 +668,37 @@ function snapshot(
     throw new Error(`Unit "${unit}" is not in the authoritative unit DAG.`);
   }
   const errors: string[] = [];
+  const prefixErrors: string[] = [];
+  const plan = resolveConstructionPlan(projectDir, state, dag);
+  let prerequisiteFingerprint: string | undefined = historicalProofBinding;
+  if (plan.custom) {
+    const canonical = constructionCheckpointKind(state, unit, plan.units);
+    if (kind !== canonical) throw new Error(`Unit "${unit}" requires the ${canonical} checkpoint.`);
+    const preceding = plan.units.slice(0, plan.units.indexOf(unit));
+    const prior = new Map<string, ConstructionCheckpoint>();
+    for (const name of preceding) {
+      const checkpoint = resolveConstructionCheckpoint(projectDir, name, constructionCheckpointKind(state, name, plan.units), state, shared);
+      prior.set(name, checkpoint);
+      if (!checkpoint.approved || (name === plan.proofUnit && !checkpoint.verified)) {
+        prefixErrors.push(`Complete and approve "${name}" before "${unit}". A skipped Unit does not supply a passing checkpoint; revise or retire the explicit plan if that was intentional.`);
+      }
+    }
+    if (unit === plan.proofUnit) {
+      const ancestors = new Set<string>();
+      const visit = (name: string): void => {
+        for (const dependency of plan.dependencies.find((entry) => entry.name === name)?.depends_on ?? []) {
+          if (ancestors.has(dependency)) continue;
+          ancestors.add(dependency);
+          visit(dependency);
+        }
+      };
+      visit(unit);
+      for (const dependency of ancestors) {
+        if (!prior.get(dependency)?.approved) errors.push(`The integrated proof needs the current approved result of "${dependency}".`);
+      }
+      prerequisiteFingerprint = digest([...ancestors].sort().map((name) => [name, prior.get(name)?.fingerprint ?? null]));
+    }
+  }
   const enabled = checkpointPolicyEnabled(state);
   if (!enabled) errors.push("Construction Checkpoints: enabled requires solo Units with an in-scope source-producing stage.");
   if (stages.length === 0) errors.push("No applicable per-unit Construction stages.");
@@ -672,7 +706,8 @@ function snapshot(
   const autonomous = isAutonomousMode(state) &&
     grant?.event === "AUTONOMY_MODE_SET" &&
     auditBlockField(grant.block, "Mode") === "autonomous";
-  const humanRequired = kind === "skeleton" || !autonomous;
+  const humanRequired = kind === "skeleton" || !autonomous ||
+    (plan.custom && plan.units.indexOf(unit) <= plan.units.indexOf(plan.proofUnit!));
   const floors: Record<string, string> = {};
   const evidence: unknown[] = [];
   // Said after the stages, in this place: under relaxed and off a review that
@@ -1053,6 +1088,7 @@ function snapshot(
     workflow: workflow ? digest(workflow.block) : null,
     claim: claimAttemptFields(projectDir, unit),
     stages: stagesEvidence,
+    ...(prerequisiteFingerprint ? { prerequisites: prerequisiteFingerprint } : {}),
   });
   const fresh = fingerprintFor(record);
   // The same evidence as it was recorded before: Windows wrote the record
@@ -1066,7 +1102,10 @@ function snapshot(
     fingerprintFor(olderRecord), fingerprintFor(record, rawEvidence), fingerprintFor(olderRecord, rawEvidence),
   ]);
   olderForms.delete(fresh);
-  const kept = fingerprintKeptOverScopeChange(rows, workflow, unit, kind, fresh, stages, approvedEvidence, floors);
+  const prerequisiteBindingMatches = prerequisiteFingerprint === undefined ||
+    (gate !== null && auditBlockField(gate.block, "Proof Prerequisites") === prerequisiteFingerprint);
+  const kept = prerequisiteBindingMatches
+    ? fingerprintKeptOverScopeChange(rows, workflow, unit, kind, fresh, stages, approvedEvidence, floors) : null;
   const fingerprint = kept !== null && !olderForms.has(kept) ? kept : fresh;
   const isFingerprint = (value: string | null | undefined): boolean =>
     value === fingerprint || (value !== null && value !== undefined && olderForms.has(value));
@@ -1102,7 +1141,7 @@ function snapshot(
     auditBlockField(gate.block, "Run floor") === floors[stages.at(-1)!] &&
     eventMatchesClaimAttempt(projectDir, gate.block, unit) &&
     (auditBlockField(gate.block, "User Input") === "Approve" ||
-      (kind !== "skeleton" && auditBlockField(gate.block, "Autonomous") === "true"));
+      ((plan.custom ? !humanRequired : kind !== "skeleton") && auditBlockField(gate.block, "Autonomous") === "true"));
   const gateApproved = gateApprovedWith(proof?.command_sha256);
   // A Unit approved under an earlier verification command keeps its approval
   // when the person approves a new command: the new one checks the Units
@@ -1129,7 +1168,35 @@ function snapshot(
       };
     }
   }
-  if (!approved && approvalKeptOverScopeChange(rows, workflow, unit, stages, approvedEvidence, floors)) approved = true;
+  if (!approved && prerequisiteBindingMatches &&
+    (!plan.custom || (!humanRequired || (gate !== null && auditBlockField(gate.block, "User Input") === "Approve"))) &&
+    approvalKeptOverScopeChange(rows, workflow, unit, stages, approvedEvidence, floors)) approved = true;
+  // A retained approval is not a newly passing integrated check. The named
+  // proof needs both facts, even when the person's policy accepts changes.
+  if (plan.custom && (!ready || (unit === plan.proofUnit && !verified))) approved = false;
+  // Retirement narrows the old integrated approval to ordinary completion.
+  // Read its identity and own evidence without reactivating its old schedule.
+  // It never answers a new skeleton obligation or writes translated receipts.
+  if (!approved && !plan.custom && kind === "unit" && proof === null && ready) {
+    const policy = onlyLatest(rows.filter((row) => row.event === "WORKFLOW_STARTED" ||
+      (row.event === "CONSTRUCTION_POLICY_SET" && auditBlockField(row.block, "Field") === "Construction Plan")));
+    if (policy?.event === "CONSTRUCTION_POLICY_SET" && workflow &&
+      attemptEventDefinitelyBefore(workflow, policy) && auditBlockField(policy.block, "Value") === "retired") {
+      let retiredPlan = null;
+      try { retiredPlan = parseConstructionPlan(auditBlockField(policy.block, "Previous Value")); } catch { /* Malformed history confers no authority. */ }
+      if (retiredPlan?.proof_unit === unit) {
+        const oldGate = onlyLatest(rows.filter((row) => row.event === "WORKFLOW_STARTED" ||
+          ((row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED") &&
+            auditBlockField(row.block, "Unit") === unit && auditBlockField(row.block, "Checkpoint") === "walking-skeleton")));
+        const binding = oldGate ? auditBlockField(oldGate.block, "Proof Prerequisites") : null;
+        if (oldGate?.event === "GATE_APPROVED" && binding && /^sha256:[0-9a-f]{64}$/.test(binding) &&
+          attemptEventDefinitelyBefore(oldGate, policy)) {
+          const historical = snapshot(projectDir, unit, "skeleton", state, shared, personAllows, binding).result;
+          if (historical.approved && historical.verified) approved = true;
+        }
+      }
+    }
+  }
   const approvedBefore = gate?.event === "GATE_APPROVED" && auditBlockField(gate.block, "Unit") === unit &&
     auditBlockField(gate.block, "Run floor") === floors[stages.at(-1)!];
   // The person chose Redo for one of this Unit's stages after approving it, and
@@ -1154,7 +1221,8 @@ function snapshot(
     waivedStages: notFinished,
     result: {
       kind, unit, stages, fingerprint, verified, approved,
-      human_required: humanRequired, enabled, ready, errors,
+      human_required: humanRequired, enabled, ready: ready && prefixErrors.length === 0, errors: [...errors, ...prefixErrors],
+      ...(prerequisiteFingerprint ? { prerequisite_fingerprint: prerequisiteFingerprint } : {}),
       verification_command: shared.verificationCommand?.label ?? null,
       command_authorized: shared.verificationCommand !== null,
       ...(unfinishedStages.length > 0 ? {
@@ -1180,7 +1248,16 @@ export function resolveConstructionCheckpoint(
   stateContent?: string,
   evidence?: ConstructionEvidence,
 ): ConstructionCheckpoint {
-  return snapshot(projectDir, unit, kind, stateContent, evidence).result;
+  const reusable = evidence && evidence.state === stateContent && evidence.root === recordDir(projectDir) ? evidence : undefined;
+  const key = `${unit}:${kind}`;
+  const cached = reusable?.planCheckpoints?.get(key);
+  if (cached) return cached;
+  const result = snapshot(projectDir, unit, kind, stateContent, evidence).result;
+  if (reusable) {
+    reusable.planCheckpoints ??= new Map();
+    reusable.planCheckpoints.set(key, result);
+  }
+  return result;
 }
 
 /**
@@ -1461,6 +1538,7 @@ function gateFields(
     "Gate Scope": "unit-end",
     Checkpoint: checkpointName(checkpoint.kind),
     Fingerprint: checkpoint.fingerprint,
+    ...(checkpoint.prerequisite_fingerprint ? { "Proof Prerequisites": checkpoint.prerequisite_fingerprint } : {}),
     "Run floor": checkpoint.run_floor,
     "Run floors": JSON.stringify(checkpoint.run_floors),
     ...(checkpoint.verification ? { "Verification Command SHA-256": checkpoint.verification.command_sha256 } : {}),

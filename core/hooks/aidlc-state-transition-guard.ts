@@ -30,6 +30,7 @@ export const DELEGATED_STATE_MUTATIONS = new Set([
   ...ENGINE_OWNED_STATE_TRANSITIONS,
   "set-skeleton-stance",
   "set-construction-iteration",
+  "set-construction-plan",
   "set-construction-checkpoints",
   "set-construction-execution",
   "set-construction-verification-command",

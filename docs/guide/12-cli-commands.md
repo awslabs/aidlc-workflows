@@ -1965,6 +1965,45 @@ before later Units, even with stage-major selected. A first design-stage
 review alone does not prove a working skeleton. Already approved inline Units
 are excluded from later swarm batches.
 
+### Explicit serial build order and a named integrated proof
+
+Before Unit work starts, a team can keep the real dependency graph and record
+a different valid serial order, with the integrated proof after prerequisites:
+
+```bash
+aidlc engine state set-construction-plan --proof tuner --units foundation,tracking,values,tuner,storage
+```
+
+Use the actual Unit directory names, each exactly once. This optional plan
+requires solo, serial, unit-major execution, enabled checkpoints and skeleton-on.
+The setter checks every dependency under the state lock. Every Unit through
+the named proof requires a human completion approval, including when an earlier
+autonomy grant exists. The proof needs a passing, authorized check and human
+approval, bound to its own and its transitive prerequisites' effective evidence.
+Existing Guard Policy governs accepted changes; a preserved approval alone
+does not invent a passing verification.
+
+The plan is recorded in version-controlled state and `CONSTRUCTION_POLICY_SET`
+audit history. Restarting or changing agents retains it. Normal routing follows
+its prefix exactly: pausing a Unit does not start another one behind it. A skip
+or jump remains the person's decision but cannot count as a successful proof.
+Reconcile an unsatisfied plan before continuing normal execution. After work
+starts, only its untouched suffix may be reordered; changing the proof identity
+requires replanning. Generic `state set` cannot write `Construction Plan`.
+
+To return to default dependency order explicitly:
+
+```bash
+aidlc engine state set-construction-plan --retire
+```
+
+Retirement preserves all work and audit evidence and grants neither approval
+nor autonomy. A separately requested incompatible execution policy (such as
+stage-major or team ownership) retires the optional plan in the same state
+write, with a notice. Missing or incompatible externally edited state/DAG data
+never silently falls back to the default order. Work without an explicit plan
+keeps the first-DAG-unit behavior documented above.
+
 ### `aidlc engine swarm prepare` - prepare a reproducible batch
 
 Before initial protected Code Generation prepare, commit the already-approved

@@ -1,4 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { constructionProofUnit, parseConstructionPlan, resolveConstructionPlan } from "./aidlc-construction-plan.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
@@ -12887,6 +12888,9 @@ export function constructionCheckpointGaps(
   evidence?: ConstructionEvidence,
 ): string[] | null {
   const scope = getField(stateContent, "Scope") ?? "";
+  if (stage.phase === "construction" && parseConstructionPlan(getField(stateContent, "Construction Plan"))) {
+    resolveConstructionPlan(projectDir, stateContent, evidence?.dag);
+  }
   if (
     stage.phase !== "construction" ||
     !constructionCheckpointsApply(stateContent) ||
@@ -12931,8 +12935,8 @@ export function constructionCheckpointGaps(
     if (stage.for_each !== "unit-of-work" && unitMajorConstructionStageSlugs(scope, stateContent).length === 0) {
       return [];
     }
-    const first = dag.batches.flat()[0];
-    return approved.has(first) ? [] : [`skeleton Unit "${first}"`];
+    const proof = constructionProofUnit(stateContent, dag.batches.flat());
+    return proof !== null && approved.has(proof) ? [] : [`skeleton Unit "${proof}"`];
   }
   return [];
 }
@@ -12977,10 +12981,11 @@ export function approvedConstructionUnits(
   if (evidence.approvedUnits) return evidence.approvedUnits;
   const dag = evidence.dag;
   if (dag.state !== "ok") return approved;
-  const skeleton = constructionSkeletonOn(stateContent) ? dag.batches.flat()[0] : null;
-  for (const unit of dag.units) {
+  const plan = resolveConstructionPlan(projectDir, stateContent, dag);
+  const skeleton = plan.proofUnit;
+  for (const unit of plan.units) {
     // It owes no checkpoint, so it stands where an approved one does.
-    if (unitSkippedItsCode(projectDir, stateContent, unit)) {
+    if (!plan.custom && unitSkippedItsCode(projectDir, stateContent, unit)) {
       approved.add(unit);
       continue;
     }
@@ -13156,6 +13161,8 @@ export function validConstructionPolicyChange(field: string, value: string): boo
     case "Construction Checkpoints": return value === "enabled" || value === "disabled";
     case "Construction Execution": return value === "serial" || value === "swarm";
     case "Construction Iteration": return value === "unit-major" || value === "stage-major";
+    case "Construction Plan":
+      try { parseConstructionPlan(value); return true; } catch { return false; }
     default: return false;
   }
 }
@@ -30921,7 +30928,7 @@ export function isAutonomousSwarmStage(
     const dag = resolveBoltDag(projectDir);
     if (
       dag.state !== "ok" || dag.units.length === 0 ||
-      !approvedConstructionUnits(projectDir, stateContent!, evidence).has(dag.batches.flat()[0])
+      !approvedConstructionUnits(projectDir, stateContent!, evidence).has(constructionProofUnit(stateContent!, dag.batches.flat()) ?? "")
     ) return false;
   }
   const resolution = resolveBoltDag(projectDir);
@@ -36506,7 +36513,7 @@ function stageStartsUnderUnitFlooring(
 function constructionPolicyRowComplete(row: AuditShardEvent): boolean {
   const field = auditBlockField(row.block, "Field");
   return (field === "Construction Iteration" || field === "Construction Checkpoints" ||
-      field === "Construction Execution") &&
+      field === "Construction Execution" || field === "Construction Plan") &&
     !!auditBlockField(row.block, "Value") &&
     !!auditBlockField(row.block, "Previous Value") &&
     !!auditBlockField(row.block, "Construction Iteration") &&

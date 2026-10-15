@@ -1,4 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { constructionProofUnit, parseConstructionPlan, reconcileConstructionPlanPolicy, resolveConstructionPlan, validateConstructionPlanRevision } from "./aidlc-construction-plan.ts";
 import { CHECKPOINT_GLOSS } from "./aidlc-guard-fences.ts";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -904,6 +905,7 @@ export function main(argv: string[]): void {
       "set",
       "set-skeleton-stance",
       "set-construction-iteration",
+      "set-construction-plan",
       "set-construction-checkpoints",
       "set-construction-execution",
       "set-construction-verification-command",
@@ -946,6 +948,9 @@ export function main(argv: string[]): void {
         break;
       case "set-construction-iteration":
         handleSetConstructionIteration(args.slice(1));
+        break;
+      case "set-construction-plan":
+        handleSetConstructionPlan(args.slice(1));
         break;
       case "set-construction-checkpoints":
         handleSetConstructionPolicy("Construction Checkpoints", args.slice(1));
@@ -1036,7 +1041,7 @@ export function main(argv: string[]): void {
         break;
       default:
         error(
-          `Unknown subcommand: ${subcommand}. Valid: get, set, set-skeleton-stance, set-construction-iteration, set-construction-checkpoints, set-construction-execution, set-construction-verification-command, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
+          `Unknown subcommand: ${subcommand}. Valid: get, set, set-construction-plan, set-skeleton-stance, set-construction-iteration, set-construction-checkpoints, set-construction-execution, set-construction-verification-command, set-unit-ownership, set-unit-gate-rhythm, refresh-unit-progress, sync-unit-scope-stage, fold-unit-merge, checkbox, count, advance, finalize, complete-workflow, gate-start, approve, reject, revise, skip, resume, acknowledge-compaction, reuse-artifact, lookup, practices-event, practices-promote, fork, merge, unit, park, unpark`
         );
     }
   } catch (e) {
@@ -1137,6 +1142,9 @@ function handleSet(args: string[]): void {
       case "Construction Iteration":
         setter = "set-construction-iteration <unit-major|stage-major>";
         break;
+      case "Construction Plan":
+        setter = "set-construction-plan --proof <unit> --units <comma-separated-units>";
+        break;
       case "Construction Verification Command":
         setter = 'set-construction-verification-command --command-file verification-command.txt';
         break;
@@ -1231,6 +1239,47 @@ function setConstructionPolicyField(content: string, field: string, value: strin
   return setOrInsertField(content, "## Runtime State", field, value);
 }
 
+function handleSetConstructionPlan(args: string[]): void {
+  let value: string;
+  if (args.length === 1 && args[0] === "--retire") value = "retired";
+  else if (args.length === 4 && args[0] === "--proof" && args[2] === "--units") {
+    value = JSON.stringify({ version: 1, units: args[3].split(","), proof_unit: args[1] });
+    parseConstructionPlan(value);
+  } else {
+    error("Usage: aidlc-state.ts set-construction-plan --proof <unit> --units <comma-separated-units>, or --retire.");
+  }
+  const pd = resolveProjectDir(projectDir);
+  withAuditLock(pd, () => {
+    const before = readStateFile(pd);
+    const after = setOrInsertField(before, "## Runtime State", "Construction Plan", value);
+    validateConstructionPlanRevision(pd, before, after);
+    if (before !== after) {
+      const words = requireHumanConstructionPolicyChange(pd, before, "Construction Plan", value);
+      emitConstructionPolicySet(pd, before, after, "Construction Plan", value, words);
+    }
+    writeStateFile(pd, after);
+    keepPlanQuestionOver(pd, before, after);
+    console.log(JSON.stringify({ updated: true, construction_plan: parseConstructionPlan(value),
+      ...(value === "retired" ? { notice: "The explicit build order and named proof are retired. Dependency order applies; recorded work and approvals remain. No verification or autonomy was granted." } : {}),
+    }));
+  });
+}
+
+// An explicit change of execution policy can retire the optional plan in the
+// same locked write. It does not reinterpret any ordinary approval as proof.
+function planCompatiblePolicyChange(pd: string, before: string, candidate: string, authority?: { words: string | null }): { state: string; retirement: string | null } {
+  if (parseConstructionPlan(getField(before, "Construction Plan")) === null) return { state: candidate, retirement: null };
+  const change = reconcileConstructionPlanPolicy(before, candidate);
+  if (change.audit.length === 0) {
+    resolveConstructionPlan(pd, candidate);
+    return { state: candidate, retirement: null };
+  }
+  const words = authority ? authority.words : requireHumanConstructionPolicyChange(pd, before, "Construction Plan", "retired");
+  const state = change.content;
+  emitConstructionPolicySet(pd, before, state, "Construction Plan", "retired", words);
+  return { state, retirement: change.lines[0] };
+}
+
 // These typed setters change runtime preferences, like the existing iteration
 // setter; they cannot mutate lifecycle fields or grant autonomy.
 function handleSetConstructionPolicy(field: string, args: string[]): void {
@@ -1238,15 +1287,17 @@ function handleSetConstructionPolicy(field: string, args: string[]): void {
   const pd = resolveProjectDir(projectDir);
   withAuditLock(pd, () => {
     const content = readStateFile(pd);
-    const updated = setConstructionPolicyField(content, field, args[0]);
+    const candidate = setConstructionPolicyField(content, field, args[0]);
+    const words = candidate !== content ? requireHumanConstructionPolicyChange(pd, content, field, args[0]) : null;
+    const change = planCompatiblePolicyChange(pd, content, candidate, { words });
+    const updated = change.state;
     if (updated !== content) {
-      const words = requireHumanConstructionPolicyChange(pd, content, field, args[0]);
       emitConstructionPolicySet(pd, content, updated, field, args[0], words);
       if (field === "Construction Execution" && args[0] === "serial") closePreparedBolts(pd, updated);
     }
     writeStateFile(pd, updated);
     keepPlanQuestionOver(pd, content, updated);
-    console.log(JSON.stringify({ updated: true, field, value: args[0], ...constructionPolicyNotice(content, updated, field) }));
+    console.log(JSON.stringify({ updated: true, field, value: args[0], ...constructionPolicyNotice(content, updated, field), ...(change.retirement ? { plan_notice: change.retirement } : {}) }));
   });
 }
 
@@ -1387,14 +1438,15 @@ function handleSetSkeletonStance(args: string[]): void {
   // unrelated field must not lose this stance write, nor vice versa).
   withAuditLock(pd, () => {
   const content = readStateFile(pd);
-  const updated = setOrInsertField(
+  const candidate = setOrInsertField(
     content,
     "## Runtime State",
     "Skeleton Stance",
     stance,
   );
-  writeStateFile(pd, updated);
-  console.log(JSON.stringify({ updated: true, skeleton_stance: stance }));
+  const change = planCompatiblePolicyChange(pd, content, candidate);
+  writeStateFile(pd, change.state);
+  console.log(JSON.stringify({ updated: true, skeleton_stance: stance, ...(change.retirement ? { plan_notice: change.retirement } : {}) }));
   });
 }
 
@@ -1440,20 +1492,22 @@ function handleSetConstructionIteration(args: string[]): void {
   ) {
     error("Select Construction Execution: serial before switching to unit-major iteration.");
   }
-  const updated = setOrInsertField(
+  const candidate = setOrInsertField(
     content,
     "## Runtime State",
     "Construction Iteration",
     value,
   );
+  const words = candidate !== content ? requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value) : null;
+  const change = planCompatiblePolicyChange(pd, content, candidate, { words });
+  const updated = change.state;
   if (updated !== content) {
-    const words = requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value);
     emitConstructionPolicySet(pd, content, updated, "Construction Iteration", value, words);
   }
   writeStateFile(pd, updated);
   keepPlanQuestionOver(pd, content, updated);
   console.log(JSON.stringify({
-    updated: true, construction_iteration: value, ...constructionPolicyNotice(content, updated, "Construction Iteration"),
+    updated: true, construction_iteration: value, ...constructionPolicyNotice(content, updated, "Construction Iteration"), ...(change.retirement ? { plan_notice: change.retirement } : {}),
   }));
   });
 }
@@ -1619,9 +1673,6 @@ function handleSetUnitOwnership(args: string[]): void {
         setOrInsertField(content, "## Runtime State", "Construction Iteration", "unit-major"),
       );
     }
-    for (const change of switches) {
-      emitConstructionPolicySet(pd, change.from, change.to, change.field, change.value, change.words);
-    }
     content = setOrInsertField(
       content,
       "## Runtime State",
@@ -1629,6 +1680,11 @@ function handleSetUnitOwnership(args: string[]): void {
       value,
     );
     if (value === "solo") content = removeUnitProgressSection(content);
+    const planChange = planCompatiblePolicyChange(pd, before, content);
+    content = planChange.state;
+    for (const change of switches) {
+      emitConstructionPolicySet(pd, change.from, change.to, change.field, change.value, change.words);
+    }
     emitAudit(pd, "UNIT_OWNERSHIP_SET", { Mode: value });
     writeStateFile(pd, content);
     if (switches.length > 0) keepPlanQuestionOver(pd, before, content);
@@ -1642,6 +1698,7 @@ function handleSetUnitOwnership(args: string[]): void {
     console.log(JSON.stringify({
       updated: true,
       unit_ownership: value,
+      ...(planChange.retirement ? { plan_notice: planChange.retirement } : {}),
       ...(notice !== "" ? { notice } : {}),
       ...(value === "team" && current !== "team"
         ? { unit_end_gates_command: `${aidlcToolInvocation("state")} set-unit-gate-rhythm unit-end` }
@@ -2578,6 +2635,15 @@ function handleUnit(args: string[]): void {
       error(`Refusing unit pause for "${unit}": "${setAsideFor}" is not in the authoritative unit DAG.`);
     }
 
+    if (["start", "resume", "complete"].includes(action)) {
+      const plan = resolveConstructionPlan(pd, content, resolution);
+      if (plan.custom) {
+        const approved = approvedConstructionUnits(pd, content);
+        const missing = plan.units.slice(0, plan.units.indexOf(unit)).find((name) => !approved.has(name));
+        if (missing) error(`Complete and approve "${missing}" before recording work for "${unit}", or revise the explicit Construction plan.`);
+      }
+    }
+
     const open = unitOpenCheckpoints(pd, slug);
     const checkpoint = open[0] ?? null;
     // The person picked recording this receipt on the gate's recovery ask.
@@ -3271,7 +3337,7 @@ function autonomousSwarmOwnsStage(
     if (constructionSkeletonOn(stateContent)) {
       const dag = resolveBoltDag(pd);
       return dag.state === "ok" && dag.units.length > 0 &&
-        approvedConstructionUnits(pd, stateContent).has(dag.batches.flat()[0]);
+        approvedConstructionUnits(pd, stateContent).has(constructionProofUnit(stateContent, dag.batches.flat()) ?? "");
     }
     return true;
   }

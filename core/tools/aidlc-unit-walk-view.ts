@@ -1,6 +1,7 @@
 // What a person reads about a Unit-by-Unit walk, shared by the status line hook
 // and `/aidlc --status`. No aidlc-lib import: the status line runs on every
-// render, so this stays a few file reads.
+// render, so ordinary work stays a few file reads. Explicit plans load their
+// shared parser only when their state field is present.
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -38,16 +39,20 @@ function plannedUnits(recordDir: string): string[] {
 export function unitProgress(
   recordDir: string,
   constructionIteration: string,
+  constructionPlan?: string | null,
 ): { current: number; total: number } | null {
   if (constructionIteration.trim() !== "unit-major") return null;
   try {
-    const units = plannedUnits(recordDir);
+    const plan = constructionPlan && constructionPlan !== "retired"
+      ? (require("./aidlc-construction-plan.ts") as typeof import("./aidlc-construction-plan.ts")).parseConstructionPlan(constructionPlan)
+      : null;
+    const units = plan?.units ?? plannedUnits(recordDir);
     if (units.length === 0) return null;
     const rows: Array<{ at: string; approved: boolean; unit: string }> = [];
     const auditDir = join(recordDir, "audit");
     for (const name of readdirSync(auditDir).filter((file) => file.endsWith(".md"))) {
       for (const entry of readFileSync(join(auditDir, name), "utf-8").split(/\n## /)) {
-        if (!/^\*\*Checkpoint\*\*: construction-unit$/m.test(entry)) continue;
+        if (!/^\*\*Checkpoint\*\*: (?:construction-unit|walking-skeleton)$/m.test(entry)) continue;
         const event = /^\*\*Event\*\*:\s*(\S+)/m.exec(entry)?.[1] ?? "";
         if (event !== "GATE_APPROVED" && event !== "GATE_REJECTED") continue;
         const unit = /^\*\*Unit\*\*:\s*(.+)$/m.exec(entry)?.[1]?.trim() ?? "";

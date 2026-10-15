@@ -1,4 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { reconcileConstructionPlanPolicy } from "./aidlc-construction-plan.ts";
 import { hasStoredMessages } from "./aidlc-message-store.ts";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -2171,7 +2172,7 @@ To get started:
     // finishes a stage, so while a Unit is open the count is of Units: the one
     // the person is on, of those planned (the status line counts the same way).
     const units = p === "construction"
-      ? unitProgress(dirname(sp), getField(content, "Construction Iteration") ?? "")
+      ? unitProgress(dirname(sp), getField(content, "Construction Iteration") ?? "", getField(content, "Construction Plan"))
       : null;
     const phaseSkipped = phaseCheckboxes.filter((c) => c.state === "skipped").length;
     const count = units
@@ -11883,6 +11884,10 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         ...(keptPolicyLine === null ? [] : [keptPolicyLine]),
       ];
     }
+    const constructionPlanChange = reconcileConstructionPlanPolicy(contentBefore, content);
+    content = constructionPlanChange.content;
+    auditEntries.push(...constructionPlanChange.audit);
+    outputLines.push(...constructionPlanChange.lines);
     if (content !== contentBefore) {
       try {
         if (auditEntries.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();
@@ -12268,6 +12273,8 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
         })
       : { content, audit: [], lines: [] };
     content = setField(settingsUpdate.content, "Last Updated", isoTimestamp());
+    const constructionPlanChange = reconcileConstructionPlanPolicy(before, content);
+    content = constructionPlanChange.content;
 
     // Audit first, as config-change does, in one batch: a failed append leaves
     // the plan and its settings untouched and records none of them.
@@ -12283,6 +12290,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
         },
       },
       ...settingsUpdate.audit,
+      ...constructionPlanChange.audit,
     ], projectDir, flags.intent, flags.space);
 
     writeStateFile(projectDir, content, flags.intent, flags.space);
@@ -12299,7 +12307,7 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
         `Stages in scope: ${executeStages.length}\n` +
         `Completed: ${completedCount}/${executeStages.length}\n` +
         (droppedUnitWork === null ? "" : `${droppedUnitWork}\n`) +
-        settingsUpdate.lines.map((line) => `${line}\n`).join(""),
+        [...settingsUpdate.lines, ...constructionPlanChange.lines].map((line) => `${line}\n`).join(""),
     );
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
@@ -12564,6 +12572,10 @@ function writeSettings(
       personWords: options.personWords, notTheirs: options.notTheirs,
       ...(options.fail ? { fail: options.fail } : {}),
     });
+    const constructionPlanChange = reconcileConstructionPlanPolicy(content, update.content);
+    update.content = constructionPlanChange.content;
+    update.audit.push(...constructionPlanChange.audit);
+    update.lines.push(...constructionPlanChange.lines);
     if (update.content !== content) {
       if (update.audit.some((entry) => entry.eventType === "GUARD_POLICY_SET")) assertChangeControlLedgerWritable();
       // A name-only rename or removal of an agreeing retired line records nothing.

@@ -81,7 +81,10 @@ or a reply from another session. Never write `--details "Approve"` unless the hu
 
 Checkpoint policy requires solo ownership, an actual non-empty Unit DAG, and
 an included source-producing per-unit stage. Design-only and no-Unit work keep
-their existing stage flow. Under skeleton-on, plan the first DAG Unit as the
+their existing stage flow. An explicit serial Construction plan can select a
+named proof after prerequisites; it is unsupported for team, swarm or stage-major
+execution. See [the CLI contract](../guide/12-cli-commands.md#explicit-serial-build-order-and-a-named-integrated-proof).
+Without that optional plan, under skeleton-on, plan the first DAG Unit as the
 smallest working integrated slice. It completes all applicable per-unit design stages and Code
 Generation, passes a real end-to-end check, and receives human skeleton approval
 before later Units start, even with stage-major selected. A first design-stage
