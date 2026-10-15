@@ -251,7 +251,10 @@ particular record.
 Session identity follows one order:
 
 1. The host session id delivered to a hook.
-2. A valid `AIDLC_SESSION_OVERRIDE` inherited from the harness process.
+2. A valid `AIDLC_SESSION_OVERRIDE` inherited from the harness process, or the
+   one AI-DLC's opencode plugin gives each shell command for the chat it runs
+   in (opencode's `shell.env` hook), so two chats in one opencode window each
+   act on their own work.
 3. The chat the host names in the agent's own shell: Codex's `CODEX_THREAD_ID`,
    Claude Code's `CLAUDE_CODE_SESSION_ID` while the process its `CLAUDE_PID`
    names is alive, or Kiro CLI's `KIRO_SESSION_ID`. A shell kept open after its
@@ -318,7 +321,9 @@ creation times, and parent PIDs identify the owning session within the same
 2-second / 64-ancestor limit as Linux and macOS. Reused PID generations and unverified ancestry do not
 select a session.
 Shared-process harnesses still cannot distinguish chats that use one process,
-including Kiro IDE multi-chat and multi-session opencode. Children of payload-bearing hooks follow
+including Kiro IDE multi-chat. In multi-session opencode the shell commands carry
+their chat (item 2), but a file write's audit row and sensors, and the to-do
+list sync, still go by the process. Children of payload-bearing hooks follow
 the payload session; tools without that parent still fall back to the shared
 cursors when ancestry is unavailable unless the harness process has a valid
 `AIDLC_SESSION_OVERRIDE`.
