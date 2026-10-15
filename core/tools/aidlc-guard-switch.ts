@@ -85,7 +85,6 @@ export const VALID_TEST_STRATEGIES: Record<string, string> = {
   comprehensive: "Comprehensive",
 };
 
-// The per-run fence switches read as config keys: `guard.plan-approval` and so on.
 const GUARD_FENCE_CONFIG_KEYS = SWITCHABLE_GUARD_FENCES.map((fence) => guardFenceConfigKey(fence)) as
   ["guard.plan-approval", "guard.review-freeze", "guard.state-transition", "guard.reviewer-scope"];
 export const CONFIG_KEYS = [
@@ -231,8 +230,6 @@ function setCeremonyField(content: string, key: CeremonyKey, value: CeremonySett
   return setField(content, field, formatCeremony(value, source));
 }
 
-// Pure state transformation plus audit/output preparation. CLI setters call this
-// under the intent lock and commit audit before state.
 // The same setting typed as this engine's own setter command carries none of
 // `next`'s flags for the message record to hold, so the dispatcher that owns
 // the command's shape is asked what their line named: `config set <key> <value>
@@ -306,7 +303,6 @@ export function settingTheirs(
     const lines = listMessages(projectDir).filter((message) =>
       message.session === chat && (spentAt === null || message.at >= spentAt));
     if (latest !== null && !lines.some((message) => message.id === latest.id)) lines.push(latest);
-    // Plan approval has two names for one switch.
     const names = key === "plan-approval" || key === "guard.plan-approval" ? ["plan-approval", "guard.plan-approval"] : [key];
     if (lines.some((message) => message.settings.some((setting) => names.includes(setting.key) && setting.value === value) ||
       names.some((name) => setterCommandNames(message.text, name, value)))) {
@@ -504,9 +500,9 @@ export function applyIntentSettings(
   // A command the person ran at their own terminal carries itself: this rule
   // protects them from a worker lowering a check on their behalf, and it has no
   // business standing in front of what they typed. An agent's tool call arrives
-  // with pipes and no chat identity on it, and is refused exactly as before, and
-  // so is one run in a terminal a host opened for its agent (Copilot in VS Code,
-  // Kiro IDE, Cursor), where the line says which chat to ask in.
+  // with pipes and no chat identity on it, and is refused, and so is one run in
+  // a terminal a host opened for its agent (Copilot in VS Code, Kiro IDE,
+  // Cursor), where the line says which chat to ask in.
   // `commandAtPersonsTerminal` owns that test for the refusal and the record alike.
   // The person's own settings here are the checks this command lowers and every
   // other setting requested as theirs: a ceremony the agent sets from their
@@ -597,10 +593,8 @@ export function applyIntentSettings(
     }
     // The person's line: what the reviews are now, what they were, and the way
     // back, in the harness's own entry word. With no override set, the level in
-    // force was the scope's own (a first "none" printed "none -> none" in two
-    // live runs; three more printed "Review override changed: advisory (scope
-    // default) -> none" to the person as it stood). An empty stored override is
-    // the scope's own level again.
+    // force was the scope's own. An empty stored override is the scope's own
+    // level again.
     const level = update.storedReview === "" ? scopeReviewLevel(target) : (update.storedReview ?? review);
     const was = update.oldReview || scopeReviewLevel(target);
     const word = (value: string): string => (value === "none" ? "off" : value);
@@ -711,8 +705,8 @@ export function applyIntentSettings(
         // so the work says whose decision it was (status reads "(set by you)"
         // instead of crediting the plan, and the audit carries the row) rather
         // than leaving their own switch with nothing behind it. A later Guard
-        // Policy word still clears per-check entries, as it always has, and
-        // nothing the person reads here changes.
+        // Policy word still clears per-check entries, and nothing the person reads
+        // here changes.
         if (typedByPerson && request.value === "off" && updated !== content) {
           content = updated;
           audit.push({
@@ -800,7 +794,6 @@ export function guardPolicyNamed(): string {
   return `Guard Policy${settingPurpose("Guard Policy")}`;
 }
 
-// A check as the person knows it: "review freeze check", "reviewer read scope check".
 function checkLabel(fence: string): string {
   return `${fence.replace("reviewer-scope", "reviewer read scope").replaceAll("-", " ")} check`;
 }
@@ -971,7 +964,6 @@ export function perCheckSettingClearedBy(policy: string | null | undefined): "on
 // Where a setting kept before any work is selected goes: the piece of work the
 // chat starts next or, with work here to pick up, whichever it picks or starts.
 const FOR_WORK_STARTED = "for the piece of work you start now";
-// " (set by you)" on a kept setting's line only when it is theirs.
 const byYou = (theirs: boolean): string => (theirs ? " (set by you)" : "");
 const FOR_WORK_PICKED_OR_STARTED = "for the work you pick up or start next";
 
@@ -1293,14 +1285,12 @@ function readFencesOffCreationGrant(projectDir: string, sessionId: string): Fenc
   return grant?.version === 1 && grant.session === sessionId && Array.isArray(grant.fences) ? grant : null;
 }
 
-// "review freeze check", "review freeze and state transition checks".
 export function checksNamed(fences: readonly SwitchableGuardFence[]): string {
   if (fences.length === 1) return checkLabel(fences[0]);
   const names = fences.map((fence) => checkLabel(fence).replace(/ check$/, ""));
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]} checks`;
 }
 
-// "The review freeze check is", "The review freeze and state transition checks are".
 export function checksAre(fences: readonly SwitchableGuardFence[]): string {
   // One check named says what it does for them; several would bury the sentence.
   const named = checksNamed(fences);
@@ -1663,7 +1653,6 @@ export function keptSettingsNotTheirs(projectDir: string, sessionId: string | nu
     if (record?.version !== 1 || record.session !== sessionId || !Array.isArray(record.notTheirs)) continue;
     for (const key of record.notTheirs) if (typeof key === "string") out.add(key);
   }
-  // One name for one setting: plan approval kept by either name is both.
   if (out.has("plan-approval") || out.has("guard.plan-approval")) {
     out.add("plan-approval");
     out.add("guard.plan-approval");

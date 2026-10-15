@@ -19,13 +19,13 @@
 //   complete --merge  — merge state + audit + runtime-graph fragment
 //                       back to main on success
 //   abort  --discard  — explicit user-driven abort; optional discard tear-down
-// The fail subcommand is unchanged in behaviour: code-gen returned an error,
+// The fail subcommand means code-gen returned an error;
 // halt-and-ask preserves the worktree by default. abort is the user's
 // explicit "I want this gone" verb.
 //
 // Runtime-graph fragment-fork / fragment-merge complete the fork/merge
-// triad alongside state and audit. The fragment file lives at
-// <wt>/aidlc-docs/runtime-graph.json (gitignored, mirrors main). No new
+// triad alongside state and audit. The fragment file lives at the path
+// worktreeRuntimeGraphPath resolves (gitignored, mirrors main). No new
 // audit events for the fragment lifecycle — it rides on the existing
 // STATE_FORKED + AUDIT_FORKED (fork) and STATE_MERGED + AUDIT_MERGED
 // (merge) boundaries.
@@ -631,10 +631,8 @@ function handleStart(args: string[]): void {
 //                            [--intent <intent>] [--space <space>]
 //
 // --merge: after BOLT_COMPLETED, delegates to `aidlc-state.ts merge` and
-// `aidlc-audit.ts audit-merge` to
-// consolidate state + audit back to main. Runs BEFORE SKILL.md Step 6.5's
-// git-merge dispatch so AIDLC metadata consolidates first. Single-bolt
-// only — csv batch with --merge is rejected.
+// `aidlc-audit.ts audit-merge` to consolidate state + audit back to main.
+// Single-bolt only -- csv batch with --merge is rejected.
 function handleComplete(args: string[]): void {
   const { booleans, rest } = splitBooleanFlags(args);
   const flags = parseFlags(rest);
@@ -680,13 +678,13 @@ function handleComplete(args: string[]): void {
       walkingSkeletonMain: true,
     });
     // HOLD-MERGE invariant enforcement.
-    // SKILL.md U5's multi-failure halt-and-ask sequence sets `Merge-Held: true`
-    // on each successful Bolt's per-Bolt forked state file before rendering
-    // any failed-sibling AUQ. This refusal pins that invariant in tooling so
-    // an orchestrator that forgets the prose contract cannot land a merge
-    // mid-AUQ-sequence. Refusal is non-zero exit + stderr; the orchestrator
-    // must call `aidlc-bolt release-merge --slug <slug>` once the AUQ
-    // sequence resolves before retrying complete --merge.
+    // `hold-merge` sets `Merge-Held: true` on each successful Bolt's per-Bolt
+    // forked state file while a failed sibling's halt-and-ask (AUQ) sequence is
+    // open. This refusal pins that invariant in tooling so an orchestrator that
+    // forgets the hold cannot land a merge mid-AUQ-sequence. Refusal is non-zero
+    // exit + a JSON envelope on stdout; the orchestrator must call `aidlc-bolt
+    // release-merge --slug <slug>` once the AUQ sequence resolves before retrying
+    // complete --merge.
     if (isMergeHeld(pd, flags.slug, flags.intent, flags.space)) {
       failJson(
         "complete-merge",
@@ -765,9 +763,9 @@ function handleComplete(args: string[]): void {
 
   // Fragment-merge primitive. Removes the worktree's runtime-graph.json
   // fragment. Idempotent — fragment-absent is a clean no-op. The post-Bash
-  // hook fires after this Bash invocation returns, sees AUDIT_MERGED in
-  // the last 3 audit blocks (per aidlc-rebuild-stage-graph.ts:87), and rebuilds
-  // main runtime-graph with instances[] populated for this slug.
+  // hook fires after this Bash invocation returns, sees AUDIT_MERGED in the
+  // last 3 audit blocks (per aidlc-rebuild-stage-graph.ts transitionRegex),
+  // and rebuilds main runtime-graph with instances[] populated for this slug.
   const fragmentMergeResult = spawnSibling(pd, "aidlc-runtime.ts", [
     "fragment-merge",
     "--slug",
@@ -849,7 +847,7 @@ function handleFail(args: string[]): void {
 //                         [--discard] [--repo <name>]
 //                         [--intent <intent>] [--space <space>]
 //
-// Explicit user-driven abort (Issue 75 US-1 line 51). Emits BOLT_FAILED with
+// Explicit user-driven abort (Issue 75 US-1). Emits BOLT_FAILED with
 // `Reason: aborted` for sub-classification — keeps the audit count stable
 // vs adding a new BOLT_ABORTED event type. Distinct from `fail` (which is
 // emitted by the orchestrator when code-gen returns failure).
@@ -879,10 +877,9 @@ function handleAbort(args: string[]): void {
   // (Reason: aborted) before discard and discard then timed out / errored,
   // the audit would claim the Bolt was aborted-and-cleaned-up while the
   // worktree directory still existed on disk and the slug remained in main's
-  // Bolt Refs (cleared by aidlc-worktree discard's WORKTREE_DISCARDED path).
-  // Caught by post-ship 4-agent review (adversarial agent BLOCKER finding).
-  // Default path (no --discard) preserves the worktree per US-1 AC line 51,
-  // so emit-before-noop is safe and the ordering only matters for --discard.
+  // Bolt Refs (cleared by `aidlc-state.ts merge`). Default path (no --discard)
+  // preserves the worktree per US-1 AC, so emit-before-noop is safe and the
+  // ordering only matters for --discard.
   if (useDiscard) {
     const identity = resolveBoltIdentity(pd, flags.slug, selection);
     const result = spawnSibling(pd, "aidlc-worktree.ts", [
@@ -923,9 +920,7 @@ function handleAbort(args: string[]): void {
 
   // Audit emission AFTER discard side-effect lands successfully (or no
   // side-effect requested). On audit emit failure here, the worktree is
-  // already gone (if --discard) but the audit row is missing — this is
-  // recoverable drift that doctor reconciles via the worktree's local
-  // audit if it survived, or by orphan-worktree detection if not.
+  // already gone (if --discard) but the audit row is missing.
   try {
     emitAudit(pd, "BOLT_FAILED", boltAbortedFields(pd, flags.name, flags.slug, flags.reason), flags.intent, flags.space);
   } catch (e) {
@@ -1003,14 +998,6 @@ function handleAbort(args: string[]): void {
 // user-visible event. The audit row that matters for doctor is the
 // BOLT_FAILED that opens the multi-failure sequence and the BOLT_COMPLETED
 // that closes each survivor's merge once the hold lifts.
-//
-// Future doctor extension: orphan Merge-Held detection. Walk per-Bolt
-// forked state for `Merge-Held: true`, cross-check parent batch's
-// BOLT_FAILED resolution status, flag if all siblings resolved (succeeded
-// retry / skipped / aborted) but `release-merge` never ran. Needs a
-// workshop-resume false-positive guard — `merge_held: true` is legitimate
-// mid-resume. Reads forked-state files and builds a parent-batch
-// resolution graph.
 function handleHoldMerge(args: string[]): void {
   const flags = parseFlags(args);
   if (!flags.slug) error("Missing --slug <kebab-slug>");
@@ -1040,7 +1027,7 @@ function forkedState(
   const identity = resolveBoltIdentity(pd, slug, selection);
   const wtPath = identity.dir;
   // Pin the worktree mirror to the SAME record the state fork wrote (null ->
-  // flat legacy mirror, today's behaviour).
+  // bare space record prefix).
   const recordPrefix = relativeRecordDir(pd, intent, space);
   const wtStatePath = worktreeStateFilePath(wtPath, recordPrefix);
   if (!existsSync(wtStatePath)) return null;
@@ -1101,18 +1088,20 @@ function setMergeHeld(pd: string, slug: string, held: boolean, intent?: string, 
 //                                   --pin-id <uuid>]
 //                                  --reason <enum> --defaults <text>
 //
-// Wires the three MERGE_DISPATCH_* events by emitting via
-// `appendAuditEntry` per event variant. Orchestrator (SKILL.md per-Bolt
-// loop) brackets each aidlc-pipeline-deploy-agent dispatch: pre-call INVOKED,
-// post-call RETURNED on successful parse, FALLBACK on timeout/malformed-YAML.
+// Wires the three MERGE_DISPATCH_* events by emitting via `emitAudit` per
+// event variant. The conductor's Unit merge-back (per
+// stage-protocol-construction.md) brackets each aidlc-pipeline-deploy-agent
+// dispatch: pre-call INVOKED, post-call RETURNED on successful parse,
+// FALLBACK on timeout/malformed-YAML.
 //
 // Emit-only contract: no state mutation, no spawn. Pure audit emission so
 // doctor can reconcile orphan INVOKED rows (slug + timestamp window).
 //
-// t48 emitter-pairing requires LITERAL `appendAuditEntry("EVENT_NAME")` per
-// case branch — Map indirection on the --event flag breaks the grep at
-// tests/feature/t48-audit-event-emitters.sh:46-57. Three cases, three literal
-// emit calls; DISPATCH_EVENTS names the same three for the messages and usage.
+// t48 emitter-pairing requires a literal event name in each case branch's
+// emitAudit call -- Map indirection on the --event flag breaks the call-site
+// scan in tests/integration/t48-audit-event-emitters.test.ts. Three cases,
+// three literal emit calls; DISPATCH_EVENTS names the same three for the
+// messages and usage.
 const DISPATCH_EVENTS: readonly string[] = ["MERGE_DISPATCH_INVOKED", "MERGE_DISPATCH_RETURNED", "MERGE_DISPATCH_FALLBACK"];
 const MERGE_STRATEGIES: readonly string[] = ["squash", "merge", "rebase"];
 
@@ -1147,7 +1136,7 @@ function handleDispatchEvent(args: string[]): void {
   }
 
   // Per-variant flag validation + literal emit. Fields populate per the
-  // schema at audit-format.md:147-149.
+  // MERGE_DISPATCH_* schema rows in audit-format.md.
   switch (flags.event) {
     case "MERGE_DISPATCH_INVOKED": {
       if (!flags["practices-excerpt"]) {

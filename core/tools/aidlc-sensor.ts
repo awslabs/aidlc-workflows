@@ -166,7 +166,7 @@ interface FireContext {
 	outputPath: string;
 	fireId: string;
 	detailPath: string;
-	scriptArgs: string[]; // CLI args appended to the script invocation
+	scriptArgs: string[];
 	scriptAbsPath: string; // sibling-resolved absolute path
 	timeoutMs: number;
 }
@@ -291,18 +291,17 @@ function dispatchError(msg: string): never {
 // and resolves it next to itself.
 // This decouples script discovery from cwd — works in tests where
 // projectDir doesn't carry a .claude/tools/ tree, AND in production where
-// it does. Sibling resolution mirrors aidlc-bolt.ts:84.
+// it does. Sibling resolution mirrors spawnSibling in aidlc-bolt.ts.
 //
 // AIDLC_SENSOR_SCRIPT_DIR overrides the resolution directory — the script
 // seam mirroring AIDLC_SENSORS_DIR for manifests. Tests that exercise stub
 // per-sensor scripts point it at an isolated temp dir so they NEVER copy
 // stubs into the shipped dist/.../tools/ tree (which both pollutes the
-// version-controlled artifact on a crashed run and makes concurrent test
+// generated artifact on a crashed run and makes concurrent test
 // files race on a shared directory). Unset in production → sibling resolution
-// against __FILE_DIR, exactly as before.
+// against the compiled harness tools directory or __FILE_DIR.
 function resolveScriptPath(command: string): string {
 	const tokens = command.trim().split(/\s+/);
-	// Find the first .ts token (drops the "bun" prefix or any flags).
 	const tsToken = tokens.find((t) => t.endsWith(".ts"));
 	const engineIndex = tokens.indexOf("engine");
 	const nativeDelegate = engineIndex >= 0 ? tokens[engineIndex + 1] : undefined;
@@ -373,7 +372,6 @@ function handleList(): void {
 	if (sensors.length === 0) {
 		return;
 	}
-	// Tabular output: id  kind  description
 	for (const s of sensors) {
 		console.log(`${s.id}\t${s.manifest.kind}\t${s.manifest.description}`);
 	}
@@ -504,7 +502,8 @@ function consumeWithProducer(slug: string): string {
 // Step 1 — validate + resolve all inputs + generate Fire id (no lock).
 // Step 4-8 — emit FIRED, spawn, decide outcome, write detail (if FAILED),
 //            emit terminal row.
-// Step 9 — exit 0.
+// Step 9 -- print the machine-readable verdict.
+// Step 10 -- exit 0.
 function handleFire(args: string[]): void {
 	const id = args[0];
 	if (!id || id.startsWith("--")) {
@@ -656,7 +655,6 @@ function handleFire(args: string[]): void {
 		// §10 MIDDLE branch: the framework-default templates dir (engine-shipped,
 		// read-only, space-independent). The sensor consults it ONLY when the team
 		// override above misses, so resolution is team → framework-default → floor.
-		// Ships zero files at GA → the branch gracefully falls through to the floor.
 		scriptArgs.push("--framework-templates-dir", frameworkTemplatesDir());
 	}
 	const detailDir = join(sensorsDir(projectDir), stageSlug);
@@ -745,7 +743,7 @@ function handleFire(args: string[]): void {
 	// Named per fire id, so a pass cannot overwrite an earlier failure's report;
 	// without this the directory keeps showing a failure that no longer exists.
 	// A noted pass (tool-unavailable, script-error, detail-write-failed) and a
-	// budget override evaluated nothing, so they supersede nothing.
+	// budget override do not verify a clean output, so they supersede nothing.
 	if (finalOutcome.kind === "passed" && finalOutcome.note === undefined) {
 		pruneSupersededDetailFiles(detailDir, id, outputPath, startedAt);
 	}
@@ -1021,7 +1019,7 @@ function decideOutcome(
 // generically. Fork sensors that omit the field fall back to 0; doctor's
 // sibling-coverage check will surface that as a fork-sensor contract gap.
 //
-// Rationale: v3 control-plane / data-plane separation puts per-sensor
+// Rationale: control-plane / data-plane separation puts per-sensor
 // findings derivation in the script (the script knows its own pass
 // threshold; e.g., required-sections script knows 2 H2 sections is the
 // minimum). The dispatcher stays generic and adds new framework sensors

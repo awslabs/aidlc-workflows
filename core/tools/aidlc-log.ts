@@ -4578,7 +4578,7 @@ function logUsage(subcommand: string | undefined): string {
       "  Records that a declared pipeline link returned. Runs in the active workspace (no --intent or --space).",
     ],
     review: [
-      `${invoke("review")} --stage <slug> --reviewer <agent> --iteration <n> [--unit <unit>]`,
+      `${invoke("review")} --stage <slug> --reviewer <agent> --iteration <n> [--unit <unit>] [--person-asked]`,
       "  Records that the reviewer was sent the work.",
       `${invoke("review")} --stage <slug> --reviewer <agent> --iteration <n> [--unit <unit>] --verdict ${[...VALID_VERDICTS].join("|")} [--review-file <path>]`,
       "  Records the reviewer's verdict. Also: --retry-pending, --single. Runs in the active workspace (no --intent or --space).",
