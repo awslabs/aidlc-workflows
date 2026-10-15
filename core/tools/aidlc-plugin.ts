@@ -2017,6 +2017,9 @@ export async function main(argv: string[]): Promise<void> {
       return;
     }
     if (command === "sync") {
+      // Kiro IDE's folder-dropped hook names its root here: /bin/sh and
+      // cmd.exe, the shells Kiro runs hooks in, set a variable differently.
+      if (flags["plugin-root"]) process.env.AIDLC_PLUGIN_ROOT = resolve(flags["plugin-root"]);
       const result = await syncPlugins(projectDir, argv);
       const message = `plugin sync complete: ${result.synced.length} plugin(s)` +
         (result.pruned.length > 0 ? `; pruned ${result.pruned.length} missing plugin(s)` : "") +

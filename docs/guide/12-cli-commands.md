@@ -2772,7 +2772,9 @@ until a sync composes it; a held plugin composed before stays as it was. On a
 host whose session-start hook names only its own plugin, the hook composes that
 plugin's installed base first. An inventory with an
 invalid entry, or a plugin root with no `hooks/compose.ts`, refuses the whole
-sync and names what is wrong, so nothing is half composed. Where the host keeps
+sync and names what is wrong, so nothing is half composed. `--plugin-root <dir>`
+names the installed plugin to compose, as `AIDLC_PLUGIN_ROOT` does; Kiro IDE's
+folder-dropped hook passes `.`, the workspace it runs in. Where the host keeps
 no plugin inventory to read, it says so and stops; in a native Claude Code
 project before Claude Code has a plugin registry
 (`~/.claude/plugins/installed_plugins.json`):
