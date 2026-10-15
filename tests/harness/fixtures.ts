@@ -956,7 +956,8 @@ export function proposalFollowUp(directive: unknown, plan?: string): string[] | 
   if (!message.includes("--propose <plan> --request")) return null;
   const id = /--request ([0-9a-f]{8})/.exec(message)?.[1];
   if (id === undefined) return null;
-  const request = /^The person asked for new work: "([^"]*)"/.exec(message)?.[1] ?? "";
+  // Beside finished work the print opens "The person said:" instead.
+  const request = /^The person (?:asked for new work|said): "([^"]*)"/.exec(message)?.[1] ?? "";
   return ["--propose", plan ?? proposePlanLikeTheAgent(request), "--request", id];
 }
 

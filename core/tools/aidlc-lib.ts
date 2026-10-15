@@ -4578,18 +4578,36 @@ export function workToPickUp(
 ): Array<{ intent: IntentInfo; state: string }> | null {
   const recorded = listIntents(projectDir, space, selectedIntent).filter((intent) => !isArchivedIntent(intent));
   if (recorded.length === 0 || recorded.some((intent) => intent.active)) return null;
-  const unfinished = recorded.map((intent) => {
-    let state = "";
-    if (intent.dirName) {
-      try {
-        state = readFileSync(stateFilePath(projectDir, intent.dirName, space), "utf-8");
-      } catch {
-        // Registry-only or incomplete record: leave unannotated.
-      }
-    }
-    return { intent, state };
-  }).filter(({ intent, state }) => !isCompletedIntent(intent) && getField(state, "Status") !== "Completed");
+  const unfinished = recorded.map((intent) => ({ intent, state: recordStateText(projectDir, intent, space) }))
+    .filter(({ intent, state }) => !isFinishedWork(intent, state));
   return unfinished.some(({ intent }) => intent.dirName) ? unfinished : null;
+}
+
+/**
+ * The finished work in `space` whose record is in this checkout, archived work
+ * left out: what words on finished work may ask to go back to. The same
+ * finished test as `workToPickUp`, which leaves this work out.
+ */
+export function finishedWork(projectDir: string, space: string, selectedIntent: string | null): IntentInfo[] {
+  return listIntents(projectDir, space, selectedIntent)
+    .filter((intent) => intent.dirName !== null && !isArchivedIntent(intent))
+    .filter((intent) => isFinishedWork(intent, recordStateText(projectDir, intent, space)));
+}
+
+// Either signal marks work finished: the registry row, or the state file a
+// finalize completed.
+function isFinishedWork(intent: IntentInfo, state: string): boolean {
+  return isCompletedIntent(intent) || getField(state, "Status") === "Completed";
+}
+
+function recordStateText(projectDir: string, intent: IntentInfo, space: string): string {
+  if (!intent.dirName) return "";
+  try {
+    return readFileSync(stateFilePath(projectDir, intent.dirName, space), "utf-8");
+  } catch {
+    // Registry-only or incomplete record: leave unannotated.
+    return "";
+  }
 }
 
 export function listIntents(
