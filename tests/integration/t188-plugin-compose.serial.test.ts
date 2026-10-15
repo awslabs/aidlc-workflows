@@ -30,7 +30,7 @@ import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join, posix, resolve, win32 } from "node:path";
+import { basename, delimiter, dirname, join, posix, resolve, win32 } from "node:path";
 import {
   acquireAuditLock,
   auditLockDir,
@@ -372,7 +372,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
           expect(hook?.action?.type).toBe("command");
           const command = hook?.action?.command ?? "";
           expect(command).toBe(
-            "aidlc engine plugin sync --plugin-root . || bun ./hooks/aidlc-plugin-compose.ts .kiro kiro-ide",
+            "aidlc engine plugin sync --harness-dir .kiro --plugin-root . || bun ./hooks/aidlc-plugin-compose.ts .kiro kiro-ide",
           );
           expect(command).not.toContain("sh -c");
           expect(existsSync(join(built, "hooks", "aidlc-plugin-compose.ts"))).toBe(true);
@@ -428,9 +428,10 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
 
   // Kiro runs a hook command through the platform shell (Node's shell: true:
   // /bin/sh, or cmd.exe on Windows) in the workspace the plugin was dropped into.
-  function runKiroIdeFolderDrop(name: string, path: string): { project: string; run: SpawnSyncReturns<string> } {
+  function runKiroIdeFolderDrop(name: string, path: string, alsoClaude = false): { project: string; run: SpawnSyncReturns<string> } {
     const kiroProject = join(tmp, name);
     cpSync(join(REPO_ROOT, "dist", "kiro-ide"), kiroProject, { recursive: true });
+    if (alsoClaude) copyHarnessInstall("claude", kiroProject);
     cpSync(pluginBuilds.get("kiro-ide")!, kiroProject, { recursive: true });
     const registration = JSON.parse(
       readFileSync(
@@ -465,10 +466,13 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(kiroGraph.some((item) => item.slug === "test-pro-integration")).toBe(true);
   });
 
-  test("Kiro IDE's folder-drop hook composes through aidlc alone when Bun is not on PATH", () => {
-    const binDir = writeAidlcOnPath("kiro-ide-aidlc-only-bin", join(tmp, "kiro-ide-aidlc-only", ".kiro", "tools", "aidlc.ts"));
+  // With Claude Code installed beside the host, a compiled aidlc pins the first
+  // harness it finds, .claude; the fixture runs that harness's dispatcher.
+  for (const alsoClaude of [false, true]) test(`Kiro IDE's folder-drop hook composes through aidlc alone when Bun is not on PATH${alsoClaude ? ", Claude Code installed beside it" : ""}`, () => {
+    const name = alsoClaude ? "kiro-ide-and-claude-aidlc-only" : "kiro-ide-aidlc-only";
+    const binDir = writeAidlcOnPath(`${name}-bin`, join(tmp, name, alsoClaude ? ".claude" : ".kiro", "tools", "aidlc.ts"));
     expect(Bun.which("bun", { PATH: binDir })).toBeNull();
-    const { project: kiroProject, run } = runKiroIdeFolderDrop("kiro-ide-aidlc-only", binDir);
+    const { project: kiroProject, run } = runKiroIdeFolderDrop(name, binDir, alsoClaude);
     expect(run.status, run.stderr).toBe(0);
     expect(run.stdout).toContain("plugin sync complete: 1 plugin(s)");
     expect(existsSync(join(kiroProject, ".kiro", "tools", "data", `plugin-compose-${PLUGIN}.json`))).toBe(true);
@@ -495,21 +499,22 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     const entries = wiring.hooks?.sessionStart ?? [];
     for (const entry of entries) expect(Object.keys(entry)).toEqual(["command"]);
     expect(entries.map((entry) => entry.command)).toEqual([
-      "aidlc engine plugin sync",
+      "aidlc engine plugin sync --harness-dir .cursor",
       "bun ./hooks/aidlc-plugin-compose.ts .cursor",
     ]);
     expect(existsSync(join(built, "hooks", "aidlc-plugin-compose.ts"))).toBe(true);
   });
 
-  test("Cursor's sessionStart entries compose through aidlc alone when Bun is not on PATH", () => {
+  for (const alsoClaude of [false, true]) test(`Cursor's sessionStart entries compose through aidlc alone when Bun is not on PATH${alsoClaude ? ", Claude Code installed beside it" : ""}`, () => {
     const built = pluginBuilds.get("cursor")!;
-    const cursorProject = join(tmp, "cursor-aidlc-only");
+    const cursorProject = join(tmp, alsoClaude ? "cursor-and-claude-aidlc-only" : "cursor-aidlc-only");
     mkdirSync(cursorProject, { recursive: true });
     const install = spawnSync(BUN, [join(CURSOR_DIST, "install.ts"), cursorProject], {
       cwd: REPO_ROOT, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
     });
     expect(install.status, install.stderr).toBe(0);
-    const binDir = writeAidlcOnPath("cursor-aidlc-only-bin", join(cursorProject, ".cursor", "tools", "aidlc.ts"));
+    if (alsoClaude) copyHarnessInstall("claude", cursorProject);
+    const binDir = writeAidlcOnPath(`${basename(cursorProject)}-bin`, join(cursorProject, alsoClaude ? ".claude" : ".cursor", "tools", "aidlc.ts"));
     expect(Bun.which("bun", { PATH: binDir })).toBeNull();
     const wiring = JSON.parse(readFileSync(join(built, "hooks", "hooks.json"), "utf-8")) as {
       hooks: { sessionStart: Array<{ command: string }> };
