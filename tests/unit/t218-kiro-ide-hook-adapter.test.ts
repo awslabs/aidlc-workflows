@@ -6079,11 +6079,18 @@ describe("t218 log-subagent identity extraction (#459)", () => {
         runIdeStdin(dir, "log-subagent", JSON.stringify({
           session_id: "sess_t218", hook_event_name: "PostToolUse", cwd: dir, tool_name, tool_input, tool_response,
         }));
+      expect(missing("invoke_sub_agent", { name: "aidlc-architect-agent", prompt: "Design" },
+        "Agent 'aidlc-architect-agent' not found in registry").code).toBe(0);
+      expect(readAudit(dir)).not.toContain("SUBAGENT_COMPLETED");
+      const health = join(seededRecordDir(dir), ".aidlc-engine/hooks-health");
+      expect(readFileSync(join(health, "kiro-adapter.drops"), "utf-8")).toContain("Kiro has no agent named aidlc-architect-agent");
+      // A reviewer copy Kiro did not load is the case the conductor falls back
+      // from, so it is traced for a later look, not counted by doctor.
       expect(missing("invoke_sub_agent", { name: "aidlc-review-0123456789ab", prompt: "Review" },
         "Agent 'aidlc-review-0123456789ab' not found in registry").code).toBe(0);
       expect(readAudit(dir)).not.toContain("SUBAGENT_COMPLETED");
-      const dropFile = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "kiro-adapter.drops");
-      expect(readFileSync(dropFile, "utf-8")).toContain("Kiro has no agent named aidlc-review-0123456789ab");
+      expect(readFileSync(join(health, "kiro-adapter.trace"), "utf-8")).toContain("Kiro has no agent named aidlc-review-0123456789ab");
+      expect(readFileSync(join(health, "kiro-adapter.drops"), "utf-8")).not.toContain("aidlc-review-0123456789ab");
       // Another agent's words are its own output, not Kiro's answer.
       expect(missing("invoke_sub_agent", { name: "aidlc-developer-agent", prompt: "Implement" },
         "Agent 'aidlc-review-0123456789ab' not found in registry").code).toBe(0);

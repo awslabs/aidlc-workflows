@@ -107,7 +107,7 @@ export function renderReviewCopy(reviewerText: string, copyName: string, unit: s
     "      match:",
     ...CONSTRUCTION_ROOTS.map((root) => `        - "${root}/**"`),
     "      exclude:",
-    ...CONSTRUCTION_ROOTS.map((root) => `        - "${root}/${unit}/**"`),
+    ...CONSTRUCTION_ROOTS.flatMap((root) => [`        - "${root}/${unit}"`, `        - "${root}/${unit}/**"`]),
   );
   return [lines[0], ...front, ...lines.slice(end)].join(eol);
 }
@@ -164,6 +164,7 @@ export function removeReviewCopy(projectDir: string, requestId: string | null | 
   const copyName = requestId ? scopedReviewCopyName(requestId) : null;
   if (copyName === null) return;
   try {
+    if (installedKiroLayout(projectDir) !== "kas") return;
     rmSync(join(writableAgentsDir(projectDir), `${copyName}.md`), { force: true });
   } catch {
     // A copy left behind is dispatched by nobody: its request is closed.

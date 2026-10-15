@@ -98,7 +98,9 @@ describe("the copy's text", () => {
       '        - "aidlc/spaces/*/intents/*/construction/**"',
       '        - ".aidlc/worktrees/*/aidlc/spaces/*/intents/*/construction/**"',
       "      exclude:",
+      '        - "aidlc/spaces/*/intents/*/construction/alpha"',
       '        - "aidlc/spaces/*/intents/*/construction/alpha/**"',
+      '        - ".aidlc/worktrees/*/aidlc/spaces/*/intents/*/construction/alpha"',
       '        - ".aidlc/worktrees/*/aidlc/spaces/*/intents/*/construction/alpha/**"',
     ].join("\n"))).toBe(true);
     // Everything else is the installed file as it was.

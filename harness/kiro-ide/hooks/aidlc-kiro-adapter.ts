@@ -140,7 +140,9 @@ import {
   kiroIdeLegacyPlanApprovalSessionId,
   markKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalLegacyWindow,
+  isScopedReviewCopy,
   recordHookDrop,
+  recordHookTrace,
   recordPreWorkflowHeartbeat,
   resolveProjectFlag,
   readPlanApprovalViolation,
@@ -3785,17 +3787,20 @@ function buildForward(): Forward {
       // line and no other sign of failure (measured on Kiro CLI 2.31.0 and IDE
       // 1.3.0). Nothing ran, so nothing finished: a completion row would read as
       // that agent having done its work.
-      const notFound = (t: KiroDelegationTarget) =>
-        t.agent !== "" && completion(t).last_assistant_message.trim() === `Agent '${t.agent}' not found in registry`;
-      const missing = targets.filter(notFound);
-      for (const t of missing) {
-        recordHookDrop(
+      // A reviewer copy Kiro did not load is the expected case the conductor
+      // falls back from (aidlc-kiro-review-copy.ts), so it is traced, not dropped.
+      const ran: KiroDelegationTarget[] = [];
+      for (const t of targets) {
+        if (t.agent === "" || completion(t).last_assistant_message.trim() !== `Agent '${t.agent}' not found in registry`) {
+          ran.push(t);
+          continue;
+        }
+        (isScopedReviewCopy(t.agent) ? recordHookTrace : recordHookDrop)(
           projectDir,
           "kiro-adapter",
           `log-subagent: Kiro has no agent named ${t.agent} — SUBAGENT_COMPLETED not recorded`,
         );
       }
-      const ran = targets.filter((t) => !notFound(t));
       if (ran.length === 0) return null;
       // A pipeline finishes every stage in one result: one row per stage, the
       // last through the ordinary forward.
