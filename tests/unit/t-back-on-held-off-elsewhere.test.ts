@@ -238,6 +238,21 @@ describe("t-back-on-held-off-elsewhere: back on for this piece of work while a s
     expect(out).toEndWith(CLEAR_OFFER);
   });
 
+  test("on again while the plan already keeps it on: their earlier on stays on this piece of work", () => {
+    const { run, said } = workspace();
+    said("change the scope to classic");
+    run(["engine", "scope", "change", "--scope", "classic", "--person-words", "change the scope to classic"]);
+    said("turn the review freeze check on");
+    run(["engine", "config", "set", "guard.review-freeze", "on", "--person-words", "turn the review freeze check on"]);
+    said("change the scope to enterprise");
+    run(["engine", "scope", "change", "--scope", "enterprise", "--person-words", "change the scope to enterprise"]);
+    said("turn the review freeze check on");
+    run(["engine", "config", "set", "guard.review-freeze", "on", "--person-words", "turn the review freeze check on"]);
+    said("change the scope back to classic");
+    run(["engine", "scope", "change", "--scope", "classic", "--person-words", "change the scope back to classic"]);
+    expect(run(["engine", "config", "get", "guard.review-freeze"])).toStartWith("on");
+  });
+
   test("nothing else keeps it off: the lines are as before", () => {
     const { run, said } = workspace();
     said("turn the review freeze check back on");

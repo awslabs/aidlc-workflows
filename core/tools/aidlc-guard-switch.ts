@@ -719,17 +719,17 @@ export function applyIntentSettings(
             },
           });
         }
-        // An on is recorded too, while a switch outside this piece of work keeps
-        // the check off: once that switch is cleared, the check is on for this
-        // work as they asked, and nothing asks them again.
-        if (request.value === "on" && updated !== content) {
-          content = updated;
-          audit.push({ eventType: "GUARD_RESTORED", fields: { Guard: request.fence, Scope: scopeName, Source: source } });
-        }
         // Turned on, but a switch outside this piece of work keeps it off: what
         // keeps it, and the way to clear it.
         const held = request.value === "on" ? stillOffLine(projectDir, projectSwitchOf(`guard.${request.fence}`), "keeps") : null;
         if (held !== null) {
+          // Their on is recorded too, so once that switch is cleared the check
+          // is on for this work as they asked and nothing asks them again. An
+          // on of theirs this work already keeps stays kept.
+          if (updated !== content && nextOn.length >= raised.length) {
+            content = updated;
+            audit.push({ eventType: "GUARD_RESTORED", fields: { Guard: request.fence, Scope: scopeName, Source: source } });
+          }
           lines.push(held);
           continue;
         }
