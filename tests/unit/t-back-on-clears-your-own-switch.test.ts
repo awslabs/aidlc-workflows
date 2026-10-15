@@ -425,6 +425,22 @@ describe("t-back-on-clears-your-own-switch: the agent's config flags clear does 
     );
   });
 
+  test("the next step says the same for a switch the machine's file keeps off, alone or with yours", () => {
+    const w = teamClone();
+    w.off(SWITCH, "global");
+    const machine = w.notice();
+    expect(machine).toEndWith(
+      `This machine's settings in ${w.file("global")} keep it off for every project here. Changing that file changes it.`,
+    );
+    expect(machine).not.toContain("?");
+    w.off(SWITCH, "local");
+    const both = w.notice();
+    expect(both).toEndWith(
+      `Your aidlc.settings.local.json and this machine's settings in ${w.file("global")} keep it off. Changing both changes it.`,
+    );
+    expect(both).not.toContain("?");
+  });
+
   test("the undo of a switch recorded in the machine's file names that file, and does what it says", () => {
     const w = teamClone();
     w.said("turn plan approval off on this machine");

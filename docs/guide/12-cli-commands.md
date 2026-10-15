@@ -1703,8 +1703,9 @@ session-start context), and `config flags --show` and the doctor Flags row (a
 warning, which does not change doctor's exit code) list it. Answer that offer in
 your own words and the agent runs the command; if the environment variable still
 keeps the check off, the command says so. A yes in the chat never changes the
-project's shared `aidlc.settings.json`, so while that file records the switch the
-line ends by naming it instead of asking, for example "The project's shared
+project's shared `aidlc.settings.json` or this machine's settings file, so while
+either records the switch the line ends by naming it instead of asking, for
+example "The project's shared
 settings in aidlc.settings.json keep it off for everyone on this project.
 Changing that file changes it." `--show` and the doctor row name a command that
 does it where they run: the clear with no file named at your own terminal, and

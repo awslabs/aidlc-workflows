@@ -490,10 +490,10 @@ export function switchOffLine(
     ? "You can turn it back on any time."
     : wayBack === "command"
     ? `To turn it back on: ${wayBackCommand(off, files, env)}`
-    // A chat's yes leaves the project's shared file as it is (backOnLine), so
-    // where that file records the switch the line says what keeps it off
-    // instead of asking what a yes cannot do.
-    : files.includes("project")
+    // A chat's yes leaves the project's shared file and this machine's as they
+    // are (backOnLine), so where either records the switch the line says what
+    // keeps it off instead of asking what a yes cannot do.
+    : files.some((target) => target !== "local")
     ? keptOffInFiles(off.projectDir!, files, "it")
     : "Do you want it back on?";
   return `The ${label}${settingPurpose(label)} is off ${where(off.target)} since ${since}${how}. ${back}`;
