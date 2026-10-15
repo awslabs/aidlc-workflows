@@ -90,6 +90,7 @@ import {
   evaluateGuardRefusal,
   eventMatchesClaimAttempt,
   formatReceivedReply,
+  GATE_RESOLUTION_EVENTS,
   freshReviewReceipts,
   filterProducesByKind,
   getField,
@@ -1120,6 +1121,35 @@ function takenFromReply(questions: string[], details: string): { say: string; no
       `${one ? "it" : "them"}, say nothing about it.`,
   };
 }
+
+// The latest question of this scope was logged after the person's latest reply,
+// and only answers used that reply before it was logged: the agent recorded the
+// answers it held, then logged one more question in the same turn. Whether the
+// person saw that question before they replied is the agent's to know; the
+// record only shows the order the agent logged things in.
+function questionLoggedAfterAnsweredReply(pd: string, stage: string, unit: string | undefined): boolean {
+  const rows = readAuditShardEvents(pd);
+  const question = decisionRowsInScope(rows, stage, unit).at(-1);
+  if (question === undefined) return false;
+  const after = (row: AuditShardEvent, than: AuditShardEvent): boolean =>
+    row.shardIndex === than.shardIndex ? row.pos > than.pos : row.timestamp > than.timestamp;
+  const turn = rows.filter((row) => isReplyTurn(row))
+    .reduce<AuditShardEvent | null>((latest, row) => latest === null || after(row, latest) ? row : latest, null);
+  if (turn === null || !after(question, turn)) return false;
+  const used = rows.filter((row) => after(row, turn) && (GATE_RESOLUTION_EVENTS.has(row.event) ||
+    row.event === "QUESTION_UNANSWERED" || row.event === "REQUEST_ROUTED"));
+  return used.length > 0 && used.every((row) => row.event === "QUESTION_ANSWERED");
+}
+
+// Said to the agent when the question was logged after the person's latest
+// reply and that reply already answered the questions logged before it: the
+// person did reply, so they are never told their answer was lost for it.
+const QUESTION_LOGGED_AFTER_ANSWERED_REPLY =
+  "This question was logged after the person's latest reply, and that reply already answered the questions " +
+  "logged before it, so the record cannot tie it to this one. Log every question before you show it. If you " +
+  "showed this question before that reply, the person has answered it: show this one question again and end " +
+  "your turn, and tell them exactly this, with nothing about why: \"AI-DLC got your reply. Please answer this " +
+  "one question once more.\" Never tell them their answer was lost.";
 
 function lateQuestionHint(candidates: StoredMessage[]): string {
   const shown = candidates.map((message) => {
@@ -2626,14 +2656,30 @@ function handleAnswer(args: string[]): void {
       // asked since). A question asked after it waits for the next reply,
       // unless the person's message that answered it arrived before it was
       // logged: then the agent names that message instead of asking again.
+      // The steps for a reply the hooks missed hold only when the person's
+      // reply did not answer this question: said bare beside a message that
+      // did, they told the person an answer that had arrived was lost.
       const late = messagesBeforeQuestion(pd, flags.stage, flags.unit);
+      const missed = unattendedHumanPresenceHint(pd);
+      if (late.length > 0) {
+        error(
+          `Cannot record this answer: the question was logged after the person's reply. ${lateQuestionHint(late)}` +
+            (missed === "" ? "" : ` If no message of theirs answers it:${missed}`),
+        );
+      }
+      // With no person at the keyboard (AIDLC_UNATTENDED) there is no one to ask again.
+      if (humanTurnMintAllowed() && questionLoggedAfterAnsweredReply(pd, flags.stage, flags.unit)) {
+        error(
+          "Cannot record this answer because no new human reply has arrived for the question. " +
+            QUESTION_LOGGED_AFTER_ANSWERED_REPLY +
+            (missed === "" ? "" : ` If you showed it only after that reply:${missed}`),
+        );
+      }
       error(
-        (late.length > 0
-          ? `Cannot record this answer: the question was logged after the person's reply. ${lateQuestionHint(late)}`
-          : "Cannot record this answer because no new human reply has arrived for the question. "
-            + "Wait for the human to type an answer, then try again."
-            + commandTurnHint(pd))
-          + unattendedHumanPresenceHint(pd),
+        "Cannot record this answer because no new human reply has arrived for the question. "
+          + "Wait for the human to type an answer, then try again."
+          + commandTurnHint(pd)
+          + missed,
       );
     }
     // Where the person replied in a picker, an answer none of their picks
