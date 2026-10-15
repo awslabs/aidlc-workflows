@@ -857,7 +857,7 @@ describe("t241 OpenCode adapter reviewer scope", () => {
 });
 
 describe("t241 OpenCode adapter state-transition guard", () => {
-  test("blocks direct lifecycle verbs and allows read-only state queries", async () => {
+  test("leaves a direct lifecycle verb to the state tool and allows read-only state queries", async () => {
     const root = freshProject();
     copyCore(root, "hooks/aidlc-state-transition-guard.ts");
     copyCore(root, "hooks/review-freeze-command.ts");
@@ -881,9 +881,10 @@ describe("t241 OpenCode adapter state-transition guard", () => {
         { tool: "bash", sessionID: "main", callID },
         { args: { command } },
       );
+    // The state tool refuses it when it runs, whatever the spelling.
     await expect(
-      invoke("blocked", "bun .aidlc/tools/aidlc-state.ts approve user-stories"),
-    ).rejects.toThrow(/Stage status cannot be changed with aidlc-state\.ts approve/i);
+      invoke("direct", "bun .aidlc/tools/aidlc-state.ts approve user-stories"),
+    ).resolves.toBeUndefined();
     await expect(
       invoke("readonly", "bun .aidlc/tools/aidlc-state.ts show"),
     ).resolves.toBeUndefined();

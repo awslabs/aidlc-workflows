@@ -165,6 +165,13 @@ experimental_request_user_input = { enabled = true }
 
 [features]
 default_mode_request_user_input = true
+
+# Release 2.11.0 shipped AIDLC_RULES_DIR in this table, pointed at a space, and
+# its own refresh of a copied project cannot take one member out of the table,
+# so the member stays, empty: the engine reads an empty AIDLC_RULES_DIR as none.
+# It can go when no supported project refreshes with a 2.11.0 tool.
+[shell_environment_policy]
+set = { AIDLC_RULES_DIR = "" }
 `;
 }
 

@@ -65,7 +65,7 @@ import { fileURLToPath } from "node:url";
 const __FILE_DIR = dirname(fileURLToPath(import.meta.url));
 const TESTS_DIR = __FILE_DIR;
 
-// ENV-VAR SEAMS (mirrors aidlc-graph.ts's AIDLC_EXPORT_FIXTURE pattern, :1172).
+// ENV-VAR SEAMS (mirrors aidlc-graph.ts's AIDLC_EXPORT_FIXTURE pattern).
 // Tests point these at a temp tree to PROVE the ratchet: copy the shipped
 // source, inject a fake new audit event / subcommand, and run `--check` against
 // the temp roots + a temp baseline without mutating real source.
@@ -132,15 +132,16 @@ const REGISTRY_PATH =
 // minMechanism; otherwise the claim is UNDER-MECHANISM (treated as uncovered).
 //
 //   none — pure in-process: import the fn / spawn a deterministic CLI tool
-//          against a temp dir. Zero LLM, zero tokens. (t106-t114 are .none.)
+//          against a temp dir. Zero LLM, zero tokens.
 //   cli  — exercises a tool's argv dispatch as a spawned subprocess.
 //   sdk  — drives the real /aidlc through the Claude Agent SDK (spends tokens;
 //          the harness calibration tier).
 //   tui  — drives the real terminal UI (tmux). Strongest; observes rendering.
 //
-// The dot-segment in a test filename (t112.NONE.test.ts) names its mechanism.
-// `calibration` is the SDK calibration tier — it drives the SDK, so it maps to
-// `sdk`.
+// mechanismsOf derives a test's mechanisms from the driver signals in its body;
+// mechanismOfTestFile supplies the filename-segment fallback (t112.NONE.test.ts
+// would seed `none`). `calibration` is the SDK calibration tier: it drives the
+// SDK, so it maps to `sdk`.
 // ---------------------------------------------------------------------------
 export const MECHANISMS = ["none", "cli", "sdk", "tui"] as const;
 export type Mechanism = (typeof MECHANISMS)[number];
@@ -223,11 +224,9 @@ export type UnitStatus =
 export interface CoverageClaim {
   file: string; // relative to repo root
   // The SCALAR REPRESENTATIVE of the test's derived mechanism set: its strongest
-  // member (Math.max over the set's ranks). This is what the registry serialises
-  // — a single value per claim, byte-identical to the legacy filename suffix
-  // while files still carry one (max(set) == suffix for every current file).
-  // The gate evaluates the full set (see buildRegistry); this field is the
-  // serialisation projection, not the gate input.
+  // member (Math.max over the set's ranks). This is what the registry serialises,
+  // a single value per claim. The gate evaluates the full set (see buildRegistry);
+  // this field is the serialisation projection, not the gate input.
   mechanism: Mechanism;
 }
 
@@ -250,15 +249,6 @@ export interface RegistryRow {
 //                     entry one keyed on `subcommand`).
 //   kind "if-chain" -> the entry `if (<anchor> === "x") ... else if ...` chain
 //                     inside main() (aidlc-unit uses this compact dispatch form).
-//
-// Verified against source on 2026-05-31:
-//   state.ts:115 switch(subcommand)     audit.ts:639 switch(subcommand)
-//   bolt.ts:803 switch(subcommand)      jump.ts:57 switch(subcommand)
-//   log.ts:133 switch(subcommand)       worktree.ts:777 switch(subcommand)
-//   validate.ts:295 switch(subcommand)  learnings.ts:750 switch(cmd)
-//   sensor.ts:659 switch(cmd)           utility.ts:2814 switch(subcommand)
-//   unit.ts:729 if(command === ...)      graph.ts:1088 const COMMANDS = {}
-//   runtime.ts:1024 const SUBCOMMANDS = {}
 // ---------------------------------------------------------------------------
 interface ToolDescriptor {
   file: string; // basename under TOOLS_DIR
@@ -386,7 +376,6 @@ export function parseIfDispatchCases(
   return cases;
 }
 
-/** Public: the subcommands of one tool, by its descriptor. */
 export function subcommandsForTool(d: ToolDescriptor): string[] {
   const src = readFileSync(join(TOOLS_DIR, d.file), "utf-8");
   if (d.kind === "object") return parseObjectDispatchKeys(src, d.anchor);
@@ -396,8 +385,10 @@ export function subcommandsForTool(d: ToolDescriptor): string[] {
 
 /** ANTI-ROT GUARD (b), independent counter. Re-counts the dispatch sites in the
  *  SAME anchored block via a DIFFERENT regex pass than subcommandsForTool's
- *  line-by-line parser: a single global regex over the balanced block text.
- *  If a parser bug silently drops a tool's cases, the two counts diverge. */
+ *  line-by-line parser: a global regex over the balanced block (if-chain) or per
+ *  line at depth 0 (switch). The object kind reuses depthOneKeys, so only the
+ *  anchor lookup is independent there. If a parser bug silently drops a tool's
+ *  cases, the two counts diverge. */
 export function independentSubcommandCount(d: ToolDescriptor): number {
   const src = readFileSync(join(TOOLS_DIR, d.file), "utf-8");
   if (d.kind === "object") {
@@ -424,14 +415,13 @@ export function independentSubcommandCount(d: ToolDescriptor): number {
   return countDepthZeroCases(block);
 }
 
-/** Count depth-0 `case "x":` sites by scanning char-by-char and matching the
- *  literal at depth 0 — structurally independent of parseSwitchDispatchCases'
- *  line-oriented loop. */
+/** Count depth-0 `case "x":` sites with a global regex per line, tracking bracket
+ *  depth char by char: independent of parseSwitchDispatchCases' single anchored
+ *  match per line. */
 function countDepthZeroCases(block: string): number {
   let depth = 0;
   let n = 0;
   const re = /case\s+"[a-z][a-z0-9-]*"\s*:/g;
-  // Walk lines so we can track depth, but match with a global regex per line.
   for (const line of block.split("\n")) {
     if (depth === 0) {
       const matches = line.match(re);
@@ -452,7 +442,7 @@ function countDepthOneKeys(body: string): number {
 export function enumerateSubcommands(): Unit[] {
   const units: Unit[] = [];
   for (const d of TOOL_DESCRIPTORS) {
-    const toolName = basename(d.file, ".ts"); // aidlc-state
+    const toolName = basename(d.file, ".ts");
     for (const sub of subcommandsForTool(d)) {
       units.push({
         unitClass: "subcommand",
@@ -465,13 +455,12 @@ export function enumerateSubcommands(): Unit[] {
   return units;
 }
 
-/** VALID_EVENT_TYPES Set members in aidlc-audit.ts (~:19). Read the Set body
+/** VALID_EVENT_TYPES Set members in aidlc-audit.ts. Read the Set body
  *  fresh; pull every quoted UPPER_SNAKE literal. */
 export function enumerateAuditEvents(): Unit[] {
   const src = readFileSync(AUDIT_PATH, "utf-8");
   const m = /const\s+VALID_EVENT_TYPES\s*=\s*new\s+Set\s*\(\s*\[/.exec(src);
   if (!m) return [];
-  // Slice from the `[` to its matching `]`.
   const open = src.indexOf("[", m.index);
   let depth = 0;
   let body = "";
@@ -495,7 +484,6 @@ export function enumerateAuditEvents(): Unit[] {
   }));
 }
 
-/** Scope keys from the v0.6 scope grid, with legacy scope-mapping fallback. */
 export function enumerateScopes(): Unit[] {
   const sourcePath = existsSync(SCOPE_GRID_PATH) ? SCOPE_GRID_PATH : SCOPE_MAPPING_PATH;
   const raw = JSON.parse(readFileSync(sourcePath, "utf-8"));
@@ -510,7 +498,6 @@ export function enumerateScopes(): Unit[] {
   }));
 }
 
-/** Stage units: every *.md under stages/<phase>/. unitId is <phase>/<slug>. */
 export function enumerateStages(): Unit[] {
   const units: Unit[] = [];
   for (const phase of readdirSync(STAGES_DIR, { withFileTypes: true })) {
@@ -530,7 +517,6 @@ export function enumerateStages(): Unit[] {
   return units;
 }
 
-/** Hook units: every aidlc-*.ts under hooks/. */
 export function enumerateHooks(): Unit[] {
   return readdirSync(HOOKS_DIR)
     .filter((f) => f.endsWith(".ts"))
@@ -545,14 +531,12 @@ export function enumerateHooks(): Unit[] {
 /** RENDER-SURFACE units: the distinct render branches of the statusline hook
  *  (dist/claude/.claude/hooks/aidlc-statusline.ts). Each branch can break
  *  independently and only a PAINTED terminal shows it, so each is its own unit
- *  at minMechanism `tui` (D-TUI-5: 6 units, not one coarse "statusline-render").
+ *  at minMechanism `tui` (7 units, not one coarse "statusline-render").
  *
- *  Enumerated FROM DISK like every other class (the §7 freshness-read): each
- *  unit names the anchor token in the statusline source that draws it. A renamed
- *  or deleted branch drops its anchor -> the unit vanishes from the enumerated
- *  universe -> the committed registry drifts -> `--check` fails. The enumerator
- *  asserts every anchor is present so a silently-removed branch cannot pass as
- *  "still covered". */
+ *  Enumerated FROM DISK like every other class: each unit names the anchor token
+ *  in the statusline source that draws it. A renamed or deleted branch drops its
+ *  anchor, and the enumerator throws rather than letting the unit vanish from the
+ *  universe, so a silently-removed branch cannot pass as "still covered". */
 const RENDER_SURFACE_ANCHORS: ReadonlyArray<{ id: string; anchor: string }> = [
   // The 10-cell progress bar (▓/░), drawn by progressBar().
   { id: "statusline-phase-bar", anchor: "function progressBar(" },
@@ -567,7 +551,7 @@ const RENDER_SURFACE_ANCHORS: ReadonlyArray<{ id: string; anchor: string }> = [
   // The right-aligned model/ctx side, padded to terminal width by printLine().
   { id: "statusline-align", anchor: "function printLine(" },
   // The COMPLETE sentinel branch (full bar at workflow completion). The literal
-  // gained the orientation prefix in P8 ([AIDLC] <prefix>COMPLETE <bar>), so the
+  // has the orientation prefix ([AIDLC] <prefix>COMPLETE <bar>), so the
   // anchor is the prefix-adjacent "}COMPLETE " token unique to this branch (the
   // `}` closes the `${prefix}` interpolation in the render template).
   { id: "statusline-complete", anchor: "}COMPLETE " },
@@ -678,7 +662,6 @@ export function enumerateExportedFunctions(): Unit[] {
   return units;
 }
 
-/** All units, every class. The full enumerated universe (left side). */
 export function enumerateAllUnits(): Unit[] {
   return [
     ...enumerateExportedFunctions(),
@@ -705,16 +688,14 @@ const TEST_TIERS = [
 
 export interface DiscoveredClaim {
   file: string; // relative to repo root
-  // The DERIVED mechanism SET — every driver the test body actually calls (§2
-  // of the refactor doc). A test that calls driveAidlc() AND spawns
-  // tui-drive.ts derives {sdk, tui}; one that calls no driver is the
-  // deterministic floor, seeded from its filename segment. This field is the
-  // single source of truth for the gate (which takes max(...ranks)); it is NOT
-  // serialised — the per-claim mechanism written into the registry is the
-  // scalar representative (the set's strongest member, == the legacy suffix
-  // while filenames still carry one). Modelling it as a set is what lets one
-  // test legitimately cover both a `tui` render-surface unit and an `sdk`
-  // audit unit.
+  // The DERIVED mechanism SET: every driver signal the test body carries. A test
+  // that calls driveAidlc() AND spawns tui-drive.ts derives {sdk, tui}; one that
+  // calls no driver is the deterministic floor, seeded from its filename segment.
+  // This field is the single source of truth for the gate (which takes
+  // max(...ranks)); it is NOT serialised: the per-claim mechanism written into the
+  // registry is the scalar representative (the set's strongest member). Modelling
+  // it as a set is what lets one test legitimately cover both a `tui`
+  // render-surface unit and an `sdk` audit unit.
   mechanisms: Mechanism[];
   unitIds: string[];
 }
@@ -726,24 +707,24 @@ export interface DiscoveredClaim {
  *  being unknowable — we treat the missing segment as `none` (the weakest), so
  *  it can never over-claim a stronger unit.
  *
- *  This is now the NON-BREAKING FALLBACK SEED for mechanismsOf() — used when the
- *  body scan finds no driver call (the deterministic `none` floor, or a legacy
- *  suffixed file whose driver is implied by the segment). Kept exported so the
- *  unit test's filename-segment assertions stay green through Phase 0. */
+ *  This is the FALLBACK SEED for mechanismsOf(): used when the body scan finds
+ *  no driver signal (the deterministic `none` floor, or a suffixed file whose
+ *  driver is implied by the segment). Kept exported so the unit test's
+ *  filename-segment assertions stay green. */
 export function mechanismOfTestFile(fileName: string): Mechanism {
   const stripped = fileName
     .replace(/\.test\.ts$/, "")
     .replace(/\.sh$/, "");
   const parts = stripped.split(".");
   if (parts.length >= 2) {
-    // The trailing dot-segment is only a mechanism when it IS one (the legacy
+    // The trailing dot-segment is only a mechanism when it IS one (the
     // `.cli`/`.none`/`.sdk`/`.tui` suffix, or `.calibration`). Any OTHER trailing
-    // segment is a DESCRIPTIVE slug, not a mechanism — e.g. once milestone 6 drops the
-    // suffixes, a suffix-free `t200.scope-exclusion.test.ts` must seed `none`,
-    // not crash the generator. So recognise a real mechanism segment, else fall
-    // through to `none` (the weakest seed — it can never over-claim). The strict
-    // throwing form (mechanismFromSegment) stays for callers that demand a known
-    // segment; here the fallback must be total.
+    // segment is a DESCRIPTIVE slug, not a mechanism: a suffix-free
+    // `t200.scope-exclusion.test.ts` must seed `none`, not crash the generator. So
+    // recognise a real mechanism segment, else fall through to `none` (the weakest
+    // seed - it can never over-claim). The strict throwing form
+    // (mechanismFromSegment) stays for callers that demand a known segment; here the
+    // fallback must be total.
     const seg = parts[parts.length - 1];
     if ((MECHANISMS as readonly string[]).includes(seg)) return seg as Mechanism;
     if (seg === "calibration") return "sdk";
@@ -752,36 +733,34 @@ export function mechanismOfTestFile(fileName: string): Mechanism {
   return "none";
 }
 
-/** Derive the mechanism SET from the DRIVERS a test actually calls (§2 of the
- *  refactor doc) — the zero-authoring equivalent of multi-tagging. The drivers
- *  the test invokes ARE the tags; you never declare a mechanism, so a test
- *  cannot claim one it does not drive.
+/** Derive the mechanism SET from the driver signals in a test's code view: the
+ *  zero-authoring equivalent of multi-tagging. The drivers the test invokes ARE
+ *  the tags; a test never declares a mechanism.
  *
- *  Scan the test's EXECUTABLE CODE (see codeView — comments and `import` lines
- *  are stripped first) and collect every match (not the first):
+ *  Scan the test's code view (see codeView: comments, `import`-starting lines
+ *  and `#` lines are stripped first) and collect every match (not the first):
  *    - `driveAidlc(` ............ adds `sdk` (the Agent-SDK driver)
- *    - spawns `tui-drive.ts` .... adds `tui` (the painted-terminal driver)
+ *    - `tui-drive.ts` ........... adds `tui` (the painted-terminal driver's
+ *                                 filename, anywhere in the code view)
  *    - `runOrchestrateNext(` .... adds `cli` (shared spawned-engine driver)
  *    - `runMergeTool(` .......... adds `cli` (the t326 fixture's traced tool spawn)
  *    - `runCheckpointTool(` ..... adds `cli` (the t344 fixture's tool spawn)
  *    - `runChangeControlTool(` .. adds `cli` (the t334 fixture's tool and hook spawn)
- *    - shipped-surface spawn .... adds `cli` (the literal shipped binary): `claude -p`,
- *                                 a runtime (`BUN`/`process.execPath`/`"bun"`/`"node"`)
- *                                 spawn whose argv targets an `aidlc-*.ts` tool, or a
- *                                 `bash`/`execFileSync("bash")` spawn of `run-tests.sh`
- *  Scanning the code view (not the raw source) is what makes "match the CALL /
- *  SPAWN expression, never a bare mention" true: the t118 comment-only lesson
- *  and helper-only imports are both handled because a driver named only in a
- *  comment or an `import` line is removed before the patterns run. A genuine
- *  spawn (`const DRIVER = join(...,
- *  "tui-drive.ts")`) or call survives the strip and registers.
+ *    - shipped-surface signals .. add `cli`: `claude -p`; a spawn primitive plus
+ *                                 a runtime token (BUN, process.execPath, "bun",
+ *                                 "node") plus an `aidlc-*.ts` literal; or a spawn
+ *                                 primitive plus `"bash"` plus a `run-tests.sh`
+ *                                 literal (see drivesCliSurface)
+ *  Scanning the code view (not the raw source) means a driver named only in a
+ *  comment or an `import` line never registers, while a filename in a string
+ *  literal (`const DRIVER = join(..., "tui-drive.ts")`) survives the strip and
+ *  does. These are textual signals: a match does not prove the test ran the
+ *  spawn.
  *
- *  When the body scan is INCONCLUSIVE (no driver call — the deterministic floor,
- *  or a file whose driver is still only implied by its legacy `.sdk.`/`.tui.`/
+ *  When the body scan is INCONCLUSIVE (no driver signal: the deterministic
+ *  floor, or a file whose driver is only implied by its `.sdk.`/`.tui.`/
  *  `.cli.`/`.none.` suffix), fall back to the filename segment via
- *  mechanismOfTestFile(). This is the doc's NON-BREAKING transition (§7 Phase 0):
- *  every existing suffixed file keeps classifying exactly as before, and new
- *  suffix-free `t<NN>.test.ts` files class by what they drive.
+ *  mechanismOfTestFile().
  *
  *  Returns the SET (deduped, ladder-ordered). The empty set never happens — the
  *  fallback always yields at least one member. */
@@ -792,7 +771,7 @@ export function mechanismsOf(fileName: string, src: string): Mechanism[] {
   const found = new Set<Mechanism>();
   // sdk — a call expression: `driveAidlc(` (whitespace tolerated before the paren).
   if (/\bdriveAidlc\s*\(/.test(code)) found.add("sdk");
-  // tui — spawning the painted-terminal driver by its filename (in code, not an import).
+  // tui - the painted-terminal driver's filename in the code view.
   if (/tui-drive\.ts/.test(code)) found.add("tui");
   // cli — driving a shipped binary as a subprocess (claude -p, an aidlc-*.ts tool
   // under the bun/node runtime, run-tests.sh under bash, or a shared harness
@@ -830,28 +809,33 @@ export function claudeDependenciesOf(_fileName: string, src: string): ClaudeDepe
   return CLAUDE_DEPENDENCIES.filter((m) => found.has(m));
 }
 
-/** Does this code-view DRIVE the shipped CLI surface as a subprocess? Three ways,
- *  each a genuine spawn of a literal shipped binary — never a bare mention:
+/** Does this code view carry the signals of a shipped-CLI subprocess? Three
+ *  shapes, each a spawn primitive beside a literal shipped binary, judged by
+ *  token co-occurrence in the code view (never by parsing argv):
  *
  *    1. `claude -p` / `claude --print` — the one live-model preflight surface.
- *       (A `claude --version` AVAILABILITY GUARD is NOT a drive — it is excluded,
- *        which is why 16 tui tests that guard on `spawnSync("claude",["--version"])`
- *        stay {tui} and never spuriously gain {cli}.)
- *    2. A RUNTIME spawn — `spawnSync`/`spawn`/`execSync`/`execFileSync`/`Bun.spawn*`
- *       whose runtime is `BUN` / `process.execPath` / a literal `"bun"` or `"node"` —
- *       whose argv targets the `aidlc.ts` dispatcher or an `aidlc-*.ts` tool. The
- *       target is matched whether it is an inline string literal
- *       (`spawnSync(BUN,["…/aidlc-state.ts"])`) OR a const bound to one
- *       (`const GRAPH_TS = join(TOOLS_DIR,"aidlc-graph.ts"); spawnSync(BUN,[GRAPH_TS,…])`),
- *       since the const definition survives in the code view (imports/comments are stripped,
- *       but a `const X = "…aidlc-*.ts"` is real code).
- *    3. A `bash` spawn (`spawnSync("bash",…)` / `execFileSync("bash",…)`) of `run-tests.sh`.
+ *       (A `claude --version` AVAILABILITY GUARD does not match, so a tui test
+ *        that guards on `spawnSync("claude",["--version"])` stays {tui} and
+ *        never spuriously gains {cli}.)
+ *    2. A RUNTIME spawn: a spawn primitive (`spawnSync`/`spawn`/`execSync`/
+ *       `execFileSync`/`Bun.spawn*`), a runtime token (`BUN` / `process.execPath`
+ *       / a literal `"bun"` or `"node"`), and a string literal naming the
+ *       `aidlc.ts` dispatcher or an `aidlc-*.ts` tool. The target is matched
+ *       whether it is an inline string literal
+ *       (`spawnSync(BUN,["aidlc-state.ts"])`) OR a const bound to one
+ *       (`const GRAPH_TS = join(TOOLS_DIR,"aidlc-graph.ts");
+ *       spawnSync(BUN,[GRAPH_TS,...])`), since the const definition survives in
+ *       the code view (imports/comments are stripped, but a `const X =
+ *       "...aidlc-*.ts"` is real code).
+ *    3. A `bash` spawn: a spawn primitive, a literal `"bash"`, and a
+ *       `run-tests.sh` literal.
  *
- *  WHY gate on a real spawn and not a bare `aidlc*.ts` mention: 12 deterministic floor
- *  tests reference a tool ONLY through a multi-line `import { … } from "…/aidlc-lib.ts"`
- *  whose path lands on a CONTINUATION line the import-strip misses — they call the lib
- *  IN-PROCESS and must stay {none}. Requiring (spawn primitive ∧ runtime ∧ shipped target)
- *  keeps every such import-only test out of cli. */
+ *  WHY gate on a spawn and not a bare `aidlc*.ts` mention: a deterministic floor
+ *  test that references a tool ONLY through a multi-line `import { ... } from
+ *  "../aidlc-lib.ts"` leaves the path on a CONTINUATION line the import-strip
+ *  misses; it calls the lib IN-PROCESS and must stay {none}. Requiring (spawn
+ *  primitive AND runtime AND shipped target) keeps every such import-only test
+ *  out of cli. */
 function drivesCliSurface(code: string): boolean {
   // 1. claude in print mode (NOT --version).
   if (drivesClaudePrintSurface(code)) return true;
@@ -879,7 +863,6 @@ function drivesCliSurface(code: string): boolean {
     /\bBUN\b|\bprocess\.execPath\b|["'](?:bun|node)["']/;
   if (RUNTIME_LAUNCHER.test(code) && hasAidlcToolLiteral) return true;
 
-  // bash launcher driving the runner.
   const BASH_LAUNCHER = /["']bash["']/;
   if (BASH_LAUNCHER.test(code) && hasRunnerLiteral) return true;
 
@@ -890,26 +873,18 @@ function drivesClaudePrintSurface(code: string): boolean {
   return /claude\s+-p\b|claude\s+--print\b/.test(code);
 }
 
-/** A code-only view of a test's source: per line, ES `import` statements, shell
- *  comments / shebangs (a leading `#`), and `//` line comments stripped FIRST,
- *  then block comments removed. mechanismsOf scans this rather than the raw
+/** A code-only view of a test's source: per line, `import`-starting lines and
+ *  shell comments / shebangs (a leading `#`) are dropped first, then `//` line
+ *  comments and block comments are removed in one string-aware pass
+ *  (stripCommentsRespectingStrings). mechanismsOf scans this rather than the raw
  *  source so a driver named only in prose or pulled in by an import cannot
  *  register a mechanism the test does not actually drive. Deterministic; no
- *  execution.
- *
- *  ORDER MATTERS: line comments are stripped BEFORE the block-comment pass. A
- *  prior version ran the block-comment regex `/\/\*[\s\S]*?\*\//` on RAW source
- *  first, so a `//` line comment whose text merely CONTAINED the substring `/*`
- *  (e.g. a `tests/fixtures/**` glob, t38.cli:64) was treated as a block-comment
- *  OPENER and paired with a downstream block-close, silently SWALLOWING the real
- *  code in between — including the `const TOOL = join(..., "aidlc-*.ts")` spawn
- *  site the mechanism scan needs. Stripping `//` lines first removes that trigger
- *  so the block pass only ever sees genuine block comments. */
+ *  execution. */
 export function codeView(src: string): string {
-  // First drop whole `import` statements and shell shebang/comment lines — a
+  // First drop import-starting lines and shell shebang/comment lines - a
   // driver named only in an import path or a `#` line is not a driver the test
-  // calls. (Whole-line removal; safe because these never share a line with a
-  // spawn/call expression.)
+  // calls. Whole-line removal assumes these lines do not also contain a
+  // spawn/call expression.
   const lineStripped = src
     .split("\n")
     .map((line) => {
@@ -921,12 +896,11 @@ export function codeView(src: string): string {
   // Then strip `//` line comments and `/* … */` block comments with a single
   // pass that RESPECTS string literals, so a `//` inside a URL ("https://…") or
   // a `/*` inside a string ("a glob /* …") never truncates or swallows real
-  // code. This subsumes the earlier line-strip-before-block ordering (a `//`
-  // comment that merely CONTAINS `/*` is consumed as a line comment, so it can
-  // no longer open a phantom block) AND closes the string-literal hole that the
-  // indexOf/regex form had. Regex literals are not lexed (a `/`-delimited regex
-  // containing `//` or `/*` is vanishingly rare in a test body and never carries
-  // a driver token), so they are left as a known, documented non-goal.
+  // code. A `//` comment that merely CONTAINS `/*` is consumed as a line
+  // comment, so it cannot open a phantom block. Regex literals are not lexed (a
+  // `/`-delimited regex containing `//` or `/*` is vanishingly rare in a test
+  // body and never carries a driver token), so they are left as a known,
+  // documented non-goal.
   return stripCommentsRespectingStrings(lineStripped);
 }
 
@@ -934,10 +908,10 @@ export function codeView(src: string): string {
  *  contents of string literals (single-quote, double-quote, backtick) intact, so
  *  a comment-opener appearing INSIDE a string (a URL's "//", or a "/*" in a glob)
  *  never truncates or swallows real code. A small single-pass state machine — not
- *  a full tokeniser (it does not lex regex literals) — sufficient for the
- *  mechanism scan, whose tokens (driveAidlc(, tui-drive.ts, spawnSync, BUN,
- *  claude -p) never live inside a string or a regex. Newlines are preserved so
- *  downstream line-based patterns still work. */
+ *  a full tokeniser (it does not lex regex literals): sufficient for the
+ *  mechanism scan, whose signals may sit inside a string literal (a driver
+ *  filename or a shipped tool path) and must survive the strip. Newlines outside
+ *  block comments are preserved so downstream line-based patterns still work. */
 function stripCommentsRespectingStrings(src: string): string {
   let out = "";
   const n = src.length;
@@ -945,14 +919,12 @@ function stripCommentsRespectingStrings(src: string): string {
   while (i < n) {
     const ch = src[i];
     const next = i + 1 < n ? src[i + 1] : "";
-    // String literal — copy verbatim through the matching quote, honouring `\` escapes.
     if (ch === '"' || ch === "'" || ch === "`") {
       out += ch;
       i++;
       while (i < n) {
         const c = src[i];
         if (c === "\\") {
-          // Escape: copy the backslash and the next char verbatim.
           out += c;
           if (i + 1 < n) out += src[i + 1];
           i += 2;
@@ -960,7 +932,7 @@ function stripCommentsRespectingStrings(src: string): string {
         }
         out += c;
         i++;
-        if (c === ch) break; // closing quote of the same kind
+        if (c === ch) break;
       }
       continue;
     }
@@ -970,7 +942,6 @@ function stripCommentsRespectingStrings(src: string): string {
       while (i < n && src[i] !== "\n") i++;
       continue;
     }
-    // `/* … */` block comment — drop through the closing `*/`.
     if (ch === "/" && next === "*") {
       i += 2;
       while (i < n && !(src[i] === "*" && src[i + 1] === "/")) i++;
@@ -996,7 +967,6 @@ export function parseCoversHeader(src: string, isShell: boolean): string[] {
   for (const line of lines) {
     const trimmed = line.trimStart();
     if (!trimmed.startsWith(leader)) {
-      // A non-comment line ends the leading comment block.
       if (inHeader) break;
       if (trimmed === "") continue; // tolerate a blank shebang gap
       break;
@@ -1028,8 +998,6 @@ export function parseCoversHeader(src: string, isShell: boolean): string[] {
 const UNIT_ID_RE = /\b([a-z][a-z0-9-]*):([A-Za-z0-9_][\w./:-]*)/g;
 
 function collectIds(text: string, out: string[]): void {
-  // Strip trailing parenthetical annotations like "(handleApprove :675)" first
-  // so a `:675` doesn't masquerade as an id segment.
   for (const m of text.matchAll(UNIT_ID_RE)) {
     out.push(`${m[1]}:${m[2]}`);
   }
@@ -1039,7 +1007,6 @@ function dedupe<T>(xs: T[]): T[] {
   return [...new Set(xs)];
 }
 
-/** Walk the test tiers, returning every file that carries a covers: header. */
 export function discoverClaims(): DiscoveredClaim[] {
   const claims: DiscoveredClaim[] = [];
   for (const tier of TEST_TIERS) {
@@ -1054,8 +1021,6 @@ export function discoverClaims(): DiscoveredClaim[] {
       if (ids.length === 0) continue;
       claims.push({
         file: `tests/${tier}/${f}`,
-        // DERIVED SET from the drivers the body calls (§2), seeded from the
-        // filename segment when the body scan is inconclusive (non-breaking).
         mechanisms: mechanismsOf(f, src),
         unitIds: ids,
       });
@@ -1148,7 +1113,6 @@ export function buildRegistry(): BuildResult {
     const byFile = new Map<string, IndexedClaim>();
     for (const m of matched) byFile.set(m.file, m);
     const indexed = [...byFile.values()];
-    // The serialised claim list carries the scalar representative per file.
     const coveredBy: CoverageClaim[] = indexed.map((c) => ({
       file: c.file,
       mechanism: c.mechanism,
@@ -1156,11 +1120,10 @@ export function buildRegistry(): BuildResult {
 
     // GUARANTEE-PRINCIPLE GATE. A claim counts when SOME mechanism in its
     // derived set ranks >= the unit's minMechanism — i.e. Math.max over the
-    // set's ranks clears the bar (§7 Phase 0). A {sdk, tui} test therefore
-    // covers a `tui` render-surface unit (max == tui) AND an `sdk`/`none` unit,
-    // which a single-label model could never express. Claims whose whole set is
-    // too weak are recorded in coveredBy (for transparency) but reported
-    // UNDER-MECHANISM rather than covered.
+    // set's ranks clears the bar. A {sdk, tui} test therefore covers a `tui`
+    // render-surface unit (max == tui) AND an `sdk`/`none` unit. Claims whose
+    // whole set is too weak are recorded in coveredBy (for transparency) but
+    // reported UNDER-MECHANISM rather than covered.
     const minRank = mechanismRank(u.minMechanism);
     const adequate = indexed.filter(
       (c) => Math.max(...c.mechanisms.map(mechanismRank)) >= minRank,
@@ -1170,7 +1133,6 @@ export function buildRegistry(): BuildResult {
     if (adequate.length > 0) {
       status = "covered";
     } else if (coveredBy.length > 0) {
-      // There ARE claims, but every one is too weak for this unit's bar.
       status = "UNDER-MECHANISM";
     } else if (u.minMechanism === "tui") {
       status = "DEFERRED-tui";
@@ -1200,7 +1162,7 @@ export function sortRegistryRows(rows: RegistryRow[]): RegistryRow[] {
 }
 
 // ===========================================================================
-// SERIALISATION — deterministic JSON so the freshness diff is byte-stable.
+// SERIALISATION - deterministic JSON for byte-stable output.
 // ===========================================================================
 
 export function registryJson(rows: RegistryRow[]): string {
@@ -1227,9 +1189,9 @@ export function classCounts(rows: RegistryRow[]): Record<UnitClass, { total: num
   return counts;
 }
 
-/** THE RATCHET: units the committed registry records as covered that a fresh
+/** THE RATCHET: units the base registry records as covered that a fresh
  *  build still enumerates but no longer covers. A unit removed from the source
- *  is not a coverage loss; the freshness diff reports it. */
+ *  is not a coverage loss. */
 export function lostClaims(committed: RegistryRow[], fresh: RegistryRow[]): RegistryRow[] {
   const now = new Map(fresh.map((r) => [`${r.unitClass}\u0000${r.unitId}`, r]));
   return committed

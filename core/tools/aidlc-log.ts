@@ -24,7 +24,9 @@ import {
   type StoredMessage,
 } from "./aidlc-message-store.ts";
 import {
+  asksForHelp,
   humanRepliedSinceGate,
+  printUsageAndExit,
   NoGuardRecoveryAskError,
   recordGuardRecoveryChoice,
   requestChangesReportCommand,
@@ -249,6 +251,12 @@ import {
 
 // The checkpoints `decision` and `answer` accept. The learnings question is an
 // ordinary question, so it is named with the way to run it.
+const DECISION_CHECKPOINTS: readonly string[] = [
+  "summary-confirmation", "plan-approval", "verification-command", "construction-policy",
+];
+// The engine's recovery question is asked by the engine, so only its answer is
+// recorded here.
+const ANSWER_CHECKPOINTS: readonly string[] = [...DECISION_CHECKPOINTS, "guard-recovery"];
 
 // A manifest that names a repo the piece of work does not record is not a
 // manifest to rewrite: the code was written where the person put it, so the
@@ -269,11 +277,11 @@ function unitManifestRefusal(
   return `unit "${unit}" has no valid source manifest at ${manifestPath} (${manifest.reason}). ${rewrite}`;
 }
 
-function unknownCheckpointMessage(checkpoint: string): string {
+function unknownCheckpointMessage(checkpoint: string, accepted: readonly string[]): string {
   if (checkpoint === "learnings") {
     return 'The learnings question takes no --checkpoint: run the same command without it.';
   }
-  return `Unknown --checkpoint "${checkpoint}". Accepted: summary-confirmation, plan-approval, verification-command, construction-policy, guard-recovery`;
+  return `Unknown --checkpoint "${checkpoint}". Accepted: ${accepted.join(", ")}`;
 }
 
 // Resolve the project dir AND assert that an active workflow exists before any
@@ -1080,14 +1088,8 @@ function handleDecision(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
   if (!flags.decision) error("Missing --decision <text>");
-  if (
-    flags.checkpoint !== undefined &&
-    flags.checkpoint !== "summary-confirmation" &&
-    flags.checkpoint !== "verification-command" &&
-    flags.checkpoint !== "construction-policy" &&
-    flags.checkpoint !== "plan-approval"
-  ) {
-    error(unknownCheckpointMessage(flags.checkpoint));
+  if (flags.checkpoint !== undefined && !DECISION_CHECKPOINTS.includes(flags.checkpoint)) {
+    error(unknownCheckpointMessage(flags.checkpoint, DECISION_CHECKPOINTS));
   }
   refusePlainSummaryConfirmation(flags, "decision");
   // A question text that says the person already confirmed ("Continue with X
@@ -1804,12 +1806,30 @@ function answerEnginePlanApproval(
     : picked.choice === "I'll edit the files" ? "edit" as const : "approve" as const;
   const units = (flags.units ?? flags.unit ?? "").split(",").map((unit) => unit.trim()).filter(Boolean);
   const feedback = flags.reason ?? (choice === "request-changes" && picked.rest ? picked.rest : undefined);
+  // A change asked for in the message the question opened for: the one the
+  // agent names, or this chat's latest with words, proved as any answer's is.
+  // Records keep whole seconds, so two in the latest second cannot be told
+  // apart: neither is taken unless the agent names one.
+  let opening: { words: string; at: string } | undefined;
+  if (choice === "request-changes") {
+    const chat = invokingChat(pd);
+    const said = chat === null ? [] : listMessages(pd).filter((m) => m.session === chat && m.words !== null);
+    const latestAt = said.reduce((at, m) => (m.at > at ? m.at : at), "");
+    const newest = said.filter((m) => m.at === latestAt);
+    const id = flags.message ?? (newest.length === 1 ? newest[0].id : undefined);
+    const proof = id === undefined ? null : proveMessage(pd, id, "answer");
+    if (proof !== null && "refusal" in proof && flags.message !== undefined) error(proof.refusal);
+    if (proof !== null && "message" in proof && proof.message.words) {
+      opening = { words: proof.message.words, at: proof.message.at };
+    }
+  }
   let result: { message: string; complete: boolean };
   try {
     result = recordPlanApprovalAnswer(pd, resolveInvokingSessionId(pd) ?? "", {
       choice,
       ...(units.length > 0 ? { units } : {}),
       ...(feedback ? { feedback } : {}),
+      ...(opening ? { opening } : {}),
     });
   } catch (e) {
     error(errorMessage(e));
@@ -1872,15 +1892,8 @@ function handleAnswer(args: string[]): void {
     }
   }
 
-  if (
-    flags.checkpoint !== undefined &&
-    flags.checkpoint !== "summary-confirmation" &&
-    flags.checkpoint !== "verification-command" &&
-    flags.checkpoint !== "construction-policy" &&
-    flags.checkpoint !== "plan-approval" &&
-    flags.checkpoint !== "guard-recovery"
-  ) {
-    error(unknownCheckpointMessage(flags.checkpoint));
+  if (flags.checkpoint !== undefined && !ANSWER_CHECKPOINTS.includes(flags.checkpoint)) {
+    error(unknownCheckpointMessage(flags.checkpoint, ANSWER_CHECKPOINTS));
   }
   // The engine's recovery question: the conductor records the remedy the
   // person picked, as it read their reply. "Request Changes: <what>" says the
@@ -4584,6 +4597,43 @@ function handleReview(args: string[]): void {
   }));
 }
 
+// --- Usage ---
+
+// What `--help` prints (#2449), from the same option and checkpoint lists the
+// subcommands check, so the usage cannot drift from what they accept.
+function logUsage(subcommand: string | undefined): string {
+  const invoke = (verb: string) => aidlcDispatcherInvocation(`log ${verb}`);
+  const flags = (options: ReadonlySet<string>) =>
+    [...options].filter((option) => option !== "--project-dir").sort().join(" ");
+  const usage: Record<string, string[]> = {
+    decision: [
+      `${invoke("decision")} --stage <slug> --decision "<the question>" --options "<choice>,<choice>"`,
+      "  Records a question before it is shown to the person. Required: --stage, --decision.",
+      `  --checkpoint: ${DECISION_CHECKPOINTS.join(", ")}. An ordinary question, the learnings one included, takes none.`,
+      `  Options: ${flags(DECISION_OPTIONS)}`,
+    ],
+    answer: [
+      `${invoke("answer")} --stage <slug> --details "<the person's exact choice>"`,
+      "  Records the person's answer. Required: --stage, and --details or --details-file.",
+      `  --checkpoint: ${ANSWER_CHECKPOINTS.join(", ")}. Use the one its question was recorded with.`,
+      `  Options: ${flags(ANSWER_OPTIONS)}`,
+    ],
+    answers: [`${invoke("answers")} --stage <slug> [--unit <unit>]`, "  Lists the answers recorded for a stage."],
+    link: [
+      `${invoke("link")} --stage <slug> --link <agent> [--repo <repo>] [--artifact <path>] [--single]`,
+      "  Records that a declared pipeline link returned. Runs in the active workspace (no --intent or --space).",
+    ],
+    review: [
+      `${invoke("review")} --stage <slug> --reviewer <agent> --iteration <n> [--unit <unit>] [--person-asked]`,
+      "  Records that the reviewer was sent the work.",
+      `${invoke("review")} --stage <slug> --reviewer <agent> --iteration <n> [--unit <unit>] --verdict ${[...VALID_VERDICTS].join("|")} [--review-file <path>]`,
+      "  Records the reviewer's verdict. Also: --retry-pending, --single. Runs in the active workspace (no --intent or --space).",
+    ],
+  };
+  if (subcommand !== undefined && usage[subcommand]) return usage[subcommand].join("\n");
+  return Object.values(usage).map((lines) => lines.join("\n")).join("\n\n");
+}
+
 // --- CLI entry point ---
 
 let projectDir: string | undefined;
@@ -4604,6 +4654,8 @@ export function main(argv: string[]): void {
   }
 
   const subcommand = filteredArgs[0];
+  if (subcommand === undefined || asksForHelp([subcommand])) printUsageAndExit(logUsage(undefined));
+  if (asksForHelp(filteredArgs.slice(1))) printUsageAndExit(logUsage(subcommand));
   readOnlyCommand = subcommand === "answers";
   if (subcommand === "decision" || subcommand === "answer") {
     refuseSplitValues(subcommand, rawArgs);

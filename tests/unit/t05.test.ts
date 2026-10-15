@@ -22,7 +22,7 @@
 // env-seam case is retained.
 //
 // Sources read for this port:
-//   dist/claude/.claude/tools/aidlc-lib.ts:893
+//   dist/claude/.claude/tools/aidlc-lib.ts
 //     export function parseStageFrontmatter(raw: string):
 //       Record<string, unknown>  — returns the parsed YAML frontmatter
 //       object; obj.slug and obj.phase are the two fields asserted here.

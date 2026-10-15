@@ -12,7 +12,7 @@
 // RESUME continuity (the 2nd session reads the 1st session's state and the
 // workflow advances), which is deterministic at the resume DISPATCH: a `--scope
 // bugfix` on a project that ALREADY has state does NOT re-init (init refuses on
-// existing state without --force, utility.ts:1746) — it resumes. We drive the two
+// existing state without --force, utility.ts) - it resumes. We drive the two
 // turns, stop each at its first deterministic landed signal, and assert the
 // continuity on disk: the 1st turn's init stages survive into the 2nd turn's
 // state, and the audit GREW across the two sessions. The DEEP multi-stage
@@ -33,7 +33,7 @@
 // the 1st turn's init [x] markers persist, and the audit grows with the 2nd
 // session's events. (We use the explicit `--scope bugfix` flag rather than a bare
 // `bugfix` to avoid the workshop-env disambiguation gate — t29 case 3's surface,
-// not this test's; SKILL.md:105 "explicit CLI flag wins".)
+// not this test's; SKILL.md "explicit CLI flag wins".)
 //
 // ASSERTION MAP (.sh test -> deterministic SDK surface, equal-or-stronger):
 //   1 after init: state file exists      -> existsSync(state) after turn 1.
@@ -55,10 +55,10 @@
 //
 // Known-answer literals (read from the SHIPPED tool, not guessed):
 //   - --init / --scope dispatch:  SKILL.md (init / known-scope routing)
-//   - re-init refusal on state:   aidlc-utility.ts:1746 (resume, not re-init, in turn 2)
-//   - init-stage [x] markers:     aidlc-utility.ts:1995-1998
-//   - State initialized summary:  aidlc-utility.ts:2154
-//   - explicit --scope wins:      SKILL.md:105
+//   - re-init refusal on state:   aidlc-utility.ts (resume, not re-init, in turn 2)
+//   - init-stage [x] markers:     aidlc-utility.ts
+//   - State initialized summary:  aidlc-utility.ts
+//   - explicit --scope wins:      SKILL.md
 //
 // It SPENDS TOKENS — driveAidlc drives the real /aidlc on Opus/Bedrock TWICE.
 // Known LLM-tier flake + one of the slowest (memory) — re-run alone if loaded.
@@ -80,7 +80,6 @@ import {
   stateFilePathFor,
 } from "../harness/sdk-drive.ts";
 
-// ---------------------------------------------------------------------------
 // AIDLC_TEST_TIMEOUT bounds the entire case, including setup and cleanup.
 const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
 // Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
@@ -98,24 +97,24 @@ function remainingWorkMs(): number {
 }
 
 
-const INIT_STATE_SUMMARY = "State initialized:"; // utility.ts:2154
+const INIT_STATE_SUMMARY = "State initialized:"; // aidlc-utility.ts handleIntentCreateStateBuild
 const STOP_AFTER_INIT = { toolName: "Bash", resultIncludes: INIT_STATE_SUMMARY } as const;
 const INIT_STAGES = ["workspace-scaffold", "workspace-detection", "state-init"];
 
 describe("t55 /aidlc creation (--scope bugfix) then resume continuity (sdk)", () => {
   // -------------------------------------------------------------------------
   // Two sequential turns against one fresh project: turn 1 creates the workflow
-  // from a scope (P4 retired --init - a scope on a clean workspace auto-creates),
-  // turn 2 a --scope bugfix turn RESUMES from it (init [x] markers persist, audit
-  // grows). Deep progression is the tui t50 journey's surface.
+  // from a scope and description, turn 2 a --scope bugfix turn RESUMES from it
+  // (init [x] markers persist, audit count does not decrease). Deep progression
+  // is the tui t50 journey's surface.
   // -------------------------------------------------------------------------
   test(
     "creation establishes state; a second scope turn resumes from it (init stages persist, audit grows across sessions)",
     async () => {
       const proj = setupIntegrationProject({ noAidlcDocs: true });
       try {
-        // P4: creation writes per-intent - state at the active intent's record dir
-        // (aidlc/spaces/<space>/intents/<slug>-<id8>/aidlc-state.md) and audit as
+        // Creation writes per-intent - state at the active intent's record dir
+        // (aidlc/spaces/<space>/intents/<YYMMDD>-<slug>/aidlc-state.md) and audit as
         // per-clone shards under <record>/audit/, NOT the flat aidlc-docs/. Resolve
         // both lazily (the cursors only exist after creation) via the record-aware
         // harness helpers, which fall back to flat for a not-yet-created project.
@@ -123,13 +122,10 @@ describe("t55 /aidlc creation (--scope bugfix) then resume continuity (sdk)", ()
         const auditDir = () => auditDirFor(proj);
 
         // ---- Turn 1: /aidlc --scope bugfix (CREATE the workflow) ----
-        // P4 retired `/aidlc --init`: on a fresh workspace the engine auto-creates
-        // the first intent from a resolved scope (the old --init had no scope and
-        // now errors directing the user to a scope/description). A named scope on a
-        // clean workspace NAMES intent-create, which scaffolds state + marks the 3
-        // init stages [x] - the creation this journey starts from. With a
-        // description: named alone, the scope first asks what the work is for
-        // (#2355). Turn 2 stays a scope named alone: on existing work it resumes.
+        // A named scope on a clean workspace NAMES intent-create, which scaffolds state
+        // + marks the 3 init stages [x] - the creation this journey starts from. With a
+        // description: named alone, the scope first asks what the work is for (#2355).
+        // Turn 2 stays a scope named alone: on existing work it resumes.
         const r1 = await driveAidlc("/aidlc --scope bugfix fix the login: it rejects a correct password", {
           projectDir: proj,
           answerScript: "default",
@@ -137,25 +133,21 @@ describe("t55 /aidlc creation (--scope bugfix) then resume continuity (sdk)", ()
           stopAfterToolResult: STOP_AFTER_INIT,
         });
 
-        // .sh test 1: after creation, the state file exists.
         expect(existsSync(statePath())).toBe(true);
         const stateAfterInit = readStateFile(proj);
         expect(stateAfterInit).toBeDefined();
 
-        // .sh test 2: all 3 init stages marked [x] after init.
         for (const stage of INIT_STAGES) {
           expect(stateAfterInit as string).toContain(`[x] ${stage}`);
         }
 
-        // Capture the post-init audit-event count as the resume baseline.
         const eventsAfterInit = readAuditEvents(proj) ?? [];
         const initEventCount = eventsAfterInit.length;
         expect(initEventCount).toBeGreaterThan(0);
 
         // ---- Turn 2: /aidlc --scope bugfix (RESUME from the init state) ----
-        // A --scope on an already-stateful project resumes (init refuses re-init
-        // without --force, utility.ts:1746). Stop at the first orchestrator
-        // directive (run-stage) so we don't chase the LLM-paced continuation.
+        // A --scope on an already-stateful project resumes. Stop at the first run-stage
+        // directive so we don't chase the LLM-paced continuation.
         const r2 = await driveAidlc("/aidlc --scope bugfix", {
           projectDir: proj,
           answerScript: "default",
@@ -163,26 +155,21 @@ describe("t55 /aidlc creation (--scope bugfix) then resume continuity (sdk)", ()
           stopAfterToolResult: { toolName: "Bash", resultIncludes: '"kind":"run-stage"' },
         });
 
-        // .sh test 3: after resume, the state file still exists.
         expect(existsSync(statePath())).toBe(true);
         const stateAfterResume = readStateFile(proj);
         expect(stateAfterResume).toBeDefined();
 
-        // CONTINUITY (stronger than the .sh's byte count): the 1st turn's init [x]
-        // markers PERSIST into the 2nd turn's state — proof the 2nd session
-        // RESUMED rather than re-initialising from scratch (a re-init would also
-        // grow the byte count, so this is the stronger continuity assertion).
+        // CONTINUITY: the 1st turn's init [x] markers PERSIST into the 2nd turn's
+        // state (a re-creation would also write them, so this is a floor, not proof
+        // of resume).
         for (const stage of INIT_STAGES) {
           expect(stateAfterResume as string).toContain(`[x] ${stage}`);
         }
 
-        // .sh test 6: audit exists after both sessions (P4: the per-clone audit
+        // Audit exists after both sessions (the per-clone audit
         // shard dir under the active intent's record).
         expect(existsSync(auditDir())).toBe(true);
 
-        // .sh test 7: the audit grew across the two sessions (the 2nd session
-        // appended its events). Typed event-count non-regression — at least as
-        // many events as after init, and the resume added at least one.
         const eventsAfterResume = readAuditEvents(proj) ?? [];
         expect(eventsAfterResume.length).toBeGreaterThanOrEqual(initEventCount);
 

@@ -53,10 +53,23 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AIDLC_SRC } from "../harness/fixtures.ts";
+import {
+	AIDLC_SRC,
+	createTestProject,
+	resetAidlcEnv,
+	runOrchestrateNext,
+	seedAidlcMemory,
+	seededRecordDir,
+	seededStateFile,
+	seedStateFile,
+} from "../harness/fixtures.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { emitStageFrontmatter, parseStageFrontmatter } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { validateStageFrontmatter } from "../../dist/claude/.claude/tools/aidlc-stage-schema.ts";
+import { stageValidationAuditFields } from "../../dist/claude/.claude/tools/aidlc-validity.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -342,5 +355,147 @@ describe("t233 back-compat forms", () => {
 			"a.md": "# A\n\nSee Intent-Statement for context.\n",
 		});
 		expect(run(dir, "a.md", "intent-statement").pass).toBe(true);
+	});
+});
+
+// The dispatcher hands the check the inputs the stage requires. An optional
+// input (`required: false`) that exists may not have informed the output, so
+// citing it is not asked for; a required one still is (#2210).
+describe("t233 the dispatcher checks the inputs a stage requires", () => {
+	const DISPATCHER = join(import.meta.dir, "..", "..", "core", "tools", "aidlc-sensor.ts");
+	const FRAMEWORK_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
+
+	function feasibility(citesIntent: boolean): { proj: string; output: string } {
+		const proj = createTestProject();
+		tempDirs.push(proj);
+		seedStateFile(proj, "state-mid-ideation.md");
+		const record = seededRecordDir(proj);
+		const put = (relative: string, body: string): string => {
+			const path = join(record, ...relative.split("/"));
+			mkdirSync(join(path, ".."), { recursive: true });
+			writeFileSync(path, body, "utf-8");
+			return path;
+		};
+		put("ideation/intent-capture/intent-statement.md", "# Intent\n\n## Goal\n\nA widget.\n");
+		// Feasibility consumes competitive-analysis with `required: false`.
+		put("ideation/market-research/competitive-analysis.md", "# Competitors\n\n## A\n\nx\n");
+		let output = "";
+		for (const name of ["feasibility-assessment", "constraint-register", "raid-log"]) {
+			const source = citesIntent ? "Source: `intent-statement.md`" : "Source: the workshop notes";
+			const path = put(`ideation/feasibility/${name}.md`, `# ${name}\n\n${source}\n\n## One\n\nx\n`);
+			if (output === "") output = path;
+		}
+		return { proj, output };
+	}
+
+	function fire(proj: string, output: string): string {
+		const res = spawnSync(BUN, [DISPATCHER, "fire", "upstream-coverage", "--stage", "feasibility", "--output-path", output], {
+			timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+			encoding: "utf-8",
+			cwd: proj,
+			env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_STAGE_GRAPH: FRAMEWORK_GRAPH },
+		});
+		expect(res.status, res.stderr).toBe(0);
+		return (JSON.parse((res.stdout || "").trim().split("\n").pop() ?? "{}") as { result: string }).result;
+	}
+
+	test("17: an optional input that exists and is not cited passes; a required one not cited still fails", () => {
+		const cited = feasibility(true);
+		expect(fire(cited.proj, cited.output)).toBe("passed");
+		const uncited = feasibility(false);
+		expect(fire(uncited.proj, uncited.output)).toBe("failed");
+	});
+});
+
+// A stage may list under `cites:` optional inputs its deliverables cite
+// whenever they exist. The check reads them beside the required inputs; the
+// key sits outside `consumes`, so adding it changes no finished stage's record.
+describe("t233 a stage's cites: optional inputs checked where they exist", () => {
+	const DISPATCHER = join(import.meta.dir, "..", "..", "core", "tools", "aidlc-sensor.ts");
+	const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+	const FRAMEWORK_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
+	type GraphNode = { slug: string; cites?: string[] } & Record<string, unknown>;
+
+	const stage = (extra: string): string =>
+		`---\nslug: syn-cites\nphase: inception\nexecution: ALWAYS\ncondition: x\nlead_agent: aidlc-product-agent\nsupport_agents: []\nmode: inline\nproduces:\n  - requirements\nconsumes:\n  - artifact: intent-statement\n    required: false\n${extra}requires_stage: []\ninputs: a\noutputs: b\n---\n`;
+
+	test("18: cites parses, validates against consumes, round-trips, and only Requirements Analysis ships it", () => {
+		const parsed = parseStageFrontmatter(stage("cites:\n  - intent-statement\n")) as Record<string, unknown>;
+		expect(parsed.cites).toEqual(["intent-statement"]);
+		expect(validateStageFrontmatter(parsed).valid).toBe(true);
+		expect(parseStageFrontmatter(emitStageFrontmatter(parsed))).toEqual(parsed);
+		expect("cites" in (parseStageFrontmatter(stage("")) as Record<string, unknown>)).toBe(false);
+		const stray = validateStageFrontmatter(parseStageFrontmatter(stage("cites:\n  - scope-document\n")));
+		expect(stray.valid).toBe(false);
+		expect(stray.valid ? [] : stray.errors).toContain('cites[0] "scope-document" is not one of the stage\'s consumes');
+		const graph = JSON.parse(readFileSync(FRAMEWORK_GRAPH, "utf-8")) as GraphNode[];
+		expect(graph.filter((node) => node.cites !== undefined).map((node) => [node.slug, node.cites])).toEqual([
+			["requirements-analysis", ["intent-statement", "scope-document"]],
+		]);
+	});
+
+	function requirementsProject(inputs: boolean, cites: boolean): { proj: string; output: string } {
+		resetAidlcEnv();
+		const proj = createTestProject();
+		tempDirs.push(proj);
+		seedStateFile(proj, "state-mid-inception.md");
+		const record = seededRecordDir(proj);
+		const put = (relative: string, body: string): string => {
+			const path = join(record, ...relative.split("/"));
+			mkdirSync(join(path, ".."), { recursive: true });
+			writeFileSync(path, body, "utf-8");
+			return path;
+		};
+		if (inputs) {
+			put("ideation/intent-capture/intent-statement.md", "# Intent\n\n## Goal\n\nA widget.\n");
+			put("ideation/scope-definition/scope-document.md", "# Scope\n\n## In\n\nx\n");
+		}
+		const source = cites ? "Sources: `intent-statement.md`, `scope-document.md`" : "Source: the person's request";
+		return { proj, output: put("inception/requirements-analysis/requirements.md", `# Requirements\n\n${source}\n\n## Functional\n\n- FR1 Login\n`) };
+	}
+
+	function fire(proj: string, output: string): string {
+		const res = spawnSync(BUN, [DISPATCHER, "fire", "upstream-coverage", "--stage", "requirements-analysis", "--output-path", output], {
+			timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+			encoding: "utf-8",
+			cwd: proj,
+			env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_STAGE_GRAPH: FRAMEWORK_GRAPH },
+		});
+		expect(res.status, res.stderr).toBe(0);
+		return (JSON.parse((res.stdout || "").trim().split("\n").pop() ?? "{}") as { result: string }).result;
+	}
+
+	test("19: Requirements Analysis cites the intent statement and scope document where they exist; without Ideation nothing is checked", () => {
+		const uncited = requirementsProject(true, false);
+		expect(fire(uncited.proj, uncited.output)).toBe("failed");
+		const cited = requirementsProject(true, true);
+		expect(fire(cited.proj, cited.output)).toBe("passed");
+		const withoutIdeation = requirementsProject(false, false);
+		expect(fire(withoutIdeation.proj, withoutIdeation.output)).toBe("passed");
+	});
+
+	test("20: a Requirements Analysis finished before cites existed is not asked about after the update", () => {
+		const graph = JSON.parse(readFileSync(FRAMEWORK_GRAPH, "utf-8")) as GraphNode[];
+		const before = graph.map((node) => {
+			const { cites: _cites, ...rest } = node;
+			return rest as GraphNode;
+		});
+		const project = requirementsProject(true, true);
+		seedAidlcMemory(project.proj);
+		const statePath = seededStateFile(project.proj);
+		const state = readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [x] requirements-analysis");
+		writeFileSync(statePath, state);
+		const node = before.find((entry) => entry.slug === "requirements-analysis");
+		expect(node).toBeDefined();
+		appendAuditEntry("STAGE_COMPLETED", {
+			Stage: "requirements-analysis",
+			...stageValidationAuditFields(project.proj, node as never, state, before as never),
+		}, project.proj);
+		const env: Record<string, string | undefined> = { ...process.env, AIDLC_STAGE_GRAPH: FRAMEWORK_GRAPH, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" };
+		delete env.AIDLC_UNATTENDED;
+		const text = JSON.stringify(runOrchestrateNext(ORCHESTRATE, project.proj, [], { env }));
+		expect(text).not.toContain("used changed after it finished");
+		expect(text).not.toContain("differently from when yours ran");
+		expect(text).not.toContain("stage_validity");
 	});
 });

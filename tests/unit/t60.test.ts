@@ -13,12 +13,12 @@
 //
 // CURRENT SURFACE: AIDLC_SCOPE_MAPPING is the LEGACY
 // TEST SEAM: when set, loadScopeMapping() reads the JSON VERBATIM and SKIPS the
-// real derivation (aidlc-lib.ts:805-825). v0.6.0 DELETED scope-mapping.json from
+// real derivation (aidlc-lib.ts). v0.6.0 DELETED scope-mapping.json from
 // the shipped tree (verified absent on disk); the compiled scope-grid.json is now
 // the EXECUTE/SKIP source and `.claude/scopes/*.md` frontmatter is the
-// depth/keywords/description source (aidlc-lib.ts:699-704, 827-849). The .sh
+// depth/keywords/description source (aidlc-lib.ts). The .sh
 // authors a NEW scope the way a harness engineer actually does — it DROPS a
-// .claude/scopes/aidlc-fixture-scope.md file and sets NO env var (t60.sh:53-81),
+// .claude/scopes/aidlc-fixture-scope.md file and sets NO env var (t60.sh),
 // exercising the real shipped derivation. This test mirrors that EXACTLY:
 // it writes the fixture .md into each temp project's COPIED .claude/scopes/ and
 // never sets AIDLC_SCOPE_MAPPING (it is even deleted from each spawn env so a
@@ -30,15 +30,15 @@
 // function symbol:
 //   - The covers header credits function:validScopes precisely because the
 //     .sh exercised it via a `bun -e "import { validScopes } ..."` SUBPROCESS
-//     (t60.sh:46). We preserve that exact mechanism (a spawned `bun -e`
+//     (t60.sh). We preserve that exact mechanism (a spawned `bun -e`
 //     importing the shipped lib.ts symbol) so the function-unit credit is
 //     earned the same way — same observable (the sorted scope list printed to
 //     stdout).
 //   - scope-table is exercised through the real aidlc-utility.ts CLI
 //     subprocess and the table it prints — the .sh's `bun "$TOOL" scope-table`
-//     (t60.sh:145-150).
+//     (t60.sh).
 //   - intent-create, scope-change, doctor: real-CLI spawns too (the .sh shelled
-//     out to the same aidlc-utility.ts subcommands at t60.sh:87,101,110,123),
+//     out to the same aidlc-utility.ts subcommands at t60.sh),
 //     credited transitively to the derivation contract under test.
 //
 // FIXTURE DISCIPLINE: each case builds a FRESH integration sandbox via

@@ -1,7 +1,7 @@
 // covers: function:loadAgents
 //
 // Mechanism: none. The contract under test is the agent-metadata loader
-// `loadAgents()` (aidlc-lib.ts:805) — the single source of truth that
+// `loadAgents()` (aidlc-lib.ts) - the single source of truth that
 // every agent-metadata consumer reads, derived from `.claude/agents/*.md`
 // frontmatter. Three things flow through that loader with NO code change
 // when an agent file is added/dropped: (1) no AGENT_KNOWLEDGE / AGENT_DISPLAY
@@ -18,7 +18,7 @@
 // dist/claude/.claude into a fresh temp project (setupIntegrationProject),
 // drops a fixture-agent.md under <proj>/.claude/agents/, then spawns the
 // tool/hook FROM THAT PROJECT — so loadAgents() inside the subprocess
-// resolves AGENTS_DIR relative to <proj>/.claude/agents (lib.ts:801,
+// resolves AGENTS_DIR relative to <proj>/.claude/agents (lib.ts,
 // `import.meta.url`-relative), seeing the fixture agent. The statusline
 // hook is mechanism=none (a hook driven by controlled stdin). An in-process
 // call against the worktree-checkout lib.ts would read the SHIPPED agents

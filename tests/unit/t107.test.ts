@@ -1,13 +1,13 @@
 // covers: function:parseCheckboxes
 //
 // t107 — property-based floor test for parseCheckboxes() in
-// dist/claude/.claude/tools/aidlc-lib.ts:449.
+// dist/claude/.claude/tools/aidlc-lib.ts.
 //
 // WHY THIS EXISTS. parseCheckboxes drives every checkbox state transition
 // in the orchestrator (countCheckboxes, the state-table render at
-// lib.ts:1345, and indirectly setCheckbox round-trips). Its contract is a
+// lib.ts, and indirectly setCheckbox round-trips). Its contract is a
 // single regex — /^- \[([ xSR?-])\] (\S+)\s*—\s*(.*)$/gm — coupled to the
-// CHECKBOX_MAP marker table at lib.ts:50. That coupling is never unit-tested
+// CHECKBOX_MAP marker table at lib.ts. That coupling is never unit-tested
 // today: if the regex marker class and CHECKBOX_MAP drift apart, a state
 // silently stops parsing and a stage's progress is mis-counted with no error.
 //

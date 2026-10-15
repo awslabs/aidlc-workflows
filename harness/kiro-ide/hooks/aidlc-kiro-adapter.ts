@@ -122,7 +122,7 @@ import {
   decodeHarnessPlainText,
   fenceCommandOutput,
   relayAsTextBlock,
-  planApprovalAskIsOpen,
+  terminalCommandRelay,
   presenceFloorHolds,
   clearKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalViolation,
@@ -2325,12 +2325,7 @@ function workflowRecordSelected(pd: string, sessionId: string): boolean {
 }
 
 function terminalContext(result: TerminalResult): string {
-  return (
-    `The command \`/aidlc ${result.typed}\` has already run. ` +
-    `It carries no workflow work. Relay the output below ${relayAsTextBlock(result.output)}, then stop. ` +
-    "Do not run any shell command or call any AIDLC tool this turn.\n\n" +
-    fenceCommandOutput(result.output, result.exitCode)
-  );
+  return terminalCommandRelay(`/aidlc ${result.typed}`, result.output, result.exitCode);
 }
 
 function terminalRefusal(result: TerminalResult): string {
@@ -2611,22 +2606,6 @@ if (target === "terminal-command-guard") {
   writeTerminalLatch(sessionId, turn, invocation, result);
   process.stderr.write(terminalRefusal(result));
   return 2;
-}
-
-// Whether the workflow this chat selects has the engine's Plan Approval
-// question open (planApprovalAskIsOpen), judged in that workflow as the gate
-// floor judges it. A chat outside the workflow never has it open.
-function planApprovalQuestionOpen(pd: string, sessionId: string): boolean {
-  try {
-    const workflow = enterHookWorkflow(pd, sessionId);
-    try {
-      return !hookOutsideGate(workflow) && planApprovalAskIsOpen(pd);
-    } finally {
-      workflow.restore();
-    }
-  } catch {
-    return false;
-  }
 }
 
 // UserPromptSubmit forwards to the core human-turn hook below. That hook
@@ -3094,6 +3073,9 @@ function buildForward(): Forward {
           session_id: sessionId,
           prompt: ide.userPrompt ?? "",
           origin,
+          // verb-intercept, beside this hook, runs a command the person typed
+          // and hands the agent its output itself.
+          relays_terminal_output: true,
         },
       };
     }
@@ -3144,14 +3126,11 @@ function buildForward(): Forward {
           },
         };
       }
-      // While the engine asks the person to approve the plan, a call to one of
-      // their MCP servers goes to the core guard marked as theirs, which runs it
-      // like their other requests beside the build; Kiro's own card and their
-      // Kiro settings decide it. Outside that question it takes the checks below.
-      if (
-        isKiroMcpTool(toolName) &&
-        planApprovalQuestionOpen(projectDir, resolvedPlanApprovalSessionId(ide))
-      ) {
+      // A call to one of the person's MCP servers goes to the core guard marked
+      // as theirs, which runs it like their other requests at any point of Code
+      // Generation; Kiro's own card and their Kiro settings decide it. It never
+      // takes the argument-less write checks below, which are for Kiro's writes.
+      if (isKiroMcpTool(toolName)) {
         return {
           hook: "aidlc-plan-approval-guard.ts",
           input: {

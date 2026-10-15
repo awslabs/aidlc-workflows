@@ -115,6 +115,25 @@ describe("summary confirmation digest reads decorated contract headings", () => 
     )).toThrow('duplicate H2 section "Q2"');
   });
 
+  test("a question that names its trade after its number is still that question", () => {
+    // The stage protocol writes `## Q<n>. [<trade>] <title>`, in the
+    // conversation language.
+    const named = QUESTIONS
+      .replace("## Q1. Which", "## Q1. [Product owner] Which")
+      .replace("## Q2: Where", "## Q2: [개발자] Where")
+      .replace("## Q3. How", "## Q3. [Operations engineer] How");
+    // Before and after the checkpoint each one is a question, not an unsupported heading.
+    expect(() => summaryConfirmationContentHash(named)).not.toThrow();
+    // Straight after Assumption Confirmation a follow-up ends that exclusion, as `## Q3.` does.
+    const afterAssumptions = named.replace("## Requested Changes Feedback\n\n[Answer]: Add an audit log.\n\n", "");
+    expect(afterAssumptions).not.toBe(named);
+    expect(summaryConfirmationContentHash(afterAssumptions.replace("One year", "Ten years")))
+      .not.toBe(summaryConfirmationContentHash(afterAssumptions));
+    expect(() => summaryConfirmationContentHash(
+      named.replace("## Q3. [Operations engineer]", "## Q2. [Operations engineer]"),
+    )).toThrow('duplicate H2 section "Q2"');
+  });
+
   test("a decorated question spelled inside code still ends the exclusion", () => {
     const spelled = QUESTIONS.replace(
       "- [assumption] Customers use email sign-in.",

@@ -8,7 +8,7 @@
 //   1. `aidlc-runtime.ts summary --json` emits the 8 top-level keys the skills'
 //      render templates depend on (workflow_id, scope, duration_minutes, stages,
 //      by_phase, memory, sensors, learnings). Source shape: RuntimeSummary
-//      (dist/claude/.claude/tools/aidlc-runtime.ts:880-905), produced by
+//      (dist/claude/.claude/tools/aidlc-runtime.ts), produced by
 //      summarize() and printed by handleSummary under `--json` as
 //      JSON.stringify(summary, null, 2).
 //   2. FORWARD drift: every dotted JSON field the three skills cite resolves in

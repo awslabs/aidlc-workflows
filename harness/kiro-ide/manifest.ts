@@ -46,7 +46,9 @@ const DELEGATION_AGENTS = [
 // (the proposalPath detect --json prints). It writes no scope and not the
 // scope grid; saving a scope is the engine's `scope save`.
 const composerProposalPath = "aidlc/spaces/*/intents/.aidlc-engine/composer-proposal.json";
-const spacePaths = ["aidlc/spaces/**"];
+// A side-by-side worker's own unit records sit in its worktree, a top-level dot
+// entry (`.aidlc/worktrees/bolt-<id8>_<slug>`); its code there still asks.
+const spacePaths = ["aidlc/spaces/**", ".aidlc/worktrees/*/aidlc/spaces/**"];
 
 const quoted = (paths: readonly string[]) =>
   paths.map((path) => `        - "${path}"`);
@@ -167,7 +169,9 @@ const KIRO_HOOKS_OFF_AGENT =
 
 const manifest: HarnessManifest = {
   name: "kiro-ide",
-  productName: "Kiro IDE",
+  // One tree for Kiro IDE and Kiro CLI, so it is named after neither.
+  productName: "Kiro",
+  choiceNote: "Kiro IDE and Kiro CLI on its v3 engine",
   configNextStep: "open this project in Kiro IDE; if the Restricted Mode banner shows at the top of the window and you know what is in this folder, select Manage on it, then Trust; run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli` in the project instead and run `/aidlc --doctor`)",
   // Kiro IDE runs a folder's hooks and loads its aidlc agent only after the
   // folder is trusted and the window reloads; until then the first approval

@@ -2,8 +2,8 @@
 // The workflow lifecycle is independent of session lifecycle — ending a
 // session does NOT complete the workflow. This event is observability only.
 //
-// No-op if aidlc-state.md is absent in cwd (the canonical "active workflow"
-// signal — matches session-start.ts and the plan definition).
+// Finished work records no later session event, even while the conversation
+// remains bound to it.
 import { existsSync } from "node:fs";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
@@ -21,6 +21,7 @@ import {
   readSessionIntentUuid,
   recordHookDrop,
   resolveProjectDirFromHook,
+  selectedRecordIsFinished,
   stateFilePath,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
@@ -28,10 +29,10 @@ import {
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
-// Read stdin for the reason and session identity. The session stamp preserves
+// Parse input for the reason and session identity. The session stamp preserves
 // attribution when intent-create has already moved the shared active cursor.
 // Guard on isTTY — if stdin is a terminal (test / direct-run / debug-mode pipeline
-// that inherits TTY), skip the read to avoid blocking forever.
+// that inherits TTY), skip payload parsing.
 let reason = "unknown";
 let sessionId = "";
 if (!process.stdin.isTTY) {
@@ -103,6 +104,7 @@ try {
   const source = ended.binding?.source;
   if (source === "unjoined") return 0;
   if (ended.intent !== null && workflowParticipation(projectDir, ended) !== "participant") return 0;
+  if (selectedRecordIsFinished(projectDir, ended)) return 0;
 } catch {
   return 0;
 }

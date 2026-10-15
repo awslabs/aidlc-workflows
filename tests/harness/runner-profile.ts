@@ -284,7 +284,6 @@ export function runnerFailureExitCode(failedFiles: number): number {
     : 1;
 }
 
-// The fixture profile preserves the runner's historical synthetic-fixture defaults.
 const FIXTURE_GUARD_ENV = {
   AIDLC_SKIP_ARTIFACT_GUARD: "1",
   AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",

@@ -8,7 +8,7 @@
 // is the PURE function compileStageGraph() — it has no process.exit shell of
 // its own (the CLI `compile` handler wraps it; runCompileCheck() likewise
 // just compares its json output to disk). compileStageGraph is exported
-// (aidlc-graph.ts:889) and reads its inputs through the documented env-var
+// (aidlc-graph.ts) and reads its inputs through the documented env-var
 // seams (AIDLC_RULES_DIR -> rulesDir, AIDLC_STAGE_GRAPH -> bootstrap source),
 // so every behavioural contract migrates to a direct in-process call. This
 // is the .none mechanism: import the pure function, drive it via the env
@@ -24,10 +24,10 @@
 // The two cases that depended on the CLI's exit code (case 9 `--check` drift,
 // case 10 bad-pairing fail) are NOT CLI-arg-parsing behaviour: `--check`'s
 // drift signal is exactly `compileStageGraph().json !== <on-disk graph>`
-// (runCompileCheck, aidlc-graph.ts:1068-1076) — reproduced here by comparing
+// (runCompileCheck, aidlc-graph.ts) - reproduced here by comparing
 // the function output to a temp graph file we wrote a prior compile to; and
 // the bad-pairing "exit 1" is a `throw` out of loadRules ->
-// validateRuleFrontmatter (aidlc-rule-schema.ts:71-76) that compileStageGraph
+// validateRuleFrontmatter (aidlc-rule-schema.ts) that compileStageGraph
 // propagates — asserted here with expect(...).toThrow. Both observables
 // (drift detected / compile rejects) are preserved without a subprocess.
 //
@@ -78,7 +78,7 @@
 // (case 8's drift edit, case 10's bad-pairing file, lifecycle validation) and the empty-dir case
 // (case 7) build throwaway temp dirs under tmpdir(), cleaned in afterAll —
 // nothing is written under tests/fixtures/**. __resetGraphCache() is called
-// before each compile (the documented test seam, aidlc-graph.ts:179) because
+// before each compile (the documented test seam, aidlc-graph.ts) because
 // loadStageGraph caches per-process; loadRules itself is uncached and re-walks
 // AIDLC_RULES_DIR every call, so the fixture swap is always honoured.
 

@@ -2,7 +2,7 @@
 //
 // t70.test.ts — SDK-harness port of tests/integration/t70-stage-workspace-detection-greenfield.sh
 // (plan 8). Drives the real /aidlc --init --force (TRAP 2; init
-// is a print-and-stop terminal with no gate, SKILL.md:54,138) against a project
+// is a print-and-stop terminal with no gate, SKILL.md) against a project
 // seeded with the greenfield-todo stub
 // (a bare README.md, no source/manifest/framework config) and a pre-seeded state
 // pinned at workspace-detection. Asserts ONLY on deterministic surfaces —
@@ -14,47 +14,47 @@
 // with a case-insensitive `[Gg]reenfield` regex and the negative with a
 // case-insensitive `brownfield` regex, and proved "init ran" only via run_claude's
 // exit semantics. The whole init path is deterministic: the engine's --init
-// branch (aidlc-orchestrate.ts:814-838) shells `bun .claude/tools/
+// branch (aidlc-orchestrate.ts) shells `bun .claude/tools/
 // aidlc-utility.ts init [--force]` via Bash and prints its stdout verbatim.
-// handleInit (aidlc-utility.ts:1716) removes the seeded state on
-// --force (:1757), runs the deterministic detectWorkspace scan (:1912 -> :1581),
-// and re-writes aidlc-state.md from a fixed template (:2044). The greenfield-todo
+// handleInit (aidlc-utility.ts) removes the seeded state on
+// --force, runs the deterministic detectWorkspace scan,
+// and re-writes aidlc-state.md from a fixed template. The greenfield-todo
 // stub carries no source files / package.json / framework config / manifest /
-// app-source dir, so detectWorkspace's `brownfield` OR-chain (:1658-1663) is all
-// false and projectType === "Greenfield" (:1666). Every .sh grep is re-expressed
+// app-source dir, so detectWorkspace's `brownfield` OR-chain is all
+// false and projectType === "Greenfield". Every .sh grep is re-expressed
 // against that on-disk state + the typed audit event + the verbatim tool stdout.
 //
 // ASSERTION MAP (.sh test -> SDK surface):
 //   1 state file still exists             -> r.stateFile !== undefined (sdk-drive reads aidlc-state.md off disk post-run)
-//   2 Completed counter == [x] count      -> assertStateField "Completed"="3" (utility.ts:2071 completedInit) AND
-//                                            on-disk `- [x]` line count === 3 (init stages marked [x], utility.ts:1996).
+//   2 Completed counter == [x] count      -> assertStateField "Completed"="3" (utility.ts completedInit) AND
+//                                            on-disk `- [x]` line count === 3 (init stages marked [x], utility.ts).
 //                                            Stronger: pins the known-answer 3, not just internal consistency.
 //   3 Project Type is greenfield          -> assertStateField "Project Type"="Greenfield"
-//                                            (utility.ts:2048 <- scan.projectType, :1666). Stronger: exact, not [Gg] regex.
-//   4 audit has WORKSPACE_SCANNED         -> assertAuditEvent "WORKSPACE_SCANNED" (emitted utility.ts:1914).
+//                                            (utility.ts <- scan.projectType). Stronger: exact, not [Gg] regex.
+//   4 audit has WORKSPACE_SCANNED         -> assertAuditEvent "WORKSPACE_SCANNED" (emitted utility.ts).
 //                                            Stronger: typed **Event** parse, not a substring grep of audit.md.
 //   5 [x] count >= 3 (all init stages)    -> on-disk `- [x]` line count >= 3 (and === completedInit === 3).
-//   6 Project Root is populated           -> assertStateField "Project Root"=<projectDir> (utility.ts:2064 <- projectDir).
+//   6 Project Root is populated           -> assertStateField "Project Root"=<projectDir> (utility.ts <- projectDir).
 //                                            Stronger: exact path equality, not merely "not the em-dash placeholder".
-//   7 State Version is 7                  -> assertStateField "State Version"="7" (utility.ts:2051 hard literal `7`).
+//   7 State Version is 7                  -> assertStateField "State Version"="7" (utility.ts hard literal `7`).
 //                                            Stronger: exact, not the `State Version.*: 7` regex.
 //   8 Project Type is NOT brownfield      -> Project-Type field does NOT match /brownfield/i (the negative; complements 3).
 //   + init actually RAN (was run_claude   -> assertToolResultContains "Bash" "Project type: Greenfield" — the init tool's
-//     exit semantics)                        verbatim stdout (utility.ts:2151). Proves the deterministic tool fired
+//     exit semantics)                        verbatim stdout (utility.ts). Proves the deterministic tool fired
 //                                            (assertToolResultContains refuses to pass vacuously if Bash never ran).
 //
 // Known-answer literals (read from the SHIPPED handler / fixture, not guessed):
-//   - --init --force dispatch:  SKILL.md:531 -> `bun .claude/tools/aidlc-utility.ts init` via Bash, stdout verbatim
-//   - --force removes seeded state then re-writes:  handleInit aidlc-utility.ts:1749-1758
-//   - classification "Greenfield":         detectWorkspace :1658-1666 (all brownfield signals false for the stub)
-//   - state Project Type line:             aidlc-utility.ts:2048
-//   - state Completed = init stage count:  :2009 (graph init-phase count) -> :2071 (=== 3); init stages get [x] :1996
-//   - state Project Root = projectDir:     :2064
-//   - state State Version literal `7`:     :2051
-//   - WORKSPACE_SCANNED audit emit:        :1914 (VALID_EVENT_TYPES member, aidlc-audit.ts:42)
-//   - init stdout "Project type: ...":     :2151
+//   - --init --force dispatch:  SKILL.md -> `bun .claude/tools/aidlc-utility.ts init` via Bash, stdout verbatim
+//   - --force removes seeded state then re-writes:  handleInit aidlc-utility.ts
+//   - classification "Greenfield":         detectWorkspace (all brownfield signals false for the stub)
+//   - state Project Type line:             aidlc-utility.ts
+//   - state Completed = init stage count:  aidlc-utility.ts (graph init-phase count === 3); init stages get [x]
+//   - state Project Root = projectDir:     aidlc-utility.ts
+//   - state State Version literal `7`:     aidlc-utility.ts
+//   - WORKSPACE_SCANNED audit emit:        aidlc-utility.ts (VALID_EVENT_TYPES member, aidlc-audit.ts)
+//   - init stdout "Project type: ...":     aidlc-utility.ts
 //   - greenfield-todo stub = bare README:  tests/fixtures/greenfield-todo/README.md (no source/manifest/framework)
-//   - no gate in the init path (no AskUserQuestion):  SKILL.md:82,138 (init prints state and STOPs)
+//   - no gate in the init path (no AskUserQuestion):  SKILL.md (init prints state and STOPs)
 //
 // It SPENDS TOKENS — each driveAidlc drives the real /aidlc on Opus/Bedrock.
 // Generous per-test timeout so a hung canUseTool fails LOUD via bun:test.

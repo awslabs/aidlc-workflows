@@ -117,7 +117,7 @@ function envNumber(env: NodeJS.ProcessEnv, key: string): number | undefined {
 }
 
 /** Allocate from actual remaining parent time, without summing worst-case
- * operation ceilings. Zero retains the SDK's old "unbounded" meaning only
+ * operation ceilings. Zero retains the SDK's "unbounded" meaning only
  * when neither parent supplies a deadline. Never return a zero timeout. */
 export function remainingOperationTimeoutMs(
   requestedMs: number | undefined,

@@ -1,14 +1,20 @@
 // covers: file:scripts/ci-update-from-previous.ts
 // The update-from-the-last-release check finds each harness tree's hook
-// commands and reads the hook phase trace to see that the engine ran them.
+// commands, installed or copied, and reads the hook phase trace to see that
+// the engine ran them.
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
+  checksumMatches,
   childEnvironment,
+  copyRuntimeAsset,
+  dispatched,
   hookCommands,
   hookInput,
+  hookRuns,
   hooksTracedToCompletion,
   opencodeHookCommands,
   tracedToCompletion,
@@ -77,6 +83,29 @@ describe("ci-update-from-previous helpers", () => {
     expect(opencodeHookCommands(join(tree, "missing.ts"))).toEqual([]);
   });
 
+  // The shell gets the project folder on opencode's hook commands, as the
+  // plugin passes it; whether the phase trace must show a hook is read from the
+  // command the plugin names, so opencode's hooks are held to it too.
+  test("opencode's hooks are held to the phase trace, though their command carries the project folder", () => {
+    const project = scratch();
+    mkdirSync(join(project, ".opencode", "plugin"), { recursive: true });
+    writeFileSync(join(project, ".opencode", "plugin", "aidlc-opencode-adapter.ts"), [
+      'const PROJECTED_INVOKE = "bun .aidlc/tools/aidlc.ts";',
+      'const TRUSTED_NAMESPACE = "engine";',
+      'await runCore("aidlc-session-start.ts", payload, directory);',
+    ].join("\n"));
+    expect(hookRuns("opencode", project)).toEqual([
+      { command: 'bun .aidlc/tools/aidlc.ts engine hook session-start --project-dir "$CLAUDE_PROJECT_DIR"', traced: true },
+    ]);
+    mkdirSync(join(project, ".github", "hooks"), { recursive: true });
+    writeFileSync(join(project, ".github", "hooks", "aidlc.json"), JSON.stringify({
+      hooks: { preToolUse: [{ bash: "bun .aidlc/hooks/aidlc-copilot-adapter.ts guard-tool-call" }] },
+    }));
+    expect(hookRuns("copilot", project)).toEqual([
+      { command: "bun .aidlc/hooks/aidlc-copilot-adapter.ts guard-tool-call", traced: false },
+    ]);
+  });
+
   test("a harness the release ships that the check does not set up is named", () => {
     const shipped = (names: string[]) => ({ distributions: names.map((name) => ({ name })) });
     expect(uncheckedHarnesses(shipped(["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]))).toEqual([]);
@@ -139,5 +168,37 @@ describe("ci-update-from-previous helpers", () => {
     expect(hookInput("kiro-ide", "aidlc engine adapter kiro-ide after-shell")).toBe("{}");
     expect(hookInput("kiro", "aidlc engine adapter kiro guard-tool-call")).toBe("{}");
     expect(hookInput("claude", "aidlc engine hook review-freeze")).toBe("{}");
+  });
+
+  // A copied project runs its own tool, so its wiring names `bun <dir>/tools/aidlc.ts`,
+  // and Copilot and Cursor name their adapter file itself (dist/<harness> is the copy runtime's tree).
+  test("a copied tree's hook commands are found on every harness that wires them in JSON", () => {
+    const found = (harness: string, dir: string) => hookCommands(join(REPO_ROOT, "dist", harness, dir));
+    expect(found("claude", ".claude")).toContain('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook session-start');
+    expect(found("codex", ".codex")).toContain("bun .codex/tools/aidlc.ts engine adapter codex continue-workflow");
+    expect(found("copilot", ".github")).toContain("bun .aidlc/hooks/aidlc-copilot-adapter.ts guard-tool-call");
+    expect(found("cursor", ".cursor")).toContain("bun .cursor/hooks/aidlc-cursor-adapter.ts guards");
+    expect(found("kiro", ".kiro")).toContain("bun .kiro/tools/aidlc.ts engine adapter kiro continue-workflow");
+    expect(found("kiro-ide", ".kiro")).toContain("bun .kiro/tools/aidlc.ts engine adapter kiro-ide guard-tool-call");
+  });
+
+  test("only a command the engine's dispatcher runs is held to the hook phase trace", () => {
+    expect(dispatched("aidlc engine hook session-start")).toBe(true);
+    expect(dispatched('bun "$CLAUDE_PROJECT_DIR/.claude/tools/aidlc.ts" engine hook session-start')).toBe(true);
+    expect(dispatched("bun .kiro/tools/aidlc.ts engine adapter kiro-ide guard-tool-call")).toBe(true);
+    expect(dispatched("bun .aidlc/hooks/aidlc-copilot-adapter.ts guard-tool-call")).toBe(false);
+    expect(dispatched("bun .cursor/hooks/aidlc-cursor-adapter.ts guards")).toBe(false);
+    expect(JSON.parse(hookInput("kiro-ide", "bun .kiro/tools/aidlc.ts engine adapter kiro-ide guard-tool-call")).tool_name).toBe("execute_bash");
+  });
+
+  test("the copy runtime is the release's own asset, checked against its .sha256", () => {
+    expect(copyRuntimeAsset("2.11.0")).toBe("aidlc-copy-runtime-2.11.0.tar.gz");
+    const file = join(scratch(), "runtime.tar.gz");
+    writeFileSync(file, "runtime\n");
+    const digest = new Bun.CryptoHasher("sha256").update("runtime\n").digest("hex");
+    expect(checksumMatches(file, `${digest}  aidlc-copy-runtime-2.11.0.tar.gz\n`)).toBe(true);
+    expect(checksumMatches(file, `${digest.toUpperCase()}  aidlc-copy-runtime-2.11.0.tar.gz`)).toBe(true);
+    expect(checksumMatches(file, `${"0".repeat(64)}  aidlc-copy-runtime-2.11.0.tar.gz\n`)).toBe(false);
+    expect(checksumMatches(file, "")).toBe(false);
   });
 });

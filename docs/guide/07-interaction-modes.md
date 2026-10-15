@@ -31,6 +31,16 @@ When a stage gathers your input, the agent writes its questions to a file and of
    5. Chat about this
 ```
 
+In a questions file the agent creates, each ordinary question names who would
+usually answer it, such as `[Product owner]` or `[Developer]`, and questions for
+the same person are kept together, unless one of them has to wait for another
+person's answer. A team can split the questions that way, and on your own you
+can see which are about what the product does and which about how it is built.
+Anyone can still answer any question. A question added later goes at the end
+with its own label. The confirmation, change-request and approval sections carry
+no label. A file that already existed keeps its questions as they were, unless
+you ask to redo the stage from scratch, which replaces it with a new one.
+
 ### Guide Me
 
 The agent walks you through each question interactively using structured prompts. Best when you want the agent to lead the conversation and ensure nothing is missed.
@@ -180,7 +190,7 @@ flowchart TD
     REPORT_APPROVED["Report approved with the reply:\nengine emits GATE_APPROVED,\ncompletes + routes"]
     REPORT_REJECTED["Report rejected with feedback:\nengine emits GATE_REJECTED,\nrecords revising state"]
     REPORT_REVISED["Report revised:\nengine re-opens gate"]
-    PROGRESS["Display progress line:\nN/total overall"]
+    PROGRESS["Display progress line:\nN of M stages done"]
     NEXT_STAGE["Proceed to next stage"]
 
     REVISE["Apply user feedback\nto stage artifacts"]
@@ -301,14 +311,12 @@ An edit to a finished stage's files is not reviewed or approved again unless you
 After an approval that moves on to another stage, a progress line appears. From the same run:
 
 ```text
-Progress: 1/19 in-scope stages complete (4/33 overall) | 1/4 IDEATION. Next: Feasibility & Constraints
+Progress: 1 of 19 stages done. Next: Feasibility & Constraints.
 ```
 
 This shows:
 - Progress across the stages your plan runs after Initialization (the count you
-  were shown when the work started), with every stage finished so far in
-  parentheses
-- Progress within the current phase
+  were shown when the work started)
 - The name of the next stage
 
 On a shorter plan the numbers are that plan's own.

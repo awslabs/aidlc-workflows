@@ -7,6 +7,8 @@ import {
   readAuditShardEvents,
   type AuditShardEvent,
   CEREMONY_ENV,
+  GUARD_FENCE_ENV,
+  type GuardSwitchKey,
   CEREMONY_FIELDS,
   CEREMONY_FLAGS,
   CEREMONY_KEYS,
@@ -67,7 +69,7 @@ import {
 } from "./aidlc-lib.ts";
 import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { chatsSince, latestMessage, latestSpendingTimestamp, listMessages, replyOfTheirs } from "./aidlc-message-store.ts";
-import { quoted } from "./aidlc-recorded-switches.ts";
+import { quoted, stillOffLine, widerPlaceOffer } from "./aidlc-recorded-switches.ts";
 import { settingPurpose } from "./aidlc-settings.ts";
 
 function throwSettingsError(message: string): never {
@@ -85,7 +87,6 @@ export const VALID_TEST_STRATEGIES: Record<string, string> = {
   comprehensive: "Comprehensive",
 };
 
-// The per-run fence switches read as config keys: `guard.plan-approval` and so on.
 const GUARD_FENCE_CONFIG_KEYS = SWITCHABLE_GUARD_FENCES.map((fence) => guardFenceConfigKey(fence)) as
   ["guard.plan-approval", "guard.review-freeze", "guard.state-transition", "guard.reviewer-scope"];
 export const CONFIG_KEYS = [
@@ -231,8 +232,6 @@ function setCeremonyField(content: string, key: CeremonyKey, value: CeremonySett
   return setField(content, field, formatCeremony(value, source));
 }
 
-// Pure state transformation plus audit/output preparation. CLI setters call this
-// under the intent lock and commit audit before state.
 // The same setting typed as this engine's own setter command carries none of
 // `next`'s flags for the message record to hold, so the dispatcher that owns
 // the command's shape is asked what their line named: `config set <key> <value>
@@ -306,7 +305,6 @@ export function settingTheirs(
     const lines = listMessages(projectDir).filter((message) =>
       message.session === chat && (spentAt === null || message.at >= spentAt));
     if (latest !== null && !lines.some((message) => message.id === latest.id)) lines.push(latest);
-    // Plan approval has two names for one switch.
     const names = key === "plan-approval" || key === "guard.plan-approval" ? ["plan-approval", "guard.plan-approval"] : [key];
     if (lines.some((message) => message.settings.some((setting) => names.includes(setting.key) && setting.value === value) ||
       names.some((name) => setterCommandNames(message.text, name, value)))) {
@@ -504,9 +502,9 @@ export function applyIntentSettings(
   // A command the person ran at their own terminal carries itself: this rule
   // protects them from a worker lowering a check on their behalf, and it has no
   // business standing in front of what they typed. An agent's tool call arrives
-  // with pipes and no chat identity on it, and is refused exactly as before, and
-  // so is one run in a terminal a host opened for its agent (Copilot in VS Code,
-  // Kiro IDE, Cursor), where the line says which chat to ask in.
+  // with pipes and no chat identity on it, and is refused, and so is one run in
+  // a terminal a host opened for its agent (Copilot in VS Code, Kiro IDE,
+  // Cursor), where the line says which chat to ask in.
   // `commandAtPersonsTerminal` owns that test for the refusal and the record alike.
   // The person's own settings here are the checks this command lowers and every
   // other setting requested as theirs: a ceremony the agent sets from their
@@ -597,10 +595,8 @@ export function applyIntentSettings(
     }
     // The person's line: what the reviews are now, what they were, and the way
     // back, in the harness's own entry word. With no override set, the level in
-    // force was the scope's own (a first "none" printed "none -> none" in two
-    // live runs; three more printed "Review override changed: advisory (scope
-    // default) -> none" to the person as it stood). An empty stored override is
-    // the scope's own level again.
+    // force was the scope's own. An empty stored override is the scope's own
+    // level again.
     const level = update.storedReview === "" ? scopeReviewLevel(target) : (update.storedReview ?? review);
     const was = update.oldReview || scopeReviewLevel(target);
     const word = (value: string): string => (value === "none" ? "off" : value);
@@ -711,8 +707,8 @@ export function applyIntentSettings(
         // so the work says whose decision it was (status reads "(set by you)"
         // instead of crediting the plan, and the audit carries the row) rather
         // than leaving their own switch with nothing behind it. A later Guard
-        // Policy word still clears per-check entries, as it always has, and
-        // nothing the person reads here changes.
+        // Policy word still clears per-check entries, and nothing the person reads
+        // here changes.
         if (typedByPerson && request.value === "off" && updated !== content) {
           content = updated;
           audit.push({
@@ -723,7 +719,25 @@ export function applyIntentSettings(
             },
           });
         }
-        lines.push(`The ${checkLabel(request.fence)} is already ${after.value}`);
+        // Turned on, but a switch outside this piece of work keeps it off: what
+        // keeps it, and the way to clear it.
+        const held = request.value === "on" ? stillOffLine(projectDir, projectSwitchOf(`guard.${request.fence}`), "keeps") : null;
+        if (held !== null) {
+          // Their on is recorded too, so once that switch is cleared the check
+          // is on for this work as they asked and nothing asks them again. An
+          // on of theirs this work already keeps stays kept.
+          if (updated !== content && nextOn.length >= raised.length) {
+            content = updated;
+            audit.push({ eventType: "GUARD_RESTORED", fields: { Guard: request.fence, Scope: scopeName, Source: source } });
+          }
+          lines.push(held);
+          continue;
+        }
+        const already = `The ${checkLabel(request.fence)} is already ${after.value}`;
+        const offer = request.value === "off" && after.value === "off" && !atTheirTerminal
+          ? widerPlaceOffer(projectDir, projectSwitchOf(`guard.${request.fence}`), "work")
+          : null;
+        lines.push(offer ? `${already}. ${offer}` : already);
         continue;
       }
       content = updated;
@@ -760,8 +774,21 @@ export function applyIntentSettings(
     const field = CEREMONY_FIELDS[key];
     const previous = getField(content, field);
     const line = formatCeremony(value, source);
+    // Turned on, but a switch outside this piece of work keeps it off: that is
+    // said in place of the setting's own line, which would read as on. Plan
+    // approval reads its environment switch only where it is trusted.
+    const held = value === "on" && !scopeDefault(flag)
+      ? stillOffLine(projectDir, CEREMONY_ENV[key], "keeps",
+        key === "plan_approval" ? planApprovalEnv(projectDir, sessionId) : process.env)
+      : null;
     if (previous === line || (source === "command" && previous === formatCeremony(value, "you"))) {
-      if (!scopeDefault(flag)) lines.push(`${field} is already ${previous}`);
+      if (held !== null) {
+        lines.push(held);
+      } else if (!scopeDefault(flag)) {
+        const already = `${field} is already ${previous}`;
+        const offer = value === "off" && !atTheirTerminal ? widerPlaceOffer(projectDir, CEREMONY_ENV[key], "work") : null;
+        lines.push(offer ? `${already}. ${offer}` : already);
+      }
       continue;
     }
     const resolution = resolveCeremony(key, getField(content, "Scope"), content);
@@ -776,6 +803,10 @@ export function applyIntentSettings(
         ...(askedIn && value === "off" && source === "you" ? { "Person Reply": askedIn } : {}),
       },
     });
+    if (held !== null) {
+      lines.push(held);
+      continue;
+    }
     const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
       ? resolution.rawStateValue : formatCeremony(resolution.value, resolution.source);
     if (!saidAsAsked(flag)) lines.push(`${field} changed: ${oldDisplay} to ${line}`);
@@ -784,11 +815,31 @@ export function applyIntentSettings(
         ? "Each code plan is now built without asking you first. You can ask to see one before it is built any time."
         : "Each code plan is now shown for approval before it is built.");
     }
+    // The line said for it ends with the one wider place (the line said as
+    // they asked carries it below instead). A value the scope set is nobody's
+    // request to turn the check off, so it offers nothing.
+    if (value === "off" && !scopeDefault(flag) && !saidAsAsked(flag) && !atTheirTerminal && lines.length > 0) {
+      const offer = widerPlaceOffer(projectDir, CEREMONY_ENV[key], "work");
+      if (offer) lines[lines.length - 1] = `${lines[lines.length - 1]} ${offer}`;
+    }
   }
   for (const item of lowering) {
-    if (saidAsAsked(item.key)) lines.push(askedSwitchLine(item, askedIn, cc.value, !atTheirTerminal));
+    if (!saidAsAsked(item.key)) continue;
+    const line = askedSwitchLine(item, askedIn, cc.value, !atTheirTerminal);
+    const offer = atTheirTerminal ? null : widerPlaceOffer(projectDir, projectSwitchOf(item.key), "work");
+    lines.push(offer ? `${line} ${offer}` : line);
   }
   return { content, audit, lines };
+}
+
+// The project's switch for a check set for this piece of work, which is where
+// a wider place for it would be set; none for the Guard Policy, which is for a
+// piece of work only.
+function projectSwitchOf(key: GuardSwitchKey): string | undefined {
+  if (key === "summary-confirmation") return CEREMONY_ENV.summary_confirmation;
+  if (key === "plan-approval") return CEREMONY_ENV.plan_approval;
+  if (key.startsWith("guard.")) return GUARD_FENCE_ENV[key.slice("guard.".length) as SwitchableGuardFence];
+  return undefined;
 }
 
 /**
@@ -800,7 +851,6 @@ export function guardPolicyNamed(): string {
   return `Guard Policy${settingPurpose("Guard Policy")}`;
 }
 
-// A check as the person knows it: "review freeze check", "reviewer read scope check".
 function checkLabel(fence: string): string {
   return `${fence.replace("reviewer-scope", "reviewer read scope").replaceAll("-", " ")} check`;
 }
@@ -971,7 +1021,6 @@ export function perCheckSettingClearedBy(policy: string | null | undefined): "on
 // Where a setting kept before any work is selected goes: the piece of work the
 // chat starts next or, with work here to pick up, whichever it picks or starts.
 const FOR_WORK_STARTED = "for the piece of work you start now";
-// " (set by you)" on a kept setting's line only when it is theirs.
 const byYou = (theirs: boolean): string => (theirs ? " (set by you)" : "");
 const FOR_WORK_PICKED_OR_STARTED = "for the work you pick up or start next";
 
@@ -1068,26 +1117,6 @@ export function planApprovalCreationGranted(
   } catch {
     return false;
   }
-}
-
-/** The recorded words still apply: no memory lock and no unattended driver since. */
-export function planApprovalOffAtCreation(
-  projectDir: string,
-  sessionId: string | null,
-  request: string | null = null,
-): boolean {
-  if (process.env.AIDLC_UNATTENDED === "1" || !planApprovalCreationGranted(projectDir, sessionId, request)) return false;
-  try {
-    return !memoryGuardPolicyDeclarations(projectDir, { sessionId: sessionId ?? undefined })
-      .some((declaration) => declaration.value === "strict");
-  } catch {
-    return false;
-  }
-}
-
-/** For the creation preview: the words apply to the request open now, or to any when none was. */
-export function planApprovalOffForOpenRequest(projectDir: string, sessionId: string | null): boolean {
-  return planApprovalOffAtCreation(projectDir, sessionId, latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS));
 }
 
 /** Spent by the next piece of work this chat creates, whether or not it was the one asked for. */
@@ -1293,14 +1322,12 @@ function readFencesOffCreationGrant(projectDir: string, sessionId: string): Fenc
   return grant?.version === 1 && grant.session === sessionId && Array.isArray(grant.fences) ? grant : null;
 }
 
-// "review freeze check", "review freeze and state transition checks".
 export function checksNamed(fences: readonly SwitchableGuardFence[]): string {
   if (fences.length === 1) return checkLabel(fences[0]);
   const names = fences.map((fence) => checkLabel(fence).replace(/ check$/, ""));
   return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]} checks`;
 }
 
-// "The review freeze check is", "The review freeze and state transition checks are".
 export function checksAre(fences: readonly SwitchableGuardFence[]): string {
   // One check named says what it does for them; several would bury the sentence.
   const named = checksNamed(fences);
@@ -1663,7 +1690,6 @@ export function keptSettingsNotTheirs(projectDir: string, sessionId: string | nu
     if (record?.version !== 1 || record.session !== sessionId || !Array.isArray(record.notTheirs)) continue;
     for (const key of record.notTheirs) if (typeof key === "string") out.add(key);
   }
-  // One name for one setting: plan approval kept by either name is both.
   if (out.has("plan-approval") || out.has("guard.plan-approval")) {
     out.add("plan-approval");
     out.add("guard.plan-approval");

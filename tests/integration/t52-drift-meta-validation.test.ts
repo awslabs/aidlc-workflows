@@ -33,11 +33,11 @@
 //
 // Source under test:
 //   - tests/integration/t48-audit-event-emitters.test.ts (the detector)
-//       * forward check    -> t48:87-137  (ok/not_ok "forward: ...")
-//       * reverse check     -> t48:139-199 (ok/not_ok "reverse: ...")
-//       * tertiary check    -> t48:201-230 (DELETED_EVENTS incl. JUMP_AUTO_STOPPED)
-//       * pairing check     -> t48:232-312 (check_pairing handleApprove ...)
-//       * md-md check       -> t48:314-335 (audit-format.md ⇄ 12-state-machine.md)
+//       * forward check    -> t48 (ok/not_ok "forward: ...")
+//       * reverse check     -> t48 (ok/not_ok "reverse: ...")
+//       * tertiary check    -> t48 (DELETED_EVENTS incl. JUMP_AUTO_STOPPED)
+//       * pairing check     -> t48 (check_pairing handleApprove ...)
+//       * md-md check       -> t48 (audit-format.md <-> 12-state-machine.md)
 //   - dist/claude/.claude/tools/aidlc-state.ts handleApprove
 //       * emitAudit(pd, "GATE_APPROVED", gateFields) (injection 1 target)
 //       * function handleApprove(args: string[]): void (injection 4 target)

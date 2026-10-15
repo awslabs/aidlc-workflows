@@ -6163,7 +6163,10 @@ process.stdin.on("end", () => server.stop(true));
     const refused = mergeKept(proj);
     expect(refused.status).not.toBe(0);
     expect(refused.out).toContain("the main checkout source changed since the stage-entry baseline (notes.ts)");
-    expect(refused.out).toContain("Undo those changes and run the merge again");
+    // The edit is the person's: the line never has the agent undo it.
+    expect(refused.out).toContain("Those are the person's own changes, so they decide: keep them");
+    expect(refused.out).toContain("or undo them themselves; then run the merge again");
+    expect(refused.out).not.toContain("Undo those changes");
     rmSync(join(proj, "notes.ts"));
     const retry = mergeKept(proj);
     expect(retry.status, retry.out).toBe(0);

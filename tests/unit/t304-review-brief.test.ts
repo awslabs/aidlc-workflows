@@ -550,6 +550,15 @@ function appendLegacyRecordReview(
 }
 
 describe("t304 executable review brief scenarios", () => {
+  test("a stale brief with nothing changed upstream says no reason line", () => {
+    const { proj } = requirementProject([]);
+    const brief = renderReviewBrief(proj, findStageBySlug("requirements-analysis")!, "stale");
+    expect(brief).toContain("**Review outcome:**");
+    expect(brief).not.toContain("Why now");
+    expect(brief).not.toContain("Re-check required");
+    expect(brief).not.toContain("**Changed upstream:**");
+  });
+
   test("READY and NOT-READY render the exact first-review outcome without exposing raw verdict tokens", () => {
     for (const verdict of ["READY", "NOT-READY"] as const) {
       const { proj } = requirementProject(
@@ -558,7 +567,8 @@ describe("t304 executable review brief scenarios", () => {
       );
       const stage = findStageBySlug("requirements-analysis")!;
       const rendered = renderReviewBrief(proj, stage, "first");
-      expect(rendered).toContain("**Why now:** First review completed.");
+      // Which pass it is changes nothing the person decides: no label.
+      expect(rendered).not.toContain("Why now");
       expect(rendered).toContain(
         verdict === "READY"
           ? "**Review outcome:** No blocking concerns were found."
@@ -1306,12 +1316,10 @@ describe("t304 executable review brief scenarios", () => {
     );
     const stage = findStageBySlug("requirements-analysis")!;
     const brief = renderReviewBrief(proj, stage, "stale");
-    // #1082: the `stale` lead line must not assert a cause that may not apply. A
-    // conductor edit can self-invalidate the receipt with nothing upstream changed,
-    // and the accurate cause is appended below as **Changed upstream:** anyway.
-    expect(brief).toContain("**Why now:**");
-    expect(brief).not.toContain("Re-check required after upstream work changed");
-    expect(brief).toContain("the previous review receipt is no longer valid");
+    // #1082: the brief asserts no cause that may not apply; the cause it can
+    // name is the **Changed upstream:** line, and there is no "why now" label.
+    expect(brief).not.toContain("Why now");
+    expect(brief).not.toContain("Re-check required");
     const relativeQuestions = relative(proj, questions).replaceAll("\\", "/");
     expect(brief).toContain(`**Changed upstream:** \`${relativeQuestions}\``);
     expect(brief).toContain(
@@ -2899,8 +2907,9 @@ describe("t304 engine-owned report replay and compatibility", () => {
     expect(brief).toContain(
       "> R-02 Finding: The review did not finish, so there is no review result to rely on. The reviewer stopped before writing its review.",
     );
-    // The revision's re-review did not finish, so it was not re-checked.
-    expect(brief).toContain("**Why now:** Revision re-check did not finish.");
+    // The revision's re-review did not finish: its finding says so, and no
+    // label says it was re-checked.
+    expect(brief).not.toContain("Why now");
     expect(brief).not.toContain("Revision re-checked.");
     expect(brief).toContain("**Review outcome:** Concerns remain for your decision.");
   });
@@ -3899,7 +3908,7 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     );
     expect(brief.status, brief.out).toBe(0);
     expect(brief.stdout).toContain("The review did not finish, so there is no review result to rely on. It stopped before writing its review.");
-    expect(brief.stdout).toContain("**Why now:** First review did not finish.");
+    expect(brief.stdout).not.toContain("Why now");
     expect(brief.stdout).not.toContain("| - | - | - | No findings |");
   });
 
@@ -3930,7 +3939,7 @@ describe("t304 protocol and harness projections use the deterministic renderer",
     expect(plain.status, plain.out).toBe(0);
     expect(plain.stdout).toMatch(/^> R-01 Finding: The review did not finish, so there is no review result to rely on\.$/m);
     expect(plain.stdout).toContain("**Review outcome:** Concerns remain for your decision.");
-    expect(plain.stdout).toContain("**Why now:** First review did not finish.");
+    expect(plain.stdout).not.toContain("Why now");
     expect(plain.stdout).not.toContain("First review completed.");
     expect(plain.stdout).not.toContain("No blocking concerns were found.");
     // A reviewer stopped before writing may still have read the work: the

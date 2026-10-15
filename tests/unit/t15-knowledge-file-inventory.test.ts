@@ -8,7 +8,7 @@
 // membership, file counts, and file sizes under the distributable knowledge/
 // tree. No process boundary, no argv/exit/stdout seam, no LLM, zero tokens. We
 // resolve the same tree the .sh resolved via the harness's AIDLC_SRC
-// (= <repo>/dist/claude/.claude, fixtures.ts:42) — the TS canonical for the
+// (= <repo>/dist/claude/.claude, fixtures.ts) - the TS canonical for the
 // .sh's KNOWLEDGE_DIR=$AIDLC_SRC/knowledge — and assert in-process with
 // existsSync / statSync / a recursive .md walk.
 //

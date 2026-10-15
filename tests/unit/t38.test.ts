@@ -20,8 +20,8 @@
 //       raw Status value ("Running"), no gate phrase leaks.
 //   - <displayName> = the stage-graph `name` for the current slug; for the
 //       feasibility slug used by state-mid-ideation.md that is
-//       "Feasibility & Constraints" (stage-graph.json:221-223).
-//   Checkbox -> state mapping: aidlc-lib.ts:62-63 ([?]->awaiting-approval,
+//       "Feasibility & Constraints" (stage-graph.json).
+//   Checkbox -> state mapping: aidlc-lib.ts ([?]->awaiting-approval,
 //   [R]->revising), confirmed against handleStatus's currentCheckbox?.state
 //   branches.
 //

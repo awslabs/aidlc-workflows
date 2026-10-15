@@ -19,13 +19,13 @@
 //   complete --merge  — merge state + audit + runtime-graph fragment
 //                       back to main on success
 //   abort  --discard  — explicit user-driven abort; optional discard tear-down
-// The fail subcommand is unchanged in behaviour: code-gen returned an error,
+// The fail subcommand means code-gen returned an error;
 // halt-and-ask preserves the worktree by default. abort is the user's
 // explicit "I want this gone" verb.
 //
 // Runtime-graph fragment-fork / fragment-merge complete the fork/merge
-// triad alongside state and audit. The fragment file lives at
-// <wt>/aidlc-docs/runtime-graph.json (gitignored, mirrors main). No new
+// triad alongside state and audit. The fragment file lives at the path
+// worktreeRuntimeGraphPath resolves (gitignored, mirrors main). No new
 // audit events for the fragment lifecycle — it rides on the existing
 // STATE_FORKED + AUDIT_FORKED (fork) and STATE_MERGED + AUDIT_MERGED
 // (merge) boundaries.
@@ -44,6 +44,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
+  asksForHelp,
   boltAbortedFields,
   boltSlugForUnit,
   BOLT_INTENT_ID8_REGEX,
@@ -81,9 +82,10 @@ import {
   verificationCommandRecovery,
   type BoltIdentity,
   legacyParkedRefPrefix,
+  printUsageAndExit,
   resolveInvokingSessionId,
 } from "./aidlc-lib.js";
-import { compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { type EngineInvocation, renderEngineInvocation } from "./aidlc-guard-operation.ts";
 import {
   askConstructionCheckpoint,
@@ -413,6 +415,7 @@ function worktreeBaseFields(
 // Usage: aidlc-bolt start --name <bolt-names> --batch <n>
 //                         [--walking-skeleton true|false]
 //                         [--worktree --slug <kebab-slug>] [--repo <name>]
+//                         [--intent <intent>] [--space <space>]
 //
 // --name accepts a single bolt name or comma-separated list for a parallel batch.
 //
@@ -624,13 +627,12 @@ function handleStart(args: string[]): void {
 
 // --- Subcommand: complete ---
 // Usage: aidlc-bolt complete --name <bolt-names> --batch <n>
-//                            [--merge --slug <kebab-slug>]
+//                            [--merge --slug <kebab-slug>] [--repo <name>]
+//                            [--intent <intent>] [--space <space>]
 //
 // --merge: after BOLT_COMPLETED, delegates to `aidlc-state.ts merge` and
-// `aidlc-audit.ts audit-merge` to
-// consolidate state + audit back to main. Runs BEFORE SKILL.md Step 6.5's
-// git-merge dispatch so AIDLC metadata consolidates first. Single-bolt
-// only — csv batch with --merge is rejected.
+// `aidlc-audit.ts audit-merge` to consolidate state + audit back to main.
+// Single-bolt only -- csv batch with --merge is rejected.
 function handleComplete(args: string[]): void {
   const { booleans, rest } = splitBooleanFlags(args);
   const flags = parseFlags(rest);
@@ -676,13 +678,13 @@ function handleComplete(args: string[]): void {
       walkingSkeletonMain: true,
     });
     // HOLD-MERGE invariant enforcement.
-    // SKILL.md U5's multi-failure halt-and-ask sequence sets `Merge-Held: true`
-    // on each successful Bolt's per-Bolt forked state file before rendering
-    // any failed-sibling AUQ. This refusal pins that invariant in tooling so
-    // an orchestrator that forgets the prose contract cannot land a merge
-    // mid-AUQ-sequence. Refusal is non-zero exit + stderr; the orchestrator
-    // must call `aidlc-bolt release-merge --slug <slug>` once the AUQ
-    // sequence resolves before retrying complete --merge.
+    // `hold-merge` sets `Merge-Held: true` on each successful Bolt's per-Bolt
+    // forked state file while a failed sibling's halt-and-ask (AUQ) sequence is
+    // open. This refusal pins that invariant in tooling so an orchestrator that
+    // forgets the hold cannot land a merge mid-AUQ-sequence. Refusal is non-zero
+    // exit + a JSON envelope on stdout; the orchestrator must call `aidlc-bolt
+    // release-merge --slug <slug>` once the AUQ sequence resolves before retrying
+    // complete --merge.
     if (isMergeHeld(pd, flags.slug, flags.intent, flags.space)) {
       failJson(
         "complete-merge",
@@ -761,9 +763,9 @@ function handleComplete(args: string[]): void {
 
   // Fragment-merge primitive. Removes the worktree's runtime-graph.json
   // fragment. Idempotent — fragment-absent is a clean no-op. The post-Bash
-  // hook fires after this Bash invocation returns, sees AUDIT_MERGED in
-  // the last 3 audit blocks (per aidlc-rebuild-stage-graph.ts:87), and rebuilds
-  // main runtime-graph with instances[] populated for this slug.
+  // hook fires after this Bash invocation returns, sees AUDIT_MERGED in the
+  // last 3 audit blocks (per aidlc-rebuild-stage-graph.ts transitionRegex),
+  // and rebuilds main runtime-graph with instances[] populated for this slug.
   const fragmentMergeResult = spawnSibling(pd, "aidlc-runtime.ts", [
     "fragment-merge",
     "--slug",
@@ -842,9 +844,10 @@ function handleFail(args: string[]): void {
 
 // --- Subcommand: abort ---
 // Usage: aidlc-bolt abort --name <bolt-name> --slug <kebab-slug> --reason <text>
-//                         [--discard]
+//                         [--discard] [--repo <name>]
+//                         [--intent <intent>] [--space <space>]
 //
-// Explicit user-driven abort (Issue 75 US-1 line 51). Emits BOLT_FAILED with
+// Explicit user-driven abort (Issue 75 US-1). Emits BOLT_FAILED with
 // `Reason: aborted` for sub-classification — keeps the audit count stable
 // vs adding a new BOLT_ABORTED event type. Distinct from `fail` (which is
 // emitted by the orchestrator when code-gen returns failure).
@@ -874,10 +877,9 @@ function handleAbort(args: string[]): void {
   // (Reason: aborted) before discard and discard then timed out / errored,
   // the audit would claim the Bolt was aborted-and-cleaned-up while the
   // worktree directory still existed on disk and the slug remained in main's
-  // Bolt Refs (cleared by aidlc-worktree discard's WORKTREE_DISCARDED path).
-  // Caught by post-ship 4-agent review (adversarial agent BLOCKER finding).
-  // Default path (no --discard) preserves the worktree per US-1 AC line 51,
-  // so emit-before-noop is safe and the ordering only matters for --discard.
+  // Bolt Refs (cleared by `aidlc-state.ts merge`). Default path (no --discard)
+  // preserves the worktree per US-1 AC, so emit-before-noop is safe and the
+  // ordering only matters for --discard.
   if (useDiscard) {
     const identity = resolveBoltIdentity(pd, flags.slug, selection);
     const result = spawnSibling(pd, "aidlc-worktree.ts", [
@@ -918,9 +920,7 @@ function handleAbort(args: string[]): void {
 
   // Audit emission AFTER discard side-effect lands successfully (or no
   // side-effect requested). On audit emit failure here, the worktree is
-  // already gone (if --discard) but the audit row is missing — this is
-  // recoverable drift that doctor reconciles via the worktree's local
-  // audit if it survived, or by orphan-worktree detection if not.
+  // already gone (if --discard) but the audit row is missing.
   try {
     emitAudit(pd, "BOLT_FAILED", boltAbortedFields(pd, flags.name, flags.slug, flags.reason), flags.intent, flags.space);
   } catch (e) {
@@ -982,6 +982,7 @@ function handleAbort(args: string[]): void {
 // --- Subcommand: hold-merge / release-merge ---
 // Usage: aidlc-bolt hold-merge --slug <slug>
 //        aidlc-bolt release-merge --slug <slug>
+//        (both also take [--intent <intent>] [--space <space>])
 //
 // HOLD-MERGE invariant tooling. Sets / clears the `Merge-Held` field in
 // the per-Bolt forked state file in the selected intent's worktree record.
@@ -997,14 +998,6 @@ function handleAbort(args: string[]): void {
 // user-visible event. The audit row that matters for doctor is the
 // BOLT_FAILED that opens the multi-failure sequence and the BOLT_COMPLETED
 // that closes each survivor's merge once the hold lifts.
-//
-// Future doctor extension: orphan Merge-Held detection. Walk per-Bolt
-// forked state for `Merge-Held: true`, cross-check parent batch's
-// BOLT_FAILED resolution status, flag if all siblings resolved (succeeded
-// retry / skipped / aborted) but `release-merge` never ran. Needs a
-// workshop-resume false-positive guard — `merge_held: true` is legitimate
-// mid-resume. Reads forked-state files and builds a parent-batch
-// resolution graph.
 function handleHoldMerge(args: string[]): void {
   const flags = parseFlags(args);
   if (!flags.slug) error("Missing --slug <kebab-slug>");
@@ -1034,7 +1027,7 @@ function forkedState(
   const identity = resolveBoltIdentity(pd, slug, selection);
   const wtPath = identity.dir;
   // Pin the worktree mirror to the SAME record the state fork wrote (null ->
-  // flat legacy mirror, today's behaviour).
+  // bare space record prefix).
   const recordPrefix = relativeRecordDir(pd, intent, space);
   const wtStatePath = worktreeStateFilePath(wtPath, recordPrefix);
   if (!existsSync(wtStatePath)) return null;
@@ -1095,21 +1088,26 @@ function setMergeHeld(pd: string, slug: string, held: boolean, intent?: string, 
 //                                   --pin-id <uuid>]
 //                                  --reason <enum> --defaults <text>
 //
-// Wires the three MERGE_DISPATCH_* events by emitting via
-// `appendAuditEntry` per event variant. Orchestrator (SKILL.md per-Bolt
-// loop) brackets each aidlc-pipeline-deploy-agent dispatch: pre-call INVOKED,
-// post-call RETURNED on successful parse, FALLBACK on timeout/malformed-YAML.
+// Wires the three MERGE_DISPATCH_* events by emitting via `emitAudit` per
+// event variant. The conductor's Unit merge-back (per
+// stage-protocol-construction.md) brackets each aidlc-pipeline-deploy-agent
+// dispatch: pre-call INVOKED, post-call RETURNED on successful parse,
+// FALLBACK on timeout/malformed-YAML.
 //
 // Emit-only contract: no state mutation, no spawn. Pure audit emission so
 // doctor can reconcile orphan INVOKED rows (slug + timestamp window).
 //
-// t48 emitter-pairing requires LITERAL `appendAuditEntry("EVENT_NAME")` per
-// case branch — Map indirection on the --event flag breaks the grep at
-// tests/feature/t48-audit-event-emitters.sh:46-57. Three cases, three literal
-// emit calls.
+// t48 emitter-pairing requires a literal event name in each case branch's
+// emitAudit call -- Map indirection on the --event flag breaks the call-site
+// scan in tests/integration/t48-audit-event-emitters.test.ts. Three cases,
+// three literal emit calls; DISPATCH_EVENTS names the same three for the
+// messages and usage.
+const DISPATCH_EVENTS: readonly string[] = ["MERGE_DISPATCH_INVOKED", "MERGE_DISPATCH_RETURNED", "MERGE_DISPATCH_FALLBACK"];
+const MERGE_STRATEGIES: readonly string[] = ["squash", "merge", "rebase"];
+
 function handleDispatchEvent(args: string[]): void {
   const flags = parseFlags(args);
-  if (!flags.event) error("Missing --event <MERGE_DISPATCH_INVOKED|MERGE_DISPATCH_RETURNED|MERGE_DISPATCH_FALLBACK>");
+  if (!flags.event) error(`Missing --event <${DISPATCH_EVENTS.join("|")}>`);
   if (!flags.slug) error("Missing --slug <kebab-slug>");
 
   const pd = resolveProjectDir(projectDir);
@@ -1138,7 +1136,7 @@ function handleDispatchEvent(args: string[]): void {
   }
 
   // Per-variant flag validation + literal emit. Fields populate per the
-  // schema at audit-format.md:147-149.
+  // MERGE_DISPATCH_* schema rows in audit-format.md.
   switch (flags.event) {
     case "MERGE_DISPATCH_INVOKED": {
       if (!flags["practices-excerpt"]) {
@@ -1158,9 +1156,9 @@ function handleDispatchEvent(args: string[]): void {
       return;
     }
     case "MERGE_DISPATCH_RETURNED": {
-      if (!flags.strategy) error("MERGE_DISPATCH_RETURNED requires --strategy <squash|merge|rebase>");
-      if (!["squash", "merge", "rebase"].includes(flags.strategy)) {
-        error(`Invalid --strategy: ${flags.strategy}. Must be squash, merge, or rebase.`);
+      if (!flags.strategy) error(`MERGE_DISPATCH_RETURNED requires --strategy <${MERGE_STRATEGIES.join("|")}>`);
+      if (!MERGE_STRATEGIES.includes(flags.strategy)) {
+        error(`Invalid --strategy: ${flags.strategy}. Must be one of: ${MERGE_STRATEGIES.join(", ")}.`);
       }
       if (!flags.target) error("MERGE_DISPATCH_RETURNED requires --target <branch>");
       if (!flags.confidence) error("MERGE_DISPATCH_RETURNED requires --confidence <0-1>");
@@ -1204,21 +1202,23 @@ function handleDispatchEvent(args: string[]): void {
     }
     default:
       error(
-        `Invalid --event: ${flags.event}. Must be MERGE_DISPATCH_INVOKED, MERGE_DISPATCH_RETURNED, or MERGE_DISPATCH_FALLBACK.`
+        `Invalid --event: ${flags.event}. Must be one of: ${DISPATCH_EVENTS.join(", ")}.`
       );
   }
 }
 
 // --- Subcommand: set-autonomy ---
+const AUTONOMY_MODES: readonly string[] = ["autonomous", "gated"];
+
 // Usage: aidlc-bolt set-autonomy --mode autonomous|gated
 //
 // Emits AUTONOMY_MODE_SET AND updates the Construction Autonomy Mode field
 // in aidlc-state.md atomically (audit-first).
 function handleSetAutonomy(args: string[]): void {
   const flags = parseFlags(args);
-  if (!flags.mode) error("Missing --mode <autonomous|gated>");
-  if (!["autonomous", "gated"].includes(flags.mode)) {
-    error(`Invalid --mode: ${flags.mode}. Must be 'autonomous' or 'gated'.`);
+  if (!flags.mode) error(`Missing --mode <${AUTONOMY_MODES.join("|")}>`);
+  if (!AUTONOMY_MODES.includes(flags.mode)) {
+    error(`Invalid --mode: ${flags.mode}. Must be ${AUTONOMY_MODES.map((mode) => `'${mode}'`).join(" or ")}.`);
   }
 
   const pd = resolveProjectDir(projectDir);
@@ -1322,6 +1322,12 @@ function checkpointSession(pd: string, flagged: string | undefined, required: bo
   return session;
 }
 
+// What checkpoint and swarm-checkpoint accept, for their messages and usage;
+// each action is a case of its handler's switch.
+const CHECKPOINT_KINDS: readonly ConstructionCheckpointKind[] = ["unit", "skeleton"];
+const CHECKPOINT_ACTIONS: readonly string[] = ["status", "ask", "verify", "approve", "reject"];
+const SWARM_CHECKPOINT_ACTIONS: readonly string[] = ["status", "ask", "approve", "reject"];
+
 function handleCheckpoint(args: string[]): void {
   // The person said to approve the Unit as it is over a review that did not
   // finish; verify reads it, and the engine checks their words are on record.
@@ -1335,10 +1341,10 @@ function handleCheckpoint(args: string[]): void {
   }
   if (!flags.unit) error("checkpoint requires --unit <name>");
   const kind = flags.kind ?? "unit";
-  if (kind !== "unit" && kind !== "skeleton") {
-    error("checkpoint --kind must be unit or skeleton");
+  const checkpointKind = CHECKPOINT_KINDS.find((known) => known === kind);
+  if (checkpointKind === undefined) {
+    error(`checkpoint --kind must be ${CHECKPOINT_KINDS.join(" or ")}`);
   }
-  const checkpointKind: ConstructionCheckpointKind = kind;
   const pd = resolveProjectDir(projectDir);
   let result: ReturnType<typeof resolveConstructionCheckpoint>;
   switch (flags.action ?? "status") {
@@ -1364,7 +1370,7 @@ function handleCheckpoint(args: string[]): void {
       );
       break;
     default:
-      error("checkpoint --action must be status, ask, verify, approve or reject");
+      error(`checkpoint --action must be one of: ${CHECKPOINT_ACTIONS.join(", ")}`);
   }
   console.log(JSON.stringify(result));
   if (flags.action === "verify" && !result.verified) process.exitCode = 1;
@@ -1394,9 +1400,75 @@ function handleSwarmCheckpoint(args: string[]): void {
       result = rejectSwarmCheckpoint(pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true));
       break;
     default:
-      error("swarm-checkpoint --action must be status, ask, approve or reject");
+      error(`swarm-checkpoint --action must be one of: ${SWARM_CHECKPOINT_ACTIONS.join(", ")}`);
   }
   console.log(JSON.stringify(result));
+}
+
+// --- Usage ---
+
+// What `--help` prints (#2449), from the same value lists the subcommands
+// check, so the usage cannot drift from what they accept.
+function boltUsage(subcommand: string | undefined): string {
+  const invoke = (verb: string) => aidlcDispatcherInvocation(`bolt ${verb}`);
+  const selector = "--intent <intent>, --space <space>";
+  const pin = "--pinned-oid <40-hex> --attempt-generation <n> --pin-id <uuid> (all three or none)";
+  const mergeHold = (verb: string, effect: string) => [
+    `${invoke(verb)} --slug <kebab-slug>`,
+    `  ${effect} Options: ${selector}`,
+  ];
+  const usage: Record<string, string[]> = {
+    start: [
+      `${invoke("start")} --name <bolt-name or csv> --batch <n>`,
+      "  Records that a Bolt, or a parallel batch named as a comma-separated list, started. Required: --name, --batch.",
+      "  --worktree --slug <kebab-slug>: one Bolt only; forks its state and audit into its worktree.",
+      `  Options: --walking-skeleton true|false, --repo <name>, ${selector}`,
+    ],
+    complete: [
+      `${invoke("complete")} --name <bolt-name or csv> --batch <n>`,
+      "  Records that a Bolt, or a parallel batch, completed. Required: --name, --batch.",
+      "  --merge --slug <kebab-slug>: one Bolt only; merges its state and audit back first.",
+      `  Options: --repo <name>, ${selector}`,
+    ],
+    fail: [
+      `${invoke("fail")} --name <failed-bolt> --error <summary>`,
+      "  Records that a Bolt failed. Required: --name, --error.",
+      "  Options: --slug <kebab-slug>, --succeeded-siblings <csv>",
+    ],
+    abort: [
+      `${invoke("abort")} --name <bolt-name> --slug <kebab-slug> --reason <text>`,
+      "  Records that the person stopped a Bolt. Required: --name, --slug, --reason.",
+      "  --discard: parks the attempt in Git, then removes its worktree.",
+      `  Options: --repo <name>, ${selector}`,
+    ],
+    "set-autonomy": [
+      `${invoke("set-autonomy")} --mode ${AUTONOMY_MODES.join("|")}`,
+      "  Sets the Construction autonomy mode. Required: --mode.",
+    ],
+    checkpoint: [
+      `${invoke("checkpoint")} --unit <name> [--action ${CHECKPOINT_ACTIONS.join("|")}]`,
+      "  The Unit's Construction checkpoint. Required: --unit. --action defaults to status.",
+      `  --kind: ${CHECKPOINT_KINDS.join(", ")} (default unit). --over-unfinished-review goes with --action verify.`,
+      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject)",
+    ],
+    "swarm-checkpoint": [
+      `${invoke("swarm-checkpoint")} --batch <n> --units <unit,unit> [--action ${SWARM_CHECKPOINT_ACTIONS.join("|")}]`,
+      "  A swarm batch's checkpoint. Required: --batch, --units. --action defaults to status.",
+      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject)",
+    ],
+    "dispatch-event": [
+      `${invoke("dispatch-event")} --event ${DISPATCH_EVENTS.join("|")} --slug <kebab-slug>`,
+      "  Records one step of a merge dispatch. Required: --event, --slug, and per event:",
+      "  MERGE_DISPATCH_INVOKED: --practices-excerpt <text>",
+      `  MERGE_DISPATCH_RETURNED: --strategy ${MERGE_STRATEGIES.join("|")} --target <branch> --confidence <0-1> --notes <text>`,
+      "  MERGE_DISPATCH_FALLBACK: --reason <text> --defaults <text>",
+      `  Options: ${pin}`,
+    ],
+    "hold-merge": mergeHold("hold-merge", "Holds the Bolt's merge until release-merge."),
+    "release-merge": mergeHold("release-merge", "Releases a held merge."),
+  };
+  if (subcommand !== undefined && usage[subcommand]) return usage[subcommand].join("\n");
+  return Object.values(usage).map((lines) => lines.join("\n")).join("\n\n");
 }
 
 let projectDir: string | undefined;
@@ -1415,6 +1487,8 @@ export function main(argv: string[]): void {
   }
 
   const subcommand = filteredArgs[0];
+  if (subcommand === undefined || asksForHelp([subcommand])) printUsageAndExit(boltUsage(undefined));
+  if (asksForHelp(filteredArgs.slice(1))) printUsageAndExit(boltUsage(subcommand));
 
   try {
     switch (subcommand) {

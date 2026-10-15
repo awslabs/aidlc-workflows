@@ -9,43 +9,43 @@
 // fixture (state-construction.md) sits at Lifecycle Phase=CONSTRUCTION, Current
 // Stage=functional-design, Scope=feature, Completed=20. `--phase ideation`
 // resolves (aidlc-jump.ts handleResolve -> firstInScopeStageOfPhase,
-// aidlc-lib.ts:1408) to the FIRST in-scope ideation stage = intent-capture.
+// aidlc-lib.ts) to the FIRST in-scope ideation stage = intent-capture.
 // intent-capture's display order is BEFORE functional-design, so direction =
-// backward (aidlc-jump.ts:143-145). The SKILL.md Stage/Phase Jump handler routes
+// backward (aidlc-jump.ts). The SKILL.md Stage/Phase Jump handler routes
 // this through `aidlc-jump.ts execute --direction backward` (as first ported;
 // today the engine names that command in a print directive), which atomically:
-// resets target + downstream EXECUTE stages [x]->[ ] (jump.ts:268-285), sets
-// target [-] (jump.ts:295), rewrites Lifecycle Phase=IDEATION + Current
-// Stage=intent-capture + recomputed Completed (jump.ts:312,313,330-331), and
+// resets target + downstream EXECUTE stages [x]->[ ] (jump.ts), sets
+// target [-] (jump.ts), rewrites Lifecycle Phase=IDEATION + Current
+// Stage=intent-capture + recomputed Completed (jump.ts), and
 // appends a STAGE_JUMPED audit event with Direction=BACKWARD / Target=intent-
-// capture (jump.ts:374-380). A jump never terminates
-// (jump.ts:309), so Status stays Running.
+// capture (jump.ts). A jump never terminates
+// (jump.ts), so Status stays Running.
 //
 // ASSERTION MAP (.sh test -> deterministic SDK surface, equal-or-stronger):
 //   1 grep STATE 'IDEATION'            -> the jump tool's OWN stdout JSON carries
-//                                         `"target_phase":"IDEATION"` (jump.ts:410 — the
+//                                         `"target_phase":"IDEATION"` (jump.ts - the
 //                                         deterministic origin of the state's Lifecycle Phase
-//                                         rewrite at jump.ts:312). Asserted on the Bash
+//                                         rewrite at jump.ts). Asserted on the Bash
 //                                         tool_result, immune to the post-jump continuation.
 //   2 assert_lt COMPLETED 20           -> the jump tool's stdout JSON carries the known-answer
-//                                         `"completed_count":4` (jump.ts:415 — the value the tool
-//                                         wrote into the Completed field, jump.ts:330-331).
+//                                         `"completed_count":4` (jump.ts - the value the tool
+//                                         wrote into the Completed field, jump.ts).
 //                                         STRONGER than the .sh's loose < 20 bound: pins the exact
 //                                         reset arithmetic, on the emission that cannot be moved
 //                                         by whatever the orchestrator does next (the t26 pattern;
 //                                         deterministically confirmed by running the shipped tool
 //                                         on this exact fixture: completed_count=4).
 //   3 grep AUDIT 'intent-capture'      -> raw audit.md bytes contain "**Target**: intent-capture"
-//                                         (jump.ts:377 Target field), the append-only deterministic
+//                                         (jump.ts Target field), the append-only deterministic
 //                                         origin of the destination; PLUS the stdout JSON
 //                                         `"target":"intent-capture"` + `"direction":"backward"`
-//                                         (jump.ts:408-409) pins which jump emitted it.
+//                                         (jump.ts) pins which jump emitted it.
 //   4 grep AUDIT 'STAGE_JUMPED'        -> assertAuditEvent(r,"STAGE_JUMPED") (parsed **Event**: line;
-//                                         jump.ts:374 emit, audit.ts:258 **Event**:).
+//                                         jump.ts emit, audit.ts **Event**:).
 //   5 grep AUDIT 'BACKWARD'            -> raw audit.md bytes contain "**Direction**: BACKWARD"
-//                                         (jump.ts:375 direction.toUpperCase(); known-answer for a
+//                                         (jump.ts direction.toUpperCase(); known-answer for a
 //                                         construction->ideation jump).
-//   6 grep AUDIT 'Timestamp'           -> raw audit.md bytes contain "**Timestamp**:" (audit.ts:257,
+//   6 grep AUDIT 'Timestamp'           -> raw audit.md bytes contain "**Timestamp**:" (audit.ts,
 //                                         emitted on every audit block).
 //
 // Known-answer literals are READ from the SHIPPED handlers (cited inline), not

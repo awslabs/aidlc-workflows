@@ -7,18 +7,11 @@
 // — the analogue of codex's exec driver (no tmux, no painted screen; the
 // model's final message + the project's on-disk state are the observables).
 //
-// LIVE-PROVEN (2026-07-12, opencode 1.17.18 on Bedrock): the same rig shape
-// ran skill + subagent discovery, this status journey, AND a real intent
-// creation (scope ask → poc → intent-create → first run-stage directive with the
-// conductor persona) — transcripts in the build session. This test pins the
-// cheap status journey so CI can re-verify the shipped tree end-to-end
-// without burning a whole workflow.
+// This test pins the cheap status journey so CI can re-verify the shipped tree
+// end-to-end without burning a whole workflow.
 //
 // SCOPE: the no-state case ONLY (status with no workflow = print-directive
-// terminal arm — turn-stable). With an ACTIVE workflow the conductor may
-// legitimately resume it inside the same run turn (the forwarding loop lives
-// in-turn), so a with-state "status is read-only" assert is not turn-stable
-// here — same carve-out as the codex exec twin.
+// terminal arm - turn-stable).
 //
 // What this proves on the SHIPPED tree, structurally:
 //   - the /aidlc command entry (.opencode/command/aidlc.md) resolves and
@@ -107,8 +100,6 @@ describe("t-run-opencode-status — /aidlc --status on the shipped dist/opencode
           rc: 0,
           tail: "",
         });
-        // The engine's no-workflow status text, surfaced verbatim by the
-        // print-directive terminal arm.
         expect(r.out.toLowerCase()).toContain("no active");
         // Read-only: the status path must not scaffold a workflow. The
         // shipped aidlc/ workspace shell (spaces/default/memory + the

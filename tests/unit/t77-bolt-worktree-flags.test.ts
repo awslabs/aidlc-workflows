@@ -15,7 +15,7 @@
 //   - the forked worktree state file the state-fork child writes.
 // The --worktree / --merge paths fan out to real sibling subprocesses
 // (aidlc-state.ts fork/merge, aidlc-audit.ts audit-fork/audit-merge,
-// aidlc-runtime.ts fragment-fork/merge) via spawnSibling (aidlc-bolt.ts:89),
+// aidlc-runtime.ts fragment-fork/merge) via spawnSibling (aidlc-bolt.ts),
 // so the contract is only observable end-to-end through the spawned binary.
 //
 // Source under test (dist/claude/.claude/tools/aidlc-bolt.ts):

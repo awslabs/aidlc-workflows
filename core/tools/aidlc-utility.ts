@@ -196,9 +196,6 @@ import {
   CEREMONY_KEYS,
   type CeremonyKey,
   type CeremonyPolicy,
-  ceremonyOffClause,
-  ceremonyOffList,
-  ceremonyPolicyValues,
   formatCeremony,
   parseCeremonySetting,
   parseCeremonyStateLine,
@@ -441,6 +438,7 @@ import {
   captureStageValidationBasis,
   codeArrivedStageLine,
   inspectStageValidity,
+  stageDefinitionChangedLine,
   stageLabel,
   staleStageNote,
 } from "./aidlc-validity.ts";
@@ -2212,6 +2210,17 @@ To get started:
       const otherNames = stageNames(others);
       validityOutput = staleStageNote(earliestName, earliestIssue, content) +
         `${otherNames ? ` Also affected: ${otherNames}.` : ""}\n`;
+    }
+    // Finished stages AI-DLC itself now does differently, told or not on the
+    // way: the work stands, and the way back is named.
+    const pending = new Set(validity.redefined.map((entry) => entry.stage));
+    const redefined = graph.map((stage) => stage.slug)
+      .filter((slug) => pending.has(slug) || validity.renewed.includes(slug));
+    if (redefined.length > 0) {
+      validityOutput += `${stageDefinitionChangedLine(
+        redefined.map((slug) => stageLabel(findStageBySlug(slug), slug) ?? slug),
+        redefined[0],
+      )}\n`;
     }
   } catch {
     // Unreadable receipts change nothing the person can act on here.
@@ -6262,7 +6271,8 @@ export async function collectDoctorReport(
   // Sub-case (c): PRACTICES_OVERRIDE Reason filter — write-failure-* rows
   //   without a following PRACTICES_AFFIRMED are flagged as orphan; rows
   //   carrying Reason: bolt-plan-marker-conflict are expected behaviour and
-  //   ignored. audit-format.md:138 anchors the discriminator routing.
+  //   ignored. The PRACTICES_OVERRIDE row in audit-format.md anchors the
+  //   discriminator routing.
   //
   // Sub-case (c) shares the orphan-audit umbrella because both classes ride
   // the same audit-walker pass; per plan-v3 §51, this is one Check, not two.
@@ -6372,8 +6382,7 @@ export async function collectDoctorReport(
   //
   // Read `Practices Affirmed Timestamp` from main state. Compare to now.
   // Empty / missing → informational pass (never affirmed). Within 90 days → ✓.
-  // Older → advisory pass=true (does NOT fail exit code; mirrors heartbeat
-  // and state/audit drift advisory pattern at aidlc-utility.ts:421-466).
+  // Older → advisory pass=true (does NOT fail exit code).
   // Invalid ISO timestamp → fail readable.
   // ---------------------------------------------------------------------------
   try {
@@ -6423,8 +6432,9 @@ export async function collectDoctorReport(
   // ---------------------------------------------------------------------------
   // Check 6 — MERGE_DISPATCH advisory
   //
-  // Walk MERGE_DISPATCH_INVOKED rows; an INVOKED row should pair with either
-  // _RETURNED or _FALLBACK for the same slug within MERGE_DISPATCH_TIMEOUT_SEC.
+  // Walk MERGE_DISPATCH_INVOKED rows; an INVOKED row older than
+  // MERGE_DISPATCH_TIMEOUT_SEC should pair with a _RETURNED or _FALLBACK for
+  // the same slug recorded at any time after it. A younger one is in flight.
   // Orphan INVOKED rows are reported as advisory (pass=true) — observation-
   // time drift on an in-memory LLM dispatch is not a fail-loud condition. A
   // future observer layer may take over this reconciliation.
@@ -6486,7 +6496,7 @@ export async function collectDoctorReport(
       pass: true,
       label: orphans === 0
         ? `MERGE_DISPATCH: 0 orphan INVOKED (${invokedRows.length} bracketed)`
-        : `MERGE_DISPATCH: ${orphans} orphan INVOKED (advisory - a merge started but no matching finish was recorded within ${MERGE_DISPATCH_TIMEOUT_SEC}s)`,
+        : `MERGE_DISPATCH: ${orphans} orphan INVOKED (advisory - a merge started more than ${MERGE_DISPATCH_TIMEOUT_SEC}s ago and no matching finish was recorded after it)`,
     });
   } catch {
     // MERGE_DISPATCH check failure is non-fatal for doctor report
@@ -11808,10 +11818,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         : 0;
       const stageDelta = executeStages.length - oldExecuteCount;
       const deltaStr = stageDelta >= 0 ? `+${stageDelta}` : String(stageDelta);
-      const summary = {
-        ...gridCostSummary(adjustedMapping as Record<string, "EXECUTE" | "SKIP">),
-        off: ceremonyOffList(newScope, ceremonyPolicyValues(newScope, content)),
-      };
+      const summary = gridCostSummary(adjustedMapping as Record<string, "EXECUTE" | "SKIP">);
       const gates = summary.gates;
       const effectiveDepth = getField(content, "Depth") || "unknown";
       auditEntries.unshift(
@@ -11861,7 +11868,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       // is what they asked for, and `next` carries on into it.
       outputLines = [
         `Switched to ${newScope} (${SCOPE_GLOSS}): ${summary.shown} stages (${shownDone} done), ` +
-          `${gates} approval gates${ceremonyOffClause(summary)}.` +
+          `${gates} approval gates.` +
           (isScopeName(oldScope) ? ` You can switch back to ${oldScope} any time.` : ""),
         ...skippedNow.map(({ slug, was }) =>
           `Skipped ${findStageBySlug(slug)?.name ?? slug} (${was}): ${newScope} does not run it. ` +

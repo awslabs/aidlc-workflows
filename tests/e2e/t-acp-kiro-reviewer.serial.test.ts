@@ -9,9 +9,8 @@
 // contracts (conductor `subagent.trustedAgents` includes the two reviewer
 // slugs; the reviewer agents' `fs_write` is capped to the `aidlc/spaces/**`
 // workspace; the SKILL.md gate flow names the §12a step). All three are pinned
-// deterministically by dist parity, but until this test NO live check proved a
-// Kiro conductor actually runs the reviewer sub-agent end-to-end — the live
-// reviewer evidence lived only on the Claude TUI leg (t-tui-t51-poc-scope).
+// deterministically by dist parity; this test is the live proof that a Kiro
+// conductor actually runs the reviewer sub-agent end-to-end.
 // This is the Kiro logic-half twin: same stage (requirements-analysis, poc,
 // `reviewer: aidlc-product-lead-agent` per its frontmatter), ACP-native shape.
 //
@@ -30,10 +29,9 @@
 //      the same pattern as driveCodekbUntilBothRepos, NOT a tool-title stop.
 //   2. The stage's clarifying questions render as numbered PROSE in the
 //      agent's text (question-rendering annex), not a protocol gate the driver
-//      can answer — so the opening prompt grants one-stage self-answer
-//      permission up front, and if the model still ends its turn to ask, ONE
-//      bounded follow-up turn on the SAME keepAlive session answers with the
-//      recommended defaults. Two turns maximum; the disk poll spans both.
+//      can answer - so the first turn ends on them, and ONE bounded follow-up
+//      turn on the SAME keepAlive session answers with the recommended
+//      defaults. Two turns maximum; the disk poll spans both.
 //
 // ASSERTABLE SURFACES (on-disk + tool trace, never prose):
 //   - requirements.md exists without an embedded review. REVIEW_COMPLETED

@@ -1621,6 +1621,11 @@ export interface PlanApprovalAnswer {
   feedback?: string;
   /** The person's reply was the option itself, so their words say nothing about what to change. */
   exactPick?: true;
+  /**
+   * Request Changes only: this chat's message the question opened for, proved by the answer command as
+   * this chat's own and unspent. Its words answer the question while no reply came after it.
+   */
+  opening?: { words: string; at: string };
 }
 
 const ANSWER_LABELS: Record<PlanApprovalAnswerChoice, string> = {
@@ -1883,7 +1888,19 @@ export function recordPlanApprovalAnswer(
       throw new Error("No Plan Approval question is open. Run next.");
     }
     const { record } = open;
-    const replies = record.replies ?? [];
+    // The message the question opened for already asked for a change ("go
+    // back to code generation: also accept -S"): with nothing answered on the
+    // question, no reply since it was shown, and no plan question answered
+    // since the message, it is the person's Request Changes for this question
+    // alone. An approval needs a reply after the question.
+    const asked = answer.choice === "request-changes" ? answer.opening : undefined;
+    const opening = asked && record.mode === "ask" && !record.replies?.length && !record.results?.length &&
+        record.repliesFrom && !personRepliedAfter(projectDir, record.repliesFrom) &&
+        !readAuditShardEvents(projectDir).some((row) => row.event === "QUESTION_ANSWERED" &&
+          auditBlockField(row.block, "Checkpoint") === "plan-approval" && row.timestamp >= asked.at)
+      ? { session: session || "unidentified-session", text: asked.words.slice(0, ASK_REPLY_MAX_CHARS) }
+      : null;
+    const replies = opening === null ? record.replies ?? [] : [opening];
     const answeredBefore = record.mode === "ask" &&
       record.targets.every((target) => record.results?.some((result) => result.unit === target.unit));
     // Replies kept after every plan was answered are for a correction.
@@ -1947,7 +1964,7 @@ export function recordPlanApprovalAnswer(
     }
     // Words kept since the question can be a question or a command to AIDLC
     // ("skip plan approval?"), which answers nothing: a choice needs a reply.
-    if (record.repliesFrom && !personRepliedAfter(projectDir, record.repliesFrom)) {
+    if (opening === null && record.repliesFrom && !personRepliedAfter(projectDir, record.repliesFrom)) {
       throw new Error(
         "The person has not answered the plan question since it was shown: their message since then was a " +
           "question or a command to AIDLC, not an answer. Answer them and end the turn. If they want plan approval " +

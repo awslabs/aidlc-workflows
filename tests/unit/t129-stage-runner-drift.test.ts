@@ -12,7 +12,7 @@
 // target. The registry harmlessly ignores the id (no enumerated unit); the
 // coverage it preserves is the .sh's exact behavioural guarantee, below.
 //
-// WHAT THE .sh PROVED (t129-stage-runner-drift.sh:1-19 prose + the 7 asserts):
+// WHAT THE .sh PROVED (t129-stage-runner-drift.sh prose + the 7 asserts):
 //   The set of `skills/aidlc-<stage>/` runner dirs is EXACTLY the RUNNABLE
 //   compiled stage-slug set (the 29 non-initialization stages) — no stage missing
 //   its runner, no orphan runner for a stage the graph dropped. The 29 runners are
@@ -41,14 +41,14 @@
 //
 // MECHANISM = cli (body-derived, milestone 3): the SPAWNED shipped tool is load-bearing.
 //   - aidlc-runner-gen.ts resolves SKILLS_DIR off its OWN module location
-//     (TOOLS_DIR/../skills, :66-67), so an in-process handleWrite()/handleCheck()
+//     (TOOLS_DIR/../skills), so an in-process handleWrite()/handleCheck()
 //     would MUTATE the SHIPPED tree. That is exactly why the .sh runs write/check
 //     against a SANDBOX copy of .claude/ (setup_integration_project). The
 //     missing/orphan/regen cases REQUIRE a sandboxed copy with its OWN
 //     aidlc-runner-gen.ts, driven via a subprocess.
 //   - The drift verdict IS a process.exit contract: handleCheck() console.logs the
-//     MISSING/ORPHAN diff then process.exit(1) (:287-294); it returns (exit 0) on
-//     sync (:281-285). The exit code is only observable on the spawned binary —
+//     MISSING/ORPHAN diff then process.exit(1); it returns (exit 0) on
+//     sync. The exit code is only observable on the spawned binary -
 //     the same surface the .sh shelled out to (`bun GEN check`). spawnsShippedTool.
 //   The two independent cross-checks (tests 1 + 2) read stage-graph.json off disk
 //   in-process — they do NOT spawn and do NOT touch the shipped tree (the .sh did
@@ -56,15 +56,15 @@
 //   WITHOUT trusting aidlc-runner-gen.ts.
 //
 // SOURCE UNDER TEST (dist/claude/.claude/tools/aidlc-runner-gen.ts):
-//   :88  isRunnableStage(node) — node.phase !== "initialization" (the 29 runnable
+//   isRunnableStage(node) - node.phase !== "initialization" (the 29 runnable
 //        stages; init stages are bootstrap and ship no per-stage runner).
-//   :214 handleWrite() — (re)generate one skills/aidlc-<slug>/SKILL.md per runnable
+//   handleWrite() - (re)generate one skills/aidlc-<slug>/SKILL.md per runnable
 //        stage + the single /aidlc-init wrapper; PRUNE stale init-stage runners.
-//   :244 isRunnerSkill(path) — on-disk runner SIGNATURE: SKILL.md body carries the
+//   isRunnerSkill(path) - on-disk runner SIGNATURE: SKILL.md body carries the
 //        `--stage` + `--single` markers (so an orphan is detectable by body, not by
 //        compiled-set membership — non-runner skills + scope-runners are never
 //        mistaken for stage-runners).
-//   :273 handleCheck() — drift guard: onDiskRunnerSlugs() set == stageSlugs() set;
+//   handleCheck() - drift guard: onDiskRunnerSlugs() set == stageSlugs() set;
 //        exit 0 + "in sync" on match, else console.log MISSING/ORPHAN diff +
 //        process.exit(1).
 //
@@ -118,7 +118,7 @@ const STAGE_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 
 // ---------------------------------------------------------------------------
 // Independent cross-check helpers — derive BOTH sets WITHOUT trusting
-// aidlc-runner-gen.ts (mirrors the .sh's pure-bash cross-check at :44-58). The
+// aidlc-runner-gen.ts (mirrors the .sh's pure-bash cross-check). The
 // `check` subcommand under test re-derives them through the tool; these read the
 // raw stage-graph.json and the on-disk skills dir directly so set-equality is
 // proven independent of the very tool the negative cases drive.
@@ -253,7 +253,7 @@ describe("t129 stage-runner drift guard (migrated from t129-stage-runner-drift.s
   // Test 5 — §6-E NON-GOLDEN: the guard CATCHES an ORPHAN runner. In a SANDBOX,
   // add a bogus runner carrying the `--stage … --single` signature for a slug NOT
   // in the graph; `check` must FIRE: exit 1 AND name it under "ORPHAN". The orphan
-  // must carry the runner SIGNATURE or isRunnerSkill (:244) would not see it.
+  // must carry the runner SIGNATURE or isRunnerSkill would not see it.
   // ===========================================================================
   test("check exits 1 and names an ORPHAN runner for a slug not in the graph [.sh test 6]", () => {
     const { gen, skills } = newSandbox();
@@ -309,7 +309,7 @@ describe("t129 stage-runner drift guard (migrated from t129-stage-runner-drift.s
 
     // Regenerate: write restores the missing runner; orphan removal — the .sh
     // rm -rf'd the orphan before `write`, since write PRUNES only stale INIT-phase
-    // runners (handleWrite :225-231), not arbitrary orphans. Mirror that.
+    // runners (handleWrite), not arbitrary orphans. Mirror that.
     rmSync(orphanDir, { recursive: true, force: true });
     const wrote = runGen(gen, ["write"]);
     expect(wrote.status).toBe(0);

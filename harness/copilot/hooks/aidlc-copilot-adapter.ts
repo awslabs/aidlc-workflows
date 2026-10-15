@@ -100,6 +100,8 @@ import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep 
 import { fileURLToPath } from "node:url";
 import {
   beforeDelimiter,
+  decideFence,
+  ENGINE_OWNED_STATE_TRANSITIONS,
   workflowParticipation,
   hookStandsOutside,
   enterHookWorkflow,
@@ -682,13 +684,24 @@ export async function run(
     return beforeDelimiter(args).some((arg) => arg === flag || arg.startsWith(`${flag}=`));
   }
 
-  // Stage status changes the state-transition guard refuses, plus the setters
-  // that change how many approval gates the person sees.
-  const STATE_KEEPS_PROMPT = new Set([
-    "set", "checkbox", "advance", "finalize", "complete-workflow", "gate-start", "approve", "reject",
-    "revise", "skip", "park", "refresh-unit-progress", "fold-unit-merge",
-    "set-unit-gate-rhythm", "set-construction-checkpoints", "set-skeleton-stance",
-  ]);
+  // The setters that change how many approval gates the person sees.
+  const GATE_SETTERS_KEEP_PROMPT = new Set(["set-unit-gate-rhythm", "set-construction-checkpoints", "set-skeleton-stance"]);
+
+  // A stage-status change only the engine makes lands when the state-transition
+  // check stands aside for this chat's work. While the check holds, the state
+  // tool refuses it with its own words, so there is nothing to ask. Read
+  // through the same decision the state tool makes; anything unread keeps the
+  // prompt.
+  function stateTransitionStandsAside(): boolean {
+    const workflow = enterHookWorkflow(projectDir, sessionId);
+    try {
+      return decideFence(projectDir, "state-transition").decision === "stand-aside";
+    } catch {
+      return true;
+    } finally {
+      workflow.restore();
+    }
+  }
 
   // Commands that keep the host's Allow prompt, so the person sees each one
   // before it runs: they throw away or merge the person's work, change which
@@ -741,7 +754,8 @@ export async function run(
       case "state-passthrough":
         if (verb === "set-construction-checkpoints" && rest.length === 1 &&
           constructionPolicyChangeAllowed(projectDir, "Construction Checkpoints", rest[0])) return false;
-        return STATE_KEEPS_PROMPT.has(verb);
+        if (ENGINE_OWNED_STATE_TRANSITIONS.has(verb)) return stateTransitionStandsAside();
+        return GATE_SETTERS_KEEP_PROMPT.has(verb);
       case "state-utility": return verb === "set-status";
       // Aborting a Bolt needs the person's consent, discarded or not.
       case "bolt": return verb === "set-autonomy" || verb === "abort";

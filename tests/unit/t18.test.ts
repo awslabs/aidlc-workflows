@@ -20,13 +20,13 @@
 //   handleAppendRaw(heading, body, projectDir): void   (NOT exported - CLI only)
 //
 // File-format contract written by appendAuditEntry / appendAuditEntryUnlocked
-// (aidlc-audit.ts:239-257), exercised below against the real bytes on disk:
+// (aidlc-audit.ts), exercised below against the real bytes on disk:
 //   - first write to a missing file prepends "# AI-DLC Audit Log\n"
 //     (appendAuditBlockAtPath)
 //   - each entry: "\n## <heading>\n**Timestamp**: <ts>\n**Event**: <type>\n"
 //     then one "**<key>**: <value>\n" per field, then "\n---\n"
 //   - heading is EVENT_HEADINGS[eventType] || eventType
-//   - timestamp is isoTimestamp(): YYYY-MM-DDTHH:MM:SSZ (aidlc-lib.ts:1441)
+//   - timestamp is isoTimestamp(): YYYY-MM-DDTHH:MM:SSZ (aidlc-lib.ts)
 //
 // Test-design note (house style): assert the OBSERVABLE behavioural contract
 // (return values, thrown errors, and the literal bytes written to the audit

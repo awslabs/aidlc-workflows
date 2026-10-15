@@ -3,9 +3,8 @@
 // Deterministic routed journey for the express scope. No SDK/TUI driver and no
 // live harness variables: every assertion crosses the shipped CLI boundary and
 // reads the compiled routing result or the state written by intent-create.
-// The keyword routing cases (`detect-scope --from-text`) went with the
-// classifier: the engine no longer reads the person's words for a plan; the
-// agent proposes it (t-plan-proposed-by-the-agent).
+// The engine does not read the person's words for a plan; the agent proposes
+// it (t-plan-proposed-by-the-agent).
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";

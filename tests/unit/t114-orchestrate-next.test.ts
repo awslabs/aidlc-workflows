@@ -5,9 +5,9 @@
 // aidlc-orchestrate.ts `next` CLI-contract test.
 //
 // SUBJECT: `next` is the read-only orchestration engine handler
-// (aidlc-orchestrate.ts:785 handleNext). It reads workflow state + the compiled
+// (aidlc-orchestrate.ts handleNext). It reads workflow state + the compiled
 // stage graph and emits EXACTLY ONE validated directive (JSON) to stdout via
-// `console.log(JSON.stringify(...))` (:147), mutating no workflow state. The
+// `console.log(JSON.stringify(...))`, mutating no workflow state. The
 // table drives it over the existing state fixtures and asserts (state + args) →
 // directive kind + key fields, the flag-precedence ladder (state > flag > env >
 // default), read-only dispatch (--status/--version → print), the
@@ -16,7 +16,7 @@
 //
 // SPAWN (not in-process): the whole contract is the argv-dispatch / process
 // boundary of aidlc-orchestrate.ts. `handleNext` is NOT exported (internal,
-// reached only through `main()` at :1965 via the `next` case at :1984). The
+// reached only through `main()` via the `next` case). The
 // directive lands on stdout through `console.log`; errors land through the
 // composed sibling tools the non-happy-path branches shell out to
 // (aidlc-jump.ts resolve/execute, aidlc-utility.ts resolve-env-scope /
@@ -57,16 +57,16 @@
 // mechanism and were dropped with it; issue #369.)
 //
 // Source cites (dist/claude/.claude/tools/aidlc-orchestrate.ts):
-//   :785 handleNext — the read-only branch ladder.
-//   :793 Branch 1  --status/--version -> print.
-//   :804 Branch 2  --stage + --phase -> "Cannot use --stage and --phase together".
-//   :822 Branch 3  --init -> print naming the scaffold cmd.
-//   :858 Branch 3b UNCONDITIONAL invalid --scope -> "Unknown scope ...".
-//   :873 Branch 4  env source -> shells resolve-env-scope -> verbatim "Invalid AWS_AIDLC_DEFAULT_SCOPE ...".
-//   :934 Branch 5  scope-change print ("scope change --scope <s>").
-//  :1034 Branch 7  --stage/--phase jump -> emitJumpDirective; with-state -> print "aidlc-jump.ts execute --target ... --direction ...".
-//  :1116 Branch 10 happy path -> run-stage for the in-flight current stage.
-//   :754 computeGate -> gate:true for every EXECUTE stage except initialization (the gate axis is NOT the execution axis).
+//   handleNext - the read-only branch ladder.
+//   Branch 1  --status/--version -> print.
+//   Branch 2  --stage + --phase -> "Cannot use --stage and --phase together".
+//   Branch 3  --init -> print naming the scaffold cmd.
+//   Branch 3b UNCONDITIONAL invalid --scope -> "Unknown scope ...".
+//   Branch 4  env source -> shells resolve-env-scope -> verbatim "Invalid AWS_AIDLC_DEFAULT_SCOPE ...".
+//   Branch 5  scope-change print ("scope change --scope <s>").
+//   Branch 7  --stage/--phase jump -> emitJumpDirective; with-state -> print "aidlc-jump.ts execute --target ... --direction ...".
+//   Branch 10 happy path -> run-stage for the in-flight current stage.
+//   computeGate -> gate:true for every EXECUTE stage except initialization (the gate axis is NOT the execution axis).
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,

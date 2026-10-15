@@ -1,22 +1,21 @@
-// t-tui-workshop.serial.tui.test.ts — drive a mini AI-DLC workshop through a
+// t-tui-workshop.serial.test.ts - drive a mini AI-DLC workshop through a
 // REAL claude TUI and prove answering its AskUserQuestion gates advances state
-// ON DISK (§5.1). A REWRITE (not a port) of the shipped spike
-// tests/spike/t-tui-workshop.sh, which was BROKEN and never passed live: its
-// MAX_ANSWERS=3 bare-Enter loop stopped BEFORE the Submit screen, so the
-// affirmation never committed, yet it asserted "Way of Working populated" —
-// unreachable. This rewrite uses the `answer-gate` subcommand (§3) instead: it
-// answers every tab/gate and TERMINATES on the post-approval `Last Completed
-// Stage` field (written atomically with GATE_APPROVED — see the spawn below for
-// why the affirmation timestamp is the WRONG terminator: the t73/t74 race).
+// ON DISK (section 5.1). A fixed-count bare-Enter loop stops BEFORE the Submit
+// screen, so the affirmation never commits. This uses the `answer-gate`
+// subcommand instead: it answers every tab/gate and TERMINATES on the
+// post-approval `Last Completed Stage` field (written after GATE_APPROVED - see
+// the spawn below for why the affirmation timestamp is the WRONG terminator:
+// the t73/t74 race).
 //
 // What it proves:
-//   - a workshop workflow starts from a freeform prompt (statusline leaves `ready`),
+//   - a workshop workflow starts from an explicit scope request (statusline
+//     leaves `ready`),
 //   - the answer-gate clears the multi-tab practices gate + the Code Style and
 //     Approval gates by taking the Recommended default per menu,
 //   - answering advances REAL state on disk (the SDK and tui paths share this
 //     exact disk assertion):
 //       * aidlc-state.md `Practices Affirmed Timestamp` non-empty,
-//       * audit.md has GATE_APPROVED >= 1,
+//       * audit has GATE_APPROVED >= 1,
 //       * team.md `## Way of Working` populated (trunk|merge|branch),
 //   - RENDER (the tui-only value-add): the captured grid showed the multi-tab
 //     `Submit` strip and the `Enter to select` footer at least once — the thing
@@ -124,7 +123,7 @@ describe("t-tui-workshop (answering AUQ gates advances disk state)", () => {
     async () => {
       const session = `aidlc_tui_workshop_${process.pid}`;
       // setupTuiProject copies the distributable AND the sibling aidlc/ memory
-      // shell (the rule layers live there post-P5) and seeds the per-intent
+      // shell (the rule layers live there) and seeds the per-intent
       // workspace shell; noAidlcDocs strips the seeded record so the live
       // `/aidlc --scope classic` auto-creates its own intent (the `ready`
       // baseline below holds because no intent resolves until creation).
@@ -191,16 +190,15 @@ describe("t-tui-workshop (answering AUQ gates advances disk state)", () => {
           if (grid.includes("Enter to select")) sawSelectFooter = true;
         }, 1000);
 
-        // --- answer the gates via the shared answer-gate primitive (§3) -------
+        // --- answer the gates via the shared answer-gate primitive (section 3) -------
         // It answers all tabs/gates by taking the Recommended default and
-        // terminates on the POST-APPROVAL state signal — NOT the bare-Enter loop
-        // the broken spike used. Run it as a long-lived subprocess; its own
-        // backstops error loud, so a hang surfaces as a nonzero exit.
+        // terminates on the POST-APPROVAL state signal. Run it as a long-lived
+        // subprocess; its own backstops error loud, so a hang surfaces as a nonzero
+        // exit.
         //
         // Terminate on `Last Completed Stage=^practices-discovery$`, NOT the
         // default `Practices Affirmed Timestamp`. This is the t73/t74
-        // terminator-race (t-tui-t74:271-283), confirmed live for this journey
-        // on macOS 2026-06-13: practices-discovery runs its affirmation gate as
+        // terminator race: practices-discovery runs its affirmation gate as
         // Step 5 gate-start → Step 6 promote (PRACTICES_AFFIRMED) → Step 7
         // timestamp `set` → the deferred Step 5 `report --result approved`
         // (GATE_APPROVED + STAGE_COMPLETED). The conductor writes the substantive
@@ -208,10 +206,10 @@ describe("t-tui-workshop (answering AUQ gates advances disk state)", () => {
         // ahead of GATE_APPROVED (captured order: PRACTICES_AFFIRMED 11:03:36 →
         // timestamp 11:03:44 → GATE_APPROVED 11:03:45). The default timestamp
         // terminator therefore stopped the loop in that gap, and the immediate
-        // `audit.md` read below saw GATE_APPROVED=0 — a real 0-count, not a
+        // audit read below saw GATE_APPROVED=0 - a real 0-count, not a
         // missing gate. Within the same handleApprove invocation the GATE_APPROVED
-        // row is appended to audit.md (aidlc-state.ts :799) BEFORE `Last Completed
-        // Stage` is flushed to aidlc-state.md by writeStateFile (:809; the :789
+        // row is appended to audit (aidlc-state.ts handleApprove) BEFORE `Last Completed
+        // Stage` is flushed to aidlc-state.md by writeStateFile (the
         // setField is in-memory only). So the moment the terminator can observe
         // `Last Completed Stage=^practices-discovery$` on disk, GATE_APPROVED is
         // already there — the GATE_APPROVED>=1 assertion below stays honest.
@@ -226,7 +224,7 @@ describe("t-tui-workshop (answering AUQ gates advances disk state)", () => {
               "--project-dir",
               sandbox,
               // Post-approval terminator (see above): the affirmation gate's
-              // GATE_APPROVED is guaranteed downstream of this field.
+              // GATE_APPROVED is guaranteed to precede this field's on-disk write.
               "--until-state-field",
               "Last Completed Stage=^practices-discovery$",
               // No fixed per-gate timeout; the overall timeout is the wedge backstop.
@@ -257,10 +255,10 @@ describe("t-tui-workshop (answering AUQ gates advances disk state)", () => {
           .filter((l) => l.startsWith("**Event**: GATE_APPROVED")).length;
         expect(gateApproved).toBeGreaterThanOrEqual(1);
 
-        // The method relocated (P5/fe7f470) from .claude/rules/aidlc-team.md to
-        // the harness-neutral workspace-root aidlc/spaces/default/memory/team.md
+        // The method lives in the harness-neutral workspace-root
+        // aidlc/spaces/default/memory/team.md
         // (neutral basename, no aidlc- prefix). Affirmation writes the section
-        // there via memoryDirFor (aidlc-state.ts:1346-1352).
+        // there via memoryDirFor (aidlc-state.ts).
         const teamRules = readFileSync(
           join(sandbox, "aidlc", "spaces", "default", "memory", "team.md"),
           "utf8",

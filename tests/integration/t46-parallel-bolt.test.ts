@@ -10,7 +10,7 @@
 // filesystem mkdir-EEXIST lock (acquireAuditLock's shared acquisition backstop
 // and 100ms retry cadence), and only separate OS
 // processes exercise it — an in-process loop would share one Bun runtime,
-// trip the AUDIT_LOCK_DEPTH reentrancy counter (aidlc-lib.ts:567), and prove
+// trip the AUDIT_LOCK_DEPTH reentrancy counter (aidlc-lib.ts), and prove
 // nothing about concurrency. So the test SPAWNS 5 real `bun aidlc-bolt.ts
 // start` processes via Bun.spawn and races them. spawnCount = all.
 //

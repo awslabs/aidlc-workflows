@@ -5,12 +5,12 @@
 // that validates aidlc-state.md structure, writes a recovery breadcrumb, and
 // emits SESSION_COMPACTED when an audit.md already exists. Hooks are
 // mechanism=none: they resolve the project dir from the CLAUDE_PROJECT_DIR env
-// var (aidlc-lib.ts:114-116) and have no exported pure function to import. So
+// var (aidlc-lib.ts) and have no exported pure function to import. So
 // every .sh assertion is preserved by SPAWNING the hook via
 // node:child_process spawnSync with CLAUDE_PROJECT_DIR set, exactly as the .sh
 // ran `CLAUDE_PROJECT_DIR=<p> bun "$HOOK"`. We assert on res.stderr (the .sh's
 // `2>&1` WARNING grep — the hook prints warnings via console.error,
-// aidlc-validate-state.ts:40), on the recovery breadcrumb / heartbeat the hook
+// aidlc-validate-state.ts), on the recovery breadcrumb / heartbeat the hook
 // writes, and on the SESSION_COMPACTED row it appends to audit.md.
 //
 // NO STDIN: unlike the SubagentStop/PostToolUse hooks (t09/t29), this PreCompact
@@ -34,7 +34,7 @@
 //   - SESSION_COMPACTED emitted via appendAuditEntry ONLY when audit.md already
 //     exists (lines 58-59); the hook never auto-creates audit.md. The audit row
 //     renders under `## Session Compacted` with `**Event**: SESSION_COMPACTED`
-//     (aidlc-audit.ts:130, EVENT_HEADINGS) plus Current Stage + State Validity
+//     (aidlc-audit.ts, EVENT_HEADINGS) plus Current Stage + State Validity
 //     fields (hook lines 61-67).
 //
 // PARITY NOTES (every .sh `ok` line maps to an expect() below; several STRONGER):

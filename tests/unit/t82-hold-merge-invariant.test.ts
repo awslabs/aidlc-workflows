@@ -6,10 +6,10 @@
 //   - `hold-merge` / `release-merge` mutate the per-Bolt FORKED state file at
 //     the intent-scoped worktree's mirrored record and print a
 //     JSON envelope to stdout, then return (handleHoldMerge / handleReleaseMerge,
-//     aidlc-bolt.ts:587-601).
+//     aidlc-bolt.ts).
 //   - `complete --merge` refuses with process.exit(1) + a {ok:false,
 //     reason:"merge-held", ...} envelope when the marker is set (failJson,
-//     aidlc-bolt.ts:336-343,868-888), and proceeds (exit 0) once released.
+//     aidlc-bolt.ts), and proceeds (exit 0) once released.
 //   - the refusal path must NOT emit BOLT_COMPLETED into the main audit shards.
 // The setup itself (`start --worktree --slug`) FANS OUT to sibling tools
 // (aidlc-state fork / aidlc-audit audit-fork / aidlc-runtime fragment-fork via

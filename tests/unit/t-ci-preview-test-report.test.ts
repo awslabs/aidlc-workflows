@@ -307,7 +307,8 @@ describe("t-ci-preview-test-report", () => {
     const body = "- change\n\nSource commit: owner/repo@a\n";
     const report = `## Nightly test report\n\n${Array.from({ length: 200 }, (_, index) => `- \`t${index}\`\n`).join("")}`;
     const line = updateReport("https://x/run/9");
-    expect(line).toContain("[the preview run](https://x/run/9)");
+    // Either channel's update can fail it, so the line names neither command.
+    expect(line).toBe("## Update from the last release\n\nUpdating from the last release to this preview **failed** in [the preview run](https://x/run/9).\n");
     expect(stagePreviewNotes(body, report, RELEASE_BODY_LIMIT, { suite: false, updateRunUrl: "https://x/run/9" }))
       .toBe(`${FAILED_UPDATE_WARNING}${body}\n${line}`);
     expect(stagePreviewNotes(body, report, RELEASE_BODY_LIMIT, { suite: false })).toBe(body);

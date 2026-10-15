@@ -27,7 +27,7 @@
 // form, so "present" is not enough — the parser must follow the block scalar to
 // the first non-empty continuation line before the next top-level key. That
 // block-scalar-aware non-empty contract is what this twin preserves verbatim
-// from the .sh's inline `bun -e` parser (t123-skills-spec-conformance.sh:94-124).
+// from the .sh's inline `bun -e` parser (t123-skills-spec-conformance.sh).
 //
 // DERIVED, never hardcoded (the .sh's central design promise): the expected set
 // is computed from the same two sources the .sh used — stage-graph.json

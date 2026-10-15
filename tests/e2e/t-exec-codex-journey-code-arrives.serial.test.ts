@@ -209,9 +209,7 @@ describe("t-exec-codex-journey-code-arrives - a new project gains the team's cod
         expect(commandOutputs(b2.stdout).filter((out) => out.includes(ASKED)), "the question came back after the answer").toEqual([]);
 
         // The answer is the person's: the reclassify came only after their
-        // reply. When this was written, codex exec 0.151.0 and 0.160.0 ran
-        // none of the project's hooks (no hook left its trace), so there is no
-        // recorded human turn to pair it with; the SDK leg checks that.
+        // reply. codexTurn records each prompt through codexPersonTurn.
         const rows = readAuditShardEvents(proj);
         const reclassified = rows.filter((r) => r.event === "WORKSPACE_RECLASSIFIED");
         expect(reclassified, "reclassify rows").toHaveLength(1);

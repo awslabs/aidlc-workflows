@@ -228,7 +228,7 @@ export function renderReport(options: {
 }
 
 export function updateReport(runUrl: string): string {
-  return `## Update from the last release\n\n\`aidlc update\` from the last release to this preview **failed** in ${link("the preview run", runUrl)}.\n`;
+  return `## Update from the last release\n\nUpdating from the last release to this preview **failed** in ${link("the preview run", runUrl)}.\n`;
 }
 
 // The published copy keeps every planned line and the source footer. The report,

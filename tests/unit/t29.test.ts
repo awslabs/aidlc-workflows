@@ -8,14 +8,14 @@
 // node:child_process spawnSync with the JSON piped through `input:`, exactly
 // as the .sh did `echo '<json>' | CLAUDE_PROJECT_DIR=<p> bun "$HOOK"`.
 //
-// The hook resolves the project dir from CLAUDE_PROJECT_DIR (aidlc-lib.ts:116)
+// The hook resolves the project dir from CLAUDE_PROJECT_DIR (aidlc-lib.ts)
 // and, on a qualifying TaskUpdate, (a) writes a health heartbeat at
 // aidlc-docs/.aidlc-engine/hooks-health/sync-statusline.last and (b) shells out to
 // <projectDir>/.claude/tools/aidlc-utility.ts set-status, which rewrites
 // Current Stage / Lifecycle Phase / Active Agent / Status / Last Updated in
-// aidlc-state.md (aidlc-utility.ts:2432-2456). For the hook to find that tool,
+// aidlc-state.md (aidlc-utility.ts). For the hook to find that tool,
 // the .sh symlinks $AIDLC_SRC -> $proj/.claude (create_hook_test_project,
-// t29-hook-sync-statusline.sh:25-30). We replicate that symlink here.
+// t29-hook-sync-statusline.sh). We replicate that symlink here.
 //
 // PARITY MAP (every .sh `ok` -> one expect()-bearing test() case here):
 //   .sh T1 assert_grep 'Current Stage.*scope-definition'  -> T1: STRONGER —
@@ -36,7 +36,7 @@
 //   .sh T6 assert_grep 'Lifecycle Phase.*CONSTRUCTION'        -> T6: STRONGER —
 //        exact `getField(state,"Lifecycle Phase") === "CONSTRUCTION"`. The phase
 //        comes from the stage graph: code-generation -> construction, uppercased
-//        by set-status (aidlc-utility.ts:2442,2446) — verified live via
+//        by set-status (aidlc-utility.ts) - verified live via
 //        findStageBySlug("code-generation").phase === "construction".
 //   .sh T7 assert_file_exists sync-statusline.last           -> T7: existsSync
 //        of the heartbeat file (same observable) + its content is a non-empty

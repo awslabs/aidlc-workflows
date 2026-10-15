@@ -1,19 +1,21 @@
-// PreToolUse hook: protect harness runtime records and lifecycle mutations.
+// PreToolUse hook: protect harness runtime records, and keep a helper agent's
+// lifecycle and routing commands with the main session.
 //
 // The orchestration engine owns stage pinning, evidence checks, idempotency,
-// and transition selection. A conductor that calls state transition verbs
-// directly bypasses that boundary. Read-only state queries and specialized
-// recovery/configuration verbs remain available.
+// and transition selection. A direct call of a stage-status verb is refused by
+// the state tool itself (ENGINE_OWNED_STATE_TRANSITIONS), whatever spelling ran
+// it, so this hook does not read the command for it. Read-only state queries
+// and specialized recovery/configuration verbs remain available.
 
 import {
   hookStandsOutside,
   enterHookWorkflow,
   type ClaudeCodeHookInput,
   decideFence,
+  ENGINE_OWNED_STATE_TRANSITIONS,
   guardStandAsideSpeaks,
   guardStoodAsideLine,
   isClaudeCodeHookInput,
-  fenceSwitchSentence,
   parseArgs,
   parseWorkspaceCommand,
   recordGuardStoodAside,
@@ -24,30 +26,13 @@ import {
 import { LAUNCHER_GLOBAL_FLAGS } from "../tools/aidlc-command.ts";
 import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 
-export const BLOCKED_STATE_TRANSITIONS = new Set([
-  "set",
-  "checkbox",
-  "advance",
-  "finalize",
-  "complete-workflow",
-  "gate-start",
-  "approve",
-  "reject",
-  "revise",
-  "skip",
-  "park",
-  "refresh-unit-progress",
-  "fold-unit-merge",
-]);
-
 export const DELEGATED_STATE_MUTATIONS = new Set([
-  ...BLOCKED_STATE_TRANSITIONS,
+  ...ENGINE_OWNED_STATE_TRANSITIONS,
   "set-skeleton-stance",
   "set-construction-iteration",
   "set-construction-checkpoints",
   "set-construction-execution",
   "set-construction-verification-command",
-  "sync-unit-scope-stage",
   "unit",
   "set-unit-ownership",
   "set-unit-gate-rhythm",
@@ -176,7 +161,6 @@ export const DELEGATE_ROLE_ADMITTED_VERBS: Readonly<
   "aidlc-pipeline-deploy-agent": { "aidlc-worktree.ts": ["create", "merge", "discard", "restore"] },
 };
 
-// The verbs one persona is admitted: everyone's, then its own.
 export function delegateAdmittedVerbs(agent: string): Readonly<Record<string, readonly string[]>> {
   const own = DELEGATE_ROLE_ADMITTED_VERBS[agent] ?? {};
   const files = [...new Set([...Object.keys(DELEGATE_ADMITTED_VERBS), ...Object.keys(own)])];
@@ -386,56 +370,28 @@ function executableShellText(command: string): string {
   );
 }
 
-export function directStateTransition(command: string): string | null {
-  // Only inspect shell command positions: start-of-input or immediately after
-  // a command separator. Matching arbitrary whitespace would mistake
-  // `echo bun ... aidlc-state.ts approve` and similar search strings for an
-  // invocation. The state CLI repeats this ownership check as the hard floor.
-  // [ \t]* after the anchor, not \s*: \n is already in the anchor class, and a
-  // cross-line \s* rescans masked heredoc whitespace quadratically (see
-  // maskFunctionDefinitions). The path-prefix class likewise excludes the
-  // anchor characters { and ( : a long run of either is a run of anchor
-  // positions, and a prefix class that can consume the run makes every anchor
-  // rescan the remainder - the same quadratic through a different door.
-  // Unquoted { and ( are shell metacharacters, not path text, so coverage is
-  // unchanged.
-  const invocation =
-    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:[^\s"';&|({]+\/)?bun(?:\.exe)?(?:\s+run)?\s+(?:"[^"\n]*aidlc-state\.ts"|'[^'\n]*aidlc-state\.ts'|[^\s;&|]*aidlc-state\.ts)\s+([a-z][a-z0-9-]*)\b/g;
-  for (const match of executableShellText(command).matchAll(invocation)) {
-    const verb = match[1];
-    if (BLOCKED_STATE_TRANSITIONS.has(verb)) return verb;
-  }
-  const nativeInvocation =
-    /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:"[^"\n]*\/aidlc(?:\.exe)?"|'[^'\n]*\/aidlc(?:\.exe)?'|[^\s"';&|({]*aidlc(?:\.exe)?)[ \t]+engine[ \t]+state[ \t]+([a-z][a-z0-9-]*)\b/g;
-  for (const match of executableShellText(command).matchAll(nativeInvocation)) {
-    const verb = match[1];
-    if (BLOCKED_STATE_TRANSITIONS.has(verb)) return verb;
-  }
-  const dispatcherTransition = delegatedLifecycleCommand(command)?.match(
-    /\bengine state ([a-z][a-z0-9-]*)$/,
-  )?.[1];
-  if (
-    dispatcherTransition &&
-    BLOCKED_STATE_TRANSITIONS.has(dispatcherTransition)
-  ) {
-    return dispatcherTransition;
-  }
-  return null;
-}
-
 // True only for an executable command that can cross a stage/workflow lifecycle
 // boundary. Unlike isEngineToolCall(), this parser deliberately ignores command
 // text passed to echo/rg, heredoc bodies, multiline strings, and function
 // definitions: flushing subagent holdback is destructive if the apparent
 // lifecycle command is only prose.
 export function isLifecycleBoundaryCommand(command: string): boolean {
+  // Only inspect shell command positions: start-of-input or immediately after
+  // a command separator. [ \t]* after the anchor, not \s*: \n is already in the
+  // anchor class, and a cross-line \s* rescans masked heredoc whitespace
+  // quadratically (see maskFunctionDefinitions). The path-prefix class likewise
+  // excludes the anchor characters { and ( : a long run of either is a run of
+  // anchor positions, and a prefix class that can consume the run makes every
+  // anchor rescan the remainder - the same quadratic through a different door.
+  // Unquoted { and ( are shell metacharacters, not path text, so coverage is
+  // unchanged.
   const invocation =
     /(?:^|&&|\|\||[;|(\n{])[ \t]*(?:(?:command|exec)\s+)?(?:env(?:\s+-[^\s]+)*\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=(?:"[^"\n]*"|'[^'\n]*'|[^\s;&|]+)\s+)*(?:[^\s"';&|({]+\/)?bun(?:\.exe)?(?:\s+run)?\s+(?:"[^"\n]*aidlc-(orchestrate|state|jump)\.ts"|'[^'\n]*aidlc-(orchestrate|state|jump)\.ts'|[^\s;&|]*aidlc-(orchestrate|state|jump)\.ts)\s+([a-z][a-z0-9-]*)\b/g;
   for (const match of executableShellText(command).matchAll(invocation)) {
     const tool = match[1] ?? match[2] ?? match[3];
     const verb = match[4];
     if (tool === "orchestrate" && verb === "report") return true;
-    if (tool === "state" && BLOCKED_STATE_TRANSITIONS.has(verb)) return true;
+    if (tool === "state" && ENGINE_OWNED_STATE_TRANSITIONS.has(verb)) return true;
     if (tool === "jump" && (verb === "execute" || verb === "reopen")) return true;
   }
   const nativeInvocation =
@@ -444,7 +400,7 @@ export function isLifecycleBoundaryCommand(command: string): boolean {
     const tool = match[1];
     const verb = match[2];
     if (tool === "orchestrate" && (verb === "report" || verb === "park")) return true;
-    if (tool === "state" && BLOCKED_STATE_TRANSITIONS.has(verb)) return true;
+    if (tool === "state" && ENGINE_OWNED_STATE_TRANSITIONS.has(verb)) return true;
     if (tool === "jump" && (verb === "execute" || verb === "reopen")) return true;
   }
   return false;
@@ -1165,21 +1121,6 @@ function delegatedLifecycleCommandAtDepth(command: string, depth: number): strin
   return null;
 }
 
-function mainSessionStandsOutside(sessionId: unknown): boolean {
-  let projectDir: string;
-  try {
-    projectDir = resolveProjectDirFromHook(import.meta.url);
-  } catch {
-    return false;
-  }
-  const workflow = enterHookWorkflow(projectDir, sessionId);
-  try {
-    return hookStandsOutside(workflow);
-  } finally {
-    workflow.restore();
-  }
-}
-
 export async function run(input: string): Promise<number> {
   let parsed: ClaudeCodeHookInput;
   try {
@@ -1234,28 +1175,6 @@ export async function run(input: string): Promise<number> {
   const agentType = parsed.agent_type?.trim() ||
     (typeof parsed.tool_input?.subagent_type === "string"
       ? parsed.tool_input.subagent_type.trim() : "");
-  const verb = directStateTransition(parsed.tool_input?.command ?? "");
-  if (verb !== null) {
-    if (standAside(`aidlc-state.ts ${verb}`)) return 0;
-    // A conversation that has not joined the workflow: the state tool's own
-    // check reads the same Guard Policy for the work it changes, and refuses
-    // with the same words where the check holds, so this hook does not stop it
-    // with an offer to turn off a check that may already be off.
-    if (agentType.length === 0 && mainSessionStandsOutside(parsed.session_id)) return 0;
-    const switchSentence = agentType.length === 0
-      ? fenceSwitchSentence(resolveProjectDirFromHook(import.meta.url), "state-transition")
-      : "";
-    process.stderr.write(
-      `Stage status cannot be changed with aidlc-state.ts ${verb} because that bypasses ` +
-        "the workflow's completion and approval checks. Use aidlc-orchestrate.ts report " +
-        "--stage <slug> --result " +
-        "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
-        "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow. " +
-        `${switchSentence}\n`,
-    );
-    return 2;
-  }
-
   if (agentType.length === 0) return 0;
   const delegatedCommand = delegatedLifecycleCommand(
     parsed.tool_input?.command ?? "",

@@ -3,7 +3,7 @@
 // t42 - state-jumped fixture structural meta-test.
 //
 // This test claims no enumerated tool unit (its covers id is an invariant);
-// like its sibling t12 (tests/integration/t12-state-fixture-validation.test.ts:1)
+// like its sibling t12 (tests/integration/t12-state-fixture-validation.test.ts)
 // it is a pure STRUCTURAL meta-test that one shipped state fixture
 // (tests/fixtures/state-jumped.md) carries the section headings, checkbox-state
 // vocabulary, and Current-Status fields that the REAL state template defines.

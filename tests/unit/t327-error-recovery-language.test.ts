@@ -185,13 +185,14 @@ describe("t327 rewritten refusal strings stay in project language", () => {
     const plan = read("core/hooks/aidlc-plan-approval-guard.ts");
     const scope = read("core/hooks/aidlc-reviewer-scope.ts");
     const transition = read("core/hooks/aidlc-state-transition-guard.ts");
+    const stateTool = read("core/tools/aidlc-state.ts");
     expect(plan).toContain("Code generation cannot start");
     expect(plan).toContain("code-generation-plan.md");
     expect(scope).toContain("This review cannot open");
     expect(scope).toContain("variables cannot be checked");
     expect(scope).toContain("the current unit.");
-    expect(transition).toContain("Stage status cannot be changed");
-    expect(transition).toContain("aidlc-orchestrate.ts report");
+    expect(stateTool).toContain("Stage status cannot be changed");
+    expect(stateTool).toContain("aidlc-orchestrate.ts report");
     expect(plan).not.toContain("`plan-approval guard:");
     expect(scope).not.toContain("reviewer read-scope:");
     expect(transition).not.toContain("workflow lifecycle and routing are conductor-owned");

@@ -1,6 +1,6 @@
 // covers: function:compileStageGraph
 //
-// t110 — compileStageGraph() in dist/claude/.claude/tools/aidlc-graph.ts:884.
+// t110 - compileStageGraph() in dist/claude/.claude/tools/aidlc-graph.ts.
 // Mechanism: none (pure-ish: reads the shipped stage files + rules + sensors
 // off disk, deterministic transform, zero LLM, zero tokens). Lives under
 // tests/integration/ because it composes the whole stages tree (31+ YAML
@@ -11,7 +11,7 @@
 // graph queries; it never asserts that re-compiling the stage graph from the
 // YAML source reproduces the SHIPPED stage-graph.json byte-for-byte. That is
 // the `aidlc-graph.ts compile --check` contract — the CI drift guard at
-// aidlc-graph.ts:1063 (runCompileCheck) / :1127 (the `compile --check` CLI
+// aidlc-graph.ts (runCompileCheck and the `compile --check` CLI
 // branch). This file pins that contract in-process.
 //
 // The shipped default location is
@@ -33,7 +33,7 @@
 //
 // Source-path discipline: compileStageGraph() and stageGraphPath() honour the
 // AIDLC_STAGE_GRAPH / AIDLC_STAGES_DIR / AIDLC_RULES_DIR / AIDLC_SENSORS_DIR
-// env seams (aidlc-graph.ts:144-167). To exercise the SHIPPED default layout
+// env seams (aidlc-graph.ts). To exercise the SHIPPED default layout
 // we clear those seams before importing the module and reset the lib.ts graph
 // cache, so both the compile and the on-disk read resolve to the default
 // DATA_DIR / DEFAULT_STAGES_DIR locations.

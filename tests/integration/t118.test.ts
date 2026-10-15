@@ -54,7 +54,7 @@
 //   WALK B gated approve (3): N1 stage==="feasibility" gate===true; STAGE_STARTED
 //     count===1 (no double-advance); N2 stage==="scope-definition".
 //   WALK C classify round-trip (3) — v0.6.0 Wave 2 milestone 9, per the engine
-//     design, .sh:235-260: the skeleton-stance classify round-trip across the report
+//     design (the .sh): the skeleton-stance classify round-trip across the report
 //     dispatcher's STANCE branch AND the next decision rule's gate computation:
 //     - .sh step 1 `stage|gate == functional-design|unresolved` -> N1
 //       stage==="functional-design" AND gate==="unresolved" (the STRING, not the

@@ -567,7 +567,7 @@ function framingHitCarvedOut(hit: string): boolean {
 // grepHits — a recursive `grep -rn` in pure TS. Returns "relpath:lineno:content"
 // for every line in every text file under the given roots that matches `pred`.
 // Relative to REPO_ROOT so carve-out predicates match the same path shapes
-// (e.g. "tests/README.md:36:..."). Skips node_modules, .git, and binary/log
+// (e.g. "tests/README.md:<lineno>:..."). Skips node_modules, .git, and binary/log
 // noise.
 
 const SKIP_DIRS = new Set(["node_modules", ".git"]);
