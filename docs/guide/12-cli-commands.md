@@ -2774,7 +2774,9 @@ plugin's installed base first. An inventory with an
 invalid entry, or a plugin root with no `hooks/compose.ts`, refuses the whole
 sync and names what is wrong, so nothing is half composed. `--plugin-root <dir>`
 names the installed plugin to compose, as `AIDLC_PLUGIN_ROOT` does; Kiro IDE's
-folder-dropped hook passes `.`, the workspace it runs in. Where the host keeps
+folder-dropped hook passes `.`, the workspace it runs in. `--harness-dir <dir>`
+names the harness folder to compose into, as `AIDLC_HARNESS_DIR` does, for a
+project with more than one harness installed. Where the host keeps
 no plugin inventory to read, it says so and stops; in a native Claude Code
 project before Claude Code has a plugin registry
 (`~/.claude/plugins/installed_plugins.json`):

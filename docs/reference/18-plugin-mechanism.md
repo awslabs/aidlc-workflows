@@ -658,16 +658,17 @@ Cursor and Kiro run a plugin hook in the platform's shell (Cursor: the
 person's shell, or PowerShell on Windows; Kiro: `/bin/sh`, or cmd.exe on
 Windows), so their hooks carry no `sh -c`. Cursor's emitted hook uses Cursor's
 flat camelCase schema (`hooks.sessionStart[].command`) with two entries:
-`aidlc engine plugin sync`, which reads the plugin root and workspace Cursor puts
-in the hook's environment, and `bun ./hooks/aidlc-plugin-compose.ts .cursor`
+`aidlc engine plugin sync --harness-dir .cursor`, which reads the plugin root and
+workspace Cursor puts in the hook's environment, and `bun ./hooks/aidlc-plugin-compose.ts .cursor`
 for an install without `aidlc`. Cursor starts each entry on its own, so the one
 whose runtime is absent fails without stopping the other. That Bun launcher uses
 `Bun.which` and `process.execPath` to probe `aidlc` and run the sibling
 `compose.ts`. Kiro IDE's `v1` SessionStart registration, folder-dropped into
 the workspace root, is one command that reads the same in `/bin/sh` and cmd.exe:
-`aidlc engine plugin sync --plugin-root . || bun ./hooks/aidlc-plugin-compose.ts .kiro kiro-ide`.
+`aidlc engine plugin sync --harness-dir .kiro --plugin-root . || bun ./hooks/aidlc-plugin-compose.ts .kiro kiro-ide`.
 Kiro gives a hook no plugin root, but runs it in that workspace, which is the
-plugin root.
+plugin root. Both name their harness, so a project with Claude Code installed
+beside Cursor or Kiro IDE composes into the right one.
 
 **Install, per host:**
 

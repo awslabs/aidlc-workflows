@@ -330,8 +330,11 @@ function copyHookTemplates(
 // Cursor and Kiro run a plugin hook in the platform's shell (Cursor: the
 // person's shell, or PowerShell on Windows; Kiro: /bin/sh, or cmd.exe), so
 // their commands carry no sh -c. The native release runs this, the copy
-// channel the Bun launcher.
-const NATIVE_PLUGIN_SYNC = `aidlc ${TRUSTED_ROUTE_NAMESPACE} plugin sync`;
+// channel the Bun launcher. It names its harness: a compiled aidlc otherwise
+// takes the first one installed in the project, .claude before the others.
+function nativePluginSync(target: PluginTarget): string {
+  return `aidlc ${TRUSTED_ROUTE_NAMESPACE} plugin sync --harness-dir ${target.harnessLeaf}`;
+}
 
 function composeCommand(target: PluginTarget): string {
   const rootExpr =
@@ -346,7 +349,7 @@ function composeCommand(target: PluginTarget): string {
     // /bin/sh and cmd.exe. Kiro gives a hook no plugin root, but runs it in the
     // workspace the plugin was dropped into, which is that root.
     return (
-      `${NATIVE_PLUGIN_SYNC} --plugin-root . || ` +
+      `${nativePluginSync(target)} --plugin-root . || ` +
       `bun ./hooks/aidlc-plugin-compose.ts ${target.harnessLeaf} ${target.harnessName}`
     );
   }
@@ -412,7 +415,7 @@ function writeHookWiring(
           // Cursor starts every entry on its own and gives a plugin hook its
           // root and workspace in the environment; the one whose runtime is
           // absent fails without stopping the other.
-          hooks: { sessionStart: [{ command: NATIVE_PLUGIN_SYNC }, { command }] },
+          hooks: { sessionStart: [{ command: nativePluginSync(target) }, { command }] },
         },
         null,
         2,
