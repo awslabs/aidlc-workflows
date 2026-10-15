@@ -15,7 +15,7 @@ import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOp
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import {
   AIDLC_SRC,
   createTestProject,
@@ -155,14 +155,30 @@ describe("t1592 one selections file per piece of work", () => {
     expect(projectMd(pd)).toContain("Picked by person B");
   });
 
-  test("the file named in full (absolute path) is the same file and is accepted", () => {
-    const pd = twoIntentProject();
-    const a = surface(pd, RECORD_A);
-    writeAt(pd, a.selections_file!, selections(RECORD_A, "Picked by person A"));
-    const r = persist(pd, join(pd, a.selections_file!));
-    expect(r.status, r.out).toBe(0);
-    expect(projectMd(pd)).toContain("Picked by person A");
-  });
+  // However the full path is spelled, it names the same file and is accepted.
+  const spellings: Array<[string, (pd: string, printed: string) => string]> = [
+    ["the native path", (pd, printed) => join(pd, printed)],
+    ["forward slashes", (pd, printed) => join(pd, printed).replaceAll("\\", "/")],
+    ["the project folder plus the printed path as it is", (pd, printed) => `${pd}${sep}${printed}`],
+    ["the project folder plus ./", (pd, printed) => `${pd}${sep}.${sep}${printed}`],
+    ["a doubled separator", (pd, printed) => `${pd}${sep}${sep}${printed}`],
+  ];
+  if (process.platform === "win32") {
+    spellings.push(["a lower-case drive letter", (pd, printed) => {
+      const full = join(pd, printed);
+      return full[0].toLowerCase() + full.slice(1);
+    }]);
+  }
+  for (const [spelling, spell] of spellings) {
+    test(`the file named in full is accepted: ${spelling}`, () => {
+      const pd = twoIntentProject();
+      const a = surface(pd, RECORD_A);
+      writeAt(pd, a.selections_file!, selections(RECORD_A, "Picked by person A"));
+      const r = persist(pd, spell(pd, a.selections_file!));
+      expect(r.status, r.out).toBe(0);
+      expect(projectMd(pd)).toContain("Picked by person A");
+    });
+  }
 
   test("a file bound to one piece of work but kept in another's folder is refused", () => {
     const pd = twoIntentProject();

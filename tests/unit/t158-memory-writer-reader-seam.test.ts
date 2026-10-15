@@ -61,6 +61,10 @@ function seedProject(root: string): void {
   mkdirSync(join(root, ".claude", "aidlc-common", "stages", "inception"), { recursive: true });
   const memDir = memoryDirFor(root);
   mkdirSync(memDir, { recursive: true });
+  // The intent-less space's own state, the evidence persist takes that the
+  // space exists (#1592): writing the picks' file makes its folder.
+  mkdirSync(join(root, "aidlc", "spaces", "default", "intents"), { recursive: true });
+  writeFileSync(join(root, "aidlc", "spaces", "default", "intents", "aidlc-state.md"), "# AI-DLC State Tracking\n- **Current Stage**: user-stories\n- **Scope**: feature\n", "utf-8");
 
   // The team.md the resolver reads. Ships the `## Corrections` heading the
   // §13 default routing targets; loadRules requires valid frontmatter-or-none

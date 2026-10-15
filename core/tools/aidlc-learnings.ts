@@ -101,7 +101,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import {
@@ -249,23 +249,6 @@ function selectionsHome(projectDir: string, space: string, intent: string | null
   const root = intent === null ? intents : join(intents, intent);
   const rel = `${LEARNINGS_SELECTIONS_DIR}/${slug}-selections.json`;
   return { root, rel, display: relative(projectDir, join(root, rel)).replaceAll("\\", "/") };
-}
-
-// Writing the picks' file with no intent record makes
-// `intents/.aidlc-engine/learnings/`, and with it the space folder. A space
-// holding nothing but that chain is one the write made, not one that exists,
-// so it never counts as the pinned space.
-function spaceHoldsMoreThanSelections(projectDir: string, space: string): boolean {
-  let dir = join(spacesRoot(projectDir), space);
-  try {
-    for (const next of ["intents", ...LEARNINGS_SELECTIONS_DIR.split("/")]) {
-      if (readdirSync(dir).some((name) => name !== next)) return true;
-      dir = join(dir, next);
-    }
-  } catch {
-    return false;
-  }
-  return false;
 }
 
 // persist reads only the file surface named for the piece of work the picks
@@ -866,9 +849,10 @@ function handlePersist(args: string[], projectDir: string): void {
     );
   }
 
-  // One path for the read and the check, named from the project as surface
-  // prints it, whatever folder the shell sits in (#1592).
-  const selectionsPath = isAbsolute(selectionsJson) ? selectionsJson : resolve(projectDir, selectionsJson);
+  // One normalized path for the read and the check, named from the project as
+  // surface prints it, whatever folder the shell sits in and however an
+  // absolute path is spelled (#1592).
+  const selectionsPath = resolve(projectDir, selectionsJson);
   const selFile = parseSelectionsFile(selectionsPath);
   if (slug !== undefined && slug !== selFile.stage_slug) {
     fail(
@@ -895,10 +879,7 @@ function handlePersist(args: string[], projectDir: string): void {
   let lockResult: { rule_learned: number; sensor_proposed: number; bound_stages: string[] };
   try {
     lockResult = withAuditLock(projectDir, () => {
-      if (
-        !isRealDirectory(join(spacesRoot(projectDir), pinnedSpace)) ||
-        !spaceHoldsMoreThanSelections(projectDir, pinnedSpace)
-      ) {
+      if (!isRealDirectory(join(spacesRoot(projectDir), pinnedSpace))) {
         fail(
           `cannot persist selections for missing space "${pinnedSpace}". ` +
             "Re-run the stage's surface step and regenerate the selections file, then retry.",
@@ -910,6 +891,16 @@ function handlePersist(args: string[], projectDir: string): void {
         fail(
           `cannot persist an unscoped selections replay in space "${pinnedSpace}": the selections ` +
             "file was surfaced when the space had no intent records, but intent records now exist. " +
+            "Re-run the stage's surface step and regenerate the selections file, then retry.",
+          1
+        );
+      }
+      // With no intent record, the space's state is the evidence it exists, as
+      // it is for surface: writing the picks' file makes the space's folder, so
+      // the folder alone proves nothing (#1592).
+      if (selFile.intent === null && !isRealFile(join(intentsDir(projectDir, pinnedSpace), "aidlc-state.md"))) {
+        fail(
+          `cannot persist selections for missing space "${pinnedSpace}": it has no workflow state. ` +
             "Re-run the stage's surface step and regenerate the selections file, then retry.",
           1
         );

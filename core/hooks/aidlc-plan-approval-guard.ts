@@ -87,8 +87,7 @@ import {
   type ClaudeCodeHookInput,
   composerProposalPath,
   docsRoot,
-  ANSWER_TEXT_DIR,
-  LEARNINGS_SELECTIONS_DIR,
+  ENGINE_TEXT_DIRS,
   REQUEST_TEXT_DIR,
   errorMessage,
   getField,
@@ -1023,13 +1022,12 @@ function isStageRecordOutput(projectDir: string, target: string): boolean {
   }
 }
 
-// The record folders where the agent writes text only the engine reads: a
-// person's answer text for `log answer --details-file`, and a stage's learnings
-// picks for `learnings persist` (#1592), which runs while Code Generation is
-// still the current stage. A plain file inside the work's own record, reached
-// through no link. Writing it changes nothing and builds nothing.
-const ENGINE_TEXT_DIRS = [ANSWER_TEXT_DIR, LEARNINGS_SELECTIONS_DIR];
-
+// The record folders where the agent writes text only the engine reads
+// (ENGINE_TEXT_DIRS): a person's answer text for `log answer --details-file`,
+// and a stage's learnings picks for `learnings persist` (#1592), which runs
+// while Code Generation is still the current stage. A plain file inside the
+// work's own record, reached through no link. Writing it changes nothing and
+// builds nothing.
 function isEngineTextTarget(projectDir: string, target: string): boolean {
   try {
     const record = docsRoot(projectDir);

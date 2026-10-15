@@ -13128,6 +13128,11 @@ const ANSWER_TEXT_MAX_BYTES = 64 * 1024;
  *  per stage, the path `learnings surface` returns, the only one persist reads. */
 export const LEARNINGS_SELECTIONS_DIR = `${ENGINE_DIR}/learnings`;
 
+/** The record folders the agent may write while Plan Approval waits: text only
+ *  the engine reads (answer text, learnings picks), never a planning authority
+ *  file. The plan-approval guard and every adapter that mirrors it read this. */
+export const ENGINE_TEXT_DIRS: readonly string[] = [ANSWER_TEXT_DIR, LEARNINGS_SELECTIONS_DIR];
+
 /** The project folder where a person's request for `next --request-file` is
  *  written, so the words reach the engine without passing through any shell.
  *  The engine reads only a plain file directly inside it. */

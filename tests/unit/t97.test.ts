@@ -504,7 +504,8 @@ describe("t97 persist (cli, idempotency-sensitive)", () => {
     // The picks' file sits where surface names it for the project persist runs
     // against, so the refusal below is the framework-tier one this case names.
     const frameworkProject = join(pd, "dist", "claude");
-    mkdirSync(join(frameworkProject, "aidlc", "spaces", "default", "memory"), { recursive: true });
+    mkdirSync(join(frameworkProject, "aidlc", "spaces", "default", "intents"), { recursive: true });
+    writeFileSync(join(frameworkProject, "aidlc", "spaces", "default", "intents", "aidlc-state.md"), "# AI-DLC State Tracking\n- **Current Stage**: user-stories\n- **Scope**: feature\n", "utf-8");
     const sel = writeSel(
       frameworkProject,
       `{ "stage_slug": "user-stories", "space": "default", "intent": null, "selections": [

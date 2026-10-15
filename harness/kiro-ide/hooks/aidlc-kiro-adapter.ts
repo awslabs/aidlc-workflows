@@ -160,8 +160,7 @@ import {
   UNBINDABLE_FINGERPRINT,
   workspaceSourceState,
   writeWorkspaceSourceSnapshot,
-  ANSWER_TEXT_DIR,
-  LEARNINGS_SELECTIONS_DIR,
+  ENGINE_TEXT_DIRS,
   composerProposalPath,
   docsRoot,
   memoryFilePath,
@@ -574,8 +573,8 @@ function latestPlanApprovalAnswer(questions: string): string | null {
 
 // The record files the shared plan-approval guard admits in every Plan
 // Approval state, by the identity it uses: the Code Generation stage's
-// learnings diary, the composer's proposal, a file in the answer-text or
-// learnings-selections folder, and one directly in the request-text folder.
+// learnings diary, the composer's proposal, a file in one of the engine text
+// folders (ENGINE_TEXT_DIRS), and one directly in the request-text folder.
 // None is a planning authority file.
 function isGuardAdmittedRecordWrite(projectDir: string, normalizedPath: string): boolean {
   try {
@@ -585,7 +584,7 @@ function isGuardAdmittedRecordWrite(projectDir: string, normalizedPath: string):
       return true;
     }
     if (dirname(path) === normalizeDriveLetter(resolve(join(projectDir, REQUEST_TEXT_DIR)))) return true;
-    return [ANSWER_TEXT_DIR, LEARNINGS_SELECTIONS_DIR].some((dir) => {
+    return ENGINE_TEXT_DIRS.some((dir) => {
       const inside = relative(normalizeDriveLetter(resolve(join(docsRoot(projectDir), dir))), path);
       return inside !== "" && !inside.startsWith("..") && !isAbsolute(inside);
     });

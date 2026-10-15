@@ -66,9 +66,10 @@ afterEach(() => {
  * the guard.
  */
 function seedProject(root: string): void {
-  // A real space, as `space create` makes it: a folder holding only the picks'
-  // file is one that write made, which persist refuses as missing (#1592).
-  mkdirSync(join(root, "aidlc", "spaces", "default", "memory"), { recursive: true });
+  // The intent-less space's own state, the evidence persist takes that the
+  // space exists (#1592): writing the picks' file makes its folder.
+  mkdirSync(join(root, "aidlc", "spaces", "default", "intents"), { recursive: true });
+  writeFileSync(join(root, "aidlc", "spaces", "default", "intents", "aidlc-state.md"), "# AI-DLC State Tracking\n- **Current Stage**: user-stories\n- **Scope**: feature\n", "utf-8");
   mkdirSync(join(root, "aidlc-docs", "inception", "user-stories"), { recursive: true });
   mkdirSync(join(root, ".claude", "rules"), { recursive: true });
   mkdirSync(join(root, ".claude", "aidlc-common", "stages", "inception"), { recursive: true });
