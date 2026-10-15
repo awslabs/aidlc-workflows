@@ -191,6 +191,10 @@ export interface GraphStage extends StageEntry {
   // per-unit construction matrix; an unlisted artifact applies to all kinds.
   produces_kinds?: Record<string, string[]>;
   consumes: Consume[];
+  // cites - optional consumes the stage's deliverables cite whenever they
+  // exist; the upstream-coverage check reads them beside the required ones.
+  // Outside consumes, so adding one changes no finished stage's validity record.
+  cites?: string[];
   requires_stage: string[];
   // sensors is the stage-side pull import — a list of sensor manifest
   // ids. Optional because most stages declare empty (initialization) or
@@ -998,6 +1002,7 @@ const FIELD_ORDER = [
   "optional_produces",
   "produces_kinds",
   "consumes",
+  "cites",
   "requires_stage",
   "sensors",
   "scopes",
@@ -2963,6 +2968,9 @@ function buildGraphStage(
   }
   if (parsed.optional_produces !== undefined) {
     stage.optional_produces = parsed.optional_produces;
+  }
+  if (parsed.cites !== undefined) {
+    stage.cites = parsed.cites;
   }
   if (parsed.produces_kinds !== undefined) {
     stage.produces_kinds = parsed.produces_kinds;

@@ -980,6 +980,10 @@
           "required": false
         }
       ],
+      "cites": [
+        "intent-statement",
+        "scope-document"
+      ],
       "requires_stage": [
         "approval-handoff",
         "reverse-engineering"

@@ -593,7 +593,8 @@ function handleFire(args: string[]): void {
 	// its file, and demanding the output prose reference it would be a
 	// guaranteed false SENSOR_FAILED on every run of that stage in that scope.
 	// An optional consume (`required: false`) may not have informed the
-	// output, and citing one that did not would be false provenance.
+	// output, and citing one that did not would be false provenance, unless the
+	// stage lists it under `cites:` (its deliverables cite it when it exists).
 	const isCodeSensor = sensorTakesFilePath(sensor.manifest, id);
 	const scriptArgs: string[] = ["--stage", stageSlug];
 	if (isCodeSensor) {
@@ -602,8 +603,9 @@ function handleFire(args: string[]): void {
 		scriptArgs.push("--output-path", outputPath);
 	}
 	if (id === "upstream-coverage") {
+		const cited = new Set(stageNode.cites ?? []);
 		const consumeSlugs = (stageNode.consumes ?? [])
-			.filter((c) => c.required !== false)
+			.filter((c) => c.required !== false || cited.has(c.artifact))
 			.map((c) => c.artifact)
 			.filter((a) => typeof a === "string" && a.length > 0);
 		scriptArgs.push(
