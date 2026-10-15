@@ -97,6 +97,8 @@ import {
   formatReceivedReply,
   freshReviewReceipts,
   getField,
+  guardRecoveryAnswerAdmits,
+  readActiveDirectiveMarker,
   guardRecoveryAskSelected,
   SKELETON_STANCES,
   guardRecoveryFeedbackStatus,
@@ -247,8 +249,8 @@ import {
   stageUsageAuditFields,
   workflowUsageAuditFields,
 } from "./aidlc-usage.ts";
-import { deriveTeamUnitProgressModel } from "./aidlc-orchestrate.ts";
-import { promotableTestingPosture } from "./aidlc-testing-posture.ts";
+import { codeGenerationCompletionPlanWaits, deriveTeamUnitProgressModel } from "./aidlc-orchestrate.ts";
+import { codeGenerationPlanWaitsStep, promotableTestingPosture } from "./aidlc-testing-posture.ts";
 import { approvedOverUnfinishedReview, approvedUnitChanges } from "./aidlc-construction-checkpoints.ts";
 
 // All valid checkbox states (lib.ts adds [?] awaiting-approval and [R] revising)
@@ -2732,6 +2734,17 @@ function handleUnit(args: string[]): void {
               "again." + theirs,
         );
       }
+    }
+
+    // A Unit's Code Generation completes only once the plan it builds from lets
+    // it build (approved, or plan approval off); the plan's question is
+    // `next`'s. The remedy the person picked at the recovery question is theirs.
+    if (
+      action === "complete" && slug === "code-generation" &&
+      !guardRecoveryAnswerAdmits(readActiveDirectiveMarker(pd, content), ["engine", "state", "unit", ...args], pd) &&
+      codeGenerationCompletionPlanWaits(pd, content, [unit])
+    ) {
+      error(`Refusing to complete unit "${unit}" for "${slug}": ${codeGenerationPlanWaitsStep()}`);
     }
 
     // UNIT_COMPLETED is receipt-plus-evidence: the receipt commits only when

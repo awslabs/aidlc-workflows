@@ -220,6 +220,7 @@ import {
   guardAttemptState,
   type GuardAttemptState,
   withWorkspaceSourceStateCache,
+  guardRecoveryAnswerAdmits,
   guardRecoveryAskFromRefusalText,
   guardPolicyStateField,
   SKELETON_STANCES,
@@ -532,6 +533,8 @@ import {
 import {
   approvedPlanChangeLine,
   codeGenerationIssuance,
+  codeGenerationPlanWaits,
+  codeGenerationPlanWaitsStep,
   codeGenerationResume,
   codeGenerationResumeNarration,
   codeGenerationStartNarration,
@@ -13067,6 +13070,64 @@ function planChangeWalk(projectDir: string, scope: string, stateContent: string)
   return { stage: stage.slug, unit, at: walk.step.kind, steps, others };
 }
 
+// A Code Generation completion (the gate opening or shown again, the stage
+// completed, an approval with no gate open) waits while its plan does, after the
+// stage's own completion checks; the plan's question is `next`'s. The remedy the
+// person picked at the recovery question is theirs. Null when it may go on.
+function codeGenerationCompletionWaits(
+  projectDir: string,
+  node: GraphStage,
+  scope: string,
+  stateContent: string,
+  args: string[],
+  unit: string | undefined,
+): Directive | null {
+  if (node.slug !== "code-generation") return null;
+  const marker = readActiveDirectiveMarker(projectDir, stateContent);
+  if (guardRecoveryAnswerAdmits(marker, ["engine", "orchestrate", "report", ...args], projectDir)) return null;
+  const targets = codeGenerationReportTargets(projectDir, node, scope, stateContent, unit);
+  return codeGenerationCompletionPlanWaits(projectDir, stateContent, targets)
+    ? printDirective(codeGenerationPlanWaitsStep())
+    : null;
+}
+
+/**
+ * Whether a Code Generation completion for these targets waits on the person:
+ * only while plan approval is on for this work (read as `next` reads it, so the
+ * scope, the person's switch and the trusted machine switch all count), and then
+ * while a target has no approval that lets it build. `unit complete` asks too.
+ */
+export function codeGenerationCompletionPlanWaits(
+  projectDir: string,
+  stateContent: string,
+  units: ReadonlyArray<string | null>,
+): boolean {
+  try {
+    if (resolvePlanApprovalSetting(projectDir, stateContent).value === "off") return false;
+  } catch {
+    return false;
+  }
+  return codeGenerationPlanWaits(projectDir, units);
+}
+
+// The Code Generation targets a completion report covers: the Unit it names,
+// the zero-Unit target, or the Units with work for the stage as the walk counts
+// them, so a Unit with nothing to build never holds the report. A Unit whose
+// completion or skip is recorded went through already: its plan is not judged
+// again, so a Testing Contract that reads stale since never holds the gate.
+function codeGenerationReportTargets(
+  projectDir: string,
+  node: GraphStage,
+  scope: string,
+  stateContent: string,
+  unit: string | undefined,
+): Array<string | null> {
+  if (!unit && (!isPerUnit(node) || usesStageLevelPerUnitArtifacts(scope, stateContent))) return [null];
+  const ledger = unitLedgerFor(projectDir, node.slug, undefined, stateContent);
+  return (unit ? [unit] : unitsWithStageWork(projectDir, node, unitWorkContext(projectDir)))
+    .filter((target) => !ledger.receipts.has(target) && !ledger.skipped.has(target));
+}
+
 // What the stage-work check needs about the Unit DAG, resolved once per call.
 type UnitWorkContext = {
   units: string[];
@@ -16603,6 +16664,15 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         }
         sequence.push(approveArgs(slug, flags));
       }
+      // A Unit gate opening or shown again, or approved with no gate open,
+      // waits while that Unit's plan does; their approval at its open gate is theirs.
+      const waits = flags.result === "rejected" || (flags.result === "approved" && status === "awaiting-approval")
+        ? null
+        : codeGenerationCompletionWaits(pd, node, scope, stateContent, args, unit);
+      if (waits !== null) {
+        emit(waits);
+        return;
+      }
       const preflight = preflightSequenceDirective(
         pd,
         stateContent,
@@ -16792,6 +16862,11 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         emit(evidence.step ? printDirective(evidence.message) : errorDirective(evidence.message));
         return;
       }
+      const waits = codeGenerationCompletionWaits(pd, node, scope, stateContent, args, undefined);
+      if (waits !== null) {
+        emit(waits);
+        return;
+      }
     }
 
     let subArgs: string[];
@@ -16959,6 +17034,14 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     );
     if (!evidence.ok) {
       emit(evidence.step ? printDirective(evidence.message) : errorDirective(evidence.message));
+      return;
+    }
+    // The person's answer at the open gate is theirs.
+    const waits = stageCheckbox.state === "awaiting-approval"
+      ? null
+      : codeGenerationCompletionWaits(pd, node, scope, stateContent, args, undefined);
+    if (waits !== null) {
+      emit(waits);
       return;
     }
   }
