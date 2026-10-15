@@ -430,9 +430,11 @@ step between them:
    user-override path). Only conflict-clear or user-escalated selections
    proceed. Sensor manifests have no org-section analogue and skip the check.
 4. **`persist` (selections-file in).** The conductor writes the kept
-   selections to `<record>/.aidlc-engine/learnings/<slug>-selections.json` (in the intent's record dir;
-   gitignored), the `selections_file` path `surface` returns, and calls `aidlc engine learnings persist
-   --slug <slug> --selections-json <path>`. The tool is the deterministic
+   selections to the `selections_file` path `surface` returns:
+   `<record>/.aidlc-engine/learnings/<slug>-selections.json`, or with no intent record
+   `aidlc/spaces/<space>/intents/.aidlc-engine/learnings/<slug>-selections.json` (both
+   gitignored), and calls `aidlc engine learnings persist
+   --slug <slug> --selections-json <selections_file>`. The tool is the deterministic
    writer — it never judges conflicts, and it reads only that file (a selections file
    anywhere else, or reached through a link, is refused, so two chats in one project
    never save each other's picks); it routes each learning as a practice to

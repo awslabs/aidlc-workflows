@@ -95,8 +95,10 @@ function writeAt(pd: string, rel: string, body: string): void {
   writeFileSync(join(pd, rel), body, "utf-8");
 }
 
-function persist(pd: string, rel: string): { status: number; out: string } {
-  return run(pd, ["persist", "--slug", STAGE, "--selections-json", rel]);
+// A chat saves its picks while it is on its own work.
+function persist(pd: string, rel: string, record = RECORD_A): { status: number; out: string } {
+  useIntent(pd, record);
+  return run(pd, ["persist", "--slug", STAGE, "--selections-json", rel], record);
 }
 
 function projectMd(pd: string): string {
@@ -120,9 +122,12 @@ describe("t1592 one selections file per piece of work", () => {
 
     // Session A saves. Before the fix this succeeded and saved B's pick while
     // A's pick was gone: A's person was told their notes were kept.
-    const a = persist(pd, shared);
+    const a = persist(pd, shared, RECORD_A);
     expect(a.status, a.out).toBe(1);
-    expect(a.out).toContain(expectedFile(RECORD_B));
+    // The way on names no path from the misplaced file: B's folder would send
+    // A to copy B's picks there and lose A's person's picks all over again.
+    expect(a.out).toContain(`learnings surface --slug ${STAGE}`);
+    expect(a.out).not.toContain(RECORD_B);
     expect(projectMd(pd)).not.toContain("Picked by person B");
     expect(projectMd(pd)).not.toContain("Picked by person A");
   });
@@ -143,7 +148,7 @@ describe("t1592 one selections file per piece of work", () => {
     writeAt(pd, b.selections_file!, selections(RECORD_B, "Picked by person B"));
 
     const ra = persist(pd, a.selections_file!);
-    const rb = persist(pd, b.selections_file!);
+    const rb = persist(pd, b.selections_file!, RECORD_B);
     expect(ra.status, ra.out).toBe(0);
     expect(rb.status, rb.out).toBe(0);
     expect(projectMd(pd)).toContain("Picked by person A");
@@ -163,9 +168,10 @@ describe("t1592 one selections file per piece of work", () => {
     const pd = twoIntentProject();
     surface(pd, RECORD_A);
     writeAt(pd, expectedFile(RECORD_A), selections(RECORD_B, "Picked by person B"));
-    const r = persist(pd, expectedFile(RECORD_A));
+    const r = persist(pd, expectedFile(RECORD_A), RECORD_A);
     expect(r.status, r.out).toBe(1);
-    expect(r.out).toContain(expectedFile(RECORD_B));
+    expect(r.out).toContain(`learnings surface --slug ${STAGE}`);
+    expect(r.out).not.toContain(RECORD_B);
     expect(projectMd(pd)).not.toContain("Picked by person B");
   });
 
@@ -178,6 +184,59 @@ describe("t1592 one selections file per piece of work", () => {
     const r = persist(pd, expectedFile(RECORD_A));
     expect(r.status, r.out).toBe(1);
     expect(projectMd(pd)).not.toContain("Picked by person A");
+  });
+
+  test("a folder link on the way to the selections file is refused, and says so", () => {
+    const pd = twoIntentProject();
+    surface(pd, RECORD_A);
+    const elsewhere = join(pd, "elsewhere");
+    mkdirSync(elsewhere, { recursive: true });
+    const learnings = dirname(join(pd, expectedFile(RECORD_A)));
+    mkdirSync(dirname(learnings), { recursive: true });
+    symlinkSync(elsewhere, learnings);
+    writeAt(pd, expectedFile(RECORD_A), selections(RECORD_A, "Picked by person A"));
+    const r = persist(pd, expectedFile(RECORD_A));
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toContain("could not be read through no link");
+    expect(projectMd(pd)).not.toContain("Picked by person A");
+  });
+
+  test("writing the picks with no intent record never makes a missing space count as existing", () => {
+    const pd = createTestProject();
+    projects.push(pd);
+    // The file's own home for a space that does not exist: writing it creates
+    // the space folder, which must still be refused as the missing space.
+    const rel = `aidlc/spaces/ghost/intents/.aidlc-engine/learnings/${STAGE}-selections.json`;
+    writeAt(
+      pd,
+      rel,
+      JSON.stringify({
+        stage_slug: STAGE,
+        space: "ghost",
+        intent: null,
+        selections: [{ candidate_id: "c1", type: "learning", scope: "project", heading: "Corrections", text: "Ghost" }],
+      }),
+    );
+    const r = run(pd, ["persist", "--slug", STAGE, "--selections-json", rel]);
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toContain("missing space");
+    expect(existsSync(join(pd, "aidlc", "spaces", "ghost", "memory"))).toBe(false);
+  });
+
+  test("the path surface printed works from a shell in a subfolder of the project", () => {
+    const pd = twoIntentProject();
+    const a = surface(pd, RECORD_A);
+    writeAt(pd, a.selections_file!, selections(RECORD_A, "Picked by person A"));
+    mkdirSync(join(pd, "src"), { recursive: true });
+    useIntent(pd, RECORD_A);
+    const r = spawnSync(BUN, [LEARNINGS_TS, "persist", "--slug", STAGE, "--selections-json", a.selections_file!, "--project-dir", pd], {
+      cwd: join(pd, "src"),
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_SESSION_OVERRIDE: CHAT[RECORD_A], AIDLC_SESSION_OVERRIDE_SOURCE: "payload" },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(projectMd(pd)).toContain("Picked by person A");
   });
 
   test("a crashed save is retried from the same file without asking the person again", () => {

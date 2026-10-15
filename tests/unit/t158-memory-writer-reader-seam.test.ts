@@ -29,14 +29,13 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AIDLC_SRC, toPortablePath } from "../harness/fixtures.ts";
-
-// Where `learnings surface` names the picks' file for an intent-less space
-// (#1592): the only place `persist` reads it.
-const SELECTIONS_FILE = "aidlc/spaces/default/intents/.aidlc-learnings/user-stories-selections.json";
+import { AIDLC_SRC, learningsSelectionsPath, toPortablePath, writeLearningsSelections } from "../harness/fixtures.ts";
 import { loadRules, memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+// The selections file is bound to this stage in the intent-less default space.
+const BINDING = { space: "default", intent: null, stage_slug: "user-stories" };
 
 const BUN = process.execPath;
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-learnings.ts");
@@ -115,26 +114,19 @@ function seedProject(root: string): void {
   );
   // A team-scoped LEARNING selection routed to the `## Corrections` heading —
   // persist appends it as a practice line into the relocated team.md.
-  mkdirSync(join(root, SELECTIONS_FILE, ".."), { recursive: true });
-  writeFileSync(
-    join(root, SELECTIONS_FILE),
-    JSON.stringify({
-      stage_slug: "user-stories",
-      space: "default",
-      intent: null,
-      selections: [
-        {
-          candidate_id: "c1",
-          type: "learning",
-          scope: "team",
-          heading: "Corrections",
-          text: "Used Given/When/Then for AC; team standardised",
-          source: "orchestrator",
-        },
-      ],
-    }),
-    "utf-8",
-  );
+  writeLearningsSelections(root, {
+    ...BINDING,
+    selections: [
+      {
+        candidate_id: "c1",
+        type: "learning",
+        scope: "team",
+        heading: "Corrections",
+        text: "Used Given/When/Then for AC; team standardised",
+        source: "orchestrator",
+      },
+    ],
+  });
 }
 
 function runPersist(root: string): { status: number; out: string } {
@@ -150,7 +142,7 @@ function runPersist(root: string): { status: number; out: string } {
       "--slug",
       "user-stories",
       "--selections-json",
-      join(root, SELECTIONS_FILE),
+      learningsSelectionsPath(root, BINDING),
       "--project-dir",
       root,
     ],

@@ -296,7 +296,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
   // AIDLC_STAGE_GRAPH seam.
   // ===========================================================================
   function seedSensorProposal(pd: string): string {
-    const sel = writeLearningsSelections(pd, {
+    return writeLearningsSelections(pd, {
       stage_slug: "user-stories",
       space: DEFAULT_SPACE,
       intent: DEFAULT_RECORD_DIR,
@@ -317,7 +317,6 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
         },
       ],
     });
-    return sel;
   }
 
   const STAGES_DIR_OF = (pd: string) => join(pd, ".claude", "aidlc-common", "stages");
@@ -536,8 +535,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     expect(c.default_scope).toBe("project");
   }, TIMEOUT);
 
-  function keyedSelection(pd: string, _name: string, keys: Record<string, string>, text: string): string {
-    const sel = writeLearningsSelections(pd, {
+  function keyedSelection(pd: string, keys: Record<string, string>, text: string): string {
+    return writeLearningsSelections(pd, {
       stage_slug: "user-stories",
       space: DEFAULT_SPACE,
       intent: DEFAULT_RECORD_DIR,
@@ -552,14 +551,13 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
         },
       ],
     });
-    return sel;
   }
 
   test("Glue: a selection keyed by surface's own `id` persists", () => {
     const pd = mkproj();
     seedMemoryMixed(pd);
     const candidate = JSON.parse(surface(pd).stdout).candidates[0];
-    const sel = keyedSelection(pd, "sel-id-alias", { id: candidate.id }, candidate.summary);
+    const sel = keyedSelection(pd, { id: candidate.id }, candidate.summary);
     const r = persist(pd, sel);
     expect(r.status, r.stderr).toBe(0);
     expect(readFileSync(projectPractices(pd), "utf-8")).toContain(candidate.summary);
@@ -570,7 +568,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const pd = mkproj();
     seedMemoryMixed(pd);
     const candidate = JSON.parse(surface(pd).stdout).candidates[0];
-    const sel = keyedSelection(pd, "sel-both-same", { candidate_id: candidate.id, id: candidate.id }, candidate.summary);
+    const sel = keyedSelection(pd, { candidate_id: candidate.id, id: candidate.id }, candidate.summary);
     const r = persist(pd, sel);
     expect(r.status, r.stderr).toBe(0);
     expect(ruleLearnedRows(pd)).toBe(1);
@@ -581,7 +579,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const pd = mkproj();
     seedMemoryMixed(pd);
     const candidate = JSON.parse(surface(pd).stdout).candidates[0];
-    const sel = keyedSelection(pd, "sel-both-differ", { candidate_id: candidate.id, id: "c99" }, candidate.summary);
+    const sel = keyedSelection(pd, { candidate_id: candidate.id, id: "c99" }, candidate.summary);
     const r = persist(pd, sel);
     expect(r.status).toBe(1);
     expect(r.stderr).toContain(`candidate_id "${candidate.id}" and id "c99"`);
@@ -593,7 +591,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const pd = mkproj();
     seedMemoryMixed(pd);
     const candidate = JSON.parse(surface(pd).stdout).candidates[0];
-    const sel = keyedSelection(pd, "sel-no-key", {}, candidate.summary);
+    const sel = keyedSelection(pd, {}, candidate.summary);
     const r = persist(pd, sel);
     expect(r.status).toBe(1);
     expect(r.stderr).toContain("selection missing candidate_id");

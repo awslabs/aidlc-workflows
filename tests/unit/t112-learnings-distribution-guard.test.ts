@@ -38,11 +38,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AIDLC_SRC, toPortablePath } from "../harness/fixtures.ts";
+import { AIDLC_SRC, learningsSelectionsPath, toPortablePath, writeLearningsSelections } from "../harness/fixtures.ts";
 
-// Where `learnings surface` names the picks' file for an intent-less space
-// (#1592): the only place `persist` reads it.
-const SELECTIONS_FILE = "aidlc/spaces/default/intents/.aidlc-learnings/user-stories-selections.json";
+// The selections file is bound to this stage in the intent-less default space.
+const BINDING = { space: "default", intent: null, stage_slug: "user-stories" };
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -67,7 +66,9 @@ afterEach(() => {
  * the guard.
  */
 function seedProject(root: string): void {
-  mkdirSync(join(root, "aidlc", "spaces", "default"), { recursive: true });
+  // A real space, as `space create` makes it: a folder holding only the picks'
+  // file is one that write made, which persist refuses as missing (#1592).
+  mkdirSync(join(root, "aidlc", "spaces", "default", "memory"), { recursive: true });
   mkdirSync(join(root, "aidlc-docs", "inception", "user-stories"), { recursive: true });
   mkdirSync(join(root, ".claude", "rules"), { recursive: true });
   mkdirSync(join(root, ".claude", "aidlc-common", "stages", "inception"), { recursive: true });
@@ -118,31 +119,24 @@ function seedProject(root: string): void {
   );
   // A sensor-binding selection — persist resolves the manifest path under the
   // project's .claude/sensors and runs it through isFrameworkDistributionPath.
-  mkdirSync(join(root, SELECTIONS_FILE, ".."), { recursive: true });
-  writeFileSync(
-    join(root, SELECTIONS_FILE),
-    JSON.stringify({
-      stage_slug: "user-stories",
-      space: "default",
-      intent: null,
-      selections: [
-        {
-          candidate_id: "c9",
-          type: "sensor",
-          origin_stage: "user-stories",
-          manifest_fields: {
-            id: "bad",
-            kind: "deterministic",
-            command: "x",
-            default_severity: "advisory",
-            description: "d",
-            matches: "**/*",
-          },
+  writeLearningsSelections(root, {
+    ...BINDING,
+    selections: [
+      {
+        candidate_id: "c9",
+        type: "sensor",
+        origin_stage: "user-stories",
+        manifest_fields: {
+          id: "bad",
+          kind: "deterministic",
+          command: "x",
+          default_severity: "advisory",
+          description: "d",
+          matches: "**/*",
         },
-      ],
-    }),
-    "utf-8",
-  );
+      },
+    ],
+  });
 }
 
 interface PersistResult {
@@ -168,7 +162,7 @@ function runPersist(root: string): PersistResult {
       "--slug",
       "user-stories",
       "--selections-json",
-      join(root, SELECTIONS_FILE),
+      learningsSelectionsPath(root, BINDING),
       "--project-dir",
       root,
     ],

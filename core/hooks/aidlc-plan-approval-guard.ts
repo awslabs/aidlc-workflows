@@ -88,6 +88,7 @@ import {
   composerProposalPath,
   docsRoot,
   ANSWER_TEXT_DIR,
+  LEARNINGS_SELECTIONS_DIR,
   REQUEST_TEXT_DIR,
   errorMessage,
   getField,
@@ -1022,13 +1023,19 @@ function isStageRecordOutput(projectDir: string, target: string): boolean {
   }
 }
 
-// The record folder where the agent writes a person's answer text for
-// `log answer --details-file`: a plain file inside the work's own record,
-// reached through no link. Writing it changes nothing and builds nothing.
-function isAnswerTextTarget(projectDir: string, target: string): boolean {
+// The record folders where the agent writes text only the engine reads: a
+// person's answer text for `log answer --details-file`, and a stage's learnings
+// picks for `learnings persist` (#1592), which runs while Code Generation is
+// still the current stage. A plain file inside the work's own record, reached
+// through no link. Writing it changes nothing and builds nothing.
+const ENGINE_TEXT_DIRS = [ANSWER_TEXT_DIR, LEARNINGS_SELECTIONS_DIR];
+
+function isEngineTextTarget(projectDir: string, target: string): boolean {
   try {
     const record = docsRoot(projectDir);
-    if (!record || !isTrustedRecordTarget(projectDir, target, join(record, ANSWER_TEXT_DIR))) return false;
+    if (!record || !ENGINE_TEXT_DIRS.some((dir) => isTrustedRecordTarget(projectDir, target, join(record, dir)))) {
+      return false;
+    }
     const existing = lstatSync(resolve(target), { throwIfNoEntry: false });
     return existing === undefined || (existing.isFile() && existing.nlink === 1);
   } catch {
@@ -2118,14 +2125,15 @@ async function evaluate(
       return 0;
     }
     // A file-tool write of a person's answer text, for the log to read with no
-    // shell on the way, passes in every Plan Approval state too, and so does
-    // one of a person's request, for `next --request-file`.
+    // shell on the way, or of a stage's learnings picks, for `learnings
+    // persist`, passes in every Plan Approval state too, and so does one of a
+    // person's request, for `next --request-file`.
     if (
       WRITE_TOOLS.has(toolName) &&
       !mutation.opaqueShell &&
       mutation.targets.length > 0 &&
       mutation.targets.every((candidate) =>
-        isAnswerTextTarget(projectDir, candidate) || isRequestTextTarget(projectDir, candidate)
+        isEngineTextTarget(projectDir, candidate) || isRequestTextTarget(projectDir, candidate)
       )
     ) {
       return 0;

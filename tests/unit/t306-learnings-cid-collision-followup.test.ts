@@ -116,17 +116,7 @@ function selectionsFile(
   text: string,
   opts: { intent?: string | null; space?: string; candidateId?: string; loose?: boolean } = {},
 ): string {
-  // The file goes where surface names it, the only place persist reads it
-  // (#1592). A case whose provenance must be refused first keeps it loose in
-  // the project, so writing it never creates the space or intent under test.
-  const write = opts.loose
-    ? (body: object): string => {
-        const p = join(pd, `${name}.json`);
-        writeFileSync(p, JSON.stringify(body), "utf-8");
-        return p;
-      }
-    : (body: { space: string; intent: string | null; stage_slug: string }): string => writeLearningsSelections(pd, body);
-  return write({
+  const body = {
     stage_slug: STAGE_SLUG,
     space: opts.space ?? DEFAULT_SPACE,
     intent: opts.intent === undefined ? DEFAULT_RECORD_DIR : opts.intent,
@@ -139,7 +129,14 @@ function selectionsFile(
         text,
       },
     ],
-  });
+  };
+  // The file goes where surface names it, the only place persist reads it
+  // (#1592). A case whose provenance has no such place (a path-traversing
+  // name, a space deleted with the file in it) keeps it loose in the project.
+  if (!opts.loose) return writeLearningsSelections(pd, body);
+  const p = join(pd, `${name}.json`);
+  writeFileSync(p, JSON.stringify(body), "utf-8");
+  return p;
 }
 
 function runPersist(
@@ -217,12 +214,9 @@ function otherSpaceProjectMd(pd: string, space: string): string {
 
 function sensorSelectionsFile(
   pd: string,
-  name: string,
   sensorId: string,
   opts: { originStage?: string; stageSlug?: string; candidateId?: string; intent?: string | null; space?: string } = {},
 ): string {
-  // `name` only labels the case: the file goes where surface names it (#1592).
-  void name;
   return writeLearningsSelections(pd, {
     stage_slug: opts.stageSlug ?? STAGE_SLUG,
     space: opts.space ?? DEFAULT_SPACE,
@@ -618,7 +612,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
   describe("finding #6 (P2, round 2) — sensor dedup must key on the sensor's own stable id, not (stage, candidate_id)", () => {
     test("the same sensor id proposed under a DIFFERENT candidate id (a later surface() run) is not re-proposed", () => {
       const pd = mkProject();
-      const sel1 = sensorSelectionsFile(pd, "sensor-run1", "acceptance-format", { candidateId: "c1" });
+      const sel1 = sensorSelectionsFile(pd, "acceptance-format", { candidateId: "c1" });
       const res1 = runPersist(pd, sel1);
       expect(res1.status).toBe(0);
       expect(JSON.parse(res1.out).sensor_proposed).toBe(1);
@@ -628,7 +622,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       // (c7 here). A dedup keyed on (stage, candidate_id) would miss the prior row
       // under the new id and emit a duplicate SENSOR_PROPOSED for a sensor that was
       // already proposed.
-      const sel2 = sensorSelectionsFile(pd, "sensor-run2", "acceptance-format", { candidateId: "c7" });
+      const sel2 = sensorSelectionsFile(pd, "acceptance-format", { candidateId: "c7" });
       const res2 = runPersist(pd, sel2);
       expect(res2.status).toBe(0);
       expect(JSON.parse(res2.out).sensor_proposed).toBe(0);
@@ -651,7 +645,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       seedStageFile(stagesDir, "construction", "requirements-analysis");
       const env = { AIDLC_STAGES_DIR: stagesDir };
 
-      const sel1 = sensorSelectionsFile(pd, "sensor-stage-a", "acceptance-format", {
+      const sel1 = sensorSelectionsFile(pd, "acceptance-format", {
         originStage: "user-stories",
       });
       const res1 = runPersist(pd, sel1, { slug: "user-stories", env });
@@ -666,7 +660,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       // sensor id. The manifest already exists and the sensor was already
       // proposed once (by a different stage) — but THIS stage has never
       // been bound, and must still end up with the id in its own frontmatter.
-      const sel2 = sensorSelectionsFile(pd, "sensor-stage-b", "acceptance-format", {
+      const sel2 = sensorSelectionsFile(pd, "acceptance-format", {
         originStage: "requirements-analysis",
         stageSlug: "requirements-analysis",
       });
@@ -805,7 +799,9 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
     test("a syntactically valid but nonexistent intent record fails without writing", () => {
       const pd = mkProject();
       const text = "Must not land under a ghost intent";
-      const selection = selectionsFile(pd, "ghost-intent", text, { loose: true, intent: "ghost-a1234567" });
+      // Written where surface would name it, which makes the folder: persist must
+      // still refuse it as a missing record and create none of the record.
+      const selection = selectionsFile(pd, "ghost-intent", text, { intent: "ghost-a1234567" });
 
       const result = runPersist(pd, selection);
       expect(result.status).not.toBe(0);
@@ -813,22 +809,28 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const practicePath = join(pd, "aidlc", "spaces", DEFAULT_SPACE, "memory", "project.md");
       const practice = existsSync(practicePath) ? readFileSync(practicePath, "utf-8") : "";
       expect(practice).not.toContain(text);
-      expect(existsSync(join(intentsDirOf(pd, DEFAULT_SPACE), "ghost-a1234567"))).toBe(false);
+      expect(existsSync(join(intentsDirOf(pd, DEFAULT_SPACE), "ghost-a1234567", "aidlc-state.md"))).toBe(false);
+      expect(existsSync(join(intentsDirOf(pd, DEFAULT_SPACE), "ghost-a1234567", "audit"))).toBe(false);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("a syntactically valid but nonexistent non-default space fails without creating it", () => {
       const pd = mkProject();
       const text = "Must not land under a ghost space";
-      const selection = selectionsFile(pd, "ghost-space", text, { loose: true, space: "ghost", intent: null });
+      // Written where surface would name it, which makes the space folder
+      // (#1592): a space holding only that file is still the missing space.
+      const selection = selectionsFile(pd, "ghost-space", text, { space: "ghost", intent: null });
 
       const result = runPersist(pd, selection);
       expect(result.status).not.toBe(0);
       expect(result.out).toContain("missing space");
-      expect(existsSync(join(pd, "aidlc", "spaces", "ghost"))).toBe(false);
+      expect(existsSync(join(pd, "aidlc", "spaces", "ghost", "memory"))).toBe(false);
+      expect(existsSync(join(intentsDirOf(pd, "ghost"), "audit"))).toBe(false);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("a deleted default space fails instead of being synthesized and partially recreated", () => {
       const pd = mkProject();
+      // The picks' own home is inside the space this case deletes, so the file
+      // stays loose: persist must refuse the missing space before reading it.
       const selection = selectionsFile(pd, "deleted-default", "Must not recreate default", { loose: true });
       const defaultDir = join(pd, "aidlc", "spaces", DEFAULT_SPACE);
       rmSync(defaultDir, { recursive: true, force: true });
@@ -844,7 +846,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const external = join(pd, "external-space");
       mkdirSync(external, { recursive: true });
       symlinkSync(external, join(pd, "aidlc", "spaces", "redirect"));
-      const selection = selectionsFile(pd, "symlink-space", "Must not follow space links", { loose: true,
+      const selection = selectionsFile(pd, "symlink-space", "Must not follow space links", {
         space: "redirect",
         intent: null,
       });

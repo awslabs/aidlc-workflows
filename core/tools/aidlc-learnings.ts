@@ -13,7 +13,7 @@
 //       output (LOCAL FIX, #735 follow-up / PR #747 review) — see
 //       "Provenance binding" below.
 //
-//   persist --slug <stage-slug> --selections-json <path> [--project-dir <path>]
+//   persist --slug <stage-slug> --selections-json <selections_file> [--project-dir <path>]
 //       The deterministic WRITER. Reads the post-AUQ selections-json
 //       (conflict-clear / user-escalated only — persist never judges),
 //       and inside ONE withAuditLock body (decide-inside-lock): re-reads
@@ -105,13 +105,17 @@
 // judgement (user). No LLM call lives in this tool.
 
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import {
   activeIntent,
   appendUnderHeading,
+  LEARNINGS_SELECTIONS_DIR,
+  normalizeDriveLetter,
+  readRegularFileNoFollowOrThrow,
+  recordFileTargetOrThrow,
   errorMessage,
   findAllEvents,
   findStageBySlug,
@@ -138,6 +142,7 @@ import {
   harnessDir,
 } from "./aidlc-lib.ts";
 import { constructionCheckpointKind, resolveConstructionCheckpoint } from "./aidlc-construction-checkpoints.ts";
+import { SLUG_RE } from "./aidlc-stage-schema.ts";
 
 // --- Exit-code convention (plan §2) ---
 //   0 success
@@ -229,56 +234,71 @@ interface SurfaceOutput {
   parked_open_questions: SurfaceParkedQuestion[];
 }
 
-// The selections file's one home per piece of work (#1592). Nothing used to
-// name it, so two sessions in one project wrote the same obvious spot and one
-// saved the other's picks while its own person's picks were lost. It lives in
-// the record's engine folder (gitignored by the shipped block); with no intent
-// record it lives in the space's intents folder under a dot name, which is
-// gitignored too and is never read as an intent record.
-function selectionsFileFor(space: string, intent: string | null, slug: string): string {
-  const folder = intent === null
-    ? `aidlc/spaces/${space}/intents/.aidlc-learnings`
-    : `aidlc/spaces/${space}/intents/${intent}/.aidlc-engine/learnings`;
-  return `${folder}/${slug}-selections.json`;
+const SELECTIONS_MAX_BYTES = 1024 * 1024;
+
+interface SelectionsHome {
+  /** The record, or with no intent record the space's intents folder. */
+  root: string;
+  /** The file under `root`, posix form. */
+  rel: string;
+  /** The file relative to the project, posix form: what surface prints. */
+  display: string;
+}
+
+// The selections file's one home per stage per piece of work (#1592). Nothing
+// used to name it, so two chats in one project wrote the same obvious spot and
+// one saved the other's picks while its own person's picks were lost. It sits
+// in the engine folder of the record, or with no intent record of the space's
+// intents folder (where the composer proposal lives); both are gitignored.
+function selectionsHome(projectDir: string, space: string, intent: string | null, slug: string): SelectionsHome {
+  const intents = intentsDir(projectDir, space);
+  const root = intent === null ? intents : join(intents, intent);
+  const rel = `${LEARNINGS_SELECTIONS_DIR}/${slug}-selections.json`;
+  return { root, rel, display: relative(projectDir, join(root, rel)).replaceAll("\\", "/") };
+}
+
+// Writing the picks' file with no intent record makes
+// `intents/.aidlc-engine/learnings/`, and with it the space folder. A space
+// holding nothing but that chain is one the write made, not one that exists,
+// so it never counts as the pinned space.
+function spaceHoldsMoreThanSelections(projectDir: string, space: string): boolean {
+  let dir = join(spacesRoot(projectDir), space);
+  try {
+    for (const next of ["intents", ...LEARNINGS_SELECTIONS_DIR.split("/")]) {
+      if (readdirSync(dir).some((name) => name !== next)) return true;
+      dir = join(dir, next);
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 // persist reads only the file surface named for the piece of work the picks
-// are bound to: a plain file there, reached through no link. Anywhere else it
-// may be another session's picks, so it is refused with the file to write.
-function assertSelectionsFileHome(projectDir: string, given: string, sel: SelectionsFile): void {
-  if (!/^[a-z0-9][a-z0-9-]*$/.test(sel.stage_slug)) {
+// are bound to, reached through no link. Anywhere else it may be another
+// chat's picks. The way on names no path taken from the misplaced file, whose
+// space and intent may be another chat's: surface prints this chat's own path
+// again, and is read-only.
+function assertSelectionsFileHome(projectDir: string, path: string, sel: SelectionsFile): void {
+  if (!SLUG_RE.test(sel.stage_slug)) {
     fail("selections-json is malformed: stage_slug must be a stage slug (bind it from surface's output)", 1);
   }
-  const expected = selectionsFileFor(sel.space, sel.intent, sel.stage_slug);
-  const notHere = "selections-json is not the file surface named for this piece of work.";
-  const refuse = (why: string): never =>
+  const home = selectionsHome(projectDir, sel.space, sel.intent, sel.stage_slug);
+  if (normalizeDriveLetter(path) !== normalizeDriveLetter(join(home.root, home.rel))) {
     fail(
-      `${why} Write the person's picks with your file tool to ${expected} (the selections_file ` +
-        `\`learnings surface\` returned for this stage), then run persist again with --selections-json ${expected}.`,
+      `selections-json must be the selections_file that \`learnings surface --slug ${sel.stage_slug}\` printed ` +
+        "for this piece of work. Write the picks there with your file tool and run persist again with that path.",
       1
     );
-  const expectedAbs = resolve(projectDir, expected);
-  let realParent = "";
-  try {
-    realParent = realpathSync(dirname(expectedAbs));
-  } catch {
-    refuse(notHere);
   }
-  // The folder is reached through no link: its real path is the project's
-  // real path plus the same record-relative tail.
-  if (realParent !== join(realpathSync(projectDir), dirname(expected))) refuse(notHere);
-  const isExpected = (candidate: string): boolean => {
-    if (basename(candidate) !== basename(expectedAbs)) return false;
-    try {
-      return realpathSync(dirname(candidate)) === realParent;
-    } catch {
-      return false;
-    }
-  };
-  if (!isExpected(resolve(given)) && !isExpected(resolve(projectDir, given))) refuse(notHere);
-  const entry = lstatSync(expectedAbs, { throwIfNoEntry: false });
-  if (entry === undefined || entry.isSymbolicLink() || !entry.isFile() || entry.nlink !== 1) {
-    refuse("selections-json must be a plain file, not a link.");
+  try {
+    recordFileTargetOrThrow(home.root, home.rel);
+  } catch (e) {
+    fail(
+      `selections-json could not be read through no link (${errorMessage(e)}). ` +
+        `Make every folder on the way to ${home.display} a plain folder, then run persist again.`,
+      1
+    );
   }
 }
 
@@ -521,7 +541,7 @@ function handleSurface(args: string[], projectDir: string): void {
     phase,
     space,
     intent,
-    selections_file: selectionsFileFor(space, intent, slug),
+    selections_file: selectionsHome(projectDir, space, intent, slug).display,
     memory_entries_total: entries.length,
     candidates,
     parked_open_questions: parked,
@@ -631,12 +651,17 @@ function narrowSelection(raw: unknown): Selection {
 }
 
 function parseSelectionsFile(path: string): SelectionsFile {
-  if (!existsSync(path)) {
-    fail(`selections-json not found: ${path}`, 1);
+  let bytes: Buffer;
+  try {
+    // A plain file, read through no link at its last step (#1592).
+    bytes = readRegularFileNoFollowOrThrow(path, "selections-json", SELECTIONS_MAX_BYTES);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") fail(`selections-json not found: ${path}`, 1);
+    fail(errorMessage(e), 1);
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(path, "utf-8"));
+    parsed = JSON.parse(bytes.toString("utf-8"));
   } catch (e) {
     fail(`selections-json is malformed: ${errorMessage(e)}`, 1);
   }
@@ -852,12 +877,15 @@ function handlePersist(args: string[], projectDir: string): void {
   const selectionsJson = flags["selections-json"];
   if (!selectionsJson) {
     fail(
-      "Usage: aidlc-learnings.ts persist --slug <stage-slug> --selections-json <path> [--project-dir <path>]",
+      "Usage: aidlc-learnings.ts persist --slug <stage-slug> --selections-json <selections_file> [--project-dir <path>]",
       1
     );
   }
 
-  const selFile = parseSelectionsFile(selectionsJson);
+  // One path for the read and the check, named from the project as surface
+  // prints it, whatever folder the shell sits in (#1592).
+  const selectionsPath = isAbsolute(selectionsJson) ? selectionsJson : resolve(projectDir, selectionsJson);
+  const selFile = parseSelectionsFile(selectionsPath);
   if (slug !== undefined && slug !== selFile.stage_slug) {
     fail(
       `slug mismatch: selections were surfaced for "${selFile.stage_slug}" but persist requested "${slug}"`,
@@ -883,7 +911,10 @@ function handlePersist(args: string[], projectDir: string): void {
   let lockResult: { rule_learned: number; sensor_proposed: number; bound_stages: string[] };
   try {
     lockResult = withAuditLock(projectDir, () => {
-      if (!isRealDirectory(join(spacesRoot(projectDir), pinnedSpace))) {
+      if (
+        !isRealDirectory(join(spacesRoot(projectDir), pinnedSpace)) ||
+        !spaceHoldsMoreThanSelections(projectDir, pinnedSpace)
+      ) {
         fail(
           `cannot persist selections for missing space "${pinnedSpace}". ` +
             "Re-run the stage's surface step and regenerate the selections file, then retry.",
@@ -917,7 +948,7 @@ function handlePersist(args: string[], projectDir: string): void {
       }
       // The picks came from the file surface named for this piece of work,
       // never a spot another session may have written (#1592).
-      assertSelectionsFileHome(projectDir, selectionsJson, selFile);
+      assertSelectionsFileHome(projectDir, selectionsPath, selFile);
       // Read across every per-clone audit shard of the PINNED intent (single
       // shard in the common case).
       const auditContent = readAllAuditShards(projectDir, pinnedIntent, pinnedSpace);
@@ -1279,7 +1310,7 @@ function printHelp(): void {
       "  surface --slug <stage-slug> [--project-dir <path>]",
       "      Read memory.md for the active stage; emit structured candidates",
       "      (Interpretations/Deviations/Tradeoffs) + parked open questions.",
-      "  persist --slug <stage-slug> --selections-json <path> [--project-dir <path>]",
+      "  persist --slug <stage-slug> --selections-json <selections_file> [--project-dir <path>]",
       "      Write confirmed learnings as practices under the routed heading in",
       "      {project,team}.md (the relocated method files) and/or scaffold + bind",
       "      a project-tier sensor manifest; emit RULE_LEARNED / SENSOR_PROPOSED",
