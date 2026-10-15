@@ -295,6 +295,35 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     if (tmp && existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
   });
 
+  // The environment a host gives a plugin hook: none of this run's own plugin,
+  // project or harness variables, plus what the host itself sets.
+  function hookEnv(extra: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of [
+      "AIDLC_HARNESS_DIR", "AIDLC_HARNESS_NAME", "AIDLC_PLUGIN_ROOT", "AIDLC_PROJECT_DIR",
+      "CLAUDE_PLUGIN_ROOT", "CLAUDE_PROJECT_DIR", "CURSOR_PLUGIN_ROOT", "CURSOR_PROJECT_DIR", "PLUGIN_ROOT",
+    ]) delete env[key];
+    return { ...env, ...extra };
+  }
+
+  // A native install's `aidlc` on a PATH that holds no Bun: the fixture runs the
+  // project's own dispatcher with this test's Bun by absolute path.
+  function writeAidlcOnPath(name: string, dispatcher: string): string {
+    const binDir = join(tmp, name);
+    mkdirSync(binDir, { recursive: true });
+    const script = join(binDir, process.platform === "win32" ? "aidlc-fixture.js" : "aidlc");
+    writeFileSync(script, [
+      `#!${BUN}`,
+      'import { spawnSync } from "node:child_process";',
+      `const child = spawnSync(${JSON.stringify(BUN)}, [${JSON.stringify(dispatcher)}, ...process.argv.slice(2)], { stdio: "inherit" });`,
+      "process.exit(child.status ?? 1);",
+      "",
+    ].join("\n"));
+    if (process.platform === "win32") writeWindowsBunLauncher(join(binDir, "aidlc.exe"), script);
+    else chmodSync(script, 0o755);
+    return binDir;
+  }
+
   // --- Packager emits every projection; Claude remains the compose E2E below ---
   test("every harness projection carries its declared host manifest, wiring, and content", () => {
     for (const harness of HARNESS_MATRIX) {
@@ -343,7 +372,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
           expect(hook?.action?.type).toBe("command");
           const command = hook?.action?.command ?? "";
           expect(command).toBe(
-            "bun ./hooks/aidlc-plugin-compose.ts .kiro kiro-ide",
+            "aidlc engine plugin sync --plugin-root . || bun ./hooks/aidlc-plugin-compose.ts .kiro kiro-ide",
           );
           expect(command).not.toContain("sh -c");
           expect(existsSync(join(built, "hooks", "aidlc-plugin-compose.ts"))).toBe(true);
@@ -397,12 +426,12 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     }
   });
 
-  test("Kiro IDE executes its generated compose wiring after a folder-drop", () => {
-    const built = pluginBuilds.get("kiro-ide")!;
-    const kiroProject = join(tmp, "kiro-ide-folder-drop");
+  // Kiro runs a hook command through the platform shell (Node's shell: true:
+  // /bin/sh, or cmd.exe on Windows) in the workspace the plugin was dropped into.
+  function runKiroIdeFolderDrop(name: string, path: string): { project: string; run: SpawnSyncReturns<string> } {
+    const kiroProject = join(tmp, name);
     cpSync(join(REPO_ROOT, "dist", "kiro-ide"), kiroProject, { recursive: true });
-    cpSync(built, kiroProject, { recursive: true });
-
+    cpSync(pluginBuilds.get("kiro-ide")!, kiroProject, { recursive: true });
     const registration = JSON.parse(
       readFileSync(
         join(kiroProject, ".kiro", "hooks", `aidlc-${PLUGIN}-compose.json`),
@@ -411,32 +440,40 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     ) as {
       hooks?: Array<{ action?: { command?: string } }>;
     };
-    const command = registration.hooks?.[0]?.action?.command ?? "";
-    const [runtime, script, ...args] = command.split(" ");
-    expect(runtime).toBe("bun");
-    expect(script).toBe("./hooks/aidlc-plugin-compose.ts");
-
-    const env: NodeJS.ProcessEnv = { ...process.env, PATH: "" };
-    delete env.AIDLC_HARNESS_DIR;
-    delete env.AIDLC_HARNESS_NAME;
-    delete env.AIDLC_PLUGIN_ROOT;
-    delete env.AIDLC_PROJECT_DIR;
-    delete env.CLAUDE_PLUGIN_ROOT;
-    delete env.CLAUDE_PROJECT_DIR;
-    delete env.PLUGIN_ROOT;
-    const compose = spawnSync(BUN, [script, ...args], {
+    const run = spawnSync(registration.hooks?.[0]?.action?.command ?? "", {
+      shell: true,
       cwd: kiroProject,
       encoding: "utf-8",
       timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
-      env,
+      env: hookEnv({ PATH: path }),
     });
-    expect(compose.status, compose.stderr).toBe(0);
+    return { project: kiroProject, run };
+  }
+
+  test("Kiro IDE's folder-drop hook composes through Bun when aidlc is not on PATH", () => {
+    const path = dirname(BUN);
+    expect(Bun.which("aidlc", { PATH: path })).toBeNull();
+    const { project: kiroProject, run } = runKiroIdeFolderDrop("kiro-ide-folder-drop", path);
+    expect(run.status, run.stderr).toBe(0);
 
     const kiroGraph = JSON.parse(
       readFileSync(
         join(kiroProject, ".kiro", "tools", "data", "stage-graph.json"),
         "utf-8",
       ),
+    ) as GraphStage[];
+    expect(kiroGraph.some((item) => item.slug === "test-pro-integration")).toBe(true);
+  });
+
+  test("Kiro IDE's folder-drop hook composes through aidlc alone when Bun is not on PATH", () => {
+    const binDir = writeAidlcOnPath("kiro-ide-aidlc-only-bin", join(tmp, "kiro-ide-aidlc-only", ".kiro", "tools", "aidlc.ts"));
+    expect(Bun.which("bun", { PATH: binDir })).toBeNull();
+    const { project: kiroProject, run } = runKiroIdeFolderDrop("kiro-ide-aidlc-only", binDir);
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toContain("plugin sync complete: 1 plugin(s)");
+    expect(existsSync(join(kiroProject, ".kiro", "tools", "data", `plugin-compose-${PLUGIN}.json`))).toBe(true);
+    const kiroGraph = JSON.parse(
+      readFileSync(join(kiroProject, ".kiro", "tools", "data", "stage-graph.json"), "utf-8"),
     ) as GraphStage[];
     expect(kiroGraph.some((item) => item.slug === "test-pro-integration")).toBe(true);
   });
@@ -456,12 +493,50 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(wiring.version).toBe(1);
     expect(Object.keys(wiring.hooks ?? {})).toEqual(["sessionStart"]);
     const entries = wiring.hooks?.sessionStart ?? [];
-    expect(entries).toHaveLength(1);
-    expect(Object.keys(entries[0] ?? {})).toEqual(["command"]);
-    const command = String(entries[0]?.command ?? "");
-    expect(command).toBe("bun ./hooks/aidlc-plugin-compose.ts .cursor");
-    expect(command).not.toContain("sh -c");
+    for (const entry of entries) expect(Object.keys(entry)).toEqual(["command"]);
+    expect(entries.map((entry) => entry.command)).toEqual([
+      "aidlc engine plugin sync",
+      "bun ./hooks/aidlc-plugin-compose.ts .cursor",
+    ]);
     expect(existsSync(join(built, "hooks", "aidlc-plugin-compose.ts"))).toBe(true);
+  });
+
+  test("Cursor's sessionStart entries compose through aidlc alone when Bun is not on PATH", () => {
+    const built = pluginBuilds.get("cursor")!;
+    const cursorProject = join(tmp, "cursor-aidlc-only");
+    mkdirSync(cursorProject, { recursive: true });
+    const install = spawnSync(BUN, [join(CURSOR_DIST, "install.ts"), cursorProject], {
+      cwd: REPO_ROOT, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+    });
+    expect(install.status, install.stderr).toBe(0);
+    const binDir = writeAidlcOnPath("cursor-aidlc-only-bin", join(cursorProject, ".cursor", "tools", "aidlc.ts"));
+    expect(Bun.which("bun", { PATH: binDir })).toBeNull();
+    const wiring = JSON.parse(readFileSync(join(built, "hooks", "hooks.json"), "utf-8")) as {
+      hooks: { sessionStart: Array<{ command: string }> };
+    };
+    // Cursor starts every entry on its own, in the plugin's folder, with the
+    // plugin root and the workspace in the environment.
+    const runs = wiring.hooks.sessionStart.map(({ command }) => spawnSync(command, {
+      shell: true,
+      cwd: built,
+      input: JSON.stringify({ hook_event_name: "sessionStart", workspace_roots: [cursorProject] }),
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      env: hookEnv({
+        PATH: binDir,
+        CURSOR_PLUGIN_ROOT: built,
+        CLAUDE_PLUGIN_ROOT: built,
+        CURSOR_PROJECT_DIR: cursorProject,
+        CLAUDE_PROJECT_DIR: cursorProject,
+      }),
+    }));
+    expect(runs.some((run) => run.status === 0 && run.stdout.includes("plugin sync complete: 1 plugin(s)")),
+      runs.map((run) => run.stderr).join("\n")).toBe(true);
+    expect(existsSync(join(cursorProject, ".cursor", "tools", "data", `plugin-compose-${PLUGIN}.json`))).toBe(true);
+    const cursorGraph = JSON.parse(
+      readFileSync(join(cursorProject, ".cursor", "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as GraphStage[];
+    expect(cursorGraph.some((item) => item.slug === "test-pro-integration")).toBe(true);
   });
 
   test("Cursor's cross-platform launcher resolves its plugin root from the hook path", () => {
