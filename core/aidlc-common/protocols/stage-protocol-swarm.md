@@ -298,11 +298,11 @@ lists.
 
 A landing that clashes with a Unit landed before it returns `status:
 "conflict"` with the files git could not merge (`conflict_files`) and a `next`
-step, and leaves the landing staged in the main checkout with git's conflict
-markers in those files. Combine both sides in each of them so each Unit keeps
-what its approved plan asked for, never dropping one Unit's side; while the
-batch is out they are the main checkout's only files you can write. Then `git
-add` them and run the same merge again: it finishes the landing and returns one
+step, and leaves the landing staged in the main checkout. Combine both sides in
+each of them so each Unit keeps what its approved plan asked for, never dropping
+one Unit's side; while the batch is out they are the main checkout's only files
+you can write. Then `git add` them (`git rm` one that stays deleted) and run the
+same merge again: it finishes the landing and returns one
 notice naming the files combined; say it once. If the two plans want different
 things there, stop and say which files clash and that `git reset --merge` in
 that checkout drops the landing; run it only when the person asks. A landing

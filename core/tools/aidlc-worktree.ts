@@ -2196,8 +2196,23 @@ function refuseLanding(
   process.exit(1);
 }
 
+// How git left an unmerged path, from its `git status` code: the target is
+// git's "us", the Unit's landing "them".
+function clashShape(code: string | undefined, target: string, unit: string): string | null {
+  switch (code) {
+    case "UU": return "changed on both sides";
+    case "AA": return "added on both sides";
+    case "DD": return "deleted on both sides";
+    case "DU": return `deleted on ${target}, changed by Unit ${unit}`;
+    case "UD": return `changed on ${target}, deleted by Unit ${unit}`;
+    case "AU": return `added on ${target}`;
+    case "UA": return `added by Unit ${unit}`;
+    default: return null;
+  }
+}
+
 // git could not merge files the target changed too. The landing stays staged
-// as git left it; combining them there and running the same merge again
+// as git left it; settling them there and running the same merge again
 // finishes it (stagedLandingOf), and the agent may write exactly those files
 // while the batch is out (stagedLandingClashFiles).
 function refuseClash(
@@ -2209,20 +2224,29 @@ function refuseClash(
   files: string[],
 ): never {
   const one = files.length === 1;
+  const codes = statusPaths(repoCwd);
+  const shaped = files.map((file) => {
+    const shape = clashShape(codes?.get(file), target, unit);
+    return shape === null ? file : `${file} (${shape})`;
+  });
   const where = one
-    ? files[0]
+    ? shaped[0]
     : files.length === 0
       ? "the files `git status` lists as unmerged"
-      : `${countFiles(files)}: ${renderLandedPaths(files)}`;
+      : `${countFiles(files)}: ${renderLandedPaths(shaped)}`;
+  // Both sides kept every file: combine them. Otherwise one may be dropped.
+  const bothKept = files.every((file) => ["UU", "AA"].includes(codes?.get(file) ?? ""));
   process.stdout.write(
     `${JSON.stringify({
       status: "conflict",
       slug,
       worktree_path: wtPath,
       conflict_files: files,
-      detail: `Unit ${unit}'s landing clashes with what is already on ${target}: it is staged in ${repoCwd}, and git left its conflict markers in ${where}.`,
+      detail: `Unit ${unit}'s landing clashes with what is already on ${target}: it is staged in ${repoCwd}, and git could not merge ${where}.`,
       next:
-        `Combine both sides in ${one ? "that file" : "those files"} and \`git add\` ${one ? "it" : "them"} in ${repoCwd}, ` +
+        (bothKept
+          ? `Combine both sides in ${one ? "that file" : "those files"} and \`git add\` ${one ? "it" : "them"} in ${repoCwd}, `
+          : `\`git add\` ${one ? "that file" : "each of those files"} to keep or combine it, or \`git rm\` it to drop it, in ${repoCwd}, `) +
         "then run this same merge again: it finishes the landing. " +
         `To drop the landing instead: \`git reset --merge\` in ${repoCwd}.`,
     })}\n`,
@@ -2259,8 +2283,8 @@ function refuseUncommittedInTheWay(
 
 function combinedLine(unit: string, combined: readonly string[], target: string): string {
   return combined.length === 1
-    ? `Landed Unit ${unit} with ${combined[0]} combined with what was already on ${target}.`
-    : `Landed Unit ${unit} with ${countFiles(combined)} combined with what was already on ${target}: ${renderLandedPaths(combined)}.`;
+    ? `Landed Unit ${unit} with ${combined[0]} settled by hand against what was already on ${target}.`
+    : `Landed Unit ${unit} with ${countFiles(combined)} settled by hand against what was already on ${target}: ${renderLandedPaths(combined)}.`;
 }
 
 function assertLandedOnTop(
