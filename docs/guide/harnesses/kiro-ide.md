@@ -515,10 +515,13 @@ copy's name (an older Kiro build may not load it), AI-DLC dispatches the
 reviewer itself, as without the feature; doctor then counts a hook drop for
 `kiro-adapter`, and that file
 (`<record>/.aidlc-engine/hooks-health/kiro-adapter.drops`) names the copy Kiro
-did not load. Measured on Kiro CLI 2.31.0 and Kiro IDE 1.3.0. It does nothing
-in a stable build, for Units built in parallel, or while the reviewer
-read-scope check is off (`guard.reviewer-scope off`,
-`AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1`).
+did not load. Measured on Kiro CLI 2.31.0 and Kiro IDE 1.3.0, and in a whole
+workflow on Kiro CLI 2.31.1. It does nothing in a stable build, for Units
+built in parallel, or while the reviewer read-scope check is off: under Guard
+Policy `off`, the default of every plan but enterprise, with
+`guard.reviewer-scope off`, or with `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1`. To
+try it on such a plan, ask in chat to turn the reviewer read-scope check on
+for the work (the agent runs `aidlc config set guard.reviewer-scope on`).
 
 ### Kiro's Workflows feature stops AI-DLC's reviews and helpers
 

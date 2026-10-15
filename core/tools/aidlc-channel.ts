@@ -169,3 +169,17 @@ export function releaseBuildVersion(env: NodeJS.ProcessEnv = process.env): strin
   }
   return configured;
 }
+
+/** The environment variable that turns preview features on, as a comma list. */
+export const PREVIEW_FEATURES_ENV = "AIDLC_PREVIEW_FEATURES";
+
+/**
+ * Whether a preview feature is on: only in a preview build, and only when the
+ * person started their tool with the feature named in AIDLC_PREVIEW_FEATURES.
+ * Read from the process environment alone: a project `.env` cannot set an
+ * AIDLC_* name (aidlc-runtime-paths.ts drops them), and no setting records it.
+ */
+export function previewFeatureOn(name: string, version: string = AIDLC_VERSION): boolean {
+  if (versionChannel(version) !== PREVIEW_CHANNEL) return false;
+  return (process.env[PREVIEW_FEATURES_ENV] ?? "").split(",").some((entry) => entry.trim() === name);
+}

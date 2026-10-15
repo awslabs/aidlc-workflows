@@ -12,10 +12,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PREVIEW_FEATURES_ENV, previewFeatureOn } from "../../core/tools/aidlc-channel.ts";
 import {
-  PREVIEW_FEATURES_ENV,
   prepareReviewCopy,
-  previewFeatureOn,
   REVIEWER_READ_SCOPE_FEATURE,
   renderReviewCopy,
 } from "../../core/tools/aidlc-kiro-review-copy.ts";

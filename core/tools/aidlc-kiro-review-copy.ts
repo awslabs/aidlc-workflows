@@ -17,7 +17,7 @@
 
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { PREVIEW_CHANNEL, versionChannel } from "./aidlc-channel.ts";
+import { previewFeatureOn } from "./aidlc-channel.ts";
 import {
   decideFence,
   installedKiroLayout,
@@ -30,21 +30,8 @@ import {
 import { resolveHarnessPath } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
-/** The environment variable that turns preview features on, as a comma list. */
-export const PREVIEW_FEATURES_ENV = "AIDLC_PREVIEW_FEATURES";
 /** The preview feature this module implements. */
 export const REVIEWER_READ_SCOPE_FEATURE = "reviewer-read-scope";
-
-/**
- * Whether a preview feature is on: only in a preview build, and only when the
- * person started their tool with the feature named in AIDLC_PREVIEW_FEATURES.
- * Read from the process environment alone: a project `.env` cannot set an
- * AIDLC_* name (aidlc-runtime-paths.ts drops them), and no setting records it.
- */
-export function previewFeatureOn(name: string, version: string = AIDLC_VERSION): boolean {
-  if (versionChannel(version) !== PREVIEW_CHANNEL) return false;
-  return (process.env[PREVIEW_FEATURES_ENV] ?? "").split(",").some((entry) => entry.trim() === name);
-}
 
 // Where the reviewer can reach the Units' folders: the project's record, and a
 // parallel batch's worktrees under .aidlc/worktrees/ (the reviewer's own
