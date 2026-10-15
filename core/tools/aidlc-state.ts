@@ -5165,6 +5165,9 @@ function verifyPipelineLinkPrecondition(
     lead_agent: string;
     support_agents: string[];
   },
+  // The person's approval is in hand: once the links are in, the same approve
+  // applies it.
+  approval = false,
 ): void {
   if (
     stage.mode !== "pipeline" ||
@@ -5186,7 +5189,11 @@ function verifyPipelineLinkPrecondition(
   const message =
     `Cannot complete "${stage.slug}" because these pipeline handoffs have not been ` +
       `recorded for the current run: ${missing.join(", ")}. ` +
-      pipelineLinkWayOn(pd, stage.slug, { repos: evidence.repos.length > 0, gateOpen });
+      pipelineLinkWayOn(pd, stage.slug, {
+        repos: evidence.repos.length > 0,
+        gateOpen,
+        ...(approval ? { approval: "the same approve command again" } : {}),
+      });
   refuseStateGuard(pd, content, stage, {
     code: "PIPELINE_EVIDENCE_MISSING",
     blockedAction: "complete",
@@ -6161,7 +6168,7 @@ function admitStageAction(
     if (options.entrypoint === "approve") {
       verifyStageArtifacts(pd, stage);
       verifySummaryConfirmationPrecondition(pd, stateContent, stage);
-      verifyPipelineLinkPrecondition(pd, stage);
+      verifyPipelineLinkPrecondition(pd, stage, true);
       verifyReviewerPrecondition(pd, stateContent, stage, "complete", true, options.personCall);
       if (!alreadyCompleted) {
         verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);

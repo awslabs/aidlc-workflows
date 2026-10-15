@@ -1472,10 +1472,12 @@ closed `op` from `GUARD_REMEDY_OPS` in `aidlc-lib.ts` (`present-approval-gate`,
 remedy sentence; the directive contract refuses an unknown `op`. Two refusals
 are the conductor's own step: a missing pipeline handoff
 (`PIPELINE_EVIDENCE_MISSING`) offers `dispatch-pipeline-links`, whose action is
-the refusal's own sentence naming the links (at an open gate, record them first,
-then `next` shows the gate again), and a review pass the cap refuses with nobody
-having asked for it (`REVIEW_BUDGET_EXHAUSTED`) offers `present-findings-at-gate`
-before `present-approval-gate`, the same gate with its findings. `lower-fence`
+the refusal's own sentence naming the links (at an open gate they are recorded
+first, then `next` shows the gate again; when the refused step was the person's
+approval, the same approval runs again, so they are not asked twice), and a
+review pass the cap refuses with nobody having asked for it
+(`REVIEW_BUDGET_EXHAUSTED`) offers `present-findings-at-gate` before
+`present-approval-gate`, the same gate with its findings. `lower-fence`
 is the one remedy a refusal adds LAST, and only when the refusal is a fence
 holding. It is a `command` choice: its `operation` is
 `{kind: "lower-fence", fence}` and its `command` is the setter, so the way past

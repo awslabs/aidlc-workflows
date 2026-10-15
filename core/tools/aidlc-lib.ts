@@ -36051,23 +36051,28 @@ export function pipelineLinkEvidence(
 // The way on for missing pipeline handoffs, one sentence for the engine's
 // refusal and the state tool's floor: the conductor's own step. The evidence
 // switch is the person's, so neither names it. At an open gate `next` shows
-// the gate only once the links are in, so it comes last there.
+// the gate only once the links are in, so it comes last there; with the
+// person's approval in hand, `approval` (the step that applies it) comes last
+// instead, so they are never asked again.
 export function pipelineLinkWayOn(
   projectDir: string,
   slug: string,
-  options: { repos: boolean; singleRun?: boolean; gateOpen?: boolean },
+  options: { repos: boolean; singleRun?: boolean; gateOpen?: boolean; approval?: string },
 ): string {
   const singleRun = options.singleRun === true;
   const next = `\`${aidlcToolInvocation("orchestrate")} next${singleRun ? ` --single --stage ${slug}` : ""}\``;
   const link = `\`${aidlcToolInvocation("log")} link --stage ${slug} ` +
     `--link <agent>${options.repos ? " --repo <repo>" : ""}${singleRun ? " --single" : ""}\``;
-  return (options.gateOpen ? "Dispatch" : `Re-run ${next} and dispatch`) +
+  const last = options.approval !== undefined
+    ? `; then run ${options.approval}: the person's approval stands, so they are not asked again`
+    : options.gateOpen ? `; then re-run ${next}, which shows the gate again` : "";
+  return (last ? "Dispatch" : `Re-run ${next} and dispatch`) +
     " the missing pipeline links in their declared order, carrying the human's revision feedback. " +
     (guardPolicyAcceptsChanges(projectDir)
       ? ""
       : "Rejection starts a new attempt: earlier scans and receipts cannot certify this revision, even for a targeted artifact edit. ") +
-    `After each link returns, run ${link}` + (options.gateOpen ? `; then re-run ${next}, which shows the gate again` : "") +
-    ". Do not re-stamp an old handoff or disable evidence checks to reopen the gate.";
+    `After each link returns, run ${link}${last}. ` +
+    "Do not re-stamp an old handoff or disable evidence checks to reopen the gate.";
 }
 
 export type UnitGateScope = "per-stage" | "unit-end";

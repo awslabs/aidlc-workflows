@@ -15215,7 +15215,7 @@ function checkPipelineLinkEvidence(
   node: GraphStage,
   slug: string,
   pd: string,
-  options: { singleRun?: boolean } = {},
+  options: { singleRun?: boolean; approval?: string } = {},
 ): EnsembleEvidenceResult {
   if (
     node.mode !== "pipeline" ||
@@ -15236,7 +15236,11 @@ function checkPipelineLinkEvidence(
     ok: false,
     message:
       `${refusal}: ${missing.join(", ")}. ` +
-      pipelineLinkWayOn(pd, slug, { repos: evidence.repos.length > 0, singleRun }),
+      pipelineLinkWayOn(pd, slug, {
+        repos: evidence.repos.length > 0,
+        singleRun,
+        ...(options.approval !== undefined ? { approval: options.approval } : {}),
+      }),
   };
 }
 
@@ -15270,6 +15274,9 @@ function checkStageCompletionEvidence(
   // The command to run again once the receipt step is done, when `next` would
   // not get back to it (a revising stage re-enters its gate only by its report).
   retry?: string,
+  // `retry` applies the person's approval, so a missing pipeline link is
+  // recorded first and the same report applies it.
+  approval = false,
 ): EnsembleEvidenceResult {
   const stageLevelPerUnit =
     isPerUnit(node) &&
@@ -15286,7 +15293,7 @@ function checkStageCompletionEvidence(
     boltResolution ?? undefined,
   );
 
-  const pipelineEvidence = checkPipelineLinkEvidence(node, slug, pd);
+  const pipelineEvidence = checkPipelineLinkEvidence(node, slug, pd, approval && retry ? { approval: retry } : {});
   if (!pipelineEvidence.ok) return pipelineEvidence;
 
   if (slug === "practices-discovery") {
@@ -16850,6 +16857,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       flags.result === "approved"
         ? `\`${renderEngineInvocation({ route: "orchestrate", args: ["report", ...args] })}\` again`
         : undefined,
+      flags.result === "approved",
     );
     if (!evidence.ok) {
       emit(evidence.step ? printDirective(evidence.message) : errorDirective(evidence.message));
