@@ -1,0 +1,17 @@
+{
+  "name": "aws-mlops",
+  "version": "0.1.0",
+  "description": "User-selected ML methodologies on a shared AWS SageMaker MLOps platform. Initial implementation: CRISP-ML(Q).",
+  "dependencies": ["core"],
+  "aidlc": {
+    "contributes": {
+      "stages": "stages/",
+      "overlays": "contributions/",
+      "agents": "agents/",
+      "scopes": "scopes/",
+      "knowledge": "knowledge/",
+      "sensors": "sensors/",
+      "tools": "tools/"
+    }
+  }
+}
