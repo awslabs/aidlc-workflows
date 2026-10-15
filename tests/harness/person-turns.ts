@@ -205,13 +205,13 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
     for (let index = 0; index < events.length; index++) {
       const row = events[index];
       const stage = auditBlockField(row.block, "Stage") ?? "";
-      // One answer to a grouped code plan question writes one approval per plan, row after row, each naming its
-      // Unit: the rows after the first are that same answer, backed (or reported) once.
+      // One answer to a grouped code plan question writes one row per plan, back to back, alike but for its Unit (an
+      // approval, or the change request): the rows after the first are that same answer, backed (or reported) once.
       const prior = events[index - 1];
-      const unitOf = (block: string) => auditBlockField(block, "Unit");
-      const sameAnswer = row.event === "PLAN_APPROVAL_RECORDED" && prior?.event === "PLAN_APPROVAL_RECORDED" &&
-        (auditBlockField(prior.block, "Stage") ?? "") === stage && unitOf(row.block) !== null &&
-        unitOf(prior.block) !== null && unitOf(row.block) !== unitOf(prior.block);
+      const field = (block: string, name: string) => auditBlockField(block, name);
+      const sameAnswer = prior !== undefined && row.event === prior.event && field(row.block, "Checkpoint") === "plan-approval" &&
+        ["Stage", "Checkpoint", "Session", "Details"].every((name) => field(row.block, name) === field(prior.block, name)) &&
+        field(row.block, "Unit") !== null && field(prior.block, "Unit") !== null && field(row.block, "Unit") !== field(prior.block, "Unit");
       const pending = open.get(stage);
       const closes = DECISION_CLOSING_EVENTS.has(row.event);
       const gate = row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED";

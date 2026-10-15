@@ -81,10 +81,12 @@ export const NO_FIXTURE: Partial<Record<Question, string>> = {};
 /** Questions the agent asks in chat. A fresh chat's bare `/aidlc` does not show them again: the engine hands an open
  * chat question back only with the person's words (openQuestionReplyDirective in aidlc-orchestrate.ts). So a live
  * drive, a fresh chat, can meet only their replies typed with `/aidlc`, as the whole exchange. */
-export const ASKED_IN_CHAT: ReadonlySet<Question> = new Set(["verification-command", "construction-policy", "stage-question", "learnings"]);
-/** Questions a live drive cannot set up: guard recovery's fixture writes the ask marker by hand, and the engine asks
- * it from the guard's own refusal record. The unit check reads their replies. */
-export const NOT_LIVE: ReadonlySet<Question> = new Set(["guard-recovery"]);
+export const ASKED_IN_CHAT: ReadonlySet<Question> = new Set(["stage-question", "learnings"]);
+/** Questions a live drive cannot set up. A verification command or Construction policy answer is recorded only from
+ * the chat that asked it (`log answer` matches the question's Session), and a live drive is a new chat. Guard
+ * recovery's fixture writes the ask marker by hand, and the engine asks it from the guard's own refusal record. The
+ * unit check reads their replies. */
+export const NOT_LIVE: ReadonlySet<Question> = new Set(["verification-command", "construction-policy", "guard-recovery"]);
 /** Whether a live drive can meet this reply the way a person would. */
 export const liveReply = (item: AnswersItem): boolean =>
   !NOT_LIVE.has(item.question) && (!ASKED_IN_CHAT.has(item.question) || item.via === "aidlc");
