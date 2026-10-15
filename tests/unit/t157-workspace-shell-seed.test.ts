@@ -156,7 +156,8 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
       } else if (harness.capabilities.memoryInclude === "codex-engine") {
         // Codex has no ambient include: the engine hands each step its rules.
         const config = readFileSync(join(harness.engineRoot, "config.toml"), "utf-8");
-        expect(config).not.toContain("AIDLC_RULES_DIR");
+        // Its AIDLC_RULES_DIR ships empty: it names no folder.
+        expect(config).not.toMatch(/AIDLC_RULES_DIR = "[^"]/);
         expect(existsSync(harness.onboardingDist)).toBe(true);
       } else if (harness.capabilities.memoryInclude === "copilot-agents-md") {
         // Copilot: the project-root AGENTS.md's @-import lines are the

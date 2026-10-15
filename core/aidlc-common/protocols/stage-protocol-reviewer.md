@@ -260,7 +260,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    recovery review on its own (a review the person asks for still runs, as
    above): the gate or completion records one `CHANGE_ACCEPTED` row, the engine's `report`
    directive (or the tool's JSON) carries one `change_notices` line for the
-   human, and the Review brief below says `Reviewed content differs` with the
+   human, and the Review brief below says `Changed after review` with the
    changed paths (a Unit's own brief, with `--unit`, says only that Unit's). The reviewer's verdict is never altered. Under `relaxed` or
    `off`, a change the person asks for after the verdict ("rename the handler",
    "fix that answer") is made directly, with no Request Changes round and no
@@ -340,7 +340,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    claimed source path was written after the terminal receipt and voided it,
    the engine permits exactly one recovery request at the next ordinal; record
    its verdict, stop editing those same surfaces, and present the gate using
-   the Review brief with `Why now: Re-check after the artifact changed.`
+   the Review brief.
 
    **On an `adversarial` review**, the reviewer-repair module, which the engine
    names then, says how to branch on the verdict.
@@ -353,8 +353,7 @@ the revised bytes, so step 3 cannot mistake the old review for coverage of the
 revision. An `adversarial` review re-enters with
 the same lead-alone loop and iteration budget as at first entry; an
 `advisory` review re-runs as one fresh advisory pass (its findings ride the
-re-presented gate using the required Review brief with `Why now: Revision
-re-checked.`).
+re-presented gate using the required Review brief).
 
 > **Gate and completion precondition (enforced by the engine).** Every gate
 > opening (`gate-start` and `revise`) and completion path (`approve`, `advance`,

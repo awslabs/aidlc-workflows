@@ -12,7 +12,7 @@
 // RESUME continuity (the 2nd session reads the 1st session's state and the
 // workflow advances), which is deterministic at the resume DISPATCH: a `--scope
 // bugfix` on a project that ALREADY has state does NOT re-init (init refuses on
-// existing state without --force, utility.ts:1746) — it resumes. We drive the two
+// existing state without --force, utility.ts) - it resumes. We drive the two
 // turns, stop each at its first deterministic landed signal, and assert the
 // continuity on disk: the 1st turn's init stages survive into the 2nd turn's
 // state, and the audit GREW across the two sessions. The DEEP multi-stage
@@ -33,7 +33,7 @@
 // the 1st turn's init [x] markers persist, and the audit grows with the 2nd
 // session's events. (We use the explicit `--scope bugfix` flag rather than a bare
 // `bugfix` to avoid the workshop-env disambiguation gate — t29 case 3's surface,
-// not this test's; SKILL.md:105 "explicit CLI flag wins".)
+// not this test's; SKILL.md "explicit CLI flag wins".)
 //
 // ASSERTION MAP (.sh test -> deterministic SDK surface, equal-or-stronger):
 //   1 after init: state file exists      -> existsSync(state) after turn 1.
@@ -55,10 +55,10 @@
 //
 // Known-answer literals (read from the SHIPPED tool, not guessed):
 //   - --init / --scope dispatch:  SKILL.md (init / known-scope routing)
-//   - re-init refusal on state:   aidlc-utility.ts:1746 (resume, not re-init, in turn 2)
-//   - init-stage [x] markers:     aidlc-utility.ts:1995-1998
-//   - State initialized summary:  aidlc-utility.ts:2154
-//   - explicit --scope wins:      SKILL.md:105
+//   - re-init refusal on state:   aidlc-utility.ts (resume, not re-init, in turn 2)
+//   - init-stage [x] markers:     aidlc-utility.ts
+//   - State initialized summary:  aidlc-utility.ts
+//   - explicit --scope wins:      SKILL.md
 //
 // It SPENDS TOKENS — driveAidlc drives the real /aidlc on Opus/Bedrock TWICE.
 // Known LLM-tier flake + one of the slowest (memory) — re-run alone if loaded.

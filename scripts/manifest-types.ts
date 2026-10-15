@@ -125,6 +125,13 @@ export type HarnessManifest = {
   name: string;
   /** User-facing product name used by lifecycle output. */
   productName: string;
+  /**
+   * The name the harness lists show instead of productName, for a harness
+   * told apart from another of the same product (Kiro CLI's v2 engine).
+   */
+  choiceName?: string;
+  /** What the harness lists show beside the name: which tools and engine it runs on. */
+  choiceNote?: string;
   /** Exact host action printed after `aidlc config` completes. */
   configNextStep: string;
   /**

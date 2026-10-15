@@ -178,7 +178,7 @@ before one stage-level lifecycle report.
 
    ```text
    $ aidlc engine workspace codekb-snapshot --repo shop-api --paths ./ --json
-   {"repo":"shop-api","store":"aidlc/spaces/default/codekb/shop-api/","paths":["./"],"store_generation":"none","source_fingerprint":"git:bc8ac8583f61da1edd5bdc681a9db722a937848b"}
+   {"repo":"shop-api","store":"aidlc/spaces/default/codekb/shop-api/","paths":["./"],"store_generation":"none","source_fingerprint":"git:bc8ac8583f61da1edd5bdc681a9db722a937848b","head_commit":"0107291c4e5f2a8b9d3e6f1a7c8b2d4e5f6a7b8c"}
    ```
 
    The architect synthesizes scan results into the 9 output artifacts (see
@@ -923,7 +923,7 @@ The artifacts written to `<record>/inception/domain-design/`:
 |-----------------------------------|-----------------------------------------------------------|
 | `components.md`                   | Fenced `yaml` component catalogue (source of truth): each component's `behaviour`, `responsibilities`, `depends_on`/`dependents`, `external_dependencies`, and owned `entities` (with `identifier`, attributes, and cross-component `references`). Followed by the derived human view: mermaid Component Diagram, Component Summary, Entity Ownership, External Dependencies, and Rationale tables |
 | `decisions.md`                    | The ADR log — architecture decision records capturing key design decisions and their rationale |
-| `traceability.json`               | Coverage table mapping each upstream `USx.y` (or fallback `FR`) to the component or entity in `components.md` that realizes it; validated by the `traceability` sensor |
+| `traceability.json`               | Coverage table mapping each upstream `USx.y` (or fallback `FR`, a requirement with sub-requirements through its `FR{n}.{m}` IDs) to the component or entity in `components.md` that realizes it; validated by the `traceability` sensor |
 
 Additionally, a questions file is created as input:
 
@@ -1058,7 +1058,7 @@ All 4 artifacts written to `<record>/inception/units-generation/`:
 |---------------------------------|-------------------------------------------------------------|
 | `unit-of-work.md`               | Unit definitions (name, description, boundaries), responsibilities, deployment model per Unit (standalone/shared/embedded), relative complexity estimate (S/M/L/XL), unit kind (`service`/`spec`/`ui`/`packaging`/`library`, drives which construction design artifacts apply), implementation notes and constraints |
 | `unit-of-work-dependency.md`    | Dependency DAG between Units (directed edges, cycle-free), integration points (APIs/shared data/events), parallel development opportunities (sets of Units with no dependency between them). Topology only, economic path-choice (recommended order, critical path) is 2.9's job. The fenced `yaml` edge block mirrors the DAG and may tag each unit with an optional `kind:` (see [Runtime graph](../13-runtime-graph.md) `bolt_dag.units[].kind`) |
-| `unit-of-work-story-map.md`     | One row per upstream item mapped to implementing Unit(s), keyed as the traceability enumeration is keyed (`USx.y` when `stories.md` is produced, and only `USx.y` rows are read; otherwise `FR`, plus optional `NFR` rows for any NFR the scope traces), cross-cutting rows spanning multiple Units, implementation order within each Unit, coverage verification (every enumerated ID assigned, every Unit has rows) |
+| `unit-of-work-story-map.md`     | One row per upstream item mapped to implementing Unit(s), keyed as the traceability enumeration is keyed (`USx.y` when `stories.md` is produced, and only `USx.y` rows are read; otherwise `FR`, a requirement with sub-requirements by its `FR{n}.{m}` IDs, plus optional `NFR` rows for any NFR the scope traces), cross-cutting rows spanning multiple Units, implementation order within each Unit, coverage verification (every enumerated ID assigned, every Unit has rows) |
 | `traceability.json`             | Coverage table deriving the Unit set from the generated Unit artifacts and verifying every enumerated ID maps to its declared target Unit; validated by the `traceability` sensor |
 
 Additionally, a questions file is created as input:

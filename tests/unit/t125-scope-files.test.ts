@@ -15,7 +15,7 @@
 //     assert in-process (mechanism none) — these are pure structural reads of
 //     the shipped .claude/scopes/*.md frontmatter + scope-grid.json. The
 //     dropped-file dynamics (7, 8) drive the AIDLC_SCOPES_DIR env-seam in
-//     process: the loader reads it at CALL time (aidlc-lib.ts:713-715), so a
+//     process: the loader reads it at CALL time (aidlc-lib.ts), so a
 //     set-env + _resetScopeMappingForTests() reload exercises the exact
 //     fixture seam the .sh drove through child `bun -e` invocations — without
 //     the spawn overhead. This is STRONGER than the .sh: it asserts the
@@ -23,15 +23,15 @@
 //
 // Source under test:
 //   dist/claude/.claude/tools/aidlc-lib.ts
-//     :713 scopesDir()           — AIDLC_SCOPES_DIR ?? <pkg>/../scopes (call-time)
-//     :760 loadScopeMetadata()   — reads name/depth/keywords/description/
-//                                   testStrategy from each aidlc-*.md frontmatter
-//     :802 loadScopeMapping()    — merges scope-grid.json (.stages) + .md metadata
-//     :854 _resetScopeMappingForTests() — clears the metadata/mapping/validScopes caches
-//     :872 validScopes()         — Object.keys(loadScopeMapping()).sort()
-//     :932 scalarField(fm, key)  — zero-dep frontmatter scalar parser
+//     scopesDir()                  - AIDLC_SCOPES_DIR ?? <pkg>/../scopes (call-time)
+//     loadScopeMetadata()          - reads name/depth/keywords/description/
+//                                    testStrategy from each aidlc-*.md frontmatter
+//     loadScopeMapping()           - merges scope-grid.json (.stages) + .md metadata
+//     _resetScopeMappingForTests() - clears the metadata/mapping/validScopes caches
+//     validScopes()                - Object.keys(loadScopeMapping()).sort()
+//     scalarField(fm, key)         - zero-dep frontmatter scalar parser
 //   dist/claude/.claude/tools/aidlc-graph.ts
-//     :209 loadScopeGrid()       — the compiled EXECUTE/SKIP grid (grid columns)
+//     loadScopeGrid()              - the compiled EXECUTE/SKIP grid (grid columns)
 //
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";

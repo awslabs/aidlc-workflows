@@ -802,12 +802,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   test("4: guard-tool-call block converts to the permissionDecision deny JSON", () => {
     const dir = scratchProject(true);
-    // A direct lifecycle call on aidlc-state.ts is exactly what the
-    // state-transition guard refuses (exit 2 + reason on stderr in core).
+    // A tool call that invokes a hook is what the state-transition guard's
+    // runtime-integrity check refuses (exit 2 + reason on stderr in core).
     const payload = withCwd(
       {
         ...FIXTURES.preToolUse_bash,
-        tool_input: { command: "bun .aidlc/tools/aidlc-state.ts approve" },
+        tool_input: { command: "bun .aidlc/tools/aidlc.ts engine hook record-human-turn" },
       },
       dir,
     );
@@ -1148,14 +1148,14 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   test("14: documented VS Code tool names normalize to the core contract", () => {
     const dir = scratchProject(true);
-    // VS Code's documented shell tool name with a blocked lifecycle command:
+    // VS Code's documented shell tool name with a refused command:
     // the alias table must canonicalize runTerminalCommand -> Bash.
     const r = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",
       session_id: "11111111-2222-4333-8444-555555555555",
       cwd: dir,
       toolName: "runTerminalCommand",
-      toolInput: { command: "bun .aidlc/tools/aidlc-state.ts approve" },
+      toolInput: { command: "bun .aidlc/tools/aidlc.ts engine hook record-human-turn" },
     });
     expect(r.code).toBe(0);
     const parsed = JSON.parse(r.stdout) as {
@@ -4527,14 +4527,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(pre.stdout, command).not.toContain('"permissionDecision":"allow"');
     }
 
-    // Denies are unchanged and never carry an allow: compounds and redirects, a
-    // direct lifecycle verb, and the host-only routes and hook files the
-    // state-transition guard refuses (a model cannot mint a human turn).
+    // Denies are unchanged and never carry an allow: compounds and redirects,
+    // and the host-only routes and hook files the state-transition guard
+    // refuses (a model cannot mint a human turn).
     for (const command of [
       "bun .aidlc/tools/aidlc.ts doctor > doctor.txt",
       "bun .aidlc/tools/aidlc-orchestrate.ts next && echo done",
-      "bun .aidlc/tools/aidlc-state.ts approve requirements-analysis",
-      "bun .aidlc/tools/aidlc.ts engine state approve requirements-analysis",
       "bun .aidlc/tools/aidlc.ts engine hook record-human-turn",
       "bun .aidlc/tools/aidlc.ts engine adapter copilot record-human-turn",
       "bun .aidlc/hooks/aidlc-record-human-turn.ts",
@@ -4545,6 +4543,60 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       const out = JSON.parse(pre.stdout) as { hookSpecificOutput?: Record<string, unknown> };
       expect(out.hookSpecificOutput?.permissionDecision, command).toBe("deny");
       expect(out.hookSpecificOutput?.updatedInput, command).toBeUndefined();
+    }
+  });
+
+  // The Allow prompt and the state tool read one check (decideFence), so they
+  // agree: in VS Code a direct stage-status command runs click-free exactly
+  // when the state tool refuses it, and keeps the prompt exactly when it would
+  // run, whatever the Guard Policy or the person's own switch.
+  test("36b: a direct state command keeps the Allow prompt exactly when the state tool would run it", () => {
+    // [policy, how the state file says it, whether the state tool refuses]
+    const policies: Array<[string, (state: string) => string, boolean]> = [
+      ["strict", (state) => state, true],
+      ["relaxed", (state) => state.replace(/^- \*\*Change Control\*\*:.*$/m, "- **Guard Policy**: relaxed (set by you)"), true],
+      ["off", (state) => state.replace(/^- \*\*Change Control\*\*:.*$/m, "- **Guard Policy**: off (set by you)"), false],
+      ["own switch", (state) => state.replace(
+        "## Scope Configuration\n",
+        "## Scope Configuration\n- **Guards Off**: state-transition (set by you)\n",
+      ), false],
+    ];
+    for (const [label, setPolicy, refusedByStateTool] of policies) {
+      const dir = orchestrationProject();
+      const statePath = seededStateFile(dir);
+      writeFileSync(statePath, setPolicy(readFileSync(statePath, "utf-8")));
+      for (const command of [
+        "bun .aidlc/tools/aidlc-state.ts approve requirements-analysis",
+        "bun .aidlc/tools/aidlc.ts engine state approve requirements-analysis",
+      ]) {
+        const pre = runAdapter(dir, "guard-tool-call", {
+          hook_event_name: "PreToolUse",
+          session_id: "direct-state",
+          tool_use_id: `direct-state-${label}`,
+          cwd: dir,
+          tool_name: "run_in_terminal",
+          tool_input: { command, explanation: "AI-DLC step", goal: "AI-DLC step", mode: "sync" },
+        });
+        expect(pre.code, `${label}: ${command}`).toBe(0);
+        if (refusedByStateTool) {
+          const out = JSON.parse(pre.stdout) as { hookSpecificOutput?: { permissionDecision?: string } };
+          expect(out.hookSpecificOutput?.permissionDecision, `${label}: ${command}`).toBe("allow");
+        } else {
+          expect(pre.stdout, `${label}: ${command}`).toBe("");
+        }
+      }
+      const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined };
+      delete env.AIDLC_STATE_TRANSITION_OWNER;
+      delete env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS;
+      const ran = spawnSync("bun", [join(dir, ".aidlc", "tools", "aidlc-state.ts"), "approve", "requirements-analysis"], {
+        cwd: dir,
+        encoding: "utf-8",
+        env,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      const words = `${ran.stdout}${ran.stderr}`;
+      expect(words.includes("Stage status cannot be changed with aidlc-state.ts approve"), `${label}: ${words}`)
+        .toBe(refusedByStateTool);
     }
   });
 

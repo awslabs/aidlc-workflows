@@ -11,44 +11,44 @@
 //
 // Mechanism: cli. A hook has no in-process arg surface — it is a top-level
 // script that reads PostToolUse JSON off stdin, resolves CLAUDE_PROJECT_DIR,
-// and terminates with process.exit (hook :53,:63,:67,:74,:85,:90,:98,:104,
-// :123,:166,:177,:180,:185,:269). Its whole contract is process-boundary
-// side-effects: it spawns `bun <proj>/.claude/tools/aidlc-sensor.ts fire <id>
-// --stage <slug> --output-path <path>` per matching sensor (hook :195-222) and
-// touches the heartbeat sensor-fire.last (hook :134-139). None of that is
+// and terminates with process.exit at each of its many exits. Its whole contract
+// is process-boundary side-effects: it spawns
+// `bun <proj>/.claude/tools/aidlc-sensor.ts fire <id>
+// --stage <slug> --output-path <path>` per matching sensor (hook) and
+// touches the heartbeat sensor-fire.last (hook). None of that is
 // observable in-process, so every case SPAWNS the real hook via the bun runtime
 // (spawnSync, input: JSON) and asserts on the exit code + the bytes/existence
 // the subprocess leaves behind. spawnCount = all.
 //
 // "No spawn" is proven the same way the .sh proved it: a STUB aidlc-sensor.ts at
-// <proj>/.claude/tools/aidlc-sensor.ts (the exact path the hook joins at :195)
+// <proj>/.claude/tools/aidlc-sensor.ts (the exact path the hook joins)
 // records its argv to T94_SPAWN_LOG. The hook's only spawn target is that path,
 // so the ABSENCE of the log file after a hook run is positive proof the per-entry
 // dispatch loop never fired. The heartbeat file (sensor-fire.last) under
 // aidlc-docs/.aidlc-engine/hooks-health/ is checked directly on disk.
 //
 // SOURCE UNDER TEST (dist/claude/.claude/hooks/aidlc-run-sensors.ts):
-//   :53      TTY guard — process.stdin.isTTY -> exit 0.
-//   :59-67   stdin parse — malformed JSON / non-hook-shaped input -> exit 0.
-//   :73-74   empty tool_input.file_path -> exit 0.
-//   :81-86   recursion guard - path under aidlc-docs/.aidlc-engine/sensors/ -> exit 0.
-//   :90      pre-init guard — no audit.md -> exit 0 (BEFORE heartbeat).
-//   :98      state-existence guard — no aidlc-state.md -> exit 0 (BEFORE heartbeat).
-//   :134-139 heartbeat (G3) — writes isoTimestamp() to sensor-fire.last. Placed
+//   TTY guard - process.stdin.isTTY -> exit 0.
+//   stdin parse - malformed JSON / non-hook-shaped input -> exit 0.
+//   empty tool_input.file_path -> exit 0.
+//   recursion guard - path under aidlc-docs/.aidlc-engine/sensors/ -> exit 0.
+//   pre-init guard - no audit.md -> exit 0 (BEFORE heartbeat).
+//   state-existence guard - no aidlc-state.md -> exit 0 (BEFORE heartbeat).
+//   heartbeat (G3) - writes isoTimestamp() to sensor-fire.last. Placed
 //            AFTER the state guard but BEFORE the active-stage/graph guards,
 //            so it IS written for the "valid-but-no-fire" cases (missing graph,
 //            empty sensors_applicable).
-//   :165-166 active-stage early-exit — missing Current Stage / "none" -> exit 0.
-//   :172-180 stage-graph early-exits — loadGraph() throws (missing AIDLC_STAGE_GRAPH
+//   active-stage early-exit - missing Current Stage / "none" -> exit 0.
+//   stage-graph early-exits - loadGraph() throws (missing AIDLC_STAGE_GRAPH
 //            file) -> exit 0; stage slug not in graph -> exit 0.
-//   :184-185 empty sensors_applicable (workspace-scaffold) -> exit 0.
-//   :196-199 G1 glob filter — `if (!entry.matches) continue` then
+//   empty sensors_applicable (workspace-scaffold) -> exit 0.
+//   G1 glob filter - `if (!entry.matches) continue` then
 //            new Bun.Glob(entry.matches).match(filePath) -> a non-matching path
 //            and an entry with no `matches` field both skip the spawn.
-//   loadGraph() honours the AIDLC_STAGE_GRAPH env-var seam (aidlc-graph.ts:160-162)
+//   loadGraph() honours the AIDLC_STAGE_GRAPH env-var seam (aidlc-graph.ts)
 //   — the seam the synthetic-graph / missing-graph cases inject through.
 //
-// FIXTURE DISCIPLINE (mirrors make_project / make_project_active, .sh:56-104): a
+// FIXTURE DISCIPLINE (mirrors make_project / make_project_active): a
 // fresh temp project with aidlc-docs/, .claude/tools/ + a per-test STUB
 // aidlc-sensor.ts at <proj>/.claude/tools/aidlc-sensor.ts (records argv to
 // T94_SPAWN_LOG). Synthetic stage-graph fixtures are written to temp files and
@@ -127,7 +127,7 @@ afterAll(() => {
 // trail via auditFilePath() — both under the active intent's record. So a
 // fixture seeds state into the record (so the cursor resolves) and, for the
 // active-workflow projects, the resolved audit SHARD (pinned clone-id) so the
-// audit gate at :100 passes. The heartbeat/skipped files land under the record's
+// audit gate passes. The heartbeat/skipped files land under the record's
 // .aidlc-engine/hooks-health/. The sensor `matches` glob in the FRAMEWORK graph is still
 // `**/aidlc-docs/**` (core data, unchanged), so the artifact file_path the hook
 // fires on stays an aidlc-docs/ path — only the state/audit/health roots moved.
@@ -142,8 +142,8 @@ function pinnedShardName(): string {
   return `${host}-${PINNED_CLONE_ID}.md`;
 }
 
-// Stub dispatcher (.sh:66-81): record argv to T94_SPAWN_LOG and exit 0. Written
-// to <proj>/.claude/tools/aidlc-sensor.ts — the path the hook joins at :195 — so
+// Stub dispatcher: record argv to T94_SPAWN_LOG and exit 0. Written
+// to <proj>/.claude/tools/aidlc-sensor.ts - the path the hook joins - so
 // the real hook spawns OUR stub, and the log file's ABSENCE proves "no spawn".
 const STUB_DISPATCHER = `// @ts-nocheck
 // t94 stub dispatcher: capture argv to T94_SPAWN_LOG and exit 0.
@@ -160,7 +160,7 @@ process.stdout.write('{"pass":true}\\n');
 process.exit(0);
 `;
 
-/** make_project (.sh:56-84): per-intent workspace shell + the stub dispatcher +
+/** make_project: per-intent workspace shell + the stub dispatcher +
  *  a pinned clone-id (so a later seedAudit's shard path is deterministic). */
 function makeProject(): string {
   const proj = createTestProject();
@@ -176,10 +176,10 @@ function makeProject(): string {
 }
 
 /**
- * make_project_active (.sh:90-104): project + state.md whose Current Stage is a
+ * make_project_active: project + state.md whose Current Stage is a
  * stage that carries applicable md-glob sensors in the FRAMEWORK graph
  * (requirements-analysis -> required-sections + upstream-coverage) + the audit
- * shard (the active-workflow gate at hook :100).
+ * shard (the active-workflow gate at hook).
  */
 function makeProjectActive(scope = "bugfix"): string {
   const proj = makeProject();
@@ -242,7 +242,7 @@ function seedState(proj: string, body: string): void {
   writeFileSync(seededStateFile(proj), body, "utf-8");
 }
 
-/** Create the resolved audit SHARD (the active-workflow gate at hook :100). With
+/** Create the resolved audit SHARD (the active-workflow gate at hook). With
  *  the pinned clone-id, this is exactly the shard the spawned hook resolves. */
 function seedAudit(proj: string): void {
   const auditDir = seededAuditDir(proj);
@@ -264,7 +264,7 @@ interface HookRun {
 }
 
 /**
- * run_hook (.sh:109-120): pipe PostToolUse Write JSON on stdin with
+ * run_hook: pipe PostToolUse Write JSON on stdin with
  * CLAUDE_PROJECT_DIR, AIDLC_STAGE_GRAPH (defaults to the framework graph), and
  * T94_SPAWN_LOG set, against the real hook. The stub dispatcher writes argv to
  * the spawn log; checks read disk afterward.
@@ -363,7 +363,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     expect(existsSync(spawnLogPath(proj))).toBe(true);
     // STRONGER than the .sh's mere file-existence check: parse the recorded argv
     // and assert the dispatcher was invoked with the fire-contract slice the
-    // hook emits at :208-216 (process.argv = [bun, scriptPath, ...flags]).
+    // hook emits (process.argv = [bun, scriptPath, ...flags]).
     const lines = readFileSync(spawnLogPath(proj), "utf-8")
       .split("\n")
       .filter(Boolean);
@@ -563,7 +563,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
 
   test("empty file_path -> no spawn [.sh case 5]", () => {
     const proj = makeProjectActive();
-    // tool_input with no file_path: the hook's `?? ""` yields "" -> exit 0 (:74).
+    // tool_input with no file_path: the hook's `?? ""` yields "" -> exit 0.
     const json = JSON.stringify({ tool_name: "Write", tool_input: {} });
     const res = spawnSync(BUN, [HOOK], {
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -583,19 +583,19 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
   test("non-aidlc path -> no glob match -> no spawn [.sh case 6]", () => {
     const proj = makeProjectActive();
     // A path outside aidlc-docs/ never matches **/aidlc-docs/**, so the per-entry
-    // dispatch loop `continue`s on both applicable sensors (:199).
+    // dispatch loop `continue`s on both applicable sensors.
     const r = runHook(proj, join(tmpdir(), "scratch-not-aidlc", "notes.txt"));
     expect(r.status).toBe(0);
     expect(existsSync(spawnLogPath(proj))).toBe(false);
   });
 
   // ===========================================================================
-  // Step 6-7 — pre-init guards (BEFORE the heartbeat at :134).
+  // Step 6-7 - pre-init guards (BEFORE the heartbeat).
   // ===========================================================================
 
   test("no audit.md -> exit 0, no heartbeat, no spawn [.sh case 7]", () => {
     const proj = makeProject();
-    // state.md present but audit.md absent -> hook :90 exits before the heartbeat.
+    // state.md present but audit.md absent -> the hook exits before the heartbeat.
     seedState(proj, "- **Current Stage**: requirements-analysis\n");
     const r = runHook(proj, inceptionMd(proj));
     expect(r.status).toBe(0);
@@ -605,7 +605,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
 
   test("no aidlc-state.md -> exit 0, no heartbeat (guard precedes heartbeat) [.sh case 8]", () => {
     const proj = makeProject();
-    // audit.md present but state.md absent -> hook :98 exits before the heartbeat.
+    // audit.md present but state.md absent -> the hook exits before the heartbeat.
     seedAudit(proj);
     const r = runHook(proj, inceptionMd(proj));
     expect(r.status).toBe(0);
@@ -670,7 +670,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
   test("missing stage-graph.json -> no spawn, heartbeat still written (G3 placement) [.sh case 14]", () => {
     const proj = makeProjectActive();
     // loadGraph() throws when the AIDLC_STAGE_GRAPH file does not exist; the hook
-    // catches it and exits 0 (:177). The heartbeat at :134 ran BEFORE the graph
+    // catches it and exits 0. The heartbeat ran BEFORE the graph
     // read, so it is present — the placement contract.
     const r = runHook(proj, inceptionMd(proj), "/nonexistent/stage-graph.json");
     expect(r.status).toBe(0);
@@ -701,7 +701,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
     const proj = makeProject();
     seedAudit(proj);
     // workspace-scaffold carries sensors_applicable: [] in the framework graph,
-    // so the hook exits at :185 — but the heartbeat at :134 already wrote.
+    // so the hook exits - but the heartbeat already wrote.
     seedState(proj, "- **Current Stage**: workspace-scaffold\n");
     const r = runHook(proj, inceptionMd(proj));
     expect(r.status).toBe(0);
@@ -716,7 +716,7 @@ describe("t94 aidlc-run-sensors hook — guards + early exits (migrated from t94
   test("sensors_applicable entry without matches -> no fire (G1: matches IS the filter) [.sh case 17]", () => {
     const proj = makeProjectActive();
     // Synthetic graph: requirements-analysis with one sensor lacking `matches`.
-    // hook :197 `if (!entry.matches) continue` -> the loop skips it, no spawn.
+    // the hook's `if (!entry.matches) continue` -> the loop skips it, no spawn.
     const synGraph = join(proj, "syn-graph.json");
     writeFileSync(
       synGraph,

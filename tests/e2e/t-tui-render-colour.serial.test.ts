@@ -4,7 +4,7 @@
 // branch (§5-C render row, §7 Phase 3), proven through the hook bytes and a REAL
 // terminal render.
 //
-// The branch under test (aidlc-statusline.ts:54-58, contextColor): the right side
+// The branch under test (aidlc-statusline.ts, contextColor): the right side
 // paints "ctx:N%" wrapped in an SGR colour escape chosen by the context-window
 // usage — green (\x1b[32m) < 50%, yellow (\x1b[33m) >= 50%, red (\x1b[31m) >= 75%.
 //

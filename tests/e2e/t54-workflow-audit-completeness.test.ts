@@ -24,7 +24,7 @@
 // `--no-aidlc-docs` project routes through intent creation and
 // `aidlc-utility.ts init --scope bugfix` (SKILL.md). init bootstraps audit.md
 // with the `# AI-DLC Audit Log`
-// header (utility.ts:1777), then appends WORKFLOW_STARTED + the init-phase events
+// header (utility.ts), then appends WORKFLOW_STARTED + the init-phase events
 // (PHASE_STARTED, STAGE_STARTED/COMPLETED ×3, WORKSPACE_*), each a canonical
 // aidlc-audit block (## heading / **Timestamp**: / **Event**: / fields / `---`).
 //
@@ -42,9 +42,9 @@
 //   6 no duplicate SESSION_STARTED -> the count of SESSION_STARTED in the parsed
 //                                     events is <= 1 (the .sh's exact bound; init
 //                                     no longer emits a bootstrap SESSION_STARTED,
-//                                     utility.ts:1770-1774).
+//                                     utility.ts).
 //   7 Audit Log header             -> raw audit.md contains "AI-DLC Audit Log"
-//                                     (utility.ts:1777).
+//                                     (utility.ts).
 //   8 Timestamp fields             -> raw audit.md contains "**Timestamp**:"
 //                                     (audit block format; the .sh's grep).
 //   9 horizontal-rule separators   -> raw audit.md contains >= 1 line starting `---`.
@@ -56,9 +56,9 @@
 //
 // Known-answer literals (read from the SHIPPED tool, not guessed):
 //   - init dispatch:            SKILL.md -> `aidlc-utility.ts init --scope bugfix`
-//   - audit header bootstrap:   aidlc-utility.ts:1777 ("# AI-DLC Audit Log")
-//   - no bootstrap SESSION_STARTED: aidlc-utility.ts:1770-1774
-//   - WORKFLOW_STARTED emit:    aidlc-utility.ts:1784
+//   - audit header bootstrap:   aidlc-utility.ts ("# AI-DLC Audit Log")
+//   - no bootstrap SESSION_STARTED: aidlc-utility.ts
+//   - WORKFLOW_STARTED emit:    aidlc-utility.ts
 //   - audit block shape:        aidlc-audit.ts (## heading / **Timestamp**: / **Event**: / --- )
 //
 // It SPENDS TOKENS — driveAidlc drives the real /aidlc on Opus/Bedrock.

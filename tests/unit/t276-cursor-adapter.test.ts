@@ -478,16 +478,16 @@ describe("t276 cursor adapter payload conversion", () => {
   test("3: guards convert a state-guard block to Cursor's permission-deny JSON", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
-    // A direct lifecycle mutation through aidlc-state.ts is the state guard's
-    // canonical refusal; on Cursor it must arrive as deny JSON, exit 0.
+    // A tool call that invokes a hook is a refusal the state guard keeps; on
+    // Cursor it must arrive as deny JSON, exit 0.
     const stdin = payload("preToolUseShell", proj, {
-      tool_input: { command: "bun .cursor/tools/aidlc-state.ts approve", cwd: "", timeout: 30000 },
+      tool_input: { command: "bun .cursor/tools/aidlc.ts engine hook record-human-turn", cwd: "", timeout: 30000 },
     });
     const r = runAdapter(proj, "guards", stdin);
     expect(r.code).toBe(0);
     const out = JSON.parse(r.stdout) as { permission?: string; agent_message?: string };
     expect(out.permission).toBe("deny");
-    expect(out.agent_message ?? "").toContain("aidlc-orchestrate");
+    expect(out.agent_message ?? "").toContain("AIDLC runtime records and hooks belong to the harness");
   });
 
   test("4: guards allow an ordinary shell command with permission-allow JSON", () => {

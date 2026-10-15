@@ -212,7 +212,7 @@ export const KIRO_HOOK_MATCHERS = {
 } as const;
 
 // Kiro IDE shows a card for every hook run (#2022), so one registration runs
-// several adapter targets: the five tool-call checks, and the two hooks for the
+// several adapter targets: the four tool-call checks, and the two hooks for the
 // person's message. Each member keeps the matcher its own registration had, in
 // the file-name order Kiro ran those registrations; the read-only tools reach
 // none. What Kiro ran after a write or a command (the audit and sensors, and
@@ -222,7 +222,6 @@ export const KIRO_HOOK_MATCHERS = {
 export const KIRO_HOOK_GROUPS: Readonly<Record<string, ReadonlyArray<{ target: string; matcher: string }>>> = {
   "guard-tool-call": [
     { target: "catch-up", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse },
-    { target: "enforce-approval-gate", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse },
     { target: "plan-approval-guard", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse },
     { target: "review-freeze", matcher: KIRO_HOOK_MATCHERS.writeOrShellPreToolUse },
     { target: "state-transition-guard", matcher: KIRO_HOOK_MATCHERS.writeOrShellPreToolUse },

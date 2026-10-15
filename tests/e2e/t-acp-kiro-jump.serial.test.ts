@@ -10,12 +10,12 @@
 // (the run-then-continue print arm would otherwise replay the target stage
 // inside the same turn — the ACP turn-boundary edge).
 //
-// Known-answer literals share provenance with t25 (jump.ts:375-415,
-// audit.ts:257-265): target/direction/target_phase stdout JSON and the
+// Known-answer literals share provenance with t25 (jump.ts,
+// audit.ts): target/direction/target_phase stdout JSON and the
 // audit block's **Target**/**Direction** lines.
 //
 // FLAKE CLASS: t26-class LLM-tier routing flake — same as the Claude twins
-// (t26 is documented flaky in docs/reference/09-testing.md:428's class). The
+// (t26 is documented flaky in docs/reference/09-testing.md's class). The
 // conductor occasionally takes a non-jump path on a jump prompt; the engine's
 // print directive and the jump tool are deterministic (probe-verified live),
 // so a red here is re-run-in-isolation before being treated as a regression.

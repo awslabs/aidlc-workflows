@@ -5,10 +5,10 @@
 //
 // The .sh's first two per-stage assertions ("has Phase field" / "has Lead
 // Agent field") drove the COVERS target — parseStageFrontmatter — through a
-// `bun -e` one-shot (frontmatter_field, t14...:15-23) that imported the
+// `bun -e` one-shot (the .sh's frontmatter_field helper) that imported the
 // function from aidlc-lib.ts, parsed a stage file, and printed the named
 // scalar (empty string if absent/non-string). parseStageFrontmatter is a PURE
-// function — "no I/O, no validation" (aidlc-lib.ts:884-888) — and aidlc-lib.ts
+// function - "no I/O, no validation" (aidlc-lib.ts) - and aidlc-lib.ts
 // carries NO `import.meta.main` block (grep-verified: 0 matches), so it is a
 // library, not a CLI entrypoint. There is no process boundary to keep as a
 // spawn seam: every contract migrates to in-process expect() calls. We read
@@ -47,7 +47,7 @@
 //     drift only as a TAP plan/observed mismatch; here it is an explicit assert).
 //   - S2: a guard that parseStageFrontmatter throws on a non-string argument and
 //     on frontmatter-less input — pins the two documented throw paths
-//     (aidlc-lib.ts:896-904) that the .sh never exercised (it only ever fed real
+//     (aidlc-lib.ts) that the .sh never exercised (it only ever fed real
 //     stage-file strings). Strengthens coverage of the COVERS target itself.
 
 import { describe, expect, test } from "bun:test";
@@ -82,7 +82,7 @@ function discoverStages(): { slug: string; path: string }[] {
 
 const STAGES = discoverStages();
 
-// Mirror of the .sh frontmatter_field helper (t14...:15-23): parse the file and
+// Mirror of the .sh frontmatter_field helper: parse the file and
 // return the named field IFF it is a string, else "". Same reduction the .sh
 // applied before its `[ -n "$val" ]` test.
 function frontmatterField(path: string, key: string): string {
@@ -115,7 +115,7 @@ describe("t14 stage-content-validation — parseStageFrontmatter (migrated from 
     );
   });
 
-  // The five per-stage assertions, mirroring the .sh inner loop (t14...:30-61).
+  // The five per-stage assertions, mirroring the .sh inner loop.
   // describe.each gives one labelled block per stage so a failure names the slug,
   // matching the .sh's "<slug> has Phase field" message granularity.
   describe.each(STAGES.map((s) => [s.slug, s.path] as const))(

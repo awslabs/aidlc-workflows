@@ -2,14 +2,14 @@
 //
 // Mechanism = cli. Every assertion about `bun aidlc-graph.ts artifacts`
 // (exit code, stdout and stderr; with the AIDLC_STAGE_GRAPH
-// fixture-injection env-var seam — lib.ts:702-703 / aidlc-graph.ts:153-155)
+// fixture-injection env-var seam - lib.ts / aidlc-graph.ts)
 // is preserved by SPAWNING the real CLI via node:child_process spawnSync
 // (BUN + the tool .ts path), asserting on res.status / res.stdout / res.stderr
 // - the PROCESS boundary, not an in-process artifactsRegistry() call. An
 // in-process twin would lose the exit-code half on the unknown/missing-subcommand
-// arms (main()'s process.exit(1), aidlc-graph.ts:1222/1230) AND the
+// arms (main()'s process.exit(1), aidlc-graph.ts) AND the
 // stdout-shaping half (the `artifacts` handler's console.log-per-line,
-// aidlc-graph.ts:1094-1098).
+// aidlc-graph.ts).
 //
 // SUBCOMMAND UNIT: this test file credits the single subcommand unit it
 // exercises — `aidlc-graph artifacts` (covers KEY subcommand:aidlc-graph
@@ -22,7 +22,7 @@
 // imports the tool, calls artifactsRegistry() twice and prints same-ref /
 // different-ref on `a === b` (ReadonlySet identity). It pins the
 // memoisation invariant on artifactsRegistry()
-// (aidlc-graph.ts:768-780, `_artifactsRegistry` cache).
+// (aidlc-graph.ts, `_artifactsRegistry` cache).
 //
 // FIXTURE DISCIPLINE: the five graph fixtures are written to a FRESH temp dir
 // (mkdtempSync) in beforeAll, each injected via AIDLC_STAGE_GRAPH on the

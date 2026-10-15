@@ -2,7 +2,7 @@
 //
 // t109 — escapeRegex(str) round-trip property test (P0 deterministic floor).
 //
-// Unit under test: escapeRegex in dist/claude/.claude/tools/aidlc-lib.ts:1540
+// Unit under test: escapeRegex in dist/claude/.claude/tools/aidlc-lib.ts
 //
 // This fn is security-relevant: the CLI tools build RegExp patterns
 // from caller-supplied tokens, and any metacharacter that survives unescaped

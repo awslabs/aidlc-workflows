@@ -14,10 +14,10 @@
 // READ-ONLY SURFACE (mirrors the .sh's "no temp project setup needed"): list /
 // describe / --help all run against the framework's shipped sensors dir
 // (dist/claude/.claude/sensors/), resolved by loadSensors() as
-// __FILE_DIR/../sensors (aidlc-graph.ts:168) — independent of cwd, so no temp
+// __FILE_DIR/../sensors (aidlc-graph.ts) - independent of cwd, so no temp
 // project, no fixtures, no audit.md. This port therefore writes NOTHING to disk
 // and seeds nothing; it doubles as a forward-check that the 6 shipped manifests
-// stay parseable, exactly as the .sh comment (t93:17-19) states.
+// stay parseable, exactly as the .sh comment (t93) states.
 //
 // COVERS ID: this .cli file credits the `aidlc-sensor list` subcommand unit
 // (covers KEY subcommand:aidlc-sensor:list, COLON form). The .sh also drives

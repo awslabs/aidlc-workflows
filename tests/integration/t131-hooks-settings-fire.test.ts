@@ -34,19 +34,19 @@
 //   dist/claude/.claude/skills/aidlc/SKILL.md — frontmatter no longer carries
 //       a `^hooks:` line.
 //   dist/claude/.claude/hooks/aidlc-write-audit-log.ts — PostToolUse Write|Edit.
-//       Self-gates: only logs writes to aidlc-docs/ (:47) AND only when
-//       audit.md already exists (:55, "Don't auto-create audit.md"). Inside a
+//       Self-gates: only logs writes to aidlc-docs/ AND only when
+//       audit.md already exists ("Don't auto-create audit.md"). Inside a
 //       workflow (audit.md present) a Write under aidlc-docs/ -> appendAuditEntry
-//       (:95) appends one ARTIFACT_CREATED/UPDATED row.
+//       appends one ARTIFACT_CREATED/UPDATED row.
 //   dist/claude/.claude/hooks/aidlc-rebuild-stage-graph.ts — PostToolUse Bash.
-//       Self-gates: command must match aidlc-(state|jump|bolt|utility).ts (:61-64)
-//       AND audit.md must exist (:68). On a GATE_APPROVED-tail audit it dispatches
-//       `bun run <proj>/.claude/tools/aidlc-runtime.ts compile` (:106-111), which
+//       Self-gates: command must match aidlc-(state|jump|bolt|utility).ts
+//       AND audit.md must exist. On a GATE_APPROVED-tail audit it dispatches
+//       `bun run <proj>/.claude/tools/aidlc-runtime.ts compile`, which
 //       writes aidlc-docs/runtime-graph.json.
 //   Project-dir resolution: resolveProjectDirFromHook honours CLAUDE_PROJECT_DIR
-//       first (aidlc-lib.ts:116).
+//       first (aidlc-lib.ts).
 //
-// FIXTURE DISCIPLINE — replicate the .sh's make_workflow (t131:76-85) EXACTLY:
+// FIXTURE DISCIPLINE - replicate the .sh's make_workflow (t131) EXACTLY:
 // a fresh temp project with aidlc-docs/ + a self-contained .claude/ skeleton
 // holding the required tool modules (runtime, lib, settings, install paths,
 // distribution, channel, version, artifact vocabulary, runtime paths, guard
@@ -267,7 +267,7 @@ describe("t131 hooks-move registration (settings.json + SKILL.md, mechanism none
 // ============================================================================
 
 /**
- * make_workflow (t131:76-85): a fresh temp project with a self-contained
+ * make_workflow (t131): a fresh temp project with a self-contained
  * .claude/ skeleton (the tools + data/stage-graph.json + the two driven
  * hooks copied in), aidlc-docs/, and a minimal aidlc-state.md. `withState`
  * controls whether the state file is seeded (the .sh's make_workflow seeds it;
@@ -326,7 +326,7 @@ interface HookResult {
   out: string;
 }
 
-/** run_hook (t131:91-92, 119-120): pipe PostToolUse JSON on stdin, CLAUDE_PROJECT_DIR set. */
+/** run_hook (t131): pipe PostToolUse JSON on stdin, CLAUDE_PROJECT_DIR set. */
 function runHook(hookPath: string, proj: string, json: string): HookResult {
   const res = spawnSync(BUN, [hookPath], {
     input: json,
@@ -337,7 +337,7 @@ function runHook(hookPath: string, proj: string, json: string): HookResult {
   return { status: res.status ?? -1, out: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
 
-// The transition audit the runtime-compile hook tail-reads (.sh:100-118):
+// The transition audit the runtime-compile hook tail-reads:
 // the last 3 blocks carry STAGE_COMPLETED + GATE_APPROVED -> dispatch compile.
 const TRANSITION_AUDIT = `## Stage Start
 **Event**: STAGE_STARTED
@@ -361,7 +361,7 @@ const TRANSITION_AUDIT = `## Stage Start
 describe("t131 spine fires inside a workflow (mechanism cli — spawnSync)", () => {
   test("B1: in-workflow Write -> audit-logger appends an audit row [.sh test 11]", () => {
     const proj = makeProject(true);
-    // The audit SHARD present == active workflow (the audit-logger's :73 gate);
+    // The audit SHARD present == active workflow (the audit-logger's audit-exists gate);
     // pin it as the seed so the hook (same clone-id) appends to this shard.
     mkdirSync(seededAuditDir(proj), { recursive: true });
     writeFileSync(pinnedShardPath(proj), "# audit\n", "utf-8");
@@ -499,7 +499,7 @@ describe("t131 spine self-gates to a no-op outside a workflow (mechanism cli —
       tool_input: { file_path: join(proj, "aidlc-docs", "inception", "x.md") },
     });
     runHook(auditLoggerHook(proj), proj, json);
-    // The "don't auto-create the audit trail" guard (hook :73) holds: no shard.
+    // The "don't auto-create the audit trail" guard holds: no shard.
     expect(readAllAuditShards(proj)).toBe("");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -526,7 +526,7 @@ describe("t131 spine self-gates to a no-op outside a workflow (mechanism cli —
       },
     });
     runHook(runtimeCompileHook(proj), proj, json);
-    // The audit-existence guard (hook :68) holds: no audit.md -> no graph.
+    // The audit-existence guard holds: no audit.md -> no graph.
     expect(existsSync(graphPath(proj))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

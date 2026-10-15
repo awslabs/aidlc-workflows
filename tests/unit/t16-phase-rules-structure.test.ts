@@ -5,7 +5,7 @@
 // invariants across the 4 phase rule files). The .sh resolved
 //   RULES_DIR  = $AIDLC_SRC/rules
 //   STAGES_DIR = $AIDLC_SRC/aidlc-common/stages
-// where $AIDLC_SRC = <repo>/dist/claude/.claude (fixtures.ts:42), and for
+// where $AIDLC_SRC = <repo>/dist/claude/.claude (fixtures.ts), and for
 // each of the four non-initialization phases asserted three things:
 //   Part 1 (.sh L17-19): rules/aidlc-phase-<phase>.md EXISTS.
 //   Part 2 (.sh L25-28): that file is NON-EMPTY (wc -c > 0).
@@ -19,7 +19,7 @@
 // shipped bytes — do the four phase rule files exist, carry content, and
 // mention their phase's stages? No process boundary, no argv/exit/stdout
 // seam, no LLM, zero tokens. We resolve the SAME trees the .sh resolved
-// (AIDLC_SRC = <repo>/dist/claude/.claude, fixtures.ts:42), enumerate the
+// (AIDLC_SRC = <repo>/dist/claude/.claude, fixtures.ts), enumerate the
 // real stage `.md` files per phase from disk, and read the real rule-file
 // bytes in-process.
 //

@@ -7,13 +7,13 @@
 // .ts path), asserting on res.status / the combined stdout+stderr exactly as
 // the .sh asserted on `$?` / the `2>&1 || true` capture. The contract under
 // test is the PROCESS boundary (doctor's stdout diagnostics + its
-// process.exit(failed>0?1:0) at aidlc-utility.ts:1385) — an in-process
+// process.exit(failed>0?1:0) at aidlc-utility.ts) - an in-process
 // handleDoctor() twin would lose the exit-code half case 17 relies on, and
 // handleDoctor() itself calls process.exit, so it cannot be invoked in-process
 // without killing the test runner. So all doctor cases (1-17) stay spawns.
 //
 // The .sh injected broken graphs / scope-mappings via the AIDLC_STAGE_GRAPH /
-// AIDLC_SCOPE_MAPPING env seams (aidlc-lib.ts:702-708) that loadStageGraph /
+// AIDLC_SCOPE_MAPPING env seams (aidlc-lib.ts) that loadStageGraph /
 // loadScopeMapping read at call time. We replicate that — fixture JSON written
 // to a temp file, path passed through the spawn env — so the sad-path cases
 // fire against a deterministic broken graph, never the real shipped data.
@@ -243,7 +243,7 @@ describe("t37 aidlc-utility doctor — state/audit drift (migrated from t37-util
     );
     const r = doctor(p);
     expect(r.out).toContain("State/audit drift");
-    // STRONGER: the failing check drives process.exit(1) (aidlc-utility.ts:1385).
+    // STRONGER: the failing check drives process.exit(1) (aidlc-utility.ts).
     expect(r.status).toBe(1);
   });
 

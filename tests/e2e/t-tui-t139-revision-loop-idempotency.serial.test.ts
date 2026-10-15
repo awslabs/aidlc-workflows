@@ -20,7 +20,7 @@
 // so it is driven through the real TUI like a human: the gate PAINTS, a keystroke
 // answers it (Enter = Approve, or Down+Enter = Request changes), and the workflow
 // continues. Auto-approving every gate skips the revision loop entirely (no
-// Request changes path, stage-protocol.md:24), so it could never exercise this.
+// Request changes path, stage-protocol.md), so it could never exercise this.
 //
 // THE METAMORPHIC RELATION (asserted as on-disk DATA, never on prose):
 //   CLEAN   = terminal aidlc-state.md after a run that APPROVES every gate.
@@ -39,8 +39,8 @@
 // reds the vacuous-pass guard — NEVER softened (IRON RULE).
 //
 // SOURCE-PINNED FACTS (verify-never-guess):
-//   - gate options exactly {Approve(1), Request changes(2)} (stage-protocol.md:41-42,
-//     165-167); option 1 is the highlighted Recommended default.
+//   - gate options exactly {Approve(1), Request changes(2)} (stage-protocol.md);
+//     option 1 is the highlighted Recommended default.
 //   - selecting "Request changes" -> aidlc-state.ts handleReject: emits
 //     GATE_REJECTED + STAGE_REVISING, marks [?]->[R], Revision Count++.
 //     The orchestrator then re-runs the stage and re-presents the SAME gate.
@@ -52,7 +52,7 @@
 //     approve-time backstop's codekb arm (aidlc-lib.ts producesArtifactFile;
 //     without it a live run honored the reject conversationally and left
 //     Revision Count stuck at 0).
-//   - Completed counter == `- [x]` grid count (aidlc-state.ts:256-258 sync); the
+//   - Completed counter == `- [x]` grid count (aidlc-state.ts sync); the
 //     terminator + the cross-run comparison both read this field.
 //   - the AUQ gate footer + exact `❯` caret signal is gridHasMenu
 //     (tui-drive.ts; identical on tmux and Windows ConPTY).

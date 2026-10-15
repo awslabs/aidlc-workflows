@@ -351,6 +351,7 @@ export const GUARD_REMEDY_WORDING = {
       `I'll bring ${c.target} to you for approval with what its review raised, instead of ` +
       "asking for another review.",
   }),
+  "present-findings-at-gate": null,
   "request-review": null,
   "start-recovery-review": null,
   "apply-repairs-then-request": null,
@@ -428,6 +429,7 @@ export const GUARD_REMEDY_WORDING = {
             `I'll finish ${c.stage} for ${c.unit ?? "this Unit"} with the review it already has. ` +
             "What the review raised comes to you when its work is up for approval.",
         },
+  "dispatch-pipeline-links": null,
   "repair-source-boundary": null,
   "reconfirm-summary": (c) => ({
     label: "Confirm the summary again",

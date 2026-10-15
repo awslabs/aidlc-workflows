@@ -14,7 +14,7 @@
 // LLM-tier flake). This port drives the REAL stage and STOPS when its approval gate
 // RENDERS (a stage/attempt-bound question predicate), the moment the deterministic artifacts + state
 // have landed (RE stage steps 3-4 write the 9 artifacts + update state BEFORE step 5
-// presents the gate, reverse-engineering.md:78-101). We assert that LANDED surface —
+// presents the gate, reverse-engineering.md). We assert that LANDED surface -
 // the §5-A1 land pattern applied to sdk — while tolerating the live conductor
 // reporting completion and advancing before the driver's gate-render stop lands.
 //
@@ -57,8 +57,8 @@
 //          A learnings or blockage question cannot satisfy this check.
 //
 // Known-answer literals (read from the SHIPPED stage, not guessed):
-//   - RE outputs (9 artifacts):   reverse-engineering.md:36, written :78-89
-//   - approval gate (step 5):     reverse-engineering.md:97-103 (AskUserQuestion)
+//   - RE outputs (9 artifacts):   reverse-engineering.md (`outputs:` frontmatter; written in Step 3, Architect Synthesis)
+//   - approval gate (step 5):     reverse-engineering.md (AskUserQuestion)
 //   - fixture init-done state:     state-brownfield-init-done.md (Phase=INCEPTION,
 //                                  Current Stage=reverse-engineering, Scope=bugfix)
 //   - brownfield-todo stub:        tests/fixtures/brownfield-todo (React/Vite/TS Todo)

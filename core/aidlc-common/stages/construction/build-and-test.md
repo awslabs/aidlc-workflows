@@ -242,23 +242,14 @@ the Build and Test Summary with a successful readiness result.
 
 ### Step 10: Cross-Unit Final Coverage Gate
 
-This is a stage-level gate, not the Construction phase boundary. Enumerate:
-
-- every `FR` and `NFR` from
-  `<record>/inception/requirements-analysis/requirements.md`
-- every three-segment `AC` from
-  `<record>/inception/user-stories/stories.md` when that stage executed
-
-Read both the stage-level
-`<record>/construction/code-generation/traceability.json` file (when present,
-including Express) and every per-unit
-`<record>/construction/*/code-generation/traceability.json` file. Verify each
-enumerated ID is covered with status `OK` in at least one stage-level or Unit
-entry and that its target file exists. Write
-`<record>/construction/build-and-test/cross-unit-traceability.md` with a
-pass/fail verdict, per-ID coverage, owning stage/Unit, target file, and every
-uncovered element. Any uncovered ID is a build-and-test finding that must be
-surfaced at the approval gate.
+This is a stage-level gate, not the Construction phase boundary. Run
+`{{INVOKE}} engine sensor-traceability --stage build-and-test`: it prints every
+requirement and acceptance criterion this run traced, whether it is built, and
+the Units and files that build it. Write
+`<record>/construction/build-and-test/cross-unit-traceability.md` from that
+output with a pass/fail verdict, per-ID coverage, owning stage/Unit, target
+file, and every uncovered element. Any uncovered ID is a build-and-test finding
+that must be surfaced at the approval gate.
 
 ### Step 11: Completion Handoff
 

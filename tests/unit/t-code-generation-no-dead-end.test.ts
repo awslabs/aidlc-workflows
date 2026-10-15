@@ -11,7 +11,8 @@
 //       in that same state, and the same refusal does not come back after its
 //       step (a deadlock);
 //   (e) before the approval the developer dispatch and a source write are
-//       refused with that way past; after it both are admitted.
+//       refused with that way past; after it both are admitted;
+//   (f) a call to one of the person's MCP servers runs, whatever the state.
 //
 // The states and the seven shapes live in tests/harness/code-generation-states.ts.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -219,6 +220,27 @@ describe("the Code Generation no-dead-end sweep", () => {
       // The sweep's report, kept beside the project while it runs (the runner's
       // per-test log keeps the thrown text).
       expect(problems, summary).toEqual([]);
+    });
+  }
+});
+
+// The person's lookup while the plan is written ran into a refusal on Kiro IDE;
+// on every harness and in every state an MCP call they ask for is theirs to make,
+// and the host's own card asks them.
+describe("a call to one of the person's MCP servers runs in every Code Generation state", () => {
+  for (const builder of STATES) {
+    test(`${builder.id}: ${builder.name}`, async () => {
+      const state = builder.build();
+      created.push(state.proj);
+      // The person asks for the lookup, as on Kiro IDE: "quick one while you write the plan".
+      expect(reply(state.proj, "quick one: use the everything MCP server to echo this back", state.session).status).toBe(0);
+      const refused: string[] = [];
+      for (const shape of SHAPES) {
+        shape.install(state.proj);
+        const verdict = await shape.mcp(state.proj, state.session);
+        if (verdict.code !== 0) refused.push(`[${shape.name}] ${verdict.said}`);
+      }
+      expect(refused).toEqual([]);
     });
   }
 });

@@ -542,7 +542,7 @@ const HOST_LABELS: Readonly<Record<string, string>> = {
   copilot: "GitHub Copilot",
   cursor: "Cursor",
   kiro: "Kiro CLI",
-  "kiro-ide": "Kiro IDE",
+  "kiro-ide": "Kiro",
   opencode: "opencode",
 };
 

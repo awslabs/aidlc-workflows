@@ -173,10 +173,6 @@ export function judgeFreeze(
   return { block: false };
 }
 
-// The block reason handed back through the harness's PreToolUse error
-// channel. Self-explaining and redirecting: it names the invariant, restores
-// the quote-at-gate route for suggestions, and names the state-correct route
-// that legitimately reopens a real defect.
 export const REVIEW_FREEZE_FALLBACK_GUIDANCE =
   "Record the person's Request Changes decision, with what they said should " +
   "change (ask only if they have not said), before editing the document; that " +
@@ -199,6 +195,10 @@ export function reviewFreezeRecoveryGuidance(
   }
 }
 
+// The block reason handed back through the harness's PreToolUse error
+// channel. Self-explaining and redirecting: it names the invariant, restores
+// the quote-at-gate route for suggestions, and names the state-correct route
+// that legitimately reopens a real defect.
 export function blockReason(
   v: FreezeVerdict,
   guidance = REVIEW_FREEZE_FALLBACK_GUIDANCE,
@@ -233,7 +233,6 @@ export async function run(input: string): Promise<number> {
     } catch {
       // Heartbeat failure is non-fatal - never let it affect the decision.
     }
-    // Deterministic off-switch: enforcement disabled entirely.
     if (resolveProjectFlag("AIDLC_DISABLE_REVIEW_FREEZE_HOOK") === "1") return 0;
     return await checkFreeze(input, projectDir);
   } finally {
@@ -285,7 +284,7 @@ async function checkFreeze(input: string, projectDir: string): Promise<number> {
     const recordedRepos = new Set(intentRepos(projectDir));
     for (const stage of loadStageGraph()) {
       if (!stage.reviewer || !openSlugs.has(stage.slug)) continue;
-      // Cheap suffix pre-check via reviewedArtifactUnit happens inside
+      // Cheap suffix pre-check via reviewedArtifactUnit happens before
       // judgeFreeze; the receipt scan only runs for a stage that actually
       // matched a target (freshReviewReceipts walks the whole ledger).
       let receipts: FreshReviewReceipts | null = null;

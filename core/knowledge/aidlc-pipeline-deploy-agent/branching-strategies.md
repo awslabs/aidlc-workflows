@@ -50,8 +50,8 @@ When dispatched for trunk-based:
 
 ### Failure modes
 
-- **Dirty tree on merge.** Local uncommitted changes on `main`; tool errors with the git message verbatim. Orchestrator's halt-and-ask offers retry/abort. Worktree preserved on retry; an explicit discard on abort sets the work aside before removing the live checkout and branch.
-- **Conflict on squash.** Squash conflicts with concurrent `main` motion (e.g. another Bolt landed first). Tool exits non-zero with `{status: "conflict", conflict_files, detail}`. Orchestrator quotes `detail` to the user.
+- **Dirty tree on merge.** Local uncommitted changes on `main` in files the landing changes: git does not start it, and the tool names those files and the step (commit them, then run the same merge again); any other git failure carries git's message verbatim. Orchestrator's halt-and-ask offers retry/abort. Worktree preserved on retry; an explicit discard on abort sets the work aside before removing the live checkout and branch.
+- **Conflict on squash.** Squash conflicts with concurrent `main` motion (e.g. another Bolt landed first). Tool exits non-zero with `{status: "conflict", conflict_files, detail, next}` and leaves the landing staged in the main checkout: combine those files there, `git add` them (`git rm` one that stays deleted) and run the same merge again, which finishes it; `git reset --merge` drops it.
 - **Branch already exists.** Pre-audit error; the tool refuses to clobber. Orchestrator should set the old attempt aside with `worktree discard` first only when authorized, or pick a different slug. Recover its files with the abort result's or doctor's `restore_operation`, invoking its engine route with the listed args exactly as argv, in the separate restored namespace. Rendered hints and commands are human display text only.
 - **Intent has no registry UUID.** Create refuses: `Intent record <relative record dir> has no registry identity (uuid); adopt or re-create the intent before Construction. Bolt worktrees are named by intent so parallel intents cannot collide.` Do not retry with a slug-only branch.
 - **Branch checked out elsewhere.** Before deleting a Bolt branch or its retained/parked refs, cleanup requires the branch to be checked out at its own Bolt directory or nowhere. A foreign-owner refusal names the owner path on stderr and records `(checked out in another worktree of this repository)` in the audit. Preserve that checkout and surface the refusal.
@@ -297,11 +297,17 @@ what `staged` lists.
   "slug": "payments",
   "worktree_path": "/Users/dev/project/.aidlc/worktrees/bolt-7c31e9a0_payments",
   "conflict_files": ["src/foo.ts", "src/bar.ts"],
-  "detail": "Merge produced conflicts in worktree at <path>. Worktree preserved for inspection."
+  "detail": "Unit payments's landing clashes with what is already on main: it is staged in /Users/dev/project, and git could not merge 2 files: src/foo.ts (changed on both sides), src/bar.ts (changed on both sides).",
+  "next": "Combine both sides in those files and `git add` them in /Users/dev/project, then run this same merge again: it finishes the landing. To drop the landing instead: `git reset --merge` in /Users/dev/project."
 }
 ```
 
-The orchestrator's halt-and-ask quotes the `detail` field verbatim. See `aidlc-common/protocols/stage-protocol-construction.md` § "Halt-and-ask on failure" and `skills/aidlc/SKILL.md` § "Halt-and-ask failure handling" for the full prompt shape and preservation invariant.
+The landing stays staged in the main checkout as git left it, and the worktree
+is preserved. Combine both sides in each listed file so each Unit keeps what its
+plan asked for, `git add` them and run the same merge again: it finishes the
+landing, records the combined files under `Landed changes` and returns one
+notice naming them. Run before they are combined, it returns this response
+again. A rebase landing's conflict is in the worktree, and its `detail` says so. See `aidlc-common/protocols/stage-protocol-construction.md` § "Halt-and-ask on failure" and `skills/aidlc/SKILL.md` § "Halt-and-ask failure handling" for the full prompt shape and preservation invariant.
 
 ### Discard response
 

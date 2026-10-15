@@ -216,6 +216,18 @@ describe("t-gate-names-failed-checks: a check that still fails is said with the 
     expect(again.gate_only, JSON.stringify(again)).toBe(true);
     expect(String(again.narration ?? "")).not.toContain("check reports");
   });
+
+  // A sentence that told the agent to correct every failing check had a Kiro
+  // agent reason aloud about the review freeze above both reviewed gates; the
+  // finding is said at the gate and corrected when the person asks.
+  test("the sensors protocol has the agent correct a failing check only when the person asks", () => {
+    const protocol = readFileSync(
+      join(import.meta.dir, "../../core/aidlc-common/protocols/stage-protocol-sensors.md"),
+      "utf-8",
+    ).replace(/\s+/g, " ");
+    expect(protocol).not.toContain("use that detail file to correct the output and run the check again");
+    expect(protocol).toContain("when they ask for changes, correct from that detail file and run the check again");
+  });
 });
 
 // A team's Unit gate speaks for that Unit's outputs: two Units at the same
@@ -332,5 +344,95 @@ describe("t-gate-names-failed-checks: a team's Unit gate names that Unit's outpu
     const shown = (again.directive ?? {}) as Record<string, unknown>;
     expect(shown.unit, JSON.stringify(again)).toBe("alpha");
     expect(String(shown.narration ?? "")).not.toContain("5 findings");
+  });
+});
+
+// upstream-coverage reads the whole stage's deliverables in the folder of the
+// file it is given, so one evaluation per folder is the stage's verdict. The
+// gate used to fire it once per deliverable: the person heard the same finding
+// once per file (#2210). Each Unit's folder still gets its own verdict.
+describe("t-gate-names-failed-checks: a stage-wide check is evaluated once per output folder", () => {
+  const SENSORS_ON = { AIDLC_DISABLE_SENSORS: "0" };
+
+  function put(relativePath: string, body: string): string {
+    const path = join(seededRecordDir(proj), ...relativePath.split("/"));
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, body);
+    return path;
+  }
+
+  function coverageRows(event: "SENSOR_FIRED" | "SENSOR_FAILED"): string[] {
+    return readAuditShardEvents(proj)
+      .filter((row) => row.event === event && auditBlockField(row.block, "Sensor ID") === "upstream-coverage")
+      .map((row) => auditBlockField(row.block, "Output path") ?? "");
+  }
+
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+  });
+  afterEach(() => cleanupTestProject(proj));
+
+  test("a Feasibility gate whose deliverables cite no required input says the finding once", () => {
+    seedStateFile(proj, "state-mid-ideation.md");
+    put("ideation/intent-capture/intent-statement.md", "# Intent\n\n## Goal\n\nA widget.\n\n## Why\n\nSales.\n");
+    for (const name of ["feasibility-assessment", "constraint-register", "raid-log"]) {
+      put(`ideation/feasibility/${name}.md`, `# ${name}\n\n## One\n\nx\n\n## Two\n\ny\n`);
+    }
+    expect(run(STATE, ["checkbox", `${STAGE}=in-progress`]).rc).toBe(0);
+    const opened = reply(ORCHESTRATE, ["report", "--stage", STAGE, "--result", "awaiting-approval"], SENSORS_ON);
+    const fired = coverageRows("SENSOR_FIRED");
+    expect(fired, JSON.stringify(opened)).toHaveLength(1);
+    expect(fired[0]).toEndWith("ideation/feasibility/feasibility-assessment.md");
+    expect(coverageRows("SENSOR_FAILED")).toHaveLength(1);
+    const narration = String(opened.narration ?? "");
+    expect(narration.match(/The upstream-coverage check reports/g) ?? []).toHaveLength(1);
+    expect(narration).toContain("The upstream-coverage check reports 1 finding in feasibility-assessment.md.");
+    expect(narration).not.toContain("more check");
+  });
+
+  test("a per-Unit stage gets one evaluation per Unit folder", () => {
+    writeFileSync(seededStateFile(proj), `# AI-DLC State Tracking
+
+## Project Information
+- **Project**: one evaluation per folder
+- **Project Type**: Greenfield
+- **Scope**: feature
+- **State Version**: 8
+
+## Runtime State
+- **Revision Count**: 0
+- **Construction Iteration**: unit-major
+
+## Scope Configuration
+- **Stages to Execute**: all
+- **Stages to Skip**: none
+- **Depth**: Standard
+- **Test Strategy**: Standard
+
+## Stage Progress
+
+### CONSTRUCTION PHASE
+- [-] functional-design \u2014 EXECUTE
+- [ ] code-generation \u2014 EXECUTE
+
+## Current Status
+- **Lifecycle Phase**: CONSTRUCTION
+- **Current Stage**: functional-design
+- **Status**: Running
+- **Last Updated**: 2026-08-20T00:00:00Z
+`);
+    seedBoltDag(proj, ["alpha", "beta"]);
+    put("inception/requirements-analysis/requirements.md", "# Requirements\n\n## Functional\n\n- FR1 Login\n\n## Other\n\nx\n");
+    for (const unit of ["alpha", "beta"]) {
+      for (const name of ["entities", "rules", "functional-spec"]) {
+        put(`construction/${unit}/functional-design/${name}.md`, `# ${name}\n\n## One\n\nx\n\n## Two\n\ny\n`);
+      }
+    }
+    const gate = run(STATE, ["gate-start", "functional-design"], { ...SENSORS_ON, AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1", AIDLC_SKIP_REVIEWER_GATE_GUARD: "1" });
+    const fired = coverageRows("SENSOR_FIRED").map((path) => path.split("/").slice(-3).join("/")).sort();
+    expect(fired, gate.out).toEqual(["alpha/functional-design/entities.md", "beta/functional-design/entities.md"]);
+    expect(coverageRows("SENSOR_FAILED")).toHaveLength(2);
   });
 });

@@ -10,7 +10,7 @@
 // and that WORKFLOW_COMPLETED is dead-last and fires EXACTLY ONCE. Every
 // downstream consumer (the statusline, resume, CI gates, doctor) reads the
 // audit tail to decide "is this workflow done?"; if a refactor reordered the
-// emits in handleCompleteWorkflow (aidlc-state.ts:573-596) — e.g. moved the
+// emits in handleCompleteWorkflow (aidlc-state.ts) - e.g. moved the
 // WORKFLOW_COMPLETED emit before PHASE_VERIFIED, or dropped the
 // alreadyMarkedCompleted guard so the final STAGE_COMPLETED doubled — the
 // counts could still look plausible while the SEQUENCE lied about what

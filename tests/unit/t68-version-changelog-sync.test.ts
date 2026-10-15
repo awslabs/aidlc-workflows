@@ -13,12 +13,12 @@
 // wired `version` subcommand of aidlc-utility.ts and asserts its exact stdout.
 // That subcommand (`aidlc-utility version`, registry minMechanism=cli) is in the
 // registry; this twin claims it via `subcommand:aidlc-utility:version` (the
-// colon form gen-coverage-registry.ts:952 accepts, joining to unitId
+// colon form gen-coverage-registry.ts accepts, joining to unitId
 // "aidlc-utility version"). The metadata-guard checks contribute no
 // enumerated-unit claim.
 //
 // SUBJECT / SOURCE UNDER TEST:
-//   - dist/claude/.claude/tools/aidlc-version.ts:4
+//   - dist/claude/.claude/tools/aidlc-version.ts
 //       export const AIDLC_VERSION = "<N.N.N>";  (single source of truth)
 //   - CHANGELOG.md (repo root): reverse-chronological `## [N.N.N] - DATE`
 //       headings, with no `[N.N.N]:` link references (test 7).
@@ -26,7 +26,7 @@
 //       handleVersion() writes `aidlc ${AIDLC_VERSION}\n` to stdout; the
 //       `version` subcommand dispatches to it. A renamed constant, broken
 //       import, or switch-case typo would break this seam.
-//   - README.md:5 shields.io badge
+//   - README.md shields.io badge
 //       ![version](https://img.shields.io/badge/version-<N.N.N>-blue)
 //
 // WHY mostly mechanism none (not cli): the metadata tests are pure greps over

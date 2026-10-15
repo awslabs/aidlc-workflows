@@ -21,7 +21,7 @@
 //   cleanupWorktreeFixture(proj): void
 //          - no-op on empty/whitespace path
 //          - REFUSES any path whose basename does not start with the prefix
-//            (defence-in-depth; mirrors worktree-helpers.sh:87-90)
+//            (defence-in-depth; mirrors worktree-helpers.sh)
 //          - prunes every registered CHILD worktree (the first porcelain
 //            `worktree ` line is the main checkout), then removes the parent
 //          - idempotent: safe to call twice / on a missing path

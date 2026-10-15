@@ -17,7 +17,7 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename, auditBlockField, authorizedVerificationCommand, currentSwarmSourceMergeChain, findStageBySlug,
-  gitCommitSourceListing, latestMainWorkflowStageRunFloorForProject, latestPersonTurn, personsGateWords,
+  gitCommitSourceListing, latestMainWorkflowStageRunFloorForProject, latestPersonTurn, listIntents, personsGateWords,
   personsLatestGatePick, readActiveDirectiveMarker, readAuditShardEvents, readProtectedResponse, readUnitSourceManifest,
   reviewArtifactFingerprint, serializeSourceListing, sourceListingSha256, stateDigest, unitSourceFingerprint,
   workspaceSourceFingerprint, workspaceSourceListing, writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
@@ -78,6 +78,24 @@ export const ANSWERS = corpus as AnswersItem[];
 export const QUESTIONS = [...new Set(ANSWERS.map((item) => item.question))];
 /** Questions with no fixture: their items are reported as skipped with this reason. */
 export const NO_FIXTURE: Partial<Record<Question, string>> = {};
+/** Questions the agent asks in chat. A fresh chat's bare `/aidlc` does not show them again: the engine hands an open
+ * chat question back only with the person's words (openQuestionReplyDirective in aidlc-orchestrate.ts). So a live
+ * drive, a fresh chat, can meet only their replies typed with `/aidlc`, as the whole exchange. */
+export const ASKED_IN_CHAT: ReadonlySet<Question> = new Set(["stage-question", "learnings"]);
+/** Questions a live drive cannot set up. A verification command or Construction policy answer is recorded only from
+ * the chat that asked it (`log answer` matches the question's Session), and a live drive is a new chat. Guard
+ * recovery's fixture writes the ask marker by hand, and the engine asks it from the guard's own refusal record. The
+ * unit check reads their replies. */
+export const NOT_LIVE: ReadonlySet<Question> = new Set(["verification-command", "construction-policy", "guard-recovery"]);
+/** Whether a live drive can meet this reply the way a person would. */
+export const liveReply = (item: AnswersItem): boolean =>
+  !NOT_LIVE.has(item.question) && (!ASKED_IN_CHAT.has(item.question) || item.via === "aidlc");
+/** The open work carried on after the person's reply: a row other than a turn of theirs from `from` on (the audit's
+ * length when the reply was sent; the chat's own opening rows, such as SESSION_STARTED, come before it), and no new
+ * record. A routing reply folded into the open work ends there. */
+export function workCarriedOn(proj: string, records: number, from: number): boolean {
+  return listIntents(proj).length === records && readAuditShardEvents(proj).slice(from).some((e) => e.event !== "HUMAN_TURN");
+}
 
 const coreTool = (name: string) => readFileSync(join(AIDLC_SRC, "tools", name), "utf-8");
 /** Whether the change an `after` item waits for is in this source. */

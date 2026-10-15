@@ -500,7 +500,9 @@ source instead. Its Step 5 files are
 Create
 `<code-generation-record>/traceability.json`.
 Enumerate every assigned AC, detailed `NFRx.y`, and `BRx.y` (or direct `FR` /
-`NFR` IDs when incremental scope skipped the design chain). Every `OK` target
+`NFR` IDs when incremental scope skipped the design chain); a requirement with
+sub-requirements is traced through its `FR{n}.{m}` IDs and needs no row of its
+own. Every `OK` target
 must be one existing workspace-relative implementation or test file. When the
 person asks to leave planned work out of this build (for example "skip the
 remaining stories"), do it: list each item they left out as `Deferred` (not

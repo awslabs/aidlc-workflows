@@ -647,9 +647,11 @@ jobs:
           done
 
   # A person on the last stable release types `aidlc update`, gets this build,
-  # and their hooks, project refresh and doctor still work. A failure turns the
-  # run red and opens the preview notes with a warning; the preview still
-  # publishes (release.yml holds a stable release back on it).
+  # and their hooks, project refresh and doctor still work; the copy leg does
+  # the same for a project copied from the copy runtime, refreshed with its own
+  # `config --from`. A failure turns the run red and opens the preview notes
+  # with a warning; the preview still publishes (release.yml holds a stable
+  # release back on it).
   update-from-previous:
     needs: [validate, stage-release]
     if: ${{ !cancelled() && needs.validate.result == 'success' && needs.stage-release.result == 'success' }}
@@ -657,6 +659,8 @@ jobs:
       fail-fast: false
       matrix:
         runner: [ubuntu-latest, macos-15, windows-latest]
+        # native: the installed `aidlc`; copy: a project copied from the copy runtime.
+        channel: [native, copy]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     permissions:
@@ -691,11 +695,12 @@ jobs:
       - name: Update from the last release
         shell: bash
         env:
+          CHANNEL: ${{ matrix.channel }}
           PREVIOUS_TAG: ${{ steps.previous.outputs.tag }}
         run: |
           set -euo pipefail
           printf 'aidlc-lifecycle-provenance-fixture\n' >build/release/aidlc-release.intoto.jsonl
-          bun scripts/ci-update-from-previous.ts --previous "$PREVIOUS_TAG" --candidate build/release
+          bun scripts/ci-update-from-previous.ts --channel "$CHANNEL" --previous "$PREVIOUS_TAG" --candidate build/release
 
   publish:
     needs: [validate, musl-smoke, windows-lifecycle, unix-lifecycle]

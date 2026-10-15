@@ -22,8 +22,8 @@ timeout_seconds: 300
 
 Reads the stage frontmatter `consumes:` list and checks the stage's
 deliverables reference each required upstream artifact that exists. An
-optional one (`required: false`) is not checked: it may not have informed
-the output. A reference counts in any of the forms the framework's
+optional one (`required: false`) is not checked, because it may not have
+informed the output, unless the stage lists it under `cites:`. A reference counts in any of the forms the framework's
 artifacts actually use:
 
 - the artifact slug as a standalone token (not embedded in a longer
@@ -43,6 +43,6 @@ Pure derivation from frontmatter - no per-stage config needed.
 
 ## Failure mode
 
-Emits `SENSOR_FAILED` and writes detail listing required artifacts declared
-in `consumes:` that appear in none of the stage's deliverables in any
+Emits `SENSOR_FAILED` and writes detail listing required or cited artifacts
+declared in `consumes:` that appear in none of the stage's deliverables in any
 accepted form.

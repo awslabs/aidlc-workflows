@@ -133,7 +133,14 @@ stateDiagram-v2
 `[?]` and `[R]` disambiguate two situations that would otherwise both look like `[-]`. On resume, `[R]` tells the conductor to present the prior artifact and feedback before re-entering the gate, instead of re-executing the stage from scratch.
 
 At `[?]`, `orchestrate next` first runs the `present-approval-gate` guard
-preflight. A refusal still wins. Otherwise it re-presents the current gate as
+preflight. A refusal still wins. When the gate's reviewed work changed after
+its review and that change is not on record yet (a change the person asked for
+at the gate, kept with the review under a relaxed or off Guard Policy), it
+hands a `print` naming `report --stage <slug> --result awaiting-approval`
+first: that report records the change and says it, with the offer to have it
+checked, and the gate is shown once, after it. At a per-Unit stage's gate that
+print carries the produced line for the gate's Unit, which the report does not
+name; a joint late approval keeps the gate-only step below. Otherwise it re-presents the current gate as
 `run-stage` with `gate_only: true` and `gate: true`, not another execution of
 the stage body or reviewer. The directive retains `reviewer`, `review_artifact`,
 and `review_class` when they were present. `reviewer` and `review_artifact` name
@@ -659,7 +666,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 ## Audit event taxonomy
 
-**118 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 118 into 25 - the grouping is presentational, the event set is the invariant). Each event's permitted tool or hook emitters are listed below. `GUARD_POLICY_SET` has distinct mutation and effective-memory-observation paths; neither duplicates the other's emission. Events pre-registered for an upcoming release have an Emitter cell reading `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)`, and a retired event name that is still read but never written reads `Reserved (retired name)`; both are skipped by the drift test's forward check. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
+**119 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 119 into 25 - the grouping is presentational, the event set is the invariant). Each event's permitted tool or hook emitters are listed below. `GUARD_POLICY_SET` has distinct mutation and effective-memory-observation paths; neither duplicates the other's emission. Events pre-registered for an upcoming release have an Emitter cell reading `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)`, and a retired event name that is still read but never written reads `Reserved (retired name)`; both are skipped by the drift test's forward check. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
 
 ### Workflow lifecycle
 
@@ -692,6 +699,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `STAGE_REVISING` | `tools/aidlc-state.ts` | Internal emitter paired with `GATE_REJECTED` after a rejected report |
 | `STAGE_SKIPPED` | `tools/aidlc-state.ts`, `tools/aidlc-jump.ts`, `tools/aidlc-utility.ts` | Exactly one per `[S]` transition; the main-workflow report path routes onward atomically. A scope change that skips the current stage before it started, or a stage waiting for approval, writes `[S]` with `Skip Kind: scope-change`; the next `next` routes past a current one through `report --result skipped`, which adds no second row |
 | `STAGE_JUMPED` | `tools/aidlc-jump.ts` | Records the destination slug on `--stage`/`--phase` jump. Backward jumps also bind the concrete changed upstream artifact paths and the downstream artifact/review paths invalidated by the reset. It starts a new attempt (run floor, review and summary attempts, Unit checkpoint approvals, source baseline) for its `Target` and every stage after it in the stage graph, the stages it resets; a stage before the `Target` keeps its attempt, so a jump back to Code Generation keeps each Unit's Functional Design (`stageJumpReaches`). A row with no `Target` the graph knows reaches every stage. |
+| `STAGE_DEFINITION_CHANGED` | `tools/aidlc-orchestrate.ts` | A finished stage AI-DLC itself now does differently (an update, a plugin turned on, the team's own stage edit) while nothing of the person's work changed. Written once the next step was said (never by a rules part or a read-only probe); that step carries a `change_notices` line only when the stage now needs an input it did not need when it ran. `Validation Basis` is the stage's receipt for its new definition and stands in for its completion receipt from then on; `Details` is the line said, or that nothing was. |
 
 ### Gate decisions
 
@@ -1130,7 +1138,7 @@ Pre-registered for v0.4.0 in milestone 1; emitters land in milestone 13 via the 
 
 ### Sensors
 
-The sensor dispatcher emits the four `SENSOR_*` events and doctor emits the paired-coverage `GUARDRAIL_LOADED` row. Write-fired sensors dispatch from PostToolUse on matching paths. Gate-fired sensors dispatch once per existing declared deliverable before initial, revised, or approve-backstop recovered gate entry when a person will answer the gate; a gate the engine approves itself under Construction autonomy dispatches only blocking sensors. A blocking binding proceeds only on a verified pass; findings, unavailable execution, malformed/mismatched verdicts, and budget overruns refuse. An override requires the logged offered choice, a human turn, the exact answer receipt, and matching `--user-input`; autonomous mode cannot override. Explicit and discovered artifact paths are canonically confined to the stage produce directories. Blocking declarations on write-fired sensors remain advisory in this release.
+The sensor dispatcher emits the four `SENSOR_*` events and doctor emits the paired-coverage `GUARDRAIL_LOADED` row. Write-fired sensors dispatch from PostToolUse on matching paths. Gate-fired sensors dispatch once per existing declared deliverable (`upstream-coverage` and `claim-sources` once per output folder) before initial, revised, or approve-backstop recovered gate entry when a person will answer the gate; a gate the engine approves itself under Construction autonomy dispatches only blocking sensors. A blocking binding proceeds only on a verified pass; findings, unavailable execution, malformed/mismatched verdicts, and budget overruns refuse. An override requires the logged offered choice, a human turn, the exact answer receipt, and matching `--user-input`; autonomous mode cannot override. Explicit and discovered artifact paths are canonically confined to the stage produce directories. Blocking declarations on write-fired sensors remain advisory in this release.
 
 | Event | Emitter | Trigger |
 |---|---|---|
@@ -1463,12 +1471,21 @@ the remedies that are executable from the current lifecycle
 state (`in-progress`, `awaiting-approval`, `revising`, `completed`, `pending`,
 `skipped`; for a team Unit, the Unit's own gate status). Every remedy carries a
 closed `op` from `GUARD_REMEDY_OPS` in `aidlc-lib.ts` (`present-approval-gate`,
-`request-review`, `start-recovery-review`, `apply-repairs-then-request`,
+`present-findings-at-gate`, `request-review`, `start-recovery-review`, `apply-repairs-then-request`,
 `record-verdict`, `retry-pending`, `request-changes`, `finish-revision`, `redo-jump`,
 `restore-or-jump`, `restart-stage`, `redo-unit-step`, `reopen-unit-step`,
-`review-advisory-gate`, `change-scope`, `restore-scope`, `abort-bolt`, `record-unit-completion`, `repair-source-boundary`, `reconfirm-summary`,
+`review-advisory-gate`, `change-scope`, `restore-scope`, `abort-bolt`, `record-unit-completion`,
+`dispatch-pipeline-links`, `repair-source-boundary`, `reconfirm-summary`,
 `unset-unattended`, `lower-fence`). Routing decisions compare `op` and never the
-remedy sentence; the directive contract refuses an unknown `op`. `lower-fence`
+remedy sentence; the directive contract refuses an unknown `op`. Two refusals
+are the conductor's own step: a missing pipeline handoff
+(`PIPELINE_EVIDENCE_MISSING`) offers `dispatch-pipeline-links`, whose action is
+the refusal's own sentence naming the links (at an open gate they are recorded
+first, then `next` shows the gate again; when the refused step was the person's
+approval, the same approval runs again, so they are not asked twice), and a
+review pass the cap refuses with nobody having asked for it
+(`REVIEW_BUDGET_EXHAUSTED`) offers `present-findings-at-gate` before
+`present-approval-gate`, the same gate with its findings. `lower-fence`
 is the one remedy a refusal adds LAST, and only when the refusal is a fence
 holding. It is a `command` choice: its `operation` is
 `{kind: "lower-fence", fence}` and its `command` is the setter, so the way past

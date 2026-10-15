@@ -684,7 +684,7 @@ describe("t349 (9) a review level set for the work replaces its scope's ceiling"
     );
   });
 
-  test("the creation preview follows a review level set at creation", () => {
+  test("the creation preview says the plan's size, whatever review level is set at creation", () => {
     const preview = (args: string[]) => {
       const proj = createTestProject();
       tempDirs.push(proj);
@@ -693,10 +693,10 @@ describe("t349 (9) a review level set for the work replaces its scope's ceiling"
       const line = res.out.split("\n").find((entry) => entry.trim().startsWith("{"));
       return String((JSON.parse(line ?? "{}") as { message?: unknown }).message);
     };
-    expect(preview(["--scope", "express"])).toMatch(/no reviewers/);
-    expect(preview(["--scope", "express", "--review", "adversarial"])).not.toMatch(/reviewers/);
-    expect(preview(["--scope", "feature"])).not.toMatch(/reviewers/);
-    expect(preview(["--scope", "feature", "--review", "none"])).toMatch(/no reviewers/);
+    // The level rides the creation command; --status shows it once the work exists.
+    expect(preview(["--scope", "express"])).not.toMatch(/reviewers/);
+    expect(preview(["--scope", "feature", "--review", "none"])).not.toMatch(/reviewers/);
+    expect(preview(["--scope", "feature", "--review", "none"])).toContain("--review none");
   });
 
   test("next takes no settings value outside the allowed words, and no command text rides along", () => {

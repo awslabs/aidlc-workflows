@@ -19,31 +19,31 @@
 // run_ref.
 //
 // Source under test (dist/claude/.claude/tools/aidlc-swarm.ts):
-//   - handlePrepare (:296): forks a worktree per unit via aidlc-worktree create
-//     + aidlc-bolt start --worktree; emits SWARM_STARTED once (:328) and
-//     SWARM_DEGRADED first when --degraded-from is given (:325). Exits 2 if any
-//     fork failed (:386), else 0.
-//   - handleCheck (:391): stateless single-unit verdict via verdictFor (:162) —
-//     checkConverged (:129, exit 0 of the bash --check-cmd) AND the anti-tamper
-//     fileTampered (:143, `git diff --quiet HEAD -- <test-file>` status===1).
+//   - handlePrepare: forks a worktree per unit via aidlc-worktree create
+//     + aidlc-bolt start --worktree; emits SWARM_STARTED once and
+//     SWARM_DEGRADED first when --degraded-from is given. Exits 2 if any
+//     fork failed, else 0.
+//   - handleCheck: stateless single-unit verdict via verdictFor -
+//     checkConverged (exit 0 of the bash --check-cmd) AND the anti-tamper
+//     fileTampered (`git diff --quiet HEAD -- <test-file>` status===1).
 //     Prints compact {unit,converged,tampered,reason}; exits 0 IFF genuinely
-//     converged (green AND untampered), 1 otherwise (:431). A --test-file that
-//     escapes the worktree is a typed confine error (:181, "resolves outside
-//     the unit worktree"), reason "error", exit 1 (:417). Emits no audit.
-//   - handleFinalize (:436): the AUTHORITATIVE gate. RE-RUNS the check on every
-//     --claimed unit before any merge (the lying-conductor guard, :503-515): a
+//     converged (green AND untampered), 1 otherwise. A --test-file that
+//     escapes the worktree is a typed confine error ("resolves outside
+//     the unit worktree"), reason "error", exit 1. Emits no audit.
+//   - handleFinalize: the AUTHORITATIVE gate. RE-RUNS the check on every
+//     --claimed unit before any merge (the lying-conductor guard): a
 //     claimed-but-red / tampered unit is refused the merge and lands "failed"
 //     with reason "error". A DECLINED (unclaimed) unit carries the conductor's
-//     --reasons attribution (:463-477,:523), defaulting to "cap-exhausted".
-//     Merges the genuine passes (serialised, :541), then emits one
+//     --reasons attribution, defaulting to "cap-exhausted".
+//     Merges the genuine passes (serialised), then emits one
 //     SWARM_UNIT_CONVERGED / SWARM_UNIT_FAILED row per unit (except a
 //     converged unit whose merge-back failed, which gets NEITHER row: its
 //     converged row lands only when a finalize retry merges it), a
-//     SWARM_BATON_RETURNED per failed unit, and a closing SWARM_COMPLETED
-//     (:555-570); prints the pretty-printed envelope and exits 2 if any unit or
-//     merge failed, else 0 (:582).
+//     SWARM_BATON_RETURNED per failed unit, and a closing SWARM_COMPLETED;
+//     prints the pretty-printed envelope and exits 2 if any unit or
+//     merge failed, else 0.
 //
-// FIXTURE (mirrors make_swarm_fixture, t134.sh:80-95): a real git repo on
+// FIXTURE (mirrors make_swarm_fixture, t134.sh): a real git repo on
 // `main` (setupWorktreeFixture, ported from tests/lib/worktree-helpers.sh)
 // seeded into Construction phase — aidlc-docs/aidlc-state.md from
 // state-construction.md + a fresh audit.md — with the framework .gitignore so

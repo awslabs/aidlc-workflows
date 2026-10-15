@@ -12,7 +12,7 @@
 // Mechanism: none. This is a pure structural check over the shipped bytes —
 // does each stage file expose its two required compartment headings? No process
 // boundary, no argv/exit/stdout seam, no LLM, zero tokens. We resolve the same
-// tree the .sh resolved (AIDLC_SRC = <repo>/dist/claude/.claude, fixtures.ts:42)
+// tree the .sh resolved (AIDLC_SRC = <repo>/dist/claude/.claude, fixtures.ts)
 // and read each .md in-process.
 //
 // The .sh has NO "# covers:" header (line 2 is a plain description). The covers
@@ -29,7 +29,7 @@
 //     any triple-backtick fenced code block (the Learn compartment — §13
 //     learnings capture).
 //
-// Faithful port of the .sh's fence-aware awk walker (t87.sh:15-22):
+// Faithful port of the .sh's fence-aware awk walker (t87.sh):
 //   the awk program flips a "fenced" flag on every line that starts with the
 //   triple-backtick fence and skips it; otherwise, when NOT fenced and the whole
 //   line equals the target heading, it records a hit and exits 0 (else exits 1).

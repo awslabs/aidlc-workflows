@@ -4,9 +4,9 @@
 // tests/integration/t39-scope-stage-count-validation.sh (plan 9). Post-PR-10 the
 // authoritative source for per-scope stage inclusion is scope-mapping.json:
 // each scope carries a `stages` map of <slug> -> "EXECUTE" | "SKIP"
-// (ScopeDefinition, aidlc-lib.ts:36-46). The .sh spawned `bun -e` per case to
+// (ScopeDefinition, aidlc-lib.ts). The .sh spawned `bun -e` per case to
 // JSON.parse that file and count EXECUTE values; here we import the SAME pure
-// loader the rest of the toolchain uses — loadScopeMapping (aidlc-lib.ts:739)
+// loader the rest of the toolchain uses - loadScopeMapping (aidlc-lib.ts)
 // — and assert against the real Record<string, ScopeDefinition> it returns.
 //
 // Mechanism: none (a pure in-process function call, zero subprocess, zero LLM,
@@ -53,13 +53,13 @@ import {
   type ScopeDefinition,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
-// Load once — loadScopeMapping memoises internally (aidlc-lib.ts:740), so a
+// Load once - loadScopeMapping memoises internally (aidlc-lib.ts), so a
 // single call is the canonical entrypoint; reuse the parsed object across cases
 // exactly as the .sh re-derived counts from the same on-disk JSON per case.
 const MAPPING: Record<string, ScopeDefinition> = loadScopeMapping();
 
 /**
- * exec_count (t39.sh:25-31): number of stages set to "EXECUTE" for <scope>.
+ * exec_count (t39.sh): number of stages set to "EXECUTE" for <scope>.
  * Object.values(m[scope].stages).filter(v => v === "EXECUTE").length.
  */
 function execCount(scope: string): number {
@@ -68,7 +68,7 @@ function execCount(scope: string): number {
 }
 
 /**
- * is_execute (t39.sh:34-41): true iff <slug> is "EXECUTE" in <scope>.
+ * is_execute (t39.sh): true iff <slug> is "EXECUTE" in <scope>.
  * The .sh returned "yes"/"no"; here a boolean (same observable predicate).
  */
 function isExecute(scope: string, slug: string): boolean {

@@ -809,6 +809,105 @@ describe("t315 pipeline link receipts", () => {
     );
   });
 
+  // The way on for a missing handoff is the agent's own: dispatch the link and
+  // record it. No review can record it (this stage has no reviewer), and at an
+  // open gate `next` comes last, since it only shows the gate once the links
+  // are in.
+  test("a missing handoff hands the agent its links as its own work, at gate-start and at the open gate", () => {
+    const proj = pipelineProject();
+    writeAllCodekbArtifacts(proj);
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    expect(runLog(proj, LEAD).rc).toBe(0);
+    const ownWork = (out: string) => {
+      const line = out.split("\n").find((entry) => entry.startsWith("{\"error\""));
+      const [sentence, ask] = String((JSON.parse(line ?? "{}") as { error?: string }).error ?? "").split("\n");
+      return { sentence, ask: JSON.parse(ask ?? "{}") as Record<string, unknown> };
+    };
+
+    const gate = state(proj, ["gate-start", RE_STAGE]);
+    expect(gate.rc).not.toBe(0);
+    const floor = ownWork(gate.out);
+    expect(floor.ask.agent_work, gate.out).toBe(true);
+    expect(floor.ask.remedies).toEqual([{
+      op: "dispatch-pipeline-links",
+      action: floor.sentence,
+      requiresHuman: false,
+      executableNow: true,
+      interaction: "external-work",
+    }]);
+    expect(floor.sentence).toContain(`for the current run: ${FINAL}. Re-run \``);
+
+    expect(state(proj, ["gate-start", RE_STAGE], true).rc).toBe(0);
+    const atGate = runOrchestrateNext(ORCH, proj, [], { env: childEnv() });
+    expect(atGate.directive?.kind, atGate.out).toBe("ask");
+    expect(atGate.directive?.agent_work).toBe(true);
+    const remedies = atGate.directive?.remedies as { op: string; action: string }[];
+    expect(remedies.map((remedy) => remedy.op)).toEqual(["dispatch-pipeline-links"]);
+    const action = remedies[0].action;
+    expect(action).toContain(`for the current run: ${FINAL}. Dispatch the missing pipeline links`);
+    const record = action.indexOf(`link --stage ${RE_STAGE} --link <agent>`);
+    const showGate = action.indexOf("orchestrate.ts next`, which shows the gate again.");
+    expect(record).toBeGreaterThan(0);
+    expect(showGate).toBeGreaterThan(record);
+    expect(action).not.toContain("AIDLC_DISABLE_ENSEMBLE_EVIDENCE");
+
+    // Doing it brings the gate back.
+    expect(runLog(proj, FINAL).rc).toBe(0);
+    const shown = runOrchestrateNext(ORCH, proj, [], { env: childEnv() });
+    expect(shown.directive?.kind, shown.out).toBe("run-stage");
+    expect(shown.directive?.stage).toBe(RE_STAGE);
+    expect(shown.directive?.gate).toBe(true);
+  });
+
+  // The person approves at the open gate and a handoff is missing: their
+  // approval stands, so once the link is recorded the same approval applies it
+  // and they are never asked again.
+  for (const via of ["report", "state approve"] as const) {
+    test(`an approval at the open gate lands once the missing link is recorded (${via})`, () => {
+      const proj = pipelineProject();
+      writeAllCodekbArtifacts(proj);
+      appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+      expect(runLog(proj, LEAD).rc).toBe(0);
+      expect(state(proj, ["gate-start", RE_STAGE], true).rc).toBe(0);
+      const env: NodeJS.ProcessEnv = { ...childEnv(), CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj };
+      delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+      const run = (args: string[], input?: string) => {
+        const result = spawnSync(BUN, args, {
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+          encoding: "utf-8",
+          cwd: proj,
+          env: via === "state approve" ? { ...env, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" } : env,
+          ...(input === undefined ? {} : { input }),
+        });
+        return { rc: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+      };
+      const turn = run([join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],
+        JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t315-approve", prompt: "Approve" }));
+      expect(turn.rc, turn.out).toBe(0);
+      const approve = via === "report"
+        ? [ORCH, "report", "--stage", RE_STAGE, "--result", "approved", "--user-input", "Approve", "--project-dir", proj]
+        : [STATE, "approve", RE_STAGE, "--user-input", "Approve", "--project-dir", proj];
+
+      const refused = run(approve);
+      // The engine's refusal is the agent's next step (a print), never an error
+      // that ends the turn with the person's approval left unapplied.
+      if (via === "report") expect(refused.out).toContain('"kind":"print"');
+      expect(refused.out).toContain(`for the current run: ${FINAL}. Dispatch the missing pipeline links`);
+      expect(refused.out).not.toContain("Re-run `");
+      expect(refused.out).not.toContain("which shows the gate again");
+      expect(refused.out).toContain(via === "report"
+        ? "then run `bun .claude/tools/aidlc-orchestrate.ts report --stage reverse-engineering --result approved"
+        : "then run the same approve command again");
+      expect(refused.out).toContain("the person's approval stands, so they are not asked again");
+
+      expect(runLog(proj, FINAL).rc).toBe(0);
+      const again = run(approve);
+      expect(again.rc, again.out).toBe(0);
+      expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(`- [x] ${RE_STAGE}`);
+      expect(readAllAuditShards(proj).split("**Event**: GATE_APPROVED").length - 1).toBe(1);
+    });
+  }
+
   test("run-stage resumes with the current-attempt completed link list", () => {
     const proj = pipelineProject();
     appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);

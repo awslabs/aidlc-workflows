@@ -506,7 +506,7 @@ flowchart TD
     REPORT_APPROVED["Report approved with the reply:\nengine emits GATE_APPROVED,\ncompletes + routes"]
     REPORT_REJECTED["Report rejected with feedback:\nengine emits GATE_REJECTED,\nrecords revising state"]
     REPORT_REVISED["Report revised:\nengine re-opens gate"]
-    PROGRESS["Display progress line:\nN/total overall"]
+    PROGRESS["Display progress line:\nN of M stages done"]
     NEXT_STAGE["Proceed to next stage"]
 
     REVISE["Apply user feedback\nto stage artifacts"]

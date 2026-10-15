@@ -8,20 +8,20 @@
 //   `/aidlc --stage approval-handoff` at the live prompt. The jump must:
 //     - land DETERMINISTICALLY on disk: aidlc-jump.ts emits a per-stage
 //       STAGE_SKIPPED for each in-flight stage it skips over and one canonical
-//       STAGE_JUMPED with Direction: FORWARD (aidlc-jump.ts:349,374-375), and
+//       STAGE_JUMPED with Direction: FORWARD (aidlc-jump.ts), and
 //       rewrites aidlc-state.md — Current Stage=approval-handoff, Lifecycle
 //       Phase=IDEATION, the skipped intermediate stages flipped to [S]
-//       (aidlc-jump.ts:243,312-313), the prior [x] stages untouched, the
+//       (aidlc-jump.ts), the prior [x] stages untouched, the
 //       Completed counter == the live [x] count, and a fresh Last Updated stamp.
 //     - RE-RENDER the statusline: STAGE_DISPLAY["approval-handoff"] =
-//       "Approval & Handoff" (aidlc-statusline.ts:72), painted as
-//       "> Approval & Handoff" by the workflow line (aidlc-statusline.ts:243).
+//       "Approval & Handoff" (aidlc-statusline.ts), painted as
+//       "> Approval & Handoff" by the workflow line (aidlc-statusline.ts).
 //   The rendered statusline is the tui-only value-add the SDK / claude -p path
 //   was BLIND to — the old .sh only grepped the state/audit bytes.
 //
 // WHY PATTERN A (landed + rendered, NO answer-gate)
 //   A forward `--stage` jump is a single deterministic transition. The jump
-//   sets Status=Running (aidlc-jump.ts:309) and the orchestrator keeps going
+//   sets Status=Running (aidlc-jump.ts) and the orchestrator keeps going
 //   past the jump. So the journey NEVER reaches a
 //   terminal state we could wait on; asserting terminal completion would be racy
 //   (the Phase-2 lesson). We instead terminate on the LANDED signal — the
@@ -38,7 +38,7 @@
 //   scanned EVERY consume — including `required: false` optionals — so it fired on
 //   essentially every forward jump (the skipped stages' optional outputs are
 //   always absent). That contradicted the graph's own contract
-//   (aidlc-graph.ts:715-716: "consumes[].required: false is silent — a first-class
+//   (aidlc-graph.ts: "consumes[].required: false is silent - a first-class
 //   valid state"). Verified live 2026-06-06 by driving this journey TWICE: the gate
 //   fired both un-seeded (default ❯ Cancel) and with-required-seeded (default ❯
 //   Continue, optionals still flagged) — proving the gate keyed off optionals too.
@@ -57,7 +57,7 @@
 //   orchestrator continues past it.
 //
 // FINDING (surfaced, not chased — AUTHORING-SPEC product-question #1)
-//   SKILL.md:255 step 13c: after a jump the orchestrator AUTO-CONTINUES rather
+//   SKILL.md step 13c: after a jump the orchestrator AUTO-CONTINUES rather
 //   than landing-and-awaiting. The post-jump
 //   approval-handoff stage will keep running and may eventually mutate Current
 //   Stage / Completed past the landed values. This test deliberately TERMINATES

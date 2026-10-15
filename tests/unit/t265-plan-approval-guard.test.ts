@@ -2321,11 +2321,12 @@ describe("t265b hook lifecycle", () => {
 
   // On the kiro-ide row the person's MCP servers reach the chat, and the Kiro
   // adapter marks such a call `aidlc_external_tool: "mcp"`, outside the agent's
-  // input. While the plan waits it runs like their other asks (Kiro asks them
-  // before it runs). Unmarked, or marked on a write, a shell or the developer,
-  // it waits; before the question is asked it waits too.
+  // input. At any point of Code Generation it runs like their other asks (Kiro
+  // asks them before it runs): while the plan is written, at the question, at
+  // the recovery question, with the step out of date or the rules still
+  // arriving. Unmarked, or marked on a write, a shell or the developer, it waits.
   for (const policy of ["strict (set by you)", "off (from scope poc)"]) {
-    test(`while the plan waits, a call the adapter marks as the person's MCP server runs (Guard Policy ${policy})`, () => {
+    test(`a call the adapter marks as the person's MCP server runs at any point of Code Generation (Guard Policy ${policy})`, () => {
       const proj = scratchProject();
       try {
         seedState(proj);
@@ -2333,12 +2334,11 @@ describe("t265b hook lifecycle", () => {
         writeFileSync(statePath, readFileSync(statePath, "utf-8")
           .replace("- **Scope**: poc\n", `- **Scope**: poc\n- **Guard Policy**: ${policy}\n`), "utf-8");
         seedUnit(proj, null, { plan: true, answer: null });
-        const marker = (kind: "ask" | "run-stage") => writeActiveDirectiveMarker(proj, {
-          kind,
-          ...(kind === "ask" ? { ask_type: "plan-approval" } : {}),
+        const marker = (fields: Record<string, unknown>) => writeActiveDirectiveMarker(proj, {
           stage: "code-generation",
           state_sha256: stateDigest(readFileSync(statePath, "utf-8")),
-        });
+          ...fields,
+        } as Parameters<typeof writeActiveDirectiveMarker>[1]);
         const MCP = (extra: Record<string, unknown> = {}) => ({
           hook_event_name: "PreToolUse",
           tool_name: "mcp_docs_query_docs",
@@ -2346,19 +2346,30 @@ describe("t265b hook lifecycle", () => {
           ...extra,
         });
         const MARK = { aidlc_external_tool: "mcp" };
-        marker("ask");
-        const marked = runHook(proj, MCP(MARK));
-        expect(marked.code, marked.stderr).toBe(0);
-        expect(runHook(proj, MCP()).code).toBe(2);
-        for (const payload of [
-          { ...WRITE(join(proj, "src", "inline.ts")), ...MARK },
-          { ...BASH("echo 'export const x = 1;' > src/inline.ts"), ...MARK },
-          { ...STAGE_DISPATCH(proj, "Build the plan."), ...MARK },
-        ]) {
-          expect(runHook(proj, payload).code, JSON.stringify(payload)).toBe(2);
+        const states: Array<[string, Record<string, unknown>]> = [
+          ["the plan is written and not yet asked about", { kind: "run-stage" }],
+          ["the engine's plan question is open", { kind: "ask", ask_type: "plan-approval" }],
+          ["the engine's recovery question is open", {
+            kind: "ask", ask_type: "guard-recovery",
+            remedies: [{ op: "request-changes", action: "Ask what should change.", interaction: "human-input" }],
+          }],
+          ["the step went out of date", { kind: "error" }],
+          ["the rules are still arriving", { kind: "load-steering", part: 1, parts: 2, continue_token: "part-one" }],
+        ];
+        for (const [state, fields] of states) {
+          marker(fields);
+          const marked = runHook(proj, MCP(MARK));
+          expect(marked.code, `${state}: ${marked.stderr}`).toBe(0);
+          for (const payload of [
+            { ...WRITE(join(proj, "src", "inline.ts")), ...MARK },
+            { ...BASH("echo 'export const x = 1;' > src/inline.ts"), ...MARK },
+            { ...STAGE_DISPATCH(proj, "Build the plan."), ...MARK },
+          ]) {
+            expect(runHook(proj, payload).code, `${state}: ${JSON.stringify(payload)}`).toBe(2);
+          }
         }
-        marker("run-stage");
-        expect(runHook(proj, MCP(MARK)).code).toBe(2);
+        marker({ kind: "ask", ask_type: "plan-approval" });
+        expect(runHook(proj, MCP()).code).toBe(2);
       } finally {
         rmSync(proj, { recursive: true, force: true });
       }

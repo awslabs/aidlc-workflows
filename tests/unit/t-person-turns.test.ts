@@ -317,6 +317,41 @@ describe("person-turn check", () => {
     expect(problems[0]).toContain('recorded words "Deploy to staging"');
   });
 
+  // The rows one answer to "Approve these 2 code plans?" writes, as the engine writes them: one per plan, back to back.
+  const GROUPED = { Stage: "code-generation", Checkpoint: "plan-approval", Session: "01995000-7a11-7000-8000-00000000d001" };
+  test("one typed reply to a grouped code plan question backs every plan in it, approved or sent back; a later group needs a newer turn", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("/aidlc");
+    drive.sent("1");
+    for (const unit of ["alpha", "beta"]) row(dir, "PLAN_APPROVAL_RECORDED", { ...GROUPED, Unit: unit, Details: "Approve Plan" });
+    expect(drive.unbacked()).toEqual([]);
+    row(dir, "UNIT_COMPLETED", { Stage: "code-generation", Unit: "alpha" });
+    drive.sent("2");
+    for (const unit of ["gamma", "delta"]) row(dir, "QUESTION_ANSWERED", { ...GROUPED, Unit: unit, Details: "Request Changes" });
+    expect(drive.unbacked()).toEqual([]);
+    row(dir, "UNIT_COMPLETED", { Stage: "code-generation", Unit: "gamma" });
+    for (const unit of ["epsilon", "zeta"]) row(dir, "PLAN_APPROVAL_RECORDED", { ...GROUPED, Unit: unit, Details: "Approve Plan" });
+    const problems = drive.unbacked();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("PLAN_APPROVAL_RECORDED code-generation (Unit epsilon)");
+  });
+
+  test("approvals back to back that are not one grouped answer each need a turn", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("/aidlc");
+    drive.sent("approve alpha");
+    // Another chat's approval, a different choice, and a checkpoint that is not the plan question are separate answers.
+    row(dir, "PLAN_APPROVAL_RECORDED", { ...GROUPED, Unit: "alpha", Details: "Approve Plan" });
+    row(dir, "PLAN_APPROVAL_RECORDED", { ...GROUPED, Session: "01995000-7a11-7000-8000-00000000e002", Unit: "beta", Details: "Approve Plan" });
+    row(dir, "QUESTION_ANSWERED", { ...GROUPED, Unit: "gamma", Details: "Request Changes" });
+    row(dir, "QUESTION_ANSWERED", { ...GROUPED, Unit: "delta", Details: "Approve Plan" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "code-generation", Checkpoint: "verification-command", Session: GROUPED.Session, Unit: "alpha", Details: "Approve" });
+    row(dir, "QUESTION_ANSWERED", { Stage: "code-generation", Checkpoint: "verification-command", Session: GROUPED.Session, Unit: "beta", Details: "Approve" });
+    expect(drive.unbacked().map((problem) => /\(Unit (\w+)\)/.exec(problem)?.[1])).toEqual(["beta", "gamma", "delta", "alpha", "beta"]);
+  });
+
   test("a later question supersedes an earlier one, as the engine pairs them", () => {
     const dir = project();
     const drive = new PersonTurnLedger(dir);

@@ -66,6 +66,9 @@ const VALID_EVENT_TYPES = new Set([
   "STAGE_COMPLETED",
   "STAGE_JUMPED",
   "STAGE_SKIPPED",
+  // A finished stage AI-DLC itself now does differently: the row carries its
+  // receipt for the new definition (aidlc-validity.ts).
+  "STAGE_DEFINITION_CHANGED",
   // Phase lifecycle
   "PHASE_STARTED",
   "PHASE_COMPLETED",
@@ -295,6 +298,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   STAGE_AWAITING_APPROVAL: "Stage Awaiting Approval",
   STAGE_REVISING: "Stage Revising",
   STAGE_COMPLETED: "Stage Completion",
+  STAGE_DEFINITION_CHANGED: "Stage Definition Changed",
   STAGE_JUMPED: "Stage Jump",
   STAGE_SKIPPED: "Stage Skip",
   PHASE_STARTED: "Phase Start",
@@ -496,6 +500,7 @@ export interface AuditEntryInput {
 // idiom as AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS in aidlc-state.ts).
 export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "STAGE_COMPLETED",
+  "STAGE_DEFINITION_CHANGED",
   "HUMAN_TURN",
   "HOST_TURN",
   "QUESTION_UNANSWERED",

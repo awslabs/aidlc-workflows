@@ -6,10 +6,10 @@
 // .sh exercised by shelling out, and that an in-process import would lose:
 //   - aidlc-runtime.ts `compile` writes runtime-graph.json to disk (the bolt_dag
 //     node is only observable as on-disk bytes) and writes the omit-diagnostic to
-//     STDERR (computeBoltDag, aidlc-runtime.ts:303-306). Byte-identical recompile
+//     STDERR (computeBoltDag, aidlc-runtime.ts). Byte-identical recompile
 //     is a disk-bytes contract, not a return value.
 //   - aidlc-sensor-required-sections.ts writes its Result JSON to STDOUT and
-//     terminates with process.exit(0) (:101-102) — a CLI shell. The edge_block
+//     terminates with process.exit(0) - a CLI shell. The edge_block
 //     field + pass flag are only observable on that stdout.
 // Both spawn the real .ts via the BUN runtime (process.execPath) against the
 // dist/ tool path — the same broadened-cli pattern milestone 3 credits (cf.
@@ -17,21 +17,21 @@
 //
 // Source under test:
 //   dist/claude/.claude/tools/aidlc-runtime.ts
-//     :297 computeBoltDag(projectDir) — reads unit-of-work-dependency.md, calls
+//     computeBoltDag(projectDir) - reads unit-of-work-dependency.md, calls
 //          parseBoltDag; returns undefined (node omitted) + STDERR diagnostic on
 //          absent/malformed/cyclic; pure data, no Date.now → byte-identical recompile.
-//     :758-761 compile() appends graph.bolt_dag only when computeBoltDag returns
+//     compile() appends graph.bolt_dag only when computeBoltDag returns
 //          a node, so the absent envelope keeps key order {workflow_id, scope,
 //          started_at, stages} (the pre-milestone-15 4-key shape).
 //   dist/claude/.claude/tools/aidlc-sensor-required-sections.ts
-//     :89-97 filename-gated extension: for unit-of-work-dependency.md, sets
+//     filename-gated extension: for unit-of-work-dependency.md, sets
 //          result.edge_block = parseBoltDag().reason (or "ok"); a non-ok block
 //          forces pass:false. Every other markdown keeps the generic ≥2-H2 check
 //          with NO edge_block field.
 //   dist/claude/.claude/tools/aidlc-lib.ts
-//     :1968 parseBoltDag(body) — the single source of truth both consumers
+//     parseBoltDag(body) - the single source of truth both consumers
 //          branch on: {ok,units,batches} | {ok:false, reason: absent|malformed|cyclic}.
-//          :1932 computeBatches — Kahn-by-level, each level sorted lexicographically.
+//          computeBatches - Kahn-by-level, each level sorted lexicographically.
 //
 //   .sh 7  sensor valid → pass:true, edge_block:ok            -> "sensor: valid block → pass:true, edge_block:ok"
 //   .sh 8  sensor cyclic → pass:false, edge_block:cyclic      -> "sensor: cyclic block → pass:false, edge_block:cyclic"

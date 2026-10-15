@@ -9,25 +9,25 @@
 //   - produces resolve under the directive's OWN stage (the node IS the producer).
 //   - consumes resolve under their PRODUCING stage (a consumed artifact lives in
 //     the dir of the one stage that produces it — docs/reference/
-//     16-artifact-vocabulary.md:20-24, 44-48 — not the consuming stage's dir).
+//     16-artifact-vocabulary.md - not the consuming stage's dir).
 //   - per-unit Construction stages (for_each: unit-of-work) inject a {unit-name}
 //     segment, applied to whichever stage OWNS the file.
 //
 // Source under test (dist/claude/.claude/tools/aidlc-orchestrate.ts):
-//   :619 resolveArtifactPath(name, owner, unit)
+//   resolveArtifactPath(name, owner, unit)
 //          - codekb owner: aidlc/spaces/<space>/codekb/<repo>/<name>.md (the
 //            isCodekb arm — fires for produces[] AND consumes[] of a codekb stage
 //            like reverse-engineering, dropping the per-intent record tail).
 //          - non-per-unit: aidlc-docs/<owner.phase>/<owner.slug>/<name>.md
 //          - per-unit:     aidlc-docs/construction/<unit>/<owner.slug>/<name>.md
-//   :639 resolveConsumePath(name, node, unit) — keys on producersOf(name)[0],
+//   resolveConsumePath(name, node, unit) - keys on producersOf(name)[0],
 //          NOT the consuming node (1:1 producer rule); orphan fallback to node.
-//   :651 projectTypeFrom(stateContent) — reads "Project Type", lowercased to
+//   projectTypeFrom(stateContent) - reads "Project Type", lowercased to
 //          "brownfield" | "greenfield" | null.
-//   :670 resolveConsumes(consumes, node, projectType, unit) — drops a consume
+//   resolveConsumes(consumes, node, projectType, unit) - drops a consume
 //          whose conditional_on != projectType (when projectType is non-null).
-//   :692 resolveProduces(node, unit) — every produces name resolves (no filter).
-//   :742 buildRunStageDirective(...) — assembles the directive with the resolved
+//   resolveProduces(node, unit) - every produces name resolves (no filter).
+//   buildRunStageDirective(...) - assembles the directive with the resolved
 //          consumes[]/produces[] arrays.
 // NONE of these are exported (the tool has zero `export`s — verified), so the
 // resolution is only observable on the directive the spawned engine emits to
@@ -37,7 +37,7 @@
 // .sh drove (`bun "$TOOL" next ... 2>&1` then python-parsed the JSON). An
 // in-process twin is IMPOSSIBLE here: the functions are unreachable from TS.
 //
-// VEHICLE (mirrors the .sh's emit_for, t116:51-63): a WITH-STATE jump now emits
+// VEHICLE (mirrors the .sh's emit_for, t116): a WITH-STATE jump now emits
 // a `print` naming aidlc-jump.ts execute (NOT a run-stage; pinned by t114/t117/
 // t118), so the path-resolution behaviour is reached via the Branch-10 happy
 // path — seed a fixture, pivot Current Stage to the target slug AND mark its
@@ -152,7 +152,7 @@ interface RunStageDirective {
 }
 
 /**
- * emit_for (t116:51-63): seed a state fixture into a fresh temp project, pivot
+ * emit_for (t116): seed a state fixture into a fresh temp project, pivot
  * Current Stage to the target slug, mark the target's checkbox in-flight ([-]),
  * then run bare `next` and return the parsed run-stage directive.
  *

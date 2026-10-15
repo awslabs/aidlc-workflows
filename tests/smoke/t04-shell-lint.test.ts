@@ -6,7 +6,7 @@
 // (tests/**/*.sh) — a pure structural file scan with zero LLM, zero tokens,
 // zero process boundary. The two scanners run in-process over REPO_ROOT/tests.
 //
-// What the .sh guards (verbatim from its header, t04-shell-lint.sh:1-18):
+// What the .sh guards (verbatim from its header, t04-shell-lint.sh):
 //   Pattern A — a trailing `[ ... ] && action` as the LAST non-blank,
 //     non-comment line of a function body, with no `|| fallback`. Under
 //     `set -e` a falsy `[` exit propagates through the function return and
@@ -18,14 +18,14 @@
 //     the script before assertions could fire).
 //
 // Port of the scanners (faithful to the .sh's awk):
-//   isCandidateA(line)  <- awk is_candidate (t04:25-29):
+//   isCandidateA(line)  <- awk is_candidate (t04):
 //       /^[[:space:]]*\[[^]]*\][[:space:]]*&&[[:space:]]*[^|&]+$/  AND
 //       index(line,"||")==0  AND  line not a comment.
-//   scanA(text)  <- the in_fn state machine (t04:32-49): on `name() {` enter a
+//   scanA(text)  <- the in_fn state machine (t04): on `name() {` enter a
 //       body and reset last_cand/last_code; on `}` at col 0 emit iff the most
 //       recent code line WAS a candidate; otherwise track last_code / last_cand
 //       over non-blank, non-comment body lines.
-//   scanB(text)  <- the Pattern-B awk (t04:62-70):
+//   scanB(text)  <- the Pattern-B awk (t04):
 //       /\$[A-Za-z_][A-Za-z0-9_]*[^ -~\t]/  on any non-comment line.
 //
 // Old TAP -> new test parity (1:1, every .sh `ok` row -> a named test()):

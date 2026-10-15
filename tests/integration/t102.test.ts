@@ -7,7 +7,7 @@
 // entries; the milestone 8 consumer — `aidlc-runtime.ts compile`, the subcommand the
 // PostToolUse hook fires — reads them. Every consumer assertion that shelled
 // out to `bun aidlc-runtime.ts compile` is preserved here by SPAWNING the real
-// CLI via node:child_process spawnSync (the run_compile helper, t102:79-82),
+// CLI via node:child_process spawnSync (the run_compile helper, t102),
 // asserting on the runtime-graph.json the tool writes + the MEMORY_EMPTY rows
 // it appends to audit.md — the PROCESS boundary plus those file side effects.
 //
@@ -57,7 +57,7 @@
 //     round-trip through the tool's forward-slash path helpers, so it is
 //     cygpath-rewritten (mirrors createTestProject / t90's makeProject).
 //   - The audit.md / aidlc-state.md combos are built inline from the .sh's
-//     AUDIT_APPROVED + STATE_FEATURE heredocs (t102:37-68). memory.md is
+//     AUDIT_APPROVED + STATE_FEATURE heredocs (t102). memory.md is
 //     seeded by copying the SHIPPED template (not a tests/fixtures/** copy)
 //     and then string-replacing real entries in, exactly as the .sh's
 //     `cp "$TEMPLATE"` + `bun -e ... raw.replace(...)` did. NOTHING is

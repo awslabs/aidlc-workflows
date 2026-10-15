@@ -29,14 +29,14 @@
 // (Construction), deployment-pipeline, and deployment-execution (Operation).
 // On a fresh greenfield project (--no-aidlc-docs ->
 // noAidlcDocs:true) reverse-engineering is auto-downgraded to SKIP
-// (aidlc-utility.ts:1958-1968), leaving requirements-analysis as the first
+// (aidlc-utility.ts), leaving requirements-analysis as the first
 // post-init stage. The deterministic seed runs
 // `aidlc-utility.ts init --scope bugfix` directly, which writes
 // the full aidlc-state.md and the audit's WORKFLOW_STARTED / PHASE_STARTED /
 // PHASE_SKIPPED / STAGE_STARTED+COMPLETED×3 / WORKSPACE_* events plus the
 // init->Inception phase hand-off (a 4th STAGE_STARTED naming requirements-
 // analysis). Crucially the init tool emits a STAGE_STARTED block for EXECUTE
-// stages ONLY (aidlc-utility.ts:1813,1907,1928,2134) — the SKIP stages
+// stages ONLY (aidlc-utility.ts) - the SKIP stages
 // (every Ideation stage, five Operation stages, etc.) get a
 // `[ ] <slug> — SKIP` row in Stage Progress and a `## Scope Configuration`
 // Skip-list entry, but NO audit STAGE_STARTED. The SDK portion proves the live
@@ -47,16 +47,16 @@
 //
 // ASSERTION MAP (.sh test -> deterministic SDK surface):
 //   1  assert_file_exists STATE             -> readStateFile(proj) !== undefined
-//                                              (init writes aidlc-state.md, utility.ts:2099)
+//                                              (init writes aidlc-state.md, utility.ts)
 //   2  no ideation artifacts (empty/absent) -> no files under aidlc-docs/ideation/ on disk
-//                                              (init scaffolds empty stage dirs only, utility.ts:1818-1838;
+//                                              (init scaffolds empty stage dirs only, utility.ts;
 //                                               every Ideation stage is SKIP so no stage writes there)
 //   3  0× `[x] <ideation-stage>`            -> STRONGER: each of the 7 Ideation stage rows in Stage
 //                                              Progress is `[ ] <slug> — SKIP` (never [x]); asserted
-//                                              per-stage on the state file (utility.ts:1996-1998)
+//                                              per-stage on the state file (utility.ts)
 //   4  grep STATE reverse-engineering|requirements-analysis (Inception present)
 //                                           -> state file contains "requirements-analysis" (the first
-//                                              post-init EXECUTE stage, Stage Progress row, utility.ts:1998)
+//                                              post-init EXECUTE stage, Stage Progress row, utility.ts)
 //   5  grep STATE code-generation|build-and-test (Construction present)
 //                                           -> state file contains "code-generation — EXECUTE" AND
 //                                              "build-and-test — EXECUTE" (the 2 Construction EXECUTE rows)
@@ -64,9 +64,9 @@
 //                                              deployment-execution are EXECUTE;
 //                                              the other 5 rows are SKIP (never [x])
 //   7-9 `[x] <init-stage>` × 3              -> the 3 init rows are `[x] <slug> — EXECUTE`; asserted
-//                                              per-stage (utility.ts:1995-1998 marker=[x] for init phase)
+//                                              per-stage (utility.ts marker=[x] for init phase)
 //   11 grep STATE [Bb]ugfix                 -> readStateField(state,"Scope") === "bugfix"
-//                                              (## Project Information Scope line, utility.ts:2049)
+//                                              (## Project Information Scope line, utility.ts)
 //   12 COMPLETED < 12 (`^- [x]` lines)      -> STRONGER: bugfix marks the 3 init stages [x] at init;
 //                                              the count of `[x]` Stage-Progress rows is bounded < 12
 //                                              the way the .sh did, AND the SKIP invariant below pins WHY.
@@ -74,17 +74,18 @@
 //   NEW (audit, the test's own unproven thesis — .sh asserted NOTHING here):
 //     SKIP stages emit zero STAGE_STARTED -> every STAGE_STARTED block in audit.md
 //       names an EXECUTE stage; NO SKIP-stage slug ever appears as a STAGE_STARTED
-//       `**Stage**:` field (utility.ts emits STAGE_STARTED only at :1813/:1907/:1928/:2134,
-//       all EXECUTE). assertAuditEvent(r,"STAGE_STARTED") first proves the event class fired.
+//       `**Stage**:` field (every utility.ts call site that emits STAGE_STARTED
+//       starts an EXECUTE stage). assertAuditEvent(r,"STAGE_STARTED") first proves the event class fired.
 //
 // Known-answer literals (read from the SHIPPED handler / scope-mapping, not guessed):
 //   - bugfix scope mapping (Ideation all SKIP, EXECUTE = init×3 + reverse-engineering +
 //     requirements-analysis + code-generation + build-and-test +
 //     deployment-pipeline + deployment-execution): scope-mapping.json "bugfix"
-//   - greenfield downgrades reverse-engineering EXECUTE->SKIP: aidlc-utility.ts:1958-1968
-//   - Stage Progress row shape `- [x|-| ] <slug> — EXECUTE|SKIP`: aidlc-utility.ts:1996-1998
-//   - Scope line "- **Scope**: bugfix": aidlc-utility.ts:2049
-//   - STAGE_STARTED emitted for EXECUTE stages only: aidlc-utility.ts:1813,1907,1928,2134
+//   - greenfield downgrades reverse-engineering EXECUTE->SKIP: aidlc-utility.ts
+//   - Stage Progress row shape `- [x|-| ] <slug>`, an em dash, then EXECUTE|SKIP, as the
+//     state file writes it and stageRow's regex reads it: aidlc-utility.ts
+//   - Scope line "- **Scope**: bugfix": aidlc-utility.ts
+//   - STAGE_STARTED emitted for EXECUTE stages only: aidlc-utility.ts
 //
 // It SPENDS TOKENS — driveAidlc drives the real /aidlc bugfix on
 // Opus/Bedrock until the deterministic run-stage directive. Generous per-test

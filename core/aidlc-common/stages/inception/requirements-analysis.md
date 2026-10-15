@@ -30,6 +30,9 @@ consumes:
     conditional_on: brownfield
   - artifact: team-practices
     required: false
+cites:
+  - intent-statement
+  - scope-document
 requires_stage:
   - approval-handoff
   - reverse-engineering

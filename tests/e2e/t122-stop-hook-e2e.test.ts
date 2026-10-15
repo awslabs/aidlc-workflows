@@ -25,17 +25,17 @@
 //       -> driveAidlc("/aidlc --status") over a COMPLETED workflow under the
 //          LIVE skill-scoped Stop hook (the project carries the real
 //          .claude/settings.json whose Stop hook entry points at the real
-//          aidlc-continue-workflow.ts — settings.json:110-118). The engine answers `done`,
+//          aidlc-continue-workflow.ts - settings.json). The engine answers `done`,
 //          the hook ALLOWS, and the headless session runs to completion: the
 //          terminal result event exists and is not an error (the .sh's
 //          "no exit-124 hang"), AND the deterministic status stdout landed in a
 //          Bash tool_result ("Status:         Completed" — the verbatim
-//          handleStatus emission, aidlc-utility.ts:296-310; deterministically
+//          handleStatus emission, aidlc-utility.ts; deterministically
 //          confirmed on this exact fixture: Completion 32/32, Status Completed).
 //   3 the live hook fired and allowed the stop without a block
 //       -> GUARDED exactly like the .sh: the skill-scoped Stop hook does not
 //          fire on every headless turn, so when the heartbeat
-//          (aidlc-docs/.aidlc-engine/hooks-health/continue-workflow.last, aidlc-continue-workflow.ts:90) is
+//          (aidlc-docs/.aidlc-engine/hooks-health/continue-workflow.last, aidlc-continue-workflow.ts) is
 //          absent we SKIP this sub-assertion (record the skip, never fail).
 //          When it IS present, the hook took one of the two allows a finished
 //          workflow's status turn reaches: the status print ended the turn
@@ -61,7 +61,7 @@
 //       -> seed state-final-stage + the no-progress counter AT the cap (8) with
 //          the project's matching progress signature
 //          (stage, stable state digest, and directive fingerprint from
-//          aidlc-continue-workflow.ts:247) +
+//          aidlc-continue-workflow.ts) +
 //          stop_hook_active:true: the hook RELEASES (empty stdout, exit 0) and
 //          appends the trace line "recursion guard released the stop"
 //          to .aidlc-engine/hooks-health/continue-workflow.trace, not to its
@@ -73,8 +73,8 @@
 //     t121 owns the exhaustive [?]/[R]/[-] matrix)
 //       -> seed state-final-stage but flip the current stage's row from [-] to
 //          [?] awaiting-approval: the real engine STILL emits a pending
-//          run-stage (the [?] stage is in-flight, aidlc-orchestrate.ts
-//          :1161-1176), but the hook ALLOWS the stop (empty stdout, exit 0).
+//          run-stage (the [?] stage is in-flight, aidlc-orchestrate.ts),
+//          but the hook ALLOWS the stop (empty stdout, exit 0).
 //          The complement of test 4 on the SAME fixture — only the checkbox
 //          state differs and the outcome flips block -> allow. This is the
 //          gate-spam fix proven end-to-end.
@@ -90,16 +90,16 @@
 //       -> seed the Running final stage, run the REAL `aidlc-orchestrate park`
 //          (exit 0, emits a `parked` directive). Park does NOT advance: the
 //          feedback-optimization checkbox stays [-] and Parked / Parked At Stage
-//          are written (aidlc-state.ts:418-441). The real hook then sees the
+//          are written (aidlc-state.ts). The real hook then sees the
 //          engine re-emit `parked` and ALLOWS the stop (empty stdout, exit 0;
-//          aidlc-continue-workflow.ts:760-771), the supported multi-session exit.
+//          aidlc-continue-workflow.ts), the supported multi-session exit.
 //   10 PARK under autonomous Construction is REFUSED (NEW, issue #365 guard)
 //       -> inject `Construction Autonomy Mode: autonomous`; the REAL
 //          `aidlc-state.ts park` refuses (NON-ZERO exit, stderr names the
-//          autonomous refusal, aidlc-state.ts:420-424). Defence-in-depth: with
+//          autonomous refusal, aidlc-state.ts). Defence-in-depth: with
 //          Parked markers injected by hand, the hook's parked branch DECLINES
 //          the allow under autonomous and falls through to the cap-bounded BLOCK
-//          (aidlc-continue-workflow.ts:760-771).
+//          (aidlc-continue-workflow.ts).
 //   11 CONVERSATIONAL carve-out (tier 3) against the REAL engine (NEW, issue
 //      #365 broader reading)
 //       -> keep the final stage [-] (engine emits a pending run-stage, as test
@@ -113,15 +113,15 @@
 // do not fire on user interrupt (the .sh's closing note, kept).
 //
 // Known-answer literals (read from the SHIPPED hook/tool/fixtures, not guessed):
-//   - Stop hook registration:    dist settings.json:110-118 (matcher "", aidlc-continue-workflow.ts)
-//   - heartbeat write:           aidlc-continue-workflow.ts:90 (continue-workflow.last)
-//   - guard file:                aidlc-continue-workflow.ts:130 (block-count.json)
-//   - progress signature:        aidlc-continue-workflow.ts:247
-//   - resetGuard on done/allow:  aidlc-continue-workflow.ts:241-248 (count 0), invoked :357
-//   - block JSON + reason:       aidlc-continue-workflow.ts:104,298-307
+//   - Stop hook registration:    dist settings.json (matcher "", aidlc-continue-workflow.ts)
+//   - heartbeat write:           aidlc-continue-workflow.ts (continue-workflow.last)
+//   - guard file:                aidlc-continue-workflow.ts (block-count.json)
+//   - progress signature:        aidlc-continue-workflow.ts
+//   - resetGuard on done/allow:  aidlc-continue-workflow.ts (count 0)
+//   - block JSON + reason:       aidlc-continue-workflow.ts
 //   - release + trace line:      aidlc-continue-workflow.ts ("recursion guard released the stop")
-//   - block cap env:             aidlc-continue-workflow.ts:69 (CLAUDE_CODE_STOP_HOOK_BLOCK_CAP, default 8)
-//   - status stdout:             aidlc-utility.ts:296-310 ("Status:         Completed")
+//   - block cap env:             aidlc-continue-workflow.ts (CLAUDE_CODE_STOP_HOOK_BLOCK_CAP, default 8)
+//   - status stdout:             aidlc-utility.ts ("Status:         Completed")
 //   - fixtures: state-completed.md (Status=Completed, 32/32) /
 //     state-final-stage.md (feedback-optimization [-], Status=Running)
 //

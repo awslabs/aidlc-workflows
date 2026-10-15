@@ -666,8 +666,9 @@ Windows, installs the last stable release with its own installer, sets up a
 project for every harness with the person's work waiting at a gate, runs
 `aidlc update` to the candidate, and checks that each project's hooks,
 `aidlc config --yes` refresh and doctor still work, and that the person picks
-their work up at that gate with nothing asked again. A
-stable release does not publish when it fails; a preview publishes with a
+their work up at that gate with nothing asked again. Its copy leg does the same
+for projects copied from the last release's copy runtime, which refresh with
+their own `config --from`. A stable release does not publish when it fails; a preview publishes with a
 warning in its notes. `publish` downloads the same candidate, re-verifies
 it, attests it, adds the exported `aidlc-release.intoto.jsonl` bundle, validates
 the complete inventory, and uploads one `attested-release` workflow artifact.
@@ -1003,7 +1004,7 @@ readers read the rows they share once (`copiedAuditBlocks` in
 
 11. **Phase boundary verification** -- Traceability checks run at the end of Ideation, Inception and Construction (the Initialization->Ideation transition has none), written by the phase's last stage to `<record>/verification/`. This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 118-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 119-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 

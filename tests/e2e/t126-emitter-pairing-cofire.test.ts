@@ -18,12 +18,12 @@
 //
 // THE SPEC (read from source, NOT guessed):
 //   The pairing taxonomy is the set of handler bodies that MUST co-emit, pinned
-//   by tests/integration/t48-audit-event-emitters.sh:304-312 (the `check_pairing`
+//   by tests/integration/t48-audit-event-emitters.sh (the `check_pairing`
 //   calls) — that is a STATIC source check (the literal appears in the handler
 //   body). THIS test is its RUNTIME complement: the partners actually LAND in
 //   the audit shards across a real workflow. The handler->pair map verified at
-//   t48:304-312 and aidlc-state.ts / aidlc-utility.ts:
-//     handleApprove          (aidlc-state.ts:675)  -> GATE_APPROVED + STAGE_COMPLETED
+//   t48 and aidlc-state.ts / aidlc-utility.ts:
+//     handleApprove          (aidlc-state.ts)       -> GATE_APPROVED + STAGE_COMPLETED
 //     handleCompleteWorkflow (aidlc-state.ts)       -> PHASE_COMPLETED + WORKFLOW_COMPLETED
 //     handleIntentCreate     (aidlc-utility.ts)      -> WORKFLOW_STARTED + PHASE_STARTED + STAGE_STARTED
 //   (handleReject -> GATE_REJECTED + STAGE_REVISING is exercised by t128, not

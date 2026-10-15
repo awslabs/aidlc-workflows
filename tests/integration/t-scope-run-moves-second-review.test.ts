@@ -2,9 +2,11 @@
 //
 // A person move in a scope run, with no model (tests/harness/scope-run.ts): at
 // the second Unit's checkpoint the agent asks for another review, which the
-// stage's one review pass refuses. The way out the refusal offers is a step the
-// engine accepts in that state, and the run reaches done. The remedy wording is
-// owned by t331; this run checks it against the real engine and hooks.
+// stage's one review pass refuses. Nobody asked for it, so the way on is the
+// agent's own step, never a question for the person: the checkpoint again, with
+// the findings. The engine accepts that step, and the run reaches done. The
+// remedy wording is owned by t331; this run checks it against the real engine
+// and hooks.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { cleanupTestProject } from "../harness/fixtures.ts";
@@ -32,33 +34,40 @@ class SecondReviewAsked extends Error {}
 
 interface Remedy {
   op: string;
+  label?: string;
   action: string;
   executableNow: boolean;
+  interaction?: string;
+}
+
+interface RecoveryAsk {
+  agent_work?: boolean;
+  remedies: Remedy[];
 }
 
 /** The guard-recovery ask a refusal carries, wherever in its output it sits. */
-function refusalRemedies(output: string): Remedy[] {
+function refusalAsk(output: string): RecoveryAsk | null {
   for (const line of output.split(/\r?\n/).reverse()) {
     const start = line.indexOf("{");
     if (start < 0) continue;
     try {
-      const parsed = JSON.parse(line.slice(start)) as { remedies?: Remedy[]; error?: string };
-      if (Array.isArray(parsed.remedies)) return parsed.remedies;
+      const parsed = JSON.parse(line.slice(start)) as Partial<RecoveryAsk> & { error?: string };
+      if (Array.isArray(parsed.remedies)) return parsed as RecoveryAsk;
       // The tool prints its refusal as {"error": "<sentence>\n<the ask>"}.
       if (typeof parsed.error === "string") {
-        const inner = refusalRemedies(parsed.error);
-        if (inner.length > 0) return inner;
+        const inner = refusalAsk(parsed.error);
+        if (inner !== null) return inner;
       }
     } catch {
       // Not the ask; keep looking.
     }
   }
-  return [];
+  return null;
 }
 
 describe("a second review the review cap refuses at a Unit's checkpoint", () => {
   for (const policy of ["strict", "relaxed"] as const) {
-    test(`Guard Policy ${policy}: the gate the refusal offers is a step the engine takes, and the run reaches done`, () => {
+    test(`Guard Policy ${policy}: the refusal hands the agent the checkpoint as its own step, and the run reaches done`, () => {
       const { proj, host } = createScopeProject("empty");
       projects.push(proj);
       const person = new PersonScript(host);
@@ -96,12 +105,15 @@ describe("a second review the review cap refuses at a Unit's checkpoint", () => 
       const refused = host.engine("log", "review", "--stage", "code-generation", "--reviewer", reviewer,
         "--iteration", "2", "--unit", "extra");
       expect(refused.status).not.toBe(0);
-      const remedies = refusalRemedies(refused.stdout + "\n" + refused.stderr);
-      const gate = remedies.find((remedy) => remedy.op === "present-approval-gate");
-      expect(gate, refused.stdout + refused.stderr).toBeDefined();
-      expect(gate!.executableNow).toBe(true);
+      const ask = refusalAsk(refused.stdout + "\n" + refused.stderr);
+      expect(ask?.agent_work, refused.stdout + refused.stderr).toBe(true);
+      expect(ask!.remedies.map((remedy) => remedy.op)).toEqual(["present-findings-at-gate"]);
+      const gate = ask!.remedies[0];
+      expect(gate).toMatchObject({ executableNow: true, interaction: "external-work" });
+      expect(gate.label).toBeUndefined();
 
-      person.pick("How would you like to go on?", remedies.map((remedy) => remedy.op), "present-approval-gate");
+      // The agent takes the step with nothing put to the person.
+      const saidBefore = person.said.length;
       const named = /`(bun \.claude\/tools\/[^`]+)`/.exec(gate!.action)?.[1];
       expect(named, gate!.action).toBeDefined();
       const words = commandWords(named!);
@@ -113,6 +125,7 @@ describe("a second review the review cap refuses at a Unit's checkpoint", () => 
       expect(shown.kind, ran.stdout).toBe("run-stage");
       expect((shown.construction_checkpoint as { unit?: string } | undefined)?.unit).toBe("extra");
       expect(host.refusals).toEqual([]);
+      expect(person.said.length).toBe(saidBefore);
 
       // The person approves the checkpoint they are shown again.
       const final = agent.drive(shown);

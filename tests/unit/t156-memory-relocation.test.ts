@@ -256,7 +256,7 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
     expect(steering).not.toContain("#[[file:");
   });
 
-  test("8: Codex ships no resolver seam; the engine hands each step its rules, and AGENTS.md ships", () => {
+  test("8: Codex ships no resolver seam (its AIDLC_RULES_DIR is empty); the engine hands each step its rules, and AGENTS.md ships", () => {
     // Codex has no ambient include: the engine reads the active space's files
     // (aidlc-steering.ts rulesContentEntries follows the active-space cursor
     // when no AIDLC_RULES_DIR is set) and hands each step its rules. The root
@@ -267,8 +267,8 @@ describe("t156 method relocation to aidlc/spaces/default/memory/ + per-harness i
       join(REPO_ROOT, "dist", "codex", ".codex", "config.toml"),
       "utf-8",
     );
-    expect(config).not.toContain("AIDLC_RULES_DIR");
-    expect(config).not.toContain("[shell_environment_policy]");
+    // The member 2.11.0 shipped stays, empty (2.11.0's own refresh cannot take it out), and names no folder.
+    expect((Bun.TOML.parse(config) as { shell_environment_policy?: unknown }).shell_environment_policy).toEqual({ set: { AIDLC_RULES_DIR: "" } });
     expect(existsSync(join(REPO_ROOT, "dist", "codex", ".codex", "aidlc-rules"))).toBe(false);
     // The root AGENTS.md (Codex's directory-merge surface) ships.
     expect(existsSync(join(REPO_ROOT, "dist", "codex", "AGENTS.md"))).toBe(true);

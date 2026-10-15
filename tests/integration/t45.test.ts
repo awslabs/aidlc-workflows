@@ -7,12 +7,12 @@
 // boundary (exit code) plus the materialised result object — so it stays
 // a spawn. An in-process handleOutputs() twin would lose the exit-code
 // half (handleOutputs/jsonSuccess write to process.stdout and the unknown-
-// phase arm is process.exit(1) via jsonError, aidlc-validate.ts:271-278)
+// phase arm is process.exit(1) via jsonError, aidlc-validate.ts)
 // AND the JSON-to-stdout half.
 //
 // NO FIXTURE / NO PROJECT DIR: aidlc-validate `outputs` reads the SHIPPED
 // stage files under dist/claude/.claude/aidlc-common/stages/<phase>/
-// (STAGES_DIR, aidlc-validate.ts:27-33) and the stage graph via
+// (STAGES_DIR, aidlc-validate.ts) and the stage graph via
 // loadStageGraph(); it writes nothing, emits no audit row, and needs no
 // CLAUDE_PROJECT_DIR. So — unlike t31/t90 — there is no createTestProject /
 // seedAuditFile / temp dir to manage and nothing under tests/fixtures/** is
@@ -34,7 +34,7 @@
 //         * d.stages is a non-empty array, AND
 //         * every stage's own .pass is true with .missing empty — i.e. the
 //           per-stage rows that DRIVE the phase-level pass (pass = stages
-//           .every(s=>s.pass), aidlc-validate.ts:254). The .sh only checked
+//           .every(s=>s.pass), aidlc-validate.ts). The .sh only checked
 //           the aggregate; on failure it printed the per-stage `missing`
 //           list, so asserting the per-stage rows mirrors the diagnostic it
 //           would have surfaced.
@@ -43,9 +43,9 @@
 // process.exit(1) arm the in-process note above flags as the reason this
 // stays a spawn):
 //   - "unknown phase -> exit 1 + error JSON on stderr" pins the
-//     handleOutputs `!phases` branch (aidlc-validate.ts:192-194).
+//     handleOutputs `!phases` branch (aidlc-validate.ts).
 //   - "all -> aggregate pass + phases[] of 5" pins the phaseArg==="all"
-//     branch (aidlc-validate.ts:259-261), the other half of handleOutputs
+//     branch (aidlc-validate.ts), the other half of handleOutputs
 //     the per-phase loop never reaches.
 
 import { describe, expect, test } from "bun:test";

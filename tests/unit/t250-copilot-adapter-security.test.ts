@@ -48,7 +48,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BLOCKED_STATE_TRANSITIONS } from "../../core/hooks/aidlc-state-transition-guard.ts";
+import { ENGINE_OWNED_STATE_TRANSITIONS } from "../../core/tools/aidlc-lib.ts";
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -124,7 +124,10 @@ const QUESTION_STORE_STUB = `export function keptRestartRun(_p: string, _args: r
 const AUDIT_TOOL_STUB = `export function appendAuditEntry(_k: string, _d: unknown, _p: string): void {}\nexport function appendSubagentPromptUnmatched(_p: string, _r: unknown): void {}\nexport function appendCoordinationStoodAside(_p: string, _r: unknown): boolean { return false; }\n`;
 const LIB_TOOL_STUB = `import { join } from "node:path";
 // The engine's own reading of a line is pure, so the rig uses the real one.
-export { beforeDelimiter, boundDirectiveMessage, nextLineFlags, readOrchestratorLauncherOptions } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};
+export { beforeDelimiter, boundDirectiveMessage, ENGINE_OWNED_STATE_TRANSITIONS, nextLineFlags, readOrchestratorLauncherOptions } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};
+export function decideFence(): { decision: "hold" | "stand-aside" } {
+  return { decision: process.env.T250_STATE_TRANSITION_STANDS_ASIDE === "1" ? "stand-aside" : "hold" };
+}
 export function stateFilePath(projectDir: string): string {
   return join(projectDir, ".aidlc-state-absent.json");
 }
@@ -1815,12 +1818,15 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         expect(r.code, command).toBe(0);
         expect(shellDecision(r).hookSpecificOutput?.permissionDecision, command).toBeUndefined();
       }
-      // Every stage-status change the state-transition guard refuses keeps the
-      // prompt even when a lowered Guard Policy lets it through.
-      for (const verb of BLOCKED_STATE_TRANSITIONS) {
+      // A stage-status change only the engine makes keeps the prompt while the
+      // state-transition check stands aside for the work, since then it lands;
+      // while the check holds, the state tool refuses it with nothing to click.
+      for (const verb of ENGINE_OWNED_STATE_TRANSITIONS) {
         const command = `aidlc engine state ${verb} requirements-analysis`;
-        const r = runAdapter(s, "guard-tool-call", shellCall(command));
-        expect(r.stdout, command).toBe("");
+        const lowered = runAdapter(s, "guard-tool-call", shellCall(command), { T250_STATE_TRANSITION_STANDS_ASIDE: "1" });
+        expect(lowered.stdout, command).toBe("");
+        const held = shellDecision(runAdapter(s, "guard-tool-call", shellCall(command)));
+        expect(held.hookSpecificOutput?.permissionDecision, command).toBe("allow");
       }
       // Their read-only and routine siblings stay click-free.
       for (const command of [

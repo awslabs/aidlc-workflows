@@ -1,7 +1,7 @@
 // covers: hook:aidlc-write-audit-log
 //
 // t170 - the audit-logger GATE. Before the workspace layout the hook gated
-// artifact logging on `file.includes("aidlc-docs/")` (aidlc-write-audit-log.ts:49).
+// artifact logging on `file.includes("aidlc-docs/")` (aidlc-write-audit-log.ts).
 // Under the per-intent record
 // (aidlc/spaces/<space>/intents/<YYMMDD>-<label>/<phase>/<stage>/...) that path
 // does not contain "aidlc-docs/", so that gate DROPPED every ARTIFACT_CREATED/
