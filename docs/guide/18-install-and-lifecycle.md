@@ -1062,6 +1062,14 @@ is done too, and says so:
   Updated. Your open work (default/add-login) carries on.
 ```
 
+When the new release does a stage you already finished differently and nothing
+of yours changed, your work stands and nothing asks you to redo it. If the stage
+now needs a document it did not need before, your next step says so once, for
+example "AI-DLC now does Functional Design differently from when yours ran; your
+work stands, and `/aidlc --stage functional-design` goes back to it (the stages
+after it reopen too)." Otherwise it is not said, and `/aidlc --status` shows that
+line. A change to your own work keeps its usual question.
+
 When the files came from another release, the next line says how to go back:
 
 ```

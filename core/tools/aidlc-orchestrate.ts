@@ -560,7 +560,10 @@ import {
   leftOutNotice,
   parkWorkflow,
 } from "./aidlc-state.ts";
-import { inspectStageValidity, stageLabel, staleStageNote } from "./aidlc-validity.ts";
+import {
+  inspectStageValidity, stageDefinitionChangedFields, stageDefinitionChangedLine, stageLabel, staleStageNote,
+  type StageValidityInspection,
+} from "./aidlc-validity.ts";
 import { VALID_DEPTHS, VALID_TEST_STRATEGIES } from "./aidlc-guard-switch.ts";
 import { markSwitchOffNoticesSaid, switchOffNotices } from "./aidlc-recorded-switches.ts";
 import { kiroHooksOffNotices, markKiroHooksOffSaid } from "./aidlc-kiro-hooks-off.ts";
@@ -690,6 +693,10 @@ interface PreparedLegacyPlanApproval {
 // the engine answers it as another verb (a `continue` answered as `next`).
 let engineInvocation: { attemptId?: string; commandKind: "next" | "continue" | "report" | "park"; claimedKind?: "continue"; commandSha256: string } | null = null;
 let activeStageValidityAdvisory: StageValidityAdvisory | undefined;
+// Finished stages AI-DLC itself now does differently: the line the next spoken
+// step carries when one now needs more than it had, and the rows that record
+// their new receipts once that step is spoken (see writePrepared).
+let activeRedefinedStages: { line: string | null; rows: Record<string, string>[] } | null = null;
 let activeRetiredGuardPolicyNotice: string | null = null;
 // undefined until the first emission of this command reads it (hookHealthNotice).
 let activeHookHealthNotice: string | null | undefined;
@@ -714,16 +721,33 @@ function kiroHooksOffNoticesOnce(projectDir: string): string[] {
   return activeKiroHooksOffNotices;
 }
 
+function redefinedStagesNotice(
+  redefined: StageValidityInspection["redefined"],
+): { line: string | null; rows: Record<string, string>[] } | null {
+  if (redefined.length === 0) return null;
+  const said = redefined.filter((entry) => entry.said);
+  const line = said.length === 0 ? null : stageDefinitionChangedLine(
+    said.map(({ stage }) => stageLabel(nodeForSlug(stage), stage) ?? stage),
+    said[0].stage,
+  );
+  return {
+    line,
+    rows: redefined.map(({ stage, basis, said }) => stageDefinitionChangedFields(stage, basis, said ? line : null)),
+  };
+}
+
 function projectStageValidityAdvisory(
   projectDir: string,
   stateContent: string,
 ): StageValidityAdvisory | undefined {
+  activeRedefinedStages = null;
   try {
     // Under Guard Policy relaxed and off the guard accepts an edit to a
     // finished stage's document and says it once, so this line never raises it.
     const validity = inspectStageValidity(projectDir, stateContent, {
       acceptContentChanges: guardPolicyAcceptsChanges(projectDir, stateContent),
     });
+    activeRedefinedStages = redefinedStagesNotice(validity.redefined);
     if (validity.issues.length === 0 && validity.warnings.length === 0) {
       return undefined;
     }
@@ -1369,6 +1393,9 @@ function prepareEmission(directive: Directive): PreparedEmission {
   if (hookNotice !== null) {
     directive = withChangeNotices(directive, [hookNotice, ...(directive.change_notices ?? [])]);
   }
+  if (activeRedefinedStages?.line) {
+    directive = withChangeNotices(directive, [activeRedefinedStages.line, ...(directive.change_notices ?? [])]);
+  }
   const switchOff = engineProjectDir ? switchOffNoticesOnce(engineProjectDir) : [];
   if (switchOff.length > 0) {
     directive = withChangeNotices(directive, [...switchOff, ...(directive.change_notices ?? [])]);
@@ -1845,6 +1872,22 @@ function writePrepared(prepared: PreparedEmission): void {
   ) {
     markSwitchOffNoticesSaid(engineProjectDir);
     activeSwitchOffNotices = [];
+  }
+  // The same holds for a stage AI-DLC now does differently: once a step is
+  // spoken, its receipt for the new definition is recorded, so no later step or
+  // chat says it again. A row that cannot be written waits for the next step.
+  if (
+    engineProjectDir && activeRedefinedStages !== null && !engineUnjoined &&
+    kind !== "load-steering" && !isReadOnlyEngineProbe()
+  ) {
+    try {
+      for (const fields of activeRedefinedStages.rows) {
+        appendAuditEntry("STAGE_DEFINITION_CHANGED", fields, engineProjectDir);
+      }
+    } catch (e) {
+      recordHookDrop(engineProjectDir, "stage-definition-changed", errorMessage(e));
+    }
+    activeRedefinedStages = null;
   }
   if (
     engineProjectDir && activeKiroHooksOffNotices !== null &&
@@ -8268,6 +8311,7 @@ function turnIsLatestRow(pd: string, messageId: string): boolean {
 // observers only describe that command and never execute it.
 function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   activeStageValidityAdvisory = undefined;
+  activeRedefinedStages = null;
   activeRetiredGuardPolicyNotice = null;
   const flags = parseNextFlags(agentArgs);
   const args = takePersonsOwnLine(flags, resolveProjectDir(projectDir)) ?? agentArgs;
@@ -17881,6 +17925,7 @@ export function main(argv: string[]): void {
     activeRetiredGuardPolicyNotice = null;
     activeHookHealthNotice = undefined;
     activeSwitchOffNotices = null;
+    activeRedefinedStages = null;
     activeKeptRequestLine = null;
     activeRestartWords = null;
     activeRestartAsked = null;

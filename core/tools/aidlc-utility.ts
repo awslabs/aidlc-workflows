@@ -440,6 +440,7 @@ import {
   captureStageValidationBasis,
   codeArrivedStageLine,
   inspectStageValidity,
+  stageDefinitionChangedLine,
   stageLabel,
   staleStageNote,
 } from "./aidlc-validity.ts";
@@ -2211,6 +2212,17 @@ To get started:
       const otherNames = stageNames(others);
       validityOutput = staleStageNote(earliestName, earliestIssue, content) +
         `${otherNames ? ` Also affected: ${otherNames}.` : ""}\n`;
+    }
+    // Finished stages AI-DLC itself now does differently, told or not on the
+    // way: the work stands, and the way back is named.
+    const pending = new Set(validity.redefined.map((entry) => entry.stage));
+    const redefined = graph.map((stage) => stage.slug)
+      .filter((slug) => pending.has(slug) || validity.renewed.includes(slug));
+    if (redefined.length > 0) {
+      validityOutput += `${stageDefinitionChangedLine(
+        redefined.map((slug) => stageLabel(findStageBySlug(slug), slug) ?? slug),
+        redefined[0],
+      )}\n`;
     }
   } catch {
     // Unreadable receipts change nothing the person can act on here.

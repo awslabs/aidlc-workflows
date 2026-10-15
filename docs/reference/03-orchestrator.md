@@ -1287,8 +1287,23 @@ the change, and reads the person's answer in their own words: a yes is their
 redo request; anything else carries on.
 Under Guard Policy `relaxed` or `off` an edit to a document that is still there
 is not raised on `next`: the guard accepts it and says it once. A document that
-is gone, a project-type change and a stage-graph change still are, and
-`/aidlc --status` still lists every stage behind.
+is gone and a project-type change still are, and `/aidlc --status` still lists
+every stage behind.
+When only the stage itself changed (an AI-DLC update, a plugin turned on, or the
+team's own stage edit changed what it reads, writes or when it runs) and nothing
+of the person's work did, the stage is not behind and no later stage is
+affected, under every Guard Policy. When the stage now needs an input it did not
+need when it ran (a new required input, or one made required), the next step the
+person hears carries one `change_notices` line that asks nothing: "AI-DLC now
+does Functional Design differently from when yours ran; your work stands, and
+`/aidlc --stage functional-design` goes back to it (the stages after it reopen
+too)." Any other change to the stage itself (an optional input or output added
+or removed, an input made optional, a changed condition) is not said. Either
+way, once a step is said, a `STAGE_DEFINITION_CHANGED` audit row records the
+stage's receipt for its new definition, so no later step or conversation says it
+again, `/aidlc --status` names the stage with that line, and a later change to
+what the stage now reads is raised as usual. A change to the person's work in
+the same window keeps the question above.
 Inspection-unavailable stages remain a per-turn advisory because they need
 attention. Receipt-less histories are not shown by `next` or by
 `/aidlc --status`, so migration adds no warning.
