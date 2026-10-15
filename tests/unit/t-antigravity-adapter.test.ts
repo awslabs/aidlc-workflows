@@ -284,19 +284,21 @@ describe("t-antigravity-adapter: live Antigravity payloads through the authored 
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
     writeTranscript(proj, MAIN, [humanStep("go")]);
+    // A tool call that invokes a hook is a refusal the state guard keeps; on
+    // Antigravity it must arrive as deny JSON, exit 0.
     const blocked = runAdapter(
       proj,
       "guards",
       payload("preToolUseRunCommand", proj, {
         toolCall: {
           name: "run_command",
-          args: { CommandLine: "bun .agents/tools/aidlc-state.ts approve", Cwd: proj },
+          args: { CommandLine: "bun .agents/tools/aidlc.ts engine hook record-human-turn", Cwd: proj },
         },
       }),
     );
     expect(blocked.code).toBe(0);
     expect(decision(blocked).decision).toBe("deny");
-    expect(decision(blocked).reason ?? "").toContain("aidlc-orchestrate");
+    expect(decision(blocked).reason ?? "").toContain("AIDLC runtime records and hooks belong to the harness");
     expectAllow(runAdapter(proj, "guards", payload("preToolUseRunCommand", proj)), "run_command");
     expectAllow(runAdapter(proj, "guards", payload("preToolUseWriteToFile", proj)), "write_to_file");
     expectAllow(runAdapter(proj, "guards", payload("preToolUseReplaceFileContent", proj)), "replace_file_content");

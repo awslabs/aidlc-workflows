@@ -256,6 +256,7 @@ function runWizard(
   const hasCredentials = options.hasCredentials ?? true;
   const detection = JSON.stringify({
     harnesses: {
+      antigravity: { found: false, probed: true },
       claude: { found: false, probed: true },
       codex: { found: false, probed: true },
       copilot: { found: false, probed: true },

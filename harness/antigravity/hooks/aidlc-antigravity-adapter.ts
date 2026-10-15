@@ -76,6 +76,7 @@ import {
   engineDirFor,
   enterHookWorkflow,
   promptMovesSelection,
+  recordHookDrop,
   takeSessionSelectionNotice,
 } from "../tools/aidlc-lib.ts";
 import { aidlcInvocation, knownActiveSpace } from "../tools/aidlc-runtime-paths.ts";
@@ -226,7 +227,7 @@ export async function run(
   function runCoreWithStderr(
     hookFile: string,
     stdinText: string,
-  ): { stdout: string; stderr: string; code: number } {
+  ): { stdout: string; stderr: string; code: number; signal: string | null } {
     const { command, token } = coreCommand(hookFile);
     const r = Bun.spawnSync(command, {
       stdin: Buffer.from(stdinText, "utf-8"),
@@ -239,6 +240,7 @@ export async function run(
       stdout: r.stdout?.toString() ?? "",
       stderr: r.stderr?.toString() ?? "",
       code: r.exitCode ?? 1,
+      signal: r.exitCode === null ? (r.signalCode ?? "a signal") : null,
     };
   }
 
@@ -793,17 +795,24 @@ export async function run(
     process.stdout.write(`${JSON.stringify({ decision: "allow" })}\n`);
   }
 
+  // Exit 2 is a guard's refusal. A guard that fails on its own (it throws, its
+  // file is missing, it is killed) refuses nothing, as in the core hook group;
+  // its error line goes where doctor reads hook drops, with a severity tag in
+  // it neutralized so only the hook that writes a drop decides doctor's verdict.
   function blockedByGuard(file: string, input: string): boolean {
     const r = runCoreWithStderr(file, input);
     if (r.code === 0) return false;
-    const reason =
-      r.code === 2
-        ? r.stderr.trim() || "blocked by AIDLC guard hook"
-        : `AIDLC guard ${file} failed with exit ${r.code}, so its safety checks could not complete and the ` +
-          "call was stopped. Retry it once; if it is stopped again, tell the person to run " +
-          `\`${aidlcInvocation()} config --harness antigravity\` in a terminal, which puts AI-DLC's ` +
-          "Antigravity files back, then try again.";
-    deny(reason);
+    if (r.code !== 2) {
+      const hook = file.replace(/^aidlc-|\.ts$/g, "");
+      const lines = r.stderr.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
+      const line = (lines.find((entry) => entry.startsWith("error:")) ??
+        lines.filter((entry) => !/^Bun v\d/.test(entry)).at(-1) ?? "no error output")
+        .replace(/\[(degraded|advisory)\]/gi, "($1)");
+      const how = r.signal === null ? `exited ${r.code}` : `was stopped by ${r.signal}`;
+      recordHookDrop(projectDir, hook, `${hook} ${how} under the Antigravity adapter: ${line.slice(0, 240)}`);
+      return false;
+    }
+    deny(r.stderr.trim() || "blocked by AIDLC guard hook");
     return true;
   }
 
