@@ -418,6 +418,9 @@ class Fixture {
 function restartFixture(harness: Harness = HARNESS_RUNTIMES[0], projection: Projection = "native") {
   const p = new Fixture(projection, harness, "state-mid-inception.md");
   writeFileSync(seededStateFile(p.project), p.state()
+    // No plan is written here, so plan approval is off: the report meets the
+    // recovery, not the plan's question.
+    .replace("- **Revision Count**: 0", "- **Revision Count**: 0\n- **Plan Approval**: off (set by you)")
     .replace("- **Current Stage**: requirements-analysis", "- **Current Stage**: code-generation")
     .replace("- **Lifecycle Phase**: INCEPTION", "- **Lifecycle Phase**: CONSTRUCTION")
     .replace("- [-] requirements-analysis — EXECUTE", "- [x] requirements-analysis — EXECUTE")

@@ -3075,6 +3075,30 @@ export function codeGenerationExecutionAllowed(
     (current.ok || codeGenerationContinuation(projectDir, target, issued) !== null);
 }
 
+/**
+ * Whether the plan behind a Code Generation completion still waits on the
+ * person: a target has no approval that lets it build (no plan yet, not
+ * approved, or changed since under strict), the check the build itself meets.
+ * Each target is judged as its own build step would be, never through the step
+ * marker, which the gate's opening retires. A judgement that throws counts as
+ * no wait, so the completion's own checks decide.
+ */
+export function codeGenerationPlanWaits(projectDir: string, units: ReadonlyArray<string | null>): boolean {
+  return units.some((unit) => {
+    try {
+      const issued: CodeGenerationIssuance = unit === null ? { kind: "run-stage" } : { kind: "run-stage", unit };
+      return !codeGenerationExecutionAllowed(projectDir, { unit }, undefined, issued);
+    } catch {
+      return false;
+    }
+  });
+}
+
+/** The step a completion gets while its plan waits: the plan's question is `next`'s. */
+export function codeGenerationPlanWaitsStep(): string {
+  return `The code plan is not approved yet: run \`${aidlcToolInvocation("orchestrate")} next\` and follow the step it prints.`;
+}
+
 function recordCodeGenerationContinuation(
   projectDir: string,
   continuation: CodeGenerationContinuation,

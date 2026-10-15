@@ -382,6 +382,27 @@ only a different fingerprint requires the existing re-save / re-review recovery,
 with parser-semantics changes as a possible cause. Stored evidence is not
 rewritten; the migration grants no approval or extra review allowance.
 
+**Code Generation completion waits for its plan.** While the plan behind Code
+Generation does not let it build (no plan yet, not approved, sent back, or
+changed since its approval under strict), `report --stage code-generation` with
+`awaiting-approval`, `revised`, `completed`, or `approved` while no gate is open
+answers with a step and changes nothing: "The code plan is not approved yet: run
+`next` and follow the step it prints." So does `unit complete --stage
+code-generation` for a Unit whose own plan waits. The plan's approval is judged
+as the build judges it (`codeGenerationCompletionPlanWaits`, over
+`codeGenerationExecutionAllowed`): a current receipt, plan approval off (the
+scope, the person, or the machine switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`
+where it is trusted, read as `next` reads it), or a lowered Guard Policy
+building an approved plan that changed. It is read for each target the report
+covers (the zero-Unit target, the Unit named, or the Units with Code Generation
+work), never from the step marker, so the gate shown again after a review, once
+its opening retired the build step, goes through. A Unit whose completion or
+skip is recorded is not judged again, so a Testing Contract that reads stale
+since (an update) never holds the gate. The person's answer at the open gate and
+the remedy they picked at the recovery question are theirs and are not held. The
+check runs after the stage's own completion checks, so their refusals keep their
+words.
+
 **Ensemble evidence gate.** On a `mob` or `subagent`-with-supports stage, the
 report path refuses `awaiting-approval`, `revised`, and `approved` while a
 declared support agent's contribution file
