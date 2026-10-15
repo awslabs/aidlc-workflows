@@ -2,8 +2,8 @@
 //
 // Owns the linter check itself; the dispatcher (aidlc-sensor.ts) routes a
 // SENSOR fire to this script via the manifest's `command:` field. Self-
-// contained apart from the import-safe runtime budget policy. Wraps the
-// project's own eslint, else `bunx eslint@10`, with `--format json
+// contained apart from the import-safe runtime budget and executable lookups.
+// Wraps the project's own eslint, else `bunx eslint@10`, with `--format json
 // --max-warnings=-1 <path>` and prints the locked stdout JSON shape:
 //
 //   {"pass": <bool>, "errorCount": <n>, "warningCount": <n>,
@@ -47,8 +47,9 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 
 interface ESLintMessage {
 	ruleId: string | null;
@@ -196,6 +197,9 @@ function flatConfigAbove(cwd: string): boolean {
 export function localEslintPath(cwd: string): string | null {
 	try {
 		const manifestPath = createRequire(join(cwd, "package.json")).resolve("eslint/package.json");
+		// Bun resolves a package no node_modules holds from its own install cache,
+		// a copy that cannot run: that is no install of the project's.
+		if (basename(dirname(dirname(manifestPath))) !== "node_modules") return null;
 		const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
 		if (manifest.name !== "eslint" || typeof manifest.version !== "string") return null;
 		const major = Number(manifest.version.split(".")[0]);
@@ -207,13 +211,48 @@ export function localEslintPath(cwd: string): string | null {
 	}
 }
 
-function invokeEslint(args: string[], cwd: string) {
+// ESLint loads a TypeScript flat config through jiti under Node, which neither
+// the pin nor a project without jiti provides, and natively under Bun, which
+// every install already runs on. In the same directory ESLint prefers .js over
+// .ts, the order FLAT_CONFIG_FILES keeps, so the first name found nearest the
+// file is the config that governs it.
+function typeScriptFlatConfigGoverns(filePath: string): boolean {
+	let dir = dirname(resolve(filePath));
+	for (;;) {
+		const name = FLAT_CONFIG_FILES.find((candidate) => existsSync(join(dir, candidate)));
+		if (name) return /\.[mc]?ts$/.test(name);
+		const parent = dirname(dir);
+		if (parent === dir) return false;
+		dir = parent;
+	}
+}
+
+function jitiBeside(cli: string): boolean {
+	try {
+		createRequire(cli).resolve("jiti");
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function invokeEslint(args: string[], cwd: string, filePath: string) {
 	const local = localEslintPath(cwd);
-	const options = { encoding: "utf-8" as const, timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS, cwd };
+	const underBun = typeScriptFlatConfigGoverns(filePath) && !(local && jitiBeside(local));
+	// A native install has no bunx of its own; its executable is Bun when told to be.
+	const native = compiledExecutable();
+	const options = {
+		encoding: "utf-8" as const,
+		timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+		cwd,
+		env: native ? { ...process.env, BUN_BE_BUN: "1" } : process.env,
+	};
 	// ESLint's published executable uses Node too. Naming its installed file
 	// avoids both PATH-shadowed eslint binaries and per-TMPDIR bunx installs.
-	if (local) return spawnSync("node", [local, ...args], options);
-	return spawnSync("bunx", [ESLINT_SPEC, ...args], options);
+	if (local) return spawnSync(underBun ? (native ?? process.execPath) : "node", [local, ...args], options);
+	const runtime = underBun ? ["--bun"] : [];
+	if (native) return spawnSync(native, ["x", ...runtime, ESLINT_SPEC, ...args], options);
+	return spawnSync("bunx", [...runtime, ESLINT_SPEC, ...args], options);
 }
 
 // Probe `eslint --version` at startup. `bunx <tool>` returns non-127
@@ -221,8 +260,8 @@ function invokeEslint(args: string[], cwd: string) {
 // resolution failure, registry timeout). The dispatcher's branch b
 // (status === 127) won't catch those — so we propagate by exiting 127
 // ourselves on any non-zero exit from this probe.
-function probeEslintAvailable(cwd: string): void {
-	const result = invokeEslint(["--version"], cwd);
+function probeEslintAvailable(filePath: string, cwd: string): void {
+	const result = invokeEslint(["--version"], cwd, filePath);
 	if (result.status !== 0) {
 		process.stderr.write("eslint-unavailable\n");
 		process.exit(127);
@@ -244,7 +283,7 @@ function probeEslintAvailable(cwd: string): void {
 // branch e then emits SENSOR_PASSED with Note=script-error: exit-2,
 // keeping the audit pair closed while flagging the breakage in stderr.
 function probeEslintConfig(filePath: string, cwd: string): void {
-	const result = invokeEslint(["--print-config", filePath], cwd);
+	const result = invokeEslint(["--print-config", filePath], cwd, filePath);
 	if (result.status === 0) return;
 	const stderr = result.stderr ?? "";
 	// Cover both legacy (.eslintrc.*) and flat-config (eslint.config.js)
@@ -272,6 +311,10 @@ function probeEslintConfig(filePath: string, cwd: string): void {
 		/syntaxerror/i.test(stderr) ||
 		/unexpected token/i.test(stderr) ||
 		/configuration .* is invalid/i.test(stderr) ||
+		// Bun's own loader, which reads a TypeScript config, words its failures so.
+		/\bBuildMessage:/.test(stderr) ||
+		/errors? building "/.test(stderr) ||
+		(hasConfigFile && /\bResolveMessage:/.test(stderr)) ||
 		(hasConfigFile && /unable to load/i.test(stderr)) ||
 		(hasConfigFile && /failed to load config/i.test(stderr))
 	) {
@@ -297,14 +340,14 @@ function configFilePresent(cwd: string): boolean {
 // Pick the most diagnostic stderr line for the parse-error reason.
 // eslint v10's stderr opens with a banner ("Oops Something went wrong!")
 // and ends in a stack trace; the SyntaxError/Error line in the middle is
-// what's actionable. Prefer lines containing "Error" (case-insensitive),
-// skip stack frames ("    at …"), fall back to the first non-empty line.
+// what's actionable. Prefer lines containing "Error" (case-insensitive) or
+// Bun's "BuildMessage:"/"ResolveMessage:", skip stack frames ("    at …"), fall back to the first non-empty line.
 function firstNonEmptyLine(s: string): string {
 	const lines = s.split(/\r?\n/).map((l) => l.trim());
 	for (const t of lines) {
 		if (!t) continue;
 		if (t.startsWith("at ")) continue; // stack frame after trim
-		if (/error/i.test(t)) return t;
+		if (/error|Message:/i.test(t)) return t;
 	}
 	for (const t of lines) {
 		if (t && !t.startsWith("at ")) return t;
@@ -323,7 +366,7 @@ function runEslint(
 	// rejects bare `-1` as a positional value because it starts with `-` ("No
 	// -NUM option defined."). The "--max-warnings -1" requires the equals form to
 	// actually reach eslint as a numeric value.
-	const result = invokeEslint(["--format", "json", "--max-warnings=-1", filePath], cwd);
+	const result = invokeEslint(["--format", "json", "--max-warnings=-1", filePath], cwd, filePath);
 	// A killed/spawn-failed run cannot establish a verdict, even if it wrote
 	// a complete-looking JSON prefix before stopping.
 	if (result.error || result.signal || result.status === null) {
@@ -381,7 +424,7 @@ export function main(argv: string[]): void {
 	// (~1s for --print-config). Both gates feed dispatcher branch b
 	// (PASSED Note=tool-unavailable) for unavailable tools or config;
 	// malformed config exits 2 (script-error).
-	probeEslintAvailable(projectRoot);
+	probeEslintAvailable(args.filePath, projectRoot);
 	probeEslintConfig(args.filePath, projectRoot);
 
 	const { stdout } = runEslint(args.filePath, projectRoot);

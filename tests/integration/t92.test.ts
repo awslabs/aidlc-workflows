@@ -53,6 +53,7 @@
 import { setDefaultTimeout, afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import {
+  chmodSync,
   copyFileSync,
   cpSync,
   existsSync,
@@ -914,6 +915,100 @@ describe("t92 local ESLint resolution", () => {
       .map((line) => (JSON.parse(line) as string[])[0]);
     expect(calls).toEqual(["--version", "--print-config", "--format"]);
   });
+});
+
+// Under Node, ESLint reads a TypeScript flat config only through jiti, which
+// neither the eslint@10 pin nor this repository's lockfile install carries;
+// under Bun it reads one natively. These run the shipped sensor script on a
+// real config and real ESLint and expect its no-var finding, not a
+// tool-unavailable pass.
+const TS_FLAT_CONFIGS: Record<string, string> = {
+  "eslint.config.mts": 'import type { Linter } from "eslint";\nconst config: Linter.Config[] = [{ rules: { "no-var": "error" } }];\nexport default config;\n',
+  "eslint.config.cts": 'import type { Linter } from "eslint";\nconst config: Linter.Config[] = [{ rules: { "no-var": "error" } }];\nmodule.exports = config;\n',
+  "eslint.config.ts": 'import type { Linter } from "eslint";\nconst config: Linter.Config[] = [{ rules: { "no-var": "error" } }];\nexport default config;\n',
+};
+const REPO_ESLINT_CLI = join(REPO_ROOT, "node_modules", "eslint", "bin", "eslint.js");
+
+describe("t92 TypeScript flat config", () => {
+  function tsConfigProject(configFile: string, linkNodeModules: boolean): { proj: string; file: string } {
+    const proj = mkdtempSync(join(tmpdir(), "aidlc-t92-ts-config-"));
+    tempDirs.push(proj);
+    writeFileSync(join(proj, "package.json"), '{"name":"aidlc-t92-ts-config","private":true}\n');
+    writeFileSync(join(proj, configFile), TS_FLAT_CONFIGS[configFile]);
+    if (linkNodeModules) {
+      symlinkSync(join(REPO_ROOT, "node_modules"), join(proj, "node_modules"), process.platform === "win32" ? "junction" : "dir");
+    }
+    const file = join(proj, "sample.js");
+    writeFileSync(file, "var total = 1;\nconsole.log(total);\n");
+    return { proj, file };
+  }
+
+  function runLinter(file: string, cwd: string, env: Record<string, string | undefined> = process.env) {
+    return spawnSync(
+      BUN,
+      [join(TOOLS_DIR, "aidlc-sensor-linter.ts"), "--stage", "code-generation", "--file-path", file],
+      { encoding: "utf-8", cwd, env, timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS) },
+    );
+  }
+
+  function expectNoVarFinding(res: ReturnType<typeof runLinter>): void {
+    expect(res.status, `${res.stdout}${res.stderr}`).toBe(0);
+    const verdict = JSON.parse(res.stdout);
+    expect(verdict.pass).toBe(false);
+    expect(verdict.errorCount).toBe(1);
+    expect(verdict.violations[0].rule).toBe("no-var");
+  }
+
+  // Stands in for bunx, or for a native executable told to be Bun, so the
+  // pinned command runs offline: it accepts only the expected leading argv,
+  // then runs the lockfile ESLint under Bun with the remaining arguments.
+  function bunShim(dir: string, name: string, prefix: string[]): string {
+    const shim = join(dir, name);
+    const expected = prefix.join(" ");
+    writeFileSync(
+      shim,
+      [
+        "#!/bin/sh",
+        `[ "$BUN_BE_BUN" = "${name === "bunx" ? "" : "1"}" ] || exit 64`,
+        `case "$*" in "${expected} "*) ;; *) exit 64 ;; esac`,
+        `shift ${prefix.length}`,
+        `exec "${BUN}" "${REPO_ESLINT_CLI}" "$@"`,
+        "",
+      ].join("\n"),
+    );
+    chmodSync(shim, 0o755);
+    return shim;
+  }
+
+  test.each(Object.keys(TS_FLAT_CONFIGS))("the project's own ESLint without jiti reads %s and reports its finding", (config) => {
+    const { proj, file } = tsConfigProject(config, true);
+    expectNoVarFinding(runLinter(file, proj));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test.skipIf(process.platform === "win32")("the pinned fallback runs under Bun for a TypeScript config", () => {
+    const { proj, file } = tsConfigProject("eslint.config.mts", false);
+    const bin = mkdtempSync(join(tmpdir(), "aidlc-t92-bunx-"));
+    tempDirs.push(bin);
+    bunShim(bin, "bunx", ["--bun", "eslint@10"]);
+    const { AIDLC_COMPILED_EXECUTABLE: _native, ...env } = process.env;
+    expectNoVarFinding(runLinter(file, proj, { ...env, PATH: `${bin}:${process.env.PATH}` }));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test.skipIf(process.platform === "win32")("a native install runs the pin through its own executable as Bun", () => {
+    const { proj, file } = tsConfigProject("eslint.config.cts", false);
+    const bin = mkdtempSync(join(tmpdir(), "aidlc-t92-native-"));
+    tempDirs.push(bin);
+    const native = bunShim(bin, "aidlc", ["x", "--bun", "eslint@10"]);
+    expectNoVarFinding(runLinter(file, proj, { ...process.env, AIDLC_COMPILED_EXECUTABLE: native }));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a broken TypeScript config is a script error, not a missing tool", () => {
+    const { proj, file } = tsConfigProject("eslint.config.mts", true);
+    writeFileSync(join(proj, "eslint.config.mts"), "const rules: number = ;\nexport default [];\n");
+    const res = runLinter(file, proj);
+    expect(res.status, `${res.stdout}${res.stderr}`).toBe(2);
+    expect(res.stderr).toContain("config-parse-error:");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ============================================================

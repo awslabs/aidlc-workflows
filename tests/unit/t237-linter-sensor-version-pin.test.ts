@@ -11,7 +11,7 @@
 // tool-unavailable PASS - masking real lint findings (observed on a real
 // box 2026-07-13: t92 tests 11/15 red purely from the apt package).
 //
-// The guard: every bunx invocation in the shipped linter sensor script
+// The guard: every pinned run (bunx, or a native install's `x`) in the shipped linter sensor script
 // must pass the pinned ESLINT_SPEC, never the bare string "eslint".
 // Source-pin over behavior: exercising the PATH-shadow scenario live
 // needs a writable PATH dir + registry access and is racy under -P;
@@ -43,14 +43,14 @@ describe("t237 linter sensor eslint version pin", () => {
   });
 
   test("no spawnSync bunx invocation passes bare 'eslint' as the tool arg", () => {
-    // Every `spawnSync("bunx", [<first-arg>, ...])` in the script must use
-    // ESLINT_SPEC. A literal "eslint" first element would resolve through
-    // node_modules/PATH and reintroduce the shadowing bug.
-    const bunxFirstArgs = [...src.matchAll(/spawnSync\(\s*"bunx",\s*\[\s*("(?:[^"]*)"|[A-Za-z_$][\w$]*)/g)].map(
+    // Every pinned run, through bunx or a native executable's `x`, must name
+    // ESLINT_SPEC after its runtime flags. A literal "eslint" package would
+    // resolve through node_modules/PATH and reintroduce the shadowing bug.
+    const pinnedRuns = [...src.matchAll(/spawnSync\(\s*(?:"bunx",\s*\[|native,\s*\[\s*"x",)\s*(?:\.\.\.runtime,\s*)?("(?:[^"]*)"|[A-Za-z_$][\w$]*)/g)].map(
       (m) => m[1],
     );
-    expect(bunxFirstArgs.length).toBeGreaterThan(0);
-    for (const arg of bunxFirstArgs) {
+    expect(pinnedRuns.length).toBe(2);
+    for (const arg of pinnedRuns) {
       expect(arg).toBe("ESLINT_SPEC");
     }
   });
