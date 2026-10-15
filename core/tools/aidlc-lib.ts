@@ -1032,8 +1032,9 @@ export function isRetiredOnlyNextArgv(args: readonly string[]): boolean {
 }
 
 // A next made only of modifier flags, one of whose values parseNextFlags refuses
-// (a depth, test-strategy, review, Guard Policy or ceremony word it does not
-// accept, or a missing value), returns that refusal before naming any command.
+// (a depth, test-strategy, review, Guard Policy, ceremony or switchable
+// `--guard.<check>` word it does not accept, or a missing value), returns that
+// refusal before naming any command.
 // It is terminal, not workflow engagement (t-tui-t27, Full Suite 36549553601).
 // A flag that takes no value beside them (`--resume`, which the agent adds on a
 // re-entry, `--single`, `--new-intent`, ...: the `none` shapes in NEXT_FLAGS)
@@ -1055,7 +1056,9 @@ export function isRefusedModifierNextArgv(args: readonly string[]): boolean {
       ? ["adversarial", "advisory", "none"]
       : flag === "--depth" || flag === "--test-strategy"
         ? ["minimal", "standard", "comprehensive"]
-        : null;
+        : flag.startsWith("--") && guardFenceFromConfigKey(flag.slice(2)) !== null
+          ? ["on", "off"]
+          : null;
     if (!words && !ceremony && !guard) return false;
     const value = args[i + 1];
     if (value === undefined || value.startsWith("--")) {
@@ -2735,9 +2738,11 @@ function isTerminalUtilityNext(invocation: { command: string; args: string[] }):
 // slot, and says what fills it, for the agent to put the reply that asked there.
 export const PERSON_WORDS_SLOT = "<their words>";
 export const PERSON_WORDS_FILL = `, with ${PERSON_WORDS_SLOT} the person's reply that asked for it, word for word`;
-const CONFIGURATION_STEP = new RegExp(
-  `^Run \`([^\`]+)\` to update the configuration(${escapeRegex(PERSON_WORDS_FILL)})?, then print its output verbatim and stop\\.$`,
+const dispatchStep = (doing: string): RegExp => new RegExp(
+  `^Run \`([^\`]+)\` to ${doing}(${escapeRegex(PERSON_WORDS_FILL)})?, then print its output verbatim and stop\\.$`,
 );
+const CONFIGURATION_STEP = dispatchStep("update the configuration");
+const SCOPE_CHANGE_STEP = dispatchStep("change scope");
 
 // A modifier-only next, or one naming a scope, can initialize work or dispatch
 // configuration or a scope change depending on state. Its own successful
@@ -2773,8 +2778,13 @@ function isTerminalConfigurationDispatch(
     "--guard-policy": "guard-policy",
     "--change-control": "guard-policy",
     ...Object.fromEntries(CEREMONY_KEYS.map((key) => [CEREMONY_FLAGS[key], CEREMONY_FLAGS[key].slice(2)])),
+    // A check typed for this work; `guard.plan-approval` is another way to say plan approval.
+    ...Object.fromEntries(SWITCHABLE_GUARD_FENCES.map((fence) =>
+      [`--guard.${fence}`, fence === "plan-approval" ? "plan-approval" : `guard.${fence}`]
+    )),
   };
-  const order = ["depth", "test-strategy", "review", "guard-policy", ...CEREMONY_KEYS.map((key) => CEREMONY_FLAGS[key].slice(2))];
+  const fences = SWITCHABLE_GUARD_FENCES.filter((fence) => fence !== "plan-approval").map((fence) => `guard.${fence}`);
+  const order = ["depth", "test-strategy", "review", "guard-policy", ...CEREMONY_KEYS.map((key) => CEREMONY_FLAGS[key].slice(2)), ...fences];
   const values = new Map<string, string>();
   // A scope change names its own command, carrying any setting typed with it.
   let scope: string | undefined;
@@ -2786,10 +2796,12 @@ function isTerminalConfigurationDispatch(
     const name = modifierFlags[args[i]];
     if (name === undefined || values.has(name)) return false;
     // The engine names the parsed value: the guard policy and ceremony words,
-    // and the depth, test-strategy, and review words lowercased (it refuses
-    // any other word before naming a command).
+    // and the depth, test-strategy, review, and check words lowercased (it
+    // refuses any other word before naming a command).
     const raw = args[i + 1];
-    const levels = name === "review" ? ["adversarial", "advisory", "none"] : ["minimal", "standard", "comprehensive"];
+    const levels = name === "review"
+      ? ["adversarial", "advisory", "none"]
+      : args[i].startsWith("--guard.") ? ["on", "off"] : ["minimal", "standard", "comprehensive"];
     const value = name === "guard-policy"
       ? parseGuardPolicy(raw)
       : CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === args[i])
@@ -2820,7 +2832,7 @@ function isTerminalConfigurationDispatch(
     const validated = validateDirective(parsed);
     if (!validated.valid || validated.data.kind !== "print") return false;
     const match = (scope !== undefined
-      ? /^Run `([^`]+)` to change scope, then print its output verbatim and stop\.$/
+      ? SCOPE_CHANGE_STEP
       : CONFIGURATION_STEP).exec(validated.data.message);
     if (!match) return false;
     if (match[2] !== undefined) expected.push("--person-words", PERSON_WORDS_SLOT);
