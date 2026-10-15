@@ -145,6 +145,7 @@ import {
   bodyRuns,
   numberedOptionLine,
   numberedProseQuestion,
+  showsGateAgain,
   validateDirective,
   withAgentNotes,
 } from "./aidlc-directive.ts";
@@ -210,6 +211,8 @@ import {
   firstPlannedStageOfPhase,
   formatReceivedReply,
   freshReviewReceipts,
+  changeAlreadyAccepted,
+  reviewerGateGuardDisabled,
   getField,
   GUARD_RECOVERY_ASK_TYPE,
   PLAN_APPROVAL_ASK_TYPE,
@@ -1358,7 +1361,7 @@ function prepareEmission(directive: Directive): PreparedEmission {
   // ask whose ways on are the conductor's own work (agent_work) is no question
   // for the person: the turn goes on, and the conductor carries them out.
   const endsTurn = (directive.kind === "ask" && (directive as { agent_work?: unknown }).agent_work !== true) ||
-    turnEndingPrints.has(directive);
+    turnEndingPrints.has(directive) || showsGateAgain(directive as unknown as Record<string, unknown>);
   if (
     directive.kind === "run-stage" && directive.construction_policy &&
     directive.gate === false
@@ -10414,6 +10417,21 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
           // The one late question is shown again as the same one question.
           const together = approveTogetherFor(pd, stateContent, currentNode, recordPrefix, codekbCtx);
           if (together) directive.approve_together = together;
+          // A joint late approval stays the one question it is: the report
+          // would show the gate as this stage's alone.
+          if (!together && gateOwesItsReport(pd, stateContent, currentNode, scope)) {
+            const step = printDirective(
+              `The ${currentNode.name} gate's reviewed work changed after its review: run \`${aidlcToolInvocation("orchestrate")} ` +
+                `report --stage ${shellArg(currentSlug)} --result awaiting-approval\` and show the gate with what it returns.`,
+            );
+            // The report covers every Unit and names no folder; a Unit is not
+            // reported on its own in a solo walk, so the produced line rides here.
+            const produced = unit !== null && isPerUnit(currentNode) && !usesStageLevelPerUnitArtifacts(scope, stateContent)
+              ? producedLine(currentNode, unit, true, pd)
+              : "";
+            emit(produced ? { ...step, narration: produced } : step);
+            return;
+          }
           const gate = applyGateOnlyShape(directive, pd, stateContent);
           emit(withChangeNotices(gate, [
             ...((gate as Directive).change_notices ?? []),
@@ -10569,6 +10587,23 @@ function isSettledAutonomousSwarm(
   if (units.length === 0) return false;
   const converged = swarmConvergedUnits(projectDir, node.slug, routingEvidenceFor(projectDir, stateContent));
   return units.every((unit) => converged.has(unit));
+}
+
+// The open gate's reviewed work changed after its review and the change is not
+// on record yet: a change the person asked for at the gate, kept with the
+// review under a relaxed or off Guard Policy. The gate's own report records it
+// and says it, with the offer to have it checked, so that report comes before
+// the gate is shown again. Under strict the changed work is the preflight's
+// recovery and never gets here. The same scan and ledger the report's gate
+// check reads, read only.
+function gateOwesItsReport(projectDir: string, stateContent: string, node: StageEntry, scope: string): boolean {
+  if (!node.reviewer || reviewerGateGuardDisabled()) return false;
+  const reviewClass = resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent);
+  if (reviewClass === "none") return false;
+  const changes = freshReviewReceipts(projectDir, stateContent, node, { reviewClass }).acceptedChanges;
+  if (changes.length === 0) return false;
+  const events = readAuditShardEvents(projectDir);
+  return changes.some((change) => !changeAlreadyAccepted(projectDir, change, events));
 }
 
 // Reuse the settled run-stage surface without re-entering body or review work.
@@ -16518,8 +16553,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         !humanPresenceGuardDisabled();
       const sequence: string[][] = [];
       if (flags.result === "awaiting-approval") {
+        // The Unit's gate shown again ends the turn, as the stage's does below.
         if (status === "awaiting-approval") {
-          emit(printDirective(
+          emit(turnEndingPrint(
             `Unit "${unit}" gate for "${slug}" is already awaiting approval.`,
           ));
           return;
@@ -16871,6 +16907,10 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       ),
       changeNoticesFromToolOutput(res.stdout),
     );
+    // The gate shown again ends the turn, as the gate-only step does: the
+    // person's reply that led here (a change, a review they asked for) is
+    // answered, and their next one is the reply to this showing.
+    if (revalidatingOpenGate && gateReply.kind === "print") turnEndingPrints.add(gateReply);
     // The agent shows the gate next, so lines held from inside the stage are
     // said with it, and its Approve option names the stage the plan runs next
     // now: a plan change made during the stage is in it.

@@ -31,7 +31,7 @@
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -588,6 +588,65 @@ describe("t-late-design-gates-one-approval: one question for the late stage appr
     expect(rows(proj, "GATE_APPROVED").length).toBe(0);
     const again = runOrchestrateNext(ORCH, proj, [], { env: chatEnv(proj) }).directive as Directive;
     expect(again.approve_together?.stages?.map((st) => st.slug)).toEqual(BLOCK.slice(1));
+  });
+
+  // A change the person asks for at an open gate under Guard Policy off is made
+  // directly; before the gate is shown again, `next` hands the gate's report,
+  // which says the change (t-gate-shown-again). Here the gate is a per-Unit
+  // stage's.
+  function guardPolicyOff(proj: string): void {
+    const path = seededStateFile(proj);
+    writeFileSync(path, readFileSync(path, "utf-8")
+      .replace("- **Revision Count**: 0\n", "- **Revision Count**: 0\n- **Guard Policy**: off (set by you)\n"));
+  }
+  function askedChange(proj: string, stage: string, unit: string): void {
+    const doc = join(seededRecordDir(proj), "construction", unit, stage, artifactFilename(REVIEW_ARTIFACTS[stage]));
+    appendFileSync(doc, "\nA change the person asked for.\n");
+    appendAuditEntry("ARTIFACT_UPDATED", { File: relative(proj, doc).replaceAll("\\", "/"), Stage: stage, Unit: unit }, proj);
+  }
+  function nextAfterChange(proj: string): Directive {
+    const r = runOrchestrateNext(ORCH, proj, [], { env: { ...engineEnv(), AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" } });
+    if (r.directive === null) throw new Error(`next did not emit parseable JSON. status=${r.status}\n${r.stdout}\n${r.stderr}`);
+    return r.directive as Directive;
+  }
+
+  test("12: an asked change at the joint late gate: the gate is shown again as the same one question", () => {
+    const proj = seedBuiltProject({ checkpoints: "disabled" });
+    guardPolicyOff(proj);
+    runReport(proj, ["--stage", "functional-design", "--result", "awaiting-approval"]);
+    askedChange(proj, "functional-design", "alpha");
+    const again = nextAfterChange(proj);
+    expect(again).toMatchObject({ kind: "run-stage", stage: "functional-design", gate_only: true });
+    expect(again.approve_together?.stages?.map((s) => s.slug)).toEqual(BLOCK);
+    expect(again.approve_together?.prompt).toBe(ONE_QUESTION);
+  });
+
+  test("12b: an asked change at a lone per-Unit gate: the report comes first, with what the stage produced", () => {
+    const proj = seedBuiltProject({
+      checkpoints: "disabled",
+      current: "code-generation",
+      checkboxes: `- [x] functional-design ${SEP} EXECUTE
+- [x] nfr-requirements ${SEP} EXECUTE
+- [x] nfr-design ${SEP} EXECUTE
+- [x] infrastructure-design ${SEP} EXECUTE
+- [-] code-generation ${SEP} EXECUTE
+- [ ] build-and-test ${SEP} EXECUTE`,
+    });
+    guardPolicyOff(proj);
+    runReport(proj, ["--stage", "code-generation", "--result", "awaiting-approval"]);
+    askedChange(proj, "code-generation", "alpha");
+    const owed = nextAfterChange(proj);
+    expect(owed.kind).toBe("print");
+    expect(String(owed.message)).toContain("report --stage code-generation --result awaiting-approval`");
+    // A Unit is not reported on its own in a solo walk: the report names none.
+    expect(String(owed.message)).not.toContain("--unit");
+    expect(String(owed.narration)).toMatch(
+      /^Code Generation is ready for your review\. It produced .*, in aidlc\/.*\/construction\/beta\/code-generation\/\.$/,
+    );
+    const reported = runReport(proj, ["--stage", "code-generation", "--result", "awaiting-approval"]);
+    expect(reported.message).toBe('Stage "code-generation" is already awaiting approval; gate evidence revalidated.');
+    expect(JSON.stringify(reported.change_notices ?? [])).toContain("construction/alpha/code-generation/code-generation-plan.md changed after");
+    expect(nextAfterChange(proj)).toMatchObject({ kind: "run-stage", stage: "code-generation", gate_only: true });
   });
 
   test("7: no shipped prose still describes the late per-stage cascade", () => {
