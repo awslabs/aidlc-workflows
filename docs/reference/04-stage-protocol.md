@@ -1427,7 +1427,11 @@ When `directive.protocol_modules` lists `learnings`, the ritual runs between the
    keep and, for free-text additions, picks the heading that derives the
    destination. The always-present "Anything to add?" channel renders at least
    `Nothing to add` and `Add a note`; one-option structured questions are
-   invalid on Claude Code and Codex.
+   invalid on Claude Code and Codex. Its `log decision` carries
+   `--question-kind learnings-note`, so an answer of `Add a note` is known by
+   that field, never by the question's wording or options: it ends the turn
+   at the follow-up, and its `agent_note` tells the agent to take the note
+   from the person's reply when they already gave it, and ask only otherwise.
 4. **Admission check**: each kept learning is checked against `org.md`'s
    matching section; a contradiction is surfaced to revise / skip / escalate.
 5. **Persist**: `aidlc-learnings.ts persist` writes each confirmed learning as a practice to

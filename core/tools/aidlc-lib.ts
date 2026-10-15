@@ -11809,10 +11809,13 @@ export function consumeCopilotConversation(
 ): boolean {
   return transactActiveDirective(projectDir, (marker, target) => {
     const context = activeDirectiveContext(target, stateContent);
+    // The stage's work recorded through `aidlc log` (markStageWorkLogged)
+    // leaves the engine mark, not an engine sequence: it is engagement here too.
     if (
       marker?.version !== 2 || marker.owner_session !== sessionId || marker.state_sha256 !== context.stateSha256 ||
       (marker.human_sequence ?? 0) <= (marker.engine_sequence ?? 0) ||
-      (marker.human_sequence ?? 0) <= (marker.conversation_sequence ?? 0)
+      (marker.human_sequence ?? 0) <= (marker.conversation_sequence ?? 0) ||
+      engineMarkedSincePersonSpoke(projectDir)
     ) return { marker, result: false, preserve: true };
     return {
       marker: {
@@ -28268,6 +28271,13 @@ export function stageWorkLogged(output: unknown, projectDir: string): boolean {
       ? output.map((part) => isPlainObject(part) && typeof part.text === "string" ? part.text : "").join("\n")
       : "";
   if (!/\\?"emitted\\?"\s*:\s*\\?"[A-Z][A-Z_]*\\?"/.test(text)) return false;
+  return engineMarkedSincePersonSpoke(projectDir);
+}
+
+// The engine mark is newer than the person's turn: the copilot path reads it
+// beside its own sequences, which a `log` call does not advance. Any
+// unreadable mark is no evidence.
+export function engineMarkedSincePersonSpoke(projectDir: string): boolean {
   try {
     const human = turnMarkerStat(projectDir, "human-turn");
     const engine = turnMarkerStat(projectDir, "engine-touch");
@@ -40949,6 +40959,8 @@ export const QUESTION_KIND_FIELD = "Question Kind";
 export const LEARNINGS_NOTE_CHOICES = ["Nothing to add", "Add a note"] as const;
 /** Its value for the mode question, written by the command the step note hands the agent. */
 export const ANSWER_MODE_QUESTION_KIND = "answer-mode";
+/** Its value for the learnings ritual's "Anything to add?", written by the command that module names. */
+export const LEARNINGS_NOTE_QUESTION_KIND = "learnings-note";
 export const ANSWER_MODE_LABELS: Record<AnswerModeChoice, string> = {
   guide: "Guide me",
   file: "I'll edit the file",

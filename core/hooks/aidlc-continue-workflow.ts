@@ -117,11 +117,12 @@
 //      the engine, so nothing there is released by it. An unattended driver
 //      (AIDLC_UNATTENDED=1) has nobody present, and a prompt it submits reads as
 //      a person's, so under autonomy it keeps the old guard. It only ever
-//      ALLOWS; it can never block more. Both paths count a `log answer` /
-//      `log review` / `log link` the logger marked as the stage's work going
-//      on (#2400), from the one rule beside markEngineTouch (markStageWorkLogged,
-//      isStageWorkLogCall, stageWorkLogged); Plan Approval and guard-recovery
-//      answers are not among them.
+//      ALLOWS; it can never block more. Both paths, and Copilot's sequences,
+//      count a `log answer` / `log review` / `log link` the logger marked as
+//      the stage's work going on (#2400), from the one rule beside
+//      markEngineTouch (markStageWorkLogged, isStageWorkLogCall,
+//      stageWorkLogged, engineMarkedSincePersonSpoke); Plan Approval and
+//      guard-recovery answers are not among them.
 //        NOT FULL PARITY. The marker path answers the same question more
 //        COARSELY than the transcript: it is blind to aidlc-jump / aidlc-bolt /
 //        aidlc-swarm and the mutating aidlc-state verbs, which the transcript

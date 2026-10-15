@@ -492,6 +492,13 @@ describe("t271 review iteration ceiling", () => {
       (JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}") as { agent_note?: string }).agent_note;
     const RA = ["--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"];
     const NO_LEARNINGS = { AIDLC_DISABLE_LEARNINGS: "1" };
+    // The skill's completion sequence runs stage-completion verification
+    // before the summary, the learnings question and the gate's report.
+    const verifiesFirst = (step: string | undefined, ...after: string[]): void => {
+      const verify = step?.indexOf("run stage-completion verification") ?? -1;
+      expect(verify, step).toBeGreaterThanOrEqual(0);
+      for (const later of after) expect(step?.indexOf(later) ?? -1, `${later} in ${step}`).toBeGreaterThan(verify);
+    };
     function verdictNote(
       box: string,
       verdict: "READY" | "NOT-READY",
@@ -519,6 +526,7 @@ describe("t271 review iteration ceiling", () => {
         });
         expect(step, verdict).toContain("say the completion summary, then run");
         expect(step).toContain("report --stage requirements-analysis --result awaiting-approval");
+        verifiesFirst(step, "completion summary", "report --stage");
         expect(step).not.toContain("learnings");
         // Agent-facing only: no verdict token.
         expect(step).not.toContain("READY");
@@ -531,12 +539,16 @@ describe("t271 review iteration ceiling", () => {
       const { step } = verdictNote("-", "READY");
       expect(step).toContain("learnings ritual");
       expect(step).not.toContain("--result");
+      verifiesFirst(step, "completion summary", "learnings ritual");
     });
 
     test("an open gate is shown again, and a revision's gate with --result revised", () => {
-      expect(verdictNote("?", "READY").step).toContain("report --stage requirements-analysis --result awaiting-approval");
+      const open = verdictNote("?", "READY").step;
+      expect(open).toContain("report --stage requirements-analysis --result awaiting-approval");
+      verifiesFirst(open, "report --stage");
       const revised = verdictNote("R", "READY").step;
       expect(revised).toContain("report --stage requirements-analysis --result revised");
+      verifiesFirst(revised, "report --stage");
       expect(revised).not.toContain("learnings");
     });
 
@@ -549,6 +561,7 @@ describe("t271 review iteration ceiling", () => {
         expect(replied.status, `${replied.stdout}${replied.stderr}`).toBe(0);
       });
       expect(step).toContain("orchestrate next");
+      verifiesFirst(step, "orchestrate next");
       expect(step).toContain("record it with their words rather than asking again");
       expect(step).not.toContain("Do not ask the approval question");
       expect(step).not.toContain("--result");
@@ -586,6 +599,8 @@ describe("t271 review iteration ceiling", () => {
         } else {
           expect(note(recorded.stdout)).toContain("--iteration 2");
           expect(note(recorded.stdout)).not.toContain("--result");
+          // Verification follows the last pass, not this one.
+          expect(note(recorded.stdout)).not.toContain("stage-completion verification");
         }
       }
 

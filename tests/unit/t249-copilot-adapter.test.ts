@@ -3301,6 +3301,34 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(marker(activeRecovery).stop_count).toBe(2);
   });
 
+  // #2400: a turn whose only engine calls are `aidlc log` recording the
+  // stage's work advances no Copilot sequence; the engine mark the logger
+  // leaves is what says the turn was not chat, so the Stop is nudged.
+  test("24a: a recorded stage answer is engagement, so the Stop after it is not conversational", () => {
+    const dir = orchestrationProject();
+    const session = "stage-work-log-owner";
+    const { directive } = driveToRunStage(dir, session);
+    const stage = String(directive.stage);
+    const log = (args: string[]) => {
+      const command = `bun .aidlc/tools/aidlc.ts engine log ${args.map((arg) => JSON.stringify(arg)).join(" ")}`;
+      expect(runAdapter(dir, "guard-tool-call", commandPayload(dir, session, command, `log-${args[0]}`)).code).toBe(0);
+      const executed = runShell(dir, command);
+      runAdapter(dir, "post-tool", commandPayload(dir, session, command, `log-${args[0]}`, true, executed.stdout));
+      return executed;
+    };
+    const asked = log(["decision", "--stage", stage, "--decision", "Which team owns it?", "--options", "Team A,Team B"]);
+    expect(asked.status, asked.stderr).toBe(0);
+    expect(runAdapter(dir, "record-human-turn", { ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "Team A" }).code).toBe(0);
+    const engineSequence = marker(dir).engine_sequence;
+    Bun.sleepSync(20);
+    const answered = log(["answer", "--stage", stage, "--details", "Team A"]);
+    expect(answered.status, answered.stderr).toBe(0);
+    expect(answered.stdout).toContain('"emitted":"QUESTION_ANSWERED"');
+    expect(marker(dir).engine_sequence).toBe(engineSequence);
+    const stopped = runAdapter(dir, "continue-workflow", { ...FIXTURES.stop, cwd: dir, session_id: session });
+    expect((JSON.parse(stopped.stdout || "{}") as { decision?: string }).decision).toBe("block");
+  });
+
   test("24b: a no-tool human prompt is consume-once conversational without prior valid v2 coordination", () => {
     for (const shape of ["missing", "malformed", "v1"] as const) {
       const dir = orchestrationProject();

@@ -111,6 +111,7 @@ import {
   isNonAnswer,
   ANSWER_MODE_LABELS,
   ANSWER_MODE_QUESTION_KIND,
+  LEARNINGS_NOTE_QUESTION_KIND,
   QUESTION_KIND_FIELD,
   answerModeFromReply,
   isAnswerModeDecision,
@@ -947,7 +948,7 @@ function demoteReviewHeadings(body: Buffer): { bytes: Buffer; changed: string[] 
 
 // --- Subcommand: decision ---
 // Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>]
-//   [--rationale <text>] [--question-kind answer-mode] [--checkpoint summary-confirmation
+//   [--rationale <text>] [--question-kind answer-mode|learnings-note] [--checkpoint summary-confirmation
 //   --questions-file <path> [--unit <unit>] [--single]]
 //
 // Fires BEFORE AskUserQuestion, recording what options will be shown.
@@ -1184,14 +1185,16 @@ function handleDecision(args: string[]): void {
   // Which of the engine's own questions this is, as the step note's command
   // names it; the answer reads the field, never the question's words.
   if (flags["question-kind"] !== undefined) {
-    if (flags["question-kind"] !== ANSWER_MODE_QUESTION_KIND) {
+    const kind = flags["question-kind"];
+    if (kind !== ANSWER_MODE_QUESTION_KIND && kind !== LEARNINGS_NOTE_QUESTION_KIND) {
       error(
-        `--question-kind ${JSON.stringify(flags["question-kind"])} is not a kind log decision records. Its one kind ` +
-          `is "${ANSWER_MODE_QUESTION_KIND}", for the question of how the person answers a stage's questions; leave ` +
+        `--question-kind ${JSON.stringify(kind)} is not a kind log decision records. Its kinds are ` +
+          `"${ANSWER_MODE_QUESTION_KIND}", for the question of how the person answers a stage's questions, and ` +
+          `"${LEARNINGS_NOTE_QUESTION_KIND}", for the learnings question "Anything to add for next time?"; leave ` +
           "the flag off for any other question.",
       );
     }
-    fields[QUESTION_KIND_FIELD] = ANSWER_MODE_QUESTION_KIND;
+    fields[QUESTION_KIND_FIELD] = kind;
   }
   if (flags.checkpoint === "summary-confirmation") {
     fields.Checkpoint = SUMMARY_CONFIRMATION_CHECKPOINT;
@@ -2581,18 +2584,24 @@ function handleAnswer(args: string[]): void {
     }
 
     // The learnings question's Add a note (its exact option, on the question
-    // logged with exactly its options): the person writes the note next, so
-    // the turn ends at the ask (stage-protocol-learnings.md section 13).
+    // its kind names): the person's next reply answers what follows, so the
+    // turn ends at that question (stage-protocol-learnings.md section 13).
+    // Whether their reply already holds the note is the agent's to read.
     const question = decisionRowsInScope(readAuditShardEvents(pd), flags.stage, flags.unit).at(-1);
     const asksForNote = flags.details === LEARNINGS_NOTE_CHOICES[1] && question !== undefined &&
-      (auditBlockField(question.block, "Options") ?? "").split(",").map((option) => option.trim()).join(",") ===
-        LEARNINGS_NOTE_CHOICES.join(",");
+      auditBlockField(question.block, QUESTION_KIND_FIELD) === LEARNINGS_NOTE_QUESTION_KIND;
     if (asksForNote) rowEndsTurn = true;
     console.log(
       JSON.stringify({
         emitted: "QUESTION_ANSWERED",
         stage: flags.stage,
-        ...(asksForNote ? { agent_note: "Ask what the note should say and end the turn; their next reply is the note." } : {}),
+        ...(asksForNote
+          ? {
+            agent_note: "When their reply already says what the note is, that is the note: take their words and do " +
+              "not ask for it again. Otherwise ask what the note should say. End the turn at the question you ask " +
+              "next; their next reply answers it.",
+          }
+          : {}),
       })
     );
   });
@@ -3083,17 +3092,17 @@ function reviewVerdictStep(
   if (node.phase === "initialization") return null;
   const box = stageBox(state, flags.stage);
   if (box === undefined || !REVIEW_IN_FLIGHT.has(box)) return null;
-  // What the person said while the reviewer worked comes first
-  // (stage-protocol-reviewer.md): `next` names the step, with their words.
-  if (personSpokeSinceReviewRequest(pd, flags.stage, flags.reviewer, undefined, selection.intent, selection.space)) {
-    return reviewVerdictNote({ kind: "person-wrote", next: aidlcDispatcherInvocation("orchestrate next") });
-  }
   const terminal = terminalReviewVerdict(
     verdict,
     String(iteration),
     reviewClass,
     node.reviewer_max_iterations ?? 2,
   ) !== null;
+  // What the person said while the reviewer worked comes first
+  // (stage-protocol-reviewer.md): `next` names the step, with their words.
+  if (personSpokeSinceReviewRequest(pd, flags.stage, flags.reviewer, undefined, selection.intent, selection.space)) {
+    return reviewVerdictNote({ kind: "person-wrote", next: aidlcDispatcherInvocation("orchestrate next"), terminal });
+  }
   if (!terminal) {
     if (box === "awaiting-approval") return null;
     return reviewVerdictNote({

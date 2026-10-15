@@ -1213,26 +1213,30 @@ export function reviewRequestNote(reviewer: string, reviewFile: string, recordVe
 }
 
 // The step after a stage's verdict is recorded (#2400), as the logger decides
-// it: one branch, with its exact command.
+// it: one branch, with its exact command. A verdict no further pass follows
+// leads into the skill's ordered completion sequence at its next step,
+// stage-completion verification, named here and owned there.
 export type ReviewVerdictStep =
-  | { kind: "person-wrote"; next: string }
+  | { kind: "person-wrote"; next: string; terminal: boolean }
   | { kind: "next-pass"; request: string }
   | { kind: "learnings" }
   | { kind: "gate"; report: string; summary: boolean };
+const NO_FURTHER_PASS = "No further review pass follows: run stage-completion verification, then ";
 export function reviewVerdictNote(step: ReviewVerdictStep): string {
   switch (step.kind) {
     case "person-wrote":
-      return `The person wrote since the review was requested: run \`${step.next}\` and follow its step together ` +
+      return "The person wrote since the review was requested: " +
+        `${step.terminal ? "run stage-completion verification, then " : ""}run \`${step.next}\` and follow its step together ` +
         "with what they said; if what they said answers the approval, record it with their words rather than " +
         "asking again.";
     case "next-pass":
       return "Another review pass follows: fix what its findings name (a review that did not finish names nothing " +
         `to fix), then request the next pass with \`${step.request}\` in this turn.`;
     case "learnings":
-      return "No further review pass follows: say the completion summary, then run the learnings ritual and ask " +
-        "its question, which ends the turn. The approval gate comes after their answer.";
+      return `${NO_FURTHER_PASS}say the completion summary, then run the learnings ritual and ask its question, ` +
+        "which ends the turn. The approval gate comes after their answer.";
     case "gate":
-      return `No further review pass follows: ${step.summary ? "say the completion summary, then " : ""}run ` +
+      return `${NO_FURTHER_PASS}${step.summary ? "say the completion summary, then " : ""}run ` +
         `\`${step.report}\`, print the review brief and ask the approval question in this turn.`;
   }
 }
