@@ -41,7 +41,10 @@ calls `report --single --stage <slug> --result completed` exactly once. Report
 requires the open start boundary and records the matching `STAGE_COMPLETED`; it
 does not fabricate both rows. The isolated path keeps no diary and does not run workflow learnings,
 open an approval gate, call main-workflow `next`, or park. The returned `done`
-terminates the isolated run.
+terminates the isolated run. `next --single` refuses a typed setting (depth,
+test strategy, review, Guard Policy, a ceremony switch or a check) with an
+`error`, since the run-stage carries none of them; the person sets it with
+`config set` first.
 
 The engine is deterministic code by design — routing is the determinism concern, so it lives in a tool, never in LLM prose (handing route string-building to an LLM would invert the tool/agent/human thesis). It **composes** the existing deterministic library: `loadGraph()` for the compiled graph, `nextInScopeStage()` / `firstInScopeStageOfPhase()` for sequencing, `validScopes()` for the scope-name set, and `getField` / `parseCheckboxes` for state reads. The non-happy-path branches (jump, intent creation, scope/config change, env-scope validation) compose the sibling CLI tools by shelling out and relaying their stderr verbatim, so user-facing error wording is never reconstructed. Explicit resume falls through to normal continuation after its parked/no-state guards. The only things the engine *adds* rather than composes are the decision rule mapping `(observed state + graph) → directive kind` and the artifact-path resolver that turns the graph node's vocabulary names into canonical record-dir paths (`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/<phase>/<stage>/...`).
 

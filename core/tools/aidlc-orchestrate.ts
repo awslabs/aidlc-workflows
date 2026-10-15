@@ -9637,6 +9637,20 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       ));
       return;
     }
+    // The run-stage carries none of the workflow's settings, so a setting typed
+    // here would be dropped while the person thinks it applied (#2654). Review
+    // and ceremony flags meet their own refusals above; this catches the rest.
+    const settings = typedSettingModifiers(flags);
+    if (settings.length > 0) {
+      const unnamed = settingNeedsTheirWords(codekbCtx.projectDir, settings);
+      emit(errorDirective(
+        `Cannot use --single with ${settings.map((s) => `--${s.split(" ")[0]}`).join(", ")}. ` +
+          "A single-stage run uses the workflow's settings as they are. " +
+          `Run \`${configSetCommand(settings, unnamed)}\`${unnamed ? PERSON_WORDS_FILL : ""} first, ` +
+          "then run the stage again with --single.",
+      ));
+      return;
+    }
     emitSingleRunStage(
       flags.stage,
       scope,

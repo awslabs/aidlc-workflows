@@ -827,4 +827,76 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     ]);
     expect(r.out).toContain("Cannot use --single with --phase");
   });
+
+  // =========================================================================
+  // Test 17 (#2654): a setting typed with --single is refused, not dropped.
+  // The run-stage carries none of them, so a single run would start with the
+  // workflow's own settings while the person thinks theirs applied. Review and
+  // ceremony flags meet their own refusals earlier in handleNext.
+  // =========================================================================
+  function startedRows(proj: string): number {
+    return readFileSync(seededAuditShard(proj), "utf-8")
+      .split("\n")
+      .filter((line) => line === "**Event**: STAGE_STARTED").length;
+  }
+
+  for (const [flag, value] of [
+    ["--test-strategy", "comprehensive"],
+    ["--depth", "comprehensive"],
+    ["--guard-policy", "relaxed"],
+  ] as const) {
+    test(`17: next --single ${flag} errors and starts nothing`, () => {
+      const proj = freshProject();
+      seedStateFile(proj, STATE_FIXTURE);
+      seedAuditFile(proj);
+      const r = run(TOOL, [
+        "next", "--stage", "build-and-test", "--single", flag, value, "--project-dir", proj,
+      ]);
+      const directive = JSON.parse(r.out.trim()) as { kind?: string; message?: string };
+      expect(directive.kind, r.out).toBe("error");
+      expect(directive.message).toContain(`Cannot use --single with ${flag}.`);
+      expect(directive.message).toContain("config set");
+      expect(startedRows(proj)).toBe(0);
+      expect(currentStage(proj)).toBe("feasibility");
+    });
+  }
+
+  test("17b: next --single with two settings names both in one error", () => {
+    const proj = freshProject();
+    seedStateFile(proj, STATE_FIXTURE);
+    seedAuditFile(proj);
+    const r = run(TOOL, [
+      "next", "--stage", "build-and-test", "--single",
+      "--depth", "standard", "--test-strategy", "comprehensive", "--project-dir", proj,
+    ]);
+    const directive = JSON.parse(r.out.trim()) as { kind?: string; message?: string };
+    expect(directive.kind, r.out).toBe("error");
+    expect(directive.message).toContain("Cannot use --single with --depth, --test-strategy.");
+    expect(directive.message).toContain("config set depth standard --test-strategy comprehensive");
+    expect(startedRows(proj)).toBe(0);
+  });
+
+  test("17c: next --single with a ceremony flag stays refused", () => {
+    const proj = freshProject();
+    seedStateFile(proj, STATE_FIXTURE);
+    seedAuditFile(proj);
+    const r = run(TOOL, [
+      "next", "--stage", "build-and-test", "--single", "--sensors", "off", "--project-dir", proj,
+    ]);
+    expect(r.out).toContain('"kind":"error"');
+    expect(startedRows(proj)).toBe(0);
+  });
+
+  test("17d: plain next --stage build-and-test --single still runs the stage", () => {
+    const proj = freshProject();
+    seedStateFile(proj, STATE_FIXTURE);
+    seedAuditFile(proj);
+    const r = run(TOOL, [
+      "next", "--stage", "build-and-test", "--single", "--project-dir", proj,
+    ]);
+    const directive = JSON.parse(r.out.trim()) as { kind?: string; single?: boolean };
+    expect(directive.kind, r.out).toBe("run-stage");
+    expect(directive.single).toBe(true);
+    expect(startedRows(proj)).toBe(1);
+  });
 });
