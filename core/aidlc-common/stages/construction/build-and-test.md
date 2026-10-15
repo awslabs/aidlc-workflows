@@ -249,6 +249,9 @@ This is a stage-level gate, not the Construction phase boundary. Enumerate:
 - every three-segment `AC` from
   `<record>/inception/user-stories/stories.md` when that stage executed
 
+A requirement with sub-requirements is traced through its `FR{n}.{m}` IDs:
+enumerate those in its place; a row for the `FR{n}` alone does not cover them.
+
 Read both the stage-level
 `<record>/construction/code-generation/traceability.json` file (when present,
 including Express) and every per-unit

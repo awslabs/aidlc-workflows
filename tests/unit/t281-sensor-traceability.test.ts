@@ -1320,6 +1320,20 @@ describe("t281 a requirement and its sub-requirements", () => {
     });
   }
 
+  test("every stage that lists FR IDs says a requirement is traced through its sub-requirements", () => {
+    const RULE = "traced through its `FR{n}.{m}` IDs";
+    for (const stage of [
+      "inception/user-stories.md",
+      "inception/domain-design.md",
+      "inception/units-generation.md",
+      "construction/functional-design.md",
+      "construction/code-generation.md",
+      "construction/build-and-test.md",
+    ]) {
+      expect(readFileSync(join(STAGES, stage), "utf-8"), stage).toContain(RULE);
+    }
+  });
+
   test("user-stories: the sub-requirements alone pass; the parents alone still miss each sub-requirement", () => {
     const proj = project();
     seedUserStories(proj);

@@ -430,7 +430,7 @@ feasibility input.
 | rules.md        | Decision rules, validation logic, constraints, policies, conditional behavior |
 | entities.md       | Entities, relationships, data structures, attributes, lifecycle states   |
 | frontend-components.md   | (CONDITIONAL) Component hierarchy, props/state, interaction flows, form validation, API integration |
-| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR), each `OK` to `BRx.y` rules in rules.md, `N/A` or `Deferred` with its reason, or `GAP` |
+| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR; a requirement with sub-requirements through its `FR{n}.{m}` IDs), each `OK` to `BRx.y` rules in rules.md, `N/A` or `Deferred` with its reason, or `GAP` |
 
 Which files a Unit gets follows its kind: a `ui` Unit gets no entities.md or
 rules.md, only a `ui` Unit gets frontend-components.md, and a `packaging`
@@ -1454,7 +1454,8 @@ with the aidlc-devsecops-agent providing security testing expertise.
     `N/A` row when no target applies.
 
 10. **Cross-Unit Final Coverage Gate** -- Enumerate every `FR` and `NFR` in
-    `requirements.md` and every `AC` in `stories.md` (when User Stories ran),
+    `requirements.md` (a requirement with sub-requirements through its
+    `FR{n}.{m}` IDs; a row for the `FR{n}` alone does not cover them) and every `AC` in `stories.md` (when User Stories ran),
     read the stage-level and every per-unit Code Generation
     `traceability.json`, and check each ID is covered `OK` with an existing
     target file. Write `cross-unit-traceability.md` with the verdict, per-ID
