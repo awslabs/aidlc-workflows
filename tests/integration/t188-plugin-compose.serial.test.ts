@@ -1267,6 +1267,33 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(existsSync(runner)).toBe(false);
   });
 
+  // --- Plugin prose gets core's invocation tokens, per install channel ---
+  test("composed plugin stages project {{INVOKE}} for the copy channel", () => {
+    const body = stageBody(project, "construction", "test-pro-integration");
+    expect(body).not.toContain("{{INVOKE}}");
+    expect(body).toContain("bun .claude/tools/aidlc.ts engine orchestrate report");
+  });
+
+  test("composed plugin stages project {{INVOKE}} for the native channel without bun", () => {
+    const nativeProject = join(tmp, "proj-native");
+    cpSync(join(REPO_ROOT, "dist-release", "claude"), nativeProject, { recursive: true });
+    const result = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
+      cwd: nativeProject,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_ROOT: pluginBuilt,
+        CLAUDE_PROJECT_DIR: nativeProject,
+        AIDLC_HARNESS_DIR: ".claude",
+      },
+    });
+    expect(result.status).toBe(0);
+    const body = stageBody(nativeProject, "construction", "test-pro-integration");
+    expect(body).toContain("`aidlc engine orchestrate report --stage test-pro-integration");
+    expect(body).not.toContain("bun ");
+    expect(body).not.toContain("{{INVOKE}}");
+  });
+
   // --- New stages compose + route ---
   test("new plugin stages are in the compiled graph", () => {
     const slugs = graph(project).map((s) => s.slug);
@@ -2793,7 +2820,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
   test("{{HARNESS_DIR}} is substituted in composed stage prose", () => {
     const body = stageBody(project, "construction", "test-pro-integration");
     expect(body).not.toContain("{{HARNESS_DIR}}");
-    expect(body).toContain(".claude/tools/aidlc-orchestrate.ts");
+    expect(body).toContain(".claude/tools/aidlc.ts engine orchestrate report");
   });
 
   // --- Idempotency ---

@@ -7,6 +7,7 @@ import {
   fixLabel,
   heading,
 } from "./aidlc-color.ts";
+import { aidlcInvocation } from "./aidlc-runtime-paths.ts";
 
 export const ROUTE_NAMESPACE_DECLARATIONS = {
   public: { trustedPrefix: false },
@@ -658,4 +659,20 @@ export function readTerminalLine(
   }
   if (sawEof && bytes.length === 0) return null;
   return Buffer.from(bytes).toString("utf-8").replace(/\r$/, "");
+}
+
+// Plugin Markdown is projected at compose/sync time, not by the packager, so it
+// gets the same invocation tokens core prose does, for the channel this tree
+// was projected for (native `aidlc`, or the copy channel's bun dispatcher).
+export function projectInvocationTokens(text: string, harnessDir: string): string {
+  const invoke = aidlcInvocation();
+  const toolPrefix = invoke === "aidlc" ? `${TRUSTED_COMMAND_PREFIX} ` : `bun ${harnessDir}/tools/`;
+  // Token names are assembled, not written whole: the packager would otherwise
+  // project the literals in this file's own source.
+  const token = (name: string): string => `{{${name}}}`;
+  return text
+    .replaceAll(token("HARNESS_DIR"), harnessDir)
+    .replaceAll(token("INVOKE"), invoke)
+    .replaceAll(token("TOOL_PREFIX"), toolPrefix)
+    .replaceAll(token("TRUSTED_NAMESPACE"), TRUSTED_ROUTE_NAMESPACE);
 }

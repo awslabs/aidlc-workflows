@@ -16,6 +16,7 @@ import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { projectInvocationTokens } from "./aidlc-command.ts";
 import {
   acquireAuditLock,
   committedTextBytes,
@@ -1093,7 +1094,7 @@ function pluginPrimitiveTargets(
 function projectedSourceBytes(source: string, harnessDir: string): Buffer {
   const bytes = readFileSync(source);
   return source.endsWith(".md")
-    ? Buffer.from(bytes.toString("utf-8").replaceAll("{{HARNESS_DIR}}", harnessDir))
+    ? Buffer.from(projectInvocationTokens(bytes.toString("utf-8"), harnessDir))
     : bytes;
 }
 
