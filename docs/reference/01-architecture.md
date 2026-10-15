@@ -252,8 +252,8 @@ sequenceDiagram
 ## Source vs distribution (one core, many harnesses)
 
 The framework is **authored once and generated per harness** — today Claude
-Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, and GitHub Copilot, and
-any capable CLI you port it to. The
+Code, Kiro CLI, Kiro IDE, Codex CLI, Cursor, opencode, GitHub Copilot, and
+Google Antigravity, and any capable CLI you port it to. The
 hand-authored source is a harness-neutral `core/` plus a thin `harness/<name>/`
 surface per CLI; `bun scripts/package.ts` materializes ignored local
 `dist/<harness>/` trees:
@@ -449,7 +449,7 @@ The resolver applies per-agent exception, group dial, shipped tier default, then
 session inherit. The shipped-default layer calls the shared tier projection
 module and the active tier cap resolver; it does not duplicate model tables.
 The same surface writers are used at package time and config refresh time for
-Claude and Cursor Markdown, Codex TOML, opencode Markdown, and Kiro agent JSON
+Claude, Cursor and Antigravity Markdown, Codex TOML, opencode Markdown, and Kiro agent JSON
 plus `chat.modelDefaults`.
 
 Refresh passes the resolved settings chain into a pristine staged projection

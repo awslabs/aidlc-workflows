@@ -25,7 +25,7 @@ function releasePath(path: string): string {
 
 describe("a model or effort request runs config models", () => {
   test("every harness's ambient onboarding names the command, in both channels", () => {
-    expect(HARNESS_MATRIX.length).toBe(7);
+    expect(HARNESS_MATRIX.length).toBe(8);
     for (const harness of HARNESS_MATRIX) {
       const invokes = [
         { path: harness.harnessOnboardingDist, invoke: `bun ${harness.manifest.harnessDir}/tools/aidlc.ts` },

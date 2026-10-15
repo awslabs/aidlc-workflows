@@ -112,6 +112,12 @@ export type TierProjection = {
    *  accounts reject every named model), so a pinned id would hard-fail
    *  installs on lower plans; agents inherit the session model instead. */
   cursor: { model: string | null };
+  /** Antigravity agent .md frontmatter: `model:` (the host's subagent model
+   *  tier: "inherit" | "flash_lite" | "flash" | "pro"). Model-only BY DESIGN,
+   *  like kiro: Antigravity has no effort key in agent frontmatter. All tiers
+   *  ship null - an omitted key is the host's own inherit, so every agent runs
+   *  on the session model the person chose. */
+  antigravity: { model: string | null };
 };
 
 export type Harness = keyof TierProjection;
@@ -128,6 +134,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     opencode: { model: null, variant: null },
     copilot: { model: null },
     cursor: { model: null },
+    antigravity: { model: null },
   },
   balanced: {
     // Effort pinned to medium. Balanced is the reviewer tier - both
@@ -138,6 +145,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     claude: { model: "sonnet", effort: "medium" },
     codex: { model: null, effort: "medium" },
     cursor: { model: null },
+    antigravity: { model: null },
     kiro: { model: null },
     opencode: { model: null, variant: "medium" },
     copilot: { model: null },
@@ -152,6 +160,7 @@ export const TIER_PROJECTIONS: Record<Tier, TierProjection> = {
     opencode: { model: null, variant: null },
     copilot: { model: null },
     cursor: { model: null },
+    antigravity: { model: null },
   },
 };
 
