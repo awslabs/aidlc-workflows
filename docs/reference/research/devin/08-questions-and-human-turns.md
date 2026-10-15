@@ -46,6 +46,7 @@ No Devin-specific long-prompt wrapping guarantee was established. The shared wor
 | Free text, batch, skipped | Each question's reply is kept word for word, free text as the person typed it; a skipped question keeps its place with no reply | t332 13m–13q (13m replays the captured 3000.11.3 ACP batch, fixture `postToolUse_askUserQuestion_acp3000_11_3_batchOther`) |
 | Gate feedback and setting words | A free-text Request Changes is the gate's feedback; a free-text reply is findable by `replyOfTheirs` | t332 13o, 13p |
 | Decision material in the question | The annex binds gate, summary, Plan Approval and composer material into the question text; protected questions keep their logged text | t181 "the Devin annex puts what the person decides on in the question"; live ACP rerun |
+| Live question channel over ACP | A free-text answer is stored word for word; a declined or cancelled question stays open for the typed reply; batches are stored whole; the decision material is in the question | Gated `t-acp-devin-questions` and `t-acp-devin-journey` (`AIDLC_DEVIN_ACP_LIVE=1`, driver `tests/harness/devin-acp-drive.ts`, DEVIN-14); passed on 3000.11.92 on 2026-10-15 |
 | Partial/unknown/contradictory response | No unrecognized or skipped choice becomes authorization | t332 13e/13f; contradictory success/selection fields remain a gap |
 | Shared method update | Devin references the normative checkpoint rules without duplicating or weakening them | t250 and t181 source-contract checks |
 

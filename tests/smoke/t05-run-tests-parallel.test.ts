@@ -759,6 +759,8 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
       "AIDLC_CODEX_EXEC_LIVE",
       "AIDLC_COPILOT_EXEC_LIVE",
       "AIDLC_CURSOR_RUN_LIVE",
+      "AIDLC_DEVIN_EXEC_LIVE",
+      "AIDLC_DEVIN_ACP_LIVE",
       "AIDLC_KIRO_IDE_LIVE",
       "AIDLC_OPENCODE_RUN_LIVE",
     ];

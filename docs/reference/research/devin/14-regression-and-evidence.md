@@ -35,6 +35,7 @@ The port repeatedly exposed the difference between a configured integration, a g
 | 2026-10-14 live ACP intent, run 1 (documented run, no stored capture) | Copy-channel install from `dist/devin` at `822d7e61` into a fresh git project; `devin 3000.11.3 (9c803229faa4)` as a `devin acp` subprocess, WSL2, bun 1.3.14, Python 3.10.12; one ACP prompt turn, 22 answers given as elicitation responses. Express was proposed; the person tailored the plan, edited it in free text (plan approval on, Guard Policy strict, a requirements reviewer), and approved `poc`. Intent Capture → Requirements Analysis → Code Generation → Build and Test all approved; `7/7 stages`, 40 generated tests pass; doctor 0 problems / 3 warnings; a new ACP session resumed to "work is finished". Hooks ran under ACP (SessionStart on `session/new`, UserPromptSubmit per prompt turn, Pre/PostToolUse, Stop, and the foreground child-Stop pass-through for all 6 dispatches). Found ACP-1 to ACP-4 (index A1–A3, A5) | Devin's terminal UI, Desktop, a third-party ACP client; per-unit reviewer windows (no Units in `poc`), background subagents, review-freeze and state-transition refusals, compaction and park/resume, the native compiled install, other OSes |
 | 2026-10-15 `ask_user_question` PostToolUse capture (documented probe, captured shape retained as a fixture) | Scratch project with a stdin-logger PostToolUse hook, the question answered over `devin acp` on 3000.11.3: a batch with free text on one question and a two-item multi-select on another. The shape — `{success, output:"User answered your questions:\n<json keyed by question>", error}` with `{selected, custom_text, skipped}` per question — is the fixture `postToolUse_askUserQuestion_acp3000_11_3_batchOther`, replayed by t332 13m. A decline and a cancel were probed the same way: neither fires PostToolUse; the model reads "The user wants to clarify these questions…" and "User canceled the question" | Devin's terminal UI answer path (assumed the same tool result, not captured); other builds |
 | 2026-10-15 live ACP intent, run 2 (documented run, no stored capture) | Same intent, driver and answers as run 1 at `99a54c8b` in a fresh project. `7/7 stages`, 39 generated tests pass, doctor 0 problems / 3 warnings. 27 stored person messages (22 picker, 5 typed), none reading "Other"; the 4-question batch kept 4 replies; the audit's `Person Reply` and `Feedback` carry the typed words; Guard Policy "set by you". Every decision question carried its material: 2 composer gates, 3 summary confirmations, 5 stage-gate questions, Plan Approval. Decline and cancel each left the question open, and the next typed message answered it. Plan Approval still read "set by a command" (ACP-5, core); the developer dispatch passed the guard first time, so ACP-4 was not retested | The same boundaries as run 1; a repair pass (ACP-4) |
+| 2026-10-15 in-tree Devin ACP tier (documented run, logs not retained in the tree) | `tests/harness/devin-acp-drive.ts` and its tests (the commit that adds them, on top of `519041be`), `devin 3000.11.92 (7f4e64980e22)`, WSL2, bun 1.3.14. `t-devin-acp-protocol` 12/12 (token-free). Live with `AIDLC_DEVIN_ACP_LIVE=1`: calibration 3/3 (29 s) and questions 2/2 (67 s). Journey PASS (1,690 s) in 3 turns: 19 answered elicitations and a declined stage gate; a typed approval, then a cancelled gate; a typed approval to `WORKFLOW_COMPLETED`. 10 clarifying questions took the default answer, `PLAN_APPROVAL_BLOCKED` 0, 7 subagents. Facts measured on the way: Devin honours `session/cancel` (`stopReason: "cancelled"`), and a declined or cancelled question ends the turn with `end_turn`. A tool that exits right after writing stdout can lose its tail on the ACP stream (the calibration fixture waits for the write before exiting). A whole intent can exceed the 30-minute single-operation budget inside one turn (one run timed out at it while still healthy), so the journey gives each turn the remaining case budget. When the person's words ask for a light plan, the composer can drop summary confirmation, so the journey asks for it by name. The learnings "Keep none of these" list appears only when a stage has notes, so the decline/cancel steps use the stage gates | Other builds and OSes; Devin's terminal UI; third-party ACP clients; a CI live family (Devin is on-demand only) |
 | Former frontmatter-revert log | Historical test narrative with an explicit notice of edited version text, recoverable in Git | Untouched raw evidence or a rerun on the newer baseline |
 
 Under PR #996 Item 9 the campaign's top-level `README.md` and `HARNESS-REQUIREMENTS.md` were removed and the owner then explicitly retained the four latest attended-run directories (152 files / 2,885,101 bytes) as a grandfathered exception; the `first-run/`–`fourth-run/` material remains historical in Git only. Interpret summaries alongside their disclosed interventions; summaries can contain diagnoses later corrected by source inspection.
@@ -102,8 +103,8 @@ Packaging determinism, source parity, static protocol checks, runtime fixture as
 | Adapter subprocess behavior | t332 (including the `Item 2` native-dispatch cases, the `Item 3` lifecycle cases, and the `Item 4` reviewer-window cases 1–24); approved dispatch, rule injection, and full workflow completion observed live (native-dispatch acceptance); reviewer window, sibling refusal, dispatch-time refusal, and close points observed live (reviewer-scope acceptance) | Regression cases for the F1 (heredoc body) and F4 (`cd` root) false positives and the F2 invalid-record refusal are not written yet (DEVIN-07 follow-ups); ~~`rebuild-stage-graph` never compiles `runtime-graph.json` on Devin because `classifyRuntimeCompileCommand` derives its path pattern from `KNOWN_HARNESS_DIRS`, which omits `.devin`~~ — fixed 2026-09-22 (`.devin` added to `KNOWN_HARNESS_DIRS`); covered by t226's per-harness-dir classifier parity test (iterates `KNOWN_HARNESS_DIRS`) and t332 `14a` (end-to-end `runtime-graph.json` compile through the adapter) |
 | Ensemble binding | t333 source-contract assertions | Real participation, contribution artifacts, pipeline receipts, and failure recovery |
 | Version and diagnostics | t334, t294, t331 tests 9/9d (spawned doctor through a `PATH` shim — pass/below-floor/unparseable pinned on any machine), t331/t332 SessionStart cases | Desktop execution, actual model selection, current hook approval; the "binary missing" spawned-doctor state is t334-only (the macOS Desktop candidate is an absolute path) |
-| Plan Approval and shell safety | t265 and shared authority tests; strict session pairing covered by the t328 `Item 1 session isolation` suite and t332 adapter A/B transport cases; native `task` dispatch translation covered by the t332 `Item 2` cases | Receipt reuse without re-prompt after a session change (inconclusive in the session-isolation acceptance; the native-dispatch acceptance resumed/compacted the same session without re-prompt but issued no `/clear`) |
-| Question rendering and recording | t250, focused t181 contract assertions (including the Devin annex's decision-material and decline/cancel contract), t332 13m–13q on the captured 3000.11.3 shape; batch, Other, multi-select, decline and cancel observed live over ACP (2026-10-15) | Contradictory-response cases; a skipped question live; Devin's terminal UI and third-party ACP clients |
+| Plan Approval and shell safety | t265 and shared authority tests; strict session pairing covered by the t328 `Item 1 session isolation` suite and t332 adapter A/B transport cases; native `task` dispatch translation covered by the t332 `Item 2` cases; a live Plan Approval answered over ACP with the developer dispatch passing the guard, in the gated `t-acp-devin-journey` (`PLAN_APPROVAL_RECORDED`) | Receipt reuse without re-prompt after a session change (inconclusive in the session-isolation acceptance; the native-dispatch acceptance resumed/compacted the same session without re-prompt but issued no `/clear`) |
+| Question rendering and recording | t250, focused t181 contract assertions (including the Devin annex's decision-material and decline/cancel contract), t332 13m–13q on the captured 3000.11.3 shape; batch, Other, multi-select, decline and cancel observed live over ACP (2026-10-15) and pinned by the gated `t-acp-devin-questions` and `t-acp-devin-journey`; the driver's own question parsing and answer encoding by `t-devin-acp-protocol` | Contradictory-response cases; a skipped question live; Devin's terminal UI and third-party ACP clients |
 | Read-only Stop consultation | t121 and t328 integration | New observer-reachable writers after engine changes |
 | Contract repair | t299 and t37 | Host write-tool attribution/fix and safe retirement |
 
@@ -117,7 +118,7 @@ Resolution lesson from the `0f39a808` merge (2026-10-14): a red test after a mer
 
 ## Live verification after a host update — not run by this rewrite
 
-The existing automated Devin live tests are deliberately narrow:
+There are two sets of automated Devin live tests. The `devin -p` set below (`AIDLC_DEVIN_EXEC_LIVE`) is deliberately narrow and runs no workflow. The ACP set (`AIDLC_DEVIN_ACP_LIVE`, "The Devin ACP driver" below) drives whole workflows. The `devin -p` set:
 
 ```bash
 AIDLC_DEVIN_EXEC_LIVE=1 bun tests/run-tests.ts --e2e --filter '^t-exec-devin-status\.serial\.test\.ts$' --debug
@@ -127,7 +128,7 @@ AIDLC_DEVIN_EXEC_LIVE=1 bun tests/run-tests.ts --e2e --filter '^t-exec-devin-con
 
 The first requires a supported binary, uses `AIDLC_DEVIN_BIN` when supplied, and covers no-workflow `/aidlc --status` plus absence of workflow scaffolding. The second drives `devin -p` against a local `Bun.serve` fixture and asserts that `${env:VAR}` headers in `.devin/mcp_config.json` arrive resolved (and empty when unset); it proves a host contract and does not need `dist/devin`. The third runs `devin skills list` / `devin mcp list` (no inference) against a scratch project seeded with one probe per documented import source: under the shipped `config.json` nothing imports and `/aidlc` stays unprefixed; under vendor defaults a positive control imports Copilot skills and OpenCode/Zed MCP and renames `/aidlc` to `/devin:aidlc` + `/github:aidlc`. None validates active workflow gates, subagents, Desktop, or all topologies; authenticated Context7 use was verified by hand (evidence table above), not by an automated test, because it needs a real key. A skip is not a live PASS. Run only with explicit approval for model usage and the applicable environment.
 
-**Live ACP intent (recipe used 2026-10-14 and 2026-10-15).** This drives a whole AI-DLC intent through Devin with nobody at a Devin UI, and it checks questions, gates, reviewers and Plan Approval end to end; one intent took about 47 minutes. It spends inference and runs the person's stored Devin credentials, so it needs the same approval as the live tests above.
+**Live ACP intent, by hand (the recipe of the 2026-10-14 and 2026-10-15 exploratory runs; `t-acp-devin-journey` now automates it).** This drives a whole AI-DLC intent through Devin with nobody at a Devin UI, and it checks questions, gates, reviewers and Plan Approval end to end; one intent took about 47 minutes. It spends inference and runs the person's stored Devin credentials, so it needs the same approval as the live tests above.
 
 1. Run `bun scripts/package.ts`, copy `dist/devin/` into a fresh `git init` project outside the checkout. A first commit there is worth making, so that later diffs show only what the run wrote.
 2. Start `devin acp` from the project as a subprocess and speak JSON-RPC over stdio. Send `initialize` with `{protocolVersion:1, clientCapabilities:{elicitation:{form:{}}}}`, then `session/new {cwd, mcpServers:[]}`. Do not call `authenticate`: stored CLI credentials are enough, and `devin-browser` fails headless. `available_commands_update` should list `/aidlc`.
@@ -142,7 +143,73 @@ The first requires a supported binary, uses `AIDLC_DEVIN_BIN` when supplied, and
    - the generated project's own tests.
 6. Keep the trace, project and notes outside the tree; the retained-artifact policy applies.
 
-The 2026-10-14/15 client (`/tmp/aidlc-devin-acp/driver.ts`) was a detached Bun daemon controlled through files: `start <projectDir> <runDir>`, `prompt`, `answer '<json>'`, `decline`, `cancel`, `permit <optionId>`, `status`, `wait`, `stop`, writing `trace.ndjson` and `transcript.md`. It is not in the tree, so it is lost with `/tmp`; bringing it in is an open owner decision (the index's open-findings table, DEVIN-14 row). `tests/harness/kiro-acp-drive.ts` is the in-tree pattern for Kiro.
+### The Devin ACP driver (`tests/harness/devin-acp-drive.ts`)
+
+The two exploratory runs used an ad-hoc daemon client outside the tree. The driver now in the tree replaces it. It is the Devin twin of `tests/harness/kiro-acp-drive.ts`: a measuring instrument that scripts the transport and returns structure, with assertions left to the tests. By owner decision it is scripted only. It has no interactive or daemon mode, so every answer comes from code. Its header comment is the wire contract it relies on, verified against the captured 3000.11.3 run and re-run on 3000.11.92. Change that header only from a new capture.
+
+**Interface:**
+- `openDevinAcpSession(projectDir)` spawns `devin acp` (or `AIDLC_DEVIN_BIN`) in the project. It sends `initialize` with the elicitation form capability, then `session/new`, and never `authenticate`.
+- `driveDevinAcp({projectDir, prompt, session?, answer?, stopAfterCommand?, timeoutMs?})` runs one prompt turn. It opens and closes its own session unless one is passed in; a caller that passes a session closes it.
+- `answer` is a `DevinAnswerer`. It receives each `elicitation/create` parsed into questions (`key` `q0…qN`, `header`, `question` text, `options` with labels, `multiSelect`, `minItems`, `required`) plus `allowOther`. It returns `{action:"accept", answers}`, `{action:"decline"}`, `{action:"cancel"}`, or `undefined`.
+- The result carries:
+  - `toolCalls` (tool name from `_meta`, `rawInput`, last output snapshot, status, `parentAgentId` for subagent children, `rejected`);
+  - `toolCallIssues` (failures the person did not cause) and `rejectedToolCalls` (declined or cancelled questions);
+  - `subagents`, `orphanUpdates`;
+  - `elicitations`, each with its outcome: answered, declined, cancelled, unanswered or after-stop, plus an `error` when the answerer threw;
+  - `permissionRequests`, `unhandledRequests`, `availableCommands`, `stopReason`;
+  - the state file and audit events after the turn;
+  - `assistantText`, for debugging only.
+- Helpers: `storedPersonMessages(projectDir)` reads `aidlc/.aidlc-sessions/messages/*.json` oldest first; `cleanDevinOutput(text)` strips the display wrap codes; `devinAcpSkipReason()` checks the gate, the version floor and `dist/devin`.
+
+**Rules it keeps:**
+- **No settings changes:** it answers a permission prompt with `allow_once`, or `reject_once` when that is the only safe option. The `allow_session`, `allow_always`, `allow_always_global` and `switch_bypass` options write the person's Devin settings, so it never picks them.
+- **Answers are person turns:** each accepted answer is recorded as a person turn before the reply goes out. A batch counts as one turn backing as many answers as it carried. The turn fails when the audit records a decision for the person with no turn behind it (`PersonTurnLedger`, as in the Kiro driver).
+- **Bad answers become a cancel:** an answer that does not fit the form is sent as a cancel and recorded as "unanswered". That covers a missing required key, a string for a multi-select, fewer than `minItems`, and free text without `allowOther`. So is an answer from a missing or throwing answerer, and every live test asserts that none occurred. After a `stopAfterCommand` stop, later questions are cancelled as "after-stop".
+- **Output is the last snapshot:** each Devin update repeats the full output, so the driver keeps the last one and never concatenates. `cleanDevinOutput` removes the wrap codes Devin inserts every 120 columns; calibration case 1 proves that byte for byte against doctor's own stdout.
+- **Stopping a turn:** `stopAfterCommand` sends `session/cancel` once an `exec` call whose command matches has completed. Devin honours it (`stopReason: "cancelled"`).
+- **Budgets:** timeouts come from `test-budget.ts`. A whole intent can run inside one prompt turn and take longer than the 30-minute single-operation budget, so the journey gives each turn whatever is left of the case budget.
+
+**Tests:**
+
+```bash
+bun tests/run-tests.ts --unit --no-llm --filter '^t-devin-acp-protocol\.test\.ts$'   # token-free fake ACP server
+AIDLC_DEVIN_ACP_LIVE=1 bun tests/run-tests.ts --e2e --debug --filter '^t-acp-devin-'  # all three live files, ~30 min
+```
+
+- **`t-devin-acp-protocol` (unit, 12 cases, no Devin binary):** runs the real driver against an in-process fake server built from the captured message shapes. It covers the handshake, label versus free-text validation, batches with multi-select, decline and cancel, the unanswered cancel, the permission choice, snapshot output and wrap cleaning, subagent lifecycle, `stopAfterCommand`, the -32601 reply, a throwing answerer, and `storedPersonMessages`.
+- **`t-acp-devin-calibration` (live, 3 cases):** doctor's stdout arrives byte for byte; a command that never ran is never found; a two-question form (free text and a multi-select) round-trips through `elicitation/create`.
+- **`t-acp-devin-questions` (live, 2 cases):** a free-text answer to the plan offer is stored word for word as a picker reply, and nothing reads "Other". A declined plan offer ends the turn with no intent and no picker reply, and the typed reply in the next turn is stored as a prompt and creates the intent without the question being asked again.
+- **`t-acp-devin-journey` (live, the full intent, about 30 minutes):**
+  - **Path:** tailor the plan, edit it in the person's words (plan approval and summary confirmation on, Guard Policy strict, a requirements reviewer), and answer the clarifying questions. Then Request Changes once at the summary confirmation and once at a stage gate, both in the person's words, and approve the plan. Decline the first stage gate after Plan Approval and cancel the next; after each, the person types an approval.
+  - **Assertions:**
+    - `WORKFLOW_COMPLETED`, `GATE_REJECTED`, `SUMMARY_CONFIRMATION_RECORDED` and `PLAN_APPROVAL_RECORDED` in the audit;
+    - no unanswered questions and no tool issues;
+    - no stored "Other", and the three free-text answers stored word for word;
+    - every batch stored whole;
+    - the Plan Approval question names a plan file that exists;
+    - stage gates say the stage is complete, and summary confirmations say "Confirming";
+    - each decline or cancel ends its turn, and the typed approval that follows adds a `GATE_APPROVED`.
+
+**Writing an answerer:**
+- **Decide each question on its own,** using the option labels AI-DLC fixes:
+  - plan offer: "Tailor a plan…";
+  - composer gate: Approve / Edit… / Reject;
+  - answer mode: "Guide me";
+  - summary confirmation: "Looks correct" / "Request changes";
+  - Plan Approval: "Approve Plan";
+  - stage gate: "Approve" / "Request Changes";
+  - learnings: "Keep none of these" / "Nothing to add".
+- **Never key on headers or question wording;** the model writes those and they vary between runs. Questions that match no rule take a default (a recommended option, else the first), and the test prints every default it used.
+- **Type only to answer a question left open.** The person's typed message should answer a question that was declined or cancelled, and nothing else. The first journey version typed "Please carry on." whenever a turn ended without a question, and that run went on to a `GATE_APPROVED` in turns where the person's only input was that line. A generic continuation at an open gate can read as approval.
+- **Don't hang a test on a step the plan may skip.** A plan edit that asked to "keep it light" led the composer to drop summary confirmation, so the journey now asks for it by name. The learnings "Keep none of these" list appears only when a stage has notes, so decline and cancel are tested on stage gates, which always come.
+
+**Other lessons from building it:**
+- A calibration tool that exits right after writing stdout can lose the end of its output on the ACP stream. The fixture now waits for the write to finish before exiting.
+- Under `--debug` the driver writes `devin-acp-drive-<pid>.ndjson` beside the logs. It records requests, condensed tool updates with output previews, every question with the answer sent, permission choices, subagent start and finish, stderr, and the end of the turn's assistant text, so a turn that ends with nothing to do can be diagnosed.
+
+**Limits:**
+- Devin is not a CI live family (as with `AIDLC_DEVIN_EXEC_LIVE`), so these tests run on demand with the person's signed-in Devin CLI and spend credits.
+- They prove the ACP surface on the builds named in the evidence table, not Devin's terminal UI, Desktop, or third-party ACP clients.
 
 A broader acceptance session needs a disposable project outside this checkout, intentional hook trust/permission setup, a confirmed build, and redacted captures. Keep source-copy and compiled/native installations distinct. Do not alter personal/global configuration or fabricate user approval to make a scenario proceed.
 
