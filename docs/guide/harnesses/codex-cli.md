@@ -240,6 +240,13 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
   `writable_roots = ["<main repo>/.git"]` — template in the shipped
   `config.toml` (linked worktrees resolve into `<main>/.git/worktrees/*`,
   so it must be the main repo's `.git`).
+- **Network under the sandbox**: the shipped `.codex/config.toml` sets
+  `network_access = true` under `[sandbox_workspace_write]`, so a command
+  Codex runs in its sandbox in this project can reach the network (to
+  install packages or fetch dependencies), whatever your own Codex default
+  is. To keep it closed in this project, set `network_access = false` there;
+  a refresh keeps the value you set. For one session only, start Codex with
+  `codex -c sandbox_workspace_write.network_access=false`.
 - **Swarm floor = developer subagents**: one `aidlc-developer-agent`
   subagent per emitted Construction Unit, side by side, each working in the
   isolated worktree for that Unit's Bolt, with the same deterministic
