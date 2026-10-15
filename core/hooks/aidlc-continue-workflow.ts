@@ -64,8 +64,10 @@
 //      team-owned Unit work, the active Unit's gate) is positively [?]/[R] we
 //      ALLOW the stop (isHumanWaitStop below), until the person's reply to
 //      the open gate is on record: then the wait is over and their choice is
-//      owed. Positive-confirmation only and fail-closed: stateless cases fall
-//      through to the cap-bounded block.
+//      owed. A reply the agent answered by showing the gate again (the change
+//      they asked for made, a review they asked for run) is a wait again, by
+//      carve-out 10. Positive-confirmation only and fail-closed: stateless
+//      cases fall through to the cap-bounded block.
 //   3. A mid-stage CLARIFYING QUESTION parks the stage at [-] in-progress — the
 //      same state as a lazy quit, so [-] alone can't be carved out. But the
 //      conductor must write a `<slug>-questions.md` with blank [Answer]: tags
@@ -141,9 +143,10 @@
 //      including under autonomous Construction when the guard requires human
 //      input. Once the response is ready, continuation is enforced again.
 //  10. A STEP THAT ENDS THE TURN: the last step the engine handed out was an
-//      `ask` (where new work goes, which plan to start it with) or a print the
-//      agent stops after (status, a setting, a scope change), and the person
-//      has not written since (turnEndIsOpen). The probe's own `next`, or
+//      `ask` (where new work goes, which plan to start it with), a print the
+//      agent stops after (status, a setting, a scope change), or the approval
+//      gate shown again (the gate-only step, or a report that revalidates the
+//      open gate), and the person has not written since (turnEndIsOpen). The probe's own `next`, or
 //      Copilot's retained step,
 //      would hand back the work in progress, so this is read before either.
 //  11. The CONSTRUCTION AUTONOMY QUESTION: the probed run-stage, or any rules

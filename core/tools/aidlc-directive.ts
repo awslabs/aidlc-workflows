@@ -1171,6 +1171,15 @@ export function gateOnlyNote(): string {
     "run the stage again or change what it produced.";
 }
 
+// The step whose note is gateOnlyNote, in the notes' own order: the agent shows
+// the gate and ends its turn, so the engine marks the turn as ended there.
+export function showsGateAgain(d: Record<string, unknown>): boolean {
+  return d.kind === "run-stage" &&
+    (d.construction_checkpoint as { command_authorized?: unknown } | undefined)?.command_authorized !== false &&
+    d.gate !== GATE_UNRESOLVED &&
+    d.gate_only === true;
+}
+
 // The protocol files a step runs by, named from its own stage file, so a chat
 // with no skill loaded reads them (seen live: a Unit's step looped on a review
 // and an autonomy question the agent never knew about).
@@ -1530,7 +1539,7 @@ export function withAgentNotes<T extends object>(
       notes.gate_note = verificationCommandRecovery(typeof d.stage === "string" ? d.stage : undefined, logInvocation, stateInvocation);
     } else if (d.gate === GATE_UNRESOLVED) {
       notes.gate_note = unresolvedGateNote(invocation);
-    } else if (d.gate_only === true) {
+    } else if (showsGateAgain(d)) {
       notes.gate_note = gateOnlyNote();
     } else if (
       d.gate === false && typeof d.unit === "string" &&

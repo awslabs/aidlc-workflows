@@ -133,7 +133,14 @@ stateDiagram-v2
 `[?]` and `[R]` disambiguate two situations that would otherwise both look like `[-]`. On resume, `[R]` tells the conductor to present the prior artifact and feedback before re-entering the gate, instead of re-executing the stage from scratch.
 
 At `[?]`, `orchestrate next` first runs the `present-approval-gate` guard
-preflight. A refusal still wins. Otherwise it re-presents the current gate as
+preflight. A refusal still wins. When the gate's reviewed work changed after
+its review and that change is not on record yet (a change the person asked for
+at the gate, kept with the review under a relaxed or off Guard Policy), it
+hands a `print` naming `report --stage <slug> --result awaiting-approval`
+first: that report records the change and says it, with the offer to have it
+checked, and the gate is shown once, after it. At a per-Unit stage's gate that
+print carries the produced line for the gate's Unit, which the report does not
+name; a joint late approval keeps the gate-only step below. Otherwise it re-presents the current gate as
 `run-stage` with `gate_only: true` and `gate: true`, not another execution of
 the stage body or reviewer. The directive retains `reviewer`, `review_artifact`,
 and `review_class` when they were present. `reviewer` and `review_artifact` name
