@@ -632,12 +632,14 @@ export async function run(
   }
 
   // "terminal": a simple AI-DLC command that is not claimed as coordination
-  // (a read-only `next` form or another AI-DLC project command). "attempt": a
-  // new call that already carries the attempt flag AI-DLC adds itself.
+  // (a read-only `next` form or another AI-DLC project command).
   // "unsupported" may carry the refusal that names what was not accepted.
+  // `uncopied`: the command without an attempt id the agent copied into it,
+  // present only when it carried one.
   type ParsedOrchestration =
-    | { status: "unrelated" | "unsupported" | "foreign" | "terminal" | "attempt"; reason?: string }
-    | { status: "recognized"; claim: CopilotCommandClaim; rewrite: (attemptId: string) => string; keepsPrompt: boolean };
+    | { status: "unsupported" | "foreign"; reason?: string }
+    | { status: "unrelated" | "terminal"; uncopied?: string }
+    | { status: "recognized"; claim: CopilotCommandClaim; rewrite: (attemptId: string) => string; uncopied?: string; keepsPrompt: boolean };
 
   // Doctor also checks the machine and may refresh the update cache over the
   // network, so it qualifies only with the flags the engine itself passes.
@@ -1093,6 +1095,8 @@ export async function run(
       args = args.slice(2);
       verbWord += 2;
     }
+    // The `--resume` shorthand gains a `next` word the command does not have.
+    const firstArgWord = verbWord - (args[0] === "--resume" ? 1 : 0);
     if (args[0] === "--resume") args = ["next", "--resume", ...args.slice(1)];
     // The orchestrator's own reading says which tokens are its launcher
     // options, in front of the verb and after it, so a word of the person's
@@ -1101,10 +1105,16 @@ export async function run(
     const launcher = readOrchestratorLauncherOptions(args);
     verbWord += launcher.verbAt;
     const options = new Set(launcher.taken);
-    // The agent's own slip: an option it would take with nothing it can take
-    // after it. An attempt id is this adapter's to add, however it is written.
+    // An attempt id is this adapter's to add. Copilot shows the agent each
+    // command as rewritten, so the agent copies the flag into later calls;
+    // refusing those looped, the agent re-adding it on every retry (#2495).
+    // Before a call runs, a copied flag and its id are dropped from the
+    // command, and a claimed call gets its own id, as on any other call. The
+    // copied id never reaches the engine.
+    const copiedWords: number[] = [];
     if (launcher.dangling !== undefined && args[launcher.dangling] === ATTEMPT_FLAG) {
-      return { status: target === "guard-tool-call" ? "attempt" : "unsupported" };
+      if (target !== "guard-tool-call") return { status: "unsupported" };
+      copiedWords.push(firstArgWord + launcher.dangling);
     }
     if (launcher.dangling !== undefined && args[launcher.dangling] === "--project-dir") {
       return { status: "unsupported", reason: PROJECT_DIR_EMPTY };
@@ -1112,9 +1122,13 @@ export async function run(
     const normalized: string[] = [];
     let attemptId = safeAttemptId(copilot.tool_use_id);
     for (let i = 0; i < args.length; i++) {
+      if (target === "guard-tool-call" && i === launcher.dangling && args[i] === ATTEMPT_FLAG) continue;
       if (args[i] === ATTEMPT_FLAG && options.has(i)) {
         const carried = args[++i];
-        if (target === "guard-tool-call") return { status: "attempt" };
+        if (target === "guard-tool-call") {
+          copiedWords.push(firstArgWord + i - 1, firstArgWord + i);
+          continue;
+        }
         if (!safeAttemptId(carried) || (attemptId && attemptId !== carried)) return { status: "unsupported" };
         attemptId = carried;
         continue;
@@ -1136,13 +1150,29 @@ export async function run(
       try { if (normalizeDriveLetter(realpathSync(resolve(projectDir, terminalPath(routed)))) !== normalizeDriveLetter(realpathSync(projectDir))) return { status: "foreign" }; }
       catch { return { status: "unsupported", reason: PROJECT_DIR_MISSING }; }
     }
+    // The command as typed without the copied words, each taken with the
+    // space in front of it, so every other word, the person's quoted ones
+    // too, stays as the agent typed it. With an id, AI-DLC's own flag goes in
+    // at `at`, a place in the command as typed.
+    const respelled = (at: number, addedAttemptId?: string): string => {
+      let body = parsed.body;
+      for (const word of [...copiedWords].sort((a, b) => b - a)) {
+        const from = parsed.ends[word - 1];
+        const to = parsed.ends[word];
+        body = body.slice(0, from) + body.slice(to);
+        if (to <= at) at -= to - from;
+      }
+      const added = addedAttemptId === undefined ? "" : ` ${ATTEMPT_FLAG} ${addedAttemptId}`;
+      return `${lead}${body.slice(0, at)}${added}${body.slice(at)}${parsed.redirect ? ` ${parsed.redirect}` : ""}`;
+    };
+    const uncopied = copiedWords.length > 0 ? { uncopied: respelled(parsed.body.length) } : {};
     const commandKind = normalized[0];
     if (!(["next", "continue", "report", "park"] as string[]).includes(commandKind)) {
-      if (!routedOrchestrate && engineNamedDoctor(normalized)) return { status: "terminal" };
+      if (!routedOrchestrate && engineNamedDoctor(normalized)) return { status: "terminal", ...uncopied };
       const routeArgv = routedOrchestrate ? ["engine", "orchestrate", ...normalized] : normalized;
       return ownProjectRoute(routeArgv, viaDispatcher ? undefined : "aidlc-orchestrate.ts")
-        ? { status: "terminal" }
-        : { status: "unrelated" };
+        ? { status: "terminal", ...uncopied }
+        : { status: "unrelated", ...uncopied };
     }
     const subArgs = normalized.slice(1);
     // Read-only next returns a terminal print before workflow inspection and
@@ -1151,7 +1181,7 @@ export async function run(
     if (commandKind === "next" && isReadOnlyNextArgv(subArgs)) {
       // `next config set` changes a setting, as `engine config set` does.
       const vouched = !(subArgs[0] === "config" && subArgs[1] === "set") && argumentsStayInProject(subArgs);
-      return { status: vouched ? "terminal" : "unrelated" };
+      return { status: vouched ? "terminal" : "unrelated", ...uncopied };
     }
     // A bare `continue` (the receipt lost) is claimed too: the engine answers it
     // as `next`, as it does on every harness, instead of a shell-shape refusal.
@@ -1191,11 +1221,9 @@ export async function run(
       // On a `next` line right after the verb, ahead of the person's words,
       // where the engine reads it; behind them it would be one of their words.
       // The other verbs carry no words of theirs, so it goes at the end.
-      rewrite: (selectedAttemptId) => {
-        const at = commandKind === "next" ? parsed.ends[verbWord] : parsed.body.length;
-        return `${lead}${parsed.body.slice(0, at)} ${ATTEMPT_FLAG} ${selectedAttemptId}` +
-          `${parsed.body.slice(at)}${parsed.redirect ? ` ${parsed.redirect}` : ""}`;
-      },
+      rewrite: (selectedAttemptId) =>
+        respelled(commandKind === "next" ? parsed.ends[verbWord] : parsed.body.length, selectedAttemptId),
+      ...uncopied,
       claim: {
         sessionId,
         ...(attemptId ? { attemptId } : {}),
@@ -2080,13 +2108,6 @@ export async function run(
           process.stdout.write(denyJson(command.reason ?? "Use one simple direct, source-dispatcher, or compiled AI-DLC command without chaining, substitution, or redirection other than one terminal `2>&1`."));
           return 0;
         }
-        if (command.status === "attempt") {
-          // An id copied from an earlier command. The text is fixed: the
-          // command is never echoed back or edited here, and the same command
-          // without the flag gets this call's own id.
-          process.stdout.write(denyJson(`AI-DLC adds \`${ATTEMPT_FLAG}\` to its own commands, so a command that already carries it did not run. Run the same command again without \`${ATTEMPT_FLAG}\` and the id after it.`));
-          return 0;
-        }
         // A guard that crashed still fails open, but AI-DLC then does not vouch
         // for the call: the host's own approval applies. A workflow command is
         // vouched once its coordination claim succeeds or the check stands
@@ -2099,14 +2120,22 @@ export async function run(
             !(shellWords(bare)?.[0] === "aidlc" && projectSuppliesLauncher())
           ? ALLOW_DECISION
           : null;
-        if (command.status === "terminal") {
-          if (allow) {
-            process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...allow } })}\n`);
+        // A command passed on unclaimed still runs without a copied attempt id.
+        const passOn = (decision: typeof allow, uncopied: string | undefined): number => {
+          const modifiedArgs = uncopied === undefined ? null : { ...(nativeToolInput ?? {}), command: uncopied };
+          if (decision || modifiedArgs) {
+            process.stdout.write(`${JSON.stringify({ ...(modifiedArgs ? { modifiedArgs } : {}), hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              ...(decision ?? {}),
+              ...(modifiedArgs ? { updatedInput: modifiedArgs } : {}),
+            } })}\n`);
           }
           return 0;
-        }
+        };
+        if (command.status === "terminal") return passOn(allow, command.uncopied);
+        if (command.status === "unrelated") return passOn(null, command.uncopied);
         if (command.status === "recognized") {
-          if (!sessionId) return 0;
+          if (!sessionId) return passOn(null, command.uncopied);
           // When this check cannot find or trust its own record, it stands aside
           // instead of refusing. A refusal could only send the agent back to a
           // fresh `next`, which re-issues the same step, and a record the hook
@@ -2123,10 +2152,7 @@ export async function run(
               command: command.claim.commandKind,
               reason,
             });
-            if (allow && !command.keepsPrompt) {
-              process.stdout.write(`${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", ...allow } })}\n`);
-            }
-            return 0;
+            return passOn(command.keepsPrompt ? null : allow, command.uncopied);
           };
           let claimed: ReturnType<typeof claimCopilotCommand>;
           try { claimed = claimCopilotCommand(projectDir, currentState(), command.claim); }
