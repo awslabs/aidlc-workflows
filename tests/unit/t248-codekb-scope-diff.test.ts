@@ -435,14 +435,12 @@ describe("t248 scopePathCovered", () => {
     expect(scopePathCovered(["src/a.ts"], "src/a.ts.bak")).toBe(false);
   });
 
-  test("a trailing slash, a leading ./ or a backslash does not change what a path names (#2578)", () => {
+  test("a trailing slash or a leading ./ does not change what a path names (#2578)", () => {
     // the same directory, spelled with and without the slash, either way round
     expect(scopePathCovered(["platform/control_plane", "applications"], "platform/control_plane/")).toBe(true);
     expect(scopePathCovered(["platform/control_plane/", "applications/"], "platform/control_plane")).toBe(true);
     expect(scopePathCovered(["src/"], "./src/")).toBe(true);
     expect(scopePathCovered(["./src/"], "src/x.ts")).toBe(true);
-    expect(scopePathCovered(["src\\a"], "src/a/")).toBe(true);
-    expect(scopePathCovered(["src\\"], "src/x/")).toBe(true);
     // only a directory written with its slash covers what is under it; a prefix ends at a "/"
     expect(scopePathCovered(["src"], "src/x/")).toBe(false);
     expect(scopePathCovered(["src/"], "src2/")).toBe(false);

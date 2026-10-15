@@ -4124,19 +4124,19 @@ export function codekbStoreIsCurrent(
   return current !== null && current === parsed.scope.fingerprint;
 }
 
-// One spelling of a scope path for comparing: backslashes become "/", leading "./"
-// and trailing "/" go, and the repo root ("." or "./") becomes "". `a`, `a/` and
-// `./a/` name the same entry. (codekbScopeFingerprint keeps its own copy of this.)
+// One spelling of a scope path for comparing: a leading "./" and a trailing "/" go, and
+// the repo root ("." or "./") becomes "". `a`, `a/` and `./a/` name the same entry. A
+// backslash is left alone, as everywhere else outside the fingerprint's own copy.
 export function normalizeScopePath(path: string): string {
-  const normalized = path.replaceAll("\\", "/").replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
+  const normalized = path.replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
   return normalized === "." ? "" : normalized;
 }
 
 // Coverage test for publish and the compare mode: does the incoming run's
-// analyzed set cover a store entry? The same path in any spelling (a trailing
-// slash, a leading "./" or a backslash does not change what it names), or an
-// incoming DIRECTORY (entry ending "/") subsuming the store path. A path written
-// without the slash covers only itself. Whether a path exists, or is a file or a
+// analyzed set cover a store entry? The same path in either spelling (a trailing
+// slash or a leading "./" does not change what it names), or an incoming
+// DIRECTORY (entry ending "/") subsuming the store path. A path written without
+// the slash covers only itself. Whether a path exists, or is a file or a
 // directory, is the source fingerprint's to say, not this test's. Deliberately
 // prefix-only - scope paths are authored as repo-relative dirs/files, not globs -
 // and a prefix ends at a "/", so `a/` never covers `a.txt`.
@@ -4144,10 +4144,7 @@ export function scopePathCovered(incoming: string[], storePath: string): boolean
   const store = normalizeScopePath(storePath);
   return incoming.some((p) => {
     const covering = normalizeScopePath(p);
-    return (
-      covering === store ||
-      (covering !== "" && p.replaceAll("\\", "/").endsWith("/") && store.startsWith(`${covering}/`))
-    );
+    return covering === store || (covering !== "" && p.endsWith("/") && store.startsWith(`${covering}/`));
   });
 }
 
