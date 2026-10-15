@@ -189,6 +189,18 @@ function extractIds(content: string, patterns: RegExp[]): Set<string> {
   return ids;
 }
 
+// A requirement whose sub-requirements are traced too (FR1 beside FR1.1, or at
+// Code Generation NFR1 beside the Unit's NFR1.1) is traced through them, so it
+// needs no row of its own; a sub-requirement left out is still reported.
+function withoutTracedParents(ids: Set<string>): Set<string> {
+  const parents = new Set<string>();
+  for (const id of ids) {
+    const parent = /^((?:FR|NFR)\d+)\.\d+$/.exec(id)?.[1];
+    if (parent) parents.add(parent);
+  }
+  return new Set([...ids].filter((id) => !parents.has(id)));
+}
+
 function idsFromFile(path: string, patterns: RegExp[], label: string): { ids: Set<string>; reason?: string } {
   const read = readText(path);
   if (read.content === null) return { ids: new Set(), reason: read.reason };
@@ -477,7 +489,7 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
     const mapped = storyAssignments(storyMap, context.units, context.unitIds, joinPatterns);
     if (mapped.reason) result.reasons.push(mapped.reason);
     result.storyAssignments = mapped.assignments;
-    for (const id of sourceIds) {
+    for (const id of withoutTracedParents(sourceIds)) {
       if (!mapped.assignments.has(id)) result.extraGaps.push(id);
     }
     return result;
@@ -524,6 +536,16 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
     return result;
   }
   if (stage === "nfr-requirements") {
+    // Without stories the story map may give a Unit its NFR rows, the join Code
+    // Generation reads. A Unit no NFR row names owes every NFR in requirements.md,
+    // and marks one that does not apply N/A with its reason.
+    if (unit && !existsSync(stories) && existsSync(storyMap)) {
+      const mapped = storyAssignments(storyMap, resolvedUnit.context.units, resolvedUnit.context.unitIds, [ID_PATTERNS.NFR]);
+      for (const [id, units] of mapped.assignments) {
+        if (units.has(unit)) result.ids.add(id);
+      }
+      if (result.ids.size > 0) return result;
+    }
     addSource(result, idsFromFile(requirements, [ID_PATTERNS.NFR], "requirements.md"));
     return result;
   }
@@ -708,9 +730,17 @@ export function main(argv: string[]): void {
   const orphans: string[] = [];
   const invalidEntries: string[] = [];
   const reasons: string[] = [];
+  const declared = new Set(data.upstream_ids);
+  const upstream = resolveUpstream(stage, projectDir, outputPath);
+  const required = withoutTracedParents(upstream.ids);
 
   for (const [field, entries] of [["coverage", data.coverage], ["reverse", data.reverse]] as const) {
     for (const entry of entries) {
+      // `reverse` holds what this stage produced that traces to nothing upstream.
+      if (field === "reverse" && required.has(entry.id) && !declared.has(entry.id)) {
+        invalidEntries.push(`reverse:${entry.id}: ${entry.id} is an upstream ID; list it in upstream_ids with a coverage row (N/A takes its reason as the target)`);
+        continue;
+      }
       if (!VALID_STATUSES.has(entry.status)) {
         invalidEntries.push(`${field}:${entry.id}: unknown status "${entry.status}"`);
         continue;
@@ -723,17 +753,15 @@ export function main(argv: string[]): void {
     }
   }
 
-  const declared = new Set(data.upstream_ids);
   const covered = new Set(data.coverage.map((entry) => entry.id));
-  const missingFromTable = [...declared].filter((id) => !covered.has(id));
+  const missingFromTable = [...withoutTracedParents(declared)].filter((id) => !covered.has(id));
   for (const entry of data.coverage) {
     if (!declared.has(entry.id)) invalidEntries.push(`coverage:${entry.id}: id is absent from upstream_ids`);
   }
 
-  const upstream = resolveUpstream(stage, projectDir, outputPath);
   reasons.push(...upstream.reasons);
   gaps.push(...upstream.extraGaps);
-  const missingFromUpstreamIds = [...upstream.ids].filter((id) => !declared.has(id));
+  const missingFromUpstreamIds = [...required].filter((id) => !declared.has(id));
   if (upstream.ids.size === 0 && upstream.reasons.length === 0) {
     reasons.push(`upstream ID set is empty for stage "${stage}"`);
   }

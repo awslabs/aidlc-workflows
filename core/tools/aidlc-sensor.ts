@@ -586,11 +586,13 @@ function handleFire(args: string[]): void {
 	// "art1:producer1,art2:producer2,..." sourced from the
 	// GraphStage.consumes[].artifact field (producer resolved via
 	// producersOf so a producing-directory citation can count as
-	// coverage), filtered to artifacts that exist on disk: a consume
-	// whose producing stage was skipped by the scope (or runtime-skipped,
-	// e.g. reverse-engineering on greenfield) never produced its file,
-	// and demanding the output prose reference it would be a guaranteed
-	// false SENSOR_FAILED on every run of that stage in that scope.
+	// coverage), filtered to the required artifacts that exist on disk: a
+	// consume whose producing stage was skipped by the scope (or
+	// runtime-skipped, e.g. reverse-engineering on greenfield) never produced
+	// its file, and demanding the output prose reference it would be a
+	// guaranteed false SENSOR_FAILED on every run of that stage in that scope.
+	// An optional consume (`required: false`) may not have informed the
+	// output, and citing one that did not would be false provenance.
 	const isCodeSensor = sensorTakesFilePath(sensor.manifest, id);
 	const scriptArgs: string[] = ["--stage", stageSlug];
 	if (isCodeSensor) {
@@ -600,6 +602,7 @@ function handleFire(args: string[]): void {
 	}
 	if (id === "upstream-coverage") {
 		const consumeSlugs = (stageNode.consumes ?? [])
+			.filter((c) => c.required !== false)
 			.map((c) => c.artifact)
 			.filter((a) => typeof a === "string" && a.length > 0);
 		scriptArgs.push(

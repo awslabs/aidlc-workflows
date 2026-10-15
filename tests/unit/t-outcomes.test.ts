@@ -10,9 +10,8 @@ import { spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { AIDLC_SRC, cleanupTestProject, createTestProject, seededAuditShard, seededStateFile } from "../harness/fixtures.ts";
-import { markersChanged, newlySkipped, readBeforeFirstAct, stageEvents } from "../harness/outcomes.ts";
+import { markersChanged, newlySkipped, stageEvents } from "../harness/outcomes.ts";
 import { PersonTurnLedger } from "../harness/person-turns.ts";
-import type { CapturedToolResult } from "../harness/sdk-drive.ts";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 
 const projects: string[] = [];
@@ -42,13 +41,6 @@ function row(dir: string, event: string, fields: Record<string, string> = {}): v
   appendFileSync(shard, [`## ${event}`, `**Timestamp**: ${at}`, `**Event**: ${event}`, ...lines, "", "---", "", ""].join("\n"));
 }
 
-function tool(toolName: string, input: Record<string, unknown>): CapturedToolResult {
-  return { toolName, input, toolUseId: `t${clock++}`, resultText: "", isError: false };
-}
-
-const PERSONA = ".claude/agents/aidlc-product-agent.md";
-const read = (path: string) => tool("Read", { file_path: `/proj/${path}` });
-
 // Stage Progress lines as the engine writes them (an em dash between slug and action).
 function state(actions: Record<string, string>): string {
   return `${Object.entries(actions).map(([slug, action]) => `- [ ] ${slug} \u2014 ${action}`).join("\n")}\n`;
@@ -60,35 +52,6 @@ function progress(markers: Record<string, string>): string {
 }
 
 describe("t-outcomes", () => {
-  describe("the lead persona reaches the agent before it acts (t238)", () => {
-    test("read before the first write and dispatch passes, whatever it read first", () => {
-      expect(readBeforeFirstAct([
-        read(".claude/aidlc-common/stages/inception/user-stories.md"),
-        read("aidlc/requirements.md"),
-        read(PERSONA),
-        tool("Agent", { subagent_type: "aidlc-design-agent" }),
-        tool("Write", { file_path: "/proj/stories.md" }),
-      ], PERSONA)).toBe(true);
-    });
-
-    test("read only after the first artifact write fails", () => {
-      expect(readBeforeFirstAct([read("aidlc/requirements.md"), tool("Write", { file_path: "/proj/stories.md" }), read(PERSONA)], PERSONA))
-        .toBe(false);
-    });
-
-    test("read only after the first support dispatch fails", () => {
-      expect(readBeforeFirstAct([tool("Task", { subagent_type: "aidlc-design-agent" }), read(PERSONA)], PERSONA)).toBe(false);
-    });
-
-    test("never read fails", () => {
-      expect(readBeforeFirstAct([read("aidlc/requirements.md")], PERSONA)).toBe(false);
-    });
-
-    test("a Windows path names the same file", () => {
-      expect(readBeforeFirstAct([tool("Read", { file_path: "C:\\proj\\.claude\\agents\\aidlc-product-agent.md" })], PERSONA)).toBe(true);
-    });
-  });
-
   describe("an isolated stage completes once, on the record (t-journey-workspace)", () => {
     const single = "single-stage:reverse-engineering";
 

@@ -46,8 +46,9 @@ particular files. Timestamp markers (`<slug>-timestamp.md`) are run records
 and always pass.
 
 `upstream-coverage` compares output prose with the stage's `consumes:`
-frontmatter. Every declared artefact must be referenced so the output shows
-which upstream inputs informed it. Stages with an empty `consumes:` list pass
+frontmatter. Every required artefact that exists must be referenced so the
+output shows which upstream inputs informed it; an optional one
+(`required: false`) is not checked. Stages with no required `consumes:` pass
 this check trivially. The compact `Imports:` and `Upstream targets:` lines in
 each stage file are the local summary; frontmatter remains authoritative when
 checks are resolved.

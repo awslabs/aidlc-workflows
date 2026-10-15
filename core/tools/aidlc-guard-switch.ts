@@ -7,6 +7,8 @@ import {
   readAuditShardEvents,
   type AuditShardEvent,
   CEREMONY_ENV,
+  GUARD_FENCE_ENV,
+  type GuardSwitchKey,
   CEREMONY_FIELDS,
   CEREMONY_FLAGS,
   CEREMONY_KEYS,
@@ -67,7 +69,7 @@ import {
 } from "./aidlc-lib.ts";
 import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { chatsSince, latestMessage, latestSpendingTimestamp, listMessages, replyOfTheirs } from "./aidlc-message-store.ts";
-import { quoted } from "./aidlc-recorded-switches.ts";
+import { quoted, widerPlaceOffer } from "./aidlc-recorded-switches.ts";
 import { settingPurpose } from "./aidlc-settings.ts";
 
 function throwSettingsError(message: string): never {
@@ -717,7 +719,11 @@ export function applyIntentSettings(
             },
           });
         }
-        lines.push(`The ${checkLabel(request.fence)} is already ${after.value}`);
+        const already = `The ${checkLabel(request.fence)} is already ${after.value}`;
+        const offer = request.value === "off" && after.value === "off" && !atTheirTerminal
+          ? widerPlaceOffer(projectDir, projectSwitchOf(`guard.${request.fence}`), "work")
+          : null;
+        lines.push(offer ? `${already}. ${offer}` : already);
         continue;
       }
       content = updated;
@@ -755,7 +761,11 @@ export function applyIntentSettings(
     const previous = getField(content, field);
     const line = formatCeremony(value, source);
     if (previous === line || (source === "command" && previous === formatCeremony(value, "you"))) {
-      if (!scopeDefault(flag)) lines.push(`${field} is already ${previous}`);
+      if (!scopeDefault(flag)) {
+        const already = `${field} is already ${previous}`;
+        const offer = value === "off" && !atTheirTerminal ? widerPlaceOffer(projectDir, CEREMONY_ENV[key], "work") : null;
+        lines.push(offer ? `${already}. ${offer}` : already);
+      }
       continue;
     }
     const resolution = resolveCeremony(key, getField(content, "Scope"), content);
@@ -778,11 +788,31 @@ export function applyIntentSettings(
         ? "Each code plan is now built without asking you first. You can ask to see one before it is built any time."
         : "Each code plan is now shown for approval before it is built.");
     }
+    // The line said for it ends with the one wider place (the line said as
+    // they asked carries it below instead). A value the scope set is nobody's
+    // request to turn the check off, so it offers nothing.
+    if (value === "off" && !scopeDefault(flag) && !saidAsAsked(flag) && !atTheirTerminal && lines.length > 0) {
+      const offer = widerPlaceOffer(projectDir, CEREMONY_ENV[key], "work");
+      if (offer) lines[lines.length - 1] = `${lines[lines.length - 1]} ${offer}`;
+    }
   }
   for (const item of lowering) {
-    if (saidAsAsked(item.key)) lines.push(askedSwitchLine(item, askedIn, cc.value, !atTheirTerminal));
+    if (!saidAsAsked(item.key)) continue;
+    const line = askedSwitchLine(item, askedIn, cc.value, !atTheirTerminal);
+    const offer = atTheirTerminal ? null : widerPlaceOffer(projectDir, projectSwitchOf(item.key), "work");
+    lines.push(offer ? `${line} ${offer}` : line);
   }
   return { content, audit, lines };
+}
+
+// The project's switch for a check set for this piece of work, which is where
+// a wider place for it would be set; none for the Guard Policy, which is for a
+// piece of work only.
+function projectSwitchOf(key: GuardSwitchKey): string | undefined {
+  if (key === "summary-confirmation") return CEREMONY_ENV.summary_confirmation;
+  if (key === "plan-approval") return CEREMONY_ENV.plan_approval;
+  if (key.startsWith("guard.")) return GUARD_FENCE_ENV[key.slice("guard.".length) as SwitchableGuardFence];
+  return undefined;
 }
 
 /**

@@ -544,7 +544,7 @@ providing testability and measurability input.
 | reliability-requirements.md  | Availability targets (SLA/SLO), fault tolerance, backup/recovery           |
 | observability-requirements.md | Monitoring, logging, tracing, alerting, dashboards, SLI/SLO definitions    |
 | tech-stack-decisions.md      | Technology selections with rationale for each choice                       |
-| traceability.json            | Every inception `NFR{n}` that applies to the Unit mapped to its `NFRx.y` IDs |
+| traceability.json            | Every inception `NFR{n}` (when User Stories did not run and the story map gives the Unit NFR rows, those) mapped to its `NFRx.y` IDs, or `N/A` with the reason it does not apply |
 
 Which files a Unit gets follows its kind: scalability, reliability and
 observability requirements are for `service` Units, and performance for

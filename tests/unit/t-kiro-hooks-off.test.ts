@@ -84,11 +84,19 @@ function run(tool: string, args: string[], extra: Record<string, string> = {}): 
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
+// `next`, then `continue <receipt>` through any rules parts, as the agent runs
+// them: the step it acts on, which is where a line for the person is said.
 function nextDirective(): Record<string, unknown> {
-  const r = run(ORCHESTRATE, ["next"], { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" });
-  const line = r.out.split("\n").find((entry) => entry.startsWith("{"));
-  expect(line, r.out).toBeDefined();
-  return JSON.parse(line as string) as Record<string, unknown>;
+  let args = ["next"];
+  for (let hop = 0; hop < 10; hop++) {
+    const r = run(ORCHESTRATE, args, { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" });
+    const line = r.out.split("\n").find((entry) => entry.startsWith("{"));
+    expect(line, r.out).toBeDefined();
+    const directive = JSON.parse(line as string) as Record<string, unknown>;
+    if (directive.kind !== "load-steering") return directive;
+    args = ["continue", String(directive.receipt ?? "")];
+  }
+  throw new Error("the rules parts did not reach the step in 10 hops");
 }
 
 function withKiroHarness(body: () => void): void {
