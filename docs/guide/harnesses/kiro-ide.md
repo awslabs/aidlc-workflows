@@ -506,9 +506,10 @@ deny reads in other Units' `construction/` folders, and dispatches that copy.
 Kiro refuses such a read and leaves those files out of search results; a shell
 read such as `cat` is not covered and asks you first, as it does today. The
 copy opens no other Unit's file, not even one the Unit's design names as an
-integration point: the reviewer notes that point as a finding instead. The copy shows in
-Kiro's agent list and `/` menu while the review runs (it is not one to pick)
-and is deleted when its verdict is recorded; AI-DLC's `.gitignore` block keeps it out of commits, and you can
+integration point: the reviewer notes that point as a finding instead. The
+copy shows in Kiro's agent list and `/` menu while the review runs; AI-DLC
+dispatches it, so there is no need to pick it. It is deleted when its verdict
+is recorded; AI-DLC's `.gitignore` block keeps it out of commits, and you can
 delete one left by a review that never finished. When Kiro has no agent by the
 copy's name (an older Kiro build may not load it), AI-DLC dispatches the
 reviewer itself, as without the feature. Measured on Kiro CLI 2.31.0 and Kiro

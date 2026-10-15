@@ -6084,13 +6084,15 @@ describe("t218 log-subagent identity extraction (#459)", () => {
       expect(readAudit(dir)).not.toContain("SUBAGENT_COMPLETED");
       const health = join(seededRecordDir(dir), ".aidlc-engine/hooks-health");
       expect(readFileSync(join(health, "kiro-adapter.drops"), "utf-8")).toContain("Kiro has no agent named aidlc-architect-agent");
-      // A reviewer copy Kiro did not load is the case the conductor falls back
-      // from, so it is traced for a later look, not counted by doctor.
-      expect(missing("invoke_sub_agent", { name: "aidlc-review-0123456789ab", prompt: "Review" },
-        "Agent 'aidlc-review-0123456789ab' not found in registry").code).toBe(0);
-      expect(readAudit(dir)).not.toContain("SUBAGENT_COMPLETED");
-      expect(readFileSync(join(health, "kiro-adapter.trace"), "utf-8")).toContain("Kiro has no agent named aidlc-review-0123456789ab");
-      expect(readFileSync(join(health, "kiro-adapter.drops"), "utf-8")).not.toContain("aidlc-review-0123456789ab");
+      // A pipeline records the stages that ran and drops the one Kiro could not find.
+      expect(missing("orchestrate_subagent", {
+        task: "Review then build",
+        stages: [{ name: "review", role: "aidlc-review-0123456789ab" }, { name: "build", role: "aidlc-developer-agent" }],
+      }, "Pipeline completed\n\n## review\nAgent 'aidlc-review-0123456789ab' not found in registry\n\n## build\nBuilt it.").code)
+        .toBe(0);
+      expect(readFileSync(join(health, "kiro-adapter.drops"), "utf-8")).toContain("Kiro has no agent named aidlc-review-0123456789ab");
+      expect(readAudit(dir)).toContain("**Agent Type**: aidlc-developer-agent");
+      expect(readAudit(dir)).not.toContain("**Agent Type**: aidlc-review-0123456789ab");
       // Another agent's words are its own output, not Kiro's answer.
       expect(missing("invoke_sub_agent", { name: "aidlc-developer-agent", prompt: "Implement" },
         "Agent 'aidlc-review-0123456789ab' not found in registry").code).toBe(0);

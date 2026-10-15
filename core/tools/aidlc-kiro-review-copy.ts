@@ -164,7 +164,6 @@ export function removeReviewCopy(projectDir: string, requestId: string | null | 
   const copyName = requestId ? scopedReviewCopyName(requestId) : null;
   if (copyName === null) return;
   try {
-    if (installedKiroLayout(projectDir) !== "kas") return;
     rmSync(join(writableAgentsDir(projectDir), `${copyName}.md`), { force: true });
   } catch {
     // A copy left behind is dispatched by nobody: its request is closed.
