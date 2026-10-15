@@ -430,6 +430,7 @@ import {
   UTILITY_COMMANDS,
   carryPendingPersonLines,
   isKiroConductorAgentFile,
+  isScopedReviewCopy,
   KIRO_CONDUCTOR_AGENT_FILE,
   PERSON_ASKED_SKIP_REASON,
 } from "./aidlc-lib.ts";
@@ -3373,7 +3374,9 @@ function kiroIdeFrameworkReads(projectDir: string, harness: string): string[] {
   const inactiveRunners = new Set<string>();
   if (graph === null) {
     for (const path of markdownUnder("aidlc-common/stages")) reads.add(path);
-    for (const path of markdownUnder("agents")) if (!isKiroConductorAgentFile(path)) reads.add(path);
+    for (const path of markdownUnder("agents")) {
+      if (!isKiroConductorAgentFile(path) && !isScopedReviewCopy(path)) reads.add(path);
+    }
     for (const path of markdownUnder("knowledge")) reads.add(path);
   } else {
     for (const node of graph) {

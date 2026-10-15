@@ -3802,9 +3802,25 @@ function buildForward(): Forward {
         );
         return null;
       }
+      // Kiro answers a dispatch to an agent it has no file for with this one
+      // line and no other sign of failure (measured on Kiro CLI 2.31.0 and IDE
+      // 1.3.0). Nothing ran, so nothing finished: a completion row would read as
+      // that agent having done its work.
+      const notFound = (t: KiroDelegationTarget) =>
+        t.agent !== "" && completion(t).last_assistant_message.trim() === `Agent '${t.agent}' not found in registry`;
+      const missing = targets.filter(notFound);
+      for (const t of missing) {
+        recordHookDrop(
+          projectDir,
+          "kiro-adapter",
+          `log-subagent: Kiro has no agent named ${t.agent} — SUBAGENT_COMPLETED not recorded`,
+        );
+      }
+      const ran = targets.filter((t) => !notFound(t));
+      if (ran.length === 0) return null;
       // A pipeline finishes every stage in one result: one row per stage, the
       // last through the ordinary forward.
-      for (const t of targets.slice(0, -1)) {
+      for (const t of ran.slice(0, -1)) {
         const r = runCore("aidlc-log-subagent.ts", completion(t));
         if (r.code !== 0) {
           recordHookDrop(
@@ -3814,7 +3830,7 @@ function buildForward(): Forward {
           );
         }
       }
-      return { hook: "aidlc-log-subagent.ts", input: completion(targets.at(-1)) };
+      return { hook: "aidlc-log-subagent.ts", input: completion(ran.at(-1)) };
     }
 
     case "continue-workflow":

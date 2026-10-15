@@ -901,6 +901,23 @@ export function toPosix(p: string): string {
   return sep === "/" ? p : p.split(sep).join("/");
 }
 
+// Split a path into components, dropping empty and "." segments and collapsing
+// ".." against its parent, so construction/U03/../U01/design.md is U01's file.
+// A leading ".." with nothing to consume is kept. The reviewer-scope hook judges
+// paths through it, and the Kiro reviewer copy renders exempt entries with it.
+export function normalizedPathComponents(p: string): string[] {
+  const out: string[] = [];
+  for (const c of toPosix(p).split("/")) {
+    if (c.length === 0 || c === ".") continue;
+    if (c === ".." && out.length > 0 && out[out.length - 1] !== "..") {
+      out.pop();
+      continue;
+    }
+    out.push(c);
+  }
+  return out;
+}
+
 // Upper-case a leading Windows drive letter and leave every other character
 // alone. VS Code-based hosts (Kiro IDE) report written files as `c:\...` while
 // the project dir carries `C:\...`, and the drive letter is the one path
@@ -38195,6 +38212,24 @@ export function isKiroConductorAgentFile(name: string): boolean {
   return KIRO_CONDUCTOR_AGENT_FILES.includes(basename(name));
 }
 
+// A reviewer copy one review request writes on Kiro (kiro-ide) when the
+// reviewer read-scope preview feature is on (aidlc-kiro-review-copy.ts): the
+// installed reviewer with that review's read scope added, named from the
+// request id so the name stands for that one request. It is the reviewer under
+// another name, never a persona of its own.
+const SCOPED_REVIEW_COPY_RE = /^aidlc-review-[0-9a-f]{12}$/;
+
+/** The reviewer copy's agent name for a review request id, or null for an id not minted as `review:<hex>`. */
+export function scopedReviewCopyName(requestId: string): string | null {
+  const m = /^review:([0-9a-f]{12})[0-9a-f]{20}$/.exec(requestId);
+  return m ? `aidlc-review-${m[1]}` : null;
+}
+
+/** Whether an agent name, or an agent file name, is a reviewer copy's. */
+export function isScopedReviewCopy(name: string): boolean {
+  return SCOPED_REVIEW_COPY_RE.test(basename(name).replace(/\.md$/, ""));
+}
+
 export function isAidlcAgentFile(path: string): boolean {
   return aidlcAgentClaim(path) !== null;
 }
@@ -38214,7 +38249,7 @@ export function loadAgents(): AgentMetadata[] {
     const slugToFile = new Map<string, string>();
     const agents: AgentMetadata[] = [];
     const files = readdirSync(dir)
-      .filter((f) => f.endsWith(".md") && !isKiroConductorAgentFile(f))
+      .filter((f) => f.endsWith(".md") && !isKiroConductorAgentFile(f) && !isScopedReviewCopy(f))
       .sort();
     for (const f of files) {
       const filePath = join(dir, f);

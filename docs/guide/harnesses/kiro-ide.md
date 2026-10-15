@@ -480,6 +480,35 @@ harnesses (or running both side by side) is supported-but-untested; `/aidlc
 --doctor` will warn if it detects a conflicting harness setup with an active
 workflow.
 
+### Preview: a Unit's reviewer reads only that Unit
+
+During a Unit's review, the reviewer is meant to read only that Unit's files
+and the shared contracts it is given. On Claude Code and the other harnesses a
+hook holds it to that; on Kiro no hook can tell the reviewer's reads apart, so
+the rule is in the reviewer's instructions only. A preview build can also have
+Kiro hold the reviewer to it. Start Kiro IDE or Kiro CLI from a terminal in
+which you ran:
+
+```bash
+export AIDLC_PREVIEW_FEATURES=reviewer-read-scope
+```
+
+(in PowerShell, `$env:AIDLC_PREVIEW_FEATURES = "reviewer-read-scope"`). A
+project `.env` file cannot set it. Then, for each Unit review, AI-DLC writes a
+copy of the reviewer, `.kiro/agents/aidlc-review-<id>.md`, whose permissions
+deny reads in other Units' `construction/` folders except a file the Unit's
+design names as an integration point, and dispatches that copy. Kiro refuses
+such a read and leaves those files out of search results; a shell read such as
+`cat` is not covered and asks you first, as it does today. The copy shows in
+Kiro's agent list while the review runs and is deleted when its verdict is
+recorded; AI-DLC's `.gitignore` block keeps it out of commits, and you can
+delete one left by a review that never finished. When Kiro has no agent by the
+copy's name (an older Kiro build may not load it), AI-DLC dispatches the
+reviewer itself, as without the feature. Measured on Kiro CLI 2.31.0 and Kiro
+IDE 1.3.0. It does nothing in a stable build, for Units built in parallel, or
+while the reviewer read-scope check is off (`guard.reviewer-scope off`,
+`AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1`).
+
 ### Kiro's Workflows feature stops AI-DLC's reviews and helpers
 
 Kiro IDE's **Workflows** feature (Settings > **Kiro Agent > Workflows:

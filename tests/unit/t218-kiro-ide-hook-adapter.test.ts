@@ -6049,6 +6049,29 @@ describe("t218 log-subagent identity extraction (#459)", () => {
     }
   });
 
+  test("S4e: a dispatch Kiro answers with 'not found in registry' records a drop, not a completion", () => {
+    // Kiro CLI 2.31.0 and IDE 1.3.0 answer a dispatch to an agent with no file
+    // with this one line and no success flag. Nothing ran, so nothing finished.
+    const dir = scratchProject(true);
+    try {
+      const missing = (tool_name: string, tool_input: Record<string, unknown>, tool_response: string) =>
+        runIdeStdin(dir, "log-subagent", JSON.stringify({
+          session_id: "sess_t218", hook_event_name: "PostToolUse", cwd: dir, tool_name, tool_input, tool_response,
+        }));
+      expect(missing("invoke_sub_agent", { name: "aidlc-review-0123456789ab", prompt: "Review" },
+        "Agent 'aidlc-review-0123456789ab' not found in registry").code).toBe(0);
+      expect(readAudit(dir)).not.toContain("SUBAGENT_COMPLETED");
+      const dropFile = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "kiro-adapter.drops");
+      expect(readFileSync(dropFile, "utf-8")).toContain("Kiro has no agent named aidlc-review-0123456789ab");
+      // Another agent's words are its own output, not Kiro's answer.
+      expect(missing("invoke_sub_agent", { name: "aidlc-developer-agent", prompt: "Implement" },
+        "Agent 'aidlc-review-0123456789ab' not found in registry").code).toBe(0);
+      expect(readAudit(dir)).toContain("**Agent Type**: aidlc-developer-agent");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("S5: a degenerate subagent_ with an empty suffix still falls back to the prose marker", () => {
     // The tool name only wins when it actually carries an identity; an empty
     // suffix is no identity, so the 0.12-era prose contract still applies.

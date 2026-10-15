@@ -1207,8 +1207,19 @@ export function autonomyChoiceNote(boltInvocation: string): string {
  * reviewer's file itself and recorded READY, so the person got a review their
  * reviewer never wrote.
  */
-export function reviewRequestNote(reviewer: string, reviewFile: string, recordVerdict: string): string {
-  return `Dispatch ${reviewer} as a subagent and have it write ${reviewFile}: that file is the reviewer's, so never ` +
+export function reviewRequestNote(
+  reviewer: string,
+  reviewFile: string,
+  recordVerdict: string,
+  dispatchAgent: string | null = null,
+): string {
+  // A reviewer copy (Kiro preview) is dispatched by its own name; the brief and
+  // the verdict keep the reviewer's.
+  const dispatch = dispatchAgent === null
+    ? `Dispatch ${reviewer} as a subagent`
+    : `Dispatch ${dispatchAgent} (${reviewer} with this review's read scope; if Kiro has no agent by that name, ` +
+      `dispatch ${reviewer} instead) as a subagent, name ${reviewer} as the reviewer in the brief,`;
+  return `${dispatch} and have it write ${reviewFile}: that file is the reviewer's, so never ` +
     `write it yourself and never stand in for it. When its verdict is back, record it with \`${recordVerdict}\`.`;
 }
 
