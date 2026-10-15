@@ -205,6 +205,13 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
     for (let index = 0; index < events.length; index++) {
       const row = events[index];
       const stage = auditBlockField(row.block, "Stage") ?? "";
+      // One answer to a grouped code plan question writes one approval per plan, row after row, each naming its
+      // Unit: the rows after the first are that same answer, backed (or reported) once.
+      const prior = events[index - 1];
+      const unitOf = (block: string) => auditBlockField(block, "Unit");
+      const sameAnswer = row.event === "PLAN_APPROVAL_RECORDED" && prior?.event === "PLAN_APPROVAL_RECORDED" &&
+        (auditBlockField(prior.block, "Stage") ?? "") === stage && unitOf(row.block) !== null &&
+        unitOf(prior.block) !== null && unitOf(row.block) !== unitOf(prior.block);
       const pending = open.get(stage);
       const closes = DECISION_CLOSING_EVENTS.has(row.event);
       const gate = row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED";
@@ -257,7 +264,7 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
         since = resolved;
         reply = false;
       }
-      if (since !== undefined && index >= first) {
+      if (since !== undefined && index >= first && !sameAnswer) {
         const after = Math.max(since + 1, first);
         const needsReply = reply;
         const quoted = instruction;

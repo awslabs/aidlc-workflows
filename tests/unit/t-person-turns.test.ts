@@ -317,6 +317,21 @@ describe("person-turn check", () => {
     expect(problems[0]).toContain('recorded words "Deploy to staging"');
   });
 
+  test("one typed reply to a grouped code plan question backs every plan in it; a later group needs a newer turn", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    drive.sent("/aidlc");
+    // "Approve these 2 code plans?" is one question, and its answer writes one approval per plan.
+    drive.sent("1");
+    for (const unit of ["alpha", "beta"]) row(dir, "PLAN_APPROVAL_RECORDED", { Stage: "code-generation", Unit: unit, Details: "Approve all" });
+    expect(drive.unbacked()).toEqual([]);
+    row(dir, "UNIT_COMPLETED", { Stage: "code-generation", Unit: "alpha" });
+    for (const unit of ["gamma", "delta"]) row(dir, "PLAN_APPROVAL_RECORDED", { Stage: "code-generation", Unit: unit, Details: "Approve all" });
+    const problems = drive.unbacked();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("PLAN_APPROVAL_RECORDED code-generation (Unit gamma)");
+  });
+
   test("a later question supersedes an earlier one, as the engine pairs them", () => {
     const dir = project();
     const drive = new PersonTurnLedger(dir);

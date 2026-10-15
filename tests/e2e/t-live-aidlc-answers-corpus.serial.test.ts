@@ -18,7 +18,8 @@
 // with its transcript excerpt is written under AIDLC_ANSWERS_REPORT_DIR (default tests/logs/aidlc-answers-live).
 //
 // Sample: AIDLC_ANSWERS_SAMPLE = a comma list of item ids, or a number per question (default 2), seeded by
-// AIDLC_ANSWERS_SEED (default 1), from the items with a fixture that wait for nothing.
+// AIDLC_ANSWERS_SEED (default 1), from the items with a fixture that wait for nothing and that a fresh chat can meet
+// (liveReply).
 // Harnesses: AIDLC_ANSWERS_HARNESSES (default claude,codex,kiro).
 // The mechanics shared with the input corpus's live check live in tests/harness/live-corpus.ts.
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -35,7 +36,9 @@ import {
   type HomeDigest, type LiveHarness, type LiveOutcome, type Transcript,
 } from "../harness/live-corpus.ts";
 import { codexWords } from "../harness/aidlc-input-corpus.ts";
-import { ANSWERS, NO_FIXTURE, buildQuestion, messageRecord, recorded, rows, typedPrompt, waitsFor, type AnswersItem } from "../harness/aidlc-answers-corpus.ts";
+import {
+  ANSWERS, ASKED_IN_CHAT, NO_FIXTURE, buildQuestion, liveReply, messageRecord, recorded, rows, typedPrompt, waitsFor, workCarriedOn, type AnswersItem,
+} from "../harness/aidlc-answers-corpus.ts";
 import { getField, listIntents, readAuditShardEvents, stateFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(LIVE_SETUP_TIMEOUT_MS);
@@ -48,10 +51,11 @@ const gate = (harness: LiveHarness): string | null => liveGate(harness, LIVE, "s
 
 // Items a real agent can be driven through: a fixture exists, nothing is waited for, and the reply is one a person can
 // give in a live chat (a dismissed box is the unit check's). Codex and Kiro CLI have no question box, so picker items
-// stay with Claude Code; a `$aidlc` line is Codex's.
+// stay with Claude Code; a `$aidlc` line is Codex's. A question asked in chat is met only by its `/aidlc` replies, and
+// guard recovery not at all (liveReply).
 function eligible(harness: LiveHarness): AnswersItem[] {
   return ANSWERS.filter((item) =>
-    NO_FIXTURE[item.question] === undefined && waitsFor(item) === null &&
+    NO_FIXTURE[item.question] === undefined && waitsFor(item) === null && liveReply(item) &&
     !(item.via === "picker" && (item.picker?.answer === null || item.picker?.answer === "" || harness !== "claude")) &&
     !(item.via === "codex" && harness !== "codex"));
 }
@@ -129,15 +133,14 @@ function recordedNow(item: AnswersItem, proj: string, start: Start): string {
   if (answered) return answered.Choice ?? answered.Details ?? answered.Decision ?? "answered";
   return "none";
 }
-// True once the choice the item expects is on record: the drive stops at that point.
-// The open work carried on after the reply: rows the stage wrote, no record created. A routing reply folded into the
-// work ends there; so does a non-answer the agent read past, which the judge of the words catches.
-const workCarriedOn = (proj: string, start: Start): boolean =>
-  listIntents(proj).length === start.records && readAuditShardEvents(proj).slice(start.events).some((e) => e.event !== "HUMAN_TURN");
-function endReached(item: AnswersItem, proj: string, start: Start): boolean {
+// True once the choice the item expects is on record: the drive stops at that point. Nothing is reached before the
+// person's reply (`replyFrom`, the audit's length when it was sent): the work carrying on is counted from there, so the
+// chat's own opening rows are not read as the reply's. A non-answer the agent read past carries on too, which the judge
+// of the words catches.
+function endReached(item: AnswersItem, proj: string, start: Start, replyFrom: number | null): boolean {
   const end = item.expected.end;
-  if (end.recorded === "none") return false;
-  if (item.question === "routing" && end.recorded === "Part of the active work") return workCarriedOn(proj, start);
+  if (end.recorded === "none" || replyFrom === null) return false;
+  if (item.question === "routing" && end.recorded === "Part of the active work") return workCarriedOn(proj, start.records, replyFrom);
   const now = recordedNow(item, proj, start);
   if (now === "none") return false;
   if (end.recorded === "first stage" || end.recorded === "jump") return now.startsWith("jump");
@@ -148,7 +151,7 @@ function endReached(item: AnswersItem, proj: string, start: Start): boolean {
 const asksAllowed = (item: AnswersItem): number => item.expected.engine.words === null ? Math.max(item.expected.end.asks, 1) : item.expected.end.asks;
 const SETTING_FIELDS: Record<string, string> = { "plan-approval": "Plan Approval", review: "Review", "guard-policy": "Guard Policy" };
 
-function judge(item: AnswersItem, proj: string, typed: string, transcript: Transcript, start: Start): { failures: string[]; endSummary: string } {
+function judge(item: AnswersItem, proj: string, typed: string, transcript: Transcript, start: Start, replyFrom: number | null): { failures: string[]; endSummary: string } {
   const failures: string[] = [];
   const end = item.expected.end;
   const now = recordedNow(item, proj, start);
@@ -161,7 +164,7 @@ function judge(item: AnswersItem, proj: string, typed: string, transcript: Trans
   if (end.recorded === "none") {
     if (now !== "none") failures.push(`a choice was recorded (${now}) where the item records none`);
   } else if (!paused) {
-    if (!endReached(item, proj, start)) failures.push(now === "none" ? `nothing recorded; expected ${end.recorded}` : `recorded ${JSON.stringify(now)}, expected ${JSON.stringify(end.recorded)}`);
+    if (!endReached(item, proj, start, replyFrom)) failures.push(now === "none" ? `nothing recorded; expected ${end.recorded}` : `recorded ${JSON.stringify(now)}, expected ${JSON.stringify(end.recorded)}`);
     if (end.words && item.via !== "picker") {
       const words = typed.replace(/^[/$]aidlc\s*/, "");
       const row = RECORD_EVENTS.map((e) => rowsAfter(proj, start, e).at(-1)).find((r) => r !== undefined);
@@ -222,6 +225,7 @@ const FIRST_PROMPT: Partial<Record<AnswersItem["question"], string | null>> = {
   "scope-confirm": "/aidlc fix the login timeout",
   "resume-reentry": null,
   "jump-target": null,
+  ...Object.fromEntries([...ASKED_IN_CHAT].map((question) => [question, null])),
 };
 function firstPrompt(item: AnswersItem, harness: LiveHarness): string | null {
   const line = item.question in FIRST_PROMPT ? FIRST_PROMPT[item.question] ?? null : "/aidlc";
@@ -250,6 +254,11 @@ async function drive(harness: LiveHarness, item: AnswersItem): Promise<LiveOutco
   try {
     await buildQuestion(proj, item.question);
     const start = startOf(proj);
+    // Where the person's reply starts in the audit; with no first line, their line is the reply.
+    let replyFrom: number | null = first === null ? start.events : null;
+    const replying = () => {
+      replyFrom ??= readAuditShardEvents(proj).length;
+    };
     let transcript: Transcript;
     if (harness === "claude") {
       // Turn 1: the agent shows the open question. The person does not use the box when they reply in chat or after
@@ -267,16 +276,18 @@ async function drive(harness: LiveHarness, item: AnswersItem): Promise<LiveOutco
         permissionMode: "bypassPermissions",
         chatAboutQuestionWhen: () => {
           boxes += 1;
+          if (item.via === "picker" && boxes === 1) replying();
           return item.via !== "picker" || boxes > 1;
         },
         answerScript: { kind: "sequence", specs: [picker.spec] },
         nextMessage: (turn) => {
           if (first === null || firstTurn !== undefined || item.via === "picker") return undefined;
           firstTurn = turn;
+          replying();
           return typed;
         },
         stopWhen: (results) => {
-          if (reachedAt === null && endReached(item, proj, start)) reachedAt = results.length;
+          if (reachedAt === null && endReached(item, proj, start, replyFrom)) reachedAt = results.length;
           const replied = item.via === "picker" ? boxes > 0 : firstTurn !== undefined;
           const since = results.length - (item.via === "picker" ? 0 : (firstTurn?.toolResults ?? 0));
           return (reachedAt !== null && results.length > reachedAt + 1) || (replied && since > REPLY_TOOL_BUDGET);
@@ -304,6 +315,7 @@ async function drive(harness: LiveHarness, item: AnswersItem): Promise<LiveOutco
       // Scratch home only: the drive's CODEX_HOME must not be the person's.
       if (home === undefined || home === REAL_CODEX_HOME) throw new Error(`the Codex drive has no scratch home (${home ?? "none"})`);
       if (first !== null) firstText = codexWords(execCodex(proj, home, first).out);
+      replying();
       const r = first === null ? execCodex(proj, home, typed) : execCodexResume(proj, home, typed);
       transcript = { tools: [], text: codexWords(r.out), asks: null, raw: r.out };
     } else {
@@ -311,6 +323,7 @@ async function drive(harness: LiveHarness, item: AnswersItem): Promise<LiveOutco
       const session = new AcpSession(proj, "aidlc", true);
       try {
         if (first !== null) firstText = (await driveKiroAcp({ projectDir: proj, prompt: first, session, keepAlive: true, timeoutMs: remainingOperationTimeoutMs(CASE_TIMEOUT_MS) })).assistantText;
+        replying();
         const r = await driveKiroAcp({ projectDir: proj, prompt: typed, session, keepAlive: true, timeoutMs: remainingOperationTimeoutMs(CASE_TIMEOUT_MS) });
         transcript = { tools: r.toolCalls.map((t) => `${t.title ?? ""} ${JSON.stringify(t).slice(0, 300)}`), text: r.assistantText, asks: null };
       } finally {
@@ -321,7 +334,7 @@ async function drive(harness: LiveHarness, item: AnswersItem): Promise<LiveOutco
     // only kind on Codex and Kiro CLI, and what Claude's agent asks when it does not open a box).
     const words = await judgeText({ typed: said, meaning: item.meaning, asksAllowed: asksAllowed(item), says: item.expected.end.says, engineWords: PERSON_READS_RULE }, transcript.text, judgeDir);
     if (words.asked !== null) transcript.asks = Math.max(transcript.asks ?? 0, words.asked);
-    const { failures, endSummary } = judge(item, proj, said, transcript, start);
+    const { failures, endSummary } = judge(item, proj, said, transcript, start, replyFrom);
     if (words.failure !== null) failures.push(words.failure);
     const setup = first === null ? null : showsQuestion(item, firstText);
     // A reply to a question the agent never showed judges nothing about the reply: the setup line stands alone.
