@@ -157,7 +157,11 @@ decide, and the way back, in plain words and in their tool's own terms. How the
 engine got there (its steps and fields, hooks, receipts, protocol labels,
 internal tags) stays off the screen unless they ask, or run a check or report
 on purpose (doctor, status, the audit record), where they get the whole
-picture. A command or path they need in order to act (an undo, a file to edit)
+picture. A line has to change what the person does or judges: a change in
+AI-DLC itself (an update, a stage it now does differently) reaches them only
+when it changes what their work needs, and otherwise stays in the record that
+status, doctor and the audit show on purpose.
+A command or path they need in order to act (an undo, a file to edit)
 is their work and is said; the agent's account of their code (files read, tests
 run, what it found) is their work too. A frame the host tool draws itself
 (Claude Code's "Stop hook error") is the host's; the words inside it are
