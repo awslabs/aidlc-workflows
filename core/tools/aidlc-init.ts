@@ -243,18 +243,20 @@ import {
 import {
   activeModelGroups,
   applyModelPolicyToProjection,
-  HARNESS_HONESTY,
   HARNESS_PRODUCT_NAMES,
   harnessHonestyNotes,
   isModelEffort,
   isModelPreset,
+  kiroAgentModelsDropped,
   MODEL_EFFORTS,
   MODEL_GROUPS,
   MODEL_PRESETS,
+  modelHarnessHonesty,
   modelPolicyAgentsDir,
   modelPolicyIsEmpty,
   modelPolicySurfaceDrift,
   normalizeModelPolicy,
+  presetsChangeNothing,
   profileGroups,
   readAgentTiers,
   resolveModelPolicy,
@@ -1260,7 +1262,7 @@ function showModels(
   output += `\nRecorded in: ${
     displayedRecorded.length > 0
       ? displayedRecorded.join(", ")
-      : sessionSetsAgentModels(harness)
+      : presetsChangeNothing(harness)
       ? `nothing; ${sessionModelsDetail(harness, null)}`
       : `nothing yet - run '${modelsCommand(projectDir, harness, "--preset balanced --project --yes")}'`
   }\n`;
@@ -1382,6 +1384,11 @@ function applyModelsFlags(
   if (!agent && (effort || model)) throw new Error("--effort and --model require --agent <name>");
   if (effort && effort !== "default" && !isModelEffort(effort)) {
     throw new Error(`--effort must be one of ${MODEL_EFFORTS.join(", ")}, or default to remove the agent's own effort`);
+  }
+  // The id is written as one frontmatter or TOML value: whitespace in it would
+  // end the line and start another key.
+  if (model && /\s/.test(model)) {
+    throw new Error(`--model takes one model id with no spaces, as your tool names it; got ${JSON.stringify(model)}`);
   }
   // A model alone leaves the agent's effort where it was, and an effort alone
   // its model. `default` removes that one setting of the agent's, so the
@@ -2767,7 +2774,7 @@ function setupMapRows(
   const providerManaged = !harnessOwnsModelAccess(modelHarness(distribution));
   // Where the session sets every agent, there is no policy to ask for: the
   // row names the host's session as the lever and is never walked.
-  const sessionSet = sessionSetsAgentModels(modelHarness(distribution));
+  const sessionSet = presetsChangeNothing(modelHarness(distribution));
   const sessionAccess = records.providers === null &&
     providerAnswerIsTheSession(modelHarness(distribution));
   const providerNeeds = providerManaged && !sessionAccess &&
@@ -2978,7 +2985,7 @@ function setupLedgerActions(
 ): ConfigOutstandingAction[] {
   const next = [...actions];
   if (
-    !sessionSetsAgentModels(harness) &&
+    !presetsChangeNothing(harness) &&
     !next.some((action) => action.section === "models")
   ) {
     const resolved = resolveAidlcSettings(projectDir);
@@ -6709,6 +6716,19 @@ function prepareRefreshSource(
     modelHarness(distribution),
     modelPolicy,
   );
+  if (descriptor.distribution === "kiro-ide" && sessionSetsAgentModels("kiro-ide")) {
+    const dropped = kiroAgentModelsDropped(
+      join(projectDir, descriptor.harnessDir, "agents"),
+      join(root, descriptor.harnessDir, "agents"),
+    );
+    if (dropped.length > 0) {
+      notes.push(
+        `The model and effort set for ${dropped.join(", ")} no longer apply in Kiro: this run did not have the ` +
+          `agent-models preview on. To put them back, run \`${configInvocationFor(projectDir)} config\` again from a ` +
+          `preview build with AIDLC_PREVIEW_FEATURES=agent-models set.`,
+      );
+    }
+  }
   applyProjectFlagsToProjection(
     root,
     descriptor.harnessDir,
@@ -8510,7 +8530,7 @@ function renderFirstRunEnding(
     `(${choices.candidate.descriptor.harnessDir}/ and aidlc/, ${count} files)`,
   );
   const harness = modelHarness(choices.candidate.stamp.distribution);
-  if (choices.preset === "unchanged" && sessionSetsAgentModels(harness)) {
+  if (choices.preset === "unchanged" && presetsChangeNothing(harness)) {
     writeMenuRow("  Model preset ... not needed  ", `(${sessionModelsDetail(harness, null)})`);
   } else if (choices.preset === "unchanged") {
     process.stdout.write("  Model preset ... left unchanged\n");
@@ -8827,7 +8847,7 @@ function writeKiroPresetRows(model: string | null, context: "setup" | "models" =
 // A preset changes nothing where agents always run on the session's model and
 // effort, so setup records none there unless the person picks one.
 function firstRunDefaultPreset(distribution: string): FirstRunChoices["preset"] {
-  return sessionSetsAgentModels(modelHarness(distribution)) ? "unchanged" : "balanced";
+  return presetsChangeNothing(modelHarness(distribution)) ? "unchanged" : "balanced";
 }
 
 function providerForHarness(
@@ -8991,7 +9011,7 @@ function customizeFirstRun(
       process.stdout.write("  Step 3 of 6 - Model effort preset\n");
       if (choices.candidate.stamp.distribution === "kiro") {
         writeKiroPresetRows(choices.kiro ? choices.kiro.setModel?.id ?? choices.kiro.session.model : null);
-      } else if (sessionSetsAgentModels(modelHarness(choices.candidate.stamp.distribution))) {
+      } else if (presetsChangeNothing(modelHarness(choices.candidate.stamp.distribution))) {
         writeMenuRow(
           "  ",
           `A preset changes nothing here: ${sessionModelsDetail(modelHarness(choices.candidate.stamp.distribution), null)}.`,
@@ -9251,7 +9271,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
         : "current model provider preserved"
     }`,
   );
-  if (HARNESS_HONESTY[modelHarness(candidate.stamp.distribution)].groupEffort) {
+  if (modelHarnessHonesty(modelHarness(candidate.stamp.distribution)).groupEffort) {
     writeMenuRow(
       recommendedDetail,
       "Records balanced (default): medium project agent effort for deciding,",
@@ -9262,7 +9282,7 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
       recommendedDetail,
       "Records balanced (default): medium effort for the whole interactive Kiro CLI session, saved in your personal Kiro settings for every Kiro project; an effort you already saved for your model stays.",
     );
-  } else if (sessionSetsAgentModels(modelHarness(candidate.stamp.distribution))) {
+  } else if (presetsChangeNothing(modelHarness(candidate.stamp.distribution))) {
     writeMenuRow(
       recommendedDetail,
       `Records no model preset: ${sessionModelsDetail(modelHarness(candidate.stamp.distribution), null)}.`,
@@ -13474,6 +13494,7 @@ export async function main(
     // rewrites; a harness whose agents inherit the session says so in a note.
     // Kiro CLI reads its agent files and its cli.json effort only when a
     // session starts, so there the change reaches open work from the next one.
+    // kiro-ide's Kiro reads a delegated agent's file at each dispatch.
     const policyHarness = modelHarness(descriptor.distribution);
     const agentsDir = modelPolicyAgentsDir(policyHarness, descriptor.harnessDir);
     const kiroCliSettings = policyHarness === "kiro" ? `${descriptor.harnessDir}/settings/cli.json` : null;

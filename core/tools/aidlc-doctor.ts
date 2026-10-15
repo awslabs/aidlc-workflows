@@ -54,8 +54,8 @@ import {
   isModelHarness,
   modelPolicyDoctorIssues,
   modelPolicyIsEmpty,
+  presetsChangeNothing,
   sessionModelsDetail,
-  sessionSetsAgentModels,
   type ModelHarness,
 } from "./aidlc-model-policy.ts";
 import {
@@ -299,7 +299,7 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
   const installed = harnesses
     .map((harness) => harness.distribution)
     .filter((distribution): distribution is ModelHarness => isModelHarness(distribution));
-  const sessionSet = installed.filter((distribution) => sessionSetsAgentModels(distribution));
+  const sessionSet = installed.filter((distribution) => presetsChangeNothing(distribution));
   if (sessionSet.length > 0) {
     const others = installed.filter((distribution) => !sessionSet.includes(distribution));
     const policyFor = (distribution: ModelHarness) =>
