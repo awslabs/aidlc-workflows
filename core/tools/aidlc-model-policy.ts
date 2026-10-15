@@ -273,6 +273,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+// A model id is written as one frontmatter or TOML value, so it is one token:
+// whitespace in it would end the line and start another key. The settings
+// reader, the policy reader and `config models --model` all ask this.
+export function isModelId(value: string): boolean {
+  return value.length > 0 && !/\s/.test(value);
+}
+
 export function isModelEffort(value: string): value is ModelEffort {
   return (MODEL_EFFORTS as readonly string[]).includes(value);
 }
@@ -376,8 +383,8 @@ export function normalizeModelPolicy(value: unknown): ModelPolicyRecord | null {
         entry.effort = raw.effort;
       }
       if (raw.model !== undefined) {
-        if (typeof raw.model !== "string" || raw.model.trim().length === 0) {
-          throw new Error(`models.agents.${name}.model must be a non-empty string`);
+        if (typeof raw.model !== "string" || !isModelId(raw.model.trim())) {
+          throw new Error(`models.agents.${name}.model must be one model id with no spaces`);
         }
         entry.model = raw.model.trim();
       }
@@ -899,20 +906,28 @@ export function modelPolicySurfaceDrift(
   return [...new Set(issues)];
 }
 
-// The agents whose Kiro (kiro-ide) file in the project carries a model or
-// effort the staged projection no longer does: a refresh run without the
-// agent-models preview takes them out, and setup says so once.
-export function kiroAgentModelsDropped(projectAgentsDir: string, stagedAgentsDir: string): string[] {
-  if (!existsSync(projectAgentsDir)) return [];
+// The shipped agents whose recorded model or effort the project's Kiro
+// (kiro-ide) file carries and the staged projection no longer does: a refresh
+// run without the agent-models preview takes them out, and setup says so once.
+// An agent the person added is not staged and keeps its file, so it is not one.
+export function kiroAgentModelsDropped(
+  projectAgentsDir: string,
+  stagedAgentsDir: string,
+  policyValue: ModelPolicyRecord | null,
+): string[] {
+  const pinned = Object.entries(normalizeModelPolicy(policyValue)?.agents ?? {})
+    .filter(([, own]) => own.model !== undefined || own.effort !== undefined)
+    .map(([name]) => name);
   const dropped: string[] = [];
-  for (const file of readdirSync(projectAgentsDir).filter((name) => name.endsWith("-agent.md")).sort()) {
-    const before = markdownSurfaceValues(readFileSync(join(projectAgentsDir, file), "utf-8"), "effortLevel");
-    if (before.model === undefined && before.effort === undefined) continue;
+  for (const name of pinned.sort()) {
+    const file = `${modelAgentStem(name)}.md`;
+    const projectPath = join(projectAgentsDir, file);
     const stagedPath = join(stagedAgentsDir, file);
-    const after = existsSync(stagedPath)
-      ? markdownSurfaceValues(readFileSync(stagedPath, "utf-8"), "effortLevel")
-      : {};
-    if (after.model === undefined && after.effort === undefined) dropped.push(modelAgentName(file));
+    if (!existsSync(projectPath) || !existsSync(stagedPath)) continue;
+    const before = markdownSurfaceValues(readFileSync(projectPath, "utf-8"), "effortLevel");
+    const after = markdownSurfaceValues(readFileSync(stagedPath, "utf-8"), "effortLevel");
+    const carried = before.model !== undefined || before.effort !== undefined;
+    if (carried && after.model === undefined && after.effort === undefined) dropped.push(name);
   }
   return dropped;
 }

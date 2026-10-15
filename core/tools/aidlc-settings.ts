@@ -5,10 +5,11 @@ import {
 } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { installRoot } from "./aidlc-install-paths.ts";
-import type {
-  ModelAgentPolicy,
-  ModelHarness,
-  ModelPolicyRecord,
+import {
+  isModelId,
+  type ModelAgentPolicy,
+  type ModelHarness,
+  type ModelPolicyRecord,
 } from "./aidlc-model-policy.ts";
 
 export const SETTINGS_FILE = "aidlc.settings.json";
@@ -285,8 +286,8 @@ function normalizeHarnessModelMap(value: unknown, where: string): HarnessModelMa
     if (!(MODEL_HARNESSES as readonly string[]).includes(harness)) {
       throw new Error(`${where} has unknown harness ${JSON.stringify(harness)}`);
     }
-    if (typeof model !== "string" || model.trim().length === 0) {
-      throw new Error(`${where}.${harness} must be a non-empty model ID`);
+    if (typeof model !== "string" || !isModelId(model.trim())) {
+      throw new Error(`${where}.${harness} must be one model ID with no spaces`);
     }
     out[harness as ModelHarness] = model.trim();
   }

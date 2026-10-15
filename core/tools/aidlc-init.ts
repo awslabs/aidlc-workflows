@@ -246,6 +246,7 @@ import {
   HARNESS_PRODUCT_NAMES,
   harnessHonestyNotes,
   isModelEffort,
+  isModelId,
   isModelPreset,
   kiroAgentModelsDropped,
   MODEL_EFFORTS,
@@ -1385,9 +1386,7 @@ function applyModelsFlags(
   if (effort && effort !== "default" && !isModelEffort(effort)) {
     throw new Error(`--effort must be one of ${MODEL_EFFORTS.join(", ")}, or default to remove the agent's own effort`);
   }
-  // The id is written as one frontmatter or TOML value: whitespace in it would
-  // end the line and start another key.
-  if (model && /\s/.test(model)) {
+  if (model && !isModelId(model)) {
     throw new Error(`--model takes one model id with no spaces, as your tool names it; got ${JSON.stringify(model)}`);
   }
   // A model alone leaves the agent's effort where it was, and an effort alone
@@ -6720,6 +6719,7 @@ function prepareRefreshSource(
     const dropped = kiroAgentModelsDropped(
       join(projectDir, descriptor.harnessDir, "agents"),
       join(root, descriptor.harnessDir, "agents"),
+      modelPolicy,
     );
     if (dropped.length > 0) {
       notes.push(
