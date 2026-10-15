@@ -190,6 +190,7 @@ describe("the reviewer read-scope copy on Kiro (preview)", () => {
     const p = new KiroUnitReview(true);
     const requested = json(p.log(p.reviewArgs()), "Request the Unit's review");
     const copyName = String(requested.dispatchAgent);
+    expect(copyName).toMatch(/^aidlc-review-[0-9a-f]{12}$/);
     expect(p.dispatched(copyName, `Agent '${copyName}' not found in registry`).code).toBe(0);
     expect(p.completions()).toEqual([]);
     // The fallback is said where doctor looks: the scope the person turned on was not held.
