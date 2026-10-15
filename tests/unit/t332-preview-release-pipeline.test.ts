@@ -1595,4 +1595,15 @@ describe("t332 preview publication pipeline", () => {
     expect(result?.run).toContain("test \"$RELEASE_RESULT\" = success");
     expect(preview.jobs["release-result"].steps?.some(step => step.name === "Require a passing Full Suite")).toBe(false);
   });
+
+  test("a pull request runs the installer ShellCheck the preview and stable gates run", () => {
+    type Steps = { jobs: Record<string, { steps?: Array<{ name?: string; run?: string }> }> };
+    const shellcheck = (path: string, job: string) =>
+      (Bun.YAML.parse(readFileSync(path, "utf-8")) as Steps).jobs[job].steps
+        ?.find((step) => step.run?.includes("shellcheck"));
+    const preview = shellcheck(PREVIEW_RELEASE_WORKFLOW, "gate");
+    expect(preview).toEqual({ name: "ShellCheck installer", run: "shellcheck scripts/install.sh" });
+    expect(shellcheck(STABLE_RELEASE_WORKFLOW, "verify")).toEqual(preview);
+    expect(shellcheck(CI_WORKFLOW, "check")).toEqual(preview);
+  });
 });
