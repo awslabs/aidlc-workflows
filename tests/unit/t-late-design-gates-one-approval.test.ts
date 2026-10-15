@@ -17,6 +17,7 @@
 //   3. one person turn and one approval approve every listed stage;
 //   4. a change request approves nothing;
 //   5. a stage that cannot be approved yet stops there; fixed, it needs no new ask;
+//  5b. on Kiro IDE that stage opens its gate as the step says, its approval report runs, and the approval covers it;
 //   6. checkpoints on, stage-major, and a lone remaining stage keep today's flow;
 //   7. no shipped prose still describes the late per-stage cascade;
 //   8. a reply another question used, or a question put since, approves nothing;
@@ -30,7 +31,7 @@
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
   AIDLC_SRC,
@@ -67,6 +68,7 @@ resetAidlcEnv();
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const KIRO_IDE_TREE = join(REPO_ROOT, "dist", "kiro-ide", ".kiro");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const LEARNINGS = join(AIDLC_SRC, "tools", "aidlc-learnings.ts");
 const RUNTIME = join(AIDLC_SRC, "tools", "aidlc-runtime.ts");
@@ -461,6 +463,33 @@ describe("t-late-design-gates-one-approval: one question for the late stage appr
     expect(fixed.kind).toBe("done");
     expect(rows(proj, "GATE_APPROVED").map((r) => r.stage)).toEqual(BLOCK);
     expect(currentStage(proj)).toBe("build-and-test");
+  });
+
+  test("5b: on Kiro IDE the stage fixed after the stop opens its gate, and the one approval given covers it", () => {
+    const proj = seedBuiltProject({ checkpoints: "disabled" }, [["nfr-design", "beta"]]);
+    openFirstGate(proj);
+    personReplies(proj);
+    runReport(proj, ["--stage", "functional-design", "--result", "approved", "--user-input", "Approve"]);
+    expect(currentStage(proj)).toBe("nfr-design");
+    // The agent finishes the review and runs the report the not-ready step names.
+    logReviewReady(proj, "nfr-design", "beta");
+    runReport(proj, ["--stage", "nfr-design", "--result", "awaiting-approval"]);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toMatch(/^- \[\?\] nfr-design /m);
+    // Its approval report goes through Kiro IDE's tool-call card first.
+    cpSync(KIRO_IDE_TREE, join(proj, ".kiro"), { recursive: true });
+    const approval = "bun .kiro/tools/aidlc.ts engine orchestrate report --stage nfr-design --result approved --user-input Approve";
+    const card = spawnSync(BUN, [join(proj, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "guard-tool-call"], {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: proj, tool_name: "execute_pwsh", tool_input: { command: approval } }),
+      env: { ...engineEnv(), AIDLC_COMPILED_EXECUTABLE: "", CLAUDE_PROJECT_DIR: proj },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(card.status, card.stderr).toBe(0);
+    expect(card.stderr).toBe("");
+    const fixed = runReport(proj, ["--stage", "nfr-design", "--result", "approved", "--user-input", "Approve"]);
+    expect(fixed.kind, JSON.stringify(fixed)).toBe("done");
+    expect(rows(proj, "GATE_APPROVED").map((r) => r.stage)).toEqual(BLOCK);
   });
 
   test("8: a reply used by another question, or a question put since, approves nothing from the list", () => {

@@ -74,7 +74,6 @@ describe("t327 refusal narration contract", () => {
       expect(clause).toContain('"Nothing is built or changed while the plan waits for your approval."');
       expect(clause).toContain("show that question again and end the turn");
       expect(clause).toContain("when they reply, record the choice they made, then run `{{INVOKE}} engine orchestrate next` as a command of its own");
-      expect(clause).toContain('"Nothing runs until you answer the approval question."');
       expect(clause).not.toContain("print that terminal, user-facing message verbatim");
       const relayed = relayedErrorRow(harnessEntry(harness.name));
       expect(body).toContain(

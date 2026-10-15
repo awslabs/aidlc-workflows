@@ -3584,10 +3584,9 @@ export function kiroIdeIgnoreSourceChecks(
 // What stops working when the person switches an AI-DLC hook off in Kiro's
 // Agent Hooks. Legacy names stay while config has not yet removed their files.
 const FLOW_ALTERING_KIRO_HOOKS: Record<string, string> = {
-  "aidlc-guard-tool-call": "approvals, the approved plan, reviewed work and AI-DLC's records are not protected",
+  "aidlc-guard-tool-call": "the approved plan, reviewed work and AI-DLC's records are not protected",
   "aidlc-record-human-turn": "your replies are not recorded, so approval gates cannot tell your answer from the assistant's, and /aidlc commands typed in chat are not run directly",
   "aidlc-continue-workflow": "a workflow with work left is not kept moving when the assistant stops (on Kiro CLI v3; Kiro IDE only records it)",
-  "aidlc-enforce-approval-gate": "the assistant is not held while an approval waits for your answer",
   "aidlc-plan-approval-guard": "the build is not kept to the plan you approved",
   "aidlc-terminal-command-guard": "commands are not checked before they run",
   "aidlc-state-transition-guard": "workflow state can change without the engine",

@@ -132,6 +132,19 @@ describe("refresh", () => {
     expect(Object.keys(unit.weights)).toEqual([...Object.keys(unit.weights)].sort());
   });
 
+  test("the guard matrix jobs' evidence weighs integration files, under the one-job name and the split ones", () => {
+    const root = repo();
+    const evidence = join(tempRoot(), "runs");
+    artifact(join(evidence, "1"), "ci-deterministic-guard-matrix-Linux", [["t-x", "PASS", 1800]]);
+    artifact(join(evidence, "2"), "ci-deterministic-guard-matrix-1-Linux", [["t-x", "PASS", 2000]]);
+    artifact(join(evidence, "2"), "full-suite-deterministic-guard-matrix-2-Windows", [["t-y.serial", "PASS", 40]], true);
+    expect(refreshWeights(evidence, root)).toEqual({ unit: 2, integration: 2 });
+    expect(JSON.parse(readFileSync(join(root, INTEGRATION_WEIGHTS), "utf8"))).toEqual({
+      defaultSeconds: 1,
+      weights: { "t-x": 1900, "t-y.serial": 40 },
+    });
+  });
+
   test("a bad integration weights file stops the refresh before either file changes", () => {
     const root = repo();
     write(join(root, INTEGRATION_WEIGHTS), "{");

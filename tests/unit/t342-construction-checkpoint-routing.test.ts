@@ -4,7 +4,7 @@
 // covers: subcommand:aidlc-state:set, subcommand:aidlc-state:set-construction-iteration
 // covers: audit:CONSTRUCTION_POLICY_RECORDED, function:authorizedConstructionPolicyChange, function:recordProtectedHumanResponse
 // covers: function:constructionPolicyChangeAuthority, function:constructionPolicyChangeAllowed
-// covers: function:hasPendingDecision, function:presenceFloorHolds
+// covers: function:hasPendingDecision
 // covers: function:guardRecoveryAskFromRefusalText, function:unitOpenCheckpoints, subcommand:aidlc-state:unit, subcommand:aidlc-log:review, hook:aidlc-session-start
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -39,8 +39,8 @@ import {
 import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   reviewArtifactFingerprint, authorizedConstructionPolicyChange, auditBlockField, readAuditShardEvents, setField, unitCompletedReceipts,
-  hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts, getField, presenceFloorHolds, REDO_REUSE_SOURCE,
-  _resetStageGraphForTests, _resetScopeMappingForTests, constructionCheckpointGaps,
+  hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts, getField, REDO_REUSE_SOURCE,
+  _resetScopeMappingForTests, constructionCheckpointGaps,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -642,50 +642,6 @@ describe("t342 Construction checkpoint routing", () => {
     expect(report.status, `${report.stdout}${report.stderr}`).toBe(0);
     expect(JSON.parse(report.stdout).kind, report.stdout).not.toBe("error");
   }
-
-  // The Kiro presence floors read the engine's own approval rule: a stage gate
-  // the engine records itself once every Unit's checkpoint is approved never
-  // waits for the person's turn, and a gate that needs them still does.
-  test("the presence floor stands aside only for a gate the engine approves itself", () => {
-    const p = fixture();
-    for (const unit of ["alpha", "beta"]) {
-      cover(p, unit);
-      approve(p, unit);
-    }
-    const gate = routed(p);
-    expect(gate.construction_policy?.completion_only, JSON.stringify(gate)).toBe(true);
-    reportStage(p, "functional-design", "awaiting-approval");
-    const approveCommand =
-      `bun .kiro/tools/aidlc.ts engine orchestrate report --stage functional-design --result approved`;
-    const state = () => readFileSync(seededStateFile(p), "utf-8");
-    expect(state()).toMatch(/^- \[\?\] functional-design /m);
-    // The person's last turn went to beta's checkpoint approval.
-    expect(presenceFloorHolds(p, state(), approveCommand)).toBe(false);
-    // beta's code changes, so its checkpoint needs the person again, and so
-    // does the stage gate.
-    writeFileSync(join(p, "src", "beta.ts"), "export const beta = 2;\n");
-    expect(presenceFloorHolds(p, state(), approveCommand)).toBe(true);
-    writeFileSync(join(p, "src", "beta.ts"), "export const beta = 1;\n");
-    expect(presenceFloorHolds(p, state(), approveCommand)).toBe(false);
-    // A stage graph the floor cannot read leaves the gate to the person.
-    const graph = process.env.AIDLC_STAGE_GRAPH;
-    writeFileSync(join(p, "not-json-graph.json"), "{");
-    writeFileSync(join(p, "object-graph.json"), "{}");
-    try {
-      for (const broken of ["missing-graph.json", "not-json-graph.json", "object-graph.json"]) {
-        process.env.AIDLC_STAGE_GRAPH = join(p, broken);
-        _resetStageGraphForTests();
-        expect(presenceFloorHolds(p, state(), approveCommand), broken).toBe(true);
-      }
-    } finally {
-      if (graph === undefined) delete process.env.AIDLC_STAGE_GRAPH;
-      else process.env.AIDLC_STAGE_GRAPH = graph;
-      _resetStageGraphForTests();
-    }
-    expect(presenceFloorHolds(p, state(), approveCommand)).toBe(false);
-    reportStage(p, "functional-design", "approved");
-    expect(state()).toMatch(/^- \[x\] functional-design /m);
-  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // Both Units are approved, so the stage gates run and functional-design is
   // approved and marked [x]. beta's code then changes, so its checkpoint is

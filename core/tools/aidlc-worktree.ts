@@ -460,6 +460,15 @@ function recordedWorktreeSelector(
   }
 }
 
+// The repository a Bolt lands in, as resolveConstructionRepo takes it: the one
+// asked for, else the one its worktree records; null or none is the work's own.
+function landingRepo(
+  requested: string | undefined,
+  recorded: ReturnType<typeof recordedWorktreeSelector>,
+): string | undefined {
+  return requested ?? (typeof recorded?.repoSelector === "string" ? recorded.repoSelector : undefined);
+}
+
 // Compare-and-delete each ref: if another process moved one after enumeration,
 // preserve it and report a cleanup failure instead of deleting newer evidence.
 function deleteRetainedSourceRefs(repoCwd: string, identity: BoltIdentity, refs: RetainedSourceRef[], tag: string): string | null {
@@ -2748,12 +2757,8 @@ function handleMerge(args: string[]): void {
   if (selection.intent !== null) flags.intent = selection.intent;
   flags.space = selection.space;
   const recorded = recordedWorktreeSelector(identity);
-  if (
-    flags.repo === undefined &&
-    typeof recorded?.repoSelector === "string"
-  ) {
-    flags.repo = recorded.repoSelector;
-  }
+  const repo = landingRepo(flags.repo, recorded);
+  if (repo !== undefined) flags.repo = repo;
   const worktreeIdentity = currentSwarmWorktreeIdentity(identity);
   const cleanupAuthority =
     worktreeIdentity === null
@@ -3093,10 +3098,12 @@ function handleMerge(args: string[]): void {
         landedChangeLine(sourceRecord.unit, landed.changed, resuming && combined.length === 0, landed.byPreCommit),
       );
     }
-    if (combined.length > 0) {
-      landingNotices.push(combinedLine(sourceRecord.unit, combined, flags.target));
+    // Named the way landedDifferences names every landed path: with its repository.
+    const settled = combined.map((path) => (repoTarget.repo ? `${repoTarget.repo}/${path}` : path));
+    if (settled.length > 0) {
+      landingNotices.push(combinedLine(sourceRecord.unit, settled, flags.target));
     }
-    const landedChanges = [...new Set([...landed.changed, ...combined])].sort();
+    const landedChanges = [...new Set([...landed.changed, ...settled])].sort();
     for (const [driver, paths] of landed.drivers) {
       landingNotices.push(
         `Your merge driver ${driver} merged ${countFiles(paths)} while landing Unit ${sourceRecord.unit}: ${renderLandedPaths(paths)}.`,
@@ -3344,28 +3351,34 @@ function combinedSinceMerge(repoCwd: string): string[] {
   )].sort();
 }
 
-// The main checkout's files the agent may write while a parallel batch is out:
-// those git could not merge, or that were combined since, in a landing this
-// tool staged there for one of `units` (refuseClash names them). Relative to
-// `projectDir`, forward slashes; none when the checkout holds no such landing.
+// The files the agent may write while a parallel batch is out: those git could
+// not merge, or that were combined since, in a landing this tool staged for one
+// of `units` (refuseClash names them), in the checkout that landing runs in: the
+// project's, or in a workspace of several repositories the Unit's own. Relative
+// to `projectDir`, forward slashes; none when no such landing is staged.
 export function stagedLandingClashFiles(projectDir: string, units: readonly string[]): string[] {
   const selection = resolveWorkflowSelection(projectDir, {});
-  const ours = units.some((unit) => {
+  const files = new Set<string>();
+  for (const unit of units) {
     try {
       const identity = resolveBoltIdentity(projectDir, boltSlugForUnit(unit), selection);
-      return (retainedSourceRefs(projectDir, identity) ?? []).some(({ oid }) =>
-        stagedLandingOf(projectDir, "squash", oid) || stagedLandingOf(projectDir, "merge", oid));
+      const { cwd, repo } = resolveConstructionRepo(
+        projectDir, landingRepo(undefined, recordedWorktreeSelector(identity)), selection.intent, selection.space,
+      );
+      const staged = (retainedSourceRefs(cwd, identity) ?? []).some(({ oid }) =>
+        stagedLandingOf(cwd, "squash", oid) || stagedLandingOf(cwd, "merge", oid));
+      if (!staged) continue;
+      const prefix = runGit(["rev-parse", "--show-prefix"], cwd);
+      if (!prefix.ok) continue;
+      const under = prefix.stdout.trim();
+      for (const path of [...listConflictFiles(cwd), ...combinedSinceMerge(cwd)]) {
+        if (path.startsWith(under)) files.add(`${repo === null ? "" : `${repo}/`}${path.slice(under.length)}`);
+      }
     } catch {
-      return false;
+      // No landing of this Unit's to finish.
     }
-  });
-  if (!ours) return [];
-  const prefix = runGit(["rev-parse", "--show-prefix"], projectDir);
-  if (!prefix.ok) return [];
-  const under = prefix.stdout.trim();
-  return [...listConflictFiles(projectDir), ...combinedSinceMerge(projectDir)]
-    .filter((path) => path.startsWith(under))
-    .map((path) => path.slice(under.length));
+  }
+  return [...files];
 }
 
 const PARKED_STAMP_RE = /^\d{8}T\d{6}Z(?:-[2-9]|-[1-9]\d+)?$/;

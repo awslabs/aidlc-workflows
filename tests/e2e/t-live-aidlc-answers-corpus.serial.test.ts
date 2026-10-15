@@ -7,7 +7,11 @@
 // dismissed with "Chat about this", the reply as their next message), after `/aidlc`, or in the box. At re-entry and a
 // jump the person's own line is the whole exchange.
 // On demand, never in PR CI: AIDLC_ANSWERS_LIVE=1 opens it, and each harness keeps its own live gate
-// (AIDLC_CODEX_EXEC_LIVE, AIDLC_KIRO_ACP_LIVE; Claude needs the `claude` binary). Scratch projects and scratch homes
+// (AIDLC_CODEX_EXEC_LIVE, AIDLC_KIRO_ACP_LIVE; Claude needs the `claude` binary). The nightly runs it too, in the
+// Claude SDK family's Linux live job (GitHub Actions with AIDLC_CLAUDE_SDK_LIVE=1, where no switch of its own reaches
+// it): Claude Code only, one item per question by the date rotation (rotateByGroup), and every miss reported, not
+// failed, until NIGHTLY_MISSES_FAIL is true. A drive that throws, a run with no item, or a changed home still fails
+// the file. Scratch projects and scratch homes
 // (the SDK's ephemeral CLAUDE_CONFIG_DIR, the Codex driver's CODEX_HOME, checked before the first prompt); the real
 // homes are hashed before and after, and a change in ~/.claude or ~/.codex fails the file.
 //
@@ -15,10 +19,12 @@
 // message record keeps their words, nothing is recorded from a non-answer, the person was asked only what the item
 // allows (a question asked twice is a miss), and what the agent told them after their reply matches the meaning and
 // the `says` rubric (a model judge, plain words, no engine terms). A report with a score per question and every miss
-// with its transcript excerpt is written under AIDLC_ANSWERS_REPORT_DIR (default tests/logs/aidlc-answers-live).
+// with its transcript excerpt, and a summary for the nightly report, is written under AIDLC_ANSWERS_REPORT_DIR (default
+// aidlc-answers-live in the run's log folder, AIDLC_TEST_LOG_DIR, else tests/logs).
 //
 // Sample: AIDLC_ANSWERS_SAMPLE = a comma list of item ids, or a number per question (default 2), seeded by
-// AIDLC_ANSWERS_SEED (default 1), from the items with a fixture that wait for nothing.
+// AIDLC_ANSWERS_SEED (default 1), from the items with a fixture that wait for nothing and that a fresh chat can meet
+// (liveReply).
 // Harnesses: AIDLC_ANSWERS_HARNESSES (default claude,codex,kiro).
 // The mechanics shared with the input corpus's live check live in tests/harness/live-corpus.ts.
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -31,32 +37,46 @@ import { execCodex, execCodexResume } from "../harness/exec-drive.ts";
 import { AcpSession, driveKiroAcp } from "../harness/kiro-acp-drive.ts";
 import { type AnswerSpec, driveAidlc, type DriveTurnEnd } from "../harness/sdk-drive.ts";
 import {
-  HOMES, PERSON_READS_RULE, drivesHome, homeDigest, judgeText, liveGate, liveHarnesses, liveProject, sampleByGroup, writeLiveReport,
+  HOMES, PERSON_READS_RULE, ROTATION_START, drivesHome, homeDigest, inNightly, judgeText, liveGate, liveHarnesses, liveItem, liveProject,
+  nightOf, rotateByGroup, sampleByGroup, writeLiveReport,
   type HomeDigest, type LiveHarness, type LiveOutcome, type Transcript,
 } from "../harness/live-corpus.ts";
 import { codexWords } from "../harness/aidlc-input-corpus.ts";
-import { ANSWERS, NO_FIXTURE, buildQuestion, messageRecord, recorded, rows, typedPrompt, waitsFor, type AnswersItem } from "../harness/aidlc-answers-corpus.ts";
+import {
+  ANSWERS, ASKED_IN_CHAT, NO_FIXTURE, buildQuestion, liveReply, messageRecord, recorded, rows, typedPrompt, waitsFor, workCarriedOn, type AnswersItem,
+} from "../harness/aidlc-answers-corpus.ts";
 import { getField, listIntents, readAuditShardEvents, stateFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(LIVE_SETUP_TIMEOUT_MS);
 
-const LIVE = process.env.AIDLC_ANSWERS_LIVE === "1";
-const HARNESSES = liveHarnesses(process.env.AIDLC_ANSWERS_HARNESSES, "AIDLC_ANSWERS_HARNESSES");
+const NIGHTLY = inNightly();
+// The nightly reports its misses until a month of them reads clean; true makes a miss fail it, as on demand.
+const NIGHTLY_MISSES_FAIL = false;
+const REPORT_ONLY = NIGHTLY && !NIGHTLY_MISSES_FAIL;
+const NIGHT = nightOf(new Date());
+const LIVE = process.env.AIDLC_ANSWERS_LIVE === "1" || NIGHTLY;
+const HARNESSES: LiveHarness[] = NIGHTLY ? ["claude"] : liveHarnesses(process.env.AIDLC_ANSWERS_HARNESSES, "AIDLC_ANSWERS_HARNESSES");
 const CASE_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_COMMAND_TIMEOUT_MS);
-const REPORT_DIR = process.env.AIDLC_ANSWERS_REPORT_DIR ?? join(REPO_ROOT, "tests", "logs", "aidlc-answers-live");
+// The run's log folder outlives the runner's checkout of this file; the nightly uploads it.
+const REPORT_DIR = process.env.AIDLC_ANSWERS_REPORT_DIR ?? join(process.env.AIDLC_TEST_LOG_DIR ?? join(REPO_ROOT, "tests", "logs"), "aidlc-answers-live");
 const gate = (harness: LiveHarness): string | null => liveGate(harness, LIVE, "set AIDLC_ANSWERS_LIVE=1 to drive the answers corpus through real agents (spends tokens)");
 
 // Items a real agent can be driven through: a fixture exists, nothing is waited for, and the reply is one a person can
 // give in a live chat (a dismissed box is the unit check's). Codex and Kiro CLI have no question box, so picker items
-// stay with Claude Code; a `$aidlc` line is Codex's.
+// stay with Claude Code; a `$aidlc` line is Codex's. A question asked in chat is met only by its `/aidlc` replies, and
+// one whose answer is bound to the chat that asked, or guard recovery, not at all (liveReply).
 function eligible(harness: LiveHarness): AnswersItem[] {
   return ANSWERS.filter((item) =>
-    NO_FIXTURE[item.question] === undefined && waitsFor(item) === null &&
+    NO_FIXTURE[item.question] === undefined && waitsFor(item) === null && liveReply(item) &&
     !(item.via === "picker" && (item.picker?.answer === null || item.picker?.answer === "" || harness !== "claude")) &&
     !(item.via === "codex" && harness !== "codex"));
 }
-const sample = (harness: LiveHarness): AnswersItem[] =>
-  sampleByGroup(eligible(harness), process.env.AIDLC_ANSWERS_SAMPLE ?? "2", process.env.AIDLC_ANSWERS_SEED, (item) => item.question);
+const sample = (harness: LiveHarness): AnswersItem[] => NIGHTLY
+  ? rotateByGroup(eligible(harness), NIGHT, (item) => item.question)
+  : sampleByGroup(eligible(harness), process.env.AIDLC_ANSWERS_SAMPLE ?? "2", process.env.AIDLC_ANSWERS_SEED, (item) => item.question);
+const SAMPLE_LINE = NIGHTLY
+  ? `Sample: the nightly's one item per question, night ${NIGHT} of the rotation from ${ROTATION_START} (${new Date().toISOString().slice(0, 10)}).`
+  : `Sample: ${process.env.AIDLC_ANSWERS_SAMPLE ?? "2"} per question, seed ${process.env.AIDLC_ANSWERS_SEED ?? "1"}.`;
 
 const before = new Map<string, HomeDigest>();
 const outcomes: LiveOutcome<AnswersItem>[] = [];
@@ -129,15 +149,14 @@ function recordedNow(item: AnswersItem, proj: string, start: Start): string {
   if (answered) return answered.Choice ?? answered.Details ?? answered.Decision ?? "answered";
   return "none";
 }
-// True once the choice the item expects is on record: the drive stops at that point.
-// The open work carried on after the reply: rows the stage wrote, no record created. A routing reply folded into the
-// work ends there; so does a non-answer the agent read past, which the judge of the words catches.
-const workCarriedOn = (proj: string, start: Start): boolean =>
-  listIntents(proj).length === start.records && readAuditShardEvents(proj).slice(start.events).some((e) => e.event !== "HUMAN_TURN");
-function endReached(item: AnswersItem, proj: string, start: Start): boolean {
+// True once the choice the item expects is on record: the drive stops at that point. Nothing is reached before the
+// person's reply (`replyFrom`, the audit's length when it was sent): the work carrying on is counted from there, so the
+// chat's own opening rows are not read as the reply's. A non-answer the agent read past carries on too, which the judge
+// of the words catches.
+function endReached(item: AnswersItem, proj: string, start: Start, replyFrom: number | null): boolean {
   const end = item.expected.end;
-  if (end.recorded === "none") return false;
-  if (item.question === "routing" && end.recorded === "Part of the active work") return workCarriedOn(proj, start);
+  if (end.recorded === "none" || replyFrom === null) return false;
+  if (item.question === "routing" && end.recorded === "Part of the active work") return workCarriedOn(proj, start.records, replyFrom);
   const now = recordedNow(item, proj, start);
   if (now === "none") return false;
   if (end.recorded === "first stage" || end.recorded === "jump") return now.startsWith("jump");
@@ -148,7 +167,7 @@ function endReached(item: AnswersItem, proj: string, start: Start): boolean {
 const asksAllowed = (item: AnswersItem): number => item.expected.engine.words === null ? Math.max(item.expected.end.asks, 1) : item.expected.end.asks;
 const SETTING_FIELDS: Record<string, string> = { "plan-approval": "Plan Approval", review: "Review", "guard-policy": "Guard Policy" };
 
-function judge(item: AnswersItem, proj: string, typed: string, transcript: Transcript, start: Start): { failures: string[]; endSummary: string } {
+function judge(item: AnswersItem, proj: string, typed: string, transcript: Transcript, start: Start, replyFrom: number | null): { failures: string[]; endSummary: string } {
   const failures: string[] = [];
   const end = item.expected.end;
   const now = recordedNow(item, proj, start);
@@ -161,7 +180,7 @@ function judge(item: AnswersItem, proj: string, typed: string, transcript: Trans
   if (end.recorded === "none") {
     if (now !== "none") failures.push(`a choice was recorded (${now}) where the item records none`);
   } else if (!paused) {
-    if (!endReached(item, proj, start)) failures.push(now === "none" ? `nothing recorded; expected ${end.recorded}` : `recorded ${JSON.stringify(now)}, expected ${JSON.stringify(end.recorded)}`);
+    if (!endReached(item, proj, start, replyFrom)) failures.push(now === "none" ? `nothing recorded; expected ${end.recorded}` : `recorded ${JSON.stringify(now)}, expected ${JSON.stringify(end.recorded)}`);
     if (end.words && item.via !== "picker") {
       const words = typed.replace(/^[/$]aidlc\s*/, "");
       const row = RECORD_EVENTS.map((e) => rowsAfter(proj, start, e).at(-1)).find((r) => r !== undefined);
@@ -222,6 +241,7 @@ const FIRST_PROMPT: Partial<Record<AnswersItem["question"], string | null>> = {
   "scope-confirm": "/aidlc fix the login timeout",
   "resume-reentry": null,
   "jump-target": null,
+  ...Object.fromEntries([...ASKED_IN_CHAT].map((question) => [question, null])),
 };
 function firstPrompt(item: AnswersItem, harness: LiveHarness): string | null {
   const line = item.question in FIRST_PROMPT ? FIRST_PROMPT[item.question] ?? null : "/aidlc";
@@ -250,6 +270,11 @@ async function drive(harness: LiveHarness, item: AnswersItem): Promise<LiveOutco
   try {
     await buildQuestion(proj, item.question);
     const start = startOf(proj);
+    // Where the person's reply starts in the audit; with no first line, their line is the reply.
+    let replyFrom: number | null = first === null ? start.events : null;
+    const replying = () => {
+      replyFrom ??= readAuditShardEvents(proj).length;
+    };
     let transcript: Transcript;
     if (harness === "claude") {
       // Turn 1: the agent shows the open question. The person does not use the box when they reply in chat or after
@@ -267,16 +292,18 @@ async function drive(harness: LiveHarness, item: AnswersItem): Promise<LiveOutco
         permissionMode: "bypassPermissions",
         chatAboutQuestionWhen: () => {
           boxes += 1;
+          if (item.via === "picker" && boxes === 1) replying();
           return item.via !== "picker" || boxes > 1;
         },
         answerScript: { kind: "sequence", specs: [picker.spec] },
         nextMessage: (turn) => {
           if (first === null || firstTurn !== undefined || item.via === "picker") return undefined;
           firstTurn = turn;
+          replying();
           return typed;
         },
         stopWhen: (results) => {
-          if (reachedAt === null && endReached(item, proj, start)) reachedAt = results.length;
+          if (reachedAt === null && endReached(item, proj, start, replyFrom)) reachedAt = results.length;
           const replied = item.via === "picker" ? boxes > 0 : firstTurn !== undefined;
           const since = results.length - (item.via === "picker" ? 0 : (firstTurn?.toolResults ?? 0));
           return (reachedAt !== null && results.length > reachedAt + 1) || (replied && since > REPLY_TOOL_BUDGET);
@@ -304,6 +331,7 @@ async function drive(harness: LiveHarness, item: AnswersItem): Promise<LiveOutco
       // Scratch home only: the drive's CODEX_HOME must not be the person's.
       if (home === undefined || home === REAL_CODEX_HOME) throw new Error(`the Codex drive has no scratch home (${home ?? "none"})`);
       if (first !== null) firstText = codexWords(execCodex(proj, home, first).out);
+      replying();
       const r = first === null ? execCodex(proj, home, typed) : execCodexResume(proj, home, typed);
       transcript = { tools: [], text: codexWords(r.out), asks: null, raw: r.out };
     } else {
@@ -311,6 +339,7 @@ async function drive(harness: LiveHarness, item: AnswersItem): Promise<LiveOutco
       const session = new AcpSession(proj, "aidlc", true);
       try {
         if (first !== null) firstText = (await driveKiroAcp({ projectDir: proj, prompt: first, session, keepAlive: true, timeoutMs: remainingOperationTimeoutMs(CASE_TIMEOUT_MS) })).assistantText;
+        replying();
         const r = await driveKiroAcp({ projectDir: proj, prompt: typed, session, keepAlive: true, timeoutMs: remainingOperationTimeoutMs(CASE_TIMEOUT_MS) });
         transcript = { tools: r.toolCalls.map((t) => `${t.title ?? ""} ${JSON.stringify(t).slice(0, 300)}`), text: r.assistantText, asks: null };
       } finally {
@@ -321,7 +350,7 @@ async function drive(harness: LiveHarness, item: AnswersItem): Promise<LiveOutco
     // only kind on Codex and Kiro CLI, and what Claude's agent asks when it does not open a box).
     const words = await judgeText({ typed: said, meaning: item.meaning, asksAllowed: asksAllowed(item), says: item.expected.end.says, engineWords: PERSON_READS_RULE }, transcript.text, judgeDir);
     if (words.asked !== null) transcript.asks = Math.max(transcript.asks ?? 0, words.asked);
-    const { failures, endSummary } = judge(item, proj, said, transcript, start);
+    const { failures, endSummary } = judge(item, proj, said, transcript, start, replyFrom);
     if (words.failure !== null) failures.push(words.failure);
     const setup = first === null ? null : showsQuestion(item, firstText);
     // A reply to a question the agent never showed judges nothing about the reply: the setup line stands alone.
@@ -342,12 +371,15 @@ beforeAll(() => {
   mkdirSync(join(judgeDir, "config"), { recursive: true });
 });
 afterAll(() => {
-  writeLiveReport({
+  const summaries = writeLiveReport({
     dir: REPORT_DIR, title: "Live answers corpus", outcomes, groupName: "question", group: (o) => o.item.question,
     recordMeans: "wrong or missing record: the choice recorded, the person's words beside it, a setting, the typed line", label: (o) => `${o.item.question} ${o.item.via}`,
-    sampleLine: `Sample: ${process.env.AIDLC_ANSWERS_SAMPLE ?? "2"} per question, seed ${process.env.AIDLC_ANSWERS_SEED ?? "1"}.`,
+    sampleLine: SAMPLE_LINE, reportOnly: REPORT_ONLY,
     homes: before, drives: (home) => drivesHome(home, HARNESSES),
   });
+  for (const s of summaries) {
+    console.log(`Answers corpus, ${s.harness}: ${s.passed} of ${s.items} passed; misses: setup ${s.misses.setup}, record ${s.misses.record}, question ${s.misses.question}, words ${s.misses.words}. ${s.sample} Report: ${REPORT_DIR}`);
+  }
   if (judgeDir) rmSync(judgeDir, { recursive: true, force: true });
   if (!LIVE) return;
   // The judge's own claude -p runs under its own config dir, so ~/.claude is owed unchanged on every run; a driven
@@ -367,9 +399,8 @@ for (const harness of HARNESSES) {
     }
     for (const item of sample(harness)) {
       test(`${item.id} ${item.question} ${item.via} ${JSON.stringify(item.input)}`, async () => {
-        const outcome = await drive(harness, item);
-        outcomes.push(outcome);
-        expect(outcome.failures, `${item.meaning}\n${outcome.transcript.text.slice(-800)}`).toEqual([]);
+        const { outcome, owed } = await liveItem(() => drive(harness, item), outcomes, REPORT_ONLY);
+        expect(owed, `${item.meaning}\n${outcome.transcript.text.slice(-800)}`).toEqual([]);
       }, CASE_TIMEOUT_MS);
     }
   });

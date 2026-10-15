@@ -61,7 +61,7 @@ const EXPECTED_V2_REGISTRATIONS: Array<{
   { file: "aidlc-session-start.json", trigger: "SessionStart", matcher: null, adapterTarget: "session-start" },
   // Kiro IDE shows a card for every hook run (#2022): one card for each
   // message (the turn record, then a typed AI-DLC command), one before each
-  // write, command or hand-off (the five tool-call checks, after it finishes
+  // write, command or hand-off (the four tool-call checks, after it finishes
   // what the last write or command left to do), and none after a write or a
   // command.
   { file: "aidlc-record-human-turn.json", trigger: "UserPromptSubmit", matcher: null, adapterTarget: "person-message" },
@@ -77,9 +77,10 @@ const RETIRED_HOOK_BASENAMES = [
   "runtime-compile",
   "stop",
   "sync-statusline",
-  // Run by the guard-tool-call card: the five checks directly, the last two as
-  // its catch-up step (#2022).
+  // Nothing runs it: the engine holds an approval to the person's reply itself.
   "enforce-approval-gate",
+  // Run by the guard-tool-call card: the four checks directly, the last two as
+  // its catch-up step (#2022).
   "plan-approval-guard",
   "review-freeze",
   "state-transition-guard",
@@ -314,10 +315,9 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
 // Each check that shares a registration keeps the tools its own registration
 // selected, in the order Kiro ran those files (file-name order).
 describe("t245 one card runs the checks that had their own cards", () => {
-  test("the guard card finishes the last call's work, then runs the five tool-call checks in their old order with their old matchers", () => {
+  test("the guard card finishes the last call's work, then runs the four tool-call checks in their old order with their old matchers", () => {
     expect(KIRO_HOOK_GROUPS["guard-tool-call"]).toEqual([
       { target: "catch-up", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse },
-      { target: "enforce-approval-gate", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse },
       { target: "plan-approval-guard", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse },
       { target: "review-freeze", matcher: KIRO_HOOK_MATCHERS.writeOrShellPreToolUse },
       { target: "state-transition-guard", matcher: KIRO_HOOK_MATCHERS.writeOrShellPreToolUse },
