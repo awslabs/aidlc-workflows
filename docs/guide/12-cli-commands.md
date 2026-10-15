@@ -1708,14 +1708,20 @@ example:
 > The review freeze check (it stops edits to work you already approved) switch is cleared for this project, but it stays off for this piece of work: guard policy off (set by you). Do you want it on for this piece of work too?
 
 The other way round, when you turn a check back on for this piece of work while
-a switch still keeps it off (a settings file, the nearest one named), the line
-says so in place of the setting's own line and offers to clear it there, for
-example:
+a switch still keeps it off, your own `aidlc.settings.local.json` entry for it is
+cleared and the line says so in place of the setting's own line, for example:
 
-> The review freeze check (it stops edits to work you already approved) is still off: aidlc.settings.local.json keeps it off for this project. Do you want it cleared there?
+> The review freeze check (it stops edits to work you already approved) is back on: aidlc.settings.local.json had kept it off for this project, and that entry is cleared. You can turn it off for the project again any time.
 
-At your own terminal it names the command that clears it instead, and when the
-editor or CLI was started with the variable it says to start it without.
+The project's shared `aidlc.settings.json` and this machine's settings file are
+not changed from that request: the line names the file and says that changing it
+changes it, for example:
+
+> The project's shared settings in aidlc.settings.json keep the review freeze check (it stops edits to work you already approved) off for everyone on this project. Changing that file changes it.
+
+At your own terminal that line names the command that clears it instead, and
+when the editor or CLI was started with the variable it says to start it
+without. Sensors and learnings read the same way.
 
 `config get` names where a switch keeps a check off: `off (AIDLC_DISABLE_REVIEW_FREEZE_HOOK in aidlc.settings.local.json)`
 when a settings file records it, or `off (env AIDLC_DISABLE_REVIEW_FREEZE_HOOK)`

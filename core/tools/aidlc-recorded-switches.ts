@@ -36,14 +36,19 @@ import { aidlcInvocation, quoteCommandArgument } from "./aidlc-runtime-paths.ts"
 import {
   type AidlcSettingsFile,
   bypassRecordedIn,
+  invalidateSettingsCache,
+  normalizeProjectFlagsRecord,
   PERSON_CHECK_SWITCH_LABELS,
   PERSON_CHECK_SWITCHES,
+  type ProjectFlagsRecord,
   settingPurpose,
   type RecordableProjectBypass,
   readSettingsTarget,
   resolveAidlcSettings,
+  serializeAidlcSettings,
   settingsPathForTarget,
   type SettingsTarget,
+  updateSettingsSection,
 } from "./aidlc-settings.ts";
 
 const RECORD_FILE = "recorded-switches.json";
@@ -288,21 +293,129 @@ export function stillOffLine(
   reason: "keeps" | "also",
   env: NodeJS.ProcessEnv = process.env,
 ): string | null {
-  const label = name === undefined ? undefined : PERSON_CHECK_SWITCH_LABELS[name as RecordableProjectBypass];
-  if (name === undefined || label === undefined) return null;
-  const named = `The ${label}${settingPurpose(label)} is still off`;
-  if (env[name] === "1") {
+  const subject = name === undefined ? null : backOnSubject(name);
+  const by = name === undefined || subject === null ? null : keptOffBy(projectDir, name, env);
+  if (name === undefined || subject === null || by === null) return null;
+  const named = `${capitalized(subject.said)} ${subject.is} still off`;
+  if (by === "environment") {
     return `${named}: ${name}=1 is set in the environment this command ran in. ` +
-      "Start the editor or CLI without it to turn the check back on.";
+      `Start the editor or CLI without it to turn ${subject.it === "it" ? "the check" : "them"} back on.`;
   }
-  const still = switchesOff(projectDir, env).find((item) => item.name === name);
-  if (still === undefined) return null;
-  const file = still.target === "global" ? still.settingsPath : basename(still.settingsPath);
-  if (reason === "also") return `${named}: ${file} also records it. Do you want it cleared there too?`;
+  const target = by[0];
+  const path = settingsPathForTarget(projectDir, target);
+  const file = target === "global" ? path : basename(path);
+  if (reason === "also") return `${named}: ${file} also records ${subject.it}. Do you want it cleared there too?`;
   const back = commandAtPersonsTerminal(env)
-    ? `To turn it back on: ${clearSwitchCommand(still.name, projectDir)}`
+    ? `To turn ${subject.it} back on: ${clearSwitchCommand(name as RecordableProjectBypass, projectDir)}`
     : "Do you want it cleared there?";
-  return `${named}: ${file} keeps it off ${where(still.target)}. ${back}`;
+  return `${named}: ${file} keeps ${subject.it} off ${where(target)}. ${back}`;
+}
+
+/**
+ * The setter's line for a check the person asked to turn back on while a
+ * settings file keeps it off, or null when nothing does. On their own request
+ * (`theirs`, the setter's rule) their own aidlc.settings.local.json entry is
+ * cleared, since nothing else turns the check on, and the line says so. The
+ * project's shared file and this machine's are not changed from this request:
+ * the line names the file and that changing it changes it, as a team's lock is
+ * said, or at their own terminal the command. The environment and a command's
+ * on are stillOffLine's.
+ */
+export function backOnLine(
+  projectDir: string,
+  name: string | undefined,
+  theirs: boolean,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const subject = name === undefined ? null : backOnSubject(name);
+  const by = name === undefined || subject === null ? null : keptOffBy(projectDir, name, env);
+  if (name === undefined || subject === null || by === null || by === "environment" || !theirs) {
+    return stillOffLine(projectDir, name, "keeps", env);
+  }
+  const local = basename(settingsPathForTarget(projectDir, "local"));
+  // Their own entry goes whatever else records the switch, so a line naming a
+  // shared file is the whole way back. A clear that failed keeps today's line.
+  if (by.includes("local") && !clearLocalSwitch(projectDir, name as RecordableProjectBypass, env)) {
+    return stillOffLine(projectDir, name, "keeps", env);
+  }
+  if (by.every((target) => target === "local")) {
+    return `${capitalized(subject.said)} ${subject.is} back on: ${local} had kept ${subject.it} off for this project, ` +
+      `and that entry is cleared. You can turn ${subject.it} off for the project again any time.`;
+  }
+  const alsoCleared = by.includes("local") ? ` The entry in ${local} is cleared too.` : "";
+  // At the person's own terminal the line names the command instead.
+  const atTerminal = commandAtPersonsTerminal(env) ? stillOffLine(projectDir, name, "keeps", env) : null;
+  if (atTerminal !== null) return `${atTerminal}${alsoCleared}`;
+  return (by.includes("project")
+    ? `The project's shared settings in ${basename(settingsPathForTarget(projectDir, "project"))} keep ${subject.said} ` +
+      "off for everyone on this project. Changing that file changes it."
+    : `This machine's settings in ${settingsPathForTarget(projectDir, "global")} keep ${subject.said} ` +
+      "off for every project here. Changing that file changes it.") + alsoCleared;
+}
+
+// How a line names the setting a switch turns off: a check by its label and
+// what it is for; sensors and learnings, which take no decision from the
+// person and so stay out of the switch-off notices, by their own names.
+function backOnSubject(name: string): { said: string; is: "is" | "are"; it: "it" | "them" } | null {
+  const label = PERSON_CHECK_SWITCH_LABELS[name as RecordableProjectBypass];
+  if (label !== undefined) return { said: `the ${label}${settingPurpose(label)}`, is: "is", it: "it" };
+  if (name === "AIDLC_DISABLE_SENSORS") return { said: "sensors", is: "are", it: "them" };
+  if (name === "AIDLC_DISABLE_LEARNINGS") return { said: "learnings", is: "are", it: "them" };
+  return null;
+}
+
+function capitalized(text: string): string {
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+}
+
+// What keeps a switch's check off, read as resolveProjectFlag reads it: the
+// environment this command ran in (a variable of the switch's name decides over
+// the files, and only 1 keeps it off), else every settings file that records
+// it, nearest first. Null when nothing does.
+function keptOffBy(projectDir: string, name: string, env: NodeJS.ProcessEnv): "environment" | SettingsTarget[] | null {
+  if (env[name] === "1") return "environment";
+  if (Object.hasOwn(env, name)) return null;
+  try {
+    if (!(resolveAidlcSettings(projectDir).flags?.bypasses ?? []).includes(name as RecordableProjectBypass)) return null;
+  } catch {
+    return null;
+  }
+  const files = (["local", "project", "global"] as const).filter((target) => {
+    try {
+      return (readSettingsTarget(projectDir, target)?.flags?.bypasses ?? []).includes(name as RecordableProjectBypass);
+    } catch {
+      return false;
+    }
+  });
+  return files.length > 0 ? files : null;
+}
+
+// Take one switch out of the person's aidlc.settings.local.json, keeping
+// everything else the file records, the way `config flags --clear-bypass
+// --local` leaves it, and keep the switch record in step. False when the file
+// cannot be read or written: the caller then says the check is still off.
+function clearLocalSwitch(projectDir: string, name: RecordableProjectBypass, env: NodeJS.ProcessEnv): boolean {
+  const path = settingsPathForTarget(projectDir, "local");
+  try {
+    // Another process may have written the file since it was read.
+    invalidateSettingsCache(path);
+    const previous = readSettingsTarget(projectDir, "local");
+    const bypasses = previous?.flags?.bypasses ?? [];
+    if (previous === null || !bypasses.includes(name)) return false;
+    const flags: ProjectFlagsRecord = { ...(previous.flags ?? { schemaVersion: 1 }) };
+    const kept = bypasses.filter((recorded) => recorded !== name).sort();
+    if (kept.length > 0) flags.bypasses = kept;
+    else delete flags.bypasses;
+    const next = updateSettingsSection(previous, "flags", normalizeProjectFlagsRecord(flags));
+    if (next === null) return false;
+    writeFileAtomic(path, serializeAidlcSettings(next));
+    invalidateSettingsCache(path);
+    recordSwitchChange(projectDir, "local", previous, next, { env, otherFiles: false });
+    return true;
+  } catch {
+    invalidateSettingsCache(path);
+    return false;
+  }
 }
 
 /**

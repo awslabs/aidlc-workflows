@@ -69,7 +69,7 @@ import {
 } from "./aidlc-lib.ts";
 import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { chatsSince, latestMessage, latestSpendingTimestamp, listMessages, replyOfTheirs } from "./aidlc-message-store.ts";
-import { quoted, stillOffLine, widerPlaceOffer } from "./aidlc-recorded-switches.ts";
+import { backOnLine, quoted, widerPlaceOffer } from "./aidlc-recorded-switches.ts";
 import { settingPurpose } from "./aidlc-settings.ts";
 
 function throwSettingsError(message: string): never {
@@ -719,9 +719,11 @@ export function applyIntentSettings(
             },
           });
         }
-        // Turned on, but a switch outside this piece of work keeps it off: what
-        // keeps it, and the way to clear it.
-        const held = request.value === "on" ? stillOffLine(projectDir, projectSwitchOf(`guard.${request.fence}`), "keeps") : null;
+        // Turned on, but a switch outside this piece of work keeps it off: their
+        // own local entry is cleared, otherwise what keeps it and the way to it.
+        const held = request.value === "on"
+          ? backOnLine(projectDir, projectSwitchOf(`guard.${request.fence}`), source === "you")
+          : null;
         if (held !== null) {
           // Their on is recorded too, so once that switch is cleared the check
           // is on for this work as they asked and nothing asks them again. An
@@ -775,10 +777,11 @@ export function applyIntentSettings(
     const previous = getField(content, field);
     const line = formatCeremony(value, source);
     // Turned on, but a switch outside this piece of work keeps it off: that is
-    // said in place of the setting's own line, which would read as on. Plan
-    // approval reads its environment switch only where it is trusted.
+    // said in place of the setting's own line, which would read as on (their
+    // own local entry is cleared first). Plan approval reads its environment
+    // switch only where it is trusted.
     const held = value === "on" && !scopeDefault(flag)
-      ? stillOffLine(projectDir, CEREMONY_ENV[key], "keeps",
+      ? backOnLine(projectDir, CEREMONY_ENV[key], source === "you",
         key === "plan_approval" ? planApprovalEnv(projectDir, sessionId) : process.env)
       : null;
     if (previous === line || (source === "command" && previous === formatCeremony(value, "you"))) {

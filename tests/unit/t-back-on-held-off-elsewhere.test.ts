@@ -1,10 +1,11 @@
 // covers: subcommand:aidlc-init:config
 //
 // The person asks to turn a check back on for this piece of work while a
-// project or machine setting, or the environment, still keeps it off. The line
-// says it is still off and why, and offers to clear the setting that keeps it
-// off, instead of "already on" (untrue: the setting keeps it off), "already
-// off" (no way forward), or "now shown for approval" (untrue for plan approval).
+// project or machine setting, or the environment, still keeps it off. Their own
+// local entry is cleared; otherwise the line says it is still off and why, and
+// the way to change it, instead of "already on" (untrue: the setting keeps it
+// off), "already off" (no way forward), or "now shown for approval" (untrue for
+// plan approval).
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -16,7 +17,7 @@ import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOp
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const SESSION = "01995000-7a11-7000-8000-00000000e4e4";
-const CLEAR_OFFER = "Do you want it cleared there?";
+const CLEARED = "had kept it off for this project, and that entry is cleared.";
 
 const made: string[] = [];
 afterEach(() => {
@@ -93,26 +94,27 @@ function workspace(): {
 }
 
 describe("t-back-on-held-off-elsewhere: back on for this piece of work while a setting keeps it off", () => {
-  test("the project's file keeps it off: said, and clearing it there offered", () => {
+  test("the project's local file keeps it off: that entry is cleared, and said", () => {
     const { run, said } = workspace();
     said("turn it off");
     run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes"]);
     said("turn the review freeze check back on");
     const out = run(["engine", "config", "set", "guard.review-freeze", "on", "--person-words", "turn the review freeze check back on"]);
     expect(out).not.toContain("already on");
-    expect(out).toContain("is still off: aidlc.settings.local.json keeps it off for this project.");
-    expect(out).toEndWith(CLEAR_OFFER);
+    expect(out).toContain(`is back on: aidlc.settings.local.json ${CLEARED}`);
+    expect(out).not.toContain("?");
+    expect(run(["engine", "config", "get", "guard.review-freeze"])).toStartWith("on");
   });
 
-  test("the machine's file keeps it off: said, and clearing it there offered", () => {
+  test("the machine's file keeps it off: said, with the file that changes it, and nothing asked", () => {
     const { run, said } = workspace();
     said("turn it off");
     run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEWER_SCOPE_HOOK", "--global", "--yes"]);
     said("turn the reviewer read scope check back on");
     const out = run(["engine", "config", "set", "guard.reviewer-scope", "on", "--person-words", "turn the reviewer read scope check back on"]);
     expect(out).not.toContain("already on");
-    expect(out).toContain("keeps it off on this machine.");
-    expect(out).toEndWith(CLEAR_OFFER);
+    expect(out).toStartWith("This machine's settings in ");
+    expect(out).toEndWith("off for every project here. Changing that file changes it.");
   });
 
   test("the team's project file keeps it off: said by its name", () => {
@@ -121,11 +123,13 @@ describe("t-back-on-held-off-elsewhere: back on for this piece of work while a s
     run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--project", "--yes"]);
     said("turn the review freeze check back on");
     const out = run(["engine", "config", "set", "guard.review-freeze", "on", "--person-words", "turn the review freeze check back on"]);
-    expect(out).toContain("is still off: aidlc.settings.json keeps it off for this project.");
-    expect(out).toEndWith(CLEAR_OFFER);
+    expect(out).toBe(
+      "The project's shared settings in aidlc.settings.json keep the review freeze check (it stops edits to work you " +
+        "already approved) off for everyone on this project. Changing that file changes it.",
+    );
   });
 
-  test("the project's and the machine's file both keep it off: the nearer one is named", () => {
+  test("the project's local file and the machine's both keep it off: the local entry is cleared, and the machine's file named", () => {
     const { run, said } = workspace();
     said("turn it off on this machine");
     run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--global", "--yes"]);
@@ -133,34 +137,33 @@ describe("t-back-on-held-off-elsewhere: back on for this piece of work while a s
     run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes"]);
     said("turn the review freeze check back on");
     const out = run(["engine", "config", "set", "guard.review-freeze", "on", "--person-words", "turn the review freeze check back on"]);
-    expect(out).toContain("is still off: aidlc.settings.local.json keeps it off for this project.");
-    expect(out).not.toContain("on this machine");
+    expect(out).toStartWith("This machine's settings in ");
+    expect(out).toEndWith("Changing that file changes it. The entry in aidlc.settings.local.json is cleared too.");
   });
 
-  test("typed as an /aidlc line: the same line, with the same offer", () => {
+  test("typed as an /aidlc line: the same line", () => {
     const { said, run, typed } = workspace();
     said("turn it off");
     run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes"]);
     said("/aidlc --guard.review-freeze on");
     const out = typed("/aidlc --guard.review-freeze on");
-    expect(out).toContain("is still off: aidlc.settings.local.json keeps it off for this project.");
-    expect(out).toEndWith(CLEAR_OFFER);
+    expect(out).toContain(`is back on: aidlc.settings.local.json ${CLEARED}`);
   });
 
-  test("at the person's own terminal: the command that clears it, and no question", () => {
+  test("at the person's own terminal: the shared file's line names the command that clears it, and no question", () => {
     const { run, said } = workspace();
     said("turn it off");
-    run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes"]);
+    run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--project", "--yes"]);
     const out = run(["engine", "config", "set", "guard.review-freeze", "on"], {
       AIDLC_TEST_CONFIG_TTY: "1",
       AIDLC_SESSION_OVERRIDE: undefined,
     });
-    expect(out).toContain("is still off: aidlc.settings.local.json keeps it off for this project. To turn it back on: ");
+    expect(out).toContain("is still off: aidlc.settings.json keeps it off for this project. To turn it back on: ");
     expect(out).toContain("config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --yes");
     expect(out).not.toContain("?");
   });
 
-  test("Guard Policy off and the project's file keeps it off: said still off, not back on", () => {
+  test("Guard Policy off and the project's local file keeps it off: cleared, and their on for this work stands", () => {
     const { run, said } = workspace();
     said("turn it off");
     run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes"]);
@@ -169,18 +172,13 @@ describe("t-back-on-held-off-elsewhere: back on for this piece of work while a s
     said("turn the review freeze check back on");
     const out = run(["engine", "config", "set", "guard.review-freeze", "on", "--person-words", "turn the review freeze check back on"]);
     expect(out).not.toContain("back on for this piece of work");
-    expect(out).toContain("is still off: aidlc.settings.local.json keeps it off for this project.");
-    expect(out).toEndWith(CLEAR_OFFER);
-    // Yes: cleared there, and their own "on" for this piece of work stands, so
-    // nothing asks it again.
-    said("yes, clear it");
-    const cleared = run(["config", "flags", "--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--yes"]);
-    expect(cleared).toContain("is on again for this project.");
-    expect(cleared).not.toContain("?");
+    expect(out).toContain(`is back on: aidlc.settings.local.json ${CLEARED}`);
+    expect(out).not.toContain("?");
+    // Their own "on" for this piece of work stands over Guard Policy off.
     expect(run(["engine", "config", "get", "guard.review-freeze"])).toStartWith("on");
   });
 
-  test("off for this piece of work, then the whole project, then back on: one yes clears it, with no second question", () => {
+  test("off for this piece of work, then the whole project, then back on: on again, with no question", () => {
     const { run, said } = workspace();
     said("turn the review freeze check off");
     const off = run(["engine", "config", "set", "guard.review-freeze", "off", "--person-words", "turn the review freeze check off"]);
@@ -189,11 +187,8 @@ describe("t-back-on-held-off-elsewhere: back on for this piece of work while a s
     run(["config", "flags", "--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes"]);
     said("turn it back on");
     const on = run(["engine", "config", "set", "guard.review-freeze", "on", "--person-words", "turn it back on"]);
-    expect(on).toEndWith(CLEAR_OFFER);
-    said("yes");
-    const cleared = run(["config", "flags", "--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--yes"]);
-    expect(cleared).toContain("is on again for this project.");
-    expect(cleared).not.toContain("?");
+    expect(on).toContain(`is back on: aidlc.settings.local.json ${CLEARED}`);
+    expect(on).not.toContain("?");
     expect(run(["engine", "config", "get", "guard.review-freeze"])).toStartWith("on");
   });
 
@@ -208,15 +203,14 @@ describe("t-back-on-held-off-elsewhere: back on for this piece of work while a s
     expect(out).not.toContain("?");
   });
 
-  test("plan approval: no line says each plan is now shown while the project's file keeps it off", () => {
+  test("plan approval: the line that clears the project's local file is the only one said", () => {
     const { run, said } = workspace();
     said("turn it off");
     run(["config", "flags", "--bypass", "AIDLC_DISABLE_PLAN_APPROVAL_GUARD", "--local", "--yes"]);
     said("turn plan approval back on");
     const out = run(["engine", "config", "set", "plan-approval", "on", "--person-words", "turn plan approval back on"]);
     expect(out).not.toContain("Each code plan is now shown for approval");
-    expect(out).toContain("is still off: aidlc.settings.local.json keeps it off for this project.");
-    expect(out).toEndWith(CLEAR_OFFER);
+    expect(out).toContain(`is back on: aidlc.settings.local.json ${CLEARED}`);
   });
 
   test("plan approval: an environment switch the chat's start never recorded keeps nothing off, so nothing says it does", () => {
@@ -228,14 +222,13 @@ describe("t-back-on-held-off-elsewhere: back on for this piece of work while a s
     expect(out).not.toContain("is still off");
   });
 
-  test("summary confirmation: said still off while the project's file keeps it off", () => {
+  test("summary confirmation: the project's local file is cleared the same way", () => {
     const { run, said } = workspace();
     said("turn it off");
     run(["config", "flags", "--bypass", "AIDLC_DISABLE_SUMMARY_CONFIRMATION", "--local", "--yes"]);
     said("turn summary confirmation back on");
     const out = run(["engine", "config", "set", "summary-confirmation", "on", "--person-words", "turn summary confirmation back on"]);
-    expect(out).toContain("is still off: aidlc.settings.local.json keeps it off for this project.");
-    expect(out).toEndWith(CLEAR_OFFER);
+    expect(out).toContain(`is back on: aidlc.settings.local.json ${CLEARED}`);
   });
 
   test("on again while the plan already keeps it on: their earlier on stays on this piece of work", () => {
