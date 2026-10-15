@@ -147,6 +147,21 @@ export function dispatched(command: string): boolean {
   return DISPATCHED.test(command.trim());
 }
 
+/**
+ * The hook commands a project's tool runs, as its shell gets them, each with
+ * whether the hook phase trace must show it. That is read from the command the
+ * wiring names, before opencode's plugin adds the project folder.
+ */
+export function hookRuns(harness: string, project: string): { command: string; traced: boolean }[] {
+  if (harness === "opencode") {
+    // The plugin passes the project folder itself; the shell reads it from the environment.
+    return opencodeHookCommands(join(project, ".opencode", "plugin", "aidlc-opencode-adapter.ts"))
+      .map((command) => ({ command: `${command} --project-dir "$CLAUDE_PROJECT_DIR"`, traced: dispatched(command) }));
+  }
+  return hookCommands(join(project, HARNESS_DIRS[harness as (typeof HARNESSES)[number]]))
+    .map((command) => ({ command, traced: dispatched(command) }));
+}
+
 /** The copy runtime a release ships, as its assets name it. */
 export function copyRuntimeAsset(version: string): string {
   return `aidlc-copy-runtime-${version}.tar.gz`;
@@ -420,10 +435,7 @@ async function check(previous: string, candidate: string, target: string, root: 
   const timedOut = new Set<string>();
   const hooks = (harness: string, project: string, when: string) => {
     const plugin = join(project, ".opencode", "plugin", "aidlc-opencode-adapter.ts");
-    const commands = harness === "opencode"
-      // The plugin passes the project folder itself; the shell reads it from the environment.
-      ? opencodeHookCommands(plugin).map((command) => `${command} --project-dir "$CLAUDE_PROJECT_DIR"`)
-      : hookCommands(join(project, HARNESS_DIRS[harness as (typeof HARNESSES)[number]]));
+    const commands = hookRuns(harness, project);
     if (commands.length === 0) fail(`${harness} ${when}: the project has no hook commands to run`);
     if (harness === "opencode") {
       const trace = join(root, "trace", String(++traces));
@@ -438,7 +450,7 @@ async function check(previous: string, candidate: string, target: string, root: 
         fail(`opencode plugin ${when}: its events did not run ${missing.join(", ")} to the end`);
       }
     }
-    for (const command of commands) {
+    for (const { command, traced } of commands) {
       if (Date.now() >= deadline) {
         fail(`${harness} hook ${when}: the check ran out of its ${CHECK_BUDGET_MS / 60_000}-minute budget before \`${command}\``);
         break;
@@ -458,7 +470,7 @@ async function check(previous: string, candidate: string, target: string, root: 
         fail(`${harness} hook ${when}: \`${command}\` did not finish within ${HOOK_TIMEOUT_MS / 60_000} minutes; it is not run again`);
         continue;
       }
-      if (r.status !== 0 || (dispatched(command) && !tracedToCompletion(trace))) {
+      if (r.status !== 0 || (traced && !tracedToCompletion(trace))) {
         fail(`${harness} hook ${when}: \`${command}\` exited ${r.status}: ${`${r.stderr ?? ""}`.trim().split("\n").at(-1) ?? ""}`);
       }
     }

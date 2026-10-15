@@ -14,6 +14,7 @@ import {
   dispatched,
   hookCommands,
   hookInput,
+  hookRuns,
   hooksTracedToCompletion,
   opencodeHookCommands,
   tracedToCompletion,
@@ -80,6 +81,29 @@ describe("ci-update-from-previous helpers", () => {
     writeFileSync(plugin, 'const PROJECTED_INVOKE = "{{INVOKE}}";\n  "aidlc-session-start.ts",\n');
     expect(opencodeHookCommands(plugin)).toEqual(["bun .aidlc/tools/aidlc.ts engine hook session-start"]);
     expect(opencodeHookCommands(join(tree, "missing.ts"))).toEqual([]);
+  });
+
+  // The shell gets the project folder on opencode's hook commands, as the
+  // plugin passes it; whether the phase trace must show a hook is read from the
+  // command the plugin names, so opencode's hooks are held to it too.
+  test("opencode's hooks are held to the phase trace, though their command carries the project folder", () => {
+    const project = scratch();
+    mkdirSync(join(project, ".opencode", "plugin"), { recursive: true });
+    writeFileSync(join(project, ".opencode", "plugin", "aidlc-opencode-adapter.ts"), [
+      'const PROJECTED_INVOKE = "bun .aidlc/tools/aidlc.ts";',
+      'const TRUSTED_NAMESPACE = "engine";',
+      'await runCore("aidlc-session-start.ts", payload, directory);',
+    ].join("\n"));
+    expect(hookRuns("opencode", project)).toEqual([
+      { command: 'bun .aidlc/tools/aidlc.ts engine hook session-start --project-dir "$CLAUDE_PROJECT_DIR"', traced: true },
+    ]);
+    mkdirSync(join(project, ".github", "hooks"), { recursive: true });
+    writeFileSync(join(project, ".github", "hooks", "aidlc.json"), JSON.stringify({
+      hooks: { preToolUse: [{ bash: "bun .aidlc/hooks/aidlc-copilot-adapter.ts guard-tool-call" }] },
+    }));
+    expect(hookRuns("copilot", project)).toEqual([
+      { command: "bun .aidlc/hooks/aidlc-copilot-adapter.ts guard-tool-call", traced: false },
+    ]);
   });
 
   test("a harness the release ships that the check does not set up is named", () => {
