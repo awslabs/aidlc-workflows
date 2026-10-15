@@ -76,6 +76,7 @@ import {
   recordAcceptedChanges,
   recordGuardStoodAside,
   recordHookDrop,
+  rejectionIsFreshAttempt,
   renderChangedPaths,
   renderSourcePathKeys,
   governedChangeControl,
@@ -2911,8 +2912,7 @@ function approvalFromTheirChangeRequest(
     row.event === "GATE_REJECTED" && row.timestamp === floor[1] &&
     [null, authority.unit].includes(auditBlockField(row.block, "Unit")));
   if (rejection === undefined) return null;
-  const reopen = auditBlockField(rejection.block, "Reopen");
-  if (reopen !== null && reopen !== "change") return null;
+  if (rejectionIsFreshAttempt(rejection.block)) return null;
   const plan = readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8");
   const instructions = readFileSync(join(authority.stageDir, "unit-test-instructions.md"), "utf-8");
   const contract = parseTestingContract(plan);

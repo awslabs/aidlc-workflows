@@ -33,6 +33,7 @@ import {
   seededStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { rejectionIsFreshAttempt } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 setDefaultTimeout(120_000);
@@ -385,20 +386,28 @@ describe("one Unit's own change request and its reopen", () => {
 
   // A jump back from Build and Test reopens this Unit's Code Generation. That is
   // a fresh attempt, not a change to the built result, so its plan comes back
-  // for approval even under off: the engine asks for the rewritten plan.
+  // for approval even under off. The person asked for no change, so the plan is
+  // asked about as it stands: never sent back for a revision nobody asked for,
+  // which an unchanged plan could never clear.
+  // One reading of the row decides it for the plan question and the approval
+  // carry alike: only `Reopen: jump` and `Reopen: redo` are fresh attempts.
+  test("a reopen or a Redo is a fresh attempt; a change request is not", () => {
+    const row = (reopen?: string): string =>
+      `**Event**: GATE_REJECTED\n**Stage**: code-generation\n${reopen ? `**Reopen**: ${reopen}\n` : ""}**Feedback**: x\n`;
+    expect(rejectionIsFreshAttempt(row("jump"))).toBe(true);
+    expect(rejectionIsFreshAttempt(row("redo"))).toBe(true);
+    expect(rejectionIsFreshAttempt(row("change"))).toBe(false);
+    expect(rejectionIsFreshAttempt(row())).toBe(false);
+  });
   for (const how of ["jump", "redo"] as const) {
     test(`off: a one-Unit reopen (${how}) brings the plan question back`, () => {
       const proj = unitProject("off", UNIT);
       approved(proj, UNIT);
       reopened(proj, UNIT, how);
-      // The reopened step writes its plan again, as any fresh attempt does.
-      const reopen = next(proj);
-      expect(reopen.kind, JSON.stringify(reopen)).toBe("run-stage");
-      expect(reopen.plan_approval?.status).toBe("revise");
-      writePlan(proj, "- [ ] Step 2: a different approach\n", UNIT);
       const asked = next(proj);
       expect(asked.kind, JSON.stringify(asked)).toBe("ask");
       expect(asked.ask_type).toBe("plan-approval");
+      expect(asked.plan_approval?.status, JSON.stringify(asked)).not.toBe("revise");
     });
   }
   // A change asked for at a late question reopens this Unit's earlier stages for
