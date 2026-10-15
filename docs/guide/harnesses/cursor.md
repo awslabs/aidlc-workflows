@@ -122,8 +122,9 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   shell, and state validation before compaction. The **PreToolUse guards**
   answer on Cursor's `{"permission":"allow"|"deny"}` stdout channel (`deny`
   may add `agent_message`) and register `failClosed: true`. Empty stdout is
-  invalid JSON, so the IDE blocks the call; malformed input, a missing guard,
-  or a crashing guard also denies the operation. Cursor names its shell tool `Shell`; the adapter
+  invalid JSON, so the IDE blocks the call; malformed input also denies the
+  operation. A guard that is missing or crashes refuses nothing, as on every
+  other harness, and `doctor` names it. Cursor names its shell tool `Shell`; the adapter
   maps it to the core hooks' `Bash`. Cursor's
     first-class `Delete` tool (unique to this harness - everywhere else deletion
     goes through the shell) is presented to the reviewer-scope guard as a write so a

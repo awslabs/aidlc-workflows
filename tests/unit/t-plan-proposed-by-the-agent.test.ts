@@ -3,8 +3,9 @@
 // The plan for a request the person typed in their own words is proposed by the
 // agent, not matched from a keyword list. `next "<request>"` on a workspace
 // with no plan named keeps the request as a question and returns one print for
-// the agent: the request, every plan this install ships (its length here, what
-// it is for, its author's hints) and the two commands that answer it. The agent
+// the agent: the request, every plan this install ships (its length here,
+// whether it splits the work into Units, what it is for, its author's hints)
+// and the two commands that answer it. The agent
 // runs `next --propose <plan> --request <id>` (or `--propose compose`) and the
 // engine renders the same plan question the person always got, with that plan,
 // so their yes still runs the exact prebuilt creation command. Before, a
@@ -20,7 +21,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
-import { getField, hooksHealthDir, nextFlagShape, readAuditShardEvents, splitKiroCommandArgs, validScopes } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { getField, hooksHealthDir, loadScopeMapping, nextFlagShape, readAuditShardEvents, splitKiroCommandArgs, validScopes } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { nextArgsAreOnlyWords, parseNextFlags } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
 import {
   AIDLC_SRC,
@@ -200,12 +201,27 @@ describe("t-plan-proposed-by-the-agent: a fresh workspace", () => {
     expect(message).toContain(PROPOSAL);
     expect(message).toContain("--propose compose --request");
     expect(message).not.toContain("This looks like");
-    for (const scope of validScopes()) expect(message).toMatch(new RegExp(`${scope} \\(\\d+ stages?\\):`));
+    for (const scope of validScopes()) expect(message).toMatch(new RegExp(`${scope} \\(\\d+ stages?(, [^)]*)?\\):`));
     expect(message).toContain("hints: fix, bug, broken, bugfix");
     const kept = questionTexts(proj);
     expect(kept.map((q) => q.text)).toContain(REQUEST_TEXT);
     expect(kept.find((q) => q.text === REQUEST_TEXT)?.proposedScope).toBe("");
     expect(readAuditShardEvents(proj).length).toBe(before);
+  });
+
+  // "Fix the two bugs as two units side by side" got bugfix, which builds in
+  // one piece: the list never said which plans have Units. Each plan says it
+  // from its own stages; reading the request stays the agent's.
+  test("the plans list says which plans split the work into Units, from each plan's own stages", () => {
+    proj = fresh();
+    const message = String(next(CLAUDE_TOOLS, proj, ["fix two bugs, as two units side by side"]).message);
+    const scopes = loadScopeMapping();
+    for (const scope of validScopes()) {
+      const marked = new RegExp(`(^|/ |Plans: )${scope} \\(\\d+ stages?, splits the work into Units\\):`).test(message);
+      expect(marked, scope).toBe(scopes[scope]?.stages["units-generation"] === "EXECUTE");
+    }
+    expect(message).toMatch(/classic \(\d+ stages, splits the work into Units\):/);
+    expect(message).toMatch(/bugfix \(\d+ stages\):/);
   });
 
   test("the proposal step re-run with its request is the same step: same id, same print", () => {

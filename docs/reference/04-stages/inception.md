@@ -607,8 +607,8 @@ not in the upstream reference.
 
 ### Steps
 
-1. **Load the Lead Persona** -- Load aidlc-product-agent persona from
-   `agents/aidlc-product-agent.md` and knowledge from
+1. **Load the Lead Persona** -- The step carries the aidlc-product-agent
+   persona (`lead_persona`); read its knowledge from
    `.claude/knowledge/aidlc-product-agent/`. The support agents (design,
    developer, quality) are NOT loaded inline - this is a mob stage; they are
    dispatched as independent collaborators during generation.
@@ -712,7 +712,7 @@ All artifacts written to `<record>/inception/user-stories/`:
 | `stories.md`                   | User stories with acceptance criteria, priority, dependencies, INVEST notes |
 | `personas.md`                  | User persona definitions, relationships, priority ranking    |
 | `user-stories-assessment.md`   | Execute/skip decision with rationale and factors considered   |
-| `traceability.json`            | Every `FR` and `NFR` ID from `requirements.md` mapped to stories (`OK`), or marked `Deferred` with a named downstream stage or `N/A` with a justification; checked by the `traceability` sensor |
+| `traceability.json`            | Every `FR` and `NFR` ID from `requirements.md` (a requirement with sub-requirements through its `FR{n}.{m}` IDs) mapped to stories (`OK`), or marked `Deferred` with a named downstream stage or `N/A` with a justification; checked by the `traceability` sensor |
 | `user-stories-questions.md`    | Story plan with clarifying questions using `[Answer]:` tags (input artifact) |
 | `contributions/aidlc-{design,developer,quality}-agent.md` | Mutually blind support contributions integrated by the lead before the gate |
 

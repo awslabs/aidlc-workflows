@@ -94,6 +94,7 @@ type WireDirective = {
   rules_content?: RuleContent[];
   rules_in_context?: string[];
   inline_context_paths?: string[];
+  lead_persona?: { path: string; text: string };
   context_warnings?: string[];
   change_notices?: string[];
   stage_validity?: {
@@ -516,7 +517,9 @@ describe("t248 deterministic steering delivery", () => {
       "- **Guard Policy**: relaxed (from scope feature)",
     );
     writeFileSync(statePath, state, "utf-8");
-    appendFileSync(orgPath(proj), "\n## Inline boundary policy\n\n", "utf-8");
+    // A short org.md leaves room under the inline limit beside the lead's
+    // persona, which this stage's step carries, so the filler below decides.
+    writeFileSync(orgPath(proj), "# Organization rules\n\n## Inline boundary policy\n\nKeep each change small.\n", "utf-8");
     const baseline = invoke(proj, "next", []);
     expect(baseline.directive.kind).toBe("run-stage");
     expect(baseline.directive.rules_content).toBeArray();
@@ -1720,9 +1723,10 @@ describe("t248 deterministic steering delivery", () => {
     ]);
     const paths = result.final.inline_context_paths ?? [];
 
-    // poc ships collaborators off, so only the lead's context is loaded.
+    // poc ships collaborators off, so only the lead's context is loaded: its
+    // persona in the step, its knowledge on the list.
+    expect(result.final.lead_persona?.path).toBe(".claude/agents/aidlc-product-agent.md");
     for (const path of [
-      ".claude/agents/aidlc-product-agent.md",
       ".claude/knowledge/aidlc-shared/ai-dlc-principles.md",
       ".claude/knowledge/aidlc-shared/rules-reading.md",
       ".claude/knowledge/aidlc-shared/verification.md",

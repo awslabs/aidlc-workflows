@@ -142,6 +142,7 @@ import {
   type RunStageWaveEntry,
   type ScopeCommandRow,
   type StageValidityAdvisory,
+  bodyRuns,
   numberedOptionLine,
   numberedProseQuestion,
   validateDirective,
@@ -1411,6 +1412,12 @@ function prepareEmission(directive: Directive): PreparedEmission {
     if (line === null) delete directive.narration;
     else directive.narration = line;
   }
+  // The lead's persona rides only where the chat works the stage's body; a gate
+  // shown again, a checkpoint or a wave is set after the step is built, and
+  // lists the file as before.
+  if (directive.kind === "run-stage" && !bodyRuns(directive as unknown as Record<string, unknown>)) {
+    listLeadPersona(directive);
+  }
   // A Code Generation build cut off part way and picked up again: the person
   // hears where it picks up instead of the stage starting over. Otherwise an
   // approved build starts with the plan's own count, from the same reading of
@@ -2219,8 +2226,12 @@ function withParkedReply(directive: Directive): Directive {
       words: cut ? words.slice(0, PARKED_REPLY_MAX_CHARS) : words,
       note: cut ? `${PARKED_REPLY_NOTE}${PARKED_REPLY_CUT_NOTE}` : PARKED_REPLY_NOTE,
     };
-    // A step that still cannot be sent alone goes without it; the record keeps the words.
-    if (Buffer.byteLength(JSON.stringify(directive), "utf-8") > directiveMaxBytes()) delete directive.parked_reply;
+    // Their words outrank the lead's persona text, which the step can list as a
+    // file to read instead. A step that still cannot be sent alone goes without
+    // them; the record keeps the words.
+    const tooBig = (): boolean => Buffer.byteLength(JSON.stringify(directive), "utf-8") > directiveMaxBytes();
+    if (tooBig()) listLeadPersona(directive);
+    if (tooBig()) delete directive.parked_reply;
   } catch (e) {
     recordHookDrop(projectDir, "parked-reply", errorMessage(e));
   }
@@ -5252,7 +5263,8 @@ function freshWorkOfferDirective(
 
 // The plan proposal step: a request that names no plan is kept as a question
 // and handed to the agent with every plan this install ships (its length here,
-// what it is for, and the hints its author wrote), so the agent proposes the
+// whether its stages split the work into Units, what it is for, and the hints
+// its author wrote), so the agent proposes the
 // one that fits what the person described and the engine renders the plan
 // question with it. A tool never reads the request for meaning; the agent does.
 // Re-run with the same request (`--request <id>`), the step reuses that
@@ -5278,7 +5290,8 @@ function planProposalDirective(
     const cost = effectiveScopeCostSummary(scope, pd, undefined, undefined, undefined, flags.projectType);
     const meta = metadata[scope];
     const hints = meta?.keywords?.length ? `; hints: ${meta.keywords.join(", ")}` : "";
-    return `${scope}${cost ? ` (${cost.shown} ${cost.shown === 1 ? "stage" : "stages"})` : ""}: ${meta?.description ?? ""}${hints}`;
+    const units = cost && cost.perUnitStages > 0 ? ", splits the work into Units" : "";
+    return `${scope}${cost ? ` (${cost.shown} ${cost.shown === 1 ? "stage" : "stages"}${units})` : ""}: ${meta?.description ?? ""}${hints}`;
   });
   return printDirective(
     `The person asked for new work: "${requestPreview(description)}".${documentSplitSentence(description)} No plan is ` +
@@ -6965,8 +6978,9 @@ function inlineContextEntries(
   const shipped = shippedInlineContextEntries(node, harnessRoot, harnessDir(), warnings, depth);
   // The project's own knowledge comes right after the personas, before the
   // shipped knowledge: it is the team's word for this work, an agent reading
-  // the roster in order reaches it second, and the roster cap trims shipped
-  // knowledge before it.
+  // the roster in order reaches it right after the personas (first, when the
+  // step carries the lead's persona and lists no support), and the roster cap
+  // trims shipped knowledge before it.
   let personas = 0;
   while (personas < shipped.length && shipped[personas].persona) personas++;
   const entries: InlineContextEntry[] = shipped.slice(0, personas);
@@ -7012,14 +7026,26 @@ function inlineContextRoster(
   node: GraphStage,
   codekbCtx?: CodekbCtx,
   depth: string | null = null,
-): { paths: string[]; warnings: string[] } {
+): { paths: string[]; warnings: string[]; lead: InlineContextEntry | null } {
   const warnings: string[] = [];
-  const allPaths = inlineContextEntries(node, codekbCtx, warnings, depth).map((e) => e.rel);
-  const { paths, omitted } = capInlineContextPaths(allPaths);
+  const entries = inlineContextEntries(node, codekbCtx, warnings, depth);
+  const { paths, omitted } = capInlineContextPaths(entries.map((e) => e.rel));
   // The person reads this line (the skill shows context warnings as written),
   // so it is about their work: no field name, no byte cap.
   if (omitted > 0) warnings.push(omittedContextWarning(omitted));
-  return { paths, warnings: boundedContextWarnings(warnings) };
+  // The lead's persona, first on the list, which the step carries itself
+  // when it can (lead_persona).
+  const lead = entries.find((e) => e.persona === true && e.agent === node.lead_agent) ?? null;
+  return { paths, warnings: boundedContextWarnings(warnings), lead: lead !== null && paths[0] === lead.rel ? lead : null };
+}
+
+// A step that does not carry the lead's persona lists its file first again,
+// where the roster had it, for the agent to read as before.
+function listLeadPersona(directive: RunStageDirective): void {
+  const lead = directive.lead_persona;
+  if (lead === undefined) return;
+  delete directive.lead_persona;
+  directive.inline_context_paths = [lead.path, ...directive.inline_context_paths];
 }
 
 function boundedContextWarnings(warnings: string[]): string[] {
@@ -7125,8 +7151,8 @@ function buildRunStageDirective(
   // The collaborators the stage ACTUALLY gets this run: the one switch owner.
   // Empty when the `collaborators` ceremony is off for this scope, which makes
   // the stage run lead-only on every topology (dispatch, gate, and promotion
-  // all read the same answer, so they can never disagree), and the inline
-  // roster then carries only the lead's persona and knowledge.
+  // all read the same answer, so they can never disagree), and the step then
+  // carries only the lead's persona and lists only the lead's knowledge.
   const effectiveSupports = effectiveSupportAgents(node, scope, stateContent);
   const inlineContext = inlineContextRoster({ ...node, support_agents: effectiveSupports }, codekbCtx, depth);
   const ruleEntries = codekbCtx
@@ -7215,6 +7241,17 @@ function buildRunStageDirective(
   }
   if (inlineContext.warnings.length > 0) {
     directive.context_warnings = inlineContext.warnings;
+  }
+  // The lead's persona rides in the step, so no read has to come before it.
+  // A file that became unreadable since the roster checked it stays listed.
+  if (inlineContext.lead !== null) {
+    try {
+      const text = readFileSync(inlineContext.lead.abs, "utf-8");
+      directive.inline_context_paths = inlineContext.paths.slice(1);
+      directive.lead_persona = { path: inlineContext.lead.rel, text };
+    } catch {
+      // Listed as before.
+    }
   }
   if (absent.length > 0) directive.consumes_absent = absent;
   // next_stage: the display name of the in-scope stage that follows this one, so
@@ -7652,6 +7689,20 @@ function personaSentAhead(directive: RunStageDirective): string | null {
     : null;
 }
 
+// The lead's persona rides in the run-stage itself, never on a rules part. When
+// the step would not fit with it even after its rules and the conductor persona
+// go ahead, the step lists the persona file to read instead, as it did before
+// the step carried it: a persona grown past what the host shows of one result
+// still leaves a step the person can go on with. Decided before the directive
+// digest, from the step alone, so every call of one delivery decides the same.
+function listLeadPersonaUnlessItFits(directive: RunStageDirective): void {
+  if (directive.lead_persona === undefined) return;
+  const { conductor_persona: _sentAhead, ...alone } = directive;
+  if (Buffer.byteLength(JSON.stringify(alone), "utf-8") > directiveMaxBytes() - INLINE_RULES_MARGIN_BYTES) {
+    listLeadPersona(directive);
+  }
+}
+
 // One load-steering part: the receipt and ready command first, so a host that
 // cuts long output still keeps them, then the persona on the part that carries
 // it, then the rule text.
@@ -7941,6 +7992,7 @@ function transportRunStage(
     held,
     persona: directive.conductor_persona === undefined ? null : sha256(directive.conductor_persona),
   };
+  listLeadPersonaUnlessItFits(directive);
   const directiveHash = sha256(JSON.stringify(directive));
   const persona = personaSentAhead(directive);
   if (persona !== null) delete directive.conductor_persona;

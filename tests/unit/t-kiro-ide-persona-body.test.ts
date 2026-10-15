@@ -89,7 +89,7 @@ describe("the Kiro IDE lead reads the persona without its tool permissions", () 
     const ensemble = readFileSync(join(KIRO_IDE, "aidlc-common", "protocols", "stage-protocol-ensemble.md"), "utf-8");
     expect(skill).not.toContain("personas load inline from `.kiro/agents/");
     expect(ensemble).not.toContain("persona framing loaded from its `.md` file under `.kiro/agents/`");
-    // The skill leaves the persona's place to the step: its inline_context_paths names the file.
-    expect(ensemble).toContain("persona framing loaded from the persona file `directive.inline_context_paths` names");
+    // The skill leaves the persona to the step, which carries it.
+    expect(ensemble).toContain("with the lead agent's persona the step carries in `directive.lead_persona`");
   });
 });

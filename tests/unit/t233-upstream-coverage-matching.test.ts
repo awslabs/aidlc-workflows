@@ -53,10 +53,15 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AIDLC_SRC } from "../harness/fixtures.ts";
+import {
+	AIDLC_SRC,
+	createTestProject,
+	seededRecordDir,
+	seedStateFile,
+} from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -342,5 +347,54 @@ describe("t233 back-compat forms", () => {
 			"a.md": "# A\n\nSee Intent-Statement for context.\n",
 		});
 		expect(run(dir, "a.md", "intent-statement").pass).toBe(true);
+	});
+});
+
+// The dispatcher hands the check the inputs the stage requires. An optional
+// input (`required: false`) that exists may not have informed the output, so
+// citing it is not asked for; a required one still is (#2210).
+describe("t233 the dispatcher checks the inputs a stage requires", () => {
+	const DISPATCHER = join(import.meta.dir, "..", "..", "core", "tools", "aidlc-sensor.ts");
+	const FRAMEWORK_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
+
+	function feasibility(citesIntent: boolean): { proj: string; output: string } {
+		const proj = createTestProject();
+		tempDirs.push(proj);
+		seedStateFile(proj, "state-mid-ideation.md");
+		const record = seededRecordDir(proj);
+		const put = (relative: string, body: string): string => {
+			const path = join(record, ...relative.split("/"));
+			mkdirSync(join(path, ".."), { recursive: true });
+			writeFileSync(path, body, "utf-8");
+			return path;
+		};
+		put("ideation/intent-capture/intent-statement.md", "# Intent\n\n## Goal\n\nA widget.\n");
+		// Feasibility consumes competitive-analysis with `required: false`.
+		put("ideation/market-research/competitive-analysis.md", "# Competitors\n\n## A\n\nx\n");
+		let output = "";
+		for (const name of ["feasibility-assessment", "constraint-register", "raid-log"]) {
+			const source = citesIntent ? "Source: `intent-statement.md`" : "Source: the workshop notes";
+			const path = put(`ideation/feasibility/${name}.md`, `# ${name}\n\n${source}\n\n## One\n\nx\n`);
+			if (output === "") output = path;
+		}
+		return { proj, output };
+	}
+
+	function fire(proj: string, output: string): string {
+		const res = spawnSync(BUN, [DISPATCHER, "fire", "upstream-coverage", "--stage", "feasibility", "--output-path", output], {
+			timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+			encoding: "utf-8",
+			cwd: proj,
+			env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_STAGE_GRAPH: FRAMEWORK_GRAPH },
+		});
+		expect(res.status, res.stderr).toBe(0);
+		return (JSON.parse((res.stdout || "").trim().split("\n").pop() ?? "{}") as { result: string }).result;
+	}
+
+	test("17: an optional input that exists and is not cited passes; a required one not cited still fails", () => {
+		const cited = feasibility(true);
+		expect(fire(cited.proj, cited.output)).toBe("passed");
+		const uncited = feasibility(false);
+		expect(fire(uncited.proj, uncited.output)).toBe("failed");
 	});
 });
