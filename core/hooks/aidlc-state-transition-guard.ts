@@ -161,7 +161,6 @@ export const DELEGATE_ROLE_ADMITTED_VERBS: Readonly<
   "aidlc-pipeline-deploy-agent": { "aidlc-worktree.ts": ["create", "merge", "discard", "restore"] },
 };
 
-// The verbs one persona is admitted: everyone's, then its own.
 export function delegateAdmittedVerbs(agent: string): Readonly<Record<string, readonly string[]>> {
   const own = DELEGATE_ROLE_ADMITTED_VERBS[agent] ?? {};
   const files = [...new Set([...Object.keys(DELEGATE_ADMITTED_VERBS), ...Object.keys(own)])];

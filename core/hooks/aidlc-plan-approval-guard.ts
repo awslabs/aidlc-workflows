@@ -32,9 +32,9 @@
 // the recovery remedy they picked excepted); a jump waits for the person's
 // move: the restart they picked at the recovery question, or one they asked
 // for while the last step is current. While the person is editing the plan
-// files themselves, those files are theirs (personIsEditingPlanFile). Three exact files
-// outside the record pass too: the composer's grid proposal, a person's answer
-// text and a person's request file, which the engine reads and nothing else.
+// files themselves, those files are theirs (personIsEditingPlanFile). Three
+// kinds of files pass too: the composer's grid proposal, a person's answer text
+// and a person's request file, which the engine reads and nothing else.
 //
 // How the hook decides: the active directive is the approval authority. A
 // directive with `unit` selects construction/<unit>/code-generation; a
@@ -47,17 +47,18 @@
 // those exact bytes. Missing, conflicting, unknown, stale, and
 // post-approval-modified evidence blocks instead of guessing.
 //
-// Fail-open outside code-generation: a missing or unreadable state file, an
-// active directive/current stage other than code-generation, malformed stdin,
-// an unknown/read-only tool, a non-developer subagent target, or any throw
-// allows the call. Once a code-generation generation path is identified,
-// missing or ambiguous target evidence blocks. The deterministic
-// off-switch AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1 disables enforcement (the
-// documented escape hatch for false-positive storms, mirroring the
-// reviewer-scope guard's off-switch) but is no longer silent: while a workflow
-// exists it appends one GUARD_DISABLED audit row per streak of disabled calls.
-// Every genuine block emits a PLAN_APPROVAL_BLOCKED audit event so the run's
-// record shows when the ordering bit; audit failures never change the decision.
+// Fail-open outside code-generation: a missing state file, no code-generation
+// stage (active directive or Current Stage) and no explicit plan dispatch,
+// malformed stdin, a read-only tool, or a non-developer subagent target allows
+// the call. Once a code-generation generation path is identified, missing or
+// ambiguous target evidence blocks, and so does any throw while the authority is
+// evaluated (an unreadable state file included). The deterministic off-switch
+// AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1 disables enforcement (the documented
+// escape hatch for false-positive storms, mirroring the reviewer-scope guard's
+// off-switch) but is not silent: while a workflow exists it appends one
+// GUARD_DISABLED audit row per streak of disabled calls. Every genuine block
+// emits a PLAN_APPROVAL_BLOCKED audit event so the run's record shows when the
+// ordering bit; audit failures never change the decision.
 
 import {
   existsSync,
@@ -151,7 +152,6 @@ export {
 
 const HOOK_NAME = "plan-approval-guard";
 
-// The one stage this hook guards and the one dispatch target it inspects.
 const GUARDED_STAGE = "code-generation";
 const GUARDED_AGENT = "aidlc-developer-agent";
 const STAGE_TARGET = "stage-level";
@@ -266,15 +266,10 @@ const DISPATCH_TOOLS = new Set(["Task", "Agent"]);
 const PLAN_APPROVAL_ASK_OPEN = "the engine is asking the person to approve the plan";
 const NO_CURRENT_DIRECTIVE =
   "the current state has no matching v2 code-generation active directive";
-// The engine asked the person how to recover and is waiting for the answer.
 const ENGINE_QUESTION_OPEN =
   "the engine is waiting for the person's answer to its recovery question";
 
-// --- The pure decision --------------------------------------------------------
-//
-// Everything below up to the main section is side-effect free and exported so
-// the decision table is unit-testable without a live session. The hook body
-// only wires stdin, the state file, and the exit code around it.
+// --- The decision -------------------------------------------------------------
 
 /** Per-unit evidence the main body gathers from disk. */
 export interface UnitEvidence {
@@ -441,7 +436,6 @@ export function promptCarriesBriefSections(promptText: string): boolean {
   return WORKER_BRIEF_SECTIONS.every((family) => family.some((heading) => folded.includes(fold(heading))));
 }
 
-/** Whitespace-insensitive containment of a non-trivial appendix in the prompt. */
 function promptCarriesReviewAppendix(
   promptText: string,
   appendix: string | undefined,
@@ -1101,7 +1095,7 @@ interface MutationIntent {
    *  evaluator (a shell script, inline code) that runs text it cannot see, a
    *  write through an option, or a PowerShell command not read as plain. */
   readable?: boolean;
-  /** AI-DLC's own command that this guard still refuses: a recorded switch that lowers a check with nobody asking. */
+  /** AI-DLC's own command that the shell reading or engineCommandAdmitted refuses. */
   engineRefused?: boolean;
 }
 
@@ -1368,7 +1362,7 @@ function isNativeEngine(name: string, args: readonly string[], enginePaths: bool
 // data-driven argument, no changed executable resolution, no preloaded code).
 // A per-tool script is read as its engine route (`aidlc-<route>.ts <args>` is
 // `engine <route> <args>`), so one verb is never two commands. Null for any
-// other program, which the shell reading judges as before.
+// other program, which the shell reading judges.
 function installedEngineArgs(
   projectDir: string,
   cwd: string,
@@ -1395,8 +1389,6 @@ function installedEngineArgs(
   return route ? ["engine", route, ...toolArgs] : null;
 }
 
-// The durable state holds the Code Generation completion gate open: the stage
-// is still current and its checkbox reads awaiting-approval.
 function codeGenerationGateHeld(state: string): boolean {
   return normalizeStageName(getField(state, "Current Stage") ?? "") === GUARDED_STAGE &&
     parseCheckboxes(state).some(
@@ -1713,8 +1705,7 @@ function shellInvocationNeedsApproval(
   }
   // AI-DLC's own command, run as installed and unwrapped: the engine judges its
   // own verbs (generation start, a gate approval, a receipt), so this guard does
-  // not, with one exception: a recorded switch that would turn a check off
-  // passes only when a person has asked (engineCommandAdmitted).
+  // not, except for the conditions owned by engineCommandAdmitted.
   const engineArgs = installedEngineArgs(projectDir, cwd, executable, invocation.args, unwrapped, dialect.enginePaths);
   if (engineArgs !== null) return !engineCommandAdmitted(projectDir, engineArgs, context);
   if (
@@ -1811,9 +1802,9 @@ async function mutationIntent(
     // A command that names AI-DLC and that the shell reading refused: an
     // untrusted spelling (a retained version, a copy of the tools outside the
     // trusted folder, a shim), a wrapper or a `cd` elsewhere, a second command
-    // beside it, or the one recorded switch nobody asked for. The passes below
+    // beside it, or a command engineCommandAdmitted refuses. The passes below
     // for a command that writes nothing never admit it: it lives or dies by
-    // the shell reading, as every AI-DLC command did before.
+    // the shell reading.
     const looksLikeEngine = invocations.some((invocation) =>
       normalizedCommandName(invocation.executable ?? invocation.name).replace(/\.(?:cmd|ps1)$/, "") === "aidlc" ||
       invocation.args.some((arg) => /^aidlc(?:-[A-Za-z0-9._-]+)?\.ts$/.test(basename(arg)))) ||
@@ -1882,7 +1873,7 @@ async function personIsEditingPlanFile(
 
 // --- Main ---------------------------------------------------------------------
 
-// The off-switch is deterministic but no longer silent: while a workflow exists,
+// The off-switch is deterministic but not silent: while a workflow exists,
 // the first tool call that passes under it appends one GUARD_DISABLED row, and
 // consecutive calls append nothing until some other row lands in the active
 // shard. Every failure in this bookkeeping still allows the call.
@@ -1978,7 +1969,6 @@ async function evaluate(
     // Heartbeat failure is non-fatal - never let it affect the decision.
   }
 
-  // Deterministic off-switch: the Plan Approval fence is disabled, recorded once.
   if (resolveProjectFlag("AIDLC_DISABLE_PLAN_APPROVAL_GUARD") === "1") {
     try {
       if (!selectedRecordIsFinished(projectDir, workflow.selection)) recordGuardDisabled(input);
@@ -2105,7 +2095,7 @@ async function evaluate(
     // What the plan never governs, at any point of Code Generation and under
     // every Guard Policy: a command the lexer read whole that names no file it
     // writes and is not AI-DLC's own (a read, a scan, a test run), and a write
-    // whose every target is outside the project. The build waits as before:
+    // whose every target is outside the project. The build waits:
     // the developer, the plan's files and the code, AI-DLC's records and
     // AI-DLC's own commands, and a command whose writes cannot be seen.
     if (
@@ -2133,7 +2123,7 @@ async function evaluate(
     // A file-tool write of the composer's proposal alone passes in every Plan
     // Approval state, before the directive checks, and never starts
     // generation. A shell write, or one that also names another file, is
-    // judged below as before.
+    // judged below.
     if (
       WRITE_TOOLS.has(toolName) &&
       !mutation.opaqueShell &&
@@ -2247,7 +2237,6 @@ async function evaluate(
         // A write seen anywhere else in the main checkout waits until the batch
         // lands.
         const listed = activeDirective.units ?? [];
-        // Each Unit's code is written inside the worktree `prepare` bound to it.
         if (
           !mutation.opaqueShell && mutation.targets.length > 0 &&
           preparedBoltWorktreeUnit(projectDir, mutation.targets, listed) !== null
@@ -2400,7 +2389,8 @@ async function evaluate(
       }
     } catch (e) {
       // Source that moved after approval never stops the build (it is one
-      // notice line), so a start that throws is a provenance failure.
+      // notice line) unless it moved while the start was being published, so a
+      // start that throws is a provenance failure.
       return refuseProvenanceFailure(errorMessage(e));
     }
     if (!verdict.block) {
@@ -2414,7 +2404,6 @@ async function evaluate(
   // own `guard.plan-approval off` switch. A human message, however recent, does
   // not lower it: see decideGuard in aidlc-lib.ts for why. Standing aside costs
   // one printed line and one audit row; the approval gate itself is untouched.
-  // Otherwise the refusal below carries the switch, so the way past is in hand.
   {
     let gate: ReturnType<typeof codeGenerationPlanApprovalFence> | null = null;
     try {
