@@ -45,12 +45,11 @@
 //   2   malformed eslint config (script-error)
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+import { compiledExecutable, projectPackage } from "./aidlc-runtime-paths.ts";
 
 interface ESLintMessage {
 	ruleId: string | null;
@@ -198,41 +197,13 @@ function governingFlatConfig(dir: string): string | null {
 	}
 }
 
-// Bun resolves a package no node_modules or NODE_PATH holds from its own
-// install cache, a copy that cannot run; every other resolution (node_modules,
-// a link out of it, NODE_PATH) is an install the project chose.
-function bunInstallCache(): string {
-	const explicit = process.env.BUN_INSTALL_CACHE_DIR?.trim();
-	if (explicit) return explicit;
-	return join(process.env.BUN_INSTALL?.trim() || join(homedir(), ".bun"), "install", "cache");
-}
-
-function inBunInstallCache(path: string): boolean {
-	let cache: string;
-	try {
-		cache = realpathSync(bunInstallCache());
-	} catch {
-		return false;
-	}
-	const rel = relative(cache, realpathSync(path));
-	return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
-}
-
 // governing is the flat config that governs the linted file, the one the
 // runtime choice reads too; localEslintPath alone resolves it from cwd.
 function projectEslint(cwd: string, governing: string | null): string | null {
-	try {
-		const manifestPath = createRequire(join(cwd, "package.json")).resolve("eslint/package.json");
-		if (inBunInstallCache(manifestPath)) return null;
-		const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
-		if (manifest.name !== "eslint" || typeof manifest.version !== "string") return null;
-		const major = Number(manifest.version.split(".")[0]);
-		if (major < 9 && governing) return null;
-		const cli = join(dirname(manifestPath), "bin", "eslint.js");
-		return existsSync(cli) ? cli : null;
-	} catch {
-		return null;
-	}
+	const own = projectPackage(cwd, "eslint");
+	if (!own || (own.major < 9 && governing)) return null;
+	const cli = join(own.root, "bin", "eslint.js");
+	return existsSync(cli) ? cli : null;
 }
 
 export function localEslintPath(cwd: string): string | null {
