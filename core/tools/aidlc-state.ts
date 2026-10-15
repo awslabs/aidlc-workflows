@@ -4511,6 +4511,9 @@ function refuseStateGuard(
     invariant: string;
     userMessage: string;
     unit?: string;
+    // The Unit whose review a stage's refusal is about: its own review
+    // accounting names the request, while the refusal stays the stage's.
+    reviewUnit?: string;
     receipts?: ReturnType<typeof freshReviewReceipts>;
     summaryCoverage?: "current" | "stale" | "missing";
     autonomousBolt?: {
@@ -4520,8 +4523,9 @@ function refuseStateGuard(
     };
   },
 ): never {
+  const attemptUnit = input.unit ?? input.reviewUnit;
   const snapshot = guardAttemptState(pd, content, stage, {
-    ...(input.unit ? { unit: input.unit } : {}),
+    ...(attemptUnit ? { unit: attemptUnit } : {}),
     ...(input.receipts ? { receipts: input.receipts } : {}),
     ...(input.summaryCoverage ? { summaryCoverage: input.summaryCoverage } : {}),
   });
@@ -5167,11 +5171,15 @@ function staleSourcePreconditionError(
     `Cannot complete "${slug}" because the project source changed after ${reviewer} ` +
       `reviewed it. Ask ${reviewer} to review the current source once more and record ` +
       `the verdict, or revert the source change, then try again.`;
+  // On a per-unit stage the review that covered the source is the newest
+  // Unit's, so the one recovery review is that Unit's.
+  const reviewUnit = receipts.newestSourceUnit ?? undefined;
   refuseStateGuard(pd, content, stage, {
     code: "SOURCE_REVIEW_STALE",
     blockedAction: action,
     invariant: "The current source remains covered by reviewer evidence.",
     userMessage: message,
+    ...(reviewUnit ? { reviewUnit } : {}),
     receipts,
   });
 }
