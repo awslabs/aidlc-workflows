@@ -353,7 +353,7 @@ const manifest: HarnessManifest = {
     { src: "hooks/aidlc-kiro-adapter.ts", dst: "hooks/aidlc-kiro-adapter.ts" },
     { src: "hooks/aidlc-kiro-tool-names.ts", dst: "hooks/aidlc-kiro-tool-names.ts" },
     // Kiro IDE shows a card for every hook run, so one registration runs the two
-    // hooks for each message and another the five tool-call checks (#2022). What
+    // hooks for each message and another the four tool-call checks (#2022). What
     // ran after a write or a command is done by the next card (catch-up).
     { src: "hooks/aidlc-record-human-turn.json", dst: "hooks/aidlc-record-human-turn.json" },
     { src: "hooks/aidlc-guard-tool-call.json", dst: "hooks/aidlc-guard-tool-call.json" },
