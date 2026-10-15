@@ -31972,7 +31972,7 @@ const GUARD_REMEDY_WORDING_BY_OP: Record<GuardRemedyOp, GuardRemedyWording> = GU
 // Kiro IDE: it ran the reviewer with no request, so no review was recorded),
 // and "have the reviewer review it" was read as writing the review in the
 // reviewer's name. The words match the review request's own step.
-function reviewRequestAction(lead: string, request: string | undefined): string {
+export function reviewRequestAction(lead: string, request: string | undefined): string {
   if (request === undefined) return `${lead}.`;
   return `${lead}: run \`${request}\`, then dispatch the reviewer named in it as a subagent and have it write ` +
     "the `reviewFile` that command returns: that file is the reviewer's, so never write it yourself and never " +
@@ -32507,6 +32507,182 @@ export function guardAttemptState(
         unit === undefined ? "none" : receipts?.unitIterations.get(unit) ?? "none"
       }`,
     ],
+  };
+}
+
+// The record's half of "the person asked for this review": they spoke since the
+// last decision, after the last request for this review. Whether their words
+// asked for it is the conductor's reading (--person-asked); the two together
+// lift the pass cap and the one recovery, which bound only the reviews the
+// agent starts on its own.
+export function personSpokeSinceReviewRequest(
+  pd: string,
+  stage: string,
+  reviewer: string,
+  unit: string | undefined,
+  intent?: string | null,
+  space?: string,
+): boolean {
+  if (!personSpokeSinceGate(pd, { requests: true })) return false;
+  let turn: AuditShardEvent | null = null;
+  let request: AuditShardEvent | null = null;
+  for (const row of sortAttemptEvents(readAuditShardEvents(pd, intent ?? undefined, space))) {
+    if (isRequestTurn(row)) turn = row;
+    else if (
+      row.event === "REVIEW_REQUESTED" && auditBlockField(row.block, "Stage") === stage &&
+      auditBlockField(row.block, "Reviewer") === reviewer && (auditBlockField(row.block, "Unit") || undefined) === unit
+    ) request = row;
+  }
+  return turn !== null && (request === null || attemptEventDefinitelyBefore(request, turn));
+}
+
+// The step that gets an open review finished, said from the attempt state
+// alone, so `next` and every caller word it once. `subject` opens the sentence
+// ("Unit "x"'s Build work is written"). Kinds: `request` (a request is owed: the
+// documents changed since it was asked, or the repairs are made, or the review
+// did not finish), `verdict` (a request is waiting for its verdict, or for one
+// more try), `repairs` (the reviewer asked for repairs: they are the lead's own
+// work, so a caller that hands the lead its stage body leaves this one to it).
+// Null when no command settles it: nothing was asked, the review is final, or
+// the request can be neither retried nor recorded (a required document is
+// gone, which restoring is the lead's work).
+//
+// It reads no review file: the logger refuses a verdict with none and says what
+// to do, so a second check here would be a second copy of that rule. What it
+// does read is whether the one retry is spent, which decides the wording.
+//
+// `personFirst` marks a step that puts the person's words ahead of its own
+// commands: it ends the turn after the agent has done what they asked, so a
+// caller that sends the agent back to `next` afterwards leaves it out, or the
+// same step comes back for as long as nothing changes.
+export type NextReviewStep = { kind: "request" | "verdict" | "repairs"; text: string; personFirst?: true };
+
+export function nextReviewStepFor(input: {
+  attempt: GuardAttemptState;
+  didNotFinish?: boolean;
+  // The recorded review could not be verified: the request is run again, and
+  // only then is a verdict recorded, as the completion guards say. Approval
+  // over it is refused whatever the person wrote, so when they have written the
+  // step puts their words first and leaves the rerun theirs to ask for.
+  verificationFailed?: boolean;
+  // The exact retry of the waiting request, given while its one retry is unspent.
+  retryRequest?: string;
+  // The person wrote since the review was asked (the recorded fact, not their
+  // words): what they asked comes first, and the retry and the NOT-READY
+  // fallback, which are for a review that stopped with no person involved, are
+  // not named.
+  personSpoke?: boolean;
+  // Whether their approval may go over this review (personMayApproveOverUnfinishedReview),
+  // and when it may not, the memory file that holds Guard Policy strict.
+  approval?: { allowed: true } | { allowed: false; lockedIn: string | null };
+  // The command that asks `next` again; a person-first step runs it only when
+  // the person asked to carry on with the review.
+  nextCommand?: string;
+  // Whether a spent retry names the NOT-READY fallback. Off after the person
+  // has written, on a route that does not put their words first.
+  fallback?: boolean;
+  subject: string;
+}): NextReviewStep | null {
+  const { attempt, subject } = input;
+  const person = input.personSpoke === true;
+  const approval = input.approval ?? { allowed: true };
+  const first = "the person has written since it was asked, so what they asked comes first " +
+    (approval.allowed
+      ? "(if they asked to approve the work as it is, report that approval with their words)"
+      : approval.lockedIn !== undefined && approval.lockedIn !== null
+        ? `(approval cannot go over this review: your team set Guard Policy to strict in ${approval.lockedIn}, ` +
+          "so the review needs its verdict first; changing that line there changes it)"
+        : "(approval cannot go over this review while Guard Policy is strict; the review needs its verdict first)");
+  // What the person's own words leave undone: a question or an approval ends
+  // the turn with no review command run; only carrying on goes on.
+  const carryOn = input.nextCommand === undefined ? "" : ` Then run \`${input.nextCommand}\`.`;
+  const otherwiseStop = " If they asked for anything else, do that and stop.";
+  if (attempt.nextReview?.request !== undefined) {
+    const lead = `${subject}, but its review has to be asked for again${person ? `, and ${first}. If they asked to carry on with the review,` : ","} ` +
+      `request pass ${attempt.nextReview.iteration}`;
+    return {
+      kind: "request",
+      text: reviewRequestAction(lead, attempt.nextReview.request) + (person ? carryOn + otherwiseStop : ""),
+      ...(person ? { personFirst: true as const } : {}),
+    };
+  }
+  if (attempt.repairReview !== undefined) {
+    if (attempt.requestReview === undefined) return null;
+    const next = attempt.repairReview.iteration + 1;
+    return input.didNotFinish === true
+      ? {
+        kind: "request",
+        text: reviewRequestAction(
+          `${subject}, but its review did not finish and nothing was reviewed${person ? `, and ${first}. If they asked to carry on with the review,` : ","} ` +
+            `request pass ${next}`,
+          attempt.requestReview,
+        ) + (person ? carryOn + otherwiseStop : ""),
+        ...(person ? { personFirst: true as const } : {}),
+      }
+      : {
+        kind: "repairs",
+        text: `${subject} and its review asked for repairs: make them, then request pass ` +
+          `${next} with \`${attempt.requestReview}\` and record the verdict.`,
+      };
+  }
+  const pending = attempt.pendingReview;
+  if (pending === undefined) return null;
+  if (input.verificationFailed === true) {
+    const rerun = pending.retryable && input.retryRequest !== undefined;
+    if (person) {
+      return {
+        kind: "verdict",
+        personFirst: true,
+        text: `${subject} and its recorded review could not be verified, and the person has written since it was asked, ` +
+          "so what they asked comes first (approval cannot go over a review that could not be verified; it has to run again first)." +
+          (rerun
+            ? ` ${reviewRequestAction("If they asked to carry on with the review, run it again", input.retryRequest)}${carryOn}`
+            : "") + otherwiseStop,
+      };
+    }
+    if (!rerun) return null;
+    return {
+      kind: "verdict",
+      text: reviewRequestAction(`${subject} and its recorded review could not be verified: run the review again`, input.retryRequest),
+    };
+  }
+  const record = pending.verdictRecordable === true && pending.recordVerdict !== undefined
+    ? `record the verdict for pass ${pending.iteration} with \`${pending.recordVerdict}\` (the verdict is the one the reviewer's review file states)`
+    : null;
+  if (person) {
+    return {
+      kind: "verdict",
+      personFirst: true,
+      text: `${subject} and its review has no verdict yet, and ${first}.` +
+        (record === null ? "" : ` If they asked to carry on with the review and the reviewer's review is there, ${record}.`) +
+        (pending.retryable && input.retryRequest !== undefined
+          ? ` ${reviewRequestAction(
+            record === null
+              ? "If they asked to carry on, ask the reviewer again"
+              : "If they asked to carry on and no review is there, ask the reviewer again",
+            input.retryRequest,
+          )}`
+          : "") +
+        (record === null && !(pending.retryable && input.retryRequest !== undefined) ? "" : carryOn) + otherwiseStop,
+    };
+  }
+  if (pending.retryable && input.retryRequest !== undefined) {
+    return {
+      kind: "verdict",
+      text: record === null
+        ? reviewRequestAction(`${subject} and its review is waiting: ask the reviewer again`, input.retryRequest)
+        : `${subject} and its review is waiting for a verdict: ${record}; if the reviewer wrote no review, ` +
+          reviewRequestAction("ask it again once", input.retryRequest),
+    };
+  }
+  if (record === null) return null;
+  return {
+    kind: "verdict",
+    text: `${subject} and its review is waiting for a verdict, and its one retry is spent: ${record}.` +
+      (input.fallback === false
+        ? ""
+        : " If the retried reviewer still wrote no review, record NOT-READY without one; that records a " +
+          "review that did not finish, not a finding."),
   };
 }
 

@@ -124,7 +124,7 @@ import {
   readAuditShardEvents,
   isRequestTurn,
   latestPersonTurn,
-  personSpokeSinceGate,
+  personSpokeSinceReviewRequest,
   ANSWER_SOURCE_ON_INSTRUCTION,
   unitSkippedUnits,
   readActiveAuditShardEvents,
@@ -2798,32 +2798,6 @@ function handleLink(args: string[]): void {
 // in aidlc-state.ts). On a per-unit Construction stage the reviewer fires once
 // PER UNIT, so pass --unit; the approve guard requires one review per unit.
 const VALID_VERDICTS = new Set(["READY", "NOT-READY"]);
-
-// The record's half of "the person asked for this review": they spoke since the
-// last decision, after the last request for this review. Whether their words
-// asked for it is the conductor's reading (--person-asked); the two together
-// lift the pass cap and the one recovery, which bound only the reviews the
-// agent starts on its own.
-function personSpokeSinceReviewRequest(
-  pd: string,
-  stage: string,
-  reviewer: string,
-  unit: string | undefined,
-  intent?: string | null,
-  space?: string,
-): boolean {
-  if (!personSpokeSinceGate(pd, { requests: true })) return false;
-  let turn: AuditShardEvent | null = null;
-  let request: AuditShardEvent | null = null;
-  for (const row of sortAttemptEvents(readAuditShardEvents(pd, intent ?? undefined, space))) {
-    if (isRequestTurn(row)) turn = row;
-    else if (
-      row.event === "REVIEW_REQUESTED" && auditBlockField(row.block, "Stage") === stage &&
-      auditBlockField(row.block, "Reviewer") === reviewer && (auditBlockField(row.block, "Unit") || undefined) === unit
-    ) request = row;
-  }
-  return turn !== null && (request === null || attemptEventDefinitelyBefore(request, turn));
-}
 
 // A refusal of a review past the cap when the person spoke since it was last
 // requested and the conductor did not say they asked for it: their words decide

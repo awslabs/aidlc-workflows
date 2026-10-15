@@ -218,6 +218,9 @@ import {
   PLAN_APPROVAL_ASK_TYPE,
   type GuardRefusal,
   guardAttemptState,
+  nextReviewStepFor,
+  personMayApproveOverUnfinishedReview,
+  personSpokeSinceReviewRequest,
   type GuardAttemptState,
   withWorkspaceSourceStateCache,
   guardRecoveryAnswerAdmits,
@@ -11381,7 +11384,7 @@ function unitReceiptOnlyStep(
       // with reviews off.
       if (review.unitStale.has(unit) || review.unitStaleProgress.has(unit)) return null;
       if (!unitWorkIsThisAttempts(projectDir, node.slug, unit, stateContent)) return null;
-      return unitReviewStep(projectDir, node, unit, review);
+      return unitReviewStep(projectDir, node, unit, review, stateContent);
     }
   }
   const command = (action: string): string =>
@@ -11391,40 +11394,114 @@ function unitReceiptOnlyStep(
   return `Unit "${unit}"'s ${node.name} work is ${done}, but its completion is not recorded: run ${steps}.`;
 }
 
+// The retry of the waiting review request, while its one retry is unspent.
+function retryRequestFor(
+  projectDir: string,
+  node: GraphStage,
+  unit: string | undefined,
+  attempt: GuardAttemptState,
+): string | undefined {
+  const pending = attempt.pendingReview;
+  if (pending === undefined || !pending.retryable) return undefined;
+  return renderReviewRequestCommand({
+    projectDir, stage: node.slug, reviewer: node.reviewer as string, ...(unit ? { unit } : {}),
+    iteration: pending.iteration, retryPending: true,
+  });
+}
+
 // The review a Unit's stage is still waiting for, as the step that gets it:
-// the first request when none was asked for in this attempt, the verdict when
-// one is waiting, and the next pass when the reviewer asked for repairs. The
-// same step the Construction checkpoint names when it is the checkpoint that
-// is not ready, said here for a stage whose Unit is otherwise done.
+// the first request when none was asked for in this attempt, otherwise the
+// step `nextReviewStepFor` names from the attempt state (the verdict, the one
+// retry while it is unspent, the next pass after repairs). The same step the
+// Construction checkpoint names when it is the checkpoint that is not ready,
+// said here for a stage whose Unit is otherwise done.
 function unitReviewStep(
   projectDir: string,
   node: GraphStage,
   unit: string,
   review: FreshReviewReceipts,
-): string {
-  const reviewer = node.reviewer as string;
-  const request = (iteration: number, retryPending = false): string =>
-    `\`${renderReviewRequestCommand({
-      projectDir,
-      stage: node.slug,
-      reviewer,
-      unit,
-      iteration,
-      ...(retryPending ? { retryPending: true } : {}),
-    })}\``;
+  stateContent: string,
+): string | null {
   const work = `Unit "${unit}"'s ${node.name} work is written`;
   const pending = review.unitPending.get(unit);
+  const { attempt } = guardAttemptState(projectDir, stateContent, node, { unit, receipts: review });
   if (pending === undefined) {
     const iteration = (review.unitIterations.get(unit) ?? 0) + 1;
-    return `${work}, but its review was never asked for: request it with ${request(iteration)}, ` +
-      "then record the verdict.";
+    const request = `\`${renderReviewRequestCommand({
+      projectDir, stage: node.slug, reviewer: node.reviewer as string, unit, iteration,
+    })}\``;
+    return `${work}, but its review was never asked for: request it with ${request}, then record the verdict.`;
   }
-  if (pending.state === "repair-required" && pending.didNotFinish !== true) {
-    return `${work} and its review asked for repairs: make them, then request pass ` +
-      `${pending.iteration + 1} with ${request(pending.iteration + 1)} and record the verdict.`;
+  const step = nextReviewStepFor({
+    attempt, didNotFinish: pending.didNotFinish === true, verificationFailed: pending.verificationFailed === true,
+    retryRequest: retryRequestFor(projectDir, node, unit, attempt),
+    // The Unit routes put the step before `next`, and `report` replays it, so
+    // the person's words are not folded in here; the NOT-READY fallback is left
+    // out once they have written, as the reviewer protocol says.
+    fallback: !personSpokeSinceReviewRequest(projectDir, node.slug, node.reviewer as string, unit),
+    subject: work,
+  });
+  return step?.text ?? null;
+}
+
+// Whether the person's approval may go over an unfinished review, and where a
+// team lock on strict sits when it may not.
+function approvalOverReview(
+  projectDir: string,
+  stateContent: string,
+): { allowed: true } | { allowed: false; lockedIn: string | null } {
+  if (personMayApproveOverUnfinishedReview(projectDir, stateContent)) return { allowed: true };
+  try {
+    const memoryStrict = resolveGuardPolicy(projectDir, stateContent).memoryStrict;
+    return { allowed: false, lockedIn: memoryStrict?.path ?? null };
+  } catch {
+    // The policy file is unreadable, so the lock cannot be confirmed or named.
+    // Approval stays blocked (personMayApproveOverUnfinishedReview already said no),
+    // but the text says the review needs its verdict without claiming a team lock.
+    return { allowed: false, lockedIn: undefined as unknown as string | null };
   }
-  return `${work} and its review is waiting for a verdict: record the verdict for pass ` +
-    `${pending.iteration}, or ask the reviewer again with ${request(pending.iteration, true)}.`;
+}
+
+// A stage that works on the whole project (not once per Unit) and whose review
+// is open: the step that gets it finished, in place of the stage body. Its
+// documents are written, since a request was made on them, so the body has
+// nothing left for the lead to write. Repairs the reviewer asked for are the
+// lead's own work, so that state, and a stage whose review was never asked
+// for, keep the body. Null leaves the route as it was.
+function stageReviewStep(
+  projectDir: string,
+  node: GraphStage,
+  scope: string,
+  stateContent: string | null,
+): { text: string; personFirst: boolean } | null {
+  if (stateContent === null || !node.reviewer || isReadOnlyEngineProbe()) return null;
+  if (isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, stateContent)) {
+    // Per Unit with a Unit DAG, the Unit routes own the review. Team ownership
+    // without a DAG is an error the route states, which a review step must not hide.
+    // The pure resolution: the route resolves the DAG itself and says once if it healed it.
+    if (resolveBoltDag(projectDir).state !== "none" || isTeamUnitOwnership(stateContent)) return null;
+  }
+  const reviewClass = resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent);
+  if (reviewClass === "none") return null;
+  const review = freshReviewReceipts(projectDir, stateContent, node, { reviewClass });
+  const pending = review.stagePending;
+  if (pending === null || pending === undefined) return null;
+  const { attempt } = guardAttemptState(projectDir, stateContent, node, { receipts: review });
+  const step = nextReviewStepFor({
+    attempt,
+    didNotFinish: pending.didNotFinish === true,
+    verificationFailed: pending.verificationFailed === true,
+    retryRequest: retryRequestFor(projectDir, node, undefined, attempt),
+    personSpoke: personSpokeSinceReviewRequest(projectDir, node.slug, node.reviewer, undefined),
+    approval: approvalOverReview(projectDir, stateContent),
+    nextCommand: `${aidlcToolInvocation("orchestrate")} next`,
+    subject: `${node.name}'s documents are written`,
+  });
+  if (step === null || step.kind === "repairs") return null;
+  // A step that puts the person's words first ends the turn once they are done.
+  return step.personFirst === true
+    ? { text: step.text, personFirst: true }
+    : { text: `${step.text} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`, personFirst: false };
 }
 
 // True when the Unit's receipts for this stage are read against the first
@@ -13822,6 +13899,11 @@ function emitForSlug(
   projectDir: string,
 ): void {
   const node = nodeForSlug(slug);
+  const reviewStep = node ? stageReviewStep(projectDir, node, scope, stateContent) : null;
+  if (reviewStep !== null) {
+    emit(reviewStep.personFirst ? turnEndingPrint(reviewStep.text) : printDirective(reviewStep.text));
+    return;
+  }
   if (node && isPerUnit(node)) {
     if (
       stateContent && checkpointPolicyEnabled(stateContent) &&
