@@ -1659,8 +1659,11 @@ The command asks nothing (`--yes` is optional), needs no `--harness` in a
 project with several harnesses, and prints what it recorded or cleared with the
 command that undoes it. With no `--local`, `--project`, or `--global`, a
 `--bypass` goes to your own `aidlc.settings.local.json`, and a `--clear-bypass`
-clears the switch from every file that records it. A switch is on while any of
-the files records it. An unattended run (`AIDLC_UNATTENDED=1`) records no
+typed at your own terminal clears the switch from every file that records it.
+Run by the agent from a chat, the same clear turns the check back on the way the
+setter does (below): your own entry is cleared, and the project's shared
+`aidlc.settings.json` and this machine's file are named, never changed. A switch
+is on while any of the files records it. An unattended run (`AIDLC_UNATTENDED=1`) records no
 `--bypass`, since nobody is there to ask for it; a `--clear-bypass` is always
 done. Run by the agent in a chat, a `--bypass` of one of the nine checks that
 take a check away from you (below) is recorded only when you asked for it, by
@@ -1698,9 +1701,15 @@ only that the check is off and since when. Every new chat opens with the
 same line while the check stays off (except on opencode, which shows no
 session-start context), and `config flags --show` and the doctor Flags row (a
 warning, which does not change doctor's exit code) list it. Answer that offer in
-your own words and the agent runs the command; if something else still keeps the
-check off (the environment variable, or another settings file), the command says
-so and asks whether you want that cleared too. When the switch is cleared but the
+your own words and the agent runs the command; if the environment variable still
+keeps the check off, the command says so. A yes in the chat never changes the
+project's shared `aidlc.settings.json`, so while that file records the switch the
+line ends by naming it instead of asking, for example "The project's shared
+settings in aidlc.settings.json keep it off for everyone on this project.
+Changing that file changes it." `--show` and the doctor row name a command that
+does it where they run: the clear with no file named at your own terminal, and
+anywhere else (an IDE's terminal included) one clear for each file that records
+the switch, with its `--local`, `--project`, or `--global`. When the switch is cleared but the
 open piece of work keeps the check off on its own (its scope or its Guard
 Policy), the line says so and offers to turn it on for that work too, for
 example:
@@ -1721,7 +1730,10 @@ changes it, for example:
 
 At your own terminal that line names the command that clears it instead, and
 when the editor or CLI was started with the variable it says to start it
-without. Sensors and learnings read the same way.
+without. Sensors and learnings read the same way, and so does the agent's
+`config flags --clear-bypass` for this project from a chat. When you ask for the
+shared file or this machine's to be changed, the agent clears it there with
+`--project` or `--global`.
 
 `config get` names where a switch keeps a check off: `off (AIDLC_DISABLE_REVIEW_FREEZE_HOOK in aidlc.settings.local.json)`
 when a settings file records it, or `off (env AIDLC_DISABLE_REVIEW_FREEZE_HOOK)`
