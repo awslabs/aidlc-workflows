@@ -40949,6 +40949,17 @@ export function isAnswerModeDecision(block: string): boolean {
   const labels = Object.values(ANSWER_MODE_LABELS).map(plain);
   return offered.length === labels.length && labels.every((label) => offered.includes(label));
 }
+/**
+ * True when a DECISION_RECORDED block is the learnings ritual's "Anything to
+ * add?": its Question Kind says so. A row recorded before that field existed
+ * is that question when it offers exactly the ritual's two choices.
+ */
+export function isLearningsNoteDecision(block: string): boolean {
+  const kind = auditBlockField(block, QUESTION_KIND_FIELD);
+  if (kind !== null) return kind === LEARNINGS_NOTE_QUESTION_KIND;
+  return (auditBlockField(block, "Options") ?? "").split(",").map((option) => option.trim()).join(",") ===
+    LEARNINGS_NOTE_CHOICES.join(",");
+}
 const ANSWER_MODE_OTHERS: Record<AnswerModeChoice, string> = {
   guide: "edit the file or chat",
   file: "be guided through them here or chat",

@@ -629,17 +629,19 @@ describe("t259 the stage's work recorded through log leaves the engine mark", ()
 
   // The learnings question's Add a note is answered by the person next (the
   // note, or what follows it), so the turn ends at the ask; Nothing to add goes
-  // on to the gate. The question is known by its kind, never by its options:
-  // the same options logged with no kind are an ordinary question. Whether the
-  // person's reply already holds the note is the agent's to read, so the note
-  // says to take it from their reply, kept on the row, and ask only otherwise.
+  // on to the gate. The question is known by its kind; one recorded before the
+  // kind existed has none, and its exact options are its form (an upgrade
+  // leaves it pending). Whether the person's reply already holds the note is
+  // the agent's to read, so the note says to take it from their reply, kept on
+  // the row, and ask only otherwise.
   test("Add a note on the learnings question ends the turn; Nothing to add and other questions do not", async () => {
     for (const [options, kind, reply, picked, ends] of [
-      ["Nothing to add,Add a note", true, "Add a note", "Add a note", true],
-      ["Nothing to add,Add a note", true, "Add a note: always run lint", "Add a note", true],
-      ["Nothing to add,Add a note", true, "Nothing to add", "Nothing to add", false],
-      ["Nothing to add,Add a note", false, "Add a note", "Add a note", false],
-      ["Add a note,Skip it", false, "Add a note", "Add a note", false],
+      ["Nothing to add,Add a note", "learnings-note", "Add a note", "Add a note", true],
+      ["Nothing to add,Add a note", "learnings-note", "Add a note: always run lint", "Add a note", true],
+      ["Nothing to add,Add a note", "learnings-note", "Nothing to add", "Nothing to add", false],
+      ["Nothing to add,Add a note", null, "Add a note", "Add a note", true],
+      ["Nothing to add,Add a note", null, "Nothing to add", "Nothing to add", false],
+      ["Add a note,Skip it", null, "Add a note", "Add a note", false],
     ] as const) {
       const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
       tempDirs.push(proj);
@@ -652,7 +654,7 @@ describe("t259 the stage's work recorded through log leaves the engine mark", ()
         spawnSync(process.execPath, [".claude/tools/aidlc.ts", "engine", ...args], { cwd: proj, encoding: "utf-8", env, input });
       markEngineTouch(proj);
       const asked = run(["log", "decision", "--stage", "feasibility", "--decision", "Anything to add for next time?",
-        "--options", options, ...(kind ? ["--question-kind", "learnings-note"] : [])]);
+        "--options", options, ...(kind ? ["--question-kind", kind] : [])]);
       expect(asked.status, asked.stderr).toBe(0);
       await Bun.sleep(20);
       const replied = run(["hook", "record-human-turn"],
@@ -660,7 +662,7 @@ describe("t259 the stage's work recorded through log leaves the engine mark", ()
       expect(replied.status, `${replied.stdout}${replied.stderr}`).toBe(0);
       await Bun.sleep(20);
       const answered = run(["log", "answer", "--stage", "feasibility", "--details", picked]);
-      const label = `${options} (${kind ? "learnings-note" : "no kind"}) -> ${reply}`;
+      const label = `${options} (${kind ?? "no kind"}) -> ${reply}`;
       expect(answered.status, `${label}: ${answered.stderr}`).toBe(0);
       expect(turnEndIsOpen(proj), label).toBe(ends);
       const agentNote = String((JSON.parse(answered.stdout.trim().split("\n").at(-1) ?? "{}") as { agent_note?: string }).agent_note ?? "");

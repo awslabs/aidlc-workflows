@@ -1233,9 +1233,10 @@ export function reviewRequestNote(reviewer: string, reviewFile: string, recordVe
 // The step after a stage's verdict is recorded (#2400), as the logger decides
 // it: one branch, with its exact command. A verdict no further pass follows
 // leads into the skill's ordered completion sequence at its next step,
-// stage-completion verification, named here and owned there.
+// stage-completion verification, named here and owned there. What the person
+// wrote comes before it: their branch is `next` alone.
 export type ReviewVerdictStep =
-  | { kind: "person-wrote"; next: string; terminal: boolean }
+  | { kind: "person-wrote"; next: string }
   | { kind: "next-pass"; request: string }
   | { kind: "learnings" }
   | { kind: "gate"; report: string; summary: boolean };
@@ -1243,8 +1244,7 @@ const NO_FURTHER_PASS = "No further review pass follows: run stage-completion ve
 export function reviewVerdictNote(step: ReviewVerdictStep): string {
   switch (step.kind) {
     case "person-wrote":
-      return "The person wrote since the review was requested: " +
-        `${step.terminal ? "run stage-completion verification, then " : ""}run \`${step.next}\` and follow its step together ` +
+      return `The person wrote since the review was requested: run \`${step.next}\` and follow its step together ` +
         "with what they said; if what they said answers the approval, record it with their words rather than " +
         "asking again.";
     case "next-pass":

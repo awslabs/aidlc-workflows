@@ -189,6 +189,7 @@ import {
   pickerAnswerNote,
   isSummaryConfirmationChoice,
   isSummaryConfirmationOptions,
+  isLearningsNoteDecision,
   summaryConfirmationCommands,
   summaryConfirmationOwed,
   summaryQuestionFileRelative,
@@ -2607,7 +2608,7 @@ function handleAnswer(args: string[]): void {
     // Whether their reply already holds the note is the agent's to read.
     const question = decisionRowsInScope(readAuditShardEvents(pd), flags.stage, flags.unit).at(-1);
     const asksForNote = flags.details === LEARNINGS_NOTE_CHOICES[1] && question !== undefined &&
-      auditBlockField(question.block, QUESTION_KIND_FIELD) === LEARNINGS_NOTE_QUESTION_KIND;
+      isLearningsNoteDecision(question.block);
     if (asksForNote) rowEndsTurn = true;
     console.log(
       JSON.stringify({
@@ -3119,7 +3120,7 @@ function reviewVerdictStep(
   // What the person said while the reviewer worked comes first
   // (stage-protocol-reviewer.md): `next` names the step, with their words.
   if (personSpokeSinceReviewRequest(pd, flags.stage, flags.reviewer, undefined, selection.intent, selection.space)) {
-    return reviewVerdictNote({ kind: "person-wrote", next: aidlcDispatcherInvocation("orchestrate next"), terminal });
+    return reviewVerdictNote({ kind: "person-wrote", next: aidlcDispatcherInvocation("orchestrate next") });
   }
   if (!terminal) {
     if (box === "awaiting-approval") return null;

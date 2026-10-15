@@ -1432,7 +1432,8 @@ When `directive.protocol_modules` lists `learnings`, the ritual runs between the
    `Nothing to add` and `Add a note`; one-option structured questions are
    invalid on Claude Code and Codex. Its `log decision` carries
    `--question-kind learnings-note`, so an answer of `Add a note` is known by
-   that field, never by the question's wording or options: it ends the turn
+   that field, never by the question's wording (a question recorded before
+   the field existed is known by exactly those two options): it ends the turn
    at the follow-up, and its `agent_note` tells the agent to take the note
    from the person's reply when they already gave it, and ask only otherwise.
 4. **Admission check**: each kept learning is checked against `org.md`'s
