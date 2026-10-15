@@ -8942,10 +8942,15 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       return;
     }
     // Picking work up from the pick question is a request to carry on with it.
+    // Parked work carries on as `--resume` does, through its unpark step: a
+    // plain `next` would answer the park, since the turns that asked came
+    // before any work was selected and are not in its record.
     if (flags.carryOn && command.kind === "switch") {
+      const statePath = stateFilePath(resolveProjectDir(projectDir), command.name);
+      const parked = existsSync(statePath) && parkedWhereItStands(readFileSync(statePath, "utf-8"));
       emit(printDirective(
         `Run \`${aidlcDispatcherInvocation(route)}${suffix}\`, print its output verbatim, then run ` +
-          `\`${aidlcToolInvocation("orchestrate")} next\` and follow what it returns.`,
+          `\`${aidlcToolInvocation("orchestrate")} next${parked ? " --resume" : ""}\` and follow what it returns.`,
       ));
       return;
     }

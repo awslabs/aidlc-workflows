@@ -622,7 +622,7 @@ export const PLAIN_ANSWERS: PersonAnswers = {
 const RECORD_PREFIX = /^aidlc\/spaces\/[^/]+\/intents\/[^/]+\//;
 
 /** The detour when picked-up work answers that it is paused: the person has to ask to resume again. */
-export const RESUME_AGAIN = "the person picked their parked work and was told to resume it again";
+const RESUME_AGAIN = "the person picked their parked work and was told to resume it again";
 
 export interface StandInOptions {
   answers?: Partial<PersonAnswers>;

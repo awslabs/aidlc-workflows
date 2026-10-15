@@ -35,7 +35,6 @@ import {
   runScope,
   SCOPE_RUN_TIMEOUT_MS,
   ScopeHost,
-  RESUME_AGAIN,
   ScopeRunRefused,
   ScopeRunStuck,
   type ScopeRun,
@@ -1131,12 +1130,6 @@ export const SKIPPED = [
 ];
 export const UNITS = ["core", "api"];
 
-/**
- * Detours the journey meets today, each with a test.todo named after it in
- * tests/integration/t-scope-host-claude.test.ts; the fix removes it here.
- */
-export const KNOWN_JOURNEY_DETOURS: readonly string[] = [RESUME_AGAIN];
-
 export interface HostJourney {
   run: ScopeRun;
   /** The first clone's audit shard: every row before the fresh clone. */
@@ -1207,9 +1200,7 @@ export function hostJourneyProblems(journey: HostJourney): string[] {
   if (shards.length !== 2 || shards.at(-1) !== basename(firstShard)) {
     problems.push(`the work's audit shards are ${JSON.stringify(shards)}: not the first clone's, sorting last, and one from the fresh clone`);
   }
-  for (const detour of run.agent.detours) {
-    if (!KNOWN_JOURNEY_DETOURS.includes(detour)) problems.push(`the person was sent round a detour: ${detour}`);
-  }
+  for (const detour of run.agent.detours) problems.push(`the person was sent round a detour: ${detour}`);
   if (new Set(chats).size !== 2) problems.push(`the person used chats ${JSON.stringify(chats)}, not two`);
   const checkpoints = run.agent.asked.filter((a) => a.what === "unit checkpoint").map((a) => a.unit);
   if (JSON.stringify(checkpoints) !== JSON.stringify(UNITS)) problems.push(`Unit checkpoints asked for ${JSON.stringify(checkpoints)}, not each Unit once`);
