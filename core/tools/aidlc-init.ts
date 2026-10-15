@@ -111,7 +111,7 @@ import {
   ReleaseVerificationError,
 } from "./aidlc-release.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
-import { compareVersions, RELEASE_CHANNELS, VERSION_ID } from "./aidlc-channel.ts";
+import { compareVersions, PREVIEW_CHANNEL, RELEASE_CHANNELS, VERSION_ID, versionChannel } from "./aidlc-channel.ts";
 import {
   type TransactionOperation,
   type TransactionOptions,
@@ -246,12 +246,16 @@ import {
   HARNESS_PRODUCT_NAMES,
   harnessHonestyNotes,
   isModelEffort,
+  installedModelBuild,
   isModelId,
   isModelPreset,
+  KIRO_AGENT_MODELS_RECORD,
   kiroAgentModelsDropped,
+  kiroAgentModelsOn,
   MODEL_EFFORTS,
   MODEL_GROUPS,
   MODEL_PRESETS,
+  modelAgentStem,
   modelHarnessHonesty,
   modelPolicyAgentsDir,
   modelPolicyIsEmpty,
@@ -262,9 +266,10 @@ import {
   readAgentTiers,
   resolveModelPolicy,
   sessionModelsDetail,
-  sessionSetsAgentModels,
   type AgentTiers,
+  type KiroAgentModelsChoice,
   type ModelAgentPolicy,
+  type ModelBuild,
   type ModelEffort,
   type ModelGroup,
   type ModelHarness,
@@ -403,6 +408,9 @@ type PreparedRefreshSource = {
   emptiedSidecars?: Set<string>;
   entries?: Baseline["entries"];
   notes: string[];
+  // kiro-ide agents whose model and effort the staged files no longer carry,
+  // and whether the release staged is a preview one (the note's wording).
+  agentModelDrops?: { agents: string[]; previewRelease: boolean };
 };
 
 type PlannedAction = {
@@ -424,7 +432,9 @@ type ModelsMutationContext = {
   tiers: AgentTiers;
   summaryLines: string[];
   notes: string[];
-  settings: SettingsMutation;
+  // Absent when only kiro-ide's agent-models choice changes.
+  settings?: SettingsMutation;
+  agentModels?: KiroAgentModelsChoice;
 };
 
 type DiagnosticSection = "runtime" | "providers" | "trust";
@@ -589,6 +599,7 @@ const MODELS_VALUE_FLAGS = new Set([
   "--save-as",
   "--session-model",
   "--writing-up-effort",
+  "--agent-models",
 ]);
 
 const MODELS_BARE_FLAGS = new Set([
@@ -899,6 +910,7 @@ function validateModelsArgs(argv: readonly string[]): string | null {
   if (grammar) return grammar;
   const mutationFlags = [
     "--agent",
+    "--agent-models",
     "--deciding-effort",
     "--effort",
     "--from",
@@ -918,6 +930,10 @@ function validateModelsArgs(argv: readonly string[]): string | null {
   }
   if (argv.includes("--save-as") && !argv.includes("--from")) {
     return "--save-as requires --from <preset|profile>";
+  }
+  const agentModels = valueAfter(argv, "--agent-models");
+  if (agentModels !== undefined && agentModels !== "on" && agentModels !== "off") {
+    return "--agent-models takes on or off";
   }
   if (argv.includes("--agent") && !argv.includes("--effort") && !argv.includes("--model")) {
     return "--agent requires --effort <value> or --model <raw-id>";
@@ -1101,6 +1117,8 @@ function modelPolicyHelp(): string {
     "  model in your personal Kiro settings. A model without that level gets its next level down.",
     "  --session-model <id>  save this model from your Kiro account's list as your session model",
     "                        (on Kiro IDE's row, the model only: Kiro IDE uses its own model picker)",
+    "  --agent-models <on|off>  on Kiro's row in a preview build: write each agent's own model and effort into",
+    "                        its Kiro agent file (on), or stop (off); recorded in this project",
     "",
     heading("WRITE TARGET", out),
     "  --project  committed team policy (recommended in a repository)",
@@ -1142,10 +1160,11 @@ function modelStateData(
   notes: string[];
 } {
   const cap = resolveTierCap(join(projectDir, "aidlc", "spaces", "default", "memory"));
+  const build = projectModelBuild(projectDir, harness);
   const effective = Object.entries(tiers).sort(([left], [right]) =>
     left.localeCompare(right)
   ).map(([name, tier]) => {
-    const item = resolveModelPolicy(policy, name, tier, harness, cap);
+    const item = resolveModelPolicy(policy, name, tier, harness, cap, build);
     const agent = resolved.models?.agents?.[name];
     const group = resolved.models?.groups?.[item.group];
     const presetGroups = resolved.models?.preset
@@ -1173,7 +1192,7 @@ function modelStateData(
     policy,
     effective,
     notes: [
-      ...harnessHonestyNotes(policy, tiers, harness, cap),
+      ...harnessHonestyNotes(policy, tiers, harness, cap, build),
       // On Kiro CLI the session model agents inherit is the saved one.
       ...(harness === "kiro" ? [KIRO_SAVED_MODEL_NOTE] : []),
     ],
@@ -1191,6 +1210,14 @@ function namedHarness(projectDir: string, harness: string | undefined): string {
 // from where the user is.
 function modelsCommand(projectDir: string, harness: ModelHarness, args: string): string {
   return `${configInvocationFor(projectDir)} config models ${args}${namedHarness(projectDir, harness)}${projectTarget(projectDir)}`;
+}
+
+// The release and agent-models choice of this project's harness, for the
+// model-policy readers; kiro-ide is the only row they change.
+function projectModelBuild(projectDir: string, harness: ModelHarness): ModelBuild {
+  if (harness !== "kiro-ide") return {};
+  const installed = discoverProjectHarnesses(projectDir).find((item) => item.distribution === harness);
+  return installed ? installedModelBuild(installed.root, installed.frameworkVersion) : {};
 }
 
 function showModels(
@@ -1264,7 +1291,7 @@ function showModels(
     displayedRecorded.length > 0
       ? displayedRecorded.join(", ")
       : presetsChangeNothing(harness)
-      ? `nothing; ${sessionModelsDetail(harness, null)}`
+      ? `nothing; ${sessionModelsDetail(harness, null, projectModelBuild(projectDir, harness))}`
       : `nothing yet - run '${modelsCommand(projectDir, harness, "--preset balanced --project --yes")}'`
   }\n`;
   writeMenuText(output);
@@ -1435,6 +1462,7 @@ function modelSummaryLines(
   tiers: AgentTiers,
   harness: ModelHarness,
   projectDir: string,
+  build: ModelBuild = projectModelBuild(projectDir, harness),
 ): { lines: string[]; notes: string[] } {
   const cap = resolveTierCap(join(projectDir, "aidlc", "spaces", "default", "memory"));
   const lines: string[] = [];
@@ -1449,12 +1477,12 @@ function modelSummaryLines(
     const name = names[0];
     if (!name) continue;
     const tier = tiers[name];
-    const before = resolveModelPolicy(previous, name, tier, harness, cap);
-    const after = resolveModelPolicy(next, name, tier, harness, cap);
+    const before = resolveModelPolicy(previous, name, tier, harness, cap, build);
+    const after = resolveModelPolicy(next, name, tier, harness, cap, build);
     if (after.unexpressed.includes("effort")) {
       lines.push(
         `  ${MODEL_GROUPS[group].label.padEnd(11)} ${names.length} agents   ` +
-          `${afterDial ?? "inherit"} requested; ${harnessHonestyNotes(next, tiers, harness, cap)[0]}`,
+          `${afterDial ?? "inherit"} requested; ${harnessHonestyNotes(next, tiers, harness, cap, build)[0]}`,
       );
       continue;
     }
@@ -1468,7 +1496,7 @@ function modelSummaryLines(
     );
     if (afterDial) lines.push(`  ${effortTradeoff(group, afterDial)}`);
   }
-  const notes = harnessHonestyNotes(next, tiers, harness, cap);
+  const notes = harnessHonestyNotes(next, tiers, harness, cap, build);
   return { lines, notes };
 }
 
@@ -1526,7 +1554,7 @@ function modelsWizard(
   if (choice === "3") {
     let next = targetCurrent;
     for (const name of Object.keys(tiers).sort()) {
-      const currentValue = resolveModelPolicy(current, name, tiers[name], harness);
+      const currentValue = resolveModelPolicy(current, name, tiers[name], harness, null, projectModelBuild(projectDir, harness));
       writeMenuText(
         `${name}: current ${currentValue.model ?? "inherit"}/${currentValue.effort ?? "inherit"}.\n`,
       );
@@ -2782,7 +2810,7 @@ function setupMapRows(
     (providers.length > 0 || records.providers === null);
   const modelsUnrecorded = !sessionSet && (!policy || modelPolicyIsEmpty(policy));
   const modelDetail = sessionSet
-    ? sessionModelsDetail(modelHarness(distribution), policy)
+    ? sessionModelsDetail(modelHarness(distribution), policy, projectModelBuild(projectDir, modelHarness(distribution)))
     : !policy || modelPolicyIsEmpty(policy)
     ? "no recorded policy; agents inherit your session model and effort"
     : policy.preset
@@ -6532,6 +6560,32 @@ function unrecordedLegacyProviderMigration(
   return null;
 }
 
+// The one line for kiro-ide agents whose model and effort leave their files:
+// what will happen on a dry run, what happened otherwise, and the way back
+// only where there is one.
+function agentModelsDropLine(
+  drops: NonNullable<PreparedRefreshSource["agentModelDrops"]>,
+  actions: readonly PlannedAction[],
+  harnessDir: string,
+  dryRun: boolean,
+  projectDir: string,
+): string | null {
+  const rewritten = drops.agents.filter((name) =>
+    actions.some((item) =>
+      item.path === `${harnessDir}/agents/${modelAgentStem(name)}.md` &&
+      (item.action === "update" || item.action === "merge" || item.action === "create")
+    )
+  );
+  if (rewritten.length === 0) return null;
+  const names = rewritten.join(", ");
+  const what = dryRun
+    ? `This will take the model and effort set for ${names} out of their Kiro agent files`
+    : `The model and effort set for ${names} no longer apply in Kiro`;
+  return drops.previewRelease
+    ? `${what}: agent-models is off for this project. \`${configInvocationFor(projectDir)} config models --agent-models on\` puts them back.`
+    : `${what}: this release of AI-DLC does not write a model or effort into Kiro agent files.`;
+}
+
 function prepareRefreshSource(
   projectDir: string,
   sourceRoot: string,
@@ -6543,6 +6597,7 @@ function prepareRefreshSource(
   projectProjection: boolean,
   diagnosticsOverride?: ConfigDiagnosticOverrides,
   force = false,
+  agentModelsRequest: { version: string; requested?: KiroAgentModelsChoice } = { version: AIDLC_VERSION },
 ): PreparedRefreshSource {
   // A copied project is not a release: never baseline the user's edits as
   // shipped entries during an in-place record mutation.
@@ -6684,6 +6739,23 @@ function prepareRefreshSource(
     if (diagnosticsOverride.plugins === null) delete staged.plugins;
     else staged.plugins = diagnosticsOverride.plugins;
   }
+  // kiro-ide's agent-models choice: `--agent-models` wins; with none recorded,
+  // a run with the switch on records "on", so later runs keep the pins
+  // without it.
+  let agentModelsChoice: KiroAgentModelsChoice | null = null;
+  let agentModelsRecorded = false;
+  if (descriptor.distribution === "kiro-ide") {
+    const recorded = staged[KIRO_AGENT_MODELS_RECORD];
+    agentModelsChoice = agentModelsRequest.requested ?? (recorded === "on" || recorded === "off" ? recorded : null);
+    if (agentModelsChoice === null && kiroAgentModelsOn({ version: agentModelsRequest.version })) {
+      agentModelsChoice = "on";
+    }
+    if (agentModelsChoice !== null && agentModelsChoice !== recorded) {
+      staged[KIRO_AGENT_MODELS_RECORD] = agentModelsChoice;
+      agentModelsRecorded = true;
+    }
+  }
+  const agentModelsBuild = { version: agentModelsRequest.version, agentModels: agentModelsChoice };
   const distribution = staged.distribution;
   if (typeof distribution !== "string") {
     throw new Error(`${stagedHarnessData}: distribution must be a string`);
@@ -6706,7 +6778,8 @@ function prepareRefreshSource(
   }
   if (
     regularFile(currentHarnessData) ||
-    diagnosticsOverride !== undefined
+    diagnosticsOverride !== undefined ||
+    agentModelsRecorded
   ) {
     writeFileSync(stagedHarnessData, `${JSON.stringify(staged, null, 2)}\n`);
     regenerated.add(`${descriptor.harnessDir}/tools/data/harness.json`);
@@ -6716,19 +6789,15 @@ function prepareRefreshSource(
     descriptor.harnessDir,
     modelHarness(distribution),
     modelPolicy,
+    undefined,
+    agentModelsBuild,
   );
-  if (descriptor.distribution === "kiro-ide" && sessionSetsAgentModels("kiro-ide")) {
-    const dropped = kiroAgentModelsDropped(
-      join(projectDir, descriptor.harnessDir, "agents"),
-      join(root, descriptor.harnessDir, "agents"),
-      modelPolicy,
-    );
-    if (dropped.length > 0) {
-      notes.push(
-        `The model and effort set for ${dropped.join(", ")} no longer apply in Kiro: this run did not have the ` +
-          `agent-models preview on. To put them back, run \`${configInvocationFor(projectDir)} config\` again from a ` +
-          `preview build with AIDLC_PREVIEW_FEATURES=agent-models set.`,
-      );
+  let agentModelDrops: PreparedRefreshSource["agentModelDrops"];
+  const agentsDir = modelPolicyAgentsDir(modelHarness(distribution), descriptor.harnessDir);
+  if (descriptor.distribution === "kiro-ide" && agentsDir !== null && !kiroAgentModelsOn(agentModelsBuild)) {
+    const agents = kiroAgentModelsDropped(join(projectDir, agentsDir), join(root, agentsDir), modelPolicy);
+    if (agents.length > 0) {
+      agentModelDrops = { agents, previewRelease: versionChannel(agentModelsRequest.version) === PREVIEW_CHANNEL };
     }
   }
   applyProjectFlagsToProjection(
@@ -7140,7 +7209,10 @@ function prepareRefreshSource(
       }
     }
   }
-  return { root, cleanup, regenerated, retiredManagedFiles, projectOverlays, unproven, emptiedSidecars, entries, notes };
+  return {
+    root, cleanup, regenerated, retiredManagedFiles, projectOverlays, unproven, emptiedSidecars, entries, notes,
+    ...(agentModelDrops ? { agentModelDrops } : {}),
+  };
   } catch (error) {
     rmSync(cleanup, { recursive: true, force: true });
     throw error;
@@ -10774,6 +10846,7 @@ function prepareModelsSection(
   }
   const mutationFlags = [
     "--agent",
+    "--agent-models",
     "--deciding-effort",
     "--effort",
     "--from",
@@ -10828,6 +10901,7 @@ function prepareModelsSection(
   const resolved = resolveAidlcSettings(projectDir);
   const current = modelPolicyForHarness(resolved.models, harness);
   const tiers = readAgentTiers(selected.root);
+  const installedBuild = installedModelBuild(selected.root, selected.frameworkVersion);
   if (argv.includes("--show")) {
     showModels(current, tiers, harness, projectDir, resolved, options);
     return null;
@@ -10838,6 +10912,7 @@ function prepareModelsSection(
       selected.harnessDir,
       harness,
       current,
+      installedBuild,
     );
     emitResult(
       drift.length === 0
@@ -10941,6 +11016,65 @@ function prepareModelsSection(
     );
     return null;
   }
+  const agentModels = valueAfter(argv, "--agent-models") as KiroAgentModelsChoice | undefined;
+  if (agentModels !== undefined && selected.distribution !== "kiro-ide") {
+    emitResult(usage("--agent-models applies to Kiro (kiro-ide) projects only", configCommand("models --help")), options);
+    return null;
+  }
+  if (agentModels !== undefined && versionChannel(installedBuild.version ?? AIDLC_VERSION) !== PREVIEW_CHANNEL) {
+    emitResult(
+      usage(
+        "--agent-models needs this project on a preview release of AI-DLC",
+        "run `aidlc config --channel preview` and `aidlc update`, then `aidlc config` in this project",
+      ),
+      options,
+    );
+    return null;
+  }
+  // The choice lives in this project's harness.json, so the switch alone asks
+  // for no settings target.
+  const agentModelsChange = agentModels !== undefined && agentModels !== installedBuild.agentModels;
+  if (agentModels !== undefined && !mutationFlags.some((flag) => flag !== "--agent-models" && argv.includes(flag))) {
+    if (!agentModelsChange) {
+      emitResult(success(`agent-models is already ${agentModels} for this project`), options);
+      return null;
+    }
+    let switchConfirm: PendingConfirm | undefined;
+    if (!argv.includes("--dry-run") && !options.yes) {
+      if (!configInputIsTty()) {
+        emitResult(
+          usage(
+            "non-interactive model policy mutation requires --yes; --yes confirms the selected policy but never chooses one",
+            configMutationRerun("models", argv),
+          ),
+          options,
+        );
+        return null;
+      }
+      switchConfirm = { question: "Apply model policy changes?", cancelled: "model policy change cancelled" };
+    }
+    const summary = modelSummaryLines(current, current, tiers, harness, projectDir, {
+      ...installedBuild,
+      agentModels,
+    });
+    return {
+      argv: modelsPipelineArgv(argv),
+      context: {
+        confirm: switchConfirm,
+        harness,
+        harnessDir: selected.harnessDir,
+        previous: current,
+        next: current,
+        tiers,
+        summaryLines: [
+          `  Kiro agent models: ${installedBuild.agentModels ?? "not set"} -> ${agentModels} in ` +
+            `${selected.harnessDir}/tools/data/harness.json`,
+        ],
+        notes: summary.notes,
+        agentModels,
+      },
+    };
+  }
   const target = settingsTargetForMutation(argv, projectDir);
   const targetPath = settingsPathForTarget(projectDir, target);
   const targetCurrentSettings = readSettingsTarget(projectDir, target);
@@ -10977,7 +11111,17 @@ function prepareModelsSection(
   // setting leaves their saved effort alone.
   const kiroSessionRequest = sessionModel !== undefined ||
     (kiroCli && (argv.includes("--preset") || argv.includes("--from")));
-  if (canonical(targetCurrentSettings) === canonical(targetNextSettings)) {
+  // On kiro-ide an unchanged policy still goes through when the agent-models
+  // choice is new (asked, or the switch about to be recorded) or the agent
+  // files lost what the choice applies.
+  const kiroIdeProjectionDue = selected.distribution === "kiro-ide" && (
+    agentModelsChange ||
+    (installedBuild.agentModels == null && kiroAgentModelsOn({ version: installedBuild.version })) ||
+    (kiroAgentModelsOn(installedBuild) &&
+      modelPolicySurfaceDrift(projectDir, selected.harnessDir, harness, current, installedBuild).length > 0)
+  );
+  const settingsUnchanged = canonical(targetCurrentSettings) === canonical(targetNextSettings);
+  if (settingsUnchanged && !kiroIdeProjectionDue) {
     // The recorded policy is already this, but the person's Kiro session may
     // not carry it yet (a new model, or an effort changed inside Kiro).
     if (kiroSessionRequest && (sessionModel !== undefined || currentKiroPreset)) {
@@ -11038,7 +11182,10 @@ function prepareModelsSection(
       cancelled: "model policy change cancelled",
     };
   }
-  const summary = modelSummaryLines(current, next, tiers, harness, projectDir);
+  const summary = modelSummaryLines(current, next, tiers, harness, projectDir, {
+    ...installedBuild,
+    ...(agentModels !== undefined ? { agentModels } : {}),
+  });
   return {
     ...(kiroPlan ? { kiro: kiroPlan } : {}),
     ...(kiroNote ? { kiroNote } : {}),
@@ -11052,12 +11199,15 @@ function prepareModelsSection(
       tiers,
       summaryLines: summary.lines,
       notes: summary.notes,
-      settings: {
-        target,
-        path: targetPath,
-        previous: targetCurrentSettings,
-        next: targetNextSettings,
-      },
+      ...(settingsUnchanged ? {} : {
+        settings: {
+          target,
+          path: targetPath,
+          previous: targetCurrentSettings,
+          next: targetNextSettings,
+        },
+      }),
+      ...(agentModels !== undefined ? { agentModels } : {}),
     },
   };
 }
@@ -12887,6 +13037,10 @@ export async function main(
       Boolean(selected.projectProjection),
       diagnosticsContext?.overrides ?? choicesContext?.overrides,
       argv.includes("--force"),
+      {
+        version: stamp.frameworkVersion,
+        ...(modelsContext?.agentModels ? { requested: modelsContext.agentModels } : {}),
+      },
     );
     prepared.notes.unshift(...sourceNotes);
     // A release that no longer ships AI-DLC's status line in the shared Claude
@@ -13168,6 +13322,18 @@ export async function main(
     if (kiroUpgraded > 0) prepared.notes.push(kiroUpgradedNote(kiroUpgraded, descriptor.harnessDir, kiroForce));
     const kiroKeptChanged = actions.filter((action) => action.detail === KIRO_KEPT_CHANGED_DETAIL).length;
     if (kiroKeptChanged > 0) prepared.notes.push(kiroKeptChangedNote(kiroKeptChanged, descriptor.harnessDir, kiroForce));
+    // A kiro-ide agent whose model and effort the refresh takes out is named
+    // only when the plan really rewrites its file.
+    const agentModelLine = prepared.agentModelDrops
+      ? agentModelsDropLine(
+        prepared.agentModelDrops,
+        actions,
+        descriptor.harnessDir,
+        argv.includes("--dry-run"),
+        projectDir,
+      )
+      : null;
+    if (agentModelLine) prepared.notes.push(agentModelLine);
     // Older releases shipped an effort map in the project's Kiro settings; a
     // refresh that removes it says where the session's effort lives now.
     const legacyKiroMap = stamp.distribution === "kiro" &&
@@ -13180,7 +13346,12 @@ export async function main(
     // edit map AI-DLC writes into this project; the person hears it once here.
     const shortForm = stamp.distribution === "opencode" ? openCodeGlobalShortFormNote() : null;
     if (shortForm) prepared.notes.push(shortForm);
-    const quietWarnings = [...hiddenRecords, ...switchWarnings, ...(shortForm ? [shortForm] : [])];
+    const quietWarnings = [
+      ...hiddenRecords,
+      ...switchWarnings,
+      ...(shortForm ? [shortForm] : []),
+      ...(agentModelLine ? [agentModelLine] : []),
+    ];
     const withQuietWarnings = (message: string): string =>
       options.mode === "quiet" && quietWarnings.length > 0
         ? `${message}${quietWarnings.map((warning) => `\nWarning: ${warning}`).join("")}`

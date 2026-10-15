@@ -19,8 +19,9 @@ import * as policy from "../../core/tools/aidlc-model-policy.ts";
 import type { ModelPolicyRecord } from "../../core/tools/aidlc-model-policy.ts";
 import { normalizeSettingsModels, projectSettingsPath } from "../../core/tools/aidlc-settings.ts";
 
-const PREVIEW = "2.11.1-preview.20261015.1";
-const STABLE = "2.11.0";
+// A tree on a preview release, and one on a stable release, with no recorded choice.
+const PREVIEW = { version: "2.11.1-preview.20261015.1" };
+const STABLE = { version: "2.11.0" };
 const FEATURE_ENV = "AIDLC_PREVIEW_FEATURES";
 const KIRO_IDE_RELEASE = join(REPO_ROOT, "dist-release", "kiro-ide");
 const REVIEWER = "architecture-reviewer";
@@ -87,10 +88,18 @@ describe("the agent-models switch", () => {
       "AI-DLC does not write a model or effort into its Kiro agent files, so every agent runs on your chat's model and effort (Kiro IDE's model picker, or Kiro CLI's session model); a model or effort set here is kept for other tools and changes nothing in Kiro.";
     expect(policy.modelHarnessHonesty("kiro-ide", STABLE).message).toBe(off);
     expect(policy.modelHarnessHonesty("kiro-ide", PREVIEW).message).toBe(
-      `${off} With AIDLC_PREVIEW_FEATURES=agent-models set, this preview build applies a model and effort set for one agent.`,
+      `${off} In this preview build, \`aidlc config models --agent-models on\` applies a model and effort set for one agent.`,
     );
     featureOn();
     expect(policy.modelHarnessHonesty("kiro-ide", STABLE).message).toBe(off);
+  });
+
+  test("a recorded choice decides on a preview release: on without the switch, off with it; a stable release ignores it", () => {
+    expect(policy.kiroAgentModelsOn({ ...PREVIEW, agentModels: "on" })).toBe(true);
+    featureOn();
+    expect(policy.kiroAgentModelsOn({ ...PREVIEW, agentModels: "off" })).toBe(false);
+    expect(policy.kiroAgentModelsOn({ ...PREVIEW, agentModels: null })).toBe(true);
+    expect(policy.kiroAgentModelsOn({ ...STABLE, agentModels: "on" })).toBe(false);
   });
 
   test("with it on, a preset still changes nothing on kiro-ide, so setup asks for none", () => {
@@ -282,4 +291,100 @@ describe("the --model value", () => {
     const recorded = existsSync(settings) ? (JSON.parse(readFileSync(settings, "utf-8")) as { models?: unknown }) : {};
     expect(recorded.models).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
+
+// The commands a person runs, on a project installed from a preview release
+// (the release tree with a preview version stamped in).
+describe("the agent-models choice through config", () => {
+  const previewVersion = "2.11.1-preview.20261016.1";
+  function previewRuntime(): string {
+    const runtime = temp("aidlc-kiro-agent-models-runtime-");
+    cpSync(KIRO_IDE_RELEASE, join(runtime, "kiro-ide"), { recursive: true });
+    const stamp = join(runtime, "kiro-ide", ".kiro", "tools", "data", "aidlc-stamp.json");
+    writeFileSync(stamp, readFileSync(stamp, "utf-8").replace(/"frameworkVersion": "[^"]+"/, `"frameworkVersion": "${previewVersion}"`));
+    const versionFile = join(runtime, "kiro-ide", ".kiro", "tools", "aidlc-version.ts");
+    writeFileSync(versionFile, readFileSync(versionFile, "utf-8").replace(/AIDLC_VERSION = "[^"]+"/, `AIDLC_VERSION = "${previewVersion}"`));
+    return runtime;
+  }
+  function project(runtime: string) {
+    const dir = temp("aidlc-kiro-agent-models-proj-");
+    mkdirSync(join(dir, ".git"));
+    const machine = temp("aidlc-kiro-agent-models-m-");
+    const base: NodeJS.ProcessEnv = {
+      ...process.env,
+      AIDLC_INSTALL_ROOT: join(machine, "share", "aidlc"),
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_RUNTIME_ROOT: runtime,
+    };
+    delete base[FEATURE_ENV];
+    const run = (args: string[], switchOn = false) => {
+      const result = spawnSync(process.execPath, [join(REPO_ROOT, "core", "tools", "aidlc-init.ts"), ...args], {
+        cwd: dir,
+        env: switchOn ? { ...base, [FEATURE_ENV]: "agent-models" } : base,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      return { status: result.status, out: `${result.stdout}${result.stderr}` };
+    };
+    const install = run(["config", "--project-dir", dir, "--from", join(runtime, "kiro-ide"), "--harness", "kiro-ide", "--mcp", "none", "--yes"]);
+    expect(install.status, install.out).toBe(0);
+    const reviewer = () => frontmatter(readFileSync(join(dir, ".kiro", "agents", REVIEWER_FILE), "utf-8"));
+    const choice = () =>
+      (JSON.parse(readFileSync(join(dir, ".kiro", "tools", "data", "harness.json"), "utf-8")) as Record<string, unknown>).agentModels;
+    return { dir, run, reviewer, choice };
+  }
+
+  test("a pin made with the switch on is recorded and survives a later config run without it", () => {
+    const p = project(previewRuntime());
+    const pin = p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--effort", "high", "--yes"], true);
+    expect(pin.status, pin.out).toBe(0);
+    expect(p.choice()).toBe("on");
+    expect(p.reviewer()).toMatch(/^model: gpt-5\.6-terra$/m);
+    const other = p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", "developer", "--effort", "low", "--yes"]);
+    expect(other.status, other.out).toBe(0);
+    expect(p.reviewer()).toMatch(/^effortLevel: high$/m);
+    expect(other.out).not.toContain("no longer apply");
+    const check = p.run(["config", "models", "--project-dir", p.dir, "--check"]);
+    expect(check.status, check.out).toBe(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
+
+  test("off beats the switch, says once what it takes out, and on puts it back", () => {
+    const p = project(previewRuntime());
+    expect(p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes"], true).status).toBe(0);
+    const dry = p.run(["config", "models", "--project-dir", p.dir, "--agent-models", "off", "--dry-run"], true);
+    expect(dry.out).toContain(`This will take the model and effort set for ${REVIEWER} out of their Kiro agent files`);
+    expect(p.reviewer()).toMatch(/^model: gpt-5\.6-terra$/m);
+    const off = p.run(["config", "models", "--project-dir", p.dir, "--agent-models", "off", "--yes"], true);
+    expect(off.status, off.out).toBe(0);
+    expect(off.out).toContain(`The model and effort set for ${REVIEWER} no longer apply in Kiro: agent-models is off for this project.`);
+    expect(p.choice()).toBe("off");
+    expect(p.reviewer()).not.toMatch(/^model:/m);
+    expect(p.run(["config", "--project-dir", p.dir, "--yes"], true).status).toBe(0);
+    expect(p.reviewer()).not.toMatch(/^model:/m);
+    const on = p.run(["config", "models", "--project-dir", p.dir, "--agent-models", "on", "--yes"]);
+    expect(on.status, on.out).toBe(0);
+    expect(p.choice()).toBe("on");
+    expect(p.reviewer()).toMatch(/^model: gpt-5\.6-terra$/m);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 3);
+
+  test("the same pin again with the switch on records it and writes the lines a stable-time pin left unwritten", () => {
+    const p = project(previewRuntime());
+    expect(p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", REVIEWER, "--effort", "high", "--yes"]).status).toBe(0);
+    expect(p.reviewer()).not.toMatch(/^effortLevel:/m);
+    const again = p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", REVIEWER, "--effort", "high", "--yes"], true);
+    expect(again.status, again.out).toBe(0);
+    expect(p.choice()).toBe("on");
+    expect(p.reviewer()).toMatch(/^effortLevel: high$/m);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
+
+  test("a project on a stable release writes and records nothing with the switch on, and refuses --agent-models", () => {
+    const p = project(join(REPO_ROOT, "dist-release"));
+    const pin = p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes"], true);
+    expect(pin.status, pin.out).toBe(0);
+    expect(p.reviewer()).not.toMatch(/^model:/m);
+    expect(p.choice()).toBeUndefined();
+    const refused = p.run(["config", "models", "--project-dir", p.dir, "--agent-models", "on", "--yes"], true);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("--agent-models needs this project on a preview release of AI-DLC");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 });

@@ -51,6 +51,7 @@ import {
 } from "./aidlc-color.ts";
 import {
   HARNESS_PRODUCT_NAMES,
+  installedModelBuild,
   isModelHarness,
   modelPolicyDoctorIssues,
   modelPolicyIsEmpty,
@@ -273,6 +274,7 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
           harness.root,
           harness.distribution,
           modelPolicyForHarness(resolved.models, harness.distribution),
+          installedModelBuild(harness.root, harness.frameworkVersion),
         )
           .map((issue) => `${harness.distribution}: ${issue}`),
       );
@@ -310,9 +312,14 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
     const parts = [
       ...(configured.length > 0 ? [`recorded policy is expressible on ${named(configured)}`] : []),
       ...(unconfigured.length > 0 ? [`no recorded policy for ${named(unconfigured)}`] : []),
-      ...sessionSet.map((distribution) =>
-        sessionModelsDetail(distribution, others.length === 0 ? policyFor(distribution) : null)
-      ),
+      ...sessionSet.map((distribution) => {
+        const installed = harnesses.find((harness) => harness.distribution === distribution);
+        return sessionModelsDetail(
+          distribution,
+          others.length === 0 ? policyFor(distribution) : null,
+          installed ? installedModelBuild(installed.root, installed.frameworkVersion) : {},
+        );
+      }),
     ];
     return { pass: true, label: `Models: ${parts.join("; ")}` };
   }
