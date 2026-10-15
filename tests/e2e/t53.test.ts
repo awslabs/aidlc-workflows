@@ -82,7 +82,8 @@
 //     requirements-analysis + code-generation + build-and-test +
 //     deployment-pipeline + deployment-execution): scope-mapping.json "bugfix"
 //   - greenfield downgrades reverse-engineering EXECUTE->SKIP: aidlc-utility.ts
-//   - Stage Progress row shape `- [x|-| ] <slug> - EXECUTE|SKIP`: aidlc-utility.ts
+//   - Stage Progress row shape `- [x|-| ] <slug>`, an em dash, then EXECUTE|SKIP, as the
+//     state file writes it and stageRow's regex reads it: aidlc-utility.ts
 //   - Scope line "- **Scope**: bugfix": aidlc-utility.ts
 //   - STAGE_STARTED emitted for EXECUTE stages only: aidlc-utility.ts
 //
