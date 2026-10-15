@@ -56,7 +56,7 @@ const OWN_PICKER_LINES = {
   cursor:
     "Cursor runs every agent on the model you choose in its model picker, so a model or effort set here is kept for other tools and changes nothing in Cursor.",
   "kiro-ide":
-    "Kiro IDE runs every agent on the model you choose in its model picker, so a model or effort set here is kept for other tools and changes nothing in Kiro IDE.",
+    "AI-DLC does not write a model or effort into its Kiro agent files, so every agent runs on your chat's model and effort (Kiro IDE's model picker, or Kiro CLI's session model); a model or effort set here is kept for other tools and changes nothing in Kiro.",
   kiro:
     "Kiro CLI runs every agent on your session's model and effort, so an effort set here without a model is kept for other tools and changes nothing in Kiro CLI; a preset (minimal, balanced or thorough) sets the session's effort.",
 } as const;

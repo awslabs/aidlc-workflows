@@ -5,7 +5,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, join } from "node:path";
-import { previewFeatureOn } from "./aidlc-channel.ts";
+import { PREVIEW_CHANNEL, previewFeatureOn, versionChannel } from "./aidlc-channel.ts";
+import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   kiroModelDefaults,
   projectTier,
@@ -148,7 +149,7 @@ export const HARNESS_HONESTY = Object.freeze({
     effort: false,
     groupEffort: false,
     message:
-      "Kiro IDE runs every agent on the model you choose in its model picker, so a model or effort set here is kept for other tools and changes nothing in Kiro IDE.",
+      "AI-DLC does not write a model or effort into its Kiro agent files, so every agent runs on your chat's model and effort (Kiro IDE's model picker, or Kiro CLI's session model); a model or effort set here is kept for other tools and changes nothing in Kiro.",
   }),
   cursor: Object.freeze({
     model: false,
@@ -187,13 +188,20 @@ const KIRO_AGENT_MODELS_HONESTY: HarnessHonesty = Object.freeze({
     "Kiro takes a model and an effort set for one agent; a preset or group effort is kept for other tools and changes nothing in Kiro.",
 });
 
+// A preview build with the switch off names the switch; a stable build does not
+// mention a preview feature at all.
+const KIRO_AGENT_MODELS_OFF_IN_PREVIEW: HarnessHonesty = Object.freeze({
+  ...HARNESS_HONESTY["kiro-ide"],
+  message:
+    `${HARNESS_HONESTY["kiro-ide"].message} With AIDLC_PREVIEW_FEATURES=${KIRO_AGENT_MODELS_FEATURE} set, this preview build applies a model and effort set for one agent.`,
+});
+
 // What a harness can express in this build. Every reader asks this rather than
 // HARNESS_HONESTY, so the kiro-ide preview switch is read in one place.
-export function modelHarnessHonesty(harness: ModelHarness, version?: string): HarnessHonesty {
-  if (harness === "kiro-ide" && previewFeatureOn(KIRO_AGENT_MODELS_FEATURE, version)) {
-    return KIRO_AGENT_MODELS_HONESTY;
-  }
-  return HARNESS_HONESTY[harness];
+export function modelHarnessHonesty(harness: ModelHarness, version: string = AIDLC_VERSION): HarnessHonesty {
+  if (harness !== "kiro-ide") return HARNESS_HONESTY[harness];
+  if (previewFeatureOn(KIRO_AGENT_MODELS_FEATURE, version)) return KIRO_AGENT_MODELS_HONESTY;
+  return versionChannel(version) === PREVIEW_CHANNEL ? KIRO_AGENT_MODELS_OFF_IN_PREVIEW : HARNESS_HONESTY["kiro-ide"];
 }
 
 // Where a harness can pin neither an agent's model nor its effort, every agent

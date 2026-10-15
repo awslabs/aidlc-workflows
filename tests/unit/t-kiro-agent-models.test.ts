@@ -82,6 +82,17 @@ describe("the agent-models switch", () => {
     expect(policy.modelHarnessHonesty("kiro-ide", PREVIEW)).toMatchObject({ model: false, effort: false });
   });
 
+  test("with it off, a preview build names the switch and a stable build does not mention it", () => {
+    const off =
+      "AI-DLC does not write a model or effort into its Kiro agent files, so every agent runs on your chat's model and effort (Kiro IDE's model picker, or Kiro CLI's session model); a model or effort set here is kept for other tools and changes nothing in Kiro.";
+    expect(policy.modelHarnessHonesty("kiro-ide", STABLE).message).toBe(off);
+    expect(policy.modelHarnessHonesty("kiro-ide", PREVIEW).message).toBe(
+      `${off} With AIDLC_PREVIEW_FEATURES=agent-models set, this preview build applies a model and effort set for one agent.`,
+    );
+    featureOn();
+    expect(policy.modelHarnessHonesty("kiro-ide", STABLE).message).toBe(off);
+  });
+
   test("with it on, a preset still changes nothing on kiro-ide, so setup asks for none", () => {
     featureOn();
     expect(policy.sessionSetsAgentModels("kiro-ide", PREVIEW)).toBe(false);
