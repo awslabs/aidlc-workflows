@@ -4594,6 +4594,19 @@ export function finishedWork(projectDir: string, space: string, selectedIntent: 
     .filter((intent) => isFinishedWork(intent, recordStateText(projectDir, intent, space)));
 }
 
+/**
+ * Where a piece of work stands, in the stage names the person sees: "at
+ * <stage>", or "in <Phase>" for work going Unit by Unit, whose Current Stage
+ * stays on the first per-Unit stage while each Unit works through the later
+ * ones. Empty when the state names no known stage.
+ */
+export function workStanding(state: string): string {
+  const stage = findStageBySlug((getField(state, "Current Stage") ?? "").trim());
+  if (!stage) return "";
+  const unitByUnit = isPerUnitStage(stage) && getField(state, "Construction Iteration")?.trim() === "unit-major";
+  return unitByUnit ? `in ${stage.phase.charAt(0).toUpperCase()}${stage.phase.slice(1)}` : `at ${stage.name}`;
+}
+
 // Either signal marks work finished: the registry row, or the state file a
 // finalize completed.
 function isFinishedWork(intent: IntentInfo, state: string): boolean {

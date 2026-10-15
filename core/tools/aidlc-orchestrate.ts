@@ -273,6 +273,7 @@ import {
   listIntents,
   listSpaces,
   finishedWork,
+  workStanding,
   workToPickUp,
   readProjectDescriptionAuthority,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
@@ -5901,15 +5902,6 @@ function unselectedRecords(
   const intents = intentStates.map(({ intent }) => intent);
   const annotate = intents.length > 1 &&
     intentStates.some(({ state }) => isTeamUnitOwnership(state));
-  // Where each piece of work stands, in the stage names the person sees. Work
-  // going Unit by Unit is named by its phase: Current Stage stays on the first
-  // per-Unit stage while each Unit works through the later ones.
-  const standing = (state: string): string => {
-    const stage = nodeForSlug((getField(state, "Current Stage") ?? "").trim());
-    if (!stage) return "";
-    const unitByUnit = isPerUnitStage(stage) && getField(state, CONSTRUCTION_ITERATION_FIELD)?.trim() === "unit-major";
-    return unitByUnit ? `in ${stage.phase.charAt(0).toUpperCase()}${stage.phase.slice(1)}` : `at ${stage.name}`;
-  };
   const present = intentStates.filter(({ intent }) => intent.dirName);
   const selectable = present.flatMap(({ intent, state }) =>
     isBindableIntentRecordName(intent.dirName)
@@ -5951,7 +5943,7 @@ function unselectedRecords(
         }
       }
     }
-    annotation ||= standing(state);
+    annotation ||= workStanding(state);
     const label = intentDisplayLabel(intent);
     // A directory name outside the record-name shape is still selectable through
     // select_commands; the text shows it quoted, as data.
