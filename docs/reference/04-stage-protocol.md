@@ -112,7 +112,7 @@ with a fresh timestamp.
 
 | # | Check |
 |---|-------|
-| 1 | At the approval gate, call `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. When `ceremony.sensors` is `on`, gate-bound sensors run once per existing deliverable before the transaction when a person will answer the gate (a gate the engine approves itself under Construction autonomy runs only its blocking sensors). A blocking binding requires a verified pass. To override, log and present the separate `Fix findings` / `Override blocking sensors` decision, wait for the exact human-backed answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`; a bare flag and autonomous mode are refused. The engine then flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
+| 1 | At the approval gate, call `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. When `ceremony.sensors` is `on`, gate-bound sensors run once per existing deliverable (`upstream-coverage` and `claim-sources` once per output folder) before the transaction when a person will answer the gate (a gate the engine approves itself under Construction autonomy runs only its blocking sensors). A blocking binding requires a verified pass. To override, log and present the separate `Fix findings` / `Override blocking sensors` decision, wait for the exact human-backed answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`; a bare flag and autonomous mode are refused. The engine then flips state from `[-]` to `[?]` AwaitingApproval and emits `STAGE_AWAITING_APPROVAL` atomically, so status shows the held gate while the prompt is open. (`STAGE_STARTED` / the `[-]` transition was emitted when the stage became active.) |
 | 2 | For non-gate questions, log options BEFORE calling `AskUserQuestion` via `aidlc engine log decision` (not by hand-writing to the `audit/` shards), then log the exact response via `aidlc engine log answer`. A question logged after the person already replied takes that reply with `--message <id>` (the refusal names the id); the person is never asked again. |
 | 3 | After an approval-gate response, call `aidlc engine orchestrate report --stage <slug> --result approved --user-input "Approve"` for approval or `aidlc engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes"` for request-changes, passing the choice they made by its label (the engine keeps their own words as the feedback; add `--reason '<what they asked to change>'` only to say more). Never call the log tool's `decision` or `answer` verb for the gate. After revision work, report `--result revised` before re-presenting it. |
 | 4 | Record the choice the person made, read from their reply; the human-turn hook keeps their exact words with it. Never choose for them or paraphrase their words in an answer or note; for automated stages use `N/A -- [reason]` |
@@ -360,12 +360,12 @@ After an approval that moves on, the engine's narration carries the progress
 line; relay it as written and count nothing yourself:
 
 ```
-Progress: [done]/[planned] in-scope stages complete ([done]/[all] overall) | [phase-done]/[phase-planned] [PHASE]. Next: [Next Stage Name]
+Progress: [done] of [planned] stages done. Next: [Next Stage Name].
 ```
 
 The engine counts completed stages only; a skipped stage leaves the plan rather
 than counting as done. Example from a Claude Code run on the `mvp` plan, after
-Intent Capture: `Progress: 1/19 in-scope stages complete (4/33 overall) | 1/4 IDEATION. Next: Feasibility & Constraints`
+Intent Capture: `Progress: 1 of 19 stages done. Next: Feasibility & Constraints.`
 
 ---
 
@@ -732,9 +732,12 @@ dynamic per workflow position.
 
 1. Apply the ordered `load-steering` sequence before `run-stage`. It delivers
    every substantive active-space rule as content and re-runs on every stage.
-2. Read every `inline_context_paths` entry: lead + supports for `inline`, and
-   the lead's persona and knowledge for `mob` because mob supports are
-   dispatched. Persona and knowledge remain path-loaded. Show any
+2. Take on `lead_persona`, the lead's persona the step carries, then read
+   every `inline_context_paths` entry: the supports' personas and every inline
+   agent's knowledge for `inline`, and the lead's knowledge for `mob` because
+   mob supports are dispatched. Support personas and knowledge remain
+   path-loaded; a step that carries no `lead_persona` lists the lead's persona
+   file first instead. Show any
    `context_warnings` verbatim and continue with the readable roster. Agent
    names alone are not loaded context.
 3. Apply every loaded perspective during execution. Do not omit support-agent

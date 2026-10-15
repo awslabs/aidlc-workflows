@@ -1250,3 +1250,127 @@ ${codekbGraph.map((stage) => `- [x] ${stage.slug} ${SEP} EXECUTE`).join("\n")}
     ]);
   });
 });
+
+// A finished stage whose own definition changed (an AI-DLC update, a plugin, a
+// stage edit) and nothing of the person's: its work stands, so it is no issue
+// and roots nothing; the inspection hands back the receipt for the new
+// definition, and says to tell the person only when the stage now needs an
+// input it did not need when it ran. Any entry the definition does not explain
+// keeps today's issue.
+describe("a finished stage whose own definition changed", () => {
+  const chain: StageValidityNode[] = [
+    { slug: "requirements-analysis", phase: "inception", produces: ["requirements"], consumes: [] },
+    {
+      slug: "code-generation",
+      phase: "construction",
+      produces: ["code-summary"],
+      consumes: [{ artifact: "requirements", required: true }],
+    },
+    {
+      slug: "build-and-test",
+      phase: "construction",
+      produces: ["build-test-results"],
+      consumes: [{ artifact: "code-summary", required: true }],
+    },
+  ];
+  const requirementsOut = artifactBasis();
+  const threat = artifactBasis({ artifact: "threat-model", producer: "security-design", required: false });
+  const codeOut = artifactBasis({ artifact: "code-summary", producer: "code-generation" });
+  const codeBefore = basis({ inputs: [requirementsOut], outputs: [codeOut] });
+  const finished = `## Stage Progress\n${chain.map((stage) => `- [x] ${stage.slug} ${SEP} EXECUTE`).join("\n")}\n`;
+
+  function recordedFor(code: StageValidationBasis): Map<string, StageValidationBasis> {
+    return new Map<string, StageValidationBasis>([
+      ["requirements-analysis", basis({ inputs: [], outputs: [requirementsOut] })],
+      ["code-generation", code],
+      ["build-and-test", basis({
+        inputs: [codeOut],
+        outputs: [artifactBasis({ artifact: "build-test-results", producer: "build-and-test" })],
+      })],
+    ]);
+  }
+  function completions(code: StageValidationBasis): string {
+    const recorded = recordedFor(code);
+    return [
+      auditEvent("WORKFLOW_STARTED", "2026-08-05T00:00:00.000Z"),
+      ...chain.map((stage, index) =>
+        auditEvent("STAGE_COMPLETED", `2026-08-05T00:00:0${index + 1}.000Z`, {
+          Stage: stage.slug,
+          [VALIDATION_BASIS_FIELD]: JSON.stringify(recorded.get(stage.slug)),
+        })),
+    ].join("\n---\n");
+  }
+  function inspect(
+    codeNow: StageValidationBasis,
+    { before = codeBefore, state = finished, rows = completions(before) } = {},
+  ) {
+    const recorded = recordedFor(before);
+    return inspectStageValidity(tempProject(), state, {
+      stages: chain,
+      audit: rows,
+      currentBasis: (stage) => (stage.slug === "code-generation" ? codeNow : recorded.get(stage.slug)!),
+    });
+  }
+  const redefined = (codeNow: Partial<StageValidationBasis>, before = codeBefore): StageValidationBasis =>
+    ({ ...before, graphContract: "sha256:new-contract", ...codeNow });
+
+  test("only the contract changed: no issue, no later stage affected, the new receipt handed back unsaid", () => {
+    const now = redefined({});
+    const result = inspect(now);
+    expect(result.issues).toEqual([]);
+    expect(result.redefined).toEqual([{ stage: "code-generation", basis: now, said: false }]);
+  });
+
+  test("an optional input added, an input removed, or one made optional is recorded and not said", () => {
+    for (const now of [
+      redefined({ inputs: [requirementsOut, threat] }),
+      redefined({ inputs: [] }),
+      redefined({ inputs: [{ ...requirementsOut, required: false }] }),
+    ]) {
+      const result = inspect(now);
+      expect(result.issues).toEqual([]);
+      expect(result.redefined.map((entry) => [entry.stage, entry.said])).toEqual([["code-generation", false]]);
+    }
+  });
+
+  test("a new required input, or one made required, is said", () => {
+    const withThreat = { ...codeBefore, inputs: [requirementsOut, threat] };
+    for (const [now, before] of [
+      [redefined({ inputs: [requirementsOut, { ...threat, required: true }] }), codeBefore],
+      [redefined({ inputs: [requirementsOut, { ...threat, required: true }] }, withThreat), withThreat],
+    ] as const) {
+      const result = inspect(now, { before });
+      expect(result.issues).toEqual([]);
+      expect(result.redefined.map((entry) => [entry.stage, entry.said])).toEqual([["code-generation", true]]);
+    }
+  });
+
+  test("an input of the person's that changed keeps today's issue and its later stages", () => {
+    const result = inspect(redefined({ inputs: [{ ...requirementsOut, contentHash: "sha256:edited" }] }));
+    expect(result.issues.map((issue) => [issue.stage, issue.status, issue.reasons])).toEqual([
+      ["code-generation", "stale", ["graph-contract", "input:requirements"]],
+      ["build-and-test", "needs-revalidation", ['depends on stale stage "code-generation" via artifact:code-summary']],
+    ]);
+    expect(result.redefined).toEqual([]);
+  });
+
+  test("a stage reopened when the definition changed gets nothing and roots nothing", () => {
+    const reopened = finished.replace("- [x] code-generation", "- [-] code-generation");
+    const result = inspect(redefined({}), { state: reopened });
+    expect(result.issues).toEqual([]);
+    expect(result.redefined).toEqual([]);
+  });
+
+  test("the recorded new receipt stands for the stage from then on", () => {
+    const now = redefined({ inputs: [] });
+    const rows = `${completions(codeBefore)}\n---\n${auditEvent("STAGE_DEFINITION_CHANGED", "2026-08-05T00:01:00.000Z", {
+      Stage: "code-generation",
+      [VALIDATION_BASIS_FIELD]: JSON.stringify(now),
+    })}`;
+    expect(latestCompletionBasesFromAudit(rows).get("code-generation")).toEqual(now);
+    const result = inspect(now, { rows });
+    expect(result.issues).toEqual([]);
+    expect(result.redefined).toEqual([]);
+    expect(result.renewed).toEqual(["code-generation"]);
+  });
+});

@@ -10,7 +10,7 @@
 //     observable return - no CLI shell, no argv, no process.exit, so
 //     all five are in-process expect()s. This is the ONLY unit claimed
 //     in covers: (function:extractMarkdownSection, minMechanism none —
-//     verified verbatim in tests/.coverage-registry.json:698).
+//     verified verbatim in tests/.coverage-registry.json).
 //   EXERCISED, NOT CLAIMED (spawnSync, cli mechanism): tests 5-6 spawn
 //     `aidlc-state.ts practices-event --type empty` against a fixture project
 //     and inspect the written audit shards. The practices-event subcommand
@@ -19,17 +19,17 @@
 //     WITHOUT claiming coverage.
 //
 // Source under test:
-//   dist/claude/.claude/tools/aidlc-lib.ts:1612
+//   dist/claude/.claude/tools/aidlc-lib.ts
 //     extractMarkdownSection(content, heading): string — strips fenced code
 //     blocks first (stripFencedCodeBlocks), matches the heading line
 //     anchored `^<heading>[ \t]*$` (trailing-whitespace tolerant, exact-
 //     match so `## Walking` never matches `## Walking Skeleton`), then
 //     returns the slice up to the next `^## ` heading or EOF. Returns "" on
 //     absent heading. Trailing newlines preserved (no .trim()).
-//   dist/claude/.claude/tools/aidlc-state.ts:1006 handlePracticesEvent
+//   dist/claude/.claude/tools/aidlc-state.ts handlePracticesEvent
 //     — `--type empty` emits PRACTICES_SECTION_EMPTY and prints the envelope
 //     {"emitted":"PRACTICES_SECTION_EMPTY","fields_count":N}; audit fields
-//     render as `**Section**: ...` / `**Fallback**: ...` (aidlc-audit.ts:253).
+//     render as `**Section**: ...` / `**Fallback**: ...` (aidlc-audit.ts).
 //
 // The real helper returns the single newline between the heading and the next
 // `##`, so test 1 pins the returned body as whitespace-only (trims to "").

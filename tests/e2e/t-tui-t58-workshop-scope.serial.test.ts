@@ -17,11 +17,11 @@
 //     - classic has depth "Standard", inherits testStrategy "Standard", and SKIPs every
 //       ideation stage (intent-capture..approval-handoff all SKIP — lines 105 of
 //       scope-mapping.json), EXECUTEs all inception/construction, SKIPs operation.
-//     - state-init (aidlc-utility.ts:2044-2099) writes the FULL stage-progress
+//     - state-init (aidlc-utility.ts) writes the FULL stage-progress
 //       block with each ideation slug rendered `- [ ] <slug> — SKIP` (the SKIP
-//       suffix from aidlc-utility.ts:1997), so a SKIP'd ideation stage can NEVER
+//       suffix from aidlc-utility.ts), so a SKIP'd ideation stage can NEVER
 //       reach `[x]`; it stays `[ ] … — SKIP`. determineFirstPostInitStage
-//       (:2175) therefore returns reverse-engineering, so the workflow's first
+//       therefore returns reverse-engineering, so the workflow's first
 //       post-init phase is INCEPTION and `- **Lifecycle Phase**: INCEPTION` lands
 //       — Ideation is never entered.
 //   .sh -> DISK ASSERTION MAP (each grep becomes a structured disk read):
@@ -48,24 +48,24 @@
 //
 // WHY PATTERN B (answer-gate, NOT Pattern A): `/aidlc --scope classic` does NOT run a
 // one-shot config edit — it starts a workflow that then asks "What would you like
-// to build?" (SKILL.md:337) and runs the workshop's mandatory gates. A Pattern-A
+// to build?" (SKILL.md) and runs the workshop's mandatory gates. A Pattern-A
 // "wait + assert" test would HANG on the first menu it does not answer. So we run
 // the shared `answer-gate` primitive (tui-drive.ts cmdAnswerGate): it presses
 // Enter (= the Recommended default) on every menu and TERMINATES on a
 // DETERMINISTIC on-disk signal — here the `Completed` counter crossing into the
-// post-init range (aidlc-state.ts:258/405/472 syncs `- **Completed**:` to the
+// post-init range (aidlc-state.ts syncs `- **Completed**:` to the
 // live `[x]` count on every advance). We NEVER wait on rewordable screen prose.
 //
 // SCOPE-CONFIRMATION GATE — verified routing + live-verify guard: `classic` is a
 // KNOWN SCOPE (a key in scope-mapping.json), so SKILL.md routes it through the
-// "known scope" path (:329-339), which does NOT render a scope-confirmation gate
-// (that gate is the FREEFORM-text path, :341-362, "confirmation is mandatory for
+// "known scope" path, which does NOT render a scope-confirmation gate
+// (that gate is the FREEFORM-text path, "confirmation is mandatory for
 // all freeform inputs"). The explicit `--scope classic` flag outranks the shipped
 // `AWS_AIDLC_DEFAULT_SCOPE: "classic"` setting (which happens to agree), so both
 // routing paths land on
 // Classic without relying on the implicit default. The journey is LLM-mediated,
 // so answer-gate remains a no-op disk-poller when no menu is
-// up (it checks the terminator FIRST each loop — tui-drive.ts:951-959), so the
+// up (it checks the terminator FIRST each loop - tui-drive.ts), so the
 // gateless known-scope path is safe too. NET: robust to both routings; the disk
 // terminator is the truth either way. (LIVE-VERIFY RISK: if a future SKILL.md
 // change makes the bare keyword render a scope picker whose default is NOT

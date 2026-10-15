@@ -197,7 +197,7 @@ afterAll(() => {
 
 // --- Helpers (TS analogues of the .sh helpers) ---
 
-/** make_proj (t92-sensor-fire.sh:104-110): fresh temp project + aidlc-docs/. */
+/** make_proj (t92-sensor-fire.sh): fresh temp project + aidlc-docs/. */
 function makeProj(): string {
   // toPortablePath (cygpath -m on win32, no-op elsewhere): mkdtempSync yields a
   // path form native Windows bun can't round-trip as CLAUDE_PROJECT_DIR. The
@@ -216,7 +216,7 @@ function makeProj(): string {
 }
 
 /**
- * make_fork_sensors (t92-sensor-fire.sh:113-136): write a single fork
+ * make_fork_sensors (t92-sensor-fire.sh): write a single fork
  * sensor manifest into a fresh AIDLC_SENSORS_DIR. Returns the dir.
  */
 function makeForkSensors(
@@ -268,7 +268,7 @@ function auditEventCount(proj: string, ev: string): number {
 }
 
 /**
- * audit_field (t92-sensor-fire.sh:153-176): value of <key> from the FIRST
+ * audit_field (t92-sensor-fire.sh): value of <key> from the FIRST
  * audit block whose `**Event**:` matches <ev>. Walks the merged trail; resets
  * at `## ` headings and `---` separators; splits `**label**: value` on the
  * literal `**: ` separator.
@@ -302,7 +302,7 @@ function auditField(proj: string, ev: string, key: string): string {
 }
 
 /**
- * audit_field_count (t92-sensor-fire.sh:183-198): count `**…**:` lines in
+ * audit_field_count (t92-sensor-fire.sh): count `**...**:` lines in
  * the FIRST audit block whose `**Event**:` matches <ev>.
  */
 function auditFieldCount(proj: string, ev: string): number {
@@ -392,7 +392,7 @@ const sleep = (ms: number): Promise<void> =>
 // ============================================================
 // Group A — Argv parsing (8): exit 1 on every invalid invocation,
 // and verify NO audit file ever appears (validate-before-lock).
-// (t92-sensor-fire.sh:202-293)
+// (t92-sensor-fire.sh)
 // ============================================================
 
 describe("t92 Group A: argv validation (exit 1, no audit emit)", () => {
@@ -471,13 +471,13 @@ describe("t92 Group A: argv validation (exit 1, no audit emit)", () => {
 
 // ============================================================
 // Group B — PASSED round-trip per sensor, REAL fixtures (5).
-// (t92-sensor-fire.sh:295-395)
+// (t92-sensor-fire.sh)
 // Fires the actual shipped per-sensor scripts against real fixture content.
 // Functional round trips use shipped scripts and temporary manifest copies
 // with fixture backstops. Registry budget calibration uses explicit fork caps.
 // ============================================================
 
-/** run_passed_md_real (t92-sensor-fire.sh:321-349). */
+/** run_passed_md_real (t92-sensor-fire.sh). */
 function runPassedMdReal(
   id: string,
   stage: string,
@@ -541,7 +541,7 @@ function realSensorEnv(id: string, proj: string): Record<string, string> {
   };
 }
 
-/** run_passed_ts_real (t92-sensor-fire.sh:356-386). */
+/** run_passed_ts_real (t92-sensor-fire.sh). */
 function runPassedTsReal(
   id: string,
   stage: string,
@@ -701,10 +701,10 @@ describe("t92 Group B: PASSED real round-trip per sensor", () => {
 
 // ============================================================
 // Group C — FAILED round-trip per sensor, REAL fixtures (4).
-// (t92-sensor-fire.sh:397-505)
+// (t92-sensor-fire.sh)
 // ============================================================
 
-/** run_failed_md_real (t92-sensor-fire.sh:422-454). */
+/** run_failed_md_real (t92-sensor-fire.sh). */
 function runFailedMdReal(
   id: string,
   stage: string,
@@ -738,7 +738,7 @@ function runFailedMdReal(
   expect(path).toBe(`aidlc-docs/${outname}`);
 }
 
-/** run_failed_ts_real (t92-sensor-fire.sh:458-490). */
+/** run_failed_ts_real (t92-sensor-fire.sh). */
 function runFailedTsReal(
   id: string,
   stage: string,
@@ -892,7 +892,7 @@ describe("t92 local ESLint resolution", () => {
 // ============================================================
 // Group D — Tool-unavailable (2): per-sensor script exits 127.
 // Dispatcher classifies branch b -> SENSOR_PASSED Note=tool-unavailable.
-// (t92-sensor-fire.sh:507-535)
+// (t92-sensor-fire.sh)
 // ============================================================
 
 function runToolUnavailable(id: string, stage: string, matches: string): void {
@@ -920,7 +920,7 @@ describe("t92 Group D: tool-unavailable (exit 127 -> PASSED Note)", () => {
 // ============================================================
 // Group E — Script-error fall-through (3): branches e (exit-N), f
 // (bad-output), and the detail-write-failed fallback.
-// (t92-sensor-fire.sh:537-576)
+// (t92-sensor-fire.sh)
 // ============================================================
 
 describe("t92 Group E: script-error fall-through", () => {
@@ -965,7 +965,7 @@ describe("t92 Group E: script-error fall-through", () => {
 
 // ============================================================
 // Group F — Budget override (2): stub-slow + timeout_seconds=1.
-// (t92-sensor-fire.sh:578-624)
+// (t92-sensor-fire.sh)
 // ============================================================
 
 describe("t92 Group F: budget override (timeout -> SENSOR_BUDGET_OVERRIDE)", () => {
@@ -1009,7 +1009,7 @@ describe("t92 Group F: budget override (timeout -> SENSOR_BUDGET_OVERRIDE)", () 
 
 // ============================================================
 // Group G — Concurrency (3): happy path, lock-released-across-spawn,
-// lock-orphan recovery. (t92-sensor-fire.sh:626-708)
+// lock-orphan recovery. (t92-sensor-fire.sh)
 // ============================================================
 
 describe("t92 Group G: concurrency invariants", () => {
@@ -1130,7 +1130,7 @@ console.log(JSON.stringify({ pass: true }));
 });
 
 // ============================================================
-// Group H — Detail-file body shape (4). (t92-sensor-fire.sh:710-754)
+// Group H - Detail-file body shape (4). (t92-sensor-fire.sh)
 // ============================================================
 
 function runDetailShape(id: string, stage: string, matches = ""): void {
@@ -1176,7 +1176,7 @@ describe("t92 Group H: detail-file body shape per sensor", () => {
 });
 
 // ============================================================
-// Group I — Detail-file collision-free (1). (t92-sensor-fire.sh:756-775)
+// Group I - Detail-file collision-free (1). (t92-sensor-fire.sh)
 // ============================================================
 
 describe("t92 Group I: detail-file collision-free", () => {
@@ -1201,7 +1201,7 @@ describe("t92 Group I: detail-file collision-free", () => {
 });
 
 // ============================================================
-// Group J — Audit-row required-fields (4). (t92-sensor-fire.sh:777-840)
+// Group J - Audit-row required-fields (4). (t92-sensor-fire.sh)
 // ============================================================
 
 describe("t92 Group J: audit-row required fields per event type", () => {
@@ -1264,7 +1264,7 @@ describe("t92 Group J: audit-row required fields per event type", () => {
 
 // ============================================================
 // Group K — Native manifest delegate resolves to its sibling script (4).
-// (t92-sensor-fire.sh:842-868)
+// (t92-sensor-fire.sh)
 // ============================================================
 
 function assertManifestCommandResolves(id: string): void {
@@ -1299,7 +1299,7 @@ describe("t92 Group K: source manifest delegate resolves next to dispatcher", ()
 // ============================================================
 // Group L — Validation order (3): pre-lock failures NEVER emit
 // SENSOR_FIRED. Each case uses a fresh projectDir.
-// (t92-sensor-fire.sh:870-924)
+// (t92-sensor-fire.sh)
 // ============================================================
 
 function assertNoFiredBeforeLock(args: string[]): void {
@@ -1342,7 +1342,7 @@ describe("t92 Group L: validation order (no SENSOR_FIRED pre-lock)", () => {
 
 // ============================================================
 // Group M — upstream-coverage --consumes resolution (1).
-// (t92-sensor-fire.sh:926-950)
+// (t92-sensor-fire.sh)
 // ============================================================
 
 describe("t92 Group M: upstream-coverage --consumes resolution", () => {

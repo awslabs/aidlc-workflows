@@ -7,7 +7,7 @@
 // in-process (via AIDLC_SRC from tests/harness/fixtures.ts) and asserts on its
 // content. No spawn, no LLM, no tokens - a structural file-content contract.
 //
-// Subject / history (verbatim from the .sh header, t41:2-22):
+// Subject / history (verbatim from the .sh header, t41):
 //   This is the ENGINE-CUTOVER REWRITE of t41. It formerly validated the prose
 //   orchestrator's flag-handling HANDLER STRUCTURE. At the cutover that entire
 //   dispatch surface moved into the deterministic orchestration engine

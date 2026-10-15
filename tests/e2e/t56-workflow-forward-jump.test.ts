@@ -34,15 +34,15 @@
 // THE JOURNEY (verified against the SHIPPED tools, deterministically, 2026-06-10).
 // From state-brownfield-init-done.md (Current Stage=reverse-engineering, idx
 // 2.1), `--stage requirements-analysis` (idx 2.3) resolves direction=forward
-// (aidlc-jump.ts:142-145). With state present the engine names the mutation:
+// (aidlc-jump.ts). With state present the engine names the mutation:
 // a print directive carrying `aidlc-jump.ts execute --target
 // requirements-analysis --direction forward --scope bugfix`; the conductor
 // runs it via Bash and the tool's stdout JSON lands in a tool_result.
 // executeJump's forward branch marks the in-flight intermediate
-// reverse-engineering `[S]` (jump.ts:242-264), pivots Current Stage to
-// requirements-analysis (jump.ts:313), keeps Lifecycle Phase INCEPTION
-// (jump.ts:312 — both stages are inception), and appends STAGE_JUMPED
-// (jump.ts:374) with Direction FORWARD.
+// reverse-engineering `[S]` (jump.ts), pivots Current Stage to
+// requirements-analysis (jump.ts), keeps Lifecycle Phase INCEPTION
+// (jump.ts - both stages are inception), and appends STAGE_JUMPED
+// (jump.ts) with Direction FORWARD.
 //
 // KNOWN ANSWERS (from running the SHIPPED resolve+execute on this exact
 // fixture): direction=forward · target=requirements-analysis ·
@@ -67,31 +67,31 @@
 //          untouched by the jump).
 //   5 skipped stages marked [S]
 //       -> the jump stdout JSON `stages_skipped` is exactly
-//          ["reverse-engineering"] (jump.ts:411) AND the post-run state
+//          ["reverse-engineering"] (jump.ts) AND the post-run state
 //          contains the `- [S] reverse-engineering` row. The .sh grepped a bare
 //          `\[S\]`; we pin the tool's own list AND the on-disk marker.
 //   6 reverse-engineering referenced in state
 //       -> the `- [S] reverse-engineering` row IS the reference (the stage the
 //          jump skipped past), and Current Stage === "requirements-analysis"
-//          pins where the jump landed (jump.ts:313). Stronger than the .sh's
+//          pins where the jump landed (jump.ts). Stronger than the .sh's
 //          bare substring grep.
 //   7 audit has STAGE_JUMPED
 //       -> assertAuditEvent(r,"STAGE_JUMPED") (parsed **Event**: line;
-//          jump.ts:374) + the raw **Direction**: FORWARD / **Target**:
-//          requirements-analysis field bytes (jump.ts:375,377).
+//          jump.ts) + the raw **Direction**: FORWARD / **Target**:
+//          requirements-analysis field bytes (jump.ts).
 //   8 lifecycle phase is INCEPTION
-//       -> the stdout JSON `"target_phase":"INCEPTION"` (jump.ts:410, the
+//       -> the stdout JSON `"target_phase":"INCEPTION"` (jump.ts, the
 //          origin of the state rewrite) AND readStateField(state,"Lifecycle
 //          Phase") === "INCEPTION".
 //
 // Known-answer literals (read from the SHIPPED tool / fixture, not guessed):
 //   - no-state --stage is read-only:  aidlc-orchestrate.ts emitJumpDirective no-state branch
-//   - with-state --stage names the jump: aidlc-orchestrate.ts:1366-1380 (print directive)
-//   - forward skip markers:   aidlc-jump.ts:242-264 ([S] for in-flight intermediates)
-//   - Current Stage write:    aidlc-jump.ts:313
-//   - Lifecycle Phase write:  aidlc-jump.ts:312 (target phase uppercased)
-//   - STAGE_JUMPED emit:      aidlc-jump.ts:374; Direction :375; Target :377
-//   - jump stdout JSON:       aidlc-jump.ts:406-420
+//   - with-state --stage names the jump: aidlc-orchestrate.ts (print directive)
+//   - forward skip markers:   aidlc-jump.ts ([S] for in-flight intermediates)
+//   - Current Stage write:    aidlc-jump.ts
+//   - Lifecycle Phase write:  aidlc-jump.ts (target phase uppercased)
+//   - STAGE_JUMPED emit:      aidlc-jump.ts, with its Direction and Target fields
+//   - jump stdout JSON:       aidlc-jump.ts
 //   - fixture: state-brownfield-init-done.md (Scope=bugfix, Current Stage=
 //     reverse-engineering, Completed=3, Lifecycle Phase=INCEPTION)
 //

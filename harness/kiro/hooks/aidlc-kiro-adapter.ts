@@ -46,7 +46,6 @@ import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  hookOutsideGate,
   hookStandsOutside,
   enterHookWorkflow,
   noteHelperSession,
@@ -57,14 +56,11 @@ import {
   readNextLine,
   decodeHarnessPlainText,
   terminalCommandRelay,
-  presenceFloorHolds,
   hookDebug,
   hostEnvelopeTurnText,
-  humanPresenceGuardDisabled,
   KIRO_CLI_HOST_TEMPLATES,
   kiroTurnOrigin,
   isAidlcAgentFile,
-  isAutonomousMode,
   leadingOrchestratorVerb,
   sanitizeHarnessPlainText,
   splitKiroCommandArgs,
@@ -920,43 +916,6 @@ if (target === "guard-tool-call") {
       "This was a read-only command and AIDLC already ran it this turn: do not advance the workflow. Its output has already been shown to the user; end the turn.\n",
     );
     return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
-  }
-
-  // --- human-presence floor (second exit-2 branch) ---
-  //
-  // Refuse a tool call ONLY while an approval gate is actually OPEN (a stage sits
-  // at [?] in the state file) and no HUMAN_TURN has been recorded since the last
-  // gate resolution: the hard floor that stops a model under autopilot from
-  // fabricating an approval (the verb-intercept seam above records a HUMAN_TURN
-  // on a real human turn). The gate-open predicate is load-bearing: after a
-  // legitimate approval the resolution follows the turn's HUMAN_TURN, and without
-  // it the floor would block the mandated same-turn continuation into the next
-  // stage. Distinct from the roll-forward latch above. Carve-outs mirror the core
-  // gate: autonomous Construction (swarm/Bolt) first, then the deterministic
-  // off-switch, then no-open-gate. Fail-open on any read/parse error: advisory,
-  // must never wedge a legitimate turn. A conversation that has not joined the
-  // selected workflow is not held at that workflow's gates.
-  const floorWorkflow = enterHookWorkflow(cwd, kiro.session_id);
-  try {
-    if (hookOutsideGate(floorWorkflow)) return 0;
-    const content = existsSync(stateFilePath(cwd))
-      ? readFileSync(stateFilePath(cwd), "utf-8")
-      : null;
-    if (isAutonomousMode(content)) return 0; // autonomous: never block
-    if (humanPresenceGuardDisabled()) return 0; // deterministic off-switch
-
-    // The shared rule: a gate the person must answer, and no turn of theirs
-    // since it opened (see presenceFloorHolds).
-    if (presenceFloorHolds(cwd, content, String(kiro.tool_input?.command ?? ""))) {
-      process.stderr.write(
-        // Kiro shows this to the person too: one line they can read, and the
-        // SKILL keys the agent's step on the same sentence.
-        "Nothing runs until you answer the approval question.\n",
-      );
-      return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
-    }
-  } catch { /* fail open: advisory presence floor */ } finally {
-    floorWorkflow.restore();
   }
 
   return 0;

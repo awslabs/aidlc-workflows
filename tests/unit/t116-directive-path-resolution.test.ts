@@ -9,25 +9,25 @@
 //   - produces resolve under the directive's OWN stage (the node IS the producer).
 //   - consumes resolve under their PRODUCING stage (a consumed artifact lives in
 //     the dir of the one stage that produces it — docs/reference/
-//     16-artifact-vocabulary.md:20-24, 44-48 — not the consuming stage's dir).
+//     16-artifact-vocabulary.md - not the consuming stage's dir).
 //   - per-unit Construction stages (for_each: unit-of-work) inject a {unit-name}
 //     segment, applied to whichever stage OWNS the file.
 //
 // Source under test (dist/claude/.claude/tools/aidlc-orchestrate.ts):
-//   :619 resolveArtifactPath(name, owner, unit)
+//   resolveArtifactPath(name, owner, unit)
 //          - codekb owner: aidlc/spaces/<space>/codekb/<repo>/<name>.md (the
 //            isCodekb arm — fires for produces[] AND consumes[] of a codekb stage
 //            like reverse-engineering, dropping the per-intent record tail).
 //          - non-per-unit: aidlc-docs/<owner.phase>/<owner.slug>/<name>.md
 //          - per-unit:     aidlc-docs/construction/<unit>/<owner.slug>/<name>.md
-//   :639 resolveConsumePath(name, node, unit) — keys on producersOf(name)[0],
+//   resolveConsumePath(name, node, unit) - keys on producersOf(name)[0],
 //          NOT the consuming node (1:1 producer rule); orphan fallback to node.
-//   :651 projectTypeFrom(stateContent) — reads "Project Type", lowercased to
+//   projectTypeFrom(stateContent) - reads "Project Type", lowercased to
 //          "brownfield" | "greenfield" | null.
-//   :670 resolveConsumes(consumes, node, projectType, unit) — drops a consume
+//   resolveConsumes(consumes, node, projectType, unit) - drops a consume
 //          whose conditional_on != projectType (when projectType is non-null).
-//   :692 resolveProduces(node, unit) — every produces name resolves (no filter).
-//   :742 buildRunStageDirective(...) — assembles the directive with the resolved
+//   resolveProduces(node, unit) - every produces name resolves (no filter).
+//   buildRunStageDirective(...) - assembles the directive with the resolved
 //          consumes[]/produces[] arrays.
 // NONE of these are exported (the tool has zero `export`s — verified), so the
 // resolution is only observable on the directive the spawned engine emits to
@@ -37,7 +37,7 @@
 // .sh drove (`bun "$TOOL" next ... 2>&1` then python-parsed the JSON). An
 // in-process twin is IMPOSSIBLE here: the functions are unreachable from TS.
 //
-// VEHICLE (mirrors the .sh's emit_for, t116:51-63): a WITH-STATE jump now emits
+// VEHICLE (mirrors the .sh's emit_for, t116): a WITH-STATE jump now emits
 // a `print` naming aidlc-jump.ts execute (NOT a run-stage; pinned by t114/t117/
 // t118), so the path-resolution behaviour is reached via the Branch-10 happy
 // path — seed a fixture, pivot Current Stage to the target slug AND mark its
@@ -143,6 +143,7 @@ interface RunStageDirective {
   support_agents: string[];
   mode: string;
   inline_context_paths: string[];
+  lead_persona?: { path: string; text: string };
   rules_in_context: string[];
   consumes: string[];
   consumes_absent?: Array<{ path: string; expected: boolean }>;
@@ -151,7 +152,7 @@ interface RunStageDirective {
 }
 
 /**
- * emit_for (t116:51-63): seed a state fixture into a fresh temp project, pivot
+ * emit_for (t116): seed a state fixture into a fresh temp project, pivot
  * Current Stage to the target slug, mark the target's checkbox in-flight ([-]),
  * then run bare `next` and return the parsed run-stage directive.
  *
@@ -652,13 +653,18 @@ describe("t116 inline context roster", () => {
     for (const path of directive.rules_in_context) {
       expect(existsSync(join(projectDir, ...path.split("/"))), path).toBe(true);
     }
+    // The step carries the lead's persona; the supports' personas are listed.
+    expect(directive.lead_persona?.path).toBe(`.claude/agents/${directive.lead_agent}.md`);
+    expect(directive.inline_context_paths).not.toContain(`.claude/agents/${directive.lead_agent}.md`);
     for (const agent of [
       directive.lead_agent,
       ...directive.support_agents,
     ]) {
-      expect(directive.inline_context_paths).toContain(
-        `.claude/agents/${agent}.md`,
-      );
+      if (agent !== directive.lead_agent) {
+        expect(directive.inline_context_paths).toContain(
+          `.claude/agents/${agent}.md`,
+        );
+      }
       expect(
         directive.inline_context_paths.some((path) =>
           path.startsWith(`.claude/knowledge/${agent}/`)
@@ -699,7 +705,8 @@ describe("t116 inline context roster", () => {
     const directive = emitFor("state-construction.md", "user-stories");
     expect(directive.mode).toBe("mob");
     expect(directive.lead_agent).toBe("aidlc-product-agent");
-    expect(directive.inline_context_paths).toContain(
+    expect(directive.lead_persona?.path).toBe(".claude/agents/aidlc-product-agent.md");
+    expect(directive.inline_context_paths).not.toContain(
       ".claude/agents/aidlc-product-agent.md",
     );
     expect(
@@ -719,7 +726,7 @@ describe("t116 inline context roster", () => {
     }
   });
 
-  test("18b: a mob stage's lead reads its project knowledge right after its persona", () => {
+  test("18b: a mob stage's lead gets its persona in the step and reads its project knowledge first", () => {
     const own = `aidlc/spaces/${DEFAULT_SPACE}/knowledge/aidlc-product-agent/stories-conventions.md`;
     const { directive } = emitForWithProject("state-construction.md", "user-stories", (proj) => {
       const absolute = join(proj, ...own.split("/"));
@@ -727,13 +734,13 @@ describe("t116 inline context roster", () => {
       writeFileSync(absolute, "# Story conventions\n", "utf-8");
     });
     expect(directive.mode).toBe("mob");
-    expect(directive.inline_context_paths[0]).toBe(".claude/agents/aidlc-product-agent.md");
-    expect(directive.inline_context_paths[1]).toBe(own);
+    expect(directive.lead_persona?.path).toBe(".claude/agents/aidlc-product-agent.md");
+    expect(directive.inline_context_paths[0]).toBe(own);
   });
 
-  // Kiro IDE's lead reads the persona copy without the tool permissions; it is
-  // still the persona, so it still comes first and the team's knowledge second.
-  test("18c: on Kiro IDE a mob lead reads its persona copy first, then its project knowledge", () => {
+  // Kiro IDE's lead gets the persona copy without the tool permissions, in the
+  // step, and reads the team's knowledge first.
+  test("18c: on Kiro IDE a mob lead gets its persona copy in the step, then reads its project knowledge", () => {
     const own = `aidlc/spaces/${DEFAULT_SPACE}/knowledge/aidlc-product-agent/stories-conventions.md`;
     const { directive } = emitForWithProject("state-construction.md", "user-stories", (proj) => {
       const absolute = join(proj, ...own.split("/"));
@@ -741,8 +748,8 @@ describe("t116 inline context roster", () => {
       writeFileSync(absolute, "# Story conventions\n", "utf-8");
     }, join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "tools", "aidlc-orchestrate.ts"));
     expect(directive.mode).toBe("mob");
-    expect(directive.inline_context_paths[0]).toBe(".kiro/aidlc-common/personas/aidlc-product-agent.md");
-    expect(directive.inline_context_paths[1]).toBe(own);
+    expect(directive.lead_persona?.path).toBe(".kiro/aidlc-common/personas/aidlc-product-agent.md");
+    expect(directive.inline_context_paths[0]).toBe(own);
   });
 
   test("19: fully-dispatched modes carry no inline context; the code plan step is the conductor's own, with nothing to read", () => {

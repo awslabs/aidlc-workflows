@@ -18,7 +18,7 @@
 //   - the jump landed on disk: aidlc-state.md `Current Stage` == approval-handoff.
 //   - parseMemoryHeadings(file).total == the visible `- ` entry count on disk —
 //     (parser <-> disk agreement), asserted by importing the
-//     exported helper from the distributable (aidlc-lib.ts:982; import-safe under
+//     exported helper from the distributable (aidlc-lib.ts; import-safe under
 //     bun without loading terminal driver dependencies).
 //   - RENDER (the tui-only value-add the SDK path is blind to): the captured
 //     grid contains both numbered approval choices, not merely a generic menu

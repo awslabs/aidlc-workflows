@@ -56,6 +56,8 @@ export type ProjectionDescriptor = {
   schemaVersion: 1;
   distribution: string;
   productName: string;
+  choiceName?: string;
+  choiceNote?: string;
   configNextStep: string;
   firstRunSteps?: string[];
   editorTerminalApp?: string;
@@ -352,6 +354,16 @@ export function jsonEntriesIsSafe(integration: Pick<RootIntegration, "path" | "p
   return integration.policy === "json-entries";
 }
 
+// The lists pad a name to 16 columns, so a name leaves at least one space.
+const CHOICE_NAME = /^[A-Za-z0-9][A-Za-z0-9 .,()+-]{0,14}$/;
+const CHOICE_NOTE = /^[A-Za-z0-9][A-Za-z0-9 .,()+-]{0,59}$/;
+
+/** Whether a harness-list name and note are text the lists can show; the packager and the reader both ask. */
+export function harnessChoiceTextIsPlain(text: { choiceName?: unknown; choiceNote?: unknown }): boolean {
+  return (text.choiceName === undefined || (typeof text.choiceName === "string" && CHOICE_NAME.test(text.choiceName))) &&
+    (text.choiceNote === undefined || (typeof text.choiceNote === "string" && CHOICE_NOTE.test(text.choiceNote)));
+}
+
 export function validateProjectionDescriptor(
   root: string,
   stamp: ProjectionStamp,
@@ -369,6 +381,10 @@ export function validateProjectionDescriptor(
     descriptor.configNextStep.trim().length === 0
   ) {
     throw new Error(`${root}: projection identity is invalid`);
+  }
+  // Shown in the harness lists as they are, so only plain words reach the terminal.
+  if (!harnessChoiceTextIsPlain(descriptor)) {
+    throw new Error(`${root}: projection harness-list text is invalid`);
   }
   if (
     (descriptor.firstRunSteps !== undefined &&
@@ -851,9 +867,11 @@ export function sha256FileMatching(path: string, known: readonly (string | undef
 // Kiro CLI's upgrade for its 3.0 engine rewrites each agent JSON in
 // .kiro/agents into Kiro's own format, which has a `permissions` block no
 // agent file AI-DLC ships has, and keeps the file it replaced beside it as
-// `<name>.json.bak`. Kiro writes the backup once, at its first upgrade, so the
-// shape is the sign, not the backup's hash. Config keeps such a file as it is,
-// and doctor does not count it as the person's change.
+// `<name>.json.bak`, then `.json.bak.1` and on when it upgrades a plain file
+// put back in its place (kiro-cli 2.29.0), so the shape is the sign, not a
+// backup's hash. Config keeps such a file as it is unless the release changes
+// what it allows and Kiro upgrades it again by itself, and doctor does not count
+// it as the person's change.
 export function kiroUpgradedAgentFile(projectDir: string, rel: string): boolean {
   if (!/^\.kiro\/agents\/[^/]+\.json$/.test(rel)) return false;
   const file = join(projectDir, rel);
@@ -865,6 +883,63 @@ export function kiroUpgradedAgentFile(projectDir: string, rel: string): boolean 
   } catch {
     return false;
   }
+}
+
+// The backup of the file Kiro last upgraded at `rel`: its highest numbered
+// `.json.bak.N`, else `.json.bak`.
+export function kiroUpgradeBackup(projectDir: string, rel: string): string | null {
+  const file = join(projectDir, rel);
+  const regular = (path: string): boolean => existsSync(path) && lstatSync(path).isFile();
+  const prefix = `${basename(file)}.bak.`;
+  const numbered = readdirSync(join(file, ".."))
+    .filter((name) => name.startsWith(prefix) && /^\d+$/.test(name.slice(prefix.length)))
+    .sort((a, b) => Number(b.slice(prefix.length)) - Number(a.slice(prefix.length)))
+    .map((name) => join(file, "..", name))
+    .find(regular);
+  return numbered ?? (regular(`${file}.bak`) ? `${file}.bak` : null);
+}
+
+// What a Kiro CLI agent file lets run and refuses, by exact entry:
+// `allowedTools` and every `toolsSettings.<tool>.allowed*` list, and every
+// `denied*` list.
+function kiroPermissionEntries(agent: unknown): { allow: Set<string>; deny: Set<string> } {
+  const allow = new Set<string>();
+  const deny = new Set<string>();
+  const record = (value: unknown): Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const entries = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+  for (const entry of entries(record(agent).allowedTools)) allow.add(`allowedTools ${entry}`);
+  for (const [tool, settings] of Object.entries(record(record(agent).toolsSettings))) {
+    for (const [key, list] of Object.entries(record(settings))) {
+      const into = key.startsWith("allowed") ? allow : key.startsWith("denied") ? deny : null;
+      for (const entry of into === null ? [] : entries(list)) into!.add(`${tool}.${key} ${entry}`);
+    }
+  }
+  return { allow, deny };
+}
+
+// Whether `release` lacks an allow entry `backup` has, or has a deny entry it
+// lacks. A rewritten entry counts as well, so this marks a change in what the
+// file allows, not only a narrowing.
+export function kiroAllowChanged(backup: unknown, release: unknown): boolean {
+  const before = kiroPermissionEntries(backup);
+  const after = kiroPermissionEntries(release);
+  return [...before.allow].some((entry) => !after.allow.has(entry)) ||
+    [...after.deny].some((entry) => !before.deny.has(entry));
+}
+
+// Kiro's upgrade keeps every field of the file it came from as it was but
+// `tools` and `hooks`, which it rewrites, and adds `permissions` (kiro-cli
+// 2.29.0). Whether `upgraded` still holds `backup`'s kept fields unchanged.
+export function kiroUpgradeKeptFields(upgraded: unknown, backup: unknown): boolean {
+  const rewritten = new Set(["tools", "hooks", "permissions"]);
+  const fields = (value: unknown): Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const a = fields(upgraded);
+  const b = fields(backup);
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)].filter((key) => !rewritten.has(key)));
+  return [...keys].every((key) => JSON.stringify(a[key]) === JSON.stringify(b[key]));
 }
 
 // Earlier releases' space switch pointed the tool's include files at that

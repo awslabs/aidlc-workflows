@@ -95,7 +95,7 @@
 // Usage (registered in .kiro/hooks/aidlc-*.json — the IDE's v2 hook schema,
 // {"version":"v1","hooks":[{name,trigger,matcher,action}]}):
 //   bun .kiro/hooks/aidlc-kiro-adapter.ts <target>
-// where <target> ∈ record-human-turn | enforce-approval-gate | session-start |
+// where <target> ∈ record-human-turn | session-start |
 //                  audit-and-sensors | rebuild-stage-graph |
 //                  sync-workflow-state | log-subagent | continue-workflow |
 //                  session-end | verb-intercept | terminal-command-guard |
@@ -123,18 +123,11 @@ import {
   fenceCommandOutput,
   relayAsTextBlock,
   terminalCommandRelay,
-  planApprovalAskIsOpen,
-  presenceFloorHolds,
   clearKiroIdeLegacyPlanApprovalHost,
   clearPlanApprovalViolation,
   getField,
   hookChildEnv,
   hookDebug,
-  hookExecutionRecoveryText,
-  humanPresenceGuardDisabled,
-  NOT_ANSWERED_YET_STEP,
-  promptHookRanRecently,
-  isAutonomousMode,
   isSwitchableGuardFence,
   listIntentDirs,
   listSpaces,
@@ -235,9 +228,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // payload acquisition entirely and keeps its zero-latency path.
 const PAYLOAD_TARGETS = new Set([
   "audit-and-sensors",
-  // The approval gate reads the payload session: concurrent chats in one IDE
-  // process each have their own workflow and gate.
-  "enforce-approval-gate",
   "log-subagent",
   "plan-approval-guard",
   "rebuild-stage-graph",
@@ -2598,10 +2588,6 @@ if (target === "terminal-command-guard") {
   if (invocation === null) return 0;
   const command = classifyTerminalCommand(invocation.args, projectDir, ide.sessionId?.trim() || undefined);
   if (command === null) return 0;
-  // Kiro runs every PreToolUse hook even after one blocks, so while the
-  // approval-gate hook refuses this call, running the command here would still
-  // act, for example archive an intent, before the person replies.
-  if (approvalGateAwaitsHuman()) return 0;
   const result = runTerminalCommand(command);
   if (result === null) return 0;
   writeTerminalLatch(sessionId, turn, invocation, result);
@@ -2609,102 +2595,11 @@ if (target === "terminal-command-guard") {
   return 2;
 }
 
-// Whether the workflow this chat selects has the engine's Plan Approval
-// question open (planApprovalAskIsOpen), judged in that workflow as the gate
-// floor judges it. A chat outside the workflow never has it open.
-function planApprovalQuestionOpen(pd: string, sessionId: string): boolean {
-  try {
-    const workflow = enterHookWorkflow(pd, sessionId);
-    try {
-      return !hookOutsideGate(workflow) && planApprovalAskIsOpen(pd);
-    } finally {
-      workflow.restore();
-    }
-  } catch {
-    return false;
-  }
-}
-
 // UserPromptSubmit forwards to the core human-turn hook below. That hook
 // applies typed switches before its state-file gate, then records HUMAN_TURN
 // and the conversational Stop marker only when workflow state exists.
 // The adapter separately tracks empty prompts against the terminal turn so
 // lowering is refused when IDE 1.0.242 hides what the person typed.
-// --- enforce-approval-gate: the preToolUse human-presence floor ---
-//
-// Run by aidlc-guard-tool-call.json (PreToolUse) for every tool but a read,
-// which cannot answer or change anything. Hard-blocks tool calls ONLY while
-// an approval gate is actually OPEN (a stage sits at [?] in the state file) and
-// no HUMAN_TURN has been recorded since the last gate resolution - the exit-2
-// floor behind the core handleApprove check. The gate-open predicate is
-// load-bearing: after a legitimate approval the resolution follows the turn's
-// HUMAN_TURN, and without it the floor would block the mandated same-turn
-// continuation into the next stage. Carve-outs mirror the core gate: autonomous
-// Construction (swarm/Bolt has no human at the gate) and the deterministic
-// off-switch. The IDE gives no cwd payload, so the project dir is process.cwd().
-// All read from disk. Fail-open on any read/parse error (advisory).
-function approvalGateAwaitsHuman(): boolean {
-  const pd = process.cwd();
-  // The payload session stays pinned for the whole check, so the gate state and
-  // the human-turn evidence come from the workflow this conversation selects,
-  // not the one the shared cursor or process ancestry names.
-  const workflow = enterHookWorkflow(pd, resolvedPlanApprovalSessionId(ide));
-  try {
-    if (hookOutsideGate(workflow)) return false;
-    const sp = stateFilePath(pd);
-    const content = existsSync(sp) ? readFileSync(sp, "utf-8") : null;
-    // Carve-outs first: autonomous Construction, the deterministic off-switch,
-    // and no-open-gate (nothing awaits approval, so nothing to floor).
-    if (isAutonomousMode(content)) return false;
-    if (humanPresenceGuardDisabled()) return false;
-    // The shared rule: a gate the person must answer, and no turn of theirs
-    // since it opened (see presenceFloorHolds).
-    return presenceFloorHolds(pd, content, String(ide.toolArgs?.command ?? ""));
-  } catch {
-    return false; // advisory - any read/parse failure fails open
-  } finally {
-    workflow.restore();
-  }
-}
-
-// The words the agent relays when the person's answer was not recorded: what
-// happened and the step for the tool they are in, never why. The step is the
-// one doctor names (the harness's hook-activation recovery), so the two never
-// differ. A Kiro IDE hook process carries VSCODE_IPC_HOOK or VSCODE_PID and a
-// Kiro CLI one carries neither (docs/reference/kiro-ide-hook-payload.md), so
-// inside Kiro IDE the person gets its step alone: everything before the
-// recovery's Kiro CLI sentence.
-function unrecordedAnswerRelay(projectDir: string): string {
-  const said = "Your answer was not recorded, so you don't need to answer again.";
-  const recovery = hookExecutionRecoveryText(projectDir);
-  const otherTools = recovery.indexOf(" In Kiro CLI,");
-  const inKiroIde = Boolean(process.env.VSCODE_IPC_HOOK?.trim() || process.env.VSCODE_PID?.trim());
-  if (inKiroIde && otherTools > 0) {
-    return `Tell them exactly this, with nothing about why: "${said} ${recovery.slice(0, otherTools)}"`;
-  }
-  const lines = otherTools > 0 ? recovery.slice(otherTools + 1) : recovery;
-  return `Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "${said}" ${lines}`;
-}
-
-if (target === "enforce-approval-gate") {
-  if (approvalGateAwaitsHuman()) {
-    // The prompt hook ran for this work and nothing moved since (its heartbeat
-    // is fresh): the person has not answered the gate yet, so the one step is
-    // to end the turn, and the person hears nothing. Only when that heartbeat
-    // is missing or far behind could a reply have gone unrecorded, and the
-    // relay says what happened and the tool's own step.
-    const pd = process.cwd();
-    process.stderr.write(
-      "An approval is waiting for the person's answer, so nothing runs until they give it: end the turn. " +
-        (promptHookRanRecently(pd)
-          ? `${NOT_ANSWERED_YET_STEP}\n`
-          : `If they already answered, that answer was not recorded. ${unrecordedAnswerRelay(pd)} ` +
-            "If that does not fix it, `/aidlc --doctor` shows what else to fix.\n"),
-    );
-    return 2; // Kiro reject contract: exit 2 + stderr BLOCKS the tool call.
-  }
-  return 0;
-}
 
 // Extract the absolute path of the file a write tool just touched from the
 // IDE's toolResult prose. Captured PostToolUse write inputs are empty, so this
@@ -3143,14 +3038,11 @@ function buildForward(): Forward {
           },
         };
       }
-      // While the engine asks the person to approve the plan, a call to one of
-      // their MCP servers goes to the core guard marked as theirs, which runs it
-      // like their other requests beside the build; Kiro's own card and their
-      // Kiro settings decide it. Outside that question it takes the checks below.
-      if (
-        isKiroMcpTool(toolName) &&
-        planApprovalQuestionOpen(projectDir, resolvedPlanApprovalSessionId(ide))
-      ) {
+      // A call to one of the person's MCP servers goes to the core guard marked
+      // as theirs, which runs it like their other requests at any point of Code
+      // Generation; Kiro's own card and their Kiro settings decide it. It never
+      // takes the argument-less write checks below, which are for Kiro's writes.
+      if (isKiroMcpTool(toolName)) {
         return {
           hook: "aidlc-plan-approval-guard.ts",
           input: {

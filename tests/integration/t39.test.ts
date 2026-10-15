@@ -18,7 +18,7 @@
 // phase at the init->first-phase handoff. It writes the `## Phase Progress`
 // block with each phase tagged Verified/Active/Pending/Skipped
 // (handleIntentCreateStateBuild). The audit row shape is `**Event**: <TYPE>` at
-// line start (aidlc-audit.ts:258), exactly what the .sh greps.
+// line start (aidlc-audit.ts), exactly what the .sh greps.
 //
 // 11 scopes × 3 assertions = 33 expect()-bearing test() cases here
 // (one describe per scope, 3 test()s each).
@@ -27,7 +27,7 @@
 // (createTestProject, which toPortablePath-converts on Windows so the
 // state.md / audit.md the tool writes via forward-slash path helpers
 // round-trip when read back). No seed is needed — init bootstraps audit.md +
-// aidlc-state.md from scratch (aidlc-utility.ts:1766/2099), matching the .sh,
+// aidlc-state.md from scratch (aidlc-utility.ts), matching the .sh,
 // which created bare projects and let init populate both. All temp dirs
 // cleaned in afterAll. Nothing is written under tests/fixtures/**.
 

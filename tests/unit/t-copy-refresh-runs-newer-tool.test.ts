@@ -28,8 +28,10 @@ const FAKE_GH = join(REPO_ROOT, "tests", "fixtures", "bin", process.platform ===
 const NEWER = "2.99.0";
 const OLDER = "2.10.0";
 const MARK = "T_COPY_NEWER_TOOL_RAN";
-// The block 2.11.0 shipped in .codex/config.toml and later releases retired.
-const POINTER = '[shell_environment_policy]\nset = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }\n\n';
+// The member 2.11.0 shipped in .codex/config.toml, and the one later releases
+// ship empty, since 2.11.0's own refresh cannot take it out.
+const POINTER = 'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }';
+const EMPTY_POINTER = 'set = { AIDLC_RULES_DIR = "" }';
 
 const temporary: string[] = [];
 afterAll(() => {
@@ -75,7 +77,7 @@ function codexRelease(
   if (!options.stampOnly) writeFileSync(own, readFileSync(own, "utf-8").replace(`"${AIDLC_VERSION}"`, `"${version}"`));
   if (options.pointer) {
     const config = join(root, ".codex", "config.toml");
-    writeFileSync(config, readFileSync(config, "utf-8").replace("[sandbox_workspace_write]", `${POINTER}[sandbox_workspace_write]`));
+    writeFileSync(config, readFileSync(config, "utf-8").replace(EMPTY_POINTER, POINTER));
   }
   if (options.mark) {
     const tool = join(root, dir, "tools", "aidlc.ts");
@@ -158,10 +160,10 @@ function copiedAt2110(): string {
   expect(setup.status, setup.out).toBe(0);
   const config = join(project, ".codex", "config.toml");
   const shipped = readFileSync(config, "utf-8");
-  expect(shipped).toContain(POINTER);
+  expect(shipped).toContain(`[shell_environment_policy]\n${POINTER}`);
   writeFileSync(config, shipped.replace(
-    POINTER,
-    '[shell_environment_policy]\ninherit = "core"\nset = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory", MY_VAR = "mine" }\n\n',
+    `[shell_environment_policy]\n${POINTER}`,
+    '[shell_environment_policy]\ninherit = "core"\nset = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory", MY_VAR = "mine" }',
   ));
   return project;
 }
@@ -188,9 +190,8 @@ describe("a copied project's refresh from a newer release runs that release's ow
       expect(ran).toContain(basename(dirname(runtime)));
       expect(ran.endsWith(join("codex", ".codex", "tools", "aidlc.ts"))).toBe(true);
       const after = readFileSync(config, "utf-8");
-      expect(after).not.toContain("AIDLC_RULES_DIR");
       expect(after).toContain('inherit = "core"');
-      expect(after).toContain('set = { MY_VAR = "mine" }');
+      expect(after).toContain('set = { AIDLC_RULES_DIR = "", MY_VAR = "mine" }');
       if (endings === "CRLF") expect(after.replace(/\r\n/g, "")).not.toContain("\n");
       expect(JSON.parse(readFileSync(join(project, ".codex", "tools", "data", "aidlc-stamp.json"), "utf-8")).frameworkVersion)
         .toBe(NEWER);
@@ -319,7 +320,7 @@ describe("a copied project's refresh from a newer release runs that release's ow
       expect(out).toContain(ranLine(NEWER));
       expect(existsSync(mark), out).toBe(true);
       expect(out).not.toContain("conflict");
-      expect(readFileSync(join(project, ".codex", "config.toml"), "utf-8")).toContain('set = { MY_VAR = "mine" }');
+      expect(readFileSync(join(project, ".codex", "config.toml"), "utf-8")).toContain('set = { AIDLC_RULES_DIR = "", MY_VAR = "mine" }');
       expect(JSON.parse(readFileSync(join(project, ".codex", "tools", "data", "aidlc-stamp.json"), "utf-8")).frameworkVersion)
         .toBe(NEWER);
     } finally {

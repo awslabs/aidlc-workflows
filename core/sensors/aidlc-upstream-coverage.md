@@ -4,7 +4,7 @@ kind: deterministic
 command: {{INVOKE}} engine sensor-upstream-coverage
 default_severity: advisory
 fire_on: gate
-description: Checks the stage's deliverables reference the upstream artifacts the stage frontmatter declares it consumes
+description: Checks the stage's deliverables reference the upstream artifacts the stage frontmatter declares it requires
 category: document-shape
 matches: "**/{aidlc-docs,intents,codekb}/**"
 input_schema:
@@ -21,8 +21,10 @@ timeout_seconds: 300
 # upstream-coverage sensor
 
 Reads the stage frontmatter `consumes:` list and checks the stage's
-deliverables reference each upstream artifact. A reference counts in any
-of the forms the framework's artifacts actually use:
+deliverables reference each required upstream artifact that exists. An
+optional one (`required: false`) is not checked, because it may not have
+informed the output, unless the stage lists it under `cites:`. A reference counts in any of the forms the framework's
+artifacts actually use:
 
 - the artifact slug as a standalone token (not embedded in a longer
   kebab token: `requirements` inside `nfr-requirements` does not count)
@@ -41,6 +43,6 @@ Pure derivation from frontmatter - no per-stage config needed.
 
 ## Failure mode
 
-Emits `SENSOR_FAILED` and writes detail listing artifacts declared in
-`consumes:` that appear in none of the stage's deliverables in any
+Emits `SENSOR_FAILED` and writes detail listing required or cited artifacts
+declared in `consumes:` that appear in none of the stage's deliverables in any
 accepted form.

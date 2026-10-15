@@ -196,8 +196,8 @@ every default except the provider, where it chose Amazon Bedrock:
     2. Codex CLI
     3. GitHub Copilot
     4. Cursor
-    5. Kiro CLI
-    6. Kiro IDE
+    5. Kiro CLI (V2)
+    6. Kiro            Kiro IDE and Kiro CLI on its v3 engine
     7. opencode
   Harness [1]:
   Using Claude Code.
@@ -323,8 +323,8 @@ up, with no default:
     2. Codex CLI
     3. GitHub Copilot
     4. Cursor
-    5. Kiro CLI
-    6. Kiro IDE
+    5. Kiro CLI (V2)
+    6. Kiro            Kiro IDE and Kiro CLI on its v3 engine
     7. opencode
   Harness [1-7]:
 
@@ -449,8 +449,8 @@ this kind of work. Here it picked `mvp`; your words may get another:
 ```text
  Plan
  I'd run the "mvp" plan for: "Build a REST API for inventory management" - 19 stages, 19 approval
- gates, 5 stages repeat per unit of work in Construction; lead agent only. Do you want me to go
- ahead with it, use a different plan, or tailor one to this task?
+ gates, 5 stages repeat per unit of work in Construction. Do you want me to go ahead with it, use
+ a different plan, or tailor one to this task?
  > 1. Go ahead with the "mvp" plan
       19 stages: skips operations and ships the core API.
    2. Use a different plan
@@ -573,7 +573,6 @@ aidlc/spaces/default/intents/261013-inventory-rest-api/ideation/intent-capture/.
 
 Stage: Intent Capture & Framing
 Review outcome: Concerns remain for your decision.
-Why now: First review completed.
 
 | ID   | Severity | Where                                      | Status |
 |------|----------|--------------------------------------------|--------|
@@ -612,13 +611,11 @@ the stage back to address them (say what to change, or that you want the
 follow-up question). This run approved:
 
 ```text
-Progress: 1/19 in-scope stages complete (4/33 overall) | 1/4 IDEATION. Next: Feasibility & Constraints
+Progress: 1 of 19 stages done. Next: Feasibility & Constraints.
 Now working on Feasibility & Constraints, wearing the architect hat.
 ```
 
-The overall count includes the three setup stages that ran when the record was
-created. The record for this piece of work now holds (trimmed to the main
-files):
+The record for this piece of work now holds (trimmed to the main files):
 
 ```text
 aidlc/spaces/default/intents/261013-inventory-rest-api/
@@ -642,8 +639,8 @@ The steps are the same everywhere; these differ:
 | Harness | Config value | Open | Invoke |
 | --- | --- | --- | --- |
 | Claude Code | `claude` | `claude` | `/aidlc` |
-| Kiro IDE | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker | `/aidlc` |
-| Kiro CLI (legacy) | `kiro` | `kiro-cli chat` | `/aidlc` |
+| Kiro (Kiro IDE, Kiro CLI on v3) | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker, or run `kiro-cli` in the project | `/aidlc` |
+| Kiro CLI (V2) | `kiro` | `kiro-cli chat` | `/aidlc` |
 | Codex CLI | `codex` | `codex` | `$aidlc` |
 | Cursor | `cursor` | Open Cursor or run `agent` | `/aidlc` |
 | opencode | `opencode` | `opencode` | `/aidlc` |
@@ -654,8 +651,8 @@ After config, complete the one step config names for your tool:
 | Harness | Typical action |
 | --- | --- |
 | Claude Code | If Claude Code is already open in this folder, exit it and start it again |
-| Kiro IDE | Open the configured project, then choose **aidlc** in the chat panel's agent picker |
-| Kiro CLI (legacy) | Start `kiro-cli chat`; the project selects the AI-DLC agent |
+| Kiro (Kiro IDE, Kiro CLI on v3) | Open the configured project, then choose **aidlc** in the chat panel's agent picker, or start `kiro-cli` in the project |
+| Kiro CLI (V2) | Start `kiro-cli chat`; the project selects the AI-DLC agent |
 | Codex CLI | Approve the hook trust prompt or apply the generated trust seed |
 | Cursor | Open the configured project or run `agent` |
 | opencode | Start `opencode` in the project |
@@ -663,9 +660,9 @@ After config, complete the one step config names for your tool:
 
 The welcome message is Claude Code's alone. AI-DLC draws its own status line
 on Claude Code; on Codex, setup offers Codex's built-in status line, with the
-task progress AI-DLC keeps current. On Kiro CLI 2.24.1 or later, use `kiro-ide`, which pins
-Kiro's v3 engine; `kiro` is the legacy row ([Kiro CLI](harnesses/kiro-cli.md)
-says how an existing `kiro` project switches).
+task progress AI-DLC keeps current. For Kiro's v3 engine on Kiro CLI 2.24.1 or
+later, use `kiro-ide`, which pins it; `kiro` is Kiro CLI (V2)
+([Kiro CLI](harnesses/kiro-cli.md) says how an existing `kiro` project switches).
 
 In Kiro IDE, the **aidlc** agent appears in the agent picker only after you
 trust the folder and reload the window: if the Restricted Mode banner shows,

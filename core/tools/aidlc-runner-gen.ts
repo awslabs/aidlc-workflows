@@ -176,8 +176,9 @@ that flag without this skill.
    \`\`\`
 
    The engine emits one \`run-stage\` directive for \`${node.slug}\` (carrying the
-   lead agent, the resolved consumes/produces paths, the rules and sensors in
-   context, and the conductor persona on the workflow's first run-stage). When the
+   lead agent and its persona, the resolved consumes/produces paths, the rules
+   and sensors in context, and the conductor persona on the workflow's first
+   run-stage). When the
    stage's rules do not fit beside it (most stages on GitHub Copilot, and any
    stage whose memory files have grown large), \`load-steering\` parts come
    first instead. For each part, apply \`directive.rules_content\` in array

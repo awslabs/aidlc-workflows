@@ -124,8 +124,10 @@ row.
 
 Create
 `<record>/construction/{unit-name}/nfr-requirements/traceability.json`.
-Enumerate every inception `NFR{n}` applicable to this Unit and target the
-derived `NFRx.y` IDs. `N/A` requires a justification:
+Enumerate every inception `NFR{n}` in `requirements.md`, or, when User Stories
+did not run and `unit-of-work-story-map.md` gives this Unit NFR rows, the NFRs
+on those rows. Target the derived `NFRx.y` IDs; one that does not apply to this
+Unit is `N/A` in `coverage`, with the reason as its target:
 
 ```json
 {

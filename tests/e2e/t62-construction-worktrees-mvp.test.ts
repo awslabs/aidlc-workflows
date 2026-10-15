@@ -20,20 +20,20 @@
 // MECHANISM SPLIT — why this is a `mixed` twin:
 //   * Tests 1 + 3 (scope-grid EXECUTE modes) are PURE structural reads of the
 //     shipped tools/data/scope-grid.json — the exact `require($MAPPING)`
-//     observable the .sh used (t62.sh:28-34 + the assert_scope_codegen_mode
+//     observable the .sh used (t62.sh + the assert_scope_codegen_mode
 //     helper). No process, no LLM → mechanism none for these.
 //   * Test 2 (MERGE_DISPATCH_INVOKED) + Test 4 (MERGE_DISPATCH_FALLBACK) SPAWN
 //     the real `aidlc-bolt.ts dispatch-event` CLI (BUN + the tool .ts path) and
 //     assert on the audit.md it writes + the JSON envelope it prints. The
 //     emit-then-process.exit / console.log contract lives only at the process
-//     boundary (aidlc-bolt.ts:660-734 handleDispatchEvent). An in-process
+//     boundary (aidlc-bolt.ts handleDispatchEvent). An in-process
 //     handleDispatchEvent call would lose the envelope-to-stdout half the .sh
 //     observed via `>/dev/null 2>&1` + the audit-row grep.
 //   * Test 5 (v7 state fields) SPAWNS `aidlc-utility.ts init --force --scope
 //     mvp` against a fresh integration project (mirrors the .sh's
 //     setup_construction_project helper) and reads back the written aidlc-state.md. The template
-//     interpolation + disk write is the CLI seam (aidlc-utility.ts:1720
-//     handleInit → :2048-2059 the v7 state template carrying `Worktree Path`
+//     interpolation + disk write is the CLI seam (aidlc-utility.ts
+//     handleInit -> the v7 state template carrying `Worktree Path`
 //     + `Bolt Refs`).
 //
 // SUBCOMMAND UNITS credited (COLON form): the two CLI subcommands the .sh

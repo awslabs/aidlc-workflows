@@ -5,7 +5,7 @@
 //
 // Mechanism: none. We read the shipped dist/claude stage .md files in-process
 // (the same AIDLC_SRC tree t05/t87 resolve) and parse frontmatter via the
-// public parseStageFrontmatter (aidlc-lib.ts:1161). No process boundary, no
+// public parseStageFrontmatter (aidlc-lib.ts). No process boundary, no
 // argv/exit/stdout seam, no live agent. The runtime artifact-path RESOLVER
 // (aidlc-orchestrate.ts resolveArtifactPath/resolveConsumePath) is a SEPARATE
 // concern owned by P1 and is NOT exercised here — at P0 the change lives at the
@@ -15,7 +15,7 @@
 // CONTRACT under test (path literal = `aidlc/spaces/<active-space>/codekb/<repo>/`):
 //   1. RE stage `outputs:` names the space-level codekb path and KEEPS its 9 .md
 //      artifact filenames (the filenames `aidlc-validate outputs` cross-checks
-//      against the body prose, aidlc-validate.ts:51-94 — t45's invariant).
+//      against the body prose, aidlc-validate.ts - t45's invariant).
 //   2. RE stage body prose writes its artifacts to the space-level codekb path.
 //   3. The freshness/staleness marker `reverse-engineering-timestamp` is
 //      preserved in `produces:` (the marker a shared per-repo codekb needs;

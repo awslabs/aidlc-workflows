@@ -759,9 +759,8 @@ export default async ({
         const violation = aidlcBashBoundaryViolation(command, aidlcEntrypoints, await currentShellDialect());
         if (violation) throw new Error(violation);
         // State-transition guard, parallel to the Claude/Kiro/Codex PreToolUse
-        // wiring. The state CLI's ownership check remains the hard floor; this
-        // gives the conductor the same immediate redirect the other harnesses
-        // get instead of a late CLI error.
+        // wiring: runtime integrity, and a named worker's lifecycle and routing
+        // commands. A direct stage-status verb is the state CLI's own to refuse.
         const guard = await runCore(
           "aidlc-state-transition-guard.ts",
           {

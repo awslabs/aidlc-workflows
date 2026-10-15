@@ -73,14 +73,21 @@ function contextBytes(
   );
 }
 
+// The lead's persona the step carries, counted with the files it lists.
+function personaBytes(step: Record<string, unknown>): number {
+  const persona = step.lead_persona as { text?: string } | undefined;
+  return Buffer.byteLength(persona?.text ?? "", "utf-8");
+}
+
 describe("t314 minimal-scope dispatch and handoff budget", () => {
   test("Minimal context rosters are exact and byte-bounded", () => {
     // poc ships collaborators off, so intent capture carries only its lead's
     // context: the architect who supports it is not brought in.
     const intent = directive("poc", "intent-capture");
     const intentPaths = intent.inline_context_paths as string[];
+    // The step carries the lead's persona; the list is what the chat reads.
+    expect((intent.lead_persona as { path: string }).path).toBe(".claude/agents/aidlc-product-agent.md");
     expect(intentPaths).toEqual([
-      ".claude/agents/aidlc-product-agent.md",
       ".claude/knowledge/aidlc-shared/ai-dlc-principles.md",
       ".claude/knowledge/aidlc-shared/rules-reading.md",
       ".claude/knowledge/aidlc-shared/verification.md",
@@ -88,13 +95,13 @@ describe("t314 minimal-scope dispatch and handoff budget", () => {
       ".claude/knowledge/aidlc-product-agent/requirements-guide.md",
     ]);
     expect(
-      contextBytes(intent.projectDir as string, intentPaths),
+      contextBytes(intent.projectDir as string, intentPaths) + personaBytes(intent),
     ).toBeLessThanOrEqual(50_000);
 
     const requirements = directive("bugfix", "requirements-analysis");
     const requirementPaths = requirements.inline_context_paths as string[];
+    expect((requirements.lead_persona as { path: string }).path).toBe(".claude/agents/aidlc-product-agent.md");
     expect(requirementPaths).toEqual([
-      ".claude/agents/aidlc-product-agent.md",
       ".claude/knowledge/aidlc-shared/ai-dlc-principles.md",
       ".claude/knowledge/aidlc-shared/brownfield.md",
       ".claude/knowledge/aidlc-shared/rules-reading.md",
@@ -103,7 +110,7 @@ describe("t314 minimal-scope dispatch and handoff budget", () => {
       ".claude/knowledge/aidlc-product-agent/requirements-guide.md",
     ]);
     expect(
-      contextBytes(requirements.projectDir as string, requirementPaths),
+      contextBytes(requirements.projectDir as string, requirementPaths) + personaBytes(requirements),
     ).toBeLessThanOrEqual(40_000);
   });
 

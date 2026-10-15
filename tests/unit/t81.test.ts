@@ -17,7 +17,7 @@
 //   orchestrator-overrides-bolt-plan-marker semantics (Reason:
 //   bolt-plan-marker-conflict, plus Practices
 //   Stance + Bolt-Plan Marker + Bolt slug fields). The contract being pinned
-//   is that handlePracticesEvent (aidlc-state.ts:1006-1071) accepts arbitrary
+//   is that handlePracticesEvent (aidlc-state.ts) accepts arbitrary
 //   --field "Key: Value" pairs (key and value trimmed) - discriminator-field
 //   disambiguation needs zero new tool code.
 //
@@ -201,11 +201,11 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     expect(auditField(f, "PRACTICES_OVERRIDE", "Bolt slug")).toBe("t81-bolt-1");
   });
 
-  test("3: framework event count pinned at 118", () => {
+  test("3: framework event count pinned at 119", () => {
     // Pin the count against the SOURCE OF TRUTH - VALID_EVENT_TYPES in
     // aidlc-audit.ts (the real count, not a sibling test's transcription of it).
     // bolt-plan-marker-conflict reuses PRACTICES_OVERRIDE (discriminator-field
-    // disambiguation) and registers no new event. The framework total is 118;
+    // disambiguation) and registers no new event. The framework total is 119;
     // REVIEW_VERDICT_DICTATED is kept registered so earlier audits read.
     const auditSrc = readFileSync(
       join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-audit.ts"),
@@ -214,7 +214,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     const block = auditSrc.match(/const VALID_EVENT_TYPES = new Set\(\[([\s\S]*?)\]\)/);
     expect(block).not.toBeNull();
     const count = (block ? block[1].match(/"[A-Z0-9_]+"/g) : null)?.length ?? -1;
-    expect(count).toBe(118);
+    expect(count).toBe(119);
   });
 
   test("4: PRACTICES_OVERRIDE coexists across both Reason discriminators", () => {

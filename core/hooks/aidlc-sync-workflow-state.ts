@@ -126,7 +126,6 @@ if (source === "ide-audit-sync") {
   slug = slugMatch[1];
 }
 
-// Health heartbeat
 const healthDir = hooksHealthDir(projectDir);
 writeHookStatusFile(healthDir, "sync-workflow-state.last", isoTimestamp());
 

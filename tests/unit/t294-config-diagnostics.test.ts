@@ -2348,7 +2348,7 @@ describe("t294 trust diagnostics", () => {
     expect(kiroDisabledHookChecks(ide, ".kiro")).toEqual([
       {
         pass: false,
-        label: "AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks: approvals, the approved plan, reviewed work and AI-DLC's records are not protected",
+        label: "AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks: the approved plan, reviewed work and AI-DLC's records are not protected",
         fix: 'turn aidlc-guard-tool-call back on under Kiro\'s Agent Hooks, or set "enabled": true in .kiro/hooks/aidlc-guard-tool-call.json',
       },
       {
@@ -2403,7 +2403,7 @@ describe("t294 trust diagnostics", () => {
     if (result.error) throw result.error;
     expect(JSON.parse(result.stdout).data.checks).toContainEqual(expect.objectContaining({
       pass: false,
-      label: "AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks: approvals, the approved plan, reviewed work and AI-DLC's records are not protected",
+      label: "AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks: the approved plan, reviewed work and AI-DLC's records are not protected",
     }));
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
@@ -3725,54 +3725,51 @@ describe("t294 config diagnostics CLI", () => {
     expect(readFileSync(configPath, "utf-8")).toBe(edited);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("Codex refresh removes the space pointer an earlier release shipped, at whichever space a switch left it", () => {
+  test("Codex refresh empties the space pointer an earlier release shipped, at whichever space a switch left it", () => {
     const env = runtimeEnv();
-    // Earlier releases shipped `AIDLC_RULES_DIR` under [shell_environment_policy]
-    // and a space switch rewrote it in place; this release ships neither, and
-    // the engine reads the active space itself.
-    const shipped = (value: string) =>
-      `[shell_environment_policy]\nset = { AIDLC_RULES_DIR = "${value}" }\n\n[sandbox_workspace_write]`;
-    for (const [label, value, form] of [
-      ["the default space", "aidlc/spaces/default/memory", "inline"],
-      ["a switched space", "aidlc/spaces/teamb/memory", "inline"],
-      ["a switched space, dotted", "aidlc/spaces/teamb/memory", "dotted"],
+    // 2.11.0 shipped `AIDLC_RULES_DIR` under [shell_environment_policy] and a
+    // space switch rewrote it in place; this release ships it empty (2.11.0's
+    // own refresh cannot take the member out), and the engine reads the active
+    // space itself.
+    const EMPTY = 'set = { AIDLC_RULES_DIR = "" }';
+    for (const [label, older, refreshedTo] of [
+      ["the default space", 'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }', EMPTY],
+      ["a switched space", 'set = { AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory" }', EMPTY],
+      ["a switched space, dotted", 'set.AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory"', 'set.AIDLC_RULES_DIR = ""'],
     ] as const) {
       const project = install("codex");
       const configPath = join(project, ".codex", "config.toml");
       const clean = readFileSync(configPath, "utf-8");
-      const older = clean.replace(
-        "[sandbox_workspace_write]",
-        form === "inline"
-          ? shipped(value)
-          : `[shell_environment_policy]\nset.AIDLC_RULES_DIR = "${value}"\n\n[sandbox_workspace_write]`,
-      );
-      expect(older, label).not.toBe(clean);
-      writeFileSync(configPath, older);
+      expect(clean, label).toContain(EMPTY);
+      writeFileSync(configPath, clean.replace(EMPTY, older));
       const refreshed = run(["config", "--project-dir", project, "--yes"], project, env);
       expect(refreshed.status, `${label}: ${refreshed.stdout}${refreshed.stderr}`).toBe(0);
       expect(refreshed.stdout, label).not.toContain("Note:");
-      // The table and its one line go; the blank line that separated it stays.
-      expect(readFileSync(configPath, "utf-8").replace("\n\n\n[sandbox_workspace_write]", "\n\n[sandbox_workspace_write]"), label).toBe(clean);
+      expect(readFileSync(configPath, "utf-8"), label).toBe(clean.replace(EMPTY, refreshedTo));
     }
-    // A table the project extended: only the pointer member goes, the project's
-    // own member and the table stay, whichever order they were written in.
+    // A table the project extended: only the pointer's value changes, the
+    // project's own members and the table stay, whichever order they were in.
     for (const [members, left] of [
-      ['AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory", PROJECT_VAR = "must-stay"', 'PROJECT_VAR = "must-stay"'],
-      ['PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory"', 'PROJECT_VAR = "must-stay"'],
-      ['PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = "aidlc/spaces/default/memory", OTHER = 1', 'PROJECT_VAR = "must-stay", OTHER = 1'],
+      ['AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory", PROJECT_VAR = "must-stay"', 'AIDLC_RULES_DIR = "", PROJECT_VAR = "must-stay"'],
+      ['PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory"', 'PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = ""'],
+      ['PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = "aidlc/spaces/default/memory", OTHER = 1', 'PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = "", OTHER = 1'],
     ] as const) {
       const extended = install("codex");
       const extendedPath = join(extended, ".codex", "config.toml");
-      const before = readFileSync(extendedPath, "utf-8").replace(
-        "[sandbox_workspace_write]",
-        `[shell_environment_policy]\nset = { ${members} }\n\n[sandbox_workspace_write]`,
-      );
+      const before = readFileSync(extendedPath, "utf-8").replace(EMPTY, `set = { ${members} }`);
       writeFileSync(extendedPath, before);
       const refreshed = run(["config", "--project-dir", extended, "--yes"], extended, env);
       expect(refreshed.status, `${members}: ${refreshed.stdout}${refreshed.stderr}`).toBe(0);
       expect(refreshed.stdout, members).not.toContain("Note:");
       expect(readFileSync(extendedPath, "utf-8"), members).toBe(before.replace(`set = { ${members} }`, `set = { ${left} }`));
     }
+    // A folder of the person's own is theirs, and stays.
+    const own = install("codex");
+    const ownPath = join(own, ".codex", "config.toml");
+    writeFileSync(ownPath, readFileSync(ownPath, "utf-8").replace(EMPTY, 'set = { AIDLC_RULES_DIR = "team/rules" }'));
+    const kept = run(["config", "--project-dir", own, "--yes"], own, env);
+    expect(kept.status, kept.stdout + kept.stderr).toBe(0);
+    expect(readFileSync(ownPath, "utf-8")).toContain('set = { AIDLC_RULES_DIR = "team/rules" }');
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("first Codex install keeps a project's own config.toml and adds AI-DLC's settings", () => {
@@ -5093,6 +5090,7 @@ process.exit(0);
       features: hash,
       sandbox_mode: hash,
       sandbox_workspace_write: hash,
+      shell_environment_policy: hash,
       suppress_unstable_features_warning: hash,
       tool_output_token_limit: hash,
       tools: hash,
@@ -5102,6 +5100,7 @@ process.exit(0);
       'value:["suppress_unstable_features_warning"]': hash,
       'value:["tool_output_token_limit"]': hash,
       'value:["sandbox_workspace_write","network_access"]': hash,
+      'value:["shell_environment_policy","set","AIDLC_RULES_DIR"]': hash,
       'value:["agents","max_depth"]': hash,
       'value:["tools","experimental_request_user_input","enabled"]': hash,
       'value:["features","default_mode_request_user_input"]': hash,
@@ -6344,7 +6343,7 @@ process.exit(0);
     const show = run([...args, "--show"], project, env);
     expect(show.status, show.stdout + show.stderr).toBe(0);
     expect(show.stdout).toContain(
-      "Model access: comes with Kiro IDE; AI-DLC configures no model provider",
+      "Model access: comes with Kiro; AI-DLC configures no model provider",
     );
     expect(show.stdout).toContain("Legacy provider answer present and ignored;");
     expect(show.stdout).toContain("config providers --reset");

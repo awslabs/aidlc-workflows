@@ -20,7 +20,7 @@
 //
 // SEED BASELINE. proj() copies audit-sample.md in as the baseline shard (named
 // `0-seed.md`), and the sample ALREADY CONTAINS one SUBAGENT_COMPLETED
-// block whose Agent Type is `aidlc-developer-agent` (audit-sample.md:19-26). So
+// block whose Agent Type is `aidlc-developer-agent` (audit-sample.md). So
 // a bare presence check would PASS off the seed alone. The event-presence cases
 // here COUNT SUBAGENT_COMPLETED blocks against the seeded baseline (baseline =
 // 1; post-fire = 2) and assert the NEW block's exact field values block-scoped,

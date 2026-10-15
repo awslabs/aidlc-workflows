@@ -18,12 +18,12 @@
 //   - dist/claude/.claude/tools/data/scope-grid.json
 //       security-patch.stages["code-generation"] === "EXECUTE"
 //       security-patch.stages["practices-discovery"] === "SKIP"
-//   - dist/claude/.claude/tools/aidlc-bolt.ts:660 handleDispatchEvent
+//   - dist/claude/.claude/tools/aidlc-bolt.ts handleDispatchEvent
 //       MERGE_DISPATCH_INVOKED branch: requires --slug +
 //       --practices-excerpt; emits via emitAudit -> appendAuditEntry with
 //       fields { "Bolt slug": slug, "Practices section excerpt": excerpt };
 //       prints {"emitted":"MERGE_DISPATCH_INVOKED","slug":...} to stdout.
-//   - dist/claude/.claude/tools/aidlc-audit.ts:168 EVENT_HEADINGS maps
+//   - dist/claude/.claude/tools/aidlc-audit.ts EVENT_HEADINGS maps
 //       MERGE_DISPATCH_INVOKED -> "Merge Dispatch Invoked"; the **Event**:
 //       and **Bolt slug**: lines land in the audit shards.
 //   - aidlc-utility.ts handleIntentCreateStateBuild writes the record's

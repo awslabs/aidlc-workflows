@@ -7,7 +7,7 @@
 // writes -- the PROCESS boundary, not in-process handleDecision/handleAnswer
 // calls. An in-process twin would lose the exit-code half the contract has for
 // every invalid-arg case (the tool's error() path is process.exit(1) via
-// emitError, aidlc-lib.ts:1546) AND the JSON-ack-to-stdout half.
+// emitError, aidlc-lib.ts) AND the JSON-ack-to-stdout half.
 //
 // SUBCOMMAND UNITS: this file credits BOTH subcommand units it
 // exercises — `aidlc-log decision` (covers KEY subcommand:aidlc-log

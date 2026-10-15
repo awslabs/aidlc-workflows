@@ -3891,7 +3891,7 @@ export function frameworkFilesDoctorCheck(
     return { pass: true, label: "AI-DLC files: not checked, no record of what AI-DLC wrote" };
   }
   const differ = changedFrameworkFiles(projectDir, selected.harnessDir, selected.harness, baseline);
-  // Config keeps an agent file Kiro upgraded for its 3.0 engine: not the person's change.
+  // An agent file Kiro upgraded for its 3.0 engine is not the person's change.
   const upgraded = differ.filter((rel) => kiroUpgradedAgentFile(projectDir, rel));
   const changed = differ.filter((rel) => !upgraded.includes(rel));
   if (changed.length === 0) {
@@ -3899,7 +3899,7 @@ export function frameworkFilesDoctorCheck(
       ? ""
       : `, apart from ${upgraded.length} agent ${
         upgraded.length === 1 ? "file" : "files"
-      } Kiro upgraded for its 3.0 engine, which config keeps`;
+      } Kiro upgraded for its 3.0 engine`;
     return { pass: true, label: `AI-DLC files: unchanged since AI-DLC wrote them${kept}` };
   }
   const invoke = invocationForHarness(selected.harnessDir);

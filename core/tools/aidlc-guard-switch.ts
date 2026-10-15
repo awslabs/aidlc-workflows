@@ -69,7 +69,7 @@ import {
 } from "./aidlc-lib.ts";
 import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { chatsSince, latestMessage, latestSpendingTimestamp, listMessages, replyOfTheirs } from "./aidlc-message-store.ts";
-import { quoted, widerPlaceOffer } from "./aidlc-recorded-switches.ts";
+import { backOnLine, quoted, widerPlaceOffer } from "./aidlc-recorded-switches.ts";
 import { settingPurpose } from "./aidlc-settings.ts";
 
 function throwSettingsError(message: string): never {
@@ -719,6 +719,22 @@ export function applyIntentSettings(
             },
           });
         }
+        // Turned on, but a switch outside this piece of work keeps it off: their
+        // own local entry is cleared, otherwise what keeps it and the way to it.
+        const held = request.value === "on"
+          ? backOnLine(projectDir, projectSwitchOf(`guard.${request.fence}`), source === "you")
+          : null;
+        if (held !== null) {
+          // Their on is recorded too, so once that switch is cleared the check
+          // is on for this work as they asked and nothing asks them again. An
+          // on of theirs this work already keeps stays kept.
+          if (updated !== content && nextOn.length >= raised.length) {
+            content = updated;
+            audit.push({ eventType: "GUARD_RESTORED", fields: { Guard: request.fence, Scope: scopeName, Source: source } });
+          }
+          lines.push(held);
+          continue;
+        }
         const already = `The ${checkLabel(request.fence)} is already ${after.value}`;
         const offer = request.value === "off" && after.value === "off" && !atTheirTerminal
           ? widerPlaceOffer(projectDir, projectSwitchOf(`guard.${request.fence}`), "work")
@@ -760,8 +776,18 @@ export function applyIntentSettings(
     const field = CEREMONY_FIELDS[key];
     const previous = getField(content, field);
     const line = formatCeremony(value, source);
+    // Turned on, but a switch outside this piece of work keeps it off: that is
+    // said in place of the setting's own line, which would read as on (their
+    // own local entry is cleared first). Plan approval reads its environment
+    // switch only where it is trusted.
+    const held = value === "on" && !scopeDefault(flag)
+      ? backOnLine(projectDir, CEREMONY_ENV[key], source === "you",
+        key === "plan_approval" ? planApprovalEnv(projectDir, sessionId) : process.env)
+      : null;
     if (previous === line || (source === "command" && previous === formatCeremony(value, "you"))) {
-      if (!scopeDefault(flag)) {
+      if (held !== null) {
+        lines.push(held);
+      } else if (!scopeDefault(flag)) {
         const already = `${field} is already ${previous}`;
         const offer = value === "off" && !atTheirTerminal ? widerPlaceOffer(projectDir, CEREMONY_ENV[key], "work") : null;
         lines.push(offer ? `${already}. ${offer}` : already);
@@ -780,6 +806,10 @@ export function applyIntentSettings(
         ...(askedIn && value === "off" && source === "you" ? { "Person Reply": askedIn } : {}),
       },
     });
+    if (held !== null) {
+      lines.push(held);
+      continue;
+    }
     const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
       ? resolution.rawStateValue : formatCeremony(resolution.value, resolution.source);
     if (!saidAsAsked(flag)) lines.push(`${field} changed: ${oldDisplay} to ${line}`);
@@ -1090,26 +1120,6 @@ export function planApprovalCreationGranted(
   } catch {
     return false;
   }
-}
-
-/** The recorded words still apply: no memory lock and no unattended driver since. */
-export function planApprovalOffAtCreation(
-  projectDir: string,
-  sessionId: string | null,
-  request: string | null = null,
-): boolean {
-  if (process.env.AIDLC_UNATTENDED === "1" || !planApprovalCreationGranted(projectDir, sessionId, request)) return false;
-  try {
-    return !memoryGuardPolicyDeclarations(projectDir, { sessionId: sessionId ?? undefined })
-      .some((declaration) => declaration.value === "strict");
-  } catch {
-    return false;
-  }
-}
-
-/** For the creation preview: the words apply to the request open now, or to any when none was. */
-export function planApprovalOffForOpenRequest(projectDir: string, sessionId: string | null): boolean {
-  return planApprovalOffAtCreation(projectDir, sessionId, latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS));
 }
 
 /** Spent by the next piece of work this chat creates, whether or not it was the one asked for. */

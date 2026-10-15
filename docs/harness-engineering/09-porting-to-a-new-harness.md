@@ -67,6 +67,13 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
 - `name` / `harnessDir` — the dir the token substitutes to (e.g. `.foo`).
 - `productName` / `configNextStep` — user-facing projection metadata consumed by
   lifecycle and `aidlc config`; keep host commands exact.
+- `choiceName` / `choiceNote` (optional) — what the harness menus of `aidlc
+  config` show instead of `productName`, and beside it: for a harness that
+  shares its product with another, such as Kiro CLI (V2) and Kiro. Plain ASCII
+  text only: an ASCII letter or digit first, then letters, digits, spaces and
+  `.,()+-`; a name of 1 to 15 characters and a note of 1 to 60. The packager
+  refuses a manifest whose text is not, and `aidlc config` does not offer such a
+  projection.
 - `firstRunSteps` / `editorTerminalApp` / `hookActivation` (optional) - only for
   a host whose first run needs steps the other harnesses do not. `firstRunSteps`
   replaces the two next-step lines that end `aidlc config`. `editorTerminalApp`

@@ -13,7 +13,7 @@
 // "state file INTEGRITY: checkbox counts, stage ordering, field updates" — and the
 // state file's STRUCTURE + all its fields are written DETERMINISTICALLY by
 // explicit init (`aidlc-utility.ts init`, the State-Version-8 template,
-// utility.ts:2044-2097), BEFORE any gate. So this sdk twin drives the init turn,
+// utility.ts), BEFORE any gate. So this sdk twin drives the init turn,
 // stops the instant the init stdout lands, and asserts the deterministic state STRUCTURE + the
 // counter↔checkbox invariant on the landed file. The FULL multi-stage progression
 // (the .sh's tests 2-3 "Current Stage advanced past init" / ">4 completed") is an
@@ -53,10 +53,10 @@
 //
 // Known-answer literals (read from the SHIPPED tool, not guessed):
 //   - init dispatch:           SKILL.md -> `aidlc-utility.ts init --scope bugfix`
-//   - State-Version-8 template: aidlc-utility.ts:2044-2097 (all the fields above)
-//   - State Version literal 8:  aidlc-utility.ts:2051
-//   - init-stage [x] markers:   aidlc-utility.ts:1995-1998
-//   - State initialized summary: aidlc-utility.ts:2154
+//   - State-Version-8 template: aidlc-utility.ts (all the fields above)
+//   - State Version literal 8:  aidlc-utility.ts
+//   - init-stage [x] markers:   aidlc-utility.ts
+//   - State initialized summary: aidlc-utility.ts
 //
 // It SPENDS TOKENS — driveAidlc drives the real /aidlc on Opus/Bedrock.
 // Generous per-test timeout; the driver aborts a hair early so a stuck run

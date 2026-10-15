@@ -43,7 +43,6 @@ import {
   type DriveResult,
 } from "../harness/sdk-drive.ts";
 
-import { readBeforeFirstAct } from "../harness/outcomes.ts";
 import { targetsStateFile } from "../harness/state-file-target.ts";
 
 const TIMEOUT_S = Number.parseInt(process.env.AIDLC_TEST_TIMEOUT ?? String(LIVE_LONG_OPERATION_TIMEOUT_MS / 1000), 10);
@@ -329,6 +328,30 @@ function readIndex(
   );
 }
 
+const LEAD_PERSONA = ".claude/agents/aidlc-product-agent.md";
+
+// The User Stories step the engine handed the agent, and the lead persona it
+// carried: the agent works as the lead with nothing to read first.
+function userStoriesStep(results: CapturedToolResult[]): CapturedToolResult | undefined {
+  return results.find(
+    (toolResult) =>
+      toolResult.toolName === "Bash" &&
+      /"kind"\s*:\s*"run-stage"/.test(toolResult.resultText) &&
+      /"stage"\s*:\s*"user-stories"/.test(toolResult.resultText),
+  );
+}
+
+function expectLeadPersonaHandedOver(step: CapturedToolResult | undefined): void {
+  expect(step, "expected the engine's user-stories run-stage directive").toBeDefined();
+  const directive = JSON.parse(step?.resultText ?? "{}") as {
+    lead_persona?: { path?: string; text?: string };
+    inline_context_paths?: string[];
+  };
+  expect(directive.lead_persona?.path, "the step did not carry the lead persona").toBe(LEAD_PERSONA);
+  expect(directive.lead_persona?.text).toContain("name: aidlc-product-agent");
+  expect(directive.inline_context_paths).not.toContain(LEAD_PERSONA);
+}
+
 function shellCommand(result: CapturedToolResult): string | undefined {
   if (result.toolName !== "Bash" && result.toolName !== "Shell") return undefined;
   return typeof result.input.command === "string"
@@ -366,7 +389,7 @@ function logKnowledgeReadDiagnostics(result: DriveResult): void {
   const knownTools = ["Read", "Bash", "Shell", "Task", "Agent", "Write", "Edit",
     "MultiEdit", "Skill", "AskUserQuestion", "Glob", "Grep", "TodoWrite"];
   const targets = [
-    ["persona", ".claude/agents/aidlc-product-agent.md"],
+    ["persona", LEAD_PERSONA],
     ["knowledge", LIVE_KNOWLEDGE_REL],
     ["stage", ".claude/aidlc-common/stages/inception/user-stories.md"],
     ["requirements", "requirements.md"],
@@ -449,19 +472,11 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         logKnowledgeReadDiagnostics(result);
         expect(result.timedOut).toBe(false);
         expect(result.stoppedAfterToolResult).toBe(true);
-        const leadPersonaPath = ".claude/agents/aidlc-product-agent.md";
-        const leadReadIndex = readIndex(result.toolResults, leadPersonaPath);
-        const projectKnowledgeReadIndex = readIndex(
-          result.toolResults,
-          LIVE_KNOWLEDGE_REL,
-        );
-        expect(leadReadIndex, "the inline mob lead persona was not read").toBeGreaterThanOrEqual(0);
+        expectLeadPersonaHandedOver(userStoriesStep(result.toolResults));
         expect(
-          projectKnowledgeReadIndex,
+          readIndex(result.toolResults, LIVE_KNOWLEDGE_REL),
           "the inline mob lead's project knowledge was not read",
-        ).toBeGreaterThan(
-          leadReadIndex,
-        );
+        ).toBeGreaterThanOrEqual(0);
         expect(
           result.toolResults.some(
             (toolResult) =>
@@ -586,13 +601,8 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
           ).toBe(false);
         }
 
-        const runStage = result.toolResults.find(
-          (toolResult) =>
-            toolResult.toolName === "Bash" &&
-            /"kind"\s*:\s*"run-stage"/.test(toolResult.resultText) &&
-            /"stage"\s*:\s*"user-stories"/.test(toolResult.resultText),
-        );
-        expect(runStage, "expected the engine's user-stories run-stage directive").toBeDefined();
+        const runStage = userStoriesStep(result.toolResults);
+        expectLeadPersonaHandedOver(runStage);
         const runStageDirective = JSON.parse(runStage?.resultText ?? "{}") as {
           next_stage?: string | null;
         };
@@ -600,21 +610,11 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
           runStageDirective.next_stage,
           "the terminal live fixture routed to another stage after user-stories",
         ).toBeNull();
-        expect(runStage?.resultText).toContain(
-          ".claude/agents/aidlc-product-agent.md",
-        );
         for (const support of SUPPORT_AGENTS) {
           expect(runStage?.resultText).not.toContain(
             `.claude/agents/${support}.md`,
           );
         }
-        // inline_context_paths is only the manifest. The lead persona must
-        // shape the work: read before the first artifact write or support
-        // dispatch, in whatever order the agent read the stage file and inputs.
-        expect(
-          readBeforeFirstAct(result.toolResults, ".claude/agents/aidlc-product-agent.md"),
-          "the inline mob lead persona was not read before the first write or dispatch",
-        ).toBe(true);
 
         // Round 1 dispatched every declared support. Each brief names the
         // shared draft/input, carries the active-space rules delivered by the

@@ -18,11 +18,19 @@
 // the same gate comes back, nothing they answered is asked again, the approval
 // is theirs, the next stage starts, and no file of theirs changed.
 //
-// Usage: bun scripts/ci-update-from-previous.ts --previous <version> --candidate <release-dir>
+// With `--channel copy` the person has no `aidlc` command: each project is a
+// copy of `runtime/<harness>/` from the previous release's
+// aidlc-copy-runtime-X.Y.Z.tar.gz (checked against its .sha256), set up with
+// its own `bun <dir>/tools/aidlc.ts config --from <runtime>`, and refreshed
+// with the same command from the candidate's copy runtime, the way the guide's
+// Copy Channel says. The hooks, doctor and the person's work are checked as on
+// the native channel.
+//
+// Usage: bun scripts/ci-update-from-previous.ts [--channel native|copy] --previous <version> --candidate <release-dir>
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { KIRO_HOOK_GROUPS } from "../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
 import type { WorkResult } from "../tests/harness/work-open.ts";
@@ -37,7 +45,21 @@ const HARNESS_DIRS: Record<(typeof HARNESSES)[number], string> = {
   "kiro-ide": ".kiro",
   opencode: ".opencode",
 };
-const HOOK_COMMAND = /^aidlc engine (?:hook|adapter) [a-z0-9-]+(?: [a-z0-9-]+)*$/;
+// Where a copied project's own tool is: `bun <dir>/tools/aidlc.ts`.
+const COPY_TOOL_DIRS: Record<(typeof HARNESSES)[number], string> = {
+  claude: ".claude",
+  codex: ".codex",
+  copilot: ".aidlc",
+  cursor: ".cursor",
+  kiro: ".kiro",
+  "kiro-ide": ".kiro",
+  opencode: ".aidlc",
+};
+// A hook command a tree wires: the installed `aidlc engine ...`, a copy's own
+// `bun <dir>/tools/aidlc.ts engine ...`, or a copy's adapter file itself
+// (Copilot and Cursor).
+const DISPATCHED = /^(?:aidlc|bun (?:"\$CLAUDE_PROJECT_DIR\/)?\.[a-z]+\/tools\/aidlc\.ts"?) engine (?:hook|adapter) [a-z0-9-]+(?: [a-z0-9-]+)*$/;
+const ADAPTER_FILE = /^bun \.[a-z]+\/hooks\/aidlc-[a-z]+-adapter\.ts [a-z0-9-]+$/;
 const WINDOWS = process.platform === "win32";
 const REPOSITORY = process.env.GITHUB_REPOSITORY || "awslabs/aidlc-workflows";
 const STEP_TIMEOUT_MS = 10 * 60_000;
@@ -70,7 +92,7 @@ export function hookCommands(treeDir: string): string[] {
   const found = new Set<string>();
   const visit = (value: unknown) => {
     if (typeof value === "string") {
-      if (HOOK_COMMAND.test(value.trim())) found.add(value.trim());
+      if (DISPATCHED.test(value.trim()) || ADAPTER_FILE.test(value.trim())) found.add(value.trim());
     } else if (Array.isArray(value)) {
       for (const item of value) visit(item);
     } else if (value && typeof value === "object") {
@@ -116,6 +138,41 @@ export function opencodeHookCommands(pluginFile: string): string[] {
   return [...hooks].sort().map((hook) => `${invoke} ${namespace} hook ${hook}`);
 }
 
+/**
+ * Whether a hook command shows in the hook phase trace: the engine's
+ * dispatcher writes it. A copy's Copilot and Cursor hooks run their adapter
+ * file itself, which writes none, so their exit code is what shows.
+ */
+export function dispatched(command: string): boolean {
+  return DISPATCHED.test(command.trim());
+}
+
+/**
+ * The hook commands a project's tool runs, as its shell gets them, each with
+ * whether the hook phase trace must show it. That is read from the command the
+ * wiring names, before opencode's plugin adds the project folder.
+ */
+export function hookRuns(harness: string, project: string): { command: string; traced: boolean }[] {
+  if (harness === "opencode") {
+    // The plugin passes the project folder itself; the shell reads it from the environment.
+    return opencodeHookCommands(join(project, ".opencode", "plugin", "aidlc-opencode-adapter.ts"))
+      .map((command) => ({ command: `${command} --project-dir "$CLAUDE_PROJECT_DIR"`, traced: dispatched(command) }));
+  }
+  return hookCommands(join(project, HARNESS_DIRS[harness as (typeof HARNESSES)[number]]))
+    .map((command) => ({ command, traced: dispatched(command) }));
+}
+
+/** The copy runtime a release ships, as its assets name it. */
+export function copyRuntimeAsset(version: string): string {
+  return `aidlc-copy-runtime-${version}.tar.gz`;
+}
+
+/** Whether a file is the one its .sha256 names: the digest, then the file name. */
+export function checksumMatches(file: string, sha256Text: string): boolean {
+  const digest = new Bun.CryptoHasher("sha256").update(readFileSync(file)).digest("hex");
+  return sha256Text.trim().split(/\s+/)[0]?.toLowerCase() === digest;
+}
+
 export function hooksTracedToCompletion(directory: string): Set<string> {
   const done = new Set<string>();
   if (!existsSync(directory)) return done;
@@ -148,7 +205,7 @@ const KIRO_IDE_TOOL_CALL = JSON.stringify({
 const KIRO_IDE_TOOL_CALL_TARGETS = new Set(["guard-tool-call", ...KIRO_HOOK_GROUPS["guard-tool-call"].map((member) => member.target)]);
 
 export function hookInput(harness: string, command: string): string {
-  const target = /^aidlc engine adapter kiro-ide ([a-z0-9-]+)$/.exec(command.trim())?.[1];
+  const target = /\bengine adapter kiro-ide ([a-z0-9-]+)$/.exec(command.trim())?.[1];
   return harness === "kiro-ide" && target !== undefined && KIRO_IDE_TOOL_CALL_TARGETS.has(target) ? KIRO_IDE_TOOL_CALL : "{}";
 }
 
@@ -184,22 +241,23 @@ async function main(argv: string[]): Promise<number> {
   const option = (flag: string) => { const at = argv.indexOf(flag); return at >= 0 ? argv[at + 1] : undefined; };
   const previous = option("--previous")?.replace(/^v/, "");
   const given = option("--candidate");
+  const channel = option("--channel") ?? "native";
   // The update runs from a scratch folder, so a relative path must not reach it.
   const candidate = given ? resolve(given) : undefined;
-  if (!previous || !candidate || !existsSync(join(candidate, "version.json"))) {
-    console.error("Usage: bun scripts/ci-update-from-previous.ts --previous <version> --candidate <release-dir>");
+  if (!previous || !candidate || !existsSync(join(candidate, "version.json")) || (channel !== "native" && channel !== "copy")) {
+    console.error("Usage: bun scripts/ci-update-from-previous.ts [--channel native|copy] --previous <version> --candidate <release-dir>");
     return 2;
   }
   const target = (JSON.parse(readFileSync(join(candidate, "version.json"), "utf-8")) as { version?: string }).version ?? "";
   const root = mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), "aidlc-update-from-previous-"));
   try {
-    return await check(previous, candidate, target, root);
+    return await check(previous, candidate, target, root, channel === "copy");
   } finally {
     if (process.env.AIDLC_KEEP_TEMP !== "1") rmSync(root, { recursive: true, force: true, maxRetries: 3 });
   }
 }
 
-async function check(previous: string, candidate: string, target: string, root: string): Promise<number> {
+async function check(previous: string, candidate: string, target: string, root: string, copy: boolean): Promise<number> {
   const deadline = Date.now() + CHECK_BUDGET_MS;
   const within = (ms: number) => Math.max(1_000, Math.min(ms, deadline - Date.now()));
   const unchecked = uncheckedHarnesses(JSON.parse(readFileSync(join(candidate, "version.json"), "utf-8")));
@@ -242,21 +300,51 @@ async function check(previous: string, candidate: string, target: string, root: 
     ? run(what, "powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", wrapper, ...args], {}, cwd)
     : run(what, join(bin, "aidlc"), args, {}, cwd);
 
-  // 1. The previous release, installed the way its README says.
-  const installer = join(root, WINDOWS ? "install.ps1" : "install.sh");
-  const fetched = spawnSync("curl", ["-fsSL", "-o", installer,
-    `https://github.com/${REPOSITORY}/releases/download/v${previous}/${WINDOWS ? "install.ps1" : "install.sh"}`],
-  { encoding: "utf-8", timeout: STEP_TIMEOUT_MS });
-  if (fetched.status !== 0) {
-    console.error(`Could not download the ${previous} installer: ${fetched.stderr}`);
-    return 1;
+  // A copied project's own tool, run in the project as the guide's commands are.
+  const tool = (what: string, harness: string, project: string, args: string[]) =>
+    run(what, process.execPath, [join(COPY_TOOL_DIRS[harness as (typeof HARNESSES)[number]], "tools", "aidlc.ts"), ...args], {}, project);
+  const previousRuntime = join(root, "previous-runtime", "runtime");
+  const candidateRuntime = join(root, "candidate-runtime", "runtime");
+  if (copy) {
+    // 1. The previous release's copy runtime, downloaded and checked against its
+    // .sha256 (the guide also verifies its attestation with gh, which this
+    // check leaves out), and the candidate's. tar runs in the folder it
+    // unpacks into, so no drive letter reaches Git for Windows' tar.
+    const asset = copyRuntimeAsset(previous);
+    for (const name of [asset, `${asset}.sha256`]) {
+      const got = spawnSync("curl", ["-fsSL", "-o", join(root, name), `https://github.com/${REPOSITORY}/releases/download/v${previous}/${name}`],
+        { encoding: "utf-8", timeout: STEP_TIMEOUT_MS });
+      if (got.status !== 0) {
+        console.error(`Could not download ${name}: ${got.stderr}`);
+        return 1;
+      }
+    }
+    if (!checksumMatches(join(root, asset), readFileSync(join(root, `${asset}.sha256`), "utf-8"))) {
+      fail(`${asset} does not match its .sha256`);
+      return report(failures);
+    }
+    for (const [archive, into] of [[join(root, asset), dirname(previousRuntime)], [join(candidate, copyRuntimeAsset(target)), dirname(candidateRuntime)]]) {
+      mkdirSync(into, { recursive: true });
+      cpSync(archive, join(into, "runtime.tar.gz"));
+      if (!run(`unpack ${archive}`, "tar", ["-xzf", "runtime.tar.gz"], {}, into).ok) return report(failures);
+    }
+  } else {
+    // 1. The previous release, installed the way its README says.
+    const installer = join(root, WINDOWS ? "install.ps1" : "install.sh");
+    const fetched = spawnSync("curl", ["-fsSL", "-o", installer,
+      `https://github.com/${REPOSITORY}/releases/download/v${previous}/${WINDOWS ? "install.ps1" : "install.sh"}`],
+    { encoding: "utf-8", timeout: STEP_TIMEOUT_MS });
+    if (fetched.status !== 0) {
+      console.error(`Could not download the ${previous} installer: ${fetched.stderr}`);
+      return 1;
+    }
+    const installed = WINDOWS
+      ? run(`install ${previous}`, "powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", installer, "-Version", previous])
+      : run(`install ${previous}`, "sh", [installer, "--version", previous]);
+    if (!installed.ok) return report(failures);
+    const before = aidlc("version before the update", ["version"]);
+    if (!before.output.includes(previous)) fail(`the installed release reports "${before.output}", not ${previous}`);
   }
-  const installed = WINDOWS
-    ? run(`install ${previous}`, "powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", installer, "-Version", previous])
-    : run(`install ${previous}`, "sh", [installer, "--version", previous]);
-  if (!installed.ok) return report(failures);
-  const before = aidlc("version before the update", ["version"]);
-  if (!before.output.includes(previous)) fail(`the installed release reports "${before.output}", not ${previous}`);
 
   // 2. A project for every harness, the person's own code committed, set up by the previous release.
   const projects = HARNESSES.map((harness) => {
@@ -269,7 +357,12 @@ async function check(previous: string, candidate: string, target: string, root: 
       run(`git ${args[0]} in the ${harness} project`, "git", args, PERSON_GIT, project);
     }
     if (harness === "copilot") writeFileSync(join(env.COPILOT_HOME!, "config.json"), `${JSON.stringify({ trustedFolders: [project] })}\n`);
-    aidlc(`aidlc config --harness ${harness} on ${previous}`, ["config", "--project-dir", project, "--harness", harness, "--mcp", "none", "--quiet"]);
+    if (copy) {
+      cpSync(join(previousRuntime, harness), project, { recursive: true });
+      tool(`the copy's setup for ${harness} on ${previous}`, harness, project, ["config", "--from", previousRuntime, "--harness", harness]);
+    } else {
+      aidlc(`aidlc config --harness ${harness} on ${previous}`, ["config", "--project-dir", project, "--harness", harness, "--mcp", "none", "--quiet"]);
+    }
     return { harness, project };
   });
   if (failures.length > 0) return report(failures);
@@ -282,7 +375,7 @@ async function check(previous: string, candidate: string, target: string, root: 
   const began = Date.now();
   const works = projects.map(({ harness, project }) => ({
     harness,
-    proc: Bun.spawn([process.execPath, WORK_OPEN, harness, project, machine, signals, String(deadline)], {
+    proc: Bun.spawn([process.execPath, WORK_OPEN, harness, project, copy ? "copy" : machine, signals, String(deadline)], {
       cwd: project,
       env,
       stdout: Bun.file(join(signals, `${harness}.log`)),
@@ -322,16 +415,19 @@ async function check(previous: string, candidate: string, target: string, root: 
   for (const w of works.filter((w) => !parked(w.harness))) ended(w, "before the person's work was left open");
   console.log(`${waiting.length} of ${works.length} projects have the person's bugfix waiting at its open Requirements gate on ${previous} (${Math.round((Date.now() - began) / 1000)} s)`);
 
-  // 4. The person's update, run by the previous release's own binary.
-  const updated = aidlc(`aidlc update from ${previous}`, ["update", "--from", candidate, "--offline"]);
-  if (!updated.ok) {
-    await stopWorks();
-    return report(failures);
-  }
-  const after = aidlc("version after the update", ["version"]);
-  if (!after.output.includes(target)) fail(`after the update aidlc reports "${after.output}", not ${target}`);
-  if (WINDOWS && !existsSync(join(bin, "aidlc"))) {
-    fail(`${join(bin, "aidlc")} is missing after the update and its first command, so Git Bash cannot run a bare aidlc and Claude Code's hooks fail`);
+  // 4. The person's update, run by the previous release's own binary. A copy
+  // has no machine install: each project refreshes itself below.
+  if (!copy) {
+    const updated = aidlc(`aidlc update from ${previous}`, ["update", "--from", candidate, "--offline"]);
+    if (!updated.ok) {
+      await stopWorks();
+      return report(failures);
+    }
+    const after = aidlc("version after the update", ["version"]);
+    if (!after.output.includes(target)) fail(`after the update aidlc reports "${after.output}", not ${target}`);
+    if (WINDOWS && !existsSync(join(bin, "aidlc"))) {
+      fail(`${join(bin, "aidlc")} is missing after the update and its first command, so Git Bash cannot run a bare aidlc and Claude Code's hooks fail`);
+    }
   }
 
   // 5. What the person does next, per project.
@@ -339,10 +435,7 @@ async function check(previous: string, candidate: string, target: string, root: 
   const timedOut = new Set<string>();
   const hooks = (harness: string, project: string, when: string) => {
     const plugin = join(project, ".opencode", "plugin", "aidlc-opencode-adapter.ts");
-    const commands = harness === "opencode"
-      // The plugin passes the project folder itself; the shell reads it from the environment.
-      ? opencodeHookCommands(plugin).map((command) => `${command} --project-dir "$CLAUDE_PROJECT_DIR"`)
-      : hookCommands(join(project, HARNESS_DIRS[harness as (typeof HARNESSES)[number]]));
+    const commands = hookRuns(harness, project);
     if (commands.length === 0) fail(`${harness} ${when}: the project has no hook commands to run`);
     if (harness === "opencode") {
       const trace = join(root, "trace", String(++traces));
@@ -357,7 +450,7 @@ async function check(previous: string, candidate: string, target: string, root: 
         fail(`opencode plugin ${when}: its events did not run ${missing.join(", ")} to the end`);
       }
     }
-    for (const command of commands) {
+    for (const { command, traced } of commands) {
       if (Date.now() >= deadline) {
         fail(`${harness} hook ${when}: the check ran out of its ${CHECK_BUDGET_MS / 60_000}-minute budget before \`${command}\``);
         break;
@@ -377,7 +470,7 @@ async function check(previous: string, candidate: string, target: string, root: 
         fail(`${harness} hook ${when}: \`${command}\` did not finish within ${HOOK_TIMEOUT_MS / 60_000} minutes; it is not run again`);
         continue;
       }
-      if (r.status !== 0 || !tracedToCompletion(trace)) {
+      if (r.status !== 0 || (traced && !tracedToCompletion(trace))) {
         fail(`${harness} hook ${when}: \`${command}\` exited ${r.status}: ${`${r.stderr ?? ""}`.trim().split("\n").at(-1) ?? ""}`);
       }
     }
@@ -386,9 +479,16 @@ async function check(previous: string, candidate: string, target: string, root: 
   for (const { harness, project } of projects) {
     const known = failures.length;
     const count = hooks(harness, project, `before the refresh`);
-    aidlc(`aidlc config --yes for ${harness}`, ["config", "--project-dir", project, "--harness", harness, "--mcp", "none", "--yes", "--quiet"]);
+    if (copy) {
+      tool(`the copy's refresh for ${harness} from ${target}`, harness, project, ["config", "--from", candidateRuntime, "--harness", harness, "--yes"]);
+      const now = tool(`the copy's version for ${harness}`, harness, project, ["version"]);
+      if (now.ok && !now.output.includes(target)) fail(`after the refresh the ${harness} copy reports "${now.output}", not ${target}`);
+    } else {
+      aidlc(`aidlc config --yes for ${harness}`, ["config", "--project-dir", project, "--harness", harness, "--mcp", "none", "--yes", "--quiet"]);
+    }
     hooks(harness, project, "after the refresh");
-    aidlc(`aidlc doctor for ${harness}`, ["doctor", "--project-dir", project, "--quiet"]);
+    if (copy) tool(`the copy's doctor for ${harness}`, harness, project, ["doctor", "--quiet"]);
+    else aidlc(`aidlc doctor for ${harness}`, ["doctor", "--project-dir", project, "--quiet"]);
     const result = failures.length === known ? "all passed" : `${failures.length - known} failed`;
     console.log(`${harness}: ${count} hook command(s) before and after the refresh, the refresh, and doctor: ${result}`);
   }
@@ -403,7 +503,7 @@ async function check(previous: string, candidate: string, target: string, root: 
   for (const w of waiting) ended(w, "while the person carried on their work");
   await stopWorks();
   if (!stopped) console.log(`The person carried on their work in ${waiting.length} project(s) (${Math.round((Date.now() - resumed) / 1000)} s)`);
-  return report(failures, `Updated from ${previous} to ${target}; every harness's hooks, refresh and doctor work, and so does the work each person left open.`);
+  return report(failures, `${copy ? "Refreshed every copy" : "Updated"} from ${previous} to ${target}; every harness's hooks, refresh and doctor work, and so does the work each person left open.`);
 }
 
 function report(failures: string[], success = ""): number {

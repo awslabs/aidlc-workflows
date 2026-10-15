@@ -84,11 +84,19 @@ function run(tool: string, args: string[], extra: Record<string, string> = {}): 
   return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
+// `next`, then `continue <receipt>` through any rules parts, as the agent runs
+// them: the step it acts on, which is where a line for the person is said.
 function nextDirective(): Record<string, unknown> {
-  const r = run(ORCHESTRATE, ["next"], { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" });
-  const line = r.out.split("\n").find((entry) => entry.startsWith("{"));
-  expect(line, r.out).toBeDefined();
-  return JSON.parse(line as string) as Record<string, unknown>;
+  let args = ["next"];
+  for (let hop = 0; hop < 10; hop++) {
+    const r = run(ORCHESTRATE, args, { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" });
+    const line = r.out.split("\n").find((entry) => entry.startsWith("{"));
+    expect(line, r.out).toBeDefined();
+    const directive = JSON.parse(line as string) as Record<string, unknown>;
+    if (directive.kind !== "load-steering") return directive;
+    args = ["continue", String(directive.receipt ?? "")];
+  }
+  throw new Error("the rules parts did not reach the step in 10 hops");
 }
 
 function withKiroHarness(body: () => void): void {
@@ -116,7 +124,9 @@ describe("t-kiro-hooks-off: a hook the person switched off in Kiro is said once 
     const off = kiroHooksOff(proj);
     expect(off).toHaveLength(1);
     expect(off[0]).toMatchObject({ name: GUARD, file: `.kiro/hooks/${GUARD}.json`, since: "2026-10-06T23:09:18.000Z" });
-    expect(off[0].protects).toContain("approvals, the approved plan");
+    expect(off[0].protects).toContain("the approved plan, reviewed work");
+    // The engine holds every approval to the person's reply whether this card runs or not.
+    expect(off[0].protects).not.toContain("approvals");
     expect(readFileSync(join(proj, ".kiro", "hooks", `${GUARD}.json`), "utf-8")).toContain('"enabled": false');
     expect(kiroHooksOff(proj, ".claude")).toEqual([]);
   });

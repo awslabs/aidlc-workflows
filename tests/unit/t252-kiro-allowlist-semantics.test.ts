@@ -381,14 +381,21 @@ const PROJECT_COMMANDS = ["bun test src/filter.test.ts", "bun test", "bunx tsc -
 // inside it a dot below the top level was fine (`src/.env-probe` was written),
 // while `.kiro/...` asked. A blanket `fs_write` in `allowedTools` allows every
 // path. A blocking preToolUse hook still refused an allowed write, so the
-// plan-approval guard keeps its say.
+// plan-approval guard keeps its say. Kiro CLI 2.29.0 (Linux) and 2.27.1
+// (Windows) read an entry's leading `./` as the project root.
 function writeVerdict(agent: { allowedTools?: string[]; allowedPaths: string[] }, path: string): "allow" | "ask" {
   if (agent.allowedTools?.includes("fs_write")) return "allow";
+  const rel = projectRelative(path);
+  if (rel === null) return "ask";
+  return agent.allowedPaths.some((glob) => globRegExp(glob.replace(/^\.\//, "")).test(rel)) ? "allow" : "ask";
+}
+
+/** The path relative to the project root, or null when it resolves outside. */
+function projectRelative(path: string): string | null {
   const root = "/project";
   const abs = path.startsWith("~") ? `/home/person${path.slice(1)}` : posix.resolve(root, path);
   const rel = posix.relative(root, abs);
-  if (rel === "" || rel.startsWith("..") || posix.isAbsolute(rel)) return "ask";
-  return agent.allowedPaths.some((glob) => globRegExp(glob).test(rel)) ? "allow" : "ask";
+  return rel === "" || rel.startsWith("..") || posix.isAbsolute(rel) ? null : rel;
 }
 
 /** The glob subset the shipped paths use: `*` and `**` match any run of
@@ -430,6 +437,7 @@ const WRITE_ALLOW = [
   "web/src/filter.test.ts",
   "README.md",
   "/project/web/src/filter.ts",
+  "/project/README.md",
   "aidlc/spaces/default/intents/fix/plan.md",
 ];
 
@@ -438,6 +446,11 @@ const WRITE_ASK = [
   ".kiro/tools/aidlc-orchestrate.ts",
   ".git/config",
   ".github/workflows/ci.yml",
+  "/project/.github/workflows/ci.yml",
+  "src/../.github/workflows/ci.yml",
+  ".husky/pre-commit",
+  ".kiro/steering/notes.md",
+  ".aidlc/worktree-meta.json",
   ".env",
   ".gitignore",
   "/tmp/outside.txt",
@@ -848,8 +861,110 @@ const RECORDED_ON_KIRO_3: Array<[Verdict, string]> = [
   ["allow", "bun .kiro/tools/aidlc-log.ts x > /tmp/x"],
 ];
 
+// Kiro's upgrade for its 3.0 engine copies each fs_write allowedPaths entry into
+// its write rule unchanged, and Kiro 3.0 matches it the way gitignore does
+// (its policy engine, kiro-cli 2.29.0): an entry with no `/` is matched against
+// the file name at any depth, so a bare `[!.]*` let the developer and the
+// conductor write `.github/workflows/ci.yml` and a worktree's code unasked; an
+// entry with a `/` is anchored at the project root (a leading `./` dropped);
+// `*` stays inside one name and also matches a name that starts with a dot; an
+// entry ending in `/**` also matches the name before it, and one with no `*`
+// also matches what is under it.
+function v3WriteVerdict(agent: { allowedPaths: string[] }, path: string): "allow" | "ask" {
+  const rel = projectRelative(path);
+  if (rel === null) return "ask";
+  return agent.allowedPaths.some((entry) => {
+    if (!entry.includes("*") && rel.startsWith(`${entry}/`)) return true;
+    if (entry.startsWith("./")) return v3GlobRegExp(entry.slice(2)).test(rel);
+    return v3GlobRegExp(entry).test(entry.includes("/") ? rel : posix.basename(rel));
+  }) ? "allow" : "ask";
+}
+
+function v3GlobRegExp(glob: string): RegExp {
+  const subtree = glob.endsWith("/**");
+  const body = subtree ? glob.slice(0, -3) : glob;
+  if (body.includes("**")) throw new Error(`Kiro 3.0's reading of ${glob} is not modelled`);
+  let out = "";
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (ch === "*") {
+      out += "[^/]*";
+    } else if (ch === "[") {
+      const close = body.indexOf("]", i);
+      const set = body.slice(i + 1, close);
+      out += set.startsWith("!") ? `[^/${set.slice(1)}]` : `[${set}]`;
+      i = close;
+    } else {
+      out += ch.replace(/[.+?^${}()|\\]/g, "\\$&");
+    }
+  }
+  return new RegExp(`^${out}${subtree ? "(?:/.*)?" : ""}$`, "s");
+}
+
+// What Kiro CLI 2.29.0 on its 3.0 engine (`--agent-engine v3`, headless, after
+// Kiro's own upgrade of an agent with the developer's write list) did for these
+// paths: written, or refused because it would have asked. Absolute paths sat
+// under the project root. Kiro's own protected paths (`.vscode`, `.kiro/agents`)
+// and outside paths asked there whatever the list says.
+const RECORDED_WRITES_ON_KIRO_3: Array<["allow" | "ask", string]> = [
+  ...[
+    "README-probe.md",
+    "package-probe.json",
+    "src/app-probe.js",
+    "web/src/deep/x.ts",
+    "src/.env-probe",
+    "aidlc/spaces/default/intents/i/plan.md",
+    ".aidlc/worktrees/bolt-1a2b3c4d_u1/aidlc/spaces/default/intents/i/construction/u1/plan.md",
+    "/project/README-abs-probe.md",
+    "/project/src/abs-probe.js",
+  ].map((path): ["allow" | "ask", string] => ["allow", path]),
+  ...[
+    ".aidlc/worktrees/bolt-1a2b3c4d_u1/src/wt-probe.js",
+    ".aidlc/worktrees/bolt-1a2b3c4d_u1/.kiro/agents/aidlc.json",
+    ".aidlc/worktree-meta.json",
+    ".github/workflows/ci.yml",
+    ".vscode/settings.json",
+    ".husky/pre-commit",
+    ".kiro/steering/x.md",
+    ".kiro/agents/x.json",
+    ".gitignore",
+    ".env",
+    "../outside.txt",
+    "/tmp/outside.txt",
+    "src/../.env-dotdot-probe",
+    "src/../.github/workflows/dotdot-probe.yml",
+    "/project/.github/workflows/abs-probe.yml",
+    "/project/.aidlc/worktrees/bolt-1a2b3c4d_u1/src/abs-wt-probe.js",
+  ].map((path): ["allow" | "ask", string] => ["ask", path]),
+];
+
 describe("t252 Kiro allowlist after Kiro CLI's 3.0 upgrade", () => {
   const agents = ["aidlc.json", ...PERSONAS];
+
+  test("every write entry holds a `/`, so Kiro 3.0 anchors it at the project root", () => {
+    for (const agent of agents) {
+      for (const entry of writeSettings("kiro", agent).allowedPaths) {
+        expect(entry, `${agent}: Kiro 3.0 reads ${entry} as a file name at any depth`).toContain("/");
+      }
+    }
+  });
+
+  test("the developer and the conductor write on Kiro 3.0 what they write on Kiro CLI 2", () => {
+    for (const agent of CODE_WRITERS) {
+      const settings = writeSettings("kiro", agent);
+      for (const path of [...WRITE_ALLOW, ...WRITE_ASK, ...WORKTREE_WRITE_ALLOW, ...WORKTREE_WRITE_ASK]) {
+        expect(v3WriteVerdict(settings, path), `${agent}: ${path}`).toBe(writeVerdict(settings, path));
+      }
+    }
+  });
+
+  test("the write model gives the verdicts Kiro 3.0 gave", () => {
+    for (const agent of CODE_WRITERS) {
+      for (const [verdict, path] of RECORDED_WRITES_ON_KIRO_3) {
+        expect(v3WriteVerdict(writeSettings("kiro", agent), path), `${agent}: Kiro 3.0 recorded ${verdict} for ${path}`).toBe(verdict);
+      }
+    }
+  });
 
   test("every entry translates exactly, with no `*` but the arguments' and at most 12 globs", () => {
     for (const agent of agents) {

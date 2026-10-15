@@ -191,6 +191,10 @@ export interface GraphStage extends StageEntry {
   // per-unit construction matrix; an unlisted artifact applies to all kinds.
   produces_kinds?: Record<string, string[]>;
   consumes: Consume[];
+  // cites - optional consumes the stage's deliverables cite whenever they
+  // exist; the upstream-coverage check reads them beside the required ones.
+  // Outside consumes, so adding one changes no finished stage's validity record.
+  cites?: string[];
   requires_stage: string[];
   // sensors is the stage-side pull import — a list of sensor manifest
   // ids. Optional because most stages declare empty (initialization) or
@@ -342,7 +346,7 @@ function stagesDir(): string {
 }
 
 /** Resolve the stage-graph.json path. Mirrors lib.ts:loadStageGraph()'s
- *  AIDLC_STAGE_GRAPH env-var seam (lib.ts:295-296) so tests can point both
+ *  AIDLC_STAGE_GRAPH env-var seam so tests can point both
  *  loader and compile-check at a temp file. Evaluated at call time so tests
  *  that set/unset the env mid-process see the change. */
 function stageGraphPath(): string {
@@ -998,6 +1002,7 @@ const FIELD_ORDER = [
   "optional_produces",
   "produces_kinds",
   "consumes",
+  "cites",
   "requires_stage",
   "sensors",
   "scopes",
@@ -1413,6 +1418,12 @@ export function consumedArtifactProducerCollisions(): {
  *  declared-prose artifact. Lives here so both invocation sites derive it
  *  identically without importing the dispatcher (whose top-level main() would
  *  run on import). */
+/** The sensors that read a stage's whole output: given one file, each
+ *  evaluates every declared deliverable in that file's folder (the dispatcher
+ *  threads --deliverables for them), so one evaluation per folder is the
+ *  stage's verdict. The dispatcher and the gate both read this set. */
+export const STAGE_WIDE_SENSOR_IDS: ReadonlySet<string> = new Set(["upstream-coverage", "claim-sources"]);
+
 export function templateEligibleArtifacts(produces: string[]): string[] {
   return (produces ?? []).filter(
     (a) =>
@@ -2957,6 +2968,9 @@ function buildGraphStage(
   }
   if (parsed.optional_produces !== undefined) {
     stage.optional_produces = parsed.optional_produces;
+  }
+  if (parsed.cites !== undefined) {
+    stage.cites = parsed.cites;
   }
   if (parsed.produces_kinds !== undefined) {
     stage.produces_kinds = parsed.produces_kinds;

@@ -52,9 +52,10 @@ outputs: stories.md, personas.md, user-stories-assessment.md, traceability.json 
 
 ### Step 1: Load the Lead Persona (mob stage)
 
-Read every path in `directive.inline_context_paths` per the stage protocol. For
-this mob the roster contains the aidlc-product-agent persona and its shared/role
-knowledge only; the product manager owns the inline draft and integration work.
+The step carries the aidlc-product-agent persona (`directive.lead_persona`); work
+this stage as that agent. Read every path in `directive.inline_context_paths` per
+the stage protocol: for this mob it holds the product agent's shared and role
+knowledge only. The product manager owns the inline draft and integration work.
 
 This stage runs `mode: mob` (stage-protocol-ensemble.md §5 "Multi-agent stages"): the support agents (aidlc-design-agent for user experience, aidlc-developer-agent for implementability, aidlc-quality-agent for testability) are NOT voices to adopt — they are dispatched as independent participants during PART 2. Do not load their personas into your own context.
 
@@ -163,7 +164,9 @@ directive's effective `support_agents` is missing. A lead-only run has none.
 **Write element-level traceability.** Create
 `<record>/inception/user-stories/traceability.json`. Enumerate every `FR` and
 `NFR` ID from `requirements.md` in `upstream_ids`, with one `coverage` row per
-ID. `OK` targets must name one or more existing `USx.y` IDs. Use `Deferred`
+ID; a requirement with sub-requirements is traced through its `FR{n}.{m}` IDs
+and needs no row of its own. `OK` targets must name one or more existing
+`USx.y` IDs. Use `Deferred`
 only with a named downstream stage and `N/A` only with a justification:
 
 ```json

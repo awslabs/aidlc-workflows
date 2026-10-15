@@ -1,4 +1,4 @@
-// covers: function:ANSWER_SOURCE_ON_INSTRUCTION, cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:pendingSummaryDecision, function:humanActedSinceGate, function:humanTurnState, function:humanActedSinceLastAnswer, function:hasOpenGate, function:isAutonomousMode, function:humanPresenceGuardDisabled, audit:GUARD_STOOD_ASIDE, function:humanTurnMintAllowed, function:unattendedHumanPresenceHint, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:SUMMARY_CONFIRMATION_HASH_SCOPE, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
+// covers: function:ANSWER_SOURCE_ON_INSTRUCTION, cli:aidlc-state(approve,gate-start), cli:aidlc-orchestrate(report), cli:aidlc-log(answer), audit:SUMMARY_CONFIRMATION_RECORDED, function:handleApprove, function:handleGateStart, function:handleAnswer, function:pendingSummaryDecision, function:humanActedSinceGate, function:humanTurnState, function:humanActedSinceLastAnswer, function:isAutonomousMode, function:humanPresenceGuardDisabled, audit:GUARD_STOOD_ASIDE, function:humanTurnMintAllowed, function:unattendedHumanPresenceHint, function:checkSummaryConfirmationEvidence, function:readAuditShardEvents, function:SUMMARY_CONFIRMATION_HASH_SCOPE, function:summaryConfirmationGuardDisabled, file:hooks/aidlc-record-human-turn.ts
 //
 // t188 - human-presence approval gate (ledger-event design).
 //
@@ -1065,33 +1065,6 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       "utf-8",
     );
     expect(humanActedSinceGate(proj)).toBe(true);
-  });
-
-  // --- hasOpenGate (the preToolUse floors' gate-open predicate) ---------------
-  //
-  // The per-harness preToolUse floors must refuse ONLY while a stage actually
-  // sits at [?]: after a legitimate approval the last resolution follows the
-  // turn's HUMAN_TURN, and without this predicate the floor would block the
-  // mandated same-turn continuation into the next stage.
-  describe("hasOpenGate (state-file [?] predicate for the preToolUse floors)", () => {
-    test("false with no state / no [?]; true once a stage awaits approval", async () => {
-      const { hasOpenGate } = await import(
-        "../../dist/claude/.claude/tools/aidlc-lib.ts"
-      );
-      expect(hasOpenGate(null)).toBe(false);
-      const before = readFileSync(seededStateFile(proj), "utf-8");
-      expect(hasOpenGate(before)).toBe(false); // fixture has no [?] stage
-      const slug = field(proj, "Current Stage");
-      guarded(proj, ["checkbox", `${slug}=in-progress`]);
-      guarded(proj, ["gate-start", slug]);
-      const open = readFileSync(seededStateFile(proj), "utf-8");
-      expect(hasOpenGate(open)).toBe(true);
-      // Approving closes it again: the floor stops firing post-approval.
-      recordHumanTurn(proj);
-      expect(guarded(proj, ["approve", slug, "--user-input", "Approve"]).rc).toBe(0);
-      const after = readFileSync(seededStateFile(proj), "utf-8");
-      expect(hasOpenGate(after)).toBe(false);
-    });
   });
 
   // --- handleAnswer twin (interview path) ------------------------------------

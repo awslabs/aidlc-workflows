@@ -53,7 +53,6 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, sep, win32 } from "node:path";
-import { resolveAction } from "../../dist/cursor/.cursor/tools/aidlc.ts";
 import {
   auditBlockField,
   createIntent,
@@ -479,16 +478,16 @@ describe("t276 cursor adapter payload conversion", () => {
   test("3: guards convert a state-guard block to Cursor's permission-deny JSON", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");
-    // A direct lifecycle mutation through aidlc-state.ts is the state guard's
-    // canonical refusal; on Cursor it must arrive as deny JSON, exit 0.
+    // A tool call that invokes a hook is a refusal the state guard keeps; on
+    // Cursor it must arrive as deny JSON, exit 0.
     const stdin = payload("preToolUseShell", proj, {
-      tool_input: { command: "bun .cursor/tools/aidlc-state.ts approve", cwd: "", timeout: 30000 },
+      tool_input: { command: "bun .cursor/tools/aidlc.ts engine hook record-human-turn", cwd: "", timeout: 30000 },
     });
     const r = runAdapter(proj, "guards", stdin);
     expect(r.code).toBe(0);
     const out = JSON.parse(r.stdout) as { permission?: string; agent_message?: string };
     expect(out.permission).toBe("deny");
-    expect(out.agent_message ?? "").toContain("aidlc-orchestrate");
+    expect(out.agent_message ?? "").toContain("AIDLC runtime records and hooks belong to the harness");
   });
 
   test("4: guards allow an ordinary shell command with permission-allow JSON", () => {
@@ -1577,21 +1576,39 @@ describe("t276 cursor adapter payload conversion", () => {
     expect(JSON.parse(sibling.stdout).permission).toBe("deny");
   });
 
-  test("22: an unavailable child guard denies the operation", () => {
-    const proj = installedProject();
-    seedStateFile(proj, "state-construction.md");
-    rmSync(join(proj, ".cursor", "hooks", "aidlc-reviewer-scope.ts"));
-
-    const r = runAdapter(proj, "guards", payload("preToolUseShell", proj));
-    expect(r.code).toBe(0);
-    const out = JSON.parse(r.stdout) as { permission?: string; agent_message?: string };
-    expect(out.permission).toBe("deny");
-    expect(out.agent_message ?? "").toContain("aidlc-reviewer-scope.ts failed");
-    // It names the step that puts the files back, and that command is a real route.
-    expect(out.agent_message ?? "").toContain("config --harness cursor");
-    expect(out.agent_message ?? "").not.toContain("doctor");
-    const action = resolveAction(["config", "--harness", "cursor"]);
-    expect(action.type).not.toBe("error");
+  test("22: a guard that fails on its own refuses nothing, and doctor reads why", () => {
+    // As in the core hook group: a crashed member refuses nothing. Denying here
+    // stopped every call, reads included, under every Guard Policy, with no
+    // step that could fix a guard that throws on this project's state.
+    const crashes: Array<[string, string | null, string]> = [
+      ["throws", 'throw new Error("simulated guard crash [degraded]");\n', "exited 1"],
+      ["exits 1", "process.exit(1);\n", "exited 1"],
+      ["is missing", null, "exited 1"],
+    ];
+    // Windows has no POSIX signals: a killed process there reports an exit code.
+    if (process.platform !== "win32") {
+      crashes.push(["is killed", 'process.kill(process.pid, "SIGKILL");\n', "was stopped by SIGKILL"]);
+    }
+    for (const [how, body, said] of crashes) {
+      const proj = installedProject();
+      seedStateFile(proj, "state-construction.md");
+      const guard = join(proj, ".cursor", "hooks", "aidlc-state-transition-guard.ts");
+      if (body === null) rmSync(guard);
+      else writeFileSync(guard, body);
+      for (const input of [
+        payload("preToolUseShell", proj),
+        payload("preToolUseShell", proj, { tool_name: "Read", tool_input: { file_path: join(proj, "README.md") } }),
+      ]) {
+        expectAllowJson(runAdapter(proj, "guards", input), how);
+      }
+      const drops = join(hooksHealthDir(proj), "state-transition-guard.drops");
+      expect(existsSync(drops), how).toBe(true);
+      const lines = readFileSync(drops, "utf-8").trim().split("\n");
+      expect(lines, how).toHaveLength(2);
+      expect(lines[0], how).toContain(`state-transition-guard ${said} under the Cursor adapter: `);
+      // A tag in the guard's own words never decides doctor's verdict.
+      expect(lines[0], how).not.toContain("[degraded]");
+    }
   });
 
   test("22b: an unavailable shared freeze parser denies before the guard chain", () => {

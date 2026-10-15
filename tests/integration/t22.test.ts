@@ -15,16 +15,16 @@
 // (dist/claude/.claude/tools/aidlc-utility.ts collectDoctorReport), NOT guessed:
 //   - header literal:     "AI-DLC doctor"                     (aidlc-doctor.ts humanReport)
 //   - runtime label:      "Runtime hook PATH: bun"                  (shared diagnostics)
-//   - hook check label:   "<hook>.ts present"                 (utility.ts:356)
-//   - settings label:     "settings.json present"            (utility.ts:365)
-//   - shell-ready label:  "workspace shell ready"            (utility.ts:597; P4: the
+//   - hook check label:   "<hook>.ts present"                 (utility.ts)
+//   - settings label:     "settings.json present"            (utility.ts)
+//   - shell-ready label:  "workspace shell ready"            (utility.ts; P4: the
 //                         old "aidlc-docs/ directory exists" row was retired - auto-create
 //                         needs no scaffolded aidlc-docs/, so doctor checks the SHIPPED SHELL
 //                         (.claude/ + aidlc/spaces/default/memory/) instead)
-//   - footer shape:       "N passed, M failed"               (utility.ts:1371)
+//   - footer shape:       "N passed, M failed"               (utility.ts)
 //                         as first ported; today the human report's footer reads
 //                         "N problems, M warnings." (aidlc-doctor.ts humanReport)
-//   - audit event:        "HEALTH_CHECKED"                    (utility.ts:1376)
+//   - audit event:        "HEALTH_CHECKED"                    (utility.ts)
 //
 // MECHANISM. Mechanism `sdk` is derived from the driveAidlc call. The covered
 // unit `aidlc-utility doctor` is minMechanism `cli` (rank 1); sdk satisfies

@@ -571,7 +571,9 @@ export function recoveryAsk(said: string): Directive | null {
  * Any other remedy (request-changes needs feedback the scope run never gives)
  * stops the run as the stand-in's limit, never as the engine's deadlock.
  */
-const REMEDY_PREFERENCE = ["present-approval-gate", "start-recovery-review", "request-review"];
+const REMEDY_PREFERENCE = [
+  "present-findings-at-gate", "present-approval-gate", "start-recovery-review", "request-review",
+];
 
 /** Where the agent handed the turn to the person, and whether the Stop hook let it. */
 export interface Handoff {
@@ -979,9 +981,12 @@ export class AgentStandIn {
       }
       const stage = String(ask.stage ?? "");
       const unit = typeof ask.unit === "string" ? ask.unit : null;
-      this.askPerson("guard recovery", stage, String(ask.question ?? ""), remedies.map((r) => r.op), remedy.op);
-      this.must("log", "answer", "--stage", stage, "--checkpoint", "guard-recovery", "--details", remedy.op,
-        ...(unit ? ["--unit", unit] : []));
+      // The agent's own work is no question: it takes the way on with no pick.
+      if (ask.agent_work !== true) {
+        this.askPerson("guard recovery", stage, String(ask.question ?? ""), remedies.map((r) => r.op), remedy.op);
+        this.must("log", "answer", "--stage", stage, "--checkpoint", "guard-recovery", "--details", remedy.op,
+          ...(unit ? ["--unit", unit] : []));
+      }
       this.refusalsMet.push({ said, signature, took: `remedy ${remedy.op}` });
       // The remedy's interaction, as the skill's guard-recovery execution says.
       // A step the remedy takes that is refused in turn is followed the same way.
@@ -994,8 +999,8 @@ export class AgentStandIn {
           if (out && typeof out.kind === "string" && out.kind !== "print" && out.kind !== "done") this.pending = out;
         } else if (remedy.op === "start-recovery-review" || remedy.op === "request-review") {
           this.reviewAgain(stage, unit);
-        } else if (remedy.op === "present-approval-gate") {
-          // Its route after the pick: the stage's gate opens for the person.
+        } else if (remedy.op === "present-approval-gate" || remedy.op === "present-findings-at-gate") {
+          // The stage's gate opens for the person.
           this.report(stage, "--result", "awaiting-approval");
         }
       } catch (error) {

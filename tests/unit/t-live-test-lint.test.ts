@@ -150,12 +150,6 @@ const KNOWN: ReadonlyArray<{ file: string; check: Check; subject: string; instea
   {
     file: "tests/integration/t238-user-stories-mob.sdk.test.ts",
     check: "the order or count of the agent's tool calls",
-    subject: "projectKnowledgeReadIndex",
-    instead: "the knowledge was read with its marker (asserted beside it); drop the read order",
-  },
-  {
-    file: "tests/integration/t238-user-stories-mob.sdk.test.ts",
-    check: "the order or count of the agent's tool calls",
     subject: "approvedIndex",
     instead: "the record: STAGE_AWAITING_APPROVAL before GATE_APPROVED for user-stories",
   },

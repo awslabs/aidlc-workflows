@@ -5,8 +5,8 @@
 // `next` branches (jump / resume / init / scope-change / config-change /
 // env-scope / freeform-intent / init-guard) and CROSS-CHECKS the jump-direction
 // against `aidlc-jump.ts resolve` — the pure-read subcommand the engine
-// DELEGATES forward/backward/redo resolution to (aidlc-orchestrate.ts:664-676,
-// 797-839). This .cli file credits `subcommand:aidlc-jump resolve` (COLON form
+// DELEGATES forward/backward/redo resolution to (aidlc-orchestrate.ts).
+// This .cli file credits `subcommand:aidlc-jump resolve` (COLON form
 // in the covers header) because the jump branch's observable contract IS that
 // resolve's `direction` / `target_slug` is what the engine surfaces: tests 1-3
 // fire `bun aidlc-jump.ts resolve ...` directly and assert the same `direction`

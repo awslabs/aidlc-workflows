@@ -126,6 +126,7 @@ import {
   personSpokeSinceGate,
   fenceSwitchSentence,
   decideFence,
+  ENGINE_OWNED_STATE_TRANSITIONS,
   guardStandAsideSpeaks,
   guardStoodAsideLine,
   recordGuardStoodAside,
@@ -235,7 +236,7 @@ import {
   recordHookDrop,
   engineDir,
 } from "./aidlc-lib.js";
-import { memoryDirFor } from "./aidlc-graph.ts";
+import { memoryDirFor, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
@@ -842,29 +843,15 @@ export function main(argv: string[]): void {
 
   const subcommand = args[0];
 
-  // Lifecycle transitions and generic state writes are engine-owned. The
-  // orchestrator binds its child marker to its own PID; this process accepts it
-  // only when it names the actual parent. A copied static token cannot bypass
-  // report's stage pinning, evidence checks, and idempotency.
-  const engineOwnedTransitions = new Set([
-    "set",
-    "checkbox",
-    "advance",
-    "finalize",
-    "complete-workflow",
-    "gate-start",
-    "approve",
-    "reject",
-    "revise",
-    "skip",
-    "park",
-    "refresh-unit-progress",
-    "sync-unit-scope-stage",
-    "fold-unit-merge",
-  ]);
+  // Lifecycle transitions and generic state writes are engine-owned, and this
+  // is the one place that rule is enforced: whatever spelling ran the verb, it
+  // arrives here, so no hook reads the command for it. The orchestrator binds
+  // its child marker to its own PID; this process accepts it only when it names
+  // the actual parent. A copied static token cannot bypass report's stage
+  // pinning, evidence checks, and idempotency.
   if (
     subcommand &&
-    engineOwnedTransitions.has(subcommand) &&
+    ENGINE_OWNED_STATE_TRANSITIONS.has(subcommand) &&
     process.env.AIDLC_STATE_TRANSITION_OWNER !== `orchestrate:${process.ppid}` &&
     !(
       subcommand === "fold-unit-merge" &&
@@ -904,8 +891,7 @@ export function main(argv: string[]): void {
           "--stage <slug> --result " +
           "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
           "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow. " +
-          // The tool-side twin of the state-transition fence: same invariant, same
-          // way out, so the human is not told to go and find it.
+          // The way out is named here, so the human is not told to go and find it.
           fenceSwitchSentence(pd, "state-transition"),
       );
     }
@@ -3710,6 +3696,29 @@ function gateSensorMatchesOutput(
     new Bun.Glob(sensor.matches).match(outputPath.replace(/\\/g, "/"));
 }
 
+// The deliverables the gate fires a sensor on. A stage-wide sensor evaluates
+// every deliverable in the folder of the file it is given, so it fires once per
+// folder (each Unit's folder at a per-Unit stage), on the folder's first
+// markdown deliverable that is not a questions or timestamp file; any other
+// sensor fires on each deliverable its matches glob accepts.
+function gateSensorOutputs(
+  sensor: NonNullable<
+    NonNullable<ReturnType<typeof findStageBySlug>>["sensors_applicable"]
+  >[number],
+  paths: string[],
+): string[] {
+  const matching = paths.filter((path) => gateSensorMatchesOutput(sensor, path));
+  if (!STAGE_WIDE_SENSOR_IDS.has(sensor.id)) return matching;
+  const isDocument = (path: string): boolean =>
+    path.endsWith(".md") && templateEligibleArtifacts([basename(path, ".md")]).length === 1;
+  const byFolder = new Map<string, string>();
+  for (const path of matching) {
+    const chosen = byFolder.get(dirname(path));
+    if (chosen === undefined || (!isDocument(chosen) && isDocument(path))) byFolder.set(dirname(path), path);
+  }
+  return [...byFolder.values()];
+}
+
 function artifactFingerprint(path: string): string | null {
   try {
     return createHash("sha256").update(readFileSync(path)).digest("hex");
@@ -3774,8 +3783,7 @@ function fireGateSensors(
   const executable = compiledExecutable();
   const sensorTool = fileURLToPath(new URL("./aidlc-sensor.ts", import.meta.url));
   for (const sensor of sensors) {
-    for (const outputPath of paths) {
-      if (!gateSensorMatchesOutput(sensor, outputPath)) continue;
+    for (const outputPath of gateSensorOutputs(sensor, paths)) {
       const expectedFingerprint = fingerprints.get(outputPath);
       if (
         sensor.default_severity === "blocking" &&
@@ -5165,6 +5173,9 @@ function verifyPipelineLinkPrecondition(
     lead_agent: string;
     support_agents: string[];
   },
+  // The person's approval is in hand: once the links are in, the same approve
+  // applies it.
+  approval = false,
 ): void {
   if (
     stage.mode !== "pipeline" ||
@@ -5177,11 +5188,20 @@ function verifyPipelineLinkPrecondition(
   const missing = evidence.missing.map(({ link, repo }) =>
     repo ? `${repo}:${link}` : link
   );
+  const content = readStateFile(pd);
+  const gateOpen = parseCheckboxes(content).find((entry) => entry.slug === stage.slug)
+    ?.state === "awaiting-approval";
+  // The sentence is also the agent's way on (evaluateGuardRefusal's
+  // dispatch-pipeline-links), so it names the links: `next` at an open gate
+  // prints the ask alone.
   const message =
     `Cannot complete "${stage.slug}" because these pipeline handoffs have not been ` +
       `recorded for the current run: ${missing.join(", ")}. ` +
-      pipelineLinkWayOn(pd, stage.slug, { repos: evidence.repos.length > 0 });
-  const content = readStateFile(pd);
+      pipelineLinkWayOn(pd, stage.slug, {
+        repos: evidence.repos.length > 0,
+        gateOpen,
+        ...(approval ? { approval: "the same approve command again" } : {}),
+      });
   refuseStateGuard(pd, content, stage, {
     code: "PIPELINE_EVIDENCE_MISSING",
     blockedAction: "complete",
@@ -5642,7 +5662,7 @@ function handleFinalize(args: string[]): void {
   }
   // Thread the live state content into BOTH walks so per-stage EXECUTE/SKIP
   // suffix overrides (a recomposed plan) and prior [x]/[S] checkboxes are
-  // honoured - the same threading the advance path does (:869/:935). Without
+  // honoured - the same threading handleAdvance does. Without
   // it these two calls project the next move from the STATIC scope grid and
   // route around any recompose flip.
   const nextStage = nextInScopeStage(completedSlug, scope, content);
@@ -6156,7 +6176,7 @@ function admitStageAction(
     if (options.entrypoint === "approve") {
       verifyStageArtifacts(pd, stage);
       verifySummaryConfirmationPrecondition(pd, stateContent, stage);
-      verifyPipelineLinkPrecondition(pd, stage);
+      verifyPipelineLinkPrecondition(pd, stage, true);
       verifyReviewerPrecondition(pd, stateContent, stage, "complete", true, options.personCall);
       if (!alreadyCompleted) {
         verifyConstructionCheckpointPrecondition(pd, stateContent, stage, options.action);
@@ -6317,8 +6337,7 @@ function latestCheckResults(pd: string, stage: GateStage, unit: string | null = 
     });
   }
   for (const sensor of sensors) {
-    for (const path of paths) {
-      if (!gateSensorMatchesOutput(sensor, path)) continue;
+    for (const path of gateSensorOutputs(sensor, paths)) {
       const rel = relative(pd, path).split(sep).join("/");
       const result = latest.get(`${sensor.id}@${rel}`);
       if (result === undefined) results.rest.push(`${sensor.id}@${rel}=not-run`);

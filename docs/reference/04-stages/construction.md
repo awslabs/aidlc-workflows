@@ -430,7 +430,7 @@ feasibility input.
 | rules.md        | Decision rules, validation logic, constraints, policies, conditional behavior |
 | entities.md       | Entities, relationships, data structures, attributes, lifecycle states   |
 | frontend-components.md   | (CONDITIONAL) Component hierarchy, props/state, interaction flows, form validation, API integration |
-| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR), each `OK` to `BRx.y` rules in rules.md, `N/A` or `Deferred` with its reason, or `GAP` |
+| traceability.json        | Every acceptance criterion of each story mapped to the Unit (without stories.md, the Unit's FR rows in the story map; without a story map, every FR; a requirement with sub-requirements through its `FR{n}.{m}` IDs), each `OK` to `BRx.y` rules in rules.md, `N/A` or `Deferred` with its reason, or `GAP` |
 
 Which files a Unit gets follows its kind: a `ui` Unit gets no entities.md or
 rules.md, only a `ui` Unit gets frontend-components.md, and a `packaging`
@@ -544,7 +544,7 @@ providing testability and measurability input.
 | reliability-requirements.md  | Availability targets (SLA/SLO), fault tolerance, backup/recovery           |
 | observability-requirements.md | Monitoring, logging, tracing, alerting, dashboards, SLI/SLO definitions    |
 | tech-stack-decisions.md      | Technology selections with rationale for each choice                       |
-| traceability.json            | Every inception `NFR{n}` that applies to the Unit mapped to its `NFRx.y` IDs |
+| traceability.json            | Every inception `NFR{n}` (when User Stories did not run and the story map gives the Unit NFR rows, those) mapped to its `NFRx.y` IDs, or `N/A` with the reason it does not apply |
 
 Which files a Unit gets follows its kind: scalability, reliability and
 observability requirements are for `service` Units, and performance for
@@ -999,7 +999,13 @@ This stage has a **two-part structure**: planning followed by generation.
    is one of the choices, the same way it records an exact pick typed in chat,
    naming the file in one line for the conductor. When the person says it in
    their own words instead ("I put my answer in the file"), the conductor reads
-   the line and records the choice they made. The
+   the line and records the choice they made. When the person's message in
+   this chat that the question opened for already asked for a change ("go back
+   to code generation: also accept -S", on finished work too) and no decision
+   has used it, the conductor records it as that question's Request Changes,
+   with their words (the message record is the proof, as `--message` reads
+   it); an approval still needs a reply after the question shows, and the
+   revised plan's question needs its own. The
    next `next` returns the run-stage with `plan_approval.status: "approved"`
    (build), `revise` (with the person's words), `repair` (a Testing Contract an
    edit broke), or `plan` (finish the files). In edit mode the person changes the
@@ -1453,11 +1459,17 @@ with the aidlc-devsecops-agent providing security testing expertise.
     pass and every applicable target to be `Met`, or the single explanatory
     `N/A` row when no target applies.
 
-10. **Cross-Unit Final Coverage Gate** -- Enumerate every `FR` and `NFR` in
-    `requirements.md` and every `AC` in `stories.md` (when User Stories ran),
-    read the stage-level and every per-unit Code Generation
-    `traceability.json`, and check each ID is covered `OK` with an existing
-    target file. Write `cross-unit-traceability.md` with the verdict, per-ID
+10. **Cross-Unit Final Coverage Gate** -- Run
+    `aidlc engine sensor-traceability --stage build-and-test`. It reports every
+    `FR` and `NFR` in `requirements.md` (a requirement with sub-requirements
+    through its `FR{n}.{m}` IDs) and every `AC` in `stories.md` (when User
+    Stories ran), each built when a stage-level or per-unit Code Generation
+    `traceability.json` covers it `OK` with an existing target file. A
+    requirement with sub-requirements is built when each Unit has built its own
+    (the `NFR1.x` its NFR Requirements wrote; a row for `NFR1` alone does not
+    cover them); otherwise by its own row or, when User Stories ran, through
+    every acceptance criterion of the stories User Stories traced it to. Write
+    `cross-unit-traceability.md` from that output with the verdict, per-ID
     coverage and every uncovered ID; an uncovered ID is a finding shown at the
     approval gate.
 

@@ -15,7 +15,7 @@
 // Nothing is written; nothing under tests/fixtures/** is touched.
 //
 // Source:
-//   dist/claude/.claude/tools/aidlc-lib.ts:893 parseStageFrontmatter(raw)
+//   dist/claude/.claude/tools/aidlc-lib.ts parseStageFrontmatter(raw)
 //     — returns Record<string, unknown>; inputs/outputs are string scalars in
 //     the stage frontmatter (verified against the real intent-capture /
 //     reverse-engineering / requirements-analysis files).

@@ -7,7 +7,7 @@
 // asserted against (a) the checkbox / Revision Count fields it writes to
 // aidlc-state.md and (b) the cumulative audit trail it appends.
 // Each transition is a CLI subcommand that terminates with process.exit on a
-// state-machine guard failure (validateSlugInState, aidlc-state.ts:661) and
+// state-machine guard failure (validateSlugInState, aidlc-state.ts) and
 // writes its event row via the audit lock — a PROCESS boundary. An in-process
 // twin would lose the multi-invocation accumulation seam (each transition
 // re-reads state + appends one locked audit block) and the exit-code contract.
@@ -33,7 +33,7 @@
 //   - Revision Count is the `- **Revision Count**: N` field line.
 //   - audit event rows carry the RAW event type on the `**Event**: <TYPE>`
 //     line (the multi-word EVENT_HEADINGS value goes on the `## ` heading,
-//     aidlc-audit.ts:117-139,254); count_event greps the **Event** line.
+//     aidlc-audit.ts); count_event greps the **Event** line.
 //
 // A single full cycle is driven in beforeAll and the per-assertion intermediate
 // Revision Count / checkbox states are captured at the moment they were written

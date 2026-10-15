@@ -351,11 +351,11 @@ describe("t240 dist/opencode packaging parity + shell shape", () => {
         { tool: "bash", sessionID: "main", callID: "direct" },
         {
           args: {
-            command: "bun .aidlc/tools/aidlc.ts engine state approve",
+            command: "bun .aidlc/tools/aidlc.ts engine hook record-human-turn",
           },
         },
       ),
-    ).rejects.toThrow(/Stage status cannot be changed with aidlc-state\.ts approve/i);
+    ).rejects.toThrow(/AIDLC runtime records and hooks belong to the harness/);
   }, ADAPTER_ENTRYPOINT_TIMEOUT_MS);
 
   test("10: doctor accepts an opencode.jsonc-only install", () => {

@@ -240,6 +240,13 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
   `writable_roots = ["<main repo>/.git"]` — template in the shipped
   `config.toml` (linked worktrees resolve into `<main>/.git/worktrees/*`,
   so it must be the main repo's `.git`).
+- **Network under the sandbox**: the shipped `.codex/config.toml` sets
+  `network_access = true` under `[sandbox_workspace_write]`, so a command
+  Codex runs in its sandbox in this project can reach the network (to
+  install packages or fetch dependencies), whatever your own Codex default
+  is. To keep it closed in this project, set `network_access = false` there;
+  a refresh keeps the value you set. For one session only, start Codex with
+  `codex -c sandbox_workspace_write.network_access=false`.
 - **Swarm floor = developer subagents**: one `aidlc-developer-agent`
   subagent per emitted Construction Unit, side by side, each working in the
   isolated worktree for that Unit's Bolt, with the same deterministic
@@ -266,7 +273,7 @@ implicit skill matching so 37 runner descriptions don't pollute the index).
   writes files via shell heredocs, which bypass the `apply_patch` hook
   matcher — `ARTIFACT_*` rows can be sparse. Interactive TUI sessions (where
   the system prompt mandates `apply_patch`) are the high-fidelity audit mode.
-- **AIDLC rule layers** live at the workspace root under `aidlc/spaces/<active-space>/memory/` (one hand-editable source, identical on every harness). Codex has no ambient include for them: the engine reads the active space's files and hands each step its rules (`config.toml` ships no `AIDLC_RULES_DIR`; an earlier release's line is removed by the next `aidlc config`). Codex's native `.codex/rules/` directory holds Starlark permission rules, distinct from the AIDLC method.
+- **AIDLC rule layers** live at the workspace root under `aidlc/spaces/<active-space>/memory/` (one hand-editable source, identical on every harness). Codex has no ambient include for them: the engine reads the active space's files and hands each step its rules (`config.toml` ships `AIDLC_RULES_DIR` empty, which the engine reads as none, so a project copied from 2.11.0 refreshes with its own tool; a space an earlier release's line names is emptied by the next `aidlc config`). Codex's native `.codex/rules/` directory holds Starlark permission rules, distinct from the AIDLC method.
 - **No welcome message**: the Claude harness renders the Phases/Stages/Scopes
   onboarding banner from `settings.json` `companyAnnouncements` at session start;
   Codex has no equivalent. The session-start path injects workflow context only.

@@ -11,7 +11,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   loadGraph,
@@ -301,10 +301,7 @@ ${quotedExecutable} -e 'await Bun.write("${marker}", "passed")'
       "<record>/construction/*/code-generation/unit-test-instructions.md",
     );
     expect(buildAndTest).toContain(
-      "<record>/construction/code-generation/traceability.json",
-    );
-    expect(buildAndTest).toContain(
-      "<record>/construction/*/code-generation/traceability.json",
+      "{{INVOKE}} engine sensor-traceability --stage build-and-test",
     );
 
     const command = readFileSync(instructionsPath, "utf-8")
@@ -319,11 +316,23 @@ ${quotedExecutable} -e 'await Bun.write("${marker}", "passed")'
     expect(executed.status, `${executed.stdout}\n${executed.stderr}`).toBe(0);
     expect(readFileSync(join(proj, marker), "utf-8")).toBe("passed");
 
-    const traceability = JSON.parse(readFileSync(traceabilityPath, "utf-8")) as {
-      coverage: Array<{ id: string; status: string; target: string }>;
-    };
-    const fr1 = traceability.coverage.find((entry) => entry.id === "FR1");
-    expect(fr1?.status).toBe("OK");
-    expect(existsSync(join(proj, fr1!.target))).toBe(true);
+    // The final gate's check reads the stage-level table and finds FR1 built.
+    mkdirSync(join(seededStateFile(proj), ".."), { recursive: true });
+    writeFileSync(seededStateFile(proj), "# State\n");
+    const requirementsDir = join(seededRecordDir(proj), "inception", "requirements-analysis");
+    mkdirSync(requirementsDir, { recursive: true });
+    writeFileSync(join(requirementsDir, "requirements.md"), "# Requirements\n\n- FR1 Express flow\n");
+    const finalGate = spawnSync("bun", [join(AIDLC_SRC, "tools", "aidlc-sensor-traceability.ts"), "--stage", "build-and-test"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      cwd: proj,
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj },
+    });
+    expect(finalGate.status, finalGate.stderr).toBe(0);
+    expect(JSON.parse(finalGate.stdout)).toEqual({
+      pass: true,
+      uncovered: [],
+      coverage: [{ id: "FR1", covered: true, built_in: ["code-generation: src/express.ts"] }],
+    });
   });
 });

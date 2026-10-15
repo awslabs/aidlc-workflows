@@ -22,7 +22,7 @@
 //       * State Version is 8,
 //       * MORE than 4 stages are marked complete `- [x]`,
 //       * the Completed counter EQUALS the `- [x]` grid count — the invariant the
-//         framework maintains (aidlc-state.ts:256-258 syncs Completed to
+//         framework maintains (aidlc-state.ts syncs Completed to
 //         countCheckboxes(...,"completed")); the .sh implied this by greping both,
 //       * all 3 Initialization stages are `[x]` (.sh tests 4-6),
 //       * at least one Inception stage progressed — reverse-engineering or

@@ -1,7 +1,8 @@
 // covers: hook:aidlc-state-transition-guard, subcommand:aidlc-state(lifecycle-owner-guard), file:hooks/aidlc-kiro-adapter.ts
 //
-// The hook provides immediate PreToolUse feedback and the state CLI repeats the
-// same ownership boundary as the harness-independent hard floor.
+// The state CLI owns the rule that only the engine changes a stage's status, in
+// every spelling; the hook keeps runtime integrity and a helper's lifecycle and
+// routing commands.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -14,17 +15,15 @@ import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, 
 import { basename, dirname, join, relative } from "node:path";
 import * as ts from "typescript";
 import {
-  BLOCKED_STATE_TRANSITIONS,
   DELEGATE_ADMITTED_VERBS,
   DELEGATE_ROLE_ADMITTED_VERBS,
   DELEGATED_STATE_MUTATIONS,
   delegatedLifecycleCommand,
-  directStateTransition,
   isLifecycleBoundaryCommand,
 } from "../../dist/claude/.claude/hooks/aidlc-state-transition-guard.ts";
 import { violatesRuntimeIntegrity } from "../../dist/claude/.claude/hooks/runtime-integrity.ts";
 import { resolveAction, ROUTES } from "../../dist/claude/.claude/tools/aidlc.ts";
-import { UTILITY_COMMANDS } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { ENGINE_OWNED_STATE_TRANSITIONS, UTILITY_COMMANDS } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../../dist/claude/.claude/tools/aidlc-settings.ts";
 import {
   cleanupTestProject,
@@ -71,7 +70,8 @@ const UTILITY = join(
   "tools",
   "aidlc-utility.ts",
 );
-const BLOCKED = [
+const DISPATCHER = join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc.ts");
+const ENGINE_OWNED = [
   "set",
   "checkbox",
   "advance",
@@ -84,6 +84,7 @@ const BLOCKED = [
   "skip",
   "park",
   "refresh-unit-progress",
+  "sync-unit-scope-stage",
   "fold-unit-merge",
 ] as const;
 const STAGES_ROOT = join(REPO_ROOT, "core", "aidlc-common", "stages");
@@ -98,7 +99,7 @@ const NON_INITIALIZATION_STAGES = [
     .map((name) => join(STAGES_ROOT, phase, name))
 ).sort();
 const DIRECT_LIFECYCLE_VERB = new RegExp(
-  String.raw`aidlc-state\.ts\s+(?:${BLOCKED.join("|")})(?=\s|$)`,
+  String.raw`aidlc-state\.ts\s+(?:${ENGINE_OWNED.join("|")})(?=\s|$)`,
 );
 const DIRECT_CHECKBOX_COMPLETION =
   /\b(?:mark|update)\b[^\n]*`\[x\]`[^\n]*\bcomplete(?:d)?\b/i;
@@ -119,21 +120,25 @@ function unownedEnv(): NodeJS.ProcessEnv {
 }
 
 describe("t242 state-transition ownership guard", () => {
-  test("the hook blocks every lifecycle verb at an actual shell command position", () => {
-    expect([...BLOCKED_STATE_TRANSITIONS]).toEqual([...BLOCKED]);
-    for (const verb of BLOCKED) {
+  test("one set names the stage-status verbs only the engine runs, and every reader takes it", () => {
+    expect([...ENGINE_OWNED_STATE_TRANSITIONS]).toEqual([...ENGINE_OWNED]);
+    for (const verb of ENGINE_OWNED) {
+      expect(DELEGATED_STATE_MUTATIONS.has(verb), verb).toBe(true);
+      expect(delegatedLifecycleCommand(`bun .claude/tools/aidlc-state.ts ${verb} fixture`), verb)
+        .toBe(`aidlc-state.ts ${verb}`);
       expect(
-        directStateTransition(
+        isLifecycleBoundaryCommand(
           `cd /tmp && env AIDLC_TEST=1 bun run ".claude/tools/aidlc-state.ts" ${verb} fixture`,
         ),
-      ).toBe(verb);
-      expect(directStateTransition(`aidlc state ${verb} fixture`)).toBeNull();
-      expect(directStateTransition(`/opt/aidlc/bin/aidlc engine state ${verb} fixture`))
-        .toBe(verb);
+        verb,
+      ).toBe(true);
+      expect(isLifecycleBoundaryCommand(`/opt/aidlc/bin/aidlc engine state ${verb} fixture`), verb)
+        .toBe(true);
+      expect(isLifecycleBoundaryCommand(`aidlc state ${verb} fixture`), verb).toBe(false);
     }
   });
 
-  test("read/config/recovery verbs and command text passed to echo or rg remain allowed", () => {
+  test("read/config/recovery verbs and command text passed to echo or rg are not lifecycle boundaries", () => {
     for (const verb of [
       "get",
       "set-skeleton-stance",
@@ -150,10 +155,10 @@ describe("t242 state-transition ownership guard", () => {
       "unpark",
     ]) {
       expect(
-        directStateTransition(
+        isLifecycleBoundaryCommand(
           `bun .claude/tools/aidlc-state.ts ${verb} fixture`,
         ),
-      ).toBeNull();
+      ).toBe(false);
     }
     for (const command of [
       "echo bun .claude/tools/aidlc-state.ts approve feasibility",
@@ -169,7 +174,7 @@ describe("t242 state-transition ownership guard", () => {
       "printf '%s' 'aidlc engine state reject feasibility'",
       "cat <<'EOF'\naidlc state advance feasibility\nEOF",
     ]) {
-      expect(directStateTransition(command), command).toBeNull();
+      expect(isLifecycleBoundaryCommand(command), command).toBe(false);
     }
   });
 
@@ -653,7 +658,7 @@ describe("t242 state-transition ownership guard", () => {
     for (const statement of hook.statements) {
       if (!ts.isFunctionDeclaration(statement) || !statement.name || !statement.body) continue;
       const functionName = statement.name.text;
-      if (!["maskFunctionDefinitions", "directStateTransition", "isLifecycleBoundaryCommand"].includes(functionName)) continue;
+      if (!["maskFunctionDefinitions", "isLifecycleBoundaryCommand"].includes(functionName)) continue;
       const visit = (node: ts.Node): void => {
         if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) &&
             node.initializer?.kind === ts.SyntaxKind.RegularExpressionLiteral &&
@@ -666,8 +671,6 @@ describe("t242 state-transition ownership guard", () => {
       visit(statement.body);
     }
     expect([...patterns.keys()].sort()).toEqual([
-      "directStateTransition.invocation",
-      "directStateTransition.nativeInvocation",
       "isLifecycleBoundaryCommand.invocation",
       "isLifecycleBoundaryCommand.nativeInvocation",
       "maskFunctionDefinitions.definition",
@@ -715,12 +718,12 @@ describe("t242 state-transition ownership guard", () => {
       Array.from({ length: 50000 }, () => "x".repeat(60)).join("\n")
     }\n`;
     for (const [label, command, verdict] of [
-      ["closed-5000-line", closed, null],
-      ["unterminated-50k-line", unterminated, null],
+      ["closed-5000-line", closed, false],
+      ["unterminated-50k-line", unterminated, false],
       [
         "closed-5000-line-then-real-call",
         `${closed}\nbun .claude/tools/aidlc-state.ts approve feasibility`,
-        "approve",
+        true,
       ],
       // Runs of { or ( are runs of invocation-anchor positions; a path-prefix
       // class that can consume them rescans the remainder from every anchor -
@@ -729,17 +732,17 @@ describe("t242 state-transition ownership guard", () => {
       [
         "160k-brace-run-single-line",
         `git commit -m ${"{".repeat(160000)}`,
-        null,
+        false,
       ],
       [
         "160k-paren-run-then-real-call",
         `${"(".repeat(160000)}\nbun .claude/tools/aidlc-state.ts approve feasibility`,
-        "approve",
+        true,
       ],
     ] as const) {
       // Keep every original adversarial input and verdict alongside the
       // deterministic prefix checks above.
-      expect(directStateTransition(command), label).toBe(verdict);
+      expect(isLifecycleBoundaryCommand(command), label).toBe(verdict);
     }
   });
 
@@ -1208,7 +1211,7 @@ describe("t242 state-transition ownership guard", () => {
   // Kiro IDE names its write tools fs_write/fs_append/str_replace/delete_file and
   // its shell execute_bash; the adapter hands each to the guard in the shared
   // Write/Edit/Bash shape, so the same refusals come back as Kiro's exit 2.
-  test("the Kiro IDE adapter route refuses runtime writes and lifecycle verbs", () => {
+  test("the Kiro IDE adapter route refuses runtime writes and leaves a direct state verb to the state tool", () => {
     const project = createTestProject();
     projects.push(project);
     cpSync(join(REPO_ROOT, "dist", "kiro-ide", ".kiro"), join(project, ".kiro"), { recursive: true });
@@ -1236,7 +1239,6 @@ describe("t242 state-transition ownership guard", () => {
       ["str_replace", { path: join(project, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), oldStr: "a", newStr: "b" }, runtime],
       ["fs_append", { path: join(project, ".kiro", "hooks", "aidlc-review-freeze.json"), text: "{}" }, runtime],
       ["delete_file", { explanation: "remove it", targetFile: seededAuditShard(project) }, "The audit trail under aidlc/spaces/"],
-      ["execute_bash", { command: "bun .kiro/tools/aidlc-state.ts approve requirements-analysis" }, "Stage status cannot be changed with aidlc-state.ts approve"],
       // A bare cd goes to $HOME, here the project's parent.
       ["execute_bash", { command: `cd; echo x > '${basename(project)}/.kiro/hooks/y.json'` }, runtime],
       // execute_pwsh reaches the guard marked as PowerShell: backslash paths
@@ -1257,6 +1259,8 @@ describe("t242 state-transition ownership guard", () => {
       ["fs_write", { path: join(project, "notes.md"), text: "x" }],
       ["read_file", { path: seededAuditShard(project) }],
       ["execute_bash", { command: 'bun .kiro/tools/aidlc-state.ts get "Current Stage"' }],
+      // The state tool refuses it when it runs, whatever the spelling.
+      ["execute_bash", { command: "bun .kiro/tools/aidlc-state.ts approve requirements-analysis" }],
       ["execute_pwsh", { command: "Set-Location docs; Set-Content notes.md x" }],
     ] as const) {
       expect(runIde(tool_name, tool_input).status, tool_name).toBe(0);
@@ -2098,56 +2102,79 @@ describe("t242 state-transition ownership guard", () => {
     }
   });
 
-  test("the Claude hook exits 2 with a redirecting stderr reason", () => {
-    const r = spawnSync(process.execPath, [HOOK], {
-      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-      input: JSON.stringify({
-        hook_event_name: "PreToolUse",
-        tool_name: "Bash",
-        tool_input: {
-          command:
-            "bun .claude/tools/aidlc-state.ts gate-start feasibility",
-        },
-      }),
-      encoding: "utf-8",
-      env: unownedEnv(),
-    });
-    expect(r.status).toBe(2);
-    expect(r.stdout).toBe("");
-    expect(r.stderr).toContain(
-      "Stage status cannot be changed with aidlc-state.ts gate-start",
-    );
-    expect(r.stderr).toContain("aidlc-orchestrate.ts report");
-  });
-
-  test("direct state-tool refusals offer the switch only to the main session", () => {
+  test("a direct state verb from the main chat passes this hook with nothing said, and the state tool refuses it", () => {
     const project = createTestProject();
     projects.push(project);
     seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
-    const payload = {
-      hook_event_name: "PreToolUse",
-      tool_name: "Bash",
-      tool_input: { command: "bun .claude/tools/aidlc-state.ts gate-start feasibility" },
+    seedAuditFile(project);
+    const statePath = seededStateFile(project);
+    const before = readFileSync(statePath, "utf-8");
+    const env = { ...unownedEnv(), CLAUDE_PROJECT_DIR: project, AIDLC_PROJECT_DIR: project };
+    const passes = (command: string) => {
+      const r = spawnSync(process.execPath, [HOOK], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } }),
+        encoding: "utf-8",
+        env,
+      });
+      expect({ command, status: r.status, said: `${r.stdout}${r.stderr}` })
+        .toEqual({ command, status: 0, said: "" });
     };
+    for (const verb of ENGINE_OWNED) passes(`bun .claude/tools/aidlc-state.ts ${verb} feasibility`);
+    for (const command of [
+      "bun .claude/tools/aidlc.ts engine state approve feasibility",
+      "/opt/aidlc/bin/aidlc engine state approve feasibility",
+      'sh -c "bun .claude/tools/aidlc-state.ts approve feasibility"',
+      "echo ran > first-part.txt && bun .claude/tools/aidlc-state.ts approve feasibility",
+    ]) {
+      passes(command);
+    }
+    // The same command, run, is refused by the state tool, by its script and
+    // through the dispatcher alike.
+    for (const argv of [[STATE, "approve", "feasibility"], [DISPATCHER, "engine", "state", "approve", "feasibility"]]) {
+      const r = spawnSync(process.execPath, argv, {
+        cwd: project,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env,
+      });
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(1);
+      expect(`${r.stdout}${r.stderr}`).toContain("Stage status cannot be changed with aidlc-state.ts approve");
+      expect(`${r.stdout}${r.stderr}`).toContain("aidlc-orchestrate.ts report");
+    }
+    expect(readFileSync(statePath, "utf-8")).toBe(before);
+  });
+
+  test("the state tool's refusal offers the main chat the switch; this hook refuses a helper at once, without it", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
     const env = { ...unownedEnv(), CLAUDE_PROJECT_DIR: project };
-    const main = spawnSync(process.execPath, [HOOK], {
-      input: JSON.stringify(payload),
+    const main = spawnSync(process.execPath, [STATE, "gate-start", "feasibility", "--project-dir", project], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
       encoding: "utf-8",
       env,
     });
-    expect(main.status).toBe(2);
-    expect(main.stderr).toContain("aidlc-orchestrate.ts report");
+    expect(main.status).toBe(1);
+    const words = `${main.stdout}${main.stderr}`;
+    expect(words).toContain("aidlc-orchestrate.ts report");
     // The agent offers the switch and, when the person says so, runs the setter itself.
-    expect(main.stderr).toContain("offer to turn the state-transition check off for this piece of work");
-    expect(main.stderr).toContain("config-change --guard.state-transition off --person-words '<their words>'` yourself");
-    expect(main.stderr).not.toContain("/aidlc config set");
+    expect(words).toContain("offer to turn the state-transition check off for this piece of work");
+    expect(words).toContain("config-change --guard.state-transition off --person-words '<their words>'` yourself");
+    expect(words).not.toContain("/aidlc config set");
     const delegated = spawnSync(process.execPath, [HOOK], {
-      input: JSON.stringify({ ...payload, agent_type: "aidlc-developer-agent" }),
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "bun .claude/tools/aidlc-state.ts gate-start feasibility" },
+        agent_type: "aidlc-developer-agent",
+      }),
       encoding: "utf-8",
       env,
     });
     expect(delegated.status).toBe(2);
-    expect(delegated.stderr).toContain("aidlc-orchestrate.ts report");
+    expect(delegated.stderr).toContain('Delegated agent "aidlc-developer-agent" cannot run aidlc-state.ts gate-start');
+    expect(delegated.stderr).toContain("only the main workflow session can change stage status or routing");
     expect(delegated.stderr).not.toContain("guard.state-transition off");
     expect(delegated.stderr).not.toContain("cannot be turned off from chat");
   });
@@ -2155,7 +2182,7 @@ describe("t242 state-transition ownership guard", () => {
   test("the state CLI rejects every unowned lifecycle verb before dispatch", () => {
     const project = createTestProject();
     projects.push(project);
-    for (const verb of BLOCKED) {
+    for (const verb of ENGINE_OWNED) {
       const r = spawnSync(
         process.execPath,
         [STATE, verb, "fixture", "--project-dir", project],
@@ -2269,7 +2296,7 @@ describe("t242 state-transition ownership guard", () => {
     expect(r.stderr).not.toContain("offer to turn the state-transition check off");
   });
 
-  test("under Guard Policy off the hook lets a direct state command through without a line", () => {
+  test("under Guard Policy off this hook does not read a direct state command: nothing said, no row", () => {
     const project = createTestProject();
     projects.push(project);
     seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
@@ -2291,14 +2318,51 @@ describe("t242 state-transition ownership guard", () => {
       env: { ...unownedEnv(), CLAUDE_PROJECT_DIR: project, AIDLC_PROJECT_DIR: project },
     });
     expect(r.status, r.stderr).toBe(0);
-    // Off means off: the row records the pass and nothing is said.
-    expect(`${r.stdout}${r.stderr}`).not.toContain("Continuing past");
+    expect(`${r.stdout}${r.stderr}`).toBe("");
+    // The state tool records the pass when the command runs; the hook adds no row of its own.
+    expect(readFileSync(seededAuditShard(project), "utf-8")).not.toContain("**Event**: GUARD_STOOD_ASIDE");
+  });
+
+  test("under the person's own switch the stand-aside line is said once, by the state tool, with one row", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    seedAuditFile(project);
+    const statePath = seededStateFile(project);
+    writeFileSync(
+      statePath,
+      readFileSync(statePath, "utf-8").replace(
+        "## Scope Configuration\n",
+        "## Scope Configuration\n- **Guards Off**: state-transition (set by you)\n",
+      ),
+    );
+    const env = { ...unownedEnv(), CLAUDE_PROJECT_DIR: project, AIDLC_PROJECT_DIR: project, AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "0" };
+    const hook = spawnSync(process.execPath, [HOOK], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        session_id: "11111111-2222-4333-8444-555555555555",
+        tool_input: { command: "bun .claude/tools/aidlc-state.ts checkbox scope-definition=in-progress" },
+      }),
+      encoding: "utf-8",
+      env,
+    });
+    expect(hook.status, hook.stderr).toBe(0);
+    const state = spawnSync(process.execPath, [STATE, "checkbox", "scope-definition=in-progress", "--project-dir", project], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env,
+    });
+    expect(state.status, `${state.stdout}${state.stderr}`).toBe(0);
+    const said = [hook.stdout, hook.stderr, state.stdout, state.stderr].join("\n");
+    expect(said.split("Continuing past the state-transition check").length - 1).toBe(1);
+    expect(state.stderr).toContain("Continuing past the state-transition check because it is off for this piece of work (set by you)");
     const rows = readFileSync(seededAuditShard(project), "utf-8")
       .split("\n## ")
       .filter((row) => row.includes("**Event**: GUARD_STOOD_ASIDE"));
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toContain("**Guard**: state-transition");
-    expect(rows[0]).toContain("**Tool**: Bash");
+    expect(rows[0]).toContain("**Tool**: aidlc-state.ts");
   });
 
   test("the state CLI refuses direct transitions when the state-transition fence is not lowered", () => {

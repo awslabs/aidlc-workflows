@@ -266,9 +266,13 @@ then use the ignored local `dist/copilot/` output.
     without a click), `next --skip`, `next --add`, `engine jump execute`,
     `engine scope change`, `engine intent create --skip`, `engine config set`
     and `next config set`,
-    `engine bolt set-autonomy`, the `engine state` status changes, and the
+    `engine bolt set-autonomy`, the `engine state` status changes while the
+    state-transition check is off for that work (by you or by your Guard
+    Policy), since then the change would land, and the
     gate setters (`set-unit-gate-rhythm`, `set-construction-checkpoints`,
-    `set-skeleton-stance`, `set-status`). `set-construction-checkpoints`, and
+    `set-skeleton-stance`, `set-status`). While that check is on, AI-DLC
+    refuses an `engine state` status change itself, so there is nothing to
+    click. `set-construction-checkpoints`, and
     `engine config set` for one of your checks (plan approval, summary
     confirmation, a fence, or Guard Policy), run without a click when you
     asked for that change in the chat since the last decision, and turning a
