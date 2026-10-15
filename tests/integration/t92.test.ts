@@ -61,6 +61,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -803,14 +804,15 @@ describe("t92 Group C: FAILED real round-trip per sensor", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
-// Fake ESLint 8 CLI: records its argv beside itself and answers the sensor's
-// three calls (version probe, config probe, lint) the way ESLint 8 does on a
-// project whose .eslintrc names a rule it cannot load.
+// Fake ESLint 8 CLI: records its argv and its BUN_BE_BUN beside itself and
+// answers the sensor's three calls (version probe, config probe, lint) the way
+// ESLint 8 does on a project whose .eslintrc names a rule it cannot load.
 const FAKE_ESLINT_8_CLI = [
   'const fs = require("node:fs");',
   'const path = require("node:path");',
   "const args = process.argv.slice(2);",
   'fs.appendFileSync(path.join(__dirname, "calls.log"), JSON.stringify(args) + "\\n");',
+  'fs.appendFileSync(path.join(__dirname, "env.log"), JSON.stringify(process.env.BUN_BE_BUN ?? null) + "\\n");',
   'if (args[0] === "--version") { process.stdout.write("v8.57.1\\n"); process.exit(0); }',
   'if (args[0] === "--print-config") { process.stdout.write("{}\\n"); process.exit(0); }',
   "process.stdout.write(JSON.stringify([{ filePath: args[args.length - 1], errorCount: 1, warningCount: 0, messages: [",
@@ -893,8 +895,7 @@ describe("t92 local ESLint resolution", () => {
     expect(localEslintPath(app)).toBeNull();
   });
 
-  test("eslint 8 with .eslintrc: the sensor runs the project's install and reports its finding", () => {
-    const { proj, cli } = localEslintProject("8.57.1", ".eslintrc.cjs");
+  function lintWithFakeEslint8(proj: string, cli: string, env: Record<string, string | undefined> = process.env) {
     writeFileSync(cli, FAKE_ESLINT_8_CLI);
     mkdirSync(join(proj, "src"));
     const file = join(proj, "src", "sample.ts");
@@ -902,7 +903,7 @@ describe("t92 local ESLint resolution", () => {
     const res = spawnSync(
       BUN,
       [join(TOOLS_DIR, "aidlc-sensor-linter.ts"), "--stage", "code-generation", "--file-path", file],
-      { encoding: "utf-8", cwd: proj, timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS) },
+      { encoding: "utf-8", cwd: proj, env, timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS) },
     );
     expect(res.status, `${res.stdout}${res.stderr}`).toBe(0);
     const verdict = JSON.parse(res.stdout);
@@ -914,6 +915,66 @@ describe("t92 local ESLint resolution", () => {
       .split("\n")
       .map((line) => (JSON.parse(line) as string[])[0]);
     expect(calls).toEqual(["--version", "--print-config", "--format"]);
+  }
+
+  test("eslint 8 with .eslintrc: the sensor runs the project's install and reports its finding", () => {
+    const { proj, cli } = localEslintProject("8.57.1", ".eslintrc.cjs");
+    lintWithFakeEslint8(proj, cli);
+  });
+
+  // npm link, a file: dependency, and pnpm all leave node_modules/eslint a link
+  // whose real path the resolver returns, outside any node_modules.
+  function linkedEslintProject(): { proj: string; cli: string } {
+    const { proj } = localEslintProject("8.57.1", ".eslintrc.cjs");
+    const linked = mkdtempSync(join(tmpdir(), "aidlc-t92-linked-eslint-"));
+    tempDirs.push(linked);
+    const pkg = join(proj, "node_modules", "eslint");
+    cpSync(pkg, linked, { recursive: true });
+    rmSync(pkg, { recursive: true, force: true });
+    symlinkSync(linked, pkg, process.platform === "win32" ? "junction" : "dir");
+    return { proj, cli: join(realpathSync(linked), "bin", "eslint.js") };
+  }
+
+  test("a linked eslint 8 with .eslintrc: the sensor runs the project's install and reports its finding", () => {
+    const { proj, cli } = linkedEslintProject();
+    expect(localEslintPath(proj)).toBe(cli);
+    lintWithFakeEslint8(proj, cli);
+  });
+
+  // Stands in for Bun's install-cache copy: a resolution that no node_modules
+  // on the lookup path from the project holds is no install of the project's.
+  test("an eslint the resolver finds outside the project's node_modules lookup keeps the pinned fallback", () => {
+    const proj = mkdtempSync(join(tmpdir(), "aidlc-t92-cache-eslint-"));
+    tempDirs.push(proj);
+    writeFileSync(join(proj, "package.json"), '{"private":true}\n');
+    const cache = join(proj, ".cache");
+    mkdirSync(join(cache, "eslint", "bin"), { recursive: true });
+    writeFileSync(join(cache, "eslint", "package.json"), JSON.stringify({ name: "eslint", version: "10.11.0" }));
+    writeFileSync(join(cache, "eslint", "bin", "eslint.js"), "// resolver fixture; never executed\n");
+    const probe = (module: string) =>
+      `const { createRequire } = require("node:module");` +
+      `const m = require(${JSON.stringify(module)});` +
+      `const path = createRequire(${JSON.stringify(join(proj, "package.json"))}).resolve("eslint/package.json");` +
+      `console.log(JSON.stringify([path, m.localEslintPath(${JSON.stringify(proj)})]));`;
+    const res = spawnSync(BUN, ["--no-install", "-e", probe(join(TOOLS_DIR, "aidlc-sensor-linter.ts"))], {
+      encoding: "utf-8",
+      cwd: proj,
+      env: { ...process.env, NODE_PATH: cache },
+      timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
+    });
+    expect(res.status, res.stderr).toBe(0);
+    const [resolved, local] = JSON.parse(res.stdout) as [string, string | null];
+    expect(realpathSync(resolved)).toBe(realpathSync(join(cache, "eslint", "package.json")));
+    expect(local).toBeNull();
+  });
+
+  // Only a native executable told to be Bun runs as Bun: ESLint under Node and
+  // the project's config and plugins it loads keep the project's environment.
+  test("a native install runs the project's ESLint under Node without BUN_BE_BUN", () => {
+    const { proj, cli } = localEslintProject("8.57.1", ".eslintrc.cjs");
+    const { BUN_BE_BUN: _set, ...env } = process.env;
+    lintWithFakeEslint8(proj, cli, { ...env, AIDLC_COMPILED_EXECUTABLE: join(proj, "aidlc-never-run") });
+    expect(readFileSync(join(dirname(cli), "env.log"), "utf-8").trim().split("\n")).toEqual(["null", "null", "null"]);
   });
 });
 
@@ -1000,6 +1061,21 @@ describe("t92 TypeScript flat config", () => {
     tempDirs.push(bin);
     const native = bunShim(bin, "aidlc", ["x", "--bun", "eslint@10"]);
     expectNoVarFinding(runLinter(file, proj, { ...process.env, AIDLC_COMPILED_EXECUTABLE: native }));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A monorepo's root config governs the nested package whose package.json is
+  // the sensor's project root, so its broken import is that package's config.
+  test("an unresolved import in an ancestor TypeScript config is a script error, not a missing tool", () => {
+    const { proj } = tsConfigProject("eslint.config.mts", true);
+    writeFileSync(join(proj, "eslint.config.mts"), 'import rules from "./missing-rules.ts";\nexport default [{ rules }];\n');
+    const app = join(proj, "packages", "app");
+    mkdirSync(app, { recursive: true });
+    writeFileSync(join(app, "package.json"), '{"name":"app","private":true}\n');
+    const file = join(app, "sample.js");
+    writeFileSync(file, "var total = 1;\nconsole.log(total);\n");
+    const res = runLinter(file, app);
+    expect(res.status, `${res.stdout}${res.stderr}`).toBe(2);
+    expect(res.stderr).toContain("config-parse-error:");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a broken TypeScript config is a script error, not a missing tool", () => {

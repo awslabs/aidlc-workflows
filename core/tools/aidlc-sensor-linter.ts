@@ -45,9 +45,9 @@
 //   2   malformed eslint config (script-error)
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 
@@ -179,17 +179,34 @@ const LEGACY_CONFIG_FILES = [
 	".eslintrc",
 ];
 
-// A flat config at cwd or any ancestor governs the files under it (a monorepo
+// A flat config at dir or any ancestor governs the files under it (a monorepo
 // keeps one at its root while the sensor's project root is the package's own
 // package.json, whether ESLint is hoisted or installed per package), so a
 // pre-9 install beside it must not run and drop those rules: look up to the
-// filesystem root, as ESLint's own flat-config lookup does.
-function flatConfigAbove(cwd: string): boolean {
+// filesystem root, as ESLint's own flat-config lookup does. In the same
+// directory ESLint prefers .js over .ts, the order FLAT_CONFIG_FILES keeps, so
+// the first name found is the config that governs dir.
+function governingFlatConfig(dir: string): string | null {
+	let current = resolve(dir);
+	for (;;) {
+		const name = FLAT_CONFIG_FILES.find((candidate) => existsSync(join(current, candidate)));
+		if (name) return join(current, name);
+		const parent = dirname(current);
+		if (parent === current) return null;
+		current = parent;
+	}
+}
+
+// The node_modules/eslint the Node lookup from cwd finds first, a link or not.
+// Bun resolves a package no node_modules holds from its own install cache, a
+// copy that cannot run: only a resolution that is this entry counts.
+function nodeModulesEslint(cwd: string): string | null {
 	let dir = resolve(cwd);
 	for (;;) {
-		if (FLAT_CONFIG_FILES.some((name) => existsSync(join(dir, name)))) return true;
+		const manifest = join(dir, "node_modules", "eslint", "package.json");
+		if (existsSync(manifest)) return realpathSync(manifest);
 		const parent = dirname(dir);
-		if (parent === dir) return false;
+		if (parent === dir) return null;
 		dir = parent;
 	}
 }
@@ -197,13 +214,11 @@ function flatConfigAbove(cwd: string): boolean {
 export function localEslintPath(cwd: string): string | null {
 	try {
 		const manifestPath = createRequire(join(cwd, "package.json")).resolve("eslint/package.json");
-		// Bun resolves a package no node_modules holds from its own install cache,
-		// a copy that cannot run: that is no install of the project's.
-		if (basename(dirname(dirname(manifestPath))) !== "node_modules") return null;
+		if (nodeModulesEslint(cwd) !== realpathSync(manifestPath)) return null;
 		const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
 		if (manifest.name !== "eslint" || typeof manifest.version !== "string") return null;
 		const major = Number(manifest.version.split(".")[0]);
-		if (major < 9 && flatConfigAbove(cwd)) return null;
+		if (major < 9 && governingFlatConfig(cwd)) return null;
 		const cli = join(dirname(manifestPath), "bin", "eslint.js");
 		return existsSync(cli) ? cli : null;
 	} catch {
@@ -213,18 +228,9 @@ export function localEslintPath(cwd: string): string | null {
 
 // ESLint loads a TypeScript flat config through jiti under Node, which neither
 // the pin nor a project without jiti provides, and natively under Bun, which
-// every install already runs on. In the same directory ESLint prefers .js over
-// .ts, the order FLAT_CONFIG_FILES keeps, so the first name found nearest the
-// file is the config that governs it.
+// every install already runs on.
 function typeScriptFlatConfigGoverns(filePath: string): boolean {
-	let dir = dirname(resolve(filePath));
-	for (;;) {
-		const name = FLAT_CONFIG_FILES.find((candidate) => existsSync(join(dir, candidate)));
-		if (name) return /\.[mc]?ts$/.test(name);
-		const parent = dirname(dir);
-		if (parent === dir) return false;
-		dir = parent;
-	}
+	return /\.[mc]?ts$/.test(governingFlatConfig(dirname(resolve(filePath))) ?? "");
 }
 
 function jitiBeside(cli: string): boolean {
@@ -239,19 +245,18 @@ function jitiBeside(cli: string): boolean {
 function invokeEslint(args: string[], cwd: string, filePath: string) {
 	const local = localEslintPath(cwd);
 	const underBun = typeScriptFlatConfigGoverns(filePath) && !(local && jitiBeside(local));
-	// A native install has no bunx of its own; its executable is Bun when told to be.
+	// A native install has no bunx of its own; its executable is Bun when told to
+	// be, and only that run is told: ESLint under Node and the project's config
+	// and plugins it loads keep the environment the project set.
 	const native = compiledExecutable();
-	const options = {
-		encoding: "utf-8" as const,
-		timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
-		cwd,
-		env: native ? { ...process.env, BUN_BE_BUN: "1" } : process.env,
-	};
+	const options = { encoding: "utf-8" as const, timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS, cwd, env: process.env };
+	const asBun = { ...options, env: { ...process.env, BUN_BE_BUN: "1" } };
 	// ESLint's published executable uses Node too. Naming its installed file
 	// avoids both PATH-shadowed eslint binaries and per-TMPDIR bunx installs.
-	if (local) return spawnSync(underBun ? (native ?? process.execPath) : "node", [local, ...args], options);
+	if (local && !underBun) return spawnSync("node", [local, ...args], options);
+	if (local) return native ? spawnSync(native, [local, ...args], asBun) : spawnSync(process.execPath, [local, ...args], options);
 	const runtime = underBun ? ["--bun"] : [];
-	if (native) return spawnSync(native, ["x", ...runtime, ESLINT_SPEC, ...args], options);
+	if (native) return spawnSync(native, ["x", ...runtime, ESLINT_SPEC, ...args], asBun);
 	return spawnSync("bunx", [...runtime, ESLINT_SPEC, ...args], options);
 }
 
@@ -305,7 +310,7 @@ function probeEslintConfig(filePath: string, cwd: string): void {
 	// fails to load — distinct from the no-config-found case above. Order
 	// matters: "unable to load" is gated by config-file presence so it
 	// can't double-fire as a no-config case (network plugin fetch, etc.).
-	const hasConfigFile = configFilePresent(cwd);
+	const hasConfigFile = configFilePresent(filePath, cwd);
 	if (
 		/parse error/i.test(stderr) ||
 		/syntaxerror/i.test(stderr) ||
@@ -328,13 +333,15 @@ function probeEslintConfig(filePath: string, cwd: string): void {
 	process.exit(127);
 }
 
-// Detect whether any eslint config file lives in cwd (the project root
-// resolved upstream). Not a walk — we only need to disambiguate "unable
+// Detect whether an eslint config governs the file, to disambiguate "unable
 // to load" between a present-but-broken config and a transient/unrelated
-// failure with no config at all. cwd is already the nearest package.json
-// ancestor by construction (see findProjectRoot).
-function configFilePresent(cwd: string): boolean {
-	return [...FLAT_CONFIG_FILES, ...LEGACY_CONFIG_FILES].some((name) => existsSync(`${cwd}/${name}`));
+// failure with no config at all. A flat config counts wherever the lookup that
+// selects it finds one, an ancestor's included; a legacy config counts in cwd,
+// already the nearest package.json ancestor by construction (see
+// findProjectRoot).
+function configFilePresent(filePath: string, cwd: string): boolean {
+	if (governingFlatConfig(dirname(resolve(filePath)))) return true;
+	return LEGACY_CONFIG_FILES.some((name) => existsSync(`${cwd}/${name}`));
 }
 
 // Pick the most diagnostic stderr line for the parse-error reason.
