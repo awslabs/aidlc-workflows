@@ -311,14 +311,12 @@ An edit to a finished stage's files is not reviewed or approved again unless you
 After an approval that moves on to another stage, a progress line appears. From the same run:
 
 ```text
-Progress: 1/19 in-scope stages complete (4/33 overall) | 1/4 IDEATION. Next: Feasibility & Constraints
+Progress: 1 of 19 stages done. Next: Feasibility & Constraints.
 ```
 
 This shows:
 - Progress across the stages your plan runs after Initialization (the count you
-  were shown when the work started), with every stage finished so far in
-  parentheses
-- Progress within the current phase
+  were shown when the work started)
 - The name of the next stage
 
 On a shorter plan the numbers are that plan's own.

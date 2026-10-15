@@ -241,10 +241,8 @@ on the revision process.
 After approval, a progress line appears:
 
 ```text
-Progress: 1/19 in-scope stages complete (4/33 overall) | 1/4 IDEATION. Next: Feasibility & Constraints
+Progress: 1 of 19 stages done. Next: Feasibility & Constraints.
 ```
-
-The overall count includes the three initialization stages.
 
 ### Remaining Ideation Stages
 

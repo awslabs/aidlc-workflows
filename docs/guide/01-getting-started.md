@@ -612,13 +612,11 @@ the stage back to address them (say what to change, or that you want the
 follow-up question). This run approved:
 
 ```text
-Progress: 1/19 in-scope stages complete (4/33 overall) | 1/4 IDEATION. Next: Feasibility & Constraints
+Progress: 1 of 19 stages done. Next: Feasibility & Constraints.
 Now working on Feasibility & Constraints, wearing the architect hat.
 ```
 
-The overall count includes the three setup stages that ran when the record was
-created. The record for this piece of work now holds (trimmed to the main
-files):
+The record for this piece of work now holds (trimmed to the main files):
 
 ```text
 aidlc/spaces/default/intents/261013-inventory-rest-api/

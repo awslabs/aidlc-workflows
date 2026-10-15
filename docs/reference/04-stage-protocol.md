@@ -360,12 +360,12 @@ After an approval that moves on, the engine's narration carries the progress
 line; relay it as written and count nothing yourself:
 
 ```
-Progress: [done]/[planned] in-scope stages complete ([done]/[all] overall) | [phase-done]/[phase-planned] [PHASE]. Next: [Next Stage Name]
+Progress: [done] of [planned] stages done. Next: [Next Stage Name].
 ```
 
 The engine counts completed stages only; a skipped stage leaves the plan rather
 than counting as done. Example from a Claude Code run on the `mvp` plan, after
-Intent Capture: `Progress: 1/19 in-scope stages complete (4/33 overall) | 1/4 IDEATION. Next: Feasibility & Constraints`
+Intent Capture: `Progress: 1 of 19 stages done. Next: Feasibility & Constraints.`
 
 ---
 

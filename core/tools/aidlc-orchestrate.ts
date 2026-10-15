@@ -16029,23 +16029,16 @@ function emitTypedResumeChoice(
 // the person the work is complete (#1411). The workflow-complete `done` and an
 // isolated `--single` run's `done` carry nothing.
 // The progress line said after an approval. It counts the stages the plan runs
-// after Initialization (the count the person was shown when the work started)
-// and, in the overall count, every compiled stage finished so far; the phase
-// part counts the approved stage's phase within the plan. Null when no stage
-// follows.
+// after Initialization, the count the person was shown when the work started.
+// Null when no stage follows.
 function approvalProgressLine(stateContent: string, approvedSlug: string, scope: string): string | null {
-  const graph = loadGraph().filter((stage) => stage.enabled !== false);
-  const approved = graph.find((stage) => stage.slug === approvedSlug);
+  const approved = loadGraph().find((stage) => stage.slug === approvedSlug && stage.enabled !== false);
   const next = nextInScopeStage(approvedSlug, scope, stateContent);
   if (!approved || approved.phase === "initialization" || !next) return null;
   const boxes = parseCheckboxes(stateContent);
-  const finished = (slug: string) => checkboxStateOf(boxes, slug) === "completed";
   const planned = plannedStages(stateContent, scope);
-  const inPhase = planned.filter((stage) => stage.phase === approved.phase);
-  const overall = `${graph.filter((stage) => finished(stage.slug)).length}/${graph.length}`;
-  const phase = `${inPhase.filter((stage) => finished(stage.slug)).length}/${inPhase.length} ${approved.phase.toUpperCase()}`;
-  return `Progress: ${planned.filter((stage) => finished(stage.slug)).length}/${planned.length} in-scope stages complete ` +
-    `(${overall} overall) | ${phase}. Next: ${next.name}`;
+  const done = planned.filter((stage) => checkboxStateOf(boxes, stage.slug) === "completed").length;
+  return `Progress: ${done} of ${planned.length} stages done. Next: ${next.name}.`;
 }
 
 // " (stage 3 of 9)" for a stage the plan runs, "" for one it does not.
