@@ -1298,7 +1298,39 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(read("harness/claude/skills/aidlc/question-rendering.md"))
       .toContain(`"Pick "Type\n  something" on any question to answer in your own words or talk it through."`);
     expect(read("harness/codex/skills/aidlc/question-rendering.md")).toContain(`"Pick "None of the above" on any question`);
+    expect(read("harness/devin/skills/aidlc/question-rendering.md").replace(/\s+/g, " "))
+      .toContain(`Pick "Other" on any question`);
     expect(read("docs/reference/04-stage-protocol.md")).not.toContain("Select 'Other'");
+  });
+
+  // On Devin the question box is often all the person sees: the annex must say
+  // the decision's context goes at the top of the question text (and the
+  // composer gate's offer with it), the escape row is "Other" or declining the
+  // question, and a declined question is no answer.
+  test("the Devin annex puts what the person decides on in the question", () => {
+    const annex = readFileSync(
+      join(REPO_ROOT, "harness/devin/skills/aidlc/question-rendering.md"),
+      "utf-8",
+    );
+    const normalised = annex.replace(/\s+/g, " ");
+    for (const token of [
+      "## What the person decides on goes in the question",
+      "goes at the top of that",
+      "the review brief exactly as its tool printed",
+      "lines and `plan_path`, then the step's `question`",
+      "exactly the `--decision` text they were logged with",
+      'Pick "Other" on any question, or decline it and tell me, to answer in your own words or talk it through.',
+      "A declined question comes back as a refused call",
+    ]) {
+      expect(normalised).toContain(token);
+    }
+    const composer = readFileSync(
+      join(REPO_ROOT, "harness/devin/skills/aidlc/composer.md"),
+      "utf-8",
+    );
+    expect(composer.replace(/\s+/g, " ")).toContain(
+      "at the top of an approve/edit/reject gate's `ask_user_question` question text",
+    );
   });
 
   test("every question renderer pins the mandatory summary checkpoint", () => {

@@ -41,6 +41,31 @@ On Request changes, when their reply already says what should change, those
 words are the feedback; otherwise ask **"What should change?"** and END THE
 TURN, and do not update any answer until that feedback arrives.
 
+## What the person decides on goes in the question
+
+On Devin the question box is often all the person sees when they decide: an
+editor driving `devin acp` shows the question as a form, and text said before
+it can sit unread above it. So whatever the protocol, a stage or the engine
+says to show before a question the person answers goes at the top of that
+question's own `question` text, then a blank line, then the question itself.
+Say it once, there, not also as chat text above the call:
+
+- **Approval gate:** the completion message (announcement and summary table),
+  then on a reviewer-backed gate the review brief exactly as its tool printed
+  it, then the `**Review:**` line, then the approval question.
+- **Summary confirmation:** the decision brief exactly as its tool printed it,
+  then the summary bullets, as shown above.
+- **Plan Approval:** `plan_approval.note` when present, each target's `summary`
+  lines and `plan_path`, then the step's `question`; the options are exactly
+  the three choices.
+- **Composer plan gate:** the short offer (the recommendation, the `Plan:`
+  line, the Guard Policy and scope settings rows), then the gate question.
+
+The verification-command question and a Construction policy question keep
+exactly the `--decision` text they were logged with as their `question`: the
+person's reply is matched to that text. Put their context in the message above
+the call.
+
 ## Mechanism
 
 On Devin CLI, render every structured question via `ask_user_question`.
@@ -91,7 +116,11 @@ ask_user_question({
   [Question Format]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#3-question-format).
 - **Other**: `ask_user_question` automatically adds the Other free-text option.
   Omit the file's Other entry from the native `options` array; do not add a
-  second interactive Other option.
+  second interactive Other option. Some editors that drive Devin over ACP show
+  only the listed choices, but every one lets the person decline the question.
+  So name both ways when you tell them about the escape: "Pick "Other" on any
+  question, or decline it and tell me, to answer in your own words or talk it
+  through."
 - **Question identity**: Do not batch identical question texts; use separate
   calls so the returned question-text keys remain unambiguous.
 
@@ -103,8 +132,10 @@ The tool returns `answers[questionText]`, keyed by the exact rendered
 `selected` can contain multiple option labels; keep them associated with their
 own question rather than flattening the batch into one answer.
 
-For `selected: ["Other"]`, `custom_text` is discussion input, not a substitute option label.
-Route it through the Other rules in [Approval Gates]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#1-approval-gates)
+For `selected: ["Other"]`, `custom_text` is the person's own words, not a
+substitute option label: their answer when it answers the question, or the
+start of a conversation about it. Route it through the Other rules in
+[Approval Gates]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#1-approval-gates)
 or [Question Format]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#3-question-format),
 as applicable.
 
@@ -112,6 +143,14 @@ A skipped question (`skipped: true`), cancellation, or rejected interaction is
 not a selected option. Keep any returned partial answers associated with their
 own questions; apply the referenced checkpoint and completeness rules to any
 unresolved questions.
+
+A declined question comes back as a refused call saying the person wants to
+clarify; a cancelled one says they cancelled it. Neither is an answer and
+neither records a reply: ask in one plain line what they would like to say (for
+a cancel, that the question is still open), and END THE TURN. Their next
+message is their answer in their own words; read it against the question's
+choices as for any reply. Never pick a choice for them, and never ask the same
+question again in that turn.
 
 ## Long prompts
 

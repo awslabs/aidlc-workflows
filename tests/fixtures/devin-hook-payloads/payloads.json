@@ -512,5 +512,69 @@
       "error": null
     },
     "tool_use_id": "chatcmpl-tool-native3000-wrapped"
+  },
+  "postToolUse_askUserQuestion_acp3000_11_3_batchOther": {
+    "session_id": "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9",
+    "prompt_id": "305eac92-3b78-46c7-b98f-37bc75a38a8d",
+    "hook_event_name": "PostToolUse",
+    "tool_name": "ask_user_question",
+    "tool_input": {
+      "questions": [
+        {
+          "question": "Pick a colour",
+          "header": "Colour",
+          "options": [
+            {
+              "label": "Red",
+              "description": "Red"
+            },
+            {
+              "label": "Blue",
+              "description": "Blue"
+            }
+          ],
+          "multi_select": false
+        },
+        {
+          "question": "Pick sizes",
+          "header": "Sizes",
+          "options": [
+            {
+              "label": "Small",
+              "description": "Small"
+            },
+            {
+              "label": "Medium",
+              "description": "Medium"
+            },
+            {
+              "label": "Large",
+              "description": "Large"
+            }
+          ],
+          "multi_select": true
+        }
+      ],
+      "answers": {
+        "Pick a colour": {
+          "selected": [
+            "Other"
+          ],
+          "custom_text": "Green please, it matches the logo"
+        },
+        "Pick sizes": {
+          "selected": [
+            "Small",
+            "Large"
+          ]
+        }
+      }
+    },
+    "tool_response": {
+      "success": true,
+      "output": "User answered your questions:\n{\n  \"Pick a colour\": {\n    \"selected\": [\n      \"Other\"\n    ],\n    \"custom_text\": \"Green please, it matches the logo\",\n    \"skipped\": false\n  },\n  \"Pick sizes\": {\n    \"selected\": [\n      \"Small\",\n      \"Large\"\n    ],\n    \"skipped\": false\n  }\n}",
+      "error": null
+    },
+    "tool_use_id": "toolu_019ruS5uNWLddKbev1divurW"
   }
 }

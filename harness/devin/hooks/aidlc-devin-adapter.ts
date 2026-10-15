@@ -145,15 +145,15 @@ interface DevinHookInput {
 // --- ask_user_question response parsing (for record-human-turn) --------------
 //
 // Mirrors the codex adapter: detect whether the user made an explicit
-// selection in an ask_user_question response, and extract the text of that
-// selection. Devin's PostToolUse tool_response is an object
+// selection in an ask_user_question response, and collect the reply of every
+// question it asked. Devin's PostToolUse tool_response is an object
 // {success, output, error} where `output` is a JSON string; the normalizer
 // extracts it before parsing. A non-string tool_response that lacks an
 // `output` string field yields no selection → skip (advisory).
 //
-// Three inner answer shapes are recognized. The outer {answers: {...}}
+// Four inner answer shapes are recognized. The outer {answers: {...}}
 // wrapper may be present (Claude Code, synthetic Devin fixtures) or absent
-// (real Devin 3000.6.14 interactive export):
+// (real Devin interactive exports):
 //   1. Claude Code: {answers: {<question id>: {answers: ["<string>"]}}}
 //      — keyed by question id; value is a non-array object with an `answers`
 //      array of plain strings.
@@ -167,6 +167,17 @@ interface DevinHookInput {
 //      a `selected` (string[]) and `skipped` (boolean) field. Captured from a
 //      real interactive session export; the original export has been removed
 //      from the working tree and is recoverable from Git history.
+//   4. Devin 3000.11.3 over ACP (captured live, fixture
+//      postToolUse_askUserQuestion_acp3000_11_3_batchOther): the output string
+//      is "User answered your questions:\n" + a pretty-printed JSON object
+//      keyed by question TEXT, each value
+//      {selected: string[], custom_text?: string, skipped: boolean} — the
+//      shape of (3) plus custom_text. multi_select rides on
+//      tool_input.questions[]. A batch answers every question in one map; a
+//      question answered through "Other" carries {selected: ["Other"],
+//      custom_text: "<their words>"}, and a declined or cancelled question
+//      fires NO PostToolUse at all (the tool call fails), so it changes
+//      nothing here.
 
 // Normalize Devin's PostToolUse tool_response into the JSON string the
 // selection parsers expect. Devin delivers {success, output, error}; the
@@ -345,58 +356,102 @@ function hasExplicitHumanSelection(toolResponse: unknown, toolInput?: unknown): 
   });
 }
 
-function explicitHumanSelectionText(toolResponse: unknown): string {
+// Every answered question in an ask_user_question tool_response, in the order
+// tool_input.questions lists them; answer keys that match no listed question
+// follow, in their own order. `key` is the answer map's key; `question` is the
+// listed question's text when the key equals that question's text or its `id`,
+// else the key itself. A question whose reply comes out empty — a skipped one,
+// or a shape none of the rules read — gets no entry.
+function pickerAnswers(
+  toolResponse: unknown,
+  toolInput: unknown,
+): Array<{ key: string; question: string; reply: string[] }> {
   const json = normalizeToolResponse(toolResponse);
-  if (json === null) return "";
+  if (json === null) return [];
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(json) as Record<string, unknown>;
-    // The answers object may be wrapped in {answers: {...}} or be the top-level
-    // object itself (real Devin 3000.6.14 interactive export has no wrapper).
-    let answersObj: Record<string, unknown> | undefined;
-    if (parsed.answers !== null && typeof parsed.answers === "object" && !Array.isArray(parsed.answers)) {
-      answersObj = parsed.answers as Record<string, unknown>;
-    } else {
-      answersObj = parsed;
-    }
-    for (const selection of Object.values(answersObj)) {
-      // Claude Code shape: object with an `answers` array of strings.
-      if (selection !== null && typeof selection === "object" && !Array.isArray(selection)) {
-        const record = selection as Record<string, unknown>;
-        if (Array.isArray(record.answers)) {
-          for (const answer of record.answers) {
-            if (typeof answer === "string" && answer.trim()) return answer.trim();
-          }
-        }
-        // Devin 3000.6.14 native shape: single object with `selected` array.
-        if (Array.isArray(record.selected)) {
-          for (const label of record.selected) {
-            if (typeof label === "string" && label.trim()) return label.trim();
-          }
-          if (typeof record.custom_text === "string" && record.custom_text.trim()) {
-            return record.custom_text.trim();
-          }
-        }
-      }
-      // Devin synthetic shape: array of {selected: string[], custom_text: string} objects.
-      if (Array.isArray(selection)) {
-        for (const entry of selection) {
-          if (entry === null || typeof entry !== "object" || Array.isArray(entry)) continue;
-          const record = entry as Record<string, unknown>;
-          if (Array.isArray(record.selected)) {
-            for (const label of record.selected) {
-              if (typeof label === "string" && label.trim()) return label.trim();
-            }
-          }
-          if (typeof record.custom_text === "string" && record.custom_text.trim()) {
-            return record.custom_text.trim();
-          }
-        }
-      }
-    }
+    parsed = JSON.parse(json);
   } catch {
-    // Non-structured prompt payloads use the direct fields below.
+    return [];
   }
-  return "";
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+  const response = parsed as Record<string, unknown>;
+  // The answers object may be wrapped in {answers: {...}} or be the top-level
+  // object itself (real Devin interactive exports have no wrapper).
+  const answers = "answers" in response ? response.answers : response;
+  if (answers === null || typeof answers !== "object" || Array.isArray(answers)) return [];
+  const picks = answers as Record<string, unknown>;
+
+  // Devin's native answer object: {selected: string[], custom_text?: string,
+  // skipped?: boolean}. A free-text "Other" pick's words ride in custom_text —
+  // "Other" itself is the row's name, never the person's words.
+  const nativeReply = (value: unknown): string[] => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return [];
+    const record = value as Record<string, unknown>;
+    if (!Array.isArray(record.selected) || record.skipped === true) return [];
+    const labels = record.selected
+      .filter((label): label is string => typeof label === "string")
+      .map((label) => label.trim())
+      .filter((label) => label !== "");
+    const custom =
+      typeof record.custom_text === "string" ? record.custom_text.trim() : "";
+    return custom !== "" ? [...labels.filter((label) => label !== "Other"), custom] : labels;
+  };
+  const replyOf = (value: unknown): string[] => {
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      return trimmed !== "" ? [trimmed] : [];
+    }
+    if (Array.isArray(value)) {
+      // Devin synthetic shape: an array of {selected, custom_text} objects.
+      return value.flatMap((entry) => nativeReply(entry));
+    }
+    if (value !== null && typeof value === "object") {
+      const record = value as Record<string, unknown>;
+      if (Array.isArray(record.answers)) {
+        // Claude Code shape: {answers: ["<string>"]}.
+        return record.answers
+          .filter((answer): answer is string => typeof answer === "string" && answer.trim() !== "")
+          .map((answer) => answer.trim());
+      }
+      return nativeReply(record);
+    }
+    return [];
+  };
+
+  const asked =
+    toolInput !== null && typeof toolInput === "object" &&
+    Array.isArray((toolInput as Record<string, unknown>).questions)
+      ? (toolInput as { questions: unknown[] }).questions
+      : [];
+  const entries: Array<{ key: string; question: string; reply: string[] }> = [];
+  const used = new Set<string>();
+  for (const item of asked) {
+    if (item === null || typeof item !== "object") continue;
+    const listed = item as Record<string, unknown>;
+    const key = Object.keys(picks).find(
+      (candidate) =>
+        !used.has(candidate) &&
+        (candidate === listed.question ||
+          (typeof listed.id === "string" && candidate === listed.id)),
+    );
+    if (key === undefined) continue;
+    const reply = replyOf(picks[key]);
+    if (reply.length === 0) continue;
+    used.add(key);
+    entries.push({
+      key,
+      question: typeof listed.question === "string" ? listed.question : key,
+      reply,
+    });
+  }
+  for (const [key, value] of Object.entries(picks)) {
+    if (used.has(key)) continue;
+    const reply = replyOf(value);
+    if (reply.length === 0) continue;
+    entries.push({ key, question: key, reply });
+  }
+  return entries;
 }
 
 // --- Core-hook subprocess plumbing ------------------------------------------
@@ -1246,8 +1301,53 @@ export async function run(
       ) {
         return 0;
       }
+      if (tool === "ask_user_question") {
+        // A question box's reply is forwarded as the picker reply it is (the
+        // same PostToolUse picker contract the Codex adapter and Claude Code
+        // use), never as typed prompt text: the core hook keeps each
+        // question's reply word for word (picker entries, gate words), and a
+        // free-text "Other" answer stays the person's own words instead of
+        // collapsing to the row label. tool_input carries only the questions,
+        // with multiSelect normalized so the core's several-picks rule sees
+        // multi_select. An unknown shape with success:true still mints a
+        // HUMAN_TURN with an empty answer — {answers:{}} alone would read as
+        // an unanswered box, so it is never sent.
+        const entries = pickerAnswers(devin.tool_response, devin.tool_input);
+        const asked = Array.isArray(devin.tool_input?.questions)
+          ? devin.tool_input.questions
+          : [];
+        const answerText =
+          asked.length <= 1
+            ? (entries[0]?.reply.join(", ") ?? "")
+            : entries.map((e) => `${e.question}: ${e.reply.join(", ")}`).join("\n");
+        runCore(
+          "aidlc-record-human-turn.ts",
+          JSON.stringify({
+            hook_event_name: "PostToolUse",
+            ...(devin.session_id ? { session_id: devin.session_id } : {}),
+            tool_name: "ask_user_question",
+            tool_input: {
+              questions: asked.map((q) => {
+                const record =
+                  q !== null && typeof q === "object" ? (q as Record<string, unknown>) : {};
+                return {
+                  ...record,
+                  multiSelect: record.multi_select === true || record.multiSelect === true,
+                };
+              }),
+            },
+            tool_response:
+              entries.length > 0
+                ? {
+                    answer: answerText,
+                    answers: Object.fromEntries(entries.map((e) => [e.key, e.reply])),
+                  }
+                : { answer: "" },
+          }),
+        );
+        return 0;
+      }
       const responseText =
-        explicitHumanSelectionText(devin.tool_response) ||
         devin.prompt ||
         devin.user_prompt ||
         devin.message ||

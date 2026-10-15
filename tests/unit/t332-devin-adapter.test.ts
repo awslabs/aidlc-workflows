@@ -53,10 +53,13 @@ import {
   seededAuditDir,
   seededRecordDir,
   seededStateFile,
+  seedStateFile,
   WORKER_BRIEF_SECTIONS_FIXTURE,
 } from "../harness/fixtures.ts";
 import {
+  auditBlockField,
   hooksHealthDir,
+  readAuditShardEvents,
   readPlanApprovalChallenge,
   readPlanApprovalResponse,
   REVIEWER_DISPATCH_TTL_MS,
@@ -68,6 +71,10 @@ import {
   writePlanApprovalChallenge,
   workspaceSourceFingerprint,
 } from "../../dist/devin/.devin/tools/aidlc-lib.ts";
+import {
+  listMessages,
+  replyOfTheirs,
+} from "../../dist/devin/.devin/tools/aidlc-message-store.ts";
 import {
   approvalFingerprint,
   codeGenerationRecordDir,
@@ -1220,6 +1227,278 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
       rmSync(dir, { recursive: true, force: true });
     }
   }, 30000);
+
+  // An ask_user_question PostToolUse in Devin 3000.11.3's native shape: the
+  // tool_response output is a JSON object keyed by question text, each value
+  // {selected: string[], custom_text?: string, skipped?: boolean}.
+  function devinNativeAnswer(
+    session: string | null,
+    questions: Array<Record<string, unknown>>,
+    answers: Record<string, unknown>,
+    promptId?: string,
+  ): Record<string, unknown> {
+    return {
+      ...(session !== null ? { session_id: session } : {}),
+      ...(promptId !== undefined ? { prompt_id: promptId } : {}),
+      hook_event_name: "PostToolUse",
+      tool_name: "ask_user_question",
+      tool_input: { questions },
+      tool_response: {
+        success: true,
+        output: `User answered your questions:\n${JSON.stringify(answers)}`,
+        error: null,
+      },
+      tool_use_id: "call_picker",
+    };
+  }
+
+  // A .devin tool invocation other than aidlc-log (state, orchestrate), as the
+  // agent runs it in this chat's project.
+  function runDevinTool(
+    dir: string,
+    tool: string,
+    args: string[],
+    env: Record<string, string | undefined> = {},
+  ): { stdout: string; stderr: string; code: number } {
+    const fullEnv: Record<string, string | undefined> = {
+      ...process.env,
+      DEVIN_PROJECT_DIR: dir,
+      CLAUDE_PROJECT_DIR: dir,
+      AIDLC_PROJECT_DIR: dir,
+      AIDLC_UNATTENDED: "0",
+      AIDLC_SKIP_ARTIFACT_GUARD: "1",
+      ...env,
+    };
+    delete fullEnv.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete fullEnv.AIDLC_SESSION_OVERRIDE_SOURCE;
+    const r = spawnSync(
+      process.execPath,
+      [join(dir, ".devin", "tools", tool), ...args, "--project-dir", dir],
+      { cwd: dir, encoding: "utf-8", env: fullEnv, timeout: 30_000 },
+    );
+    return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? -1 };
+  }
+
+  test("13m: a captured 3000.11.3 ACP batch keeps every question's reply, free text first", () => {
+    // Captured live (probe over devin acp): a two-question batch — one answered
+    // through "Other" free text, one multi-select. Pre-fix the stored message
+    // kept only the FIRST label of the first answer ("Other"), so the person's
+    // words and the second answer were lost. Now the picker contract forwards
+    // every question's reply: the colour answer is their custom_text, the sizes
+    // keep all picks.
+    const dir = scratchProject(true);
+    try {
+      const before = readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+      const r = runAdapter(
+        dir,
+        "record-human-turn",
+        withCwd(
+          FIXTURES.postToolUse_askUserQuestion_acp3000_11_3_batchOther as Record<string, unknown>,
+          dir,
+        ),
+      );
+      expect(r.code).toBe(0);
+      const after = readAudit(dir).split("**Event**: HUMAN_TURN").length - 1;
+      expect(after).toBe(before + 1);
+      const turns = readAuditShardEvents(dir).filter((row) => row.event === "HUMAN_TURN");
+      const lastTurn = turns.at(-1)?.block ?? "";
+      expect(auditBlockField(lastTurn, "Source")).toBe("picker");
+      const picked = auditBlockField(lastTurn, "Picked") ?? "";
+      for (const reply of ["Green please, it matches the logo", "Small", "Large"]) {
+        expect(picked).toContain(reply);
+      }
+      const message = listMessages(dir).at(-1);
+      expect(message?.source).toBe("picker");
+      expect(message?.text).toBe(
+        "Pick a colour: Green please, it matches the logo\nPick sizes: Small, Large",
+      );
+      expect(message?.picker).toEqual([
+        { question: "Pick a colour", reply: "Green please, it matches the logo" },
+        { question: "Pick sizes", reply: "Small, Large" },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("13n: a single free-text Other answer stores the person's words, never the row label", () => {
+    const session = "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9";
+    const payloads: Array<Record<string, unknown>> = [
+      // Synthetic array shape: {answers: {<q>: [{selected:["Other"],custom_text}]}}.
+      FIXTURES.postToolUse_askUserQuestion_devinOtherShape as Record<string, unknown>,
+      // 3000.11.3 native object shape with `skipped`.
+      devinNativeAnswer(
+        session,
+        [
+          {
+            question: "approve?",
+            header: "gate",
+            options: [{ label: "yes" }, { label: "no" }],
+            multi_select: false,
+          },
+        ],
+        { "approve?": { selected: ["Other"], custom_text: "yes, but add a test", skipped: false } },
+      ),
+    ];
+    for (const payload of payloads) {
+      const dir = scratchProject(true);
+      try {
+        const r = runAdapter(dir, "record-human-turn", withCwd(payload, dir));
+        expect(r.code).toBe(0);
+        const message = listMessages(dir).at(-1);
+        expect(message?.source).toBe("picker");
+        expect(message?.text).toBe("yes, but add a test");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("13o: a free-text reply at a stage-gate picker is kept as the person's gate words", () => {
+    // The live-run defect: the person picked "Other" and typed their change
+    // request, and GATE_REJECTED recorded "Feedback: Other". Mirroring
+    // t-own-words-gates' picker cases, driven through the Devin adapter. The
+    // brownfield fixture's current stage (requirements-analysis) wants review
+    // evidence at gate-start; mid-ideation's feasibility gates without it.
+    const dir = scratchProject(true);
+    try {
+      const session = "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9";
+      seedStateFile(dir, "state-mid-ideation.md");
+      const slug = runDevinTool(dir, "aidlc-state.ts", ["get", "Current Stage"], {
+        AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+      }).stdout.trim();
+      const box = runDevinTool(dir, "aidlc-state.ts", ["checkbox", `${slug}=in-progress`], {
+        AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+      });
+      expect(box.code, box.stderr).toBe(0);
+      const gate = runDevinTool(dir, "aidlc-state.ts", ["gate-start", slug], {
+        AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+      });
+      expect(gate.code, gate.stderr).toBe(0);
+      const r = runAdapter(
+        dir,
+        "record-human-turn",
+        withCwd(
+          devinNativeAnswer(
+            session,
+            [
+              {
+                question: "Approve this stage?",
+                header: "Gate",
+                options: [{ label: "Approve" }, { label: "Request Changes" }],
+                multi_select: false,
+              },
+            ],
+            {
+              "Approve this stage?": {
+                selected: ["Other"],
+                custom_text: "Request changes: amounts must be positive",
+                skipped: false,
+              },
+            },
+          ),
+          dir,
+        ),
+      );
+      expect(r.code).toBe(0);
+      const report = runDevinTool(dir, "aidlc-orchestrate.ts", [
+        "report", "--stage", slug, "--result", "rejected", "--user-input", "Request Changes",
+      ], { AIDLC_SESSION_OVERRIDE: session });
+      const rejected = readAuditShardEvents(dir).filter((row) => row.event === "GATE_REJECTED");
+      expect(rejected, report.stdout + report.stderr).toHaveLength(1);
+      const feedback = auditBlockField(rejected[0].block, "Feedback") ?? "";
+      expect(feedback).toContain("amounts must be positive");
+      expect(feedback).not.toContain("Other");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("13p: a picker free-text answer is a reply replyOfTheirs can find", () => {
+    // The status defect: the person's words never reached the message store, so
+    // replyOfTheirs could not prove a settings reply and /aidlc --status read
+    // Guard Policy/Plan Approval as "set by a command".
+    const dir = scratchProject(true);
+    try {
+      const session = "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9";
+      const words = "Turn plan approval on and use Guard Policy strict";
+      const r = runAdapter(
+        dir,
+        "record-human-turn",
+        withCwd(
+          devinNativeAnswer(
+            session,
+            [
+              {
+                question: "Anything to set before we go on?",
+                header: "Settings",
+                options: [{ label: "Done" }, { label: "Something else" }],
+                multi_select: false,
+              },
+            ],
+            {
+              "Anything to set before we go on?": {
+                selected: ["Other"],
+                custom_text: words,
+                skipped: false,
+              },
+            },
+          ),
+          dir,
+        ),
+      );
+      expect(r.code).toBe(0);
+      const rows = readAuditShardEvents(dir);
+      expect(replyOfTheirs(dir, session, words, rows)).not.toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("13q: a skipped question in a batch keeps its place with a null reply", () => {
+    const dir = scratchProject(true);
+    try {
+      const session = "019eb8be-e4fe-7a42-ba1b-e5f963dbddc9";
+      const r = runAdapter(
+        dir,
+        "record-human-turn",
+        withCwd(
+          devinNativeAnswer(
+            session,
+            [
+              {
+                question: "Pick a colour",
+                header: "Colour",
+                options: [{ label: "Red" }, { label: "Blue" }],
+                multi_select: false,
+              },
+              {
+                question: "Pick sizes",
+                header: "Sizes",
+                options: [{ label: "Small" }, { label: "Large" }],
+                multi_select: true,
+              },
+            ],
+            {
+              "Pick a colour": { selected: ["Red"], skipped: false },
+              "Pick sizes": { selected: [], skipped: true },
+            },
+          ),
+          dir,
+        ),
+      );
+      expect(r.code).toBe(0);
+      const message = listMessages(dir).at(-1);
+      expect(message?.source).toBe("picker");
+      expect(message?.text).toBe("Pick a colour: Red");
+      expect(message?.picker).toEqual([
+        { question: "Pick a colour", reply: "Red" },
+        { question: "Pick sizes", reply: null },
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   // --- rebuild-stage-graph: exec PostToolUse advisory ---
 
