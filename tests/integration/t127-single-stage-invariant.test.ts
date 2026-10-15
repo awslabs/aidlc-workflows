@@ -884,7 +884,48 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
       "next", "--stage", "build-and-test", "--single", "--sensors", "off", "--project-dir", proj,
     ]);
     expect(r.out).toContain('"kind":"error"');
+    expect(r.out).toContain("Cannot combine ceremony flags");
     expect(startedRows(proj)).toBe(0);
+  });
+
+  test("17e: next --single --guard.<fence> errors and names the fence flag", () => {
+    const proj = freshProject();
+    seedStateFile(proj, STATE_FIXTURE);
+    seedAuditFile(proj);
+    const r = run(TOOL, [
+      "next", "--stage", "build-and-test", "--single", "--guard.review-freeze", "off", "--project-dir", proj,
+    ]);
+    const directive = JSON.parse(r.out.trim()) as { kind?: string; message?: string };
+    expect(directive.kind, r.out).toBe("error");
+    expect(directive.message).toContain("Cannot use --single with --guard.review-freeze.");
+    expect(startedRows(proj)).toBe(0);
+  });
+
+  test("17f: the config set the refusal names lands on the workflow the single run reads", () => {
+    const proj = freshProject();
+    seedStateFile(proj, STATE_FIXTURE);
+    const set = spawnSync(BUN, [
+      join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "config", "set", "test-strategy", "comprehensive",
+      "--project-dir", proj,
+    ], { encoding: "utf-8" });
+    expect(set.status, `${set.stdout}${set.stderr}`).toBe(0);
+    expect(run(STATE_TOOL, ["get", "Test Strategy", "--project-dir", proj]).out.trim()).toBe("Comprehensive");
+    const r = run(TOOL, [
+      "next", "--stage", "build-and-test", "--single", "--project-dir", proj,
+    ]);
+    expect(r.out).toContain('"kind":"run-stage"');
+  });
+
+  test("17g: with no workflow, the refusal does not name a config set the single run never reads", () => {
+    const proj = freshProject();
+    const r = run(TOOL, [
+      "next", "--stage", "build-and-test", "--single", "--test-strategy", "comprehensive", "--project-dir", proj,
+    ]);
+    const directive = JSON.parse(r.out.trim()) as { kind?: string; message?: string };
+    expect(directive.kind, r.out).toBe("error");
+    expect(directive.message).toContain("Cannot use --single with --test-strategy.");
+    expect(directive.message).toContain("With no workflow here");
+    expect(directive.message).not.toContain("config set");
   });
 
   test("17d: plain next --stage build-and-test --single still runs the stage", () => {

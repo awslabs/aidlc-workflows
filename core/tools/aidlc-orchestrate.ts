@@ -9640,12 +9640,21 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // The run-stage carries none of the workflow's settings, so a setting typed
     // here would be dropped while the person thinks it applied (#2654). Review
     // and ceremony flags meet their own refusals above; this catches the rest.
+    // With no workflow, config set only holds the setting for the next piece of
+    // work, which the single run never reads, so that step is not named there.
     const settings = typedSettingModifiers(flags);
     if (settings.length > 0) {
+      const refused = `Cannot use --single with ${settings.map((s) => `--${s.split(" ")[0]}`).join(", ")}.`;
+      if (stateContent === null) {
+        emit(errorDirective(
+          `${refused} With no workflow here, a single-stage run uses the default settings. ` +
+            "Run the stage again with --single and no setting, or start the work with the setting to use it.",
+        ));
+        return;
+      }
       const unnamed = settingNeedsTheirWords(codekbCtx.projectDir, settings);
       emit(errorDirective(
-        `Cannot use --single with ${settings.map((s) => `--${s.split(" ")[0]}`).join(", ")}. ` +
-          "A single-stage run uses the workflow's settings as they are. " +
+        `${refused} A single-stage run uses the workflow's settings as they are. ` +
           `Run \`${configSetCommand(settings, unnamed)}\`${unnamed ? PERSON_WORDS_FILL : ""} first, ` +
           "then run the stage again with --single.",
       ));
