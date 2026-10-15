@@ -640,7 +640,7 @@ The steps are the same everywhere; these differ:
 | Harness | Config value | Open | Invoke |
 | --- | --- | --- | --- |
 | Claude Code | `claude` | `claude` | `/aidlc` |
-| Kiro (Kiro IDE, Kiro CLI on v3) | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker | `/aidlc` |
+| Kiro (Kiro IDE, Kiro CLI on v3) | `kiro-ide` | Open the project, then choose **aidlc** in the chat panel's agent picker, or run `kiro-cli` in the project | `/aidlc` |
 | Kiro CLI (V2) | `kiro` | `kiro-cli chat` | `/aidlc` |
 | Codex CLI | `codex` | `codex` | `$aidlc` |
 | Cursor | `cursor` | Open Cursor or run `agent` | `/aidlc` |
@@ -652,7 +652,7 @@ After config, complete the one step config names for your tool:
 | Harness | Typical action |
 | --- | --- |
 | Claude Code | If Claude Code is already open in this folder, exit it and start it again |
-| Kiro (Kiro IDE, Kiro CLI on v3) | Open the configured project, then choose **aidlc** in the chat panel's agent picker |
+| Kiro (Kiro IDE, Kiro CLI on v3) | Open the configured project, then choose **aidlc** in the chat panel's agent picker, or start `kiro-cli` in the project |
 | Kiro CLI (V2) | Start `kiro-cli chat`; the project selects the AI-DLC agent |
 | Codex CLI | Approve the hook trust prompt or apply the generated trust seed |
 | Cursor | Open the configured project or run `agent` |
