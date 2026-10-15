@@ -1,6 +1,6 @@
 # Structured questions and human-turn recording
 
-**Finding:** DEVIN-08. **Status:** Implemented response compatibility; live batch/cancellation authority coverage remains limited. **Source baseline:** `6e208f7b`. **Fact-checked:** 2026-09-12; upstream-merge 2026-10-13 and 2026-10-14.
+**Finding:** DEVIN-08. **Status:** Implemented. Free text, batches and multi-select keep the person's words per question (`99a54c8b`), the decision's material travels in the question, and decline/cancel is the own-words path. All three were accepted live over ACP on 3000.11.3 (2026-10-15 rerun). Contradictory response fields and third-party ACP clients remain unexercised. **Source baseline:** `99a54c8b` (earlier sections were written against `6e208f7b`). **Fact-checked:** 2026-09-12; upstream-merge 2026-10-13 and 2026-10-14; live ACP runs 2026-10-14 and 2026-10-15.
 
 ## Why this was needed
 
@@ -26,7 +26,13 @@ A HUMAN_TURN is evidence of interaction in the engine's model; it is not a Plan 
 
 The headless S02 C07/C08 captures contain cancelled attempts, not answered PostToolUse envelopes. Historical interactive session exports informed native-answer fixtures; the original exports were removed from the working tree and are recoverable from Git history. An exported tool response is not automatically a raw hook-stdin capture; keep those provenance levels separate.
 
-t332 covers object response, selected/Other compatibility shapes, successful unknown responses, cancellation, wrapped/unwrapped native-shaped maps, and a seeded Plan Approval response. This does not prove a fresh end-to-end interactive approval on the current host.
+t332 covers object response, selected/Other compatibility shapes, successful unknown responses, cancellation, wrapped/unwrapped native-shaped maps, a seeded Plan Approval response, and (13m–13q) the captured 3000.11.3 batch, single free text, multi-select, skipped questions, gate feedback and `replyOfTheirs`.
+
+The answered-question shape is now a hook capture, not an inference. On 2026-10-15 a stdin-logger PostToolUse hook in a scratch project captured an ACP-answered batch on 3000.11.3: `{success:true, output:"User answered your questions:\n{…}", error:null}`, the JSON keyed by exact question text with `{selected, custom_text, skipped}` per question. A free-text answer is `selected:["Other"]` plus its `custom_text`. The earlier synthetic `payloads.json` shapes had never been checked against a capture; the parser was right for them and wrong for the person's words.
+
+Two live ACP intents on 3000.11.3 (DEVIN-14 has the recipe and results) are end-to-end evidence over ACP, not over Devin's own UI. Run 1 (2026-10-14, `822d7e61`) found the defects: three free-text answers stored as "Other", a three-question batch stored as its first answer, and 11 of 22 questions with no text before them. Run 2 (2026-10-15, `99a54c8b`) stored 27 messages (22 picker, 5 typed), none reading "Other". Its batch kept all four replies, every decision question carried its material, and a decline and a cancel each left the question open for the typed reply that answered it. Neither run used Devin's terminal UI, Desktop, or a third-party ACP client.
+
+The Codex adapter still has its own `explicitHumanSelectionText`, which takes the first label, for the `answer` field it forwards. It also forwards the whole reply as `picker_reply`, which the core's per-question reader prefers. Codex was not run, so whether it shows the A1 symptom is not established.
 
 No Devin-specific long-prompt wrapping guarantee was established. The shared worktree long-path fallback reference is not proof that a fallback is implemented or tested on Devin.
 
@@ -45,13 +51,15 @@ No Devin-specific long-prompt wrapping guarantee was established. The shared wor
 
 ## Superseded approaches and history
 
-`f51d55d3` fixed the outer object envelope. `d6e26c47`, `8d8d4987`, and `a5b3fb38` addressed later shape/recording issues; `3d426b04` handled the textual prefix. `40d65300` centralized method wording and corrected the native field mapping.
+`f51d55d3` fixed the outer object envelope. `d6e26c47`, `8d8d4987`, and `a5b3fb38` addressed later shape/recording issues; `3d426b04` handled the textual prefix. `40d65300` centralized method wording and corrected the native field mapping. `99a54c8b` replaced `explicitHumanSelectionText` with `pickerAnswers` and the typed-prompt forwarding with a picker PostToolUse, and bound the decision material and the decline/cancel path into the annex and `composer.md`.
 
-Retired: string-only hook responses; Claude-only inner answer shapes; exit 0 means a human turn was written; a human turn means plan approval; an answered tool schema proves an answered hook capture; the original run-2 wrapper fix alone established full approval correctness.
+Retired: string-only hook responses; Claude-only inner answer shapes; the first selected label as the person's message; an answer forwarded as a typed prompt; decision material said only before the question; exit 0 means a human turn was written; a human turn means plan approval; an answered tool schema proves an answered hook capture; the original run-2 wrapper fix alone established full approval correctness.
 
 ## Sources
 
-- `harness/devin/skills/aidlc/question-rendering.md`
+- `harness/devin/skills/aidlc/question-rendering.md` — including "What the person decides on goes in the question"
+- `harness/devin/skills/aidlc/composer.md` — the offer in the gate's question
+- `tests/fixtures/devin-hook-payloads/payloads.json` — `postToolUse_askUserQuestion_acp3000_11_3_batchOther` (the 2026-10-15 capture) and the free-text, multi-select and skipped variants
 - `core/aidlc-common/protocols/stage-protocol.md` — Structured questions, Question Format, Approval Gates
 - `core/aidlc-common/protocols/stage-protocol-summary.md` — the consolidated-summary checkpoint (since `0f39a808`)
 - `harness/devin/hooks/aidlc-devin-adapter.ts` — response parsing, record-human-turn

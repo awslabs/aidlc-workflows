@@ -1,6 +1,6 @@
 # TEMPORARY — Devin harness fixes found in a live ACP run (2026-10-14)
 
-**Status:** working list, to be fixed one by one and then folded into the permanent findings (DEVIN-02, DEVIN-07, DEVIN-08, DEVIN-14) and deleted. Not a finding of its own; not an instruction to bypass any gate.
+**Status:** working list, to be fixed one by one and then folded into the permanent findings and deleted. Not a finding of its own; not an instruction to bypass any gate. **Folded 2026-10-15:** both runs' lessons are in the index ("Live ACP intent runs", A1–A7, and the open-findings table), DEVIN-08 (ACP-1 to ACP-3, fixed), DEVIN-07 F5 (ACP-4), DEVIN-09 (ACP-5), and DEVIN-14 (run rows, the payload capture, and the live ACP recipe). What remains to fix from here is ACP-4 and ACP-5; delete this file once both are fixed or decided.
 
 **Source:** branch `feat/devin-harness` at `822d7e61` (upstream `0f39a808` merged), copy-channel install from `dist/devin` into a fresh git repository. Devin CLI `3000.11.3 (9c803229faa4)` driven as a subprocess over ACP (`devin acp`, JSON-RPC over stdio) on WSL2 (kernel 5.15.167), bun 1.3.14, Python 3.10.12. Parent model: the user-level default; subagents: the organization's default subagent model. One attended-by-script run: nobody typed in a Devin UI; every answer was sent as an ACP elicitation response or a prompt.
 
