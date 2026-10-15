@@ -5177,11 +5177,16 @@ function verifyPipelineLinkPrecondition(
   const missing = evidence.missing.map(({ link, repo }) =>
     repo ? `${repo}:${link}` : link
   );
+  const content = readStateFile(pd);
+  const gateOpen = parseCheckboxes(content).find((entry) => entry.slug === stage.slug)
+    ?.state === "awaiting-approval";
+  // The sentence is also the agent's way on (evaluateGuardRefusal's
+  // dispatch-pipeline-links), so it names the links: `next` at an open gate
+  // prints the ask alone.
   const message =
     `Cannot complete "${stage.slug}" because these pipeline handoffs have not been ` +
       `recorded for the current run: ${missing.join(", ")}. ` +
-      pipelineLinkWayOn(pd, stage.slug, { repos: evidence.repos.length > 0 });
-  const content = readStateFile(pd);
+      pipelineLinkWayOn(pd, stage.slug, { repos: evidence.repos.length > 0, gateOpen });
   refuseStateGuard(pd, content, stage, {
     code: "PIPELINE_EVIDENCE_MISSING",
     blockedAction: "complete",

@@ -809,6 +809,56 @@ describe("t315 pipeline link receipts", () => {
     );
   });
 
+  // The way on for a missing handoff is the agent's own: dispatch the link and
+  // record it. No review can record it (this stage has no reviewer), and at an
+  // open gate `next` comes last, since it only shows the gate once the links
+  // are in.
+  test("a missing handoff hands the agent its links as its own work, at gate-start and at the open gate", () => {
+    const proj = pipelineProject();
+    writeAllCodekbArtifacts(proj);
+    appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);
+    expect(runLog(proj, LEAD).rc).toBe(0);
+    const ownWork = (out: string) => {
+      const line = out.split("\n").find((entry) => entry.startsWith("{\"error\""));
+      const [sentence, ask] = String((JSON.parse(line ?? "{}") as { error?: string }).error ?? "").split("\n");
+      return { sentence, ask: JSON.parse(ask ?? "{}") as Record<string, unknown> };
+    };
+
+    const gate = state(proj, ["gate-start", RE_STAGE]);
+    expect(gate.rc).not.toBe(0);
+    const floor = ownWork(gate.out);
+    expect(floor.ask.agent_work, gate.out).toBe(true);
+    expect(floor.ask.remedies).toEqual([{
+      op: "dispatch-pipeline-links",
+      action: floor.sentence,
+      requiresHuman: false,
+      executableNow: true,
+      interaction: "external-work",
+    }]);
+    expect(floor.sentence).toContain(`for the current run: ${FINAL}. Re-run \``);
+
+    expect(state(proj, ["gate-start", RE_STAGE], true).rc).toBe(0);
+    const atGate = runOrchestrateNext(ORCH, proj, [], { env: childEnv() });
+    expect(atGate.directive?.kind, atGate.out).toBe("ask");
+    expect(atGate.directive?.agent_work).toBe(true);
+    const remedies = atGate.directive?.remedies as { op: string; action: string }[];
+    expect(remedies.map((remedy) => remedy.op)).toEqual(["dispatch-pipeline-links"]);
+    const action = remedies[0].action;
+    expect(action).toContain(`for the current run: ${FINAL}. Dispatch the missing pipeline links`);
+    const record = action.indexOf(`link --stage ${RE_STAGE} --link <agent>`);
+    const showGate = action.indexOf("orchestrate.ts next`, which shows the gate again.");
+    expect(record).toBeGreaterThan(0);
+    expect(showGate).toBeGreaterThan(record);
+    expect(action).not.toContain("AIDLC_DISABLE_ENSEMBLE_EVIDENCE");
+
+    // Doing it brings the gate back.
+    expect(runLog(proj, FINAL).rc).toBe(0);
+    const shown = runOrchestrateNext(ORCH, proj, [], { env: childEnv() });
+    expect(shown.directive?.kind, shown.out).toBe("run-stage");
+    expect(shown.directive?.stage).toBe(RE_STAGE);
+    expect(shown.directive?.gate).toBe(true);
+  });
+
   test("run-stage resumes with the current-attempt completed link list", () => {
     const proj = pipelineProject();
     appendAuditEntry("STAGE_STARTED", { Stage: RE_STAGE, Agent: LEAD }, proj);

@@ -10731,6 +10731,9 @@ const summaryRoute = (logVerb: "decision" | "answer"): GuardRemedyAnswerRoute =>
     lastEngineFlag(rest, "--checkpoint") === "summary-confirmation";
 const GUARD_REMEDY_ANSWER_ROUTES: Record<GuardRemedyOp, GuardRemedyAnswerPhases | null> = {
   "present-approval-gate": { afterPick: reportResult("awaiting-approval") },
+  // The conductor's own work only: an own-work ask writes no marker, so there
+  // is no pick to route.
+  "present-findings-at-gate": null,
   "request-review": { afterPick: reviewRoute },
   "start-recovery-review": { afterPick: reviewRoute },
   "apply-repairs-then-request": { afterPick: reviewRoute },
@@ -10753,6 +10756,8 @@ const GUARD_REMEDY_ANSWER_ROUTES: Record<GuardRemedyOp, GuardRemedyAnswerPhases 
   "restore-scope": null,
   "abort-bolt": null,
   "record-unit-completion": null,
+  // The conductor's own work only, as present-findings-at-gate.
+  "dispatch-pipeline-links": null,
   "repair-source-boundary": { afterPick: reviewRoute },
   // Present the summary (its prompt checkpoint) on the pick; record the
   // confirmation once the person gave it.
@@ -31339,6 +31344,9 @@ export type GuardLifecycleState =
 // values; the `action` sentence beside each is presentation.
 export const GUARD_REMEDY_OPS = [
   "present-approval-gate",
+  // The same gate as the conductor's own step: the review cap refused a pass
+  // nobody asked for, so the findings go to the gate and the person decides there.
+  "present-findings-at-gate",
   "request-review",
   "start-recovery-review",
   "apply-repairs-then-request",
@@ -31364,6 +31372,8 @@ export const GUARD_REMEDY_OPS = [
   // Record a Unit's missing UNIT_COMPLETED receipt from the artifacts already
   // on disk, when the gate needs it and the Unit's work is done.
   "record-unit-completion",
+  // Dispatch the pipeline links the stage has not recorded, and record each.
+  "dispatch-pipeline-links",
   "repair-source-boundary",
   "reconfirm-summary",
   "unset-unattended",
@@ -32075,6 +32085,18 @@ export function evaluateGuardRefusal(
         executableNow: true,
       });
     }
+    // A pipeline handoff is missing: the way on is the conductor's own, to
+    // dispatch the links and record each, which the refusal's sentence says
+    // (pipelineLinkWayOn, with the links named). No review records a link.
+    const pipelineLinks = input.code === "PIPELINE_EVIDENCE_MISSING";
+    if (pipelineLinks) {
+      remedies.push({
+        op: "dispatch-pipeline-links",
+        action: input.userMessage,
+        requiresHuman: false,
+        executableNow: openForWork || state === "revising",
+      });
+    }
     if (input.attempt.pendingReview) {
       if (
         input.attempt.pendingReview.verdictRecordable !== false &&
@@ -32180,14 +32202,26 @@ export function evaluateGuardRefusal(
         route: "orchestrate",
         args: ["next", ...(input.projectDir ? ["--project-dir", input.projectDir] : [])],
       }, { harnessDir: harnessDir() });
+      const presentGate = checkpointUnit === null
+        ? "Present the unresolved review findings at the approval gate for the " +
+          "human instead of starting another review pass."
+        : `Present the unresolved review findings at unit "${checkpointUnit}"'s checkpoint ` +
+          `for the human instead of starting another review pass: run \`${showCheckpoint}\`, ` +
+          "which shows that checkpoint again, and ask it with the findings.";
+      // The cap refused a pass nobody asked for (the log tool sends this code
+      // here only when the person has not spoken since the last request): the
+      // gate is the conductor's own step. A repeat still offers it to the person.
+      if (input.code === "REVIEW_BUDGET_EXHAUSTED") {
+        remedies.push({
+          op: "present-findings-at-gate",
+          action: presentGate,
+          requiresHuman: false,
+          executableNow: true,
+        });
+      }
       remedies.push({
         op: "present-approval-gate",
-        action: checkpointUnit === null
-          ? "Present the unresolved review findings at the approval gate for the " +
-            "human instead of starting another review pass."
-          : `Present the unresolved review findings at unit "${checkpointUnit}"'s checkpoint ` +
-            `for the human instead of starting another review pass: run \`${showCheckpoint}\`, ` +
-            "which shows that checkpoint again, and ask it with the findings.",
+        action: presentGate,
         requiresHuman: true,
         executableNow: true,
       });
@@ -32212,7 +32246,8 @@ export function evaluateGuardRefusal(
     } else if (
       reviewBudgetAvailable &&
       input.attempt.reviewCoverage === "missing" &&
-      noReviewInFlight
+      noReviewInFlight &&
+      !pipelineLinks
     ) {
       remedies.push({
         op: "request-review",
@@ -36015,21 +36050,24 @@ export function pipelineLinkEvidence(
 
 // The way on for missing pipeline handoffs, one sentence for the engine's
 // refusal and the state tool's floor: the conductor's own step. The evidence
-// switch is the person's, so neither names it.
+// switch is the person's, so neither names it. At an open gate `next` shows
+// the gate only once the links are in, so it comes last there.
 export function pipelineLinkWayOn(
   projectDir: string,
   slug: string,
-  options: { repos: boolean; singleRun?: boolean },
+  options: { repos: boolean; singleRun?: boolean; gateOpen?: boolean },
 ): string {
   const singleRun = options.singleRun === true;
-  return `Re-run \`${aidlcToolInvocation("orchestrate")} next${singleRun ? ` --single --stage ${slug}` : ""}\` ` +
-    `and dispatch the missing pipeline links in their declared order, carrying the human's revision feedback. ` +
+  const next = `\`${aidlcToolInvocation("orchestrate")} next${singleRun ? ` --single --stage ${slug}` : ""}\``;
+  const link = `\`${aidlcToolInvocation("log")} link --stage ${slug} ` +
+    `--link <agent>${options.repos ? " --repo <repo>" : ""}${singleRun ? " --single" : ""}\``;
+  return (options.gateOpen ? "Dispatch" : `Re-run ${next} and dispatch`) +
+    " the missing pipeline links in their declared order, carrying the human's revision feedback. " +
     (guardPolicyAcceptsChanges(projectDir)
       ? ""
       : "Rejection starts a new attempt: earlier scans and receipts cannot certify this revision, even for a targeted artifact edit. ") +
-    `After each link returns, run \`${aidlcToolInvocation("log")} link --stage ${slug} ` +
-    `--link <agent>${options.repos ? " --repo <repo>" : ""}` +
-    `${singleRun ? " --single" : ""}\`. Do not re-stamp an old handoff or disable evidence checks to reopen the gate.`;
+    `After each link returns, run ${link}` + (options.gateOpen ? `; then re-run ${next}, which shows the gate again` : "") +
+    ". Do not re-stamp an old handoff or disable evidence checks to reopen the gate.";
 }
 
 export type UnitGateScope = "per-stage" | "unit-end";
