@@ -112,6 +112,14 @@ export async function run(input: string): Promise<number> {
       if (request) {
         dispatchAgent = agentType;
         agentType = request.reviewer;
+      } else {
+        recordHookDrop(
+          projectDir,
+          "log-subagent",
+          `${agentType} finished with no open review request of its own; recorded under its own name`,
+          intent,
+          space,
+        );
       }
     } catch (e) {
       recordHookDrop(projectDir, "log-subagent", `reviewer copy not resolved: ${errorMessage(e)}`, intent, space);

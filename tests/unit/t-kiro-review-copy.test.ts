@@ -1,4 +1,4 @@
-// covers: file:tools/aidlc-kiro-review-copy.ts, function:previewFeatureOn, function:reviewCopyExcludes, function:renderReviewCopy, function:prepareReviewCopy, function:removeReviewCopy, function:scopedReviewCopyName, function:isScopedReviewCopy, function:normalizedPathComponents
+// covers: file:tools/aidlc-kiro-review-copy.ts, function:previewFeatureOn, function:renderReviewCopy, function:prepareReviewCopy, function:scopedReviewCopyName, function:isScopedReviewCopy
 //
 // On Kiro (kiro-ide) a delegated reviewer's own `fs_read` deny with an
 // `exclude` is enforced, and the agent file is read again at each dispatch
@@ -9,7 +9,7 @@
 // the verdict run end to end in tests/integration/t-kiro-review-copy-flow.test.ts.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -17,35 +17,43 @@ import {
   prepareReviewCopy,
   previewFeatureOn,
   REVIEWER_READ_SCOPE_FEATURE,
-  removeReviewCopy,
   renderReviewCopy,
-  reviewCopyExcludes,
 } from "../../core/tools/aidlc-kiro-review-copy.ts";
 import {
   _resetAgentsForTests,
   isScopedReviewCopy,
   loadAgents,
-  normalizedPathComponents,
   scopedReviewCopyName,
 } from "../../core/tools/aidlc-lib.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
 const PREVIEW = "2.11.0-preview.20261015.1";
 const STABLE = "2.11.0";
-const ON = { [PREVIEW_FEATURES_ENV]: REVIEWER_READ_SCOPE_FEATURE };
 const REVIEWER = "aidlc-architecture-reviewer-agent";
 const SHIPPED_REVIEWER = join(REPO_ROOT, "dist", "kiro-ide", ".kiro", "agents", `${REVIEWER}.md`);
 const REQUEST = `review:${"0123456789ab"}${"c".repeat(20)}`;
 const COPY = "aidlc-review-0123456789ab";
 
+const saved = { ...process.env };
+afterEach(() => {
+  for (const key of [PREVIEW_FEATURES_ENV, "AIDLC_AGENTS_DIR", "AIDLC_HARNESS_NAME", "AIDLC_DISABLE_REVIEWER_SCOPE_HOOK"]) {
+    if (saved[key] === undefined) delete process.env[key];
+    else process.env[key] = saved[key];
+  }
+  _resetAgentsForTests();
+});
+
 describe("the preview switch", () => {
   test("a feature is on only in a preview build, and only when it is named", () => {
-    expect(previewFeatureOn(REVIEWER_READ_SCOPE_FEATURE, ON, PREVIEW)).toBe(true);
-    expect(previewFeatureOn(REVIEWER_READ_SCOPE_FEATURE, { [PREVIEW_FEATURES_ENV]: " other , reviewer-read-scope " }, PREVIEW))
-      .toBe(true);
-    expect(previewFeatureOn(REVIEWER_READ_SCOPE_FEATURE, ON, STABLE)).toBe(false);
-    expect(previewFeatureOn(REVIEWER_READ_SCOPE_FEATURE, {}, PREVIEW)).toBe(false);
-    expect(previewFeatureOn(REVIEWER_READ_SCOPE_FEATURE, { [PREVIEW_FEATURES_ENV]: "reviewer-read" }, PREVIEW)).toBe(false);
+    process.env[PREVIEW_FEATURES_ENV] = REVIEWER_READ_SCOPE_FEATURE;
+    expect(previewFeatureOn(REVIEWER_READ_SCOPE_FEATURE, PREVIEW)).toBe(true);
+    expect(previewFeatureOn(REVIEWER_READ_SCOPE_FEATURE, STABLE)).toBe(false);
+    process.env[PREVIEW_FEATURES_ENV] = " other , reviewer-read-scope ";
+    expect(previewFeatureOn(REVIEWER_READ_SCOPE_FEATURE, PREVIEW)).toBe(true);
+    process.env[PREVIEW_FEATURES_ENV] = "reviewer-read";
+    expect(previewFeatureOn(REVIEWER_READ_SCOPE_FEATURE, PREVIEW)).toBe(false);
+    delete process.env[PREVIEW_FEATURES_ENV];
+    expect(previewFeatureOn(REVIEWER_READ_SCOPE_FEATURE, PREVIEW)).toBe(false);
   });
 });
 
@@ -59,53 +67,26 @@ describe("the copy's name", () => {
     expect(isScopedReviewCopy("aidlc-review-notes")).toBe(false);
     expect(isScopedReviewCopy(REVIEWER)).toBe(false);
   });
-});
 
-describe("the read scope", () => {
-  test("excludes the Unit's folder and each exempt file in another Unit's folder, by its part from construction/", () => {
-    expect(reviewCopyExcludes("alpha", [
-      "aidlc/spaces/default/intents/261015-notes/inception/components.md",
-      "aidlc/spaces/default/intents/261015-notes/construction/alpha/functional-design/functional-design-questions.md",
-      "/work/notes/aidlc/spaces/default/intents/261015-notes/construction/beta/functional-design/api.md",
-      "construction/alpha/../beta/functional-design/api.md",
-    ])).toEqual([
-      "aidlc/spaces/*/intents/*/construction/alpha/**",
-      "aidlc/spaces/*/intents/*/construction/beta/functional-design/api.md",
-    ]);
-  });
-
-  test("an absolute path is read from the project, and the Unit's own folder in any letter case", () => {
-    const project = "/work/construction/notes";
-    expect(reviewCopyExcludes("alpha", [
-      `${project}/aidlc/spaces/default/intents/261015-notes/construction/beta/functional-design/api.md`,
-    ], project)).toEqual([
-      "aidlc/spaces/*/intents/*/construction/alpha/**",
-      "aidlc/spaces/*/intents/*/construction/beta/functional-design/api.md",
-    ]);
-    expect(reviewCopyExcludes("U01", ["construction/u01/functional-design/api.md"]))
-      .toEqual(["aidlc/spaces/*/intents/*/construction/U01/**"]);
-  });
-
-  test("a path that cannot be written as an exact pattern makes no copy", () => {
-    expect(reviewCopyExcludes("alpha", ["construction/beta/*.md"])).toBeNull();
-    expect(reviewCopyExcludes("alpha", ['construction/beta/a"b.md'])).toBeNull();
-    expect(reviewCopyExcludes("al*", [])).toBeNull();
-    expect(reviewCopyExcludes("", [])).toBeNull();
-    expect(reviewCopyExcludes("..", [])).toBeNull();
-  });
-
-  test("the hook and the copy read .. the same way", () => {
-    expect(normalizedPathComponents("construction/U03/../U01/./design.md")).toEqual(["construction", "U01", "design.md"]);
-    expect(normalizedPathComponents("../construction/U01")).toEqual(["..", "construction", "U01"]);
+  test("the persona roster does not load a copy", () => {
+    const dir = mkdtempSync(join(tmpdir(), "t-kiro-review-copy-"));
+    try {
+      const shipped = readFileSync(SHIPPED_REVIEWER, "utf-8");
+      writeFileSync(join(dir, `${REVIEWER}.md`), shipped);
+      writeFileSync(join(dir, `${COPY}.md`), renderReviewCopy(shipped, COPY, "alpha")!);
+      process.env.AIDLC_AGENTS_DIR = dir;
+      _resetAgentsForTests();
+      expect(loadAgents().map((agent) => agent.slug)).toEqual([REVIEWER]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
 describe("the copy's text", () => {
   test("the shipped reviewer, renamed, with the deny rule last in its permissions", () => {
     const shipped = readFileSync(SHIPPED_REVIEWER, "utf-8");
-    const copy = renderReviewCopy(shipped, COPY, reviewCopyExcludes("alpha", [
-      "construction/beta/functional-design/api.md",
-    ])!);
+    const copy = renderReviewCopy(shipped, COPY, "alpha");
     expect(copy).not.toBeNull();
     const front = copy!.split("\n---\n")[0];
     expect(front).toContain(`\nname: ${COPY}\n`);
@@ -115,9 +96,10 @@ describe("the copy's text", () => {
       "      effect: deny",
       "      match:",
       '        - "aidlc/spaces/*/intents/*/construction/**"',
+      '        - ".aidlc/worktrees/*/aidlc/spaces/*/intents/*/construction/**"',
       "      exclude:",
       '        - "aidlc/spaces/*/intents/*/construction/alpha/**"',
-      '        - "aidlc/spaces/*/intents/*/construction/beta/functional-design/api.md"',
+      '        - ".aidlc/worktrees/*/aidlc/spaces/*/intents/*/construction/alpha/**"',
     ].join("\n"))).toBe(true);
     // Everything else is the installed file as it was.
     const added = copy!.split("\n").filter((line) => !shipped.split("\n").includes(line));
@@ -126,80 +108,56 @@ describe("the copy's text", () => {
     expect(copy!.slice(copy!.indexOf("\n---\n"))).toBe(shipped.slice(shipped.indexOf("\n---\n")));
   });
 
-  test("keeps CRLF line ends and a quoted display name", () => {
-    const text = ["---", "name: r", 'display_name: "Reviewer"', "permissions:", "  rules:", "    - capability: shell",
+  test("keeps CRLF line ends and a quoted display name, and reads past a byte-order mark", () => {
+    const text = ["\uFEFF---", "name: r", 'display_name: "Reviewer"', "permissions:", "  rules:", "    - capability: shell",
       "      effect: allow", "---", "", "Body"].join("\r\n");
-    const copy = renderReviewCopy(text, COPY, ["aidlc/spaces/*/intents/*/construction/alpha/**"])!;
+    const copy = renderReviewCopy(text, COPY, "alpha")!;
     expect(copy).toContain('\r\ndisplay_name: "Reviewer (this review)"\r\n');
-    expect(copy).toContain('      effect: allow\r\n    - capability: fs_read\r\n');
+    expect(copy).toContain("      effect: allow\r\n    - capability: fs_read\r\n");
     expect(copy.endsWith("---\r\n\r\nBody")).toBe(true);
   });
 
   test("a display name that is not plain words is left as it is", () => {
     const text = (display: string) => ["---", "name: r", `display_name: ${display}`, "permissions:", "  rules:",
       "    - capability: shell", "      effect: allow", "---", ""].join("\n");
-    expect(renderReviewCopy(text("[Arch] Reviewer"), COPY, [])).toContain("\ndisplay_name: [Arch] Reviewer\n");
-    expect(renderReviewCopy(text("Reviewer: architecture"), COPY, [])).toContain("\ndisplay_name: Reviewer: architecture\n");
+    expect(renderReviewCopy(text("[Arch] Reviewer"), COPY, "alpha")).toContain("\ndisplay_name: [Arch] Reviewer\n");
+    expect(renderReviewCopy(text("Reviewer: architecture"), COPY, "alpha")).toContain("\ndisplay_name: Reviewer: architecture\n");
   });
 
-  test("a file without permissions.rules in the shipped shape makes no copy", () => {
-    expect(renderReviewCopy("---\nname: r\n---\nBody", COPY, [])).toBeNull();
-    expect(renderReviewCopy("---\nname: r\npermissions:\n  rules: []\n---\n", COPY, [])).toBeNull();
-    expect(renderReviewCopy("no frontmatter", COPY, [])).toBeNull();
+  test("no copy without permissions.rules in the shipped shape, or for a unit that is not a plain name", () => {
+    const rules = ["---", "name: r", "permissions:", "  rules:", "    - capability: shell", "---", ""].join("\n");
+    expect(renderReviewCopy(rules, COPY, "alpha")).not.toBeNull();
+    for (const unit of ["", "..", "a/b", "u*", 'a"b']) expect(renderReviewCopy(rules, COPY, unit), unit).toBeNull();
+    expect(renderReviewCopy("---\nname: r\n---\nBody", COPY, "alpha")).toBeNull();
+    expect(renderReviewCopy("---\nname: r\npermissions:\n  rules: []\n---\n", COPY, "alpha")).toBeNull();
+    expect(renderReviewCopy("no frontmatter", COPY, "alpha")).toBeNull();
+    // A `rules:` list under another key is not the permissions list.
+    expect(renderReviewCopy(["---", "name: r", "permissions:", "hooks:", "  rules:", "    - x", "---", ""].join("\n"), COPY, "alpha"))
+      .toBeNull();
   });
 });
 
-describe("writing and removing the copy", () => {
-  const saved = { ...process.env };
-  let dir = "";
-  afterEach(() => {
-    for (const key of ["AIDLC_AGENTS_DIR", "AIDLC_HARNESS_NAME"]) {
-      if (saved[key] === undefined) delete process.env[key];
-      else process.env[key] = saved[key];
+describe("when there is no copy", () => {
+  test("anything but a preview build with the feature on, on Kiro, for a Unit, dispatches the reviewer itself", () => {
+    const dir = mkdtempSync(join(tmpdir(), "t-kiro-review-copy-"));
+    try {
+      mkdirSync(join(dir, ".kiro", "agents"), { recursive: true });
+      const review = { requestId: REQUEST, reviewer: REVIEWER, unit: "alpha" };
+      process.env.AIDLC_HARNESS_NAME = "kiro-ide";
+      process.env[PREVIEW_FEATURES_ENV] = REVIEWER_READ_SCOPE_FEATURE;
+      expect(prepareReviewCopy(dir, review, STABLE), "stable build").toBeNull();
+      expect(prepareReviewCopy(dir, { ...review, unit: undefined }, PREVIEW), "not a Unit's review").toBeNull();
+      expect(prepareReviewCopy(dir, { ...review, requestId: "legacy" }, PREVIEW), "an id not minted here").toBeNull();
+      process.env.AIDLC_DISABLE_REVIEWER_SCOPE_HOOK = "1";
+      expect(prepareReviewCopy(dir, review, PREVIEW), "reviewer-scope check switched off").toBeNull();
+      delete process.env.AIDLC_DISABLE_REVIEWER_SCOPE_HOOK;
+      process.env.AIDLC_HARNESS_NAME = "claude";
+      expect(prepareReviewCopy(dir, review, PREVIEW), "another harness").toBeNull();
+      delete process.env[PREVIEW_FEATURES_ENV];
+      process.env.AIDLC_HARNESS_NAME = "kiro-ide";
+      expect(prepareReviewCopy(dir, review, PREVIEW), "feature not named").toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
-    _resetAgentsForTests();
-    if (dir) rmSync(dir, { recursive: true, force: true });
-  });
-
-  function project(): string {
-    dir = mkdtempSync(join(tmpdir(), "t-kiro-review-copy-"));
-    const agents = join(dir, ".kiro", "agents");
-    mkdirSync(agents, { recursive: true });
-    writeFileSync(join(agents, `${REVIEWER}.md`), readFileSync(SHIPPED_REVIEWER, "utf-8"));
-    process.env.AIDLC_AGENTS_DIR = agents;
-    process.env.AIDLC_HARNESS_NAME = "kiro-ide";
-    return dir;
-  }
-
-  const review = { requestId: REQUEST, reviewer: REVIEWER, unit: "alpha", exempt: [] };
-
-  test("a preview build with the feature on writes it beside the reviewer; the roster does not load it", () => {
-    const p = project();
-    expect(prepareReviewCopy(p, review, { env: ON, version: PREVIEW })).toBe(COPY);
-    const copy = join(p, ".kiro", "agents", `${COPY}.md`);
-    expect(readFileSync(copy, "utf-8")).toContain('        - "aidlc/spaces/*/intents/*/construction/alpha/**"');
-    expect(readFileSync(join(p, ".kiro", "agents", `${REVIEWER}.md`), "utf-8")).toBe(readFileSync(SHIPPED_REVIEWER, "utf-8"));
-    _resetAgentsForTests();
-    expect(loadAgents().map((agent) => agent.slug)).toEqual([REVIEWER]);
-    removeReviewCopy(p, REQUEST);
-    expect(existsSync(copy)).toBe(false);
-  });
-
-  test("anything else dispatches the reviewer itself and writes nothing", () => {
-    const p = project();
-    const none = (label: string, value: string | null) => {
-      expect(value, label).toBeNull();
-      expect(existsSync(join(p, ".kiro", "agents", `${COPY}.md`)), label).toBe(false);
-    };
-    none("stable build", prepareReviewCopy(p, review, { env: ON, version: STABLE }));
-    none("feature not named", prepareReviewCopy(p, review, { env: {}, version: PREVIEW }));
-    none("not a Unit's review", prepareReviewCopy(p, { ...review, unit: undefined }, { env: ON, version: PREVIEW }));
-    none("reviewer-scope check switched off", prepareReviewCopy(p, review, {
-      env: { ...ON, AIDLC_DISABLE_REVIEWER_SCOPE_HOOK: "1" }, version: PREVIEW,
-    }));
-    none("an exempt glob", prepareReviewCopy(p, { ...review, exempt: ["construction/beta/*"] }, { env: ON, version: PREVIEW }));
-    none("no such reviewer", prepareReviewCopy(p, { ...review, reviewer: "aidlc-missing-agent" }, { env: ON, version: PREVIEW }));
-    process.env.AIDLC_HARNESS_NAME = "kiro";
-    none("another harness", prepareReviewCopy(p, review, { env: ON, version: PREVIEW }));
   });
 });

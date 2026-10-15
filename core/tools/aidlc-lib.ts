@@ -901,23 +901,6 @@ export function toPosix(p: string): string {
   return sep === "/" ? p : p.split(sep).join("/");
 }
 
-// Split a path into components, dropping empty and "." segments and collapsing
-// ".." against its parent, so construction/U03/../U01/design.md is U01's file.
-// A leading ".." with nothing to consume is kept. The reviewer-scope hook judges
-// paths through it, and the Kiro reviewer copy renders exempt entries with it.
-export function normalizedPathComponents(p: string): string[] {
-  const out: string[] = [];
-  for (const c of toPosix(p).split("/")) {
-    if (c.length === 0 || c === ".") continue;
-    if (c === ".." && out.length > 0 && out[out.length - 1] !== "..") {
-      out.pop();
-      continue;
-    }
-    out.push(c);
-  }
-  return out;
-}
-
 // Upper-case a leading Windows drive letter and leave every other character
 // alone. VS Code-based hosts (Kiro IDE) report written files as `c:\...` while
 // the project dir carries `C:\...`, and the drive letter is the one path
@@ -38335,18 +38318,6 @@ export const KIRO_CONDUCTOR_AGENT_FILE = "aidlc-aidlc.md";
 export const KIRO_CONDUCTOR_AGENT_FILES: readonly string[] = [KIRO_CONDUCTOR_AGENT_FILE, "aidlc.md"];
 export function isKiroConductorAgentFile(name: string): boolean {
   return KIRO_CONDUCTOR_AGENT_FILES.includes(basename(name));
-}
-
-/**
- * The components of a reviewer-scope exempt entry from its `construction`
- * component on (the first, compared in any letter case), or null when the
- * entry never enters a construction folder. The reviewer-scope hook matches
- * exempt entries by this suffix, and the Kiro reviewer copy renders them by it.
- */
-export function constructionSuffixComponents(entry: string): string[] | null {
-  const comps = normalizedPathComponents(entry);
-  const at = comps.findIndex((c) => c.toLowerCase() === "construction");
-  return at === -1 ? null : comps.slice(at);
 }
 
 // A reviewer copy one review request writes on Kiro (kiro-ide) when the

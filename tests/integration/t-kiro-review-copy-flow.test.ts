@@ -147,8 +147,7 @@ describe("the reviewer read-scope copy on Kiro (preview)", () => {
   test("a preview request writes the copy and names it; its completion is the reviewer's; the verdict removes it", () => {
     const p = new KiroUnitReview(true);
     const shippedAgents = p.agents();
-    const exempt = `aidlc/spaces/default/intents/${seededRecordDir(p.dir).split("/").at(-1)}/construction/beta/${STAGE}/entities.md`;
-    const requested = json(p.log(p.reviewArgs("--exempt", exempt)), "Request the Unit's review");
+    const requested = json(p.log(p.reviewArgs()), "Request the Unit's review");
     expect(requested.emitted).toBe("REVIEW_REQUESTED");
     const requestId = String(requested.requestId);
     const copyName = `aidlc-review-${requestId.slice("review:".length, "review:".length + 12)}`;
@@ -160,7 +159,7 @@ describe("the reviewer read-scope copy on Kiro (preview)", () => {
     expect(copy).toContain(`\nname: ${copyName}\n`);
     expect(copy).toContain('        - "aidlc/spaces/*/intents/*/construction/**"');
     expect(copy).toContain(`        - "aidlc/spaces/*/intents/*/construction/${UNIT}/**"`);
-    expect(copy).toContain(`        - "aidlc/spaces/*/intents/*/construction/beta/${STAGE}/entities.md"`);
+    expect(copy).not.toContain("construction/beta");
     expect(readFileSync(join(p.dir, ".kiro", "agents", `${REVIEWER}.md`), "utf-8"))
       .toBe(readFileSync(join(KIRO_IDE_TREE, "agents", `${REVIEWER}.md`), "utf-8"));
     expect(p.agents()).toEqual([...shippedAgents, `${copyName}.md`].sort());

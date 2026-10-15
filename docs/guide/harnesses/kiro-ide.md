@@ -502,10 +502,11 @@ export AIDLC_PREVIEW_FEATURES=reviewer-read-scope
 (in PowerShell, `$env:AIDLC_PREVIEW_FEATURES = "reviewer-read-scope"`). A
 project `.env` file cannot set it. Then, for each Unit review, AI-DLC writes a
 copy of the reviewer, `.kiro/agents/aidlc-review-<id>.md`, whose permissions
-deny reads in other Units' `construction/` folders except a file the Unit's
-design names as an integration point, and dispatches that copy. Kiro refuses
-such a read and leaves those files out of search results; a shell read such as
-`cat` is not covered and asks you first, as it does today. The copy shows in
+deny reads in other Units' `construction/` folders, and dispatches that copy.
+Kiro refuses such a read and leaves those files out of search results; a shell
+read such as `cat` is not covered and asks you first, as it does today. The
+copy opens no other Unit's file, not even one the Unit's design names as an
+integration point: the reviewer notes that point as a finding instead. The copy shows in
 Kiro's agent list while the review runs and is deleted when its verdict is
 recorded; AI-DLC's `.gitignore` block keeps it out of commits, and you can
 delete one left by a review that never finished. When Kiro has no agent by the

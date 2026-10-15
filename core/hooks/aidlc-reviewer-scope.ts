@@ -52,7 +52,6 @@ import {
   acquireAuditLock,
   auditFilePath,
   type ClaudeCodeHookInput,
-  constructionSuffixComponents,
   decideFence,
   errorMessage,
   guardStandAsideSpeaks,
@@ -63,7 +62,6 @@ import {
   isClaudeCodeHookInput,
   isTeamUnitOwnership,
   isoTimestamp,
-  normalizedPathComponents,
   recordHookDrop,
   readActiveDirectiveMarker,
   readStateFile,
@@ -172,12 +170,32 @@ function candidateStrings(
   return out;
 }
 
+// Split a path into components, dropping empty and "." segments and
+// COLLAPSING ".." against its parent. Without the collapse,
+// construction/U03/../U01/design.md would be judged on U03 (the first
+// segment after construction/) and allowed even though the filesystem
+// resolves it into sibling U01. A leading ".." with no parent to consume is
+// kept as-is (it climbs above the visible string; the sweep/wildcard rules
+// in judgeOccurrence apply to whatever remains).
+function normalizedComps(p: string): string[] {
+  const out: string[] = [];
+  for (const c of toPosix(p).split("/")) {
+    if (c.length === 0 || c === ".") continue;
+    if (c === ".." && out.length > 0 && out[out.length - 1] !== "..") {
+      out.pop();
+      continue;
+    }
+    out.push(c);
+  }
+  return out;
+}
+
 function fold(s: string): string {
   return s.toLowerCase();
 }
 
 function normalizedCompsFolded(p: string): string[] {
-  return normalizedPathComponents(p).map(fold);
+  return normalizedComps(p).map(fold);
 }
 
 function globComponentMatchesConstruction(component: string): boolean {
@@ -210,8 +228,10 @@ function canonicalSuffix(comps: string[]): string {
 // when the entry never enters construction/ (those entries are irrelevant to
 // the matcher - non-construction paths are always allowed).
 function exemptSuffixOf(entry: string): string | null {
-  const comps = constructionSuffixComponents(entry);
-  return comps === null ? null : canonicalSuffix(comps);
+  const comps = normalizedComps(entry);
+  const i = constructionIndex(comps);
+  if (i === -1) return null;
+  return canonicalSuffix(comps.slice(i));
 }
 
 // Judge one construction/ occurrence: the first path segment after the
@@ -314,7 +334,7 @@ function markDefaulted(v: ScopeVerdict | null): ScopeVerdict | null {
 }
 
 function judgeLexicalPath(text: string, scope: PreparedScope): ScopeVerdict | null {
-  const comps = normalizedPathComponents(text);
+  const comps = normalizedComps(text);
   for (let i = 0; i < comps.length; i++) {
     if (constructionIndex([comps[i]], true) !== 0) continue;
     if (judgeOccurrence(comps.slice(i), scope.unitFolded, scope.exemptSuffixes)) {
@@ -363,7 +383,7 @@ function judgePathAccess(
 }
 
 function patternLimitsToCurrentUnit(text: string, scope: PreparedScope): boolean {
-  const comps = normalizedPathComponents(text);
+  const comps = normalizedComps(text);
   let sawConstruction = false;
   for (let i = 0; i < comps.length; i++) {
     if (constructionIndex([comps[i]], true) !== 0) continue;
@@ -463,7 +483,7 @@ function shellSegments(command: string): ShellSegment[] {
 }
 
 function commandBasename(command: string): string {
-  const comps = normalizedPathComponents(command);
+  const comps = normalizedComps(command);
   return fold(comps[comps.length - 1] ?? command);
 }
 

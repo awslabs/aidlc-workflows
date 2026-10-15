@@ -357,15 +357,6 @@ function parseFlags(
   return { positional, flags };
 }
 
-// Every value of a flag that may be given more than once (parseFlags keeps the last).
-function repeatedFlag(args: string[], name: string): string[] {
-  const values: string[] = [];
-  for (let i = 0; i < args.length - 1; i++) {
-    if (args[i] === name && !args[i + 1].startsWith("--")) values.push(args[++i]);
-  }
-  return values;
-}
-
 // decision and answer read only their flags, so a word outside any flag used to
 // vanish and the record kept a value cut short. A value arrives split like this
 // when it was not quoted as one argument, or when Windows PowerShell 5.1 passed
@@ -3953,7 +3944,6 @@ function handleReview(args: string[]): void {
       requestId,
       reviewer: flags.reviewer,
       ...(flags.unit ? { unit: flags.unit } : {}),
-      exempt: repeatedFlag(args, "--exempt"),
     });
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",

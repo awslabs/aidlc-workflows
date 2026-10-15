@@ -1,23 +1,26 @@
-// The per-review reviewer copy on Kiro (kiro-ide), a preview feature.
+// The per-review reviewer copy on Kiro (the KAS layout: kiro-ide), a preview
+// feature.
 //
 // Kiro's hook payloads do not say which agent made a tool call, so the
 // reviewer-scope PreToolUse hook cannot hold a per-unit reviewer to its unit
-// there. What Kiro does enforce is the delegated
-// agent's own `permissions`: an `fs_read` deny with an `exclude` refuses a read
-// outside the exclude (relative, absolute and `..` forms alike) and leaves the
-// denied files out of search results, and the agent file is read again at each
-// dispatch (measured on Kiro CLI 2.31.0 and Kiro IDE 1.3.0). So the review
-// request writes a copy of the installed reviewer whose rules add that deny for
-// this review's unit, and the conductor dispatches the copy. The copy's name is
-// derived from the request id, which is what binds it to one request.
+// there. What Kiro does enforce is the delegated agent's own `permissions`: an
+// `fs_read` deny with an `exclude` refuses a read outside the exclude (relative,
+// absolute and `..` forms alike) and leaves the denied files out of search
+// results, and the agent file is read again at each dispatch (measured on Kiro
+// CLI 2.31.0 and Kiro IDE 1.3.0). So the review request writes a copy of the
+// installed reviewer whose rules add that deny for this review's unit, and the
+// conductor dispatches the copy. The copy's name is derived from the request
+// id, which is what binds it to one request.
+//
+// The copy opens no file of another unit, not even one the unit's design names
+// as an integration point: the reviewer notes that point as a finding instead.
 
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { isAbsolute, join, relative } from "node:path";
+import { join } from "node:path";
 import { PREVIEW_CHANNEL, versionChannel } from "./aidlc-channel.ts";
 import {
   decideFence,
-  constructionSuffixComponents,
-  installedHarnessName,
+  installedKiroLayout,
   recordHookDrop,
   resolveProjectFlag,
   scopedReviewCopyName,
@@ -38,61 +41,33 @@ export const REVIEWER_READ_SCOPE_FEATURE = "reviewer-read-scope";
  * Read from the process environment alone: a project `.env` cannot set an
  * AIDLC_* name (aidlc-runtime-paths.ts drops them), and no setting records it.
  */
-export function previewFeatureOn(
-  name: string,
-  env: NodeJS.ProcessEnv = process.env,
-  version: string = AIDLC_VERSION,
-): boolean {
+export function previewFeatureOn(name: string, version: string = AIDLC_VERSION): boolean {
   if (versionChannel(version) !== PREVIEW_CHANNEL) return false;
-  return (env[PREVIEW_FEATURES_ENV] ?? "").split(",").some((entry) => entry.trim() === name);
+  return (process.env[PREVIEW_FEATURES_ENV] ?? "").split(",").some((entry) => entry.trim() === name);
 }
 
-const GLOB_CHARS = /[*?[\]{}]/;
-// A double-quoted YAML scalar would need a quote, a backslash or a control
-// character escaped: a path holding one is not rendered at all.
-function unquotable(text: string): boolean {
-  return [...text].some((ch) => ch === '"' || ch === "\\" || ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f);
-}
-
-const CONSTRUCTION_GLOB = "aidlc/spaces/*/intents/*/construction";
-
-/**
- * The `exclude` entries for one review: the unit's own subtree, then each exempt
- * path that lies in another unit's folder, by its part from `construction/` on
- * (the suffix the reviewer-scope hook matches exempt entries by). An absolute
- * path inside the project is read from the project, so a folder above it that
- * happens to be named `construction` is not taken for the Units' folder. Null
- * when the unit or an exempt path cannot be written as an exact pattern.
- */
-export function reviewCopyExcludes(unit: string, exempt: readonly string[], projectDir?: string): string[] | null {
-  if (unit === "" || unit === "." || unit === ".." || GLOB_CHARS.test(unit) || unquotable(unit) || unit.includes("/")) {
-    return null;
-  }
-  const excludes = [`${CONSTRUCTION_GLOB}/${unit}/**`];
-  for (const entry of exempt) {
-    const inProject = projectDir !== undefined && isAbsolute(entry) ? relative(projectDir, entry) : "";
-    const suffix = constructionSuffixComponents(inProject !== "" && !inProject.startsWith("..") ? inProject : entry);
-    if (suffix === null) continue;
-    const rest = suffix.slice(1);
-    if (rest.length === 0 || rest[0].toLowerCase() === unit.toLowerCase()) continue;
-    if (rest.some((c) => GLOB_CHARS.test(c) || unquotable(c) || c === "..")) return null;
-    const pattern = `${CONSTRUCTION_GLOB}/${rest.join("/")}`;
-    if (!excludes.includes(pattern)) excludes.push(pattern);
-  }
-  return excludes;
-}
+// Where the reviewer can reach the Units' folders: the project's record, and a
+// parallel batch's worktrees under .aidlc/worktrees/ (the reviewer's own
+// filesystem rule reaches them).
+const CONSTRUCTION_ROOTS = [
+  "aidlc/spaces/*/intents/*/construction",
+  ".aidlc/worktrees/*/aidlc/spaces/*/intents/*/construction",
+];
 
 /**
  * The copy's text: the installed reviewer file with its `name` set to the copy's
  * name, its `display_name` marked as this review's, and one rule added at the
- * end of `permissions.rules` that denies reads under any unit's construction
- * folder except the excluded ones. Everything else (the person's own edits
- * included) stays as installed. Null when the file has no frontmatter, no
- * `name`, or no `permissions.rules` list in the shipped shape.
+ * end of `permissions.rules` that denies reads in every unit's construction
+ * folder except this unit's. Everything else (the person's own edits included)
+ * stays as installed. Null when the unit cannot be written as an exact pattern,
+ * or the file has no frontmatter, no `name`, or no `permissions.rules` list in
+ * the shipped shape.
  */
-export function renderReviewCopy(reviewerText: string, copyName: string, excludes: readonly string[]): string | null {
-  const eol = reviewerText.includes("\r\n") ? "\r\n" : "\n";
-  const lines = reviewerText.split(/\r?\n/);
+export function renderReviewCopy(reviewerText: string, copyName: string, unit: string): string | null {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(unit)) return null;
+  const text = reviewerText.replace(/^\uFEFF/, "");
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = text.split(/\r?\n/);
   if (lines[0] !== "---") return null;
   const end = lines.indexOf("---", 1);
   if (end === -1) return null;
@@ -103,19 +78,25 @@ export function renderReviewCopy(reviewerText: string, copyName: string, exclude
   front[nameAt] = `name: ${copyName}`;
   const displayAt = front.findIndex((line) => /^display_name:/.test(line));
   if (displayAt !== -1) {
-    const value = front[displayAt].slice("display_name:".length).trim();
     // A double-quoted name takes the words inside its quotes; a plain one only
     // when it is plain words, so the result is always a quoted YAML string.
     // Any other form is left as it is.
+    const value = front[displayAt].slice("display_name:".length).trim();
     const quoted = /^"(.*)"$/.exec(value);
     if (quoted) front[displayAt] = `display_name: "${quoted[1]} (this review)"`;
     else if (/^[A-Za-z0-9][^"\\#:]*$/.test(value)) front[displayAt] = `display_name: "${value} (this review)"`;
   }
 
+  // `rules:` must be the permissions block's own key: every line between them
+  // belongs to that block (indented, or blank).
   const permissionsAt = front.findIndex((line) => /^permissions:\s*$/.test(line));
   if (permissionsAt === -1) return null;
-  const rulesAt = front.findIndex((line, i) => i > permissionsAt && /^ {2}rules:\s*$/.test(line));
-  if (rulesAt === -1 || !/^ {4}- /.test(front[rulesAt + 1] ?? "")) return null;
+  let rulesAt = permissionsAt + 1;
+  while (rulesAt < front.length && !/^ {2}rules:\s*$/.test(front[rulesAt])) {
+    if (front[rulesAt].trim() !== "" && !/^ /.test(front[rulesAt])) return null;
+    rulesAt++;
+  }
+  if (rulesAt === front.length || !/^ {4}- /.test(front[rulesAt + 1] ?? "")) return null;
   let insertAt = rulesAt + 1;
   while (insertAt < front.length && (front[insertAt].trim() === "" || /^ {4}/.test(front[insertAt]))) insertAt++;
   front.splice(
@@ -124,35 +105,34 @@ export function renderReviewCopy(reviewerText: string, copyName: string, exclude
     "    - capability: fs_read",
     "      effect: deny",
     "      match:",
-    `        - "${CONSTRUCTION_GLOB}/**"`,
+    ...CONSTRUCTION_ROOTS.map((root) => `        - "${root}/**"`),
     "      exclude:",
-    ...excludes.map((pattern) => `        - "${pattern}"`),
+    ...CONSTRUCTION_ROOTS.map((root) => `        - "${root}/${unit}/**"`),
   );
   return [lines[0], ...front, ...lines.slice(end)].join(eol);
 }
 
-// The installed agents folder (agentsDir's), checked for a link on the way that
-// would lead the copy's write or removal somewhere else.
+// The installed agents folder, refused when a link on the way would lead the
+// copy's write or removal somewhere else.
 function writableAgentsDir(projectDir: string): string {
-  return process.env.AIDLC_AGENTS_DIR ?? resolveHarnessPath(["agents"], { mutable: true, projectDir });
+  return resolveHarnessPath(["agents"], { mutable: true, projectDir });
 }
 
 /**
  * Write this review's reviewer copy and return its agent name for the conductor
  * to dispatch, or null when this review is dispatched to the reviewer itself:
- * the feature is off, the project is not on Kiro (kiro-ide), the review is not a
- * Unit's, it runs in a parallel batch's worktree, the reviewer read-scope check
- * stands aside for this work, or the copy cannot be written. Never refuses: the
- * review goes on either way. A copy the feature asked for but could not write
- * leaves a line among the reviewer-scope drops doctor counts.
+ * the feature is off, the project's Kiro tree is not the KAS layout, the review
+ * is not a Unit's, it runs in a parallel batch's worktree, the reviewer
+ * read-scope check stands aside for this work, or the copy cannot be written.
+ * Never refuses: the review goes on either way. A copy the feature asked for
+ * but could not write leaves a line among the reviewer-scope drops doctor counts.
  */
 export function prepareReviewCopy(
   projectDir: string,
-  review: { requestId: string; reviewer: string; unit?: string; exempt: readonly string[] },
-  build: { env?: NodeJS.ProcessEnv; version?: string } = {},
+  review: { requestId: string; reviewer: string; unit?: string },
+  version: string = AIDLC_VERSION,
 ): string | null {
-  const env = build.env ?? process.env;
-  if (!review.unit || !previewFeatureOn(REVIEWER_READ_SCOPE_FEATURE, env, build.version)) return null;
+  if (!review.unit || !previewFeatureOn(REVIEWER_READ_SCOPE_FEATURE, version)) return null;
   const copyName = scopedReviewCopyName(review.requestId);
   if (copyName === null) return null;
   const skipped = (why: string): null => {
@@ -160,18 +140,18 @@ export function prepareReviewCopy(
     return null;
   };
   try {
-    if (installedHarnessName(projectDir) !== "kiro-ide") return null;
+    if (installedKiroLayout(projectDir) !== "kas") return null;
     if (swarmWorkerWorktreeMeta(projectDir) !== null) return null;
-    if (resolveProjectFlag("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK", env, projectDir) === "1") return null;
+    if (resolveProjectFlag("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK", process.env, projectDir) === "1") return null;
     if (decideFence(projectDir, "reviewer-scope").decision === "stand-aside") return null;
-    const excludes = reviewCopyExcludes(review.unit, review.exempt, projectDir);
-    if (excludes === null) return skipped("the unit or an exempt path holds a character a pattern cannot carry");
     if (!/^[a-z0-9][a-z0-9-]*$/.test(review.reviewer)) return skipped("the reviewer name is not a plain agent name");
     const agents = writableAgentsDir(projectDir);
     const reviewerPath = join(agents, `${review.reviewer}.md`);
     if (!existsSync(reviewerPath)) return skipped(`${reviewerPath} is missing`);
-    const text = renderReviewCopy(readFileSync(reviewerPath, "utf-8"), copyName, excludes);
-    if (text === null) return skipped(`${reviewerPath} has no permissions.rules list in the installed shape`);
+    const text = renderReviewCopy(readFileSync(reviewerPath, "utf-8"), copyName, review.unit);
+    if (text === null) {
+      return skipped(`the unit name or ${reviewerPath} is not in the shape a copy is made from (frontmatter, name, permissions.rules)`);
+    }
     writeFileAtomic(join(agents, `${copyName}.md`), text);
     return copyName;
   } catch (e) {
