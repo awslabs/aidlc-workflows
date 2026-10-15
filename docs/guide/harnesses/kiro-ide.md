@@ -524,7 +524,11 @@ ask in chat to turn the reviewer read-scope check on for the work (or type
 On Kiro every AI-DLC agent runs on your chat's model and effort: the model you
 pick in Kiro IDE, or Kiro CLI's session model. Kiro can run a delegated agent
 on its own model and effort, for example a reviewer on another model family,
-and a preview build can set that for one agent. In a terminal in which you ran:
+and a preview build can set that for one agent. To get a preview build, run
+`aidlc config --channel preview` and then `aidlc update`;
+`aidlc config --channel stable` and `aidlc update --channel stable` go back
+([Release Channels](../18-install-and-lifecycle.md#release-channels)). Then, in
+a terminal:
 
 ```bash
 export AIDLC_PREVIEW_FEATURES=agent-models
@@ -532,7 +536,10 @@ aidlc config models --agent architecture-reviewer --model gpt-5.6-terra --effort
 ```
 
 (in PowerShell, `$env:AIDLC_PREVIEW_FEATURES = "agent-models"`; name both
-preview features as `reviewer-read-scope,agent-models`). AI-DLC records the
+preview features as `reviewer-read-scope,agent-models`). When you ask the
+agent in chat to set it instead, it runs the same command from Kiro, so the
+variable has to be in Kiro's own environment: export it in a terminal, then
+start Kiro IDE or `kiro-cli` from that terminal. AI-DLC records the
 choice in `aidlc.settings.json` and writes `model:` and `effortLevel:` into that
 agent's `.kiro/agents/aidlc-architecture-reviewer-agent.md`; a Unit's reviewer
 copy keeps them. Kiro reads them when it next dispatches the agent, in a chat
