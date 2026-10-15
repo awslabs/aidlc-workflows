@@ -13,7 +13,7 @@
 //   - statusline-counter    : the "done/total" appended after the bar -> "2/7".
 //   - statusline-stage-name : STAGE_DISPLAY["feasibility"]="Feasibility", seeded
 //                             Current Stage=feasibility -> "> Feasibility".
-//   - statusline-align      : printLine() (aidlc-statusline.ts:174-187) joins the
+//   - statusline-align      : printLine() (aidlc-statusline.ts) joins the
 //                             left status to the right side (model, and ctx:% on a
 //                             live turn). In production the statusline hook runs
 //                             with PIPED stdout, so process.stdout.columns is

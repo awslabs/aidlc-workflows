@@ -20,7 +20,7 @@
 //
 // Files under test (read from the shipped tree, AIDLC_SRC = dist/claude/.claude):
 //   skills/aidlc/SKILL.md  — YAML frontmatter delimited by the first two `---`
-//     lines (SKILL.md:1-14). Fields asserted: name, description, user-invocable;
+//     lines (SKILL.md). Fields asserted: name, description, user-invocable;
 //     the absence of a top-level `hooks:` key in that block.
 //   settings.json          — the project-wide hook registration. PostToolUse
 //     Write|Edit matcher carries aidlc-write-audit-log.ts; PreCompact carries

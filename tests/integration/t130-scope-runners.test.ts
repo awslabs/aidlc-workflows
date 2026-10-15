@@ -6,7 +6,7 @@
 // units it proves by initialising under each scope and resolving its opening
 // move.
 //
-// WHAT THE .sh PROVED (t130-scope-runners.sh:1-12 prose + the loop at :42-70):
+// WHAT THE .sh PROVED (t130-scope-runners.sh prose + the loop):
 //   For each first-batch scope the runner's shell makes the SAME first move —
 //   `aidlc-orchestrate.ts next --scope <scope>` over a real init,
 //   and the test pins that
@@ -27,7 +27,7 @@
 // emit) - against a temp project holding a FULL copy of the shipped .claude/.
 // Both run FROM THE COPY (`bun <proj>/.claude/tools/...`) so the engine
 // resolves the graph, the stage files, AND `../aidlc-common/conductor.md`
-// (aidlc-orchestrate.ts:351, CONDUCTOR_PERSONA_PATH resolved relative to the
+// (aidlc-orchestrate.ts, CONDUCTOR_PERSONA_PATH resolved relative to the
 // tool module) from the copied tree. An in-process twin would lose the
 // create->next process seam AND the cwd-independent persona resolution the
 // corpus exists to pin.

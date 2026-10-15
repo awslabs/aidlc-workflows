@@ -14,17 +14,17 @@
 // SOURCE UNDER TEST:
 //   dist/claude/.claude/hooks/aidlc-write-audit-log.ts — PostToolUse(Write|Edit).
 //     - resolves projectDir through resolveProjectDirFromHook (as first ported,
-//       aidlc-lib.ts:116).
+//       aidlc-lib.ts).
 //     - reads PostToolUse JSON on stdin; logs writes under the active intent
 //       record or active space codekb tree, and only when the audit shard
 //       exists. A Write to a NET-NEW artifact emits ARTIFACT_CREATED with
 //       fields Tool / File / Context.
-//   dist/claude/.claude/tools/aidlc-audit.ts:214 appendAuditEntry — acquires
+//   dist/claude/.claude/tools/aidlc-audit.ts appendAuditEntry - acquires
 //     the audit lock (acquireAuditLock), appends one block, then releases it
 //     (releaseAuditLock). The hook takes the same lock through withAuditLock
 //     and appends with appendAuditEntryUnlocked. The block format is
 //     "\n## <heading>\n**Timestamp**: ...\n**Event**: ...\n<fields>\n---\n".
-//   dist/claude/.claude/tools/aidlc-lib.ts:512 auditLockDir(projectDir) =
+//   dist/claude/.claude/tools/aidlc-lib.ts auditLockDir(projectDir) =
 //     join(tmpdir(), `.aidlc-audit-<8 hex of md5(auditLockIdentity)>.lock`), the
 //     mkdir-based mutex's directory (acquireAuditLock / releaseAuditLock); we
 //     ask the source for it via auditLockDir() rather than recompute the hash.

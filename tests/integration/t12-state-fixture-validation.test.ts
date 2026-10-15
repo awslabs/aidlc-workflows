@@ -5,7 +5,7 @@
 // carry the section headings, phase headings, and bold-field format expected by
 // the REAL state template contract. The honest covers id is therefore the structural
 // INVARIANT under test, declared free-form like t125's invariant: ids
-// (tests/unit/t125.none.test.ts:1) — invariant ids are descriptive claims, not
+// (tests/unit/t125.none.test.ts) - invariant ids are descriptive claims, not
 // joined to an enumerated subcommand/function unit.
 //
 // Subject under test (the shipped, real bytes — no temp project, no tool):

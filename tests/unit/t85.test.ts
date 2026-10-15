@@ -7,11 +7,11 @@
 // SPAWNING the real CLI via node:child_process spawnSync (BUN + the tool
 // .ts path), asserting on the same `out` (stdout+stderr, mirroring the .sh's
 // `2>&1`) and — STRONGER — on res.status. handleDoctor is a process.exit
-// entrypoint (aidlc-utility.ts:1385, `import.meta.main` at :2861), so it
+// entrypoint (aidlc-utility.ts, `import.meta.main`), so it
 // stays a spawn: an in-process twin would lose the exit-code half AND the
 // process.stdout.write report half the practices-staleness contract renders.
 //
-// CONTRACT UNDER TEST (aidlc-utility.ts:894-945, Check 5 — Practices
+// CONTRACT UNDER TEST (aidlc-utility.ts, Check 5 - Practices
 // staleness): reads `Practices Affirmed Timestamp` from main state, compares
 // to now.
 //   - state file absent / empty / `[`-placeholder / missing field ->
@@ -19,14 +19,14 @@
 //       absent" for the no-state arm; the .sh only exercises the empty /
 //       placeholder / missing-field arms, all of which land on "never
 //       affirmed (informational)").
-//   - within PRACTICES_STALENESS_DAYS (90, aidlc-utility.ts:321) -> pass=true,
+//   - within PRACTICES_STALENESS_DAYS (90, aidlc-utility.ts) -> pass=true,
 //       "affirmed N day(s) ago" with NO "advisory".
 //   - beyond 90 days -> pass=true, "affirmed N days ago (advisory: > 90
 //       days; consider re-running practices-discovery)".
 //   - unparseable ISO -> pass=FALSE, "timestamp unreadable" + the bad value
 //       echoed in the fix clause. This is the ONLY failing check the .sh
 //       exercises, so it forces doctor's overall exit to 1 (failed > 0,
-//       aidlc-utility.ts:1385) — pinned here, STRONGER than the .sh's
+//       aidlc-utility.ts) - pinned here, STRONGER than the .sh's
 //       `|| true` swallow.
 //   - future-dated -> pass=true, "affirmed in the future (clock skew or
 //       hand-edited timestamp N day(s) ahead)" (regression for the MINOR fix

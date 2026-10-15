@@ -18,7 +18,7 @@
 //
 // Source / surfaces under test:
 //   - docs/reference/12-state-machine.md   (## Audit event taxonomy tables)
-//   - dist/claude/.claude/tools/aidlc-audit.ts:19  VALID_EVENT_TYPES = new Set([...])
+//   - dist/claude/.claude/tools/aidlc-audit.ts  VALID_EVENT_TYPES = new Set([...])
 //   - dist/claude/.claude/knowledge/aidlc-shared/audit-format.md  (## Event Registry)
 //   - dist/claude/.claude/tools/*.ts + hooks/*.ts  (emission call sites)
 //   - dist/claude/.claude/tools/aidlc-state.ts     (pairing handler bodies)

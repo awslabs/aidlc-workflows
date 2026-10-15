@@ -8,7 +8,7 @@
 //
 // The override assertions use on-disk state + parsed audit events. The
 // invalid-strategy arm is not asserted on prose (as first ported, see the
-// UNPORTABLE note below): SKILL.md:114 has the LLM validate --test-strategy
+// UNPORTABLE note below): SKILL.md has the LLM validate --test-strategy
 // itself and emit the error IN PROSE before any tool runs. Its deterministic
 // equivalent (config-change --test-strategy extreme -> stderr "Unknown test
 // strategy", exit 1) is covered at the CLI tier by tests/unit/t27.test.ts (the
@@ -17,38 +17,38 @@
 //
 // ASSERTION MAP (.sh assertion -> deterministic SDK surface):
 //   A1 STATE_A grep 'Test Strategy.*Minimal'  -> assertStateField "Test Strategy" === "Minimal"
-//                                                 (config-change setField, utility.ts:2389; VALID_TEST_STRATEGIES, utility.ts:68-72)
+//                                                 (config-change setField, utility.ts; VALID_TEST_STRATEGIES, utility.ts)
 //   A2 AUDIT_A grep 'TEST_STRATEGY_CHANGED'    -> assertAuditEvent "TEST_STRATEGY_CHANGED"
-//                                                 (appendAuditEvent, utility.ts:2406; VALID_EVENT_TYPES, aidlc-audit.ts:60)
+//                                                 (appendAuditEvent, utility.ts; VALID_EVENT_TYPES, aidlc-audit.ts)
 //   B1 CLAUDE_OUTPUT contains "Unknown test    -> UNPORTABLE to a deterministic SDK surface (LLM-prose
-//      strategy"                                  validation by SKILL.md:114). Deterministic equivalent
-//                                                  (CLI die() -> stderr, utility.ts:2373) is covered by
+//      strategy"                                  validation by SKILL.md). Deterministic equivalent
+//                                                  (CLI die() -> stderr, utility.ts) is covered by
 //                                                  tests/unit/t27.test.ts; NOT asserted on prose.
 //   C1 STATE_C grep 'Depth.*Standard'          -> assertStateField "Depth" === "Standard"
 //                                                 (no-op: fixture Depth already Standard; config-change
-//                                                  leaves it, utility.ts:2385/2399; prints "Depth is already Standard")
+//                                                  leaves it, utility.ts; prints "Depth is already Standard")
 //   C2 STATE_C grep 'Test Strategy.*Minimal'   -> assertStateField "Test Strategy" === "Minimal"
 //   C3 STRAT_COUNT == 1                         -> r.auditEvents.filter(=== "TEST_STRATEGY_CHANGED").length === 1
 //                                                 (count on the parsed audit array, in file order)
 //
 // Known-answer literals (read from the SHIPPED handler, not guessed):
-//   - config-change dispatch:  SKILL.md:124-127 -> `bun .claude/tools/aidlc-utility.ts config-change`
+//   - config-change dispatch:  SKILL.md -> `bun .claude/tools/aidlc-utility.ts config-change`
 //                              with EXACTLY the extracted --depth / --test-strategy flags
 //                              (as first ported; today the engine names one `config set`
 //                              command, aidlc-orchestrate.ts configSetCommand, which the
 //                              dispatcher routes to handleConfigChange)
-//   - "Test Strategy" / "Depth" state fields:  config-change setField (utility.ts:2386,2389),
-//                              normalised via VALID_DEPTHS / VALID_TEST_STRATEGIES (utility.ts:62-72:
+//   - "Test Strategy" / "Depth" state fields:  config-change setField (utility.ts),
+//                              normalised via VALID_DEPTHS / VALID_TEST_STRATEGIES (utility.ts:
 //                              "standard"->"Standard", "minimal"->"Minimal")
-//   - TEST_STRATEGY_CHANGED audit event:  appendAuditEvent (utility.ts:2406), written as
-//                              `**Event**: TEST_STRATEGY_CHANGED` (aidlc-audit.ts:258), parsed by
+//   - TEST_STRATEGY_CHANGED audit event:  appendAuditEvent (utility.ts), written as
+//                              `**Event**: TEST_STRATEGY_CHANGED` (aidlc-audit.ts), parsed by
 //                              readAuditEvents (sdk-drive.ts)
 //   - P4 layout note:          config-change does NOT migrate the flat seed (only intent-create
-//                              migrates, aidlc-utility.ts:2022). The withState seed stays at the
+//                              migrates, aidlc-utility.ts). The withState seed stays at the
 //                              active intent's record (seedStateFile), so assertStateField
 //                              (r.stateFile) / assertAuditEvent (r.auditEvents) resolve it via
 //                              sdk-drive's per-intent readers - no hardcoded flat path here.
-//   - state-mid-ideation fixture seeds Depth=Standard, Test Strategy=Standard (state-mid-ideation.md:17-18)
+//   - state-mid-ideation fixture seeds Depth=Standard, Test Strategy=Standard (state-mid-ideation.md)
 //     and Scope=feature — so --test-strategy minimal CHANGES Standard->Minimal (event fires) while
 //     --depth standard is a no-op (DEPTH_CHANGED does NOT fire).
 //

@@ -10,7 +10,7 @@
 // `--phase ideation`; this is the `--stage intent-capture` twin. Both route
 // through `aidlc-jump.ts execute --direction backward`. The phase-vs-stage
 // dispatch differs in resolution only (--stage resolves the literal slug
-// directly; --phase routes through firstInScopeStageOfPhase, jump.ts:121-136);
+// directly; --phase routes through firstInScopeStageOfPhase, jump.ts);
 // the EXECUTE emission and every deterministic surface below are identical.
 //
 // THE JOURNEY (verified against the SHIPPED tool). The seeded fixture
@@ -18,27 +18,27 @@
 // Stage=functional-design, Scope=feature, Completed=20. `--stage intent-capture`
 // resolves directly to intent-capture, whose display order is BEFORE
 // functional-design, so direction = backward
-// (aidlc-jump.ts:143-145). The SKILL.md Stage/Phase Jump handler routes this
+// (aidlc-jump.ts). The SKILL.md Stage/Phase Jump handler routes this
 // through `aidlc-jump.ts execute --direction backward` (as first ported; today
 // the engine names that command in a print directive), which atomically:
-//   - resets target + downstream EXECUTE stages [x]/[-]/[S] -> [ ] (jump.ts:268-285),
-//   - sets target intent-capture -> [-] in-progress (jump.ts:295),
+//   - resets target + downstream EXECUTE stages [x]/[-]/[S] -> [ ] (jump.ts),
+//   - sets target intent-capture -> [-] in-progress (jump.ts),
 //   - rewrites Lifecycle Phase=IDEATION, Current Stage=intent-capture,
 //     In Progress=intent-capture, Status=Running, recomputed Completed
-//     (jump.ts:312-331; a jump never terminates, jump.ts:309, so
+//     (jump.ts; a jump never terminates, so
 //     Status stays Running and the workflow does NOT terminate —
 //     workflow_stopped:false),
 //   - crosses the construction->ideation phase boundary, so emits
-//     PHASE_COMPLETED / PHASE_VERIFIED / PHASE_STARTED (jump.ts:356-371),
+//     PHASE_COMPLETED / PHASE_VERIFIED / PHASE_STARTED (jump.ts),
 //   - appends STAGE_JUMPED with Direction=BACKWARD / Source=functional-design /
-//     Target=intent-capture / Scope=feature (jump.ts:374-380),
+//     Target=intent-capture / Scope=feature (jump.ts),
 //   - appends STAGE_STARTED for the target (Stage=intent-capture,
-//     Agent=aidlc-product-agent; jump.ts:386-390).
+//     Agent=aidlc-product-agent; jump.ts).
 // An optional-field read (e.g. get "Initial Intent") writes no ERROR_LOGGED row
 // (#2264); we do NOT assert on ERROR_LOGGED.
 //
 // THE KNOWN-ANSWER COUNT. countCheckboxes("completed") after a backward reset to
-// intent-capture leaves exactly 4 [x] (jump.ts:330-331). Verified by both the
+// intent-capture leaves exactly 4 [x] (jump.ts). Verified by both the
 // shipped tool's stdout (completed_count:4) and the reset arithmetic: the 3
 // init stages (workspace-scaffold/workspace-detection/state-init, UPSTREAM of
 // intent-capture) survive, AND the fixture's per-unit-duplicate `widget-cart`
@@ -48,30 +48,30 @@
 //
 // ASSERTION MAP (.sh test -> deterministic SDK surface):
 //   1 assert_lt COMPLETED 20 (grep 'Completed'|head -1)
-//       -> Bash tool_result contains `"completed_count":4` (jump.ts:415 stdout
+//       -> Bash tool_result contains `"completed_count":4` (jump.ts stdout
 //          JSON): the exact known-answer 4 (satisfies <20).
 //   2 assert_grep AUDIT 'intent-capture'
-//       -> raw audit.md bytes contain "**Target**: intent-capture" (jump.ts:377)
+//       -> raw audit.md bytes contain "**Target**: intent-capture" (jump.ts)
 //          beside the tool's own Current Stage rewrite
-//          (jump.ts:313). The audit Target line is the immutable origin; the
+//          (jump.ts). The audit Target line is the immutable origin; the
 //          post-run state file is not re-read (the driver stops on the jump
 //          output). (audit-sample.md baseline does NOT contain intent-capture,
 //          no vacuous pass.)
 //   3 assert_lt X_COUNT 15 / 4 assert_eq X_COUNT COMPLETED
 //       -> the `- [x]` count and the Completed field after the reset: the
-//          jump tool keeps these in lockstep (jump.ts:330-331); asserts internal
+//          jump tool keeps these in lockstep (jump.ts); asserts internal
 //          consistency through the stdout `"completed_count":4` (the on-disk
 //          count is not re-read).
 //   5 assert_grep AUDIT 'STAGE_JUMPED'
-//       -> assertAuditEvent(r,"STAGE_JUMPED") (parsed **Event**: line; jump.ts:374).
+//       -> assertAuditEvent(r,"STAGE_JUMPED") (parsed **Event**: line; jump.ts).
 //   6 assert_grep AUDIT 'BACKWARD'
-//       -> raw audit.md bytes contain "**Direction**: BACKWARD" (jump.ts:375).
+//       -> raw audit.md bytes contain "**Direction**: BACKWARD" (jump.ts).
 //   7 assert_grep AUDIT 'Timestamp'
-//       -> raw audit.md bytes contain "**Timestamp**:" (audit.ts:257, every block).
+//       -> raw audit.md bytes contain "**Timestamp**:" (audit.ts, every block).
 //   8 Status=Running AND Current Stage == In Progress (read from FINAL state)
 //       -> the jump tool writes Status, Current Stage and In Progress together
-//          (jump.ts:313,316,321) — the EXACT three-way consistency the .sh read.
-//          ALSO the jump-tool stdout `"workflow_stopped":false` (jump.ts:416, the
+//          (jump.ts) - the EXACT three-way consistency the .sh read.
+//          ALSO the jump-tool stdout `"workflow_stopped":false` (jump.ts, the
 //          deterministic origin) AND the STAGE_STARTED audit event for the target
 //          are asserted; the final state file is not re-read.
 //

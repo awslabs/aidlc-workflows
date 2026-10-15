@@ -7,19 +7,19 @@
 // node:child_process spawnSync (BUN + the tool .ts path), asserting on the
 // combined stdout+stderr the tool writes (2>&1 in the .sh) — the PROCESS
 // boundary. handleDoctor ends in process.exit(failed > 0 ? 1 : 0)
-// (aidlc-utility.ts:1385) and writes its report to process.stdout
-// (aidlc-utility.ts:1373), so an in-process twin would lose the exit-code
+// (aidlc-utility.ts) and writes its report to process.stdout
+// (aidlc-utility.ts), so an in-process twin would lose the exit-code
 // half AND the rendered-report half the .sh's `2>&1` grep relies on.
 //
-// CONTRACT under test — Check 2 "stale branches" (aidlc-utility.ts:672-731):
+// CONTRACT under test - Check 2 "stale branches" (aidlc-utility.ts):
 // walks `git branch --list 'bolt-*'`; parses new and legacy Bolt names and flags
 // a branch whose identity's worktree directory
 // is gone AND no terminal WORKTREE_MERGED / WORKTREE_DISCARDED audit row
-// landed for that slug (slugTerminated, aidlc-utility.ts:551-560, keyed on
+// landed for that slug (slugTerminated, aidlc-utility.ts, keyed on
 // `**Bolt slug**: <slug>` via findAllEvents). Three label shapes are pinned:
-//   - not a git repo : "Stale branches: 0 observed (not a git repo)" (:691)
-//   - clean / live   : "Stale branches: 0 (<N> bolt-* observed)"      (:715)
-//   - stale drift    : "Stale branches: <N> drift" + slug in fix       (:720)
+//   - not a git repo : "Stale branches: 0 observed (not a git repo)"
+//   - clean / live   : "Stale branches: 0 (<N> bolt-* observed)"
+//   - stale drift    : "Stale branches: <N> drift" + slug in fix
 //
 // PARITY NOTES (every .sh `ok`/`not_ok` line maps to a test() below; several
 // are STRONGER than the original grep):

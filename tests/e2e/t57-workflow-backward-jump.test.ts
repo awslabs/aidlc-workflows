@@ -17,8 +17,8 @@
 // retiring it cannot make any unit go UNCOVERED. This port claims the units the
 // journey actually exercises, mirroring the sibling t56-workflow-forward-jump
 // .test.ts (which claims the same two jump subcommands): the orchestrator shells
-// `aidlc-jump.ts resolve` (SKILL.md:206) then `aidlc-jump.ts execute`
-// (SKILL.md:223). It ADDS `audit:STAGE_JUMPED` — a currently-UNCOVERED unit
+// `aidlc-jump.ts resolve` (SKILL.md) then `aidlc-jump.ts execute`
+// (SKILL.md). It ADDS `audit:STAGE_JUMPED` - a currently-UNCOVERED unit
 // (registry status UNCOVERED, minMechanism `none`) that this test asserts
 // deterministically via assertAuditEvent. Mechanism `sdk` (derived from
 // driveAidlc, rank 2) satisfies both the subcommands' `cli` bar and the audit
@@ -37,18 +37,18 @@
 //
 // THE INVARIANT UNDER TEST. A backward jump (`--stage reverse-engineering`
 // from a construction-phase fixture) resolves to direction "backward"
-// (target index 10 < current index, aidlc-jump.ts:144), so executeJump's
+// (target index 10 < current index, aidlc-jump.ts), so executeJump's
 // backward branch resets target + downstream EXECUTE stages [x]/[-]/[S] → [ ]
-// (aidlc-jump.ts:268-285), pivots Current Stage to the target
-// (aidlc-jump.ts:313), and rewrites Lifecycle Phase to the target's phase
-// uppercased (aidlc-jump.ts:312 — reverse-engineering is an INCEPTION stage).
-// A jump always lands Status="Running" (aidlc-jump.ts:309 → never terminates),
+// (aidlc-jump.ts), pivots Current Stage to the target
+// (aidlc-jump.ts), and rewrites Lifecycle Phase to the target's phase
+// uppercased (aidlc-jump.ts - reverse-engineering is an INCEPTION stage).
+// A jump always lands Status="Running" (aidlc-jump.ts -> never terminates),
 // so the
 // orchestrator CONTINUES after the jump — which is exactly why this port
 // asserts the jump tool's OWN stdout emission (stopAfterToolResult the instant
 // it lands) rather than the final on-disk state the .sh raced against. The
 // transient target-checkbox [-]→[x] churn (the .sh's own header note,
-// t57.sh:6-9) is deliberately NOT asserted by either suite.
+// t57.sh) is deliberately NOT asserted by either suite.
 //
 // THE KNOWN-ANSWER COUNT. Running the SHIPPED tool deterministically on this
 // exact fixture (`aidlc-jump.ts execute --target reverse-engineering
@@ -60,48 +60,48 @@
 // ASSERTION MAP (.sh test -> SDK surface -> shipped-handler cite):
 //   1 Current Stage = reverse-engineering
 //       -> the jump tool's stdout JSON `"target":"reverse-engineering"`
-//          (jump.ts:409 — the deterministic origin of the Current Stage write,
-//          jump.ts:313) PLUS the audit `**Target**: reverse-engineering` line.
+//          (jump.ts - the deterministic origin of the Current Stage write,
+//          jump.ts) PLUS the audit `**Target**: reverse-engineering` line.
 //   2 X_COUNT < 15 (fixture had 20 [x]; .sh comment said "19")
-//       -> stdout JSON `"completed_count":11` (jump.ts:415 — the value the tool
-//          wrote into Completed, jump.ts:330-331). STRONGER than the .sh's <15:
+//       -> stdout JSON `"completed_count":11` (jump.ts - the value the tool
+//          wrote into Completed, jump.ts). STRONGER than the .sh's <15:
 //          pins the exact reset arithmetic on an emission immune to the
 //          post-jump continuation.
 //   3 audit has STAGE_JUMPED
 //       -> assertAuditEvent(r, "STAGE_JUMPED")
-//          [aidlc-jump.ts:374 emitAudit(pd,"STAGE_JUMPED",...); rendered as
-//           `**Event**: STAGE_JUMPED` at aidlc-audit.ts:258, which
+//          [aidlc-jump.ts emitAudit(pd,"STAGE_JUMPED",...); rendered as
+//           `**Event**: STAGE_JUMPED` at aidlc-audit.ts, which
 //           readAuditEvents parses off the `**Event**:` line]
 //   4 audit records BACKWARD (direction tag)
 //       -> raw audit.md (read off disk) contains the verbatim field line
 //          `**Direction**: BACKWARD` AND `**Target**: reverse-engineering`
-//          [aidlc-jump.ts:375 Direction: direction.toUpperCase(), :377 Target;
-//           rendered as `**${key}**: ${value}` field lines at aidlc-audit.ts:265].
+//          [aidlc-jump.ts Direction: direction.toUpperCase(), Target;
+//           rendered as `**${key}**: ${value}` field lines at aidlc-audit.ts].
 //          Stronger than the .sh's bare `grep BACKWARD`: pins the exact field
 //          shape AND ties the direction to the reverse-engineering jump, so an
 //          unrelated future use of "BACKWARD" can't satisfy it. PLUS the stdout
-//          `"direction":"backward"` (jump.ts:407).
+//          `"direction":"backward"` (jump.ts).
 //   5 Lifecycle Phase = INCEPTION
-//       -> stdout JSON `"target_phase":"INCEPTION"` (jump.ts:410 — the
-//          deterministic origin of the Lifecycle Phase rewrite, jump.ts:312;
+//       -> stdout JSON `"target_phase":"INCEPTION"` (jump.ts - the
+//          deterministic origin of the Lifecycle Phase rewrite, jump.ts;
 //          reverse-engineering's phase is "inception" -> "INCEPTION")
 //
 // Known-answer literals (read from the SHIPPED handler / fixture, not guessed):
-//   - jump dispatch:        SKILL.md:204-223 -> the orchestrator shells
+//   - jump dispatch:        SKILL.md -> the orchestrator shells
 //                           `bun .claude/tools/aidlc-jump.ts resolve` then
 //                           `... execute --target reverse-engineering
 //                           --direction backward --scope feature` via Bash.
-//   - backward reset branch: aidlc-jump.ts:268-285
-//   - Current Stage write:   aidlc-jump.ts:313
-//   - Lifecycle Phase write: aidlc-jump.ts:312
-//   - STAGE_JUMPED emit:     aidlc-jump.ts:374; Direction field aidlc-jump.ts:375
-//   - audit block shape:     aidlc-audit.ts:256-267
-//   - jump stdout JSON:      aidlc-jump.ts:406-420 (direction/target/target_phase/
+//   - backward reset branch: aidlc-jump.ts
+//   - Current Stage write:   aidlc-jump.ts
+//   - Lifecycle Phase write: aidlc-jump.ts
+//   - STAGE_JUMPED emit:     aidlc-jump.ts; Direction field aidlc-jump.ts
+//   - audit block shape:     aidlc-audit.ts
+//   - jump stdout JSON:      aidlc-jump.ts (direction/target/target_phase/
 //                            completed_count/...); known-answer completed_count=11
 //                            confirmed by running the shipped tool on the fixture.
 //   - fixture state-construction.md: Scope=feature, Lifecycle Phase=CONSTRUCTION,
 //     Current Stage=functional-design (idx > RE's 10 -> backward), 20 [x] stages.
-//   - reverse-engineering EXECUTEs under feature scope: scope-mapping.json:21.
+//   - reverse-engineering EXECUTEs under feature scope: scope-mapping.json.
 //
 // It SPENDS TOKENS — each driveAidlc drives the real /aidlc on Opus/Bedrock.
 // Asserts ONLY on tool stdout JSON / auditEvents / raw audit.md — NEVER on assistantText.

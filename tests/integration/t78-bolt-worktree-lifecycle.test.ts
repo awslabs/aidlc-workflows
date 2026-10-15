@@ -11,11 +11,11 @@
 //
 // WHY cli (not none): the subject IS the cross-process lifecycle. aidlc-bolt
 // start --worktree / complete --merge / abort --discard each fan out to sibling
-// CLIs via spawnSync (aidlc-bolt.ts:89-116 spawnSibling): start delegates to
+// CLIs via spawnSync (aidlc-bolt.ts spawnSibling): start delegates to
 // aidlc-state.ts fork + aidlc-audit.ts audit-fork + aidlc-runtime.ts
-// fragment-fork (aidlc-bolt.ts:222-284); complete delegates to state merge +
-// audit-merge + fragment-merge (:371-435); abort --discard delegates to
-// aidlc-worktree.ts discard BEFORE the audit emit (:516-547, the post-review
+// fragment-fork (aidlc-bolt.ts); complete delegates to state merge +
+// audit-merge + fragment-merge; abort --discard delegates to
+// aidlc-worktree.ts discard BEFORE the audit emit (the post-review
 // discard-first ordering). The observables — Bolt Refs append/clear, the
 // STATE_FORKED/AUDIT_FORKED/STATE_MERGED/AUDIT_MERGED rows emitted inside each
 // sibling's withAuditLock, the WORKTREE_DISCARDED teardown — only exist after
@@ -25,17 +25,17 @@
 //
 // Source under test:
 //   dist/claude/.claude/tools/aidlc-bolt.ts
-//     :149 handleStart   — --worktree path: BOLT_STARTED, then state-fork
+//          handleStart   - --worktree path: BOLT_STARTED, then state-fork
 //                          (STATE_FORKED + Bolt Refs append on main),
 //                          audit-fork (AUDIT_FORKED + worktree audit.md),
 //                          fragment-fork (no audit event)
-//     :307 handleComplete — --merge path: BOLT_COMPLETED, then state-merge
+//          handleComplete - --merge path: BOLT_COMPLETED, then state-merge
 //                          (STATE_MERGED + Bolt Refs slug removal),
 //                          audit-merge (AUDIT_MERGED), fragment-merge
-//     :498 handleAbort    — BOLT_FAILED with Reason=aborted; --discard tears
+//          handleAbort    - BOLT_FAILED with Reason=aborted; --discard tears
 //                          down the worktree via aidlc-worktree discard FIRST
 //                          (so BOLT_FAILED only lands when discard succeeded)
-//   dist/claude/.claude/tools/aidlc-worktree.ts :156 create / :455 discard
+//   dist/claude/.claude/tools/aidlc-worktree.ts create / discard
 //   dist/claude/.claude/tools/aidlc-lib.ts worktreePath -> intent-scoped Bolt dir.
 //
 // Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):

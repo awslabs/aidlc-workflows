@@ -6,13 +6,13 @@
 // stage's prose actually mentions the outputs it declares, the state it
 // updates, its skip condition (when CONDITIONAL), its output directory, and an
 // approval mechanism. Two of its three derived predicates run THROUGH the pure
-// `parseStageFrontmatter` function (aidlc-lib.ts:893) — `is_conditional` reads
+// `parseStageFrontmatter` function (aidlc-lib.ts) - `is_conditional` reads
 // `obj.execution`, and `has_question_output` reads `obj.outputs` then extracts
 // the *.md filenames — so the covers id is `function:parseStageFrontmatter`,
 // the library function this test drives.
 //
 // MECHANISM DETAIL: every check is an in-process call: parseStageFrontmatter
-// is a PURE function (aidlc-lib.ts:884-886 "Pure — no I/O, no validation"), and
+// is a PURE function (aidlc-lib.ts "Pure - no I/O, no validation"), and
 // the rest is regex scans over file bytes read with readFileSync. We IMPORT
 // parseStageFrontmatter directly and run three helpers against its real return
 // value (getOutputFilenames / isConditional / hasQuestionOutput). Zero

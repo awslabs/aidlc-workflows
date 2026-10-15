@@ -10,16 +10,16 @@
 // WHAT IT PROVES:
 //   Case A — depth override on an EXISTING workflow:
 //     setup state-mid-ideation (Depth=Standard, scope=feature) + audit, type
-//     `/aidlc --depth minimal`. SKILL.md step 8 (SKILL.md:124-125) sees `--depth`
+//     `/aidlc --depth minimal`. SKILL.md step 8 (SKILL.md) sees `--depth`
 //     WITHOUT --scope/--stage/--phase + state present, so it shells
 //     `aidlc-utility.ts config-change --depth minimal`, prints output, STOPS — no
 //     workflow run-on, a pure one-shot config edit. handleConfigChange
-//     (aidlc-utility.ts:2356) normalises minimal -> "Minimal", setField("Depth",
-//     ...) (:2386), writes state, and emits DEPTH_CHANGED with Old Depth=Standard
-//     / New Depth=Minimal (:2400). Assert ON DISK: aidlc-state.md `- **Depth**:
+//     (aidlc-utility.ts) normalises minimal -> "Minimal", setField("Depth",
+//     ...), writes state, and emits DEPTH_CHANGED with Old Depth=Standard
+//     / New Depth=Minimal. Assert ON DISK: aidlc-state.md `- **Depth**:
 //     Minimal` (the .sh's `Depth.*Minimal` grep) + audit.md has a DEPTH_CHANGED
 //     event (the .sh's `DEPTH_CHANGED` grep). Assert RENDERED: the pane shows the
-//     printed confirmation `Depth changed: Standard → Minimal` (:2415) AND the
+//     printed confirmation `Depth changed: Standard -> Minimal` AND the
 //     workflow statusline `[AIDLC] IDEATION` is still painted (the override does
 //     not start/stop a workflow).
 //
@@ -45,7 +45,7 @@
 // `/aidlc bugfix --depth comprehensive` creates a NEW workflow from a
 // brownfield stub and overrides the scope default depth. That is a SCOPE-START
 // journey, not a depth-OVERRIDE journey — `--depth` arriving WITH `--scope`
-// routes through the init/start path (SKILL.md:531 `init ... --depth`), a
+// routes through the init/start path (SKILL.md `init ... --depth`), a
 // different surface that runs the 3 init stages and lands a workflow. Per the
 // driver-split invariant + Pattern A's "lands deterministically, does NOT run to
 // completion" framing, the depth-DEFAULT-override-at-scope-start belongs with the

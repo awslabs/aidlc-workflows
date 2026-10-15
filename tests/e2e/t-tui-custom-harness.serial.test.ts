@@ -74,11 +74,11 @@
 //   - lead_agent appears in the run-stage directive from aidlc-orchestrate.ts,
 //     populated directly from stage-graph.json.
 //   - init records Scope + routes to firstPostInit + Lifecycle Phase=INCEPTION:
-//     aidlc-utility.ts:2087-2112 (verified: init --scope data-migration writes
+//     aidlc-utility.ts (verified: init --scope data-migration writes
 //     Lifecycle Phase: INCEPTION, Current Stage: schema-snapshot).
-//   - SENSOR_FIRED event string + detail path: aidlc-sensor.ts:296 / :268-270.
-//   - statusline raw-slug fallback: aidlc-statusline.ts:220.
-//   - F1 freeform vs --scope dispatch: SKILL.md:110 (--scope) vs detect-scope.
+//   - SENSOR_FIRED event string + detail path: aidlc-sensor.ts.
+//   - statusline raw-slug fallback: aidlc-statusline.ts.
+//   - F1 freeform vs --scope dispatch: SKILL.md (--scope) vs detect-scope.
 //
 // IRON RULE: a surface that fails here is a real FINDING about whether the
 // framework actually honours a harness engineer's edit — surfaced to the user,

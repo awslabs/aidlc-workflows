@@ -6,7 +6,7 @@
 //    Rule 9 exempts from the agent-registration cross-check)
 //
 // t62 - stage-frontmatter schema validation. The tool is a PURE
-// validator — "no I/O, no YAML parsing, no mutation" (aidlc-stage-schema.ts:6-7)
+// validator - "no I/O, no YAML parsing, no mutation" (aidlc-stage-schema.ts)
 // - so every behavioural contract can be asserted in-process by
 // importing and CALLING validateStageFrontmatter directly. There is no CLI
 // arg-parsing or process.exit shell to keep as a spawn seam: the .ts file is a

@@ -14,8 +14,8 @@
 // on, including real lock contention (case 6). So everything stays
 // spawned. spawnCount = all.
 //
-// IMPORTANT cwd contract (same as the .sh, t49:99-126): aidlc-worktree.ts's
-// assertNotSiblingWorktree (aidlc-worktree.ts:101-121) checks
+// IMPORTANT cwd contract (same as the .sh, t49): aidlc-worktree.ts's
+// assertNotSiblingWorktree (aidlc-worktree.ts) checks
 // `git rev-parse --show-toplevel` against `git rev-parse --git-common-dir`'s
 // parent, probing the git checkout resolved from --project-dir (its repoCwd)
 // rather than the process cwd. Every worktree/bolt spawn here still runs with

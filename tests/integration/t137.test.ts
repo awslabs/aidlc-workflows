@@ -7,27 +7,27 @@
 // (BUN + the tool .ts path), asserting on res.status (== $rc) and on the
 // audit shards / aidlc-state.md the tools write - the PROCESS boundary, including
 // the process.exit(1) that the .sh's `$?` arm relies on (emitError ->
-// process.exit(1), aidlc-lib.ts:1546). An in-process twin would lose the
+// process.exit(1), aidlc-lib.ts). An in-process twin would lose the
 // exit-code half every failure case hinges on.
 //
 // THE COVERED UNIT — audit:ERROR_LOGGED. This file exercises the
 // failure-injection paths whose observable is the ERROR_LOGGED audit row
-// emitted by emitError (aidlc-lib.ts:1504-1547). emitError fires its
+// emitted by emitError (aidlc-lib.ts). emitError fires its
 // ERROR_LOGGED append ONLY when the selected intent's state file exists
-// (aidlc-lib.ts:1513) — Failure 4 (read-only state.md, file present) is the
+// (aidlc-lib.ts) - Failure 4 (read-only state.md, file present) is the
 // case that lands a fresh ERROR_LOGGED row, and Test 8 asserts the count
-// climbs. The row format is `**Event**: ERROR_LOGGED` (aidlc-audit.ts:258,
-// heading "Error Logged" aidlc-audit.ts:149), Tool/Command/Error fields
-// (aidlc-lib.ts:1528-1538).
+// climbs. The row format is `**Event**: ERROR_LOGGED` (aidlc-audit.ts,
+// heading "Error Logged"), Tool/Command/Error fields
+// (aidlc-lib.ts).
 //
 // CHAOS CONTRACT under test (the .sh's four failure injections):
 //   F1. Permission-denied on the audit shard during a transition - audit-first
 //       means appendAuditEntry throws BEFORE writeStateFile, so the tool exits 1
 //       and aidlc-state.md is byte-identical to its pre-injection snapshot.
 //   F2. Missing audit shard dir - appendAuditEntry -> appendAuditEntryUnlocked ->
-//       ensureAuditFile (aidlc-audit.ts:254) recreates it; gate-start exits 0.
+//       ensureAuditFile (aidlc-audit.ts) recreates it; gate-start exits 0.
 //   F3. Corrupted state (no Scope) — handleAdvance refuses with an error that
-//       names the missing "Scope" field (aidlc-state.ts:290-293); exits 1.
+//       names the missing "Scope" field (aidlc-state.ts); exits 1.
 //   F4. Read-only state.md — the audit emit succeeds (ERROR_LOGGED lands) but
 //       writeStateFile can't write, so the tool exits 1 AND a fresh
 //       ERROR_LOGGED row is appended (the covered observable).

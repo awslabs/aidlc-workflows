@@ -18,7 +18,7 @@
 //     settings default in the live TUI path.
 //   - Case error (invalid env value errors, writes NO state): the env block is
 //     rewritten to `AWS_AIDLC_DEFAULT_SCOPE: "bogus"`; the orchestrator's step-0
-//     resolve-env-scope (SKILL.md:100-108) prints the canonical
+//     resolve-env-scope (SKILL.md) prints the canonical
 //     `Invalid AWS_AIDLC_DEFAULT_SCOPE` error and STOPS without creating state.
 //     .sh assertions ported: rendered output contains "Invalid
 //     AWS_AIDLC_DEFAULT_SCOPE"; no intent is created and no per-intent state is written.
@@ -34,13 +34,13 @@
 //
 // ENV FORWARDING:
 //   tui-drive.ts's tmux backend launches the claude child via `tmux new-session`
-//   (tui-drive.ts:271-283) and sets NO `update-environment` / `setenv` / `-e`
+//   (tui-drive.ts) and sets NO `update-environment` / `setenv` / `-e`
 //   env on the session, so the test PROCESS's shell env is NOT forwarded to the
 //   claude child (tmux new-session inherits the tmux *server* environment, not
 //   the spawning client's). The .sh's mechanism — `export AWS_AIDLC_DEFAULT_SCOPE=...`
 //   in the shell before run_claude — therefore does NOT translate to the TUI.
 //   So this port drives the env scope the way a REAL user does and the way
-//   SKILL.md:108 describes ("workshop facilitators set AWS_AIDLC_DEFAULT_SCOPE
+//   SKILL.md describes ("workshop facilitators set AWS_AIDLC_DEFAULT_SCOPE
 //   once in .claude/settings.json env block"): through the project's
 //   `.claude/settings.json` `env` block, which Claude Code reliably injects into
 //   its own process. This is MORE faithful to the production surface than the

@@ -4,7 +4,7 @@
 // human-timeline framing. Migrated from
 // tests/unit/t26-delivery-agent-timeline-guardrail.sh (TAP plan 3 — one `ok`
 // per file across the three delivery-surface artefacts). The .sh resolved
-// AIDLC_SRC = dist/claude/.claude (tests/lib/fixtures.sh:7) and, for each of the
+// AIDLC_SRC = dist/claude/.claude (tests/lib/fixtures.sh) and, for each of the
 // three files, grepped (case-insensitive) for a FORBIDDEN alternation; a file
 // passed iff NONE of the patterns matched.
 //
@@ -17,7 +17,7 @@
 // bytes — does each delivery-surface artefact stay free of human-timeline
 // framing? No process boundary, no argv/exit/stdout seam, no LLM, zero tokens.
 // We resolve the same tree the .sh resolved (AIDLC_SRC = <repo>/dist/claude/.claude,
-// fixtures.ts:42) and read each .md in-process.
+// fixtures.ts) and read each .md in-process.
 //
 // Subject under test (dist/claude/.claude/...):
 //   - aidlc-common/stages/inception/delivery-planning.md  (the stage spec)

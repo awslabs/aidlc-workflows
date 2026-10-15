@@ -2456,10 +2456,10 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
 
   // --- Stop-hook run-mode cap on Kiro (issue #365/#367 cross-harness coverage) ---
   //
-  // Kiro's stop adapter (case "continue-workflow", aidlc-kiro-adapter.ts:303-314) synthesizes
+  // Kiro's stop adapter (case "continue-workflow", aidlc-kiro-adapter.ts) synthesizes
   // {hook_event_name:"Stop", stop_hook_active:false} with NO transcript_path. So
   // the core hook's conversational carve-out (tier 3) is structurally inert on
-  // Kiro: the RUN-MODE-AWARE no-progress cap (blockCap, aidlc-continue-workflow.ts:122-137) is
+  // Kiro: the RUN-MODE-AWARE no-progress cap (blockCap, aidlc-continue-workflow.ts) is
   // the ONLY release path for a chatting / pausing human. These two tests pin
   // that contract deterministically:
   //   - interactive (no autonomy field) -> cap 2: a 2nd identical no-progress
@@ -2467,7 +2467,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
   //   - autonomous Construction -> cap 8: still blocks on call 3 (an unattended
   //     run keeps the loop alive; only a real hang ever hits 8).
   // The per-project guard counter persists under the active record's
-  // .aidlc-continue-workflow-hook/block-count.json (stopHookDir, aidlc-lib.ts:1620), so the
+  // .aidlc-continue-workflow-hook/block-count.json (stopHookDir, aidlc-lib.ts), so the
   // SAME scratch project is reused across the repeated calls - consecutive
   // no-progress blocks at one unchanging signature, which is exactly what the
   // counter measures.
@@ -2477,7 +2477,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
    *  test runner's environment (a leaked override would mask the contract). The
    *  adapter itself never sets the var (verified: aidlc-kiro-adapter.ts builds
    *  {hook_event_name,stop_hook_active} only), and the core hook reads it from
-   *  the inherited process env (aidlc-continue-workflow.ts:123). */
+   *  the inherited process env (aidlc-continue-workflow.ts). */
   function runStopNoCapEnv(projectDir: string): { stdout: string; code: number } {
     const env = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
     delete (env as Record<string, string | undefined>).CLAUDE_CODE_STOP_HOOK_BLOCK_CAP;
@@ -2535,7 +2535,7 @@ if (args[0] === "engine" && args[1] === "orchestrate") {
     try {
       expect(process.env.CLAUDE_CODE_STOP_HOOK_BLOCK_CAP).toBeUndefined();
       // Inject the autonomy field as a bullet line in ## Current Status (getField
-      // matches `- **Field**: value`, aidlc-lib.ts:1913). The base fixture has no
+      // matches `- **Field**: value`, aidlc-lib.ts). The base fixture has no
       // such field; adding it flips defaultBlockCap to 8 without changing the
       // engine's pending directive (Current Stage is unchanged).
       const statePath = seededStateFile(dir);

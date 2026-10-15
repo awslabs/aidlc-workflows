@@ -9,7 +9,7 @@
 // exist on disk under the distributable .claude/ tree? No process boundary, no
 // argv/exit/stdout seam, no LLM, zero tokens. We resolve the same tree the .sh
 // resolved via the harness's AIDLC_SRC (= <repo>/dist/claude/.claude,
-// fixtures.ts:42) and assert existsSync() in-process. AIDLC_SRC is the TS
+// fixtures.ts) and assert existsSync() in-process. AIDLC_SRC is the TS
 // canonical for the .sh's `cd .../dist/claude/.claude && pwd` CLAUDE_DIR.
 //
 // Subject under test: the shipped layout of dist/claude/.claude/ — the bytes a

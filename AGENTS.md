@@ -249,7 +249,7 @@ Agents read this code more than people do, and they can read the code itself. A 
 
 - **Keep:** why the code is this way, the path that was tried and rejected, a constraint that lives somewhere else, a platform quirk, who owns a rule, a test file's header saying what it checks, and a short label that maps a long block.
 - **Cut:** a comment that restates the next lines; history git already keeps (where code was ported from, review rounds, "used to", "now", dates), unless the history is the reason; commented-out code; a TODO with no owner; an empty banner.
-- **Point by name, never by line.** Name the function, test, section or file you mean; a line number goes wrong as soon as someone edits above it. `tests/unit/t-comment-pointer-lint.test.ts` fails on a pointer such as `aidlc-lib.ts:4144`, `lib:357-361` or `(:869)` in any comment under `core/`, `harness/`, `scripts/` and `plugins/`.
+- **Point by name, never by line.** Name the function, test, section or file you mean; a line number goes wrong as soon as someone edits above it. `tests/unit/t-comment-pointer-lint.test.ts` fails on a pointer such as `aidlc-lib.ts:4144`, `lib:357-361` or `(:869)` in any comment under `core/`, `harness/`, `scripts/`, `plugins/` and `tests/`.
 - **A wrong comment is worse than none.** When you change code, fix or cut the comment that describes it.
 - **Leave machine-read comments as they are:** `covers:` headers and the claim tokens on their lines, `@ts-expect-error`, `biome-ignore`, and markers a tool reads, such as `/* @aidlc-shipped-entrypoints@ */`. Some tools read plain words too: the merge queue's macOS run picks the unit test files whose source names macOS or darwin (`scripts/ci-macos-unit-selection.ts`), so keep that word in a test that needs the macOS run.
 

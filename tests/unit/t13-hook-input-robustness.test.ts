@@ -21,25 +21,25 @@
 // the raw file_path into its `**File**:` field; the shell never expands it).
 //
 // SOURCE UNDER TEST — the always-exit-0 / robustness contract per hook:
-//   hooks/aidlc-write-audit-log.ts   :31 TTY exit0; :37-40 bad-JSON exit0;
-//                                   :43 tool_name ?? ""; :44 file_path ?? "";
-//                                   :100-105 emit failure -> recordHookDrop + exit0
-//   hooks/aidlc-validate-state.ts :30 no-state-file exit0; reads STATE not stdin
-//                                   (ignores stdin entirely); :60-72 emit
+//   hooks/aidlc-write-audit-log.ts  TTY exit0; bad-JSON exit0;
+//                                   tool_name ?? ""; file_path ?? "";
+//                                   emit failure -> recordHookDrop + exit0
+//   hooks/aidlc-validate-state.ts   no-state-file exit0; reads STATE not stdin
+//                                   (ignores stdin entirely); emit
 //                                   failure non-fatal
-//   hooks/aidlc-session-start.ts  :39 no-state-file exit0; :58-76 stdin read is
+//   hooks/aidlc-session-start.ts    no-state-file exit0; stdin read is
 //                                   try/wrapped, malformed -> source="malformed";
-//                                   :88-93 emit failure non-fatal
-//   hooks/aidlc-statusline.ts     :193 TTY -> "" stdin; :195-199 malformed JSON
-//                                   swallowed; :208-211 no state -> "[AIDLC] ready"
+//                                   emit failure non-fatal
+//   hooks/aidlc-statusline.ts       TTY -> "" stdin; malformed JSON
+//                                   swallowed; no state -> "[AIDLC] ready"
 //   hooks/aidlc-log-subagent.ts   : no-state exit0 before heartbeat; TTY exit0;
 //                                   bad-JSON exit0; agent_* ?? defaults; emit
 //                                   failure -> recordHookDrop + exit0
-//   hooks/aidlc-run-sensors.ts    :17 "always exit 0" contract; :53 TTY exit0;
-//                                   :61-67 bad-JSON exit0; :74 empty path exit0;
-//                                   :90 no-audit exit0
-//   hooks/aidlc-rebuild-stage-graph.ts:40 TTY exit0; :45-51 bad-JSON exit0;
-//                                   :52 command ?? ""; :64 no-command-match exit0
+//   hooks/aidlc-run-sensors.ts      "always exit 0" contract; TTY exit0;
+//                                   bad-JSON exit0; empty path exit0;
+//                                   no-audit exit0
+//   hooks/aidlc-rebuild-stage-graph.ts TTY exit0; bad-JSON exit0;
+//                                   command ?? ""; no-command-match exit0
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,

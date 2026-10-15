@@ -18,7 +18,7 @@
 //
 // THE DETERMINISTIC SURFACE. The conductor runs
 //   `bun .claude/tools/aidlc.ts engine intent create --scope <scope> ...`
-// via Bash and prints its stdout VERBATIM. handleIntentCreate (aidlc-utility.ts:1986)
+// via Bash and prints its stdout VERBATIM. handleIntentCreate (aidlc-utility.ts)
 // does the scan + state-init in one deterministic tool call, then writes the
 // per-intent aidlc-state.md (the State-Version-8 template) and appends a fixed
 // audit event sequence (per-clone shard). The Bash tool_result carries the creation
@@ -39,22 +39,22 @@
 //
 //   - The creation CLI actually RAN: assertToolResultContains(r,"Bash",<verbatim summary>)
 //     proves the deterministic tool fired and its fixed stdout reached us
-//     ("Intent created:" / "State initialized:" / "Project type:", utility.ts:2374-2382) -
+//     ("Intent created:" / "State initialized:" / "Project type:", utility.ts) -
 //     written by handleIntentCreateStateBuild; the test pins the first two.
 //     assertToolResultContains refuses to pass vacuously if Bash never
-//     fired (assert.ts:44), so this also guards against a prose-only run.
-//   - Creation audit events: the creation handler emits WORKFLOW_STARTED (utility.ts:2065),
+//     fired (assert.ts), so this also guards against a prose-only run.
+//   - Creation audit events: the creation handler emits WORKFLOW_STARTED (utility.ts),
 //     WORKSPACE_SCAFFOLDED, WORKSPACE_INITIALISED and per-init-stage
 //     STAGE_COMPLETED. We assert the named events - a statement of WHY the
 //     audit grew.
 //
 // Known-answer literals (read from the SHIPPED handler, not guessed):
-//   - creation dispatch:         engine NAMES `intent create --scope <scope>` (aidlc-orchestrate.ts:302), conductor runs it
-//   - creation stdout anchors:   "Intent created:" / "State initialized:" / "Project type:" (utility.ts:2374-2382)
+//   - creation dispatch:         engine NAMES `intent create --scope <scope>` (aidlc-orchestrate.ts), conductor runs it
+//   - creation stdout anchors:   "Intent created:" / "State initialized:" / "Project type:" (utility.ts)
 //   - State Version value:    "8" (creation template)
 //   - 3 state fields:         Worktree Path / Bolt Refs / Practices Affirmed Timestamp
 //   - init-stage [x] markers: "[x] <slug>" for the 3 initialization stages, always EXECUTE/[x]
-//   - creation audit events:     WORKFLOW_STARTED / WORKSPACE_SCAFFOLDED / WORKSPACE_INITIALISED (utility.ts:2065/2110/2331)
+//   - creation audit events:     WORKFLOW_STARTED / WORKSPACE_SCAFFOLDED / WORKSPACE_INITIALISED (utility.ts)
 //
 // It SPENDS TOKENS — each driveAidlc drives the real /aidlc on Opus/Bedrock.
 // Generous per-test timeout so a hung canUseTool fails LOUD via bun:test.

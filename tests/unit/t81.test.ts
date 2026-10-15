@@ -17,7 +17,7 @@
 //   orchestrator-overrides-bolt-plan-marker semantics (Reason:
 //   bolt-plan-marker-conflict, plus Practices
 //   Stance + Bolt-Plan Marker + Bolt slug fields). The contract being pinned
-//   is that handlePracticesEvent (aidlc-state.ts:1006-1071) accepts arbitrary
+//   is that handlePracticesEvent (aidlc-state.ts) accepts arbitrary
 //   --field "Key: Value" pairs (key and value trimmed) - discriminator-field
 //   disambiguation needs zero new tool code.
 //

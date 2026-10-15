@@ -7,15 +7,23 @@
 // with an extension and a line, any name with a line range, or a bare line
 // after a space or bracket. A value written `name: 123`, a port in a URL, a
 // time, and a name with neither extension nor range are not pointers.
-import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import * as ts from "typescript";
 import { REPO_ROOT } from "../harness/fixtures.ts";
+import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
+import { runTestSourceGit } from "../lib/test-source.ts";
 
-const FOLDERS = ["core", "harness", "scripts", "plugins"];
+// Parsing every source file takes longer than bun's default case timeout.
+setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+const FOLDERS = ["core", "harness", "scripts", "plugins", "tests"];
 const SOURCE = /\.(?:ts|tsx|mts|cts|js|mjs|cjs)$/;
-const SKIP = new Set(["node_modules", "dist", "dist-release"]);
+// Fixtures are inputs the tests read as data, not code anyone maintains.
+const FIXTURES = "tests/fixtures/";
+// #1568 edits the lines under these two t66 comments: cut this skip when it lands or closes.
+const SKIP_POINTERS = new Set(["tests/integration/t66.test.ts .sh:79-84", "tests/integration/t66.test.ts .sh:892-900"]);
 const URL = /\bhttps?:\/\/\S+/g;
 const POINTER =
   /(?<![\w./-])(?:[\w./-]*\.[A-Za-z]{1,5}:\d+(?:-\d+)?|[A-Za-z_][\w.-]*:\d+-\d+)\b|(?<![\w:])(?<=^|[\s([,;/]):\d{2,}\b/g;
@@ -26,14 +34,16 @@ export function pointersIn(comment: string): string[] {
   return [...text.matchAll(POINTER)].map((match) => match[0]);
 }
 
-function sourceFiles(dir: string, out: string[] = []): string[] {
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (SKIP.has(entry.name)) continue;
-    const path = join(dir, entry.name);
-    if (entry.isDirectory()) sourceFiles(path, out);
-    else if (SOURCE.test(entry.name)) out.push(path);
-  }
-  return out;
+/**
+ * The source files Git tracks or would track, so what a test run leaves behind
+ * (tests/logs/, dist/, node_modules/) is never read. --cached still lists a
+ * tracked file deleted from the working tree, hence the existsSync.
+ */
+function sourceFiles(): string[] {
+  const listed = runTestSourceGit(REPO_ROOT, ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", ...FOLDERS]);
+  return [...new Set(listed.split("\0"))].filter(
+    (path) => SOURCE.test(path) && !path.startsWith(FIXTURES) && existsSync(join(REPO_ROOT, path)),
+  );
 }
 
 /** Every comment in a file, once, with the line it starts on. */
@@ -58,16 +68,13 @@ function commentsOf(file: string, text: string): Array<{ line: number; text: str
 }
 
 describe("t-comment-pointer-lint", () => {
-  test("no comment in core/, harness/, scripts/ or plugins/ points at a line", () => {
+  test("no comment in core/, harness/, scripts/, plugins/ or tests/ points at a line", () => {
     const findings: string[] = [];
-    for (const folder of FOLDERS) {
-      for (const file of sourceFiles(join(REPO_ROOT, folder))) {
-        for (const comment of commentsOf(file, readFileSync(file, "utf8"))) {
-          for (const pointer of pointersIn(comment.text)) {
-            findings.push(
-              `${relative(REPO_ROOT, file)}:${comment.line}: ${pointer} in a comment: name the function, test or section instead`,
-            );
-          }
+    for (const path of sourceFiles()) {
+      for (const comment of commentsOf(path, readFileSync(join(REPO_ROOT, path), "utf8"))) {
+        for (const pointer of pointersIn(comment.text)) {
+          if (SKIP_POINTERS.has(`${path} ${pointer}`)) continue;
+          findings.push(`${path}:${comment.line}: ${pointer} in a comment: name the function, test or section instead`);
         }
       }
     }

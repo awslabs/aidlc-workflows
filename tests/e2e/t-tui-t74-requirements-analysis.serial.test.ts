@@ -41,14 +41,14 @@
 //
 // FINDING (terminator glob — surfaced, handled faithfully, NOT softened):
 //   The stage writes TWO files under the stage dir (stage frontmatter
-//   `outputs:`, requirements-analysis.md:35):
+//   `outputs:`, requirements-analysis.md):
 //       requirements.md                          (the final artefact)
 //       requirements-analysis-questions.md       (the questions file, authored FIRST)
 //   The spec's table reads `--until-file "...*requirements*" (exclude *questions*)`,
 //   but tui-drive `--until-file` globs ONE path segment and CANNOT express an
 //   exclusion — a `*requirements*` glob matches the questions file too, and the
-//   questions file lands BEFORE requirements.md (stage step order: questions at
-//   :92, requirements at :116). A loose `*requirements*` glob would therefore
+//   questions file lands BEFORE requirements.md (stage step order: questions first,
+//   then requirements). A loose `*requirements*` glob would therefore
 //   terminate on the questions file, stopping the journey BEFORE the requirements
 //   artefact is written — a false-early stop that would red the requirements
 //   asserts for the WRONG reason. To honour the spec's "exclude *questions*"
