@@ -703,6 +703,7 @@ interface FinalRow {
   built_in?: string[];
   through?: string[];
   not_built?: string[];
+  not_applicable?: string[];
 }
 
 interface FinalCoverage {
@@ -726,6 +727,11 @@ function readTable(path: string, label: string): { data?: TraceabilityData; reas
 // its own, and a row for the parent alone does not cover them; else it is built
 // by its own row; else, with stories, through every criterion of the stories
 // User Stories traced it to, because Code Generation then traces criteria.
+// One nothing builds is settled when the latest stage that traced it (User
+// Stories, then NFR Requirements, then Code Generation) marked it `N/A` with its
+// reason in every table there that lists it; any other row there, or an `N/A`
+// with no reason, leaves it unbuilt. A Unit's own Code Generation `N/A` settles
+// a sub-requirement it owes.
 // `uncovered` comes before the per-ID rows so a host that cuts long output keeps it.
 function finalCoverage(projectDir: string): FinalCoverage {
   const docsDir = recordDir(projectDir);
@@ -741,6 +747,18 @@ function finalCoverage(projectDir: string): FinalCoverage {
   if (requirements.reason) reasons.push(requirements.reason);
   const reported = [...withoutTracedParents(requirements.ids)];
 
+  // Per ID, the latest stage's `N/A` reasons, or null when a row there is not one.
+  const notApplicable = new Map<string, { rank: number; reasons: string[] | null }>();
+  const traced = (rank: number, where: string, entry: CoverageEntry) => {
+    const prior = notApplicable.get(entry.id);
+    if (prior && prior.rank > rank) return;
+    const kept = prior?.rank === rank ? prior.reasons : [];
+    const reason = entry.status === "N/A" ? entry.target?.trim() : "";
+    notApplicable.set(entry.id, { rank, reasons: kept && reason ? [...kept, `${where}: ${reason}`] : null });
+  };
+  const whyNotApplicable = (id: string) => notApplicable.get(id)?.reasons ?? undefined;
+  const ownNotApplicable = new Map<string, string>();
+
   const storyTargets = new Map<string, Set<string>>();
   let storyContent: string | null = null;
   const storiesPath = join(docsDir, "inception", "user-stories", "stories.md");
@@ -752,6 +770,7 @@ function finalCoverage(projectDir: string): FinalCoverage {
     const table = readTable(join(docsDir, "inception", "user-stories", "traceability.json"), "User Stories traceability.json");
     if (table.reason) reasons.push(table.reason);
     for (const entry of table.data?.coverage ?? []) {
+      traced(0, "user-stories", entry);
       if (entry.status !== "OK") continue;
       const stories = storyTargets.get(entry.id) ?? new Set<string>();
       for (const story of extractIds(entry.target ?? "", [ID_PATTERNS.US])) stories.add(story);
@@ -784,6 +803,14 @@ function finalCoverage(projectDir: string): FinalCoverage {
     const built = new Set<string>();
     owed.set(owner, children);
     builtBy.set(owner, built);
+    const where = (stage: string) => (owner === "code-generation" ? stage : `${owner}/${stage}`);
+    // Read only for its `N/A` rows: an unreadable one settles nothing.
+    const nfrTable = join(dir, "nfr-requirements", "traceability.json");
+    if (existsSync(nfrTable)) {
+      for (const entry of readTable(nfrTable, `${owner} NFR Requirements traceability.json`).data?.coverage ?? []) {
+        traced(1, where("nfr-requirements"), entry);
+      }
+    }
     const path = join(dir, "code-generation", "traceability.json");
     if (!existsSync(path)) continue;
     tables++;
@@ -796,6 +823,8 @@ function finalCoverage(projectDir: string): FinalCoverage {
       if (tracedParent(id)) children.add(id);
     }
     for (const entry of read.data.coverage) {
+      traced(2, where("code-generation"), entry);
+      if (entry.status === "N/A" && entry.target?.trim()) ownNotApplicable.set(`${owner}: ${entry.id}`, entry.target.trim());
       if (entry.status !== "OK") continue;
       const problem = codeTargetProblem(projectRoot, entry.target);
       if (problem) {
@@ -818,17 +847,23 @@ function finalCoverage(projectDir: string): FinalCoverage {
   for (const id of reported) {
     const parts: string[] = [];
     const partsNotBuilt: string[] = [];
+    const partsNotApplicable: string[] = [];
     for (const [owner, children] of owed) {
       for (const child of children) {
         if (tracedParent(child) !== id) continue;
-        parts.push(`${owner}: ${child}`);
-        if (!builtBy.get(owner)?.has(child)) partsNotBuilt.push(`${owner}: ${child}`);
+        const part = `${owner}: ${child}`;
+        parts.push(part);
+        if (builtBy.get(owner)?.has(child)) continue;
+        const reason = ownNotApplicable.get(part);
+        if (reason) partsNotApplicable.push(`${part}: ${reason}`);
+        else partsNotBuilt.push(part);
       }
     }
     if (parts.length > 0) {
+      const settled = partsNotApplicable.length > 0 ? { not_applicable: partsNotApplicable } : {};
       coverage.push(partsNotBuilt.length === 0
-        ? { id, covered: true, through: parts }
-        : { id, covered: false, through: parts, not_built: partsNotBuilt });
+        ? { id, covered: true, through: parts, ...settled }
+        : { id, covered: false, through: parts, not_built: partsNotBuilt, ...settled });
       continue;
     }
     const built = builtIn.get(id);
@@ -837,12 +872,13 @@ function finalCoverage(projectDir: string): FinalCoverage {
       continue;
     }
     const through = [...(storyTargets.get(id) ?? [])].flatMap(criteriaOrStory);
-    if (through.length === 0) {
-      coverage.push({ id, covered: false });
+    if (through.length > 0) {
+      const notBuilt = through.filter((part) => !builtIn.has(part) && !whyNotApplicable(part));
+      coverage.push(notBuilt.length === 0 ? { id, covered: true, through } : { id, covered: false, through, not_built: notBuilt });
       continue;
     }
-    const notBuilt = through.filter((part) => !builtIn.has(part));
-    coverage.push(notBuilt.length === 0 ? { id, covered: true, through } : { id, covered: false, through, not_built: notBuilt });
+    const why = whyNotApplicable(id);
+    coverage.push(why ? { id, covered: true, not_applicable: why } : { id, covered: false });
   }
 
   const uncovered = coverage.filter((row) => !row.covered);

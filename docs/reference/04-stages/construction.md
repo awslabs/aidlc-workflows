@@ -1468,7 +1468,11 @@ with the aidlc-devsecops-agent providing security testing expertise.
     requirement with sub-requirements is built when each Unit has built its own
     (the `NFR1.x` its NFR Requirements wrote; a row for `NFR1` alone does not
     cover them); otherwise by its own row or, when User Stories ran, through
-    every acceptance criterion of the stories User Stories traced it to. Write
+    every acceptance criterion of the stories User Stories traced it to. One
+    that nothing builds is settled when the latest stage that traced it (User
+    Stories, NFR Requirements, then Code Generation) marked it `N/A` with its
+    reason in every table there that lists it; an `N/A` with no reason is not
+    settled. Write
     `cross-unit-traceability.md` from that output with the verdict, per-ID
     coverage and every uncovered ID; an uncovered ID is a finding shown at the
     approval gate.

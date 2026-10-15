@@ -52,9 +52,9 @@ When this module is listed, trigger after Step N-1 (completion message rendered)
 
 4. **Admission conflict-check (before any write).** For each kept learning candidate, compare the proposed practice line against `org.md`'s matching `## <section>` (matched by the routed heading — the single-line variant of the §5 admission gate). This comparison is a section-level LLM check (knowledge → orchestrator-LLM). If the practice contradicts an org guardrail, surface the conflicting org sentence inline; the user **revises, skips this candidate, or escalates** (judgement → user; there is no user-override path). Only conflict-clear or user-escalated selections proceed to the write. Sensor manifests have no org-section analogue and skip this check.
 
-5. **Persist (the tool writes + emits audit).** Build the selections file — `{ stage_slug, space, intent, selections[] }`, where `space`/`intent` are carried verbatim from step 2's surface output — and call:
+5. **Persist (the tool writes + emits audit).** Build the selections file — `{ stage_slug, space, intent, selections[] }`, where `stage_slug`/`space`/`intent` are carried verbatim from step 2's surface output — and write it with your file tool to the `selections_file` path that surface output names (a gitignored `.aidlc-engine/learnings/` folder: the record's, or with no intent record the space's intents folder's; one file per stage per piece of work). Then call:
    ```bash
-   {{INVOKE}} engine learnings persist --slug <stage-slug> --selections-json <path>
+   {{INVOKE}} engine learnings persist --slug <stage-slug> --selections-json <the selections_file surface returned>
    ```
    Each entry in `selections[]` identifies its candidate by `candidate_id`. The
    key `id`, which `surface` emits and step 3 correlates on, is accepted as an

@@ -13,7 +13,9 @@
 // is not read as that line again (takePersonsOwnLine, wordsAlreadyRead), and words
 // that name one piece and ask for it to go on ("continue auth") get the pick
 // question's own one-step answer, `next --pick <name>`, so the person never
-// says it twice. Team mode (Unit Ownership: team) gets the reading too. Every path also checks the
+// says it twice. Parked work picked that way after `/aidlc --resume` (a fresh
+// clone) carries on through the unpark step, never back to "Run /aidlc
+// --resume". Team mode (Unit Ownership: team) gets the reading too. Every path also checks the
 // chain the agent is told to follow: a stage step or one question within three
 // engine calls, and never the same print twice.
 
@@ -379,6 +381,36 @@ describe("t-carry-on-continues-the-work: work here but none selected in this cha
       // Kiro asks which work it belongs to at once; the others take the plan
       // proposal step first, then the plan the agent proposes, then the question.
       expect(request.calls).toBe(harness === "kiro" ? 2 : 3);
+    });
+
+    // A fresh clone of parked work: `/aidlc --resume` asks which work to carry
+    // on with, and the pick carries the parked work on in the same turn, never
+    // back to "Run /aidlc --resume" for the person to type again.
+    test(`${harness}: parked work, none selected: the pick after --resume carries it on through the unpark step`, () => {
+      proj = cloneWithWork(tools, ["auth"]);
+      const intents = join(proj, "aidlc", "spaces", "default", "intents");
+      const selector = readdirSync(intents).find((name) => /^\d{6}-auth$/.test(name))!;
+      switchTool(tools, proj, selector);
+      stateTool(proj, "park");
+      rmSync(join(intents, "active-intent"), { force: true });
+      const ask = next(tools, proj, ["--resume"]);
+      expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("intent-pick");
+      expect(ask.select_commands).toEqual([{ selector, command: expect.stringContaining(` next --pick ${selector}`) }]);
+      let d = next(tools, proj, ["--pick", selector]);
+      const prints: string[] = [];
+      while (d.kind === "print" && prints.length < 3) {
+        const message = String(d.message);
+        prints.push(message);
+        const switched = PICK_STEP.exec(message)?.[1];
+        if (switched !== undefined) switchTool(tools, proj, switched);
+        if (/ unpark`/.test(message)) stateTool(proj, "unpark");
+        const then = [...message.matchAll(/\bnext((?: --resume)?)`/g)].at(-1);
+        expect(then, message).toBeDefined();
+        d = next(tools, proj, then![1] ? ["--resume"] : []);
+      }
+      const note = `${prints.join(" | ")} => ${JSON.stringify(d).slice(0, 300)}`;
+      expect(d.kind, note).toBe("run-stage");
+      expect(prints.length, note).toBe(2);
     });
   }
 

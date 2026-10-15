@@ -82,7 +82,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    its bytes and the currently claimed source bytes into `REVIEW_REQUESTED`; it
    refuses before dispatch when the manifest is missing or invalid. The
    successful request's JSON returns `requestId` and `reviewFile`: the
-   project-relative path, under `<record>/.aidlc-engine/reviews/`, where this
+   path, under `<record>/.aidlc-engine/reviews/`, where this
    request's review is written. The request opens that slot (an earlier draft
    left there by an incomplete dispatch of the same iteration is removed), so
    the file the reviewer leaves is this dispatch's review and no other. It also
