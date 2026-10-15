@@ -829,115 +829,111 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
   });
 
   // =========================================================================
-  // Test 17 (#2654): a setting typed with --single is refused, not dropped.
-  // The run-stage carries none of them, so a single run would start with the
-  // workflow's own settings while the person thinks theirs applied. Review and
-  // ceremony flags meet their own refusals earlier in handleNext.
+  // Test 17 (#2654): a depth or test strategy typed with --single is that
+  // run's alone. It is recorded on the isolated start and rides on the
+  // run-stage; the workflow's own settings stay as they are. A Guard Policy or
+  // check cannot be the run's own, so it is refused, naming no config set.
+  // Review and ceremony flags meet their own refusals earlier in handleNext.
   // =========================================================================
-  function startedRows(proj: string): number {
-    return readFileSync(seededAuditShard(proj), "utf-8")
-      .split("\n")
-      .filter((line) => line === "**Event**: STAGE_STARTED").length;
+  type SingleDirective = {
+    kind?: string;
+    message?: string;
+    single?: boolean;
+    depth?: string;
+    test_strategy?: string;
+  };
+
+  function nextSingle(proj: string, extra: string[]): SingleDirective {
+    const r = run(TOOL, ["next", "--stage", "build-and-test", "--single", ...extra, "--project-dir", proj]);
+    return JSON.parse(r.out.trim()) as SingleDirective;
   }
 
+  function startedBlocks(proj: string): string[] {
+    return readFileSync(seededAuditShard(proj), "utf-8")
+      .split("\n---")
+      .filter((block) => block.includes("**Event**: STAGE_STARTED"));
+  }
+
+  function seededSingleProject(): string {
+    const proj = freshProject();
+    seedStateFile(proj, STATE_FIXTURE);
+    seedAuditFile(proj);
+    return proj;
+  }
+
+  test("17: next --single --test-strategy runs the stage with it and leaves the workflow's as it is", () => {
+    const proj = seededSingleProject();
+    const directive = nextSingle(proj, ["--test-strategy", "comprehensive"]);
+    expect(directive.kind, JSON.stringify(directive)).toBe("run-stage");
+    expect(directive.single).toBe(true);
+    expect(directive.test_strategy).toBe("Comprehensive");
+    expect(directive.depth).toBeUndefined();
+    const started = startedBlocks(proj);
+    expect(started).toHaveLength(1);
+    expect(started[0]).toContain("**Workflow**: single-stage:build-and-test");
+    expect(started[0]).toContain("**Test Strategy**: Comprehensive");
+    expect(run(STATE_TOOL, ["get", "Test Strategy", "--project-dir", proj]).out.trim()).toBe("Standard");
+    expect(currentStage(proj)).toBe("feasibility");
+  });
+
+  test("17b: next --single with a depth and a test strategy carries both", () => {
+    const proj = seededSingleProject();
+    const directive = nextSingle(proj, ["--depth", "minimal", "--test-strategy", "comprehensive"]);
+    expect(directive.kind, JSON.stringify(directive)).toBe("run-stage");
+    expect(directive.depth).toBe("Minimal");
+    expect(directive.test_strategy).toBe("Comprehensive");
+    expect(startedBlocks(proj)[0]).toContain("**Depth**: Minimal");
+  });
+
+  test("17c: a re-run of the open attempt keeps its settings and refuses different ones", () => {
+    const proj = seededSingleProject();
+    expect(nextSingle(proj, ["--depth", "minimal"]).kind).toBe("run-stage");
+    const again = nextSingle(proj, []);
+    expect(again.kind, JSON.stringify(again)).toBe("run-stage");
+    expect(again.depth).toBe("Minimal");
+    const other = nextSingle(proj, ["--depth", "standard"]);
+    expect(other.kind, JSON.stringify(other)).toBe("error");
+    expect(other.message).toContain("The open isolated attempt uses depth Minimal, not Standard.");
+    expect(other.message).toContain("--depth minimal");
+    expect(startedBlocks(proj)).toHaveLength(1);
+  });
+
+  test("17d: with no workflow, next --single --test-strategy runs the stage with it", () => {
+    const proj = freshProject();
+    const directive = nextSingle(proj, ["--test-strategy", "comprehensive"]);
+    expect(directive.kind, JSON.stringify(directive)).toBe("run-stage");
+    expect(directive.test_strategy).toBe("Comprehensive");
+  });
+
   for (const [flag, value] of [
-    ["--test-strategy", "comprehensive"],
-    ["--depth", "comprehensive"],
     ["--guard-policy", "relaxed"],
+    ["--guard.review-freeze", "off"],
   ] as const) {
-    test(`17: next --single ${flag} errors and starts nothing`, () => {
-      const proj = freshProject();
-      seedStateFile(proj, STATE_FIXTURE);
-      seedAuditFile(proj);
-      const r = run(TOOL, [
-        "next", "--stage", "build-and-test", "--single", flag, value, "--project-dir", proj,
-      ]);
-      const directive = JSON.parse(r.out.trim()) as { kind?: string; message?: string };
-      expect(directive.kind, r.out).toBe("error");
+    test(`17e: next --single ${flag} errors, names no config set and starts nothing`, () => {
+      const proj = seededSingleProject();
+      const directive = nextSingle(proj, [flag, value]);
+      expect(directive.kind, JSON.stringify(directive)).toBe("error");
       expect(directive.message).toContain(`Cannot use --single with ${flag}.`);
-      expect(directive.message).toContain("config set");
-      expect(startedRows(proj)).toBe(0);
-      expect(currentStage(proj)).toBe("feasibility");
+      expect(directive.message).not.toContain("config set");
+      expect(startedBlocks(proj)).toHaveLength(0);
     });
   }
 
-  test("17b: next --single with two settings names both in one error", () => {
-    const proj = freshProject();
-    seedStateFile(proj, STATE_FIXTURE);
-    seedAuditFile(proj);
-    const r = run(TOOL, [
-      "next", "--stage", "build-and-test", "--single",
-      "--depth", "standard", "--test-strategy", "comprehensive", "--project-dir", proj,
-    ]);
-    const directive = JSON.parse(r.out.trim()) as { kind?: string; message?: string };
-    expect(directive.kind, r.out).toBe("error");
-    expect(directive.message).toContain("Cannot use --single with --depth, --test-strategy.");
-    expect(directive.message).toContain("config set depth standard --test-strategy comprehensive");
-    expect(startedRows(proj)).toBe(0);
+  test("17f: next --single with a ceremony flag stays refused", () => {
+    const proj = seededSingleProject();
+    const directive = nextSingle(proj, ["--sensors", "off"]);
+    expect(directive.kind, JSON.stringify(directive)).toBe("error");
+    expect(directive.message).toContain("Cannot combine ceremony flags");
+    expect(startedBlocks(proj)).toHaveLength(0);
   });
 
-  test("17c: next --single with a ceremony flag stays refused", () => {
-    const proj = freshProject();
-    seedStateFile(proj, STATE_FIXTURE);
-    seedAuditFile(proj);
-    const r = run(TOOL, [
-      "next", "--stage", "build-and-test", "--single", "--sensors", "off", "--project-dir", proj,
-    ]);
-    expect(r.out).toContain('"kind":"error"');
-    expect(r.out).toContain("Cannot combine ceremony flags");
-    expect(startedRows(proj)).toBe(0);
-  });
-
-  test("17e: next --single --guard.<fence> errors and names the fence flag", () => {
-    const proj = freshProject();
-    seedStateFile(proj, STATE_FIXTURE);
-    seedAuditFile(proj);
-    const r = run(TOOL, [
-      "next", "--stage", "build-and-test", "--single", "--guard.review-freeze", "off", "--project-dir", proj,
-    ]);
-    const directive = JSON.parse(r.out.trim()) as { kind?: string; message?: string };
-    expect(directive.kind, r.out).toBe("error");
-    expect(directive.message).toContain("Cannot use --single with --guard.review-freeze.");
-    expect(startedRows(proj)).toBe(0);
-  });
-
-  test("17f: the config set the refusal names lands on the workflow the single run reads", () => {
-    const proj = freshProject();
-    seedStateFile(proj, STATE_FIXTURE);
-    const set = spawnSync(BUN, [
-      join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "config", "set", "test-strategy", "comprehensive",
-      "--project-dir", proj,
-    ], { encoding: "utf-8" });
-    expect(set.status, `${set.stdout}${set.stderr}`).toBe(0);
-    expect(run(STATE_TOOL, ["get", "Test Strategy", "--project-dir", proj]).out.trim()).toBe("Comprehensive");
-    const r = run(TOOL, [
-      "next", "--stage", "build-and-test", "--single", "--project-dir", proj,
-    ]);
-    expect(r.out).toContain('"kind":"run-stage"');
-  });
-
-  test("17g: with no workflow, the refusal does not name a config set the single run never reads", () => {
-    const proj = freshProject();
-    const r = run(TOOL, [
-      "next", "--stage", "build-and-test", "--single", "--test-strategy", "comprehensive", "--project-dir", proj,
-    ]);
-    const directive = JSON.parse(r.out.trim()) as { kind?: string; message?: string };
-    expect(directive.kind, r.out).toBe("error");
-    expect(directive.message).toContain("Cannot use --single with --test-strategy.");
-    expect(directive.message).toContain("With no workflow here");
-    expect(directive.message).not.toContain("config set");
-  });
-
-  test("17d: plain next --stage build-and-test --single still runs the stage", () => {
-    const proj = freshProject();
-    seedStateFile(proj, STATE_FIXTURE);
-    seedAuditFile(proj);
-    const r = run(TOOL, [
-      "next", "--stage", "build-and-test", "--single", "--project-dir", proj,
-    ]);
-    const directive = JSON.parse(r.out.trim()) as { kind?: string; single?: boolean };
-    expect(directive.kind, r.out).toBe("run-stage");
+  test("17g: plain next --stage build-and-test --single carries no settings of its own", () => {
+    const proj = seededSingleProject();
+    const directive = nextSingle(proj, []);
+    expect(directive.kind, JSON.stringify(directive)).toBe("run-stage");
     expect(directive.single).toBe(true);
-    expect(startedRows(proj)).toBe(1);
+    expect(directive.depth).toBeUndefined();
+    expect(directive.test_strategy).toBeUndefined();
+    expect(startedBlocks(proj)).toHaveLength(1);
   });
 });

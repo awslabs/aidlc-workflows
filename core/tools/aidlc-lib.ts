@@ -35648,6 +35648,12 @@ export function pipelineAttemptStartedAt(
 // after confirming an open attempt. Match its boundary ordering and never
 // borrow ceremony policy from the main workflow; legacy rows return null.
 export function singleStageAttemptScope(projectDir: string, slug: string): string | null {
+  return singleStageAttemptField(projectDir, slug, "Scope");
+}
+
+// A field the latest isolated start of <slug> recorded (Scope, Depth, Test
+// Strategy), or null when that start did not record it.
+export function singleStageAttemptField(projectDir: string, slug: string, field: string): string | null {
   const workflow = `single-stage:${slug}`;
   const attemptStart = readAuditShardEvents(projectDir)
     .filter((entry) =>
@@ -35661,7 +35667,7 @@ export function singleStageAttemptScope(projectDir: string, slug: string): strin
       return a.pos - b.pos;
     })
     .pop();
-  return attemptStart ? auditBlockField(attemptStart.block, "Scope") : null;
+  return attemptStart ? auditBlockField(attemptStart.block, field) : null;
 }
 
 export function singleStageAttemptIsOpen(

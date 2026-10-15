@@ -360,6 +360,7 @@ import {
   resolveWorkflowSelection,
   delegatedWorktreeIntent,
   scopeCostSummary,
+  singleStageAttemptField,
   singleStageAttemptIsOpen,
   singleStageAttemptScope,
   defaultScope,
@@ -9637,26 +9638,19 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       ));
       return;
     }
-    // The run-stage carries none of the workflow's settings, so a setting typed
-    // here would be dropped while the person thinks it applied (#2654). Review
-    // and ceremony flags meet their own refusals above; this catches the rest.
-    // With no workflow, config set only holds the setting for the next piece of
-    // work, which the single run never reads, so that step is not named there.
-    const settings = typedSettingModifiers(flags);
-    if (settings.length > 0) {
-      const refused = `Cannot use --single with ${settings.map((s) => `--${s.split(" ")[0]}`).join(", ")}.`;
-      if (stateContent === null) {
-        emit(errorDirective(
-          `${refused} With no workflow here, a single-stage run uses the default settings. ` +
-            "Run the stage again with --single and no setting, or start the work with the setting to use it.",
-        ));
-        return;
-      }
-      const unnamed = settingNeedsTheirWords(codekbCtx.projectDir, settings);
+    // A depth or test strategy typed here is this run's alone: it rides on the
+    // isolated start and its run-stage (#2654). A Guard Policy or a check is
+    // read by hooks from the workflow, so an isolated run cannot take its own;
+    // naming config set would change the whole workflow instead. Review and
+    // ceremony flags meet their own refusals above.
+    const unsupported = typedSettingModifiers(flags)
+      .map((modifier) => modifier.split(" ")[0])
+      .filter((key) => key !== "depth" && key !== "test-strategy");
+    if (unsupported.length > 0) {
       emit(errorDirective(
-        `${refused} A single-stage run uses the workflow's settings as they are. ` +
-          `Run \`${configSetCommand(settings, unnamed)}\`${unnamed ? PERSON_WORDS_FILL : ""} first, ` +
-          "then run the stage again with --single.",
+        `Cannot use --single with ${unsupported.map((key) => `--${key}`).join(", ")}. ` +
+          "A single-stage run cannot take its own Guard Policy or checks. " +
+          "Run the stage again with --single and without them.",
       ));
       return;
     }
@@ -9667,6 +9661,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       recordPrefix,
       codekbCtx,
       codekbCtx.projectDir,
+      {
+        Depth: flags.depth ? VALID_DEPTHS[flags.depth] : undefined,
+        "Test Strategy": flags.testStrategy ? VALID_TEST_STRATEGIES[flags.testStrategy] : undefined,
+      },
     );
     return;
   }
@@ -13895,25 +13893,62 @@ function emitForSlug(
 const SINGLE_INIT_ERROR =
   `Cannot run an initialization stage with --single. Initialization is bootstrap (it creates the intent + state); it runs automatically when you start a workflow (describe what to build, e.g. ${entrySkillInvocation()} "build the auth service").`;
 
+// The settings an isolated run takes for itself, in the state file's words,
+// keyed by the audit field its start records them under.
+type SingleRunSettings = Partial<Record<"Depth" | "Test Strategy", string>>;
+const SINGLE_RUN_SETTING_FLAGS = { Depth: "--depth", "Test Strategy": "--test-strategy" } as const;
+
+// What the latest isolated start of <slug> recorded. A steering continuation
+// rebuilds the run-stage from this, so the first part and the last agree.
+function recordedSingleRunSettings(projectDir: string, slug: string): SingleRunSettings {
+  const settings: SingleRunSettings = {};
+  for (const field of Object.keys(SINGLE_RUN_SETTING_FLAGS) as Array<keyof SingleRunSettings>) {
+    const recorded = singleStageAttemptField(projectDir, slug, field);
+    if (recorded !== null) settings[field] = recorded;
+  }
+  return settings;
+}
+
+function applySingleRunSettings(directive: RunStageDirective, settings: SingleRunSettings): void {
+  if (settings.Depth) directive.depth = settings.Depth;
+  if (settings["Test Strategy"]) directive.test_strategy = settings["Test Strategy"];
+}
+
+// The start's refusal, or the settings the attempt runs with: an open attempt
+// keeps the ones it started with, as it keeps its scope.
 function ensureSingleStageStarted(
   projectDir: string,
   node: GraphStage,
   scope: string,
-): string | null {
+  settings: SingleRunSettings = {},
+): { error: string } | { settings: SingleRunSettings } {
   if (singleStageAttemptIsOpen(projectDir, node.slug)) {
     const recordedScope = singleStageAttemptScope(projectDir, node.slug);
     if (recordedScope !== null && recordedScope !== scope) {
       // A saved scope that is not a scope name is not repeated or put in a command.
       const named = isScopeName(recordedScope);
-      return `The open isolated attempt uses ${named ? `scope "${recordedScope}"` : "another scope"}, not requested scope "${scope}". ` +
-        `Complete it with \`report --single --stage ${node.slug} --result approved\`` +
-        (named ? `, or re-run with \`--scope ${scopeArg(recordedScope)}\`.` : ".");
+      return {
+        error: `The open isolated attempt uses ${named ? `scope "${recordedScope}"` : "another scope"}, not requested scope "${scope}". ` +
+          `Complete it with \`report --single --stage ${node.slug} --result approved\`` +
+          (named ? `, or re-run with \`--scope ${scopeArg(recordedScope)}\`.` : "."),
+      };
     }
-    return null;
+    const kept = recordedSingleRunSettings(projectDir, node.slug);
+    for (const [field, flag] of Object.entries(SINGLE_RUN_SETTING_FLAGS) as Array<[keyof SingleRunSettings, string]>) {
+      const recorded = kept[field] ?? null;
+      const typed = settings[field];
+      if (typed === undefined || recorded === typed) continue;
+      return {
+        error: `The open isolated attempt uses ${recorded === null ? `the default ${field.toLowerCase()}` : `${field.toLowerCase()} ${recorded}`}, not ${typed}. ` +
+          `Complete it with \`report --single --stage ${node.slug} --result approved\`` +
+          (recorded === null ? `, or re-run without ${flag}.` : `, or re-run with \`${flag} ${recorded.toLowerCase()}\`.`),
+      };
+    }
+    return { settings: kept };
   }
   // A query never appends a lifecycle event: an observer that opened a
   // single-stage attempt would move the run floor it came to read.
-  if (isReadOnlyEngineProbe()) return null;
+  if (isReadOnlyEngineProbe()) return { settings };
   const error = appendSingleStageAuditEvents(projectDir, [{
     eventType: "STAGE_STARTED",
     fields: {
@@ -13921,10 +13956,11 @@ function ensureSingleStageStarted(
       Agent: node.lead_agent,
       Workflow: syntheticWorkflowId(node.slug),
       Scope: scope,
+      ...Object.fromEntries(Object.entries(settings).filter(([, value]) => value !== undefined)),
     },
   }]);
   routingEvidence = null;
-  return error;
+  return error === null ? { settings } : { error };
 }
 
 function emitSingleRunStage(
@@ -13934,6 +13970,7 @@ function emitSingleRunStage(
   recordPrefix: string | null = null,
   codekbCtx: CodekbCtx,
   projectDir: string,
+  settings: SingleRunSettings = {},
 ): void {
   const node = nodeForSlug(slug);
   if (!node) {
@@ -13949,10 +13986,10 @@ function emitSingleRunStage(
   // An isolated run never touches the plan or the cursor, so a stage the
   // scope skips runs too when the person asks for it, with one line saying so.
   const notInPlan = !new Set(subgraphForScope(scope).map((s) => s.slug)).has(node.slug);
-  const startError = ensureSingleStageStarted(projectDir, node, scope);
-  if (startError) {
+  const started = ensureSingleStageStarted(projectDir, node, scope, settings);
+  if ("error" in started) {
     emit(errorDirective(
-      `Cannot start isolated stage "${node.slug}": ${startError}`,
+      `Cannot start isolated stage "${node.slug}": ${started.error}`,
     ));
     return;
   }
@@ -13975,6 +14012,7 @@ function emitSingleRunStage(
   directive.single = true;
   directive.gate = false;
   directive.next_stage = null;
+  applySingleRunSettings(directive, started.settings);
   emit(notInPlan
     ? withChangeNotices(directive, [
       ...((directive as Directive).change_notices ?? []),
@@ -17571,7 +17609,12 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   } else {
     directive.next_stage = payload.n;
   }
-  if (payload.x) directive.single = true;
+  if (payload.x) {
+    directive.single = true;
+    if (singleStageAttemptIsOpen(pd, node.slug)) {
+      applySingleRunSettings(directive, recordedSingleRunSettings(pd, node.slug));
+    }
+  }
   if (payload.z === true) applySettledSwarmShape(directive);
   if (payload.q !== undefined) directive.unit_gate = payload.q;
   if (payload.o === true) applyGateOnlyShape(directive, pd, liveState ?? "");

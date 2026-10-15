@@ -93,7 +93,7 @@ Create `<record>/construction/build-and-test/build-instructions.md`:
 
 ### Step 3-7: Generate Test Instructions (Strategy-Aware)
 
-Consult the active test strategy from `aidlc-state.md` → `**Test Strategy**` (see stage-protocol.md §8 "Test Strategy"). Generate additional test instruction files based on the strategy level:
+Consult the active test strategy from `aidlc-state.md` → `**Test Strategy**`, or the run-stage's `test_strategy` when an isolated run carries one (see stage-protocol.md §8 "Test Strategy"). Generate additional test instruction files based on the strategy level:
 
 **Minimal strategy** — generate no additional test instruction files. Unit
 tests are covered per-unit by Code Generation.
