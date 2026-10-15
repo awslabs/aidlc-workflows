@@ -1,6 +1,6 @@
 // code-generation-states.ts - every Code Generation state a person can be in,
 // built through the installed tools, and the seven harness shapes of one tool
-// call against the plan-approval guard.
+// call (and of a call to the person's MCP server) against the plan-approval guard.
 //
 // The no-dead-end sweep (tests/unit/t-code-generation-no-dead-end.test.ts)
 // asks, in every state and for every harness: is the person's message kept,
@@ -548,7 +548,11 @@ export interface Shape {
   /** Install this harness's tree into the project (removing a sibling that shares the dir). */
   install(proj: string): void;
   call(proj: string, session: string, call: ToolCall): Verdict | Promise<Verdict>;
+  /** A call to one of the person's MCP servers, named and delivered as this harness's own hook entry gets it. */
+  mcp(proj: string, session: string): Verdict | Promise<Verdict>;
 }
+
+const MCP_INPUT = { message: "look this up" };
 
 const DIST = join(REPO_ROOT, "dist");
 
@@ -595,11 +599,18 @@ const claude: Shape = {
     { hook_event_name: "PreToolUse", session_id: session, cwd: proj, ...claudeInput(call, ".claude") },
     { CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
   )),
+  // settings.json sends no `mcp__` tool to the hooks; the group's own matchers are the next door.
+  mcp: (proj, session) => stderrVerdict(spawnShape(
+    proj, [join(proj, ".claude", "tools", "aidlc.ts"), "engine", "hook", "guard-tool-call"],
+    { hook_event_name: "PreToolUse", session_id: session, cwd: proj, tool_name: "mcp__everything__echo", tool_input: MCP_INPUT },
+    { CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+  )),
 };
 
 // Codex gives every tool call its own turn and call ids; its adapter replays a
 // verdict only for a byte-identical delivery, so each call here carries its own.
 let codexCall = 0;
+const CODEX_ENV = { CLAUDE_PROJECT_DIR: undefined, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined, AIDLC_COMPILED_EXECUTABLE: "" };
 
 const codex: Shape = {
   name: "codex", dir: ".codex",
@@ -618,9 +629,18 @@ const codex: Shape = {
         hook_event_name: "PreToolUse", cwd: proj, session_id: session,
         turn_id: `turn-sweep-${++codexCall}`, tool_use_id: `call-sweep-${codexCall}`, ...native,
       },
-      { CLAUDE_PROJECT_DIR: undefined, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined, AIDLC_COMPILED_EXECUTABLE: "" },
+      CODEX_ENV,
     ));
   },
+  mcp: (proj, session) => stderrVerdict(spawnShape(
+    proj, [join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "guard-tool-call"],
+    {
+      hook_event_name: "PreToolUse", cwd: proj, session_id: session,
+      turn_id: `turn-sweep-${++codexCall}`, tool_use_id: `call-sweep-${codexCall}`,
+      tool_name: "mcp__everything__echo", tool_input: MCP_INPUT,
+    },
+    CODEX_ENV,
+  )),
 };
 
 const copilot: Shape = {
@@ -634,20 +654,32 @@ const copilot: Shape = {
         : call.tool === "Edit"
           ? { tool_name: "replace_string_in_file", tool_input: { filePath: call.path, oldString: "a", newString: "b" } }
           : { tool_name: "runSubagent", tool_input: { subagent_type: call.agent, prompt: respell(call.prompt, ".aidlc") } };
-    const result = spawnShape(
-      proj, [join(proj, ".aidlc", "hooks", "aidlc-copilot-adapter.ts"), "guard-tool-call"],
-      { hook_event_name: "PreToolUse", session_id: session, timestamp: new Date().toISOString(), cwd: proj, ...native },
-      { AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined, AIDLC_COMPILED_EXECUTABLE: undefined },
-    );
-    if (result.status !== 0) return { code: result.status, said: `adapter failed: ${result.stderr.trim()}` };
-    const line = result.stdout.trim().split("\n").find((entry) => entry.startsWith("{"));
-    const out = line ? JSON.parse(line) as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } } : {};
-    const decision = out.hookSpecificOutput?.permissionDecision;
-    return decision === "deny"
-      ? { code: 2, said: out.hookSpecificOutput?.permissionDecisionReason ?? "" }
-      : { code: 0, said: "" };
+    return copilotCall(proj, session, native);
+  },
+  // VS Code's name for an MCP tool, then the Copilot CLI's: both must pass.
+  mcp: (proj, session) => {
+    for (const tool_name of ["mcp_everything_echo", "everything-echo"]) {
+      const verdict = copilotCall(proj, session, { tool_name, tool_input: MCP_INPUT });
+      if (verdict.code !== 0) return { code: verdict.code, said: `${tool_name}: ${verdict.said}` };
+    }
+    return { code: 0, said: "" };
   },
 };
+
+function copilotCall(proj: string, session: string, native: Record<string, unknown>): Verdict {
+  const result = spawnShape(
+    proj, [join(proj, ".aidlc", "hooks", "aidlc-copilot-adapter.ts"), "guard-tool-call"],
+    { hook_event_name: "PreToolUse", session_id: session, timestamp: new Date().toISOString(), cwd: proj, ...native },
+    { AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined, AIDLC_COMPILED_EXECUTABLE: undefined },
+  );
+  if (result.status !== 0) return { code: result.status, said: `adapter failed: ${result.stderr.trim()}` };
+  const line = result.stdout.trim().split("\n").find((entry) => entry.startsWith("{"));
+  const out = line ? JSON.parse(line) as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } } : {};
+  const decision = out.hookSpecificOutput?.permissionDecision;
+  return decision === "deny"
+    ? { code: 2, said: out.hookSpecificOutput?.permissionDecisionReason ?? "" }
+    : { code: 0, said: "" };
+}
 
 const cursor: Shape = {
   name: "cursor", dir: ".cursor",
@@ -660,24 +692,29 @@ const cursor: Shape = {
         : call.tool === "Edit"
           ? { tool_name: "Edit", tool_input: { file_path: call.path, old_string: "a", new_string: "b" } }
           : { tool_name: "Task", tool_input: { description: "build", subagent_type: call.agent, prompt: respell(call.prompt, ".cursor") } };
-    const result = spawnShape(
-      proj, [join(proj, ".cursor", "hooks", "aidlc-cursor-adapter.ts"), "guards"],
-      {
-        conversation_id: session, generation_id: session, model: "", tool_use_id: "toolu_sweep",
-        session_id: session, hook_event_name: "preToolUse", cursor_version: "2026.07.23-e383d2b",
-        workspace_roots: [proj], user_email: "user@example.com", transcript_path: null, cwd: proj, ...native,
-      },
-      {
-        AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor",
-        GIT_CONFIG_GLOBAL: join(proj, ".absent-global-gitconfig"), GIT_CONFIG_SYSTEM: join(proj, ".absent-system-gitconfig"),
-      },
-    );
-    if (result.status !== 0) return { code: result.status, said: `adapter failed: ${result.stderr.trim()}` };
-    const line = result.stdout.trim().split("\n").find((entry) => entry.startsWith("{"));
-    const out = line ? JSON.parse(line) as { permission?: string; agent_message?: string } : {};
-    return out.permission === "deny" ? { code: 2, said: out.agent_message ?? "" } : { code: 0, said: "" };
+    return cursorCall(proj, session, native);
   },
+  mcp: (proj, session) => cursorCall(proj, session, { tool_name: "MCP:echo", tool_input: MCP_INPUT }),
 };
+
+function cursorCall(proj: string, session: string, native: Record<string, unknown>): Verdict {
+  const result = spawnShape(
+    proj, [join(proj, ".cursor", "hooks", "aidlc-cursor-adapter.ts"), "guards"],
+    {
+      conversation_id: session, generation_id: session, model: "", tool_use_id: "toolu_sweep",
+      session_id: session, hook_event_name: "preToolUse", cursor_version: "2026.07.23-e383d2b",
+      workspace_roots: [proj], user_email: "user@example.com", transcript_path: null, cwd: proj, ...native,
+    },
+    {
+      AIDLC_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: ".cursor",
+      GIT_CONFIG_GLOBAL: join(proj, ".absent-global-gitconfig"), GIT_CONFIG_SYSTEM: join(proj, ".absent-system-gitconfig"),
+    },
+  );
+  if (result.status !== 0) return { code: result.status, said: `adapter failed: ${result.stderr.trim()}` };
+  const line = result.stdout.trim().split("\n").find((entry) => entry.startsWith("{"));
+  const out = line ? JSON.parse(line) as { permission?: string; agent_message?: string } : {};
+  return out.permission === "deny" ? { code: 2, said: out.agent_message ?? "" } : { code: 0, said: "" };
+}
 
 function kiroNative(call: ToolCall, dir: string): { tool_name: string; tool_input: Record<string, unknown> } {
   switch (call.tool) {
@@ -696,6 +733,12 @@ const kiro: Shape = {
     { hook_event_name: "preToolUse", cwd: proj, session_id: session, ...kiroNative(call, ".kiro") },
     { CLAUDE_PROJECT_DIR: proj },
   )),
+  // The agent registers this guard for execute_bash, fs_write and subagent only; the adapter is the next door.
+  mcp: (proj, session) => stderrVerdict(spawnShape(
+    proj, [join(proj, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "plan-approval-guard"],
+    { hook_event_name: "preToolUse", cwd: proj, session_id: session, tool_name: "@everything/echo", tool_input: MCP_INPUT },
+    { CLAUDE_PROJECT_DIR: proj },
+  )),
 };
 
 const kiroIde: Shape = {
@@ -711,23 +754,18 @@ const kiroIde: Shape = {
       { CLAUDE_PROJECT_DIR: proj, USER_PROMPT: undefined },
     ));
   },
+  // The one card every non-read tool meets (aidlc-guard-tool-call.json).
+  mcp: (proj, session) => stderrVerdict(spawnShape(
+    proj, [join(proj, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "guard-tool-call"],
+    { hook_event_name: "PreToolUse", cwd: proj, session_id: session, tool_name: "mcp_everything_echo", tool_input: MCP_INPUT },
+    { CLAUDE_PROJECT_DIR: proj, USER_PROMPT: undefined },
+  )),
 };
 
 const opencode: Shape = {
   name: "opencode", dir: ".aidlc",
   install: (proj) => installTree(proj, "opencode", ".aidlc"),
-  call: async (proj, session, call) => {
-    // The shipped plugin with its own defaults: the shipped entrypoint list and
-    // the installed `bun .aidlc/tools/aidlc.ts engine` of the project.
-    const { default: createAdapter } = await import("../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts");
-    const client = {
-      session: {
-        get: async () => ({ data: {} }),
-        prompt: async () => {},
-      },
-    };
-    const adapter = await createAdapter({ client: client as never, directory: proj } as never);
-    const before = (adapter as Record<string, (a: unknown, b: unknown) => Promise<void>>)["tool.execute.before"];
+  call: (proj, session, call) => {
     const [tool, args] = call.tool === "Bash"
       ? ["bash", { command: respell(call.command, ".aidlc") }]
       : call.tool === "Write"
@@ -735,14 +773,30 @@ const opencode: Shape = {
         : call.tool === "Edit"
           ? ["edit", { filePath: call.path, oldString: "a", newString: "b" }]
           : ["task", { subagent_type: call.agent, prompt: respell(call.prompt, ".aidlc") }];
-    try {
-      await before({ tool, sessionID: session, callID: `sweep-${tool}` }, { args });
-      return { code: 0, said: "" };
-    } catch (error) {
-      return { code: 2, said: error instanceof Error ? error.message : String(error) };
-    }
+    return opencodeCall(proj, session, tool, args);
   },
+  mcp: (proj, session) => opencodeCall(proj, session, "everything_echo", MCP_INPUT),
 };
+
+// The shipped plugin with its own defaults: the shipped entrypoint list and the
+// installed `bun .aidlc/tools/aidlc.ts engine` of the project.
+async function opencodeCall(proj: string, session: string, tool: string, args: Record<string, unknown>): Promise<Verdict> {
+  const { default: createAdapter } = await import("../../dist/opencode/.opencode/plugin/aidlc-opencode-adapter.ts");
+  const client = {
+    session: {
+      get: async () => ({ data: {} }),
+      prompt: async () => {},
+    },
+  };
+  const adapter = await createAdapter({ client: client as never, directory: proj } as never);
+  const before = (adapter as Record<string, (a: unknown, b: unknown) => Promise<void>>)["tool.execute.before"];
+  try {
+    await before({ tool, sessionID: session, callID: `sweep-${tool}` }, { args });
+    return { code: 0, said: "" };
+  } catch (error) {
+    return { code: 2, said: error instanceof Error ? error.message : String(error) };
+  }
+}
 
 export const SHAPES: Shape[] = [claude, codex, copilot, cursor, kiro, kiroIde, opencode];
 

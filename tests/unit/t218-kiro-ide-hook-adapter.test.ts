@@ -4802,13 +4802,13 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
 
   // An MCP call reaches the hooks as Kiro's tool_load, then the call itself as
   // `mcp_<server>_<tool>` (measured on Kiro CLI 2.31.0 and Kiro IDE 1.3.0).
-  // While the engine asks the person to approve the code plan both pass, so
-  // they can look something up before they decide; Kiro's own card still asks
-  // before the call. While the stage runs before approval the call waits, with
-  // or without a marker in the payload, and so does a tool the table does not
-  // know that is not an MCP call.
+  // Both pass at any point of Code Generation: while the plan is written (the
+  // person asked for a lookup mid-plan on Kiro IDE 1.2.37 and was refused), at
+  // the plan question, at the recovery question; Kiro's own card still asks
+  // before the call. A tool the table does not know that is not an MCP call
+  // still waits before approval.
   for (const policy of ["off", "strict"] as const) {
-    test(`an MCP call passes while the plan question is open, not before it (Guard Policy ${policy})`, () => {
+    test(`an MCP call passes at any point of Code Generation, through either entry (Guard Policy ${policy})`, () => {
       const dir = scratchProject(true);
       try {
         seedCodeGenerationDirective(dir);
@@ -4838,11 +4838,32 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
           expect(result.code, `${name}: ${result.stderr}`).toBe(0);
         }
         expect(call("unknown_mutation_tool", { message: "x" }).code).toBe(2);
-        writeActiveDirectiveMarker(dir, { kind: "run-stage", stage: "code-generation", state_sha256: stateDigest(state) });
-        expect(call("tool_load", load).code).toBe(0);
-        expect(call("mcp_probe_ws_ws_echo", echo).code).toBe(2);
-        expect(call("mcp_probe_ws_ws_echo", echo, { aidlc_external_tool: "mcp" }).code).toBe(2);
-        expect(call("mcp_time_get_current_time", {}).code).toBe(2);
+        const group = (toolName: string, toolInput: Record<string, unknown>) =>
+          runIdeStdin(dir, "guard-tool-call", JSON.stringify({
+            hook_event_name: "PreToolUse",
+            session_id: `ide-mcp-${policy}`,
+            cwd: dir,
+            tool_name: toolName,
+            tool_input: toolInput,
+          }));
+        for (const [step, fields] of [
+          ["the plan being written", { kind: "run-stage" }],
+          ["the recovery question", {
+            kind: "ask", ask_type: "guard-recovery",
+            remedies: [{ op: "request-changes", action: "Ask what should change.", interaction: "human-input" }],
+          }],
+        ] as const) {
+          writeActiveDirectiveMarker(dir, {
+            stage: "code-generation", state_sha256: stateDigest(state), ...fields,
+          } as Parameters<typeof writeActiveDirectiveMarker>[1]);
+          for (const [name, input] of [["tool_load", load], ["mcp_probe_ws_ws_echo", echo], ["mcp_time_get_current_time", {}]] as const) {
+            const result = call(name, input);
+            expect(result.code, `${step}, ${name}: ${result.stderr}`).toBe(0);
+            const card = group(name, input);
+            expect(card.code, `${step}, ${name} through the guard card: ${card.stderr}`).toBe(0);
+          }
+          expect(call("unknown_mutation_tool", { message: "x" }).code, step).toBe(2);
+        }
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }

@@ -1650,12 +1650,15 @@ This is one of the framework's six flow-altering hooks and one of its five `PreT
 **What the plan never governs.** At any point of Code Generation, under every
 Guard Policy and whatever the current step (the plan being written, the engine's
 plan question open, the rules still arriving, a swarm batch, a step gone out of
-date, an approved plan whose Testing Contract was edited), two kinds of call pass
+date, an approved plan whose Testing Contract was edited), three kinds of call pass
 without a word: a shell command that names no file it writes and is not AI-DLC's
 own (a read such as `sed -n` or `find`, a scan, a test run, `python script.py`),
-and a file-tool or shell write whose every target is outside the project (the
+a file-tool or shell write whose every target is outside the project (the
 path as written and the real path of its deepest existing folder both lie
-outside the project; a link from outside into the project counts as inside).
+outside the project; a link from outside into the project counts as inside),
+and on the kiro-ide row a call to one of the person's MCP servers (the Kiro
+adapter marks it `aidlc_external_tool: "mcp"`; Kiro's own approval card and the
+person's Kiro settings decide whether it runs).
 A command the guard cannot read whole keeps the build's verdict: one with
 whitespace, a line continuation or an escaped operator (`\>`, `\&`) the lexer
 does not decode, one that can hide a command or a write target (a variable, a
@@ -1676,10 +1679,8 @@ that name anywhere. What else the person asks for runs at once, the same under
 every Guard Policy: a shell command that names no file it writes (a commit, an
 install, a test run), a file-tool or shell write to any other file in the
 project outside `aidlc/` and the harness folder, reached through no symlink,
-AI-DLC's own commands and records (above and below), and on the kiro-ide row a
-call to one of the person's MCP servers (the Kiro adapter marks it
-`aidlc_external_tool: "mcp"`; Kiro's own approval card and the person's Kiro
-settings decide whether it runs). When the plans name no
+AI-DLC's own commands and records (above and below), and a call to one of the
+person's MCP servers (above). When the plans name no
 path at all, only a Markdown or plain-text document (`.md`, `.markdown`, `.txt`,
 `.rst`, `.adoc`) is beside the build. The conductor does what was asked and says
 "Done. The code plan still waits for your approval." Once the person's approval

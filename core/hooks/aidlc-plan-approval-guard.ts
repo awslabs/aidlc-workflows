@@ -2080,6 +2080,11 @@ async function evaluate(
     if (!codeGenerationRelevant) return 0;
     const knownMutationTool =
       toolName === "Bash" || WRITE_TOOLS.has(toolName);
+    // A call to one of the person's own MCP servers, as the harness adapter
+    // marks it outside the agent's input, runs like their other requests at any
+    // point of Code Generation: the host's own approval and their settings
+    // decide it. A marked write, shell or dispatch gets no such pass.
+    if (parsed.aidlc_external_tool === "mcp" && !knownMutationTool && !DISPATCH_TOOLS.has(toolName)) return 0;
     const mutation: MutationIntent = guardedDispatch
       ? { targets: [], opaqueShell: false, shellCommand: null }
       : knownMutationTool
@@ -2213,13 +2218,6 @@ async function evaluate(
         if (knownMutationTool && !mutation.engineRefused) {
           const planPaths = mutation.targets.length > 0 ? planApprovalPlanNamedPaths(projectDir) : null;
           if (mutation.targets.every((candidate) => isPlanWaitSideWrite(projectDir, candidate, planPaths))) return 0;
-        }
-        // A call to one of the person's own MCP servers, as the harness adapter
-        // marks it outside the agent's input, runs like their other requests:
-        // the host's own approval and their settings decide it. A marked
-        // write, shell or dispatch gets no such pass.
-        if (parsed.aidlc_external_tool === "mcp" && !knownMutationTool && !DISPATCH_TOOLS.has(toolName)) {
-          return 0;
         }
         authorityFailure = PLAN_APPROVAL_ASK_OPEN;
         standing = planStanding(projectDir, activeDirective);
