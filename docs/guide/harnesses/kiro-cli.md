@@ -239,7 +239,13 @@ top-level dot entry, and anything outside the project, still ask. Your
 project's own test and build commands (`bun test`, `npm test`, `pytest`, and so
 on), a `git push` and a recursive delete still ask, so you see each one before
 it runs. In a side-by-side build the workers and reviewers run the test command
-you approved through AI-DLC's own `swarm check`, which does not ask.
+you approved through AI-DLC's own `swarm check`, which does not ask. When a
+side-by-side build's workers or reviewers ask, Kiro gathers their requests in a
+"tool approval pending" box; choosing (f) **Approve all pending and
+auto-approve future subagent requests** there lets them run whatever they ask,
+without asking you again, for the rest of that chat, reviewers that start later
+included. Requests from the main chat still ask as before, and Kiro writes no
+setting for it.
 
 **Sessions with no approver stall rather than prompt.** Anything outside the
 pre-approved set needs an interactive answer. Under `kiro-cli chat

@@ -1684,7 +1684,14 @@ and an offer to turn it back on, for example:
 > The review freeze check (it stops edits to work you already approved) is off for this project since 10:42, because you said: "turn the review freeze check off for this project". Do you want it back on?
 
 Right after you turn a check off yourself, that line states the way back instead
-of asking about what you just decided: "You can turn it back on any time."
+of asking about what you just decided: "You can turn it back on any time." When
+a wider place would change something, it then offers that place, once: "Do you
+want it off for the whole project instead?" after this piece of work, "Do you
+want it off for this whole machine instead?" after this project. Asking for a
+check that is already off there says so, with the same offer. This machine, a
+check with no project switch, and the Guard Policy have nowhere wider to go, so
+nothing is asked, and nothing is asked of a command you run at your own
+terminal.
 
 When the engine cannot tie it to a message of yours in the chat, the line says
 only that the check is off and since when. Every new chat opens with the
