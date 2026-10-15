@@ -2556,7 +2556,8 @@ root, both also leave out AI-DLC's own files, as `codekb-scope-diff` does
 (below). A space+repo lock keeps
 the two values from straddling a concurrent publication. The returned
 `store_generation`, `source_fingerprint`, and `paths` are inputs to
-`codekb-publish`.
+`codekb-publish`; `head_commit` is the commit the knowledge base's Run Record
+names (`unknown` outside Git or before the first commit).
 
 ### `aidlc-utility codekb-publish` - guarded all-artifact publication
 

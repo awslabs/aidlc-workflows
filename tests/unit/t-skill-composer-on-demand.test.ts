@@ -47,7 +47,7 @@ const ANY_CHAT = [
   "**Saving a plan for next time.**",
   "Mid-workflow, when the human asks in plain chat to turn sensors, learnings, summary confirmation, or reviews on or off, or plan approval on, just do it",
   "A review level set for the piece of work replaces its scope's ceiling",
-  "After turning one on, check it with",
+  "After turning sensors or learnings on, check it with",
   "to skip plan approval, the harness records it and creation turns it off",
 ];
 

@@ -1459,12 +1459,17 @@ with the aidlc-devsecops-agent providing security testing expertise.
     pass and every applicable target to be `Met`, or the single explanatory
     `N/A` row when no target applies.
 
-10. **Cross-Unit Final Coverage Gate** -- Enumerate every `FR` and `NFR` in
-    `requirements.md` (a requirement with sub-requirements through its
-    `FR{n}.{m}` IDs; a row for the `FR{n}` alone does not cover them) and every `AC` in `stories.md` (when User Stories ran),
-    read the stage-level and every per-unit Code Generation
-    `traceability.json`, and check each ID is covered `OK` with an existing
-    target file. Write `cross-unit-traceability.md` with the verdict, per-ID
+10. **Cross-Unit Final Coverage Gate** -- Run
+    `aidlc engine sensor-traceability --stage build-and-test`. It reports every
+    `FR` and `NFR` in `requirements.md` (a requirement with sub-requirements
+    through its `FR{n}.{m}` IDs) and every `AC` in `stories.md` (when User
+    Stories ran), each built when a stage-level or per-unit Code Generation
+    `traceability.json` covers it `OK` with an existing target file. A
+    requirement with sub-requirements is built when each Unit has built its own
+    (the `NFR1.x` its NFR Requirements wrote; a row for `NFR1` alone does not
+    cover them); otherwise by its own row or, when User Stories ran, through
+    every acceptance criterion of the stories User Stories traced it to. Write
+    `cross-unit-traceability.md` from that output with the verdict, per-ID
     coverage and every uncovered ID; an uncovered ID is a finding shown at the
     approval gate.
 

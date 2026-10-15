@@ -1,7 +1,8 @@
 name: CI
 
 # Deterministic gate for the main line. Every PR push runs contract checks
-# (generator determinism, typecheck, lint), Linux smoke/unit/integration, and
+# (generator determinism, typecheck, lint, installer ShellCheck), Linux
+# smoke/unit/integration, and
 # production-guard contracts. The merge queue, manual dispatch, and callers also
 # run the cross-OS native-terminal units and live OS-isolation smoke proofs, and
 # the merge queue runs the deterministic smoke, unit, integration and E2E tiers
@@ -65,6 +66,11 @@ jobs:
       # determinism guard, then typechecks all three tsconfigs and runs Biome.
       - name: Run contract checks
         run: bun run check
+
+      # The same step the preview and stable gates run (t332 holds the three
+      # equal), so a PR that breaks the installer is red before it merges.
+      - name: ShellCheck installer
+        run: shellcheck scripts/install.sh
 
   deterministic:
     name: Tests (${{ matrix.runner }}, ${{ matrix.suite.name }})
