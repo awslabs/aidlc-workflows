@@ -43,6 +43,6 @@ Pure derivation from frontmatter - no per-stage config needed.
 
 ## Failure mode
 
-Emits `SENSOR_FAILED` and writes detail listing required artifacts declared
-in `consumes:` that appear in none of the stage's deliverables in any
+Emits `SENSOR_FAILED` and writes detail listing required or cited artifacts
+declared in `consumes:` that appear in none of the stage's deliverables in any
 accepted form.
