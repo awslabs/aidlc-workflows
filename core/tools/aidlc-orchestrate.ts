@@ -15234,6 +15234,9 @@ function checkPipelineLinkEvidence(
     : `Cannot present "${slug}" for approval because these pipeline handoffs have not been recorded for the current run`;
   return {
     ok: false,
+    // With the person's approval in hand the way on is the agent's own step
+    // (dispatch, record, the same report again), so the turn goes on.
+    ...(options.approval !== undefined ? { step: true as const } : {}),
     message:
       `${refusal}: ${missing.join(", ")}. ` +
       pipelineLinkWayOn(pd, slug, {

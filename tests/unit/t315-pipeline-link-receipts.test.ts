@@ -889,6 +889,9 @@ describe("t315 pipeline link receipts", () => {
         : [STATE, "approve", RE_STAGE, "--user-input", "Approve", "--project-dir", proj];
 
       const refused = run(approve);
+      // The engine's refusal is the agent's next step (a print), never an error
+      // that ends the turn with the person's approval left unapplied.
+      if (via === "report") expect(refused.out).toContain('"kind":"print"');
       expect(refused.out).toContain(`for the current run: ${FINAL}. Dispatch the missing pipeline links`);
       expect(refused.out).not.toContain("Re-run `");
       expect(refused.out).not.toContain("which shows the gate again");
