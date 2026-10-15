@@ -1387,7 +1387,9 @@ function applyModelsFlags(
     throw new Error(`--effort must be one of ${MODEL_EFFORTS.join(", ")}, or default to remove the agent's own effort`);
   }
   if (model && !isModelId(model)) {
-    throw new Error(`--model takes one model id with no spaces, as your tool names it; got ${JSON.stringify(model)}`);
+    throw new Error(
+      `--model takes one model id as your tool names it: letters, digits and punctuation with no spaces, starting with a letter or digit; got ${JSON.stringify(model)}`,
+    );
   }
   // A model alone leaves the agent's effort where it was, and an effort alone
   // its model. `default` removes that one setting of the agent's, so the

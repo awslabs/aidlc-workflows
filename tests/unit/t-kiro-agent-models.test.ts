@@ -233,12 +233,22 @@ describe("the doctor and the notes on kiro-ide", () => {
 });
 
 describe("the --model value", () => {
-  test("a recorded model id with a line break is refused where settings and policy are read", () => {
-    const injected = "gpt-5.6-terra\ntools: [\"shell\"]";
-    expect(() => normalizeSettingsModels({ schemaVersion: 1, agents: { [REVIEWER]: { model: { "kiro-ide": injected } } } }))
-      .toThrow("must be one model ID with no spaces");
-    expect(() => policy.normalizeModelPolicy({ schemaVersion: 1, agents: { [REVIEWER]: { model: injected } } }))
-      .toThrow("must be one model id with no spaces");
+  test("a recorded model id that is not one plain token is kept readable but never written into a Kiro agent file", () => {
+    featureOn();
+    for (const recorded of ["gpt-5.6-terra\ntools: [\"shell\"]", "#gpt", "\"gpt", "gpt\u0085x"]) {
+      const value: ModelPolicyRecord = { schemaVersion: 1, agents: { [REVIEWER]: { model: recorded } } };
+      expect(normalizeSettingsModels({ schemaVersion: 1, agents: { [REVIEWER]: { model: { "kiro-ide": recorded } } } }))
+        .not.toBeNull();
+      const resolved = policy.resolveModelPolicy(value, REVIEWER, "balanced", "kiro-ide", null, PREVIEW);
+      expect(resolved.model, JSON.stringify(recorded)).toBeUndefined();
+      expect(resolved.unexpressed).toEqual(["model"]);
+      const root = projection();
+      const before = agentFiles(root)[REVIEWER_FILE];
+      policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", value, null, PREVIEW);
+      expect(agentFiles(root)[REVIEWER_FILE], JSON.stringify(recorded)).toBe(before);
+    }
+    expect(policy.isModelId("claude-opus-4-8[1m]")).toBe(true);
+    expect(policy.isModelId("arn:aws:bedrock:us-east-1::foundation-model/x")).toBe(true);
   });
 
   test("a model id with a space is refused before anything is recorded", () => {
@@ -267,7 +277,7 @@ describe("the --model value", () => {
       "config", "models", "--project-dir", project, "--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra\neffortLevel: max", "--yes",
     ]);
     expect(refused.status).not.toBe(0);
-    expect(`${refused.stdout}${refused.stderr}`).toContain("--model takes one model id with no spaces");
+    expect(`${refused.stdout}${refused.stderr}`).toContain("--model takes one model id as your tool names it");
     const settings = projectSettingsPath(project);
     const recorded = existsSync(settings) ? (JSON.parse(readFileSync(settings, "utf-8")) as { models?: unknown }) : {};
     expect(recorded.models).toBeUndefined();

@@ -281,11 +281,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-// A model id is written as one frontmatter or TOML value, so it is one token:
-// whitespace in it would end the line and start another key. The settings
-// reader, the policy reader and `config models --model` all ask this.
+// A model id written into an agent file as a bare frontmatter or TOML value:
+// one printable ASCII token that starts with a letter or digit, so it can
+// neither end the line nor start a YAML comment, quote or collection.
+// `config models --model` asks this of a new id, and the kiro-ide writer of a
+// recorded one; a recorded id outside it stays readable, so it can be replaced.
 export function isModelId(value: string): boolean {
-  return value.length > 0 && !/\s/.test(value);
+  return /^[A-Za-z0-9][\x21-\x7e]*$/.test(value);
 }
 
 export function isModelEffort(value: string): value is ModelEffort {
@@ -391,8 +393,8 @@ export function normalizeModelPolicy(value: unknown): ModelPolicyRecord | null {
         entry.effort = raw.effort;
       }
       if (raw.model !== undefined) {
-        if (typeof raw.model !== "string" || !isModelId(raw.model.trim())) {
-          throw new Error(`models.agents.${name}.model must be one model id with no spaces`);
+        if (typeof raw.model !== "string" || raw.model.trim().length === 0) {
+          throw new Error(`models.agents.${name}.model must be a non-empty string`);
         }
         entry.model = raw.model.trim();
       }
@@ -516,7 +518,7 @@ export function resolveModelPolicy(
   let clampedEffort: EffectiveModelPolicy["clampedEffort"];
 
   if (requestedModel !== undefined) {
-    if (honesty.model) model = requestedModel;
+    if (honesty.model && (harness !== "kiro-ide" || isModelId(requestedModel))) model = requestedModel;
     else unexpressed.push("model");
   }
 
@@ -980,7 +982,13 @@ export function harnessHonestyNotes(
   );
   const notes: string[] = [];
   if (effective.some((item) => item.unexpressed.length > 0)) {
-    notes.push(modelHarnessHonesty(harness, version).message);
+    // The kiro-ide switch hint is for one agent's own setting; a preset or
+    // group effort stays unexpressed with the switch on too.
+    const own = effective.some((item) => item.layer === "agent-exception" && item.unexpressed.length > 0);
+    const honesty = modelHarnessHonesty(harness, version);
+    notes.push(
+      honesty === KIRO_AGENT_MODELS_OFF_IN_PREVIEW && !own ? HARNESS_HONESTY["kiro-ide"].message : honesty.message,
+    );
   }
   for (const item of effective) {
     if (item.clampedEffort) {
