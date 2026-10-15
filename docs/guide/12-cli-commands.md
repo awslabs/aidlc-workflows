@@ -1527,6 +1527,16 @@ answer didn't reach AI-DLC. Quit Kiro and start it again in this folder with:
 kiro-cli chat --agent-engine v2 --agent aidlc, then give it once more." The
 agent is told never to offer to turn a check off for them.
 
+A `log answer` for a question the agent logged after the person's reply is
+refused too, and the refusal says so to the agent. When the person's message is
+on record, it names that message (`--message <id>`), so they are not asked
+again. When it is not, and that reply already answered the questions logged
+before it, the agent is told to log every question before showing it and, if it
+showed this question before that reply, to show it again and tell the person
+"AI-DLC got your reply. Please answer this one question once more." Either way
+the line about an answer that didn't reach AI-DLC holds only for a reply that
+could have been missed, never for one that arrived.
+
 Only `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1` lowers human presence, set machine-wide
 or recorded with `aidlc config flags --bypass` (AI-DLC then says it is off).
 `AIDLC_UNATTENDED=1` separately withholds human-turn minting; it does not lower
