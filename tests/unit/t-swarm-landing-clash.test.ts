@@ -1,8 +1,8 @@
 // covers: subcommand:aidlc-worktree:merge, hook:aidlc-plan-approval-guard, audit:SWARM_SOURCE_MERGED
 //
 // Two parallel Units wrote one file. The first lands; the second's landing
-// clashes, and git leaves it staged in the person's main checkout with its
-// conflict markers. The landing says so and names the way on, the agent may
+// clashes, and git leaves it staged in the person's main checkout. The landing
+// says how git left each file and names the way on, the agent may
 // combine exactly those files there while the batch is out, the same merge
 // says the clash again until they are combined, and then it lands and the
 // batch goes on. Nothing else in the main checkout opens up. A landing that git
@@ -10,7 +10,7 @@
 // main checkout (an AI-DLC update to .gitignore) names the file and the step.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
@@ -36,17 +36,21 @@ function land(pd: string, unit: string, target = "main") {
 }
 
 // alpha and beta each build their own file and write one shared file; alpha lands.
-function clashed(shared = "src/shared.ts", target = "main"): string {
+function clashed(
+  shared = "src/shared.ts",
+  target = "main",
+  change = (_unit: string, path: string, value: number) => writeFileSync(path, `export const shared = ${value};\n`),
+): string {
   const pd = fixture(["alpha", "beta"]);
   if (target !== "main") git(pd, ["branch", "-m", "main", target]);
   const prepared = swarm(pd, ["prepare", "--batch", "1", "--units", "alpha,beta", "--base", target]);
   expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
   ["alpha", "beta"].forEach((unit, index) => {
     writeUnitSource(pd, unit, index + 2);
-    writeFileSync(join(wt(pd, unit), shared), `export const shared = ${index + 2};\n`);
+    change(unit, join(wt(pd, unit), shared), index + 2);
     const checked = swarm(pd, ["check", unit]);
     expect(checked.code, `${checked.out}\n${checked.err}`).toBe(0);
-    reviewRevisedSource(pd, unit, [`src/${unit}.ts`, shared]);
+    reviewRevisedSource(pd, unit, [...new Set([`src/${unit}.ts`, shared])]);
   });
   const finalized = swarm(pd, ["finalize", "--batch", "1", "--units", "alpha,beta", "--claimed", "alpha,beta"]);
   expect(finalized.code, `${finalized.out}\n${finalized.err}`).toBe(0);
@@ -83,7 +87,7 @@ describe("a parallel landing that clashes with a Unit already landed", () => {
     const clash = JSON.parse(r.out) as Clash;
     expect(clash).toMatchObject({ status: "conflict", conflict_files: ["src/shared.ts"] });
     expect(clash.detail).toContain("Unit beta's landing clashes with what is already on main");
-    expect(clash.detail).toContain("src/shared.ts");
+    expect(clash.detail).toContain("src/shared.ts (added on both sides)");
     expect(clash.detail).toContain(pd);
     expect(clash.detail).not.toContain("in worktree");
     expect(clash.next).toContain("`git add`");
@@ -127,7 +131,7 @@ describe("a parallel landing that clashes with a Unit already landed", () => {
     const landed = land(pd, "beta");
     expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0);
     expect((JSON.parse(landed.out) as { notices?: string[] }).notices)
-      .toEqual(["Landed Unit beta with src/shared.ts combined with what was already on main."]);
+      .toEqual(["Landed Unit beta with src/shared.ts settled by hand against what was already on main."]);
     expect(readFileSync(join(pd, "src", "shared.ts"), "utf-8")).toBe(COMBINED);
     expect(unmerged(pd)).toBe("");
     const rows = readAuditShardEvents(pd).filter((row) => row.event === "SWARM_SOURCE_MERGED");
@@ -136,6 +140,26 @@ describe("a parallel landing that clashes with a Unit already landed", () => {
     // The landing is done: the main checkout's files wait for the batch again.
     expect(guard(pd, "Write", write(join(pd, "src", "shared.ts"))).code).toBe(2);
     expect((nextDirective(pd) as { kind: string }).kind).toBe("run-stage");
+  });
+
+  test("a file one Unit deleted and the other changed: the clash says so, and `git rm` keeps the deletion", () => {
+    // alpha's plan removes its module; beta's changes it, and its own file too.
+    const pd = clashed("src/alpha.ts", "main", (unit, path) =>
+      unit === "alpha" ? rmSync(path) : writeFileSync(path, "export const alpha = 3;\n"));
+    const clash = JSON.parse(land(pd, "beta").out) as Clash;
+    expect(clash).toMatchObject({ status: "conflict", conflict_files: ["src/alpha.ts"] });
+    expect(clash.detail).toContain("git could not merge src/alpha.ts (deleted on main, changed by Unit beta)");
+    expect(clash.detail).not.toContain("conflict markers");
+    expect(clash.next).toContain("`git rm`");
+    git(pd, ["rm", "-q", "src/alpha.ts"]);
+    const landed = land(pd, "beta");
+    expect(landed.code, `${landed.out}\n${landed.err}`).toBe(0);
+    expect((JSON.parse(landed.out) as { notices?: string[] }).notices)
+      .toEqual(["Landed Unit beta with src/alpha.ts settled by hand against what was already on main."]);
+    expect(existsSync(join(pd, "src", "alpha.ts"))).toBe(false);
+    expect(readFileSync(join(pd, "src", "beta.ts"), "utf-8")).toBe("export const beta = 3;\n");
+    const rows = readAuditShardEvents(pd).filter((row) => row.event === "SWARM_SOURCE_MERGED");
+    expect(auditBlockField(rows[1].block, "Landed changes")).toContain("src/alpha.ts");
   });
 
   test("a file whose name is not plain ASCII: the clash names it as it is, and the agent may write it", () => {
