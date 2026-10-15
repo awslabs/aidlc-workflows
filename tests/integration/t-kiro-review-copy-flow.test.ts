@@ -192,6 +192,9 @@ describe("the reviewer read-scope copy on Kiro (preview)", () => {
     const copyName = String(requested.dispatchAgent);
     expect(p.dispatched(copyName, `Agent '${copyName}' not found in registry`).code).toBe(0);
     expect(p.completions()).toEqual([]);
+    // The fallback is said where doctor looks: the scope the person turned on was not held.
+    expect(readFileSync(join(seededRecordDir(p.dir), ".aidlc-engine", "hooks-health", "kiro-adapter.drops"), "utf-8"))
+      .toContain(`Kiro has no agent named ${copyName}`);
     expect(p.dispatched(REVIEWER, `**Reviewer:** ${REVIEWER}\n\nVerdict: READY`).code).toBe(0);
     expect(p.completions().map((row) => auditBlockField(row, "Agent Type"))).toEqual([REVIEWER]);
   });

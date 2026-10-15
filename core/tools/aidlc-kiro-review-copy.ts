@@ -159,7 +159,11 @@ export function prepareReviewCopy(
   }
 }
 
-/** Remove the reviewer copy of a request, if one was written. Best effort. */
+/**
+ * Remove the reviewer copy of a request, if one was written. Best effort. It
+ * does not ask the layout again: the name belongs to that one request, and a
+ * layout read that answers differently at the verdict would leave the copy.
+ */
 export function removeReviewCopy(projectDir: string, requestId: string | null | undefined): void {
   const copyName = requestId ? scopedReviewCopyName(requestId) : null;
   if (copyName === null) return;

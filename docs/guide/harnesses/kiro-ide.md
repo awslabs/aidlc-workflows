@@ -512,9 +512,10 @@ dispatches it, so there is no need to pick it. It is deleted when its verdict
 is recorded; AI-DLC's `.gitignore` block keeps it out of commits, and you can
 delete one left by a review that never finished. When Kiro has no agent by the
 copy's name (an older Kiro build may not load it), AI-DLC dispatches the
-reviewer itself, as without the feature. Measured on Kiro CLI 2.31.0 and Kiro
-IDE 1.3.0. It does nothing in a stable build, for Units built in parallel, or
-while the reviewer read-scope check is off (`guard.reviewer-scope off`,
+reviewer itself, as without the feature, and doctor's hook-drop line names the
+copy Kiro did not load. Measured on Kiro CLI 2.31.0 and Kiro IDE 1.3.0. It
+does nothing in a stable build, for Units built in parallel, or while the
+reviewer read-scope check is off (`guard.reviewer-scope off`,
 `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1`).
 
 ### Kiro's Workflows feature stops AI-DLC's reviews and helpers

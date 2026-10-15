@@ -6094,9 +6094,11 @@ describe("t218 log-subagent identity extraction (#459)", () => {
       expect(readAudit(dir)).toContain("**Agent Type**: aidlc-developer-agent");
       expect(readAudit(dir)).not.toContain("**Agent Type**: aidlc-review-0123456789ab");
       // Another agent's words are its own output, not Kiro's answer.
+      const developerRows = () => readAudit(dir).split("**Agent Type**: aidlc-developer-agent").length - 1;
+      const before = developerRows();
       expect(missing("invoke_sub_agent", { name: "aidlc-developer-agent", prompt: "Implement" },
         "Agent 'aidlc-review-0123456789ab' not found in registry").code).toBe(0);
-      expect(readAudit(dir)).toContain("**Agent Type**: aidlc-developer-agent");
+      expect(developerRows()).toBe(before + 1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
