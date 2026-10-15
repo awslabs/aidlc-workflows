@@ -408,12 +408,11 @@ describe("t338 atomic per-intent settings", () => {
     const express = run(UTILITY, ["scope-change", "--scope", "express"], proj, { AIDLC_DISABLE_SENSORS: "1" });
     expect(express.status, express.stderr).toBe(0);
     // express declares every ceremony off; the human's learnings choice is
-    // retained, so the clause names reviewers, the env-disabled sensors, and
-    // the scope-owned summary confirmation and plan approval.
-    // The clause rides the reply's first line, after the approval gate count.
-    const offClause = (stdout: string): string | undefined =>
-      stdout.split("\n").find((line) => line.startsWith("Switched to "))?.split("; no ")[1]?.split(". You can switch back")[0];
-    expect(offClause(express.stdout)).toBe("reviewers, sensors, summary confirmation, or plan approval; lead agent only");
+    // retained. The reply's first line says the plan's size and the way back,
+    // never the settings: the state rows below and --status hold them.
+    const switched = (stdout: string): string | undefined =>
+      stdout.split("\n").find((line) => line.startsWith("Switched to "));
+    expect(switched(express.stdout)).toMatch(/ approval gates\. You can switch back to [a-z-]+ any time\.$/);
     // Plan approval follows the scope the person switched to.
     expect(getField(readFileSync(state, "utf-8"), "Plan Approval")).toBe("off (from scope express)");
     expect(getField(readFileSync(state, "utf-8"), "Learnings")).toBe("on (set by a command)");
@@ -423,7 +422,7 @@ describe("t338 atomic per-intent settings", () => {
     const classic = run(UTILITY, ["scope-change", "--scope", "classic"], proj);
     expect(classic.status, classic.stderr).toBe(0);
     expect(getField(readFileSync(state, "utf-8"), "Learnings")).toBe("on (set by a command)");
-    expect(offClause(classic.stdout)).toBe("summary confirmation; lead agent only");
+    expect(switched(classic.stdout)).toMatch(/ approval gates\. You can switch back to express any time\.$/);
     expect(getField(readFileSync(state, "utf-8"), "Plan Approval")).toBe("on (from scope classic)");
   });
 

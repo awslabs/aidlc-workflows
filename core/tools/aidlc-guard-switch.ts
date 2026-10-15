@@ -1092,26 +1092,6 @@ export function planApprovalCreationGranted(
   }
 }
 
-/** The recorded words still apply: no memory lock and no unattended driver since. */
-export function planApprovalOffAtCreation(
-  projectDir: string,
-  sessionId: string | null,
-  request: string | null = null,
-): boolean {
-  if (process.env.AIDLC_UNATTENDED === "1" || !planApprovalCreationGranted(projectDir, sessionId, request)) return false;
-  try {
-    return !memoryGuardPolicyDeclarations(projectDir, { sessionId: sessionId ?? undefined })
-      .some((declaration) => declaration.value === "strict");
-  } catch {
-    return false;
-  }
-}
-
-/** For the creation preview: the words apply to the request open now, or to any when none was. */
-export function planApprovalOffForOpenRequest(projectDir: string, sessionId: string | null): boolean {
-  return planApprovalOffAtCreation(projectDir, sessionId, latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS));
-}
-
 /** Spent by the next piece of work this chat creates, whether or not it was the one asked for. */
 export function consumePlanApprovalCreationGrant(projectDir: string, sessionId: string | null): void {
   if (!sessionId) return;

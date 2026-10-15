@@ -161,8 +161,6 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files (scope id
 
 Scopes differ by an order of magnitude in ceremony: `poc` runs a narrow single-pass path, while `feature` runs 30 stages after Initialization with 30 approval gates (29 of each on a new project, where Reverse Engineering is skipped) and five stages that repeat for each Unit of Work in Construction (four design stages and Code Generation). The scope confirmation line names the effective numbers - stage count, approval-gate count, and any per-unit fan-out - computed from the compiled grid and workspace scan, never estimated. Greenfield work excludes reverse engineering, and scopes that skip `units-generation` omit the per-unit clause because no Unit DAG exists. You know what you are consenting to before the workflow starts.
 
-The confirmation also lists what the effective policy turns off, including creation flags and environment kill switches. Classic defaults add `; no summary confirmation; lead agent only`; opting summary confirmation in removes its part, because an advisory review cap is not a disabled ceremony, and collaborators on removes `lead agent only`. Scopes with every ceremony enabled, collaborators on, and no `none` review cap omit that clause.
-
 > **Per-project default scope:** teams can pre-set the default scope for a project by setting `AWS_AIDLC_DEFAULT_SCOPE` in `.claude/settings.json`. See [Customization § Per-Project Default Scope](13-customization.md#per-project-default-scope).
 
 ---
@@ -234,8 +232,7 @@ the line says 6 stages and 6 approval gates:
 ```text
  Plan
  I'd run the "bugfix" plan for: "Fix the timeout on the export endpoint" - 5 stages, 5 approval
- gates; no learnings ritual or summary confirmation; lead agent only. Do you want me to go ahead
- with it, use a different plan, or tailor one to this task?
+ gates. Do you want me to go ahead with it, use a different plan, or tailor one to this task?
  > 1. Go ahead with the "bugfix" plan
       5 stages focused on fixing this specific bug.
    2. Use a different plan

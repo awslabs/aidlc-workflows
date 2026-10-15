@@ -449,8 +449,8 @@ this kind of work. Here it picked `mvp`; your words may get another:
 ```text
  Plan
  I'd run the "mvp" plan for: "Build a REST API for inventory management" - 19 stages, 19 approval
- gates, 5 stages repeat per unit of work in Construction; lead agent only. Do you want me to go
- ahead with it, use a different plan, or tailor one to this task?
+ gates, 5 stages repeat per unit of work in Construction. Do you want me to go ahead with it, use
+ a different plan, or tailor one to this task?
  > 1. Go ahead with the "mvp" plan
       19 stages: skips operations and ships the core API.
    2. Use a different plan

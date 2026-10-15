@@ -196,9 +196,6 @@ import {
   CEREMONY_KEYS,
   type CeremonyKey,
   type CeremonyPolicy,
-  ceremonyOffClause,
-  ceremonyOffList,
-  ceremonyPolicyValues,
   formatCeremony,
   parseCeremonySetting,
   parseCeremonyStateLine,
@@ -11818,10 +11815,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         : 0;
       const stageDelta = executeStages.length - oldExecuteCount;
       const deltaStr = stageDelta >= 0 ? `+${stageDelta}` : String(stageDelta);
-      const summary = {
-        ...gridCostSummary(adjustedMapping as Record<string, "EXECUTE" | "SKIP">),
-        off: ceremonyOffList(newScope, ceremonyPolicyValues(newScope, content)),
-      };
+      const summary = gridCostSummary(adjustedMapping as Record<string, "EXECUTE" | "SKIP">);
       const gates = summary.gates;
       const effectiveDepth = getField(content, "Depth") || "unknown";
       auditEntries.unshift(
@@ -11871,7 +11865,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       // is what they asked for, and `next` carries on into it.
       outputLines = [
         `Switched to ${newScope} (${SCOPE_GLOSS}): ${summary.shown} stages (${shownDone} done), ` +
-          `${gates} approval gates${ceremonyOffClause(summary)}.` +
+          `${gates} approval gates.` +
           (isScopeName(oldScope) ? ` You can switch back to ${oldScope} any time.` : ""),
         ...skippedNow.map(({ slug, was }) =>
           `Skipped ${findStageBySlug(slug)?.name ?? slug} (${was}): ${newScope} does not run it. ` +

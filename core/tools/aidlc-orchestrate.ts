@@ -187,10 +187,6 @@ import {
   SWITCHABLE_GUARD_FENCES,
   type SwitchableGuardFence,
   type CeremonyPolicy,
-  ceremonyOffClause,
-  ceremonyOffList,
-  type ReviewClass,
-  scopeSettingsOffList,
   ceremonyPolicyValues,
   effectiveSupportAgents,
   effectiveSupportAgentsForProject,
@@ -234,7 +230,6 @@ import {
   latestReviewRecordRefs,
   isAutonomousConstructionGate,
   isConstructionSwarmEnabled,
-  isKillSwitchSource,
   installedHarnessName,
   recordGuardRefusal,
   currentGuardRecoveryAskMarker,
@@ -354,7 +349,6 @@ import {
   GUARD_POLICY_GLOSS,
   SCOPE_GLOSS,
   type BoltDagResolution,
-  resolveCeremony,
   resolveProjectDir,
   resolveProjectFlag,
   recentWorkspaceRecordNames,
@@ -545,9 +539,6 @@ import {
   fenceMemoryLockRefusal,
   guardPolicyNamed,
   planApprovalMemoryLockRefusal,
-  planApprovalOffAtCreation,
-  planApprovalEnv,
-  planApprovalOffForOpenRequest,
   settingsKeptSince,
   settingTheirs,
   switchKeptForNextWork,
@@ -2795,7 +2786,7 @@ function scopeCommands(
   declaredType?: "greenfield" | "brownfield",
 ): ScopeCommandRow[] {
   return [...validScopes()].map((scope) => {
-    const cost = effectiveScopeCostSummary(scope, projectDir, undefined, undefined, undefined, declaredType);
+    const cost = effectiveScopeCostSummary(scope, projectDir, undefined, declaredType);
     return {
       scope,
       command: `${prefix} --scope ${scopeArg(scope)} --request ${questionId}${carried}`,
@@ -4573,8 +4564,6 @@ function detectedProjectType(projectDir: string): string | null {
 function effectiveScopeCostSummary(
   scope: string,
   projectDir: string,
-  overrides?: Partial<CeremonyPolicy>,
-  review?: ReviewClass,
   planChanges?: PlanChanges,
   declaredType?: "greenfield" | "brownfield",
 ) {
@@ -4586,63 +4575,37 @@ function effectiveScopeCostSummary(
   const planned = planChanges ? planWithChanges(scope, planChanges) : null;
   const plan = planned && planned.errors.length === 0 ? planned.stages : null;
   const nominal = plan ? gridCostSummary(plan) : scoped;
-  const policy = {} as CeremonyPolicy;
-  for (const key of CEREMONY_KEYS) {
-    const base = key === "plan_approval"
-      ? resolveCeremony(key, scope, null, planApprovalEnv(projectDir, null), projectDir)
-      : resolveCeremony(key, scope, null);
-    policy[key] = isKillSwitchSource(base.source) ? "off" : overrides?.[key] ?? base.value;
-  }
-  // A review level set at creation replaces the scope's cap, so it decides
-  // whether the preview says no reviewers.
-  const off = review === undefined ? ceremonyOffList(scope, policy) : scopeSettingsOffList(review, policy);
   const stages = plan ?? loadScopeMapping()[scope]?.stages;
   // The type the person declared wins over the scan, as at creation.
   if (
     stages?.["reverse-engineering"] !== "EXECUTE" ||
     (declaredType ?? detectedProjectType(projectDir)) !== "greenfield"
   ) {
-    return { ...nominal, off };
+    return nominal;
   }
-  const adjusted = { ...stages, "reverse-engineering": "SKIP" as const };
-  return { ...gridCostSummary(adjusted), off };
+  return gridCostSummary({ ...stages, "reverse-engineering": "SKIP" as const });
 }
 
-// The one-line ceremony preview uses effective policy and the compiled grid:
-// "N stages, G approval gates" (the stages after Initialization, the count the
-// progress line uses) plus a per-unit clause when Construction
-// stages fan out per Unit of Work. Greenfield previews apply the same
-// reverse-engineering adjustment intent creation writes into state.
+// The one-line size of a plan, from the compiled grid: "N stages, G approval
+// gates" (the stages after Initialization, the count the progress line uses)
+// plus a per-unit clause when Construction stages fan out per Unit of Work.
+// Its settings are not part of it: the person reads them with --status.
+// Greenfield previews apply the same reverse-engineering adjustment intent
+// creation writes into state.
 // Returns "" for a scope that does not resolve (a fixture tree without it), so
 // callers can drop the whole clause rather than emit a broken preview.
 function costClause(
   scope: string,
   projectDir: string,
-  overrides?: Partial<CeremonyPolicy>,
-  review?: ReviewClass,
   planChanges?: PlanChanges,
-  request: string | null = null,
   declaredType?: "greenfield" | "brownfield",
 ): string {
-  // Plan approval off the person asked for before the work existed is part of
-  // what creation will do, so the preview says so.
-  let session: string | null = null;
-  try {
-    session = resolveInvokingSessionId(projectDir);
-  } catch {
-    session = null;
-  }
-  const asked = overrides?.plan_approval === undefined && (request === null
-    ? planApprovalOffForOpenRequest(projectDir, session)
-    : planApprovalOffAtCreation(projectDir, session, request));
-  const c = effectiveScopeCostSummary(
-    scope, projectDir, asked ? { ...overrides, plan_approval: "off" } : overrides, review, planChanges, declaredType,
-  );
+  const c = effectiveScopeCostSummary(scope, projectDir, planChanges, declaredType);
   if (!c) return "";
   const perUnit = c.perUnitStages > 0
     ? `, ${c.perUnitStages} ${c.perUnitStages === 1 ? "stage repeats" : "stages repeat"} per unit of work in Construction`
     : "";
-  return `${c.shown} ${c.shown === 1 ? "stage" : "stages"}, ${c.gates} approval ${c.gates === 1 ? "gate" : "gates"}${perUnit}${ceremonyOffClause(c)}`;
+  return `${c.shown} ${c.shown === 1 ? "stage" : "stages"}, ${c.gates} approval ${c.gates === 1 ? "gate" : "gates"}${perUnit}`;
 }
 
 // --- Flag parsing ---
@@ -5263,7 +5226,7 @@ function freshWorkOfferDirective(
     // Preview the ceremony the user is confirming: stage/gate counts from the
     // compiled grid (never estimates). Drop the clause if the scope does not
     // resolve (a fixture tree without it) rather than emit a broken preview.
-    const clause = costClause(plan, pd, flags.ceremony, undefined, undefined, null, flags.projectType);
+    const clause = costClause(plan, pd, undefined, flags.projectType);
     const cost = clause ? ` - ${clause}` : "";
     return scopeConfirmAskDirective(
       `I'd run the "${plan}" plan for: "${requestPreview(intentText)}"${cost}.${documentSplitSentence(intentText)} ` +
@@ -5282,10 +5245,10 @@ function freshWorkOfferDirective(
   // user calibrates the order-of-magnitude difference before deciding, and
   // sees bugfix even when the description gave no word to match. Fall back
   // to bare names if any scope does not resolve.
-  const bugfix = effectiveScopeCostSummary("bugfix", pd, undefined, undefined, undefined, flags.projectType);
-  const express = effectiveScopeCostSummary("express", pd, undefined, undefined, undefined, flags.projectType);
-  const classic = effectiveScopeCostSummary("classic", pd, undefined, undefined, undefined, flags.projectType);
-  const feat = effectiveScopeCostSummary("feature", pd, undefined, undefined, undefined, flags.projectType);
+  const bugfix = effectiveScopeCostSummary("bugfix", pd, undefined, flags.projectType);
+  const express = effectiveScopeCostSummary("express", pd, undefined, flags.projectType);
+  const classic = effectiveScopeCostSummary("classic", pd, undefined, flags.projectType);
+  const feat = effectiveScopeCostSummary("feature", pd, undefined, flags.projectType);
   const fallbackExamples = [...validScopes()].slice(0, 3).join(", ") || "an explicit scope";
   const examples = bugfix && express && classic && feat
     ? `bugfix = ${bugfix.shown} stages, express = ${express.shown}, classic = ${classic.shown}, feature = ${feat.shown}`
@@ -5330,7 +5293,7 @@ function planProposalDirective(
   const next = `${aidlcToolInvocation("orchestrate")} next`;
   const metadata = loadScopeMetadata();
   const plans = [...validScopes()].map((scope) => {
-    const cost = effectiveScopeCostSummary(scope, pd, undefined, undefined, undefined, flags.projectType);
+    const cost = effectiveScopeCostSummary(scope, pd, undefined, flags.projectType);
     const meta = metadata[scope];
     const hints = meta?.keywords?.length ? `; hints: ${meta.keywords.join(", ")}` : "";
     const units = cost && cost.perUnitStages > 0 ? ", splits the work into Units" : "";
@@ -5411,10 +5374,8 @@ function createPrintDirective(
 ): PrintDirective {
   const cmd = [`--scope ${scopeArg(scope)}`];
   let labelHint = "";
-  let requestId: string | null = null;
   if (description && description.length > 0) {
     const questionId = flags.request ?? saveQuestion(projectDir, description, scope).id;
-    requestId = questionId;
     cmd.push(`--request ${questionId}`);
     // The conductor (LLM) condenses the description into the short dir-name label
     // — the engine can't summarize. Name the missing --label in the directive so
@@ -5456,9 +5417,7 @@ function createPrintDirective(
   // Disclose the ceremony on the print: an explicitly named scope creates
   // directly (no confirm ask by design), so the stage/gate counts ride here.
   // Omit the parenthetical when the scope does not resolve (fixture trees).
-  const clause = costClause(
-    scope, projectDir, flags.ceremony, flags.review as ReviewClass | undefined, flags.planChanges, requestId, flags.projectType,
-  );
+  const clause = costClause(scope, projectDir, flags.planChanges, flags.projectType);
   const cost = clause ? ` (${clause})` : "";
   const runCmd = `Run \`${aidlcDispatcherInvocation("intent create")} ${cmd.join(" ")}\``;
   // New work, like the first, carries on in this chat: the creation binds the
