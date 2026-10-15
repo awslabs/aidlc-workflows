@@ -127,6 +127,7 @@ const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
 const CODEX_RELEASE = join(REPO_ROOT, "dist-release", "codex");
 const COPILOT_RELEASE = join(REPO_ROOT, "dist-release", "copilot");
 const CURSOR_RELEASE = join(REPO_ROOT, "dist-release", "cursor");
+const CURSOR_COPY = join(REPO_ROOT, "dist", "cursor");
 const KIRO_IDE_COPY = join(REPO_ROOT, "dist", "kiro-ide");
 const KIRO_IDE_RELEASE = join(REPO_ROOT, "dist-release", "kiro-ide");
 const OPENCODE_RELEASE = join(REPO_ROOT, "dist-release", "opencode");
@@ -3015,12 +3016,14 @@ describe("t243 project initialization", () => {
     mkdirSync(join(project, ".git"));
     const config = join(project, "install.ts");
     writeFileSync(config, "// the project's own install script\n");
+    // The copy runtime is the tree that still writes a whole file (its
+    // installer); native setup leaves it out.
     const initialized = run(INIT, [
       "config",
       "--project-dir",
       project,
       "--from",
-      CURSOR_RELEASE,
+      CURSOR_COPY,
       "--harness",
       "cursor",
       "--force",

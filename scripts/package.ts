@@ -1351,6 +1351,24 @@ function rewriteNativeOnboarding(value: string, exactReads = false): string {
     );
 }
 
+// A copyOnly harness file ships in the copy runtime alone. The native tree
+// drops it and the root integration of the same path, so `aidlc config` never
+// writes it into a project.
+function dropCopyOnlyFiles(outRoot: string, m: HarnessManifest): void {
+  const copyOnly = m.harnessFiles.filter((file) => file.copyOnly);
+  if (copyOnly.length === 0) return;
+  for (const file of copyOnly) {
+    rmSync(file.projectRoot ? join(outRoot, file.dst) : join(outRoot, m.harnessDir, file.dst), { force: true });
+  }
+  const dropped = new Set(copyOnly.filter((file) => file.projectRoot).map((file) => file.dst));
+  const descriptorPath = join(outRoot, m.harnessDir, PROJECTION_DATA);
+  const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
+    rootIntegrations: Array<Record<string, unknown>>;
+  };
+  descriptor.rootIntegrations = descriptor.rootIntegrations.filter((item) => !dropped.has(String(item.path)));
+  writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+}
+
 function projectNativeRootIntegrations(outRoot: string, m: HarnessManifest): void {
   const additions = m.nativeRootIntegrations ?? [];
   if (additions.length === 0) return;
@@ -1397,6 +1415,7 @@ function rewriteNativeInvocations(
   m: HarnessManifest,
   copyRoot: string,
 ): void {
+  dropCopyOnlyFiles(outRoot, m);
   projectNativeRootIntegrations(outRoot, m);
   applyNativeReplacements(outRoot, m);
   const harnessDir = escapeRegExp(m.harnessDir);

@@ -86,6 +86,9 @@ const manifest: HarnessManifest = {
         ],
       },
     },
+    // The copy runtime's installer (copyOnly below): the native projection
+    // drops this entry with the file, so a refresh retires the one an earlier
+    // native setup wrote.
     {
       path: "install.ts",
       policy: "whole-file",
@@ -144,9 +147,11 @@ const manifest: HarnessManifest = {
     // (permissions only, documented contract).
     { src: "cli.json", dst: "cli.json" },
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
-    // Distribution-local, non-destructive install command. It merges the
-    // project-owned Cursor config and onboarding surfaces before copying.
-    { src: "install.ts", dst: "install.ts", projectRoot: true },
+    // The copy runtime's non-destructive installer, run from the extracted
+    // runtime (`bun "$RUNTIME_ROOT/cursor/install.ts" your-project`). It merges
+    // the project-owned Cursor config and onboarding surfaces before copying.
+    // Native setup never writes it into a project.
+    { src: "install.ts", dst: "install.ts", projectRoot: true, copyOnly: true },
   ],
 
   // AGENTS.md at the project root — Cursor auto-reads it (root + nested) as
