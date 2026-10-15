@@ -93,6 +93,24 @@ During Code Generation's repair pass the conductor resumed the developer (`run_s
 
 **Verify.** (a) t333 binding-prose assertion; (b) t332 cases: a resume of a guard-passed developer is allowed, a resume of an unknown id or after the plan changed is refused.
 
+### ACP-5 (low, core, all harnesses): a plan approval turned on in the person's words reads "set by a command"
+
+Found on the 2026-10-15 rerun, after ACP-1 was fixed. The creation command was `intent create --scope poc … --guard-policy strict --plan-approval on --person-words '<their words>'`, and the stored reply equals those words. Status then read `Guard Policy: strict (set by you)` but `Plan Approval: on (set by a command)`.
+
+**Root cause (confirmed in code).** `core/tools/aidlc-utility.ts`, intent creation: the loop that credits each ceremony to the person through `theirsAtCreation` skips plan approval (`if (key === "plan_approval") continue;`, ~8453), and the only other places that set `ceremonySetByPerson.plan_approval` are the creation-grant and lowering paths for `off` (~8437-8439, ~8509-8519). A plan approval raised to `on` with the person's words is never checked against `theirsAtCreation`, so the state line records `command`.
+
+**Fix to design.** Credit `plan_approval: on` the way the other ceremonies are credited (`theirsAtCreation("plan-approval", "on") || theirsAtCreation("guard.plan-approval", "on")`), leaving the `off` lowering rules as they are. **Verify.** A t165/t171-style creation case: `--plan-approval on --person-words '<words>'` with a stored reply of those words reads `on (set by you)`; without the reply it stays `set by a command`.
+
+## Rerun after the fixes (2026-10-15, `99a54c8b`)
+
+The same intent driven the same way through `devin acp` on a fresh copy-channel project (`/tmp/aidlc-devin-acp/project2`, run dir `run2`, notes in `notes2.md`). Plan: `poc`, edited in free text to plan approval on and Guard Policy strict; Intent Capture → Requirements Analysis → Code Generation → Build and Test, all approved; workflow completed (`7/7 stages`), 39 unit tests pass; doctor 0 problems with the same 3 advisory warnings.
+
+- **ACP-1:** 27 stored messages (22 picker, 5 typed), none reading `Other`. The free-text plan edit, the summary Request changes and the gate Request Changes were stored word for word, and the audit's `Person Reply`/`Feedback` carry those words. The 4-question batch kept all 4 replies. Guard Policy now reads "set by you"; Plan Approval does not (ACP-5, a separate core bug).
+- **ACP-2:** every decision question carried its material: both composer gates (recommendation, `Plan:` line, Guard Policy and settings rows), the three summary confirmations (decision brief and bullets), all five stage gates (completion message, sensor findings, review brief and findings table, `**Review:**` line; Build and Test's results, timing and known limitations) and Plan Approval (summary lines and plan path). In run 1 the two composer gates, the Intent Capture gate, the first Requirements gate, Plan Approval and Build and Test had none of it, and the three summary confirmations lacked the decision brief.
+- **ACP-3:** a declined learnings question got "What would you like to say about these notes…? The question … is still open." and the turn ended. A cancelled one got "That question is still open: … Tell me what you'd like." and the turn ended. In both cases the typed reply that followed was stored as the person's prompt and answered the question.
+- **ACP-4:** did not recur: the developer dispatch passed the plan-approval guard first time, and there was no repair pass to resume. It stays open.
+- **Unchanged:** the review `--iteration 2` refusal after a gate Request Changes (by design) and the traceability parent-ID findings (core) both recurred.
+
 ## Not Devin-harness fixes (route elsewhere or leave)
 
 - **Devin host (report upstream if wanted):** ACP tool output contains `ESC(B ESC[0m` wrap codes every 120 columns and is sent twice; display-only.
