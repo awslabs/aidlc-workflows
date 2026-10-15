@@ -373,11 +373,12 @@ regions, and the non-interactive hook runtime. With one detected harness, the
 wizard names it and offers three choices: recommended defaults, six-step
 customization, or exit with nothing written. Multiple detected harnesses get a
 numbered harness picker first; no detected harness gets the complete picker
-without a default. A Kiro CLI at 2.24.1 or later counts for both Kiro rows; the
-wizard then prefers Kiro IDE (`kiro-ide`), whose `.kiro/settings/cli.json` pins
-Kiro's v3 engine, to Kiro CLI (`kiro`). Other detected harnesses keep their
-order, a harness editor's own terminal still comes first, and the picker's list
-and numbers stay the same.
+without a default. A Kiro CLI at 2.24.1 or later counts for both Kiro
+harnesses. The picker lists `kiro` as Kiro CLI (V2): it pins no engine and is
+built for Kiro CLI's v2 engine. It lists `kiro-ide` as Kiro, for Kiro IDE and
+Kiro CLI on its v3 engine. Of the two, Kiro CLI (V2) comes first, so Enter
+takes it unless an earlier detected harness leads the list or setup runs in a
+harness editor's own terminal, whose harness comes first.
 
 Before any setup choices, the wizard probes the project filesystem using
 temporary files and directories, then removes them. It checks transaction
@@ -1062,6 +1063,14 @@ is done too, and says so:
   Updated. Your open work (default/add-login) carries on.
 ```
 
+When the new release does a stage you already finished differently and nothing
+of yours changed, your work stands and nothing asks you to redo it. If the stage
+now needs a document it did not need before, your next step says so once, for
+example "AI-DLC now does Functional Design differently from when yours ran; your
+work stands, and `/aidlc --stage functional-design` goes back to it (the stages
+after it reopen too)." Otherwise it is not said, and `/aidlc --status` shows that
+line. A change to your own work keeps its usual question.
+
 When the files came from another release, the next line says how to go back:
 
 ```
@@ -1093,10 +1102,19 @@ Refresh preserves:
   opencode writes under `.opencode/` at its first start: config never copies,
   owns, or removes these
 - the agent files in `.kiro/agents` that Kiro CLI upgraded for its 3.0 engine
-  (Kiro keeps each file it replaced beside it as `.json.bak`): a refresh keeps
-  them as Kiro left them, says so in one line, and brings in the rest of the
-  release; `aidlc config --harness kiro --force` takes the release's versions,
-  and Kiro upgrades them again the next time it starts on its 3.0 engine
+  (Kiro keeps each file it replaced beside it as `.json.bak`, then
+  `.json.bak.1` and on): a refresh keeps them as Kiro left them, says so in one
+  line, and brings in the rest of the release; `aidlc config --harness kiro
+  --force` takes the release's versions, and Kiro upgrades them again the next
+  time it starts on its 3.0 engine. When the release changes what such a file
+  allows (it drops an allow entry or adds a deny entry the file Kiro upgraded
+  from had), the refresh puts the release's version back by itself, provided
+  Kiro upgrades it again by itself at its next 3.0 start (its auto-upgrade is
+  on: `chat.enableAutoAgentUpgrade` is true in your own Kiro settings, as
+  **Enable auto-upgrade** at Kiro's first 3.0 start saves it), that file is
+  the one AI-DLC wrote there, and Kiro's copy keeps its other fields; otherwise it keeps Kiro's copy and says, in one line,
+  that the file still allows what an older release allowed and that `--force`
+  takes the release's version
 
 Under `aidlc/`, install and refresh copy only those seeds. The clone identity,
 sessions, engine health, and other per-machine state are never copied from the
@@ -1161,8 +1179,9 @@ tables (such as `[agents.<role>]` or `[mcp_servers.<name>]`), comments, order,
 and spelling. An AI-DLC value nobody changed takes the release's value; a value
 you changed stays yours, with a note when a release ships a different one
 (delete the key and refresh to take it); a deleted AI-DLC key comes back, with
-a note. An `AIDLC_RULES_DIR` line an earlier release shipped is removed, at
-whichever space a switch left it, unless you added your own keys to its table. A project that
+a note. An `AIDLC_RULES_DIR` value an earlier release shipped is emptied, at
+whichever space a switch left it, and your own keys in its table stay; a folder
+of your own there stays yours. A project that
 already has its own `.codex/config.toml` keeps it on first install, and AI-DLC
 adds its settings. A file the refresh cannot merge safely (it does not parse,
 or uses one of AI-DLC's table names for something else, such as an array of

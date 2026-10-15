@@ -47,7 +47,7 @@ const AUDIT_MD = join(AIDLC_SRC, "knowledge", "aidlc-shared", "audit-format.md")
 // removed. The retired CHANGE_CONTROL_SET stays in the set as a read-only
 // legacy row; REVIEW_VERDICT_DICTATED is registered but never written, so
 // audits and worktree deltas that carry it still read and merge.
-const CANONICAL_COUNT = 118;
+const CANONICAL_COUNT = 119;
 
 /** Slice the lines of `text` BETWEEN the first line matching `start` and the
  *  next line matching `end` (inclusive of both), reproducing `sed -n

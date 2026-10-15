@@ -36,13 +36,19 @@ import { aidlcInvocation, quoteCommandArgument } from "./aidlc-runtime-paths.ts"
 import {
   type AidlcSettingsFile,
   bypassRecordedIn,
+  invalidateSettingsCache,
+  normalizeProjectFlagsRecord,
   PERSON_CHECK_SWITCH_LABELS,
   PERSON_CHECK_SWITCHES,
+  type ProjectFlagsRecord,
   settingPurpose,
   type RecordableProjectBypass,
+  readSettingsTarget,
   resolveAidlcSettings,
+  serializeAidlcSettings,
   settingsPathForTarget,
   type SettingsTarget,
+  updateSettingsSection,
 } from "./aidlc-settings.ts";
 
 const RECORD_FILE = "recorded-switches.json";
@@ -205,11 +211,218 @@ export function clearSwitchCommand(
  *   start, the engine's next step). The agent runs the command if they want it.
  * - `statement`: they just turned it off themselves, so the line states that the
  *   way back is there. Putting their own decision back to them as a question
- *   asks them to think again about what they decided a moment ago.
+ *   asks them to think again about what they decided a moment ago. The switch's
+ *   own line may still offer a wider place (widerPlaceOffer), which is a new
+ *   choice, not their decision put back to them.
  * - `command`: nobody is listening (`config flags --show`, a doctor fix line), so
  *   the one command that turns it back on is named instead of an offer.
  */
 export type SwitchWayBack = "offer" | "statement" | "command";
+
+/**
+ * The one question a check's switch line ends with when a wider place would
+ * change something: the whole project after this piece of work, this whole
+ * machine after this project. None for a check with no switch of that kind,
+ * where the environment decides, where a settings file already keeps it off
+ * there (any file, for the project; the machine's, for the machine), or for a
+ * command run at the person's own terminal, where no chat is there to answer.
+ * The agent relays it as written and, on a yes, sets it there.
+ */
+export function widerPlaceOffer(
+  projectDir: string,
+  name: string | undefined,
+  from: "work" | "project",
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  if (name === undefined || !(PERSON_CHECK_SWITCHES as readonly string[]).includes(name)) return null;
+  if (Object.hasOwn(env, name) || commandAtPersonsTerminal(env)) return null;
+  const recordedIn = (target: SettingsTarget): boolean => {
+    try {
+      return (readSettingsTarget(projectDir, target)?.flags?.bypasses ?? []).includes(name as RecordableProjectBypass);
+    } catch {
+      return false;
+    }
+  };
+  if (from === "work") {
+    return (["local", "project", "global"] as const).some(recordedIn)
+      ? null
+      : "Do you want it off for the whole project instead?";
+  }
+  return recordedIn("global") ? null : "Do you want it off for this whole machine instead?";
+}
+
+/**
+ * What `config flags --bypass` says for a check the person asked to turn off
+ * that a settings file already keeps off at that place: that it is, and the
+ * one wider-place offer. Empty for anything else (the command's own line).
+ */
+export function alreadyOffLines(
+  projectDir: string,
+  target: SettingsTarget,
+  names: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  return names.flatMap((name) => {
+    const label = PERSON_CHECK_SWITCH_LABELS[name as RecordableProjectBypass];
+    if (label === undefined) return [];
+    let held = false;
+    try {
+      held = (readSettingsTarget(projectDir, target)?.flags?.bypasses ?? []).includes(name as RecordableProjectBypass);
+    } catch {
+      held = false;
+    }
+    if (!held) return [];
+    const offer = target === "global" ? null : widerPlaceOffer(projectDir, name, "project", env);
+    return [`The ${label}${settingPurpose(label)} is already off ${where(target)}.${offer ? ` ${offer}` : ""}`];
+  });
+}
+
+/**
+ * What still keeps a check off after the person turned it back on, and the way
+ * to it, or null when nothing does: the environment this command ran in first
+ * (only a launch without it changes that), then the nearest settings file that
+ * records the switch. `reason` is how that file stands to what they did: it
+ * `keeps` the check off when they turned it on for this piece of work, and
+ * `also` records it when they cleared it in another file. The line ends with
+ * the offer to clear it there, or at the person's own terminal names the
+ * command that does.
+ */
+export function stillOffLine(
+  projectDir: string,
+  name: string | undefined,
+  reason: "keeps" | "also",
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const subject = name === undefined ? null : backOnSubject(name);
+  const by = name === undefined || subject === null ? null : keptOffBy(projectDir, name, env);
+  if (name === undefined || subject === null || by === null) return null;
+  const named = `${capitalized(subject.said)} ${subject.is} still off`;
+  if (by === "environment") {
+    return `${named}: ${name}=1 is set in the environment this command ran in. ` +
+      `Start the editor or CLI without it to turn ${subject.it === "it" ? "the check" : "them"} back on.`;
+  }
+  const target = by[0];
+  const path = settingsPathForTarget(projectDir, target);
+  const file = target === "global" ? path : basename(path);
+  if (reason === "also") return `${named}: ${file} also records ${subject.it}. Do you want it cleared there too?`;
+  const back = commandAtPersonsTerminal(env)
+    ? `To turn ${subject.it} back on: ${clearSwitchCommand(name as RecordableProjectBypass, projectDir)}`
+    : "Do you want it cleared there?";
+  return `${named}: ${file} keeps ${subject.it} off ${where(target)}. ${back}`;
+}
+
+/**
+ * The setter's line for a check the person asked to turn back on while a
+ * settings file keeps it off, or null when nothing does. On their own request
+ * (`theirs`, the setter's rule) their own aidlc.settings.local.json entry is
+ * cleared, since nothing else turns the check on, and the line says so. The
+ * project's shared file and this machine's are not changed from this request:
+ * the line names the file and that changing it changes it, as a team's lock is
+ * said, or at their own terminal the command. The environment and a command's
+ * on are stillOffLine's.
+ */
+export function backOnLine(
+  projectDir: string,
+  name: string | undefined,
+  theirs: boolean,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const subject = name === undefined ? null : backOnSubject(name);
+  const by = name === undefined || subject === null ? null : keptOffBy(projectDir, name, env);
+  if (name === undefined || subject === null || by === null || by === "environment" || !theirs) {
+    return stillOffLine(projectDir, name, "keeps", env);
+  }
+  const local = basename(settingsPathForTarget(projectDir, "local"));
+  // Their own entry goes whatever else records the switch, so a line naming a
+  // shared file is the whole way back. A clear that failed keeps today's line.
+  if (by.includes("local") && !clearLocalSwitch(projectDir, name as RecordableProjectBypass, env)) {
+    return stillOffLine(projectDir, name, "keeps", env);
+  }
+  if (by.every((target) => target === "local")) {
+    return `${capitalized(subject.said)} ${subject.is} back on: ${local} had kept ${subject.it} off for this project, ` +
+      `and that entry is cleared.`;
+  }
+  const alsoCleared = by.includes("local") ? ` The entry in ${local} is cleared too.` : "";
+  // At the person's own terminal the line names the command instead.
+  const atTerminal = commandAtPersonsTerminal(env) ? stillOffLine(projectDir, name, "keeps", env) : null;
+  if (atTerminal !== null) return `${atTerminal}${alsoCleared}`;
+  // Every file's switch counts, so a line naming one of two holders would send them to half the way back.
+  if (by.includes("project") && by.includes("global")) {
+    return `The project's shared settings in ${basename(settingsPathForTarget(projectDir, "project"))} and this machine's ` +
+      `settings in ${settingsPathForTarget(projectDir, "global")} keep ${subject.said} off. Changing both changes it.` +
+      alsoCleared;
+  }
+  return (by.includes("project")
+    ? `The project's shared settings in ${basename(settingsPathForTarget(projectDir, "project"))} keep ${subject.said} ` +
+      "off for everyone on this project. Changing that file changes it."
+    : `This machine's settings in ${settingsPathForTarget(projectDir, "global")} keep ${subject.said} ` +
+      "off for every project here. Changing that file changes it.") + alsoCleared;
+}
+
+// How a line names the setting a switch turns off: a check by its label and
+// what it is for; sensors and learnings, which take no decision from the
+// person and so stay out of the switch-off notices, by their own names.
+function backOnSubject(name: string): { said: string; is: "is" | "are"; it: "it" | "them" } | null {
+  const label = PERSON_CHECK_SWITCH_LABELS[name as RecordableProjectBypass];
+  if (label !== undefined) return { said: `the ${label}${settingPurpose(label)}`, is: "is", it: "it" };
+  if (name === "AIDLC_DISABLE_SENSORS") return { said: "sensors", is: "are", it: "them" };
+  if (name === "AIDLC_DISABLE_LEARNINGS") return { said: "learnings", is: "are", it: "them" };
+  return null;
+}
+
+function capitalized(text: string): string {
+  return `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+}
+
+// What keeps a switch's check off, read as resolveProjectFlag reads it: the
+// environment this command ran in (a variable of the switch's name decides over
+// the files, and only 1 keeps it off), else every settings file that records
+// it, nearest first. Null when nothing does.
+function keptOffBy(projectDir: string, name: string, env: NodeJS.ProcessEnv): "environment" | SettingsTarget[] | null {
+  if (env[name] === "1") return "environment";
+  if (Object.hasOwn(env, name)) return null;
+  try {
+    if (!(resolveAidlcSettings(projectDir).flags?.bypasses ?? []).includes(name as RecordableProjectBypass)) return null;
+  } catch {
+    return null;
+  }
+  const files = (["local", "project", "global"] as const).filter((target) => {
+    try {
+      return (readSettingsTarget(projectDir, target)?.flags?.bypasses ?? []).includes(name as RecordableProjectBypass);
+    } catch {
+      return false;
+    }
+  });
+  return files.length > 0 ? files : null;
+}
+
+// Take one switch out of the person's aidlc.settings.local.json, keeping
+// everything else the file records, the way `config flags --clear-bypass
+// --local` leaves it, and keep the switch record in step. False when the file
+// cannot be read or written: the caller then says the check is still off.
+function clearLocalSwitch(projectDir: string, name: RecordableProjectBypass, env: NodeJS.ProcessEnv): boolean {
+  const path = settingsPathForTarget(projectDir, "local");
+  try {
+    // Another process may have written the file since it was read.
+    invalidateSettingsCache(path);
+    const previous = readSettingsTarget(projectDir, "local");
+    const bypasses = previous?.flags?.bypasses ?? [];
+    if (previous === null || !bypasses.includes(name)) return false;
+    const flags: ProjectFlagsRecord = { ...(previous.flags ?? { schemaVersion: 1 }) };
+    const kept = bypasses.filter((recorded) => recorded !== name).sort();
+    if (kept.length > 0) flags.bypasses = kept;
+    else delete flags.bypasses;
+    const next = updateSettingsSection(previous, "flags", normalizeProjectFlagsRecord(flags));
+    if (next === null) return false;
+    writeFileAtomic(path, serializeAidlcSettings(next));
+    invalidateSettingsCache(path);
+    recordSwitchChange(projectDir, "local", previous, next, { env, otherFiles: false });
+    return true;
+  } catch {
+    invalidateSettingsCache(path);
+    return false;
+  }
+}
 
 /**
  * The one line the person hears while a switch is off: what the check is for,
@@ -323,25 +536,21 @@ export function recordSwitchChange(
   writeRecord(projectDir, switches);
   const off = switchesOff(projectDir, env);
   // They ran the command that turned these off a moment ago, so each line states
-  // where that leaves them and that the way back is there, and asks nothing.
+  // where that leaves them and that the way back is there, and puts nothing of
+  // theirs back to them; it ends with the one wider place, when there is one.
   const lines = off.filter((item) => added.includes(item.name))
-    .map((item) => switchOffLine(item, new Date(), "statement"));
+    .map((item) => {
+      const line = switchOffLine(item, new Date(), "statement");
+      const offer = item.target === "global" ? null : widerPlaceOffer(projectDir, item.name, "project", env);
+      return offer ? `${line} ${offer}` : line;
+    });
   // "On again" only when nothing else still keeps the check off.
   for (const name of removed) {
     const label = PERSON_CHECK_SWITCH_LABELS[name] ?? name;
-    const still = off.find((item) => item.name === name);
-    if (env[name] === "1") {
-      lines.push(
-        `The ${label}${settingPurpose(label)} is still off: ${name}=1 is set in the environment this command ran in. ` +
-          "Start the editor or CLI without it to turn the check back on.",
-      );
-    } else if (still) {
-      if (!otherFiles) continue;
-      const file = still.target === "global" ? still.settingsPath : basename(still.settingsPath);
-      lines.push(
-        `The ${label}${settingPurpose(label)} is still off: ${file} also records it. ` +
-          "Do you want it cleared there too?",
-      );
+    if (env[name] !== "1" && !otherFiles && off.some((item) => item.name === name)) continue;
+    const still = stillOffLine(projectDir, name, "also", env);
+    if (still !== null) {
+      lines.push(still);
     } else {
       const held = heldOffByWork(projectDir, name);
       lines.push(held === null

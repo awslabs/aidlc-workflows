@@ -7,6 +7,8 @@ import {
   readAuditShardEvents,
   type AuditShardEvent,
   CEREMONY_ENV,
+  GUARD_FENCE_ENV,
+  type GuardSwitchKey,
   CEREMONY_FIELDS,
   CEREMONY_FLAGS,
   CEREMONY_KEYS,
@@ -67,7 +69,7 @@ import {
 } from "./aidlc-lib.ts";
 import { entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { chatsSince, latestMessage, latestSpendingTimestamp, listMessages, replyOfTheirs } from "./aidlc-message-store.ts";
-import { quoted } from "./aidlc-recorded-switches.ts";
+import { backOnLine, quoted, widerPlaceOffer } from "./aidlc-recorded-switches.ts";
 import { settingPurpose } from "./aidlc-settings.ts";
 
 function throwSettingsError(message: string): never {
@@ -717,7 +719,27 @@ export function applyIntentSettings(
             },
           });
         }
-        lines.push(`The ${checkLabel(request.fence)} is already ${after.value}`);
+        // Turned on, but a switch outside this piece of work keeps it off: their
+        // own local entry is cleared, otherwise what keeps it and the way to it.
+        const held = request.value === "on"
+          ? backOnLine(projectDir, projectSwitchOf(`guard.${request.fence}`), source === "you")
+          : null;
+        if (held !== null) {
+          // Their on is recorded too, so once that switch is cleared the check
+          // is on for this work as they asked and nothing asks them again. An
+          // on of theirs this work already keeps stays kept.
+          if (updated !== content && nextOn.length >= raised.length) {
+            content = updated;
+            audit.push({ eventType: "GUARD_RESTORED", fields: { Guard: request.fence, Scope: scopeName, Source: source } });
+          }
+          lines.push(held);
+          continue;
+        }
+        const already = `The ${checkLabel(request.fence)} is already ${after.value}`;
+        const offer = request.value === "off" && after.value === "off" && !atTheirTerminal
+          ? widerPlaceOffer(projectDir, projectSwitchOf(`guard.${request.fence}`), "work")
+          : null;
+        lines.push(offer ? `${already}. ${offer}` : already);
         continue;
       }
       content = updated;
@@ -754,8 +776,22 @@ export function applyIntentSettings(
     const field = CEREMONY_FIELDS[key];
     const previous = getField(content, field);
     const line = formatCeremony(value, source);
+    // Turned on, but a switch outside this piece of work keeps it off: that is
+    // said in place of the setting's own line, which would read as on (their
+    // own local entry is cleared first). Plan approval reads its environment
+    // switch only where it is trusted.
+    const held = value === "on" && !scopeDefault(flag)
+      ? backOnLine(projectDir, CEREMONY_ENV[key], source === "you",
+        key === "plan_approval" ? planApprovalEnv(projectDir, sessionId) : process.env)
+      : null;
     if (previous === line || (source === "command" && previous === formatCeremony(value, "you"))) {
-      if (!scopeDefault(flag)) lines.push(`${field} is already ${previous}`);
+      if (held !== null) {
+        lines.push(held);
+      } else if (!scopeDefault(flag)) {
+        const already = `${field} is already ${previous}`;
+        const offer = value === "off" && !atTheirTerminal ? widerPlaceOffer(projectDir, CEREMONY_ENV[key], "work") : null;
+        lines.push(offer ? `${already}. ${offer}` : already);
+      }
       continue;
     }
     const resolution = resolveCeremony(key, getField(content, "Scope"), content);
@@ -770,6 +806,10 @@ export function applyIntentSettings(
         ...(askedIn && value === "off" && source === "you" ? { "Person Reply": askedIn } : {}),
       },
     });
+    if (held !== null) {
+      lines.push(held);
+      continue;
+    }
     const oldDisplay = resolution.intent === null && resolution.rawStateValue !== null
       ? resolution.rawStateValue : formatCeremony(resolution.value, resolution.source);
     if (!saidAsAsked(flag)) lines.push(`${field} changed: ${oldDisplay} to ${line}`);
@@ -778,11 +818,31 @@ export function applyIntentSettings(
         ? "Each code plan is now built without asking you first. You can ask to see one before it is built any time."
         : "Each code plan is now shown for approval before it is built.");
     }
+    // The line said for it ends with the one wider place (the line said as
+    // they asked carries it below instead). A value the scope set is nobody's
+    // request to turn the check off, so it offers nothing.
+    if (value === "off" && !scopeDefault(flag) && !saidAsAsked(flag) && !atTheirTerminal && lines.length > 0) {
+      const offer = widerPlaceOffer(projectDir, CEREMONY_ENV[key], "work");
+      if (offer) lines[lines.length - 1] = `${lines[lines.length - 1]} ${offer}`;
+    }
   }
   for (const item of lowering) {
-    if (saidAsAsked(item.key)) lines.push(askedSwitchLine(item, askedIn, cc.value, !atTheirTerminal));
+    if (!saidAsAsked(item.key)) continue;
+    const line = askedSwitchLine(item, askedIn, cc.value, !atTheirTerminal);
+    const offer = atTheirTerminal ? null : widerPlaceOffer(projectDir, projectSwitchOf(item.key), "work");
+    lines.push(offer ? `${line} ${offer}` : line);
   }
   return { content, audit, lines };
+}
+
+// The project's switch for a check set for this piece of work, which is where
+// a wider place for it would be set; none for the Guard Policy, which is for a
+// piece of work only.
+function projectSwitchOf(key: GuardSwitchKey): string | undefined {
+  if (key === "summary-confirmation") return CEREMONY_ENV.summary_confirmation;
+  if (key === "plan-approval") return CEREMONY_ENV.plan_approval;
+  if (key.startsWith("guard.")) return GUARD_FENCE_ENV[key.slice("guard.".length) as SwitchableGuardFence];
+  return undefined;
 }
 
 /**
@@ -1060,26 +1120,6 @@ export function planApprovalCreationGranted(
   } catch {
     return false;
   }
-}
-
-/** The recorded words still apply: no memory lock and no unattended driver since. */
-export function planApprovalOffAtCreation(
-  projectDir: string,
-  sessionId: string | null,
-  request: string | null = null,
-): boolean {
-  if (process.env.AIDLC_UNATTENDED === "1" || !planApprovalCreationGranted(projectDir, sessionId, request)) return false;
-  try {
-    return !memoryGuardPolicyDeclarations(projectDir, { sessionId: sessionId ?? undefined })
-      .some((declaration) => declaration.value === "strict");
-  } catch {
-    return false;
-  }
-}
-
-/** For the creation preview: the words apply to the request open now, or to any when none was. */
-export function planApprovalOffForOpenRequest(projectDir: string, sessionId: string | null): boolean {
-  return planApprovalOffAtCreation(projectDir, sessionId, latestFrontQuestionId(projectDir, OPEN_QUESTION_WINDOW_MS));
 }
 
 /** Spent by the next piece of work this chat creates, whether or not it was the one asked for. */

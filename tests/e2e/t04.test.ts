@@ -16,7 +16,7 @@
 // git-worktree-remove + branch-delete effects.
 //
 // FIXTURE: aidlc-worktree.ts asserts discard runs from the main checkout
-// (assertNotSiblingWorktree, aidlc-worktree.ts:459->101) and runs real git, so
+// (assertNotSiblingWorktree, aidlc-worktree.ts) and runs real git, so
 // each case needs an ACTUAL git repo on `main` with one commit plus an
 // aidlc-docs/ dir. setupWorktreeFixture (tests/harness/fixtures.ts) builds
 // exactly that; the tool is spawned with cwd = the fixture so its
@@ -29,7 +29,7 @@
 // Also asserted:
 //   * T4 also asserts the idempotent second discard prints emitted:null with
 //     reason "already-discarded" (the .sh only checked the exit code; the
-//     handler's no-op contract — aidlc-worktree.ts:470-480 — is now pinned).
+//     handler's no-op contract - aidlc-worktree.ts - is now pinned).
 //   * T1-4 also asserts the Bolt branch is gone, proving discard deletes the
 //     branch as well as the directory.
 //   * T12 also asserts the verify (present, default window) case still passes

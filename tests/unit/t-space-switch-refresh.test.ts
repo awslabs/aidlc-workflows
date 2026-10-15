@@ -125,9 +125,10 @@ function earlierRelease(harness: string): string {
   }
   if (harness === "codex") {
     const path = join(prior, ".codex", "config.toml");
+    // 2.11.0's pointer, in the member this release ships empty.
     writeFileSync(path, readFileSync(path, "utf-8").replace(
-      "[sandbox_workspace_write]",
-      `[shell_environment_policy]\nset = { AIDLC_RULES_DIR = "${DEFAULT}" }\n\n[sandbox_workspace_write]`,
+      'set = { AIDLC_RULES_DIR = "" }',
+      `set = { AIDLC_RULES_DIR = "${DEFAULT}" }`,
     ));
   }
   return prior;
@@ -191,7 +192,7 @@ describe("a space switch changes no tracked file, and a refresh after it is no c
       expect(refreshed.status, refreshed.out).toBe(0);
       expect(pointing(project, TEAM)).toEqual([]);
       if (harness === "codex") {
-        expect(readFileSync(join(project, ".codex", "config.toml"), "utf-8")).not.toContain("AIDLC_RULES_DIR");
+        expect(readFileSync(join(project, ".codex", "config.toml"), "utf-8")).toContain('set = { AIDLC_RULES_DIR = "" }');
       } else {
         expect(pointing(project, COPY).length).toBeGreaterThan(0);
       }

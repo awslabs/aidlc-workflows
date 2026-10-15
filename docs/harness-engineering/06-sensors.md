@@ -31,7 +31,8 @@ before you author anything:
   omitted.
 - **`fire_on: gate` runs once per deliverable.** Immediately before
   `gate-start` opens its state transaction, the state tool fires each gate-bound
-  sensor once for every existing declared deliverable path; a gate the engine
+  sensor once for every existing declared deliverable path (`upstream-coverage` and `claim-sources`, which read
+  the whole stage's output, once per output folder); a gate the engine
   approves itself under Construction autonomy fires only blocking sensors, since
   advisory evidence has no reader there. The dispatch stays outside the
   transaction because the sensor dispatcher takes the audit lock.
@@ -64,7 +65,7 @@ Six manifests ship under `.claude/sensors/`, each prefixed `aidlc-`:
 |----------|----------|--------|
 | `aidlc-claim-sources.md` | Gate | Every Intent Capture claim carries a resolvable source tag; registered description, scope, and memory values match authoritative inputs; retained assumptions exactly match explicit human confirmation |
 | `aidlc-required-sections.md` | Gate | The output carries the required H2 headings — a generic content-shape check. Timestamp run records (`*-timestamp.md`) always pass |
-| `aidlc-upstream-coverage.md` | Gate | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it consumes, by slug, wikilink, or the producing stage's directory path |
+| `aidlc-upstream-coverage.md` | Gate | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it requires (`required: true`) or lists under `cites:`, by slug, wikilink, or the producing stage's directory path |
 | `aidlc-traceability.md` | Write: `**/traceability.json` | Validates stable upstream IDs, statuses, deterministic targets, and derived business-rule orphans |
 | `aidlc-linter.md` | Write: `.ts` / `.js` | Wraps your configured linter (ESLint by default) |
 | `aidlc-type-check.md` | Write: `.ts` / `.tsx` | Wraps your configured type-checker (`tsc` by default) |

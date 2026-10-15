@@ -23,7 +23,8 @@ export const REFRESH_HINT =
   "gh run download <green merge-group run id> -p 'ci-deterministic-*' -D <dir>, then bun scripts/ci-test-weights.ts refresh <dir>";
 
 export type WeightTier = "unit" | "integration";
-const ARTIFACT = /^(?:ci|full-suite)-deterministic-(unit-\d+|integration)-(Linux|macOS|Windows)$/;
+// The guard matrix jobs run integration files too, so their evidence weighs them.
+const ARTIFACT = /^(?:ci|full-suite)-deterministic-(unit-\d+|integration|guard-matrix(?:-\d+)?)-(Linux|macOS|Windows)$/;
 
 /** tier -> name -> OS -> passing durations in seconds */
 export type Samples = Record<WeightTier, Map<string, Map<string, number[]>>>;
@@ -45,7 +46,7 @@ function artifactDirs(root: string, depth = 2): Array<{ dir: string; tier: Weigh
     const dir = join(root, name);
     if (!statSync(dir).isDirectory()) continue;
     const match = ARTIFACT.exec(name);
-    if (match) found.push({ dir, tier: match[1] === "integration" ? "integration" : "unit", os: match[2] });
+    if (match) found.push({ dir, tier: match[1].startsWith("unit-") ? "unit" : "integration", os: match[2] });
     else if (depth > 0) found.push(...artifactDirs(dir, depth - 1));
   }
   return found;

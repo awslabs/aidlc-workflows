@@ -10,7 +10,7 @@
 //
 // Mechanism = cli (NOT none). Every assertion is a process-boundary
 // observable: the exit code that emitError -> process.exit(1)
-// produces (aidlc-lib.ts:1637), the chmod 0444 permission denial that only a
+// produces (aidlc-lib.ts), the chmod 0444 permission denial that only a
 // real spawned process hits at appendFileSync / writeStateFile, the audit.md
 // bytes the locked audit emitter appends, and the whole-file state.md snapshot
 // compared before/after. An in-process import twin would lose the exit-code
@@ -23,24 +23,24 @@
 // Source under test (dist/claude/.claude/tools/aidlc-state.ts):
 //   handleAcknowledgeCompaction - emits RECOVERY_COMPLETED via emitAudit.
 //          NO writeStateFile and NO try/catch around the emit: a
-//          locked audit.md makes appendAuditEntry throw (aidlc-audit.ts:272
+//          locked audit.md makes appendAuditEntry throw (aidlc-audit.ts
 //          appendFileSync EACCES), the throw propagates to main()'s catch
 //          -> error() -> exit 1. The handler never writes state, so
 //          state.md is structurally guaranteed byte-unchanged (F1).
 //   handleGateStart - emitAudit STAGE_AWAITING_APPROVAL then writeStateFile.
 //          F2: appendAuditEntry -> appendAuditEntryUnlocked -> ensureAuditFile
-//          (aidlc-audit.ts:189-199) recreates a missing audit.md; exit 0.
+//          (aidlc-audit.ts) recreates a missing audit.md; exit 0.
 //          F4: audit emit succeeds (audit.md writable) but writeStateFile on a
 //          0444 state.md throws -> main() catch -> error() -> emitError emits
-//          ERROR_LOGGED (state.md exists, so the guard at aidlc-lib.ts:1604
+//          ERROR_LOGGED (state.md exists, so the guard at aidlc-lib.ts
 //          lets the row through) and exits 1.
 //   handleAdvance - getField(content,"Scope") returns null on a corrupted
 //          state -> error("State file has no Scope field...");
 //          exit 1; the message names "Scope".
 //
 // emitError ERROR_LOGGED format: `**Event**: ERROR_LOGGED`, heading
-// "Error Logged", with Tool/Command/Error fields (aidlc-lib.ts:1619-1629,
-// aidlc-audit.ts:151).
+// "Error Logged", with Tool/Command/Error fields (aidlc-lib.ts,
+// aidlc-audit.ts).
 //
 // CHAOS CONTRACT:
 //   F1. Permission-denied on audit.md during acknowledge-compaction —
@@ -60,7 +60,7 @@
 //   - F2 assert 4: the recreated audit must carry the STAGE_AWAITING_APPROVAL row
 //     gate-start emits - proving rebuilt-and-written.
 //   - F3 assert 6: pin the exact refusal sentence
-//     "no Scope field" (aidlc-state.ts:334).
+//     "no Scope field" (aidlc-state.ts).
 //   - F4 assert 8: pin the new row's Tool field to "aidlc-state", proving the
 //     row came from the state tool's emitError path.
 //

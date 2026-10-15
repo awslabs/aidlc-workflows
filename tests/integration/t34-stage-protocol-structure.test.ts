@@ -263,13 +263,17 @@ describe("t34 stage-protocol.md structure + cross-references (migrated from t34-
   });
 
   // =========================================================================
-  // §5: The knowledge an inline step reads comes listed in order on the
-  // directive (inline_context_paths), so the protocol says only to keep it.
+  // Section 5: The lead's persona rides in the step, and the knowledge an inline step
+  // reads comes listed in order on the directive (inline_context_paths), so
+  // the protocol says only to take on the one and keep the order of the other.
   // =========================================================================
-  test("§5: an inline step reads its knowledge in the order the directive lists it", () => {
-    expect(PROTOCOL.replace(/\s+/g, " ")).toContain(
-      "`inline_context_paths` lists the team's knowledge right after the personas and before the shipped methodology: read it in the order listed.",
+  test("Section 5: an inline step takes on the lead's persona and reads its knowledge in the order the directive lists it", () => {
+    const text = PROTOCOL.replace(/\s+/g, " ");
+    expect(text).toContain("the step carries the lead's persona itself (`lead_persona`: its file and its text)");
+    expect(text).toContain(
+      "lists what the chat still reads: the supports' personas on an inline stage, then the team's knowledge, then the shipped methodology. Read it in the order listed.",
     );
+    expect(text).not.toContain("a mob must load its lead persona first");
     expect(protocolHas("### Knowledge loading order")).toBe(false);
   });
 

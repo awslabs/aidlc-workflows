@@ -7,8 +7,6 @@
 // it is the person-turn check every driver already runs (person-turns.ts); it
 // has no second version here.
 
-import type { CapturedToolResult } from "./sdk-drive.ts";
-
 type EngineReader = Pick<
   typeof import("../../dist/claude/.claude/tools/aidlc-lib.ts"),
   "auditBlockField" | "readAuditShardEvents" | "parseStateStageSuffixes" | "parseCheckboxes"
@@ -57,20 +55,3 @@ export function markersChanged(before: string, after: string, current?: string):
     .map((line) => line.slug);
 }
 
-const ACTS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit", "Task", "Agent"]);
-
-/**
- * The agent read `path` before its first file write or subagent dispatch, so
- * what the file says shaped everything it produced, in whatever order it read
- * the rest.
- */
-export function readBeforeFirstAct(results: readonly CapturedToolResult[], path: string): boolean {
-  const wanted = path.replaceAll("\\", "/");
-  const readAt = results.findIndex((result) =>
-    result.toolName === "Read" &&
-    typeof result.input.file_path === "string" &&
-    result.input.file_path.replaceAll("\\", "/").includes(wanted)
-  );
-  const actAt = results.findIndex((result) => ACTS.has(result.toolName));
-  return readAt >= 0 && (actAt < 0 || readAt < actAt);
-}

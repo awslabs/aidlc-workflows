@@ -22,7 +22,7 @@
 // tolerant of conversational variance, mirroring t52/t141 — NEVER on assistantText.
 //
 // Known-answer literals (read from the SHIPPED tools, not guessed):
-//   - creation print:  aidlc-orchestrate.ts:302/311 — names
+//   - creation print:  aidlc-orchestrate.ts - names
 //                   `intent create --scope <scope>` and ends "re-run `next` to continue"
 //   - creation summary: `State initialized:` (aidlc-utility.ts handleIntentCreate stdout)
 //   - state fields: State-Version-8 template (aidlc-utility.ts handleIntentCreate)

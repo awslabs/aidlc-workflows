@@ -74,7 +74,6 @@ describe("t327 refusal narration contract", () => {
       expect(clause).toContain('"Nothing is built or changed while the plan waits for your approval."');
       expect(clause).toContain("show that question again and end the turn");
       expect(clause).toContain("when they reply, record the choice they made, then run `{{INVOKE}} engine orchestrate next` as a command of its own");
-      expect(clause).toContain('"Nothing runs until you answer the approval question."');
       expect(clause).not.toContain("print that terminal, user-facing message verbatim");
       const relayed = relayedErrorRow(harnessEntry(harness.name));
       expect(body).toContain(
@@ -185,13 +184,14 @@ describe("t327 rewritten refusal strings stay in project language", () => {
     const plan = read("core/hooks/aidlc-plan-approval-guard.ts");
     const scope = read("core/hooks/aidlc-reviewer-scope.ts");
     const transition = read("core/hooks/aidlc-state-transition-guard.ts");
+    const stateTool = read("core/tools/aidlc-state.ts");
     expect(plan).toContain("Code generation cannot start");
     expect(plan).toContain("code-generation-plan.md");
     expect(scope).toContain("This review cannot open");
     expect(scope).toContain("variables cannot be checked");
     expect(scope).toContain("the current unit.");
-    expect(transition).toContain("Stage status cannot be changed");
-    expect(transition).toContain("aidlc-orchestrate.ts report");
+    expect(stateTool).toContain("Stage status cannot be changed");
+    expect(stateTool).toContain("aidlc-orchestrate.ts report");
     expect(plan).not.toContain("`plan-approval guard:");
     expect(scope).not.toContain("reviewer read-scope:");
     expect(transition).not.toContain("workflow lifecycle and routing are conductor-owned");

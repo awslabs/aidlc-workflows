@@ -253,7 +253,9 @@ For `fire_on: write`, `matches` is the fire filter: the hook compares the path
 being written against the glob and an entry without a glob never fires. For
 `fire_on: gate`, `gate-start` and `revise` enumerate every existing declared
 deliverable, skip paths outside each sensor's `matches` capability, and dispatch
-only matching paths; an omitted glob accepts every deliverable. A gate the engine
+only matching paths; an omitted glob accepts every deliverable. `upstream-coverage` and `claim-sources`, which
+read the whole stage's output, dispatch once per output folder, on its first
+deliverable that is not a questions or timestamp file. A gate the engine
 approves itself under Construction autonomy dispatches only blocking sensors
 (advisory evidence has no reader there). All six shipped
 manifests declare a glob. The compile resolver copies it into
@@ -309,7 +311,8 @@ dispatch remains advisory.
 ## `fire_on`
 
 `write` is the default and preserves incremental PostToolUse feedback. `gate`
-fires once per existing declared deliverable immediately before `gate-start`
+fires once per existing declared deliverable (once per output folder for
+`upstream-coverage` and `claim-sources`) immediately before `gate-start`
 opens the first gate, before `revise` re-enters the gate after revision work,
 and before the approve-time revision backstop performs recovered re-entry. When
 no person will answer the gate (the engine approves it itself under Construction

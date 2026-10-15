@@ -130,6 +130,9 @@ List in `upstream_ids` every ID this Unit answers for:
 - Otherwise, with `unit-of-work-story-map.md`: every `FR` on this Unit's rows.
 - Otherwise: every `FR` in `requirements.md`.
 
+A requirement with sub-requirements is traced through its `FR{n}.{m}` IDs and
+needs no row of its own.
+
 Give each ID one `coverage` row: `OK` with a `target` naming one or more
 `BRx.y` IDs that exist in `rules.md`; `N/A` with the reason as its `target`
 (for example `delivered by u2-profile`); `Deferred` with the later stage that

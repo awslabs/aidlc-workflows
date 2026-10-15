@@ -339,6 +339,27 @@ For unconditional consumes, **omit the field entirely**. There is no
 `always` value — an unconditional consume simply has no `conditional_on`
 key.
 
+### `cites`
+
+An optional list of the stage's own `consumes` artifacts that its
+deliverables cite whenever the artifact exists. The `upstream-coverage` check
+asks the deliverables to cite every required consume that exists; it leaves an
+optional one (`required: false`) unchecked, because an optional input may not
+have informed the output, unless the stage lists it here. Requirements
+Analysis lists `intent-statement` and `scope-document`: both are optional
+there, because scopes without Ideation produce neither, and when they exist the
+requirements build on them. Each entry must name one of the stage's consumes.
+The key sits outside `consumes`, so adding or removing it does not change the
+record of a stage that already finished.
+
+```yaml
+consumes:
+  - artifact: intent-statement
+    required: false
+cites:
+  - intent-statement
+```
+
 ### `optional_produces`
 
 A plain kebab-case string list, parallel to `produces:`. It names artifacts

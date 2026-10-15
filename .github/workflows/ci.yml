@@ -1,7 +1,8 @@
 name: CI
 
 # Deterministic gate for the main line. Every PR push runs contract checks
-# (generator determinism, typecheck, lint), Linux smoke/unit/integration, and
+# (generator determinism, typecheck, lint, installer ShellCheck), Linux
+# smoke/unit/integration, and
 # production-guard contracts. The merge queue, manual dispatch, and callers also
 # run the cross-OS native-terminal units and live OS-isolation smoke proofs, and
 # the merge queue runs the deterministic smoke, unit, integration and E2E tiers
@@ -66,38 +67,49 @@ jobs:
       - name: Run contract checks
         run: bun run check
 
+      # The same step the preview and stable gates run (t332 holds the three
+      # equal), so a PR that breaks the installer is red before it merges.
+      - name: ShellCheck installer
+        run: shellcheck scripts/install.sh
+
   deterministic:
     name: Tests (${{ matrix.runner }}, ${{ matrix.suite.name }})
     strategy:
       fail-fast: false
       matrix:
         runner: ${{ fromJSON((github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' && inputs.platform_regressions) && '["ubuntu-latest","macos-15","windows-latest"]' || '["ubuntu-latest"]') }}
-        # Twelve unit shards: each runs its files serially, so the slowest
+        # Sixteen unit shards: each runs its files serially, so the slowest
         # shard sets this gate's time. tests/unit-shard-weights.json balances
         # them by each file's slowest OS.
         suite:
           - {name: smoke, tier: smoke}
-          - {name: unit-1, tier: unit, shard: "1/12"}
-          - {name: unit-2, tier: unit, shard: "2/12"}
-          - {name: unit-3, tier: unit, shard: "3/12"}
-          - {name: unit-4, tier: unit, shard: "4/12"}
-          - {name: unit-5, tier: unit, shard: "5/12"}
-          - {name: unit-6, tier: unit, shard: "6/12"}
-          - {name: unit-7, tier: unit, shard: "7/12"}
-          - {name: unit-8, tier: unit, shard: "8/12"}
-          - {name: unit-9, tier: unit, shard: "9/12"}
-          - {name: unit-10, tier: unit, shard: "10/12"}
-          - {name: unit-11, tier: unit, shard: "11/12"}
-          - {name: unit-12, tier: unit, shard: "12/12"}
+          - {name: unit-1, tier: unit, shard: "1/16"}
+          - {name: unit-2, tier: unit, shard: "2/16"}
+          - {name: unit-3, tier: unit, shard: "3/16"}
+          - {name: unit-4, tier: unit, shard: "4/16"}
+          - {name: unit-5, tier: unit, shard: "5/16"}
+          - {name: unit-6, tier: unit, shard: "6/16"}
+          - {name: unit-7, tier: unit, shard: "7/16"}
+          - {name: unit-8, tier: unit, shard: "8/16"}
+          - {name: unit-9, tier: unit, shard: "9/16"}
+          - {name: unit-10, tier: unit, shard: "10/16"}
+          - {name: unit-11, tier: unit, shard: "11/16"}
+          - {name: unit-12, tier: unit, shard: "12/16"}
+          - {name: unit-13, tier: unit, shard: "13/16"}
+          - {name: unit-14, tier: unit, shard: "14/16"}
+          - {name: unit-15, tier: unit, shard: "15/16"}
+          - {name: unit-16, tier: unit, shard: "16/16"}
           # The scope runs (tests/integration/t-scope-run-*), the scope runs
           # on every harness tree through its own hooks (t-scope-host-*) and the
           # guard matrix (t-guard-matrix-*) drive whole scopes through the engine
           # and take minutes each, so each runs in its own integration job beside
-          # the rest.
+          # the rest. The guard matrix is CPU bound, so it runs in two halves by
+          # name; the two filters are complements, so every file is in one.
           - {name: integration, tier: integration, exclude: '^t-(scope-run|scope-host|guard-matrix)-'}
           - {name: scope-runs, tier: integration, filter: '^t-scope-run-'}
           - {name: scope-hosts, tier: integration, filter: '^t-scope-host-'}
-          - {name: guard-matrix, tier: integration, filter: '^t-guard-matrix-'}
+          - {name: guard-matrix-1, tier: integration, filter: '^t-guard-matrix-[a-h]'}
+          - {name: guard-matrix-2, tier: integration, filter: '^t-guard-matrix-[^a-h]'}
           - {name: e2e, tier: e2e}
         # PR pushes and calls run Linux only and stop at integration. The merge
         # queue and a platform_regressions dispatch run every tier on all three
@@ -106,16 +118,16 @@ jobs:
         # only here, all three OSes in the nightly and in a full_verification
         # Full Suite. In the merge
         # queue, macOS runs its selected unit files (macos-merge-selection
-        # below) in two jobs, unit-1 and unit-2, instead of twelve: macOS
+        # below) in two jobs, unit-1 and unit-2, instead of sixteen: macOS
         # runners set the queue's pace.
-        exclude: ${{ fromJSON(github.event_name == 'merge_group' && '[{"runner":"macos-15","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}},{"runner":"windows-latest","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}},{"runner":"macos-15","suite":{"name":"scope-hosts","tier":"integration","filter":"^t-scope-host-"}},{"runner":"windows-latest","suite":{"name":"scope-hosts","tier":"integration","filter":"^t-scope-host-"}},{"runner":"macos-15","suite":{"name":"guard-matrix","tier":"integration","filter":"^t-guard-matrix-"}},{"runner":"windows-latest","suite":{"name":"guard-matrix","tier":"integration","filter":"^t-guard-matrix-"}},{"runner":"macos-15","suite":{"name":"unit-3","tier":"unit","shard":"3/12"}},{"runner":"macos-15","suite":{"name":"unit-4","tier":"unit","shard":"4/12"}},{"runner":"macos-15","suite":{"name":"unit-5","tier":"unit","shard":"5/12"}},{"runner":"macos-15","suite":{"name":"unit-6","tier":"unit","shard":"6/12"}},{"runner":"macos-15","suite":{"name":"unit-7","tier":"unit","shard":"7/12"}},{"runner":"macos-15","suite":{"name":"unit-8","tier":"unit","shard":"8/12"}},{"runner":"macos-15","suite":{"name":"unit-9","tier":"unit","shard":"9/12"}},{"runner":"macos-15","suite":{"name":"unit-10","tier":"unit","shard":"10/12"}},{"runner":"macos-15","suite":{"name":"unit-11","tier":"unit","shard":"11/12"}},{"runner":"macos-15","suite":{"name":"unit-12","tier":"unit","shard":"12/12"}}]' || github.event_name == 'workflow_dispatch' && inputs.platform_regressions && '[{"runner":"macos-15","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}},{"runner":"windows-latest","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}},{"runner":"macos-15","suite":{"name":"scope-hosts","tier":"integration","filter":"^t-scope-host-"}},{"runner":"windows-latest","suite":{"name":"scope-hosts","tier":"integration","filter":"^t-scope-host-"}},{"runner":"macos-15","suite":{"name":"guard-matrix","tier":"integration","filter":"^t-guard-matrix-"}},{"runner":"windows-latest","suite":{"name":"guard-matrix","tier":"integration","filter":"^t-guard-matrix-"}}]' || '[{"suite":{"name":"e2e","tier":"e2e"}}]') }}
+        exclude: ${{ fromJSON(github.event_name == 'merge_group' && '[{"runner":"macos-15","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}},{"runner":"windows-latest","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}},{"runner":"macos-15","suite":{"name":"scope-hosts","tier":"integration","filter":"^t-scope-host-"}},{"runner":"windows-latest","suite":{"name":"scope-hosts","tier":"integration","filter":"^t-scope-host-"}},{"runner":"macos-15","suite":{"name":"guard-matrix-1","tier":"integration","filter":"^t-guard-matrix-[a-h]"}},{"runner":"windows-latest","suite":{"name":"guard-matrix-1","tier":"integration","filter":"^t-guard-matrix-[a-h]"}},{"runner":"macos-15","suite":{"name":"guard-matrix-2","tier":"integration","filter":"^t-guard-matrix-[^a-h]"}},{"runner":"windows-latest","suite":{"name":"guard-matrix-2","tier":"integration","filter":"^t-guard-matrix-[^a-h]"}},{"runner":"macos-15","suite":{"name":"unit-3","tier":"unit","shard":"3/16"}},{"runner":"macos-15","suite":{"name":"unit-4","tier":"unit","shard":"4/16"}},{"runner":"macos-15","suite":{"name":"unit-5","tier":"unit","shard":"5/16"}},{"runner":"macos-15","suite":{"name":"unit-6","tier":"unit","shard":"6/16"}},{"runner":"macos-15","suite":{"name":"unit-7","tier":"unit","shard":"7/16"}},{"runner":"macos-15","suite":{"name":"unit-8","tier":"unit","shard":"8/16"}},{"runner":"macos-15","suite":{"name":"unit-9","tier":"unit","shard":"9/16"}},{"runner":"macos-15","suite":{"name":"unit-10","tier":"unit","shard":"10/16"}},{"runner":"macos-15","suite":{"name":"unit-11","tier":"unit","shard":"11/16"}},{"runner":"macos-15","suite":{"name":"unit-12","tier":"unit","shard":"12/16"}},{"runner":"macos-15","suite":{"name":"unit-13","tier":"unit","shard":"13/16"}},{"runner":"macos-15","suite":{"name":"unit-14","tier":"unit","shard":"14/16"}},{"runner":"macos-15","suite":{"name":"unit-15","tier":"unit","shard":"15/16"}},{"runner":"macos-15","suite":{"name":"unit-16","tier":"unit","shard":"16/16"}}]' || github.event_name == 'workflow_dispatch' && inputs.platform_regressions && '[{"runner":"macos-15","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}},{"runner":"windows-latest","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}},{"runner":"macos-15","suite":{"name":"scope-hosts","tier":"integration","filter":"^t-scope-host-"}},{"runner":"windows-latest","suite":{"name":"scope-hosts","tier":"integration","filter":"^t-scope-host-"}},{"runner":"macos-15","suite":{"name":"guard-matrix-1","tier":"integration","filter":"^t-guard-matrix-[a-h]"}},{"runner":"windows-latest","suite":{"name":"guard-matrix-1","tier":"integration","filter":"^t-guard-matrix-[a-h]"}},{"runner":"macos-15","suite":{"name":"guard-matrix-2","tier":"integration","filter":"^t-guard-matrix-[^a-h]"}},{"runner":"windows-latest","suite":{"name":"guard-matrix-2","tier":"integration","filter":"^t-guard-matrix-[^a-h]"}}]' || '[{"suite":{"name":"e2e","tier":"e2e"}}]') }}
     uses: ./.github/workflows/deterministic-tests.yml
     with:
       ref: ${{ github.sha }}
       runner: ${{ matrix.runner }}
       tier: ${{ matrix.suite.tier }}
       # The merge queue's two macOS unit jobs are shards 1/2 and 2/2.
-      unit-shard: ${{ github.event_name == 'merge_group' && matrix.runner == 'macos-15' && matrix.suite.shard == '1/12' && '1/2' || github.event_name == 'merge_group' && matrix.runner == 'macos-15' && matrix.suite.shard == '2/12' && '2/2' || matrix.suite.shard || '' }}
+      unit-shard: ${{ github.event_name == 'merge_group' && matrix.runner == 'macos-15' && matrix.suite.shard == '1/16' && '1/2' || github.event_name == 'merge_group' && matrix.runner == 'macos-15' && matrix.suite.shard == '2/16' && '2/2' || matrix.suite.shard || '' }}
       filter: ${{ matrix.suite.filter || '' }}
       exclude: ${{ matrix.suite.exclude || '' }}
       artifact-label: ci-deterministic-${{ matrix.suite.name }}

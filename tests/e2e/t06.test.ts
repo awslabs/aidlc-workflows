@@ -3,8 +3,8 @@
 // CLI-contract port of tests/e2e/t06-worktree-sibling-rejection.sh (TAP
 // plan 3), mechanism = cli. The .sh drives `aidlc-worktree.ts create` from
 // INSIDE a sibling worktree to prove the tool's pre-audit
-// assertNotSiblingWorktree guard (aidlc-worktree.ts:101-121, called at
-// :162 before any audit emit) rejects the call. The covers UNIT credited is
+// assertNotSiblingWorktree guard (aidlc-worktree.ts, called before any
+// audit emit) rejects the call. The covers UNIT credited is
 // subcommand:aidlc-worktree:create — the same subcommand t02 covers, here
 // exercised on its sibling-rejection branch.
 //

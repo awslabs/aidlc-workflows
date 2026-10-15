@@ -155,7 +155,8 @@ describe("t214 keyword-hit confirm carries the effective cost clause", () => {
     const q = String(d.question);
     expect(q).toContain('"bugfix"');
     const bf = counts(GRID.bugfix.stages, true);
-    expect(q).toContain(`${costClause(bf)}; no learnings ritual or summary confirmation; lead agent only.`);
+    // The plan's size and nothing after it: the settings are the plan's, and --status shows them.
+    expect(q).toContain(`- ${costClause(bf)}. Do you want me to go ahead`);
     expect(q).not.toContain("per unit of work");
   });
 
@@ -246,11 +247,11 @@ describe("t214 creation print carries the cost parenthetical", () => {
     const m = String(d.message);
     expect(m).toContain("intent create --scope bugfix");
     const bf = counts(GRID.bugfix.stages, true);
-    expect(m).toContain(`(${costClause(bf)}; no learnings ritual or summary confirmation; lead agent only)`);
+    expect(m).toContain(`(${costClause(bf)})`);
     expect(m).not.toContain("per unit of work");
   });
 
-  test("classic creation preview omits the off clause when summary confirmation is enabled", () => {
+  test("a setting typed with the request rides the command; the preview says the plan's size only", () => {
     proj = createTestProject();
     removeWorkspaceRecord(proj);
     const result = runNext(proj, [
@@ -261,11 +262,10 @@ describe("t214 creation print carries the cost parenthetical", () => {
     expect(d.kind).toBe("print");
     const message = String(d.message);
     expect(message).toContain("--summary-confirmation on");
-    // Advisory is a review cap; enabling summary confirmation leaves no disabled ceremony.
-    expect(message).toContain("; lead agent only");
+    expect(message).toContain(`(${costClause(counts(GRID.classic.stages, true))})`);
   });
 
-  test("feature creation preview discloses the environment sensor kill switch", () => {
+  test("a machine switch is not said in the creation preview (the person set it; --status shows it)", () => {
     proj = createTestProject();
     removeWorkspaceRecord(proj);
     const result = runNext(proj, ["--scope", "feature", "--sensors", "on", "add login support"], {
@@ -274,7 +274,8 @@ describe("t214 creation print carries the cost parenthetical", () => {
     expect(result.rc, result.out).toBe(0);
     const d = directiveOf(result.out);
     expect(d.kind).toBe("print");
-    expect(String(d.message).match(/; no [^)]*/)?.[0]).toBe("; no sensors; lead agent only");
+    expect(String(d.message)).toContain(`(${costClause(counts(GRID.feature.stages, true))})`);
+    expect(String(d.message)).not.toContain("; no ");
   });
 
   for (const scope of ["classic", "feature"]) {
@@ -285,16 +286,8 @@ describe("t214 creation print carries the cost parenthetical", () => {
       expect(d.kind).toBe("print");
       const expected = counts(GRID[scope].stages, true);
       expect(expected.perUnitStages).toBeGreaterThan(0);
-      expect(String(d.message)).toContain(costClause(expected));
+      expect(String(d.message)).toContain(`(${costClause(expected)})`);
       expect(String(d.message)).toContain("per unit of work");
-      if (scope === "classic") {
-        expect(String(d.message)).toContain(
-          "; no summary confirmation; lead agent only",
-        );
-      } else {
-        // feature keeps the first four ceremonies on but ships collaborators off.
-        expect(String(d.message)).toContain("; lead agent only");
-      }
     });
   }
 });
@@ -308,6 +301,6 @@ describe("t214 scope-change stdout carries the stage and gate counts", () => {
     // The fixture is Greenfield, so reverse-engineering EXECUTE -> SKIP.
     const mvp = counts(GRID.mvp.stages, true);
     expect(r.out).toContain(`Switched to mvp (the set of stages this work runs): ${mvp.shown} stages (`);
-    expect(r.out).toContain(`, ${mvp.gates} approval gates`);
+    expect(r.out).toContain(`, ${mvp.gates} approval gates. You can switch back to feature any time.`);
   });
 });

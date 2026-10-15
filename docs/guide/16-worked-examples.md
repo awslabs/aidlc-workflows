@@ -50,7 +50,7 @@ The 3 Initialization stages run as a single deterministic tool call (`aidlc-util
 - **0.2 Workspace Detection** — Rule-based scan identifies Java 17, Spring Boot 3.2, Maven, brownfield project
 - **0.3 State Init** — Initializes `aidlc-state.md` with scope `bugfix`, depth `Minimal`, and the domain stages marked for execution
 
-> Progress: 3/9 overall | 3/3 INITIALIZATION stages complete. Next: Reverse Engineering
+> Setting up a bugfix workflow for this: 6 stages, 6 approval gates.
 
 ### Stage 2.1 — Reverse Engineering
 
@@ -207,7 +207,7 @@ This example builds a notification service for a task management application. Th
 
 The 3 Initialization stages run automatically inside `aidlc-utility intent-create`. Workspace Detection identifies: TypeScript, Node.js 20, Express, PostgreSQL, brownfield project with existing task and user services.
 
-> Progress: 3/33 overall | Scope: feature, Depth: Standard
+> Setting up a feature workflow for this: 30 stages, 30 approval gates, 5 stages repeat per unit of work in Construction.
 
 ### Ideation Phase (stages 1.1-1.7)
 
@@ -264,7 +264,7 @@ Defines scope boundaries: in-scope (3 trigger types, user preferences, email dig
 
 Compiles the initiative brief aggregating all Ideation outputs. Phase boundary verification confirms intent-to-scope traceability.
 
-> Progress: 10/33 overall | IDEATION complete. Verification Gate passed.
+> Progress: 7 of 30 stages done. Next: Reverse Engineering.
 
 ### Inception Phase (stages 2.1-2.9)
 
@@ -326,7 +326,7 @@ bidi controls, line/paragraph separators, and no-break space U+00A0) are refused
 You choose **Approve**; only after recording that exact answer in the same session
 does the typed setter authorize this command for the intent's checkpoints.
 
-> Progress: 19/33 overall | INCEPTION complete. Verification Gate passed.
+> Progress: 16 of 30 stages done. Next: Functional Design.
 
 ### Construction Phase (stages 3.1-3.7)
 
@@ -418,7 +418,7 @@ Generates build instructions, runs the full test suite across all 3 Units: 47 te
 
 Configures CI pipeline with lint, build, test, and security scan stages. Quality gates: coverage >= 75%, no critical vulnerabilities.
 
-> Progress: 26/33 overall | CONSTRUCTION complete. Verification Gate passed.
+> Progress: 23 of 30 stages done. Next: Deployment Pipeline.
 
 ### Operation Phase (stages 4.1-4.7)
 
@@ -429,8 +429,6 @@ Configures CI pipeline with lint, build, test, and security scan stages. Quality
 **Stage 4.4 — Observability Setup** — CloudWatch dashboards for notification delivery latency, email send rate, dead-letter queue depth. Alarms for delivery failures.
 
 **Stage 4.7 — Feedback & Optimization** — SLO targets (99.9% in-app delivery, 99% email delivery within 30s), cost analysis, feedback loop document.
-
-> Progress: 33/33 overall | OPERATION complete. Feature workflow complete.
 
 ### Key differences from bugfix
 

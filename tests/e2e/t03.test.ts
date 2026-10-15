@@ -14,7 +14,7 @@
 // and the real git-merge / git-worktree-remove side effects.
 //
 // FIXTURE: aidlc-worktree.ts asserts it runs from the main checkout
-// (assertNotSiblingWorktree, aidlc-worktree.ts:101) and runs real git, so each
+// (assertNotSiblingWorktree, aidlc-worktree.ts) and runs real git, so each
 // case needs an ACTUAL git repo on `main` with one commit plus an aidlc-docs/
 // dir. setupWorktreeFixture (tests/harness/fixtures.ts) builds exactly that;
 // the tool is spawned with cwd = the fixture so its HEAD / rev-parse resolves
@@ -183,7 +183,10 @@ describe("t03 aidlc-worktree merge (migrated from t03-worktree-merge.sh, plan 13
 
     expect(r.status).not.toBe(0);
     expect(r.out).toContain('"status":"conflict"');
-    expect(r.out).toContain('"detail":"Merge produced conflicts');
+    // The landing is staged in the main checkout, and the line says so and names the way on.
+    const clash = JSON.parse(r.out) as { detail: string; next: string };
+    expect(clash.detail).toContain(`Unit demo's landing clashes with what is already on main: it is staged in ${p}`);
+    expect(clash.next).toContain("run this same merge again");
     // conflict_files lists exactly the conflicting path (pins both
     // non-empty AND the right path — listConflictFiles uses
     // `git diff --name-only --diff-filter=U`, deterministic).

@@ -23,7 +23,7 @@
 //   - dist/claude/.claude/skills/aidlc/SKILL.md
 //       `## Stage Graph` table: | Slug | # | Stage | Phase | Execution |
 //       Lead Agent | Support Agents | Mode |
-//   - dist/claude/.claude/tools/aidlc-lib.ts:982 parseStageFrontmatter(raw)
+//   - dist/claude/.claude/tools/aidlc-lib.ts parseStageFrontmatter(raw)
 //       => Record<string, unknown>; pulls the scalar `lead_agent:` from the
 //       `---...---` YAML block (ARRAY_KEYS excludes it, so it arrives as the
 //       scalar string the table column must equal). A non-string parse becomes
@@ -32,7 +32,7 @@
 //       e.g. workspace-scaffold.md frontmatter `lead_agent: orchestrator`,
 //       intent-capture.md `lead_agent: aidlc-product-agent`).
 //
-// Normalization contract (the .sh's load-bearing step, t38.sh:46-48): the
+// Normalization contract (the .sh's load-bearing step, t38.sh): the
 // graph renders an orchestrator-led stage as `(orchestrator)` (parenthesised);
 // the YAML carries the bare slug `orchestrator`. ALL parens are stripped from
 // the table cell before comparing, so `(orchestrator)` becomes `orchestrator`

@@ -10,21 +10,21 @@
 //
 // MECHANISM = cli (every observable is a PROCESS-boundary contract):
 //   - exit code (handleAuditFork/Merge call jsonError → process.exit(1), or
-//     jsonSuccess and fall off the end → exit 0)              [aidlc-audit.ts:205-208]
-//   - stdout JSON ('"emitted":"AUDIT_FORKED"', '"entries_merged":0')  [:424,:620]
+//     jsonSuccess and fall off the end -> exit 0)              [aidlc-audit.ts]
+//   - stdout JSON ('"emitted":"AUDIT_FORKED"', '"entries_merged":0')
 //   - stderr error strings ("main audit not found", "prefix-hash", "Failed to
-//     acquire audit lock", the slug-length message)            [:368,:520-529,:556,:312]
+//     acquire audit lock", the slug-length message)
 //   - the literal bytes the tool copies / appends to audit.md on disk
-//   - the AIDLC_AUDIT_LOCK_RETRIES / _RETRY_MS env-var seam            [:548-555]
-//   - the planted-mkdir-lock contention path (auditLockDir = md5(projectDir)[0:8]) [aidlc-lib.ts:512-514]
-//   - the chmod-readonly post-emit failure path → ERROR_LOGGED [fork-emitted:<ts>]  [:407-422]
+//   - the AIDLC_AUDIT_LOCK_RETRIES / _RETRY_MS env-var seam
+//   - the planted-mkdir-lock contention path (auditLockDir = md5(projectDir)[0:8]) [aidlc-lib.ts]
+//   - the chmod-readonly post-emit failure path -> ERROR_LOGGED [fork-emitted:<ts>]
 // An in-process twin would lose the process.exit shell, the env seam, the
 // JSON-on-stdout contract, and the cross-process lock contention.
 // So every case SPAWNS the real binary (BUN + the .ts path) and the
 // audit-fork/merge prerequisites use the real `aidlc-worktree.ts create`
 // subcommand against a genuine git fixture.
 //
-// FIXTURE (mirrors make_fixture, t07:53-61): aidlc-audit audit-fork resolves a
+// FIXTURE (mirrors make_fixture, t07): aidlc-audit audit-fork resolves a
 // worktree via worktreePath(projectDir, intentId8, slug) and refuses if that
 // intent-scoped directory is absent. The
 // worktree is created with the real `aidlc-worktree.ts create` subcommand, which

@@ -16,7 +16,7 @@
 // stdout+stderr — the PROCESS boundary the .sh tested. mechanism = cli.
 //
 // WHY SPAWN (not in-process): handleDoctor terminates with
-// `process.exit(failed > 0 ? 1 : 0)` (aidlc-utility.ts:1385 region) and writes
+// `process.exit(failed > 0 ? 1 : 0)` (aidlc-utility.ts region) and writes
 // its report via `process.stdout.write`. A bare temp project fails the
 // hook/settings checks, so doctor exits 1 — the .sh swallows that with
 // `|| true` and asserts on stdout content, where the reconciliation rows
@@ -24,25 +24,25 @@
 // but assert on the rendered report lines.
 //
 // Source under test (dist/claude/.claude/tools/aidlc-utility.ts, handleDoctor):
-//   Check 1 — Orphan worktrees (:563-670)
-//     - `observed === 0`        → "Orphan worktrees: 0 observed" (:644)
-//     - active fork (Bolt Refs) → "Orphan worktrees: 0 (N active fork[s])" (:647-649)
-//     - preserved-by-abort      → "... N preserved-by-abort (awaiting resume)" (:648)
-//     - cleanup-orphan          → "Orphan worktrees: N drift" + "cleanup-orphan" (:655-660)
-//     - unmatched (no trail)    → "Orphan worktrees: N drift" + "unmatched" (:652-660)
-//   Check 3 — Orphan state files (:734-781)
-//     - none observed           → "Orphan state files: 0 observed" (:765)
-//     - active/discarded        → "Orphan state files: 0 (N active)" (:766)
-//     - orphan state            → "Orphan state files: N drift" (:771)
-//   Check 4 — Orphan audit drift (:784-892)
-//     - clean                   → "Orphan audit: 0 observed" (:866)
-//     - reconciled              → "Orphan audit: 0 (N reconciled)" (:868)
-//     - sub-case (a)            → "... AUDIT_FORKED-without-disk: <slug>" (:876)
-//     - sub-case (b)            → "... orphan-delta (no AUDIT_MERGED): <slug>" (:877)
-//     - PRACTICES_OVERRIDE      → "... without follow-up PRACTICES_AFFIRMED" (:878)
-//     - unknown Reason          → "... unknown Reason - track for follow-up" (:871)
-//   Check 6 — MERGE_DISPATCH advisory (:948-1014)
-//     - orphan INVOKED          → "MERGE_DISPATCH: N orphan INVOKED (advisory ...)" (:1013)
+//   Check 1 - Orphan worktrees
+//     - `observed === 0`        -> "Orphan worktrees: 0 observed"
+//     - active fork (Bolt Refs) -> "Orphan worktrees: 0 (N active fork[s])"
+//     - preserved-by-abort      -> "... N preserved-by-abort (awaiting resume)"
+//     - cleanup-orphan          -> "Orphan worktrees: N drift" + "cleanup-orphan"
+//     - unmatched (no trail)    -> "Orphan worktrees: N drift" + "unmatched"
+//   Check 3 - Orphan state files
+//     - none observed           -> "Orphan state files: 0 observed"
+//     - active/discarded        -> "Orphan state files: 0 (N active)"
+//     - orphan state            -> "Orphan state files: N drift"
+//   Check 4 - Orphan audit drift
+//     - clean                   -> "Orphan audit: 0 observed"
+//     - reconciled              -> "Orphan audit: 0 (N reconciled)"
+//     - sub-case (a)            -> "... AUDIT_FORKED-without-disk: <slug>"
+//     - sub-case (b)            -> "... orphan-delta (no AUDIT_MERGED): <slug>"
+//     - PRACTICES_OVERRIDE      -> "... without follow-up PRACTICES_AFFIRMED"
+//     - unknown Reason          -> "... unknown Reason - track for follow-up"
+//   Check 6 - MERGE_DISPATCH advisory
+//     - orphan INVOKED          -> "MERGE_DISPATCH: N orphan INVOKED (advisory ...)"
 //
 // FIXTURE DISCIPLINE (mirrors the .sh's create_test_project / seed_* /
 // append_audit / cleanup_test_project per-case lifecycle):
@@ -51,7 +51,7 @@
 //     exactly the .sh's `seed_audit_file` + `seed_state_file` pair.
 //   - Audit blocks are appended in the .sh's `append_audit` shape: a leading
 //     "\n", the block body, then "\n\n---\n" — so findAllEvents' `\n---\n`
-//     split (aidlc-lib.ts:668) sees each block as a discrete entry, byte-for-
+//     split (aidlc-lib.ts) sees each block as a discrete entry, byte-for-
 //     byte the heredocs the .sh wrote.
 //   - Bolt Refs are set via sedReplaceInFile, the TS port of the .sh's sed_i on
 //     the `- **Bolt Refs**:` state line.

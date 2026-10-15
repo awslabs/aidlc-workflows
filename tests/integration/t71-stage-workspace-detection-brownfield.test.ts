@@ -11,7 +11,7 @@
 // (`/aidlc --scope poc "build a todo app"`) over the brownfield stub — NO
 // --init --force, and NO seeded state. A seeded flat state would trigger
 // `intent-create`'s
-// migrate-flat short-circuit (handleIntentCreate aidlc-utility.ts:2022-2037 MOVES
+// migrate-flat short-circuit (handleIntentCreate aidlc-utility.ts MOVES
 // the flat tree into a record and RETURNS without running the scan), which would
 // skip the very WORKSPACE_SCANNED classification this test pins. A clean creation on
 // the brownfield stub runs the scan and writes the classification (mirrors how
@@ -28,9 +28,9 @@
 // The creation path is a single deterministic Bash dispatch: the engine names
 // `bun .claude/tools/aidlc.ts engine intent create --scope <scope> --arguments "..."`
 // and the conductor prints its stdout VERBATIM. handleIntentCreate
-// (aidlc-utility.ts:1986) runs detectWorkspace over the brownfield-todo stub and
+// (aidlc-utility.ts) runs detectWorkspace over the brownfield-todo stub and
 // WRITES the classification into the per-intent aidlc-state.md + emits
-// WORKSPACE_SCANNED (:2144). So every .sh assertion maps to a surface the TOOL
+// WORKSPACE_SCANNED. So every .sh assertion maps to a surface the TOOL
 // produced, not the LLM's rendering.
 //
 // KNOWN-ANSWER classification for the brownfield-todo stub. Verified by running
@@ -38,12 +38,12 @@
 //   projectType="Brownfield"  languages="TypeScript"  frameworks="Vite, React"
 //   buildSystem="npm (package.json)".
 // The framework order ("Vite, React" not "React, Vite") is deterministic:
-// detectFrameworks pushes Vite from vite.config.ts (utility.ts:1483) BEFORE
-// React from package.json deps (:1505). The stub's package.json carries
+// detectFrameworks pushes Vite from vite.config.ts (utility.ts) BEFORE
+// React from package.json deps. The stub's package.json carries
 // react@^18 as a runtime dep and vite.config.ts at the root.
 //
 // ASSERTION MAP (.sh test -> SDK surface). Source: handleIntentCreate
-// (aidlc-utility.ts:1986) runs the SAME detectWorkspace scan + state/audit write
+// (aidlc-utility.ts) runs the SAME detectWorkspace scan + state/audit write
 // the old --init did, now per-intent. The surfaces below are unchanged; only the
 // dispatch (clean creation, not --init --force) and the record location (per-intent,
 // resolved by sdk-drive's readers) moved.
@@ -52,8 +52,8 @@
 //                                          creation writes Completed=completedInit (3 init stages) and marks all 3
 //                                          init stages [x]. Both sides computed off the written file — stronger
 //                                          than the .sh (proves the invariant, not a literal).
-//   3 Project Type ~ [Bb]rownfield     -> assertStateField "Project Type" === "Brownfield"  (state write :2377; scan:1666)
-//   4 Frameworks lists React           -> assertStateFieldContains "Frameworks" "React"     (state write; detectFrameworks:1505)
+//   3 Project Type ~ [Bb]rownfield     -> assertStateField "Project Type" === "Brownfield"  (state write; detectWorkspace scan)
+//   4 Frameworks lists React           -> assertStateFieldContains "Frameworks" "React"     (state write; detectFrameworks)
 //   5 Languages lists TypeScript       -> assertStateFieldContains "Languages" "TypeScript" (state write; LANG_BY_EXT .ts/.tsx)
 //   6 audit has WORKSPACE_SCANNED      -> assertAuditEvent "WORKSPACE_SCANNED"              (handleIntentCreate:2144; aidlc-audit.ts)
 //   7 [x] count >= 3 (all init stages) -> on disk: count of `^- [x]` >= 3                   (3 init stages marked [x])
@@ -63,7 +63,7 @@
 //
 // STRONGER-THAN-.sh additions (parity floor, not weakening):
 //   - assertToolResultContains(r,"Bash","Project type: Brownfield") etc. on the
-//     verbatim creation stdout block (utility.ts:2377-2380) - proves the deterministic
+//     verbatim creation stdout block (utility.ts) - proves the deterministic
 //     creation dispatch ACTUALLY FIRED (no vacuous pass) before we trust the written
 //     file, and asserts the exact full Languages/Frameworks/BuildSystem literals
 //     the .sh only spot-grepped for substrings.

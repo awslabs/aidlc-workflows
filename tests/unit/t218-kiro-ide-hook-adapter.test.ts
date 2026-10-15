@@ -41,11 +41,9 @@ import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { canonicalWriteTool, isKiroShellTool, KIRO_HOOK_GROUPS } from "../../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
 import {
-  createIntent,
   readAllAuditShards,
   readIntentRegistry,
   relayAsTextBlock,
-  setActiveIntentCursor,
   writeSessionBinding,
   writePlanApprovalLegacyOffer,
   writeActiveDirectiveMarker,
@@ -4802,13 +4800,13 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
 
   // An MCP call reaches the hooks as Kiro's tool_load, then the call itself as
   // `mcp_<server>_<tool>` (measured on Kiro CLI 2.31.0 and Kiro IDE 1.3.0).
-  // While the engine asks the person to approve the code plan both pass, so
-  // they can look something up before they decide; Kiro's own card still asks
-  // before the call. While the stage runs before approval the call waits, with
-  // or without a marker in the payload, and so does a tool the table does not
-  // know that is not an MCP call.
+  // Both pass at any point of Code Generation: while the plan is written (the
+  // person asked for a lookup mid-plan on Kiro IDE 1.2.37 and was refused), at
+  // the plan question, at the recovery question; Kiro's own card still asks
+  // before the call. A tool the table does not know that is not an MCP call
+  // still waits before approval.
   for (const policy of ["off", "strict"] as const) {
-    test(`an MCP call passes while the plan question is open, not before it (Guard Policy ${policy})`, () => {
+    test(`an MCP call passes at any point of Code Generation, through either entry (Guard Policy ${policy})`, () => {
       const dir = scratchProject(true);
       try {
         seedCodeGenerationDirective(dir);
@@ -4838,11 +4836,32 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
           expect(result.code, `${name}: ${result.stderr}`).toBe(0);
         }
         expect(call("unknown_mutation_tool", { message: "x" }).code).toBe(2);
-        writeActiveDirectiveMarker(dir, { kind: "run-stage", stage: "code-generation", state_sha256: stateDigest(state) });
-        expect(call("tool_load", load).code).toBe(0);
-        expect(call("mcp_probe_ws_ws_echo", echo).code).toBe(2);
-        expect(call("mcp_probe_ws_ws_echo", echo, { aidlc_external_tool: "mcp" }).code).toBe(2);
-        expect(call("mcp_time_get_current_time", {}).code).toBe(2);
+        const group = (toolName: string, toolInput: Record<string, unknown>) =>
+          runIdeStdin(dir, "guard-tool-call", JSON.stringify({
+            hook_event_name: "PreToolUse",
+            session_id: `ide-mcp-${policy}`,
+            cwd: dir,
+            tool_name: toolName,
+            tool_input: toolInput,
+          }));
+        for (const [step, fields] of [
+          ["the plan being written", { kind: "run-stage" }],
+          ["the recovery question", {
+            kind: "ask", ask_type: "guard-recovery",
+            remedies: [{ op: "request-changes", action: "Ask what should change.", interaction: "human-input" }],
+          }],
+        ] as const) {
+          writeActiveDirectiveMarker(dir, {
+            stage: "code-generation", state_sha256: stateDigest(state), ...fields,
+          } as Parameters<typeof writeActiveDirectiveMarker>[1]);
+          for (const [name, input] of [["tool_load", load], ["mcp_probe_ws_ws_echo", echo], ["mcp_time_get_current_time", {}]] as const) {
+            const result = call(name, input);
+            expect(result.code, `${step}, ${name}: ${result.stderr}`).toBe(0);
+            const card = group(name, input);
+            expect(card.code, `${step}, ${name} through the guard card: ${card.stderr}`).toBe(0);
+          }
+          expect(call("unknown_mutation_tool", { message: "x" }).code, step).toBe(2);
+        }
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
@@ -6267,13 +6286,12 @@ describe("t218 failed tool calls are not audited as writes (#417)", () => {
   });
 });
 
-// Kiro IDE shows one "Run Command Hook" card for every hook run, so the five
+// Kiro IDE shows one "Run Command Hook" card for every hook run, so the four
 // tool-call checks share one registration (guard-tool-call) and the two
 // after-shell hooks another (after-shell) (#2022). Each check keeps the tools
 // its own registration selected, every check still runs after one refuses (as
 // Kiro ran every hook), and the call is refused when any check refuses.
 describe("t218 one card runs the checks that had their own cards (#2022)", () => {
-  const FLOOR = "An approval is waiting for the person's answer, so nothing runs until they give it: end the turn.";
   const RUNTIME = "AIDLC runtime records and hooks belong to the harness";
   const count = (text: string, part: string) => text.split(part).length - 1;
   const call = (dir: string, payload: Record<string, unknown>) =>
@@ -6290,22 +6308,43 @@ describe("t218 one card runs the checks that had their own cards (#2022)", () =>
   }
   const env = { AIDLC_COMPILED_EXECUTABLE: "", AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" };
 
-  test("a read runs while an approval waits; a write is refused with the floor's words once", () => {
+  // What the agent runs after opening a gate is AI-DLC's own or the person's
+  // work: it runs, and the approval stays the engine's to hold until they reply.
+  test("while an approval waits, AI-DLC's own commands and a write run, and the approval waits for the person", () => {
     const dir = scratchProject(true);
     try {
       waitingGate(dir);
-      const read = runIdeStdin(dir, "guard-tool-call", call(dir, {
-        tool_name: "read_file",
-        tool_input: { path: "README.md" },
-      }), env);
-      expect(read.code, read.stderr).toBe(0);
-      expect(read.stderr).toBe("");
-      const write = runIdeStdin(dir, "guard-tool-call", call(dir, {
-        tool_name: "fs_write",
-        tool_input: { path: "scratch/notify.txt", text: "approval needed" },
-      }), env);
-      expect(write.code, write.stderr).toBe(2);
-      expect(count(write.stderr, FLOOR)).toBe(1);
+      const calls = [
+        { tool_name: "read_file", tool_input: { path: "README.md" } },
+        { tool_name: "fs_write", tool_input: { path: "scratch/notify.txt", text: "approval needed" } },
+        ...[
+          "bun .kiro/tools/aidlc.ts engine sensor fire required-sections --stage requirements-analysis --output-path requirements.md",
+          "bun .kiro/tools/aidlc.ts engine audit history",
+          "bun .kiro/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved --user-input Approve",
+        ].map((command) => ({ tool_name: "execute_pwsh", tool_input: { command } })),
+      ];
+      for (const payload of calls) {
+        const r = runIdeStdin(dir, "guard-tool-call", call(dir, payload), env);
+        expect(r.code, `${JSON.stringify(payload)}\n${r.stderr}`).toBe(0);
+        expect(r.stderr, JSON.stringify(payload)).toBe("");
+      }
+      const stateEnv: NodeJS.ProcessEnv = {
+        ...process.env,
+        AIDLC_SKIP_ARTIFACT_GUARD: "1",
+        AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+        CLAUDE_PROJECT_DIR: dir,
+      };
+      delete stateEnv.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+      delete stateEnv.AIDLC_UNATTENDED;
+      const approve = spawnSync(process.execPath, [
+        join(dir, ".kiro", "tools", "aidlc-state.ts"), "approve", "requirements-analysis", "--user-input", "Approve",
+        "--project-dir", dir,
+      ], { cwd: dir, encoding: "utf-8", env: stateEnv, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+      expect(approve.status, approve.stdout).not.toBe(0);
+      expect(`${approve.stdout}${approve.stderr}`).toContain(
+        "no new human reply has been received for this approval question",
+      );
+      expect(readAudit(dir)).not.toContain("**Event**: GATE_APPROVED");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -6314,23 +6353,26 @@ describe("t218 one card runs the checks that had their own cards (#2022)", () =>
   test("every check still runs after one refuses, and a check that lets the call through adds no words", () => {
     const dir = scratchProject(true);
     try {
-      waitingGate(dir);
       const capture = join(dir, "after-refusal.jsonl");
-      for (const hookFile of ["aidlc-review-freeze.ts", "aidlc-state-transition-guard.ts"]) {
-        writeFileSync(
-          join(dir, ".kiro", "hooks", hookFile),
-          recordingGuard(capture).replace("  return 0;", '  process.stderr.write("stand-in note\\n");\n  return 0;'),
-          "utf-8",
-        );
-      }
+      const REFUSED = "stand-in refusal";
+      writeFileSync(
+        join(dir, ".kiro", "hooks", "aidlc-review-freeze.ts"),
+        recordingGuard(capture).replace("  return 0;", `  process.stderr.write("${REFUSED}\\n");\n  return 2;`),
+        "utf-8",
+      );
+      writeFileSync(
+        join(dir, ".kiro", "hooks", "aidlc-state-transition-guard.ts"),
+        recordingGuard(capture).replace("  return 0;", '  process.stderr.write("stand-in note\\n");\n  return 0;'),
+        "utf-8",
+      );
       const r = runIdeStdin(dir, "guard-tool-call", call(dir, {
         tool_name: "fs_write",
         tool_input: { path: join(dir, "aidlc", "notes.md"), text: "x" },
       }), env);
       expect(r.code, r.stderr).toBe(2);
-      expect(count(r.stderr, FLOOR)).toBe(1);
+      expect(count(r.stderr, REFUSED)).toBe(1);
       expect(r.stderr).not.toContain("stand-in note");
-      // Both write checks ran after the floor refused.
+      // The state-transition check ran after the review freeze refused.
       expect(readFileSync(capture, "utf-8").trim().split("\n")).toHaveLength(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -6413,116 +6455,7 @@ describe("t218 one card runs the checks that had their own cards (#2022)", () =>
   });
 });
 
-describe("t218 enforce-approval-gate refusal names doctor's trust step", () => {
-  // The prompt hook ran for this work (its heartbeat is fresh) and the gate the
-  // agent just opened has no reply yet: the floor says to end the turn and
-  // nothing about a missed reply, so the person is never sent to trust and
-  // reload a window for an answer they have not given.
-  test("with the prompt hook's heartbeat fresh, the floor says the person has not answered yet and names no trust step", () => {
-    const dir = scratchProject(true);
-    try {
-      const statePath = seededStateFile(dir);
-      writeFileSync(
-        statePath,
-        readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
-      );
-      appendStageStarted(dir, "requirements-analysis", "2026-01-01T00:00:00Z");
-      const health = join(seededRecordDir(dir), ".aidlc-engine", "hooks-health");
-      mkdirSync(health, { recursive: true });
-      writeFileSync(join(health, "record-human-turn.last"), `${new Date().toISOString().replace(/\.\d{3}Z$/, "Z")}\n`);
-      const r = runIde(dir, "enforce-approval-gate", null, { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
-      expect(r.code, r.stderr).toBe(2);
-      expect(r.stderr).toContain("An approval is waiting for the person's answer, so nothing runs until they give it: end the turn.");
-      expect(r.stderr).toContain("The person has not answered yet: end your turn; their next reply answers it.");
-      for (const words of ["not recorded", "trust this folder", "Reload Window", "doctor", "hook"]) {
-        expect(r.stderr).not.toContain(words);
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("an open gate with no human turn blocks and names the step doctor names", () => {
-    const dir = scratchProject(true);
-    try {
-      const statePath = seededStateFile(dir);
-      writeFileSync(
-        statePath,
-        readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
-      );
-      // A workflow event with no HUMAN_TURN after it: presence tracking is on.
-      appendStageStarted(dir, "requirements-analysis", "2026-01-01T00:00:00Z");
-      const r = runIde(dir, "enforce-approval-gate", null, {
-        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
-      });
-      expect(r.code, r.stderr).toBe(2);
-      expect(r.stderr).toContain("An approval is waiting for the person's answer, so nothing runs until they give it: end the turn.");
-      expect(r.stderr).toContain("If they already answered, that answer was not recorded.");
-      // The same Kiro IDE step doctor names, from the same shipped text, so the
-      // two never send the person different ways; inside Kiro IDE (its hook
-      // processes carry VSCODE_IPC_HOOK/VSCODE_PID) the person gets that step
-      // alone, in fixed words the agent relays without explaining why.
-      const recovery = (JSON.parse(readFileSync(join(KIRO_IDE_TREE, "tools", "data", "harness.json"), "utf-8")) as {
-        hookActivation: { recovery: string };
-      }).hookActivation.recovery;
-      expect(recovery).toContain("choose Trust Folder & Continue when Kiro asks whether you trust it");
-      const ideStep = recovery.slice(0, recovery.indexOf(" In Kiro CLI,"));
-      expect(ideStep.startsWith("In Kiro IDE, trust this folder:")).toBe(true);
-      expect(r.stderr).toContain(
-        `Tell them exactly this, with nothing about why: "Your answer was not recorded, so you don't need to answer again. ${ideStep}"`,
-      );
-      // Trust takes effect after a window reload (measured), so the step names
-      // it; another agent in the picker does not stop the hooks, so it names no
-      // picker.
-      expect(r.stderr).toContain("Then run Developer: Reload Window from the Command Palette");
-      expect(r.stderr).not.toContain("agent picker");
-      // Only the Kiro IDE step reaches a Kiro IDE person: no other tool's
-      // line, and nothing about how AI-DLC works.
-      const words = r.stderr.slice(r.stderr.indexOf('"Your answer'), r.stderr.lastIndexOf('"') + 1);
-      for (const machinery of ["Kiro CLI", "kiro-cli", "ACP", "hook", "human turn", "recorded turn"]) {
-        expect(words).not.toContain(machinery);
-      }
-      expect(r.stderr).not.toContain("Kiro CLI");
-      expect(r.stderr).not.toContain("ACP");
-      expect(r.stderr).not.toContain("hooks");
-      expect(r.stderr).not.toContain("reply again");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  // The same refusal outside Kiro IDE (Kiro CLI on this tree, or an ACP
-  // client: no VSCODE_IPC_HOOK/VSCODE_PID) names the other tools' lines, and
-  // leaves the Kiro IDE step out.
-  test("outside Kiro IDE the refusal gives the Kiro CLI and ACP lines, never the Kiro IDE step", () => {
-    const dir = scratchProject(true);
-    try {
-      const statePath = seededStateFile(dir);
-      writeFileSync(
-        statePath,
-        readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
-      );
-      appendStageStarted(dir, "requirements-analysis", "2026-01-01T00:00:00Z");
-      const r = runIde(dir, "enforce-approval-gate", null, {
-        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
-        VSCODE_IPC_HOOK: undefined,
-        VSCODE_PID: undefined,
-      });
-      expect(r.code, r.stderr).toBe(2);
-      expect(r.stderr).toContain(
-          'Tell them exactly this, with nothing about why, then only the line below for the tool they are in: "Your answer was not recorded, so you don\'t need to answer again."',
-      );
-      expect(r.stderr).toContain("In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.");
-      expect(r.stderr).toContain(
-        "If you drive Kiro from an ACP client, the Kiro IDE guide names what that client must send.",
-      );
-      expect(r.stderr).not.toContain("In Kiro IDE, trust this folder");
-      expect(r.stderr).not.toContain("hooks");
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
+describe("t218 the Kiro IDE trust step", () => {
   // The ACP sentence in the shared step names what to do, not AI-DLC's hooks.
   test("the shared Kiro IDE step's ACP sentence says what to do, not how AI-DLC works", () => {
     const activation = (JSON.parse(readFileSync(join(KIRO_IDE_TREE, "tools", "data", "harness.json"), "utf-8")) as {
@@ -6641,45 +6574,6 @@ describe("t218 enforce-approval-gate refusal names doctor's trust step", () => {
   });
 });
 
-describe("t218 enforce-approval-gate lets only the engine-issued chosen setter through", () => {
-  test("the Construction setting the person chose runs at an open gate; an altered form waits", () => {
-    const dir = scratchProject(true);
-    try {
-      const statePath = seededStateFile(dir);
-      writeFileSync(
-        statePath,
-        readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
-      );
-      const shard = join(seededAuditDir(dir), pinnedShardName());
-      writeFileSync(
-        shard,
-        readFileSync(shard, "utf-8") +
-        "\n## WORKFLOW_STARTED\n**Timestamp**: 2025-12-31T00:00:00Z\n**Event**: WORKFLOW_STARTED\n**Scope**: feature\n\n---\n" +
-        "\n## STAGE_STARTED\n**Timestamp**: 2026-01-01T00:00:00Z\n**Event**: STAGE_STARTED\n**Stage**: requirements-analysis\n\n---\n" +
-        "\n## HUMAN_TURN\n**Timestamp**: 2026-01-01T00:00:01Z\n**Event**: HUMAN_TURN\n**Session**: kiro-ide-person\n\n---\n" +
-          "\n## CONSTRUCTION_POLICY_RECORDED\n**Timestamp**: 2026-01-01T00:00:02Z\n**Event**: CONSTRUCTION_POLICY_RECORDED\n" +
-          "**Stage**: requirements-analysis\n**Checkpoint**: Construction Policy\n**Field**: Construction Iteration\n" +
-          "**Value**: unit-major\n**Session**: kiro-ide-person\n**User Input**: Approve\n\n---\n",
-        "utf-8",
-      );
-      const gate = (command: string) =>
-        runIdeStdin(dir, "enforce-approval-gate", JSON.stringify({
-          hook_event_name: "PreToolUse", cwd: dir, tool_name: "execute_bash", tool_input: { command },
-        }), { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
-      const setter = "bun .kiro/tools/aidlc.ts engine state set-construction-iteration unit-major";
-      const applied = gate(setter);
-      expect(applied.code, applied.stderr).toBe(0);
-      for (const altered of [`PATH=./bin ${setter}`, `env FOO=1 ${setter}`, `./bin/${setter}`]) {
-        expect(gate(altered).code, altered).toBe(2);
-      }
-      expect(gate("bun .kiro/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved").code)
-        .toBe(2);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-});
-
 // The seam reads a `next` line as the engine does, launcher options taken off
 // first; a folder of another project keeps the line as typed, so the seam never
 // runs that project's command in this one.
@@ -6715,10 +6609,9 @@ describe("t218 terminal-command-guard runs a command named for another project n
   });
 });
 
-// Kiro IDE runs every PreToolUse hook even after one blocks (measured on
-// 1.1.14), so terminal-command-guard still runs after the approval gate refuses
-// the call and must not act on it.
-describe("t218 terminal-command-guard runs nothing while an approval gate awaits the person", () => {
+// The seam runs an AI-DLC command it recognises inside the hook and refuses the
+// shell call with its result, so the command runs once.
+describe("t218 terminal-command-guard runs an AI-DLC command inside the hook", () => {
   const archive = (dir: string) =>
     runIdeStdin(dir, "terminal-command-guard", JSON.stringify({
       session_id: "sess_gate_archive",
@@ -6735,92 +6628,7 @@ describe("t218 terminal-command-guard runs nothing while an approval gate awaits
   const registry = (dir: string) =>
     readFileSync(join(intentsDirOf(dir, DEFAULT_SPACE), "intents.json"), "utf-8");
 
-  test("an archive the approval gate refuses changes no state, registry, or audit", () => {
-    const dir = scratchProject(true);
-    try {
-      const statePath = seededStateFile(dir);
-      writeFileSync(
-        statePath,
-        readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
-      );
-      appendStageStarted(dir, "requirements-analysis", "2026-01-01T00:00:00Z");
-      const snapshot = () => ({
-        state: readFileSync(statePath, "utf-8"),
-        registry: registry(dir),
-        audit: readAudit(dir),
-      });
-      const before = snapshot();
-      const gate = runIde(dir, "enforce-approval-gate", null, {
-        AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
-      });
-      expect(gate.code, gate.stderr).toBe(2);
-
-      const r = archive(dir);
-      expect(r.code, r.stderr).toBe(0);
-      expect(r.stderr).toBe("");
-      expect(snapshot()).toEqual(before);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("the payload session's open gate holds the command when the shared cursor names another record", () => {
-    const dir = scratchProject(true);
-    try {
-      const statePath = seededStateFile(dir);
-      writeFileSync(
-        statePath,
-        readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
-      );
-      appendStageStarted(dir, "requirements-analysis", "2026-01-01T00:00:00Z");
-      // The conversation works in the gated record; the cursor names a record with no gate open.
-      writeSessionBinding(dir, "sess_gate_archive", DEFAULT_SPACE, DEFAULT_RECORD_DIR, "switch");
-      const other = createIntent(dir, "other-work", DEFAULT_SPACE, "feature");
-      setActiveIntentCursor(dir, other.dirName, DEFAULT_SPACE);
-      const before = registry(dir);
-
-      const r = archive(dir);
-      expect(r.code, r.stderr).toBe(0);
-      expect(r.stderr).toBe("");
-      expect(registry(dir)).toBe(before);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("the standalone approval gate judges each chat by its own workflow", () => {
-    const dir = scratchProject(true);
-    try {
-      const statePath = seededStateFile(dir);
-      writeFileSync(
-        statePath,
-        readFileSync(statePath, "utf-8").replace("- [-] requirements-analysis", "- [?] requirements-analysis"),
-      );
-      appendStageStarted(dir, "requirements-analysis", "2026-01-01T00:00:00Z");
-      // Chat A works in the gated record; chat B and the shared cursor are on a record with no gate open.
-      writeSessionBinding(dir, "sess_gated_chat", DEFAULT_SPACE, DEFAULT_RECORD_DIR, "switch");
-      const other = createIntent(dir, "other-work", DEFAULT_SPACE, "feature");
-      writeSessionBinding(dir, "sess_free_chat", DEFAULT_SPACE, other.dirName, "switch");
-      setActiveIntentCursor(dir, other.dirName, DEFAULT_SPACE);
-      const gate = (sessionId: string) =>
-        runIdeStdin(dir, "enforce-approval-gate", JSON.stringify({
-          session_id: sessionId,
-          hook_event_name: "PreToolUse",
-          cwd: dir,
-          tool_name: "fs_write",
-          tool_input: { path: join(dir, "notes.md"), text: "x" },
-        }), { AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0" });
-      const gated = gate("sess_gated_chat");
-      expect(gated.code, gated.stderr).toBe(2);
-      expect(gated.stderr).toContain("An approval is waiting for the person's answer");
-      const free = gate("sess_free_chat");
-      expect(free.code, free.stderr).toBe(0);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test("with no gate open, the same archive runs inside the hook", () => {
+  test("an archive runs inside the hook", () => {
     const dir = scratchProject(true);
     try {
       const r = archive(dir);

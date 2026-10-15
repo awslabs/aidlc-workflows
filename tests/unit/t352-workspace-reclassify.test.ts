@@ -1057,7 +1057,7 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     expect(String(nextIn(proj).narration ?? "")).not.toContain("Setting up a poc workflow");
   });
 
-  test("what a bugfix plan leaves out is said with the first stage", () => {
+  test("the first stage says the bugfix plan's size, not its settings", () => {
     const proj = project();
     const creation = nextIn(proj, ["--scope", "bugfix", "rows dated on the last day are left out of the report"]);
     expect(creation.kind).toBe("print");
@@ -1068,8 +1068,8 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     ], { encoding: "utf-8", env: chat, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
     const said = String(nextIn(proj).narration);
-    expect(said).toStartWith("Setting up a bugfix workflow for this");
-    expect(said).toContain("; no learnings ritual or summary confirmation; lead agent only.");
+    expect(said).toMatch(/^Setting up a bugfix workflow for this: \d+ stages, \d+ approval gates\./);
+    expect(said).not.toContain("lead agent only");
   });
 
   test("how a pasted document was split is said with the first stage", () => {

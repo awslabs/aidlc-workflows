@@ -8,8 +8,9 @@
 // to filter on `**/{aidlc-docs,intents}/**`, so gate-start found the nine
 // deliverables and then skipped every one: zero SENSOR_* rows, and nothing
 // reported it. This drives the shipped graph, manifests and sensor scripts end
-// to end: gate-start on a seeded CodeKB store must fire both sensors on all
-// nine files, and every one must pass. architecture.md and the timestamp file,
+// to end: gate-start on a seeded CodeKB store must fire required-sections on
+// all nine files and upstream-coverage, which reads the whole store, once on
+// its first document, and every fire must pass. architecture.md and the timestamp file,
 // the two artifacts re-artifacts.md gives templates for, are built from those
 // templates, so an architecture template that stops satisfying the
 // required-sections floor reds here rather than on every brownfield run
@@ -43,7 +44,6 @@ const CODEKB_FILES = [
   "code-quality-assessment.md",
   "reverse-engineering-timestamp.md",
 ];
-const SENSORS = ["required-sections", "upstream-coverage"];
 const projects: string[] = [];
 
 afterAll(() => {
@@ -118,7 +118,7 @@ function field(block: string, name: string): string {
 }
 
 describe("t350 reverse-engineering gate sensors reach the CodeKB", () => {
-  test("gate-start fires both declared sensors on all nine CodeKB artifacts, and all pass", () => {
+  test("gate-start fires required-sections on all nine CodeKB artifacts and upstream-coverage once, and all pass", () => {
     const project = codekbStoreProject();
     const result = spawnSync(
       BUN,
@@ -145,7 +145,7 @@ describe("t350 reverse-engineering gate sensors reach the CodeKB", () => {
     }));
     expect(new Set(fired.map(({ stage }) => stage))).toEqual(new Set(["reverse-engineering"]));
     expect(fired.map(({ pair }) => pair).sort()).toEqual(
-      SENSORS.flatMap((sensor) => CODEKB_FILES.map((file) => `${sensor}:${file}`)).sort(),
+      [...CODEKB_FILES.map((file) => `required-sections:${file}`), "upstream-coverage:business-overview.md"].sort(),
     );
     // A script error or missing tool also lands as SENSOR_PASSED, carrying a
     // Note; only a Note-free pass means the sensor actually evaluated the file.

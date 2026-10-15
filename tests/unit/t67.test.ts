@@ -23,7 +23,7 @@
 // regardless of stream; JSON-ack asserts stay scoped to stdout.
 //
 // ROW COUNT (Test 8): loadScopeMapping() derives the scope
-//       SET from the .claude/scopes/aidlc-*.md files present (aidlc-lib.ts:836)
+//       SET from the .claude/scopes/aidlc-*.md files present (aidlc-lib.ts)
 //       + scope-grid.json `.stages`, so that filesystem count is the live
 //       source; Test 8 pins gridCount === mdCount === rendered rows.
 //

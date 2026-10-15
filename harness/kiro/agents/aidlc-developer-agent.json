@@ -27,7 +27,7 @@
     "fs_write": {
       "allowedPaths": [
         "aidlc/spaces/**",
-        "[!.]*",
+        "./[!.]*",
         "[!.]*/**",
         ".aidlc/worktrees/*/aidlc/spaces/**"
       ]

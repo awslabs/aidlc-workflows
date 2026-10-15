@@ -8,13 +8,14 @@
 > [Running AI-DLC on Kiro IDE](kiro-ide.md).
 
 > [!IMPORTANT]
-> This page covers the legacy `kiro` row, which pins no Kiro engine. On Kiro
-> CLI 2.24.1 or later, use the `kiro-ide` row instead: it pins Kiro's v3
-> engine and runs in Kiro CLI as well as Kiro IDE, and the interactive
-> `aidlc config` prefers it to this row when both are detected. This row stays for
-> older Kiro CLI versions and existing projects. In an existing `kiro`
-> project, `aidlc config --harness kiro-ide` switches `.kiro/` to it in place
-> and keeps `aidlc/`.
+> This page covers the `kiro` harness, which pins no Kiro engine. The
+> interactive `aidlc config` lists it as Kiro CLI (V2); when it detects Kiro
+> CLI 2.24.1 or later, it makes it the default over Kiro, except in Kiro IDE's
+> own terminal, where Kiro leads. For Kiro's v3 engine on Kiro CLI 2.24.1 or
+> later, use the `kiro-ide` harness, listed as Kiro: it pins that engine and
+> runs in Kiro CLI as well as Kiro IDE. In an existing `kiro` project,
+> `aidlc config --harness kiro-ide` switches `.kiro/` to it in place and keeps
+> `aidlc/`.
 
 One of the framework's harnesses: the Kiro runtime runs the same AI-DLC
 methodology on [Kiro CLI](https://kiro.dev/docs/cli/). One deterministic core
@@ -239,7 +240,13 @@ top-level dot entry, and anything outside the project, still ask. Your
 project's own test and build commands (`bun test`, `npm test`, `pytest`, and so
 on), a `git push` and a recursive delete still ask, so you see each one before
 it runs. In a side-by-side build the workers and reviewers run the test command
-you approved through AI-DLC's own `swarm check`, which does not ask.
+you approved through AI-DLC's own `swarm check`, which does not ask. When a
+side-by-side build's workers or reviewers ask, Kiro gathers their requests in a
+"tool approval pending" box; choosing (f) **Approve all pending and
+auto-approve future subagent requests** there lets them run whatever they ask,
+without asking you again, for the rest of that chat, reviewers that start later
+included. Requests from the main chat still ask as before, and Kiro writes no
+setting for it.
 
 **Sessions with no approver stall rather than prompt.** Anything outside the
 pre-approved set needs an interactive answer. Under `kiro-cli chat

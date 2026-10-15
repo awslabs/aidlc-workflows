@@ -218,11 +218,11 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     expect(r.out).not.toContain("RESULT: PASS");
   }, PER_TEST_TIMEOUT);
 
-  test("twelve weighted unit shards cover every file once and preserve binary affinity", () => {
+  test("sixteen weighted unit shards cover every file once and preserve binary affinity", () => {
     const files = readdirSync(join(TESTS_ROOT, "unit"))
       .filter((file) => file.endsWith(".test.ts"))
       .sort();
-    const shards = assignWeightedShards(files, 12, UNIT_SHARD_CONFIG);
+    const shards = assignWeightedShards(files, 16, UNIT_SHARD_CONFIG);
     const flattened = shards.flat();
 
     expect(shards.every((shard) => shard.length > 0)).toBe(true);

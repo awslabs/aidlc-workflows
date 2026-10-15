@@ -5,10 +5,10 @@
 //
 // Greps against the assistant's reworded rendering are CLASS-1 prose-flaky:
 // the rendering varies run-to-run. In the first port, the SKILL.md dispatch
-// (SKILL.md:67,71) routes `--status` to `bun .claude/tools/aidlc-utility.ts
+// (SKILL.md) routes `--status` to `bun .claude/tools/aidlc-utility.ts
 // status` via Bash and prints its stdout VERBATIM; today the engine names the
 // status utility in a print directive the conductor runs. That stdout is the
-// deterministic surface: handleStatus (aidlc-utility.ts:181) reads the fields
+// deterministic surface: handleStatus (aidlc-utility.ts) reads the fields
 // straight off aidlc-state.md (Scope/Phase/Current Stage) and renders a fixed
 // "AI-DLC Workflow Status" block - so "IDEATION", "Feasibility", and "feature"
 // appear because the TOOL read them from the seeded state, not because the LLM
@@ -26,7 +26,7 @@
 // Known-answer literals (read from the SHIPPED handler, not guessed):
 //   - status block fields:  aidlc-utility.ts handleStatus() (Scope/Phase/Current Stage lines)
 //   - no-workflow literal:   "No active AI-DLC workflow found." (handleStatus)
-//   - --status dispatch:     SKILL.md:67,71 -> `bun .claude/tools/aidlc-utility.ts status` via Bash, stdout verbatim
+//   - --status dispatch:     SKILL.md -> `bun .claude/tools/aidlc-utility.ts status` via Bash, stdout verbatim
 //   - state-mid-ideation fixture carries Scope=feature, Lifecycle Phase=IDEATION,
 //     Current Stage=feasibility ("Feasibility & Constraints").
 //

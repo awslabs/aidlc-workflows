@@ -27,7 +27,7 @@
 //   (The old step 6, test-run propagation to the spawned compile, was removed
 //      per #369 when the test-run mechanism was removed.)
 //
-// FIXTURE DISCIPLINE — replicate the .sh's make_project (t91:36-47) EXACTLY:
+// FIXTURE DISCIPLINE - replicate the .sh's make_project (t91) EXACTLY:
 // a fresh temp project under aidlc-docs/ + a self-contained .claude/ skeleton
 // with the tool modules and their dependencies (aidlc-runtime.ts, aidlc-lib.ts,
 // aidlc-settings.ts, aidlc-install-paths.ts, aidlc-distribution.ts,
@@ -39,7 +39,7 @@
 // aidlc-state.md ("- **Scope**: feature"). The COPY (not symlink) matters:
 // the hook spawns `<projectDir>/.claude/tools/aidlc-runtime.ts`, whose
 // aidlc-lib.ts resolves stage-graph.json relative to its own import.meta.url
-// (aidlc-lib.ts:693 DATA_DIR) — so the data file must sit beside the copied
+// (aidlc-lib.ts DATA_DIR) - so the data file must sit beside the copied
 // lib for the compile to read it. mkdtempSync + toPortablePath (Windows path
 // round-trip, since the tool writes audit/graph paths through forward-slash
 // helpers). Nothing is written under tests/fixtures/**. All temp dirs cleaned
@@ -114,7 +114,7 @@ afterAll(() => {
 });
 
 /**
- * make_project (t91:36-47): a fresh temp project with a self-contained
+ * make_project (t91): a fresh temp project with a self-contained
  * .claude/ skeleton so the hook + the compile it spawns resolve every path
  * via CLAUDE_PROJECT_DIR. Copies (NOT symlinks) the hook and required tool files
  * — aidlc-lib.ts resolves data/stage-graph.json relative to its own location,
@@ -221,7 +221,7 @@ interface HookResult {
   out: string;
 }
 
-/** run_hook (t91:49-53): pipe the PostToolUse JSON on stdin with CLAUDE_PROJECT_DIR set. */
+/** run_hook (t91): pipe the PostToolUse JSON on stdin with CLAUDE_PROJECT_DIR set. */
 function runHook(proj: string, json: string): HookResult {
   const res = spawnSync(BUN, [hookPath(proj)], {
     input: json,
@@ -252,9 +252,9 @@ function runHookEmptyStdin(proj: string): HookResult {
 const payload = (command: string): string =>
   JSON.stringify({ tool_name: "Bash", tool_input: { command } });
 
-// --- Audit fixtures (t91:57-172, 202-226) ---------------------------------
+// --- Audit fixtures (t91) ---------------------------------
 // Trailing block separator matters: split('\n---\n') leaves an empty tail
-// element, but slice(-3) is robust to it (the .sh comment at t91:55-56).
+// element, but slice(-3) is robust to it (the .sh comment at t91).
 
 const AUDIT_GATE_APPROVED = `## Workflow Start
 **Timestamp**: 2026-05-27T10:00:00Z

@@ -15,23 +15,23 @@
 // MECHANISM = cli (every observable is a PROCESS-boundary contract):
 //   - the success-JSON the bolt tool prints to stdout carries the literal
 //     `RUNTIME_GRAPH_FORKED` / `RUNTIME_GRAPH_MERGED` tokens in its
-//     `forked: [...]` / `merged: [...]` arrays  [aidlc-bolt.ts:293,:443]
+//     `forked: [...]` / `merged: [...]` arrays  [aidlc-bolt.ts]
 //   - the fragment file on disk at
-//     <wt>/aidlc-docs/runtime-graph.json  [aidlc-runtime.ts:1097,:1179]
+//     <wt>/aidlc-docs/runtime-graph.json  [aidlc-runtime.ts]
 //   - the worktree directory removed by the real `git worktree remove`
-//     dispatched inside aidlc-worktree discard  [aidlc-worktree.ts:455-519]
+//     dispatched inside aidlc-worktree discard  [aidlc-worktree.ts]
 //   - the compiled main runtime-graph.json's instances[] (presence + alphabetical
-//     ordering)  [aidlc-runtime.ts:452-551]
+//     ordering)  [aidlc-runtime.ts]
 //   `aidlc-bolt start --worktree` itself spawns sibling subprocesses
 //   (aidlc-state fork, aidlc-audit audit-fork, aidlc-runtime fragment-fork) via
-//   spawnSync (aidlc-bolt.ts:89-116) — an in-process twin would lose the very
+//   spawnSync (aidlc-bolt.ts) - an in-process twin would lose the very
 //   cross-process fork/merge dance under test. So every scenario SPAWNS the real
 //   binaries (BUN + the .ts path) against a genuine git fixture.
 //   spawnCount = all.
 //
-// FIXTURE (mirrors make_bolt_fixture, t12:57-76): aidlc-worktree create runs a
+// FIXTURE (mirrors make_bolt_fixture, t12): aidlc-worktree create runs a
 // real `git worktree add` and asserts it is invoked from the main checkout
-// (assertNotSiblingWorktree, aidlc-worktree.ts:101) — so each scenario needs an
+// (assertNotSiblingWorktree, aidlc-worktree.ts) - so each scenario needs an
 // actual git repo on `main` with one commit, a Construction-phase state file
 // (state-construction.md gives the phase/scope that lets Bolt operations run),
 // a bare-header audit shard, and the framework .gitignore set so worktree create

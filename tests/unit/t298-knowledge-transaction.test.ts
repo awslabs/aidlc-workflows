@@ -330,7 +330,7 @@ describe("t298 the audit row lands in the SPACE shard, not the active intent's",
     expect(blocks.at(-1)).toContain("**Event**: STAGE_STARTED");
   });
 
-  test("DocumentKB-only audit rows do not activate the human-presence floor", () => {
+  test("DocumentKB-only audit rows do not count as a turn of the person's", () => {
     const p = projectWithIntent();
     doc(p, "policy.md");
     expect(humanActedSinceGate(p)).toBe(false);

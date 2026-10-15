@@ -6,7 +6,7 @@
 // through their on-disk packaging surface, a DIFFERENT subject from the
 // integration t130's engine-routing surface.
 //
-// WHAT THE .sh PROVED (t130-scope-runners.sh:1-10 prose + the loop at :24-99):
+// WHAT THE .sh PROVED (t130-scope-runners.sh prose + the loop):
 //   The five first-batch scope-runner skills are STRUCTURALLY conformant on disk,
 //   the generator's scope-drift guard is clean over the shipped tree, runners are
 //   a CURATED subset (a non-batch scope ships no runner), and the generator emits
@@ -32,9 +32,9 @@
 //     also fails here.
 //   - Two checks are genuine PROCESS / ENV seams that must be SPAWNED (mechanism
 //     cli): the drift-guard EXIT CODE (`scopes --check` exits 0 iff in sync,
-//     aidlc-runner-gen.ts:476/474) and the env-seam GENERATION (`AIDLC_SCOPES_DIR`
+//     aidlc-runner-gen.ts) and the env-seam GENERATION (`AIDLC_SCOPES_DIR`
 //     points the reader at an isolated tree, `--out` points the writer at an
-//     isolated skills dir, :315/:449) — both are the SAME shipped tool the .sh
+//     isolated skills dir) - both are the SAME shipped tool the .sh
 //     shelled out to (`bun GEN scopes …`). An in-process twin would lose the
 //     process.exit drift contract and the env-seam isolation. spawnsShippedTool.
 //

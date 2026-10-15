@@ -24,15 +24,15 @@
 //     maps code-generation=EXECUTE and practices-discovery=EXECUTE (read at
 //     test time; the runtime source of truth, the transpose of per-stage
 //     `scopes:` frontmatter — milestone 12 retired scope-mapping.json).
-//   - dispatch-event: aidlc-bolt.ts:660 handleDispatchEvent. Three literal
-//     emit cases (t48 emitter-pairing). MERGE_DISPATCH_INVOKED (:670) requires
+//   - dispatch-event: aidlc-bolt.ts handleDispatchEvent. Three literal
+//     emit cases (t48 emitter-pairing). MERGE_DISPATCH_INVOKED requires
 //     --practices-excerpt; emits {Bolt slug, Practices section excerpt}.
-//     MERGE_DISPATCH_RETURNED (:686) requires --strategy/--target/--confidence/
+//     MERGE_DISPATCH_RETURNED requires --strategy/--target/--confidence/
 //     --notes; emits {Bolt slug, Strategy, Target branch, Confidence, Notes}.
 //     Each emits via appendAuditEntry → audit.md, then prints
 //     {"emitted":<EVENT>,"slug":<slug>} to stdout. Emit-only: no state mutation.
-//   - init: aidlc-utility.ts:1720 handleInit → writeStateFile (:2103). The v7
-//     state template (:2049-2059) carries State Version 7 plus the three
+//   - init: aidlc-utility.ts handleInit -> writeStateFile. The v7
+//     state template carries State Version 7 plus the three
 //     v0.4.0 fields: **Worktree Path**, **Bolt Refs**, **Practices Affirmed
 //     Timestamp**. setup_construction_project ran `init --force --scope <s>`.
 //

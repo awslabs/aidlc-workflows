@@ -196,9 +196,6 @@ import {
   CEREMONY_KEYS,
   type CeremonyKey,
   type CeremonyPolicy,
-  ceremonyOffClause,
-  ceremonyOffList,
-  ceremonyPolicyValues,
   formatCeremony,
   parseCeremonySetting,
   parseCeremonyStateLine,
@@ -440,6 +437,7 @@ import {
   captureStageValidationBasis,
   codeArrivedStageLine,
   inspectStageValidity,
+  stageDefinitionChangedLine,
   stageLabel,
   staleStageNote,
 } from "./aidlc-validity.ts";
@@ -2212,6 +2210,17 @@ To get started:
       validityOutput = staleStageNote(earliestName, earliestIssue, content) +
         `${otherNames ? ` Also affected: ${otherNames}.` : ""}\n`;
     }
+    // Finished stages AI-DLC itself now does differently, told or not on the
+    // way: the work stands, and the way back is named.
+    const pending = new Set(validity.redefined.map((entry) => entry.stage));
+    const redefined = graph.map((stage) => stage.slug)
+      .filter((slug) => pending.has(slug) || validity.renewed.includes(slug));
+    if (redefined.length > 0) {
+      validityOutput += `${stageDefinitionChangedLine(
+        redefined.map((slug) => stageLabel(findStageBySlug(slug), slug) ?? slug),
+        redefined[0],
+      )}\n`;
+    }
   } catch {
     // Unreadable receipts change nothing the person can act on here.
   }
@@ -3572,10 +3581,9 @@ export function kiroIdeIgnoreSourceChecks(
 // What stops working when the person switches an AI-DLC hook off in Kiro's
 // Agent Hooks. Legacy names stay while config has not yet removed their files.
 const FLOW_ALTERING_KIRO_HOOKS: Record<string, string> = {
-  "aidlc-guard-tool-call": "approvals, the approved plan, reviewed work and AI-DLC's records are not protected",
+  "aidlc-guard-tool-call": "the approved plan, reviewed work and AI-DLC's records are not protected",
   "aidlc-record-human-turn": "your replies are not recorded, so approval gates cannot tell your answer from the assistant's, and /aidlc commands typed in chat are not run directly",
   "aidlc-continue-workflow": "a workflow with work left is not kept moving when the assistant stops (on Kiro CLI v3; Kiro IDE only records it)",
-  "aidlc-enforce-approval-gate": "the assistant is not held while an approval waits for your answer",
   "aidlc-plan-approval-guard": "the build is not kept to the plan you approved",
   "aidlc-terminal-command-guard": "commands are not checked before they run",
   "aidlc-state-transition-guard": "workflow state can change without the engine",
@@ -6259,7 +6267,8 @@ export async function collectDoctorReport(
   // Sub-case (c): PRACTICES_OVERRIDE Reason filter — write-failure-* rows
   //   without a following PRACTICES_AFFIRMED are flagged as orphan; rows
   //   carrying Reason: bolt-plan-marker-conflict are expected behaviour and
-  //   ignored. audit-format.md:138 anchors the discriminator routing.
+  //   ignored. The PRACTICES_OVERRIDE row in audit-format.md anchors the
+  //   discriminator routing.
   //
   // Sub-case (c) shares the orphan-audit umbrella because both classes ride
   // the same audit-walker pass; per plan-v3 §51, this is one Check, not two.
@@ -6369,8 +6378,7 @@ export async function collectDoctorReport(
   //
   // Read `Practices Affirmed Timestamp` from main state. Compare to now.
   // Empty / missing → informational pass (never affirmed). Within 90 days → ✓.
-  // Older → advisory pass=true (does NOT fail exit code; mirrors heartbeat
-  // and state/audit drift advisory pattern at aidlc-utility.ts:421-466).
+  // Older → advisory pass=true (does NOT fail exit code).
   // Invalid ISO timestamp → fail readable.
   // ---------------------------------------------------------------------------
   try {
@@ -10538,12 +10546,20 @@ function handleCodekbSnapshot(
               `source, leaving that one out.`),
       );
     }
+    // The commit the Run Record names, so the scan agent runs no git for it.
+    // git finds the repository above a project folder too.
+    const head = spawnSync("git", ["rev-parse", "--verify", "-q", "HEAD"], {
+      cwd: repoDir,
+      encoding: "utf-8",
+      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
     return {
       repo,
       store: `${relativeCodekbDir(projectDir, repo, space)}/`,
       paths,
       store_generation: codekbStoreGeneration(storeDir),
       source_fingerprint: sourceFingerprint,
+      head_commit: head.status === 0 ? head.stdout.trim() : "unknown",
     };
   });
   if (flags.json === "true") {
@@ -10553,7 +10569,8 @@ function handleCodekbSnapshot(
   process.stdout.write(
     `STORE_GENERATION ${snapshot.store_generation}\n` +
       `SOURCE_FINGERPRINT ${snapshot.source_fingerprint}\n` +
-      `SOURCE_PATHS ${snapshot.paths.join(",")}\n`,
+      `SOURCE_PATHS ${snapshot.paths.join(",")}\n` +
+      `HEAD_COMMIT ${snapshot.head_commit}\n`,
   );
 }
 
@@ -11806,10 +11823,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         : 0;
       const stageDelta = executeStages.length - oldExecuteCount;
       const deltaStr = stageDelta >= 0 ? `+${stageDelta}` : String(stageDelta);
-      const summary = {
-        ...gridCostSummary(adjustedMapping as Record<string, "EXECUTE" | "SKIP">),
-        off: ceremonyOffList(newScope, ceremonyPolicyValues(newScope, content)),
-      };
+      const summary = gridCostSummary(adjustedMapping as Record<string, "EXECUTE" | "SKIP">);
       const gates = summary.gates;
       const effectiveDepth = getField(content, "Depth") || "unknown";
       auditEntries.unshift(
@@ -11859,7 +11873,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       // is what they asked for, and `next` carries on into it.
       outputLines = [
         `Switched to ${newScope} (${SCOPE_GLOSS}): ${summary.shown} stages (${shownDone} done), ` +
-          `${gates} approval gates${ceremonyOffClause(summary)}.` +
+          `${gates} approval gates.` +
           (isScopeName(oldScope) ? ` You can switch back to ${oldScope} any time.` : ""),
         ...skippedNow.map(({ slug, was }) =>
           `Skipped ${findStageBySlug(slug)?.name ?? slug} (${was}): ${newScope} does not run it. ` +

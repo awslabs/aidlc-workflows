@@ -29,7 +29,7 @@
 // Source under test (dist/claude/.claude/tools/aidlc-orchestrate.ts):
 //   computeGate(node, scope, stateContent): GateValue
 //          - skeleton-gate stage + NO stance recorded → GATE_UNRESOLVED
-//            (= "unresolved", aidlc-directive.ts:37) — the round-trip sentinel
+//            (= "unresolved", aidlc-directive.ts) - the round-trip sentinel
 //          - skeleton-gate stage + stance recorded   → resolveSkeletonGate(...)
 //          - every other EXECUTE stage outside init  -> true
 //   resolveSkeletonGate(stance, scope): boolean - true for on/off/scope-
@@ -45,8 +45,8 @@
 //          - valid + parked on skeleton stage → spawns aidlc-state.ts
 //            set-skeleton-stance, then emits a `print` (re-run next)
 //
-// The DETERMINED gate is `true` for every stance (aidlc-orchestrate.ts:534-553):
-// per the verified resolution prose (SKILL.md:655-720), skeleton-on always-gates
+// The DETERMINED gate is `true` for every stance (aidlc-orchestrate.ts):
+// per the verified resolution prose (SKILL.md), skeleton-on always-gates
 // Bolt 1, and skeleton-off runs Bolt 1 as a regular Bolt whose node gate is
 // still presented. The stance picks the CEREMONY, not whether a gate is
 // presented; the gate axis is on for all construction work. The round-trip

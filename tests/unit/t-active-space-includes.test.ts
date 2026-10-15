@@ -164,10 +164,10 @@ describe("t-active-space-includes: every shipped include reads the copy", () => 
     }
   });
 
-  test("Codex: no include and no AIDLC_RULES_DIR seam; the engine hands each step its rules", () => {
+  test("Codex: no include and an empty AIDLC_RULES_DIR; the engine hands each step its rules", () => {
     const config = readFileSync(distSurface("codex", ".codex", "config.toml"), "utf-8");
-    expect(config).not.toContain("AIDLC_RULES_DIR");
-    expect(config).not.toContain("[shell_environment_policy]");
+    // The member 2.11.0 shipped stays, empty (2.11.0's own refresh cannot take it out), and names no folder.
+    expect((Bun.TOML.parse(config) as { shell_environment_policy?: unknown }).shell_environment_policy).toEqual({ set: { AIDLC_RULES_DIR: "" } });
   });
 
   test("every harness's shipped .gitignore ignores the copy", () => {

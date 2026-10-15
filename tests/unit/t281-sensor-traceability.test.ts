@@ -1289,3 +1289,493 @@ describe("t281 User Stories skipped: a Unit traces its own story-map rows", () =
     expect(out.result.missing_from_upstream_ids).toEqual(["FR3", "FR4"]);
   });
 });
+
+// #2210: requirements.md gives a requirement sub-requirements (`### FR1:` with
+// `**FR1.1**` under it). Tracing every sub-requirement traces the requirement,
+// so a table of sub-requirements passes, and one that names only the parent
+// still hears about each sub-requirement it left out.
+describe("t281 a requirement and its sub-requirements", () => {
+  const GROUPED = [
+    "# Requirements",
+    "",
+    "## Functional",
+    "### FR1: Login",
+    "**FR1.1** Accept email and password",
+    "**FR1.2** Lock after five failures",
+    "### FR2: Recovery",
+    "**FR2.1** Send a reset link",
+    "",
+    "## Non-functional",
+    "- NFR1 Security",
+  ].join("\n");
+
+  function storiesTable(proj: string, ids: string[]): string {
+    return trace(proj, "inception/user-stories/traceability.json", {
+      stage: "user-stories",
+      upstream_ids: ids,
+      coverage: ids.map((id) =>
+        id === "NFR1"
+          ? { id, status: "Deferred", target: "nfr-requirements" }
+          : { id, status: "OK", target: id.startsWith("FR2") ? "US1.2" : "US1.1" }),
+    });
+  }
+
+  test("every stage that lists FR IDs says a requirement is traced through its sub-requirements", () => {
+    const RULE = "traced through its `FR{n}.{m}` IDs";
+    for (const stage of [
+      "inception/user-stories.md",
+      "inception/domain-design.md",
+      "inception/units-generation.md",
+      "construction/functional-design.md",
+      "construction/code-generation.md",
+    ]) {
+      expect(readFileSync(join(STAGES, stage), "utf-8"), stage).toContain(RULE);
+    }
+  });
+
+  test("user-stories: the sub-requirements alone pass; the parents alone still miss each sub-requirement", () => {
+    const proj = project();
+    seedUserStories(proj);
+    write(proj, "inception/requirements-analysis/requirements.md", GROUPED);
+    let out = run(proj, "user-stories", storiesTable(proj, ["FR1.1", "FR1.2", "FR2.1", "NFR1"]));
+    expect(out.result.missing_from_upstream_ids).toEqual([]);
+    expect(out.result.pass, out.result.reason).toBe(true);
+
+    out = run(proj, "user-stories", storiesTable(proj, ["FR1", "FR1.1", "FR1.2", "FR2", "FR2.1", "NFR1"]));
+    expect(out.result.pass, out.result.reason).toBe(true);
+
+    out = run(proj, "user-stories", storiesTable(proj, ["FR1.1", "FR2.1", "NFR1"]));
+    expect(out.result.missing_from_upstream_ids).toEqual(["FR1.2"]);
+
+    out = run(proj, "user-stories", storiesTable(proj, ["FR1", "FR2", "NFR1"]));
+    expect(out.result.pass).toBe(false);
+    expect(out.result.missing_from_upstream_ids).toEqual(["FR1.1", "FR1.2", "FR2.1"]);
+  });
+
+  test("user-stories: a requirement listed in upstream_ids needs no coverage row of its own when its sub-requirements have theirs", () => {
+    const proj = project();
+    seedUserStories(proj);
+    write(proj, "inception/requirements-analysis/requirements.md", GROUPED);
+    const file = trace(proj, "inception/user-stories/traceability.json", {
+      stage: "user-stories",
+      upstream_ids: ["FR1", "FR1.1", "FR1.2", "FR2", "FR2.1", "NFR1"],
+      coverage: [
+        { id: "FR1.1", status: "OK", target: "US1.1" },
+        { id: "FR1.2", status: "OK", target: "US1.1" },
+        { id: "FR2.1", status: "OK", target: "US1.2" },
+        { id: "NFR1", status: "Deferred", target: "nfr-requirements" },
+      ],
+    });
+    const out = run(proj, "user-stories", file);
+    expect(out.result.missing_from_table).toEqual([]);
+    expect(out.result.pass, out.result.reason).toBe(true);
+  });
+
+  test("without stories: domain-design and a story map keyed by sub-requirements pass", () => {
+    const proj = project();
+    write(proj, "inception/requirements-analysis/requirements.md", GROUPED);
+    const leaves = ["FR1.1", "FR1.2", "FR2.1"];
+    const domain = trace(proj, "inception/domain-design/traceability.json", {
+      stage: "domain-design",
+      upstream_ids: leaves,
+      coverage: leaves.map((id) => ({ id, status: "OK", target: "AuthService" })),
+    });
+    let out = run(proj, "domain-design", domain);
+    expect(out.result.missing_from_upstream_ids).toEqual([]);
+    expect(out.result.pass, out.result.reason).toBe(true);
+
+    seedUnits(proj);
+    write(proj, "inception/units-generation/unit-of-work-story-map.md", [
+      "# Story Map",
+      "",
+      "| Requirement | Unit ID | Directory |",
+      "|---|---|---|",
+      "| FR1.1 | U1 | u1-auth |",
+      "| FR1.2 | U1 | u1-auth |",
+      "| FR2.1 | U2 | u2-profile |",
+    ].join("\n"));
+    const units = trace(proj, "inception/units-generation/traceability.json", {
+      stage: "units-generation",
+      upstream_ids: leaves,
+      coverage: leaves.map((id) => ({ id, status: "OK", target: id === "FR2.1" ? "U2" : "U1" })),
+    });
+    out = run(proj, "units-generation", units);
+    expect(out.result.gaps).toEqual([]);
+    expect(out.result.missing_from_upstream_ids).toEqual([]);
+    expect(out.result.pass, out.result.reason).toBe(true);
+  });
+
+  test("zero-Unit code-generation: FR sub-requirements, and NFR1 through its NFR1.x, need no parent row", () => {
+    const proj = project();
+    write(proj, "inception/requirements-analysis/requirements.md", GROUPED);
+    write(proj, "construction/nfr-requirements/security-requirements.md", "# Security\n\n- NFR1.1 Hash passwords\n- NFR1.2 Lock out\n");
+    const source = join(proj, "src", "app.ts");
+    mkdirSync(join(source, ".."), { recursive: true });
+    writeFileSync(source, "export const app = true;\n");
+    const table = (ids: string[]) => trace(proj, "construction/code-generation/traceability.json", {
+      stage: "code-generation",
+      upstream_ids: ids,
+      coverage: ids.map((id) => ({ id, status: "OK", target: "src/app.ts" })),
+    });
+    let out = run(proj, "code-generation", table(["FR1.1", "FR1.2", "FR2.1", "NFR1.1", "NFR1.2"]));
+    expect(out.result.missing_from_upstream_ids).toEqual([]);
+    expect(out.result.pass, out.result.reason).toBe(true);
+
+    out = run(proj, "code-generation", table(["FR1.1", "FR1.2", "FR2.1", "NFR1.1"]));
+    expect(out.result.missing_from_upstream_ids).toEqual(["NFR1.2"]);
+  });
+});
+
+// #2210: which inception NFRs a Unit owes at NFR Requirements. When User Stories
+// did not run and the story map gives the Unit NFR rows, those are its NFRs (the
+// join Code Generation reads); otherwise it owes every NFR in requirements.md,
+// and one that does not apply is N/A with the reason as its target.
+describe("t281 nfr-requirements: the NFRs a Unit owes", () => {
+  function seedNfrUnits(proj: string, mapRows: string[], stories: boolean): void {
+    if (stories) seedUserStories(proj);
+    write(proj, "inception/requirements-analysis/requirements.md", [
+      "# Requirements",
+      "",
+      "## Functional",
+      "- FR1 Login",
+      "- FR2 Profile",
+      "",
+      "## Non-functional",
+      "- NFR1 Security",
+      "- NFR2 Latency",
+      "- NFR3 Availability",
+    ].join("\n"));
+    seedUnits(proj);
+    write(proj, "inception/units-generation/unit-of-work-story-map.md", [
+      "# Story Map",
+      "",
+      "| Item | Unit ID | Directory |",
+      "|---|---|---|",
+      ...mapRows,
+    ].join("\n"));
+  }
+
+  function nfrTable(proj: string, unit: string, rows: Array<{ id: string; status: string; target?: string }>): string {
+    return trace(proj, `construction/${unit}/nfr-requirements/traceability.json`, {
+      stage: "nfr-requirements",
+      unit,
+      upstream_ids: rows.map((row) => row.id),
+      coverage: rows,
+    });
+  }
+
+  const ok = (id: string) => ({ id, status: "OK", target: `${id}.1` });
+  const notApplicable = (id: string) => ({ id, status: "N/A", target: "no runtime in this Unit" });
+
+  test("User Stories skipped: a Unit owes the NFRs on its own story-map rows", () => {
+    const proj = project();
+    seedNfrUnits(proj, [
+      "| FR1 | U1 | u1-auth |",
+      "| FR2 | U2 | u2-profile |",
+      "| NFR1 | U1; U2 | u1-auth; u2-profile |",
+      "| NFR2 | U2 | u2-profile |",
+    ], false);
+    let out = run(proj, "nfr-requirements", nfrTable(proj, "u1-auth", [ok("NFR1")]));
+    expect(out.result.missing_from_upstream_ids).toEqual([]);
+    expect(out.result.pass, out.result.reason).toBe(true);
+
+    out = run(proj, "nfr-requirements", nfrTable(proj, "u2-profile", [ok("NFR1")]));
+    expect(out.result.missing_from_upstream_ids).toEqual(["NFR2"]);
+  });
+
+  test("a Unit no NFR row names, or a map with no NFR rows, owes every NFR", () => {
+    const proj = project();
+    seedNfrUnits(proj, ["| FR1 | U1 | u1-auth |", "| FR2 | U2 | u2-profile |", "| NFR2 | U2 | u2-profile |"], false);
+    let out = run(proj, "nfr-requirements", nfrTable(proj, "u1-auth", [ok("NFR1")]));
+    expect(out.result.missing_from_upstream_ids).toEqual(["NFR2", "NFR3"]);
+
+    seedNfrUnits(proj, ["| FR1 | U1 | u1-auth |", "| FR2 | U2 | u2-profile |"], false);
+    out = run(proj, "nfr-requirements", nfrTable(proj, "u2-profile", [ok("NFR2")]));
+    expect(out.result.missing_from_upstream_ids).toEqual(["NFR1", "NFR3"]);
+  });
+
+  test("with stories, a library Unit lists every NFR and marks the ones that do not apply N/A with a reason", () => {
+    const proj = project();
+    seedNfrUnits(proj, ["| US1.1 | U1 | u1-auth |", "| US1.2 | U2 | u2-profile |"], true);
+    let out = run(proj, "nfr-requirements", nfrTable(proj, "u2-profile", [ok("NFR1")]));
+    expect(out.result.missing_from_upstream_ids).toEqual(["NFR2", "NFR3"]);
+
+    out = run(proj, "nfr-requirements", nfrTable(proj, "u2-profile", [ok("NFR1"), notApplicable("NFR2"), notApplicable("NFR3")]));
+    expect(out.result.pass, out.result.reason).toBe(true);
+  });
+});
+
+// #2210: an upstream ID lives in `upstream_ids` and `coverage` (N/A there, with
+// the reason as its target); `reverse` holds only what the stage produced that
+// traces to nothing upstream. An upstream ID put in `reverse` is pointed back.
+describe("t281 where an N/A row goes", () => {
+  const POINTER = "reverse:NFR2.1: NFR2.1 is an upstream ID; list it in upstream_ids with a coverage row (N/A takes its reason as the target)";
+
+  test("an upstream ID in reverse is pointed at coverage; there, N/A with its reason passes", () => {
+    const proj = project();
+    write(proj, "construction/nfr-design/security-design.md", "# Security design\n\n- NFR1.1 KMS-backed storage\n- NFR2.1 Response cache\n");
+    let file = trace(proj, "construction/infrastructure-design/traceability.json", {
+      stage: "infrastructure-design",
+      upstream_ids: ["NFR1.1"],
+      coverage: [{ id: "NFR1.1", status: "OK", target: "KMS key" }],
+      reverse: [{ id: "NFR2.1", status: "N/A" }],
+    });
+    let out = run(proj, "infrastructure-design", file);
+    expect(out.result.invalid_entries).toEqual([POINTER]);
+    expect(out.result.missing_from_upstream_ids).toEqual(["NFR2.1"]);
+
+    file = trace(proj, "construction/infrastructure-design/traceability.json", {
+      stage: "infrastructure-design",
+      upstream_ids: ["NFR1.1", "NFR2.1"],
+      coverage: [
+        { id: "NFR1.1", status: "OK", target: "KMS key" },
+        { id: "NFR2.1", status: "N/A", target: "no cache tier in this deployment" },
+      ],
+    });
+    out = run(proj, "infrastructure-design", file);
+    expect(out.result.pass, out.result.reason).toBe(true);
+  });
+
+  test("a business rule that traces to nothing stays in reverse, N/A with its reason", () => {
+    const proj = project();
+    seedRequirements(proj);
+    write(proj, "construction/functional-design/rules.md", "# Rules\n\n- BR1.1 Validate credentials\n- BR1.2 Trim input\n");
+    const table = (reverse: Array<{ id: string; status: string; target?: string }>) =>
+      trace(proj, "construction/functional-design/traceability.json", {
+        stage: "functional-design",
+        upstream_ids: ["FR1", "FR2"],
+        coverage: [
+          { id: "FR1", status: "OK", target: "BR1.1" },
+          { id: "FR2", status: "Deferred", target: "code-generation" },
+        ],
+        reverse,
+      });
+    let out = run(proj, "functional-design", table([{ id: "BR1.2", status: "N/A", target: "technical validation rule" }]));
+    expect(out.result.pass, out.result.reason).toBe(true);
+
+    out = run(proj, "functional-design", table([{ id: "BR1.2", status: "N/A" }]));
+    expect(out.result.invalid_entries).toEqual(["reverse:BR1.2: status N/A requires a non-empty target"]);
+  });
+});
+
+// Build and Test's cross-Unit coverage: every requirement and criterion the run
+// traced, built or not. With stories, Code Generation traces criteria, not FRs,
+// so a requirement is built through the criteria of the stories User Stories
+// traced it to; a requirement with sub-requirements is built through them.
+describe("t281 Build and Test: every requirement and criterion is built", () => {
+  interface FinalRow {
+    id: string;
+    covered: boolean;
+    built_in?: string[];
+    through?: string[];
+    not_built?: string[];
+  }
+  interface FinalCoverage {
+    pass: boolean;
+    uncovered: string[];
+    reason?: string;
+    coverage: FinalRow[];
+  }
+
+  const GROUPED = [
+    "# Requirements",
+    "",
+    "## Functional",
+    "### FR1: Login",
+    "**FR1.1** Accept email and password",
+    "**FR1.2** Lock after five failures",
+    "### FR2: Recovery",
+    "**FR2.1** Send a reset link",
+    "",
+    "## Non-functional",
+    "- NFR1 Security",
+  ].join("\n");
+
+  function runFinal(proj: string): FinalCoverage {
+    const spawned = spawnSync("bun", [SCRIPT, "--stage", "build-and-test"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      cwd: proj,
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj },
+    });
+    expect(spawned.stderr ?? "").toBe("");
+    expect(spawned.status).toBe(0);
+    const stdout = spawned.stdout ?? "";
+    expect(stdout.trim().split(/\r?\n/)).toHaveLength(1);
+    return JSON.parse(stdout) as FinalCoverage;
+  }
+
+  function row(out: FinalCoverage, id: string): FinalRow | undefined {
+    return out.coverage.find((entry) => entry.id === id);
+  }
+
+  function source(proj: string, relative: string): void {
+    const path = join(proj, ...relative.split("/"));
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, "export {};\n");
+  }
+
+  // A feature-shaped record: User Stories, two Units, NFR Requirements per Unit.
+  function seedStoryPath(proj: string, recovery: { status: string; target: string }): { auth: string; profile: string } {
+    seedUserStories(proj);
+    seedUnits(proj);
+    write(proj, "inception/requirements-analysis/requirements.md", GROUPED);
+    trace(proj, "inception/user-stories/traceability.json", {
+      stage: "user-stories",
+      upstream_ids: ["FR1.1", "FR1.2", "FR2.1", "NFR1"],
+      coverage: [
+        { id: "FR1.1", status: "OK", target: "US1.1" },
+        { id: "FR1.2", status: "OK", target: "US1.1" },
+        { id: "FR2.1", status: "OK", target: "US1.2" },
+        { id: "NFR1", status: "Deferred", target: "nfr-requirements" },
+      ],
+    });
+    write(proj, "construction/u1-auth/nfr-requirements/security-requirements.md", "# Security\n\n- NFR1.1 Hash passwords\n");
+    write(proj, "construction/u2-profile/nfr-requirements/security-requirements.md", "# Security\n\n- NFR1.2 Sign reset links\n");
+    source(proj, "src/auth/login.ts");
+    source(proj, "src/profile/reset.ts");
+    const auth = trace(proj, "construction/u1-auth/code-generation/traceability.json", {
+      stage: "code-generation",
+      unit: "u1-auth",
+      upstream_ids: ["AC1.1.1", "AC1.1.2", "NFR1.1"],
+      coverage: [
+        { id: "AC1.1.1", status: "OK", target: "src/auth/login.ts" },
+        { id: "AC1.1.2", status: "OK", target: "src/auth/login.ts" },
+        { id: "NFR1.1", status: "OK", target: "src/auth/login.ts" },
+      ],
+    });
+    const profile = trace(proj, "construction/u2-profile/code-generation/traceability.json", {
+      stage: "code-generation",
+      unit: "u2-profile",
+      upstream_ids: ["AC1.2.1", "NFR1.2"],
+      coverage: [
+        { id: "AC1.2.1", ...recovery },
+        { id: "NFR1.2", status: "OK", target: "src/profile/reset.ts" },
+      ],
+    });
+    return { auth, profile };
+  }
+
+  test("with stories, a requirement is built through its stories' criteria, and NFR1 through its NFR1.x", () => {
+    const proj = project();
+    const tables = seedStoryPath(proj, { status: "OK", target: "src/profile/reset.ts" });
+    // Each Unit's table is the one its own check asks for: criteria and NFR1.x, no FR rows.
+    for (const table of [tables.auth, tables.profile]) {
+      const unit = run(proj, "code-generation", table);
+      expect(unit.result.pass, unit.result.reason).toBe(true);
+    }
+
+    const out = runFinal(proj);
+    expect(out.reason).toBeUndefined();
+    expect(out.uncovered).toEqual([]);
+    expect(out.pass).toBe(true);
+    expect(out.coverage.map((entry) => entry.id)).toEqual(["FR1.1", "FR1.2", "FR2.1", "NFR1", "AC1.1.1", "AC1.1.2", "AC1.2.1"]);
+    expect(row(out, "FR1.1")).toEqual({ id: "FR1.1", covered: true, through: ["AC1.1.1", "AC1.1.2"] });
+    expect(row(out, "FR2.1")).toEqual({ id: "FR2.1", covered: true, through: ["AC1.2.1"] });
+    expect(row(out, "NFR1")).toEqual({ id: "NFR1", covered: true, through: ["u1-auth: NFR1.1", "u2-profile: NFR1.2"] });
+    expect(row(out, "AC1.2.1")).toEqual({ id: "AC1.2.1", covered: true, built_in: ["u2-profile: src/profile/reset.ts"] });
+  });
+
+  test("with stories, a story left out of the build leaves its criteria and requirement unbuilt", () => {
+    const proj = project();
+    seedStoryPath(proj, { status: "Deferred", target: "skip the remaining stories" });
+    const out = runFinal(proj);
+    expect(out.pass).toBe(false);
+    expect(out.uncovered).toEqual(["FR2.1", "AC1.2.1"]);
+    expect(row(out, "FR2.1")).toEqual({ id: "FR2.1", covered: false, through: ["AC1.2.1"], not_built: ["AC1.2.1"] });
+    expect(row(out, "AC1.2.1")).toEqual({ id: "AC1.2.1", covered: false });
+    expect(row(out, "FR1.1")?.covered).toBe(true);
+  });
+
+  test("without stories (security-patch shape), FR leaves are built by their own rows and NFR1 through NFR1.1", () => {
+    const proj = project();
+    write(proj, "inception/requirements-analysis/requirements.md", GROUPED);
+    write(proj, "construction/nfr-requirements/security-requirements.md", "# Security\n\n- NFR1.1 Hash passwords\n");
+    source(proj, "src/app.ts");
+    const ids = ["FR1.1", "FR1.2", "FR2.1", "NFR1.1"];
+    const table = trace(proj, "construction/code-generation/traceability.json", {
+      stage: "code-generation",
+      upstream_ids: ids,
+      coverage: ids.map((id) => ({ id, status: "OK", target: "src/app.ts" })),
+    });
+    const unit = run(proj, "code-generation", table);
+    expect(unit.result.pass, unit.result.reason).toBe(true);
+
+    let out = runFinal(proj);
+    expect(out.reason).toBeUndefined();
+    expect(out.pass).toBe(true);
+    expect(out.coverage.map((entry) => entry.id)).toEqual(["FR1.1", "FR1.2", "FR2.1", "NFR1"]);
+    expect(row(out, "FR1.1")).toEqual({ id: "FR1.1", covered: true, built_in: ["code-generation: src/app.ts"] });
+    expect(row(out, "NFR1")).toEqual({ id: "NFR1", covered: true, through: ["code-generation: NFR1.1"] });
+
+    trace(proj, "construction/code-generation/traceability.json", {
+      stage: "code-generation",
+      upstream_ids: ids,
+      coverage: [
+        { id: "FR1.1", status: "OK", target: "src/app.ts" },
+        { id: "FR2.1", status: "OK", target: "src/missing.ts" },
+        { id: "NFR1.1", status: "GAP" },
+      ],
+    });
+    out = runFinal(proj);
+    expect(out.pass).toBe(false);
+    expect(out.uncovered).toEqual(["FR1.2", "FR2.1", "NFR1"]);
+    expect(row(out, "NFR1")).toEqual({ id: "NFR1", covered: false, through: ["code-generation: NFR1.1"], not_built: ["code-generation: NFR1.1"] });
+    expect(out.reason).toContain("FR2.1: target file does not exist: src/missing.ts");
+  });
+
+  test("a Unit owes the NFRx.y its NFR Requirements wrote, even when its table leaves one out or carries the parent row", () => {
+    const proj = project();
+    seedStoryPath(proj, { status: "OK", target: "src/profile/reset.ts" });
+    write(proj, "construction/u2-profile/nfr-requirements/security-requirements.md", "# Security\n\n- NFR1.2 Sign reset links\n- NFR1.3 Expire reset links\n");
+    let out = runFinal(proj);
+    expect(out.uncovered).toEqual(["NFR1"]);
+    expect(row(out, "NFR1")).toEqual({
+      id: "NFR1",
+      covered: false,
+      through: ["u1-auth: NFR1.1", "u2-profile: NFR1.2", "u2-profile: NFR1.3"],
+      not_built: ["u2-profile: NFR1.3"],
+    });
+
+    // The same ID in two Units is two requirements: one Unit's built NFR1.1
+    // does not stand in for another's.
+    write(proj, "construction/u2-profile/nfr-requirements/security-requirements.md", "# Security\n\n- NFR1.1 Rate-limit reset requests\n- NFR1.2 Sign reset links\n");
+    out = runFinal(proj);
+    expect(row(out, "NFR1")?.not_built).toEqual(["u2-profile: NFR1.1"]);
+
+    const direct = project();
+    write(direct, "inception/requirements-analysis/requirements.md", GROUPED);
+    write(direct, "construction/nfr-requirements/security-requirements.md", "# Security\n\n- NFR1.1 Hash passwords\n- NFR1.2 Lock out\n");
+    source(direct, "src/app.ts");
+    const ids = ["FR1.1", "FR1.2", "FR2.1", "NFR1", "NFR1.1"];
+    trace(direct, "construction/code-generation/traceability.json", {
+      stage: "code-generation",
+      upstream_ids: ids,
+      coverage: ids.map((id) => ({ id, status: "OK", target: "src/app.ts" })),
+    });
+    out = runFinal(direct);
+    expect(out.uncovered).toEqual(["NFR1"]);
+    expect(row(out, "NFR1")).toEqual({
+      id: "NFR1",
+      covered: false,
+      through: ["code-generation: NFR1.1", "code-generation: NFR1.2"],
+      not_built: ["code-generation: NFR1.2"],
+    });
+  });
+
+  test("a missing input is said, never read as built", () => {
+    const proj = project();
+    seedStoryPath(proj, { status: "OK", target: "src/profile/reset.ts" });
+    rmSync(join(seededRecordDir(proj), "inception", "user-stories", "traceability.json"));
+    const out = runFinal(proj);
+    expect(out.pass).toBe(false);
+    expect(out.reason).toContain("required upstream artifact is missing");
+    expect(out.uncovered).toEqual(["FR1.1", "FR1.2", "FR2.1"]);
+  });
+
+  test("Build and Test's coverage gate runs this check instead of listing the IDs itself", () => {
+    const stage = readFileSync(join(STAGES, "construction", "build-and-test.md"), "utf-8");
+    expect(stage).toContain("{{INVOKE}} engine sensor-traceability --stage build-and-test");
+    expect(stage).not.toContain("every `FR` and `NFR` from");
+  });
+});

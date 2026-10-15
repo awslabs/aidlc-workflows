@@ -19,11 +19,11 @@
 // Source under test:
 //   dist/claude/.claude/tools/data/scope-grid.json — poc.stages map
 //       (transpose of per-stage `scopes:` frontmatter; runtime source of truth
-//        after milestone 12 retired scope-mapping.json — helpers.sh:46-48)
-//   dist/claude/.claude/tools/aidlc-bolt.ts:660 handleDispatchEvent
+//        after milestone 12 retired scope-mapping.json - helpers.sh)
+//   dist/claude/.claude/tools/aidlc-bolt.ts handleDispatchEvent
 //       — MERGE_DISPATCH_INVOKED requires --practices-excerpt; emits
 //         emitAudit(pd, "MERGE_DISPATCH_INVOKED", {"Bolt slug": slug, ...})
-//   dist/claude/.claude/tools/aidlc-state.ts:1048 handlePracticesEvent
+//   dist/claude/.claude/tools/aidlc-state.ts handlePracticesEvent
 //       - --type empty -> emitAudit(pd, "PRACTICES_SECTION_EMPTY", fields)
 //   dist/claude/.claude/tools/aidlc-utility.ts handleIntentCreateStateBuild
 //       - the state template emits "- **Worktree Path**:" + "- **Bolt Refs**:",

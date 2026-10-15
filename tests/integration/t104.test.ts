@@ -13,17 +13,17 @@
 // orchestrator-LLM's at observation time — doctor never blocks on it.
 //
 // SPAWN (not in-process): the handler is `handleDoctor(projectDir)` which
-// terminates with `process.exit(failed > 0 ? 1 : 0)` (aidlc-utility.ts:1385)
-// and writes its report via `process.stdout.write` (:1373). The rule-drift row
+// terminates with `process.exit(failed > 0 ? 1 : 0)` (aidlc-utility.ts)
+// and writes its report via `process.stdout.write`. The rule-drift row
 // is only observable on that stdout, and the AIDLC_RULES_DIR / AIDLC_STAGE_GRAPH
-// fixture-isolation seams (aidlc-graph.ts:160-162) are evaluated inside the
+// fixture-isolation seams (aidlc-graph.ts) are evaluated inside the
 // subprocess. An in-process twin would lose the env-seam isolation and the
 // process.exit shell the .sh's `|| true` is written around. spawnCount = all.
 //
 // EXIT-CODE NOTE: the .sh runs `bun "$UTIL" doctor ... 2>&1 || true` — it
 // SWALLOWS the exit code, because a bare temp project fails the hook/settings
-// checks (doctor exits 1 on any failure, :1385). The rule-drift row is an
-// always-`pass:true` advisory (:1239,:1268,:1276) regardless. So like the .sh
+// checks (doctor exits 1 on any failure). The rule-drift row is an
+// always-`pass:true` advisory regardless. So like the .sh
 // we assert on stdout content, not on res.status — the row renders identically
 // at exit 1. (We DO capture status to mirror the `|| true` semantics.)
 //
@@ -53,7 +53,7 @@
 //       stdout.
 //   - .sh case 3  DRIFT_LINE prefixed `^✓` (advisory pass)  -> test 3: the
 //       grepped `Rule drift:` line starts with `✓ ` (✓ + two spaces, the
-//       tool's pass prefix at :1361), proving it did NOT push `failed`.
+//       tool's pass prefix), proving it did NOT push `failed`.
 //   - .sh case 4  N=0 fixture -> "Rule drift: no team/project rule overlaps
 //       org policy" AND `^✓`  -> test 4: both, on the same grepped line.
 //   - .sh case 5  org-absent fixture -> "Rule drift: org rules absent

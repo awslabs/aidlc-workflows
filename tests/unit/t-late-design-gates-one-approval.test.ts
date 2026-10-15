@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, audit:GATE_APPROVED, audit:STAGE_AWAITING_APPROVAL, function:approvesTogetherStages, function:approvedTogetherCover
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, audit:GATE_APPROVED, audit:STAGE_AWAITING_APPROVAL, function:approvesTogetherStages, function:approvedTogetherCover, function:planChangeDirective, function:openGateApprovesTogether
 //
 // CLI-contract test: when Construction runs one Unit at a time (unit-major) and
 // Unit checkpoints are off, the per-Unit stages' approvals that come due after
@@ -17,19 +17,22 @@
 //   3. one person turn and one approval approve every listed stage;
 //   4. a change request approves nothing;
 //   5. a stage that cannot be approved yet stops there; fixed, it needs no new ask;
+//  5b. on Kiro IDE that stage opens its gate as the step says, its approval report runs, and the approval covers it;
 //   6. checkpoints on, stage-major, and a lone remaining stage keep today's flow;
 //   7. no shipped prose still describes the late per-stage cascade;
 //   8. a reply another question used, or a question put since, approves nothing;
 //   9. autonomous Construction and team-owned Units keep one turn, one gate;
-//  10. the learnings question surfaces each listed stage; any other stage is still refused.
+//  10. the learnings question surfaces each listed stage; any other stage is still refused;
+//  11. "skip Functional Design and approve the rest": the skip step names the approval of the
+//      rest, which approves them together; a skip alone leaves them to their question.
 //
 // SOURCE UNDER TEST (dist/claude/.claude/tools/): aidlc-orchestrate.ts next and
 // report, aidlc-state.ts gate-start and approve, through the spawned engine.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, relative } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -65,6 +68,7 @@ resetAidlcEnv();
 
 const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const KIRO_IDE_TREE = join(REPO_ROOT, "dist", "kiro-ide", ".kiro");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const LEARNINGS = join(AIDLC_SRC, "tools", "aidlc-learnings.ts");
 const RUNTIME = join(AIDLC_SRC, "tools", "aidlc-runtime.ts");
@@ -345,6 +349,39 @@ function currentStage(proj: string): string | undefined {
   return /\*\*Current Stage\*\*:\s*(\S+)/.exec(readFileSync(seededStateFile(proj), "utf-8"))?.[1];
 }
 
+const SESSION = "01995000-7a11-7000-8000-00000000c0de";
+
+function chatEnv(proj: string): NodeJS.ProcessEnv {
+  return { ...engineEnv(), CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_SESSION_OVERRIDE: SESSION };
+}
+
+// What the person types at the question, through the human-turn hook every harness uses.
+function says(proj: string, prompt: string): void {
+  const res = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+    cwd: proj,
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt }),
+    env: { ...chatEnv(proj), AIDLC_UNATTENDED: "0" },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  if ((res.status ?? -1) !== 0) throw new Error(`human-turn hook failed: ${res.stdout ?? ""}${res.stderr ?? ""}`);
+}
+
+// The agent runs a command the engine's step names, as it names it.
+function runNamed(proj: string, command: string): Directive {
+  const words = [...command.matchAll(/'([^']*)'|(\S+)/g)].map((m) => m[1] ?? m[2]);
+  expect(words.slice(0, 2)).toEqual(["bun", words[1]]);
+  const tool = join(AIDLC_SRC, "tools", String(words[1]).replace(/^\.claude\/tools\//, ""));
+  const r = spawnSync(BUN, [tool, ...words.slice(2), "--project-dir", proj], {
+    cwd: proj,
+    env: chatEnv(proj),
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(r.status, `${command}\n${r.stdout}${r.stderr}`).toBe(0);
+  return JSON.parse((r.stdout ?? "").split("\n").find((line) => line.trim().startsWith("{")) ?? "{}") as Directive;
+}
+
 function openFirstGate(proj: string): { gate: Directive; opened: Directive } {
   const gate = runNext(proj);
   const opened = runReport(proj, ["--stage", "functional-design", "--result", "awaiting-approval"]);
@@ -426,6 +463,33 @@ describe("t-late-design-gates-one-approval: one question for the late stage appr
     expect(fixed.kind).toBe("done");
     expect(rows(proj, "GATE_APPROVED").map((r) => r.stage)).toEqual(BLOCK);
     expect(currentStage(proj)).toBe("build-and-test");
+  });
+
+  test("5b: on Kiro IDE the stage fixed after the stop opens its gate, and the one approval given covers it", () => {
+    const proj = seedBuiltProject({ checkpoints: "disabled" }, [["nfr-design", "beta"]]);
+    openFirstGate(proj);
+    personReplies(proj);
+    runReport(proj, ["--stage", "functional-design", "--result", "approved", "--user-input", "Approve"]);
+    expect(currentStage(proj)).toBe("nfr-design");
+    // The agent finishes the review and runs the report the not-ready step names.
+    logReviewReady(proj, "nfr-design", "beta");
+    runReport(proj, ["--stage", "nfr-design", "--result", "awaiting-approval"]);
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toMatch(/^- \[\?\] nfr-design /m);
+    // Its approval report goes through Kiro IDE's tool-call card first.
+    cpSync(KIRO_IDE_TREE, join(proj, ".kiro"), { recursive: true });
+    const approval = "bun .kiro/tools/aidlc.ts engine orchestrate report --stage nfr-design --result approved --user-input Approve";
+    const card = spawnSync(BUN, [join(proj, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), "guard-tool-call"], {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: proj, tool_name: "execute_pwsh", tool_input: { command: approval } }),
+      env: { ...engineEnv(), AIDLC_COMPILED_EXECUTABLE: "", CLAUDE_PROJECT_DIR: proj },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(card.status, card.stderr).toBe(0);
+    expect(card.stderr).toBe("");
+    const fixed = runReport(proj, ["--stage", "nfr-design", "--result", "approved", "--user-input", "Approve"]);
+    expect(fixed.kind, JSON.stringify(fixed)).toBe("done");
+    expect(rows(proj, "GATE_APPROVED").map((r) => r.stage)).toEqual(BLOCK);
   });
 
   test("8: a reply used by another question, or a question put since, approves nothing from the list", () => {
@@ -517,6 +581,101 @@ describe("t-late-design-gates-one-approval: one question for the late stage appr
       expect(refused.status).not.toBe(0);
       expect(refused.stderr).toContain("slug mismatch");
     }
+  });
+
+  // "skip Functional Design and approve the rest" at the one question: the
+  // skip was carried out and the approval dropped, so the other stages were
+  // asked about again.
+  for (const [said, skipped, rest] of [
+    ["skip Functional Design and approve the rest", ["functional-design"], BLOCK.slice(1)],
+    ["skip Functional Design and NFR Requirements, approve the rest", ["functional-design", "nfr-requirements"], BLOCK.slice(2)],
+  ] as const) {
+    test(`11: "${said}" skips ${skipped.length === 1 ? "it" : "them"} and approves the rest together`, () => {
+      const proj = seedBuiltProject({ checkpoints: "disabled" });
+      openFirstGate(proj);
+      says(proj, said);
+      const step = runOrchestrateNext(ORCH, proj, ["--skip", skipped.join(",")], { env: chatEnv(proj) }).directive as Directive;
+      const message = String(step.message);
+      const named = [...message.matchAll(/`(bun [^`]+)`/g)].map((m) => m[1]).filter((c) => !c.includes("--single"));
+      const approve = named.find((c) => c.includes("--result approved"));
+      expect(approve, message).toBe(`bun .claude/tools/aidlc-orchestrate.ts report --stage ${rest[0]} --result approved --user-input Approve`);
+      // The agent read their message as also approving the rest: every named command, in order.
+      for (const command of named.filter((c) => !c.includes("--add"))) runNamed(proj, command);
+      expect(rows(proj, "GATE_APPROVED").map((r) => r.stage)).toEqual([...rest]);
+      expect(rows(proj, "STAGE_SKIPPED").map((r) => r.stage)).toContain("functional-design");
+      expect(currentStage(proj)).toBe("build-and-test");
+    });
+  }
+
+  test("11b: \"skip Functional Design\" alone leaves the rest to their question", () => {
+    const proj = seedBuiltProject({ checkpoints: "disabled" });
+    openFirstGate(proj);
+    says(proj, "skip Functional Design");
+    const step = runOrchestrateNext(ORCH, proj, ["--skip", "functional-design"], { env: chatEnv(proj) }).directive as Directive;
+    const skip = /`(bun [^`]+--result skipped[^`]*)`/.exec(String(step.message))?.[1];
+    runNamed(proj, String(skip));
+    expect(rows(proj, "GATE_APPROVED").length).toBe(0);
+    const again = runOrchestrateNext(ORCH, proj, [], { env: chatEnv(proj) }).directive as Directive;
+    expect(again.approve_together?.stages?.map((st) => st.slug)).toEqual(BLOCK.slice(1));
+  });
+
+  // A change the person asks for at an open gate under Guard Policy off is made
+  // directly; before the gate is shown again, `next` hands the gate's report,
+  // which says the change (t-gate-shown-again). Here the gate is a per-Unit
+  // stage's.
+  function guardPolicyOff(proj: string): void {
+    const path = seededStateFile(proj);
+    writeFileSync(path, readFileSync(path, "utf-8")
+      .replace("- **Revision Count**: 0\n", "- **Revision Count**: 0\n- **Guard Policy**: off (set by you)\n"));
+  }
+  function askedChange(proj: string, stage: string, unit: string): void {
+    const doc = join(seededRecordDir(proj), "construction", unit, stage, artifactFilename(REVIEW_ARTIFACTS[stage]));
+    appendFileSync(doc, "\nA change the person asked for.\n");
+    appendAuditEntry("ARTIFACT_UPDATED", { File: relative(proj, doc).replaceAll("\\", "/"), Stage: stage, Unit: unit }, proj);
+  }
+  function nextAfterChange(proj: string): Directive {
+    const r = runOrchestrateNext(ORCH, proj, [], { env: { ...engineEnv(), AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" } });
+    if (r.directive === null) throw new Error(`next did not emit parseable JSON. status=${r.status}\n${r.stdout}\n${r.stderr}`);
+    return r.directive as Directive;
+  }
+
+  test("12: an asked change at the joint late gate: the gate is shown again as the same one question", () => {
+    const proj = seedBuiltProject({ checkpoints: "disabled" });
+    guardPolicyOff(proj);
+    runReport(proj, ["--stage", "functional-design", "--result", "awaiting-approval"]);
+    askedChange(proj, "functional-design", "alpha");
+    const again = nextAfterChange(proj);
+    expect(again).toMatchObject({ kind: "run-stage", stage: "functional-design", gate_only: true });
+    expect(again.approve_together?.stages?.map((s) => s.slug)).toEqual(BLOCK);
+    expect(again.approve_together?.prompt).toBe(ONE_QUESTION);
+  });
+
+  test("12b: an asked change at a lone per-Unit gate: the report comes first, with what the stage produced", () => {
+    const proj = seedBuiltProject({
+      checkpoints: "disabled",
+      current: "code-generation",
+      checkboxes: `- [x] functional-design ${SEP} EXECUTE
+- [x] nfr-requirements ${SEP} EXECUTE
+- [x] nfr-design ${SEP} EXECUTE
+- [x] infrastructure-design ${SEP} EXECUTE
+- [-] code-generation ${SEP} EXECUTE
+- [ ] build-and-test ${SEP} EXECUTE`,
+    });
+    guardPolicyOff(proj);
+    runReport(proj, ["--stage", "code-generation", "--result", "awaiting-approval"]);
+    askedChange(proj, "code-generation", "alpha");
+    const owed = nextAfterChange(proj);
+    expect(owed.kind).toBe("print");
+    expect(String(owed.message)).toContain("report --stage code-generation --result awaiting-approval`");
+    // A Unit is not reported on its own in a solo walk: the report names none.
+    expect(String(owed.message)).not.toContain("--unit");
+    expect(String(owed.narration)).toMatch(
+      /^Code Generation is ready for your review\. It produced .*, in aidlc\/.*\/construction\/beta\/code-generation\/\.$/,
+    );
+    const reported = runReport(proj, ["--stage", "code-generation", "--result", "awaiting-approval"]);
+    expect(reported.message).toBe('Stage "code-generation" is already awaiting approval; gate evidence revalidated.');
+    expect(JSON.stringify(reported.change_notices ?? [])).toContain("construction/alpha/code-generation/code-generation-plan.md changed after");
+    expect(nextAfterChange(proj)).toMatchObject({ kind: "run-stage", stage: "code-generation", gate_only: true });
   });
 
   test("7: no shipped prose still describes the late per-stage cascade", () => {

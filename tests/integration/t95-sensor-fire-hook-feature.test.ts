@@ -10,10 +10,10 @@
 // by piping PostToolUse JSON on stdin with CLAUDE_PROJECT_DIR set, exactly as
 // settings.json wires it. The hook's whole contract is process-boundary
 // side-effects: it spawns `bun <proj>/.claude/tools/aidlc-sensor.ts fire <id>
-// --stage <slug> --output-path <path>` per matching sensor (hook :195-222),
+// --stage <slug> --output-path <path>` per matching sensor (hook),
 // records hook-level drops via recordHookDrop to
-// aidlc-docs/.aidlc-engine/hooks-health/sensor-fire.drops (hook :238-257, lib.ts:1554),
-// and touches the heartbeat sensor-fire.last (hook :134-139). (The
+// aidlc-docs/.aidlc-engine/hooks-health/sensor-fire.drops (hook, lib.ts),
+// and touches the heartbeat sensor-fire.last (hook). (The
 // sensor-fire.skipped accounting under the old test-run mode was removed per
 // #369.) None of that is
 // observable in-process, so every row SPAWNS the real hook via the bun runtime
@@ -21,25 +21,25 @@
 // subprocess leaves behind. spawnCount = all.
 //
 // SOURCE UNDER TEST (dist/claude/.claude/hooks/aidlc-run-sensors.ts):
-//   :43-44 SUBPROCESS_TIMEOUT_MS = Number(env.AIDLC_SENSOR_TIMEOUT_MS) || 90_000
+//   SUBPROCESS_TIMEOUT_MS = Number(env.AIDLC_SENSOR_TIMEOUT_MS) || 90_000
 //          — the env-var seam the timeout case overrides (no source patch).
 //   (The old test-run-mode skip that appended to sensor-fire.skipped was removed
 //          per #369.)
-//   :134-139 heartbeat — writes isoTimestamp() to sensor-fire.last every fire.
-//   :184-185 empty sensors_applicable -> exit 0 (no spawn).
-//   :196-222 per-entry dispatch — `if (!entry.matches) continue` then
+//   heartbeat - writes isoTimestamp() to sensor-fire.last every fire.
+//   empty sensors_applicable -> exit 0 (no spawn).
+//   per-entry dispatch - `if (!entry.matches) continue` then
 //          new Bun.Glob(entry.matches).match(filePath); spawn argv is
 //          ["fire", entry.id, "--stage", currentStage, "--output-path", filePath].
-//   :235-257 timeout (SIGTERM/ETIMEDOUT) -> recordHookDrop "...subprocess killed
+//   timeout (SIGTERM/ETIMEDOUT) -> recordHookDrop "...subprocess killed
 //          by SIGTERM (timeout)"; non-zero exit -> recordHookDrop "...dispatcher
-//          exit <n>...". Always exit 0 (G5 advisory, :269).
-//   loadGraph() honours AIDLC_STAGE_GRAPH (aidlc-graph.ts:160-162) — the seam
+//          exit <n>...". Always exit 0 (G5 advisory).
+//   loadGraph() honours AIDLC_STAGE_GRAPH (aidlc-graph.ts) - the seam
 //   the synthetic-graph cases inject through.
 //
-// FIXTURE DISCIPLINE (mirrors make_project / make_project_active, t95:90-110):
+// FIXTURE DISCIPLINE (mirrors make_project / make_project_active, t95):
 // a fresh temp project with aidlc-docs/, .claude/tools/, .claude/hooks/, and a
 // per-test MOCK aidlc-sensor.ts at <proj>/.claude/tools/aidlc-sensor.ts (the
-// exact path the hook joins at :195) that records its argv to T95_SPAWN_LOG and
+// exact path the hook joins) that records its argv to T95_SPAWN_LOG and
 // exits per T95_STUB_MODE (pass | fail-exit-1 | slow). Synthetic stage-graph
 // fixtures are written to temp files and injected via AIDLC_STAGE_GRAPH. All
 // temp dirs cleaned in afterAll; nothing under tests/fixtures/**.

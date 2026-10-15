@@ -17,6 +17,7 @@ import { AgentStandIn, PersonScript, type RunResult, ScopeHost } from "../harnes
 import {
   GATE,
   installedAidlc,
+  launcherFor,
   NEXT_STAGE,
   outsideMarkedParts,
   personChanges,
@@ -126,6 +127,13 @@ describe("the stand-in on a project a release set up", () => {
     writeFileSync(join(machine, "active-executable"), `${join(machine, "versions", "2.11.0", "aidlc.exe")}\r\n`);
     expect(installedAidlc(machine, false)).toEqual([join(machine, "bin", "aidlc")]);
     expect(installedAidlc(machine, true)).toEqual([join(machine, "versions", "2.11.0", "aidlc.exe")]);
+  });
+
+  test("a copied project has no aidlc: its agent runs the project's own `bun <dir>/tools/...`", () => {
+    const machine = folder();
+    writeFileSync(join(machine, "active-executable"), `${join(machine, "versions", "2.11.0", "aidlc.exe")}\n`);
+    expect(launcherFor("copy")).toBeNull();
+    expect(launcherFor(machine)).toEqual(installedAidlc(machine));
   });
 });
 

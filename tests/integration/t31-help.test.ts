@@ -8,15 +8,15 @@
 // WHY A SPAWN (not an import of renderHelpText): the contract under test is
 // the `help` SUBCOMMAND — `bun aidlc-utility.ts help` — including its exit
 // code and that it writes the compiled text to STDOUT (handleHelp ->
-// process.stdout.write, aidlc-utility.ts:165-167). The covers id is
+// process.stdout.write, aidlc-utility.ts). The covers id is
 // subcommand:aidlc-utility:help, so the subprocess dispatch arm
-// (aidlc-utility.ts:2815 `case "help"`) is the seam being credited. An
+// (aidlc-utility.ts `case "help"`) is the seam being credited. An
 // in-process renderHelpText() twin would lose the exit-0 + stdout-routing half
 // the subcommand contract owns.
 //
 // CONTRACT CONFIRMED: help text is no longer a static constant — renderHelpText()
-// (aidlc-utility.ts:143-163) compiles the scope block live from
-// loadScopeMapping() (aidlc-lib.ts:739) over validScopes() (aidlc-lib.ts:783),
+// (aidlc-utility.ts) compiles the scope block live from
+// loadScopeMapping() (aidlc-lib.ts) over validScopes() (aidlc-lib.ts),
 // so stage counts ("All 33 stages" / "9 of 33 stages") are derived from the
 // shipped scope-grid EXECUTE/Total tallies, not hardcoded. This guards stale
 // counts.
@@ -29,36 +29,13 @@
 // files the tool wrote and therefore need the temp-project + portable-path
 // helpers.)
 //
-// PARITY MAP as first ported (each .sh `assert_contains` -> one expect() here,
-// same observable substring; the .sh is retired, the test names have since
-// been reworded, and --init / --force are now asserted ABSENT instead):
-//   .sh:28  "enterprise"        -> "lists enterprise scope"
-//   .sh:29  "feature"           -> "lists feature scope"
-//   .sh:30  "mvp"               -> "lists mvp scope"
-//   .sh:31  "poc"               -> "lists poc scope"
-//   .sh:32  "bugfix"            -> "lists bugfix scope"
-//   .sh:33  "refactor"          -> "lists refactor scope"
-//   .sh:34  "infra"             -> "lists infra scope"
-//   .sh:35  "security-patch"    -> "lists security-patch scope"
-//   .sh:38  "--status"          -> "lists --status utility"
-//   .sh:39  "--init"            -> "lists --init utility"
-//   .sh:40  "--doctor"          -> "lists --doctor utility"
-//   .sh:41  "--help"            -> "lists --help utility"
-//   .sh:47  "All 33 stages"     -> "enterprise/feature shows 'All 33 stages'"
-//   .sh:48  "9 of 33 stages"    -> "bugfix shows compiled '9 of 33 stages'"
-//   .sh:49  "(default)"         -> "classic row shows '(default)' marker"
-//   .sh:52  "--force"           -> "lists --force flag"
-//   .sh:55  "--stage"           -> "lists --stage utility"
-//   .sh:56  "--phase"           -> "lists --phase utility"
-//   .sh:57  "--scope"           -> "lists --scope utility"
-//
 // Additional contracts:
 //   S1: res.status === 0 - we pin a clean exit on the subcommand dispatch.
 //   S2: All shipped scope names appear.
 //   S3: Workshop retains its Minimal testStrategy override; the help renderer
 //       appends ", <ts> test strategy" when def.testStrategy is set.
 //   S4: "--test-strategy" + "--version" utility flags present — documented in
-//       HELP_TEXT_TAIL (aidlc-utility.ts:123-124) but unasserted by the .sh.
+//       HELP_TEXT_TAIL (aidlc-utility.ts) but unasserted by the .sh.
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";

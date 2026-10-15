@@ -52,7 +52,6 @@ export async function run(input: string): Promise<number> {
 async function compact(input: string, projectDir: string): Promise<number> {
 const stateFile = stateFilePath(projectDir);
 
-// Write health heartbeat
 const healthDir = hooksHealthDir(projectDir);
 writeHookStatusFile(healthDir, "validate-state.last", isoTimestamp());
 
@@ -69,7 +68,6 @@ try {
   // Missing/malformed or foreign compaction is coordination-neutral.
 }
 
-// Validate state file has required sections
 const missing: string[] = [];
 if (!content.includes("## Stage Progress")) missing.push("Stage Progress");
 if (!content.includes("## Current Status")) missing.push("Current Status");
@@ -97,7 +95,6 @@ try {
   // Best-effort: the heartbeat above and the audit row below still tell the story.
 }
 
-// Emit SESSION_COMPACTED if an audit file exists for this workflow.
 const auditFile = auditFilePath(projectDir);
 if (existsSync(auditFile)) {
   try {

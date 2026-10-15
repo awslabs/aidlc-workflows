@@ -2,7 +2,9 @@
 // notes. Preview publication does not wait for a passing suite, so the run
 // summary and the published notes carry the failing jobs and test cases instead.
 // Nor does it wait for the update from the last release: a failure there opens
-// the notes with a warning and a line in the report.
+// the notes with a warning and a line in the report. The answers corpus's
+// nightly run, which only reports its misses, ends the report on every night
+// and stays out of the published notes.
 import fs from "node:fs";
 import { basename, join } from "node:path";
 import { unmetLegs } from "./ci-full-suite-result.ts";
@@ -41,6 +43,21 @@ export interface FailedJob {
   name: string;
   url: string;
 }
+/** The answers corpus's summary of one harness's run (tests/harness/live-corpus.ts liveSummary). */
+export interface AnswersSummary {
+  harness: string;
+  stamp: string;
+  sample: string;
+  reportOnly: boolean;
+  items: number;
+  passed: number;
+  misses: { setup: number; record: number; question: number; words: number };
+  missed: { id: string; group: string; kinds: string[] }[];
+}
+export const ANSWERS_HEADING = "### Answers corpus";
+const ANSWERS_DIR = "aidlc-answers-live";
+const SUMMARY_FILE = new RegExp(`(?:^|/)${ANSWERS_DIR}/SUMMARY-[^/]+\\.json$`);
+const MAX_MISSED = 30;
 
 function isDirectory(path: string): boolean {
   try {
@@ -109,6 +126,64 @@ export function collectFailures(evidenceDir: string): RunFailures[] {
     });
 }
 
+function answersSummary(value: unknown): AnswersSummary | undefined {
+  const s = value as Partial<AnswersSummary> | null;
+  const count = (n: unknown) => typeof n === "number" && Number.isSafeInteger(n) && n >= 0;
+  if (!s || typeof s !== "object" || typeof s.harness !== "string" || typeof s.stamp !== "string" || typeof s.sample !== "string" ||
+    !count(s.items) || !count(s.passed) || !s.misses || !count(s.misses.setup) || !count(s.misses.record) || !count(s.misses.question) ||
+    !count(s.misses.words) || !Array.isArray(s.missed)) return undefined;
+  const missed = s.missed.filter((m) => typeof m?.id === "string" && typeof m.group === "string" && Array.isArray(m.kinds))
+    .map((m) => ({ id: m.id, group: m.group, kinds: m.kinds.filter((k): k is string => typeof k === "string") }));
+  return { harness: s.harness, stamp: s.stamp, sample: s.sample, reportOnly: s.reportOnly === true, items: s.items!, passed: s.passed!,
+    misses: { setup: s.misses.setup, record: s.misses.record, question: s.misses.question, words: s.misses.words }, missed };
+}
+
+/** The answers corpus's summaries in the live jobs' artifacts: per harness, the last run's (a retried file's last attempt). */
+export function collectAnswers(evidenceDir: string): AnswersSummary[] {
+  if (!isDirectory(evidenceDir)) return [];
+  const latest = new Map<string, AnswersSummary>();
+  for (const artifact of fs.readdirSync(evidenceDir).sort()) {
+    if (!artifact.startsWith("full-suite-live-") || !isDirectory(join(evidenceDir, artifact))) continue;
+    const files = (fs.readdirSync(join(evidenceDir, artifact), { recursive: true }) as string[])
+      .map((path) => path.replaceAll("\\", "/"))
+      .filter((path) => SUMMARY_FILE.test(path));
+    for (const path of files) {
+      const summary = answersSummary(readJson(join(evidenceDir, artifact, path)));
+      if (!summary) continue;
+      const seen = latest.get(summary.harness);
+      if (!seen || seen.stamp < summary.stamp) latest.set(summary.harness, summary);
+    }
+  }
+  return [...latest.values()].sort((a, b) => a.harness.localeCompare(b.harness, "en"));
+}
+
+const HARNESS_NAMES: Record<string, string> = { claude: "Claude Code", codex: "Codex", kiro: "Kiro CLI" };
+
+/** What the answers corpus found tonight, one line per harness and each miss by item, so it can be driven again. */
+export function answersSection(summaries: readonly AnswersSummary[]): string {
+  const lines = [ANSWERS_HEADING, ""];
+  if (summaries.length === 0) {
+    lines.push("No answers corpus summary was in the downloaded evidence.");
+    return `${lines.join("\n")}\n`;
+  }
+  for (const s of summaries) {
+    const name = HARNESS_NAMES[s.harness] ?? s.harness;
+    lines.push(`${label(name)}: ${s.passed} of ${s.items} replies passed; misses: setup ${s.misses.setup}, record ${s.misses.record}, question ${s.misses.question}, words ${s.misses.words}. ${label(s.sample)}` +
+      (s.reportOnly ? " Report-only: these misses do not fail the suite." : ""), "");
+    for (const m of s.missed.slice(0, MAX_MISSED)) lines.push(`- ${code(m.id)} (${label(m.group)}): ${m.kinds.map(label).join(", ")}`);
+    if (s.missed.length > MAX_MISSED) lines.push(`- ...and ${s.missed.length - MAX_MISSED} more`);
+    if (s.missed.length > 0) lines.push("");
+  }
+  if (summaries.some((s) => s.misses.setup > 0)) {
+    lines.push("A setup miss is the check's own: the agent never showed the question, or the drive could not account for a decision.");
+  }
+  if (summaries.some((s) => s.missed.length > 0)) {
+    lines.push(`Drive a miss again with ${code("AIDLC_ANSWERS_LIVE=1 AIDLC_ANSWERS_HARNESSES=<tool> AIDLC_ANSWERS_SAMPLE=<id>")}.`);
+  }
+  lines.push(`The report and transcripts are in the ${code("full-suite-live-*")} artifact, under ${code(ANSWERS_DIR)}.`);
+  return `${lines.join("\n")}\n`;
+}
+
 export function failedJobs(pages: unknown): FailedJob[] {
   if (!Array.isArray(pages)) return [];
   return pages.flatMap((page) => Array.isArray(page?.jobs) ? page.jobs : [])
@@ -158,13 +233,16 @@ export function renderReport(options: {
   omittedLegs?: readonly string[];
   runs: RunFailures[];
   jobs: FailedJob[] | undefined;
+  /** The answers corpus's summaries; the section is left out when absent. */
+  answers?: readonly AnswersSummary[];
 }): string {
   const source = code(options.sourceSha.slice(0, 12));
   const run = link(`run ${options.runId}`, options.runUrl);
   const lines = ["## Nightly test report", ""];
+  const answers = options.answers === undefined ? "" : `\n${answersSection(options.answers)}`;
   if (options.fullSuiteResult === "success") {
     lines.push(`Full Suite **passed** for ${source} in ${run}.`);
-    return `${lines.join("\n")}\n`;
+    return `${lines.join("\n")}\n${answers}`;
   }
   lines.push(`Full Suite **failed** for ${source} in ${run}. The preview build does not wait for these tests.`, "");
   const legs = unmetLegs(options.legs ?? {}, options.omittedLegs ?? []);
@@ -220,15 +298,15 @@ export function renderReport(options: {
   lines.push("", `Full logs are in the ${run} ${code("full-suite-*")} artifacts.`);
 
   let report = `${lines.join("\n")}\n`;
-  if (report.length > MAX_REPORT) {
+  if (report.length + answers.length > MAX_REPORT) {
     const note = `\n- ...report truncated; see ${run}.\n`;
-    report = `${report.slice(0, report.lastIndexOf("\n", MAX_REPORT - note.length))}${note}`;
+    report = `${report.slice(0, report.lastIndexOf("\n", MAX_REPORT - answers.length - note.length))}${note}`;
   }
-  return report;
+  return `${report}${answers}`;
 }
 
 export function updateReport(runUrl: string): string {
-  return `## Update from the last release\n\n\`aidlc update\` from the last release to this preview **failed** in ${link("the preview run", runUrl)}.\n`;
+  return `## Update from the last release\n\nUpdating from the last release to this preview **failed** in ${link("the preview run", runUrl)}.\n`;
 }
 
 // The published copy keeps every planned line and the source footer. The report,
@@ -242,9 +320,12 @@ export function stagePreviewNotes(
 ): string {
   const update = failed.updateRunUrl === undefined ? "" : FAILED_UPDATE_WARNING;
   if (!failed.suite && !update) return body;
+  // The answers corpus's section is the nightly's own reading, not part of the failure report.
+  const answers = report.indexOf(`\n${ANSWERS_HEADING}\n`);
+  const suiteReport = answers === -1 ? report : report.slice(0, answers);
   const notes = `${failed.suite ? FAILED_SUITE_WARNING : ""}${update}${body}`;
   // The short update line goes first, so a long suite report is what gets cut.
-  const full = [failed.updateRunUrl === undefined ? "" : updateReport(failed.updateRunUrl), failed.suite ? report : ""]
+  const full = [failed.updateRunUrl === undefined ? "" : updateReport(failed.updateRunUrl), failed.suite ? suiteReport : ""]
     .filter(Boolean).join("\n");
   const budget = limit - notes.length - 1;
   if (full.length <= budget) return `${notes}\n${full}`;
@@ -301,6 +382,7 @@ if (import.meta.main && process.argv[2] === "--stage-notes") {
     omittedLegs: Array.isArray(result?.omittedLegs) ? result.omittedLegs.filter((job) => typeof job === "string") : [],
     runs: collectFailures(evidenceDir),
     jobs: pages === undefined ? undefined : failedJobs(pages),
+    answers: collectAnswers(evidenceDir),
   });
   await Bun.write(outputPath, report);
 }
