@@ -3693,11 +3693,7 @@ export function codekbScopeFingerprint(
   excludedPaths: string[] = [],
 ): string | null {
   if (paths.length === 0) return null;
-  const normalizePath = (path: string): string => {
-    let normalized = path.replaceAll("\\", "/");
-    normalized = normalized.replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
-    return normalized === "." ? "" : normalized;
-  };
+  const normalizePath = (path: string): string => normalizeScopePath(path.replaceAll("\\", "/"));
   const normalizedExclusions = excludedPaths.map(normalizePath);
   const survivingPaths = paths
     .map((original) => ({ original, normalized: normalizePath(original) }))
@@ -4138,7 +4134,8 @@ export function codekbStoreIsCurrent(
 
 // One spelling of a scope path for comparing: a leading "./" and a trailing "/" go, and
 // the repo root ("." or "./") becomes "". `a`, `a/` and `./a/` name the same entry. A
-// backslash is left alone, as everywhere else outside the fingerprint's own copy.
+// backslash is left alone: the source fingerprint turns a backslash into / before it calls
+// this; nothing else does.
 export function normalizeScopePath(path: string): string {
   const normalized = path.replace(/^(?:\.\/)+/, "").replace(/\/+$/, "");
   return normalized === "." ? "" : normalized;
