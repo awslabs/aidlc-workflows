@@ -845,11 +845,14 @@ export function applyModelPolicyToProjection(
   return effective;
 }
 
-// Whether a Kiro agent file carries a model or effort line, read as the drift
-// check reads it.
+// Whether a Kiro agent file carries a `model:` or `effortLevel:` line, by key
+// as the writer takes them out, whatever its value.
 export function kiroAgentFileHasModelLines(content: string): boolean {
-  const values = markdownSurfaceValues(content, "effortLevel");
-  return values.model !== undefined || values.effort !== undefined;
+  const fm = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "";
+  return fm.split(/\r?\n/).some((line) => {
+    const key = /^([A-Za-z_][\w-]*):/.exec(line)?.[1];
+    return key === "model" || key === "effortLevel";
+  });
 }
 
 function markdownSurfaceValues(

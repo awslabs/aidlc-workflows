@@ -717,7 +717,7 @@ Scopes (set depth, test strategy, and stage count):
 const HELP_TEXT_TAIL = `
 Utilities:
   --status          Show current workflow progress (read-only)
-  --config [section]  Configure models, runtime, providers, trust, flags, or project in-session
+  --config [section]  Configure models, runtime, providers, trust, flags, project, or preview in-session
   --claim <unit>    Atomically claim a team-owned Unit in this checkout
   --release <unit>  Release a Unit claim from the unscoped main checkout
   unit adopt <unit>  Adopt the checked-out live claim branch in a fresh clone

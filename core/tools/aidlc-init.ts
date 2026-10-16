@@ -258,6 +258,7 @@ import {
 import {
   activeModelGroups,
   applyModelPolicyToProjection,
+  HARNESS_HONESTY,
   HARNESS_PRODUCT_NAMES,
   harnessHonestyNotes,
   isModelEffort,
@@ -1077,7 +1078,7 @@ export function validatePublicConfigArgs(input: readonly string[]): string | nul
   const section = positionals[0];
   if (!section) return validateRootConfigArgs(argv);
   if (!VALID_CONFIG_SECTIONS.has(section.value)) {
-    return `unknown config section ${JSON.stringify(section.value)}; valid sections: models, runtime, providers, trust, flags, project, preview`;
+    return `unknown config section ${JSON.stringify(section.value)}; valid sections: ${CONFIG_SECTIONS.join(", ")}`;
   }
   const sectionArgv = [
     ...argv.slice(0, section.index),
@@ -6818,8 +6819,8 @@ function prepareRefreshSource(
   );
   if (agentModelsKept.length > 0) {
     notes.push(
-      `agent-models is off, but ${agentModelsKept.join(", ")} ${
-        agentModelsKept.length === 1 ? "is not as AI-DLC last wrote it, so it keeps its" : "are not as AI-DLC last wrote them, so they keep their"
+      `agent-models is off, but AI-DLC cannot tell that ${agentModelsKept.join(", ")} ${
+        agentModelsKept.length === 1 ? "is as it last wrote it, so it keeps its" : "are as it last wrote them, so they keep their"
       } model and effort lines; Kiro still follows them until you take them out.`,
     );
   }
@@ -11196,9 +11197,12 @@ function validatePreviewArgs(argv: readonly string[]): string | null {
   }
   const words = previewWords(argv);
   const positions = new Set(configPositionals(argv).map((item) => item.index));
-  const grammar = validateConfigOptionGrammar(argv.filter((_, index) => !positions.has(index)), "preview", {
-    values: PREVIEW_VALUE_FLAGS,
-    bare: PREVIEW_BARE_FLAGS,
+  const flags = argv.filter((_, index) => !positions.has(index));
+  // `--download` as every section takes it: the fix a missing release prints.
+  const download = validateDownloadArgs(flags, false);
+  if (download) return download;
+  const grammar = validateConfigOptionGrammar(flags, "preview", {
+    ...withDownloadGrammar(flags, { values: PREVIEW_VALUE_FLAGS, bare: PREVIEW_BARE_FLAGS }),
     invalidKnownMessage: (flag) => `${flag} is not valid for config preview`,
   });
   if (grammar) return grammar;
@@ -11286,7 +11290,10 @@ function showPreviewFeatures(
   }
   for (const tree of trees) {
     const states = features.filter((state) => state.harness === tree.distribution);
-    if (states.length === 0) continue;
+    if (states.length === 0) {
+      output += `${HARNESS_PRODUCT_NAMES[modelHarness(tree.distribution)]} (${tree.harnessDir}): none\n`;
+      continue;
+    }
     const version = tree.frameworkVersion ?? AIDLC_VERSION;
     const preview = versionChannel(version) === PREVIEW_CHANNEL;
     output += `${HARNESS_PRODUCT_NAMES[modelHarness(tree.distribution)]} (${tree.harnessDir}, ${version}):\n`;
@@ -11323,7 +11330,11 @@ function previewSwitchLine(
   // release) has no way back to undo into.
   const back = previewFeatureOn(feature, before ? { [feature]: before } : {}, version) ? "on" : "off";
   const undo = back !== to ? ` To undo: ${previewCommand(projectDir, tree.distribution, `${feature} ${back} --yes`)}` : "";
-  return `${head}; ${PREVIEW_FEATURE_TEXT[feature].takes}.${undo}`;
+  // A switch that changes nothing in effect (on to off on a stable release) says so.
+  const takes = back === "on" || previewFeatureOn(feature, { [feature]: to }, version)
+    ? PREVIEW_FEATURE_TEXT[feature].takes
+    : "nothing changes on this release";
+  return `${head}; ${takes}.${undo}`;
 }
 
 // How to get the preview release the project needs, as commands. A copied
@@ -11429,9 +11440,16 @@ function preparePreviewSection(
   const harness = modelHarness(tree.distribution);
   const current = modelPolicyForHarness(resolveAidlcSettings(projectDir).models, harness);
   const tiers = readAgentTiers(tree.root);
-  // Off says its way back in the switch line itself.
-  const notes = feature === KIRO_AGENT_MODELS_FEATURE && choice === "on"
+  // Off says its way back in the switch line itself, and what a recorded
+  // per-agent model or effort then does on Kiro.
+  const ownSettings = Object.values(normalizeModelPolicy(current)?.agents ?? {})
+    .some((agent) => agent.model !== undefined || agent.effort !== undefined);
+  const notes = feature !== KIRO_AGENT_MODELS_FEATURE
+    ? []
+    : choice === "on"
     ? modelSummaryLines(current, current, tiers, harness, projectDir, { version, agentModels: choice }).notes
+    : ownSettings
+    ? [HARNESS_HONESTY["kiro-ide"].message]
     : [];
   return {
     argv: modelsPipelineArgv(argv),
@@ -12582,8 +12600,8 @@ export async function main(
     }
     emitResult(
       usage(
-        `unknown config section ${JSON.stringify(section.value)}; valid sections: models, runtime, providers, trust, flags, project, preview`,
-        configCommand("<models|runtime|providers|trust|flags|project|preview> --help"),
+        `unknown config section ${JSON.stringify(section.value)}; valid sections: ${CONFIG_SECTIONS.join(", ")}`,
+        configCommand(`<${CONFIG_SECTIONS.join("|")}> --help`),
       ),
       options,
     );
@@ -13268,6 +13286,13 @@ export async function main(
       projectedSettings.models,
       modelHarness(stamp.distribution),
     );
+    // A preview feature turned on is checked against the release this run sets
+    // up, which a pin can make another one than the installed tree's.
+    if (modelsContext?.preview?.choice === "on" && versionChannel(stamp.frameworkVersion) !== PREVIEW_CHANNEL) {
+      throw new Error(
+        `${modelsContext.preview.feature} needs this project on a preview release of AI-DLC; this run sets it up on ${stamp.frameworkVersion}`,
+      );
+    }
     prepared = prepareRefreshSource(
       projectDir,
       selected.root,

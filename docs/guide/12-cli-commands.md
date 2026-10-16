@@ -719,8 +719,8 @@ file it came from instead of being replaced by another layer's choice.
 
 ### `/aidlc --config [section]` - In-session project configuration
 
-Configure one of `models`, `runtime`, `providers`, `trust`, `flags`, or
-`project` without leaving the harness conversation. With no section, the
+Configure one of `models`, `runtime`, `providers`, `trust`, `flags`,
+`project`, or `preview` without leaving the harness conversation. With no section, the
 conductor asks which sections you want to consider. With a section, it always
 asks what you want to change there, offering that section's choices and leaving
 it unchanged, even when the section is already clean.

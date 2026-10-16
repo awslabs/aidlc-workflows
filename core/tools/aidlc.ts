@@ -3567,15 +3567,7 @@ function renderPublicGrammarFailure(
     (process.stdin.isTTY || process.env.AIDLC_TEST_CONFIG_TTY === "1")
   ) {
     const invoke = aidlcInvocation();
-    const nearest = [
-      "models",
-      "runtime",
-      "providers",
-      "trust",
-      "flags",
-      "project",
-      "preview",
-    ]
+    const nearest = [...CONFIG_SECTIONS]
       .map((candidate) => ({
         candidate,
         distance: editDistance(configSection, candidate),

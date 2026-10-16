@@ -113,14 +113,11 @@ function writableAgentsDir(projectDir: string): string {
   return resolveHarnessPath(["agents"], { mutable: true, projectDir });
 }
 
-// The preview choices of the tree the copy joins (`aidlc config preview`); a
-// tree that cannot be resolved records nothing.
+// The preview choices of the project's Kiro tree (`aidlc config preview`):
+// always `.kiro`, the folder the layout check reads too. Read through a link
+// as it is, so a copy that cannot be written there is still said.
 function recordedChoices(projectDir: string): ReturnType<typeof readPreviewFeatures> {
-  try {
-    return readPreviewFeatures(resolveHarnessPath([], { mutable: true, projectDir }));
-  } catch {
-    return {};
-  }
+  return readPreviewFeatures(join(projectDir, ".kiro"));
 }
 
 /** What the review request does with the reviewer copy. */
