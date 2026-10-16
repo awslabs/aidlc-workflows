@@ -375,6 +375,7 @@ import {
   commandAtPersonsTerminal,
   clearSessionIntentUuid,
   sourceBaselineAuditFields,
+  workspaceBaselineStageSlugs,
   unitDependencyPath,
   withAuditLock,
   validScopes,
@@ -8407,7 +8408,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       // not from the registry.
       ...sourceBaselineAuditFields(
         projectDir,
-        "code-generation",
+        workspaceBaselineStageSlugs(),
         created.dirName,
         created.space,
         repos,

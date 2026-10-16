@@ -39,6 +39,7 @@ import {
   setPhaseProgress,
   stageIndex,
   sourceBaselineAuditFields,
+  workspaceBaselineStageSlugs,
   toPosix,
   UNIT_NAME_REGEX,
   writeStateFile,
@@ -689,7 +690,7 @@ function handleExecute(args: string[]): void {
   // than creating a competing snapshot or clearing the jump boundary.
   const jumpSourceBaseline = sourceBaselineAuditFields(
     pd,
-    "code-generation",
+    workspaceBaselineStageSlugs(targetSlug),
   );
   const changedUpstreamArtifacts =
     direction === "backward" ? stageArtifactPaths(pd, targetStage) : [];
