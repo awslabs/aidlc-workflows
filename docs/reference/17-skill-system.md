@@ -44,8 +44,10 @@ open an approval gate, call main-workflow `next`, or park. The returned `done`
 terminates the isolated run. A typed `--depth` or `--test-strategy` is the
 run's own: `next --single` records it on the synthetic `STAGE_STARTED` (`Depth`,
 `Test Strategy`) and the run-stage carries it as `depth` / `test_strategy`,
-leaving the workflow's settings unchanged. A re-run of the open attempt keeps
-the recorded values and refuses different ones, as it does a different scope.
+leaving the workflow's settings unchanged; the typed depth also picks the
+knowledge roster. A re-run of the open attempt keeps the recorded values; a
+different one starts a new attempt (a new `STAGE_STARTED`), and the unfinished
+one is set aside, never recorded as completed.
 Review, Guard Policy, a fence switch and ceremony switches are refused with an
 `error`: hooks read those from the workflow, so an isolated run cannot take its
 own.

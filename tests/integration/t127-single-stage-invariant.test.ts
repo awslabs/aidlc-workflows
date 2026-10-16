@@ -885,17 +885,42 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     expect(startedBlocks(proj)[0]).toContain("**Depth**: Minimal");
   });
 
-  test("17c: a re-run of the open attempt keeps its settings and refuses different ones", () => {
+  test("17c: a re-run of the open attempt keeps its settings; a different one starts it over", () => {
     const proj = seededSingleProject();
     expect(nextSingle(proj, ["--depth", "minimal"]).kind).toBe("run-stage");
     const again = nextSingle(proj, []);
     expect(again.kind, JSON.stringify(again)).toBe("run-stage");
     expect(again.depth).toBe("Minimal");
-    const other = nextSingle(proj, ["--depth", "standard"]);
-    expect(other.kind, JSON.stringify(other)).toBe("error");
-    expect(other.message).toContain("The open isolated attempt uses depth Minimal, not Standard.");
-    expect(other.message).toContain("--depth minimal");
     expect(startedBlocks(proj)).toHaveLength(1);
+    // The person asked for Standard: the stage starts over with it. The
+    // unfinished attempt is set aside, never recorded as completed.
+    const other = nextSingle(proj, ["--depth", "standard"]) as SingleDirective & { change_notices?: string[] };
+    expect(other.kind, JSON.stringify(other)).toBe("run-stage");
+    expect(other.depth).toBe("Standard");
+    expect(other.change_notices?.join("\n")).toContain("starts over with the settings you gave");
+    const started = startedBlocks(proj);
+    expect(started).toHaveLength(2);
+    expect(started[1]).toContain("**Depth**: Standard");
+    expect(readFileSync(seededAuditShard(proj), "utf-8")).not.toContain("**Event**: STAGE_COMPLETED");
+    // Its re-run keeps the new attempt's setting.
+    expect(nextSingle(proj, []).depth).toBe("Standard");
+  });
+
+  test("17c2: a typed depth picks the knowledge the stage loads, through the steering continuation", () => {
+    const roster = (extra: string[]): string[] => {
+      const proj = freshProject();
+      const r = run(TOOL, [
+        "next", "--scope", "bugfix", "--stage", "requirements-analysis", "--single", ...extra, "--project-dir", proj,
+      ]);
+      const directive = JSON.parse(r.out.trim()) as { kind?: string; inline_context_paths?: string[] };
+      expect(directive.kind, r.out).toBe("run-stage");
+      return directive.inline_context_paths ?? [];
+    };
+    // bugfix runs at Minimal, which prunes the lead's knowledge.
+    const minimal = roster([]);
+    const comprehensive = roster(["--depth", "comprehensive"]);
+    expect(comprehensive.length).toBeGreaterThan(minimal.length);
+    for (const path of minimal) expect(comprehensive).toContain(path);
   });
 
   test("17d: with no workflow, next --single --test-strategy runs the stage with it", () => {
