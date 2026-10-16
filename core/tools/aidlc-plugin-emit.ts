@@ -47,6 +47,7 @@ export type PluginTargetKind = "store" | "kiro" | "kiro-ide" | "cursor";
 export interface PluginTarget {
   harnessName: string;
   manifestDir: string;
+  marketplaceDir: string;
   harnessLeaf: string;
   kind: PluginTargetKind;
   installRoots: string[];
@@ -158,6 +159,7 @@ export function readPluginTargets(path: string): PluginTargetTable {
       !isPlainRecord(value) ||
       typeof value.harnessName !== "string" ||
       typeof value.manifestDir !== "string" ||
+      (value.marketplaceDir !== undefined && typeof value.marketplaceDir !== "string") ||
       typeof value.harnessLeaf !== "string" ||
       !Array.isArray(value.installRoots) ||
       value.installRoots.some((item) => typeof item !== "string") ||
@@ -173,6 +175,9 @@ export function readPluginTargets(path: string): PluginTargetTable {
     out[harness] = {
       harnessName: value.harnessName,
       manifestDir: value.manifestDir,
+      marketplaceDir: typeof value.marketplaceDir === "string"
+        ? value.marketplaceDir
+        : value.manifestDir,
       harnessLeaf: value.harnessLeaf,
       kind: value.kind,
       installRoots: [...value.installRoots],
@@ -654,8 +659,10 @@ export function buildPluginProjection(
           2,
         )}\n`,
       );
+      const marketplaceDir = join(outDir, options.target.marketplaceDir);
+      mkdirSync(marketplaceDir, { recursive: true });
       writeFileSync(
-        join(hostManifestDir, "marketplace.json"),
+        join(marketplaceDir, "marketplace.json"),
         `${JSON.stringify(
           {
             name: "aidlc-plugins",

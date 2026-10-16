@@ -1918,11 +1918,12 @@ function pluginTargets(): PluginTargetTable {
     for (const root of manifest.plugin?.installRoots ?? []) {
       addTopLevel(root);
     }
+    const manifestDir =
+      manifest.plugin?.manifestDir ?? `${manifest.harnessDir}-plugin`;
     pluginTargetCache[harnessName] = {
       harnessName: manifest.name,
-      manifestDir:
-        manifest.plugin?.manifestDir ??
-        `${manifest.harnessDir}-plugin`,
+      manifestDir,
+      marketplaceDir: manifest.plugin?.marketplaceDir ?? manifestDir,
       harnessLeaf: manifest.harnessDir,
       kind: manifest.plugin?.kind ?? "store",
       installRoots: [...installRoots].sort(),
