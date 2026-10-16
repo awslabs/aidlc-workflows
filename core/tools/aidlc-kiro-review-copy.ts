@@ -113,6 +113,16 @@ function writableAgentsDir(projectDir: string): string {
   return resolveHarnessPath(["agents"], { mutable: true, projectDir });
 }
 
+// The preview choices of the tree the copy joins (`aidlc config preview`); a
+// tree that cannot be resolved records nothing.
+function recordedChoices(projectDir: string): ReturnType<typeof readPreviewFeatures> {
+  try {
+    return readPreviewFeatures(resolveHarnessPath([], { mutable: true, projectDir }));
+  } catch {
+    return {};
+  }
+}
+
 /** What the review request does with the reviewer copy. */
 export type ReviewCopyOutcome =
   /** Dispatch this agent: the reviewer with the review's read scope. */
@@ -136,10 +146,7 @@ export function prepareReviewCopy(
   review: { requestId: string; reviewer: string; unit?: string },
   version: string = AIDLC_VERSION,
 ): ReviewCopyOutcome | null {
-  // The choice is the project's Kiro tree's, the one whose agents the copy joins.
-  if (!review.unit || !previewFeatureOn(REVIEWER_READ_SCOPE_FEATURE, readPreviewFeatures(join(projectDir, ".kiro")), version)) {
-    return null;
-  }
+  if (!review.unit || !previewFeatureOn(REVIEWER_READ_SCOPE_FEATURE, recordedChoices(projectDir), version)) return null;
   // Doctor lists a drop by its reason up to the first ": ", cut short, so the
   // reason starts with a short cause and the details follow it.
   const drop = (cause: string, detail: string) =>

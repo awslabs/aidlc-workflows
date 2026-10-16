@@ -95,6 +95,7 @@ import {
   writeSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { CONFIG_SECTIONS } from "./aidlc-command.ts";
 import { fileURLToPath } from "node:url";
 import {
   deleteQuestion,
@@ -4707,14 +4708,6 @@ export interface ParsedFlags {
   retiredOnly?: boolean;
 }
 
-const CONFIG_SECTIONS = [
-  "models",
-  "runtime",
-  "providers",
-  "trust",
-  "flags",
-  "project",
-] as const;
 type ConfigSection = (typeof CONFIG_SECTIONS)[number];
 
 // Extract the flags the `next` decision rule consumes. --project-dir is pulled

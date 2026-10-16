@@ -265,6 +265,7 @@ import {
   isModelId,
   isModelPreset,
   KIRO_AGENT_MODELS_FEATURE,
+  kiroAgentFileHasModelLines,
   kiroAgentModelsOn,
   MODEL_EFFORTS,
   MODEL_GROUPS,
@@ -6772,9 +6773,7 @@ function prepareRefreshSource(
         const target = join(projectDir, rel);
         if (!regularFile(target)) return false;
         if (priorHash !== undefined && ownedFileHash(target, [priorHash]).hash === priorHash) return true;
-        if (/^(model|effortLevel):/m.test(readFileSync(target, "utf-8").match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "")) {
-          agentModelsKept.push(rel);
-        }
+        if (kiroAgentFileHasModelLines(readFileSync(target, "utf-8"))) agentModelsKept.push(rel);
         return false;
       };
     }
@@ -6819,8 +6818,8 @@ function prepareRefreshSource(
   );
   if (agentModelsKept.length > 0) {
     notes.push(
-      `agent-models is off, but you changed ${agentModelsKept.join(", ")}, so ${
-        agentModelsKept.length === 1 ? "it keeps its" : "they keep their"
+      `agent-models is off, but ${agentModelsKept.join(", ")} ${
+        agentModelsKept.length === 1 ? "is not as AI-DLC last wrote it, so it keeps its" : "are not as AI-DLC last wrote them, so they keep their"
       } model and effort lines; Kiro still follows them until you take them out.`,
     );
   }
@@ -11281,6 +11280,9 @@ function showPreviewFeatures(
   let output = `${heading("Preview features", out)}\n\n`;
   if (features.length === 0) {
     output += `  none for ${trees.map((tree) => HARNESS_PRODUCT_NAMES[modelHarness(tree.distribution)]).join(", ")}\n`;
+    writeMenuText(output);
+    process.exitCode = EXIT.ok;
+    return;
   }
   for (const tree of trees) {
     const states = features.filter((state) => state.harness === tree.distribution);
@@ -11293,11 +11295,15 @@ function showPreviewFeatures(
         state.recorded === "on" && !state.on ? " (recorded on; this release is not a preview release)" : state.recorded === null ? " (not set)" : ""
       }\n    ${PREVIEW_FEATURE_TEXT[state.feature].does}.\n`;
     }
-    if (!preview) {
-      output += "  Preview features apply only on a preview release of AI-DLC; off works on any release.\n";
+    if (preview) {
+      output += `  Turn one on or off: ${previewCommand(projectDir, tree.distribution, "<feature> <on|off> --yes")}\n`;
+    } else {
+      output += "  Preview features apply only on a preview release of AI-DLC.\n";
+      if (states.some((state) => state.recorded === "on")) {
+        output += `  ${previewCommand(projectDir, tree.distribution, "<feature> off --yes")} clears one recorded on.\n`;
+      }
     }
   }
-  output += `\nTurn one on or off: ${previewCommand(projectDir, trees.length === 1 ? trees[0].distribution : "", "<feature> <on|off> --yes")}\n`;
   writeMenuText(output);
   process.exitCode = EXIT.ok;
 }
@@ -11313,23 +11319,28 @@ function previewSwitchLine(
 ): string {
   const version = tree.frameworkVersion ?? AIDLC_VERSION;
   const head = `  Preview feature ${feature}: ${before ?? "not set"} -> ${to} in ${tree.harnessDir}/tools/data/harness.json`;
+  // Back to what applied before; a recorded on that did not apply (a stable
+  // release) has no way back to undo into.
   const back = previewFeatureOn(feature, before ? { [feature]: before } : {}, version) ? "on" : "off";
-  // On a release that is not a preview one, on cannot be undone into.
-  const undo = back === "on" || versionChannel(version) === PREVIEW_CHANNEL || to === "on"
-    ? ` To undo: ${previewCommand(projectDir, tree.distribution, `${feature} ${back} --yes`)}`
-    : "";
+  const undo = back !== to ? ` To undo: ${previewCommand(projectDir, tree.distribution, `${feature} ${back} --yes`)}` : "";
   return `${head}; ${PREVIEW_FEATURE_TEXT[feature].takes}.${undo}`;
 }
 
-// How to get the preview release the project needs, as commands.
+// How to get the preview release the project needs, as commands. A copied
+// runtime has no release channel to follow: it takes a preview copy instead.
 function previewReleaseSteps(projectDir: string): string {
+  const invoke = configInvocationFor(projectDir);
+  if (invoke !== "aidlc") {
+    return "install a preview release's copy runtime into this project (Release Channels in the install guide)";
+  }
   const pin = join(projectDir, ".aidlc-version");
   const pinned = regularFile(pin) ? readFileSync(pin, "utf-8").trim() : "";
+  const target = projectTarget(projectDir);
   return [
-    ...(pinned ? [`${configCommand("--unpin")} (this project is pinned to ${pinned} in .aidlc-version)`] : []),
-    configCommand("--channel preview"),
+    ...(pinned ? [`aidlc config --unpin${target} (this project is pinned to ${pinned} in .aidlc-version)`] : []),
+    "aidlc config --channel preview",
     "aidlc update",
-    configCommand(),
+    `aidlc config${target}`,
   ].join(", then ");
 }
 
@@ -11396,7 +11407,8 @@ function preparePreviewSection(
     return null;
   }
   const recorded = readPreviewFeatures(tree.root)[feature] ?? null;
-  if (recorded === choice) {
+  // Nothing recorded is off, so off there changes nothing and records nothing.
+  if ((recorded ?? "off") === choice) {
     emitResult(success(`${feature} is already ${choice} for this project`, { feature, choice }), options);
     return null;
   }
@@ -11417,7 +11429,8 @@ function preparePreviewSection(
   const harness = modelHarness(tree.distribution);
   const current = modelPolicyForHarness(resolveAidlcSettings(projectDir).models, harness);
   const tiers = readAgentTiers(tree.root);
-  const notes = feature === KIRO_AGENT_MODELS_FEATURE
+  // Off says its way back in the switch line itself.
+  const notes = feature === KIRO_AGENT_MODELS_FEATURE && choice === "on"
     ? modelSummaryLines(current, current, tiers, harness, projectDir, { version, agentModels: choice }).notes
     : [];
   return {
