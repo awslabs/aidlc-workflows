@@ -122,7 +122,7 @@ import {
   takeRestartRequest,
 } from "./aidlc-question-store.ts";
 import { latestMessage, noReplySince } from "./aidlc-message-store.ts";
-import { aidlcEntryWords } from "./aidlc-reply-reader.ts";
+import { aidlcEntryWords, APPROVAL_GATE_CHOICES, pickerOffersChoices } from "./aidlc-reply-reader.ts";
 import {
   type AskDirective,
   type Directive,
@@ -3494,6 +3494,11 @@ function openGateReplyDirective(stage: string, requestId: string, folder: string
   );
 }
 
+// The choices a question's row says it offered, in order.
+function questionOptions(block: string): string[] {
+  return (auditBlockField(block, "Options") ?? "").split(",").map((option) => option.trim()).filter(Boolean);
+}
+
 // How the person's answer to the stage's open question is recorded, named
 // from the question's own row, so a new chat, which never saw it asked, has
 // all it needs.
@@ -3509,9 +3514,17 @@ function openQuestionAnswer(stage: string, block: string): string {
       ? [`${aidlcToolInvocation("bolt")} swarm-checkpoint`,
         batch && units ? ` --batch ${shellArg(batch)} --units ${shellArg(units)}` : ""]
       : [null, ""];
+  // A question that needs the person's own reply offers Approve and Request
+  // Changes, numbered as the human-turn hook reads a number typed for them, so
+  // "/aidlc 2" reads in a chat that never saw it asked. A batch whose files
+  // changed after its check (strict) offers Request Changes alone and gets no
+  // number; a row from before rows named their options offered both.
+  const options = questionOptions(block);
+  const numbered = options.length === 0 || pickerOffersChoices(options, APPROVAL_GATE_CHOICES)
+    ? `its choices are ${APPROVAL_GATE_CHOICES.map((choice, at) => `${at + 1}. ${choice}`).join(" and ")}; `
+    : "";
   // The verification command and a Construction policy question name their
-  // two choices (the only ones `log decision` takes for them), their own
-  // flags, and the setter an approval runs; the command itself stays in its
+  // own flags and the setter an approval runs; the command itself stays in its
   // file, never on a shell line.
   const field = auditBlockField(block, "Field") ?? "";
   const value = auditBlockField(block, "Value") ?? "";
@@ -3523,12 +3536,13 @@ function openQuestionAnswer(stage: string, block: string): string {
         `set-${field.toLowerCase().replaceAll(" ", "-")} ${shellArg(value)}`]
       : [null, null];
   return gate
-    ? `answer it through that checkpoint, never \`log answer\` (which would not approve it): run \`${gate} --action ` +
-      `approve${target}\` or \`${gate} --action reject${target}\`${target ? "" : " for that Unit or batch"}, passing ` +
-      "the person's reply unchanged as `--user-input` (and their feedback as `--reason` when they ask for changes)"
+    ? `${numbered}answer it through that checkpoint, never \`log answer\` (which would not approve it): ` +
+      `run \`${gate} --action approve${target}\` or \`${gate} --action reject${target}\`` +
+      `${target ? "" : " for that Unit or batch"}, passing the person's reply unchanged as \`--user-input\` ` +
+      "(and their feedback as `--reason` when they ask for changes)"
     : flags !== null
-      ? "its choices are 1. Approve and 2. Request Changes; " +
-        `record the choice they made with \`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)}${flags} ` +
+      ? `${numbered}record the choice they made with ` +
+        `\`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)}${flags} ` +
         `--details '<Approve or Request Changes>'\`; after an Approve, run \`${aidlcToolInvocation("state")} ${setter}\` and ` +
         "say its notice line"
       : `record it with \`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)} --details '<their exact reply>'\` ` +
@@ -3580,7 +3594,7 @@ function openQuestionAgainDirective(projectDir: string, stage: string, block: st
   }
   const decision = auditBlockField(block, "Decision");
   if (!decision) return null;
-  const choices = (auditBlockField(block, "Options") ?? "").split(",").map((option) => option.trim()).filter(Boolean);
+  const choices = questionOptions(block);
   return printDirective(
     `Stage "${stage}" has a question you asked that the person has not answered yet. Show it to them again, word ` +
       `for word as it was asked, with its choices, and end your turn: ${JSON.stringify(decision)}` +

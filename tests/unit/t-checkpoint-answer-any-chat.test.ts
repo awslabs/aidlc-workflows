@@ -10,10 +10,12 @@
 // Only the newest question asked, still open, is taken: never the agent's
 // words, never a stale answer to an older question. Once the approval was
 // asked, a new chat's checkpoint step skips the learnings question the old
-// chat already asked, and the step for prose names the Unit to approve.
-// The verification command question, and a Construction policy question a
-// record carries, are answered in any chat the same way, and the step for
-// prose names the flags their answer is recorded with. A bare `/aidlc` in a
+// chat already asked, and the step for prose names the Unit to approve and
+// the two choices a typed number picks ("/aidlc 2"), none for a batch asked
+// with Request Changes alone. The verification command question, and a
+// Construction policy question a record carries, are answered in any chat
+// the same way, and the step for prose names the flags their answer is
+// recorded with. A bare `/aidlc` in a
 // new chat shows again, as it was asked, a question with no step of its own
 // that asks it again; the others come back through their own step.
 import {
@@ -266,6 +268,18 @@ describe("t-checkpoint-answer-any-chat: what a new chat is told to do", () => {
     expect(print.message).toContain("checkpoint --action reject --unit alpha --kind unit`");
     expect(print.message).not.toContain("session you asked with");
   });
+
+  test("\"/aidlc 2\" in a new chat is Request Changes, and the step names the choices a number picks", () => {
+    const p = fixture();
+    expect(checkpoint(p, ["--action", "ask", "--session", OLD]).status).toBe(0);
+    person(p, "/aidlc 2", NEW);
+    expect(readProtectedResponse(p, NEW)?.choice).toBe("Request Changes");
+    const print = next(p, ["2"]);
+    expect(print.kind, JSON.stringify(print)).toBe("print");
+    expect(print.message).toContain(
+      "its choices are 1. Approve and 2. Request Changes; answer it through that checkpoint, never `log answer`",
+    );
+  });
 });
 
 describe("t-checkpoint-answer-any-chat: a batch checkpoint answered in a new chat", () => {
@@ -284,6 +298,30 @@ describe("t-checkpoint-answer-any-chat: a batch checkpoint answered in a new cha
       kind: "checkpoint-approval", targetDigest: protectedTargetDigest(target), choice: "Approve",
     })).not.toThrow();
   });
+
+  // Under a strict Guard Policy a batch whose files changed after its check is
+  // asked with Request Changes alone; a row from before rows named their
+  // options offered both.
+  for (const [offered, named] of [
+    ["both choices", true], ["Request Changes alone", false], ["no Options field", true],
+  ] as const) {
+    test(`"2" at a batch question with ${offered}: the step ${named ? "names" : "names no"} numbered choices`, () => {
+      const p = construction();
+      appendAuditEntry("STAGE_STARTED", { Stage: "functional-design" }, p);
+      const options: Record<string, string> = offered === "both choices" ? { Options: "Approve,Request Changes" }
+        : offered === "Request Changes alone" ? { Options: "Request Changes" } : {};
+      appendAuditEntry("DECISION_RECORDED", {
+        Checkpoint: "Swarm Batch Approval", Stage: "functional-design", "Batch number": "1", Units: "alpha, beta",
+        Fingerprint: "sha256:batch", Session: OLD, ...options,
+      }, p);
+      const print = next(p, ["2"]);
+      expect(print.kind, JSON.stringify(print)).toBe("print");
+      expect(print.message).toContain("swarm-checkpoint --action reject --batch 1 --units 'alpha, beta'`");
+      expect(print.message?.includes("its choices are 1. Approve and 2. Request Changes; answer it through that checkpoint"))
+        .toBe(named);
+      expect(print.message?.includes("1. Approve")).toBe(named);
+    });
+  }
 });
 
 // The two other questions whose answer needs the person's own reply to them,
