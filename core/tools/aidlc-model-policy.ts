@@ -655,7 +655,8 @@ export function writeMarkdownAgentSurface(
     "model",
     "effort",
     "variant",
-    "effortLevel",
+    // Kiro's key; another harness's file keeps a line of that name as it is.
+    ...(effortKey === "effortLevel" ? ["effortLevel"] : []),
     ...(options.removeKeys ?? []),
   ]);
   const source = match[1].split(/\r?\n/);

@@ -549,11 +549,12 @@ at the model's own default, and an agent given a model but no effort runs at
 that model's default effort, not your chat's. `--model default` and
 `--effort default` take them out again. A preset or a group effort
 (`--preset`, `--reviewing-effort`) still changes nothing on Kiro, and the
-conductor keeps your chat's model. While it is on, `aidlc config` writes the
-`aidlc-*-agent.md` files of the agents it sets from the release, as it does
-on Claude Code, so change those agents through `aidlc config models` rather
-than by hand; `aidlc config models --check` reports a line that does not
-match. `aidlc config models --agent-models off` takes every
+conductor keeps your chat's model. While it is on, AI-DLC owns the `model:`
+and `effortLevel:` lines of every `aidlc-*-agent.md` file, as it does on Claude
+Code: `aidlc config` writes the files of the agents it sets from the release
+and takes such a line out of the others, so change them through
+`aidlc config models` rather than by hand; `aidlc config models --check`
+reports a line that does not match. `aidlc config models --agent-models off` takes every
 agent's lines out in that run and keeps the recorded models and efforts, so
 `--agent-models on` puts them back. With it off, and on a stable release, AI-DLC leaves the Kiro agent files as they
 are, lines you added yourself included, so turn it off before you move a

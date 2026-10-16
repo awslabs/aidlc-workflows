@@ -179,6 +179,12 @@ describe("writing kiro-ide agent files", () => {
     }
   });
 
+  test("the shared Markdown writer takes an effortLevel line out only of a Kiro agent file", () => {
+    const text = "---\nname: x\neffortLevel: low\n---\nBody\n";
+    expect(policy.writeMarkdownAgentSurface(text, { model: "m" })).toContain("effortLevel: low");
+    expect(policy.writeMarkdownAgentSurface(text, { model: "m" }, { effortKey: "effortLevel" })).not.toContain("effortLevel: low");
+  });
+
   test("an edited effortLevel reads as drift while it is on", () => {
     const root = projection();
     policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, ON);
