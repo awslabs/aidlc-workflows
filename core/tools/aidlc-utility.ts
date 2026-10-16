@@ -1585,9 +1585,12 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
         },
       });
       resetSelectionSensitiveCaches();
-      if (strippedPlugins.length > 0) {
+      // A paused plugin is stripped too, but it comes back when its base is on
+      // again, not when it is: its pause line says so.
+      const strippedOff = strippedPlugins.filter((plugin) => !pausedAfter.has(plugin));
+      if (strippedOff.length > 0) {
         process.stdout.write(
-          `Stripped merged contributions of disabled plugin(s): ${strippedPlugins.join(", ")} (re-enabling restores them on the next session start)\n`,
+          `Stripped merged contributions of disabled plugin(s): ${strippedOff.join(", ")} (re-enabling restores them on the next session start)\n`,
         );
       }
       process.stdout.write(`Enabled plugins: ${names.join(", ")}\n`);
