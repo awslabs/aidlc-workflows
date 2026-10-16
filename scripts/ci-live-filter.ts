@@ -108,8 +108,10 @@ export const PLATFORM_ONLY: Record<string, readonly NodeJS.Platform[]> = {
   // The golden journeys run nightly on Linux; stage logic is the same on every OS.
   "tests/integration/t-journey-golden-bugfix.sdk.test.ts": ["linux"],
   "tests/integration/t-journey-golden-poc.sdk.test.ts": ["linux"],
-  // A Windows run of the Codex journey keeps its retry only under 25 minutes (tests/lib/file-retry.ts).
+  // A live file keeps its retry only under 25 minutes (tests/lib/file-retry.ts):
+  // the Codex journey runs about 17 on Windows, Copilot's longer than that.
   "tests/e2e/t-exec-codex-journey-golden-bugfix.serial.test.ts": ["linux", "win32"],
+  "tests/e2e/t-exec-copilot-journey-golden-bugfix.serial.test.ts": ["linux"],
   // The answers corpus opens on the family's gate in a live job too: one item
   // per question a night, by a date rotation, on Linux (its own shard).
   "tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts": ["linux"],

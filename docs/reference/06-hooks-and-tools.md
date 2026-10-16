@@ -95,10 +95,10 @@ uses `protected-question-<sessionSegment>.json` and
 Questions bind the kind, session, random challenge ID, canonical target digest,
 and offered choices; answers bind the session and challenge ID and are consumed
 only after the owning audit append succeeds. A session with neither file takes a
-Unit or batch checkpoint question another chat asked, when its
-`DECISION_RECORDED` row is the newest question asked and nothing has answered
-it: the question, and any reply kept for it, move to this session's mailbox, so
-the person may answer a checkpoint in any chat and approve it there in one
+Unit or batch checkpoint, verification command, or Construction policy question
+another chat asked, when its `DECISION_RECORDED` row is the newest question
+asked and nothing has answered it: the question, and any reply kept for it,
+move to this session's mailbox, so the person may answer it in any chat, in one
 reply. An older question, or one asked before another question, never moves.
 
 For a question minted by `log decision`, rendered picker text must match the

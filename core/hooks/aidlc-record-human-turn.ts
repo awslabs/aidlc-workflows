@@ -838,9 +838,9 @@ try {
             } else if (protectedQuestion) {
               if (!notAReply) recordProtectedHumanResponse(projectDir, sessionId, replyText, questionText, pickerQuestion);
             } else if (!notAReply) {
-              // With no question of its own here, a Unit or batch checkpoint
-              // question another chat asked takes the reply: the person may
-              // answer it in any chat.
+              // With no question of its own here, a question another chat asked
+              // that needs the person's own reply (a checkpoint, the verification
+              // command) takes this one: the person may answer it in any chat.
               if (plan || !recordProtectedHumanResponse(projectDir, sessionId, replyText, questionText, pickerQuestion).recorded) {
                 recordPlanApprovalHumanResponse(projectDir, sessionId, replyText, pickerQuestion);
               }

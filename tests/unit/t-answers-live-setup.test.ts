@@ -2,9 +2,9 @@
 //
 // What the live answers check can set up in a fresh chat, the way a person meets it. A question the agent asked in
 // chat is not shown again by a bare `/aidlc`, so only its replies typed with `/aidlc` are driven live. A verification
-// command or Construction policy answer is bound to the chat that asked, and guard recovery's fixture cannot be met,
-// so those are not driven live at all. And the open work carrying on after a routing reply is counted from that reply,
-// not from the rows the chat writes as it opens.
+// command or Construction policy answer typed in a fresh chat is recorded there, so their `/aidlc` replies are driven
+// too; guard recovery's fixture cannot be met, so it is not driven live at all. And the open work carrying on after a
+// routing reply is counted from that reply, not from the rows the chat writes as it opens.
 //
 // Mechanism: function - the live pool over the corpus, and the engine's own steps on the fixtures (the human-turn
 // hook, the session-start hook, `next`); no agent runs.
@@ -41,11 +41,11 @@ function project(): string {
 }
 
 describe("the live answers check in a fresh chat", () => {
-  test("a question asked in chat is driven live only by its /aidlc replies, and the chat-bound ones and guard recovery not at all", () => {
+  test("a question asked in chat is driven live only by its /aidlc replies, and guard recovery not at all", () => {
     const live = (question: string) => ANSWERS.filter((item) => item.question === question && liveReply(item)).map((item) => item.via);
     for (const question of ASKED_IN_CHAT) expect(live(question).every((via) => via === "aidlc"), question).toBe(true);
-    expect(live("verification-command")).toEqual([]);
-    expect(live("construction-policy")).toEqual([]);
+    expect(live("verification-command")).toEqual(["aidlc", "aidlc"]);
+    expect(live("construction-policy")).toEqual(["aidlc", "aidlc"]);
     expect(live("stage-question")).toEqual(["aidlc"]);
     expect(live("learnings")).toEqual([]);
     for (const question of NOT_LIVE) expect(live(question), question).toEqual([]);
@@ -67,25 +67,25 @@ describe("the live answers check in a fresh chat", () => {
     expect(String(words.directive?.message ?? "")).toContain("has a question you asked that the person has not answered yet");
   });
 
-  // If a new chat can ever record these answers, their /aidlc replies can be driven live again.
-  for (const [question, stage, flags] of [
-    ["verification-command", "code-generation", ["--command", "npm test"]],
-    ["construction-policy", "functional-design", ["--field", "Construction Execution", "--value", "swarm"]],
+  for (const [question, flags] of [
+    ["verification-command", ["--command", "npm test"]],
+    ["construction-policy", ["--field", "Construction Execution", "--value", "swarm"]],
   ] as const) {
-    test(`a ${question} answer is recorded only from the chat that asked it`, async () => {
+    test(`a ${question} answer is recorded in the chat that asked it and in a new one`, async () => {
       const answer = async (session: string) => {
         const proj = project();
         await buildQuestion(proj, question);
         if (session !== SESSION) await opens(proj, session);
         await say(proj, "/aidlc 2", "claude", { session });
         await next(proj, ["2"], { session });
-        return exec([process.execPath, join(proj, ".claude", "tools", "aidlc-log.ts"), "answer", "--stage", stage, "--checkpoint", question,
-          ...flags, "--details", "Request Changes"], { cwd: proj, env: env(proj, { session }) });
+        return exec([process.execPath, join(proj, ".claude", "tools", "aidlc-log.ts"), "answer", "--stage", "functional-design",
+          "--checkpoint", question, ...flags, "--details", "Request Changes"], { cwd: proj, env: env(proj, { session }) });
       };
-      expect((await answer(SESSION)).status).toBe(0);
+      const here = await answer(SESSION);
+      expect(here.status, here.stdout + here.stderr).toBe(0);
       const elsewhere = await answer(OTHER_CHAT);
-      expect(elsewhere.status).toBe(1);
-      expect(elsewhere.stdout + elsewhere.stderr).toContain("Session exists in the current workflow");
+      expect(elsewhere.status, elsewhere.stdout + elsewhere.stderr).toBe(0);
+      expect(JSON.parse(elsewhere.stdout.trim()).emitted).toBe("QUESTION_ANSWERED");
     });
   }
 

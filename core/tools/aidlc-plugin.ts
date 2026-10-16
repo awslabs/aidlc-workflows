@@ -915,7 +915,7 @@ export function collectPluginStatus(
 function humanAction(status: PluginStatus): string {
   if (status.state === "inventory-unavailable" || status.state === "paused") return status.message;
   if (status.action === "current") return "current";
-  if (status.action === "sync") return "run: aidlc config";
+  if (status.action === "sync") return `run: ${aidlcInvocation()} engine plugin sync`;
   return `needs attention: ${status.message}`;
 }
 

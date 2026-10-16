@@ -75,9 +75,9 @@ can also open `<record>/verification-command.txt`. The canonical command is a
 nonblank single line of at most 1024 characters. Control characters and
 display-spoofing characters (Unicode format characters, including zero-width and
 bidi controls, line/paragraph separators, and no-break space U+00A0) are refused.
-Record the human's **Approve** / **Request Changes** reply in that session;
-only **Approve** authorizes the receipt, not an unrelated reply, **Request Changes**,
-or a reply from another session. Never write `--details "Approve"` unless the human chose it.
+Record the human's **Approve** / **Request Changes** reply, in that chat or a
+new one while it is the newest question asked; only **Approve** authorizes the
+receipt, not an unrelated reply, **Request Changes**, or a reply to another question. Never write `--details "Approve"` unless the human chose it.
 
 Checkpoint policy requires solo ownership, an actual non-empty Unit DAG, and
 an included source-producing per-unit stage. Design-only and no-Unit work keep

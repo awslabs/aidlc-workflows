@@ -83,9 +83,10 @@ changing the state file:
 Unit/batch checkpoint. A matching current-workflow human approval receipt is
 required before `state set-construction-verification-command` writes the field;
 the field alone never authorizes execution, and generic `state set` refuses it.
-The human's **Approve** / **Request Changes** reply must come from the
-invoking SessionStart session. Only **Approve** authorizes the receipt; an
-unrelated reply, **Request Changes**, or a reply from another session does not.
+The human's **Approve** / **Request Changes** reply counts in the chat that
+asked or in a new one while it is the newest question asked. Only **Approve**
+authorizes the receipt; an unrelated reply, **Request Changes**, or a reply to
+another question does not.
 See the [recorded-command flow](12-cli-commands.md#construction-verification-command-record-human-authorization).
 
 ### Six-state checkboxes
