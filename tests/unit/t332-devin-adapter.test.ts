@@ -1668,11 +1668,15 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
     }
   });
 
-  test("17a: state-transition-guard blocks an exec that attempts a direct state transition (exec→Bash reaches guard)", () => {
-    // The adapter MUST translate exec→Bash so the core guard's command-pattern
-    // match (which hardcodes `Bash`) fires. Without translation, the guard
-    // would see tool_name="exec" and skip the command check, allowing the
-    // forbidden transition. This test proves the translation is load-bearing.
+  test("17a: state-transition-guard permits the conductor's exec and still blocks a delegated one (exec→Bash reaches guard)", () => {
+    // Since upstream #2601 the state tool itself refuses a direct stage-status
+    // command in every spelling (ENGINE_OWNED_STATE_TRANSITIONS), and the hook
+    // only blocks delegated agents — payloads carrying agent_type. The
+    // conductor's own exec passes; the tool's refusal lands where the change
+    // happens. The exec→Bash translation stays load-bearing for the delegated
+    // path: a payload carrying agent_type is still piped and blocked. (Devin
+    // child events carry no identity — C17 — so the delegated path is latent
+    // until the host surfaces it.)
     const dir = scratchProject(false);
     try {
       const payload = {
@@ -1683,9 +1687,16 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
           command: "bun .devin/tools/aidlc-state.ts reject feasibility",
         },
       };
-      const r = runAdapter(dir, "state-transition-guard", payload);
-      expect(r.code).toBe(2);
-      expect(r.stderr).toContain("Stage status cannot be changed");
+      const conductor = runAdapter(dir, "state-transition-guard", payload);
+      expect(conductor.code).toBe(0);
+      const delegated = runAdapter(dir, "state-transition-guard", {
+        ...payload,
+        agent_type: "aidlc-developer-agent",
+      });
+      expect(delegated.code).toBe(2);
+      expect(delegated.stderr).toContain(
+        "only the main workflow session can change stage status or routing",
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1694,8 +1705,8 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
   test.skipIf(process.platform === "win32")(
     "17d: compiled executable delegation keeps the guard's block reason (stderr channel)",
     () => {
-      // Same forbidden transition as 17a, but through the compiled argv
-      // branch (runCoreWithStderr → [executable, "engine", "hook",
+      // Same delegated block as 17a, but through the compiled argv branch
+      // (runCoreWithStderr → [executable, "engine", "hook",
       // state-transition-guard]). The old `[executable, "hook", …]` argv
       // also exited 2 — but with the dispatcher's "unknown command 'hook'"
       // on stderr, masking the guard's real reason. This pins that the
@@ -1710,12 +1721,15 @@ describe("t332 devin adapter — stdin shim normalizes Devin payloads to core ho
           tool_input: {
             command: "bun .devin/tools/aidlc-state.ts reject feasibility",
           },
+          agent_type: "aidlc-developer-agent",
         };
         const r = runAdapter(dir, "state-transition-guard", payload, {
           AIDLC_COMPILED_EXECUTABLE: stub,
         });
         expect(r.code).toBe(2);
-        expect(r.stderr).toContain("Stage status cannot be changed");
+        expect(r.stderr).toContain(
+          "only the main workflow session can change stage status or routing",
+        );
         expect(r.stderr).not.toContain("unknown command");
       } finally {
         rmSync(dir, { recursive: true, force: true });
