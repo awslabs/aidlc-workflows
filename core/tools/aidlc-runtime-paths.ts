@@ -139,7 +139,7 @@ function legacyDistribution(harnessDir: string): string | null {
   return harnessDir.slice(1);
 }
 
-function harnessIdentity(root: string, strict = false): ProjectHarness | null {
+export function harnessIdentity(root: string, strict = false): ProjectHarness | null {
   const harnessDir = basename(root);
   const dataDir = join(root, "tools", "data");
   const harnessPath = join(dataDir, "harness.json");

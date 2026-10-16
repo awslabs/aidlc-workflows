@@ -17,7 +17,7 @@
 
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { type PreviewFeature, previewFeatureOn, readPreviewFeatures } from "./aidlc-channel.ts";
+import type { PreviewFeature } from "./aidlc-channel.ts";
 import {
   decideFence,
   installedKiroLayout,
@@ -28,7 +28,8 @@ import {
   swarmWorkerWorktreeMeta,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
-import { discoverProjectHarnesses, resolveHarnessPath } from "./aidlc-runtime-paths.ts";
+import { treePreviewFeature } from "./aidlc-model-policy.ts";
+import { resolveHarnessPath } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 /** The preview feature this module implements. */
@@ -113,22 +114,7 @@ function writableAgentsDir(projectDir: string): string {
   return resolveHarnessPath(["agents"], { mutable: true, projectDir });
 }
 
-// The preview choices of the project's Kiro tree (`aidlc config preview`):
-// always `.kiro`, the folder the layout check reads too. Read through a link
-// as it is, so a copy that cannot be written there is still said.
-function recordedChoices(projectDir: string): ReturnType<typeof readPreviewFeatures> {
-  return readPreviewFeatures(join(projectDir, ".kiro"));
-}
 
-// The release that tree is on, as `config preview` reads it; the running
-// engine's when the tree carries no stamp.
-function treeVersion(projectDir: string, version: string): string {
-  try {
-    return discoverProjectHarnesses(projectDir).find((tree) => tree.harnessDir === ".kiro")?.frameworkVersion ?? version;
-  } catch {
-    return version;
-  }
-}
 
 /** What the review request does with the reviewer copy. */
 export type ReviewCopyOutcome =
@@ -153,12 +139,10 @@ export function prepareReviewCopy(
   review: { requestId: string; reviewer: string; unit?: string },
   version: string = AIDLC_VERSION,
 ): ReviewCopyOutcome | null {
-  if (
-    !review.unit ||
-    !previewFeatureOn(REVIEWER_READ_SCOPE_FEATURE, recordedChoices(projectDir), treeVersion(projectDir, version))
-  ) {
-    return null;
-  }
+  // The project's Kiro tree is always `.kiro`, the folder the layout check
+  // reads too; read through a link as it is, so a copy that cannot be written
+  // there is still said.
+  if (!review.unit || !treePreviewFeature(join(projectDir, ".kiro"), REVIEWER_READ_SCOPE_FEATURE, version).on) return null;
   // Doctor lists a drop by its reason up to the first ": ", cut short, so the
   // reason starts with a short cause and the details follow it.
   const drop = (cause: string, detail: string) =>

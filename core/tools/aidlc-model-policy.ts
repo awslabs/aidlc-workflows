@@ -5,6 +5,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, join } from "node:path";
+import { harnessIdentity } from "./aidlc-runtime-paths.ts";
 import {
   PREVIEW_CHANNEL,
   type PreviewChoice,
@@ -207,6 +208,26 @@ export function installedModelBuild(harnessRoot: string, version?: string): Mode
     agentModels: readPreviewFeatures(harnessRoot)[KIRO_AGENT_MODELS_FEATURE] ?? null,
   };
 }
+
+// A preview feature in one harness tree: what the tree records, the release it
+// is stamped with (the running engine's for a tree from before stamps), and
+// whether the feature applies there. `config preview` and the reviewer copy
+// read this; a tree whose identity cannot be read records nothing.
+export function treePreviewFeature(
+  root: string,
+  feature: PreviewFeature,
+  engineVersion: string = AIDLC_VERSION,
+): { recorded: PreviewChoice | null; version: string; on: boolean } {
+  const tree = harnessIdentity(root);
+  if (tree === null) return { recorded: null, version: engineVersion, on: false };
+  const version = tree.frameworkVersion ?? engineVersion;
+  const choices = readPreviewFeatures(root);
+  return { recorded: choices[feature] ?? null, version, on: previewFeatureOn(feature, choices, version) };
+}
+
+// What Kiro's agents run on once agent-models is turned off where it applied.
+export const KIRO_AGENT_MODELS_OFF_NOTE =
+  "The models and efforts set for single agents stay recorded and are no longer written into Kiro's agent files; every agent runs on your chat's model and effort (Kiro IDE's model picker, or Kiro CLI's session model).";
 
 // Whether kiro-ide applies one agent's model and effort. The writer, the drift
 // check and the notes all read this.

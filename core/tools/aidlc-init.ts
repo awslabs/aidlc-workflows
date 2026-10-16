@@ -122,7 +122,6 @@ import {
   type PreviewFeature,
   previewFeatureOn,
   previewFeaturesFrom,
-  readPreviewFeatures,
   RELEASE_CHANNELS,
   VERSION_ID,
   versionChannel,
@@ -265,6 +264,7 @@ import {
   isModelId,
   isModelPreset,
   KIRO_AGENT_MODELS_FEATURE,
+  KIRO_AGENT_MODELS_OFF_NOTE,
   kiroAgentFileHasModelLines,
   kiroAgentModelsOn,
   MODEL_EFFORTS,
@@ -281,6 +281,7 @@ import {
   readAgentTiers,
   resolveModelPolicy,
   sessionModelsDetail,
+  treePreviewFeature,
   type AgentTiers,
   type KiroAgentModelsChoice,
   type ModelAgentPolicy,
@@ -11230,7 +11231,7 @@ function previewHelp(): string {
     "",
     heading("USAGE", out),
     `  ${cmd(`${invoke} config preview [--json]`, out)}`,
-    `  ${cmd(`${invoke} config preview <feature> <on|off> [--dry-run] [--yes]`, out)}`,
+    `  ${cmd(`${invoke} config preview <feature> <on|off> [--dry-run] [--yes] [--download]`, out)}`,
     "",
     heading("FEATURES", out),
     ...PREVIEW_FEATURES.map((feature) => `  ${feature}  ${PREVIEW_FEATURE_TEXT[feature].does}`),
@@ -11238,7 +11239,7 @@ function previewHelp(): string {
     "A preview feature applies only on a preview release of AI-DLC, and only once turned on;",
     "the choice is recorded in this project's harness tree (tools/data/harness.json). Off works",
     "on any release. Both features are Kiro's (kiro-ide); --harness picks the tree when the",
-    "project has more than one.",
+    "project has more than one. --download goes with a change, as in the other sections.",
     "",
     heading("EXAMPLE", out),
     `  ${cmd(`${invoke} config preview agent-models on --yes`, out)}`,
@@ -11252,15 +11253,11 @@ function previewFeatureStates(tree: ProjectHarness): Array<{
   recorded: PreviewChoice | null;
   on: boolean;
 }> {
-  const recorded = readPreviewFeatures(tree.root);
-  const version = tree.frameworkVersion ?? AIDLC_VERSION;
   return PREVIEW_FEATURES.filter((feature) => PREVIEW_FEATURE_HARNESSES[feature].includes(tree.distribution))
-    .map((feature) => ({
-      harness: tree.distribution,
-      feature,
-      recorded: recorded[feature] ?? null,
-      on: previewFeatureOn(feature, recorded, version),
-    }));
+    .map((feature) => {
+      const state = treePreviewFeature(tree.root, feature);
+      return { harness: tree.distribution, feature, recorded: state.recorded, on: state.on };
+    });
 }
 
 function showPreviewFeatures(
@@ -11336,12 +11333,13 @@ function previewSwitchLine(
   return `${head}; ${takes}.${undo}`;
 }
 
-// How to get the preview release the project needs, as commands. A copied
-// runtime has no release channel to follow: it takes a preview copy instead.
-function previewReleaseSteps(projectDir: string): string {
+// How to get the preview release the project needs, as commands, ending with
+// the command to run again there. A copied runtime has no release channel to
+// follow: it takes a preview copy instead.
+function previewReleaseSteps(projectDir: string, rerun: string): string {
   const invoke = configInvocationFor(projectDir);
   if (invoke !== "aidlc") {
-    return "install a preview release's copy runtime into this project (Release Channels in the install guide)";
+    return `install a preview release's copy runtime into this project (Release Channels in the install guide), then ${rerun}`;
   }
   const pin = join(projectDir, ".aidlc-version");
   const pinned = regularFile(pin) ? readFileSync(pin, "utf-8").trim() : "";
@@ -11351,6 +11349,7 @@ function previewReleaseSteps(projectDir: string): string {
     "aidlc config --channel preview",
     "aidlc update",
     `aidlc config${target}`,
+    rerun,
   ].join(", then ");
 }
 
@@ -11405,18 +11404,19 @@ function preparePreviewSection(
     );
     return null;
   }
-  const version = tree.frameworkVersion ?? AIDLC_VERSION;
+  const state = treePreviewFeature(tree.root, feature);
+  const version = state.version;
   if (choice === "on" && versionChannel(version) !== PREVIEW_CHANNEL) {
     emitResult(
       usage(
         `${feature} needs this project on a preview release of AI-DLC; it is on ${version}`,
-        previewReleaseSteps(projectDir),
+        previewReleaseSteps(projectDir, previewCommand(projectDir, tree.distribution, `${feature} on --yes`)),
       ),
       options,
     );
     return null;
   }
-  const recorded = readPreviewFeatures(tree.root)[feature] ?? null;
+  const recorded = state.recorded;
   // Nothing recorded is off, so off there changes nothing and records nothing.
   if ((recorded ?? "off") === choice) {
     emitResult(success(`${feature} is already ${choice} for this project`, { feature, choice }), options);
@@ -11448,8 +11448,8 @@ function preparePreviewSection(
     ? []
     : choice === "on"
     ? modelSummaryLines(current, current, tiers, harness, projectDir, { version, agentModels: choice }).notes
-    : ownSettings
-    ? ["The models and efforts set for single agents stay recorded and are no longer written into Kiro's agent files."]
+    : ownSettings && state.on
+    ? [KIRO_AGENT_MODELS_OFF_NOTE]
     : [];
   return {
     argv: modelsPipelineArgv(argv),
@@ -13291,7 +13291,7 @@ export async function main(
     if (modelsContext?.preview?.choice === "on" && versionChannel(stamp.frameworkVersion) !== PREVIEW_CHANNEL) {
       throw new Error(
         `${modelsContext.preview.feature} needs this project on a preview release of AI-DLC; this run sets it up on ${stamp.frameworkVersion}; ${
-          previewReleaseSteps(projectDir)
+          previewReleaseSteps(projectDir, previewCommand(projectDir, stamp.distribution, `${modelsContext.preview.feature} on --yes`))
         }`,
       );
     }
