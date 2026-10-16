@@ -5,10 +5,11 @@
 // plugin, and a base builds on core alone (#2693). Plugin sync composes the
 // bases first, then the plugins built on them, whatever their names and
 // whatever order the hosts run their session-start hooks in. A plugin whose
-// base is missing, outside its range or built on another plugin, or that names
-// two bases, is held with one line: said once by sync, kept by plugin list and
-// doctor, while every other plugin still composes. A held plugin composed
-// before stays as it was, and its line says so.
+// base is missing, outside its range, built on another plugin or lacks a stage
+// the plugin's scopes include, or that names two bases, is held with one line:
+// said once by sync, kept by plugin list and doctor, while every other plugin
+// still composes. A held plugin composed before stays as it was, and its line
+// says so.
 //
 // Mechanism: cli. Tiny plugins are built with the shipped builder into temp
 // roots; each case copies dist/claude into a fresh project with a fixture
@@ -71,6 +72,12 @@ type PluginSpec = {
   dependencies?: string[];
   requires?: string[];
   consumes?: string[];
+  // More stages like the example one, each producing <slug>-output.
+  stages?: string[];
+  // The example scope's include_stages; the example stage leaves the scope
+  // when `includesOnly` is set.
+  includes?: string[];
+  includesOnly?: boolean;
   harness?: (typeof HARNESSES)[number];
 };
 
@@ -102,7 +109,21 @@ function plugin(spec: PluginSpec): string {
       `consumes:\n${spec.consumes.map((artifact) => `  - artifact: ${artifact}\n    required: true`).join("\n")}`,
     );
   }
+  for (const slug of spec.stages ?? []) {
+    writeFileSync(
+      join(root, "stages", "construction", `${slug}.md`),
+      stage.replaceAll(`${spec.name}-example-stage`, slug).replaceAll(`${spec.name}-example-output`, `${slug}-output`),
+    );
+  }
+  if (spec.includesOnly) stage = stage.replace(`scopes:\n  - ${spec.name}-example\n`, "scopes: []\n");
   writeFileSync(stagePath, stage);
+  if (spec.includes) {
+    const scopePath = join(root, "scopes", `${spec.name}-example.md`);
+    writeFileSync(
+      scopePath,
+      readFileSync(scopePath, "utf-8").replace("runner: true", `runner: true\ninclude_stages: [${spec.includes.join(", ")}]`),
+    );
+  }
   const out = join(dir, "build");
   const built = spawnSync(
     process.execPath,
@@ -451,12 +472,106 @@ describe("t354 session-start hooks need no order", () => {
   });
 });
 
+const INIT = ["workspace-scaffold", "workspace-detection", "state-init"];
+
+// The stages a scope runs, from the project's compiled grid; null when the
+// grid has no column for it.
+function column(target: Project, scope: string): string[] | null {
+  const grid = JSON.parse(
+    readFileSync(join(target.dir, ".claude", "tools", "data", "scope-grid.json"), "utf-8"),
+  ) as Record<string, { stages: Record<string, string> }>;
+  const stages = grid[scope]?.stages;
+  return stages ? Object.keys(stages).filter((slug) => stages[slug] === "EXECUTE") : null;
+}
+
+// zeta at a version, with the stages it has besides its example stage.
+function zetaWith(version: string, stages: string[]): Installed[string] {
+  return { root: plugin({ name: "zeta", version, stages }), version };
+}
+
+describe("t354 a team scope runs the base stages it includes", () => {
+  test("the team scope runs them, and the base's stages and scope stay as they were (the reporter's case B)", () => {
+    const target = project({
+      alpha: { root: alpha({ includes: ["zeta-intake"] }) },
+      zeta: zetaWith("0.1.0", ["zeta-intake", "zeta-research"]),
+    });
+    const ran = sync(target);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(ran.stdout.trim()).toBe("plugin sync complete: 2 plugin(s)");
+    expect(column(target, "alpha-example")).toEqual([...INIT, "zeta-intake", "alpha-example-stage"]);
+    expect(column(target, "zeta-example")).toEqual([...INIT, "zeta-example-stage", "zeta-intake", "zeta-research"]);
+    const intake = join(target.dir, ".claude", "aidlc-common", "stages", "construction", "zeta-intake.md");
+    expect(readFileSync(intake, "utf-8")).not.toContain("alpha-example");
+  });
+
+  test("a base that no longer has an included stage holds the team plugin, with one line naming every stage", () => {
+    const target = project({
+      alpha: { root: alpha({ includes: ["zeta-intake", "zeta-research"] }) },
+      zeta: zetaWith("0.1.1", ["zeta-intake-v2"]),
+    });
+    const ran = sync(target);
+    const line = "alpha is not composed: it needs zeta-intake and zeta-research for its alpha-example scope, which zeta 0.1.1 does not have. Install a zeta version that has them, or a version of alpha made for zeta 0.1.1.";
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(ran.stdout).toContain(line);
+    expect(statusOf(target, "zeta")?.state).toBe("current");
+    expect(statusOf(target, "alpha")).toEqual(expect.objectContaining({ state: "dependency-unmet", message: line }));
+  });
+
+  test("composed before: the team plugin stays, its scope runs without the stage, the line is said once, and the old column is not kept", () => {
+    const team = alpha({ includes: ["zeta-intake"], includesOnly: true });
+    const target = project({ alpha: { root: team }, zeta: zetaWith("0.1.0", ["zeta-intake"]) });
+    expect(sync(target).status).toBe(0);
+    expect(column(target, "alpha-example")).toEqual([...INIT, "zeta-intake"]);
+    setInstalled(target, { alpha: { root: team }, zeta: zetaWith("0.1.1", ["zeta-intake-v2"]) });
+    const ran = sync(target);
+    const line = "alpha stays as composed before, but it needs zeta-intake for its alpha-example scope, which zeta 0.1.1 does not have, so alpha-example runs without it. Install a zeta version that has it, or a version of alpha made for zeta 0.1.1.";
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(ran.stdout).toContain(line);
+    expect(stamp(target, "alpha")?.version).toBe("0.1.0");
+    expect(stamp(target, "zeta")?.version).toBe("0.1.1");
+    // Only include_stages put alpha-example in the grid, so it is no
+    // composer-authored scope whose old column a recompile keeps.
+    expect(column(target, "alpha-example") ?? []).not.toContain("zeta-intake");
+    expect(existsSync(join(target.dir, "aidlc", "scopes", "alpha-example.md"))).toBe(false);
+    const again = sync(target);
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+    expect(again.stdout).not.toContain("alpha");
+    expect(statusOf(target, "alpha")?.message).toBe(line);
+  });
+
+  test("with no host plugin list, the check reads the stages the base composed in the project", () => {
+    const held = project({});
+    expect(sync(held, { hookRoot: zetaWith("0.1.1", ["zeta-intake-v2"]).root, hostList: false }).status).toBe(0);
+    const ran = sync(held, { hookRoot: alpha({ includes: ["zeta-intake"] }), hostList: false });
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(ran.stdout).toContain(
+      "alpha is not composed: it needs zeta-intake for its alpha-example scope, which zeta 0.1.1 does not have. Install a zeta version that has it, or a version of alpha made for zeta 0.1.1.",
+    );
+
+    const composed = project({});
+    expect(sync(composed, { hookRoot: zetaWith("0.1.0", ["zeta-intake"]).root, hostList: false }).status).toBe(0);
+    const fits = sync(composed, { hookRoot: alpha({ includes: ["zeta-intake"] }), hostList: false });
+    expect(fits.status, fits.stdout + fits.stderr).toBe(0);
+    expect(fits.stdout).not.toContain("alpha is not composed");
+    expect(column(composed, "alpha-example")).toEqual([...INIT, "zeta-intake", "alpha-example-stage"]);
+  });
+
+  test("a base outside the range says only the range line", () => {
+    const target = project({ alpha: { root: alpha({ includes: ["zeta-intake"] }) }, zeta: zetaWith("0.2.0", []) });
+    const ran = sync(target);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(ran.stdout).toContain("alpha is not composed: it needs zeta ^0.1.0, and zeta 0.2.0 is installed.");
+    expect(ran.stdout).not.toContain("zeta-intake");
+  });
+});
+
 describe("t354 the build carries the plugin's own manifest", () => {
-  test("every harness projection has .aidlc-plugin/plugin.json, and no host manifest has dependencies", () => {
+  test("every harness projection has .aidlc-plugin/plugin.json and the scope's include_stages, and no host manifest has dependencies", () => {
     for (const harness of HARNESSES) {
-      const out = plugin({ name: "alpha", dependencies: ["core", "zeta@^0.1.0"], harness });
+      const out = plugin({ name: "alpha", dependencies: ["core", "zeta@^0.1.0"], includes: ["zeta-intake"], harness });
       const carried = JSON.parse(readFileSync(join(out, ".aidlc-plugin", "plugin.json"), "utf-8")) as { dependencies?: unknown };
       expect(carried.dependencies, harness).toEqual(["core", "zeta@^0.1.0"]);
+      expect(readFileSync(join(out, "scopes", "alpha-example.md"), "utf-8"), harness).toContain("include_stages: [zeta-intake]");
       for (const entry of readdirSync(out)) {
         const hostManifest = join(out, entry, "plugin.json");
         if (entry === ".aidlc-plugin" || !existsSync(hostManifest)) continue;

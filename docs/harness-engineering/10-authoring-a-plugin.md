@@ -400,7 +400,13 @@ projection remains deferred (doc 18 §9 Status).
   the selected core/plugin set may claim it, and graph compilation rejects an
   ambiguous set. Membership for plugin-authored stages is their `scopes:`
   frontmatter list; a contribution's `adds.scopes` (§3) adds YOUR scope to an
-  existing core stage. See [Scopes](04-scopes.md).
+  existing core stage. A plugin built on a base runs the base's stages in its
+  own scope with `include_stages: [acme-1-intent-capture,
+  acme-3-code-generation]`: compile puts them in that scope's column only, and
+  the base's stages and scopes stay as they are. It names the base's stages
+  only. `include_stages` needs an AI-DLC release newer than 2.11.0; 2.11.0 and
+  earlier ignore it, so there the scope runs your own stages alone. See
+  [Scopes](04-scopes.md).
 
 ### Ship a doctor check
 
@@ -591,7 +597,9 @@ Validation checks:
   filename, and plugin ownership;
 - scopes use `<plugin>-<name>.md`, match their frontmatter identity, declare a
   supported depth, and parse declared keywords as a non-empty block or flow
-  list;
+  list; `include_stages` names neither your own stage nor a core stage, and a
+  stage it names is a warning that it is not checked unless `--with
+  <base-root>` names your checkout of the base, which must have it;
 - agents use `<plugin>-<role>-agent.md` and match their frontmatter identity;
 - no two plugin stages produce the same artifact across `produces` and
   `optional_produces`, even when no stage consumes it;
@@ -754,9 +762,10 @@ test("plugin composes into a Claude install", () => {
 - **One base at most.** A plugin builds on core and at most one base plugin:
   `"dependencies": ["core", "acme@^1.2.0"]`. The base itself builds on core
   alone. Sync composes the base first, so your stages can order after its
-  stages (`requires_stage`), read its artifacts and name its agents (check
-  those with `--with <base-root>`). If the installed base is
-  missing, outside your range or builds on another plugin, your plugin is not
+  stages (`requires_stage`), read its artifacts, name its agents and run its
+  stages in your scopes (`include_stages`); check those with `--with
+  <base-root>`. If the installed base is missing, outside your range, builds
+  on another plugin or lacks a stage your scopes include, your plugin is not
   composed (a version composed before stays as it was) and the person sees one
   line saying why; everything else still composes. A second base, your own name, or a range npm cannot read fails
   `aidlc plugin validate` (doc 18 §8).
