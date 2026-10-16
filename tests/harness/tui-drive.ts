@@ -1749,6 +1749,13 @@ export function reviewedPicks(grid: string): string[] {
   return Array.from({ length: ticked }, () => "");
 }
 
+// The option on the menu's caret row, the one Enter takes (a lone
+// multi-select ticks that row too), without its checkbox.
+export function menuPick(grid: string): string {
+  const row = unglueRules(grid).split("\n").findLast((line) => AUQ_CARET_OPTION.test(line)) ?? "";
+  return /^\s*❯\s+\d+\.\s+(?:\[[ ✔]\]\s*)?(.*\S)/.exec(row)?.[1].trim() ?? "";
+}
+
 // Is the painted question a MULTI-SELECT ("select all that apply")? The AUQ key
 // model, confirmed from the claude bundle AND by live single-keystroke probing of
 // the real widget (2026-06-06):
@@ -2375,7 +2382,7 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
       if (gridIsMultiTabForm(grid)) {
         await backend.send(session, "Right", false, true); // advance to the next tab / Submit
       } else {
-        nextPersonTurnCarriesPicks(session, 1);
+        nextPersonTurnCarriesPicks(session, 1, menuPick(grid));
         await backend.send(session, "Enter", false, true); // lone multi-select: commit it
       }
     } else if (rejectFirstGate && gridIsApprovalGate(grid)) {
@@ -2417,7 +2424,8 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         screen: grid,
       });
       // A pick on one tab of a form is counted with the form's Submit.
-      nextPersonTurnCarriesPicks(session, gridIsMultiTabForm(grid) ? 0 : 1);
+      const tab = gridIsMultiTabForm(grid);
+      nextPersonTurnCarriesPicks(session, tab ? 0 : 1, tab ? "" : menuPick(grid));
       await backend.send(session, "Enter", false, true); // select Recommended + advance
     }
     answered++;
