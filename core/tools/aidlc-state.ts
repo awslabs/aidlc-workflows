@@ -4348,8 +4348,8 @@ function verifyStageArtifacts(
     const message =
       `${reviewerPreconditionPrefix(stage.slug, action)}: none of its declared artifacts exist ` +
         `under the intent's record directory. The stage protocol requires ${stage.name} ` +
-        `to produce output before the gate. Produce the artifacts before completing. ` +
-        `(declared: ${(stage.produces ?? []).join(", ") || "none"})`;
+        `to produce output before the gate. Produce the artifacts ` +
+        `(declared: ${(stage.produces ?? []).join(", ") || "none"}), then run the same report again.`;
     refuseStateGuard(pd, stateContent ?? readStateFile(pd), stage, {
       code: "REQUIRED_ARTIFACTS_MISSING",
       blockedAction: action,
@@ -4365,8 +4365,7 @@ function verifyStageArtifacts(
         `workspace tree. In a git workspace this means no uncommitted change and no ` +
         `code in the last commit; otherwise no source file exists. Planning docs alone ` +
         `do not satisfy ${stage.name} - write the code to the workspace (a source change ` +
-        `not committed yet counts, as does code in the last commit), or the person can ` +
-        `choose Request Changes and say what is missing.`;
+        `not committed yet counts, as does code in the last commit), then run the same report again.`;
     refuseStateGuard(pd, stateContent ?? readStateFile(pd), stage, {
       code: "REQUIRED_SOURCE_WORK_MISSING",
       blockedAction: action,
@@ -4512,6 +4511,9 @@ function refuseStateGuard(
     invariant: string;
     userMessage: string;
     unit?: string;
+    // The Unit whose review a stage's refusal is about: its own review
+    // accounting names the request, while the refusal stays the stage's.
+    reviewUnit?: string;
     receipts?: ReturnType<typeof freshReviewReceipts>;
     summaryCoverage?: "current" | "stale" | "missing";
     autonomousBolt?: {
@@ -4521,8 +4523,9 @@ function refuseStateGuard(
     };
   },
 ): never {
+  const attemptUnit = input.unit ?? input.reviewUnit;
   const snapshot = guardAttemptState(pd, content, stage, {
-    ...(input.unit ? { unit: input.unit } : {}),
+    ...(attemptUnit ? { unit: attemptUnit } : {}),
     ...(input.receipts ? { receipts: input.receipts } : {}),
     ...(input.summaryCoverage ? { summaryCoverage: input.summaryCoverage } : {}),
   });
@@ -5168,11 +5171,15 @@ function staleSourcePreconditionError(
     `Cannot complete "${slug}" because the project source changed after ${reviewer} ` +
       `reviewed it. Ask ${reviewer} to review the current source once more and record ` +
       `the verdict, or revert the source change, then try again.`;
+  // On a per-unit stage the review that covered the source is the newest
+  // Unit's, so the one recovery review is that Unit's.
+  const reviewUnit = receipts.newestSourceUnit ?? undefined;
   refuseStateGuard(pd, content, stage, {
     code: "SOURCE_REVIEW_STALE",
     blockedAction: action,
     invariant: "The current source remains covered by reviewer evidence.",
     userMessage: message,
+    ...(reviewUnit ? { reviewUnit } : {}),
     receipts,
   });
 }
@@ -6029,7 +6036,7 @@ function verifyTeamUnitGateEvidence(
     if (missing.length > 0) {
       const message =
         `Refusing gate for unit "${context.unit}" of "${stage.slug}": required ` +
-        `artifacts are missing (${missing.join(", ")}).`;
+        `artifacts are missing (${missing.join(", ")}). Write them, then run the same report again.`;
       refuseStateGuard(pd, content, stage, {
         code: "REQUIRED_ARTIFACTS_MISSING",
         blockedAction: action,

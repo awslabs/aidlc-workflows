@@ -261,6 +261,8 @@ import {
   legacyWorktreePath,
   listIntents,
   workToPickUp,
+  finishedWork,
+  workStanding,
   listSpaces,
   ARCHIVED_INTENT_STATUS,
   clearActiveIntentCursor,
@@ -1933,6 +1935,30 @@ function codeScannedClause(projectDir: string, intent: string | undefined, space
   }
 }
 
+// The work here while none is selected in this conversation (a teammate's
+// clone, a chat that has not joined it): each piece by name and where it
+// stands, then the two ways on. Null when no record is here.
+function workHereStatus(projectDir: string, space: string): string | null {
+  const present = listIntents(projectDir, space, null).filter((intent) => intent.dirName !== null);
+  const shown = present.filter((intent) => !isArchivedIntent(intent));
+  if (shown.length === 0) return null;
+  const finished = new Set(finishedWork(projectDir, space, null).map((intent) => intent.dirName));
+  const states = new Map((workToPickUp(projectDir, space, null) ?? []).map(({ intent, state }) => [intent.dirName, state]));
+  const lines = shown.map((intent) => {
+    const record = isSafeIntentRecordName(intent.dirName) ? intent.dirName : JSON.stringify(intent.dirName);
+    const label = intentDisplayLabel(intent);
+    const where = finished.has(intent.dirName) ? "finished" : workStanding(states.get(intent.dirName) ?? "") || "in progress";
+    return `  ${label === record ? record : `${label} (record ${record})`}: ${where}\n`;
+  });
+  const archived = present.length - shown.length;
+  const entry = entrySkillInvocation();
+  return `No work is selected in this conversation. Work in this project${space === DEFAULT_SPACE ? "" : ` (space "${space}")`}:\n` +
+    lines.join("") +
+    (archived > 0 ? `  (${archived} archived; ${entry} intent list --all shows ${archived === 1 ? "it" : "them"})\n` : "") +
+    `\nTo carry on with one, or go back to one of its stages: ${entry} intent <record>\n` +
+    `To start new work: ${entry} "build the auth service"\n`;
+}
+
 function handleStatus(projectDir: string, flags: Record<string, string>): void {
   // --intent <record> / --space <name> target a specific intent's status
   // (vision §5); omitted -> the active record.
@@ -1946,6 +1972,7 @@ function handleStatus(projectDir: string, flags: Record<string, string>): void {
       : stateFilePath(projectDir, selection.intent, selection.space);
   if (!existsSync(sp)) {
     process.stdout.write(
+      (selection.intent === null ? workHereStatus(projectDir, selection.space) : null) ??
       `No active AI-DLC workflow found.
 
 To get started:

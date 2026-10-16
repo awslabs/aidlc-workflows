@@ -766,7 +766,7 @@ describe("t278 engine-emitted wave contract", () => {
     expect(result.directive.wave?.entries.map((entry) => entry.unit)).toEqual([
       "alpha",
     ]);
-    expect(result.stderr).toContain("bolt_dag is missing or stale");
+    expect(result.stderr).not.toContain("bolt_dag");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("dependent batches wait for fresh terminal receipts, including NOT-READY at cap", () => {

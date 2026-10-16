@@ -336,6 +336,48 @@ describe("t27 aidlc-utility status", () => {
     expect(r.stdout).toContain("No active");
   });
 
+  // A teammate's clone: the records are here, the per-user cursor is not.
+  // Status names each piece of work and where it stands, never "no workflow".
+  function cloneWithRecords(withArchived = false): string {
+    const p = bareProj();
+    const intents = join(p, "aidlc", "spaces", "default", "intents");
+    const finished = readdirSync(intents).find((name) => name.startsWith("fixture-"))!;
+    seedStateFile(p, "state-completed.md");
+    const other = "261016-other-work";
+    mkdirSync(join(intents, other), { recursive: true });
+    cpSync(STATE_FIXTURE, join(intents, other, "aidlc-state.md"));
+    const registry = JSON.parse(readFileSync(join(intents, "intents.json"), "utf-8"));
+    registry.push({ uuid: "00000000-0000-7000-8000-000000000002", slug: "other-work", dirName: other, status: "in-flight" });
+    if (withArchived) {
+      const old = "261001-old-work";
+      mkdirSync(join(intents, old), { recursive: true });
+      cpSync(STATE_FIXTURE, join(intents, old, "aidlc-state.md"));
+      registry.push({ uuid: "00000000-0000-7000-8000-000000000003", slug: "old-work", dirName: old, status: "archived" });
+    }
+    writeFileSync(join(intents, "intents.json"), `${JSON.stringify(registry, null, 2)}\n`);
+    rmSync(join(intents, "active-intent"), { force: true });
+    expect(finished).toBeDefined();
+    return p;
+  }
+
+  test("5b: status with work here and none selected names each piece and where it stands", () => {
+    const r = util(["status"], cloneWithRecords());
+    expect(r.status).toBe(0);
+    expect(r.stdout).not.toContain("No active");
+    expect(r.stdout).toContain("No work is selected in this conversation. Work in this project:");
+    expect(r.stdout).toMatch(/ {2}fixture \(record fixture-[0-9a-f]+\): finished\n/);
+    expect(r.stdout).toContain("  other-work (record 261016-other-work): at Feasibility");
+    expect(r.stdout).toContain("To carry on with one, or go back to one of its stages: /aidlc intent <record>");
+    expect(r.stdout).toContain('To start new work: /aidlc "build the auth service"');
+  });
+
+  test("5c: archived work is counted, not listed", () => {
+    const r = util(["status"], cloneWithRecords(true));
+    expect(r.stdout).toContain("other-work");
+    expect(r.stdout).not.toContain("old-work");
+    expect(r.stdout).toContain("(1 archived; /aidlc intent list --all shows it)");
+  });
+
   test("6: status shows IDEATION phase", () => {
     const r = util(["status"], stateProj());
     expect(r.stdout).toContain("IDEATION");

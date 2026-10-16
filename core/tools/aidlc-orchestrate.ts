@@ -276,6 +276,8 @@ import {
   isCompletedIntent,
   listIntents,
   listSpaces,
+  finishedWork,
+  workStanding,
   workToPickUp,
   readProjectDescriptionAuthority,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
@@ -5293,6 +5295,7 @@ function planProposalDirective(
   description: string,
   pd: string,
   derivedFrom?: string,
+  finished?: FinishedWorkHere,
 ): PrintDirective {
   const kept = derivedFrom === undefined ? null : readQuestion(pd, derivedFrom);
   const question = kept !== null && kept.origin === "front" && kept.text === description && !kept.proposedScope
@@ -5310,13 +5313,69 @@ function planProposalDirective(
     const units = cost && cost.perUnitStages > 0 ? ", splits the work into Units" : "";
     return `${scope}${cost ? ` (${cost.shown} ${cost.shown === 1 ? "stage" : "stages"}${units})` : ""}: ${meta?.description ?? ""}${hints}`;
   });
+  const words = `"${requestPreview(description)}".${documentSplitSentence(description)}`;
+  // Words beside finished work may ask to go back to one of its stages: the
+  // agent reads which, so the tool does not call them new work.
+  const opening = finished === undefined
+    ? `The person asked for new work: ${words} No plan is chosen for it yet. Read what they describe and propose `
+    : `The person said: ${words} ${finishedWorkReading(finished, typedSettingsFirst(flags, pd))} If they describe new ` +
+      "work, no plan is chosen for it yet, so propose ";
   return printDirective(
-    `The person asked for new work: "${requestPreview(description)}".${documentSplitSentence(description)} No plan is ` +
-      "chosen for it yet. Read what they describe and propose the plan below that fits it: run " +
+    `${opening}the plan below that fits it: run ` +
       `\`${next} --propose <plan> --request ${question.id}\` and it returns the question to show them (go ahead, ` +
       "a different plan, or a tailored one) with its answers; show it as given. When no ready-made plan fits, run " +
       `\`${next} --propose compose --request ${question.id}\` instead. Create nothing yourself. Plans: ${plans.join(" / ")}`,
   );
+}
+
+// Finished work here, by the name the person knows it by and the record that
+// selects it, and whether this chat has it selected.
+type FinishedWorkHere = { records: Array<{ label: string; record: string }>; selected: boolean };
+
+// The selected workflow, finished: the one piece the words can go back to.
+function finishedSelectedWork(pd: string): FinishedWorkHere | undefined {
+  const { space, intent } = engineSelection(pd);
+  if (intent === null || !isSafeIntentRecordName(intent)) return undefined;
+  const row = listIntents(pd, space, intent).find((entry) => entry.dirName === intent);
+  return { records: [{ label: intentDisplayLabel(row ?? { dirName: intent }), record: intent }], selected: true };
+}
+
+// Finished work here while none is selected in this chat (a teammate's clone,
+// a chat that has not joined it). Record names are repository text: only one
+// in the record-name shape is written into a command, so any other is left out.
+function finishedUnselectedWork(pd: string): FinishedWorkHere | undefined {
+  const { space, intent } = engineSelection(pd);
+  if (intent !== null) return undefined;
+  const records = finishedWork(pd, space, null)
+    .flatMap((entry) => isSafeIntentRecordName(entry.dirName) ? [{ label: intentDisplayLabel(entry), record: entry.dirName }] : []);
+  return records.length === 0 ? undefined : { records, selected: false };
+}
+
+// The settings typed with the words, set before the stage step: a jump takes
+// none of them, so they would be dropped without a word.
+function typedSettingsFirst(flags: ParsedFlags, pd: string): string {
+  const typed = typedSettingModifiers(flags);
+  if (typed.length === 0) return "";
+  const unnamed = settingNeedsTheirWords(pd, typed);
+  return `\`${configSetCommand(typed, unnamed)}\`${unnamed ? PERSON_WORDS_FILL : ""} and say the line it prints, then `;
+}
+
+// The way back to a stage of finished work, beside the plan step; `settings`
+// is the step that sets what the person typed with the words, or "".
+function finishedWorkReading({ records, selected }: FinishedWorkHere, settings: string): string {
+  const named = records.map(({ label, record }) => label === record ? `\`${record}\`` : `\`${label}\` (record: \`${record}\`)`);
+  const stage = `${settings}\`${aidlcToolInvocation("orchestrate")} next --stage <stage slug>\` (add \`--unit <unit>\` or ` +
+    "`--every-unit` when they named a Unit or every Unit) and follow what it returns.";
+  if (records.length === 1) {
+    const select = selected ? "" : `\`${aidlcDispatcherInvocation("intent")} ${records[0].record}\`, then `;
+    return `This project's work ${named[0]} is finished${selected ? "" : ", and it is not selected in this chat"}. ` +
+      "Their words may ask to go back to one of its stages, or describe new work: read them. If they ask to go back " +
+      `to a stage of it, run ${select}${stage}`;
+  }
+  return `This project's finished work, none selected in this chat: ${named.join(", ")}. Their words may ask to go ` +
+    "back to a stage of one of them, or describe new work: read them. If they ask to go back to a stage of one, run " +
+    `\`${aidlcDispatcherInvocation("intent")} <its record>\`, then ${stage} If their words fit more than one, ask ` +
+    "them once in plain words which they meant, then stop.";
 }
 
 // The workflow creation print for a resolved scope on a fresh workspace (no intent
@@ -5347,6 +5406,8 @@ function freshWorkRoute(
   // An earlier question held these words: the ask this builds records that
   // request as its root, so what the person set for it still reaches the work.
   derivedFrom?: string,
+  // Finished work the words may ask to go back to (finishedWorkReading).
+  finished?: FinishedWorkHere,
 ): Directive {
   // The plan the agent proposed with the request, when it did; none means the
   // proposal step first.
@@ -5361,7 +5422,7 @@ function freshWorkRoute(
     if (pick) return pick;
   }
   if (plan !== null) return freshWorkOfferDirective(flags, pd, plan, derivedFrom);
-  return planProposalDirective(flags, description, pd, derivedFrom);
+  return planProposalDirective(flags, description, pd, derivedFrom, finished);
 }
 
 // The selected workflow has nothing left to run: its current stage is done or
@@ -5845,15 +5906,6 @@ function unselectedRecords(
   const intents = intentStates.map(({ intent }) => intent);
   const annotate = intents.length > 1 &&
     intentStates.some(({ state }) => isTeamUnitOwnership(state));
-  // Where each piece of work stands, in the stage names the person sees. Work
-  // going Unit by Unit is named by its phase: Current Stage stays on the first
-  // per-Unit stage while each Unit works through the later ones.
-  const standing = (state: string): string => {
-    const stage = nodeForSlug((getField(state, "Current Stage") ?? "").trim());
-    if (!stage) return "";
-    const unitByUnit = isPerUnitStage(stage) && getField(state, CONSTRUCTION_ITERATION_FIELD)?.trim() === "unit-major";
-    return unitByUnit ? `in ${stage.phase.charAt(0).toUpperCase()}${stage.phase.slice(1)}` : `at ${stage.name}`;
-  };
   const present = intentStates.filter(({ intent }) => intent.dirName);
   const selectable = present.flatMap(({ intent, state }) =>
     isBindableIntentRecordName(intent.dirName)
@@ -5895,7 +5947,7 @@ function unselectedRecords(
         }
       }
     }
-    annotation ||= standing(state);
+    annotation ||= workStanding(state);
     const label = intentDisplayLabel(intent);
     // A directory name outside the record-name shape is still selectable through
     // select_commands; the text shows it quoted, as data.
@@ -6444,8 +6496,10 @@ function readUnitOwnership(stateContent: string | null): "team" | null {
 // so the per-unit loop, the approve-side coverage guard, and the swarm fan-out
 // never truncate a multi-unit plan because a hook failed to refresh the graph.
 // Three states:
-//   ok        - batches resolved (healed=true when recomputed; a heal writes
-//               one stderr note, since the compile hook should have run).
+//   ok        - batches resolved, recomputed when the cache is stale. A
+//               heal says nothing: a fresh clone has no graph until the
+//               next transition compiles one, and hooks that never run are
+//               reported by next's hooks-off stop and by doctor.
 //   none      - no dependency artifact: a genuine zero-unit scope; callers
 //               keep the single-iteration degrade byte-identical.
 //   malformed - the artifact exists but its fenced units block does not
@@ -6456,13 +6510,7 @@ function readUnitOwnership(stateContent: string | null): "team" | null {
 type BoltBatchesResolution = BoltDagResolution;
 
 function resolveBoltBatches(projectDir: string, evidence?: ConstructionEvidence): BoltBatchesResolution {
-  const resolution = evidence?.dag ?? resolveBoltDag(projectDir);
-  if (resolution.state === "ok" && resolution.healed) {
-    process.stderr.write(
-      `aidlc-orchestrate: runtime-graph.json bolt_dag is missing or stale; recomputed ${resolution.batches.length} unit batch(es) from unit-of-work-dependency.md (check the rebuild-stage-graph hook)\n`,
-    );
-  }
-  return resolution;
+  return evidence?.dag ?? resolveBoltDag(projectDir);
 }
 
 // True when `node` is the SKELETON-GATE stage for `scope` — the FIRST
@@ -9663,8 +9711,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // over. A typed scope (flag or positional, even the finished workflow's own)
   // starts that work with that scope, as it does on a fresh workspace, and as a
   // second intent (Branch 4a): this session may hold the finished one's context.
-  // Prose alone gets the fresh-start answer (Branch 8). A jump or --resume is a
-  // move on the finished workflow itself and keeps its own path.
+  // Prose alone gets the fresh-start answer (Branch 8), beside the way back to
+  // a stage of the finished work, since the words may ask for that. A jump or
+  // --resume is a move on the finished workflow itself and keeps its own path.
   const finishedWorkDescription = flags.intent?.trim();
   if (
     stateContent &&
@@ -9680,7 +9729,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       emit(createPrintDirective(typedScope, flags, pd, finishedWorkDescription));
       return;
     }
-    emit(freshWorkRoute(flags, flags.intent!, pd, question?.id));
+    emit(freshWorkRoute(flags, flags.intent!, pd, question?.id, finishedSelectedWork(pd)));
     return;
   }
 
@@ -9920,8 +9969,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   ) {
     // The question these words came through (a reading step's, or the proposal
     // step's own on a re-run) is the request's root, and the proposal step
-    // reuses it: the same id, the same print.
-    emit(freshWorkRoute(flags, flags.intent, pd, question?.id));
+    // reuses it: the same id, the same print. Finished work here, which the
+    // pick above leaves out, is named beside it.
+    emit(freshWorkRoute(flags, flags.intent, pd, question?.id, finishedUnselectedWork(pd)));
     return;
   }
 
@@ -13759,7 +13809,7 @@ function emitUnitMajorRunStage(
 
   // Resolve the DAG and kind map once. A stale graph can heal from the
   // dependency artifact; threading this immutable result through every
-  // fallback prevents repeated reads/warnings and preserves healed unit kinds.
+  // fallback prevents repeated reads and preserves healed unit kinds.
   if (resolution.state !== "ok" || resolution.batches.flat().length === 0) {
     emitPerUnitRunStage(
       node,

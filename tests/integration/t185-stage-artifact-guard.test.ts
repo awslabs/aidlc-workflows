@@ -74,6 +74,7 @@ import {
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  guardRecoveryAskFromRefusalText,
   pipelineAttemptStartedAt,
   readSummaryAuthorization,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
@@ -89,6 +90,11 @@ const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility
 let handoffClock = 0;
+
+// The guard-recovery ask a refusal carries on the last line of its sentence.
+function refusalAsk(out: string) {
+  return guardRecoveryAskFromRefusalText((JSON.parse(out) as { error: string }).error);
+}
 
 function ensurePipelineAttemptStarted(proj: string): void {
   if (pipelineAttemptStartedAt(proj, "reverse-engineering")) return;
@@ -638,12 +644,49 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     const slug = field(proj, "Current Stage");
     const r = guarded(proj, ["gate-start", slug]);
     expect(r.rc).not.toBe(0);
-    expect((JSON.parse(r.out) as { error: string }).error).toContain(
+    const said = (JSON.parse(r.out) as { error: string }).error;
+    expect(said).toContain(
       'Cannot present "feasibility" for approval: none of its declared artifacts exist',
     );
+    expect(said).toContain("then run the same report again");
+    // Writing the outputs is the agent's own step, the refusal's own sentence;
+    // Feasibility has no reviewer, so a review request is no way on.
+    const ask = refusalAsk(r.out);
+    expect(ask?.agent_work, r.out).toBe(true);
+    expect(ask?.remedies.map((remedy) => [remedy.op, remedy.interaction])).toEqual([
+      ["produce-stage-output", "external-work"],
+    ]);
+    expect(ask?.remedies[0]?.action).toBe(said.split("\n")[0]);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
       `- [-] ${slug}`,
     );
+  });
+
+  // The reporter's path: `report` hands back only the ask, so the step the
+  // agent takes is the refusal's own sentence on its one way on.
+  test("report on a stage with no outputs hands the agent writing them, in the refusal's own words", () => {
+    const slug = field(proj, "Current Stage");
+    bypassed(proj, ["checkbox", `${slug}=in-progress`]);
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.AIDLC_SKIP_ARTIFACT_GUARD;
+    const r = spawnSync(BUN, [ORCHESTRATE, "report", "--stage", slug, "--result", "awaiting-approval", "--project-dir", proj], {
+      encoding: "utf-8",
+      env,
+    });
+    const step = JSON.parse(r.stdout) as {
+      kind?: string;
+      agent_work?: boolean;
+      reason_codes?: string[];
+      remedies?: { op: string; action: string; interaction?: string }[];
+    };
+    expect(step.kind, r.stdout).toBe("ask");
+    expect(step.agent_work, r.stdout).toBe(true);
+    expect(step.reason_codes).toEqual(["REQUIRED_ARTIFACTS_MISSING"]);
+    expect(step.remedies?.map((remedy) => [remedy.op, remedy.interaction])).toEqual([
+      ["produce-stage-output", "external-work"],
+    ]);
+    expect(step.remedies?.[0]?.action).toContain('Cannot present "feasibility" for approval: none of its declared artifacts exist');
+    expect(step.remedies?.[0]?.action).toContain("then run the same report again");
   });
 
   test("revise REFUSES before [?] when revised artifacts are absent", () => {
@@ -2075,8 +2118,13 @@ X. Other (please specify)
       const refused = approveCodeGen();
       expect(refused.rc).not.toBe(0);
       expect(refused.out).toContain("a source change not committed yet counts, as does code in the last commit");
-      expect(refused.out).toContain("choose Request Changes and say what is missing");
+      expect(refused.out).toContain("then run the same report again");
+      // The way on is the agent's own step: it carries no question for the person.
+      expect(refused.out).not.toContain("choose Request Changes");
       expect(refused.out).not.toContain("--bypass");
+      const ask = refusalAsk(refused.out);
+      expect(ask?.agent_work, refused.out).toBe(true);
+      expect(ask?.remedies.map((remedy) => remedy.op)).toEqual(["produce-stage-output"]);
       // The step it names: new source, reviewed again as any change is, and
       // the same approve goes through.
       writeFileSync(join(proj, "src", "auth", "login.ts"), "export const login = 2;\n");
