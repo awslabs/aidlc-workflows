@@ -17,7 +17,7 @@ import {
   unbackedFailure,
   unbackedTuiDecisions,
 } from "../harness/person-turns.ts";
-import { reviewedPicks } from "../harness/tui-drive.ts";
+import { menuPick, reviewedPicks } from "../harness/tui-drive.ts";
 
 const projects: string[] = [];
 const folders: string[] = [];
@@ -643,6 +643,53 @@ describe("person-turn check", () => {
     expect(problems[0]).toContain('recorded words "Add a note"');
     expect(problems[0]).toContain('"Keep (project); Nothing to add"');
     expect(readdirSync(folder)).toEqual([]);
+  });
+
+  // Run 38809298225 on Windows: the person picked "Guide me" on a lone
+  // question, and the agent recorded it as a choice left to it, quoting the
+  // pick. Only the pick's own words can back that quote.
+  test("a lone menu pick backs an answer the agent records quoting it", () => {
+    const screen = [
+      "─".repeat(60),
+      " ☐ Answer mode",
+      "",
+      "│ I've created 5 questions about how your team wants to work on this project, at",
+      "│ inception/practices-discovery/practices-discovery-questions.md. How would you like to answer them?",
+      "",
+      "❯ 1. Guide me",
+      "     I'll walk you through each question here, one batch at a time.",
+      "  2. I'll edit the file",
+      "     You fill in the answers directly in the questions file, then tell me you're done.",
+      "  3. Chat",
+      "     We discuss freely and I pull the decisions out of the conversation.",
+      "  4. Type something.",
+      "─".repeat(60),
+    ].join("\n");
+    expect(menuPick(screen)).toBe("Guide me");
+    expect(menuPick(screen.replace("❯ 1. Guide me", "❯ 1.─Guide me─────"))).toBe("Guide me");
+    expect(menuPick("│ Which areas apply?\n\n❯ 1. [ ] Storage\n  2. [ ] Network")).toBe("Storage");
+    ledgerFolder();
+    const problems = [menuPick(screen), ""].map((words, which) => {
+      const dir = project();
+      const session = `t-person-turns-lone-pick-${which}-${process.pid}`;
+      startPersonTurnSession(session, dir);
+      submittedToPersonTurnSession(session, "/aidlc --scope classic Build a simple React todo app");
+      row(dir, "DECISION_RECORDED", {
+        Stage: "practices-discovery", Decision: "How would you like to answer the questions?", "Question Kind": "answer-mode",
+      });
+      nextPersonTurnCarriesPicks(session, 1, words);
+      submittedToPersonTurnSession(session, "");
+      row(dir, "QUESTION_ANSWERED", {
+        Stage: "practices-discovery", Details: "Guide me",
+        "Answer Source": "chosen by the agent as the person asked", Instruction: "Guide me",
+      });
+      return unbackedTuiDecisions(dir);
+    });
+    expect(problems[0]).toEqual([]);
+    // A pick with no words backs no quote.
+    expect(problems[1]).toHaveLength(1);
+    expect(problems[1][0]).toContain("QUESTION_ANSWERED practices-discovery");
+    expect(problems[1][0]).toContain('recorded words "Guide me"');
   });
 
   test("a form's picks are read off its review screen, or its ticked tabs when the review is out of view", () => {
