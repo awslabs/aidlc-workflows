@@ -187,8 +187,6 @@ export type KiroAgentModelsChoice = "on" | "off";
 export type ModelBuild = {
   version?: string;
   agentModels?: KiroAgentModelsChoice | null;
-  // This run turns agent-models off: the kiro-ide writer takes its lines out once.
-  takeOut?: boolean;
 };
 
 export function readKiroAgentModelsChoice(harnessRoot: string): KiroAgentModelsChoice | null {
@@ -785,6 +783,8 @@ export function applyModelPolicyToProjection(
   policyValue?: ModelPolicyRecord | null,
   capValue?: Tier | null,
   build?: ModelBuild,
+  // The run that turns kiro-ide's agent-models off: take its lines out once.
+  takeOut = false,
 ): EffectiveModelPolicy[] {
   const harnessRoot = join(projectionRoot, harnessDir);
   const policy = policyValue ?? null;
@@ -822,7 +822,7 @@ export function applyModelPolicyToProjection(
         }),
       );
     }
-  } else if (harness === "kiro-ide" && (kiroAgentModelsOn(build) || build?.takeOut)) {
+  } else if (harness === "kiro-ide" && (kiroAgentModelsOn(build) || takeOut)) {
     // Kiro reads `model` and `effortLevel` from the agent at each dispatch; the
     // conductor (aidlc-aidlc.md) has no tier and is never written. With the
     // feature off the agent files are left as they are, the person's own lines
@@ -905,6 +905,8 @@ export function modelPolicySurfaceDrift(
   harness: ModelHarness,
   policyValue: ModelPolicyRecord | null,
   build?: ModelBuild,
+  // Also list the policy this harness cannot express, not only file mismatches.
+  includeUnexpressed = true,
 ): string[] {
   const harnessRoot = join(projectDir, harnessDir);
   const agentsDir = modelPolicyAgentsDir(harness, harnessDir);
@@ -937,8 +939,10 @@ export function modelPolicySurfaceDrift(
     const surfaceExpected = harness === "kiro" && expected.model && kiroCollapsed[expected.model]
       ? { ...expected, effort: kiroCollapsed[expected.model] }
       : expected;
-    for (const field of expected.unexpressed) {
-      issues.push(`${name}: ${field} policy is not expressible on ${harness}`);
+    if (includeUnexpressed) {
+      for (const field of expected.unexpressed) {
+        issues.push(`${name}: ${field} policy is not expressible on ${harness}`);
+      }
     }
     let path = "";
     let actual: { model?: string; effort?: ModelEffort } = {};
@@ -1033,12 +1037,13 @@ export function harnessHonestyNotes(
     // The kiro-ide switch hint is for one agent's own setting; a preset or
     // group effort stays unexpressed with the switch on too.
     const own = effective.some((item) => item.layer === "agent-exception" && item.unexpressed.length > 0);
-    const honesty = modelHarnessHonesty(harness, build);
+    const offInPreview = harness === "kiro-ide" && !kiroAgentModelsOn(build) &&
+      versionChannel(build?.version ?? AIDLC_VERSION) === PREVIEW_CHANNEL;
     notes.push(
-      honesty !== KIRO_AGENT_MODELS_OFF_IN_PREVIEW
-        ? honesty.message
+      !offInPreview
+        ? modelHarnessHonesty(harness, build).message
         : own
-        ? `${honesty.message} \`${command("--agent-models on --yes")}\` turns it on.`
+        ? `${KIRO_AGENT_MODELS_OFF_IN_PREVIEW.message} \`${command("--agent-models on --yes")}\` turns it on.`
         : HARNESS_HONESTY["kiro-ide"].message,
     );
   }

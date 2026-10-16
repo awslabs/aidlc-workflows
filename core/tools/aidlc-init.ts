@@ -1215,12 +1215,15 @@ function agentModelsSwitchLine(
   projectDir: string,
   harness: ModelHarness,
   harnessDir: string,
-  from: KiroAgentModelsChoice | null | undefined,
+  before: ModelBuild,
   to: KiroAgentModelsChoice,
 ): string {
-  return `  Kiro agent models: ${from ?? "not set"} -> ${to} in ${harnessDir}/tools/data/harness.json; ` +
-    `Kiro takes it at each agent's next dispatch. To undo: ` +
-    modelsCommand(projectDir, harness, `--agent-models ${to === "on" ? "off" : "on"} --yes`);
+  const head = `  Kiro agent models: ${before.agentModels ?? "not set"} -> ${to} in ${harnessDir}/tools/data/harness.json`;
+  const wasOn = kiroAgentModelsOn(before);
+  // Recording what was already in effect changes no agent file.
+  if (wasOn === (to === "on")) return `${head}; the agent files do not change.`;
+  return `${head}; Kiro takes it at each agent's next dispatch. To undo: ` +
+    modelsCommand(projectDir, harness, `--agent-models ${wasOn ? "on" : "off"} --yes`);
 }
 
 // The release and agent-models choice of this project's harness, for the
@@ -6583,6 +6586,7 @@ function prepareRefreshSource(
   projectProjection: boolean,
   diagnosticsOverride?: ConfigDiagnosticOverrides,
   force = false,
+  // The caller passes the version of the release being staged.
   agentModelsRequest: { version: string; requested?: KiroAgentModelsChoice } = { version: AIDLC_VERSION },
 ): PreparedRefreshSource {
   // A copied project is not a release: never baseline the user's edits as
@@ -6730,19 +6734,27 @@ function prepareRefreshSource(
   // without it.
   let agentModelsChoice: KiroAgentModelsChoice | null = null;
   let agentModelsRecorded = false;
+  // Lines come out only in the run that turns off a feature that was on.
+  let agentModelsTakeOut = false;
   if (descriptor.distribution === "kiro-ide") {
     const recorded = staged[KIRO_AGENT_MODELS_RECORD];
+    const before = recorded === "on" || recorded === "off" ? recorded : null;
     agentModelsChoice = kiroAgentModelsChoice(recorded, agentModelsRequest.requested, agentModelsRequest.version);
+    agentModelsTakeOut = agentModelsRequest.requested === "off" &&
+      kiroAgentModelsOn({ version: agentModelsRequest.version, agentModels: before });
     if (agentModelsChoice !== null && agentModelsChoice !== recorded) {
       staged[KIRO_AGENT_MODELS_RECORD] = agentModelsChoice;
       agentModelsRecorded = true;
+      if (agentModelsRequest.requested === undefined) {
+        notes.push(
+          "Recorded agent-models on for this project, because AIDLC_PREVIEW_FEATURES names it: later runs keep " +
+            "each agent's own model and effort without it. " +
+            `\`${configInvocationFor(projectDir)} config models --agent-models off --yes\` turns it off.`,
+        );
+      }
     }
   }
-  const agentModelsBuild: ModelBuild = {
-    version: agentModelsRequest.version,
-    agentModels: agentModelsChoice,
-    takeOut: agentModelsRequest.requested === "off",
-  };
+  const agentModelsBuild: ModelBuild = { version: agentModelsRequest.version, agentModels: agentModelsChoice };
   const distribution = staged.distribution;
   if (typeof distribution !== "string") {
     throw new Error(`${stagedHarnessData}: distribution must be a string`);
@@ -6778,6 +6790,7 @@ function prepareRefreshSource(
     modelPolicy,
     undefined,
     agentModelsBuild,
+    agentModelsTakeOut,
   );
   applyProjectFlagsToProjection(
     root,
@@ -11043,7 +11056,7 @@ function prepareModelsSection(
         next: current,
         tiers,
         summaryLines: [
-          agentModelsSwitchLine(projectDir, harness, selected.harnessDir, installedBuild.agentModels, agentModels),
+          agentModelsSwitchLine(projectDir, harness, selected.harnessDir, installedBuild, agentModels),
         ],
         notes: summary.notes,
         agentModels,
@@ -11092,11 +11105,9 @@ function prepareModelsSection(
   const settingsUnchanged = canonical(targetCurrentSettings) === canonical(targetNextSettings);
   const kiroIdeProjectionDue = settingsUnchanged && selected.distribution === "kiro-ide" && (
     agentModelsChange ||
-    (installedBuild.agentModels == null &&
-      kiroAgentModelsChoice(null, undefined, installedBuild.version ?? AIDLC_VERSION) !== null) ||
+    (installedBuild.agentModels == null && kiroAgentModelsOn({ version: installedBuild.version })) ||
     (kiroAgentModelsOn(installedBuild) &&
-      modelPolicySurfaceDrift(projectDir, selected.harnessDir, harness, current, installedBuild)
-        .some((issue) => !issue.endsWith("is not expressible on kiro-ide")))
+      modelPolicySurfaceDrift(projectDir, selected.harnessDir, harness, current, installedBuild, false).length > 0)
   );
   if (settingsUnchanged && !kiroIdeProjectionDue) {
     // The recorded policy is already this, but the person's Kiro session may
@@ -11165,7 +11176,7 @@ function prepareModelsSection(
   });
   if (agentModels !== undefined && agentModelsChange) {
     summary.lines.unshift(
-      agentModelsSwitchLine(projectDir, harness, selected.harnessDir, installedBuild.agentModels, agentModels),
+      agentModelsSwitchLine(projectDir, harness, selected.harnessDir, installedBuild, agentModels),
     );
   }
   return {

@@ -179,7 +179,7 @@ describe("writing kiro-ide agent files", () => {
     featureOn();
     const root = projection();
     policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, PREVIEW);
-    policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, { ...PREVIEW, agentModels: "off", takeOut: true });
+    policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, { ...PREVIEW, agentModels: "off" }, true);
     const path = join(root, ".kiro", "agents", REVIEWER_FILE);
     expect(frontmatter(readFileSync(path, "utf-8"))).not.toMatch(/^(model|effortLevel):/m);
     writeFileSync(path, readFileSync(path, "utf-8").replace(/\n---\n/, "\nmodel: claude-sonnet-5.5\n---\n"));
@@ -405,6 +405,24 @@ describe("the agent-models choice through config", () => {
     const refused = p.run(["config", "models", "--project-dir", bare, "--agent-models", "on", "--preset", "balanced", "--global", "--dry-run"]);
     expect(refused.status).not.toBe(0);
     expect(refused.out).toContain("--agent-models applies to an installed Kiro (kiro-ide) project");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
+
+  test("off on a project where it was never on leaves the person's own lines, and its line says no agent file changes", () => {
+    const p = project(previewRuntime());
+    const path = join(p.dir, ".kiro", "agents", REVIEWER_FILE);
+    writeFileSync(path, readFileSync(path, "utf-8").replace(/\n---\n/, "\nmodel: claude-sonnet-5.5\n---\n"));
+    const off = p.run(["config", "models", "--project-dir", p.dir, "--agent-models", "off", "--yes"]);
+    expect(off.status, off.out).toBe(0);
+    expect(off.out).toContain("Kiro agent models: not set -> off in .kiro/tools/data/harness.json; the agent files do not change.");
+    expect(p.reviewer()).toMatch(/^model: claude-sonnet-5\.5$/m);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
+
+  test("a run that records the choice from the switch says so", () => {
+    const p = project(previewRuntime());
+    const pin = p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes"], true);
+    expect(pin.status, pin.out).toBe(0);
+    expect(pin.out).toContain("Recorded agent-models on for this project, because AIDLC_PREVIEW_FEATURES names it");
+    expect(p.run(["config", "models", "--project-dir", p.dir, "--check"]).status).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
   test("a project on a stable release writes and records nothing with the switch on, and refuses --agent-models", () => {
