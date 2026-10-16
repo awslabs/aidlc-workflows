@@ -1868,6 +1868,10 @@ aidlc engine audit history
 
 `log answers` returns JSON with paired answers, open questions, and the rare ambiguous answer (one with no question before it, or two writers tied at one second). One reply closes every question logged for the menu it answered.
 `audit history` returns a JSON timeline of events and free-form notes.
+`aidlc engine audit turns` is for you: it lists each of your turns with what
+you sent, read from this machine's message record, since the committed audit
+keeps no words. Records stay on the machine that wrote them for a day, so an
+older turn, or one from another clone, says its words are not here.
 
 An answer whose text holds a character a shell acts on (`$`, a backtick, a quote,
 `%`, `&`, `|`, `<`, `>`, `^`, `!`, or a line break) reaches `log answer` through
