@@ -512,8 +512,10 @@ aidlc engine plugin sync
 
 `plugin select` stages disabled-contribution removal, graph/grid compilation,
 runners, and generated tables before committing one project transaction;
-re-enabled contributions return on the next SessionStart sync. It refuses to
-disable a plugin needed by an active workflow. The
+re-enabled contributions return on the next SessionStart sync (on Kiro CLI and
+opencode, which run no compose hook, when you run
+`aidlc engine plugin sync --plugin-root <folder>` with the plugin's folder).
+It refuses to disable a plugin needed by an active workflow. The
 `PLUGIN_SELECTION_CHANGED` audit append is part of committed validation, so an
 audit failure rolls the whole selection back. `plugin list` is different: it
 compares host inventory with composition/ownership stamps and does not change

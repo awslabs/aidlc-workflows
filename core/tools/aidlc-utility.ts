@@ -456,6 +456,7 @@ import {
   contributionSources,
   copyProjectSurfaces,
   cutPluginFragment,
+  nextCompose,
   personaTwinRels,
   projectDiffPlan,
   recordedContributionGaps,
@@ -1073,7 +1074,7 @@ export function regenerateSelectionSurfaces(
 // (tools/data/plugin-contrib-<key>.json). Prose fragments carry their own
 // sentinel markers. On disable, select-plugins strips both, so a disabled
 // plugin's contributions stop steering enabled stages; re-enabling restores
-// them on the next session start (the plugin's compose hook re-merges).
+// them at the plugin's next compose (`nextCompose` in aidlc-plugin.ts).
 
 function pluginContribSidecarPath(plugin: string): string {
   return resolveHarnessPath(
@@ -1427,12 +1428,16 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
         },
       });
       resetSelectionSensitiveCaches();
+      // No record keeps the folder a plugin composed from, so a sync line names
+      // it in words.
+      const harnessName = runtimeHarnessName(projectDir, harnessDir());
       // A paused plugin is stripped too, but it comes back when its base is on
       // again, not when it is: its pause line says so.
-      const strippedOff = strippedPlugins.filter((plugin) => !pausedAfter.has(plugin));
-      if (strippedOff.length > 0) {
+      for (const plugin of strippedPlugins.filter((name) => !pausedAfter.has(name))) {
         process.stdout.write(
-          `Stripped merged contributions of disabled plugin(s): ${strippedOff.join(", ")} (re-enabling restores them on the next session start)\n`,
+          `What ${plugin} added to other stages and agents is taken out; turn ${plugin} back on and it returns ${
+            nextCompose(harnessName, plugin, null)
+          }.\n`,
         );
       }
       process.stdout.write(`Enabled plugins: ${names.join(", ")}\n`);
