@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { codexToolResults, copilotToolResults } from "../harness/exec-drive.ts";
+import { codexToolResults, copilotToolResults, copilotTurnCommand } from "../harness/exec-drive.ts";
 import { cleanupTestProject, createTestProject, seededAuditShard, seededStateFile } from "../harness/fixtures.ts";
 import { type GoldenJourney, type GoldenRun, goldenPathProblems, GoldenPerson } from "../harness/golden-journey.ts";
 import type { CapturedToolResult } from "../harness/sdk-drive.ts";
@@ -67,6 +67,16 @@ describe("the person on a typed tool", () => {
       choices: [{ label: 'Go ahead with the "bugfix" plan', command: go }, { label: "Use a different plan" }],
     });
     expect(person.typedReply(1, [offer])).toEqual({ line: 'Go ahead with the "bugfix" plan', newSession: false });
+    expect(person.problems).toEqual([]);
+  });
+
+  test("a print after the question they were given changes nothing waiting for them", () => {
+    const person = new GoldenPerson(journey(project()));
+    // The agent ran ahead after showing the offer, and the engine said nothing was started.
+    const ranAhead = shell("bun .aidlc/tools/aidlc-orchestrate.ts next --scope bugfix --request c46934e4", {
+      kind: "print", message: "Nothing was started: the person has not answered the plan question yet. Show them the question as it was given and end your turn.",
+    });
+    expect(person.typedReply(1, [PLAN_ASK, ranAhead])).toEqual({ line: "Approve Plan", newSession: false });
     expect(person.problems).toEqual([]);
   });
 
@@ -161,5 +171,23 @@ describe("Copilot CLI's JSON stream", () => {
       { toolName: "Bash", input: { command: "bun .aidlc/tools/aidlc.ts engine orchestrate next" }, toolUseId: "call_1", resultText: '{"kind":"ask"}\n<shellId: 0 completed with exit code 0>', isError: false },
       { toolName: "Bash", input: { command: "bun .aidlc/tools/aidlc.ts engine orchestrate next" }, toolUseId: "call_3", resultText: "refused", isError: true },
     ]);
+  });
+});
+
+describe("a Copilot CLI turn", () => {
+  const options = { copilotHome: "home", sessionId: "11111111-2222-4333-8444-555555555555", resume: true };
+  const line = 'Go ahead with the "bugfix" plan';
+
+  test("on stdin the line the person typed reaches Copilot as typed and is no argument a launcher reads", () => {
+    const { argv, input } = copilotTurnCommand(line, { ...options, stdin: true });
+    expect(input).toBe(line);
+    expect(argv).not.toContain(line);
+    expect(argv).toEqual(["-s", "--no-remote", "--allow-all-tools", "--resume", options.sessionId]);
+  });
+
+  test("without it the line rides -p, as the release journey types it", () => {
+    expect(copilotTurnCommand(line, options)).toEqual({
+      argv: ["-p", line, "-s", "--no-remote", "--allow-all-tools", "--resume", options.sessionId],
+    });
   });
 });

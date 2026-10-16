@@ -1,12 +1,13 @@
 // covers: scope:bugfix, file:skills/aidlc/SKILL.md, hook:aidlc-record-human-turn, audit:GATE_APPROVED, audit:PLAN_APPROVAL_RECORDED
 //
 // t-exec-copilot-journey-golden-bugfix.serial.test.ts - the "fix existing code"
-// golden journey on GitHub Copilot CLI (live `copilot -p`), from the person's
-// first line to the fix built, with a night between.
+// golden journey on GitHub Copilot CLI (live, headless `copilot` with each line
+// the person types handed over on stdin, as typed), from the person's first
+// line to the fix built, with a night between.
 //
 // The journey: the release journey's greeter repo and its copy-channel install
 // (tests/harness/release-journey.ts), in a folder Copilot trusts, with
-// production guards. `copilot -p` shows no question box, so every question
+// production guards. Headless Copilot shows no question box, so every question
 // comes as numbered text and the person types each reply.
 //   session 1: `/aidlc fix the greeter: ...`, the plan offer taken, Reverse
 //              Engineering approved, Requirements answered (their own words for
@@ -23,8 +24,8 @@
 // brief is no turn of theirs), or the fix does not work. Pass/fail reads only
 // what the engine and hooks recorded, the state file, the person's own turns
 // and the project's own code, NEVER the agent's prose. AI-DLC ships no Copilot
-// CLI permission rules and `-p` needs `--allow-all-tools`, so no permission is
-// counted here.
+// CLI permission rules and a headless run needs `--allow-all-tools`, so no
+// permission is counted here.
 //
 // The model is Copilot's own-model mode (BYOK): in CI the Full Suite points it
 // at the credential broker, so no GitHub sign-in or Copilot seat is involved.
@@ -129,10 +130,10 @@ describe("t-exec-copilot-journey-golden-bugfix: fix existing code on Copilot CLI
           ledger.sent(line);
           const started = Date.now();
           const turn = copilotTurn(proj, line, {
-            copilotHome, sessionId, resume: !newSession, usageFile, json: true, timeoutMs: Math.max(1, deadline - Date.now()),
+            copilotHome, sessionId, resume: !newSession, usageFile, json: true, stdin: true, timeoutMs: Math.max(1, deadline - Date.now()),
           });
           turns.push({ line, newSession, seconds: Math.round((Date.now() - started) / 1000) });
-          if (turn.rc !== 0) throw new Error(`Copilot ended "${line}" with exit ${turn.rc}: ${turn.out.slice(-1500)}`);
+          if (turn.rc !== 0) throw new Error(`Copilot ended "${line}" with exit ${turn.rc}: ${turn.out.trim().slice(-1500)}`);
           const unbacked = ledger.unbacked();
           if (unbacked.length > 0) throw unbackedFailure(`The Copilot turn "${line}"`, unbacked);
           tokens[tokens.length - 1] = sessionTokens(usageFile);

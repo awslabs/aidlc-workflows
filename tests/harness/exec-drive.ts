@@ -332,24 +332,39 @@ export interface CopilotTurnOptions {
   timeoutMs?: number;
   /** Print the turn as JSON events (one per line), which `copilotToolResults` reads. */
   json?: boolean;
+  /**
+   * Hand the line over on stdin, not as `-p <line>`: no shell or launcher sees
+   * it, so it arrives as typed. On Windows the CLI is an npm `.cmd` launcher,
+   * and Bun refuses an argument with a double quote for one.
+   */
+  stdin?: boolean;
+}
+
+/** The argv and stdin of one Copilot CLI turn for `line`. */
+export function copilotTurnCommand(line: string, options: CopilotTurnOptions): { argv: string[]; input?: string } {
+  return {
+    argv: [
+      ...(options.stdin ? [] : ["-p", line]), "-s", "--no-remote", "--allow-all-tools",
+      ...(options.resume ? ["--resume", options.sessionId] : ["--session-id", options.sessionId]),
+      ...(options.usageFile ? ["--usage-output-file", options.usageFile] : []),
+      ...(options.json ? ["--output-format", "json"] : []),
+    ],
+    ...(options.stdin ? { input: line } : {}),
+  };
 }
 
 // One person turn in a named Copilot CLI session: the typed line rides the
 // prompt as it is (`/aidlc ...` or a reply), so AI-DLC's hooks see what the
 // person typed. --allow-all-tools as in runCopilot.
 export function copilotTurn(proj: string, line: string, options: CopilotTurnOptions): ExecResult {
+  const { argv, input } = copilotTurnCommand(line, options);
   const result = spawnSync(
     COPILOT_BIN,
-    [
-      "-p", line, "-s", "--no-remote", "--allow-all-tools",
-      ...(options.resume ? ["--resume", options.sessionId] : ["--session-id", options.sessionId]),
-      ...(options.usageFile ? ["--usage-output-file", options.usageFile] : []),
-      ...(options.json ? ["--output-format", "json"] : []),
-    ],
+    argv,
     {
       cwd: proj,
       encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
+      ...(input === undefined ? { stdio: ["ignore", "pipe", "pipe"] as const } : { input, stdio: ["pipe", "pipe", "pipe"] as const }),
       env: { ...process.env, PWD: proj, COPILOT_HOME: options.copilotHome },
       timeout: remainingOperationTimeoutMs(options.timeoutMs ?? TEST_TIMEOUT_MS, { phase: "Copilot turn" }),
       // A JSON turn prints an event per streamed token: several MB for one stage.
