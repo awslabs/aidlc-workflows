@@ -1748,8 +1748,9 @@ The declared coverage is:
   (`tests/e2e/t-exec-codex-journey-golden-bugfix.serial.test.ts`, Linux and
   Windows) fixes the same greeter from the first line to Code Generation approved,
   with the plan question left for the day and approved in a new session; Copilot's
-  (`tests/e2e/t-exec-copilot-journey-golden-bugfix.serial.test.ts`) does the same
-  on the copy-channel install of its release journey.
+  (`tests/e2e/t-exec-copilot-journey-golden-bugfix.serial.test.ts`, Linux only:
+  on Windows it runs past the 25 minutes a retry allows) does the same on the
+  copy-channel install of its release journey.
 - Kiro ACP, TUI and IDE are declared exclusions pending a dedicated isolated
   Windows desktop host; local live runs remain their coverage path.
 - Cursor is excluded: no credential separation is available because its vendor
@@ -1762,9 +1763,9 @@ linux`, `--matrix macos` and `--matrix windows` as the dynamic matrices of the
 `live_linux`, `live_macos` and `live_windows` jobs. Each row's `shard: N/M`
 selects a duration-balanced group for its family/platform. Each OS has two Claude
 SDK (five on Linux, which alone runs the golden journeys and the answers corpus,
-the corpus on a shard of its own), three Claude TUI, one Codex and one Copilot
-(two each on Linux and Windows, where their golden journeys run) and one opencode
-shard: 31 live harness jobs in all. Timing weights in
+the corpus on a shard of its own), three Claude TUI, one Codex (two on Linux and
+Windows, where the Codex golden journey runs), one Copilot and one opencode shard:
+29 live harness jobs in all. Timing weights in
 `tests/live-shard-weights.json` are scheduling hints;
 discovery still assigns every eligible file exactly once per platform. Each OS
 has its own concurrency cap: four Linux, two macOS and three Windows live jobs.
