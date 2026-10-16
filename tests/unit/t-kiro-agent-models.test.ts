@@ -181,6 +181,13 @@ describe("writing kiro-ide agent files", () => {
     }
   });
 
+  test("a model or effortLevel line counts by its key, whatever its value", () => {
+    for (const line of ['effortLevel: "high"', "model: my model # pinned", "model:"]) {
+      expect(policy.kiroAgentFileHasModelLines(`---\nname: x\n${line}\n---\nBody\n`), line).toBe(true);
+    }
+    expect(policy.kiroAgentFileHasModelLines("---\nname: x\n---\nmodel: in the body\n")).toBe(false);
+  });
+
   test("the shared Markdown writer takes an effortLevel line out only of a Kiro agent file", () => {
     const text = "---\nname: x\neffortLevel: low\n---\nBody\n";
     expect(policy.writeMarkdownAgentSurface(text, { model: "m" })).toContain("effortLevel: low");
@@ -346,6 +353,7 @@ describe("the agent-models choice through config", () => {
     const off = p.preview("agent-models", "off", "--yes");
     expect(off.status, off.out).toBe(0);
     expect(off.out.split("config preview agent-models on --yes")).toHaveLength(2);
+    expect(off.out).toContain(OFF_LINE);
     expect(p.choice()).toBe("off");
     expect(p.reviewer()).not.toMatch(/^model:/m);
     withOwnModelLine(p.reviewerPath);
@@ -364,7 +372,7 @@ describe("the agent-models choice through config", () => {
     writeFileSync(p.reviewerPath, `${readFileSync(p.reviewerPath, "utf-8")}\nA line of my own.\n`);
     const off = p.preview("agent-models", "off", "--yes");
     expect(off.status, off.out).toBe(0);
-    expect(off.out).toContain(`.kiro/agents/${REVIEWER_FILE} is not as AI-DLC last wrote it, so it keeps its model and effort lines`);
+    expect(off.out).toContain(`AI-DLC cannot tell that .kiro/agents/${REVIEWER_FILE} is as it last wrote it, so it keeps its model and effort lines`);
     expect(p.reviewer()).toMatch(/^model: "gpt-5\.6-terra"$/m);
     expect(readFileSync(p.reviewerPath, "utf-8")).toContain("A line of my own.");
     expect(p.choice()).toBe("off");
@@ -408,6 +416,8 @@ describe("the agent-models choice through config", () => {
     expect(old.status).not.toBe(0);
     expect(old.out).toContain("unknown models option --agent-models");
     expect(p.choice()).toBe("on");
+    const download = p.preview("reviewer-read-scope", "on", "--download", "--dry-run");
+    expect(download.out).not.toContain("--download");
     const unknown = p.preview("agent-modles", "on", "--yes");
     expect(unknown.out).toContain('unknown preview feature "agent-modles"; preview features: agent-models, reviewer-read-scope');
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
@@ -462,7 +472,7 @@ describe("the agent-models choice through config", () => {
     expect(listed.out).not.toContain("Turn one on or off");
     const off = p.preview("agent-models", "off", "--yes");
     expect(off.status, off.out).toBe(0);
-    expect(off.out).toContain("Preview feature agent-models: on -> off in .kiro/tools/data/harness.json");
+    expect(off.out).toContain("Preview feature agent-models: on -> off in .kiro/tools/data/harness.json; nothing changes on this release.");
     expect(off.out).not.toContain("To undo");
     expect(p.choice()).toBe("off");
     expect(p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes").status).toBe(0);

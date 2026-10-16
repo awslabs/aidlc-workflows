@@ -173,8 +173,6 @@ describe("when there is no copy", () => {
     try {
       mkdirSync(join(dir, ".kiro", "agents"), { recursive: true });
       const review = { requestId: REQUEST, reviewer: REVIEWER, unit: "alpha" };
-      // As from the project's installed Kiro tree, whose record the copy reads.
-      process.env.AIDLC_HARNESS_DIR = ".kiro";
       process.env.AIDLC_HARNESS_NAME = "kiro-ide";
       recordPreview(dir, { [REVIEWER_READ_SCOPE_FEATURE]: "on" });
       expect(prepareReviewCopy(dir, review, STABLE), "stable release").toBeNull();
