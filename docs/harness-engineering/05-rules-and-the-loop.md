@@ -149,6 +149,9 @@ independently enforce this comparison; it accepts the selections it receives.
 The check is an audit aid, not an enforcement boundary. Practices-discovery is
 the other admission gate, but it does not run the org-conflict check: its
 promotion is a deterministic section-replace legitimised by user affirmation.
+Project rules are appended under `Mandated` or `Forbidden` only when the same
+text is absent from that section, ignoring generated `(affirmed YYYY-MM-DD)`
+suffixes. Re-affirming an unchanged rule keeps its existing text and date.
 Two read-only `/aidlc --doctor` rows surface state after the fact: a
 **rule-drift**
 row flags headings where team or project content overlaps a populated org heading

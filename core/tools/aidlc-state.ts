@@ -8485,7 +8485,9 @@ function handlePracticesPromote(args: string[]): void {
 
   // Step 4b: Build new project-guardrails.md by appending each rule under the
   // matching heading with a date stamp. Rules are one-per-line in the draft;
-  // empty/blank lines and comment lines are skipped.
+  // empty/blank lines and comment lines are skipped. The generated terminal
+  // date stamps are provenance, not rule identity; leave an existing rule and
+  // its original date untouched when the same text is affirmed again.
   const parseRules = (sectionContent: string): string[] => {
     return sectionContent
       .split("\n")
@@ -8502,21 +8504,27 @@ function handlePracticesPromote(args: string[]): void {
   );
   const mandatedRules = parseRules(mandatedDraft);
   const forbiddenRules = parseRules(forbiddenDraft);
+  const ruleText = (line: string): string =>
+    line.replace(/(?: \(affirmed \d{4}-\d{2}-\d{2}\))+$/, "");
 
   let newGuardrailsMd = guardrailsMd;
-  const existingGuardrailLines = new Set(
-    newGuardrailsMd.split("\n").map((line) => line.trim()),
+  const existingMandatedRules = new Set(
+    parseRules(extractMarkdownSection(guardrailsMd, "## Mandated")).map(ruleText),
+  );
+  const existingForbiddenRules = new Set(
+    parseRules(extractMarkdownSection(guardrailsMd, "## Forbidden")).map(ruleText),
   );
   for (const rule of mandatedRules) {
-    const stampedLine = `${rule} (affirmed ${today})`;
-    if (existingGuardrailLines.has(stampedLine)) continue;
+    const text = ruleText(rule);
+    if (existingMandatedRules.has(text)) continue;
+    const stampedLine = `${text} (affirmed ${today})`;
     try {
       newGuardrailsMd = appendUnderHeading(
         newGuardrailsMd,
         "## Mandated",
         `${stampedLine}\n`
       );
-      existingGuardrailLines.add(stampedLine);
+      existingMandatedRules.add(text);
       rulesAppended.mandated++;
     } catch (e) {
       fail(`appendUnderHeading failed on Mandated: ${errorMessage(e)}`);
@@ -8524,15 +8532,16 @@ function handlePracticesPromote(args: string[]): void {
     }
   }
   for (const rule of forbiddenRules) {
-    const stampedLine = `${rule} (affirmed ${today})`;
-    if (existingGuardrailLines.has(stampedLine)) continue;
+    const text = ruleText(rule);
+    if (existingForbiddenRules.has(text)) continue;
+    const stampedLine = `${text} (affirmed ${today})`;
     try {
       newGuardrailsMd = appendUnderHeading(
         newGuardrailsMd,
         "## Forbidden",
         `${stampedLine}\n`
       );
-      existingGuardrailLines.add(stampedLine);
+      existingForbiddenRules.add(text);
       rulesAppended.forbidden++;
     } catch (e) {
       fail(`appendUnderHeading failed on Forbidden: ${errorMessage(e)}`);
@@ -8543,7 +8552,7 @@ function handlePracticesPromote(args: string[]): void {
   // Step 5 & 6: Write project.md first, then team.md.
   // If the project write fails, team.md is untouched. If the team write
   // fails after project succeeded, we surface that as PRACTICES_OVERRIDE and
-  // the user re-enters the gate. Exact dated project rules are deduplicated
+  // the user re-enters the gate. Identical project rules are deduplicated
   // above, so a retry cannot accumulate copies after this partial-write path.
   try {
     writeFileSync(guardrailsPath, newGuardrailsMd, "utf-8");
