@@ -439,6 +439,24 @@ describe("t-checkpoint-answer-any-chat: a bare /aidlc in a new chat", () => {
     expect(recorded.status, recorded.out).toBe(0);
   });
 
+  test("a question its stage's questions file still holds is asked again by the stage's own step, from the file", () => {
+    // A guided batch: logged as its question numbers and every option shown, its questions in the file.
+    const p = construction();
+    appendAuditEntry("STAGE_STARTED", { Stage: "functional-design" }, p);
+    const dir = join(seededRecordDir(p), "construction", "alpha", "functional-design");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "functional-design-questions.md"),
+      "# Questions\n\n## Q1\n\nWhich store?\n\nA. Files\nB. A database\n\n[Answer]: \n\n## Q2\n\nWho signs in?\n\nC. Anyone\nD. Members\n\n[Answer]: \n");
+    const asked = tool(p, "log", ["decision", "--stage", "functional-design", "--session", OLD,
+      "--decision", "Q1,Q2", "--options", "A,B,C,D"]);
+    expect(asked.status, asked.out).toBe(0);
+    // They replied in the old chat, which ended before the answers were written down.
+    person(p, "Q1: B, Q2: D", OLD);
+    const resumed = bare(p, NEW) as { kind: string; kept_replies?: { replies: unknown[] } };
+    expect(resumed.kind, JSON.stringify(resumed)).toBe("run-stage");
+    expect(JSON.stringify(resumed.kept_replies?.replies ?? [])).toContain("Q1: B, Q2: D");
+  });
+
   test("a verification command question is asked again by its own step, not shown from its row", () => {
     const p = askedInOldChat("verification command");
     const resumed = bare(p, NEW);

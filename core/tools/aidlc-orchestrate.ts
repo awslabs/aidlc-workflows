@@ -2184,6 +2184,12 @@ const KEPT_REPLIES_NOTE =
   "each answer they gave on its [Answer]: line and record it with `log answer`, then ask only what is still open. " +
   "Never ask them again what they already answered.";
 
+// Whether a questions file in `dir` still has a blank answer.
+function hasBlankAnswer(dir: string): boolean {
+  return existsSync(dir) && readdirSync(dir).some((name) =>
+    name.endsWith("-questions.md") && /\[Answer\]:[ \t]*_*[ \t]*$/m.test(readFileSync(join(dir, name), "utf-8")));
+}
+
 function withKeptReplies(directive: Directive): Directive {
   if (isRouteCheckProbe() || directive.kind !== "run-stage" || directive.gate_only || directive.build_settled) {
     return directive;
@@ -2194,9 +2200,7 @@ function withKeptReplies(directive: Directive): Directive {
     const dir = directive.phase === "construction" && directive.unit
       ? join(docsRoot(projectDir), "construction", directive.unit, directive.stage)
       : stageDir(projectDir, directive.phase, directive.stage);
-    const blank = existsSync(dir) && readdirSync(dir).some((name) =>
-      name.endsWith("-questions.md") && /\[Answer\]:[ \t]*_*[ \t]*$/m.test(readFileSync(join(dir, name), "utf-8")));
-    if (!blank) return directive;
+    if (!hasBlankAnswer(dir)) return directive;
     const kept = keptRepliesSinceStageStart(projectDir, {
       stage: directive.stage,
       ...(directive.phase === "construction" && directive.unit ? { unit: directive.unit } : {}),
@@ -3557,10 +3561,23 @@ function openQuestionReplyDirective(stage: string, block: string, requestId: str
 // carries): the agent shows it again from its row and waits, so the person
 // keeps their place. The text goes out verbatim: a question box pairs the
 // reply with a protected question by that text or its two choices. Null for
-// any other question; its own step asks it again with what it asks about.
-function openQuestionAgainDirective(stage: string, block: string): PrintDirective | null {
+// any other question; its own step asks it again with what it asks about. So
+// is a question the stage's questions file still holds (a guided batch logs
+// only its question numbers): the stage's step asks it from the file, with any
+// reply kept for it (withKeptReplies). Unreadable is left to that step too.
+function openQuestionAgainDirective(projectDir: string, stage: string, block: string): PrintDirective | null {
   const checkpoint = auditBlockField(block, "Checkpoint");
   if (checkpoint !== null && checkpoint !== CONSTRUCTION_POLICY_CHECKPOINT) return null;
+  try {
+    const phase = nodeForSlug(stage)?.phase ?? "";
+    const construction = join(docsRoot(projectDir), "construction");
+    const unitDirs = phase === "construction" && existsSync(construction)
+      ? readdirSync(construction).map((unit) => join(construction, unit, stage))
+      : [];
+    if ([stageDir(projectDir, phase, stage), ...unitDirs].some(hasBlankAnswer)) return null;
+  } catch {
+    return null;
+  }
   const decision = auditBlockField(block, "Decision");
   if (!decision) return null;
   const choices = (auditBlockField(block, "Options") ?? "").split(",").map((option) => option.trim()).filter(Boolean);
@@ -10277,7 +10294,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     !isTeamUnitOwnership(stateContent)
   ) {
     const open = openStageQuestion(pd, stateContent);
-    const again = open === null ? null : openQuestionAgainDirective(open.stage, open.block);
+    const again = open === null ? null : openQuestionAgainDirective(pd, open.stage, open.block);
     if (open !== null && again !== null) {
       pickUpStage = open.stage;
       leadsToSpeech.add(again);
