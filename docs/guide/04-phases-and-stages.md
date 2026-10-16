@@ -269,9 +269,9 @@ stage-major order. A first design-stage review alone is not a working skeleton.
 The check is the intent's recorded, human-authorized `Construction Verification
 Command`, reused for every Unit/batch checkpoint. Delivery Planning proposes it
 from the project scan and asks you to approve it. Your approval of that question,
-in your own words or by picking **Approve**, is what sets it; **Request
-Changes**, an answer to some other question, or a reply from another chat does
-not. You may
+in your own words or by picking **Approve**, is what sets it, in the chat that
+asked or in a new one while it is the newest question asked; **Request
+Changes** or an answer to some other question does not. You may
 defer if no runnable check exists yet; the first checkpoint then asks before
 verification. A missing authorization or later command change always requires
 the [recorded-command flow](12-cli-commands.md#construction-verification-command-record-human-authorization),

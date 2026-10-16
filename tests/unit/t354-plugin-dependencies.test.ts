@@ -626,6 +626,16 @@ describe("t354 turning a base off pauses the plugin built on it", () => {
       /zeta is off\. alpha builds on zeta, so alpha is paused until zeta is on again\. To turn alpha off as well: .*config project --plugins aidlc --yes/,
     );
     expect(stageEnabled(target, "alpha-example-stage")).toBe(false);
+    // While paused nothing alpha adds runs, as through plugin select.
+    expect(buildAndTest(target)).not.toContain("ALPHA-CONTRIBUTION");
+    expect(existsSync(join(target.dir, ".claude", "tools", "data", "plugin-contrib-alpha.json"))).toBe(false);
+    // Turning zeta back on there brings alpha back at the next session start.
+    const back = engine(target, ["config", "project", "--plugins", "aidlc,alpha,zeta", "--yes"]);
+    expect(back.status, back.stdout + back.stderr).toBe(0);
+    expect(back.stdout).not.toContain("paused");
+    const synced = sync(target);
+    expect(synced.status, synced.stdout + synced.stderr).toBe(0);
+    expect(buildAndTest(target)).toContain("ALPHA-CONTRIBUTION");
   });
 
   test("a select that would pause the plugin open work runs on is refused as a turn-off is, naming both", () => {

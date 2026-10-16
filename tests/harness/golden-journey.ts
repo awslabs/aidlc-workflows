@@ -163,20 +163,29 @@ function stageAwaitingApproval(proj: string): string | undefined {
   return /^- \[\?\] (\S+)/m.exec(readStateFile(proj) ?? "")?.[1];
 }
 
-/** The engine's last step handed to the agent, read from the agent's own Bash results. */
+/**
+ * The engine's last step handed to the agent, read from the agent's own Bash
+ * results. A print after it changes nothing waiting for the person (the
+ * engine's "Nothing was started: the person has not answered the plan question
+ * yet" to an agent that ran ahead), so the step before it counts; a print alone
+ * is the last step.
+ */
 function lastEngineStep(results: readonly CapturedToolResult[]): Record<string, unknown> | undefined {
+  let print: Record<string, unknown> | undefined;
   for (let i = results.length - 1; i >= 0; i--) {
     const t = results[i];
     const command = typeof t.input.command === "string" ? t.input.command : "";
     // The engine's own steps also tell the agent to run aidlc-orchestrate.ts (the plan offer's `next --propose`).
     if (t.toolName !== "Bash" || !/engine orchestrate|aidlc-orchestrate\.ts/.test(command)) continue;
     try {
-      return parseDirectiveOutput(t.resultText).directive as unknown as Record<string, unknown>;
+      const step = parseDirectiveOutput(t.resultText).directive as unknown as Record<string, unknown>;
+      if (step.kind !== "print") return step;
+      print ??= step;
     } catch {
       // Not a directive (a refusal or a print): look further back.
     }
   }
-  return undefined;
+  return print;
 }
 
 /** The plain choice at an approval, a mode, a summary or a learnings question. */

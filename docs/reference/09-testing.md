@@ -1031,7 +1031,7 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 | `AIDLC_INPUT_SEED` | `1` | Seed of the live input check's sample, so a re-run drives the same items. |
 | `AIDLC_ANSWERS_LIVE` | unset | Set to `1` to drive a sample of the answers corpus through real agents (`tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts`); each harness keeps its own gate (`AIDLC_CODEX_EXEC_LIVE`, `AIDLC_KIRO_ACP_LIVE`, the `claude` binary). |
 | `AIDLC_ANSWERS_HARNESSES` | `claude,codex,kiro` | Which agents the live answers check drives. |
-| `AIDLC_ANSWERS_SAMPLE` | `2` | Items per question for the live answers check, or a comma list of item ids. The pool is the replies a fresh chat can meet: a question the agent asked in chat (a stage question, learnings) is not shown again by a bare `/aidlc`, so only its replies typed with `/aidlc` are driven, as the whole exchange; a verification command or Construction policy answer is recorded only from the chat that asked it, and guard recovery's fixture cannot be met, so those are read by the unit check only (`liveReply` in `tests/harness/aidlc-answers-corpus.ts`). |
+| `AIDLC_ANSWERS_SAMPLE` | `2` | Items per question for the live answers check, or a comma list of item ids. The pool is the replies a fresh chat can meet: a question the agent asked in chat (a stage question, learnings, the verification command, a Construction policy question) is not shown again by a bare `/aidlc`, so only its replies typed with `/aidlc` are driven, as the whole exchange; guard recovery's fixture cannot be met, so it is read by the unit check only (`liveReply` in `tests/harness/aidlc-answers-corpus.ts`). |
 | `AIDLC_ANSWERS_SEED` | `1` | Seed of the live answers check's sample, so a re-run drives the same items. |
 | `AIDLC_ANSWERS_REPORT_DIR` | `aidlc-answers-live` in the run's log folder (`AIDLC_TEST_LOG_DIR`, else `tests/logs`) | Where the live answers check writes its report, its transcripts and the summary the nightly report reads. |
 | `AIDLC_INPUT_REPORT_DIR` | `tests/logs/aidlc-input-live` | Where the live input check writes its report (a score per category and every miss with its transcript excerpt). |
@@ -1747,7 +1747,10 @@ The declared coverage is:
   and requires doctor to name the trust fix. Codex's golden journey
   (`tests/e2e/t-exec-codex-journey-golden-bugfix.serial.test.ts`, Linux and
   Windows) fixes the same greeter from the first line to Code Generation approved,
-  with the plan question left for the day and approved in a new session.
+  with the plan question left for the day and approved in a new session; Copilot's
+  (`tests/e2e/t-exec-copilot-journey-golden-bugfix.serial.test.ts`, Linux only:
+  on Windows it runs past the 25 minutes a retry allows) does the same on the
+  copy-channel install of its release journey.
 - Kiro ACP, TUI and IDE are declared exclusions pending a dedicated isolated
   Windows desktop host; local live runs remain their coverage path.
 - Cursor is excluded: no credential separation is available because its vendor

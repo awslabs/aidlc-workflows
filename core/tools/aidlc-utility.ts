@@ -1407,6 +1407,19 @@ function stripDisabledPluginContributions(
   return stripped;
 }
 
+// The one turn-off rule, run in the staged tree a selection is built in by
+// plugin select and by every config refresh: a plugin that tree's selection
+// leaves off or pauses keeps nothing it merged into core stages and personas,
+// nor its record of it, so its compose merges it back once it is on again.
+// The implicit core plugin merges nothing.
+export function stripPluginsTurnedOff(): string[] {
+  const active = pluginsEnabled();
+  if (active === null) return [];
+  return stripDisabledPluginContributions(
+    knownPluginNames().filter((name) => name !== "aidlc" && !active.has(name)),
+  );
+}
+
 // A selection change must not strand a live workflow: after disable, a state
 // file whose Scope belongs to a disabled plugin makes every later /aidlc on
 // that workflow hard-error ("Unknown scope") with no in-band way out (the
@@ -1535,9 +1548,6 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
 
     const previousSelection = renderPluginSelection(pluginsSelected());
     const newSelection = names.join(", ");
-    // Plugins this change DISABLES (known but not selected, or paused; the
-    // implicit core plugin has no composed contributions to strip).
-    const disabling = known.filter((n) => n !== "aidlc" && !active.has(n));
 
     const stagingRoot = mkdtempSync(join(tmpdir(), "aidlc-plugin-select-"));
     const stagedProject = join(stagingRoot, "project");
@@ -1558,10 +1568,11 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
         process.env.AIDLC_HARNESS_DIR = selectedHarness;
         process.env.AIDLC_RUNTIME_HARNESS_ROOT = join(stagedProject, selectedHarness);
         resetSelectionSensitiveCaches();
-        // Strip disabled contributions in staging before recompiling. The live
-        // project remains byte-untouched until the shared transaction commits.
-        strippedPlugins = stripDisabledPluginContributions(disabling);
+        // Strip what the new selection turns off in staging before recompiling.
+        // The live project remains byte-untouched until the shared transaction
+        // commits.
         writePluginSelection(stagedProject, names);
+        strippedPlugins = stripPluginsTurnedOff();
         regenerateSelectionSurfaces(stagedProject, projectDir);
       } finally {
         for (const key of envKeys) {
