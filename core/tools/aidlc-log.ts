@@ -1085,6 +1085,42 @@ function replyAnswersQuestion(pd: string, stage: string, unit: string | undefine
   return answers < picks;
 }
 
+// The ordinary questions of this scope logged after the person's message that
+// answers them and not answered yet: the person may never have seen them. A
+// message is ordered against a question as messagesBeforeQuestion orders it.
+function questionsLoggedAfter(pd: string, stage: string, unit: string | undefined, message: StoredMessage): string[] {
+  const rows = readAuditShardEvents(pd);
+  const after = (row: AuditShardEvent, than: AuditShardEvent): boolean =>
+    row.shardIndex === than.shardIndex ? row.pos > than.pos : row.timestamp > than.timestamp;
+  const turn = rows.find((row) => row.event === "HUMAN_TURN" && auditBlockField(row.block, "Message Id") === message.id);
+  const answered = rows.filter((row) =>
+    row.event === "QUESTION_ANSWERED" && auditBlockField(row.block, "Stage") === stage &&
+    (unit === undefined || auditBlockField(row.block, "Unit") === unit)).at(-1);
+  return decisionRowsInScope(rows, stage, unit)
+    .filter((row) => auditBlockField(row.block, "Checkpoint") === null)
+    .filter((row) => turn === undefined ? message.at < row.timestamp : after(row, turn))
+    .filter((row) => answered === undefined || after(row, answered))
+    .map((row) => (auditBlockField(row.block, "Decision") ?? "").replace(/\s+/g, " ").trim())
+    .filter((question) => question !== "");
+}
+
+// What the person is told when their reply answered questions they may never
+// have seen: the answer as recorded and the questions it was taken for. Only
+// the agent knows whether it showed them the questions, so the note leaves it
+// that call.
+function takenFromReply(questions: string[], details: string): { say: string; note: string } {
+  const quoted = questions.map((question) => `"${question}"`);
+  const named = quoted.length === 1 ? quoted[0] : `${quoted.slice(0, -1).join(", ")} and ${quoted.at(-1)}`;
+  const one = questions.length === 1;
+  return {
+    say: `From your reply I took "${details.replace(/\s+/g, " ").trim()}" for ${named}, which I had not asked you ` +
+      "yet. Tell me if you meant something else.",
+    note: `Unless you showed the person ${one ? "that question" : "those questions"} before they replied, tell them ` +
+      "the say line once, giving each choice in its words where it shows only a letter; if you showed " +
+      `${one ? "it" : "them"}, say nothing about it.`,
+  };
+}
+
 function lateQuestionHint(candidates: StoredMessage[]): string {
   const shown = candidates.map((message) => {
     const words = (message.words ?? message.text).replace(/\s+/g, " ").trim();
@@ -2538,6 +2574,8 @@ function handleAnswer(args: string[]): void {
     }
     // The person's own words go on the record beside the choice the agent read
     // in them, as they do at a gate and for the engine's own questions.
+    // Read before this answer is on record, which would close the questions.
+    const taken = named === null ? [] : questionsLoggedAfter(pd, flags.stage, flags.unit, named);
     if (named !== null) {
       fields["Message Id"] = named.id;
       if (named.words && !isNonAnswer(named.words)) fields["Person Reply"] = named.words;
@@ -2619,17 +2657,23 @@ function handleAnswer(args: string[]): void {
     const asksForNote = flags.details === LEARNINGS_NOTE_CHOICES[1] && question !== undefined &&
       isLearningsNoteDecision(question.block);
     if (asksForNote) rowEndsTurn = true;
+    const sayBack = taken.length > 0 ? takenFromReply(taken, flags.details) : null;
+    const notes = [
+      ...(asksForNote
+        ? [
+          "When their reply already says what the note is, that is the note: take their words and do " +
+          "not ask for it again. Otherwise ask what the note should say. End the turn at the question you ask " +
+          "next; their next reply answers it.",
+        ]
+        : []),
+      ...(sayBack !== null ? [sayBack.note] : []),
+    ];
     console.log(
       JSON.stringify({
         emitted: "QUESTION_ANSWERED",
         stage: flags.stage,
-        ...(asksForNote
-          ? {
-            agent_note: "When their reply already says what the note is, that is the note: take their words and do " +
-              "not ask for it again. Otherwise ask what the note should say. End the turn at the question you ask " +
-              "next; their next reply answers it.",
-          }
-          : {}),
+        ...(sayBack !== null ? { say: sayBack.say } : {}),
+        ...(notes.length > 0 ? { agent_note: notes.join(" ") } : {}),
       })
     );
   });
