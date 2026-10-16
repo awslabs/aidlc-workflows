@@ -427,7 +427,12 @@ export interface HookActivation {
 
 interface ShippedHarnessData {
   rulesSubdir: string | null;
+  /** The plugins the person selected, as typed; null when there is no selection. */
   plugins: ReadonlySet<string> | null;
+  /** Selected plugins paused because their base is off, each with its base. */
+  paused: ReadonlyMap<string, string>;
+  /** The plugins that run: the selection less the paused ones. */
+  active: ReadonlySet<string> | null;
   documentExtractors: ReadonlyMap<string, DocumentExtractorSpec> | null;
   runnerFrontmatterAdditions: readonly string[];
   hookActivation: HookActivation | null;
@@ -619,9 +624,14 @@ function readShippedHarnessData(): ShippedHarnessData {
         finish.every((name) => typeof name === "string" && name !== "")
       ? [...finish as string[]]
       : null;
+    const paused = pausedBySelection(plugins, (plugin) => composedPluginBase(dirname(p), plugin));
     _shippedHarnessData = {
       rulesSubdir,
       plugins,
+      paused,
+      active: plugins === null || paused.size === 0
+        ? plugins
+        : new Set([...plugins].filter((plugin) => !paused.has(plugin))),
       documentExtractors,
       runnerFrontmatterAdditions,
       hookActivation,
@@ -635,6 +645,8 @@ function readShippedHarnessData(): ShippedHarnessData {
   _shippedHarnessData = {
     rulesSubdir: null,
     plugins: null,
+    paused: new Map(),
+    active: null,
     documentExtractors: null,
     runnerFrontmatterAdditions: [],
     hookActivation: null,
@@ -678,8 +690,59 @@ export function documentExtractors(): ReadonlyMap<string, DocumentExtractorSpec>
   return readShippedHarnessData().documentExtractors;
 }
 
+/** The plugins that run: the person's selection less the plugins paused
+ *  because their base is off. Null when there is no selection (all run). */
 export function pluginsEnabled(): ReadonlySet<string> | null {
+  return readShippedHarnessData().active;
+}
+
+/** The person's selection exactly as they typed it, for showing it back. */
+export function pluginsSelected(): ReadonlySet<string> | null {
   return readShippedHarnessData().plugins;
+}
+
+/** Selected plugins paused because their base is off, each with its base. */
+export function pausedPlugins(): ReadonlyMap<string, string> {
+  return readShippedHarnessData().paused;
+}
+
+// A plugin builds on core and at most one base plugin. When the person's
+// selection keeps a plugin but leaves its base out, that plugin stays in their
+// list and is paused: nothing it adds runs until the base is on again. The one
+// owner of that rule; the base comes from the plugin's composition stamp,
+// which plugin sync writes.
+export function pausedBySelection(
+  selection: ReadonlySet<string> | null,
+  baseOf: (plugin: string) => string | null,
+): Map<string, string> {
+  const paused = new Map<string, string>();
+  if (selection === null) return paused;
+  for (const plugin of [...selection].sort()) {
+    if (plugin === "aidlc") continue;
+    const base = baseOf(plugin);
+    if (base !== null && !selection.has(base)) paused.set(plugin, base);
+  }
+  return paused;
+}
+
+/** The one line a selection change says, once, when it pauses `plugin`;
+ *  `offCommand` turns the plugin off as well, or null when no list is left. */
+export function pausedLine(plugin: string, base: string, offCommand: string | null): string {
+  return `${base} is off. ${plugin} builds on ${base}, so ${plugin} is paused until ${base} is on again. ` +
+    (offCommand === null
+      ? `To turn ${plugin} off as well, select the plugins you want on.`
+      : `To turn ${plugin} off as well: ${offCommand}.`);
+}
+
+/** The base a composed plugin builds on, from its stamp in `dataDir`. */
+export function composedPluginBase(dataDir: string, plugin: string): string | null {
+  if (!/^[a-z][a-z0-9-]*$/.test(plugin)) return null;
+  try {
+    const base = (JSON.parse(readFileSync(join(dataDir, `plugin-compose-${plugin}.json`), "utf-8")) as { base?: unknown }).base;
+    return typeof base === "string" && /^[a-z][a-z0-9-]*$/.test(base) ? base : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -38415,6 +38478,24 @@ export function isKiroConductorAgentFile(name: string): boolean {
   return KIRO_CONDUCTOR_AGENT_FILES.includes(basename(name));
 }
 
+// A reviewer copy one review request writes on Kiro (kiro-ide) when the
+// reviewer read-scope preview feature is on (aidlc-kiro-review-copy.ts): the
+// installed reviewer with that review's read scope added, named from the
+// request id so the name stands for that one request. It is the reviewer under
+// another name, never a persona of its own.
+const SCOPED_REVIEW_COPY_RE = /^aidlc-scoped-review-[0-9a-f]{12}$/;
+
+/** The reviewer copy's agent name for a review request id, or null for an id not minted as `review:<hex>`. */
+export function scopedReviewCopyName(requestId: string): string | null {
+  const m = /^review:([0-9a-f]{12})[0-9a-f]{20}$/.exec(requestId);
+  return m ? `aidlc-scoped-review-${m[1]}` : null;
+}
+
+/** Whether an agent name, or an agent file name, is a reviewer copy's. */
+export function isScopedReviewCopy(name: string): boolean {
+  return SCOPED_REVIEW_COPY_RE.test(basename(name).replace(/\.md$/, ""));
+}
+
 export function isAidlcAgentFile(path: string): boolean {
   return aidlcAgentClaim(path) !== null;
 }
@@ -38434,7 +38515,7 @@ export function loadAgents(): AgentMetadata[] {
     const slugToFile = new Map<string, string>();
     const agents: AgentMetadata[] = [];
     const files = readdirSync(dir)
-      .filter((f) => f.endsWith(".md") && !isKiroConductorAgentFile(f))
+      .filter((f) => f.endsWith(".md") && !isKiroConductorAgentFile(f) && !isScopedReviewCopy(f))
       .sort();
     for (const f of files) {
       const filePath = join(dir, f);
@@ -38615,7 +38696,6 @@ export function parseStageFrontmatter(
     // an empty-string value.
     if (key === "optional_produces") continue;
     if (key === "required_sections") continue;
-    if (key === "cites") continue;
     // The key was discovered at the start of some line, so it IS
     // present. scalarField returns "" for both absent AND empty-quoted
     // ("") — since we know it's present, assign the result
@@ -38661,12 +38741,6 @@ export function parseStageFrontmatter(
   // "required_sections must be array, got string".
   if (topLevelKeys.has("required_sections")) {
     obj.required_sections = listField(fm, "required_sections");
-  }
-
-  // cites is an OPTIONAL array field: absent key -> absent property, so only the
-  // stages that author it carry it through compile.
-  if (topLevelKeys.has("cites")) {
-    obj.cites = listField(fm, "cites");
   }
 
   // reviewer_max_iterations is the one numeric scalar field. The generic
@@ -38970,7 +39044,6 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "optional_produces",
     "produces_kinds",
     "consumes",
-    "cites",
     "requires_stage",
     "sensors",
     "scopes",
@@ -39032,6 +39105,9 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
           }
           if (typeof e.conditional_on === "string") {
             lines.push(`    conditional_on: ${emitScalar(e.conditional_on)}`);
+          }
+          if (typeof e.cited === "boolean") {
+            lines.push(`    cited: ${e.cited}`);
           }
         }
       }

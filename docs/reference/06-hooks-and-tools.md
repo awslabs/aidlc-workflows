@@ -1639,6 +1639,8 @@ This is one of the framework's six flow-altering hooks and one of its five `PreT
 
 **Reviewer read-scope failure behavior.** No record, a stale or malformed record, a non-reviewer agent, an unknown tool, malformed stdin, or any internal error allows the reviewer read-scope call; a reviewer-agent sighting touching `construction/` paths with no dispatch record records an advisory drop for `--doctor` only while a digest-valid active directive is a per-unit `run-stage` (or a live `invoke-swarm`) - when `stage-protocol-reviewer-unit.md` owed the record. A single-stage review, or a missing/stale marker, stays silent rather than asserting an omission. The deterministic off-switch `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1` disables this reviewer read-scope enforcement. A valid claimed-checkout stamp is handled first, and cross-unit writes remain refused under every policy word, per-work fence setting, and reviewer-scope environment switch.
 
+**Kiro (KAS layout: kiro-ide), preview.** Kiro's hook payloads carry no agent identity, so this hook has no registration on Kiro IDE or the Kiro CLI v3 engine. In a preview build, with `reviewer-read-scope` named in `AIDLC_PREVIEW_FEATURES` in the environment Kiro was started with, the Unit review request (`aidlc-log.ts review --unit`, `prepareReviewCopy` in `aidlc-kiro-review-copy.ts`) instead writes `.kiro/agents/aidlc-scoped-review-<first 12 hex of the request id>.md`: the installed reviewer with an `fs_read` deny on `aidlc/spaces/*/intents/*/construction/**` and `.aidlc/worktrees/*/aidlc/spaces/*/intents/*/construction/**`, excluding only the Unit's own folder in this intent's record (`aidlc/spaces/<space>/intents/<intent>/construction/<unit>`), and returns its name as `dispatchAgent`. Unlike the record's `exempt` list here, the copy grants no other Unit's file; the reviewer notes a named integration point as a finding. Kiro enforces a delegated agent's own deny on reads in every path form and filters search results (Kiro CLI 2.31.0, Kiro IDE 1.3.0); shell reads stay an approval prompt. The completion Kiro reports under the copy's name is recorded under the request's reviewer (`Dispatch Agent` beside it, `aidlc-log-subagent.ts`), a dispatch Kiro answers with `Agent '<name>' not found in registry` records no completion, and the verdict deletes the copy. No copy is written for a swarm Unit's worktree, or while this check stands aside (Guard Policy `off`, the default of every plan but enterprise; `guard.reviewer-scope off`; `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1`); one the feature could not write (no `permissions.rules` list in the installed reviewer; a space, intent or unit name that is not a plain name; no resolvable intent record) leaves a `reviewer-scope` drop line and a `change_notices` line saying the review runs without the check. The copy's patterns are Kiro's globs, not this matcher, and whether Kiro matches a path written in another letter case was not measured.
+
 ### Plan-Approval Guard Hook
 
 **Source:** `.claude/hooks/aidlc-plan-approval-guard.ts`
@@ -2202,7 +2204,10 @@ for values, precedence, and isolated-run semantics.
 `aidlc engine plugin sync` routes. It normalizes the proved Claude/Codex host
 inventories (or one injected current root), validates host manifests, hashes
 compose inputs, compares project stamps, and renders the three-action status
-surface. Sync composes in staging and applies one `aidlc-transaction.ts` plan;
+surface. Sync composes base plugins before the plugins built on them, holds a
+plugin that cannot build on its base (with a `plugin-held-<key>.json` record
+that list and doctor read), composes in staging and applies one
+`aidlc-transaction.ts` plan;
 `--prune-missing` additionally requires full inventory, `--yes` when
 non-interactive (at a terminal it names what it prunes and proceeds), and a
 hash-valid `plugin-owned-<key>.json` record. These paths never open a network

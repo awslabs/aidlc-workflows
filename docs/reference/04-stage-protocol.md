@@ -480,7 +480,7 @@ and an unclear reply gets one short follow-up.
   `aidlc-review-brief.ts summary --stage <slug> --questions-file <path>` before
   the structured **Looks correct** / **Request changes** confirmation. The
   deterministic brief names the stage, questions file, generated artifacts,
-  why the decision is required now, and the exact effect of both choices. Do
+  and the exact effect of both choices. Do
   not ask for confirmation as bare prose. Before presenting it, append or reset a dedicated
   **Consolidated Summary Confirmation** entry in the stage questions file with
   both options and a blank `[Answer]:`. Record the prompt with

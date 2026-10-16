@@ -5,6 +5,7 @@
     "linux": {
       "tests/e2e/t-exec-codex-compose-front.serial.test.ts": 225,
       "tests/e2e/t-exec-codex-compose-inflight.serial.test.ts": 135,
+      "tests/e2e/t-exec-codex-journey-golden-bugfix.serial.test.ts": 620,
       "tests/e2e/t-exec-codex-journey-workspace.serial.test.ts": 207,
       "tests/e2e/t-exec-codex-memory-include.serial.test.ts": 13,
       "tests/e2e/t-exec-codex-status.serial.test.ts": 14,
@@ -80,6 +81,7 @@
     "win32": {
       "tests/e2e/t-exec-codex-compose-front.serial.test.ts": 211,
       "tests/e2e/t-exec-codex-compose-inflight.serial.test.ts": 136,
+      "tests/e2e/t-exec-codex-journey-golden-bugfix.serial.test.ts": 1800,
       "tests/e2e/t-exec-codex-journey-workspace.serial.test.ts": 338,
       "tests/e2e/t-exec-codex-memory-include.serial.test.ts": 50,
       "tests/e2e/t-exec-codex-status.serial.test.ts": 60,

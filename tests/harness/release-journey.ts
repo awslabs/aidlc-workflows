@@ -65,6 +65,25 @@ export function aidlcCommand(
   return { status: result.status, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
+/** The person's own small project, committed: a greeter that prints `hello` where the README says `Hello, <name>!`. */
+export function seedGreeter(proj: string): void {
+  mkdirSync(join(proj, "src"), { recursive: true });
+  mkdirSync(join(proj, "test"), { recursive: true });
+  writeFileSync(join(proj, "README.md"), "# greeter\n\nA tiny command-line greeter: `node src/app.js Ada` should print `Hello, Ada!`.\n");
+  writeFileSync(join(proj, "package.json"), `${JSON.stringify({
+    name: "greeter", version: "0.1.0", private: true, scripts: { start: "node src/app.js", test: "node test/app.test.js" },
+  }, null, 2)}\n`);
+  writeFileSync(join(proj, "src", "app.js"), "const name = process.argv[2];\nconsole.log('hello');\n");
+  writeFileSync(join(proj, "test", "app.test.js"),
+    "const { execFileSync } = require('node:child_process');\n" +
+    "const out = execFileSync('node', ['src/app.js', 'Ada']).toString().trim();\n" +
+    "if (out !== 'Hello, Ada!') { console.error('expected Hello, Ada! got ' + out); process.exit(1); }\n" +
+    "console.log('ok');\n");
+  git(proj, ["init", "-q"]);
+  git(proj, ["add", "README.md", "package.json", "src", "test"]);
+  git(proj, ["commit", "-qm", "greeter with the bug"]);
+}
+
 /**
  * The person's project with AI-DLC installed through the copy channel: the
  * runtime is dist/<harness> without the files a copy leaves out, copied over
@@ -81,21 +100,7 @@ export function setupReleaseJourneyProject(
     rmSync(join(runtime, harness, path), { force: true });
   }
   const proj = join(root, "proj");
-  mkdirSync(join(proj, "src"), { recursive: true });
-  mkdirSync(join(proj, "test"), { recursive: true });
-  writeFileSync(join(proj, "README.md"), "# greeter\n\nA tiny command-line greeter: `node src/app.js Ada` should print `Hello, Ada!`.\n");
-  writeFileSync(join(proj, "package.json"), `${JSON.stringify({
-    name: "greeter", version: "0.1.0", private: true, scripts: { start: "node src/app.js", test: "node test/app.test.js" },
-  }, null, 2)}\n`);
-  writeFileSync(join(proj, "src", "app.js"), "const name = process.argv[2];\nconsole.log('hello');\n");
-  writeFileSync(join(proj, "test", "app.test.js"),
-    "const { execFileSync } = require('node:child_process');\n" +
-    "const out = execFileSync('node', ['src/app.js', 'Ada']).toString().trim();\n" +
-    "if (out !== 'Hello, Ada!') { console.error('expected Hello, Ada! got ' + out); process.exit(1); }\n" +
-    "console.log('ok');\n");
-  git(proj, ["init", "-q"]);
-  git(proj, ["add", "-A"]);
-  git(proj, ["commit", "-qm", "greeter with the bug"]);
+  seedGreeter(proj);
   cpSync(join(runtime, harness), proj, { recursive: true });
   const project = { harness, root, runtime, proj };
   const config = aidlcCommand(project, ["config", "--from", runtime, "--harness", harness, "--yes"], env);

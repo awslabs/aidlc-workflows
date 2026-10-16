@@ -283,6 +283,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored aidlc/.aidlc-request-text/
           // (a request the engine has not read yet).
           "sha256:6c6ff7641c17829d77fdd023f340b938db11dcc26c734a0c452d5213f9bd19cf",
+          // The variant shipped before the block ignored .kiro/agents/aidlc-scoped-review-*.md
+          // (a review's reviewer copy, a preview feature).
+          "sha256:f9d49a8c823df8174ea7d8a83209380202e5673b5ee8c1ff6b9cce90bcfd550e",
         ],
       },
     },

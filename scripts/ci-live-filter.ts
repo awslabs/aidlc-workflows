@@ -34,9 +34,14 @@ export type VerificationFamily = (typeof VERIFICATION_FAMILIES)[number];
 export const LIVE_SHARD_COUNTS: Partial<Record<LiveFamily, number>> = {
   "claude-sdk": 2, "claude-tui": 3, codex: 1, copilot: 1, opencode: 1, "release-contract": 1,
 };
-/** More shards where a family's files run on one OS only (the golden journeys and the answers corpus run on Linux). */
+/**
+ * More shards where a family's files run on some OSes only: the Claude golden
+ * journeys and the answers corpus on Linux, the Codex golden journey on Linux
+ * and Windows, each in a shard of its own under the one-hour role session.
+ */
 export const LIVE_PLATFORM_SHARD_COUNTS: Partial<Record<LiveFamily, Partial<Record<NodeJS.Platform, number>>>> = {
   "claude-sdk": { linux: 5 },
+  codex: { linux: 2, win32: 2 },
 };
 
 export function liveShardCount(family: LiveFamily, platform: NodeJS.Platform): number {
@@ -103,6 +108,8 @@ export const PLATFORM_ONLY: Record<string, readonly NodeJS.Platform[]> = {
   // The golden journeys run nightly on Linux; stage logic is the same on every OS.
   "tests/integration/t-journey-golden-bugfix.sdk.test.ts": ["linux"],
   "tests/integration/t-journey-golden-poc.sdk.test.ts": ["linux"],
+  // A Windows run of the Codex journey keeps its retry only under 25 minutes (tests/lib/file-retry.ts).
+  "tests/e2e/t-exec-codex-journey-golden-bugfix.serial.test.ts": ["linux", "win32"],
   // The answers corpus opens on the family's gate in a live job too: one item
   // per question a night, by a date rotation, on Linux (its own shard).
   "tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts": ["linux"],

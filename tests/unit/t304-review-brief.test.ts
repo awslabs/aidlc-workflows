@@ -1747,9 +1747,7 @@ describe("t304 executable review brief scenarios", () => {
       expect(rendered, mode).toBe(expected);
       expect(rendered).toContain("**Stage:** Requirements Analysis");
       expect(rendered).toContain("**Confirming:** Consolidated answers in");
-      expect(rendered).toContain(
-        "**Why now:** All stage questions are answered",
-      );
+      expect(rendered).not.toContain("Why now");
       expect(rendered).toContain(
         "**Looks correct** - record this confirmation and generate",
       );
@@ -1758,6 +1756,32 @@ describe("t304 executable review brief scenarios", () => {
       );
       expect(rendered).not.toContain("ungenerated");
     }
+  });
+
+  test("the summary brief names what it will generate, never the questions file the person answered in", () => {
+    const { proj, relativeArtifact, questions } = requirementProject([]);
+    const relativeQuestions = relative(proj, questions).replaceAll("\\", "/");
+    expect(
+      renderSummaryConfirmationBrief(proj, findStageBySlug("requirements-analysis")!, questions),
+    ).toContain(
+      `**Confirming:** Consolidated answers in \`${relativeQuestions}\` before generating \`${relativeArtifact}\`.\n`,
+    );
+
+    const planning = join(seededRecordDir(proj), "inception", "delivery-planning");
+    mkdirSync(planning, { recursive: true });
+    const planningQuestions = join(planning, "delivery-planning-questions.md");
+    writeFileSync(planningQuestions, "# Questions\n", "utf-8");
+    const planningRelative = relative(proj, planning).replaceAll("\\", "/");
+    const generated = renderSummaryConfirmationBrief(proj, findStageBySlug("delivery-planning")!, planningQuestions)
+      .split("before generating ")[1]
+      .split("\n")[0];
+    expect(generated).toBe(
+      `${
+        ["bolt-plan", "team-allocation", "risk-and-sequencing-rationale", "external-dependency-map"]
+          .map((name) => `\`${planningRelative}/${name}.md\``)
+          .join(", ")
+      }.`,
+    );
   });
 
   test("the shipped CLI renders the same summary brief", () => {

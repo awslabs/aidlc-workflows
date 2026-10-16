@@ -17,8 +17,10 @@ produces:
 consumes:
   - artifact: intent-statement
     required: false
+    cited: true
   - artifact: scope-document
     required: false
+    cited: true
   - artifact: business-overview
     required: false
     conditional_on: brownfield
@@ -30,9 +32,6 @@ consumes:
     conditional_on: brownfield
   - artifact: team-practices
     required: false
-cites:
-  - intent-statement
-  - scope-document
 requires_stage:
   - approval-handoff
   - reverse-engineering

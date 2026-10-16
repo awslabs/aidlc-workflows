@@ -407,31 +407,36 @@ describe("t233 the dispatcher checks the inputs a stage requires", () => {
 	});
 });
 
-// A stage may list under `cites:` optional inputs its deliverables cite
-// whenever they exist. The check reads them beside the required inputs; the
-// key sits outside `consumes`, so adding it changes no finished stage's record.
-describe("t233 a stage's cites: optional inputs checked where they exist", () => {
+// A stage marks a consume `cited: true` when its deliverables cite that
+// optional input whenever it exists. The check reads them beside the required
+// inputs; the compile lists them as the node's `cites` and leaves the compiled
+// consumes as they were, so marking one changes no finished stage's record.
+describe("t233 a stage's cited optional inputs checked where they exist", () => {
 	const DISPATCHER = join(import.meta.dir, "..", "..", "core", "tools", "aidlc-sensor.ts");
 	const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 	const FRAMEWORK_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
-	type GraphNode = { slug: string; cites?: string[] } & Record<string, unknown>;
+	type GraphNode = { slug: string; cites?: string[]; consumes?: Array<Record<string, unknown>> } & Record<string, unknown>;
 
-	const stage = (extra: string): string =>
-		`---\nslug: syn-cites\nphase: inception\nexecution: ALWAYS\ncondition: x\nlead_agent: aidlc-product-agent\nsupport_agents: []\nmode: inline\nproduces:\n  - requirements\nconsumes:\n  - artifact: intent-statement\n    required: false\n${extra}requires_stage: []\ninputs: a\noutputs: b\n---\n`;
+	const stage = (cited: string, top = ""): string =>
+		`---\nslug: syn-cites\nphase: inception\nexecution: ALWAYS\ncondition: x\nlead_agent: aidlc-product-agent\nsupport_agents: []\nmode: inline\nproduces:\n  - requirements\nconsumes:\n  - artifact: intent-statement\n    required: false\n${cited}${top}requires_stage: []\ninputs: a\noutputs: b\n---\n`;
+	const consumes = (raw: string): Array<Record<string, unknown>> =>
+		(parseStageFrontmatter(raw) as { consumes: Array<Record<string, unknown>> }).consumes;
 
-	test("18: cites parses, validates against consumes, round-trips, and only Requirements Analysis ships it", () => {
-		const parsed = parseStageFrontmatter(stage("cites:\n  - intent-statement\n")) as Record<string, unknown>;
-		expect(parsed.cites).toEqual(["intent-statement"]);
+	test("18: cited: true parses, validates, round-trips, and only Requirements Analysis ships it", () => {
+		const parsed = parseStageFrontmatter(stage("    cited: true\n")) as Record<string, unknown>;
+		expect(consumes(stage("    cited: true\n"))).toEqual([{ artifact: "intent-statement", required: false, cited: true }]);
 		expect(validateStageFrontmatter(parsed).valid).toBe(true);
 		expect(parseStageFrontmatter(emitStageFrontmatter(parsed))).toEqual(parsed);
-		expect("cites" in (parseStageFrontmatter(stage("")) as Record<string, unknown>)).toBe(false);
-		const stray = validateStageFrontmatter(parseStageFrontmatter(stage("cites:\n  - scope-document\n")));
-		expect(stray.valid).toBe(false);
-		expect(stray.valid ? [] : stray.errors).toContain('cites[0] "scope-document" is not one of the stage\'s consumes');
+		expect("cited" in consumes(stage(""))[0]).toBe(false);
+		const word = validateStageFrontmatter(parseStageFrontmatter(stage("    cited: yes\n")));
+		expect(word.valid ? [] : word.errors).toContain("consumes[0].cited must be boolean, got string");
+		const list = validateStageFrontmatter(parseStageFrontmatter(stage("", "cites:\n  - intent-statement\n")));
+		expect(list.valid ? [] : list.errors).toContain("unknown key: cites");
 		const graph = JSON.parse(readFileSync(FRAMEWORK_GRAPH, "utf-8")) as GraphNode[];
 		expect(graph.filter((node) => node.cites !== undefined).map((node) => [node.slug, node.cites])).toEqual([
 			["requirements-analysis", ["intent-statement", "scope-document"]],
 		]);
+		expect(graph.flatMap((node) => (node.consumes ?? []).filter((entry) => "cited" in entry))).toEqual([]);
 	});
 
 	function requirementsProject(inputs: boolean, cites: boolean): { proj: string; output: string } {

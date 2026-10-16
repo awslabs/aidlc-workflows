@@ -64,10 +64,10 @@ block:
 ```jsonc
 {
   "name": "test-pro",                 // == dir name; "core", "aidlc", and "aidlc-*" are reserved
-  "version": "0.1.0",                 // semver (dependency checks are deferred)
+  "version": "0.1.0",                 // semver
   "description": "Full-featured testing plugin — unit/branch coverage, functional, integration, regression, edge, and API positive+negative.",
   "author": { "name": "AWS AIDLC" },
-  "dependencies": ["core"],           // other plugins, e.g. ["compliance@^1.2.0"]
+  "dependencies": ["core"],           // core plus at most one base, e.g. ["core", "compliance@^1.2.0"]
   "aidlc": {
     "contributes": {                  // which subtrees this plugin ships
       "stages": "stages/",            // NEW stage files
@@ -744,10 +744,14 @@ test("plugin composes into a Claude install", () => {
   collide with core or another plugin — a collision is a compose error with
   attribution. (Method files are not a plugin contribution yet: the validator
   rejects `contributes.memory`.)
-- **Dependencies** *(⏳ deferred).* `dependencies` is designed to resolve a
-  `name@^x.y.z` constraint against the dependency's `version` with cycle
-  rejection, but **nothing reads the field yet** — declaring it has no effect
-  today (doc 18 §9 Status).
+- **One base at most.** A plugin builds on core and at most one base plugin:
+  `"dependencies": ["core", "acme@^1.2.0"]`. The base itself builds on core
+  alone. Sync composes the base first, so your stages can order after its
+  stages (`requires_stage`) and read its artifacts. If the installed base is
+  missing, outside your range or builds on another plugin, your plugin is not
+  composed (a version composed before stays as it was) and the person sees one
+  line saying why; everything else still composes. A second base, your own name, or a range npm cannot read fails
+  `aidlc plugin validate` (doc 18 §8).
 - **Additive only.** Contributions add — they cannot override or remove a core
   stage's fields, agent, or prose. (A genuine need to _change_ upstream behavior
   is a framework design decision, not a plugin concern.)

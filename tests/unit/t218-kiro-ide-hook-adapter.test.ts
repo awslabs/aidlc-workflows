@@ -6068,6 +6068,40 @@ describe("t218 log-subagent identity extraction (#459)", () => {
     }
   });
 
+  test("S4e: a dispatch Kiro answers with 'not found in registry' records a drop, not a completion", () => {
+    // Kiro CLI 2.31.0 and IDE 1.3.0 answer a dispatch to an agent with no file
+    // with this one line and no success flag. Nothing ran, so nothing finished.
+    const dir = scratchProject(true);
+    try {
+      const missing = (tool_name: string, tool_input: Record<string, unknown>, tool_response: string) =>
+        runIdeStdin(dir, "log-subagent", JSON.stringify({
+          session_id: "sess_t218", hook_event_name: "PostToolUse", cwd: dir, tool_name, tool_input, tool_response,
+        }));
+      expect(missing("invoke_sub_agent", { name: "aidlc-architect-agent", prompt: "Design" },
+        "Agent 'aidlc-architect-agent' not found in registry").code).toBe(0);
+      expect(readAudit(dir)).not.toContain("SUBAGENT_COMPLETED");
+      const health = join(seededRecordDir(dir), ".aidlc-engine/hooks-health");
+      expect(readFileSync(join(health, "kiro-adapter.drops"), "utf-8")).toContain("Kiro has no agent named aidlc-architect-agent");
+      // A pipeline records the stages that ran and drops the one Kiro could not find.
+      expect(missing("orchestrate_subagent", {
+        task: "Review then build",
+        stages: [{ name: "review", role: "aidlc-scoped-review-0123456789ab" }, { name: "build", role: "aidlc-developer-agent" }],
+      }, "Pipeline completed\n\n## review\nAgent 'aidlc-scoped-review-0123456789ab' not found in registry\n\n## build\nBuilt it.").code)
+        .toBe(0);
+      expect(readFileSync(join(health, "kiro-adapter.drops"), "utf-8")).toContain("Kiro has no agent named aidlc-scoped-review-0123456789ab");
+      expect(readAudit(dir)).toContain("**Agent Type**: aidlc-developer-agent");
+      expect(readAudit(dir)).not.toContain("**Agent Type**: aidlc-scoped-review-0123456789ab");
+      // Another agent's words are its own output, not Kiro's answer.
+      const developerRows = () => readAudit(dir).split("**Agent Type**: aidlc-developer-agent").length - 1;
+      const before = developerRows();
+      expect(missing("invoke_sub_agent", { name: "aidlc-developer-agent", prompt: "Implement" },
+        "Agent 'aidlc-scoped-review-0123456789ab' not found in registry").code).toBe(0);
+      expect(developerRows()).toBe(before + 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("S5: a degenerate subagent_ with an empty suffix still falls back to the prose marker", () => {
     // The tool name only wins when it actually carries an identity; an empty
     // suffix is no identity, so the 0.12-era prose contract still applies.

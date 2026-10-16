@@ -20,6 +20,7 @@ import {
   committedTextBytes,
   errorMessage,
   parseArgs,
+  pausedBySelection,
   resolveProjectDir,
 } from "./aidlc-lib.ts";
 import { policyPathWithin } from "./aidlc-install-paths.ts";
@@ -40,6 +41,11 @@ import {
   type TransactionOperation,
   type TransactionPlan,
 } from "./aidlc-transaction.ts";
+import {
+  readPluginBase,
+  type PluginBaseProblem,
+  type PluginDependency,
+} from "./aidlc-plugin-validate.ts";
 
 const SAFE_PLUGIN_KEY = /^[a-z][a-z0-9-]*$/;
 const STRICT_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
@@ -63,6 +69,10 @@ export type InstalledPlugin = {
   manifestPath: string;
   enabled: boolean;
   sourceHash: string;
+  // The one base plugin this one builds on, from its own manifest, or why that
+  // manifest cannot say.
+  base: PluginDependency | null;
+  baseProblem: PluginBaseProblem | { kind: "unreadable"; reason: string } | null;
 };
 
 export type InvalidInstalledPlugin = {
@@ -84,6 +94,9 @@ export type CompositionStamp = {
   name: string;
   version: string;
   sourceHash: string;
+  // The base plugin this one builds on. A host with no plugin list reads it
+  // here to keep layering one level deep.
+  base?: string;
 };
 
 export type PluginStatusName =
@@ -95,7 +108,9 @@ export type PluginStatusName =
   | "installed-disabled"
   | "installed-missing"
   | "invalid-installed"
-  | "inventory-unavailable";
+  | "inventory-unavailable"
+  | "dependency-unmet"
+  | "paused";
 
 export type PluginStatus = {
   key: string | null;
@@ -118,10 +133,20 @@ type OwnershipRecord = {
   files: OwnershipFile[];
 };
 
+// A plugin sync could not compose on its base, and the line that says why,
+// for plugin list and doctor. The sync that composes the plugin removes it.
+export type HeldRecord = {
+  schemaVersion: 1;
+  name: string;
+  version: string;
+  reason: string;
+};
+
 export type ProjectEvidence = {
   stamps: Map<string, CompositionStamp>;
   legacy: Set<string>;
   ownership: Map<string, OwnershipRecord>;
+  held: Map<string, HeldRecord>;
 };
 
 function absolute(path: string): string {
@@ -249,7 +274,23 @@ export function normalizeInstalledPlugin(
     manifestPath,
     enabled,
     sourceHash: pluginSourceHash(canonicalRoot),
+    ...installedBase(canonicalRoot, key),
   };
+}
+
+// A projection built before the plugin's own manifest travelled with it
+// builds on core alone, as every plugin did then.
+function installedBase(root: string, key: string): Pick<InstalledPlugin, "base" | "baseProblem"> {
+  const manifestPath = join(root, ".aidlc-plugin", "plugin.json");
+  if (!existsSync(manifestPath)) return { base: null, baseProblem: null };
+  let manifest: unknown;
+  try {
+    manifest = readJson(manifestPath);
+  } catch {
+    return { base: null, baseProblem: { kind: "unreadable", reason: "not valid JSON" } };
+  }
+  const read = readPluginBase((manifest as { dependencies?: unknown } | null)?.dependencies, key);
+  return "problem" in read ? { base: null, baseProblem: read.problem } : { base: read.base, baseProblem: null };
 }
 
 function currentRoots(): string[] {
@@ -591,7 +632,8 @@ function parseStamp(path: string): CompositionStamp | null {
       typeof value.version === "string" &&
       STRICT_SEMVER.test(value.version) &&
       typeof value.sourceHash === "string" &&
-      /^sha256:[0-9a-f]{64}$/.test(value.sourceHash)
+      /^sha256:[0-9a-f]{64}$/.test(value.sourceHash) &&
+      (value.base === undefined || (typeof value.base === "string" && SAFE_PLUGIN_KEY.test(value.base)))
     ) {
       return value as CompositionStamp;
     }
@@ -634,8 +676,15 @@ function projectEvidence(projectDir: string, harnessDir: string): ProjectEvidenc
   const stamps = new Map<string, CompositionStamp>();
   const legacy = new Set<string>();
   const ownership = new Map<string, OwnershipRecord>();
-  if (!existsSync(dataDir)) return { stamps, legacy, ownership };
+  const held = new Map<string, HeldRecord>();
+  if (!existsSync(dataDir)) return { stamps, legacy, ownership, held };
   for (const entry of readdirSync(dataDir).sort()) {
+    const heldMatch = entry.match(/^plugin-held-([a-z][a-z0-9-]*)\.json$/);
+    if (heldMatch) {
+      const record = parseHeld(join(dataDir, entry));
+      if (record && record.name === heldMatch[1]) held.set(heldMatch[1], record);
+      continue;
+    }
     let match = entry.match(/^plugin-compose-([a-z][a-z0-9-]*)\.json$/);
     if (match) {
       const stamp = parseStamp(join(dataDir, entry));
@@ -666,7 +715,26 @@ function projectEvidence(projectDir: string, harnessDir: string): ProjectEvidenc
     // A missing or unreadable graph cannot prove legacy composition.
   }
   for (const key of stamps.keys()) legacy.delete(key);
-  return { stamps, legacy, ownership };
+  return { stamps, legacy, ownership, held };
+}
+
+function parseHeld(path: string): HeldRecord | null {
+  try {
+    const value = readJson(path) as Partial<HeldRecord>;
+    if (
+      value.schemaVersion === 1 &&
+      typeof value.name === "string" &&
+      SAFE_PLUGIN_KEY.test(value.name) &&
+      typeof value.version === "string" &&
+      STRICT_SEMVER.test(value.version) &&
+      typeof value.reason === "string"
+    ) {
+      return value as HeldRecord;
+    }
+  } catch {
+    // An unreadable record says nothing; the next sync writes it again.
+  }
+  return null;
 }
 
 function selectedPlugins(projectDir: string, harnessDir: string): Set<string> | null {
@@ -699,6 +767,17 @@ export function comparePluginState(
   selection: Set<string> | null,
 ): PluginStatus[] {
   const rows: PluginStatus[] = [];
+  // The person kept the plugin and left its base off: a plain state, not a
+  // problem.
+  const paused = pausedBySelection(selection, (key) => evidence.stamps.get(key)?.base ?? null);
+  const pausedStatus = (key: string, installedVersion: string | null): PluginStatus => ({
+    key,
+    installedVersion,
+    composedVersion: evidence.stamps.get(key)?.version ?? null,
+    state: "paused",
+    action: "current",
+    message: `paused: needs ${paused.get(key)}, which is off`,
+  });
   for (const invalid of inventory.invalid) {
     rows.push({
       key: invalid.key ?? null,
@@ -715,7 +794,12 @@ export function comparePluginState(
     installedKeys.add(plugin.key);
     const stamp = evidence.stamps.get(plugin.key);
     const enabled = plugin.enabled && (selection === null || selection.has(plugin.key));
-    if (!enabled) {
+    const held = evidence.held.get(plugin.key);
+    if (enabled && paused.has(plugin.key)) {
+      rows.push(pausedStatus(plugin.key, plugin.version));
+    } else if (enabled && held?.version === plugin.version) {
+      rows.push(heldStatus(held, stamp?.version ?? null));
+    } else if (!enabled) {
       rows.push({
         key: plugin.key,
         installedVersion: plugin.version,
@@ -774,8 +858,20 @@ export function comparePluginState(
   // composed plugin the host does not show is reported as not compared:
   // nothing for the person to do, so doctor does not warn about it.
   const provedMissing = inventory.capability === "full-inventory";
+  // Without a host plugin list, the record is the only sign of a plugin sync
+  // could not compose.
+  if (!provedMissing) for (const key of evidence.held.keys()) composedKeys.add(key);
   for (const key of [...composedKeys].sort()) {
     if (installedKeys.has(key) || invalidKeys.has(key)) continue;
+    const held = provedMissing ? undefined : evidence.held.get(key);
+    if (!provedMissing && paused.has(key)) {
+      rows.push(pausedStatus(key, null));
+      continue;
+    }
+    if (held) {
+      rows.push(heldStatus(held, evidence.stamps.get(key)?.version ?? null));
+      continue;
+    }
     rows.push({
       key,
       installedVersion: null,
@@ -792,6 +888,17 @@ export function comparePluginState(
   );
 }
 
+function heldStatus(held: HeldRecord, composedVersion: string | null): PluginStatus {
+  return {
+    key: held.name,
+    installedVersion: held.version,
+    composedVersion,
+    state: "dependency-unmet",
+    action: "attention",
+    message: held.reason,
+  };
+}
+
 export function collectPluginStatus(
   projectDir: string,
   harnessDir = runtimeHarnessDir(projectDir),
@@ -806,7 +913,7 @@ export function collectPluginStatus(
 }
 
 function humanAction(status: PluginStatus): string {
-  if (status.state === "inventory-unavailable") return status.message;
+  if (status.state === "inventory-unavailable" || status.state === "paused") return status.message;
   if (status.action === "current") return "current";
   if (status.action === "sync") return "run: aidlc config";
   return `needs attention: ${status.message}`;
@@ -944,6 +1051,7 @@ function writeCompositionRecords(
     name: plugin.key,
     version: plugin.version,
     sourceHash: plugin.sourceHash,
+    ...(plugin.base ? { base: plugin.base.name } : {}),
   };
   writeFileSync(
     join(dataDir, `plugin-owned-${plugin.key}.json`),
@@ -1488,12 +1596,23 @@ function compositionIsCurrent(
   plugin: InstalledPlugin,
   evidence: ProjectEvidence,
   projectDir: string,
+  harnessDir: string,
+  selection: ReadonlySet<string> | null,
 ): boolean {
   const stamp = evidence.stamps.get(plugin.key);
   if (
     !stamp ||
     stamp.version !== plugin.version ||
-    stamp.sourceHash !== plugin.sourceHash
+    stamp.sourceHash !== plugin.sourceHash ||
+    (stamp.base ?? null) !== (plugin.base?.name ?? null)
+  ) return false;
+  // Turning a plugin off strips what it merged into core stages and removes
+  // its record of that, so when it is on again its compose merges it back. A
+  // plugin that is off merges nothing, so it has no record to miss.
+  if (
+    (selection === null || selection.has(plugin.key)) &&
+    regularFiles(join(plugin.root, "contributions")).some((path) => path.endsWith(".md")) &&
+    !existsSync(join(harnessDataDir(projectDir, harnessDir), `plugin-contrib-${plugin.key}.json`))
   ) return false;
   const ownership = evidence.ownership.get(plugin.key);
   if (!ownership) return false;
@@ -1527,12 +1646,127 @@ export function announcePrune(
   );
 }
 
+// A base not composed in this run: here at a version (installed, or composed
+// in this project) and with the base it builds on itself, if any; missing and
+// why; or turned off for this project, which pauses the plugin built on it.
+export type BaseView =
+  | { kind: "here"; version: string; where: string; base: string | null }
+  | { kind: "missing"; why: "not-installed" | "host-disabled" | "not-in-project" }
+  | { kind: "off" };
+
+export type HeldPlugin = { plugin: InstalledPlugin; reason: string };
+
+// The words a held line needs that only the host knows: its name, and when a
+// waiting plugin composes (Kiro CLI composes only when the person runs sync).
+export type HeldWords = { hostName: string; nextCompose: (base: string) => string };
+
+type HeldProblem =
+  | { kind: "missing"; base: PluginDependency; why: "not-installed" | "host-disabled" | "not-in-project" }
+  | { kind: "deep"; base: string; baseOfBase: string }
+  | { kind: "range"; base: PluginDependency; version: string; where: string }
+  | Exclude<InstalledPlugin["baseProblem"], null>;
+
+// Every held line is built here: what happened to the plugin, why, and the
+// one step that is the person's.
+function heldLine(
+  plugin: InstalledPlugin,
+  problem: HeldProblem,
+  composedVersion: string | null,
+  words: HeldWords,
+): string {
+  const key = plugin.key;
+  const needs = (base: PluginDependency): string =>
+    base.range === null ? base.name : `${base.name} ${base.range}`;
+  const [why, step] = problem.kind === "missing"
+    ? problem.why === "not-installed"
+      ? [`needs ${needs(problem.base)}, which is not installed`, `Install ${problem.base.name} and ${key} composes at the next session start.`]
+      : problem.why === "host-disabled"
+        ? [`needs ${problem.base.name}, which is disabled in ${words.hostName}`, `Enable ${problem.base.name} there, or disable ${key}.`]
+        : [
+          `needs ${needs(problem.base)}, which this project does not have yet`,
+          `If ${problem.base.name} is installed, ${key} composes at ${words.nextCompose(problem.base.name)}; if not, install ${problem.base.name}.`,
+        ]
+    : problem.kind === "deep"
+      ? [`builds on ${problem.base}, which builds on ${problem.baseOfBase}`, "A plugin can build only on a base that builds on core alone."]
+      : problem.kind === "range"
+        ? [
+          `needs ${needs(problem.base)}, and ${problem.base.name} ${problem.version} is ${problem.where}`,
+          `Install a ${problem.base.name} version in that range, or a version of ${key} made for ${problem.base.name} ${problem.version}.`,
+        ]
+        : problem.kind === "bases"
+          ? [`names more than one base plugin (${problem.names.join(", ")})`, "A plugin builds on core and at most one base."]
+          : [
+            `has a .aidlc-plugin/plugin.json that cannot be read (${
+              problem.kind === "shape" ? "dependencies must be an array of non-empty strings" : problem.reason
+            })`,
+            "Its author needs to fix that file.",
+          ];
+  if (composedVersion === null) return `${key} is not composed: it ${why}. ${step}`;
+  if (composedVersion === plugin.version) return `${key} stays as composed before, but it ${why}. ${step}`;
+  return `${key} stays at ${composedVersion} as composed before: ${key} ${plugin.version} ${why}. ${step}`;
+}
+
+// Layering is shallow on purpose: a plugin builds on core and at most one base
+// plugin, and a base builds on core alone. So the order is the bases, then the
+// plugins built on them, alphabetical within each, as sync always ran. A
+// plugin whose base is missing, outside its range or built on another plugin,
+// or whose manifest cannot say, is held with its line and never resolved; one
+// whose base is turned off for this project is paused, and nothing is said.
+export function layerOrder(
+  plugins: InstalledPlugin[],
+  baseView: (name: string) => BaseView,
+  composedVersion: (key: string) => string | null,
+  words: HeldWords,
+): { ordered: InstalledPlugin[]; held: HeldPlugin[]; paused: InstalledPlugin[] } {
+  const sorted = [...plugins].sort((left, right) => left.key.localeCompare(right.key));
+  const inRun = new Map(sorted.map((plugin) => [plugin.key, plugin]));
+  const bases: InstalledPlugin[] = [];
+  const layered: InstalledPlugin[] = [];
+  const held: HeldPlugin[] = [];
+  const paused: InstalledPlugin[] = [];
+  for (const plugin of sorted) {
+    const base = plugin.base;
+    if (plugin.baseProblem === null && base === null) {
+      bases.push(plugin);
+      continue;
+    }
+    let problem: HeldProblem | null = plugin.baseProblem;
+    if (problem === null && base !== null) {
+      const own = inRun.get(base.name);
+      const view: BaseView = own
+        ? { kind: "here", version: own.version, where: "installed", base: own.base?.name ?? null }
+        : baseView(base.name);
+      if (view.kind === "off") {
+        paused.push(plugin);
+        continue;
+      }
+      problem = view.kind === "missing"
+        ? { kind: "missing", base, why: view.why }
+        : view.base !== null
+          ? { kind: "deep", base: base.name, baseOfBase: view.base }
+          : base.range !== null && !Bun.semver.satisfies(view.version, base.range)
+            ? { kind: "range", base, version: view.version, where: view.where }
+            : null;
+    }
+    if (problem === null) layered.push(plugin);
+    else held.push({ plugin, reason: heldLine(plugin, problem, composedVersion(plugin.key), words) });
+  }
+  return { ordered: [...bases, ...layered], held, paused };
+}
+
 export async function syncPlugins(
   projectDir: string,
   argv: string[],
   harnessDir = runtimeHarnessDir(projectDir),
   lockRetry = 0,
-): Promise<{ synced: string[]; pruned: string[]; operations: number }> {
+): Promise<{
+  synced: string[];
+  pruned: string[];
+  operations: number;
+  held: HeldRecord[];
+  newlyHeld: HeldRecord[];
+  paused: string[];
+}> {
   const harness = harnessKind(harnessDir);
   const inventory = currentRoots().length > 0
     ? currentRootInventory(harness)
@@ -1542,6 +1776,7 @@ export async function syncPlugins(
   const prune = argv.includes("--prune-missing");
   let plugins: InstalledPlugin[];
   let missing: string[] = [];
+  let hostList: InstalledPlugin[] | null = null;
   if (inventory.capability === "full-inventory") {
     if (inventory.invalid.length > 0) {
       throw new Error(
@@ -1551,6 +1786,7 @@ export async function syncPlugins(
     plugins = inventory.installed.filter((plugin) =>
       plugin.enabled && (selection === null || selection.has(plugin.key))
     );
+    hostList = inventory.installed;
     const installed = new Set(inventory.installed.map((plugin) => plugin.key));
     missing = [...new Set([
       ...evidence.stamps.keys(),
@@ -1570,17 +1806,81 @@ export async function syncPlugins(
     if (plugins.length === 0) {
       throw new Error("host inventory unavailable; run sync through an installed plugin's host hook");
     }
+    // A host hook names only its own plugin. Where the host lists its
+    // plugins, the installed base that plugin builds on composes first in the
+    // same run, so the order of the hosts' hooks does not matter.
+    if (plugins.some((plugin) => plugin.base !== null)) {
+      const host = discoverPluginInventory(harnessDir, projectDir);
+      if (host.capability === "full-inventory") {
+        hostList = host.installed;
+        const run = new Map(plugins.map((plugin) => [plugin.key, plugin]));
+        for (const plugin of plugins) {
+          const found = host.installed.find((candidate) =>
+            candidate.key === plugin.base?.name && candidate.enabled &&
+            (selection === null || selection.has(candidate.key))
+          );
+          if (found && !run.has(found.key)) run.set(found.key, found);
+        }
+        plugins = [...run.values()];
+      }
+    }
   }
+  const harnessName = runtimeHarnessName(projectDir, harnessDir);
+  const order = layerOrder(
+    plugins,
+    (name) => {
+      if (selection !== null && !selection.has(name)) return { kind: "off" };
+      const stamp = evidence.stamps.get(name);
+      const composed: BaseView | null = stamp
+        ? { kind: "here", version: stamp.version, where: "composed in this project", base: stamp.base ?? null }
+        : null;
+      if (hostList === null) return composed ?? { kind: "missing", why: "not-in-project" };
+      const found = hostList.find((plugin) => plugin.key === name);
+      if (!found) return { kind: "missing", why: "not-installed" };
+      return composed ?? { kind: "missing", why: "host-disabled" };
+    },
+    (key) => evidence.stamps.get(key)?.version ?? null,
+    {
+      hostName: harness === "codex" ? "Codex" : "Claude Code",
+      nextCompose: (base) => harnessName === "kiro" ? `the next plugin sync after ${base}` : "the next session start",
+    },
+  );
+  plugins = order.ordered;
+  const held: HeldRecord[] = order.held.map(({ plugin, reason }) => ({
+    schemaVersion: 1,
+    name: plugin.key,
+    version: plugin.version,
+    reason,
+  }));
+  const heldNow = new Set(held.map((record) => record.name));
+  // A record goes once its plugin composes; where the host lists its plugins,
+  // also once the plugin is gone or no longer held.
+  const staleHeld = [...evidence.held.keys()].filter((key) =>
+    plugins.some((plugin) => plugin.key === key) ||
+    (inventory.capability === "full-inventory" && !heldNow.has(key))
+  );
+  // Said once: sync says a held plugin when its record is new or changed;
+  // plugin list and doctor keep showing it.
+  const newlyHeld = held.filter((record) => {
+    const recorded = evidence.held.get(record.name);
+    return recorded?.version !== record.version || recorded.reason !== record.reason;
+  });
+  const paused = order.paused.map((plugin) => plugin.key);
   const pruned = prune ? missing : [];
   announcePrune(argv, pruned);
   if (
     pruned.length === 0 &&
-    plugins.every((plugin) => compositionIsCurrent(plugin, evidence, projectDir))
+    staleHeld.length === 0 &&
+    newlyHeld.length === 0 &&
+    plugins.every((plugin) => compositionIsCurrent(plugin, evidence, projectDir, harnessDir, selection))
   ) {
     return {
       synced: plugins.map((plugin) => plugin.key).sort(),
       pruned: [],
       operations: 0,
+      held,
+      newlyHeld,
+      paused,
     };
   }
   const stagingRoot = mkdtempSync(join(tmpdir(), "aidlc-plugin-sync-"));
@@ -1615,6 +1915,12 @@ export async function syncPlugins(
         refuseLinkOnTheWay(projectDir, assertOwnedPath(projectDir, file.path));
       }
       pruneOwnedPlugin(stagedProject, harnessDir, key, evidence.ownership.get(key));
+    }
+    const stagedData = harnessDataDir(stagedProject, harnessDir);
+    for (const key of staleHeld) rmSync(join(stagedData, `plugin-held-${key}.json`), { force: true });
+    for (const record of held) {
+      mkdirSync(stagedData, { recursive: true });
+      writeFileSync(join(stagedData, `plugin-held-${record.name}.json`), `${JSON.stringify(record, null, 2)}\n`);
     }
     const claimedPaths = new Set<string>();
     for (const plugin of plugins) {
@@ -1654,13 +1960,16 @@ export async function syncPlugins(
       if (
         pruned.length === 0 &&
         plugins.every((plugin) =>
-          compositionIsCurrent(plugin, refreshedEvidence, projectDir)
+          compositionIsCurrent(plugin, refreshedEvidence, projectDir, harnessDir, selection)
         )
       ) {
         return {
           synced: plugins.map((plugin) => plugin.key).sort(),
           pruned: [],
           operations: 0,
+          held,
+          newlyHeld: [],
+          paused,
         };
       }
       throw error;
@@ -1669,6 +1978,9 @@ export async function syncPlugins(
       synced: plugins.map((plugin) => plugin.key).sort(),
       pruned,
       operations: plan.operations.length,
+      held,
+      newlyHeld,
+      paused,
     };
   } finally {
     rmSync(stagingRoot, { recursive: true, force: true });
@@ -1707,7 +2019,8 @@ export async function main(argv: string[]): Promise<void> {
     if (command === "sync") {
       const result = await syncPlugins(projectDir, argv);
       const message = `plugin sync complete: ${result.synced.length} plugin(s)` +
-        (result.pruned.length > 0 ? `; pruned ${result.pruned.length} missing plugin(s)` : "");
+        (result.pruned.length > 0 ? `; pruned ${result.pruned.length} missing plugin(s)` : "") +
+        result.newlyHeld.map((record) => `\n${record.reason}`).join("");
       if (flags.json === "true") process.stdout.write(jsonEnvelope(0, message, result));
       else if (flags.quiet !== "true") process.stdout.write(`${message}\n`);
       return;

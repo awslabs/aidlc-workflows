@@ -112,9 +112,10 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    reported fixed stays among the settled decisions, so a recurrence keeps its
    decision.
 
-   Then delegate to the reviewer agent named in `directive.reviewer`. The
-   request remains unmatched while the reviewer runs, so the approval gate and
-   completion stay blocked.
+   Then delegate to the reviewer agent named in `directive.reviewer` (or the
+   request's `dispatchAgent` when it returns one, as the reviewer-unit module
+   says). The request remains unmatched while the reviewer runs, so the
+   approval gate and completion stay blocked.
 
    Pass:
    - The stage definition file path (`directive.stage_file`)

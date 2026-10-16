@@ -243,6 +243,34 @@ describe("t314 standalone plugin validator", () => {
     );
   });
 
+  test("dependencies name core and at most one base plugin, with a range npm can read", () => {
+    const withDependencies = (dependencies: string[]): string[] => {
+      const root = fixture();
+      const manifestPath = join(root, ".aidlc-plugin", "plugin.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
+      manifest.dependencies = dependencies;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+      return validatePluginRoot(root).errors
+        .filter((finding) => finding.message.startsWith("manifest dependencies"))
+        .map((finding) => finding.message);
+    };
+    expect(withDependencies(["core", "zeta@^1.2.0"])).toEqual([]);
+    expect(withDependencies(["zeta@1.x || >=2.1.0 <3"])).toEqual([]);
+    expect(withDependencies(["core", "zeta"])).toEqual([]);
+    expect(withDependencies(["core", "zeta", "mid@^1.0.0"])).toEqual([
+      "manifest dependencies name more than one base plugin (zeta, mid)",
+    ]);
+    expect(withDependencies(["core", "zeta@>=1, <2"])).toEqual([
+      'manifest dependencies: "zeta@>=1, <2" has a version range npm cannot read, such as "^1.2.0" or ">=1.2.0 <2.0.0"',
+    ]);
+    expect(withDependencies(["core", "aidlc-zeta"])).toEqual([
+      'manifest dependencies: "aidlc-zeta" does not name a plugin: use "core", "<plugin>", or "<plugin>@<range>"',
+    ]);
+    expect(withDependencies(["core", "fixture-plugin@^1.0.0"])).toEqual([
+      'manifest dependencies: "fixture-plugin@^1.0.0" names this plugin itself',
+    ]);
+  });
+
   test("b: stage frontmatter parse and schema failures are reported", () => {
     const root = fixture();
     const stage = join(

@@ -265,6 +265,61 @@ export function assertSupportedPluginContributionPaths(
   );
 }
 
+export type PluginDependency = { name: string; range: string | null };
+
+// Why a dependencies list cannot be read, or the second base it names.
+export type PluginBaseProblem =
+  | { kind: "shape" }
+  | { kind: "entry"; reason: string }
+  | { kind: "bases"; names: string[] };
+
+// npm's range grammar, checked here because Bun.semver.satisfies, which plugin
+// sync uses, accepts any string: "garbage" satisfies every version.
+const RANGE_VERSION =
+  String.raw`(?:\d+|[xX*])(?:\.(?:\d+|[xX*])){0,2}(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?`;
+const RANGE_PLAIN = new RegExp(`^${RANGE_VERSION}$`);
+const RANGE_COMPARATOR = new RegExp(`^(?:\\^|~|>=|<=|>|<|=)?${RANGE_VERSION}$`);
+
+function validDependencyRange(range: string): boolean {
+  return range.split("||").every((set) => {
+    const tokens = set.trim().split(/\s+/);
+    if (tokens.length === 3 && tokens[1] === "-") {
+      return RANGE_PLAIN.test(tokens[0]) && RANGE_PLAIN.test(tokens[2]);
+    }
+    return tokens[0] !== "" && tokens.every((token) => RANGE_COMPARATOR.test(token));
+  });
+}
+
+// What a plugin builds on: core and at most one base plugin, which builds on
+// core alone. The one owner of that rule: validate reports what this returns,
+// and plugin sync holds a plugin on it.
+export function readPluginBase(
+  entries: unknown,
+  self?: string,
+): { base: PluginDependency | null } | { problem: PluginBaseProblem } {
+  if (entries === undefined) return { base: null };
+  if (!Array.isArray(entries) || entries.some((entry) => typeof entry !== "string" || entry.trim() === "")) {
+    return { problem: { kind: "shape" } };
+  }
+  const bases: PluginDependency[] = [];
+  for (const entry of entries as string[]) {
+    const text = entry.trim();
+    const at = text.indexOf("@");
+    const name = at < 0 ? text : text.slice(0, at);
+    const range = at < 0 ? null : text.slice(at + 1).trim();
+    if (name !== "core" && (!PLUGIN_NAME_RE.test(name) || name === "aidlc" || name.startsWith("aidlc-"))) {
+      return { problem: { kind: "entry", reason: `"${entry}" does not name a plugin: use "core", "<plugin>", or "<plugin>@<range>"` } };
+    }
+    if (range !== null && !validDependencyRange(range)) {
+      return { problem: { kind: "entry", reason: `"${entry}" has a version range npm cannot read, such as "^1.2.0" or ">=1.2.0 <2.0.0"` } };
+    }
+    if (name === self) return { problem: { kind: "entry", reason: `"${entry}" names this plugin itself` } };
+    if (name !== "core") bases.push({ name, range });
+  }
+  if (bases.length > 1) return { problem: { kind: "bases", names: bases.map((base) => base.name) } };
+  return { base: bases[0] ?? null };
+}
+
 export function validatePluginName(
   declaredName: string,
   rootName = declaredName,
@@ -583,19 +638,21 @@ function validateManifest(
       );
     }
   }
-  if (
-    manifest.dependencies !== undefined &&
-    (!Array.isArray(manifest.dependencies) ||
-      manifest.dependencies.some(
-        (entry) => typeof entry !== "string" || entry.trim() === "",
-      ))
-  ) {
+  const base = readPluginBase(manifest.dependencies, declaredName);
+  if ("problem" in base) {
+    const { problem } = base;
     addError(
       findings,
       displayFile,
       "manifest-shape",
-      "manifest dependencies must be an array of non-empty strings",
-      'Use entries such as "core" or "other-plugin@^1.2.0".',
+      problem.kind === "shape"
+        ? "manifest dependencies must be an array of non-empty strings"
+        : problem.kind === "bases"
+          ? `manifest dependencies name more than one base plugin (${problem.names.join(", ")})`
+          : `manifest dependencies: ${problem.reason}`,
+      problem.kind === "bases"
+        ? "A plugin builds on core and at most one base plugin; keep one."
+        : 'Use entries such as "core" or "other-plugin@^1.2.0".',
     );
   }
 

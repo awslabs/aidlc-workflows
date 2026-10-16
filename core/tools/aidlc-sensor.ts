@@ -594,7 +594,7 @@ function handleFire(args: string[]): void {
 	// guaranteed false SENSOR_FAILED on every run of that stage in that scope.
 	// An optional consume (`required: false`) may not have informed the
 	// output, and citing one that did not would be false provenance, unless the
-	// stage lists it under `cites:` (its deliverables cite it when it exists).
+	// stage marks it `cited: true` (its deliverables cite it when it exists).
 	const isCodeSensor = sensorTakesFilePath(sensor.manifest, id);
 	const scriptArgs: string[] = ["--stage", stageSlug];
 	if (isCodeSensor) {

@@ -15,6 +15,7 @@ import {
   writeHookStatusFile,
   isClaudeCodeHookInput,
   isoTimestamp,
+  isScopedReviewCopy,
   openReviewRequests,
   readAuditShardEvents,
   recordDir,
@@ -24,6 +25,7 @@ import {
   resolveWorkflowSelection,
   REVIEW_FILE_DIGEST_FIELD,
   reviewFileDigestOnDisk,
+  scopedReviewCopyName,
   stateFilePathForSelection,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
@@ -91,16 +93,43 @@ export async function run(input: string): Promise<number> {
     );
   }
 
-  const agentType =
+  let agentType =
     typeof parsed.agent_type === "string" && parsed.agent_type.trim()
       ? parsed.agent_type
       : "unknown";
   const agentId: string = parsed.agent_id ?? "";
   const agentMessage: string = (parsed.last_assistant_message ?? "").slice(0, 200);
+  // A reviewer copy (Kiro preview, aidlc-kiro-review-copy.ts) is its request's
+  // reviewer under another name: the row names the reviewer, so the review's
+  // evidence is found as the reviewer's, and keeps the copy's name beside it.
+  // Only a copy whose request is still open is read this way.
+  let dispatchAgent: string | null = null;
+  let openRequests: ReturnType<typeof openReviewRequests> | null = null;
+  if (isScopedReviewCopy(agentType)) {
+    try {
+      openRequests = openReviewRequests(readAuditShardEvents(projectDir, intent, space));
+      const request = openRequests.find((open) => scopedReviewCopyName(open.requestId) === agentType);
+      if (request) {
+        dispatchAgent = agentType;
+        agentType = request.reviewer;
+      } else {
+        recordHookDrop(
+          projectDir,
+          "log-subagent",
+          `${agentType} finished with no open review request of its own; recorded under its own name`,
+          intent,
+          space,
+        );
+      }
+    } catch (e) {
+      recordHookDrop(projectDir, "log-subagent", `reviewer copy not resolved: ${errorMessage(e)}`, intent, space);
+    }
+  }
 
   const fields: Record<string, string> = {
     "Agent Type": agentType,
   };
+  if (dispatchAgent !== null) fields["Dispatch Agent"] = dispatchAgent;
   if (agentId) fields["Agent ID"] = agentId;
   if (agentMessage) fields.Message = agentMessage;
   // What a reviewer left in the review file of every request still open for
@@ -112,7 +141,7 @@ export async function run(input: string): Promise<number> {
   try {
     const record = recordDir(projectDir, intent, space);
     if (record !== null) {
-      const digests = openReviewRequests(readAuditShardEvents(projectDir, intent, space))
+      const digests = (openRequests ?? openReviewRequests(readAuditShardEvents(projectDir, intent, space)))
         .filter((request) => request.reviewer === agentType)
         .map((request) => ({
           reviewFile: request.reviewFile,

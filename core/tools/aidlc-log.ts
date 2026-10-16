@@ -11,6 +11,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { dirname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { prepareReviewCopy, removeReviewCopy } from "./aidlc-kiro-review-copy.ts";
 import {
   chatsSince,
   holdsQuote,
@@ -4085,6 +4086,17 @@ function handleReview(args: string[]): void {
     // A Unit of a parallel batch, reviewed in its worktree: the reviewer runs the
     // tests the person approved through AI-DLC's own check, as its worker does.
     const swarmUnit = flags.stage === "code-generation" && flags.unit ? swarmWorkerWorktreeMeta(pd) : null;
+    // On Kiro (kiro-ide), with the reviewer read-scope preview feature on, this
+    // review's reviewer is dispatched as a copy that carries its read scope; a
+    // replaced request's copy goes with it.
+    if (replaces !== null) removeReviewCopy(pd, replaces);
+    const copy = requestId === null ? null : prepareReviewCopy(pd, {
+      requestId,
+      reviewer: flags.reviewer,
+      ...(flags.unit ? { unit: flags.unit } : {}),
+    });
+    const dispatchAgent = copy !== null && "dispatchAgent" in copy ? copy.dispatchAgent : null;
+    if (copy !== null && "notice" in copy) requestChangeNotices.push(copy.notice);
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
@@ -4094,7 +4106,12 @@ function handleReview(args: string[]): void {
       // asked to allow an AI-DLC internal step (two live runs). The request
       // the conductor already runs hands the time over instead.
       reviewed_at: isoTimestamp(),
-      agent_note: reviewRequestNote(flags.reviewer, reviewFile ?? "the review file this request opened", recordVerdict),
+      agent_note: reviewRequestNote(
+        flags.reviewer,
+        reviewFile ?? "the review file this request opened",
+        recordVerdict,
+        dispatchAgent,
+      ),
       ...(retried ? { retry: "pending-request" } : {}),
       ...(upgraded ? { upgrade: "legacy-request" } : {}),
       ...(recovery ? { recovery } : {}),
@@ -4102,6 +4119,7 @@ function handleReview(args: string[]): void {
       requestId,
       reviewFile,
       recordVerdict,
+      ...(dispatchAgent !== null ? { dispatchAgent } : {}),
       ...(swarmUnit && swarmUnit.swarmUnit === flags.unit
         ? { test_command: swarmUnitTestCommand(flags.unit) }
         : {}),
@@ -4716,6 +4734,8 @@ function handleReview(args: string[]): void {
   // the reviewer-scope hook reads it. Remove that one too, when it is this
   // review's own record; another Unit's review keeps its window.
   removeParentReviewerDispatch(pd, { reviewer: flags.reviewer, stage: flags.stage, unit: flags.unit });
+  // The verdict closes the request, so its reviewer copy (Kiro preview) goes too.
+  removeReviewCopy(pd, fields["Request Id"]);
 
   const agentNote = recorded.context === undefined
     ? null
