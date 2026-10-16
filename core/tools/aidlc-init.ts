@@ -11300,8 +11300,8 @@ function previewSwitchLine(
   feature: PreviewFeature,
   before: PreviewChoice | null,
   to: PreviewChoice,
+  version: string,
 ): string {
-  const version = tree.frameworkVersion ?? AIDLC_VERSION;
   const head = before === to
     ? `  Preview feature ${feature}: ${to}, as recorded in ${tree.harnessDir}/tools/data/harness.json`
     : `  Preview feature ${feature}: ${before ?? "not set"} -> ${to} in ${tree.harnessDir}/tools/data/harness.json`;
@@ -11318,6 +11318,15 @@ function previewSwitchLine(
     ? PREVIEW_FEATURE_TEXT[feature].takes
     : "nothing changes on this release";
   return `${head}; ${takes}.${undo}`;
+}
+
+// The release a config run sets this project up on, as preview features read
+// it before the run: its pin, else the release its tree is on. The run checks
+// on again against the release it selects.
+function previewTargetVersion(projectDir: string, treeVersion: string): string {
+  const pin = join(projectDir, ".aidlc-version");
+  const pinned = regularFile(pin) ? readFileSync(pin, "utf-8").trim() : "";
+  return VERSION_ID.test(pinned) ? pinned : treeVersion;
 }
 
 // How to get the preview release the project needs, as commands, ending with
@@ -11391,14 +11400,25 @@ function preparePreviewSection(
     );
     return null;
   }
-  // Whether `on` can apply is decided against the release this run sets up,
-  // which a pin or --download can make another one than the installed tree's.
+  // What applies is read on the release this run sets up, which a pin can
+  // make another one than the installed tree's.
   const state = treePreviewFeature(tree.root, feature);
-  const version = state.version;
+  const version = previewTargetVersion(projectDir, state.version);
   const recorded = state.recorded;
+  const applies = recorded === "on" && versionChannel(version) === PREVIEW_CHANNEL;
+  if (choice === "on" && versionChannel(version) !== PREVIEW_CHANNEL) {
+    emitResult(
+      usage(
+        `${feature} needs this project on a preview release of AI-DLC; it is on ${version}`,
+        previewReleaseSteps(projectDir, previewCommand(projectDir, tree.distribution, `${feature} on --yes`)),
+      ),
+      options,
+    );
+    return null;
+  }
   // Nothing recorded is off, so off there changes nothing and records nothing.
   // A recorded on that does not apply here goes on, to the release check.
-  if ((recorded ?? "off") === choice && (choice === "off" || state.on)) {
+  if ((recorded ?? "off") === choice && (choice === "off" || applies)) {
     emitResult(success(`${feature} is already ${choice} for this project`, { feature, choice }), options);
     return null;
   }
@@ -11420,15 +11440,14 @@ function preparePreviewSection(
   const current = modelPolicyForHarness(resolveAidlcSettings(projectDir).models, harness);
   const tiers = readAgentTiers(tree.root);
   // Off says its way back in the switch line itself, and what becomes of a
-  // recorded per-agent model or effort; a file it cannot take them out of is
-  // named by the refresh.
+  // recorded per-agent model or effort.
   const ownSettings = Object.values(normalizeModelPolicy(current)?.agents ?? {})
     .some((agent) => agent.model !== undefined || agent.effort !== undefined);
   const notes = feature !== KIRO_AGENT_MODELS_FEATURE
     ? []
     : choice === "on"
     ? modelSummaryLines(current, current, tiers, harness, projectDir, { version, agentModels: choice }).notes
-    : ownSettings && state.on
+    : ownSettings && applies
     ? [KIRO_AGENT_MODELS_OFF_NOTE]
     : [];
   return {
@@ -11440,7 +11459,7 @@ function preparePreviewSection(
       previous: current,
       next: current,
       tiers,
-      summaryLines: [previewSwitchLine(projectDir, tree, feature, recorded, choice)],
+      summaryLines: [previewSwitchLine(projectDir, tree, feature, recorded, choice, version)],
       notes,
       preview: { feature, choice },
     },
