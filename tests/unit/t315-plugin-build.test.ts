@@ -480,6 +480,30 @@ describe("t315 standalone plugin builder", () => {
     expect(existsSync(outDir)).toBe(false);
   });
 
+  test("a plugin that orders after another plugin's stage without declaring it does not build, and says the one step", () => {
+    const pluginRoot = join(scratch, "undeclared-plugin", "beta");
+    const created = spawnSync(process.execPath, [join(copiedTools, "aidlc-plugin-create.ts"), "beta", pluginRoot], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    });
+    expect(created.status, created.stderr).toBe(0);
+    const stagePath = join(pluginRoot, "stages", "construction", "beta-example-stage.md");
+    writeFileSync(
+      stagePath,
+      readFileSync(stagePath, "utf-8").replace("requires_stage: []", "requires_stage:\n  - zeta-example-stage"),
+      "utf-8",
+    );
+    const outDir = join(scratch, "undeclared-plugin-output");
+    const result = run([pluginRoot, "claude", outDir]);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Plugin build: FAILED");
+    expect(result.stderr).toContain(
+      `ERROR stages/construction/beta-example-stage.md [base-reference]: requires_stage "zeta-example-stage" is not a core stage or one of beta's own`,
+    );
+    expect(result.stderr).toContain('Fix: If another plugin ships it, add that plugin to dependencies next to "core"');
+    expect(existsSync(outDir)).toBe(false);
+  });
+
   test("a team plugin whose stage leads with its base's agent builds, saying once that the agent is not checked", () => {
     const pluginRoot = join(scratch, "team-plugin", "alpha");
     const created = spawnSync(process.execPath, [join(copiedTools, "aidlc-plugin-create.ts"), "alpha", pluginRoot], {
