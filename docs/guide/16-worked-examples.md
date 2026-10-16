@@ -323,8 +323,9 @@ also open `<record>/verification-command.txt`. The canonical command must be a
 nonblank single line of at most 1024 characters. Control characters and
 display-spoofing characters (Unicode format characters, including zero-width and
 bidi controls, line/paragraph separators, and no-break space U+00A0) are refused.
-You choose **Approve**; only after recording that exact answer in the same session
-does the typed setter authorize this command for the intent's checkpoints.
+You choose **Approve** (in that chat, or in a new one while it is the newest
+question asked); only after recording that exact answer does the typed setter
+authorize this command for the intent's checkpoints.
 
 > Progress: 16 of 30 stages done. Next: Functional Design.
 

@@ -590,6 +590,12 @@ describe("t242 pure status comparator", () => {
       version: "version-differs",
     });
     expect(rows.find((row) => row.key === "version")?.message).toContain("upgrade");
+    // Config composes no plugin; each state a sync clears names the sync.
+    const lines = renderPluginStatuses(rows).split("\n");
+    for (const key of ["legacy", "new", "source", "version"]) {
+      expect(lines.find((line) => line.startsWith(`${key} `)), key)
+        .toEndWith(`run: ${aidlcInvocation()} engine plugin sync`);
+    }
   });
 
   test("default rendering exposes only the three actions and verbose keeps taxonomy", () => {
@@ -610,7 +616,8 @@ describe("t242 pure status comparator", () => {
     );
     const rendered = renderPluginStatuses(rows);
     expect(rendered).toContain("current");
-    expect(rendered).toContain("run: aidlc config");
+    expect(rendered).toContain(`run: ${aidlcInvocation()} engine plugin sync`);
+    expect(rendered).not.toContain("aidlc config");
     expect(rendered).toContain("needs attention: invalid manifest");
     expect(rendered).not.toContain("[source-changed]");
     expect(renderPluginStatuses(rows, true)).toContain("[source-changed]");
@@ -732,7 +739,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       pass: false,
       severity: "warn",
       label: "Plugins: 1 require sync",
-      fix: "run `aidlc config`",
+      fix: "run `bun .claude/tools/aidlc.ts engine plugin sync`",
     }));
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

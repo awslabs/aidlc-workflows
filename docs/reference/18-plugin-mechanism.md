@@ -247,7 +247,8 @@ as `paused: needs zeta, which is off` and doctor lists it as information. Turnin
 the base back on brings the plugin back at the next session start. A pause that
 would strand open work is refused like any turn-off, naming the plugin and the
 base. Through `aidlc config project --plugins`, a plugin turned off or paused
-keeps its merged contributions until the next `select-plugins`.
+loses its merged contributions the same way: every config refresh runs the same
+rule, `stripPluginsTurnedOff()` in `aidlc-utility.ts`, in its staged tree.
 
 ## 5a. Installed inventory, composition stamps, and sync
 
@@ -291,7 +292,7 @@ edits and path-only renames are visible.
 
 `aidlc engine plugin list [--verbose|--json]` compares the host inventory with those
 stamps. Default output deliberately has only three actions: `current`,
-`run: aidlc config`, or `needs attention: <remediation>`. On a host with no
+`run: aidlc engine plugin sync`, or `needs attention: <remediation>`. On a host with no
 plugin list, a composed plugin reads `not compared: no host plugin list` and
 needs nothing. Verbose and JSON output retain the internal reason: version differs,
 source changed, not composed, legacy unstamped, disabled, missing,
@@ -396,10 +397,13 @@ sensors / full consume entries including `required` and optional
 `conditional_on` / scopes / required_sections, per target stage) and each
 successfully applied fragment's anchor/order/hash in a per-plugin sidecar at
 `tools/data/plugin-contrib-<key>.json`; spliced prose fragments also carry their
-own sentinel markers. On disable, `select-plugins` strips both from the installed
-stage source inside the same rollback transaction, so a disabled plugin's
-contributions stop steering enabled stages. Re-enabling restores them on the
-next session start: the plugin's compose hook re-merges, byte-identical.
+own sentinel markers. On disable, `select-plugins` and every config refresh
+(`aidlc config project --plugins` among them) strip both from the installed
+stage source inside their own rollback transaction, through one rule
+(`stripPluginsTurnedOff()`), so a disabled or paused plugin's contributions stop
+steering enabled stages. Re-enabling restores them on the next session start (on
+Kiro CLI, at the next `aidlc engine plugin sync`): the plugin's compose hook
+re-merges, byte-identical.
 
 Compose hooks and `select-plugins` serialize planning on the same realpath-keyed
 workspace lock; live project changes then commit through the transaction

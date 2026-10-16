@@ -1108,15 +1108,19 @@ describe("t342 Construction checkpoint routing", () => {
     expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).not.toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("policy answers cannot cross sessions, proposals, or offered choices", () => {
+  test("a policy answer binds the chat the person answered in, the proposal, and the offered choice", () => {
     const p = fixture();
     const field = "Construction Checkpoints";
     const before = readFileSync(seededStateFile(p));
+    // Answered in another chat: the reply there takes the question, so the chat
+    // that asked records nothing, and the other records only that proposal.
     expect(policyChoice(p, "decision", field, "disabled").status).toBe(0);
     policyHuman(p, "Approve", "other-session");
     expect(policyChoice(p, "answer", field, "disabled").status).not.toBe(0);
-    expect(policyChoice(p, "answer", field, "disabled", "other-session").status).not.toBe(0);
+    expect(policyChoice(p, "answer", field, "enabled", "other-session").status).not.toBe(0);
+    expect(policyChoice(p, "answer", field, "disabled", "other-session").status).toBe(0);
     // Free words are the agent's to read; an exact pick binds the proposal it answered.
+    expect(policyChoice(p, "decision", field, "disabled").status).toBe(0);
     policyHuman(p, "Approve");
     expect(policyChoice(p, "answer", field, "enabled").status).not.toBe(0);
     // Re-presenting a proposal invalidates the old hook response.

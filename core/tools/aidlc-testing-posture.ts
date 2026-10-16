@@ -66,6 +66,8 @@ import {
   moveProtectedQuestion,
   DECISION_PAIRING_EVENTS,
   decisionAnsweredBy,
+  CONSTRUCTION_POLICY_CHECKPOINT,
+  VERIFICATION_COMMAND_CHECKPOINT,
   sortAttemptEvents,
   planApprovalChallengeRelativePath,
   readRegularFileNoFollowOrThrow,
@@ -3869,16 +3871,16 @@ function pickerAsksProtectedQuestion(
   return isOneOfChoices(picked, APPROVAL_GATE_CHOICES);
 }
 
-// The person may answer a Unit or batch checkpoint question in any chat. With
-// no question of its own in this chat, the checkpoint question another chat
+// The person may answer a question that needs their own reply to it (a Unit or
+// batch checkpoint, the verification command, a Construction policy question)
+// in any chat. With no question of its own in this chat, the one another chat
 // asked moves here, with any reply already kept for it, so this reply pairs
-// with it and its approval needs no second answer. Only the newest question
+// with it and its answer needs no second reply. Only the newest question
 // asked in any chat moves, while nothing has answered it: a reply never pairs
 // with an older question, nor with one when another was asked after it.
-function checkpointQuestionFromAnotherChat(projectDir: string, session: string): ProtectedQuestion | null {
+function protectedQuestionFromAnotherChat(projectDir: string, session: string): ProtectedQuestion | null {
   if (existsSync(join(projectDir, planApprovalChallengeRelativePath(projectDir, session)))) return null;
-  const elsewhere = protectedQuestionsElsewhere(projectDir, session)
-    .filter((question) => question.kind === "checkpoint-approval");
+  const elsewhere = protectedQuestionsElsewhere(projectDir, session);
   if (elsewhere.length === 0) return null;
   const rows = sortAttemptEvents(readAuditShardEvents(projectDir).filter((row) => DECISION_PAIRING_EVENTS.has(row.event)));
   const at = rows.findLastIndex((row) => row.event === "DECISION_RECORDED");
@@ -3889,12 +3891,23 @@ function checkpointQuestionFromAnotherChat(projectDir: string, session: string):
     auditBlockField(row.block, "Stage") === field("Stage") && decisionAnsweredBy(asked, row.event, row.block))) {
     return null;
   }
-  const askedAbout = (target: Record<string, unknown>): boolean => target.fingerprint === field("Fingerprint") &&
-    (field("Checkpoint") === "Construction Unit Approval"
-      ? target.kind === "unit" && target.unit === field("Unit") && target.checkpointKind === field("Kind")
-      : field("Checkpoint") === "Swarm Batch Approval" && target.kind === "batch" &&
-        String(target.batch) === field("Batch number"));
-  const matching = elsewhere.filter((question) => askedAbout(question.target));
+  const askedAbout = ({ kind, target }: ProtectedQuestion): boolean => {
+    switch (field("Checkpoint")) {
+      case "Construction Unit Approval":
+        return kind === "checkpoint-approval" && target.fingerprint === field("Fingerprint") && target.kind === "unit" &&
+          target.unit === field("Unit") && target.checkpointKind === field("Kind");
+      case "Swarm Batch Approval":
+        return kind === "checkpoint-approval" && target.fingerprint === field("Fingerprint") && target.kind === "batch" &&
+          String(target.batch) === field("Batch number");
+      case VERIFICATION_COMMAND_CHECKPOINT:
+        return kind === "verification-command" && target.commandSha256 === field("Command SHA-256");
+      case CONSTRUCTION_POLICY_CHECKPOINT:
+        return kind === "construction-policy" && target.field === field("Field") && target.value === field("Value");
+      default:
+        return false;
+    }
+  };
+  const matching = elsewhere.filter(askedAbout);
   const question = matching.find((candidate) =>
     readProtectedResponse(projectDir, candidate.session)?.challengeId === candidate.challengeId) ?? matching[0];
   return question ? moveProtectedQuestion(projectDir, question, session) : null;
@@ -3912,7 +3925,7 @@ export function recordProtectedHumanResponse(
   return withAuditLock(projectDir, () => {
     const text = responseText.trim();
     const question = readProtectedQuestion(projectDir, session) ??
-      (text && !isNonAnswer(text) ? checkpointQuestionFromAnotherChat(projectDir, session) : null);
+      (text && !isNonAnswer(text) ? protectedQuestionFromAnotherChat(projectDir, session) : null);
     if (!question) return { recorded: false };
     const picked = question.promptDigest !== undefined && questionText !== null;
     if (picked && !pickerAsksProtectedQuestion(question, questionText, picker, responseText)) {

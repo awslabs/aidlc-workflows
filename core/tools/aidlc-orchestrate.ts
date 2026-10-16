@@ -172,6 +172,9 @@ import {
   attemptEventIsCrossShardTied,
   artifactFilename,
   auditBlockField,
+  CONSTRUCTION_POLICY_CHECKPOINT,
+  VERIFICATION_COMMAND_CHECKPOINT,
+  validConstructionPolicyChange,
   auditFilePath,
   REDO_REUSE_SOURCE,
   boltSlugForUnit,
@@ -219,6 +222,10 @@ import {
   PLAN_APPROVAL_ASK_TYPE,
   type GuardRefusal,
   guardAttemptState,
+  nextReviewStepFor,
+  openReviewRequests,
+  personMayApproveOverUnfinishedReview,
+  personSpokeSinceReviewRequest,
   type GuardAttemptState,
   withWorkspaceSourceStateCache,
   guardRecoveryAnswerAdmits,
@@ -3500,12 +3507,30 @@ function openQuestionReplyDirective(stage: string, block: string, requestId: str
       ? [`${aidlcToolInvocation("bolt")} swarm-checkpoint`,
         batch && units ? ` --batch ${shellArg(batch)} --units ${shellArg(units)}` : ""]
       : [null, ""];
+  // The verification command and a Construction policy question name their
+  // two choices (the only ones `log decision` takes for them), their own
+  // flags, and the setter an approval runs; the command itself stays in its
+  // file, never on a shell line.
+  const field = auditBlockField(block, "Field") ?? "";
+  const value = auditBlockField(block, "Value") ?? "";
+  const [flags, setter] = checkpoint === VERIFICATION_COMMAND_CHECKPOINT
+    ? [" --checkpoint verification-command --command-file verification-command.txt",
+      "set-construction-verification-command --command-file verification-command.txt"]
+    : checkpoint === CONSTRUCTION_POLICY_CHECKPOINT && validConstructionPolicyChange(field, value)
+      ? [` --checkpoint construction-policy --field ${shellArg(field)} --value ${shellArg(value)}`,
+        `set-${field.toLowerCase().replaceAll(" ", "-")} ${shellArg(value)}`]
+      : [null, null];
   const answer = gate
     ? `answer it through that checkpoint, never \`log answer\` (which would not approve it): run \`${gate} --action ` +
       `approve${target}\` or \`${gate} --action reject${target}\`${target ? "" : " for that Unit or batch"}, passing ` +
       "the person's reply unchanged as `--user-input` (and their feedback as `--reason` when they ask for changes)"
-    : `record it with \`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)} --details '<their exact reply>'\` ` +
-      "(with the checkpoint flags that question was logged with, when it has them)";
+    : flags !== null
+      ? "its choices are 1. Approve and 2. Request Changes; " +
+        `record the choice they made with \`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)}${flags} ` +
+        `--details '<Approve or Request Changes>'\`; after an Approve, run \`${aidlcToolInvocation("state")} ${setter}\` and ` +
+        "say its notice line"
+      : `record it with \`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)} --details '<their exact reply>'\` ` +
+        "(with the checkpoint flags that question was logged with, when it has them)";
   return printDirective(
     `Stage "${stage}" has a question you asked that the person has not answered yet. Read their reply. ` +
       `If it answers that question, ${answer}, then carry on with "${stage}" from where you asked and run bare ` +
@@ -11429,7 +11454,7 @@ function unitReceiptOnlyStep(
       // with reviews off.
       if (review.unitStale.has(unit) || review.unitStaleProgress.has(unit)) return null;
       if (!unitWorkIsThisAttempts(projectDir, node.slug, unit, stateContent)) return null;
-      return unitReviewStep(projectDir, node, unit, review);
+      return unitReviewStep(projectDir, node, unit, review, stateContent);
     }
   }
   const command = (action: string): string =>
@@ -11439,40 +11464,139 @@ function unitReceiptOnlyStep(
   return `Unit "${unit}"'s ${node.name} work is ${done}, but its completion is not recorded: run ${steps}.`;
 }
 
+// The review file the open request for this stage (or Unit) names, as the log
+// handed it out: relative to the project. A chat that resumes never saw the
+// request, so the step has to carry it. Undefined when nothing is open or the
+// record cannot be read.
+function openReviewFileFor(
+  projectDir: string,
+  stage: string,
+  reviewer: string,
+  unit: string | undefined,
+): string | undefined {
+  const record = engineRelativeRecordDir(projectDir);
+  if (record === null) return undefined;
+  try {
+    const open = openReviewRequests(readAuditShardEvents(projectDir)).filter((request) =>
+      request.stage === stage && request.reviewer === reviewer && (request.unit ?? undefined) === unit &&
+      // An isolated stage run (`--single`) reviews on its own; the Stop hook leaves those rows out too.
+      auditBlockField(request.row.block, "Workflow")?.startsWith("single-stage:") !== true);
+    const latest = open.at(-1);
+    return latest === undefined ? undefined : toPosix(join(record, latest.reviewFile));
+  } catch {
+    return undefined;
+  }
+}
+
+// The retry of the waiting review request, while its one retry is unspent.
+function retryRequestFor(
+  projectDir: string,
+  node: GraphStage,
+  unit: string | undefined,
+  attempt: GuardAttemptState,
+): string | undefined {
+  const pending = attempt.pendingReview;
+  if (pending === undefined || !pending.retryable) return undefined;
+  return renderReviewRequestCommand({
+    projectDir, stage: node.slug, reviewer: node.reviewer as string, ...(unit ? { unit } : {}),
+    iteration: pending.iteration, retryPending: true,
+  });
+}
+
 // The review a Unit's stage is still waiting for, as the step that gets it:
-// the first request when none was asked for in this attempt, the verdict when
-// one is waiting, and the next pass when the reviewer asked for repairs. The
-// same step the Construction checkpoint names when it is the checkpoint that
-// is not ready, said here for a stage whose Unit is otherwise done.
+// the first request when none was asked for in this attempt, otherwise the
+// step `nextReviewStepFor` names from the attempt state (the verdict, the one
+// retry while it is unspent, the next pass after repairs). The same step the
+// Construction checkpoint names when it is the checkpoint that is not ready,
+// said here for a stage whose Unit is otherwise done.
 function unitReviewStep(
   projectDir: string,
   node: GraphStage,
   unit: string,
   review: FreshReviewReceipts,
-): string {
-  const reviewer = node.reviewer as string;
-  const request = (iteration: number, retryPending = false): string =>
-    `\`${renderReviewRequestCommand({
-      projectDir,
-      stage: node.slug,
-      reviewer,
-      unit,
-      iteration,
-      ...(retryPending ? { retryPending: true } : {}),
-    })}\``;
+  stateContent: string,
+): string | null {
   const work = `Unit "${unit}"'s ${node.name} work is written`;
   const pending = review.unitPending.get(unit);
+  const { attempt } = guardAttemptState(projectDir, stateContent, node, { unit, receipts: review });
   if (pending === undefined) {
     const iteration = (review.unitIterations.get(unit) ?? 0) + 1;
-    return `${work}, but its review was never asked for: request it with ${request(iteration)}, ` +
-      "then record the verdict.";
+    const request = `\`${renderReviewRequestCommand({
+      projectDir, stage: node.slug, reviewer: node.reviewer as string, unit, iteration,
+    })}\``;
+    return `${work}, but its review was never asked for: request it with ${request}, then record the verdict.`;
   }
-  if (pending.state === "repair-required" && pending.didNotFinish !== true) {
-    return `${work} and its review asked for repairs: make them, then request pass ` +
-      `${pending.iteration + 1} with ${request(pending.iteration + 1)} and record the verdict.`;
+  const step = nextReviewStepFor({
+    attempt, didNotFinish: pending.didNotFinish === true, verificationFailed: pending.verificationFailed === true,
+    retryRequest: retryRequestFor(projectDir, node, unit, attempt),
+    reviewFile: openReviewFileFor(projectDir, node.slug, node.reviewer as string, unit),
+    // The Unit routes put the step before `next`, and `report` replays it, so
+    // the person's words are not folded in here; the NOT-READY fallback is left
+    // out once they have written, as the reviewer protocol says.
+    fallback: !personSpokeSinceReviewRequest(projectDir, node.slug, node.reviewer as string, unit),
+    subject: work,
+  });
+  return step?.text ?? null;
+}
+
+// Whether the person's approval may go over an unfinished review, and where a
+// team lock on strict sits when it may not.
+function approvalOverReview(
+  projectDir: string,
+  stateContent: string,
+): { allowed: true } | { allowed: false; lockedIn: string | null } {
+  if (personMayApproveOverUnfinishedReview(projectDir, stateContent)) return { allowed: true };
+  try {
+    const memoryStrict = resolveGuardPolicy(projectDir, stateContent).memoryStrict;
+    return { allowed: false, lockedIn: memoryStrict?.path ?? null };
+  } catch {
+    // The policy file is unreadable, so the lock cannot be confirmed or named.
+    // Approval stays blocked (personMayApproveOverUnfinishedReview already said no),
+    // but the text says the review needs its verdict without claiming a team lock.
+    return { allowed: false, lockedIn: undefined as unknown as string | null };
   }
-  return `${work} and its review is waiting for a verdict: record the verdict for pass ` +
-    `${pending.iteration}, or ask the reviewer again with ${request(pending.iteration, true)}.`;
+}
+
+// A stage that works on the whole project (not once per Unit) and whose review
+// is open: the step that gets it finished, in place of the stage body. Its
+// documents are written, since a request was made on them, so the body has
+// nothing left for the lead to write. Repairs the reviewer asked for are the
+// lead's own work, so that state, and a stage whose review was never asked
+// for, keep the body. Null leaves the route as it was.
+function stageReviewStep(
+  projectDir: string,
+  node: GraphStage,
+  scope: string,
+  stateContent: string | null,
+): { text: string; personFirst: boolean } | null {
+  if (stateContent === null || !node.reviewer || isReadOnlyEngineProbe()) return null;
+  if (isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, stateContent)) {
+    // Per Unit with a Unit DAG, the Unit routes own the review. Team ownership
+    // without a DAG is an error the route states, which a review step must not hide.
+    if (resolveBoltDag(projectDir).state !== "none" || isTeamUnitOwnership(stateContent)) return null;
+  }
+  const reviewClass = resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent);
+  if (reviewClass === "none") return null;
+  const review = freshReviewReceipts(projectDir, stateContent, node, { reviewClass });
+  const pending = review.stagePending;
+  if (pending === null || pending === undefined) return null;
+  const { attempt } = guardAttemptState(projectDir, stateContent, node, { receipts: review });
+  const step = nextReviewStepFor({
+    attempt,
+    didNotFinish: pending.didNotFinish === true,
+    verificationFailed: pending.verificationFailed === true,
+    retryRequest: retryRequestFor(projectDir, node, undefined, attempt),
+    reviewFile: openReviewFileFor(projectDir, node.slug, node.reviewer, undefined),
+    personSpoke: personSpokeSinceReviewRequest(projectDir, node.slug, node.reviewer, undefined),
+    approval: approvalOverReview(projectDir, stateContent),
+    nextCommand: `${aidlcToolInvocation("orchestrate")} next`,
+    subject: `${node.name}'s documents are written`,
+  });
+  if (step === null || step.kind === "repairs") return null;
+  // A step that puts the person's words first ends the turn once they are done.
+  return step.personFirst === true
+    ? { text: step.text, personFirst: true }
+    : { text: `${step.text} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`, personFirst: false };
 }
 
 // True when the Unit's receipts for this stage are read against the first
@@ -13870,6 +13994,11 @@ function emitForSlug(
   projectDir: string,
 ): void {
   const node = nodeForSlug(slug);
+  const reviewStep = node ? stageReviewStep(projectDir, node, scope, stateContent) : null;
+  if (reviewStep !== null) {
+    emit(reviewStep.personFirst ? turnEndingPrint(reviewStep.text) : printDirective(reviewStep.text));
+    return;
+  }
   if (node && isPerUnit(node)) {
     if (
       stateContent && checkpointPolicyEnabled(stateContent) &&
