@@ -250,6 +250,7 @@ import {
   isModelId,
   isModelPreset,
   KIRO_AGENT_MODELS_RECORD,
+  kiroAgentModelsApplied,
   kiroAgentModelsChoice,
   kiroAgentModelsOn,
   MODEL_EFFORTS,
@@ -1219,7 +1220,7 @@ function agentModelsSwitchLine(
   to: KiroAgentModelsChoice,
 ): string {
   const head = `  Kiro agent models: ${before.agentModels ?? "not set"} -> ${to} in ${harnessDir}/tools/data/harness.json`;
-  const wasOn = kiroAgentModelsOn(before);
+  const wasOn = kiroAgentModelsApplied(before);
   // Recording what was already in effect changes no agent file.
   if (wasOn === (to === "on")) return `${head}; the agent files do not change.`;
   return `${head}; Kiro takes it at each agent's next dispatch. To undo: ` +
@@ -6587,7 +6588,7 @@ function prepareRefreshSource(
   diagnosticsOverride?: ConfigDiagnosticOverrides,
   force = false,
   // The caller passes the version of the release being staged.
-  agentModelsRequest: { version: string; requested?: KiroAgentModelsChoice } = { version: AIDLC_VERSION },
+  agentModelsRequest: { version: string; requested?: KiroAgentModelsChoice; dryRun?: boolean } = { version: AIDLC_VERSION },
 ): PreparedRefreshSource {
   // A copied project is not a release: never baseline the user's edits as
   // shipped entries during an in-place record mutation.
@@ -6741,15 +6742,15 @@ function prepareRefreshSource(
     const before = recorded === "on" || recorded === "off" ? recorded : null;
     agentModelsChoice = kiroAgentModelsChoice(recorded, agentModelsRequest.requested, agentModelsRequest.version);
     agentModelsTakeOut = agentModelsRequest.requested === "off" &&
-      kiroAgentModelsOn({ version: agentModelsRequest.version, agentModels: before });
+      kiroAgentModelsApplied({ version: agentModelsRequest.version, agentModels: before });
     if (agentModelsChoice !== null && agentModelsChoice !== recorded) {
       staged[KIRO_AGENT_MODELS_RECORD] = agentModelsChoice;
       agentModelsRecorded = true;
       if (agentModelsRequest.requested === undefined) {
         notes.push(
-          "Recorded agent-models on for this project, because AIDLC_PREVIEW_FEATURES names it: later runs keep " +
-            "each agent's own model and effort without it. " +
-            `\`${configInvocationFor(projectDir)} config models --agent-models off --yes\` turns it off.`,
+          `${agentModelsRequest.dryRun ? "This records" : "Recorded"} agent-models on for this project, because ` +
+            "AIDLC_PREVIEW_FEATURES names it: later runs keep each agent's own model and effort without it. " +
+            `\`${modelsCommand(projectDir, "kiro-ide", "--agent-models off --yes")}\` turns it off.`,
         );
       }
     }
@@ -13033,6 +13034,7 @@ export async function main(
       argv.includes("--force"),
       {
         version: stamp.frameworkVersion,
+        dryRun: argv.includes("--dry-run"),
         ...(modelsContext?.agentModels ? { requested: modelsContext.agentModels } : {}),
       },
     );

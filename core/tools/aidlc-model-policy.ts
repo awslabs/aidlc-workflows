@@ -213,6 +213,18 @@ export function kiroAgentModelsChoice(
   return kiroAgentModelsOn({ version }) ? "on" : null;
 }
 
+// Whether AI-DLC's lines are in the project's kiro-ide agent files: every run
+// that writes them records "on" first, so on a preview release that record
+// says it, whatever the variable says now.
+export function kiroAgentModelsApplied(build: ModelBuild = {}): boolean {
+  return versionChannel(build.version ?? AIDLC_VERSION) === PREVIEW_CHANNEL && build.agentModels === "on";
+}
+
+// A preview release where agent-models is not on: the note names how to turn it on.
+export function kiroAgentModelsOffInPreview(build: ModelBuild = {}): boolean {
+  return versionChannel(build.version ?? AIDLC_VERSION) === PREVIEW_CHANNEL && !kiroAgentModelsOn(build);
+}
+
 // What a reader of an installed project knows: the release it is on and its
 // recorded agent-models choice.
 export function installedModelBuild(harnessRoot: string, version?: string): ModelBuild {
@@ -254,9 +266,7 @@ const KIRO_AGENT_MODELS_OFF_IN_PREVIEW: HarnessHonesty = Object.freeze({
 export function modelHarnessHonesty(harness: ModelHarness, build: ModelBuild = {}): HarnessHonesty {
   if (harness !== "kiro-ide") return HARNESS_HONESTY[harness];
   if (kiroAgentModelsOn(build)) return KIRO_AGENT_MODELS_HONESTY;
-  return versionChannel(build.version ?? AIDLC_VERSION) === PREVIEW_CHANNEL
-    ? KIRO_AGENT_MODELS_OFF_IN_PREVIEW
-    : HARNESS_HONESTY["kiro-ide"];
+  return kiroAgentModelsOffInPreview(build) ? KIRO_AGENT_MODELS_OFF_IN_PREVIEW : HARNESS_HONESTY["kiro-ide"];
 }
 
 // Where a harness can pin neither an agent's model nor its effort, every agent
@@ -1037,8 +1047,7 @@ export function harnessHonestyNotes(
     // The kiro-ide switch hint is for one agent's own setting; a preset or
     // group effort stays unexpressed with the switch on too.
     const own = effective.some((item) => item.layer === "agent-exception" && item.unexpressed.length > 0);
-    const offInPreview = harness === "kiro-ide" && !kiroAgentModelsOn(build) &&
-      versionChannel(build?.version ?? AIDLC_VERSION) === PREVIEW_CHANNEL;
+    const offInPreview = harness === "kiro-ide" && kiroAgentModelsOffInPreview(build);
     notes.push(
       !offInPreview
         ? modelHarnessHonesty(harness, build).message

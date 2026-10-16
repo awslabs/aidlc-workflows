@@ -417,6 +417,19 @@ describe("the agent-models choice through config", () => {
     expect(p.reviewer()).toMatch(/^model: claude-sonnet-5\.5$/m);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
+  test("with the variable set but nothing recorded, off still leaves the person's line, and on says what it writes", () => {
+    const p = project(previewRuntime());
+    const path = join(p.dir, ".kiro", "agents", REVIEWER_FILE);
+    writeFileSync(path, readFileSync(path, "utf-8").replace(/\n---\n/, "\nmodel: claude-sonnet-5.5\n---\n"));
+    const off = p.run(["config", "models", "--project-dir", p.dir, "--agent-models", "off", "--yes"], true);
+    expect(off.status, off.out).toBe(0);
+    expect(off.out).toContain("the agent files do not change.");
+    expect(p.reviewer()).toMatch(/^model: claude-sonnet-5\.5$/m);
+    const on = p.run(["config", "models", "--project-dir", p.dir, "--agent-models", "on", "--yes"], true);
+    expect(on.out).toContain("Kiro takes it at each agent's next dispatch. To undo: ");
+    expect(on.out).toContain("--agent-models off --yes");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
+
   test("a run that records the choice from the switch says so", () => {
     const p = project(previewRuntime());
     const pin = p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes"], true);
