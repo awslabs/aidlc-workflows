@@ -195,6 +195,15 @@ describe("writing kiro-ide agent files", () => {
     expect(policy.modelPolicySurfaceDrift(root, ".kiro", "kiro-ide", pinned, ON)).toContain(`${REVIEWER}: effort low != high`);
   });
 
+  test("on, a recorded preset and group effort write nothing and are no drift", () => {
+    const root = projection();
+    const before = agentFiles(root);
+    const shared: ModelPolicyRecord = { schemaVersion: 1, preset: "thorough", groups: { reviewing: { effort: "max" } } };
+    policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", shared, null, ON);
+    expect(agentFiles(root)).toEqual(before);
+    expect(policy.modelPolicySurfaceDrift(root, ".kiro", "kiro-ide", shared, ON)).toEqual([]);
+  });
+
   test("the take-out on a stable release takes the lines out and leaves the rest of the file", () => {
     const root = projection();
     const path = join(root, ".kiro", "agents", REVIEWER_FILE);

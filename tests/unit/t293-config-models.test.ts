@@ -1635,6 +1635,26 @@ describe("t293 doctor model policy advisory", () => {
     expect(check.fix).not.toContain("effort policy");
   });
 
+  test("config models --check on kiro-ide counts what doctor counts", () => {
+    const check = (models: unknown) => {
+      const project = temp("aidlc-t293-check-kiro-ide-");
+      cpSync(join(DIST, "kiro-ide"), project, { recursive: true });
+      writeFileSync(projectSettingsPath(project), `${JSON.stringify({ schemaVersion: 1, models }, null, 2)}\n`);
+      return run(["config", "models", "--project-dir", project, "--check"], project, runtimeEnv());
+    };
+    const shared = check({ schemaVersion: 1, preset: "balanced", groups: { reviewing: { effort: "max" } } });
+    expect(shared.status, shared.stdout).toBe(0);
+    expect(shared.stdout).toContain("model policy is reflected on kiro-ide");
+    // A model recorded for Kiro by name is still drift there; its effort is not.
+    const named = check({
+      schemaVersion: 1,
+      agents: { architect: { model: { "kiro-ide": "claude-sonnet-5.5" }, effort: "high" } },
+    });
+    expect(named.status).toBe(1);
+    expect(named.stdout).toContain("architect: model policy is not expressible on kiro-ide");
+    expect(named.stdout).not.toContain("architect: effort");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("doctor names the session where it sets every agent, and Kiro CLI carries the preset", () => {
     // A preset recorded for the team (setup records none on these hosts) is
     // not a problem to fix where the host cannot pin an agent's model or effort.
