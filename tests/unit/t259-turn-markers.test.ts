@@ -625,6 +625,20 @@ describe("t259 the stage's work recorded through log leaves the engine mark", ()
     expect(answered.status, answered.stderr).toBe(0);
     expect(answered.stdout).toContain('"emitted":"QUESTION_ANSWERED"');
     expect(turnMarkersShowConversational(proj)).toBe(false);
+
+    // A reply that answers the last question and asks one back: the agent
+    // answers it and ends the turn (--ends-turn), so the turn-end mark is
+    // left instead of the engine mark and the stop is allowed.
+    const next = log("decision", "--stage", "feasibility", "--decision", "Which region?", "--options", "us-east-1,eu-west-1");
+    expect(next.status, next.stderr).toBe(0);
+    await Bun.sleep(20);
+    person("us-east-1. What does that change for latency?");
+    await Bun.sleep(20);
+    const askedBack = log("answer", "--stage", "feasibility", "--details", "us-east-1", "--ends-turn");
+    expect(askedBack.status, askedBack.stderr).toBe(0);
+    expect(askedBack.stdout).toContain('"emitted":"QUESTION_ANSWERED"');
+    expect(turnEndIsOpen(proj)).toBe(true);
+    expect(turnMarkersShowConversational(proj)).toBe(true);
   }, 120_000);
 
   // The learnings question's Add a note is answered by the person next (the

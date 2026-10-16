@@ -19633,6 +19633,8 @@ export interface ReviewAttemptAccounting {
       // The request row names its own review file (rows recorded before
       // per-request review files do not).
       ownReviewFile: boolean;
+      // Admitted past the pass budget because the person asked (Person Asked).
+      personAsked: boolean;
     }
   >;
   recoveryIteration: number | null;
@@ -19940,6 +19942,7 @@ export function reviewAttemptAccounting(
       binding: ReviewRequestBinding | null;
       retried: boolean;
       ownReviewFile: boolean;
+      personAsked: boolean;
     }
   >();
   for (let i = floor + 1; i < events.length; i++) {
@@ -19999,6 +20002,7 @@ export function reviewAttemptAccounting(
             (auditBlockField(entry.block, "Retry") === "pending-request" &&
               modernBinding)),
         ownReviewFile: auditBlockField(entry.block, "Review File") !== null,
+        personAsked: auditBlockField(entry.block, "Person Asked") === "true",
       });
     } else {
       const pending = pendingRequests.get(iteration);
@@ -28150,10 +28154,11 @@ export function markEngineTouch(projectDir: string, intent?: string, space?: str
 // mid-stage, and the carve-out must not release it (#2400). aidlc-log is the
 // one owner of that call: after a row it recorded it leaves the engine mark
 // (markStageWorkLogged), or the turn-end mark when the person answers next
-// (a summary's Request changes with nothing said, which asks "What should
-// change?", and the learnings question's Add a note), or no mark for a review of a stage no longer in flight. Both
-// evidence paths read that mark, kept here rather than in
-// isEngineEngagementSegment, which also feeds the forwarding-loop and
+// (an answer whose reply also asked something, `--ends-turn`; a summary's
+// Request changes with nothing said, which asks "What should change?"; and
+// the learnings question's Add a note), or no mark for a review of a stage
+// no longer in flight. Both evidence paths read that mark, kept here rather
+// than in isEngineEngagementSegment, which also feeds the forwarding-loop and
 // runtime-compile detectors:
 //
 //   - marker path (Kiro IDE, Kiro CLI, opencode): the engine mark itself;

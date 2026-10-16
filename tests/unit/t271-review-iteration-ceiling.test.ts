@@ -571,6 +571,27 @@ describe("t271 review iteration ceiling", () => {
       }
     });
 
+    // With reviews off, a review the person asked for is admitted past the
+    // zero-pass budget; its verdict still names the step back to their gate.
+    test("with reviews off, a review the person asked for names the gate's report", () => {
+      const proj = seedProject("feature");
+      const sf = seededStateFile(proj);
+      writeFileSync(sf, `${readFileSync(sf, "utf-8")}\n- **Review Override**: none\n`);
+      const asked = spawnSync(process.execPath, [join(dirname(LOG_TOOL), "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+        cwd: proj, encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_UNATTENDED: "" },
+        input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t271-asked", prompt: "please have it reviewed" }),
+      });
+      expect(asked.status, `${asked.stdout}${asked.stderr}`).toBe(0);
+      const requested = runReview(proj, [...RA, "--person-asked"], NO_LEARNINGS);
+      expect(requested.status, requested.stderr).toBe(0);
+      expect(readAllAuditShards(proj)).toContain("**Person Asked**: true");
+      const recorded = runReview(proj, [...RA, "--verdict", "NOT-READY"], NO_LEARNINGS);
+      expect(recorded.status, recorded.stderr).toBe(0);
+      const step = note(recorded.stdout);
+      expect(step).toContain("report --stage requirements-analysis --result awaiting-approval");
+      expect(step).not.toContain("--iteration 2");
+    });
+
     test("a review of a stage no longer in flight has no step and leaves the turn as it was", () => {
       const { proj, step } = verdictNote("x", "READY", NO_LEARNINGS, (p) => {
         markEngineTouch(p);

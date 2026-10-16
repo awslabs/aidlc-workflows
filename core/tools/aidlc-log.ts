@@ -356,7 +356,8 @@ function parseFlags(
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a.startsWith("--")) {
-      if (a === "--single" || a === "--retry-pending" || a === "--stage-level" || a === "--park" || a === "--person-asked") {
+      if (a === "--single" || a === "--retry-pending" || a === "--stage-level" || a === "--park" || a === "--person-asked" ||
+        a === "--ends-turn") {
         flags[a.slice(2)] = "true";
         continue;
       }
@@ -428,7 +429,8 @@ function refuseSplitValues(subcommand: "decision" | "answer", rawArgs: string[])
       }
       if (first === null && open !== null && open.words.length > 0) first = open;
       open = null;
-      const valueless = a === "--single" || a === "--retry-pending" || a === "--stage-level" || a === "--park";
+      const valueless = a === "--single" || a === "--retry-pending" || a === "--stage-level" || a === "--park" ||
+        a === "--ends-turn";
       const next = rawArgs[i + 1];
       if (valueless || next === undefined || (next.startsWith("--") && a !== "--project-dir")) continue;
       open = { flag: a, value: next, words: [] };
@@ -515,9 +517,10 @@ const DECISION_OPTIONS: ReadonlySet<string> = new Set([
 // --units, --reason and --park: the engine's Plan Approval question, recorded as
 // the person chose (which Units, what to change, and whether to stop for now).
 // --on-instruction: a stage question the person left to the agent.
+// --ends-turn: their reply also asked something, which the agent answers.
 const ANSWER_OPTIONS: ReadonlySet<string> = new Set([
   ...LOG_INTERACTION_OPTIONS, "--details", "--units", "--reason", "--park", "--on-instruction",
-  "--details-file", "--on-instruction-file",
+  "--details-file", "--on-instruction-file", "--ends-turn",
 ]);
 
 // The person has said something in this piece of work: a turn that can carry a
@@ -1887,6 +1890,11 @@ function handleAnswer(args: string[]): void {
     }
   }
   if (!flags.details) error("Missing --details <text> (or --details-file <file>)");
+  // The person's reply also asked something: the agent answers it and the
+  // turn ends there, their next reply deciding (the stage protocol). That the
+  // reply asks is the agent's reading (--ends-turn); the turn-end mark replaces
+  // the engine mark, so the Stop hook lets the turn end.
+  if (flags["ends-turn"] === "true") rowEndsTurn = true;
   // A stage question the person left to the agent. Checkpoints and approvals
   // stay the person's own each time, and an unattended run has nobody to hand
   // anything over.
@@ -3091,9 +3099,11 @@ function stageBox(state: string, stage: string): string | undefined {
 // another pass follows is the engine's own terminal rule (terminalReviewVerdict),
 // whether the learnings question comes first is the run-stage's own rule
 // (learningsRitualRuns), and the gate's command is the report the stage
-// protocol names. A Unit's review, an isolated single-stage run, an autonomous
-// Construction gate and a stage no longer in flight keep the step their own
-// directive names: no note.
+// protocol names. A review the person asked for past the budget (even with
+// reviews off) and the one bounded stale-receipt recovery are one-off passes:
+// their verdict is terminal whatever the class. A Unit's review, an isolated
+// single-stage run, an autonomous Construction gate and a stage no longer in
+// flight keep the step their own directive names: no note.
 function reviewVerdictStep(
   pd: string,
   flags: Record<string, string>,
@@ -3105,13 +3115,16 @@ function reviewVerdictStep(
     reviewClass: ReviewClass | null;
   },
   selection: { intent: string | null; space: string },
+  request: { personAsked: boolean; recovery: boolean },
 ): string | null {
   const { state, node, reviewClass } = context;
-  if (flags.unit !== undefined || flags.single === "true" || reviewClass === null || reviewClass === "none") return null;
+  const oneOff = request.personAsked || request.recovery;
+  if (flags.unit !== undefined || flags.single === "true" || reviewClass === null) return null;
+  if (reviewClass === "none" && !oneOff) return null;
   if (node.phase === "initialization") return null;
   const box = stageBox(state, flags.stage);
   if (box === undefined || !REVIEW_IN_FLIGHT.has(box)) return null;
-  const terminal = terminalReviewVerdict(
+  const terminal = oneOff || terminalReviewVerdict(
     verdict,
     String(iteration),
     reviewClass,
@@ -4113,7 +4126,10 @@ function handleReview(args: string[]): void {
   let reviewMarkdown: string | null = null;
   const verdictChangeNotices: string[] = [];
   // What the verdict was recorded against, for the step it hands the agent.
-  const recorded: { context?: ReturnType<typeof loadContext> } = {};
+  const recorded: {
+    context?: ReturnType<typeof loadContext>;
+    request?: { personAsked: boolean; recovery: boolean };
+  } = {};
 
   try {
     withAuditLock(pd, () => {
@@ -4141,6 +4157,7 @@ function handleReview(args: string[]): void {
           "cannot be recovered by retrying or rebaselining; start a fresh review attempt.",
         );
       }
+      recorded.request = { personAsked: pendingRequest.personAsked, recovery: requestBinding.recoveryCause !== null };
       // A review can outlive a confirmation/retraction. Recheck the same
       // summary/output admission used at request time before issuing terminal
       // authority; an unchanged artifact snapshot alone cannot establish it.
@@ -4695,7 +4712,10 @@ function handleReview(args: string[]): void {
 
   const agentNote = recorded.context === undefined
     ? null
-    : reviewVerdictStep(pd, flags, verdict, iteration, recorded.context, { intent, space });
+    : reviewVerdictStep(pd, flags, verdict, iteration, recorded.context, { intent, space }, recorded.request ?? {
+      personAsked: false,
+      recovery: false,
+    });
   console.log(JSON.stringify({
     emitted: "REVIEW_COMPLETED",
     stage: flags.stage,
