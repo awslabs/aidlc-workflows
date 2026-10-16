@@ -1,4 +1,6 @@
-import { type Dirent, existsSync, lstatSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { type Dirent, existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -230,6 +232,40 @@ export function compiledExecutable(
   const explicit = process.env.AIDLC_COMPILED_EXECUTABLE?.trim();
   if (explicit) return explicit;
   return isCompiledExecutable(moduleUrl, executable) ? executable : null;
+}
+
+// A package the project installed itself, as Node resolves it from cwd:
+// node_modules, a link out of it, or NODE_PATH. Bun's resolver can also answer
+// from its own install cache, a copy that cannot run and that the project never
+// chose, so that answer is none. The code sensors run the project's own tool
+// through this.
+export function projectPackage(cwd: string, name: string): { root: string; major: number } | null {
+  try {
+    const manifestPath = createRequire(join(cwd, "package.json")).resolve(`${name}/package.json`);
+    if (inBunInstallCache(manifestPath)) return null;
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    if (manifest.name !== name || typeof manifest.version !== "string") return null;
+    return { root: dirname(manifestPath), major: Number(manifest.version.split(".")[0]) };
+  } catch {
+    return null;
+  }
+}
+
+function bunInstallCache(): string {
+  const explicit = process.env.BUN_INSTALL_CACHE_DIR?.trim();
+  if (explicit) return explicit;
+  return join(process.env.BUN_INSTALL?.trim() || join(homedir(), ".bun"), "install", "cache");
+}
+
+function inBunInstallCache(path: string): boolean {
+  let cache: string;
+  try {
+    cache = realpathSync(bunInstallCache());
+  } catch {
+    return false;
+  }
+  const rel = relative(cache, realpathSync(path));
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
 // Child calls and human-facing command rendering describe the same dispatcher

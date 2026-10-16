@@ -71,6 +71,7 @@ import {
   seededAuditShard,
   seededRecordDir,
   seededStateFile,
+  writeLearningsSelections,
 } from "../harness/fixtures.ts";
 import { parseSensorManifest } from "../../dist/claude/.claude/tools/aidlc-sensor-schema.ts";
 import { memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
@@ -123,10 +124,6 @@ function mkproj(): string {
 
 function seedMemoryMixed(pd: string): void {
   cpSync(MEMORY_MIXED, join(seededRecordDir(pd), "inception", "user-stories", "memory.md"));
-}
-
-function writeJson(path: string, value: unknown): void {
-  writeFileSync(path, JSON.stringify(value));
 }
 
 interface CliResult {
@@ -205,8 +202,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
   test("Case 1: project pick lands as a practice in project.md [.sh 2]", () => {
     const pd = mkproj();
     seedMemoryMixed(pd);
-    const sel = join(pd, "sel1.json");
-    writeJson(sel, {
+    const sel = writeLearningsSelections(pd, {
       stage_slug: "user-stories",
       space: DEFAULT_SPACE,
       intent: DEFAULT_RECORD_DIR,
@@ -236,8 +232,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
   test("Case 1: team-scoped pick lands as a practice in team.md [.sh 3]", () => {
     const pd = mkproj();
     seedMemoryMixed(pd);
-    const sel = join(pd, "sel1.json");
-    writeJson(sel, {
+    const sel = writeLearningsSelections(pd, {
       stage_slug: "user-stories",
       space: DEFAULT_SPACE,
       intent: DEFAULT_RECORD_DIR,
@@ -267,8 +262,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
   test("Case 1: two RULE_LEARNED audit rows [.sh 4]", () => {
     const pd = mkproj();
     seedMemoryMixed(pd);
-    const sel = join(pd, "sel1.json");
-    writeJson(sel, {
+    const sel = writeLearningsSelections(pd, {
       stage_slug: "user-stories",
       space: DEFAULT_SPACE,
       intent: DEFAULT_RECORD_DIR,
@@ -302,8 +296,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
   // AIDLC_STAGE_GRAPH seam.
   // ===========================================================================
   function seedSensorProposal(pd: string): string {
-    const sel = join(pd, "sel3.json");
-    writeJson(sel, {
+    return writeLearningsSelections(pd, {
       stage_slug: "user-stories",
       space: DEFAULT_SPACE,
       intent: DEFAULT_RECORD_DIR,
@@ -324,7 +317,6 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
         },
       ],
     });
-    return sel;
   }
 
   const STAGES_DIR_OF = (pd: string) => join(pd, ".claude", "aidlc-common", "stages");
@@ -395,8 +387,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const pd = mkproj();
     seedMemoryMixed(pd);
     // Reject verdict: the conflicting candidate was dropped pre-write → empty.
-    const sel = join(pd, "sel3b-reject.json");
-    writeJson(sel, { stage_slug: "user-stories", space: DEFAULT_SPACE, intent: DEFAULT_RECORD_DIR, selections: [] });
+    const sel = writeLearningsSelections(pd, { stage_slug: "user-stories", space: DEFAULT_SPACE, intent: DEFAULT_RECORD_DIR, selections: [] });
     expect(persist(pd, sel).status).toBe(0);
     // The RULE_LEARNED event (a write) MUST NOT fire: zero RULE_LEARNED rows.
     expect(ruleLearnedRows(pd)).toBe(0);
@@ -406,8 +397,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
   test("Case 3b: user-escalated entry writes through to the learnings file [.sh 11]", () => {
     const pd = mkproj();
     seedMemoryMixed(pd);
-    const sel = join(pd, "sel3b-escalate.json");
-    writeJson(sel, {
+    const sel = writeLearningsSelections(pd, {
       stage_slug: "user-stories",
       space: DEFAULT_SPACE,
       intent: DEFAULT_RECORD_DIR,
@@ -432,8 +422,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
   test("Case 4: idempotent re-run → exactly one audit row + one file line [.sh 12]", () => {
     const pd = mkproj();
     seedMemoryMixed(pd);
-    const sel = join(pd, "sel4.json");
-    writeJson(sel, {
+    const sel = writeLearningsSelections(pd, {
       stage_slug: "user-stories",
       space: DEFAULT_SPACE,
       intent: DEFAULT_RECORD_DIR,
@@ -462,8 +451,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
   test("Case 5: concurrent persist serialises → exactly one row + one line [.sh 13]", async () => {
     const pd = mkproj();
     seedMemoryMixed(pd);
-    const sel = join(pd, "sel5.json");
-    writeJson(sel, {
+    const sel = writeLearningsSelections(pd, {
       stage_slug: "user-stories",
       space: DEFAULT_SPACE,
       intent: DEFAULT_RECORD_DIR,
@@ -500,8 +488,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
   test("Case 6: recovery re-writes the line, skips re-emit, exit 0 [.sh 14]", () => {
     const pd = mkproj();
     seedMemoryMixed(pd);
-    const sel = join(pd, "sel6.json");
-    writeJson(sel, {
+    const sel = writeLearningsSelections(pd, {
       stage_slug: "user-stories",
       space: DEFAULT_SPACE,
       intent: DEFAULT_RECORD_DIR,
@@ -548,9 +535,8 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     expect(c.default_scope).toBe("project");
   }, TIMEOUT);
 
-  function keyedSelection(pd: string, name: string, keys: Record<string, string>, text: string): string {
-    const sel = join(pd, `${name}.json`);
-    writeJson(sel, {
+  function keyedSelection(pd: string, keys: Record<string, string>, text: string): string {
+    return writeLearningsSelections(pd, {
       stage_slug: "user-stories",
       space: DEFAULT_SPACE,
       intent: DEFAULT_RECORD_DIR,
@@ -565,14 +551,13 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
         },
       ],
     });
-    return sel;
   }
 
   test("Glue: a selection keyed by surface's own `id` persists", () => {
     const pd = mkproj();
     seedMemoryMixed(pd);
     const candidate = JSON.parse(surface(pd).stdout).candidates[0];
-    const sel = keyedSelection(pd, "sel-id-alias", { id: candidate.id }, candidate.summary);
+    const sel = keyedSelection(pd, { id: candidate.id }, candidate.summary);
     const r = persist(pd, sel);
     expect(r.status, r.stderr).toBe(0);
     expect(readFileSync(projectPractices(pd), "utf-8")).toContain(candidate.summary);
@@ -583,7 +568,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const pd = mkproj();
     seedMemoryMixed(pd);
     const candidate = JSON.parse(surface(pd).stdout).candidates[0];
-    const sel = keyedSelection(pd, "sel-both-same", { candidate_id: candidate.id, id: candidate.id }, candidate.summary);
+    const sel = keyedSelection(pd, { candidate_id: candidate.id, id: candidate.id }, candidate.summary);
     const r = persist(pd, sel);
     expect(r.status, r.stderr).toBe(0);
     expect(ruleLearnedRows(pd)).toBe(1);
@@ -594,7 +579,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const pd = mkproj();
     seedMemoryMixed(pd);
     const candidate = JSON.parse(surface(pd).stdout).candidates[0];
-    const sel = keyedSelection(pd, "sel-both-differ", { candidate_id: candidate.id, id: "c99" }, candidate.summary);
+    const sel = keyedSelection(pd, { candidate_id: candidate.id, id: "c99" }, candidate.summary);
     const r = persist(pd, sel);
     expect(r.status).toBe(1);
     expect(r.stderr).toContain(`candidate_id "${candidate.id}" and id "c99"`);
@@ -606,7 +591,7 @@ describe("t99 §13 learning-gate end-to-end (migrated from t99-learnings-gate-fl
     const pd = mkproj();
     seedMemoryMixed(pd);
     const candidate = JSON.parse(surface(pd).stdout).candidates[0];
-    const sel = keyedSelection(pd, "sel-no-key", {}, candidate.summary);
+    const sel = keyedSelection(pd, {}, candidate.summary);
     const r = persist(pd, sel);
     expect(r.status).toBe(1);
     expect(r.stderr).toContain("selection missing candidate_id");

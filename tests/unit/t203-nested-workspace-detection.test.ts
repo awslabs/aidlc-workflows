@@ -33,14 +33,15 @@
 //      brownfield). Routing is unchanged: reverse-engineering still
 //      greenfield-SKIPs.
 //
-//   3. AI-DLC's OWN WHOLE FILES. Cursor ships its copy installer as a root
-//      install.ts, and `aidlc config --harness cursor` (or copying the whole
-//      runtime/cursor/ tree) leaves it in the project. The root file sweep
-//      counted it as TypeScript, so an empty Cursor workspace scanned
-//      Brownfield and Reverse Engineering ran over the framework install. The
-//      scanner now skips every file an installed harness's projection
-//      descriptor lists as a whole-file root integration; a root install.ts
-//      that no installed harness claims is still the project's code.
+//   3. AI-DLC's OWN WHOLE FILES. Cursor's copy runtime ships its installer as
+//      a root install.ts, and copying the whole runtime/cursor/ tree leaves it
+//      in the project. The root file sweep counted it as TypeScript, so an
+//      empty Cursor workspace scanned Brownfield and Reverse Engineering ran
+//      over the framework install. The scanner now skips every file an
+//      installed harness's projection descriptor lists as a whole-file root
+//      integration; a root install.ts that no installed harness claims, such
+//      as one beside a native Cursor setup (which writes none), is still the
+//      project's code.
 //
 // detectWorkspace is a pure function of the directory tree, so each detection
 // case builds a FRESH mkdtemp dir, writes the signal files inline, and reads the
@@ -383,16 +384,18 @@ describe("t203 greenfield advisory (incremental scopes, no routing override)", (
   });
 });
 
-// Fix 3: AI-DLC's own whole files. Real Cursor installs, both routes that leave
-// install.ts at the project root: native config, and the complete runtime tree
-// copied into the folder.
+// Fix 3: AI-DLC's own whole files. Real Cursor installs: native config, which
+// writes no root install.ts, and the complete copy runtime tree copied into the
+// folder, which brings one.
 const INIT = join(REPO_ROOT, "core", "tools", "aidlc-init.ts");
 const CURSOR_RELEASE = join(REPO_ROOT, "dist-release", "cursor");
+const CURSOR_COPY_RUNTIME = join(REPO_ROOT, "dist", "cursor");
 const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
 
-function configuredForCursor(): string {
+function configuredForCursor(prepare?: (d: string) => void): string {
   const d = tmp();
   expect(spawnSync("git", ["init", "-q", d]).status).toBe(0);
+  prepare?.(d);
   const r = spawnSync(
     BUN,
     [INIT, "config", "--project-dir", d, "--from", CURSOR_RELEASE, "--harness", "cursor", "--mcp", "none"],
@@ -409,12 +412,20 @@ function copiedRuntime(release: string, into: string = tmp()): string {
 }
 
 describe("t203 AI-DLC's own whole files are never the project's code", () => {
-  test("an empty folder configured for Cursor scans Greenfield though install.ts sits at its root", () => {
+  test("an empty folder configured for Cursor scans Greenfield and gets no install.ts at its root", () => {
     const d = configuredForCursor();
-    expect(existsSync(join(d, "install.ts"))).toBe(true);
+    expect(existsSync(join(d, "install.ts"))).toBe(false);
     const scan = detectWorkspace(d);
     expect(scan.projectType).toBe("Greenfield");
     expect(scan.languages).toBe("Unknown");
+  });
+
+  test("a project's own root install.ts beside a native Cursor setup is its code", () => {
+    const d = configuredForCursor((project) => put(project, ["install.ts"], "export const install = 1;\n"));
+    expect(readFileSync(join(d, "install.ts"), "utf-8")).toBe("export const install = 1;\n");
+    const scan = detectWorkspace(d);
+    expect(scan.projectType).toBe("Brownfield");
+    expect(scan.languages).toBe("TypeScript");
   });
 
   test("a classic intent there starts Greenfield and skips Reverse Engineering", () => {
@@ -432,7 +443,7 @@ describe("t203 AI-DLC's own whole files are never the project's code", () => {
   });
 
   test("the complete Cursor runtime copied into an empty folder scans Greenfield", () => {
-    const d = copiedRuntime(CURSOR_RELEASE);
+    const d = copiedRuntime(CURSOR_COPY_RUNTIME);
     expect(existsSync(join(d, "install.ts"))).toBe(true);
     const scan = detectWorkspace(d);
     expect(scan.projectType).toBe("Greenfield");
@@ -440,7 +451,7 @@ describe("t203 AI-DLC's own whole files are never the project's code", () => {
   });
 
   test("the project's own code beside a Cursor install counts, and install.ts adds no language", () => {
-    const d = copiedRuntime(CURSOR_RELEASE);
+    const d = copiedRuntime(CURSOR_COPY_RUNTIME);
     put(d, ["main.py"], "print(1)\n");
     const scan = detectWorkspace(d);
     expect(scan.projectType).toBe("Brownfield");
@@ -461,7 +472,7 @@ describe("t203 AI-DLC's own whole files are never the project's code", () => {
 
   test("a container folder holding only a Cursor install adds no nested hit", () => {
     const d = tmp();
-    copiedRuntime(CURSOR_RELEASE, join(d, "svc"));
+    copiedRuntime(CURSOR_COPY_RUNTIME, join(d, "svc"));
     const scan = detectWorkspace(d);
     expect(scan.projectType).toBe("Greenfield");
     expect(scan.nestedRoot).toBeUndefined();

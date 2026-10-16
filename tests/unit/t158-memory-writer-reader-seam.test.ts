@@ -29,10 +29,13 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AIDLC_SRC, toPortablePath } from "../harness/fixtures.ts";
+import { AIDLC_SRC, learningsSelectionsPath, toPortablePath, writeLearningsSelections } from "../harness/fixtures.ts";
 import { loadRules, memoryDirFor } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+// The selections file is bound to this stage in the intent-less default space.
+const BINDING = { space: "default", intent: null, stage_slug: "user-stories" };
 
 const BUN = process.execPath;
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-learnings.ts");
@@ -58,6 +61,10 @@ function seedProject(root: string): void {
   mkdirSync(join(root, ".claude", "aidlc-common", "stages", "inception"), { recursive: true });
   const memDir = memoryDirFor(root);
   mkdirSync(memDir, { recursive: true });
+  // The intent-less space's own state, the evidence persist takes that the
+  // space exists (#1592): writing the picks' file makes its folder.
+  mkdirSync(join(root, "aidlc", "spaces", "default", "intents"), { recursive: true });
+  writeFileSync(join(root, "aidlc", "spaces", "default", "intents", "aidlc-state.md"), "# AI-DLC State Tracking\n- **Current Stage**: user-stories\n- **Scope**: feature\n", "utf-8");
 
   // The team.md the resolver reads. Ships the `## Corrections` heading the
   // §13 default routing targets; loadRules requires valid frontmatter-or-none
@@ -111,25 +118,19 @@ function seedProject(root: string): void {
   );
   // A team-scoped LEARNING selection routed to the `## Corrections` heading —
   // persist appends it as a practice line into the relocated team.md.
-  writeFileSync(
-    join(root, "sel.json"),
-    JSON.stringify({
-      stage_slug: "user-stories",
-      space: "default",
-      intent: null,
-      selections: [
-        {
-          candidate_id: "c1",
-          type: "learning",
-          scope: "team",
-          heading: "Corrections",
-          text: "Used Given/When/Then for AC; team standardised",
-          source: "orchestrator",
-        },
-      ],
-    }),
-    "utf-8",
-  );
+  writeLearningsSelections(root, {
+    ...BINDING,
+    selections: [
+      {
+        candidate_id: "c1",
+        type: "learning",
+        scope: "team",
+        heading: "Corrections",
+        text: "Used Given/When/Then for AC; team standardised",
+        source: "orchestrator",
+      },
+    ],
+  });
 }
 
 function runPersist(root: string): { status: number; out: string } {
@@ -145,7 +146,7 @@ function runPersist(root: string): { status: number; out: string } {
       "--slug",
       "user-stories",
       "--selections-json",
-      join(root, "sel.json"),
+      learningsSelectionsPath(root, BINDING),
       "--project-dir",
       root,
     ],

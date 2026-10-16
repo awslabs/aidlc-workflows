@@ -4224,6 +4224,31 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(JSON.parse(result.out).decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("(h) a setting their line did not carry, typed with next, allows the stop after the step that names their words", () => {
+    for (const format of ["claude", "codex"] as const) {
+      for (const { typed, command, reply } of [
+        { typed: "--scope mvp --sensors off", command: "scope change --scope mvp --sensors off", reply: "Switched to mvp: 22 stages (7 done), 19 approval gates." },
+        { typed: "--guard.review-freeze off", command: "config set guard.review-freeze off", reply: "Review freeze turned off (set by you)." },
+      ]) {
+        const proj = makeProject();
+        seedActive(proj);
+        const named = `${command} --person-words '<their words>'`;
+        const output = terminalModifierDispatch(proj, typed.split(" "), named, false);
+        const tp = seedTranscriptEntries(proj, format, [
+          { kind: "human", text: "switch to mvp and turn the checks off" },
+          { kind: "bash", id: "modifier-call", command: `bun .claude/tools/aidlc.ts engine orchestrate next ${typed}` },
+          { kind: "result", id: "modifier-call", output },
+          { kind: "bash", id: "setter-call", command: `bun .claude/tools/aidlc.ts engine ${command} --person-words 'switch to mvp and turn the checks off'` },
+          { kind: "result", id: "setter-call", output: reply },
+          { kind: "text" },
+        ]);
+        const result = runHook(proj, JSON.stringify({ stop_hook_active: false, transcript_path: tp }), "run-stage");
+        expect(result.rc, `${format}: ${typed}`).toBe(0);
+        expect(result.out, `${format}: ${typed}`).toBe("");
+      }
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("(h) a guard-policy next whose print names a different value still blocks (#1369)", () => {
     const proj = makeProject();
     seedActive(proj);

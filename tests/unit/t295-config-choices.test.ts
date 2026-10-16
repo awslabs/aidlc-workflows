@@ -111,6 +111,17 @@ function install(harness = "claude", mcp: "defaults" | "none" = "none"): string 
   return project;
 }
 
+// The person's own shell: both ends a terminal, no chat bound to it, and none of
+// the marks an agent's host puts on the commands it runs (the runner's own
+// environment may carry its host's), as commandAtPersonsTerminal reads it.
+function ownTerminal(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { AIDLC_TEST_CONFIG_TTY: "1", TERM_PROGRAM: undefined, AIDLC_SESSION_OVERRIDE: undefined };
+  for (const key of Object.keys(process.env)) {
+    if (/^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_)/i.test(key)) env[key] = undefined;
+  }
+  return env;
+}
+
 function runtimeEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     AIDLC_RUNTIME_ROOT: DIST_RELEASE,
@@ -821,14 +832,22 @@ describe("t295 flags section", () => {
     const mine = flags("--bypass", "AIDLC_DISABLE_SENSORS");
     expect(mine.status, mine.stdout + mine.stderr).toBe(0);
     expect(mine.stdout).toContain("Recorded AIDLC_DISABLE_SENSORS in aidlc.settings.local.json.");
-    // One way back everywhere: the no-layer clear (it clears every file that
-    // records the switch), the form every other line and the skills name.
+    // One way back everywhere: the no-layer clear (at the person's own terminal
+    // it clears every file that records the switch), the form every other line
+    // and the skills name.
     expect(mine.stdout).toContain("To undo: bun .claude/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_SENSORS --yes");
     expect(mine.stdout).not.toContain("--clear-bypass AIDLC_DISABLE_SENSORS --local --yes");
     expect(bypasses("aidlc.settings.local.json")).toEqual(["AIDLC_DISABLE_SENSORS"]);
     expect(bypasses("aidlc.settings.json")).toBeUndefined();
     expect(flags("--project", "--bypass", "AIDLC_DISABLE_LEARNINGS", "--yes").status).toBe(0);
-    const cleared = flags("--clear-bypass", "AIDLC_DISABLE_LEARNINGS");
+    // Typed at the person's own terminal, the no-layer clear reaches every file
+    // that records the switch (from a chat it leaves the shared one).
+    const typed = (...args: string[]) => run(
+      ["config", "flags", "--project-dir", project, ...args],
+      project,
+      runtimeEnv(ownTerminal()),
+    );
+    const cleared = typed("--clear-bypass", "AIDLC_DISABLE_LEARNINGS");
     expect(cleared.status, cleared.stdout + cleared.stderr).toBe(0);
     expect(cleared.stdout.startsWith("Cleared AIDLC_DISABLE_LEARNINGS from aidlc.settings.json."), cleared.stdout)
       .toBe(true);
@@ -837,7 +856,7 @@ describe("t295 flags section", () => {
     expect(resolvedFlags(project)?.bypasses).toEqual(["AIDLC_DISABLE_SENSORS"]);
     expect(flags("--project", "--bypass", "AIDLC_DISABLE_SENSORS", "--bypass", "AIDLC_DISABLE_LEARNINGS", "--yes").status).toBe(0);
     expect(flags("--local", "--bypass", "AIDLC_DISABLE_LEARNINGS", "--yes").status).toBe(0);
-    const both = flags("--clear-bypass", "AIDLC_DISABLE_SENSORS", "--clear-bypass", "AIDLC_DISABLE_LEARNINGS");
+    const both = typed("--clear-bypass", "AIDLC_DISABLE_SENSORS", "--clear-bypass", "AIDLC_DISABLE_LEARNINGS");
     expect(both.status, both.stdout + both.stderr).toBe(0);
     expect(both.stdout).toContain("Cleared AIDLC_DISABLE_SENSORS from aidlc.settings.local.json.");
     expect(both.stdout).toContain("Cleared AIDLC_DISABLE_SENSORS from aidlc.settings.json.");
@@ -882,10 +901,11 @@ describe("t295 flags section", () => {
     if (process.platform === "win32" || process.getuid?.() === 0) return;
     const project = install();
     const machine = temp("aidlc-t295-machine-layer-");
+    // At the person's own terminal, where the no-layer clear reaches the machine file.
     const flags = (...args: string[]) => run(
       ["config", "flags", "--project-dir", project, ...args],
       project,
-      runtimeEnv({ AIDLC_INSTALL_ROOT: machine }),
+      runtimeEnv({ AIDLC_INSTALL_ROOT: machine, ...ownTerminal() }),
     );
     expect(flags("--global", "--bypass", "AIDLC_DISABLE_SENSORS", "--yes").status).toBe(0);
     expect(flags("--local", "--bypass", "AIDLC_DISABLE_SENSORS", "--yes").status).toBe(0);

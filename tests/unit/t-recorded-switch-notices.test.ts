@@ -152,6 +152,17 @@ function says(proj: string, prompt: string): void {
   expect(result.status, result.stderr).toBe(0);
 }
 
+// The person's own shell: both ends a terminal, no chat bound to it, and none of
+// the marks an agent's host puts on the commands it runs (the runner's own
+// environment may carry its host's), as commandAtPersonsTerminal reads it.
+function ownTerminal(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { AIDLC_TEST_CONFIG_TTY: "1", TERM_PROGRAM: undefined };
+  for (const key of Object.keys(process.env)) {
+    if (/^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_)/i.test(key)) env[key] = undefined;
+  }
+  return env;
+}
+
 function flags(proj: string, ...args: string[]) {
   const result = dispatch(proj, ["config", "flags", "--project-dir", proj, ...args]);
   invalidateSettingsCache();
@@ -323,10 +334,17 @@ describe("a check switched off for the project is always said, never refused", (
     expect(local.stdout).not.toContain("is on again");
     expect(resolveProjectFlag(NAME, NONE, proj)).toBe("1");
 
-    // The way back the notice names clears every file that records it.
+    // The way back the notice names, typed at the person's own terminal, clears
+    // every file that records it.
     expect(flags(proj, "--bypass", NAME, "--local", "--yes").status).toBe(0);
     const wayBack = clearSwitchCommand(NAME);
-    const back = flags(proj, ...wayBack.slice(wayBack.indexOf(" config flags ") + " config flags ".length).split(" "));
+    const back = dispatch(
+      proj,
+      ["config", "flags", "--project-dir", proj, ...wayBack.slice(wayBack.indexOf(" config flags ") + " config flags ".length).split(" ")],
+      undefined,
+      ownTerminal(),
+    );
+    invalidateSettingsCache();
     expect(back.status, back.stdout + back.stderr).toBe(0);
     expect(back.stdout).toContain("The review freeze check is on again for this project.");
     expect(back.stdout.match(/is on again/g)).toHaveLength(1);

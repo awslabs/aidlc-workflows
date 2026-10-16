@@ -571,12 +571,23 @@ export async function run(
   // The person's words in a recorded answer or decision are text, never a
   // path: on Windows `--options "A: yes,B: no"` would read as drive A:.
   const FREE_TEXT_FLAGS = new Set(["--options", "--details", "--decision", "--reason"]);
-  function withoutFreeText(args: readonly string[]): string[] {
+  // So are the words a setter is handed as the reply that asked for it
+  // (`--person-words '/aidlc turn the review freeze off'`), on the commands
+  // that take them and can run without a click (`scope change` always keeps
+  // the prompt), outside a Windows terminal (PowerShell, cmd, or a call that
+  // names no shell on Windows), where they are checked as any other argument;
+  // the file form, --person-words-file, is always a path.
+  const PERSON_WORDS_FLAGS = new Set(["--person-words"]);
+  const TAKES_PERSON_WORDS = new Set(["config set", "intent create", "top-recompose recompose"]);
+  // A value is the next argument only when it does not start with `--`, as
+  // parseArgs and the log reader take it (recompose refuses a value starting
+  // with `-`), so no flag after it is hidden.
+  function withoutFreeText(args: readonly string[], flags: ReadonlySet<string> = FREE_TEXT_FLAGS): string[] {
     const kept: string[] = [];
     for (let i = 0; i < args.length; i++) {
       if (args[i] === "--") { kept.push(...args.slice(i)); break; }
-      if (!FREE_TEXT_FLAGS.has(args[i].split("=")[0])) kept.push(args[i]);
-      else if (!args[i].includes("=")) i++;
+      if (!flags.has(args[i].split("=")[0])) kept.push(args[i]);
+      else if (!args[i].includes("=") && args[i + 1] !== undefined && !args[i + 1].startsWith("--")) i++;
     }
     return kept;
   }
@@ -666,9 +677,10 @@ export async function run(
     const at = route.group === "top" ? (clean[0] === "engine" ? 0 : -1) : clean.indexOf(route.group);
     const rest = clean.slice(at + 2);
     const recordsWords = route.id === "log" && (clean[at + 1] === "answer" || clean[at + 1] === "decision");
+    const takesWords = !windowsTerminal && TAKES_PERSON_WORDS.has(`${route.id} ${clean[at + 1]}`);
     return !keepsPrompt(route.id, clean[at + 1] ?? "", rest, personMayLift) &&
       !clean.some((arg) => CALLER_RUNS.has(arg.split("=")[0])) &&
-      argumentsStayInProject(recordsWords ? withoutFreeText(clean) : clean);
+      argumentsStayInProject(recordsWords ? withoutFreeText(clean) : takesWords ? withoutFreeText(clean, PERSON_WORDS_FLAGS) : clean);
   }
 
   function personActedSinceGate(): boolean {

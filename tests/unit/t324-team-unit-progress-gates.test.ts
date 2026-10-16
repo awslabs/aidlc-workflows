@@ -49,6 +49,7 @@ import {
 import {
   readReviewFindingDispositions,
 } from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
+import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -153,6 +154,7 @@ function constructionState(opts: {
 ## Runtime State
 - **Revision Count**: 0
 - **Construction Iteration**: unit-major
+- **Plan Approval**: off (set by you)
 ${ownership}${rhythm}
 ## Scope Configuration
 - **Stages to Execute**: all
@@ -244,6 +246,11 @@ function coverUnit(proj: string, unit: string, stage: string): void {
     );
   }
   if (stage === "code-generation") {
+    // A plan the engine can read, with its Testing Contract.
+    writeFileSync(
+      join(dir, artifactFilename("code-generation-plan")),
+      `# Plan for ${unit}\n\n${renderTestingContract(resolveTestingPosture(proj))}\n## Steps\n\n- [ ] Step 1\n`,
+    );
     writeFileSync(
       join(dir, "source-manifest.json"),
       `${JSON.stringify({ stage, unit, version: 1, writes: [] }, null, 2)}\n`,
@@ -389,6 +396,11 @@ function settleBody(proj: string, directive: Directive): void {
     throw new Error(`${started.out}\nnext=${JSON.stringify(runNext(proj))}`);
   }
   coverUnit(proj, unit, stage);
+  // With the plan written, `next` hands over its build: plan approval is off
+  // in this file, so it records that nobody was asked and the Unit completes.
+  if (stage === "code-generation") {
+    expect(runNext(proj)).toMatchObject({ kind: "run-stage", stage, unit, plan_approval: { status: "approved" } });
+  }
   expect(runState(proj, ["unit", "complete", "--stage", stage, "--unit", unit]).rc)
     .toBe(0);
   if (directive.reviewer) {

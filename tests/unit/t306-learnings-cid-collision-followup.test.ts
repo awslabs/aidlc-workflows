@@ -73,6 +73,7 @@ import {
   DEFAULT_SPACE,
   intentsDirOf,
   seededStateFile,
+  writeLearningsSelections,
 } from "../harness/fixtures.ts";
 import { parseStageFrontmatter, readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
@@ -113,27 +114,28 @@ function selectionsFile(
   pd: string,
   name: string,
   text: string,
-  opts: { intent?: string | null; space?: string; candidateId?: string } = {},
+  opts: { intent?: string | null; space?: string; candidateId?: string; loose?: boolean } = {},
 ): string {
+  const body = {
+    stage_slug: STAGE_SLUG,
+    space: opts.space ?? DEFAULT_SPACE,
+    intent: opts.intent === undefined ? DEFAULT_RECORD_DIR : opts.intent,
+    selections: [
+      {
+        candidate_id: opts.candidateId ?? CANDIDATE_ID,
+        type: "learning",
+        scope: "project",
+        heading: "Corrections",
+        text,
+      },
+    ],
+  };
+  // The file goes where surface names it, the only place persist reads it
+  // (#1592). A case whose provenance has no such place (a path-traversing
+  // name, a space deleted with the file in it) keeps it loose in the project.
+  if (!opts.loose) return writeLearningsSelections(pd, body);
   const p = join(pd, `${name}.json`);
-  writeFileSync(
-    p,
-    JSON.stringify({
-      stage_slug: STAGE_SLUG,
-      space: opts.space ?? DEFAULT_SPACE,
-      intent: opts.intent === undefined ? DEFAULT_RECORD_DIR : opts.intent,
-      selections: [
-        {
-          candidate_id: opts.candidateId ?? CANDIDATE_ID,
-          type: "learning",
-          scope: "project",
-          heading: "Corrections",
-          text,
-        },
-      ],
-    }),
-    "utf-8",
-  );
+  writeFileSync(p, JSON.stringify(body), "utf-8");
   return p;
 }
 
@@ -212,36 +214,29 @@ function otherSpaceProjectMd(pd: string, space: string): string {
 
 function sensorSelectionsFile(
   pd: string,
-  name: string,
   sensorId: string,
   opts: { originStage?: string; stageSlug?: string; candidateId?: string; intent?: string | null; space?: string } = {},
 ): string {
-  const p = join(pd, `${name}.json`);
-  writeFileSync(
-    p,
-    JSON.stringify({
-      stage_slug: opts.stageSlug ?? STAGE_SLUG,
-      space: opts.space ?? DEFAULT_SPACE,
-      intent: opts.intent === undefined ? DEFAULT_RECORD_DIR : opts.intent,
-      selections: [
-        {
-          candidate_id: opts.candidateId ?? CANDIDATE_ID,
-          type: "sensor",
-          origin_stage: opts.originStage ?? STAGE_SLUG,
-          manifest_fields: {
-            id: sensorId,
-            kind: "deterministic",
-            command: `bun .claude/tools/aidlc-sensor.ts fire ${sensorId}`,
-            default_severity: "advisory",
-            description: "Test sensor",
-            matches: "**/*",
-          },
+  return writeLearningsSelections(pd, {
+    stage_slug: opts.stageSlug ?? STAGE_SLUG,
+    space: opts.space ?? DEFAULT_SPACE,
+    intent: opts.intent === undefined ? DEFAULT_RECORD_DIR : opts.intent,
+    selections: [
+      {
+        candidate_id: opts.candidateId ?? CANDIDATE_ID,
+        type: "sensor",
+        origin_stage: opts.originStage ?? STAGE_SLUG,
+        manifest_fields: {
+          id: sensorId,
+          kind: "deterministic",
+          command: `bun .claude/tools/aidlc-sensor.ts fire ${sensorId}`,
+          default_severity: "advisory",
+          description: "Test sensor",
+          matches: "**/*",
         },
-      ],
-    }),
-    "utf-8",
-  );
-  return p;
+      },
+    ],
+  });
 }
 
 describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 review)", () => {
@@ -483,7 +478,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
     test("path-traversing space fails before writing outside aidlc/spaces", () => {
       const pd = mkProject();
       const escaped = join(pd, "escaped-space");
-      const sel = selectionsFile(pd, "malformed-space-traversal", "must not escape", {
+      const sel = selectionsFile(pd, "malformed-space-traversal", "must not escape", { loose: true,
         space: "../../escaped-space",
       });
 
@@ -506,7 +501,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
 
     test("path-traversing intent fails before audit-path resolution", () => {
       const pd = mkProject();
-      const sel = selectionsFile(pd, "malformed-intent-traversal", "must not escape", {
+      const sel = selectionsFile(pd, "malformed-intent-traversal", "must not escape", { loose: true,
         intent: "../../escaped-intent",
       });
 
@@ -617,7 +612,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
   describe("finding #6 (P2, round 2) — sensor dedup must key on the sensor's own stable id, not (stage, candidate_id)", () => {
     test("the same sensor id proposed under a DIFFERENT candidate id (a later surface() run) is not re-proposed", () => {
       const pd = mkProject();
-      const sel1 = sensorSelectionsFile(pd, "sensor-run1", "acceptance-format", { candidateId: "c1" });
+      const sel1 = sensorSelectionsFile(pd, "acceptance-format", { candidateId: "c1" });
       const res1 = runPersist(pd, sel1);
       expect(res1.status).toBe(0);
       expect(JSON.parse(res1.out).sensor_proposed).toBe(1);
@@ -627,7 +622,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       // (c7 here). A dedup keyed on (stage, candidate_id) would miss the prior row
       // under the new id and emit a duplicate SENSOR_PROPOSED for a sensor that was
       // already proposed.
-      const sel2 = sensorSelectionsFile(pd, "sensor-run2", "acceptance-format", { candidateId: "c7" });
+      const sel2 = sensorSelectionsFile(pd, "acceptance-format", { candidateId: "c7" });
       const res2 = runPersist(pd, sel2);
       expect(res2.status).toBe(0);
       expect(JSON.parse(res2.out).sensor_proposed).toBe(0);
@@ -650,7 +645,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       seedStageFile(stagesDir, "construction", "requirements-analysis");
       const env = { AIDLC_STAGES_DIR: stagesDir };
 
-      const sel1 = sensorSelectionsFile(pd, "sensor-stage-a", "acceptance-format", {
+      const sel1 = sensorSelectionsFile(pd, "acceptance-format", {
         originStage: "user-stories",
       });
       const res1 = runPersist(pd, sel1, { slug: "user-stories", env });
@@ -665,7 +660,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       // sensor id. The manifest already exists and the sensor was already
       // proposed once (by a different stage) — but THIS stage has never
       // been bound, and must still end up with the id in its own frontmatter.
-      const sel2 = sensorSelectionsFile(pd, "sensor-stage-b", "acceptance-format", {
+      const sel2 = sensorSelectionsFile(pd, "acceptance-format", {
         originStage: "requirements-analysis",
         stageSlug: "requirements-analysis",
       });
@@ -770,10 +765,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
   describe("finding #10 (P1, round 5) — dedup must include rows emitted earlier in the same batch", () => {
     test("duplicate content in one selections file emits one line and one RULE_LEARNED row", () => {
       const pd = mkProject();
-      const path = join(pd, "duplicate-content.json");
-      writeFileSync(
-        path,
-        JSON.stringify({
+      const path = writeLearningsSelections(pd, {
           stage_slug: STAGE_SLUG,
           space: DEFAULT_SPACE,
           intent: DEFAULT_RECORD_DIR,
@@ -782,9 +774,7 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
             { candidate_id: "c2", type: "learning", scope: "project", heading: "Corrections", text: "Same learning" },
             { candidate_id: "c3", type: "learning", scope: "team", heading: "Corrections", text: "Same learning" },
           ],
-        }),
-        "utf-8",
-      );
+      });
 
       const result = runPersist(pd, path);
       expect(result.status).toBe(0);
@@ -809,6 +799,8 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
     test("a syntactically valid but nonexistent intent record fails without writing", () => {
       const pd = mkProject();
       const text = "Must not land under a ghost intent";
+      // Written where surface would name it, which makes the folder: persist must
+      // still refuse it as a missing record and create none of the record.
       const selection = selectionsFile(pd, "ghost-intent", text, { intent: "ghost-a1234567" });
 
       const result = runPersist(pd, selection);
@@ -817,23 +809,29 @@ describe("t306 aidlc-learnings persist/surface — #735 follow-up (PR #747 revie
       const practicePath = join(pd, "aidlc", "spaces", DEFAULT_SPACE, "memory", "project.md");
       const practice = existsSync(practicePath) ? readFileSync(practicePath, "utf-8") : "";
       expect(practice).not.toContain(text);
-      expect(existsSync(join(intentsDirOf(pd, DEFAULT_SPACE), "ghost-a1234567"))).toBe(false);
+      expect(existsSync(join(intentsDirOf(pd, DEFAULT_SPACE), "ghost-a1234567", "aidlc-state.md"))).toBe(false);
+      expect(existsSync(join(intentsDirOf(pd, DEFAULT_SPACE), "ghost-a1234567", "audit"))).toBe(false);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("a syntactically valid but nonexistent non-default space fails without creating it", () => {
       const pd = mkProject();
       const text = "Must not land under a ghost space";
+      // Written where surface would name it, which makes the space folder
+      // (#1592): a space holding only that file is still the missing space.
       const selection = selectionsFile(pd, "ghost-space", text, { space: "ghost", intent: null });
 
       const result = runPersist(pd, selection);
       expect(result.status).not.toBe(0);
       expect(result.out).toContain("missing space");
-      expect(existsSync(join(pd, "aidlc", "spaces", "ghost"))).toBe(false);
+      expect(existsSync(join(pd, "aidlc", "spaces", "ghost", "memory"))).toBe(false);
+      expect(existsSync(join(intentsDirOf(pd, "ghost"), "audit"))).toBe(false);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
     test("a deleted default space fails instead of being synthesized and partially recreated", () => {
       const pd = mkProject();
-      const selection = selectionsFile(pd, "deleted-default", "Must not recreate default");
+      // The picks' own home is inside the space this case deletes, so the file
+      // stays loose: persist must refuse the missing space before reading it.
+      const selection = selectionsFile(pd, "deleted-default", "Must not recreate default", { loose: true });
       const defaultDir = join(pd, "aidlc", "spaces", DEFAULT_SPACE);
       rmSync(defaultDir, { recursive: true, force: true });
 

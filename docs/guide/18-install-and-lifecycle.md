@@ -536,7 +536,9 @@ predates that, the config command that creates it adds it to the clone's own
 `.git/info/exclude` instead. Neither file counts as the team's code. Mutations
 require exactly one of `--project`, `--local`, or `--global`, except a bypass:
 `--bypass` with no layer records in the local file, and `--clear-bypass` with
-no layer clears every file that records it. The interactive wizard asks for the
+no layer, typed at your own terminal, clears every file that records it (run by
+the agent from a chat it clears only the local file and names the project or
+machine file that still keeps the check off). The interactive wizard asks for the
 layer and recommends project policy inside a repository. Outside a recognized
 project only the machine layer is valid, so `--global` is inferred. `--show`
 labels each effective value with its winning source.

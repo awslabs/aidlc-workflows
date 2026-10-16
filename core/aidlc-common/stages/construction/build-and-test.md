@@ -244,8 +244,8 @@ the Build and Test Summary with a successful readiness result.
 
 This is a stage-level gate, not the Construction phase boundary. Run
 `{{INVOKE}} engine sensor-traceability --stage build-and-test`: it prints every
-requirement and acceptance criterion this run traced, whether it is built, and
-the Units and files that build it. Write
+requirement and acceptance criterion this run traced, whether it is built or
+marked `N/A` with its reason, and the Units and files that build it. Write
 `<record>/construction/build-and-test/cross-unit-traceability.md` from that
 output with a pass/fail verdict, per-ID coverage, owning stage/Unit, target
 file, and every uncovered element. Any uncovered ID is a build-and-test finding

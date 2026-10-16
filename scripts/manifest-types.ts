@@ -16,8 +16,11 @@ export type DirMap = { src: string; dst: string };
  * By default <dst> is relative to <harnessDir>/ (e.g. .kiro/skills/aidlc/SKILL.md).
  * Set projectRoot:true to land it at the dist tree ROOT instead, beside the
  * harness dir (e.g. dist/kiro/AGENTS.md) — Kiro/Codex put AGENTS.md there.
+ * Set copyOnly:true for a file only the copy runtime (dist/<name>/) ships,
+ * such as Cursor's copy installer: the native projection, and so
+ * `aidlc config`, leaves it out.
  */
-export type FileMap = { src: string; dst: string; projectRoot?: boolean };
+export type FileMap = { src: string; dst: string; projectRoot?: boolean; copyOnly?: boolean };
 
 /**
  * Context handed to a harness emit() plugin. Everything it needs to write

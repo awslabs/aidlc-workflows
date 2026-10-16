@@ -1978,6 +1978,8 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       const started = tool(p, "state", ["unit", "start", "--stage", slug, "--unit", "alpha"]);
       expect(started.status, started.out).toBe(0);
       cover(p, "alpha", [slug], false);
+      // Code Generation is redone plan included: its plan is approved again.
+      if (slug === "code-generation") planApproved(p, "alpha");
       const completed = tool(p, "state", ["unit", "complete", "--stage", slug, "--unit", "alpha"]);
       expect(completed.status, completed.out).toBe(0);
     }
@@ -2098,6 +2100,9 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     const banner = JSON.parse(hook.stdout.trim()).additionalContext as string;
     expect(banner).toContain("Active Unit: beta on code-generation (in-progress)");
     expect(banner).toContain("Current Step: code-generation for unit beta");
+    // beta's Code Generation completes once its plan is approved and built.
+    cover(p, "beta", ["code-generation"], false);
+    planApproved(p, "beta");
     const completed = tool(p, "state", ["unit", "complete", "--stage", "code-generation", "--unit", "beta"]);
     expect(completed.status, completed.out).toBe(0);
     expect(readFileSync(seededStateFile(p), "utf-8")).not.toContain("- **Unit Stage**:");
@@ -2253,12 +2258,10 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     return result.stdout ?? "";
   }
 
-  // beta's Code Generation as #1586 resumes it: beta started the step, the
-  // person approved its plan, the build started (the approval receipt is in
-  // generation), and steps 1 and 2 were built and ticked before it stopped.
-  function startedBuild(p: string) {
-    expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]).status).toBe(0);
-    const dir = codeGenerationRecordDir(p, "beta");
+  // A Unit's code plan as the person approves it: the plan is written, `next`
+  // asks, they approve in their own words, and the agent records that choice.
+  function planApproved(p: string, unit: string) {
+    const dir = codeGenerationRecordDir(p, unit);
     const planFile = join(dir, "code-generation-plan.md");
     mkdirSync(dir, { recursive: true });
     const steps = [1, 2, 3, 4].map((n) => `Step ${n}: build part ${n} in \`src/part${n}.ts\``);
@@ -2266,8 +2269,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       "# Code Generation Plan\n\n## Summary\n\n- Builds: four parts\n- Touches: src/\n- Tests: 4 unit tests\n\n" +
       `## Steps\n\n${steps.map((step) => `- [ ] ${step}`).join("\n")}\n\n${renderTestingContract(resolveTestingPosture(p))}`);
     writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test src/parts.test.ts`.\n");
-    expect(next(p)).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit: "beta" });
-    // The person approves in their own words; the agent records that choice.
+    expect(next(p)).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit });
     hookCall(p, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
       hook_event_name: "UserPromptSubmit", prompt: "approve",
     });
@@ -2278,6 +2280,15 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     ], env);
     expect(recorded.status, recorded.out).toBe(0);
     expect(next(p).plan_approval).toEqual({ status: "approved" });
+    return planFile;
+  }
+
+  // beta's Code Generation as #1586 resumes it: beta started the step, the
+  // person approved its plan, the build started (the approval receipt is in
+  // generation), and steps 1 and 2 were built and ticked before it stopped.
+  function startedBuild(p: string) {
+    expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]).status).toBe(0);
+    const planFile = planApproved(p, "beta");
     const brief = tool(p, "testing-posture", ["brief", "--unit", "beta"]);
     expect(brief.status, brief.out).toBe(0);
     hookCall(p, [join(AIDLC_SRC, "hooks/aidlc-plan-approval-guard.ts")], {

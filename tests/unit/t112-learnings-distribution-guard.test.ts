@@ -38,7 +38,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AIDLC_SRC, toPortablePath } from "../harness/fixtures.ts";
+import { AIDLC_SRC, learningsSelectionsPath, toPortablePath, writeLearningsSelections } from "../harness/fixtures.ts";
+
+// The selections file is bound to this stage in the intent-less default space.
+const BINDING = { space: "default", intent: null, stage_slug: "user-stories" };
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -63,7 +66,10 @@ afterEach(() => {
  * the guard.
  */
 function seedProject(root: string): void {
-  mkdirSync(join(root, "aidlc", "spaces", "default"), { recursive: true });
+  // The intent-less space's own state, the evidence persist takes that the
+  // space exists (#1592): writing the picks' file makes its folder.
+  mkdirSync(join(root, "aidlc", "spaces", "default", "intents"), { recursive: true });
+  writeFileSync(join(root, "aidlc", "spaces", "default", "intents", "aidlc-state.md"), "# AI-DLC State Tracking\n- **Current Stage**: user-stories\n- **Scope**: feature\n", "utf-8");
   mkdirSync(join(root, "aidlc-docs", "inception", "user-stories"), { recursive: true });
   mkdirSync(join(root, ".claude", "rules"), { recursive: true });
   mkdirSync(join(root, ".claude", "aidlc-common", "stages", "inception"), { recursive: true });
@@ -114,30 +120,24 @@ function seedProject(root: string): void {
   );
   // A sensor-binding selection — persist resolves the manifest path under the
   // project's .claude/sensors and runs it through isFrameworkDistributionPath.
-  writeFileSync(
-    join(root, "sel.json"),
-    JSON.stringify({
-      stage_slug: "user-stories",
-      space: "default",
-      intent: null,
-      selections: [
-        {
-          candidate_id: "c9",
-          type: "sensor",
-          origin_stage: "user-stories",
-          manifest_fields: {
-            id: "bad",
-            kind: "deterministic",
-            command: "x",
-            default_severity: "advisory",
-            description: "d",
-            matches: "**/*",
-          },
+  writeLearningsSelections(root, {
+    ...BINDING,
+    selections: [
+      {
+        candidate_id: "c9",
+        type: "sensor",
+        origin_stage: "user-stories",
+        manifest_fields: {
+          id: "bad",
+          kind: "deterministic",
+          command: "x",
+          default_severity: "advisory",
+          description: "d",
+          matches: "**/*",
         },
-      ],
-    }),
-    "utf-8",
-  );
+      },
+    ],
+  });
 }
 
 interface PersistResult {
@@ -147,7 +147,7 @@ interface PersistResult {
 
 /**
  * Run `bun aidlc-learnings.ts persist --slug user-stories --selections-json
- * <root>/sel.json --project-dir <root>` and capture the exit code + combined
+ * <root>/<selections file> --project-dir <root>` and capture the exit code + combined
  * output. AIDLC_STAGES_DIR is explicitly removed so the tool's stagesDir()
  * falls back to <projectDir>/.claude/aidlc-common/stages - the seeded tree.
  */
@@ -163,7 +163,7 @@ function runPersist(root: string): PersistResult {
       "--slug",
       "user-stories",
       "--selections-json",
-      join(root, "sel.json"),
+      learningsSelectionsPath(root, BINDING),
       "--project-dir",
       root,
     ],

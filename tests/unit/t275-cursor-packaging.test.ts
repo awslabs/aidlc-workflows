@@ -23,6 +23,10 @@
 //   (6) Outside a git repository, where Cursor may skip project hooks
 //       (issue #976), config, the copy installer, and the doctor all name
 //       `git init`; inside one, subfolders included, they stay quiet.
+//   (7) The copy installer ships only in the copy runtime, where the guide
+//       runs it: native setup writes no AI-DLC file at the project root,
+//       keeps a project's own install.ts, and a refresh removes the root
+//       install.ts an earlier native setup left.
 //
 // WHY SUBPROCESS for (1). Same idiom as t141/t150/t240: the packager is a
 // CLI; we pin its observable behavior, not its internals.
@@ -582,9 +586,14 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
         }, null, 2)}\n`,
       );
 
+      // The native tree ships no installer, so the copy installer runs
+      // beside a copy of it and copies its native wiring.
+      const nativeDist = join(root, "cursor-release");
+      cpSync(CURSOR_RELEASE_ROOT, nativeDist, { recursive: true });
+      cpSync(CURSOR_INSTALLER_SOURCE, join(nativeDist, "install.ts"));
       const install = spawnSync(
         "bun",
-        [join(CURSOR_RELEASE_ROOT, "install.ts"), project],
+        [join(nativeDist, "install.ts"), project],
         {
           timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
           cwd: REPO_ROOT,
@@ -1293,4 +1302,76 @@ describe("t275 dist/cursor packaging parity + shell shape", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS); // Two configs, two installs, and two doctors need a bounded Windows startup allowance.
+
+  const rootIntegrationPaths = (tree: string): string[] =>
+    (JSON.parse(
+      readFileSync(join(tree, ".cursor", "tools", "data", "aidlc-projection.json"), "utf-8"),
+    ) as { rootIntegrations: Array<{ path: string }> }).rootIntegrations.map((item) => item.path);
+  const nativeConfig = (project: string, from: string) =>
+    spawnSync("bun", [INIT, "config", "--project-dir", project, "--from", from, "--harness", "cursor", "--mcp", "none"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      cwd: project,
+      encoding: "utf-8",
+    });
+
+  test("22: native setup leaves no AI-DLC file at the project root and keeps the project's own install.ts", () => {
+    expect(existsSync(join(CURSOR_ROOT, "install.ts"))).toBe(true);
+    expect(rootIntegrationPaths(CURSOR_ROOT)).toContain("install.ts");
+    expect(existsSync(join(CURSOR_RELEASE_ROOT, "install.ts"))).toBe(false);
+    expect(rootIntegrationPaths(CURSOR_RELEASE_ROOT)).not.toContain("install.ts");
+
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-own-installer-"));
+    const project = join(root, "project");
+    try {
+      mkdirSync(project);
+      expect(spawnSync("git", ["init", "-q", project]).status).toBe(0);
+      const own = "// the project's own setup script\nconsole.log(\"setting up\");\n";
+      writeFileSync(join(project, "install.ts"), own);
+      writeFileSync(join(project, "package.json"), "{}\n");
+      const config = nativeConfig(project, CURSOR_RELEASE_ROOT);
+      expect(config.status, config.stdout + config.stderr).toBe(0);
+      expect(readFileSync(join(project, "install.ts"), "utf-8")).toBe(own);
+      expect(readdirSync(project).sort()).toEqual(
+        [".cursor", ".git", ".gitignore", "AGENTS.md", "aidlc", "install.ts", "package.json"],
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("23: a refresh removes the root install.ts an earlier native setup left, and says so", () => {
+    const root = mkdtempSync(join(tmpdir(), "t275-cursor-retired-installer-"));
+    const project = join(root, "project");
+    try {
+      // An earlier release's native tree: this one with the root installer and
+      // its root integration, as the copy runtime still carries them.
+      const earlier = join(root, "earlier", "cursor");
+      cpSync(CURSOR_RELEASE_ROOT, earlier, { recursive: true });
+      cpSync(join(CURSOR_ROOT, "install.ts"), join(earlier, "install.ts"));
+      const descriptorPath = join(earlier, ".cursor", "tools", "data", "aidlc-projection.json");
+      const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
+        rootIntegrations: Array<{ path: string }>;
+      };
+      if (!descriptor.rootIntegrations.some((item) => item.path === "install.ts")) {
+        const copied = JSON.parse(
+          readFileSync(join(ENGINE, "tools", "data", "aidlc-projection.json"), "utf-8"),
+        ) as { rootIntegrations: Array<{ path: string }> };
+        descriptor.rootIntegrations.push(copied.rootIntegrations.find((item) => item.path === "install.ts")!);
+        writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+      }
+
+      mkdirSync(project);
+      expect(spawnSync("git", ["init", "-q", project]).status).toBe(0);
+      const first = nativeConfig(project, earlier);
+      expect(first.status, first.stdout + first.stderr).toBe(0);
+      expect(existsSync(join(project, "install.ts"))).toBe(true);
+
+      const refresh = nativeConfig(project, CURSOR_RELEASE_ROOT);
+      expect(refresh.status, refresh.stdout + refresh.stderr).toBe(0);
+      expect(existsSync(join(project, "install.ts"))).toBe(false);
+      expect(refresh.stdout).toMatch(/Removed 1 file that is no longer part of AI-DLC [^\n:]+:\r?\n {2}install\.ts\r?\n/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
