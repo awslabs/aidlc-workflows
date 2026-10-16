@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { TRUSTED_COMMAND_PREFIX, TRUSTED_ROUTE_NAMESPACE } from "./aidlc-command.ts";
 
 // The environment the engine runs in, settled before anything else in this
 // module or any module that imports it (the dispatcher, aidlc-lib and every
@@ -302,6 +303,22 @@ export function quoteCommandArgument(
   return shell === "powershell"
     ? `'${value.replaceAll("'", "''")}'`
     : `'${value.replaceAll("'", "'\"'\"'")}'`;
+}
+
+// Plugin Markdown is projected at compose/sync time, not by the packager, so it
+// gets the same invocation tokens core prose does, for the channel this tree
+// was projected for (native `aidlc`, or the copy channel's bun dispatcher).
+export function projectInvocationTokens(text: string, harnessDir: string): string {
+  const invoke = aidlcInvocation();
+  const toolPrefix = invoke === "aidlc" ? `${TRUSTED_COMMAND_PREFIX} ` : `bun ${harnessDir}/tools/`;
+  // Token names are assembled, not written whole: the packager would otherwise
+  // project the literals in this file's own source.
+  const token = (name: string): string => `{{${name}}}`;
+  return text
+    .replaceAll(token("HARNESS_DIR"), harnessDir)
+    .replaceAll(token("INVOKE"), invoke)
+    .replaceAll(token("TOOL_PREFIX"), toolPrefix)
+    .replaceAll(token("TRUSTED_NAMESPACE"), TRUSTED_ROUTE_NAMESPACE);
 }
 
 export function aidlcInvocation(): string {

@@ -27,6 +27,7 @@ import {
   aidlcInvocation,
   compiledExecutable,
   LinkedFolderError,
+  projectInvocationTokens,
   refuseLinkOnTheWay,
   resolveHarnessPath,
   resolveSkillsPath,
@@ -878,7 +879,7 @@ function pluginPrimitiveTargets(
 function projectedSourceBytes(source: string, harnessDir: string): Buffer {
   const bytes = readFileSync(source);
   return source.endsWith(".md")
-    ? Buffer.from(bytes.toString("utf-8").replaceAll("{{HARNESS_DIR}}", harnessDir))
+    ? Buffer.from(projectInvocationTokens(bytes.toString("utf-8"), harnessDir))
     : bytes;
 }
 
