@@ -11089,8 +11089,7 @@ function prepareModelsSection(
   const kiroSessionRequest = sessionModel !== undefined ||
     (kiroCli && (argv.includes("--preset") || argv.includes("--from")));
   // On kiro-ide an unchanged policy still goes through when the agent-models
-  // choice is new (asked, or the switch about to be recorded) or the agent
-  // files lost what the choice applies.
+  // choice changes what applies, or the agent files lost what it applies.
   const settingsUnchanged = canonical(targetCurrentSettings) === canonical(targetNextSettings);
   const kiroIdeProjectionDue = settingsUnchanged && selected.distribution === "kiro-ide" && (
     agentModelsChange ||
@@ -11188,7 +11187,8 @@ function prepareModelsSection(
           next: targetNextSettings,
         },
       }),
-      ...(agentModels !== undefined ? { agentModels } : {}),
+      // A switch that changes nothing in effect is not recorded.
+      ...(agentModels !== undefined && agentModelsChange ? { agentModels } : {}),
     },
   };
 }

@@ -334,6 +334,10 @@ describe("the agent-models choice through config", () => {
     expect(off.status, off.out).toBe(0);
     expect(off.out).toContain("agent-models is already off for this project");
     expect(p.reviewer()).toMatch(/^model: claude-sonnet-5\.5$/m);
+    const both = p.models("--project", "--agent-models", "off", "--agent", "developer", "--effort", "low", "--yes");
+    expect(both.status, both.out).toBe(0);
+    expect(both.out).not.toContain("Kiro agent models:");
+    expect(p.choice()).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
   test("AIDLC_PREVIEW_FEATURES naming agent-models writes and records nothing", () => {
@@ -374,7 +378,7 @@ describe("the agent-models choice through config", () => {
     expect(p.choice()).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
-  test("a model id with a space is refused before anything is recorded", () => {
+  test("a model id with a line break is refused before anything is recorded", () => {
     const p = project(previewRuntime());
     const refused = p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra\neffortLevel: max", "--yes");
     expect(refused.status).not.toBe(0);

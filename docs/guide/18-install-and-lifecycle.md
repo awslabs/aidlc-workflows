@@ -595,9 +595,10 @@ carries its effort through the project's `chat.modelDefaults`, which then
 replaces your personal effort map in that project. An effort set on Kiro CLI
 without a model is kept for other tools, and the command says so in one line.
 Kiro IDE, Cursor, and GitHub Copilot cannot portably pin
-agent models or effort, so setup records no preset there (on Kiro, a preview
-build pins one agent's model and effort with the `agent-models` preview feature
-on: [Preview: one agent on its own model and effort](harnesses/kiro-ide.md#preview-one-agent-on-its-own-model-and-effort)). A model or effort you
+agent models or effort, so setup records no preset there (on Kiro, a project on a
+preview release pins one agent's model and effort after
+`aidlc config models --agent-models on`:
+[Preview: one agent on its own model and effort](harnesses/kiro-ide.md#preview-one-agent-on-its-own-model-and-effort)). A model or effort you
 set anyway is kept for teammates on tools that apply it, writes no inert keys,
 and the command says in one line that this tool uses the model you choose in its
 own model picker. On those three, every agent uses the session's model and

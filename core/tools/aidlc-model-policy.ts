@@ -174,7 +174,7 @@ type HarnessHonesty = {
   readonly message: string;
 };
 
-/** The project's choice for that feature, a top-level key of its kiro-ide `tools/data/harness.json`. */
+/** A kiro-ide project's agent-models choice ("on"/"off"), a top-level key of its `tools/data/harness.json`. */
 export const KIRO_AGENT_MODELS_RECORD = "agentModels";
 export type KiroAgentModelsChoice = "on" | "off";
 
@@ -210,8 +210,7 @@ export function installedModelBuild(harnessRoot: string, version?: string): Mode
 
 // Whether kiro-ide applies one agent's model and effort: only a tree on a
 // preview release whose project recorded "on" (`config models --agent-models
-// on`). Every run that writes the lines reads this, so it also says whether
-// AI-DLC's lines are in the files.
+// on`). The writer, the drift check and the take-out on off all read this.
 export function kiroAgentModelsOn(build: ModelBuild = {}): boolean {
   return versionChannel(build.version ?? AIDLC_VERSION) === PREVIEW_CHANNEL && build.agentModels === "on";
 }
