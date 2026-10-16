@@ -8291,15 +8291,33 @@ function nextEngagesWorkflow(args: string[], flags: ParsedFlags = parseNextFlags
 // message last (a reply in plain words, a utility). Returns
 // their line's arguments when it took them, for the readings that look at the
 // command as typed.
+//
+// On a workspace with no work yet, words the agent passed that are none of the
+// readings of their line give way to it the same way (#2401: on Kiro IDE an
+// agent passed `--description Northwind Mini Bank: ...`, reworded, for the
+// person's `/aidlc I want to build "Northwind Mini Bank", ...`, and that became
+// the work's name). The agent's words stand only when they and its plan are
+// exactly one whole reading of their line: the engine's own parse of it, or one
+// its reading step names (their words whole, or a plan word's task under that
+// plan), with no setting of theirs left out. Otherwise the request is their
+// words whole and the plan their line names (none: the plan question asks
+// them); the settings the agent read from their words are its reading of what
+// they meant, so they are kept unless the line names its own. A line only the
+// agent can read whole (a reading step, a flag `next` does not take) is handed
+// back to it as typed. Which is which is a string comparison, never a reading
+// of meaning.
 function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   if (engineSessionId === undefined || isReadOnlyEngineProbe()) return null;
-  if (flags.intent !== undefined || flags.request !== undefined) return null;
+  if (flags.request !== undefined) return null;
+  const agentWords = flags.intent?.trim();
   const carriesNothing = Object.entries(flags).every(([key, value]) =>
-    key === "scope" || key === "positionalScope" || key === "resume" || value === undefined || value === false);
+    key === "scope" || key === "positionalScope" || key === "resume" || value === undefined || value === false ||
+    (agentWords !== undefined && (KEPT_REQUEST_FLAGS.has(key) || key === "fences")));
   if (!carriesNothing) return null;
   const message = latestMessage(pd, engineSessionId);
   if (message === null || message.source !== "prompt") return null;
   const stateContent = loadStateFileIfPresent(pd);
+  if (agentWords !== undefined && (stateContent !== null || message.words === null || message.cut)) return null;
   if (message.words !== null) {
     // Their words name work; with work selected, only while their turn is
     // still the latest row: after that the agent's bare `next` is the work in
@@ -8324,13 +8342,70 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
   if (typed === null || typed.length === 0) return null;
   const argv = splitKiroCommandArgs(typed);
   const own = parseNextFlags(argv);
+  let taken = own;
+  if (agentWords !== undefined) {
+    if (own.intent === undefined) return null;
+    if ((own.readingStep !== undefined || own.untakenFlag !== undefined) && lineHandedOut(pd, engineSessionId, message.id)) {
+      return null;
+    }
+    const agentPlan = flags.scope ?? flags.positionalScope;
+    if (wholeReadings(own).some((reading) => reading.plan === agentPlan && reading.words === agentWords)) return null;
+    if (own.readingStep === undefined && own.untakenFlag === undefined) taken = withAgentsReading(own, flags);
+  }
   // A line `next` already read for this chat (the reading step over work nobody
   // has selected kept its words as a question) is not read again: the bare
   // `next` the agent runs after that step asks which work to pick up.
   if (own.intent !== undefined && wordsAlreadyRead(pd, own.intent, message.at)) return null;
   for (const key of Object.keys(flags)) delete (flags as unknown as Record<string, unknown>)[key];
-  Object.assign(flags, own);
+  Object.assign(flags, taken);
   return argv;
+}
+
+// Their line's words, plan and settings, with the settings the agent read from
+// them where the line names none of its own. A plan the agent named is not
+// kept: with words that are not one whole reading it cannot be told from one
+// it made up, so the plan is the line's own, or the person's at the question.
+function withAgentsReading(own: ParsedFlags, agent: ParsedFlags): ParsedFlags {
+  const read: ParsedFlags = { ...agent, ...own };
+  delete read.markedWords;
+  if (own.markedWords) read.markedWords = true;
+  read.scope = own.scope;
+  read.positionalScope = own.positionalScope;
+  if (agent.ceremony !== undefined && own.ceremony !== undefined) read.ceremony = { ...agent.ceremony, ...own.ceremony };
+  if (agent.fences !== undefined && own.fences !== undefined) read.fences = { ...agent.fences, ...own.fences };
+  // A stage either list names is kept; one their line names on the other list wins.
+  if (agent.planChanges !== undefined && own.planChanges !== undefined) {
+    const { skip, add } = own.planChanges;
+    read.planChanges = {
+      skip: [...new Set([...skip, ...agent.planChanges.skip.filter((stage) => !add.includes(stage))])],
+      add: [...new Set([...add, ...agent.planChanges.add.filter((stage) => !skip.includes(stage))])],
+    };
+  }
+  for (const key of Object.keys(read) as (keyof ParsedFlags)[]) if (read[key] === undefined) delete read[key];
+  return read;
+}
+
+// The whole readings of a line, each a plan (or none) and the words: the
+// engine's parse of it, or the ones its reading step names. A line carrying a
+// setting has none an agent's plan and words alone could match, and a parse
+// that folded out a token of theirs is not their words whole.
+function wholeReadings(own: ParsedFlags): { plan?: string; words: string }[] {
+  const said = (own.personWords ?? own.intent)?.trim();
+  if (said === undefined) return [];
+  const settings = Object.keys(own).filter((key) =>
+    !["intent", "markedWords", "scope", "positionalScope", "readingStep", "personWords", "untakenFlag", "untakenFlagValue"]
+      .includes(key));
+  if (settings.length > 0) return [];
+  const step = own.readingStep;
+  if (step?.kind === "plan-word") return [{ plan: step.scope, words: planWordTask(step.scope, said) }, { words: said }];
+  if (step !== undefined) return [{ words: said }];
+  return [{ plan: own.scope ?? own.positionalScope, words: said }];
+}
+
+// The task after a plan word that opens the person's sentence, as the reading
+// step names it.
+function planWordTask(scope: string, said: string): string {
+  return said.slice(scope.length).trim();
 }
 
 // A settings-only line is handed out once, and `next`, which hands it out,
@@ -8340,7 +8415,10 @@ function takePersonsOwnLine(flags: ParsedFlags, pd: string): string[] | null {
 // turn stayed the latest row, and the same print came back forever. The mark
 // is written whichever way the line reached `next`: the agent passed it (its
 // `next $ARGUMENTS`) or takePersonsOwnLine took it (a bare `next`). One record
-// per chat, overwritten by the next line handed out.
+// per chat, overwritten by the next line handed out. A line with words that
+// only the agent can read whole (a reading step, a flag `next` does not take)
+// is handed back to it once the same way: the corrected `next` it then sends
+// is its reading, and the line is not taken over it again.
 interface HandedOutLine {
   version: 1;
   session: string;
@@ -8356,9 +8434,11 @@ function lineHandedOut(pd: string, session: string, messageId: string): boolean 
 }
 function handOutSettingsLine(flags: ParsedFlags, pd: string): void {
   if (engineSessionId === undefined || isReadOnlyEngineProbe()) return;
-  if (typedSettingModifiers(flags).length === 0) return;
+  const handsBack = flags.readingStep !== undefined || flags.untakenFlag !== undefined;
+  if (!handsBack && typedSettingModifiers(flags).length === 0) return;
   const message = latestMessage(pd, engineSessionId);
-  if (message === null || message.source !== "prompt" || message.words !== null || message.settings.length === 0) return;
+  if (message === null || message.source !== "prompt") return;
+  if (handsBack ? message.words === null : message.words !== null || message.settings.length === 0) return;
   markLineHandedOut(pd, engineSessionId, message.id);
 }
 function markLineHandedOut(pd: string, session: string, messageId: string): void {
@@ -8480,7 +8560,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
         `A plan's name and then the task ("${entrySkillInvocation()} ${step.scope} <the task>") is how ` +
         `AI-DLC's guide tells people to pick a plan: when the rest of the line reads as the task for that ` +
         `plan, they named it, so run \`${next} --scope ${step.scope} -- ` +
-        `${quoteCommandArgument(said.slice(step.scope.length).trim())}\`. ` +
+        `${quoteCommandArgument(planWordTask(step.scope, said))}\`. ` +
         `When the whole line reads as one phrase with that word in it ("classic car rental website"), ` +
         `it is their own words: ${theirs}. Ask them once in plain words only when it reads both ways.`,
       ));

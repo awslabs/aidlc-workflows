@@ -7982,6 +7982,24 @@ describe("t218 the person-message card names the first engine step on an /aidlc 
     }
   });
 
+  // #2401 F1: one quoted argument is the person's request whatever its first
+  // word, so a request that opens with a flag-shaped word still gets the step.
+  test("a quoted /aidlc request that opens with a flag-shaped word names next", () => {
+    const dir = scratchProject(false);
+    try {
+      for (const [line, session] of [
+        ['/aidlc "--name the work after the bank"', "sess_first_step_quoted_flag"],
+        ['/aidlc "--description should be added to the CLI"', "sess_first_step_quoted_flag_2"],
+      ]) {
+        const r = card(dir, line, session);
+        expect(r.code, r.stderr).toBe(0);
+        expect(r.stdout, line).toContain(FIRST_STEP);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   // A plan's name typed alone is the person's pick with nothing said yet about
   // the work. A bare `next` reads no such line, so the card names `next <plan>`,
   // which asks what the work is for and creates nothing (#2378).
