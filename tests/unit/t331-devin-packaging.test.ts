@@ -247,13 +247,13 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       ...copyChannelDispatcherCommands().map(
         (command) => `Exec(${spelling}.devin/tools/aidlc.ts ${command})`,
       ),
-      ...copyChannelToolScripts().map(
-        (script) => `Exec(${spelling}.devin/tools/${script})`,
-      ),
       // Devin-only: the top-level help prints are granted past the shared
       // dispatcher list (which does not carry them).
       ...["--help", "help"].map(
         (command) => `Exec(${spelling}.devin/tools/aidlc.ts ${command})`,
+      ),
+      ...copyChannelToolScripts().map(
+        (script) => `Exec(${spelling}.devin/tools/${script})`,
       ),
     ];
     const copyAllow = [
