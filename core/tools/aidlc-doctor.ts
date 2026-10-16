@@ -211,11 +211,16 @@ function pluginCheck(projectDir: string, verbose: boolean): DoctorCheck {
   const detail = verbose && statuses.length > 0
     ? ` - ${statuses.map((status) => `${status.key ?? "host"}:${status.state}`).join(", ")}`
     : "";
+  // A paused plugin is the person's own choice: information, never a fix.
+  const paused = statuses
+    .filter((status) => status.state === "paused")
+    .map((status) => `; ${status.key} ${status.message}`)
+    .join("");
   if (attention.length > 0) {
     return {
       pass: false,
       severity: "warn",
-      label: `Plugins: ${attention.length} need attention${detail}`,
+      label: `Plugins: ${attention.length} need attention${paused}${detail}`,
       fix: attention.map((status) => status.message).join("; "),
     };
   }
@@ -223,28 +228,28 @@ function pluginCheck(projectDir: string, verbose: boolean): DoctorCheck {
     return {
       pass: false,
       severity: "warn",
-      label: `Plugins: ${drift.length} require sync${detail}`,
+      label: `Plugins: ${drift.length} require sync${paused}${detail}`,
       fix: "run `aidlc config`",
     };
   }
   if (inventory.capability !== "full-inventory") {
     // No host plugin list to compare against: report what this project has.
     // A warning here could never be cleared by anything the person does.
-    const composed = statuses.map((status) =>
+    const composed = statuses.filter((status) => status.state !== "paused").map((status) =>
       [status.key, status.composedVersion].filter(Boolean).join(" ")
     );
     return {
       pass: true,
       label: composed.length === 0
         ? "Plugins: none in this project"
-        : `Plugins: ${composed.join(", ")} in this project (no host plugin list to compare versions with)${detail}`,
+        : `Plugins: ${composed.join(", ")} in this project (no host plugin list to compare versions with)${paused}${detail}`,
     };
   }
   return {
     pass: true,
     label: statuses.length === 0
       ? "Plugins: no AIDLC plugins installed"
-      : `Plugins: composed state is current${detail}`,
+      : `Plugins: composed state is current${paused}${detail}`,
   };
 }
 

@@ -137,6 +137,7 @@ import {
   activeSpace,
   activeWorkflowDescriptions,
   commandAtPersonsTerminal,
+  composedPluginBase,
   DEFAULT_SPACE,
   escapeRegex,
   fenceKeyBypassed,
@@ -148,6 +149,8 @@ import {
   RECORDABLE_PROJECT_BYPASSES,
   type ProjectFlagsRecord,
   normalizeDriveLetter,
+  pausedBySelection,
+  pausedLine,
   resolveInvokingSessionId,
   sameFileIdentity,
   withAuditLock,
@@ -11799,10 +11802,34 @@ function projectChangeLines(projectDir: string, context: ChoicesMutationContext)
       undo = earlier ? [...undo, flag, earlier] : null;
     }
   }
-  if (!undo || !printableArgs(undo)) return [`Changed the project choices in ${file}.`];
-  return [`Changed the project choices in ${file}. To undo: ${configInvocationFor(projectDir)} config project ${
-    undo.map((arg) => quoteCommandArgument(arg)).join(" ")
-  } --yes${namedHarness(projectDir, context.distribution)}${projectTarget(projectDir)}`];
+  const changed = !undo || !printableArgs(undo)
+    ? `Changed the project choices in ${file}.`
+    : `Changed the project choices in ${file}. To undo: ${configInvocationFor(projectDir)} config project ${
+      undo.map((arg) => quoteCommandArgument(arg)).join(" ")
+    } --yes${namedHarness(projectDir, context.distribution)}${projectTarget(projectDir)}`;
+  return [changed, ...pausedChangeLines(projectDir, context)];
+}
+
+// Said once, at the change that pauses a plugin: its base is left out of the
+// list the person typed, and the plugin stays in it.
+function pausedChangeLines(projectDir: string, context: ChoicesMutationContext): string[] {
+  if (context.nextPlugins === null) return [];
+  const dataDir = join(projectDir, context.harnessDir, "tools", "data");
+  const baseOf = (plugin: string): string | null => composedPluginBase(dataDir, plugin);
+  const before = pausedBySelection(context.previousPlugins === null ? null : new Set(context.previousPlugins), baseOf);
+  const after = pausedBySelection(new Set(context.nextPlugins), baseOf);
+  return [...after].filter(([plugin, base]) => before.get(plugin) !== base).map(([plugin, base]) => {
+    const rest = (context.nextPlugins ?? []).filter((name) => name !== plugin);
+    return pausedLine(
+      plugin,
+      base,
+      rest.length > 0
+        ? `${configInvocationFor(projectDir)} config project --plugins ${rest.join(",")} --yes${
+          namedHarness(projectDir, context.distribution)
+        }${projectTarget(projectDir)}`
+        : null,
+    );
+  });
 }
 
 // The machine settings file lives outside the project, so its change runs as
@@ -13378,7 +13405,12 @@ export async function main(
     // stages leave the graph.
     const pluginsOff = choicesContext?.section === "project" && choicesContext.nextPlugins !== null &&
         canonical(choicesContext.previousPlugins) !== canonical(choicesContext.nextPlugins)
-      ? activeWorkflowPluginDependencies(projectDir, new Set(choicesContext.nextPlugins))
+      ? activeWorkflowPluginDependencies(projectDir, (() => {
+        const next = new Set(choicesContext.nextPlugins);
+        const dataDir = join(projectDir, choicesContext.harnessDir, "tools", "data");
+        const paused = pausedBySelection(next, (plugin) => composedPluginBase(dataDir, plugin));
+        return new Set([...next].filter((plugin) => !paused.has(plugin)));
+      })())
       : [];
     if (refreshing) {
       withAuditLock(

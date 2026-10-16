@@ -20,6 +20,7 @@ import {
   committedTextBytes,
   errorMessage,
   parseArgs,
+  pausedBySelection,
   resolveProjectDir,
 } from "./aidlc-lib.ts";
 import { policyPathWithin } from "./aidlc-install-paths.ts";
@@ -108,7 +109,8 @@ export type PluginStatusName =
   | "installed-missing"
   | "invalid-installed"
   | "inventory-unavailable"
-  | "dependency-unmet";
+  | "dependency-unmet"
+  | "paused";
 
 export type PluginStatus = {
   key: string | null;
@@ -765,6 +767,17 @@ export function comparePluginState(
   selection: Set<string> | null,
 ): PluginStatus[] {
   const rows: PluginStatus[] = [];
+  // The person kept the plugin and left its base off: a plain state, not a
+  // problem.
+  const paused = pausedBySelection(selection, (key) => evidence.stamps.get(key)?.base ?? null);
+  const pausedStatus = (key: string, installedVersion: string | null): PluginStatus => ({
+    key,
+    installedVersion,
+    composedVersion: evidence.stamps.get(key)?.version ?? null,
+    state: "paused",
+    action: "current",
+    message: `paused: needs ${paused.get(key)}, which is off`,
+  });
   for (const invalid of inventory.invalid) {
     rows.push({
       key: invalid.key ?? null,
@@ -782,7 +795,9 @@ export function comparePluginState(
     const stamp = evidence.stamps.get(plugin.key);
     const enabled = plugin.enabled && (selection === null || selection.has(plugin.key));
     const held = evidence.held.get(plugin.key);
-    if (enabled && held?.version === plugin.version) {
+    if (enabled && paused.has(plugin.key)) {
+      rows.push(pausedStatus(plugin.key, plugin.version));
+    } else if (enabled && held?.version === plugin.version) {
       rows.push(heldStatus(held, stamp?.version ?? null));
     } else if (!enabled) {
       rows.push({
@@ -849,6 +864,10 @@ export function comparePluginState(
   for (const key of [...composedKeys].sort()) {
     if (installedKeys.has(key) || invalidKeys.has(key)) continue;
     const held = provedMissing ? undefined : evidence.held.get(key);
+    if (!provedMissing && paused.has(key)) {
+      rows.push(pausedStatus(key, null));
+      continue;
+    }
     if (held) {
       rows.push(heldStatus(held, evidence.stamps.get(key)?.version ?? null));
       continue;
@@ -894,7 +913,7 @@ export function collectPluginStatus(
 }
 
 function humanAction(status: PluginStatus): string {
-  if (status.state === "inventory-unavailable") return status.message;
+  if (status.state === "inventory-unavailable" || status.state === "paused") return status.message;
   if (status.action === "current") return "current";
   if (status.action === "sync") return "run: aidlc config";
   return `needs attention: ${status.message}`;
@@ -1577,6 +1596,7 @@ function compositionIsCurrent(
   plugin: InstalledPlugin,
   evidence: ProjectEvidence,
   projectDir: string,
+  harnessDir: string,
 ): boolean {
   const stamp = evidence.stamps.get(plugin.key);
   if (
@@ -1584,6 +1604,12 @@ function compositionIsCurrent(
     stamp.version !== plugin.version ||
     stamp.sourceHash !== plugin.sourceHash ||
     (stamp.base ?? null) !== (plugin.base?.name ?? null)
+  ) return false;
+  // Turning a plugin off strips what it merged into core stages and removes
+  // its record of that, so when it is on again its compose merges it back.
+  if (
+    regularFiles(join(plugin.root, "contributions")).some((path) => path.endsWith(".md")) &&
+    !existsSync(join(harnessDataDir(projectDir, harnessDir), `plugin-contrib-${plugin.key}.json`))
   ) return false;
   const ownership = evidence.ownership.get(plugin.key);
   if (!ownership) return false;
@@ -1843,7 +1869,7 @@ export async function syncPlugins(
     pruned.length === 0 &&
     staleHeld.length === 0 &&
     newlyHeld.length === 0 &&
-    plugins.every((plugin) => compositionIsCurrent(plugin, evidence, projectDir))
+    plugins.every((plugin) => compositionIsCurrent(plugin, evidence, projectDir, harnessDir))
   ) {
     return {
       synced: plugins.map((plugin) => plugin.key).sort(),
@@ -1931,7 +1957,7 @@ export async function syncPlugins(
       if (
         pruned.length === 0 &&
         plugins.every((plugin) =>
-          compositionIsCurrent(plugin, refreshedEvidence, projectDir)
+          compositionIsCurrent(plugin, refreshedEvidence, projectDir, harnessDir)
         )
       ) {
         return {

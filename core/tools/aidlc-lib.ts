@@ -427,7 +427,12 @@ export interface HookActivation {
 
 interface ShippedHarnessData {
   rulesSubdir: string | null;
+  /** The plugins the person selected, as typed; null when there is no selection. */
   plugins: ReadonlySet<string> | null;
+  /** Selected plugins paused because their base is off, each with its base. */
+  paused: ReadonlyMap<string, string>;
+  /** The plugins that run: the selection less the paused ones. */
+  active: ReadonlySet<string> | null;
   documentExtractors: ReadonlyMap<string, DocumentExtractorSpec> | null;
   runnerFrontmatterAdditions: readonly string[];
   hookActivation: HookActivation | null;
@@ -619,9 +624,14 @@ function readShippedHarnessData(): ShippedHarnessData {
         finish.every((name) => typeof name === "string" && name !== "")
       ? [...finish as string[]]
       : null;
+    const paused = pausedBySelection(plugins, (plugin) => composedPluginBase(dirname(p), plugin));
     _shippedHarnessData = {
       rulesSubdir,
       plugins,
+      paused,
+      active: plugins === null || paused.size === 0
+        ? plugins
+        : new Set([...plugins].filter((plugin) => !paused.has(plugin))),
       documentExtractors,
       runnerFrontmatterAdditions,
       hookActivation,
@@ -635,6 +645,8 @@ function readShippedHarnessData(): ShippedHarnessData {
   _shippedHarnessData = {
     rulesSubdir: null,
     plugins: null,
+    paused: new Map(),
+    active: null,
     documentExtractors: null,
     runnerFrontmatterAdditions: [],
     hookActivation: null,
@@ -678,8 +690,59 @@ export function documentExtractors(): ReadonlyMap<string, DocumentExtractorSpec>
   return readShippedHarnessData().documentExtractors;
 }
 
+/** The plugins that run: the person's selection less the plugins paused
+ *  because their base is off. Null when there is no selection (all run). */
 export function pluginsEnabled(): ReadonlySet<string> | null {
+  return readShippedHarnessData().active;
+}
+
+/** The person's selection exactly as they typed it, for showing it back. */
+export function pluginsSelected(): ReadonlySet<string> | null {
   return readShippedHarnessData().plugins;
+}
+
+/** Selected plugins paused because their base is off, each with its base. */
+export function pausedPlugins(): ReadonlyMap<string, string> {
+  return readShippedHarnessData().paused;
+}
+
+// A plugin builds on core and at most one base plugin. When the person's
+// selection keeps a plugin but leaves its base out, that plugin stays in their
+// list and is paused: nothing it adds runs until the base is on again. The one
+// owner of that rule; the base comes from the plugin's composition stamp,
+// which plugin sync writes.
+export function pausedBySelection(
+  selection: ReadonlySet<string> | null,
+  baseOf: (plugin: string) => string | null,
+): Map<string, string> {
+  const paused = new Map<string, string>();
+  if (selection === null) return paused;
+  for (const plugin of [...selection].sort()) {
+    if (plugin === "aidlc") continue;
+    const base = baseOf(plugin);
+    if (base !== null && !selection.has(base)) paused.set(plugin, base);
+  }
+  return paused;
+}
+
+/** The one line a selection change says, once, when it pauses `plugin`;
+ *  `offCommand` turns the plugin off as well, or null when no list is left. */
+export function pausedLine(plugin: string, base: string, offCommand: string | null): string {
+  return `${base} is off. ${plugin} builds on ${base}, so ${plugin} is paused until ${base} is on again. ` +
+    (offCommand === null
+      ? `To turn ${plugin} off as well, select the plugins you want on.`
+      : `To turn ${plugin} off as well: ${offCommand}.`);
+}
+
+/** The base a composed plugin builds on, from its stamp in `dataDir`. */
+export function composedPluginBase(dataDir: string, plugin: string): string | null {
+  if (!/^[a-z][a-z0-9-]*$/.test(plugin)) return null;
+  try {
+    const base = (JSON.parse(readFileSync(join(dataDir, `plugin-compose-${plugin}.json`), "utf-8")) as { base?: unknown }).base;
+    return typeof base === "string" && /^[a-z][a-z0-9-]*$/.test(base) ? base : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

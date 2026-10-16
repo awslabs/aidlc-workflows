@@ -577,9 +577,13 @@ describe("t354 turning a base off pauses the plugin built on it", () => {
       message: "paused: needs zeta, which is off",
     }));
     expect(pluginTool(target, ["list"]).stdout).toMatch(/alpha\s+0\.1\.0\s+0\.1\.0\s+paused: needs zeta, which is off/);
-    expect(engine(target, ["engine", "plugin-list"]).stdout + engine(target, ["plugin", "list"]).stdout).toContain(
-      "alpha paused: needs zeta, which is off",
-    );
+    const inChat = spawnSync(process.execPath, [join(target.dir, ".claude", "tools", "aidlc-utility.ts"), "plugin-list"], {
+      cwd: target.dir,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
+      env: cleanEnv({ CLAUDE_PROJECT_DIR: target.dir, AIDLC_HARNESS_DIR: ".claude", AIDLC_HARNESS_NAME: "claude" }),
+    });
+    expect(String(inChat.stdout)).toContain("alpha paused: needs zeta, which is off");
     const plugins = doctorChecks(target).find((check) => check.label.startsWith("Plugins:"));
     expect(plugins?.pass).toBe(true);
     expect(plugins?.label).toContain("alpha paused: needs zeta, which is off");
@@ -637,7 +641,7 @@ describe("t354 turning a base off pauses the plugin built on it", () => {
     );
     const ran = select(target, "aidlc,alpha");
     expect(ran.status).not.toBe(0);
-    const said = ran.stdout + ran.stderr;
+    const said = (JSON.parse((ran.stdout + ran.stderr).trim()) as { error: string }).error;
     expect(said).toContain('owned by plugin "alpha"');
     expect(said).toContain("alpha builds on zeta");
     expect(selection(target)).toBeUndefined();
