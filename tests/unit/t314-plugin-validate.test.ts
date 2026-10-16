@@ -403,6 +403,84 @@ describe("t314 standalone plugin validator", () => {
     expect(bare.stderr).toContain("--with <base-root>");
   });
 
+  test("a scope can include its base's stages: unchecked without --with, checked with it", () => {
+    // Sets include_stages on the fixture scope; the base checkout has zeta-intake.
+    const includes = (root: string, value: string): void => {
+      const scope = join(root, "scopes", "fixture-plugin-validation.md");
+      writeFileSync(
+        scope,
+        readFileSync(scope, "utf-8").replace("description: Fixture scope", `description: Fixture scope\ninclude_stages: ${value}`),
+        "utf-8",
+      );
+    };
+    const file = "scopes/fixture-plugin-validation.md";
+    const { root, baseRoot } = layered("aidlc-quality-agent");
+    write(join(baseRoot, "stages", "inception", "zeta-intake.md"), "---\nslug: zeta-intake\nplugin: zeta\n---\n\n# Intake\n");
+    includes(root, "[zeta-intake, zeta-renamed]");
+    const unchecked = validatePluginRoot(root);
+    expect(unchecked.errors).toEqual([]);
+    expect(unchecked.warnings.filter((finding) => finding.rule === "base-reference")).toEqual([
+      {
+        file,
+        rule: "base-reference",
+        message: 'stage "zeta-intake" is not checked: it would come from zeta, the base this plugin builds on',
+        fix: "Run validate again with --with <path to your zeta checkout> to check it.",
+      },
+      {
+        file,
+        rule: "base-reference",
+        message: 'stage "zeta-renamed" is not checked: it would come from zeta, the base this plugin builds on',
+        fix: "Run validate again with --with <path to your zeta checkout> to check it.",
+      },
+    ]);
+
+    const checked = validatePluginRoot(root, { baseRoot });
+    expect(checked.warnings.map((finding) => finding.rule)).not.toContain("base-reference");
+    expect(checked.errors).toEqual([
+      {
+        file,
+        rule: "scope-include",
+        message: 'include_stages names "zeta-renamed", which your zeta checkout has no stage for',
+        fix: "Name a stage of zeta, or pass a checkout of the zeta version this plugin is for.",
+      },
+    ]);
+
+    // Its own stage and a core stage join a scope the ways they always have.
+    const own = layered("aidlc-quality-agent");
+    includes(own.root, "[fixture-plugin-stage, code-generation]");
+    expect(validatePluginRoot(own.root).errors).toEqual([
+      {
+        file,
+        rule: "scope-include",
+        message: 'include_stages names "code-generation", a core stage',
+        fix: "Put a core stage in this scope with a contribution's adds.scopes.",
+      },
+      {
+        file,
+        rule: "scope-include",
+        message: 'include_stages names "fixture-plugin-stage", this plugin\'s own stage',
+        fix: "List fixture-plugin-validation in that stage's scopes: instead.",
+      },
+    ]);
+
+    const coreOnly = fixture();
+    includes(coreOnly, "[zeta-intake]");
+    expect(validatePluginRoot(coreOnly).errors).toEqual([
+      {
+        file,
+        rule: "scope-include",
+        message: 'include_stages names "zeta-intake", but this plugin builds on core alone',
+        fix: 'include_stages takes the stages of the base plugin you build on: name it in dependencies, such as "<base>@^1.2.0".',
+      },
+    ]);
+
+    const empty = layered("aidlc-quality-agent");
+    includes(empty.root, "[]");
+    expect(validatePluginRoot(empty.root).errors.map((finding) => finding.message)).toEqual([
+      "declared include_stages must parse to a non-empty block or flow list",
+    ]);
+  });
+
   test("b: stage frontmatter parse and schema failures are reported", () => {
     const root = fixture();
     const stage = join(

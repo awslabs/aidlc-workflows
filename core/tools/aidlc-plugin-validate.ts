@@ -50,6 +50,7 @@ export type PluginValidationRule =
   | "scope-owner"
   | "scope-depth"
   | "scope-keywords"
+  | "scope-include"
   | "agent-frontmatter"
   | "agent-filename"
   | "agent-name"
@@ -532,6 +533,25 @@ function ownAgents(root: string): string[] {
     .map((file) => basename(file, ".md"));
 }
 
+// A stage file's stem is its slug (the stage-filename rule).
+export function pluginStageSlugs(root: string): string[] {
+  return scanPluginFiles(join(root, "stages")).files
+    .filter((file) => file.endsWith(".md"))
+    .map((file) => basename(file, ".md"));
+}
+
+// The base stages each of a plugin's scopes runs (`include_stages:`), for
+// plugin sync, which holds a plugin whose base lacks one.
+export function scopeIncludes(root: string): Array<{ scope: string; stages: string[] }> {
+  return scanPluginFiles(join(root, "scopes")).files
+    .filter((file) => file.endsWith(".md"))
+    .flatMap((file) => {
+      const frontmatter = frontmatterBlock(readFileSync(file, "utf-8")) ?? "";
+      const stages = listField(frontmatter, "include_stages");
+      return stages.length > 0 ? [{ scope: scalarField(frontmatter, "name") || basename(file, ".md"), stages }] : [];
+    });
+}
+
 function pluginAgentRoster(root: string): string[] {
   return [
     ...new Set([
@@ -542,13 +562,13 @@ function pluginAgentRoster(root: string): string[] {
   ].sort();
 }
 
-// The agents of the --with checkout, which must be the base the manifest
-// names: null when it is not (with a finding) or the manifest cannot say.
-function baseRootAgents(
+// The agents and stages of the --with checkout, which must be the base the
+// manifest names: null when it is not (with a finding) or the manifest cannot say.
+function baseRootCheckout(
   baseRoot: string,
   base: PluginDependency | null | undefined,
   findings: MutableFindings,
-): string[] | null {
+): { agents: string[]; stages: string[] } | null {
   if (base === undefined) return null;
   const at = resolve(baseRoot);
   let name: unknown;
@@ -578,7 +598,24 @@ function baseRootAgents(
     );
     return null;
   }
-  return ownAgents(at);
+  return { agents: ownAgents(at), stages: pluginStageSlugs(at) };
+}
+
+// A name only the base could supply: said once, and checked with --with.
+function addBaseReference(
+  findings: MutableFindings,
+  file: string,
+  kind: "agent" | "stage",
+  name: string,
+  base: string,
+): void {
+  addWarning(
+    findings,
+    file,
+    "base-reference",
+    `${kind} "${name}" is not checked: it would come from ${base}, the base this plugin builds on`,
+    `Run validate again with --with <path to your ${base} checkout> to check it.`,
+  );
 }
 
 // The agent fields Rule 9 of validateStageFrontmatter checks.
@@ -823,15 +860,7 @@ function validateStages(
           !ownedHere(agent)
         )
       : [];
-    for (const agent of unchecked) {
-      addWarning(
-        findings,
-        displayFile,
-        "base-reference",
-        `agent "${agent}" is not checked: it would come from ${uncheckedBase}, the base this plugin builds on`,
-        `Run validate again with --with <path to your ${uncheckedBase} checkout> to check it.`,
-      );
-    }
+    for (const agent of unchecked) addBaseReference(findings, displayFile, "agent", agent, uncheckedBase ?? "");
     const validation = validateStageFrontmatter(
       parsed,
       unchecked.length > 0 ? { agents: [...(context?.agents ?? []), ...unchecked] } : context,
@@ -1012,8 +1041,14 @@ function validateScopes(
   root: string,
   pluginName: string,
   findings: MutableFindings,
+  base: PluginDependency | null | undefined,
+  baseStages: string[] | null,
+  coreStageSlugs?: Iterable<string>,
 ): void {
   const prefix = `${pluginName}-`;
+  const ownStages = new Set(pluginStageSlugs(root));
+  const coreStages = new Set(coreStageSlugs ?? pluginAuthoringContext().stages);
+  const checkoutStages = baseStages === null ? null : new Set(baseStages);
   for (const file of scanPluginFiles(join(root, "scopes")).files.filter((path) =>
     path.endsWith(".md"),
   )) {
@@ -1084,6 +1119,39 @@ function validateScopes(
         "declared keywords must parse to a non-empty block or flow list",
         "Add at least one keyword using `keywords: [value]` or indented `- value` entries.",
       );
+    }
+    const includes = listField(frontmatter, "include_stages");
+    if (/^include_stages\s*:/m.test(frontmatter) && includes.length === 0) {
+      addError(
+        findings,
+        displayFile,
+        "scope-include",
+        "declared include_stages must parse to a non-empty block or flow list",
+        "Name the base stages this scope runs using `include_stages: [slug]` or indented `- slug` entries.",
+      );
+    }
+    // A scope includes its base's stages only: its own stages join through
+    // their scopes: list and a core stage through a contribution, as before.
+    for (const slug of includes) {
+      const refuse = (message: string, fix: string): void =>
+        addError(findings, displayFile, "scope-include", message, fix);
+      if (coreStages.has(slug)) {
+        refuse(`include_stages names "${slug}", a core stage`, "Put a core stage in this scope with a contribution's adds.scopes.");
+      } else if (ownStages.has(slug)) {
+        refuse(`include_stages names "${slug}", this plugin's own stage`, `List ${name || stem} in that stage's scopes: instead.`);
+      } else if (base === null) {
+        refuse(
+          `include_stages names "${slug}", but this plugin builds on core alone`,
+          'include_stages takes the stages of the base plugin you build on: name it in dependencies, such as "<base>@^1.2.0".',
+        );
+      } else if (base && checkoutStages === null) {
+        addBaseReference(findings, displayFile, "stage", slug, base.name);
+      } else if (base && !checkoutStages?.has(slug)) {
+        refuse(
+          `include_stages names "${slug}", which your ${base.name} checkout has no stage for`,
+          `Name a stage of ${base.name}, or pass a checkout of the ${base.name} version this plugin is for.`,
+        );
+      }
     }
   }
 }
@@ -1256,18 +1324,18 @@ export function validatePluginRoot(
   const { pluginName, base } = validateManifest(root, findings);
   validatePluginContentSymlinks(root, findings);
   const context = options.stageContext ?? { agents: pluginAgentRoster(root) };
-  const baseAgents = options.baseRoot === undefined
+  const baseCheckout = options.baseRoot === undefined
     ? null
-    : baseRootAgents(options.baseRoot, base, findings);
+    : baseRootCheckout(options.baseRoot, base, findings);
   validateStages(
     root,
     pluginName,
     findings,
-    baseAgents ? { agents: [...(context.agents ?? []), ...baseAgents] } : context,
-    baseAgents ? undefined : base?.name,
+    baseCheckout ? { agents: [...(context.agents ?? []), ...baseCheckout.agents] } : context,
+    baseCheckout ? undefined : base?.name,
   );
   validateContributions(root, pluginName, findings, options.coreStageSlugs, options.coreAgentSlugs);
-  validateScopes(root, pluginName, findings);
+  validateScopes(root, pluginName, findings, base, baseCheckout?.stages ?? null, options.coreStageSlugs);
   validateAgents(root, pluginName, findings);
   validateTools(root, findings);
   const composeHook = validateComposeHook(

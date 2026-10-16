@@ -510,7 +510,7 @@ fragments:                    # PROSE — spliced into the stage body
 | Add a verification to a stage | `adds.sensors` (+ ship the manifest and `tools/` script) | ✅ implemented |
 | Add a consume edge | `adds.consumes` | ✅ implemented |
 | Add a `requires_stage` edge | `adds.requires_stage` | ✅ implemented (the dependency must compile before the target — a lower full pinned number, or an earlier phase for a stage not yet pinned; violations are dropped-with-log) |
-| Put an existing stage under a plugin scope | `adds.scopes` (own-plugin scopes only; installed identity file required) | ✅ implemented |
+| Put an existing stage under a plugin scope | `adds.scopes` for a core stage (own-plugin scopes only; installed identity file required); `include_stages:` on the scope for a stage of the plugin's base (section 7) | ✅ implemented |
 | Inject phase policy / guardrails | ship `memory/phases/<p>.md` into the default-space seed (§7) | ⏳ deferred (not yet projected) |
 | Enrich a core persona (a collaboration bullet, a mandatory anchor) | `contributions/agents/<agent>.md` with `fragments` at `in:<H2>`, `after-preflight` or `end-of-body` | ✅ implemented (prose only; `adds.*` is refused with an advisory drop) |
 
@@ -604,7 +604,14 @@ nominate itself when the preferred core `classic` default is disabled; at most o
 enabled scope may claim the nomination, and graph compilation rejects an
 ambiguous selected set. Adding a plugin scope to an existing core stage works
 through a contribution's `adds.scopes` (§6) — own-plugin scopes only, and the
-scope file must be installed before the merge.
+scope file must be installed before the merge. A plugin built on a base (section 8)
+runs the base's stages in its own scope by naming them in the scope's
+`include_stages:` list: compile adds each to that scope's column (the stage's
+compiled row lists the scope), and the stage files and every other scope stay
+as they are. An include no installed stage has is left out of the column and
+never fails the compile; sync holds the plugin and says which stage is missing
+(section 8). Validate refuses a core or own stage there, and checks the rest against
+the `--with` checkout of the base.
 
 **Activation (`when:`)** *(⚠️ parsed, not evaluated).* A stage may carry a structured `when:` predicate; `{producer-in-plan: X}` is schema-validated and parsed, but **no engine consumer evaluates it yet** — `aidlc-graph` names itself the future home. So a stage carrying `when:` is today EXECUTE under its declared scopes unconditionally. A plugin's own stages exist only when the plugin is in the chosen set, so "is this plugin active" is already a compose-time fact.
 
@@ -629,8 +636,9 @@ Independent authors who never coordinate are kept safe by:
   installed version (on a host with no plugin list, the version composed in
   the project), and there is no solver and no lock file. A plugin whose base
   is not installed (or not in the project yet), is disabled in the host, is
-  outside the range or builds on another plugin, or whose manifest names two
-  bases or cannot be read, is held and never resolved: sync says one line
+  outside the range, builds on another plugin or lacks a stage the plugin's
+  scopes include (`include_stages`, section 7), or whose manifest names two bases or
+  cannot be read, is held and never resolved: sync says one line
   once, writes `tools/data/plugin-held-<key>.json`, composes every other
   plugin and exits 0 (`--json` lists `data.held`); `plugin list` and doctor
   show the line until a sync composes the plugin and removes the record. A

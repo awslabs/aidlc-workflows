@@ -45,7 +45,9 @@ import {
 } from "./aidlc-transaction.ts";
 import {
   hostIdSegment,
+  pluginStageSlugs,
   readPluginBase,
+  scopeIncludes,
   type PluginBaseProblem,
   type PluginDependency,
 } from "./aidlc-plugin-validate.ts";
@@ -1744,10 +1746,11 @@ export function announcePrune(
 }
 
 // A base not composed in this run: here at a version (installed, or composed
-// in this project) and with the base it builds on itself, if any; missing and
-// why; or turned off for this project, which pauses the plugin built on it.
+// in this project), with the base it builds on itself, if any, and its stage
+// slugs when known; missing and why; or turned off for this project, which
+// pauses the plugin built on it.
 export type BaseView =
-  | { kind: "here"; version: string; where: string; base: string | null }
+  | { kind: "here"; version: string; where: string; base: string | null; stages: ReadonlySet<string> | null }
   | { kind: "missing"; why: "not-installed" | "host-disabled" | "not-in-project" }
   | { kind: "off" };
 
@@ -1761,6 +1764,7 @@ type HeldProblem =
   | { kind: "missing"; base: PluginDependency; why: "not-installed" | "host-disabled" | "not-in-project" }
   | { kind: "deep"; base: string; baseOfBase: string }
   | { kind: "range"; base: PluginDependency; version: string; where: string }
+  | { kind: "include"; base: string; version: string; missing: Array<{ scope: string; stages: string[] }> }
   | Exclude<InstalledPlugin["baseProblem"], null>;
 
 // Every held line is built here: what happened to the plugin, why, and the
@@ -1774,6 +1778,12 @@ function heldLine(
   const key = plugin.key;
   const needs = (base: PluginDependency): string =>
     base.range === null ? base.name : `${base.name} ${base.range}`;
+  const listed = (items: string[]): string =>
+    items.length < 3 ? items.join(" and ") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+  const it = problem.kind === "include" &&
+      new Set(problem.missing.flatMap(({ stages }) => stages)).size > 1
+    ? "them"
+    : "it";
   const [why, step] = problem.kind === "missing"
     ? problem.why === "not-installed"
       ? [`needs ${needs(problem.base)}, which is not installed`, `Install ${problem.base.name} and ${key} composes at the next session start.`]
@@ -1790,6 +1800,11 @@ function heldLine(
           `needs ${needs(problem.base)}, and ${problem.base.name} ${problem.version} is ${problem.where}`,
           `Install a ${problem.base.name} version in that range, or a version of ${key} made for ${problem.base.name} ${problem.version}.`,
         ]
+        : problem.kind === "include"
+        ? [
+          `needs ${listed(problem.missing.map(({ scope, stages }) => `${listed(stages)} for its ${scope} scope`))}, which ${problem.base} ${problem.version} does not have`,
+          `Install a ${problem.base} version that has ${it}, or a version of ${key} made for ${problem.base} ${problem.version}.`,
+        ]
         : problem.kind === "bases"
           ? [`names more than one base plugin (${problem.names.join(", ")})`, "A plugin builds on core and at most one base."]
           : [
@@ -1799,16 +1814,42 @@ function heldLine(
             "Its author needs to fix that file.",
           ];
   if (composedVersion === null) return `${key} is not composed: it ${why}. ${step}`;
-  if (composedVersion === plugin.version) return `${key} stays as composed before, but it ${why}. ${step}`;
+  // The composed scopes are this version's, so they run without what is missing.
+  const without = problem.kind === "include"
+    ? `, so ${listed(problem.missing.map(({ scope }) => scope))} run${problem.missing.length === 1 ? "s" : ""} without ${it}`
+    : "";
+  if (composedVersion === plugin.version) return `${key} stays as composed before, but it ${why}${without}. ${step}`;
   return `${key} stays at ${composedVersion} as composed before: ${key} ${plugin.version} ${why}. ${step}`;
+}
+
+// The stages a plugin's scopes include that its base does not have, by scope.
+function missingIncludes(
+  plugin: InstalledPlugin,
+  baseStages: ReadonlySet<string>,
+): Array<{ scope: string; stages: string[] }> {
+  return scopeIncludes(plugin.root).flatMap(({ scope, stages }) => {
+    const missing = stages.filter((stage) => !baseStages.has(stage));
+    return missing.length > 0 ? [{ scope, stages: missing }] : [];
+  });
+}
+
+// A composed base's stage slugs, from where its owned stage files are
+// installed (<harness>/aidlc-common/stages/<phase>/<slug>.md).
+function ownedStageSlugs(ownership: OwnershipRecord | undefined): ReadonlySet<string> | null {
+  if (!ownership) return null;
+  return new Set(ownership.files.flatMap((file) => {
+    const match = file.path.match(/(?:^|\/)aidlc-common\/stages\/[^/]+\/([^/]+)\.md$/);
+    return match ? [match[1]] : [];
+  }));
 }
 
 // Layering is shallow on purpose: a plugin builds on core and at most one base
 // plugin, and a base builds on core alone. So the order is the bases, then the
 // plugins built on them, alphabetical within each, as sync always ran. A
-// plugin whose base is missing, outside its range or built on another plugin,
-// or whose manifest cannot say, is held with its line and never resolved; one
-// whose base is turned off for this project is paused, and nothing is said.
+// plugin whose base is missing, outside its range, built on another plugin or
+// without a stage the plugin's scopes include, or whose manifest cannot say,
+// is held with its line and never resolved; one whose base is turned off for
+// this project is paused, and nothing is said.
 export function layerOrder(
   plugins: InstalledPlugin[],
   baseView: (name: string) => BaseView,
@@ -1831,7 +1872,13 @@ export function layerOrder(
     if (problem === null && base !== null) {
       const own = inRun.get(base.name);
       const view: BaseView = own
-        ? { kind: "here", version: own.version, where: "installed", base: own.base?.name ?? null }
+        ? {
+          kind: "here",
+          version: own.version,
+          where: "installed",
+          base: own.base?.name ?? null,
+          stages: new Set(pluginStageSlugs(own.root)),
+        }
         : baseView(base.name);
       if (view.kind === "off") {
         paused.push(plugin);
@@ -1844,6 +1891,10 @@ export function layerOrder(
           : base.range !== null && !Bun.semver.satisfies(view.version, base.range)
             ? { kind: "range", base, version: view.version, where: view.where }
             : null;
+      if (problem === null && view.kind === "here" && view.stages !== null) {
+        const missing = missingIncludes(plugin, view.stages);
+        if (missing.length > 0) problem = { kind: "include", base: base.name, version: view.version, missing };
+      }
     }
     if (problem === null) layered.push(plugin);
     else held.push({ plugin, reason: heldLine(plugin, problem, composedVersion(plugin.key), words) });
@@ -1984,7 +2035,13 @@ async function syncPluginsLocked(
       if (selection !== null && !selection.has(name)) return { kind: "off" };
       const stamp = evidence.stamps.get(name);
       const composed: BaseView | null = stamp
-        ? { kind: "here", version: stamp.version, where: "composed in this project", base: stamp.base ?? null }
+        ? {
+          kind: "here",
+          version: stamp.version,
+          where: "composed in this project",
+          base: stamp.base ?? null,
+          stages: ownedStageSlugs(evidence.ownership.get(name)),
+        }
         : null;
       if (hostList === null) return composed ?? { kind: "missing", why: "not-in-project" };
       const found = hostList.find((plugin) => plugin.key === name);

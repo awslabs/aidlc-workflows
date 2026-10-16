@@ -2778,7 +2778,24 @@ export function compileStageGraph(): {
 
   // Sort by numeric order (phase-prefix.index).
   stages.sort((a, b) => numericStageOrder(a.number, b.number));
-  const stockScopeNames = stageDeclaredScopeNames(stages);
+
+  // A team plugin's scope runs the base stages its include_stages names, so
+  // each included stage's row carries that scope, as if the stage named it.
+  // An include no installed stage has is left out (plugin sync holds the team
+  // plugin and says so), never an error. Such a scope counts as stage-declared
+  // even when nothing resolves, so composedFoldBack never keeps its old column
+  // as a composer-authored scope's.
+  const bySlug = new Map(stages.map((stage) => [stage.slug, stage]));
+  const includingScopes: string[] = [];
+  for (const meta of Object.values(loadScopeMetadataAll())) {
+    if (meta.includeStages === undefined) continue;
+    includingScopes.push(meta.name);
+    for (const slug of meta.includeStages) {
+      const stage = bySlug.get(slug);
+      if (stage && !(stage.scopes ?? []).includes(meta.name)) stage.scopes = [...(stage.scopes ?? []), meta.name];
+    }
+  }
+  const stockScopeNames = new Set([...stageDeclaredScopeNames(stages), ...includingScopes]);
 
   // Resolve per-stage rule chain. Strict-additive: every applicable rule
   // appears in rules_in_context (org+team+project + phase when stage's
