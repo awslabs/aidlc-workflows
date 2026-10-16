@@ -3,7 +3,8 @@
 // file; the aidlc-*.ts hook bodies beside it are PACKAGED core, byte-shared
 // with the Claude Code harness). Modeled on codex's aidlc-codex-adapter.ts:
 // ONE shim normalizes the harness payload to the ClaudeCodeHookInput shape
-// and subprocess-pipes into the named core hook, forwarding the result.
+// and hands it to the named core hook, forwarding the result. The four guards
+// run theirs inside this process (runGuard); the other hooks run as children.
 //
 // ONE dist serves BOTH Copilot surfaces (CLI 1.0.74+ and VS Code agent mode
 // 1.130+): the shipped .github/hooks/aidlc.json registers PascalCase event
@@ -121,6 +122,7 @@ import {
   recordPreWorkflowHeartbeat,
   resolveWorkflowSelection,
   noteHelperSession,
+  runHookHere,
   settleCopilotCommand,
   settleCopilotIntentBoundary,
   stateFilePath,
@@ -249,12 +251,14 @@ export async function run(
   // engine is told nothing and treats the call as it treats a command with no
   // chat, instead of binding a new "chat" for every tool call.
   const coreSessionId = sessionId.startsWith("toolu_") ? "" : sessionId;
-  const projectEnv = {
-    ...process.env,
+  // What a core hook is given on top of this process's environment, as a
+  // child or (runGuard) while it runs here.
+  const projectPins: Record<string, string> = {
     AIDLC_PROJECT_DIR: projectDir,
     CLAUDE_PROJECT_DIR: projectDir,
     ...(sessionId ? { AIDLC_COPILOT_SESSION_ID: sessionId } : {}),
   };
+  const projectEnv = { ...process.env, ...projectPins };
 
   // Tolerant field reads: PascalCase-registered events arrive snake_case on
   // both surfaces EXCEPT SubagentStart, which the CLI delivers camelCase
@@ -410,6 +414,22 @@ export async function run(
     };
   }
 
+  // The four guards run their core hook inside this process, as on Codex: a
+  // child loads the whole engine again, so as children the four would cost a
+  // shell call five engine loads. A guard sees what its child saw (the same input and pins);
+  // one that cannot be imported runs as a child as before, and one that fails
+  // on its own still leaves its reason where doctor reads it.
+  async function runGuard(
+    hookFile: string,
+    stdin: string,
+  ): Promise<{ stdout: string; stderr: string; code: number }> {
+    const here = await runHookHere(join(HOOKS_DIR, hookFile), stdin, projectPins);
+    if (here === null) return runCoreWithStderr(hookFile, stdin);
+    const hook = hookFile.replace(/^aidlc-|\.ts$/g, "");
+    failedCoreHookDrop(hook, here.code, null, here.stderr, forwardedSessionId(stdin));
+    return here;
+  }
+
   // The session a core hook ran for: the forwarded payload's (the prior
   // session for a reconciled session-end), else this event's.
   function forwardedSessionId(stdin: string): string {
@@ -436,7 +456,7 @@ export async function run(
   ): void {
     if (exitCode === 0 || exitCode === 2) return;
     const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
-    const line = (lines.find((entry) => entry.startsWith("error:")) ??
+    const line = (lines.find((entry) => /^(?:\w*Error|error):/.test(entry)) ??
       lines.filter((entry) => !/^Bun v\d/.test(entry)).at(-1) ?? "no error output")
       .replace(/\[(degraded|advisory)\]/gi, "($1)");
     const how = exitCode === null ? `was stopped by ${signalCode ?? "a signal"}` : `exited ${exitCode}`;
@@ -2004,7 +2024,7 @@ export async function run(
             // Malformed advisory output does not disable plan enforcement.
           }
         }
-        const planApproval = runCoreWithStderr(
+        const planApproval = await runGuard(
           "aidlc-plan-approval-guard.ts",
           JSON.stringify({
             hook_event_name: "PreToolUse",
@@ -2044,7 +2064,7 @@ export async function run(
           process.stdout.write(denyJson("This AI-DLC command targets a different physical project. Run it from that project's own Copilot session."));
           return 0;
         }
-        const guard = runCoreWithStderr(
+        const guard = await runGuard(
           "aidlc-state-transition-guard.ts",
           withAgentType(canonicalInput, delegatedAgentType()),
         );
@@ -2052,7 +2072,7 @@ export async function run(
           process.stdout.write(denyJson(guard.stderr));
           return 0;
         }
-        const scope = runCoreWithStderr(
+        const scope = await runGuard(
           "aidlc-reviewer-scope.ts",
           withAgentType(canonicalInput),
         );
@@ -2060,7 +2080,7 @@ export async function run(
           process.stdout.write(denyJson(scope.stderr));
           return 0;
         }
-        const freeze = runCoreWithStderr(
+        const freeze = await runGuard(
           "aidlc-review-freeze.ts",
           canonicalInput,
         );
@@ -2068,7 +2088,7 @@ export async function run(
           process.stdout.write(denyJson(freeze.stderr));
           return 0;
         }
-        const planApproval = runCoreWithStderr(
+        const planApproval = await runGuard(
           "aidlc-plan-approval-guard.ts",
           withShellReading(canonicalInput),
         );
@@ -2219,7 +2239,7 @@ export async function run(
             tool_input: call.toolInput,
             ...(agentType ? { agent_type: agentType } : {}),
           });
-          const r = runCoreWithStderr("aidlc-reviewer-scope.ts", fwd);
+          const r = await runGuard("aidlc-reviewer-scope.ts", fwd);
           if (r.code === 2) {
             process.stdout.write(denyJson(r.stderr));
             return 0;
@@ -2227,7 +2247,7 @@ export async function run(
         }
         for (const call of toolCalls) {
           if (call.toolName === "Write" || call.toolName === "Edit") {
-            const freeze = runCoreWithStderr(
+            const freeze = await runGuard(
               "aidlc-review-freeze.ts",
               JSON.stringify({
                 hook_event_name: "PreToolUse",
@@ -2239,7 +2259,7 @@ export async function run(
               process.stdout.write(denyJson(freeze.stderr));
               return 0;
             }
-            const planApproval = runCoreWithStderr(
+            const planApproval = await runGuard(
               "aidlc-plan-approval-guard.ts",
               JSON.stringify({
                 hook_event_name: "PreToolUse",

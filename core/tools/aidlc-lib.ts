@@ -4,7 +4,7 @@ import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from
 import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
 import { homedir, hostname, tmpdir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve as resolvePath, sep, win32 } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { TextDecoder } from "node:util";
 import { inflateSync } from "node:zlib";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
@@ -40179,6 +40179,86 @@ export function removeHookStatusFile(healthDir: string, fileName: string): boole
   } catch {
     return false;
   }
+}
+
+// --- A core hook run in the calling process ---
+//
+// An adapter that starts a core hook as a child loads the whole engine again
+// for it, so a tool call whose guards each run as a child pays one engine load
+// per guard. runHookHere imports the hook and calls its run(input) in this
+// process instead: the environment the child would have been given on top of
+// this one (`env`, the project pins) is set only while it runs, and both
+// streams are collected as the child's pipes collected them. It answers null
+// when the hook cannot be imported or exports no run(), and the caller starts
+// it as a child as before. collectHookOutput is the collecting half, for a
+// step that is not a hook file (an adapter running its own cases as a group).
+
+export interface HookOutput {
+  stdout: string;
+  stderr: string;
+  code: number;
+}
+
+export async function runHookHere(
+  hookPath: string,
+  input: string,
+  env: Readonly<Record<string, string>> = {},
+): Promise<HookOutput | null> {
+  let mod: { run?: unknown };
+  try {
+    mod = (await import(pathToFileURL(hookPath).href)) as { run?: unknown };
+  } catch {
+    return null;
+  }
+  if (typeof mod.run !== "function") return null;
+  const hookRun = mod.run as (input: string) => number | Promise<number>;
+  const previous = Object.entries(env).map(([key]) => [key, process.env[key]] as const);
+  Object.assign(process.env, env);
+  try {
+    return await collectHookOutput(() => hookRun(input));
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+// A step that throws fails alone: code 1, never a refusal, with the error
+// written as Bun writes an uncaught one when a process ends on it (`error:`
+// for a plain Error), so a reader of the text, doctor's drop line among them,
+// finds the line the crashed child left. Bun's console.* writes past
+// process.stdout.write and is not collected; the core hooks write through
+// process.stdout and process.stderr.
+export async function collectHookOutput(
+  step: () => number | Promise<number>,
+): Promise<HookOutput> {
+  const out: string[] = [];
+  const err: string[] = [];
+  const stdoutWrite = process.stdout.write;
+  const stderrWrite = process.stderr.write;
+  const text = (chunk: unknown): string =>
+    typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf-8");
+  process.stdout.write = ((chunk: unknown) => {
+    out.push(text(chunk));
+    return true;
+  }) as typeof process.stdout.write;
+  process.stderr.write = ((chunk: unknown) => {
+    err.push(text(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  let code: number;
+  try {
+    code = await step();
+  } catch (error) {
+    const said = error instanceof Error ? error.stack ?? error.message : String(error);
+    err.push(`${said.replace(/^Error: /, "error: ")}\n`);
+    code = 1;
+  } finally {
+    process.stdout.write = stdoutWrite;
+    process.stderr.write = stderrWrite;
+  }
+  return { stdout: out.join(""), stderr: err.join(""), code };
 }
 
 // --- Hook drop counter ---

@@ -259,6 +259,17 @@ are kept for the piece of work this chat starts next, and any other first-use
 fence switch gets the instruction to create the piece of work and type it again.
 Its human-sequence coordination marker still requires an existing state file.
 
+Before a tool call the one PreToolUse registration, `guard-tool-call`, runs the
+state-transition, reviewer-scope, review-freeze and plan-approval guards that
+the call's tool reaches, in that order, and the first refusal ends the call.
+Each guard's core hook runs inside the adapter's process, as on Codex: imported
+from beside the adapter through the runner both adapters share (`runHookHere`
+in `aidlc-lib.ts`), with the environment its child would have been given set
+only while it runs. A guard that cannot be imported runs as a child as before;
+the stage-rule rewrite, the human-turn hook and the PostToolUse hooks keep
+their child. Run as children, the four would cost five engine loads per shell
+call instead of one, and on Windows every process start is slow.
+
 Every subagent launch is one dispatch. VS Code's subagent tool is `runSubagent`
 (`{prompt, description, agentName?, model?}`); the CLI's is `task`
 (`{agent_type, prompt, description, name?, model?}`), which PascalCase hooks
