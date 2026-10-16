@@ -11459,7 +11459,9 @@ function openReviewFileFor(
   if (record === null) return undefined;
   try {
     const open = openReviewRequests(readAuditShardEvents(projectDir)).filter((request) =>
-      request.stage === stage && request.reviewer === reviewer && (request.unit ?? undefined) === unit);
+      request.stage === stage && request.reviewer === reviewer && (request.unit ?? undefined) === unit &&
+      // An isolated stage run (`--single`) reviews on its own; the Stop hook leaves those rows out too.
+      auditBlockField(request.row.block, "Workflow")?.startsWith("single-stage:") !== true);
     const latest = open.at(-1);
     return latest === undefined ? undefined : toPosix(join(record, latest.reviewFile));
   } catch {

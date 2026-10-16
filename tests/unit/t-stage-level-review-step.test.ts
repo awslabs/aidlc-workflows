@@ -209,7 +209,7 @@ describe("stage-level review step: the person wrote since the review was asked",
     const msg = d.message ?? "";
     expect(msg).toContain("what they asked comes first");
     expect(msg).not.toContain("--retry-pending");
-    expect(msg.indexOf("record NOT-READY without one")).toBeGreaterThan(msg.indexOf("If they asked to carry on and no review is there"));
+    expect(msg.indexOf("record NOT-READY without one")).toBeGreaterThan(msg.indexOf("If they asked to carry on and no review file is there"));
     expect(msg).toContain("If they asked for anything else, do that and stop.");
     // the person asked to carry on, no review is there: the step's own fallback records and the review moves on
     expect(review(r.p, 1, ["--verdict", "NOT-READY"]).status).toBe(0);
@@ -360,7 +360,7 @@ describe("nextReviewStepFor: the table", () => {
     const s = nextReviewStepFor({ attempt: { ...base, ...attempt }, personSpoke: true, nextCommand: "NEXT", reviewFile: "REVIEW.md", subject: "S" });
     const text = s?.text ?? "";
     expect(text).toContain("REVIEW.md");
-    expect(text.indexOf("record NOT-READY without one")).toBeGreaterThan(text.indexOf("If they asked to carry on and no review is there"));
+    expect(text.indexOf("record NOT-READY without one")).toBeGreaterThan(text.indexOf("If they asked to carry on and no review file is there"));
     expect(text.indexOf("`NEXT`")).toBeGreaterThan(text.indexOf("record NOT-READY without one"));
     expect(text).not.toContain("RETRY");
     const off = nextReviewStepFor({ attempt: { ...base, ...attempt }, personSpoke: true, fallback: false, subject: "S" });

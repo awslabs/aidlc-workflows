@@ -32736,7 +32736,7 @@ export function nextReviewStepFor(input: {
           )}`
           : "") +
         (record !== null && !(pending.retryable && input.retryRequest !== undefined) && input.fallback !== false
-          ? " If they asked to carry on and no review is there, record NOT-READY without one; that records a " +
+          ? " If they asked to carry on and no review file is there, record NOT-READY without one; that records a " +
             "review that did not finish, not a finding."
           : "") +
         (record === null && !(pending.retryable && input.retryRequest !== undefined) ? "" : carryOn) + otherwiseStop,
@@ -32757,7 +32757,7 @@ export function nextReviewStepFor(input: {
     text: `${subject} and its review is waiting for a verdict, and its one retry is spent: ${record}.` +
       (input.fallback === false
         ? ""
-        : " If the retried reviewer still wrote no review, record NOT-READY without one; that records a " +
+        : " If the retried reviewer still wrote no review file, record NOT-READY without one; that records a " +
           "review that did not finish, not a finding."),
   };
 }
