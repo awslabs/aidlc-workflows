@@ -254,6 +254,21 @@ describe("t190 validate-grid CLI - fixture graph (TRUE orphan, conditional_on)",
     expect(brown.out).toContain("Strict (recompose) mode");
   });
 
+  // Windows PowerShell 5.1 writes UTF-8 with a byte order mark; the composer's
+  // proposal written that way is the same proposal (#2452), not unreadable.
+  test("a proposal written with a byte order mark and CRLF is read as written", () => {
+    const { graphPath, dir } = writeFixture();
+    const proposal = join(dir, "p.json");
+    writeFileSync(
+      proposal,
+      `﻿${JSON.stringify(fixtureGrid({ alpha: "EXECUTE" }), null, 2).replace(/\n/g, "\r\n")}\r\n`,
+      "utf-8",
+    );
+    const r = runValidateGrid(proposal, [], { AIDLC_STAGE_GRAPH: graphPath });
+    expect(r.out).not.toContain("cannot read");
+    expect(r.rc, r.out).toBe(0);
+  });
+
   test("accepts the {stages: {...}} wrapper shape (a scope-grid entry verbatim)", () => {
     const { graphPath, dir } = writeFixture();
     const proposal = join(dir, "p.json");

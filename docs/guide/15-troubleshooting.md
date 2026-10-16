@@ -17,6 +17,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Symptom | Quick Fix |
 |---------|-----------|
 | No audit entries appearing | Run `aidlc doctor`; for a copy install, also verify `bun` is on the hook PATH |
+| Windows: the audit or another record shows `â€”` for `—` and `â†’` for `→` | The file is UTF-8, and Windows PowerShell 5.1 read it as ANSI. Read it with `Get-Content -Encoding UTF8`, or use PowerShell 7. A file rewritten from that reading keeps the wrong characters, so copy a record with `Copy-Item` or Explorer, and share a run with `/aidlc --doctor --export` |
 | I edited a file by hand; will the agent accept it? | Yes: edit, then say **done** (or carry on). An edit to a finished stage is used as is but not re-approved; to have it approved, jump back with `/aidlc --stage <name>`, which reopens that stage and every stage after it. See [Editing Files Yourself](07-interaction-modes.md#editing-files-yourself) for each case |
 | Claude hooks are restricted by policy | Ask the Claude Code administrator to lift managed `allowManagedHooksOnly`; project settings cannot override it |
 | Cursor: approvals are never recorded | If the project is not in a git repository, run `git init` in it, then fully restart Cursor and trust the folder (see [Cursor project outside a git repository](#cursor-project-outside-a-git-repository)) |

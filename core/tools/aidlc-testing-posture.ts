@@ -70,6 +70,7 @@ import {
   VERIFICATION_COMMAND_CHECKPOINT,
   sortAttemptEvents,
   planApprovalChallengeRelativePath,
+  agentFileText,
   readRegularFileNoFollowOrThrow,
   recordDir,
   recordFileTargetOrThrow,
@@ -3442,7 +3443,7 @@ function planApprovalBatchSelection(projectDir: string, file: string): PlanAppro
   const record = recordDir(projectDir);
   if (record === null) throw new Error("Cannot resolve the active intent record.");
   const path = recordFileTargetOrThrow(record, recordRelativeFileName(projectDir, record, file));
-  const contents = readRegularFileNoFollowOrThrow(path, "Plan Approval batch manifest", 64 * 1024).toString("utf-8");
+  const contents = agentFileText(readRegularFileNoFollowOrThrow(path, "Plan Approval batch manifest", 64 * 1024));
   let value: unknown;
   try {
     value = JSON.parse(contents);
