@@ -26239,11 +26239,14 @@ function ignoredSourceClaimReason(
     if (seeded.status !== 0) {
       return `Git could not seed ignore verification for ${JSON.stringify(path)}`;
     }
+    // Literal, like the probe's pathspecs: git would otherwise read a route
+    // folder's `[id]` as a character class and list its ignored siblings.
     const ignoredDescendants = spawnSync(
       "git",
       [
         "-C",
         sourceRepoDir,
+        "--literal-pathspecs",
         "ls-files",
         "-z",
         "--others",
