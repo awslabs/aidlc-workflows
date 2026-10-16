@@ -956,6 +956,7 @@ export function antigravityStopVerdict(stdout: string): { blocked: boolean; reas
  */
 export class AntigravityScopeHost extends NativeScopeHost {
   override readonly dir = ".agents";
+  override readonly skill = ".agents/skills/aidlc/SKILL.md";
   override readonly picker = true;
   private steps = new Map<string, number>();
 

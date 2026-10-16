@@ -2,8 +2,8 @@
 
 The Antigravity runtime is one of the framework's harness distributions, for
 [Google Antigravity](https://antigravity.google). One tree serves every surface
-that runs the Antigravity agent: the **Antigravity IDE**, the **Antigravity
-CLI** (`agy`), and **Jetski**: they share the same workspace-local
+that runs the Antigravity agent: the **Antigravity IDE** and the **Antigravity
+CLI** (`agy`): they share the same workspace-local
 customization root, `.agents/`. One deterministic core, many harnesses: the
 engine, state machine, audit log, graph, swarm referee, and learnings gate are
 byte-identical across every distribution - only the shell differs. The
@@ -36,7 +36,7 @@ split dot-dir), the way Cursor does. The distribution is:
 
 ## Prerequisites
 
-- **Antigravity** - the IDE, the CLI (`agy`), or Jetski. All of them read
+- **Antigravity** - the IDE or the CLI (`agy`). Both read
   this install's `.agents/` surfaces. Verified against agy cli-2026.10; hooks
   (`.agents/hooks.json`), skills (`.agents/skills/`) and Markdown agents
   (`.agents/agents/`) are current-line features.

@@ -913,7 +913,7 @@ const HARNESS_CLI: Record<
     required: false,
     install: "Install the Cursor CLI and ensure `cursor --version` works; IDE-only installs may omit it.",
   },
-  // The Antigravity CLI; the IDE and Jetski read the same .agents/ tree.
+  // The Antigravity CLI; the IDE and CLI read the same .agents/ tree.
   antigravity: {
     command: "agy",
     required: false,

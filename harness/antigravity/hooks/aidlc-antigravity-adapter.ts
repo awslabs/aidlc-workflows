@@ -6,7 +6,7 @@
 // subprocess-pipes into the named core hook.
 //
 // Antigravity payloads (live corpus, agy cli-2026.10.13 on macOS; the IDE and
-// Jetski share the hooks.json contract) differ from Claude Code's in these
+// CLI share the hooks.json contract) differ from Claude Code's in these
 // load-bearing ways:
 //   1. Keys are camelCase protojson (conversationId, stepIdx, toolCall.name,
 //      toolCall.args, workspacePaths, transcriptPath). There is no session id
@@ -140,6 +140,8 @@ const DELEGATION_TOOLS = new Set([
   "invoke_subagent",
   "define_subagent",
   "manage_subagents",
+  "send_message",
+  "swarm",
   "run_workflow",
   "browser_subagent",
 ]);
@@ -332,13 +334,16 @@ export async function run(
       typeof step.content === "string" && /^A\d+:/m.test(step.content);
   }
 
-  // The questions the ask_question call asked, from the step before the
-  // answer, and the answers it carries, as the core hook's picker payload.
+  // The questions the ask_question call asked, from the preceding planner
+  // step, and the answers it carries, as the core hook's picker payload.
   function pickerPayload(steps: TranscriptStep[], answer: TranscriptStep): Record<string, unknown> {
     const index = steps.indexOf(answer);
-    const call = index > 0
-      ? (steps[index - 1].tool_calls ?? []).find((entry) => entry.name === "ask_question")
-      : undefined;
+    let call: { name?: string; args?: unknown } | undefined;
+    for (let i = index - 1; i >= 0 && i >= index - 5; i--) {
+      if (steps[i].type === "ASK_QUESTION") break;
+      call = (steps[i].tool_calls ?? []).find((entry) => entry.name === "ask_question");
+      if (call) break;
+    }
     const args = (call?.args ?? {}) as { questions?: unknown };
     const asked = Array.isArray(args.questions) ? args.questions : [];
     const questions = asked.map((entry) => {
@@ -760,9 +765,20 @@ export async function run(
     }
     const content = stringArg("CodeContent", "Content", "content");
     if (content !== undefined) input.content = content;
-    const oldString = stringArg("TargetContent", "Target", "old_string");
+    const chunks = Array.isArray(args.ReplacementChunks)
+      ? args.ReplacementChunks.filter((c): c is Record<string, unknown> => !!c && typeof c === "object")
+      : [];
+    const chunkText = (field: "TargetContent" | "ReplacementContent"): string | undefined => {
+      if (chunks.length === 0) return undefined;
+      const joined = chunks
+        .map((c) => (typeof c[field] === "string" ? c[field] : ""))
+        .filter((s) => s.length > 0)
+        .join("\n");
+      return joined.length > 0 ? joined : undefined;
+    };
+    const oldString = stringArg("TargetContent", "Target", "old_string") ?? chunkText("TargetContent");
     if (oldString !== undefined) input.old_string = oldString;
-    const newString = stringArg("ReplacementContent", "Replacement", "new_string");
+    const newString = stringArg("ReplacementContent", "Replacement", "new_string") ?? chunkText("ReplacementContent");
     if (newString !== undefined) input.new_string = newString;
     const dispatched = dispatchedAgents();
     if (dispatched.length > 0) {
@@ -849,7 +865,15 @@ export async function run(
       }),
     );
     if (record.spawn) removeFile(join(LEDGER_DIR, record.spawn));
-    removeFile(conversationFile(conversation));
+    // Keep the delegate's attributed persona on disk across Idle -> re-awakened
+    // turns in the same conversationId so follow-up messages retain reviewer
+    // read-scope and nested-delegation enforcement.
+    if (record.agent) {
+      writeConversation(conversation, { kind: "delegate", agent: record.agent });
+      kindCache = { kind: "delegate", agent: record.agent };
+    } else {
+      removeFile(conversationFile(conversation));
+    }
   }
 
   // --- Targets ------------------------------------------------------------------

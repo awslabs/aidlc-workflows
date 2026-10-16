@@ -261,6 +261,8 @@ describe("t-antigravity-adapter: live Antigravity payloads through the authored 
     expect(turns(proj)).toBe(2);
     // An answer in the ask_question modal is a human turn too: the host
     // records it as a completed ASK_QUESTION step, not as a typed message.
+    // Even if an intermediate step sits between the PLANNER_RESPONSE and the
+    // completed ASK_QUESTION step, pickerPayload still locates the question.
     writeTranscript(proj, MAIN, [
       humanStep("Approve"),
       modelStep("Starting the review."),
@@ -272,10 +274,12 @@ describe("t-antigravity-adapter: live Antigravity payloads through the authored 
         "Approve — Continue to NFR Design",
         "Request Changes — Provide revision feedback",
       ]),
+      systemStep("Intermediate status note before modal answer"),
       answerStep("Approve — Continue to NFR Design"),
     ]);
-    expect(runAdapter(proj, "turn", payload("preInvocationFirst", proj, { initialNumSteps: 8 })).code).toBe(0);
+    expect(runAdapter(proj, "turn", payload("preInvocationFirst", proj, { initialNumSteps: 9 })).code).toBe(0);
     expect(turns(proj)).toBe(3);
+    expect(readAllAuditShards(proj)).toContain("Approval — Functional Design complete.");
     expect(runAdapter(proj, "guards", payload("preToolUseRunCommand", proj)).code).toBe(0);
     expect(turns(proj)).toBe(3);
   });
@@ -365,7 +369,8 @@ describe("t-antigravity-adapter: live Antigravity payloads through the authored 
       ),
       "main",
     );
-    // The delegate's stop lands SUBAGENT_COMPLETED and retires its record.
+    // The delegate's stop lands SUBAGENT_COMPLETED and retires its spawn record,
+    // while retaining the conversation's attributed persona if re-awakened.
     const done = runAdapter(proj, "stop", payload("subStop", proj));
     expect(done.code).toBe(0);
     expect(done.stdout.trim()).toBe("{}");
@@ -373,6 +378,28 @@ describe("t-antigravity-adapter: live Antigravity payloads through the authored 
     const shard = readFileSync(seededAuditShard(proj), "utf-8");
     expect(shard).toContain("SUBAGENT_COMPLETED");
     expect(shard).toContain("aidlc-architecture-reviewer-agent");
+
+    // Re-awakened turn in the same delegate conversationId retains attribution:
+    // unit-a reads are allowed, unit-b reads remain scope-blocked, and send_message is denied.
+    mkdirSync(join(record, "construction", "unit-a"), { recursive: true });
+    writeFileSync(join(record, "construction", "unit-a", "design.md"), "# a\n");
+    const allowedRead = runAdapter(
+      proj,
+      "guards",
+      payload("subPreToolUseViewFile", proj, {
+        toolCall: { name: "view_file", args: { AbsolutePath: join(record, "construction", "unit-a", "design.md") } },
+      }),
+    );
+    expectAllow(allowedRead, "re-awakened delegate in-scope read");
+    const blockedMsg = runAdapter(
+      proj,
+      "guards",
+      payload("subPreToolUseInvokeSubagent", proj, {
+        toolCall: { name: "send_message", args: { Recipient: MAIN, Message: "hi" } },
+      }),
+    );
+    expect(decision(blockedMsg).decision).toBe("deny");
+    expect(decision(blockedMsg).reason ?? "").toContain("nested delegation");
   });
 
   test("6: a write lands an audit row; a failed write does not", () => {
@@ -403,6 +430,21 @@ describe("t-antigravity-adapter: live Antigravity payloads through the authored 
     );
     expect(failed.code).toBe(0);
     expect(readFileSync(seededAuditShard(proj), "utf-8")).toBe(before);
+    const multiEdit = runAdapter(
+      proj,
+      "audit-and-sensors",
+      payload("postToolUseWriteToFile", proj, {
+        toolCall: {
+          name: "multi_replace_file_content",
+          args: {
+            TargetFile: artifact,
+            ReplacementChunks: [{ TargetContent: "# design", ReplacementContent: "# updated design", StartLine: 1, EndLine: 1 }],
+          },
+        },
+      }),
+    );
+    expect(multiEdit.code).toBe(0);
+    expect(readFileSync(seededAuditShard(proj), "utf-8").length).toBeGreaterThan(before.length);
     expect(runAdapter(proj, "runtime-compile", payload("postToolUseRunCommand", proj)).code).toBe(0);
   });
 

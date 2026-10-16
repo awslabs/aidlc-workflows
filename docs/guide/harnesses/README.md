@@ -59,7 +59,7 @@ Pick your harness:
 | **Codex CLI** (≥ 0.145.0) | `$aidlc` | [AI-DLC on Codex CLI](codex-cli.md) — prerequisites, trust pre-seed, Bedrock config, the git-repo requirement. |
 | **Cursor** | `/aidlc` | [AI-DLC on Cursor](cursor.md) — one tree for the Cursor IDE and CLI, native subagents and skills, the hooks.json adapter, what's different on Cursor. |
 | **opencode** (≥ 1.17) | `/aidlc` | [AI-DLC on opencode](opencode.md) — the split `.aidlc/` + `.opencode/` layout, the adapter plugin, what's different on opencode. |
-| **Google Antigravity** (IDE, `agy` CLI, Jetski) | `/aidlc` | [AI-DLC on Google Antigravity](antigravity.md) — one `.agents/` tree for the IDE, the CLI and Jetski, native subagents and skills, the hooks.json adapter, the transcript-read human turn, what's different on Antigravity. |
+| **Google Antigravity** (IDE and `agy` CLI) | `/aidlc` | [AI-DLC on Google Antigravity](antigravity.md) — one `.agents/` tree for the IDE and CLI, native subagents and skills, the hooks.json adapter, the transcript-read human turn, what's different on Antigravity. |
 | **GitHub Copilot** (CLI ≥ 1.0.74 / VS Code ≥ 1.130) | `/aidlc` | [AI-DLC on GitHub Copilot](copilot.md) — one install for both surfaces, the `.github/` merge, folder trust, what's different on Copilot. |
 
 AI-DLC on Kiro (IDE or CLI) works best with **Claude Opus 4.8**, which requires a **paid Kiro plan**.

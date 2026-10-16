@@ -45,14 +45,23 @@ the surrounding instruction requires a question, their content MUST be rendered
 through this annex. This annex's mapping examples are illustrative. The
 prohibition is about echoing raw fences in live orchestration turns.)
 
-## Mechanism
+## Mechanism (two-track)
 
 On Antigravity, every structured question renders via the **`ask_question`
-tool**: the fenced ` ```question ` spec is the input, the tool call is the
-output, never the other way around. The tool takes a list of questions, each
-with a `question` text, a list of plain-string `options`, and an
-`is_multi_select` flag; it has no separate header or per-option description
-fields, so the spec folds into it like this:
+tool** (Track 1) whenever `ask_question` is in your active tool declarations:
+the fenced ` ```question ` spec is the input, the tool call is the output,
+never the other way around. In headless CLI runs (`agy -p` / `--prompt`) or
+environments where `ask_question` is unavailable, fall back to **numbered prose
+in chat** (Track 2).
+
+### Track 1 — `ask_question` (primary, when the tool is available)
+
+The tool takes a list of questions, each with a `question` text, a list of
+plain-string `options`, and an `is_multi_select` flag (if your build's
+`ask_question` schema also requires `toolAction` and `toolSummary`, populate
+them as a 2–5 word `-ing` phrase and a 2–5 word noun phrase); it has no
+separate header or per-option description fields, so the spec folds into it
+like this:
 
 | Spec field | `ask_question` field |
 |------------|----------------------|
@@ -87,6 +96,28 @@ ask_question({
   }]
 })
 ```
+
+### Track 2 — numbered prose (headless / tool-unavailable floor)
+
+If `ask_question` is not in your tool declarations (or the session is headless),
+render the spec as numbered prose options in chat and let the user answer with
+a number or free text:
+
+```
+**Approval** — [Stage Name] complete. How would you like to proceed?
+
+1. **Approve** — Continue to [next stage]
+2. **Request Changes** — Provide revision feedback
+3. **Other** — describe what you want instead
+
+Reply with a number (or just tell me).
+```
+
+On Track 2, start every question at `1`, independent of numbered content earlier
+in the message or another question in the batch. Use unordered bullets for
+immediately preceding summaries. Visible `1` maps to the first source option
+label, `2` to the second, and so on, and always append `**Other** — describe
+what you want instead` as the final number.
 
 ## Mandatory consolidated-summary checkpoint
 

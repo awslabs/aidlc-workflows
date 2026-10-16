@@ -2,14 +2,14 @@
 //
 // Projects the harness-neutral core/ tree into dist/antigravity/.agents/. One
 // tree serves every surface that runs the Antigravity agent: the Antigravity
-// IDE, the Antigravity CLI (`agy`), and Jetski. They share the same
+// IDE and the Antigravity CLI (`agy`). They share the same
 // workspace-local customization root, `<project>/.agents/`, and read the same
 // files from it: skills/<name>/SKILL.md, agents/*.md, rules/*.md, hooks.json
 // and plugins/. Like Cursor, Antigravity consumes the standard projection
 // directly - no emit.ts.
 //
 // Antigravity specifics vs Claude (live-verified against agy cli-2026.10.13
-// on macOS; the IDE and Jetski share the discovery and hook contract):
+// on macOS; the IDE and CLI share the discovery and hook contract):
 //   - token → .agents. Antigravity reads ONLY .agents/skills/, .agents/agents/,
 //     .agents/rules/, .agents/hooks.json, .agents/plugins/ and the JSON
 //     registries beside them for native meaning; the engine dirs (tools/,
@@ -61,29 +61,24 @@ const PERSONA_AGENTS = [
   "aidlc-quality-agent",
 ] as const;
 
-// Antigravity's tool allowlist for a delegated persona: the file, search and
-// shell tools a stage's work needs (the IDE and the CLI each ignore a name
-// the other does not ship), and none of the delegation tools
-// (invoke_subagent, define_subagent, manage_subagents, run_workflow,
-// browser_subagent): agents never call each other; only the conductor hands
-// out work. `mainAgent: false` keeps the personas out of the main-agent
-// picker; they are reachable through `invoke_subagent` only.
+// Antigravity's tool allowlist for a delegated persona: the file, search,
+// task-management and shell tools a stage's work needs, and none of the
+// delegation tools (invoke_subagent, define_subagent, manage_subagents,
+// send_message, swarm, run_workflow, browser_subagent): agents never call each
+// other; only the conductor hands out work. `mainAgent: false` keeps the
+// personas out of the main-agent picker; they are reachable through
+// `invoke_subagent` only.
 const PERSONA_FRONTMATTER = [
   "tools:",
   "  - view_file",
-  "  - view_code_item",
   "  - list_dir",
   "  - find_by_name",
   "  - grep_search",
-  "  - codebase_search",
   "  - write_to_file",
   "  - replace_file_content",
   "  - multi_replace_file_content",
-  "  - sed_file",
-  "  - notebook_edit",
   "  - run_command",
-  "  - command_status",
-  "  - send_command_input",
+  "  - manage_task",
   "  - read_url_content",
   "  - search_web",
   "mainAgent: false",
