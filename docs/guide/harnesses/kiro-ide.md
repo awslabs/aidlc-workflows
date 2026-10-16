@@ -549,16 +549,18 @@ at the model's own default, and an agent given a model but no effort runs at
 that model's default effort, not your chat's. `--model default` and
 `--effort default` take them out again. A preset or a group effort
 (`--preset`, `--reviewing-effort`) still changes nothing on Kiro, and the
-conductor keeps your chat's model. While it is on, AI-DLC owns the `model:`
-and `effortLevel:` lines of every `aidlc-*-agent.md` file, as it does on Claude
-Code: `aidlc config` writes the files of the agents it sets from the release
-and takes such a line out of the others, so change them through
-`aidlc config models` rather than by hand; `aidlc config models --check`
-reports a line that does not match. `aidlc config models --agent-models off` takes every
-agent's lines out in that run and keeps the recorded models and efforts, so
-`--agent-models on` puts them back. With it off, and on a stable release, AI-DLC leaves the Kiro agent files as they
-are, lines you added yourself included, so turn it off before you move a
-project back to a stable release. `effortLevel` is not in Kiro's documentation.
+conductor keeps your chat's model. While it is on, AI-DLC owns the model and
+effort lines (`model:`, `effortLevel:`, and the `effort:`, `variant:` and
+`tier:` keys other tools use) of the agent files it ships, as it does on Claude
+Code: `aidlc config` writes those of the agents it sets and takes them out of
+the others, so change them through `aidlc config models` rather than by hand;
+`aidlc config models --check` reports a `model:` or `effortLevel:` line that
+does not match. An agent file you added yourself is not touched.
+`aidlc config models --agent-models off` takes those lines out of the agent
+files it ships in that run and keeps the recorded models and efforts, so
+`--agent-models on` puts them back. With it off, and on a stable release,
+AI-DLC leaves the Kiro agent files as they are, lines you added yourself
+included, so turn it off before you move a project back to a stable release. `effortLevel` is not in Kiro's documentation.
 Measured on Kiro CLI 2.31.1 on its v3 engine and Kiro IDE 1.3.0.
 
 ### Kiro's Workflows feature stops AI-DLC's reviews and helpers
