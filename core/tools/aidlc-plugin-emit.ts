@@ -49,6 +49,7 @@ export interface PluginTarget {
   harnessName: string;
   manifestDir: string;
   marketplaceDir: string;
+  hostCatalogue: boolean;
   harnessLeaf: string;
   kind: PluginTargetKind;
   installRoots: string[];
@@ -79,7 +80,9 @@ export interface PluginProjectionResult {
 
 // AI-DLC's own plugins show in the host as aidlc-<name> in this catalogue; a
 // plugin anyone else builds shows under the names its author chose.
-const FIRST_PARTY_MARKETPLACE = "aidlc-plugins";
+export const FIRST_PARTY_MARKETPLACE = "aidlc-plugins";
+const FIRST_PARTY_OWNER = { name: "AWS AIDLC" };
+const CATALOGUE_DESCRIPTION = "AIDLC plugin catalogue.";
 // Kiro has no plugin store, so a plugin is dropped into the project: each one
 // in its own folder in AI-DLC's part of .kiro, so a second plugin never lands
 // on the first.
@@ -173,6 +176,7 @@ export function readPluginTargets(path: string): PluginTargetTable {
       typeof value.harnessName !== "string" ||
       typeof value.manifestDir !== "string" ||
       (value.marketplaceDir !== undefined && typeof value.marketplaceDir !== "string") ||
+      (value.hostCatalogue !== undefined && typeof value.hostCatalogue !== "boolean") ||
       typeof value.harnessLeaf !== "string" ||
       !Array.isArray(value.installRoots) ||
       value.installRoots.some((item) => typeof item !== "string") ||
@@ -191,6 +195,7 @@ export function readPluginTargets(path: string): PluginTargetTable {
       marketplaceDir: typeof value.marketplaceDir === "string"
         ? value.marketplaceDir
         : value.manifestDir,
+      hostCatalogue: value.hostCatalogue === true,
       harnessLeaf: value.harnessLeaf,
       kind: value.kind,
       installRoots: [...value.installRoots],
@@ -324,6 +329,53 @@ function droppedIntoProject(kind: PluginTargetKind): boolean {
 // Forward slashes: the Kiro IDE hook command names it.
 function droppedPluginFolder(harnessLeaf: string, hostName: string): string {
   return `${harnessLeaf}/${DROPPED_PLUGINS_FOLDER}/${hostName}`;
+}
+
+type CatalogueEntry = { name: string; source: string; version: unknown; description: unknown };
+
+function catalogueText(name: string, owner: unknown, plugins: CatalogueEntry[]): string {
+  return `${JSON.stringify({ name, owner, description: CATALOGUE_DESCRIPTION, plugins }, null, 2)}\n`;
+}
+
+// A plugin someone else builds carries its own catalogue; AI-DLC's own share
+// one per host format at the root of the tree that holds them (dist/plugins,
+// the release runtime's plugins/), so a person adds that folder once and
+// installs any of them, and a second plugin of ours never brings a second
+// catalogue of the same name. Only the given hosts' catalogues are rewritten.
+export function writeFirstPartyCatalogues(
+  root: string,
+  targets: Iterable<PluginTarget>,
+): string[] {
+  const plugins = existsSync(root)
+    ? readdirSync(root)
+      .filter((name) => !name.startsWith(".") && statSync(join(root, name)).isDirectory())
+      .sort()
+    : [];
+  const written: string[] = [];
+  for (const target of targets) {
+    if (!target.hostCatalogue) continue;
+    const entries = plugins.flatMap((plugin): CatalogueEntry[] => {
+      const projection = join(root, plugin, target.harnessName);
+      if (!existsSync(join(projection, ".aidlc-plugin", "plugin.json"))) return [];
+      const manifest = readPluginManifest(projection);
+      const name = pluginNameFromManifest(projection, manifest);
+      return [{
+        name: pluginHostNames(name, manifest, true).plugin,
+        source: `./${plugin}/${target.harnessName}`,
+        version: manifest.version || "0.0.1",
+        description: manifest.description || "",
+      }];
+    });
+    const rel = `${target.marketplaceDir}/marketplace.json`;
+    if (entries.length === 0) {
+      rmSync(join(root, rel), { force: true });
+      continue;
+    }
+    mkdirSync(join(root, target.marketplaceDir), { recursive: true });
+    writeFileSync(join(root, rel), catalogueText(FIRST_PARTY_MARKETPLACE, FIRST_PARTY_OWNER, entries));
+    written.push(rel);
+  }
+  return written;
 }
 
 export function projectionPluginRoot(
@@ -464,6 +516,7 @@ export function droppedPluginRegistrations(
     harnessName: "kiro-ide",
     manifestDir: "",
     marketplaceDir: "",
+    hostCatalogue: false,
     harnessLeaf,
     kind: "kiro-ide",
     installRoots: [],
@@ -779,28 +832,16 @@ export function buildPluginProjection(
           2,
         )}\n`,
       );
-      const marketplaceDir = join(pluginDir, options.target.marketplaceDir);
-      mkdirSync(marketplaceDir, { recursive: true });
-      writeFileSync(
-        join(marketplaceDir, "marketplace.json"),
-        `${JSON.stringify(
-          {
-            name: host.marketplace,
-            owner: author,
-            description: "AIDLC plugin catalogue.",
-            plugins: [
-              {
-                name: host.plugin,
-                source: ".",
-                version,
-                description,
-              },
-            ],
-          },
-          null,
-          2,
-        )}\n`,
-      );
+      if (!firstParty) {
+        const marketplaceDir = join(pluginDir, options.target.marketplaceDir);
+        mkdirSync(marketplaceDir, { recursive: true });
+        writeFileSync(
+          join(marketplaceDir, "marketplace.json"),
+          catalogueText(host.marketplace, author, [
+            { name: host.plugin, source: ".", version, description },
+          ]),
+        );
+      }
 
       copyHookTemplates(
         pluginRoot,
