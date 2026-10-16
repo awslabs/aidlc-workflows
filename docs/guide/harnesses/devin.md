@@ -149,10 +149,11 @@ runners are explicit-only: `/aidlc-domain-design`, `/aidlc-bugfix`, etc.
 - **Permissions** — `.devin/config.json` pre-approves reads, edits, writes,
   search, subagent dispatch, structured questions, web search, and web fetch.
   Copy installs pre-approve the `aidlc.ts engine` prefix, the dispatcher's
-  listed read-only commands, and each approved `.devin/tools/` script in both
+  listed read-only commands, the top-level `aidlc.ts --help` and `help`
+  prints, and each approved `.devin/tools/` script in both
   `bun` and `bun run` spellings; native installs pre-approve
-  the installed `aidlc engine` command prefix and its listed read-only
-  commands. General Bun, Git, Node, npm, npx,
+  the installed `aidlc engine` command prefix, its listed read-only
+  commands, and `aidlc --help`/`aidlc help`. General Bun, Git, Node, npm, npx,
   and uvx commands are not blanket-pre-approved. Personal overrides live in
   `.devin/config.local.json` and `.devin/mcp_config.local.json` (both
   gitignored).

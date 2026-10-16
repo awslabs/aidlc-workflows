@@ -98,7 +98,7 @@ import {
   TRUSTED_ROUTE_NAMESPACE,
   trustedCommand,
 } from "../core/tools/aidlc-command.ts";
-import { copyChannelDispatcherCommands, copyChannelToolScripts, ROUTES, TOOLS } from "../core/tools/aidlc.ts";
+import { copyChannelDispatcherCommands, copyChannelToolScripts, resolveAction, ROUTES, TOOLS } from "../core/tools/aidlc.ts";
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 import { BUILD_VERSION_ENV, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
 import { copyStartsWithout, harnessChoiceTextIsPlain, sha256Bytes, writtenRootIntegration } from "../core/tools/aidlc-distribution.ts";
@@ -1070,6 +1070,17 @@ function escapeRegExp(value: string): string {
 // The dispatcher commands every install pre-approves exactly as written
 // (copyChannelDispatcherCommands), as the native release runs them: through
 // the installed aidlc command, never a project path.
+// Devin-only: the top-level help prints are the one read-only dispatcher
+// form the copy-channel command list does not carry, so Devin's grants add
+// them here. The guard refuses the grant the day either spelling stops being
+// a pure help print.
+const DEVIN_HELP_COMMANDS = ["--help", "help"];
+for (const candidate of DEVIN_HELP_COMMANDS) {
+  if (resolveAction([candidate]).type !== "help") {
+    throw new Error(`[devin] ${candidate} is not a help print; refusing to pre-approve it`);
+  }
+}
+
 function nativeDispatcherCommands(): string[] {
   return copyChannelDispatcherCommands().map((command) => `aidlc ${command}`);
 }
@@ -1194,6 +1205,7 @@ function rewriteDevinNativePermissions(outRoot: string, m: HarnessManifest): voi
     ),
     `Exec(${trustedCommand()})`,
     ...nativeDispatcherCommands().map((command) => `Exec(${command})`),
+    ...DEVIN_HELP_COMMANDS.map((command) => `Exec(aidlc ${command})`),
   ];
   writeFileSync(configPath, `${JSON.stringify(value, null, 2)}\n`);
 }
@@ -1361,6 +1373,7 @@ function expandDevinToolAllows(treeRoot: string, m: HarnessManifest): void {
         ? [
           `${tool("aidlc.ts")} engine)`,
           ...copyChannelDispatcherCommands().map((command) => `${tool("aidlc.ts")} ${command})`),
+          ...DEVIN_HELP_COMMANDS.map((command) => `${tool("aidlc.ts")} ${command})`),
           ...copyChannelToolScripts().map((script) => `${tool(script)})`),
         ]
         : [entry]

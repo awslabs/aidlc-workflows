@@ -250,6 +250,11 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       ...copyChannelToolScripts().map(
         (script) => `Exec(${spelling}.devin/tools/${script})`,
       ),
+      // Devin-only: the top-level help prints are granted past the shared
+      // dispatcher list (which does not carry them).
+      ...["--help", "help"].map(
+        (command) => `Exec(${spelling}.devin/tools/aidlc.ts ${command})`,
+      ),
     ];
     const copyAllow = [
       "Read(**)", "edit", "write", "grep", "glob",
@@ -263,6 +268,7 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
       ...allow.filter((entry) => !entry.startsWith("Exec(bun ")),
       `Exec(${trustedCommand()})`,
       ...copyChannelDispatcherCommands().map((command) => `Exec(aidlc ${command})`),
+      ...["--help", "help"].map((command) => `Exec(aidlc ${command})`),
     ];
     for (const [path, expectedAllow] of [
       [join(REPO_ROOT, "harness", "devin", "config.json"), allow],
