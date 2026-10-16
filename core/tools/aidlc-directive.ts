@@ -1236,7 +1236,8 @@ export function reviewRequestNote(
   const dispatch = dispatchAgent === null
     ? `Dispatch ${reviewer} as a subagent`
     : `Dispatch ${dispatchAgent} (${reviewer} with this review's read scope; if Kiro has no agent by that name, ` +
-      `dispatch ${reviewer} instead) as a subagent, name ${reviewer} as the reviewer in the brief,`;
+      `dispatch ${reviewer} instead and tell the person in one line that this review runs without the reviewer ` +
+      `read-scope check) as a subagent, name ${reviewer} as the reviewer in the brief,`;
   return `${dispatch} and have it write ${reviewFile}: that file is the reviewer's, so never ` +
     `write it yourself and never stand in for it. When its verdict is back, record it with \`${recordVerdict}\`.`;
 }

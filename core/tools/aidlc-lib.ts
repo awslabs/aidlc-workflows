@@ -38233,12 +38233,12 @@ export function isKiroConductorAgentFile(name: string): boolean {
 // installed reviewer with that review's read scope added, named from the
 // request id so the name stands for that one request. It is the reviewer under
 // another name, never a persona of its own.
-const SCOPED_REVIEW_COPY_RE = /^aidlc-review-[0-9a-f]{12}$/;
+const SCOPED_REVIEW_COPY_RE = /^aidlc-scoped-review-[0-9a-f]{12}$/;
 
 /** The reviewer copy's agent name for a review request id, or null for an id not minted as `review:<hex>`. */
 export function scopedReviewCopyName(requestId: string): string | null {
   const m = /^review:([0-9a-f]{12})[0-9a-f]{20}$/.exec(requestId);
-  return m ? `aidlc-review-${m[1]}` : null;
+  return m ? `aidlc-scoped-review-${m[1]}` : null;
 }
 
 /** Whether an agent name, or an agent file name, is a reviewer copy's. */

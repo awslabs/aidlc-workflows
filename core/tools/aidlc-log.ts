@@ -3940,11 +3940,13 @@ function handleReview(args: string[]): void {
     // review's reviewer is dispatched as a copy that carries its read scope; a
     // replaced request's copy goes with it.
     if (replaces !== null) removeReviewCopy(pd, replaces);
-    const dispatchAgent = requestId === null ? null : prepareReviewCopy(pd, {
+    const copy = requestId === null ? null : prepareReviewCopy(pd, {
       requestId,
       reviewer: flags.reviewer,
       ...(flags.unit ? { unit: flags.unit } : {}),
     });
+    const dispatchAgent = copy !== null && "dispatchAgent" in copy ? copy.dispatchAgent : null;
+    if (copy !== null && "notice" in copy) requestChangeNotices.push(copy.notice);
     console.log(JSON.stringify({
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,

@@ -12,7 +12,7 @@
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   cleanupTestProject,
@@ -150,7 +150,7 @@ describe("the reviewer read-scope copy on Kiro (preview)", () => {
     const requested = json(p.log(p.reviewArgs()), "Request the Unit's review");
     expect(requested.emitted).toBe("REVIEW_REQUESTED");
     const requestId = String(requested.requestId);
-    const copyName = `aidlc-review-${requestId.slice("review:".length, "review:".length + 12)}`;
+    const copyName = `aidlc-scoped-review-${requestId.slice("review:".length, "review:".length + 12)}`;
     expect(requested.dispatchAgent).toBe(copyName);
     expect(String(requested.agent_note)).toContain(`Dispatch ${copyName} (${REVIEWER} with this review's read scope`);
     expect(String(requested.agent_note)).toContain(`name ${REVIEWER} as the reviewer in the brief`);
@@ -158,13 +158,16 @@ describe("the reviewer read-scope copy on Kiro (preview)", () => {
     const copy = readFileSync(join(p.dir, ".kiro", "agents", `${copyName}.md`), "utf-8");
     expect(copy).toContain(`\nname: ${copyName}\n`);
     expect(copy).toContain('        - "aidlc/spaces/*/intents/*/construction/**"');
-    expect(copy).toContain(`        - "aidlc/spaces/*/intents/*/construction/${UNIT}/**"`);
+    // Only this intent's folder of the Unit is opened again.
+    const record = relative(p.dir, seededRecordDir(p.dir)).split(sep).join("/");
+    expect(copy).toContain(`        - "${record}/construction/${UNIT}/**"`);
+    expect(copy).not.toContain(`"aidlc/spaces/*/intents/*/construction/${UNIT}`);
     expect(copy).not.toContain("construction/beta");
     expect(readFileSync(join(p.dir, ".kiro", "agents", `${REVIEWER}.md`), "utf-8"))
       .toBe(readFileSync(join(KIRO_IDE_TREE, "agents", `${REVIEWER}.md`), "utf-8"));
     expect(p.agents()).toEqual([...shippedAgents, `${copyName}.md`].sort());
     // AI-DLC's .gitignore block keeps the copy out of the person's commits.
-    expect(readFileSync(join(KIRO_IDE_TREE, "..", ".gitignore"), "utf-8").split("\n")).toContain(".kiro/agents/aidlc-review-*.md");
+    expect(readFileSync(join(KIRO_IDE_TREE, "..", ".gitignore"), "utf-8").split("\n")).toContain(".kiro/agents/aidlc-scoped-review-*.md");
 
     const reviewFile = resolve(p.dir, String(requested.reviewFile));
     mkdirSync(dirname(reviewFile), { recursive: true });
@@ -190,7 +193,7 @@ describe("the reviewer read-scope copy on Kiro (preview)", () => {
     const p = new KiroUnitReview(true);
     const requested = json(p.log(p.reviewArgs()), "Request the Unit's review");
     const copyName = String(requested.dispatchAgent);
-    expect(copyName).toMatch(/^aidlc-review-[0-9a-f]{12}$/);
+    expect(copyName).toMatch(/^aidlc-scoped-review-[0-9a-f]{12}$/);
     expect(p.dispatched(copyName, `Agent '${copyName}' not found in registry`).code).toBe(0);
     expect(p.completions()).toEqual([]);
     // The fallback is said where doctor looks: the scope the person turned on was not held.
@@ -198,6 +201,23 @@ describe("the reviewer read-scope copy on Kiro (preview)", () => {
       .toContain(`Kiro has no agent named ${copyName}`);
     expect(p.dispatched(REVIEWER, `**Reviewer:** ${REVIEWER}\n\nVerdict: READY`).code).toBe(0);
     expect(p.completions().map((row) => auditBlockField(row, "Agent Type"))).toEqual([REVIEWER]);
+  });
+
+  test("a copy that cannot be written is said in one line, and the reviewer itself is dispatched", () => {
+    const p = new KiroUnitReview(true);
+    const reviewerFile = join(p.dir, ".kiro", "agents", `${REVIEWER}.md`);
+    writeFileSync(reviewerFile, readFileSync(reviewerFile, "utf-8").replace(/\npermissions:\n/, "\nreviewer_permissions:\n"));
+    const requested = json(p.log(p.reviewArgs()), "Request the Unit's review");
+    expect(requested.dispatchAgent).toBeUndefined();
+    expect(requested.change_notices).toEqual([
+      `This review of ${UNIT} can read other Units' files: AI-DLC could not hold the reviewer to this Unit this time.`,
+    ]);
+    expect(String(requested.agent_note)).toStartWith(`Dispatch ${REVIEWER} as a subagent`);
+    // Doctor lists a drop by its reason up to the first ": ", cut to 120 characters: the cause fits.
+    const drops = readFileSync(join(seededRecordDir(p.dir), ".aidlc-engine", "hooks-health", "reviewer-scope.drops"), "utf-8");
+    const shown = drops.trim().split("\t").at(-1)!.split(": ")[0];
+    expect(shown).toBe("reviewer copy not written, a name is not plain or the reviewer file is not in the installed shape");
+    expect(shown.length).toBeLessThanOrEqual(120);
   });
 
   test("a stable build's request is the request it was", () => {

@@ -22,6 +22,7 @@ import {
   decideFence,
   installedKiroLayout,
   recordHookDrop,
+  relativeRecordDir,
   resolveProjectFlag,
   scopedReviewCopyName,
   swarmWorkerWorktreeMeta,
@@ -33,10 +34,11 @@ import { AIDLC_VERSION } from "./aidlc-version.ts";
 /** The preview feature this module implements. */
 export const REVIEWER_READ_SCOPE_FEATURE = "reviewer-read-scope";
 
-// Where the reviewer can reach the Units' folders: the project's record, and a
-// parallel batch's worktrees under .aidlc/worktrees/ (the reviewer's own
-// filesystem rule reaches them).
-const CONSTRUCTION_ROOTS = [
+// Where the reviewer can reach the Units' folders: every intent's record, and
+// a parallel batch's worktrees under .aidlc/worktrees/ (the reviewer's own
+// filesystem rule reaches them). All of them are denied; only this review's
+// Unit folder, in this intent's record, is opened again.
+const DENIED_ROOTS = [
   "aidlc/spaces/*/intents/*/construction",
   ".aidlc/worktrees/*/aidlc/spaces/*/intents/*/construction",
 ];
@@ -44,14 +46,19 @@ const CONSTRUCTION_ROOTS = [
 /**
  * The copy's text: the installed reviewer file with its `name` set to the copy's
  * name, its `display_name` marked as this review's, and one rule added at the
- * end of `permissions.rules` that denies reads in every unit's construction
- * folder except this unit's. Everything else (the person's own edits included)
- * stays as installed. Null when the unit cannot be written as an exact pattern,
- * or the file has no frontmatter, no `name`, or no `permissions.rules` list in
- * the shipped shape.
+ * end of `permissions.rules` that denies reads in every construction folder
+ * (every intent's, and every batch worktree's) except this Unit's folder in
+ * this intent's record. Everything else (the person's own edits included)
+ * stays as installed. `record` is the intent record's path from the project
+ * root (`aidlc/spaces/<space>/intents/<intent>`). Null when the record or the
+ * unit cannot be written as an exact pattern, or the file has no frontmatter,
+ * no `name`, or no `permissions.rules` list in the shipped shape.
  */
-export function renderReviewCopy(reviewerText: string, copyName: string, unit: string): string | null {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(unit)) return null;
+export function renderReviewCopy(reviewerText: string, copyName: string, record: string, unit: string): string | null {
+  const plain = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+  const recordParts = record.split("/");
+  if (!plain.test(unit) || recordParts.length !== 5 || recordParts[0] !== "aidlc" || recordParts[1] !== "spaces" ||
+    recordParts[3] !== "intents" || !plain.test(recordParts[2]) || !plain.test(recordParts[4])) return null;
   const text = reviewerText.replace(/^\uFEFF/, "");
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
   const lines = text.split(/\r?\n/);
@@ -92,9 +99,10 @@ export function renderReviewCopy(reviewerText: string, copyName: string, unit: s
     "    - capability: fs_read",
     "      effect: deny",
     "      match:",
-    ...CONSTRUCTION_ROOTS.map((root) => `        - "${root}/**"`),
+    ...DENIED_ROOTS.map((root) => `        - "${root}/**"`),
     "      exclude:",
-    ...CONSTRUCTION_ROOTS.flatMap((root) => [`        - "${root}/${unit}"`, `        - "${root}/${unit}/**"`]),
+    `        - "${record}/construction/${unit}"`,
+    `        - "${record}/construction/${unit}/**"`,
   );
   return [lines[0], ...front, ...lines.slice(end)].join(eol);
 }
@@ -105,44 +113,83 @@ function writableAgentsDir(projectDir: string): string {
   return resolveHarnessPath(["agents"], { mutable: true, projectDir });
 }
 
+/** What the review request does with the reviewer copy. */
+export type ReviewCopyOutcome =
+  /** Dispatch this agent: the reviewer with the review's read scope. */
+  | { dispatchAgent: string }
+  /** The feature asked for a copy and none could be written: this review runs
+   *  without its read scope, and `notice` tells the person so in one line. */
+  | { notice: string };
+
 /**
- * Write this review's reviewer copy and return its agent name for the conductor
- * to dispatch, or null when this review is dispatched to the reviewer itself:
- * the feature is off, the project's Kiro tree is not the KAS layout, the review
- * is not a Unit's, it runs in a parallel batch's worktree, the reviewer
- * read-scope check stands aside for this work, or the copy cannot be written.
- * Never refuses: the review goes on either way. A copy the feature asked for
- * but could not write leaves a line among the reviewer-scope drops doctor counts.
+ * Write this review's reviewer copy and say which agent the conductor
+ * dispatches, or null when the feature does not apply and the review goes to
+ * the reviewer itself as it always has: the feature is off, the project's Kiro
+ * tree is not the KAS layout, the review is not a Unit's, it runs in a parallel
+ * batch's worktree, or the reviewer read-scope check stands aside for this
+ * work. Never refuses. A copy the feature asked for but could not write leaves
+ * a line among the reviewer-scope drops doctor counts, naming the cause, and a
+ * notice.
  */
 export function prepareReviewCopy(
   projectDir: string,
   review: { requestId: string; reviewer: string; unit?: string },
   version: string = AIDLC_VERSION,
-): string | null {
+): ReviewCopyOutcome | null {
   if (!review.unit || !previewFeatureOn(REVIEWER_READ_SCOPE_FEATURE, version)) return null;
-  const copyName = scopedReviewCopyName(review.requestId);
-  if (copyName === null) return null;
-  const skipped = (why: string): null => {
-    recordHookDrop(projectDir, "reviewer-scope", `reviewer copy for ${review.reviewer} (unit ${review.unit}) not written: ${why}`);
-    return null;
-  };
+  // Doctor lists a drop by its reason up to the first ": ", cut short, so the
+  // reason starts with a short cause and the details follow it.
+  const drop = (cause: string, detail: string) =>
+    recordHookDrop(
+      projectDir,
+      "reviewer-scope",
+      `reviewer copy not written, ${cause}: ${review.reviewer} for unit ${review.unit}${detail ? `; ${detail}` : ""}`,
+    );
+  // Whether the feature applies here at all. A check that cannot be read
+  // leaves the review as it always was, with a drop line and no notice: it is
+  // not known that the person's check was on.
   try {
     if (installedKiroLayout(projectDir) !== "kas") return null;
     if (swarmWorkerWorktreeMeta(projectDir) !== null) return null;
     if (resolveProjectFlag("AIDLC_DISABLE_REVIEWER_SCOPE_HOOK", process.env, projectDir) === "1") return null;
     if (decideFence(projectDir, "reviewer-scope").decision === "stand-aside") return null;
-    if (!/^[a-z0-9][a-z0-9-]*$/.test(review.reviewer)) return skipped("the reviewer name is not a plain agent name");
+  } catch (e) {
+    drop("its conditions could not be read", e instanceof Error ? e.message : String(e));
+    return null;
+  }
+  const skipped = (cause: string, detail = ""): ReviewCopyOutcome => {
+    drop(cause, detail);
+    return {
+      notice:
+        `This review of ${review.unit} can read other Units' files: AI-DLC could not hold the reviewer to this Unit ` +
+        "this time.",
+    };
+  };
+  const copyName = scopedReviewCopyName(review.requestId);
+  if (copyName === null) return skipped("the request id names no copy", review.requestId);
+  try {
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(review.reviewer)) return skipped("the reviewer name is not plain");
+    const record = relativeRecordDir(projectDir);
+    if (record === null) return skipped("no intent record");
     const agents = writableAgentsDir(projectDir);
     const reviewerPath = join(agents, `${review.reviewer}.md`);
-    if (!existsSync(reviewerPath)) return skipped(`${reviewerPath} is missing`);
-    const text = renderReviewCopy(readFileSync(reviewerPath, "utf-8"), copyName, review.unit);
+    if (!existsSync(reviewerPath)) return skipped("the reviewer file is missing", reviewerPath);
+    const text = renderReviewCopy(
+      readFileSync(reviewerPath, "utf-8"),
+      copyName,
+      record,
+      review.unit,
+    );
     if (text === null) {
-      return skipped(`the unit name or ${reviewerPath} is not in the shape a copy is made from (frontmatter, name, permissions.rules)`);
+      return skipped(
+        "a name is not plain or the reviewer file is not in the installed shape",
+        `${record}, unit ${review.unit}, ${reviewerPath}`,
+      );
     }
     writeFileAtomic(join(agents, `${copyName}.md`), text);
-    return copyName;
+    return { dispatchAgent: copyName };
   } catch (e) {
-    return skipped(e instanceof Error ? e.message : String(e));
+    return skipped("the copy could not be written", e instanceof Error ? e.message : String(e));
   }
 }
 
