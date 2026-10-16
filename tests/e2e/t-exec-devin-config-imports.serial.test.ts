@@ -121,7 +121,7 @@ function probeTokens(text: string): string[] {
 
 describe(`t-exec-devin read_config_from import isolation via devin skills/mcp list`, () => {
   test.skipIf(SKIP_REASON !== null)(
-    `shipped config: no sibling skill or MCP imports; /aidlc stays unprefixed${SKIP_REASON ? ` [SKIP: ${SKIP_REASON}]` : ""}`,
+    `shipped config: only the Windsurf skill imports (windsurf gates .devin/rules on older builds); /aidlc stays unprefixed${SKIP_REASON ? ` [SKIP: ${SKIP_REASON}]` : ""}`,
     () => {
       const workspace = mkdtempSync(join(tmpdir(), "aidlc-devin-imports-"));
       const xdg = mkdtempSync(join(tmpdir(), "aidlc-devin-xdg-"));
@@ -146,7 +146,13 @@ describe(`t-exec-devin read_config_from import isolation via devin skills/mcp li
         expect(skillsOut).toMatch(/\/aidlc .*\(\.\/\.devin\/skills\/aidlc\)/);
         expect(skillsOut).not.toContain("/github:aidlc");
         expect(skillsOut).not.toContain("/devin:aidlc");
-        expect(skillsOut).not.toContain("probe-");
+        // windsurf stays true in the shipped config — Devin ≤3000.11.3 gates
+        // .devin/rules delivery on that switch, so the Windsurf probe is the
+        // one sibling skill expected to appear.
+        for (const token of probeTokens(skillsOut)) {
+          expect(token).toBe("probe-windsurf-skill");
+        }
+        expect(skillsOut).toContain("probe-windsurf-skill");
         // Devin's own (disabled) registry entry must list — it proves
         // `mcp list` read the scratch project's .devin/mcp_config.json;
         // no imported probe may appear alongside it.

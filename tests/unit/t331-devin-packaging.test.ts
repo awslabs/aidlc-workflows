@@ -290,6 +290,9 @@ describe("t331 dist/devin packaging parity + shell shape", () => {
         `${path}: read_config_from must be all booleans (null reads as true)`,
       ).toBe(true);
       expect(config.read_config_from.agents_standard, path).toBe(true);
+      // windsurf stays true too: on 3000.10.21–3000.11.3 that switch also
+      // gates .devin/rules delivery, so a false drops every always-on rule.
+      expect(config.read_config_from.windsurf, path).toBe(true);
       expect(Object.keys(config.read_config_from).sort(), path).toEqual(
         [...DEVIN_IMPORT_SOURCES].sort(),
       );

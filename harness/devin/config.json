@@ -17,7 +17,7 @@
   "read_config_from": {
     "agents_standard": true,
     "cursor": false,
-    "windsurf": false,
+    "windsurf": true,
     "claude": false,
     "copilot": false,
     "opencode": false,
