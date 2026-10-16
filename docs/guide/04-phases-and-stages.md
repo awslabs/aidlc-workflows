@@ -285,9 +285,9 @@ already approved whose evidence is unchanged, so nothing runs again.
 
 At a Unit or skeleton checkpoint you are asked to **Approve** or **Request
 Changes**. Answer in your own words or pick an option: your reply to that
-checkpoint's question decides it, and an option you pick is the one recorded.
-A reply to a different question, or from another chat, does not count. A
-checkpoint whose work changed after it was asked is asked again. Checkpoints
+checkpoint's question decides it, in the chat that asked or in a new one while
+it is the newest question asked, and an option you pick is the one recorded.
+A reply to a different question does not count. A checkpoint whose work changed after it was asked is asked again. Checkpoints
 you chose to let run automatically are recorded without a question.
 
 The autonomy offer is **Continue automatically** / **Review each checkpoint**:
