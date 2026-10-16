@@ -604,9 +604,10 @@ Validation checks:
   filename, and plugin ownership;
 - scopes use `<plugin>-<name>.md`, match their frontmatter identity, declare a
   supported depth, and parse declared keywords as a non-empty block or flow
-  list; `include_stages` names neither your own stage nor a core stage, and a
-  stage it names is a warning that it is not checked unless `--with
-  <base-root>` names your checkout of the base, which must have it;
+  list; `include_stages` names only your base's stages (never your own or a
+  core stage; a base's stage slugs start with its name, as compose requires),
+  and each is a warning that it is not checked unless `--with <base-root>`
+  names your checkout of the base, which must have it;
 - agents use `<plugin>-<role>-agent.md` and match their frontmatter identity;
 - no two plugin stages produce the same artifact across `produces` and
   `optional_produces`, even when no stage consumes it;
@@ -616,7 +617,10 @@ Validation checks:
   on a base can lead a stage with the base's agent: without the base's
   checkout such an agent (`<base>-...`) is a warning that it is not checked;
   `--with <base-root>` names your own checkout of the base, whose agents then
-  count, and must be the base your manifest names;
+  count, and must be the base your manifest names. A plugin that declares no
+  base and names a stage (`requires_stage`) or agent that is neither core's nor
+  its own fails with the one step: add the plugin that ships it to
+  `dependencies`;
 - authored plugin content uses regular files and directories; symlinks under
   stages, scopes, agents, contributions, sensors, knowledge, tools, or hooks
   are rejected instead of being silently omitted or followed;
@@ -771,7 +775,10 @@ test("plugin composes into a Claude install", () => {
   alone. Sync composes the base first, so your stages can order after its
   stages (`requires_stage`), read its artifacts, name its agents and run its
   stages in your scopes (`include_stages`); check those with `--with
-  <base-root>`. If the installed base is missing, outside your range, builds
+  <base-root>`. `aidlc plugin create` writes `["core"]`, so add the base by
+  hand: until you do, validate and build stop on a stage or agent of another
+  plugin, which would otherwise compose only when the names happen to sort the
+  right way. If the installed base is missing, outside your range, builds
   on another plugin or lacks a stage your scopes include, your plugin is not
   composed (a version composed before stays as it was) and the person sees one
   line saying why; everything else still composes. A second base, your own name, or a range npm cannot read fails

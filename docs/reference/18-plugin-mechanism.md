@@ -110,7 +110,9 @@ checkout. It checks the manifest, stage schema, scope and agent identity,
 plugin-local artifact collisions, accidental test/fixture payloads under
 `tools/`, and any vendored `hooks/compose.ts` against the template bundled with
 the tool. A stage agent only the plugin's base could supply is a warning unless
-`--with` names the author's checkout of that base. Top-level
+`--with` names the author's checkout of that base; in a plugin that declares no
+base, a stage or agent that is neither core's nor the plugin's own is an error
+naming `dependencies`. Top-level
 `aidlc plugin validate|build` routes delegate to these same
 implementations; `create|test` routes remain deferred to
 [RFC #723 §2e](https://github.com/awslabs/aidlc-workflows/issues/723).
@@ -620,8 +622,9 @@ runs the base's stages in its own scope by naming them in the scope's
 compiled row lists the scope), and the stage files and every other scope stay
 as they are. An include no installed stage has is left out of the column and
 never fails the compile; sync holds the plugin and says which stage is missing
-(section 8). Validate refuses a core or own stage there, and checks the rest against
-the `--with` checkout of the base.
+(section 8). Validate refuses a core or own stage there and a name that cannot be
+the base's (a plugin's stage slugs start with its name, which compose enforces), and
+checks the base's against the `--with` checkout of the base.
 
 **Activation (`when:`)** *(⚠️ parsed, not evaluated).* A stage may carry a structured `when:` predicate; `{producer-in-plan: X}` is schema-validated and parsed, but **no engine consumer evaluates it yet** — `aidlc-graph` names itself the future home. So a stage carrying `when:` is today EXECUTE under its declared scopes unconditionally. A plugin's own stages exist only when the plugin is in the chosen set, so "is this plugin active" is already a compose-time fact.
 
