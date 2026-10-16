@@ -11552,7 +11552,6 @@ function stageReviewStep(
   if (isPerUnit(node) && !usesStageLevelPerUnitArtifacts(scope, stateContent)) {
     // Per Unit with a Unit DAG, the Unit routes own the review. Team ownership
     // without a DAG is an error the route states, which a review step must not hide.
-    // The pure resolution: the route resolves the DAG itself and says once if it healed it.
     if (resolveBoltDag(projectDir).state !== "none" || isTeamUnitOwnership(stateContent)) return null;
   }
   const reviewClass = resolveReviewClass(node.review_class ?? "adversarial", scope, stateContent);
