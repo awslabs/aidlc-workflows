@@ -1747,9 +1747,7 @@ describe("t304 executable review brief scenarios", () => {
       expect(rendered, mode).toBe(expected);
       expect(rendered).toContain("**Stage:** Requirements Analysis");
       expect(rendered).toContain("**Confirming:** Consolidated answers in");
-      expect(rendered).toContain(
-        "**Why now:** All stage questions are answered",
-      );
+      expect(rendered).not.toContain("Why now");
       expect(rendered).toContain(
         "**Looks correct** - record this confirmation and generate",
       );
