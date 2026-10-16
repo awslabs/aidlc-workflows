@@ -50,7 +50,9 @@ The default heading set can be overridden two ways. **Precedence: a resolving
    `aidlc/spaces/<space>/memory/templates/<artifact>.md` (keyed by the output filename stem —
    artifact `X` writes to `X.md`). When one resolves for the output path, its
    `##` headings become the expected set and the sensor passes iff
-   `expected ⊆ output`; the missing headings are precise findings. Whole-doc,
+   `expected ⊆ output`; the missing headings are precise findings. A heading
+   matches with or without a leading emoji (`## 📌 Overview` is `## Overview`),
+   the same rule the claim-sources sensor reads headings by. Whole-doc,
    advisory — the human decides at the gate. The same file is the skeleton the
    agent fills (see the stage protocol § Template overrides), so the produced
    shape and the checked shape cannot drift. A template applies only to a
