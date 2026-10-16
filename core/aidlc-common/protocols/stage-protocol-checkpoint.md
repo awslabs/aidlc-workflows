@@ -65,9 +65,10 @@ options:
     description: Propose a different project check before running verification.
 ```
 
-Read the person's reply in that session and record the choice they made. The
+Read the person's reply and record the choice they made. The
 human-turn hook keeps that they replied to this question and their exact words;
-a reply from another session, or to another question, does not count. When they
+a reply typed in a new chat is kept for it while it is the newest question
+asked, and a reply to another question does not count. When they
 approve, record their answer, and set the command:
 
 ```bash

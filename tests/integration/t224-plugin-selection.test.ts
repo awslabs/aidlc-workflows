@@ -490,7 +490,69 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     // Nothing was recorded before, so --reset (every plugin on) is the undo.
     expect(result.stdout).toContain("config project --reset --yes");
     expect(JSON.parse(readFileSync(harnessPath(proj), "utf-8")).plugins).toEqual(["aidlc"]);
+    // What the plugin merged into core stages is out, as with plugin select.
+    const buildAndTest = readFileSync(join(proj, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), "utf-8");
+    expect(buildAndTest).not.toContain("<!-- plugin:test-pro:");
+    expect(buildAndTest).not.toContain("test-pro-regression-suite");
+    expect(existsSync(join(proj, ".claude", "tools", "data", "plugin-contrib-test-pro.json"))).toBe(false);
   });
+
+  // The order a person meets: config installs and records the project, the
+  // plugin composes at a session start, then config project turns it off.
+  // What it merged into core stages and personas goes, as with plugin select,
+  // with no line beyond the change and its undo; the undo brings it back at
+  // the next session start.
+  for (const harness of ["claude", "codex"] as const) {
+    test(`${harness}: config project turning a plugin off takes out what it merged, and its undo brings that back at the next session start`, () => {
+      const leaf = harness === "claude" ? ".claude" : ".codex";
+      const proj = join(tmp, `config-off-${harness}`);
+      const built = harness === "claude"
+        ? pluginBuilt
+        : buildPluginProjection(PLUGIN, harness, join(tmp, "plugin", harness));
+      const release = join(REPO_ROOT, "dist", harness);
+      mkdirSync(proj, { recursive: true });
+      const env = { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_HARNESS_DIR: leaf };
+      const run = (tool: string, args: string[]) => spawnSync(BUN, [tool, ...args], {
+        cwd: proj,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+        env,
+      });
+      const config = (...args: string[]) => run(join(proj, leaf, "tools", "aidlc.ts"), ["config", ...args]);
+      const installed = run(join(release, leaf, "tools", "aidlc.ts"), [
+        "config", "--from", release, "--harness", harness, "--project-dir", proj, "--yes",
+      ]);
+      expect(installed.status, `${installed.stdout}${installed.stderr}`).toBe(0);
+      composePluginFixture({ plugin: PLUGIN, harness, projectDir: proj, pluginBuilt: built, copyInstall: false });
+
+      const stage = join(proj, leaf, "aidlc-common", "stages", "construction", "build-and-test.md");
+      const persona = join(proj, leaf, "agents", "aidlc-quality-agent.md");
+      const twin = join(proj, leaf, "agents", "aidlc-quality-agent.toml");
+      const sidecar = join(proj, leaf, "tools", "data", "plugin-contrib-test-pro.json");
+      const merged = [stage, persona, ...(harness === "codex" ? [twin] : [])];
+      const composed = merged.map((path) => readFileSync(path, "utf-8"));
+      const composedSidecar = readFileSync(sidecar, "utf-8");
+      for (const text of composed) expect(text).toContain("<!-- plugin:test-pro:");
+
+      const off = config("project", "--plugins", "aidlc", "--yes");
+      expect(off.status, `${off.stdout}${off.stderr}`).toBe(0);
+      expect(off.stdout).toContain("config project --reset --yes");
+      expect(off.stdout).not.toContain("Stripped");
+      for (const path of merged) expect(readFileSync(path, "utf-8")).not.toContain("<!-- plugin:test-pro:");
+      expect(readFileSync(stage, "utf-8")).not.toContain("test-pro-regression-suite");
+      expect(existsSync(sidecar)).toBe(false);
+      const nodes = JSON.parse(readFileSync(join(proj, leaf, "tools", "data", "stage-graph.json"), "utf-8")) as GraphStage[];
+      const bat = nodes.find((s) => s.slug === "build-and-test");
+      expect(bat?.produces).not.toContain("test-pro-regression-suite");
+      expect(bat?.sensors ?? []).not.toContain("coverage-threshold");
+
+      const undo = config("project", "--reset", "--yes");
+      expect(undo.status, `${undo.stdout}${undo.stderr}`).toBe(0);
+      composePluginFixture({ plugin: PLUGIN, harness, projectDir: proj, pluginBuilt: built, copyInstall: false });
+      expect(merged.map((path) => readFileSync(path, "utf-8"))).toEqual(composed);
+      expect(readFileSync(sidecar, "utf-8")).toBe(composedSidecar);
+    });
+  }
 
   test("doctor flags a selection that already strands an active workflow", () => {
     const proj = join(tmp, "strand-doctor");

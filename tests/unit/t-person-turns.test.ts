@@ -18,6 +18,7 @@ import {
   unbackedTuiDecisions,
 } from "../harness/person-turns.ts";
 import { menuPick, reviewedPicks } from "../harness/tui-drive.ts";
+import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 
 const projects: string[] = [];
 const folders: string[] = [];
@@ -746,5 +747,69 @@ describe("person-turn check", () => {
     tamper(join(folder, ledger));
     expect(() => unbackedTuiDecisions(dir)).toThrow(says);
     expect(readdirSync(folder)).toEqual([]);
+  });
+});
+
+// The engine binds an answer to the message the agent names for a question it
+// logged after the reply (proveMessage in aidlc-log.ts); the ledger reads the
+// binding the same way.
+describe("an answer that names the person's message", () => {
+  // The store drops records older than a day as it saves one, so these rows run on a recent clock.
+  const base = Date.now() - 60 * 60_000;
+  let tick = 0;
+  const stamp = () => new Date(base + 1000 * tick++).toISOString().replace(/\.\d{3}Z$/, "Z");
+  function recent(dir: string, event: string, fields: Record<string, string> = {}): void {
+    const shard = seededAuditShard(dir);
+    mkdirSync(dirname(shard), { recursive: true });
+    const lines = Object.entries(fields).map(([name, value]) => `**${name}**: ${value}`);
+    appendFileSync(shard, [`## ${event}`, `**Timestamp**: ${stamp()}`, `**Event**: ${event}`, ...lines, "", "---", "", ""].join("\n"));
+  }
+  // The driver types `words` into `chat`; the human-turn hook keeps the message and writes its turn row.
+  function typed(dir: string, drive: PersonTurnLedger, words: string, chat = "chat-a"): string {
+    drive.sent(words);
+    const message = saveMessage(dir, {
+      session: chat, at: stamp(), source: "prompt", text: words, picker: null, words, settings: [],
+      route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+    });
+    recent(dir, "HUMAN_TURN", { Session: chat, Origin: "person", Source: "typed", "Message Id": message.id });
+    return message.id;
+  }
+  const question = (decision: string) => ({ Stage: "requirements-analysis", Decision: decision, Options: "A,B,X" });
+  const REPLY = "Keep it small: the greeting uses the name, and nothing else changes";
+
+  test("a typed reply backs the answer to a question the agent logged after it, when the answer names it", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    recent(dir, "DECISION_RECORDED", question("Q1: no name given"));
+    const id = typed(dir, drive, REPLY);
+    recent(dir, "DECISION_RECORDED", question("Q2: name handling"));
+    recent(dir, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: "Q1: A; Q2: A", "Message Id": id, "Person Reply": REPLY });
+    expect(drive.unbacked()).toEqual([]);
+  });
+
+  test("a message from another chat does not back it", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    recent(dir, "DECISION_RECORDED", question("Q1: no name given"));
+    const id = typed(dir, drive, REPLY, "chat-b");
+    typed(dir, drive, "what does Q1 mean?");
+    recent(dir, "DECISION_RECORDED", question("Q2: name handling"));
+    recent(dir, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: "Q1: A; Q2: A", "Message Id": id });
+    const problems = drive.unbacked();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("QUESTION_ANSWERED requirements-analysis");
+  });
+
+  test("a message an approval spent does not back it", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    recent(dir, "STAGE_AWAITING_APPROVAL", { Stage: "reverse-engineering" });
+    const id = typed(dir, drive, "Approve");
+    recent(dir, "GATE_APPROVED", { Stage: "reverse-engineering", "User Input": "Approve", "Message Id": id });
+    recent(dir, "DECISION_RECORDED", question("Q1: no name given"));
+    recent(dir, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: "Q1: A", "Message Id": id });
+    const problems = drive.unbacked();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("QUESTION_ANSWERED requirements-analysis");
   });
 });

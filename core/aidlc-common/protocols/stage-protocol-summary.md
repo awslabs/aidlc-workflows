@@ -7,8 +7,8 @@ Load this module when the engine lists `summary` in `directive.protocol_modules`
   `bun {{HARNESS_DIR}}/tools/aidlc-review-brief.ts summary --stage "<directive.stage>" --questions-file "<questions-path>"`;
   add `--unit "<directive.unit>"` on a per-unit stage. Print its compact
   decision brief verbatim before presenting this structured question. The brief
-  names the stage, the questions file and artifacts being confirmed, why
-  confirmation is required now, and the exact effect of both choices:
+  names the stage, the questions file and artifacts being confirmed, and the
+  exact effect of both choices:
   ```question
   prompt: "Does this all look correct before I generate the artifact?"
   header: Confirm

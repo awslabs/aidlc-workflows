@@ -2240,7 +2240,8 @@ export function renderSummaryConfirmationBrief(
       `Summary confirmation questions file must exist inside the active intent record: ${questionsFile}`,
     );
   }
-  const entries = reviewArtifactEntries(projectDir, stage, unit) ?? [];
+  // The questions file is what the person confirms, never one of the files made from it.
+  const entries = (reviewArtifactEntries(projectDir, stage, unit) ?? []).filter((entry) => !entry.summaryInput);
   const artifacts = entries.map((entry) =>
     `\`${workspaceArtifactPath(projectDir, entry)}\``
   );
@@ -2251,7 +2252,6 @@ export function renderSummaryConfirmationBrief(
   return [
     `**Stage:** ${stage.name}`,
     `**Confirming:** Consolidated answers in \`${questions}\` before generating ${generated}.`,
-    "**Why now:** All stage questions are answered; artifact generation will use this confirmed summary.",
     "**Decision options:**",
     "- **Looks correct** - record this confirmation and generate the named artifacts.",
     "- **Request changes** - nothing is generated yet; say what to change in your answers, and they are updated first.",

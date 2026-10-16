@@ -314,7 +314,8 @@ recovery protocol's Session resume says, never as Request Changes.
   feedback; pass `--reason` only to add your own summary beside them. Ask
   "What should change?" only when they did not say.
 - **They asked a question:** answer it and end the turn. Their next reply
-  decides.
+  decides. When the same reply also answered a question you record, add
+  `--ends-turn` to that `log answer`.
 - **Their intent is genuinely unclear:** ask one short question, as a colleague
   would, and end the turn.
 - **Their words on a command line:** where the engine keeps their words (a

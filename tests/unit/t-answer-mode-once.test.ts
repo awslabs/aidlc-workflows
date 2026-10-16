@@ -278,7 +278,7 @@ describe("answer mode across a piece of work", () => {
     expect(runStageAnswerMode(proj)).toMatchObject({ ask: true, mode: null });
   });
 
-  test("--question-kind takes only answer-mode, and says so", () => {
+  test("--question-kind takes only its own kinds, and says so", () => {
     const { proj, state } = project();
     const first = currentStage(state);
     const refused = run(LOG, [
@@ -289,6 +289,7 @@ describe("answer mode across a piece of work", () => {
     const message = String((JSON.parse(line ?? "{}") as { error?: string }).error ?? "");
     expect(message).toContain('--question-kind "database"');
     expect(message).toContain('"answer-mode"');
+    expect(message).toContain('"learnings-note"');
     expect(readAuditShardEvents(proj).some((entry) => entry.event === "DECISION_RECORDED")).toBe(false);
   });
 

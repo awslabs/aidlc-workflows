@@ -629,6 +629,16 @@ export function buildPluginProjection(
         )}\n`,
       );
 
+      // The plugin's own manifest travels with every projection, because
+      // plugin sync reads the base it builds on from there. A host manifest
+      // cannot carry it: Claude Code reads a `dependencies` key there as host
+      // plugins to enable.
+      mkdirSync(join(outDir, ".aidlc-plugin"), { recursive: true });
+      cpSync(
+        join(pluginRoot, ".aidlc-plugin", "plugin.json"),
+        join(outDir, ".aidlc-plugin", "plugin.json"),
+      );
+
       const hostManifestDir = join(outDir, options.target.manifestDir);
       mkdirSync(hostManifestDir, { recursive: true });
       writeFileSync(

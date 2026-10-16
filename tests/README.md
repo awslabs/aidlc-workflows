@@ -285,7 +285,8 @@ but still requires successful tests before reporting that intentional skip.
 
 Live matrices use bounded, duration-balanced shards on the existing platforms: two
 Claude SDK (five on Linux, which alone runs the golden journeys and the answers
-corpus), three Claude TUI, one Codex, one Copilot and one opencode shard per OS (**27 live jobs**). Linux allows four
+corpus), three Claude TUI, one Codex (two on Linux and Windows, for the Codex golden
+journey), one Copilot and one opencode shard per OS (**29 live jobs**). Linux allows four
 concurrent live jobs, macOS two and Windows three. Each shard uses up to two
 isolated file workers; Windows Codex files remain serial. A worker starts each
 file/attempt from the original checkout snapshot and fresh home, temporary

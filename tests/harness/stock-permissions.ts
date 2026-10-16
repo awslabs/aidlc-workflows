@@ -1,9 +1,9 @@
 // stock-permissions.ts - what a person on stock settings is asked during a live drive.
 //
 // AI-DLC ships what its own commands need: Claude Code allow rules
-// (dist/claude/.claude/settings.json) and Codex prefix rules beside its
+// (dist/claude/.claude/settings.json), Codex prefix rules beside its
 // workspace-write sandbox (dist/codex/.codex/rules/default.rules,
-// .codex/config.toml). A person who keeps those settings is asked only about
+// .codex/config.toml) and opencode's permission table (dist/opencode/opencode.json). A person who keeps those settings is asked only about
 // their own project's commands. So a permission request for AI-DLC's own
 // command or record, a write outside the project, or a Codex sandbox refusal of
 // AI-DLC's own command is a break the person meets; any other request (the
@@ -27,7 +27,7 @@ export interface StockPermissionReport {
 const WRITE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const PATH_KEYS = ["file_path", "notebook_path", "path"] as const;
 
-/** A path in `text` that is, or starts with, AI-DLC's records folder or the harness folder (`.claude`, `.codex`). */
+/** A path in `text` that is, or starts with, AI-DLC's records folder or the harness folder (`.claude`, `.codex`, `.aidlc`). */
 function namesAidlc(text: string, harnessDir: string): boolean {
   const folder = harnessDir.replace(".", "\\.");
   return new RegExp(`(?:^|[\\s'"=(:/\\\\])(?:${folder}|aidlc)(?:[/\\\\\\s'")]|$)`).test(text);
@@ -86,6 +86,33 @@ export function codexSandboxProblems(stdout: string): StockPermissionReport {
     if (refusal === undefined) continue;
     const said = `${command} (${refusal.trim().slice(0, 200)})`;
     if (namesAidlc(command, ".codex")) report.problems.push(`the sandbox refused AI-DLC's own command: ${said}`);
+    else report.listed.push(said);
+  }
+  return report;
+}
+
+// What `opencode run` (1.18) says when the shipped table asks: with no one to
+// ask, it refuses the call.
+const OPENCODE_REJECTED = /rejected permission/i;
+
+/** The calls opencode refused in one `opencode run --format json` turn, AI-DLC's own split from the rest. */
+export function opencodePermissionProblems(stdout: string): StockPermissionReport {
+  const report: StockPermissionReport = { problems: [], listed: [] };
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("{")) continue;
+    let event: { type?: unknown; part?: { tool?: unknown; state?: { status?: unknown; input?: Record<string, unknown>; error?: unknown } } };
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const state = event.part?.state;
+    if (event.type !== "tool_use" || state?.status !== "error" || !OPENCODE_REJECTED.test(String(state.error ?? ""))) continue;
+    const input = state.input ?? {};
+    const target = ["command", "filePath", "path"].map((key) => input[key]).find((value): value is string => typeof value === "string") ??
+      JSON.stringify(input);
+    const said = `${String(event.part?.tool)} ${JSON.stringify(target)}`;
+    if (namesAidlc(target, ".aidlc")) report.problems.push(`opencode refused AI-DLC's own call on the shipped permissions: ${said}`);
     else report.listed.push(said);
   }
   return report;

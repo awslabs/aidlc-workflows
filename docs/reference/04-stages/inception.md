@@ -1273,10 +1273,10 @@ All Inception phase artifacts:
    `--checkpoint verification-command --command-file verification-command.txt`
    and find the session they run in.
    Record the decision before asking and wait for the human's **Approve** /
-   **Request Changes** reply in that session. Record the answer with the same
-   stage/checkpoint/command/session; only **Approve** authorizes the receipt.
-   An unrelated reply, **Request Changes**, or a reply from another session does
-   not. Never write `--details "Approve"` unless the human chose it; only then run
+   **Request Changes** reply, in that chat or a new one while it is the newest
+   question asked. Record the answer with the same stage/checkpoint/command;
+   only **Approve** authorizes the receipt. An unrelated reply, **Request
+   Changes**, or a reply to another question does not. Never write `--details "Approve"` unless the human chose it; only then run
    `state set-construction-verification-command --command-file verification-command.txt`. **Request Changes** means
    propose another command. The receipt must precede the state field; never use
    generic `state set` or auto-approve. This command is reused for all Unit/batch

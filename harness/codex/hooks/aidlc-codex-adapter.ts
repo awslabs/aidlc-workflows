@@ -68,11 +68,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import {
+  collectHookOutput,
   emptyPickerResult,
   isNonAnswer,
   noteHelperSession,
+  runHookHere,
   sessionsDir,
   stateFilePath,
   validSessionId,
@@ -240,11 +242,13 @@ if (payloadSessionId) {
   const ownThread = typeof codex.agent_id === "string" ? codex.agent_id : rolloutThread(codex.transcript_path);
   if (ownThread !== null) noteHelperSession(projectDir, payloadSessionId, ownThread);
 }
-const projectEnv = {
-  ...process.env,
+// What a core hook is given on top of this process's environment, as a child
+// or (runCoreHere) while it runs here.
+const projectPins = {
   AIDLC_PROJECT_DIR: projectDir,
   CLAUDE_PROJECT_DIR: projectDir,
 };
+const projectEnv = { ...process.env, ...projectPins };
 
 // --- Duplicate-delivery replay cache ---------------------------------------
 //
@@ -413,62 +417,18 @@ function runCoreWithStderr(
   };
 }
 
-// The core hooks that run on every shell call run INSIDE this process. A child
-// `aidlc engine hook` loaded the whole engine a second time for each of them,
-// and Codex starts every matching handler at once, so one `ls` cost nine engine
-// loads (#2066). The hook module is imported from beside this file (the packaged
-// runtime under the compiled engine, the project copy under the Bun channel),
-// the project is pinned the way the child saw it, and its run(input) is called
-// with stdout and stderr collected as the child's pipes collected them. A hook
-// that cannot be imported or exports no run() runs as a child as before.
+// The core hooks that run on every shell call run INSIDE this process
+// (runHookHere): a child `aidlc engine hook` loads the whole engine a second
+// time for each of them, and Codex starts every matching handler at once. The
+// hook module is imported from beside this file (the packaged runtime under
+// the compiled engine, the project copy under the Bun channel). A hook that
+// cannot be imported or exports no run() runs as a child as before.
 async function runCoreHere(
   hookFile: string,
   input: string,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  let mod: { run?: unknown };
-  try {
-    mod = (await import(pathToFileURL(join(HOOKS_DIR, hookFile)).href)) as { run?: unknown };
-  } catch {
-    return runCoreWithStderr(hookFile, input);
-  }
-  if (typeof mod.run !== "function") return runCoreWithStderr(hookFile, input);
-  const hookRun = mod.run as (input: string) => number | Promise<number>;
-  process.env.AIDLC_PROJECT_DIR = projectDir;
-  process.env.CLAUDE_PROJECT_DIR = projectDir;
-  return await collectOutput(() => hookRun(input));
-}
-
-// Run one step with its stdout and stderr collected instead of written. A step
-// that throws fails alone: code 1 with the error text, as its own crashed
-// process would have ended, and never a refusal.
-async function collectOutput(
-  step: () => number | Promise<number>,
-): Promise<{ stdout: string; stderr: string; code: number }> {
-  const out: string[] = [];
-  const err: string[] = [];
-  const stdoutWrite = process.stdout.write;
-  const stderrWrite = process.stderr.write;
-  const text = (chunk: unknown): string =>
-    typeof chunk === "string" ? chunk : Buffer.from(chunk as Uint8Array).toString("utf-8");
-  process.stdout.write = ((chunk: unknown) => {
-    out.push(text(chunk));
-    return true;
-  }) as typeof process.stdout.write;
-  process.stderr.write = ((chunk: unknown) => {
-    err.push(text(chunk));
-    return true;
-  }) as typeof process.stderr.write;
-  let code: number;
-  try {
-    code = await step();
-  } catch (error) {
-    err.push(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
-    code = 1;
-  } finally {
-    process.stdout.write = stdoutWrite;
-    process.stderr.write = stderrWrite;
-  }
-  return { stdout: out.join(""), stderr: err.join(""), code };
+  return (await runHookHere(join(HOOKS_DIR, hookFile), input, projectPins)) ??
+    runCoreWithStderr(hookFile, input);
 }
 
 // Re-wrap the core context output ({"additionalContext": ...}) into the
@@ -897,7 +857,7 @@ switch (target) {
     let allowed = "";
     const refusals: string[] = [];
     for (const member of members) {
-      const said = await collectOutput(() => run(member, rawInput, _extraArgs));
+      const said = await collectHookOutput(() => run(member, rawInput, _extraArgs));
       if (said.code === 2) {
         code = 2;
         if (said.stderr && !refusals.includes(said.stderr)) refusals.push(said.stderr);

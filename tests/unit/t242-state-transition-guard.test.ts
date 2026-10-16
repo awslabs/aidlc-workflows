@@ -1350,7 +1350,7 @@ describe("t242 state-transition ownership guard", () => {
     // Presenting a gate spends them, through the engine's own transition.
     const state = (args: string[]) => spawnSync(process.execPath, [STATE, ...args, "--project-dir", project], {
       encoding: "utf-8",
-      env: { ...unownedEnv(), AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", AIDLC_SKIP_ARTIFACT_GUARD: "1" },
+      env: { ...unownedEnv(), AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", AIDLC_SKIP_ARTIFACT_GUARD: "1", AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1" },
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     const slug = (state(["get", "Current Stage"]).stdout ?? "").trim();

@@ -1031,7 +1031,7 @@ To add artifact assertions to an existing e2e workflow test under `tests/e2e/`:
 | `AIDLC_INPUT_SEED` | `1` | Seed of the live input check's sample, so a re-run drives the same items. |
 | `AIDLC_ANSWERS_LIVE` | unset | Set to `1` to drive a sample of the answers corpus through real agents (`tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts`); each harness keeps its own gate (`AIDLC_CODEX_EXEC_LIVE`, `AIDLC_KIRO_ACP_LIVE`, the `claude` binary). |
 | `AIDLC_ANSWERS_HARNESSES` | `claude,codex,kiro` | Which agents the live answers check drives. |
-| `AIDLC_ANSWERS_SAMPLE` | `2` | Items per question for the live answers check, or a comma list of item ids. The pool is the replies a fresh chat can meet: a question the agent asked in chat (a stage question, learnings) is not shown again by a bare `/aidlc`, so only its replies typed with `/aidlc` are driven, as the whole exchange; a verification command or Construction policy answer is recorded only from the chat that asked it, and guard recovery's fixture cannot be met, so those are read by the unit check only (`liveReply` in `tests/harness/aidlc-answers-corpus.ts`). |
+| `AIDLC_ANSWERS_SAMPLE` | `2` | Items per question for the live answers check, or a comma list of item ids. The pool is the replies a fresh chat can meet: a bare `/aidlc` shows again a question the agent asked in chat with no step of its own, so every reply to a Construction policy question is driven; a stage question and learnings keep to their replies typed with `/aidlc` while the drive cannot judge the agent's words after a chat reply; the verification command comes back at its own checkpoint step, which the fixture does not reach, so only its replies typed with `/aidlc` are driven, as the whole exchange; guard recovery's fixture cannot be met, so it is read by the unit check only (`liveReply` in `tests/harness/aidlc-answers-corpus.ts`). |
 | `AIDLC_ANSWERS_SEED` | `1` | Seed of the live answers check's sample, so a re-run drives the same items. |
 | `AIDLC_ANSWERS_REPORT_DIR` | `aidlc-answers-live` in the run's log folder (`AIDLC_TEST_LOG_DIR`, else `tests/logs`) | Where the live answers check writes its report, its transcripts and the summary the nightly report reads. |
 | `AIDLC_INPUT_REPORT_DIR` | `tests/logs/aidlc-input-live` | Where the live input check writes its report (a score per category and every miss with its transcript excerpt). |
@@ -1744,7 +1744,16 @@ The declared coverage is:
   is what a person does on day one: set up through the copy channel, doctor, the
   documented first step, the plan question, and Reverse Engineering approved, with a
   message record for every line typed; a second case leaves the folder untrusted
-  and requires doctor to name the trust fix.
+  and requires doctor to name the trust fix. Codex's golden journey
+  (`tests/e2e/t-exec-codex-journey-golden-bugfix.serial.test.ts`, Linux and
+  Windows) fixes the same greeter from the first line to Code Generation approved,
+  with the plan question left for the day and approved in a new session; Copilot's
+  (`tests/e2e/t-exec-copilot-journey-golden-bugfix.serial.test.ts`, Linux only:
+  on Windows it runs past the 25 minutes a retry allows) does the same on the
+  copy-channel install of its release journey. opencode's
+  (`tests/e2e/t-run-opencode-journey-golden-change.serial.test.ts`, Linux) takes the
+  same request to Reverse Engineering, where the person asks for one change in
+  their own words and approves the revision, on the shipped permission table.
 - Kiro ACP, TUI and IDE are declared exclusions pending a dedicated isolated
   Windows desktop host; local live runs remain their coverage path.
 - Cursor is excluded: no credential separation is available because its vendor
@@ -1757,8 +1766,9 @@ linux`, `--matrix macos` and `--matrix windows` as the dynamic matrices of the
 `live_linux`, `live_macos` and `live_windows` jobs. Each row's `shard: N/M`
 selects a duration-balanced group for its family/platform. Each OS has two Claude
 SDK (five on Linux, which alone runs the golden journeys and the answers corpus,
-the corpus on a shard of its own), three Claude TUI, one Codex, one Copilot and one
-opencode shard: 27 live harness jobs in all. Timing weights in
+the corpus on a shard of its own), three Claude TUI, one Codex (two on Linux and
+Windows, where the Codex golden journey runs), one Copilot and one opencode shard:
+29 live harness jobs in all. Timing weights in
 `tests/live-shard-weights.json` are scheduling hints;
 discovery still assigns every eligible file exactly once per platform. Each OS
 has its own concurrency cap: four Linux, two macOS and three Windows live jobs.

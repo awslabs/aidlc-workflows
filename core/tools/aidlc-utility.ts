@@ -364,6 +364,11 @@ import {
   inspectSubagentInflight,
   harnessDataPath,
   pluginsEnabled,
+  pluginsSelected,
+  pausedPlugins,
+  pausedBySelection,
+  pausedLine,
+  composedPluginBase,
   projectDescriptionFilePath,
   PROJECT_DESCRIPTION_FILE,
   scalarField,
@@ -1402,6 +1407,19 @@ function stripDisabledPluginContributions(
   return stripped;
 }
 
+// The one turn-off rule, run in the staged tree a selection is built in by
+// plugin select and by every config refresh: a plugin that tree's selection
+// leaves off or pauses keeps nothing it merged into core stages and personas,
+// nor its record of it, so its compose merges it back once it is on again.
+// The implicit core plugin merges nothing.
+export function stripPluginsTurnedOff(): string[] {
+  const active = pluginsEnabled();
+  if (active === null) return [];
+  return stripDisabledPluginContributions(
+    knownPluginNames().filter((name) => name !== "aidlc" && !active.has(name)),
+  );
+}
+
 // A selection change must not strand a live workflow: after disable, a state
 // file whose Scope belongs to a disabled plugin makes every later /aidlc on
 // that workflow hard-error ("Unknown scope") with no in-band way out (the
@@ -1480,7 +1498,7 @@ export function activeWorkflowPluginDependencies(
 
 function handleSelectPlugins(projectDir: string, positional: string[]): void {
   if (positional.length === 1) {
-    const selection = renderPluginSelection(pluginsEnabled());
+    const selection = renderPluginSelection(pluginsSelected());
     process.stdout.write(
       `Current plugin selection: ${selection}\nKnown plugins: ${knownPluginNames().join(", ")}\n`,
     );
@@ -1507,22 +1525,29 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
     if (unknown.length > 0) {
       die(`Unknown plugin name(s): ${unknown.join(", ")}. Valid plugins: ${known.join(", ")}.`);
     }
-    const violations = activeWorkflowDependencyViolations(projectDir, new Set(names));
+    // A plugin kept in the list whose base is left out is paused: off for
+    // everything that runs, still in the person's list.
+    const nameSet = new Set(names);
+    const pausedBefore = pausedPlugins();
+    const pausedAfter = pausedBySelection(nameSet, (plugin) => composedPluginBase(dirname(harnessDataPath()), plugin));
+    const active = new Set(names.filter((name) => !pausedAfter.has(name)));
+    const violations = activeWorkflowDependencyViolations(projectDir, active);
     if (violations.length > 0) {
+      const pausedWhy = [...pausedAfter]
+        .filter(([plugin]) => violations.some((v) => v.includes(`plugin "${plugin}"`)))
+        .map(([plugin, base]) => `  ${plugin} would be paused: ${plugin} builds on ${base}, which this selection leaves off.\n`)
+        .join("");
       die(
         `select-plugins refused: the new selection would strand ${violations.length} active workflow dependency(ies):\n` +
           violations.map((v) => `  - ${v}`).join("\n") +
+          (pausedWhy ? `\n${pausedWhy.trimEnd()}` : "") +
           `\nComplete or archive the workflow(s) first (\`${entrySkillInvocation()} intent archive <name>\`; a parked workflow ` +
           "still needs its plugin when it resumes), or keep the plugin enabled, then re-run select-plugins.",
       );
     }
 
-    const previousSelection = renderPluginSelection(pluginsEnabled());
+    const previousSelection = renderPluginSelection(pluginsSelected());
     const newSelection = names.join(", ");
-    const nameSet = new Set(names);
-    // Plugins this change DISABLES (known but not selected; the implicit core
-    // plugin has no composed contributions to strip).
-    const disabling = known.filter((n) => n !== "aidlc" && !nameSet.has(n));
 
     const stagingRoot = mkdtempSync(join(tmpdir(), "aidlc-plugin-select-"));
     const stagedProject = join(stagingRoot, "project");
@@ -1543,10 +1568,11 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
         process.env.AIDLC_HARNESS_DIR = selectedHarness;
         process.env.AIDLC_RUNTIME_HARNESS_ROOT = join(stagedProject, selectedHarness);
         resetSelectionSensitiveCaches();
-        // Strip disabled contributions in staging before recompiling. The live
-        // project remains byte-untouched until the shared transaction commits.
-        strippedPlugins = stripDisabledPluginContributions(disabling);
+        // Strip what the new selection turns off in staging before recompiling.
+        // The live project remains byte-untouched until the shared transaction
+        // commits.
         writePluginSelection(stagedProject, names);
+        strippedPlugins = stripPluginsTurnedOff();
         regenerateSelectionSurfaces(stagedProject, projectDir);
       } finally {
         for (const key of envKeys) {
@@ -1570,12 +1596,25 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
         },
       });
       resetSelectionSensitiveCaches();
-      if (strippedPlugins.length > 0) {
+      // A paused plugin is stripped too, but it comes back when its base is on
+      // again, not when it is: its pause line says so.
+      const strippedOff = strippedPlugins.filter((plugin) => !pausedAfter.has(plugin));
+      if (strippedOff.length > 0) {
         process.stdout.write(
-          `Stripped merged contributions of disabled plugin(s): ${strippedPlugins.join(", ")} (re-enabling restores them on the next session start)\n`,
+          `Stripped merged contributions of disabled plugin(s): ${strippedOff.join(", ")} (re-enabling restores them on the next session start)\n`,
         );
       }
       process.stdout.write(`Enabled plugins: ${names.join(", ")}\n`);
+      // Said once: at the select that pauses a plugin, never again after.
+      for (const [plugin, base] of pausedAfter) {
+        if (pausedBefore.get(plugin) === base) continue;
+        const rest = names.filter((name) => name !== plugin);
+        process.stdout.write(`${pausedLine(
+          plugin,
+          base,
+          rest.length > 0 ? `${entrySkillInvocation()} plugin select ${rest.join(",")}` : null,
+        )}\n`);
+      }
     } catch (err) {
       resetSelectionSensitiveCaches();
       die(`select-plugins failed: ${errorMessage(err)}`);
@@ -1585,16 +1624,18 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
   }, undefined, undefined, WORKSPACE_MUTATION_LOCK_RETRIES);
 }
 
-function pluginListRows(): Array<{ name: string; enabled: boolean }> {
-  const selected = pluginsEnabled();
+function pluginListRows(): Array<{ name: string; enabled: boolean; pausedFor?: string }> {
+  const active = pluginsEnabled();
+  const paused = pausedPlugins();
   return knownPluginNames().map((name) => ({
     name,
-    enabled: selected === null || selected.has(name),
+    enabled: active === null || active.has(name),
+    ...(paused.has(name) ? { pausedFor: paused.get(name) } : {}),
   }));
 }
 
 function handlePluginList(flags: Record<string, string>): void {
-  const selected = pluginsEnabled();
+  const selected = pluginsSelected();
   const rows = pluginListRows();
   if (flags.json === "true") {
     process.stdout.write(
@@ -1608,7 +1649,11 @@ function handlePluginList(flags: Record<string, string>): void {
 
   process.stdout.write(
     `Plugin selection: ${renderPluginSelection(selected)}\n` +
-      rows.map((row) => `${row.name} ${row.enabled ? "enabled" : "disabled"}`).join("\n") +
+      rows.map((row) =>
+        row.pausedFor
+          ? `${row.name} paused: needs ${row.pausedFor}, which is off`
+          : `${row.name} ${row.enabled ? "enabled" : "disabled"}`
+      ).join("\n") +
       (rows.length > 0 ? "\n" : ""),
   );
 }
@@ -3354,12 +3399,15 @@ function kiroPluginSelection(root: string): ReadonlySet<string> | null {
   try {
     const value = JSON.parse(text) as Record<string, unknown>;
     if (!value || typeof value !== "object" || !Array.isArray(value.plugins)) return null;
-    return new Set(
+    const selected = new Set(
       value.plugins
         .filter((name): name is string => typeof name === "string")
         .map((name) => name.trim())
         .filter((name) => name.length > 0),
     );
+    // A paused plugin reads as off, as everywhere else that runs.
+    const paused = pausedBySelection(selected, (plugin) => composedPluginBase(join(root, "tools", "data"), plugin));
+    return new Set([...selected].filter((name) => !paused.has(name)));
   } catch {
     return null;
   }
@@ -4866,7 +4914,7 @@ export async function collectDoctorReport(
         : `Plugin selection flags: ${disagreements.length} disagreement(s)`,
       fix: disagreements.length > 0
         ? `${disagreements.join("; ")} - run \`${aidlcDispatcherInvocation("plugin select")} ${
-            selected === null ? knownPluginNames().join(",") : [...selected].sort().join(",")
+            [...(pluginsSelected() ?? knownPluginNames())].sort().join(",")
           }\` to recover`
         : undefined,
     });

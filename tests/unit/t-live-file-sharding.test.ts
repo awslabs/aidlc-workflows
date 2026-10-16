@@ -148,16 +148,17 @@ describe("bounded live file sharding", () => {
 
   test("the live matrix stays bounded as files accumulate", () => {
     expect(LIVE_SHARD_COUNTS).toEqual({ "claude-sdk": 2, "claude-tui": 3, codex: 1, copilot: 1, opencode: 1, "release-contract": 1 });
-    expect(LIVE_PLATFORM_SHARD_COUNTS).toEqual({ "claude-sdk": { linux: 5 } });
-    expect(kinds.flatMap(kind => liveMatrix(kind).include).filter(row => row.family !== "release-contract")).toHaveLength(27);
+    expect(LIVE_PLATFORM_SHARD_COUNTS).toEqual({ "claude-sdk": { linux: 5 }, codex: { linux: 2, win32: 2 } });
+    expect(kinds.flatMap(kind => liveMatrix(kind).include).filter(row => row.family !== "release-contract")).toHaveLength(29);
     expect(selectedLiveFiles("claude-sdk", "linux", "2/5").length).toBeGreaterThan(1);
-    expect(selectedLiveFiles("codex", "linux", "1/1")).toHaveLength(6);
+    expect(["1/2", "2/2"].flatMap((shard) => selectedLiveFiles("codex", "linux", shard))).toHaveLength(7);
+    expect(selectedLiveFiles("codex", "darwin", "1/1")).toHaveLength(6);
     const file = selectedLiveFiles("claude-sdk", "linux", "3/5")[0];
     expect(() => selectedLiveFiles("claude-sdk", "linux", "2/5", file)).toThrow("outside the selected shard");
   });
 
   test("malformed, out-of-range, unsafe, and stale shard totals are rejected", () => {
-    const total = LIVE_SHARD_COUNTS.codex!;
+    const total = liveShardCount("codex", "linux");
     for (const shard of [
       "", "1", "1/2/3", "1.0/2", "1e0/2", "-1/2", "+1/2", "0/2", "1/0",
       `01/${total}`, `1/0${total}`, ` 1/${total}`, `1/${total} `, `1/${total}\n`,
@@ -301,7 +302,7 @@ describe("bounded live file sharding", () => {
   });
 
   test("sandbox forwards optional shards as individual arguments with two workers", () => {
-    const total = LIVE_SHARD_COUNTS.codex!;
+    const total = liveShardCount("codex", "linux");
     const shard = `1/${total}`;
     const prefix = [process.execPath, "scripts/ci-live-filter.ts", "codex", "--platform", "linux"];
     expect(sandboxCommand("codex", "linux")).toEqual([...prefix, "--run", "--", "--debug", "-P", "2"]);

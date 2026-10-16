@@ -1888,6 +1888,10 @@ engine proves the record exists, came through this chat, and is not spent by a
 later approval or decision, and reads none of its words; the answer is recorded
 and the person is not asked again. A refused answer names the id when such a
 message exists. The id is engine-to-agent text and is never shown to the person.
+When the answer is recorded for questions logged after that message, the output
+carries `say`, one line for the person naming those questions and the answer as
+recorded, and an `agent_note`: the agent tells them the line once, unless it
+showed them those questions before they replied.
 See [Hooks and Tools](../reference/06-hooks-and-tools.md#read-only-audit-commands) for pairing rules, ordering, and filters.
 
 ### `aidlc engine bolt set-autonomy` - change Construction approvals
@@ -2021,9 +2025,10 @@ preserve any backticks in the command. The human can also open
 `<record>/verification-command.txt`.
 
 
-Wait for the human's **Approve** / **Request Changes** reply in that
-session. Only **Approve** authorizes the receipt; an unrelated reply,
-**Request Changes**, or a reply from another session does not. Never write
+Wait for the human's **Approve** / **Request Changes** reply, in that chat
+or a new one while it is the newest question asked. Only **Approve** authorizes
+the receipt; an unrelated reply, **Request Changes**, or a reply to another
+question does not. Never write
 `--details "Approve"` unless the human chose it. Only then run:
 
 ```bash
@@ -2154,9 +2159,11 @@ So is `check_offer`, when a stage's review passes are spent and its reviewed wor
 changed after the last review: "Do you want me to have the new approach checked
 before you decide?"
 
-Wait for the human's **Approve** / **Request Changes** reply in that
-session, to this checkpoint question. It authorizes only the matching action;
-an unrelated reply, another session's reply, or a reply to a different question
+Wait for the human's **Approve** / **Request Changes** reply to this checkpoint
+question, in that chat or a new one: with no question of its own, a new chat's
+reply is kept for the checkpoint question another chat asked, while it is the
+newest question asked and still open. It authorizes only the matching action;
+an unrelated reply, the agent's own words, or a reply to a different question
 does not. Never pass `--user-input` the human did not choose. Run only the action
 they chose:
 
@@ -2267,9 +2274,11 @@ complete canonical `command` from the verification-command tool output into a
 code span without abbreviation, preserving any backticks with a longer delimiter.
 
 
-Wait for the human's **Approve** / **Request Changes** reply in that
-session, to this checkpoint question. It authorizes only the matching action;
-an unrelated reply, another session's reply, or a reply to a different question
+Wait for the human's **Approve** / **Request Changes** reply to this checkpoint
+question, in that chat or a new one: with no question of its own, a new chat's
+reply is kept for the checkpoint question another chat asked, while it is the
+newest question asked and still open. It authorizes only the matching action;
+an unrelated reply, the agent's own words, or a reply to a different question
 does not. Never pass `--user-input` the human did not choose. Run only the action
 they chose:
 
@@ -2757,11 +2766,20 @@ bun .claude/tools/aidlc-utility.ts select-plugins test-pro
 bun .claude/tools/aidlc-utility.ts select-plugins aidlc,test-pro
 ```
 
-The command validates names, writes `.claude/tools/data/harness.json`, strips a newly disabled plugin's merged contributions from core stage source (structural adds via the compose-written sidecar, spliced prose via its sentinel markers; re-enabling restores them on the next session start), recompiles the full graph with disabled nodes marked `enabled:false`, prunes/regenerates stage and scope runners, and refreshes the generated scope and stage tables (`tables.md`, beside the orchestrator skill) in one transaction. `aidlc` is core; omitting it disables core surfaces except the always-on Initialization stages. A change that would strand an active workflow (its scope, or a pending EXECUTE stage in its plan, owned by a plugin the new selection disables) is refused with each dependency named - complete or archive the workflow first (a parked workflow still needs its plugin when it resumes), or keep the plugin enabled.
+The command validates names, writes `.claude/tools/data/harness.json`, strips a newly disabled plugin's merged contributions from core stage source (structural adds via the compose-written sidecar, spliced prose via its sentinel markers; re-enabling restores them on the next session start), recompiles the full graph with disabled nodes marked `enabled:false`, prunes/regenerates stage and scope runners, and refreshes the generated scope and stage tables (`tables.md`, beside the orchestrator skill) in one transaction. `aidlc` is core; omitting it disables core surfaces except the always-on Initialization stages. A change that would strand an active workflow (its scope, or a pending EXECUTE stage in its plan, owned by a plugin the new selection disables) is refused with each dependency named - complete or archive the workflow first (a parked workflow still needs its plugin when it resumes), or keep the plugin enabled. Leaving a base plugin out while keeping a plugin built on it pauses that plugin: the list is written as typed, one line says so once with the command that turns the plugin off as well, nothing the plugin adds runs while its base is off, `plugin list` shows it as `paused`, and turning the base back on brings it back at the next session start.
 
 `/aidlc plugin sync` (`aidlc engine plugin sync`) runs installed plugin compose
 hooks from the host's plugin inventory, and prints `plugin sync complete: <n>
-plugin(s)` when it is done. It is safe to run repeatedly. An inventory with an
+plugin(s)` when it is done. It is safe to run repeatedly. It composes base
+plugins first, then the plugins built on them (a plugin builds on core and at
+most one base, named in its manifest's `dependencies`). A plugin it cannot
+compose on its base (not installed, outside the plugin's version range, built
+on another plugin, or two bases named) is held: sync says why once, in one line
+after the complete line, composes every other plugin and exits 0, and `--json`
+lists it in `data.held`. `aidlc engine plugin list` and doctor keep the line
+until a sync composes it; a held plugin composed before stays as it was. On a
+host whose session-start hook names only its own plugin, the hook composes that
+plugin's installed base first. An inventory with an
 invalid entry, or a plugin root with no `hooks/compose.ts`, refuses the whole
 sync and names what is wrong, so nothing is half composed. Where the host keeps
 no plugin inventory to read, it says so and stops; in a native Claude Code

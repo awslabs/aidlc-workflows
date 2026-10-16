@@ -98,18 +98,22 @@ const TARGETS = [
   "continue-workflow",
 ];
 
-/** A recording stub: append stdin to <capture>/<hook>.jsonl, exit `exitCode`.
- *  A guard stub can be seeded to exit 2 (+stderr) to prove the adapter projects
- *  a deliberate block into the Copilot deny dialect. */
+/** A recording stub: append its input to <capture>/<hook>.jsonl, answer
+ *  `exitCode`. A guard stub can be seeded to exit 2 (+stderr) to prove the
+ *  adapter projects a deliberate block into the Copilot deny dialect. It runs
+ *  the way a core hook runs: its run(input) inside the adapter's process for a
+ *  guard, its own process for every other hook. */
 function stubHookBody(hookName: string, exitCode = 0, stderr = ""): string {
   return [
-    `const raw = await Bun.stdin.text();`,
-    `const dir = process.env.T250_CAPTURE ?? ".";`,
-    `const { appendFileSync } = await import("node:fs");`,
-    `const { join } = await import("node:path");`,
-    `appendFileSync(join(dir, ${JSON.stringify(`${hookName}.jsonl`)}), raw + "\\n");`,
-    stderr ? `process.stderr.write(${JSON.stringify(stderr)});` : ``,
-    `process.exit(${exitCode});`,
+    `export async function run(raw: string): Promise<number> {`,
+    `  const dir = process.env.T250_CAPTURE ?? ".";`,
+    `  const { appendFileSync } = await import("node:fs");`,
+    `  const { join } = await import("node:path");`,
+    `  appendFileSync(join(dir, ${JSON.stringify(`${hookName}.jsonl`)}), raw + "\\n");`,
+    stderr ? `  process.stderr.write(${JSON.stringify(stderr)});` : ``,
+    `  return ${exitCode};`,
+    `}`,
+    `if (import.meta.main) process.exit(await run(await Bun.stdin.text()));`,
   ]
     .filter(Boolean)
     .join("\n");
@@ -123,8 +127,9 @@ function stubHookBody(hookName: string, exitCode = 0, stderr = ""): string {
 const QUESTION_STORE_STUB = `export function keptRestartRun(_p: string, _args: readonly string[]): null { return null; }\n`;
 const AUDIT_TOOL_STUB = `export function appendAuditEntry(_k: string, _d: unknown, _p: string): void {}\nexport function appendSubagentPromptUnmatched(_p: string, _r: unknown): void {}\nexport function appendCoordinationStoodAside(_p: string, _r: unknown): boolean { return false; }\n`;
 const LIB_TOOL_STUB = `import { join } from "node:path";
-// The engine's own reading of a line is pure, so the rig uses the real one.
-export { beforeDelimiter, boundDirectiveMessage, ENGINE_OWNED_STATE_TRANSITIONS, nextLineFlags, readOrchestratorLauncherOptions } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};
+// The engine's own reading of a line is pure, so the rig uses the real one, and
+// the real in-process hook runner, which runs the stub guards beside it.
+export { beforeDelimiter, boundDirectiveMessage, ENGINE_OWNED_STATE_TRANSITIONS, nextLineFlags, readOrchestratorLauncherOptions, runHookHere } from ${JSON.stringify(join(REPO_ROOT, "core", "tools", "aidlc-lib.ts"))};
 export function decideFence(): { decision: "hold" | "stand-aside" } {
   return { decision: process.env.T250_STATE_TRANSITION_STANDS_ASIDE === "1" ? "stand-aside" : "hold" };
 }
