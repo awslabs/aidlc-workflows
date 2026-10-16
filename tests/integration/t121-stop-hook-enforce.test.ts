@@ -2582,7 +2582,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
   //     stop WITHOUT running the engine's `next` probe (which could delete the
   //     challenge via resetPlanApprovalRuntime). The carve-out is inside the
   //     `if (!copilotSession)` block, after the resume-wait check and before
-  //     runEngineNextDirective (aidlc-continue-workflow.ts:1394-1404).
+  //     runEngineNextDirective in aidlc-continue-workflow.ts.
   // =========================================================================
   test("(f) pending Plan Approval challenge allows the stop before the probe (carve-out)", () => {
     const proj = makeProject();

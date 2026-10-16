@@ -1237,7 +1237,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
   test("2e: plan-approval-guard lifts tool_input.workdir into the top-level cwd (Facet B parity)", () => {
     // Facet B parity: the codex adapter's rewriteStdinCwd lifts
     // tool_input.workdir into the top-level cwd the core guard reads
-    // (parsed.cwd at aidlc-plan-approval-guard.ts:701). The guard's
+    // (parsed.cwd in its isFrameworkToolInvocation). The guard's
     // isFrameworkToolInvocation resolves a `bun .codex/tools/aidlc-*.ts`
     // script against cwd (resolve(cwd, script) at line 488); the
     // framework-tool exemption succeeds only when that resolves into the

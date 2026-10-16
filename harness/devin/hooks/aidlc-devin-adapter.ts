@@ -588,7 +588,7 @@ function rewriteStdinToolName(rawInput: string, devin: DevinHookInput): string {
 }
 
 // Lift tool_input.workdir into the top-level cwd field the core
-// plan-approval-guard reads (parsed.cwd at aidlc-plan-approval-guard.ts:1974).
+// plan-approval-guard reads (parsed.cwd in its installedEngineArgs).
 // The guard's installedEngineArgs resolves the tool script path against cwd
 // (isTrustedToolFile / resolve(cwd, script)). Without this lift, a framework
 // tool command run from a subdirectory (Devin passes the subdirectory as

@@ -308,7 +308,7 @@ function explicitHumanSelectionText(toolResponse: unknown): string {
 }
 
 // Lift tool_input.workdir into the top-level cwd field the core
-// plan-approval-guard reads (parsed.cwd at aidlc-plan-approval-guard.ts:665).
+// plan-approval-guard reads (parsed.cwd in its isFrameworkToolInvocation).
 // The guard's isFrameworkToolInvocation resolves framework-tool script
 // paths against cwd (resolve(cwd, script) at line 487). Without this lift,
 // a framework hook command run from a subdirectory (Codex

@@ -1,7 +1,7 @@
 // core/tools/aidlc-devin-config.ts — the Devin `read_config_from` contract.
 //
 // Devin documents seven compatibility-import sources
-// (read-config-from.mdx:138-146 in the 3000.10.31 doc bundle); every one
+// (the read-config-from.mdx options table in the 3000.10.31 doc bundle); every one
 // defaults to enabled and `null` counts as `true`, so the shipped project
 // config.json states an explicit boolean for each. `agents_standard` stays
 // `true` — it is the only channel by which Devin reads the rendered
@@ -36,7 +36,7 @@ import { homedir } from "node:os";
 import { compareTriples } from "./aidlc-devin-version.ts";
 
 /** The seven documented `read_config_from` keys, in the order of Devin's
- *  options table (read-config-from.mdx:138-146). */
+ *  options table (read-config-from.mdx). */
 export const DEVIN_IMPORT_SOURCES = [
   "agents_standard",
   "cursor",
@@ -119,7 +119,7 @@ export function devinUserLayerOverridesProject(
 
 /** The user-level Devin config path: $XDG_CONFIG_HOME/devin/config.json,
  *  else ~/.config/devin/config.json; %APPDATA%\devin\config.json on Windows
- *  (global-vs-local.mdx:21,190). Injectable for tests. */
+ *  (global-vs-local.mdx). Injectable for tests. */
 export function userDevinConfigPath(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
