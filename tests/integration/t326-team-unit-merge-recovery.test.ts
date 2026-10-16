@@ -350,12 +350,14 @@ describe("t326 pinned team Unit merge", () => {
       claimedCheckout,
       readFileSync(seededStateFile(claimedCheckout), "utf-8"),
     );
+    // The claimed checkout reads another Unit's receipts the way an unscoped
+    // checkout reads them: the skeleton main built is complete here too.
     expect(claimOnlyModel.section).toBe(
       `## Unit Progress
 <!-- Derived, engine-owned projection; routing ignores hand edits. -->
 | unit | owner | functional-design | nfr-requirements | nfr-design | infrastructure-design | code-generation | gate |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| skeleton | - | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
+| skeleton | - | [x] | [x] | [x] | [x] | [x] | [x] |
 | alpha | claim-only | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |
 | beta | - | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |`,
     );
@@ -461,9 +463,12 @@ describe("t326 pinned team Unit merge", () => {
       readFileSync(seededStateFile(beta), "utf-8"),
     );
     expect(model.mergedUnits.has("beta")).toBe(false);
+    // alpha's UNIT_MERGED on main is visible from beta's claimed clone, so the
+    // table carries the merged column there as it does on main.
+    expect(model.mergedUnits.has("alpha")).toBe(true);
     expect(
       model.section.split("\n").find((line) => line.startsWith("| beta |")),
-    ).toBe("| beta | - | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |");
+    ).toBe("| beta | - | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] | [ ] |");
     expect(nextDirective(beta)).toMatchObject({
       kind: "run-stage",
       stage: "functional-design",

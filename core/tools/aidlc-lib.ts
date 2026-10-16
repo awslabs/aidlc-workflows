@@ -32361,7 +32361,24 @@ export function eventMatchesClaimAttempt(
       : eventGeneration === String(generation);
   }
   const eventUnit = auditBlockField(block, "Unit");
-  if (unit !== undefined && unit !== stamp.unit) return false;
+  // Another Unit's receipt, read in a scoped checkout: it is not this claim's
+  // attempt, so it is read as an unscoped checkout reads it. A scoped
+  // checkout that refused it would show every other Unit as unfinished, and
+  // fold that view into main's table when it lands its own Unit.
+  const other = unit !== undefined && unit !== stamp.unit
+    ? unit
+    : unit === undefined && eventUnit !== null && eventUnit !== stamp.unit
+    ? eventUnit
+    : null;
+  if (other !== null) {
+    const eventGeneration = auditBlockField(block, "Attempt Generation");
+    if (eventGeneration === null) return true;
+    const generation =
+      readClaimGenerations(projectDir)[claimGenerationKey(projectDir, other)];
+    return generation === undefined
+      ? true
+      : eventGeneration === String(generation);
+  }
   if (eventUnit !== null && eventUnit !== stamp.unit) return false;
   return (
     auditBlockField(block, "Attempt Generation") === String(stamp.generation)
