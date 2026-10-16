@@ -31,6 +31,7 @@ import {
   pluginBuildLockPath,
   readPluginTargets,
 } from "../../dist/claude/.claude/tools/aidlc-plugin-emit.ts";
+import { asShippedBuild } from "../harness/plugin-host-names.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -93,7 +94,7 @@ function copyPlugin(label: string): string {
   return root;
 }
 
-function minimalPlugin(name: string): string {
+function minimalPlugin(name: string, aidlc: Record<string, unknown> = {}): string {
   const root = join(scratch, "minimal-plugins", name);
   mkdirSync(join(root, ".aidlc-plugin"), { recursive: true });
   writeFileSync(
@@ -105,7 +106,7 @@ function minimalPlugin(name: string): string {
         description: "Minimal plugin",
         author: { name: "Fixture" },
         dependencies: ["core"],
-        aidlc: { contributes: { tools: "tools/" } },
+        aidlc: { ...aidlc, contributes: { tools: "tools/" } },
       },
       null,
       2,
@@ -138,8 +139,12 @@ function treeFiles(root: string): Map<string, Buffer> {
   return out;
 }
 
-function treeDiff(expected: string, actual: string): string[] {
-  const expectedFiles = treeFiles(expected);
+function treeDiff(
+  expected: string,
+  actual: string,
+  shape: (files: Map<string, Buffer>) => Map<string, Buffer> = (files) => files,
+): string[] {
+  const expectedFiles = shape(treeFiles(expected));
   const actualFiles = treeFiles(actual);
   const names = new Set([...expectedFiles.keys(), ...actualFiles.keys()]);
   const differences: string[] = [];
@@ -154,7 +159,7 @@ function treeDiff(expected: string, actual: string): string[] {
 }
 
 describe("t315 standalone plugin builder", () => {
-  test("copied tools build byte-identical test-pro projections for every harness", () => {
+  test("copied tools build test-pro byte for byte as the packager does, under its own names", () => {
     expect(HARNESSES).toEqual(EXPECTED_HARNESSES);
     const pluginRoot = copyPlugin("all-harnesses");
     for (const harness of HARNESSES) {
@@ -165,10 +170,47 @@ describe("t315 standalone plugin builder", () => {
       expect(Object.keys(json)).toEqual(["valid", "errors", "warnings"]);
       expect(json.valid).toBe(true);
       expect(
-        treeDiff(join(EXPECTED_ROOT, harness), outDir),
+        treeDiff(join(EXPECTED_ROOT, harness), outDir, asShippedBuild),
         harness,
       ).toEqual([]);
     }
+  });
+
+  test("a plugin someone else builds carries the names its author chose", () => {
+    const root = minimalPlugin("acme-standards");
+    const named = minimalPlugin("acme-rules", { marketplace: "acme-aidlc-plugins" });
+    const catalogue = (outDir: string, dir: string) =>
+      JSON.parse(readFileSync(join(outDir, dir, "marketplace.json"), "utf-8")) as {
+        name: string;
+        plugins: Array<{ name: string }>;
+      };
+    const hostName = (outDir: string, dir: string) =>
+      (JSON.parse(readFileSync(join(outDir, dir, "plugin.json"), "utf-8")) as { name: string }).name;
+
+    const claude = join(scratch, "third-party", "claude");
+    expect(run([root, "claude", claude, "--json"]).status).toBe(0);
+    expect(hostName(claude, ".claude-plugin")).toBe("acme-standards");
+    expect(catalogue(claude, ".claude-plugin").name).toBe("acme-standards");
+    expect(catalogue(claude, ".claude-plugin").plugins.map((entry) => entry.name)).toEqual(["acme-standards"]);
+
+    const codex = join(scratch, "third-party", "codex");
+    expect(run([named, "codex", codex, "--json"]).status).toBe(0);
+    expect(hostName(codex, ".codex-plugin")).toBe("acme-rules");
+    expect(catalogue(codex, join(".agents", "plugins")).name).toBe("acme-aidlc-plugins");
+    expect(catalogue(codex, join(".agents", "plugins")).plugins.map((entry) => entry.name)).toEqual(["acme-rules"]);
+
+    // On Kiro the whole plugin sits in its own folder, so a second plugin
+    // dropped into the same project never lands on the first.
+    const kiro = join(scratch, "third-party", "kiro-ide");
+    expect(run([root, "kiro-ide", kiro, "--json"]).status).toBe(0);
+    const folder = join(".kiro", "aidlc-plugins", "acme-standards");
+    expect(hostName(kiro, join(folder, ".kiro-plugin"))).toBe("acme-standards");
+    expect(existsSync(join(kiro, folder, ".aidlc-plugin", "plugin.json"))).toBe(true);
+    expect(existsSync(join(kiro, folder, "hooks", "compose.ts"))).toBe(true);
+    expect(existsSync(join(kiro, folder, "tools", "acme-standards-tool.ts"))).toBe(true);
+    expect(readdirSync(kiro).sort()).toEqual([".aidlc-plugin-projection.json", ".kiro"]);
+    expect(readdirSync(join(kiro, ".kiro")).sort()).toEqual(["aidlc-plugins", "hooks"]);
+    expect(readdirSync(join(kiro, ".kiro", "hooks"))).toEqual(["aidlc-acme-standards-compose.json"]);
   });
 
   test("default output is <plugin-root>/dist/<harness>", () => {
@@ -179,6 +221,7 @@ describe("t315 standalone plugin builder", () => {
       treeDiff(
         join(EXPECTED_ROOT, "claude"),
         join(pluginRoot, "dist", "claude"),
+        asShippedBuild,
       ),
     ).toEqual([]);
   });
@@ -438,7 +481,7 @@ describe("t315 standalone plugin builder", () => {
     const result = run([pluginRoot, "claude", outDir, "--json"]);
     expect(result.status, result.stderr).toBe(0);
     expect(
-      treeDiff(join(EXPECTED_ROOT, "claude"), outDir),
+      treeDiff(join(EXPECTED_ROOT, "claude"), outDir, asShippedBuild),
     ).toEqual([]);
   });
 
@@ -460,7 +503,7 @@ describe("t315 standalone plugin builder", () => {
     const outDir = join(scratch, "vendored-output");
     const result = run([pluginRoot, "claude", outDir, "--json"]);
     expect(result.status, result.stderr).toBe(0);
-    expect(treeDiff(join(EXPECTED_ROOT, "claude"), outDir)).toEqual([]);
+    expect(treeDiff(join(EXPECTED_ROOT, "claude"), outDir, asShippedBuild)).toEqual([]);
   });
 
   test("validation errors refuse the build with exit 1", () => {

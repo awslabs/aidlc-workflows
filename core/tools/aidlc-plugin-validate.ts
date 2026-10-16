@@ -37,6 +37,7 @@ export type PluginValidationRule =
   | "manifest-json"
   | "manifest-shape"
   | "manifest-name"
+  | "manifest-marketplace"
   | "content-symlink"
   | "stage-frontmatter"
   | "stage-schema"
@@ -263,6 +264,38 @@ export function assertSupportedPluginContributionPaths(
   throw new Error(
     `${manifestFile}: ${issues.map((issue) => issue.message).join("; ")}`,
   );
+}
+
+// A host keeps what it installs under the catalogue's and the plugin's names
+// (Codex: plugins/cache/<marketplace>/<plugin>/), so each is one path segment.
+export function hostIdSegment(value: string): boolean {
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value);
+}
+
+// The one rule for the catalogue a plugin someone else builds is listed in:
+// any name its author chooses outside AI-DLC's own aidlc namespace (a second
+// "aidlc-plugins" catalogue replaces ours in Claude Code). Validate reports it
+// and the emitter refuses it before writing anything.
+export function pluginMarketplaceIssue(
+  aidlc: unknown,
+): { message: string; fix: string } | null {
+  if (!isPlainRecord(aidlc) || aidlc.marketplace === undefined) return null;
+  const name = aidlc.marketplace;
+  if (typeof name !== "string" || !hostIdSegment(name)) {
+    return {
+      message: `marketplace name ${JSON.stringify(name)} must be one name a host can keep as a folder: letters, digits, ".", "_" or "-", starting with a letter or digit`,
+      fix: 'Set "aidlc": {"marketplace": "<name>"}, such as "acme-aidlc-plugins", or leave it out to use the plugin\'s own name.',
+    };
+  }
+  // Claude Code tells catalogues apart only up to letter case.
+  const folded = name.toLowerCase();
+  if (folded === "aidlc" || folded.startsWith("aidlc-")) {
+    return {
+      message: `marketplace name "${name}" is AI-DLC's own: "aidlc" and names starting "aidlc-" are kept for the plugins AI-DLC ships`,
+      fix: 'Name the marketplace for your organisation or team, such as "acme-aidlc-plugins".',
+    };
+  }
+  return null;
 }
 
 export type PluginDependency = { name: string; range: string | null };
@@ -675,6 +708,11 @@ function validateManifest(
       "Map each shipped subtree to its plugin-relative directory.",
     );
     return { pluginName: declaredName };
+  }
+
+  const marketplace = pluginMarketplaceIssue(manifest.aidlc);
+  if (marketplace) {
+    addError(findings, displayFile, "manifest-marketplace", marketplace.message, marketplace.fix);
   }
 
   for (const issue of contributionPathIssues(manifest.aidlc.contributes)) {
