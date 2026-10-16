@@ -114,8 +114,6 @@ function writableAgentsDir(projectDir: string): string {
   return resolveHarnessPath(["agents"], { mutable: true, projectDir });
 }
 
-
-
 /** What the review request does with the reviewer copy. */
 export type ReviewCopyOutcome =
   /** Dispatch this agent: the reviewer with the review's read scope. */
