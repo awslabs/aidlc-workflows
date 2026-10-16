@@ -345,7 +345,7 @@ describe("the agent-models choice through config", () => {
     expect(p.reviewer()).toMatch(/^model: "gpt-5\.6-terra"$/m);
     const off = p.preview("agent-models", "off", "--yes");
     expect(off.status, off.out).toBe(0);
-    expect(off.out).toContain("config preview agent-models on --yes");
+    expect(off.out.split("config preview agent-models on --yes")).toHaveLength(2);
     expect(p.choice()).toBe("off");
     expect(p.reviewer()).not.toMatch(/^model:/m);
     withOwnModelLine(p.reviewerPath);
@@ -357,29 +357,27 @@ describe("the agent-models choice through config", () => {
     expect(p.reviewer()).toMatch(/^model: "gpt-5\.6-terra"$/m);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 3);
 
-  test("off keeps the lines of an agent file the person changed since AI-DLC wrote it, and names it", () => {
+  test("off keeps the lines of an agent file not as AI-DLC last wrote it, and names it", () => {
     const p = project(previewRuntime());
     expect(p.preview("agent-models", "on", "--yes").status).toBe(0);
     expect(p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes").status).toBe(0);
     writeFileSync(p.reviewerPath, `${readFileSync(p.reviewerPath, "utf-8")}\nA line of my own.\n`);
     const off = p.preview("agent-models", "off", "--yes");
     expect(off.status, off.out).toBe(0);
-    expect(off.out).toContain(`you changed .kiro/agents/${REVIEWER_FILE}, so it keeps its model and effort lines`);
+    expect(off.out).toContain(`.kiro/agents/${REVIEWER_FILE} is not as AI-DLC last wrote it, so it keeps its model and effort lines`);
     expect(p.reviewer()).toMatch(/^model: "gpt-5\.6-terra"$/m);
     expect(readFileSync(p.reviewerPath, "utf-8")).toContain("A line of my own.");
     expect(p.choice()).toBe("off");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
-  test("off where it was never on records off and leaves the person's line", () => {
+  test("off where it was never on is already off, records nothing and leaves the person's line", () => {
     const p = project(previewRuntime());
     withOwnModelLine(p.reviewerPath);
     const off = p.preview("agent-models", "off", "--yes");
     expect(off.status, off.out).toBe(0);
-    expect(off.out).toContain("Preview feature agent-models: not set -> off");
+    expect(off.out).toContain("agent-models is already off for this project");
     expect(p.reviewer()).toMatch(/^model: claude-sonnet-5\.5$/m);
-    expect(p.choice()).toBe("off");
-    const again = p.preview("agent-models", "off", "--yes");
-    expect(again.out).toContain("agent-models is already off for this project");
+    expect(p.recorded()).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
   test("AIDLC_PREVIEW_FEATURES naming agent-models writes and records nothing", () => {
@@ -456,13 +454,45 @@ describe("the agent-models choice through config", () => {
     const refused = p.preview("agent-models", "on", "--yes");
     expect(refused.status).not.toBe(0);
     expect(refused.out).toContain("agent-models needs this project on a preview release of AI-DLC; it is on 2.11.0");
-    expect(refused.out).toContain("config --channel preview");
+    // Run through Bun, as a copied runtime runs, so the steps name a preview copy.
+    expect(refused.out).toContain("install a preview release's copy runtime into this project");
+    const listed = p.preview();
+    expect(listed.out).toContain("agent-models: off (recorded on; this release is not a preview release)");
+    expect(listed.out).toContain("config preview <feature> off --yes clears one recorded on.");
+    expect(listed.out).not.toContain("Turn one on or off");
     const off = p.preview("agent-models", "off", "--yes");
     expect(off.status, off.out).toBe(0);
+    expect(off.out).toContain("Preview feature agent-models: on -> off in .kiro/tools/data/harness.json");
+    expect(off.out).not.toContain("To undo");
     expect(p.choice()).toBe("off");
     expect(p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes").status).toBe(0);
     expect(p.reviewer()).not.toMatch(/^model:/m);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 3);
+
+  test("a tree no preview feature works in lists none and offers no command", () => {
+    const dir = temp("aidlc-kiro-agent-models-claude-");
+    mkdirSync(join(dir, ".git"));
+    const machine = temp("aidlc-kiro-agent-models-m-");
+    const env = { ...process.env, AIDLC_INSTALL_ROOT: join(machine, "share", "aidlc"), AIDLC_BIN_DIR: join(machine, "bin") };
+    const run = (args: string[]) => {
+      const result = spawnSync(process.execPath, [join(REPO_ROOT, "core", "tools", "aidlc-init.ts"), ...args], {
+        cwd: dir,
+        env,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      return { status: result.status, out: `${result.stdout}${result.stderr}` };
+    };
+    const install = run(["config", "--project-dir", dir, "--from", join(REPO_ROOT, "dist-release", "claude"), "--mcp", "none", "--yes"]);
+    expect(install.status, install.out).toBe(0);
+    const listed = run(["config", "preview", "--project-dir", dir]);
+    expect(listed.status, listed.out).toBe(0);
+    expect(listed.out).toContain("none for Claude Code");
+    expect(listed.out).not.toContain("<feature>");
+    const refused = run(["config", "preview", "--project-dir", dir, "agent-models", "on", "--yes"]);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("agent-models is a preview feature of kiro-ide projects; this one uses claude");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
   test("a model id with a line break is refused before anything is recorded", () => {
     const p = project(previewRuntime());

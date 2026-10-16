@@ -478,6 +478,13 @@ describe("t114 in-session config alias", () => {
     expect(out).not.toContain("ask which sections");
   });
 
+  test("--config takes every section the usage line names, preview included", () => {
+    proj = createOrchestrationTestProject();
+    const out = runNext(proj, ["--config", "preview"]).out;
+    expect(out).toContain('"kind":"print"');
+    expect(out).toContain("bun .claude/tools/aidlc.ts config preview --show --json");
+  });
+
   test("--config rejects unknown or extra trailing tokens as usage errors", () => {
     proj = createOrchestrationTestProject();
     for (const args of [

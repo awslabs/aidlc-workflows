@@ -36,7 +36,7 @@ const RECORD = "aidlc/spaces/default/intents/261015-notes";
 
 const saved = { ...process.env };
 afterEach(() => {
-  for (const key of ["AIDLC_PREVIEW_FEATURES", "AIDLC_AGENTS_DIR", "AIDLC_HARNESS_NAME", "AIDLC_DISABLE_REVIEWER_SCOPE_HOOK"]) {
+  for (const key of ["AIDLC_PREVIEW_FEATURES", "AIDLC_AGENTS_DIR", "AIDLC_HARNESS_DIR", "AIDLC_HARNESS_NAME", "AIDLC_DISABLE_REVIEWER_SCOPE_HOOK"]) {
     if (saved[key] === undefined) delete process.env[key];
     else process.env[key] = saved[key];
   }
@@ -173,6 +173,8 @@ describe("when there is no copy", () => {
     try {
       mkdirSync(join(dir, ".kiro", "agents"), { recursive: true });
       const review = { requestId: REQUEST, reviewer: REVIEWER, unit: "alpha" };
+      // As from the project's installed Kiro tree, whose record the copy reads.
+      process.env.AIDLC_HARNESS_DIR = ".kiro";
       process.env.AIDLC_HARNESS_NAME = "kiro-ide";
       recordPreview(dir, { [REVIEWER_READ_SCOPE_FEATURE]: "on" });
       expect(prepareReviewCopy(dir, review, STABLE), "stable release").toBeNull();

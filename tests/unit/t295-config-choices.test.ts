@@ -179,7 +179,7 @@ function resolvedFlags(project: string) {
 }
 
 describe("t295 config choice dispatch", () => {
-  test("flags and project are sections, unknown usage lists all six, and flags are strict", () => {
+  test("flags and project are sections, unknown usage lists all seven, and flags are strict", () => {
     for (const section of ["flags", "project"]) {
       const help = run(["config", section, "--help"], REPO_ROOT);
       expect(help.status).toBe(0);
