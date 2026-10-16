@@ -465,3 +465,181 @@ describe("t354 the build carries the plugin's own manifest", () => {
     }
   });
 });
+
+// C: `/aidlc plugin select` takes the whole list, so a person who leaves the
+// base out and keeps the team plugin typed the team plugin themselves. The
+// select goes through as typed; the team plugin is paused (nothing it adds
+// runs) until its base is on again; one line says so at that select, then
+// silence; turning the base back on brings it back at the next session start.
+describe("t354 turning a base off pauses the plugin built on it", () => {
+  const CONTRIBUTION = [
+    "---",
+    "target: build-and-test",
+    "plugin: alpha",
+    "fragments:",
+    "  - anchor: end-of-steps",
+    "    order: 100",
+    "---",
+    "",
+    "## fragment: end-of-steps",
+    "",
+    "ALPHA-CONTRIBUTION: check the alpha things.",
+    "",
+  ].join("\n");
+  const PAUSE_LINE =
+    "zeta is off. alpha builds on zeta, so alpha is paused until zeta is on again. To turn alpha off as well: /aidlc plugin select aidlc.";
+
+  // alpha with a prose contribution to a core stage, so "nothing alpha adds
+  // runs" can be read in that stage's source.
+  function contributingAlpha(): string {
+    const out = alpha();
+    mkdirSync(join(out, "contributions", "construction"), { recursive: true });
+    writeFileSync(join(out, "contributions", "construction", "build-and-test.md"), CONTRIBUTION);
+    return out;
+  }
+
+  function engine(target: Project, args: string[]): Ran {
+    const result = spawnSync(process.execPath, [join(target.dir, ".claude", "tools", "aidlc.ts"), ...args], {
+      cwd: target.dir,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
+      env: cleanEnv({
+        AIDLC_CLAUDE_PLUGIN_REGISTRY: target.registry,
+        AIDLC_CLAUDE_SETTINGS: target.settings,
+        CLAUDE_PROJECT_DIR: target.dir,
+        AIDLC_HARNESS_DIR: ".claude",
+        AIDLC_HARNESS_NAME: "claude",
+      }),
+    });
+    return { status: result.status, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
+  }
+
+  const select = (target: Project, names: string): Ran => engine(target, ["engine", "plugin", "select", names]);
+  const buildAndTest = (target: Project): string =>
+    readFileSync(join(target.dir, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), "utf-8");
+  const selection = (target: Project): unknown =>
+    (JSON.parse(readFileSync(join(target.dir, ".claude", "tools", "data", "harness.json"), "utf-8")) as { plugins?: unknown }).plugins;
+  const stageEnabled = (target: Project, slug: string): boolean => {
+    const graph = JSON.parse(
+      readFileSync(join(target.dir, ".claude", "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as Array<{ slug: string; enabled?: boolean }>;
+    return graph.find((node) => node.slug === slug)?.enabled !== false;
+  };
+  const doctorChecks = (target: Project): Array<{ label: string; pass: boolean; fix?: string; severity?: string }> => {
+    const ran = engine(target, ["doctor", "--json"]);
+    return (JSON.parse(ran.stdout) as { data: { checks: Array<{ label: string; pass: boolean; fix?: string; severity?: string }> } }).data.checks;
+  };
+
+  let alphaRoot = "";
+  function composedPair(): Project {
+    alphaRoot = contributingAlpha();
+    const target = project({ alpha: { root: alphaRoot }, zeta: { root: ZETA() } });
+    const ran = sync(target);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(buildAndTest(target)).toContain("ALPHA-CONTRIBUTION");
+    return target;
+  }
+
+  test("the select goes through exactly as typed and says the pause once", () => {
+    const target = composedPair();
+    const first = select(target, "aidlc,alpha");
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    expect(selection(target)).toEqual(["aidlc", "alpha"]);
+    expect(first.stdout.split(PAUSE_LINE).length - 1).toBe(1);
+    const again = select(target, "aidlc,alpha");
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+    expect(again.stdout).not.toContain("paused");
+  });
+
+  test("while paused nothing alpha adds runs, and session start and sync say nothing about it", () => {
+    const target = composedPair();
+    expect(select(target, "aidlc,alpha").status).toBe(0);
+    expect(stageEnabled(target, "alpha-example-stage")).toBe(false);
+    expect(buildAndTest(target)).not.toContain("ALPHA-CONTRIBUTION");
+    const agreement = doctorChecks(target).find((check) => check.label.startsWith("Plugin selection flags"));
+    expect(agreement?.pass).toBe(true);
+    const synced = sync(target);
+    expect(synced.status, synced.stdout + synced.stderr).toBe(0);
+    expect(synced.stdout).not.toContain("alpha");
+    expect(buildAndTest(target)).not.toContain("ALPHA-CONTRIBUTION");
+    const hook = sync(target, { hookRoot: alphaRoot });
+    expect(hook.status, hook.stdout + hook.stderr).toBe(0);
+    expect(hook.stdout).not.toContain("alpha");
+    expect(buildAndTest(target)).not.toContain("ALPHA-CONTRIBUTION");
+  });
+
+  test("plugin list shows the pause as a plain state, and doctor as information only", () => {
+    const target = composedPair();
+    expect(select(target, "aidlc,alpha").status).toBe(0);
+    expect(statusOf(target, "alpha")).toEqual(expect.objectContaining({
+      state: "paused",
+      action: "current",
+      message: "paused: needs zeta, which is off",
+    }));
+    expect(pluginTool(target, ["list"]).stdout).toMatch(/alpha\s+0\.1\.0\s+0\.1\.0\s+paused: needs zeta, which is off/);
+    expect(engine(target, ["engine", "plugin-list"]).stdout + engine(target, ["plugin", "list"]).stdout).toContain(
+      "alpha paused: needs zeta, which is off",
+    );
+    const plugins = doctorChecks(target).find((check) => check.label.startsWith("Plugins:"));
+    expect(plugins?.pass).toBe(true);
+    expect(plugins?.label).toContain("alpha paused: needs zeta, which is off");
+    expect(plugins?.fix).toBeUndefined();
+  });
+
+  test("turning zeta back on brings alpha back at the next session start, with nothing else to do", () => {
+    const target = composedPair();
+    expect(select(target, "aidlc,alpha").status).toBe(0);
+    const back = select(target, "aidlc,alpha,zeta");
+    expect(back.status, back.stdout + back.stderr).toBe(0);
+    expect(back.stdout).not.toContain("paused");
+    expect(stageEnabled(target, "alpha-example-stage")).toBe(true);
+    const synced = sync(target);
+    expect(synced.status, synced.stdout + synced.stderr).toBe(0);
+    expect(buildAndTest(target)).toContain("ALPHA-CONTRIBUTION");
+    expect(statusOf(target, "alpha")?.state).toBe("current");
+  });
+
+  test("through aidlc config project --plugins the same pause goes through and says its own command", () => {
+    const target = composedPair();
+    const recorded = engine(target, ["config", "--from", join(REPO_ROOT, "dist", "claude"), "--force", "--yes"]);
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    const ran = engine(target, ["config", "project", "--plugins", "aidlc,alpha", "--yes"]);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect(selection(target)).toEqual(["aidlc", "alpha"]);
+    expect(ran.stdout).toMatch(
+      /zeta is off\. alpha builds on zeta, so alpha is paused until zeta is on again\. To turn alpha off as well: .*config project --plugins aidlc --yes/,
+    );
+    expect(stageEnabled(target, "alpha-example-stage")).toBe(false);
+  });
+
+  test("a select that would pause the plugin open work runs on is refused as a turn-off is, naming both", () => {
+    const target = composedPair();
+    const dirName = "pause-probe-deadbeef";
+    const intentDir = join(target.dir, "aidlc", "spaces", "default", "intents", dirName);
+    mkdirSync(intentDir, { recursive: true });
+    writeFileSync(
+      join(target.dir, "aidlc", "spaces", "default", "intents", "intents.json"),
+      `${JSON.stringify([{ uuid: "deadbeef-0000-4000-8000-000000000000", slug: "pause-probe", dirName, scope: "alpha-example", status: "in-flight" }], null, 2)}\n`,
+    );
+    writeFileSync(
+      join(intentDir, "aidlc-state.md"),
+      [
+        "# AI-DLC State Tracking",
+        "",
+        "## Project Information",
+        "- **Project**: pause probe",
+        "- **Scope**: alpha-example",
+        "",
+        "## Current Status",
+        "- **Status**: Running",
+        "",
+      ].join("\n"),
+    );
+    const ran = select(target, "aidlc,alpha");
+    expect(ran.status).not.toBe(0);
+    const said = ran.stdout + ran.stderr;
+    expect(said).toContain('owned by plugin "alpha"');
+    expect(said).toContain("alpha builds on zeta");
+    expect(selection(target)).toBeUndefined();
+  });
+});
