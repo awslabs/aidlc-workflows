@@ -208,7 +208,8 @@ describe("writing kiro-ide agent files", () => {
     policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, ON);
     const copy = renderReviewCopy(
       readFileSync(join(root, ".kiro", "agents", REVIEWER_FILE), "utf-8"),
-      "aidlc-review-0123456789ab",
+      "aidlc-scoped-review-0123456789ab",
+      "aidlc/spaces/default/intents/i1",
       "alpha",
     );
     expect(copy).not.toBeNull();
