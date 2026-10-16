@@ -21,13 +21,19 @@ import {
   writeTargets,
 } from "./review-freeze-command.ts";
 
-// Session records, Plan Approval records, and the words the human-turn hook
-// keeps for a stage gate (`<record>/.aidlc-engine/gate-words/`, the Feedback a
-// Request Changes records as the person's own). Only the hooks and the engine
+// Session records, Plan Approval records, the words the human-turn hook keeps
+// for a stage gate (`<record>/.aidlc-engine/gate-words/`, the Feedback a
+// Request Changes records as the person's own), and the hooks' own heartbeats
+// and drop logs (`<record>/.aidlc-engine/hooks-health/`, and the folder's name
+// before the engine-dir move, `.aidlc-hooks-health/`): a heartbeat or a drop
+// line is what tells the engine a hook ran (the reviewer-finished mark, #943,
+// and the hooks-not-firing checks read them). Only the hooks and the engine
 // write them; the rest of `.aidlc-engine/` stays writable. Case-insensitive, like
 // AUDIT_TRAIL_PATH, because Windows resolves any casing to the same record.
-const RUNTIME_RECORD_PATH = /(?:^|[\\/])\.(?:aidlc-sessions|aidlc-plan-approval|aidlc-engine[\\/]+gate-words)(?:[\\/]|$)/i;
-const RUNTIME_RECORD_MENTION = /(?:^|[\\/'"`\s])\.(?:aidlc-sessions|aidlc-plan-approval|aidlc-engine[\\/]+gate-words)(?=[\\/'"`\s]|$)/i;
+const RUNTIME_RECORD_PATH =
+  /(?:^|[\\/])\.(?:aidlc-sessions|aidlc-plan-approval|aidlc-hooks-health|aidlc-engine[\\/]+(?:gate-words|hooks-health))(?:[\\/]|$)/i;
+const RUNTIME_RECORD_MENTION =
+  /(?:^|[\\/'"`\s])\.(?:aidlc-sessions|aidlc-plan-approval|aidlc-hooks-health|aidlc-engine[\\/]+(?:gate-words|hooks-health))(?=[\\/'"`\s]|$)/i;
 // The audit trail: per-intent shards under `aidlc/spaces/<space>/intents/<record>/audit/`
 // and the bare space shard directory `aidlc/spaces/<space>/intents/audit/` (see
 // auditFilePath in aidlc-lib.ts). Worktree mirrors repeat the same relative layout
@@ -41,8 +47,15 @@ const AUDIT_TRAIL_PATH =
   /(?:^|[\\/])aidlc[\\/]spaces[\\/][^\\/]+[\\/]intents[\\/](?:[^\\/]+[\\/])?audit(?:[\\/]|$)/i;
 const HOOK_FILE = /(?:^|[\\/])hooks[\\/]aidlc-[a-z-]+\.ts$|(?:^|[\\/])aidlc-(?:kiro|codex|copilot|cursor)-adapter\.ts$/;
 const HOOK_MODULE = /(?:^|[\\/])(?:hooks[\\/]aidlc-[a-z-]+|aidlc-(?:record-human-turn|guard-switch))(?:\.ts)?$/;
+// The variables a host sets in its agent's shell to name the chat (Codex's
+// thread id, Claude Code's session id). The engine reads them to tell which
+// chat and which host a command runs in (Claude Code's is what makes a missing
+// reviewer completion evidence, #943), so a command may neither set nor remove
+// one: `unset`, `env -u`, and, on a line that runs an AI-DLC command, `env -i`.
+const HOST_CHAT_NAMES = ["CODEX_THREAD_ID", "CODEX_SESSION_ID", "CLAUDE_CODE_SESSION_ID"];
+const HOST_CHAT_NAME = `(?:${HOST_CHAT_NAMES.join("|")})`;
 // The variables that carry AI-DLC's authority or turn a guard off: the session
-// and presence overrides (Codex's thread id is one), the direct state and audit authorities, the
+// and presence overrides (a host's chat name is one), the direct state and audit authorities, the
 // human-turn token, and every recordable bypass. Only the person sets them,
 // outside the agent. A terminal can set one many ways, so each is recognized:
 // POSIX assignments and builtins, PowerShell's env: drive, .NET calls, and
@@ -51,14 +64,13 @@ const HOOK_MODULE = /(?:^|[\\/])(?:hooks[\\/]aidlc-[a-z-]+|aidlc-(?:record-human
 const HARNESS_CONTROL_NAME = `(?:${[
   "AIDLC_SESSION_OVERRIDE",
   "AIDLC_SESSION_OVERRIDE_SOURCE",
-  "CODEX_THREAD_ID",
-  "CODEX_SESSION_ID",
   "AIDLC_UNATTENDED",
   "AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS",
   "AIDLC_STATE_TRANSITION_OWNER",
   "AIDLC_ALLOW_DIRECT_AUDIT_EVENTS",
   "AIDLC_INTERNAL_HUMAN_TURN_TOKEN",
   "AIDLC_SKIP_REVIEWER_GATE_GUARD",
+  ...HOST_CHAT_NAMES,
   ...RECORDABLE_PROJECT_BYPASSES,
 ].join("|")})`;
 const HARNESS_CONTROL_ASSIGNMENTS = [
@@ -75,6 +87,14 @@ const HARNESS_CONTROL_ASSIGNMENTS = [
   `(?:SetEnvironmentVariable|\\.Add)[\\s;('"]*${HARNESS_CONTROL_NAME}\\b`,
   // setx NAME 1, which every later terminal inherits
   `\\bsetx(?:\\.exe)?\\b[^\\n]*\\b${HARNESS_CONTROL_NAME}\\b`,
+  // unset NAME, env -u NAME, env --unset=NAME: removing the host's chat name
+  `\\bunset\\b[^\\n;&|]*\\b${HOST_CHAT_NAME}\\b`,
+  `\\benv\\b[^\\n;&|]*\\s(?:-[a-z0-9]*u\\s*|--unset(?:\\s+|=))['"]?${HOST_CHAT_NAME}\\b`,
+  // env -i, env -, env --ignore-environment before an AI-DLC command (an
+  // aidlc-*.ts tool or the `aidlc` command, not a path that names aidlc):
+  // every variable removed, the host's chat name with them
+  `\\benv\\b[^\\n;&|]*\\s(?:-[a-z0-9]*i[a-z0-9]*|-|--ignore-environment)(?=\\s)[^\\n;&|]*` +
+    `(?:\\baidlc(?:-[a-z0-9-]+)?\\.ts\\b|(?:^|\\s)aidlc(?=\\s|$))`,
 ].map((source) => new RegExp(source, "i"));
 const SCRIPT_EXTENSION = /\.(?:ts|js|mjs|cjs|sh|py)$/;
 const PROSE_EXTENSION = /\.(?:md|markdown|mdown|txt|rst|adoc|asciidoc)$/i;
