@@ -4290,6 +4290,58 @@ describe("t243 project initialization", () => {
     expect(readFileSync(file, "utf-8")).toBe(shipped);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // No config section takes --force, so a section's conflict names config
+  // itself, from the source the section used, then the section once more; on
+  // a copied tool with --from and natively from the installed release, the
+  // command it names and then the section both go through.
+  test("a section's conflict names the config command that takes --force, and it and the section go through", () => {
+    const machine = temp("aidlc-t243-section-conflict-machine-");
+    const launcher = join(temp("aidlc-t243-section-conflict-launcher-"), INSTALLED_EXECUTABLE);
+    try {
+      linkSync(BUN, launcher);
+    } catch {
+      cpSync(BUN, launcher);
+    }
+    // A copy of Bun under the name aidlc stands in for the compiled executable.
+    const channels = [
+      { name: "copied", tool: BUN, from: ["--from", CLAUDE_RELEASE], named: ["bun", ".claude/tools/aidlc.ts", "config", "--from", CLAUDE_RELEASE, "--force"] },
+      { name: "native", tool: launcher, from: [], named: ["aidlc", "config", "--force"] },
+    ];
+    for (const channel of channels) {
+      const project = temp(`aidlc-t243-section-conflict-${channel.name}-`);
+      mkdirSync(join(project, ".git"));
+      const env = {
+        AIDLC_RUNTIME_ROOT: join(REPO_ROOT, "dist-release"),
+        AIDLC_INSTALL_ROOT: machine,
+        AIDLC_BIN_DIR: join(machine, "bin"),
+      };
+      const config = (args: string[]) =>
+        spawnSync(channel.tool, [INIT, "config", ...args], {
+          cwd: project,
+          env: { ...process.env, ...env },
+          encoding: "utf-8",
+          timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        });
+      const installed = config(["--project-dir", project, ...channel.from, "--harness", "claude", "--mcp", "none", "--yes"]);
+      expect(installed.status, `${channel.name}: ${installed.stdout}${installed.stderr}`).toBe(0);
+      const file = join(project, ".claude", "agents", "aidlc-developer-agent.md");
+      const shipped = readFileSync(file, "utf-8");
+      writeFileSync(file, `${shipped}\nmy own notes\n`);
+      const section = ["project", ...channel.from, "--mcp", "defaults", "--yes"];
+      const refused = config(section);
+      expect(refused.status, `${channel.name}: ${refused.stdout}${refused.stderr}`).toBe(4);
+      const out = refused.stdout.replace(/\s+/g, " ");
+      expect(out, channel.name).not.toContain("run it again with --force");
+      const named = /to take the shipped version over it, run `([^`]+)`, then the same command again\./.exec(out)?.[1];
+      expect(printedWords(named ?? ""), `${channel.name}: ${out}`).toEqual(channel.named);
+      const forced = config(printedWords(named ?? "").slice(channel.named.indexOf("config") + 1));
+      expect(forced.status, `${channel.name}: ${forced.stdout}${forced.stderr}`).toBe(0);
+      expect(readFileSync(file, "utf-8"), channel.name).toBe(shipped);
+      const again = config(section);
+      expect(again.status, `${channel.name}: ${again.stdout}${again.stderr}`).toBe(0);
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // The command a conflict names is the one of the harness being set up, not
   // the first install a project shows: a first Codex install names Codex's own.
   test("a first install's conflict names the command of the harness being set up", () => {
