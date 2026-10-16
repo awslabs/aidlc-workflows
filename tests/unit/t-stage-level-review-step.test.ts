@@ -101,6 +101,19 @@ describe("stage-level review step: next names the step the review log accepts", 
     expect(turnEndIsOpen(r.p)).toBe(false);
     expect(review(r.p, 1, ["--retry-pending"]).status).toBe(0);
   });
+  test("a chat that never saw the request is told which review file holds the verdict", () => {
+    const r = start(); request(r); writeReview(r, "READY");
+    const d = next(r.p);
+    expect(r.file).toContain(".aidlc-engine/reviews/");
+    expect(d.message).toContain(r.file);
+    expect(d.message).toContain(reviewCmd(1, " --verdict"));
+    expect(turnEndIsOpen(r.p)).toBe(false);
+  });
+  test("the file is named when the person has written too", () => {
+    const r = start(); request(r); writeReview(r, "READY");
+    says(r.p, "carry on");
+    expect(next(r.p).message).toContain(r.file);
+  });
   test("retry spent: the verdict only, and the fallback is named as a review that did not finish", () => {
     const r = start(); request(r); retry(r);
     const d = next(r.p);
@@ -189,14 +202,20 @@ describe("stage-level review step: the person wrote since the review was asked",
     expect(next(r.p).message).toContain(reviewCmd(1, " --retry-pending"));
     expect(review(r.p, 1, ["--retry-pending"]).status).toBe(0);
   });
-  test("a spent retry names neither a retry nor the fallback, and ends the turn", () => {
+  test("a spent retry: no retry, and the fallback only if they asked to carry on; following it advances", () => {
     const r = start(); request(r); retry(r);
-    says(r.p, "approve it as it is");
+    says(r.p, "carry on");
     const d = next(r.p);
-    expect(d.message).toContain("what they asked comes first");
-    expect(d.message).not.toContain("--retry-pending");
-    expect(d.message).not.toContain("NOT-READY without");
-    expect(d.message).toContain("If they asked for anything else, do that and stop.");
+    const msg = d.message ?? "";
+    expect(msg).toContain("what they asked comes first");
+    expect(msg).not.toContain("--retry-pending");
+    expect(msg.indexOf("record NOT-READY without one")).toBeGreaterThan(msg.indexOf("If they asked to carry on and no review is there"));
+    expect(msg).toContain("If they asked for anything else, do that and stop.");
+    // the person asked to carry on, no review is there: the step's own fallback records and the review moves on
+    expect(review(r.p, 1, ["--verdict", "NOT-READY"]).status).toBe(0);
+    const after = next(r.p);
+    expect(after.message).not.toBe(d.message);
+    expect(after.message).toContain("did not finish");
   });
   test("a team lock on strict, through the real next: approval waits for the review and the file is named", () => {
     const r = start(); request(r);
@@ -335,6 +354,17 @@ describe("nextReviewStepFor: the table", () => {
     expect(off?.text).toContain("VERD");
     expect(off?.text).not.toContain("NOT-READY");
     expect(off?.personFirst).toBeUndefined();
+  });
+  test("the person wrote and the retry is spent: the fallback is theirs to ask for, and the file is named", () => {
+    const attempt = { pendingReview: { iteration: 1, retryable: false, verdictRecordable: true, recordVerdict: "VERD" } };
+    const s = nextReviewStepFor({ attempt: { ...base, ...attempt }, personSpoke: true, nextCommand: "NEXT", reviewFile: "REVIEW.md", subject: "S" });
+    const text = s?.text ?? "";
+    expect(text).toContain("REVIEW.md");
+    expect(text.indexOf("record NOT-READY without one")).toBeGreaterThan(text.indexOf("If they asked to carry on and no review is there"));
+    expect(text.indexOf("`NEXT`")).toBeGreaterThan(text.indexOf("record NOT-READY without one"));
+    expect(text).not.toContain("RETRY");
+    const off = nextReviewStepFor({ attempt: { ...base, ...attempt }, personSpoke: true, fallback: false, subject: "S" });
+    expect(off?.text).not.toContain("NOT-READY without one");
   });
   test("a team lock on strict says approval waits for the review, and names the file", () => {
     const attempt = { pendingReview: { iteration: 1, retryable: true, verdictRecordable: true, recordVerdict: "VERD" } };

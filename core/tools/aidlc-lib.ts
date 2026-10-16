@@ -32578,6 +32578,9 @@ export function nextReviewStepFor(input: {
   // The command that asks `next` again; a person-first step runs it only when
   // the person asked to carry on with the review.
   nextCommand?: string;
+  // The review file the open request names (project-relative), so a chat that
+  // never saw the request knows where the verdict is written.
+  reviewFile?: string;
   // Whether a spent retry names the NOT-READY fallback. Off after the person
   // has written, on a route that does not put their words first.
   fallback?: boolean;
@@ -32647,7 +32650,10 @@ export function nextReviewStepFor(input: {
     };
   }
   const record = pending.verdictRecordable === true && pending.recordVerdict !== undefined
-    ? `record the verdict for pass ${pending.iteration} with \`${pending.recordVerdict}\` (the verdict is the one the reviewer's review file states)`
+    ? `record the verdict for pass ${pending.iteration} with \`${pending.recordVerdict}\` ` +
+      (input.reviewFile === undefined
+        ? "(the verdict is the one the reviewer's review file states)"
+        : `(the verdict is the one the reviewer's review file states: ${input.reviewFile})`)
     : null;
   if (person) {
     return {
@@ -32662,6 +32668,10 @@ export function nextReviewStepFor(input: {
               : "If they asked to carry on and no review is there, ask the reviewer again",
             input.retryRequest,
           )}`
+          : "") +
+        (record !== null && !(pending.retryable && input.retryRequest !== undefined) && input.fallback !== false
+          ? " If they asked to carry on and no review is there, record NOT-READY without one; that records a " +
+            "review that did not finish, not a finding."
           : "") +
         (record === null && !(pending.retryable && input.retryRequest !== undefined) ? "" : carryOn) + otherwiseStop,
     };

@@ -219,6 +219,7 @@ import {
   type GuardRefusal,
   guardAttemptState,
   nextReviewStepFor,
+  openReviewRequests,
   personMayApproveOverUnfinishedReview,
   personSpokeSinceReviewRequest,
   type GuardAttemptState,
@@ -11394,6 +11395,28 @@ function unitReceiptOnlyStep(
   return `Unit "${unit}"'s ${node.name} work is ${done}, but its completion is not recorded: run ${steps}.`;
 }
 
+// The review file the open request for this stage (or Unit) names, as the log
+// handed it out: relative to the project. A chat that resumes never saw the
+// request, so the step has to carry it. Undefined when nothing is open or the
+// record cannot be read.
+function openReviewFileFor(
+  projectDir: string,
+  stage: string,
+  reviewer: string,
+  unit: string | undefined,
+): string | undefined {
+  const record = engineRelativeRecordDir(projectDir);
+  if (record === null) return undefined;
+  try {
+    const open = openReviewRequests(readAuditShardEvents(projectDir)).filter((request) =>
+      request.stage === stage && request.reviewer === reviewer && (request.unit ?? undefined) === unit);
+    const latest = open.at(-1);
+    return latest === undefined ? undefined : toPosix(join(record, latest.reviewFile));
+  } catch {
+    return undefined;
+  }
+}
+
 // The retry of the waiting review request, while its one retry is unspent.
 function retryRequestFor(
   projectDir: string,
@@ -11435,6 +11458,7 @@ function unitReviewStep(
   const step = nextReviewStepFor({
     attempt, didNotFinish: pending.didNotFinish === true, verificationFailed: pending.verificationFailed === true,
     retryRequest: retryRequestFor(projectDir, node, unit, attempt),
+    reviewFile: openReviewFileFor(projectDir, node.slug, node.reviewer as string, unit),
     // The Unit routes put the step before `next`, and `report` replays it, so
     // the person's words are not folded in here; the NOT-READY fallback is left
     // out once they have written, as the reviewer protocol says.
@@ -11492,6 +11516,7 @@ function stageReviewStep(
     didNotFinish: pending.didNotFinish === true,
     verificationFailed: pending.verificationFailed === true,
     retryRequest: retryRequestFor(projectDir, node, undefined, attempt),
+    reviewFile: openReviewFileFor(projectDir, node.slug, node.reviewer, undefined),
     personSpoke: personSpokeSinceReviewRequest(projectDir, node.slug, node.reviewer, undefined),
     approval: approvalOverReview(projectDir, stateContent),
     nextCommand: `${aidlcToolInvocation("orchestrate")} next`,
