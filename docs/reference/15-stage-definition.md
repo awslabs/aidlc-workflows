@@ -339,25 +339,30 @@ For unconditional consumes, **omit the field entirely**. There is no
 `always` value — an unconditional consume simply has no `conditional_on`
 key.
 
-### `cites`
+### `consumes[].cited`
 
-An optional list of the stage's own `consumes` artifacts that its
-deliverables cite whenever the artifact exists. The `upstream-coverage` check
-asks the deliverables to cite every required consume that exists; it leaves an
-optional one (`required: false`) unchecked, because an optional input may not
-have informed the output, unless the stage lists it here. Requirements
-Analysis lists `intent-statement` and `scope-document`: both are optional
+An optional boolean on a consume: `cited: true` says the stage's deliverables
+cite that input whenever it exists. The `upstream-coverage` check asks the
+deliverables to cite every required consume that exists; it leaves an optional
+one (`required: false`) unchecked, because an optional input may not have
+informed the output, unless the consume is marked `cited: true`. Requirements
+Analysis marks `intent-statement` and `scope-document`: both are optional
 there, because scopes without Ideation produce neither, and when they exist the
-requirements build on them. Each entry must name one of the stage's consumes.
-The key sits outside `consumes`, so adding or removing it does not change the
-record of a stage that already finished.
+requirements build on them.
+
+The compile lists the marked consumes as the stage's `cites` in
+`stage-graph.json` and keeps the compiled `consumes` entries as they were, so
+marking or unmarking one does not change the record of a stage that already
+finished. The flag sits on the consume, not in a top-level list, because a
+project on 2.8.0 to 2.11.0 refreshes to a newer release with its own tool,
+which accepts a key inside a consume and refuses a top-level key it does not
+know.
 
 ```yaml
 consumes:
   - artifact: intent-statement
     required: false
-cites:
-  - intent-statement
+    cited: true
 ```
 
 ### `optional_produces`

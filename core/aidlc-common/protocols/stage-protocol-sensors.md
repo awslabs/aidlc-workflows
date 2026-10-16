@@ -47,7 +47,7 @@ and always pass.
 `upstream-coverage` compares output prose with the stage's `consumes:`
 frontmatter. Every required artefact that exists must be referenced so the
 output shows which upstream inputs informed it; an optional one
-(`required: false`) is not checked unless the stage lists it under `cites:`. Stages with no required or cited `consumes:` pass
+(`required: false`) is not checked unless the stage marks it `cited: true`. Stages with no required or cited `consumes:` pass
 this check trivially. The compact `Imports:` and `Upstream targets:` lines in
 each stage file are the local summary; frontmatter remains authoritative when
 checks are resolved.

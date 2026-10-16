@@ -23,7 +23,7 @@ timeout_seconds: 300
 Reads the stage frontmatter `consumes:` list and checks the stage's
 deliverables reference each required upstream artifact that exists. An
 optional one (`required: false`) is not checked, because it may not have
-informed the output, unless the stage lists it under `cites:`. A reference counts in any of the forms the framework's
+informed the output, unless the stage marks it `cited: true`. A reference counts in any of the forms the framework's
 artifacts actually use:
 
 - the artifact slug as a standalone token (not embedded in a longer
