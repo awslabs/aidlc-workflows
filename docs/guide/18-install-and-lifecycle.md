@@ -668,7 +668,8 @@ readiness check and keeping each run small.
 `/aidlc --config [section]` is the conversational alias for these same config
 sections. The conductor reads the current JSON state before asking, gathers
 only the changes you want, and lands each accepted section through one exact
-`aidlc config <section> <explicit value flags> --yes` command. Leaving a
+`aidlc config <section> <explicit value flags> --yes` command (for preview,
+`aidlc config preview <feature> <on|off> --yes`). Leaving a
 section unchanged runs no command. After landing or declining, the alias stops;
 it never advances or resumes workflow work.
 

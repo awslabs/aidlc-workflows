@@ -28,7 +28,7 @@ import {
   swarmWorkerWorktreeMeta,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
-import { resolveHarnessPath } from "./aidlc-runtime-paths.ts";
+import { discoverProjectHarnesses, resolveHarnessPath } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 /** The preview feature this module implements. */
@@ -120,6 +120,16 @@ function recordedChoices(projectDir: string): ReturnType<typeof readPreviewFeatu
   return readPreviewFeatures(join(projectDir, ".kiro"));
 }
 
+// The release that tree is on, as `config preview` reads it; the running
+// engine's when the tree carries no stamp.
+function treeVersion(projectDir: string, version: string): string {
+  try {
+    return discoverProjectHarnesses(projectDir).find((tree) => tree.harnessDir === ".kiro")?.frameworkVersion ?? version;
+  } catch {
+    return version;
+  }
+}
+
 /** What the review request does with the reviewer copy. */
 export type ReviewCopyOutcome =
   /** Dispatch this agent: the reviewer with the review's read scope. */
@@ -143,7 +153,12 @@ export function prepareReviewCopy(
   review: { requestId: string; reviewer: string; unit?: string },
   version: string = AIDLC_VERSION,
 ): ReviewCopyOutcome | null {
-  if (!review.unit || !previewFeatureOn(REVIEWER_READ_SCOPE_FEATURE, recordedChoices(projectDir), version)) return null;
+  if (
+    !review.unit ||
+    !previewFeatureOn(REVIEWER_READ_SCOPE_FEATURE, recordedChoices(projectDir), treeVersion(projectDir, version))
+  ) {
+    return null;
+  }
   // Doctor lists a drop by its reason up to the first ": ", cut short, so the
   // reason starts with a short cause and the details follow it.
   const drop = (cause: string, detail: string) =>

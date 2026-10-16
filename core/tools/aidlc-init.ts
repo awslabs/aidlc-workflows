@@ -258,7 +258,6 @@ import {
 import {
   activeModelGroups,
   applyModelPolicyToProjection,
-  HARNESS_HONESTY,
   HARNESS_PRODUCT_NAMES,
   harnessHonestyNotes,
   isModelEffort,
@@ -11210,7 +11209,7 @@ function validatePreviewArgs(argv: readonly string[]): string | null {
   if (output) return output;
   const known = PREVIEW_FEATURES.join(", ");
   if (words.length === 0) {
-    return argv.includes("--dry-run") || argv.includes("--yes")
+    return ["--dry-run", "--yes", "--download"].some((flag) => argv.includes(flag))
       ? `name the feature to change: config preview <feature> <on|off> (${known})`
       : null;
   }
@@ -11440,8 +11439,9 @@ function preparePreviewSection(
   const harness = modelHarness(tree.distribution);
   const current = modelPolicyForHarness(resolveAidlcSettings(projectDir).models, harness);
   const tiers = readAgentTiers(tree.root);
-  // Off says its way back in the switch line itself, and what a recorded
-  // per-agent model or effort then does on Kiro.
+  // Off says its way back in the switch line itself, and what becomes of a
+  // recorded per-agent model or effort; a file it cannot take them out of is
+  // named by the refresh.
   const ownSettings = Object.values(normalizeModelPolicy(current)?.agents ?? {})
     .some((agent) => agent.model !== undefined || agent.effort !== undefined);
   const notes = feature !== KIRO_AGENT_MODELS_FEATURE
@@ -11449,7 +11449,7 @@ function preparePreviewSection(
     : choice === "on"
     ? modelSummaryLines(current, current, tiers, harness, projectDir, { version, agentModels: choice }).notes
     : ownSettings
-    ? [HARNESS_HONESTY["kiro-ide"].message]
+    ? ["The models and efforts set for single agents stay recorded and are no longer written into Kiro's agent files."]
     : [];
   return {
     argv: modelsPipelineArgv(argv),
@@ -13290,7 +13290,9 @@ export async function main(
     // up, which a pin can make another one than the installed tree's.
     if (modelsContext?.preview?.choice === "on" && versionChannel(stamp.frameworkVersion) !== PREVIEW_CHANNEL) {
       throw new Error(
-        `${modelsContext.preview.feature} needs this project on a preview release of AI-DLC; this run sets it up on ${stamp.frameworkVersion}`,
+        `${modelsContext.preview.feature} needs this project on a preview release of AI-DLC; this run sets it up on ${stamp.frameworkVersion}; ${
+          previewReleaseSteps(projectDir)
+        }`,
       );
     }
     prepared = prepareRefreshSource(

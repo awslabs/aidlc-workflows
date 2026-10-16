@@ -730,8 +730,9 @@ The conductor reads current state with
 section at once), asks for changes conversationally, and
 uses the native question picker for enumerable choices. Saying "leave it"
 skips that section. Every accepted change lands through one exact
-`aidlc config <section> <explicit value flags> --yes` command; the command and
-its output are shown. The alias never invents values and never runs bare
+`aidlc config <section> <explicit value flags> --yes` command (for preview,
+`aidlc config preview <feature> <on|off> --yes`); the command and its output
+are shown. The alias never invents values and never runs bare
 `aidlc config --yes`.
 
 This is terminal configuration work. After the change lands, or after you
