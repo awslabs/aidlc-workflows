@@ -22,7 +22,7 @@ tests/unit/t242-plugin-state.test.ts:
                              ^
 error: expect(received).toEqual(expected)
 
-- ObjectContaining 
+- ObjectContaining
   {
     "capability": "current-root-only",
 -   "harness": "devin",
