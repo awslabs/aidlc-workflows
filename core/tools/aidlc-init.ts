@@ -250,8 +250,6 @@ import {
   isModelId,
   isModelPreset,
   KIRO_AGENT_MODELS_RECORD,
-  kiroAgentModelsApplied,
-  kiroAgentModelsChoice,
   kiroAgentModelsOn,
   MODEL_EFFORTS,
   MODEL_GROUPS,
@@ -1220,9 +1218,7 @@ function agentModelsSwitchLine(
   to: KiroAgentModelsChoice,
 ): string {
   const head = `  Kiro agent models: ${before.agentModels ?? "not set"} -> ${to} in ${harnessDir}/tools/data/harness.json`;
-  const wasOn = kiroAgentModelsApplied(before);
-  // Recording what was already in effect changes no agent file.
-  if (wasOn === (to === "on")) return `${head}; the agent files do not change.`;
+  const wasOn = kiroAgentModelsOn(before);
   return `${head}; Kiro takes it at each agent's next dispatch. To undo: ` +
     modelsCommand(projectDir, harness, `--agent-models ${wasOn ? "on" : "off"} --yes`);
 }
@@ -6588,7 +6584,7 @@ function prepareRefreshSource(
   diagnosticsOverride?: ConfigDiagnosticOverrides,
   force = false,
   // The caller passes the version of the release being staged.
-  agentModelsRequest: { version: string; requested?: KiroAgentModelsChoice; dryRun?: boolean } = { version: AIDLC_VERSION },
+  agentModelsRequest: { version: string; requested?: KiroAgentModelsChoice } = { version: AIDLC_VERSION },
 ): PreparedRefreshSource {
   // A copied project is not a release: never baseline the user's edits as
   // shipped entries during an in-place record mutation.
@@ -6730,29 +6726,20 @@ function prepareRefreshSource(
     if (diagnosticsOverride.plugins === null) delete staged.plugins;
     else staged.plugins = diagnosticsOverride.plugins;
   }
-  // kiro-ide's agent-models choice: `--agent-models` wins; with none recorded,
-  // a run with the switch on records "on", so later runs keep the pins
-  // without it.
+  // kiro-ide's agent-models choice: what `--agent-models` asks, else what is
+  // recorded. Lines come out only in the run that turns off a choice that was on.
   let agentModelsChoice: KiroAgentModelsChoice | null = null;
   let agentModelsRecorded = false;
-  // Lines come out only in the run that turns off a feature that was on.
   let agentModelsTakeOut = false;
   if (descriptor.distribution === "kiro-ide") {
     const recorded = staged[KIRO_AGENT_MODELS_RECORD];
     const before = recorded === "on" || recorded === "off" ? recorded : null;
-    agentModelsChoice = kiroAgentModelsChoice(recorded, agentModelsRequest.requested, agentModelsRequest.version);
+    agentModelsChoice = agentModelsRequest.requested ?? before;
     agentModelsTakeOut = agentModelsRequest.requested === "off" &&
-      kiroAgentModelsApplied({ version: agentModelsRequest.version, agentModels: before });
+      kiroAgentModelsOn({ version: agentModelsRequest.version, agentModels: before });
     if (agentModelsChoice !== null && agentModelsChoice !== recorded) {
       staged[KIRO_AGENT_MODELS_RECORD] = agentModelsChoice;
       agentModelsRecorded = true;
-      if (agentModelsRequest.requested === undefined) {
-        notes.push(
-          `${agentModelsRequest.dryRun ? "This records" : "Recorded"} agent-models on for this project, because ` +
-            "AIDLC_PREVIEW_FEATURES names it: later runs keep each agent's own model and effort without it. " +
-            `\`${modelsCommand(projectDir, "kiro-ide", "--agent-models off --yes")}\` turns it off.`,
-        );
-      }
     }
   }
   const agentModelsBuild: ModelBuild = { version: agentModelsRequest.version, agentModels: agentModelsChoice };
@@ -11023,7 +11010,8 @@ function prepareModelsSection(
   }
   // The choice lives in this project's harness.json, so the switch alone asks
   // for no settings target.
-  const agentModelsChange = agentModels !== undefined && agentModels !== installedBuild.agentModels;
+  // Nothing recorded is off, so a change is one in what applies.
+  const agentModelsChange = agentModels !== undefined && (agentModels === "on") !== kiroAgentModelsOn(installedBuild);
   if (agentModels !== undefined && !mutationFlags.some((flag) => flag !== "--agent-models" && argv.includes(flag))) {
     if (!agentModelsChange) {
       emitResult(success(`agent-models is already ${agentModels} for this project`), options);
@@ -11106,7 +11094,6 @@ function prepareModelsSection(
   const settingsUnchanged = canonical(targetCurrentSettings) === canonical(targetNextSettings);
   const kiroIdeProjectionDue = settingsUnchanged && selected.distribution === "kiro-ide" && (
     agentModelsChange ||
-    (installedBuild.agentModels == null && kiroAgentModelsOn({ version: installedBuild.version })) ||
     (kiroAgentModelsOn(installedBuild) &&
       modelPolicySurfaceDrift(projectDir, selected.harnessDir, harness, current, installedBuild, false).length > 0)
   );
@@ -13034,7 +13021,6 @@ export async function main(
       argv.includes("--force"),
       {
         version: stamp.frameworkVersion,
-        dryRun: argv.includes("--dry-run"),
         ...(modelsContext?.agentModels ? { requested: modelsContext.agentModels } : {}),
       },
     );

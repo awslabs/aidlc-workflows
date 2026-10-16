@@ -537,10 +537,8 @@ aidlc config models --agent architecture-reviewer --model gpt-5.6-terra --effort
 
 The first command turns the feature on for this project and records that in
 `.kiro/tools/data/harness.json`, so every later `aidlc config` run keeps it,
-from a terminal or from a chat request alike. Running a pin with
-`AIDLC_PREVIEW_FEATURES=agent-models` set in the environment (in PowerShell,
-`$env:AIDLC_PREVIEW_FEATURES = "agent-models"`) turns it on the same way.
-AI-DLC records the model and effort in `aidlc.settings.json` and writes
+from a terminal or from a chat request alike; no environment variable is
+involved. AI-DLC records the model and effort in `aidlc.settings.json` and writes
 `model:` and `effortLevel:` into that agent's
 `.kiro/agents/aidlc-architecture-reviewer-agent.md`; a Unit's reviewer copy
 keeps them. Kiro reads them when it next dispatches the agent, in a chat that
@@ -557,8 +555,7 @@ on Claude Code, so change those agents through `aidlc config models` rather
 than by hand; `aidlc config models --check` reports a line that does not
 match. `aidlc config models --agent-models off` takes every
 agent's lines out in that run and keeps the recorded models and efforts, so
-`--agent-models on` puts them back; off holds even with the variable set. With
-it off, and on a stable release, AI-DLC leaves the Kiro agent files as they
+`--agent-models on` puts them back. With it off, and on a stable release, AI-DLC leaves the Kiro agent files as they
 are, lines you added yourself included, so turn it off before you move a
 project back to a stable release. `effortLevel` is not in Kiro's documentation.
 Measured on Kiro CLI 2.31.1 on its v3 engine and Kiro IDE 1.3.0.

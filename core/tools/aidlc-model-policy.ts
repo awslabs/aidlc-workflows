@@ -5,7 +5,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, join } from "node:path";
-import { PREVIEW_CHANNEL, previewFeatureOn, versionChannel } from "./aidlc-channel.ts";
+import { PREVIEW_CHANNEL, versionChannel } from "./aidlc-channel.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   kiroModelDefaults,
@@ -174,9 +174,6 @@ type HarnessHonesty = {
   readonly message: string;
 };
 
-/** The preview feature that writes one agent's model and effort into its Kiro agent file. */
-export const KIRO_AGENT_MODELS_FEATURE = "agent-models";
-
 /** The project's choice for that feature, a top-level key of its kiro-ide `tools/data/harness.json`. */
 export const KIRO_AGENT_MODELS_RECORD = "agentModels";
 export type KiroAgentModelsChoice = "on" | "off";
@@ -200,26 +197,6 @@ export function readKiroAgentModelsChoice(harnessRoot: string): KiroAgentModelsC
   }
 }
 
-// The choice a config run records for a kiro-ide project: `--agent-models`
-// wins, then what is recorded; with neither, a preview release with the switch
-// on records "on", so later runs keep the pins without it.
-export function kiroAgentModelsChoice(
-  recorded: unknown,
-  requested: KiroAgentModelsChoice | undefined,
-  version: string,
-): KiroAgentModelsChoice | null {
-  if (requested !== undefined) return requested;
-  if (recorded === "on" || recorded === "off") return recorded;
-  return kiroAgentModelsOn({ version }) ? "on" : null;
-}
-
-// Whether AI-DLC's lines are in the project's kiro-ide agent files: every run
-// that writes them records "on" first, so on a preview release that record
-// says it, whatever the variable says now.
-export function kiroAgentModelsApplied(build: ModelBuild = {}): boolean {
-  return versionChannel(build.version ?? AIDLC_VERSION) === PREVIEW_CHANNEL && build.agentModels === "on";
-}
-
 // A preview release where agent-models is not on: the note names how to turn it on.
 export function kiroAgentModelsOffInPreview(build: ModelBuild = {}): boolean {
   return versionChannel(build.version ?? AIDLC_VERSION) === PREVIEW_CHANNEL && !kiroAgentModelsOn(build);
@@ -231,15 +208,12 @@ export function installedModelBuild(harnessRoot: string, version?: string): Mode
   return { ...(version ? { version } : {}), agentModels: readKiroAgentModelsChoice(harnessRoot) };
 }
 
-// Whether kiro-ide applies one agent's model and effort. Only a tree on a
-// preview release does; there a recorded choice decides, and with none the
-// switch in AIDLC_PREVIEW_FEATURES turns it on (a config run then records it).
+// Whether kiro-ide applies one agent's model and effort: only a tree on a
+// preview release whose project recorded "on" (`config models --agent-models
+// on`). Every run that writes the lines reads this, so it also says whether
+// AI-DLC's lines are in the files.
 export function kiroAgentModelsOn(build: ModelBuild = {}): boolean {
-  const version = build.version ?? AIDLC_VERSION;
-  if (versionChannel(version) !== PREVIEW_CHANNEL) return false;
-  if (build.agentModels === "off") return false;
-  if (build.agentModels === "on") return true;
-  return previewFeatureOn(KIRO_AGENT_MODELS_FEATURE, version);
+  return versionChannel(build.version ?? AIDLC_VERSION) === PREVIEW_CHANNEL && build.agentModels === "on";
 }
 
 // Kiro uses a delegated agent's own `model` and `effortLevel` (measured on Kiro
