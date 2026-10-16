@@ -55,6 +55,7 @@ import {
 } from "../harness/plugin-kit.ts";
 import { writeWindowsBunLauncher } from "../harness/windows-native-executable.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
+import { readPluginTargets } from "../../core/tools/aidlc-plugin-emit.ts";
 
 const PACKAGE_TS = join(REPO_ROOT, "scripts", "package.ts");
 const BUN = process.execPath; // the bun running this test — robust for hooks
@@ -63,6 +64,7 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const PLUGIN = "test-pro";
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude", ".claude");
+const PLUGIN_TARGETS = readPluginTargets(join(CLAUDE_DIST, "tools", "data", "plugin-targets.json"));
 const OPENCODE_DIST = join(REPO_ROOT, "dist", "opencode");
 const KIRO_DIST = join(REPO_ROOT, "dist", "kiro", ".kiro");
 const KIRO_IDE_DIST = join(REPO_ROOT, "dist", "kiro-ide", ".kiro");
@@ -323,20 +325,23 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         name?: string;
       };
       expect(hostManifest.name, harness.name).toBe(`aidlc-${PLUGIN}`);
-      // The catalogue sits where the host reads one: Codex adds a folder as a
-      // marketplace only through .agents/plugins/marketplace.json.
-      const catalogue = join(root, harness.capabilities.plugin.marketplaceDir, "marketplace.json");
-      expect(existsSync(catalogue), `${harness.name}: catalogue`).toBe(true);
+      // Our own plugins share one catalogue at the root of dist/plugins, where
+      // each host reads one (Codex: .agents/plugins/marketplace.json), so no
+      // projection of ours carries a catalogue of its own.
       expect(
-        (JSON.parse(readFileSync(catalogue, "utf-8")) as { plugins?: Array<{ name?: string }> })
-          .plugins?.map((entry) => entry.name),
-        `${harness.name}: catalogue entry`,
-      ).toEqual([`aidlc-${PLUGIN}`]);
-      if (harness.capabilities.plugin.marketplaceDir !== harness.capabilities.plugin.manifestDir) {
+        fileInventory(built).filter((file) => file.endsWith("marketplace.json")),
+        `${harness.name}: no catalogue of its own`,
+      ).toEqual([]);
+      const target = PLUGIN_TARGETS[harness.name];
+      const shared = join(REPO_ROOT, "dist", "plugins", target.marketplaceDir, "marketplace.json");
+      if (target.hostCatalogue) {
         expect(
-          existsSync(join(root, harness.capabilities.plugin.manifestDir, "marketplace.json")),
-          `${harness.name}: no second catalogue`,
-        ).toBe(false);
+          (JSON.parse(readFileSync(shared, "utf-8")) as { name?: string; plugins?: Array<{ name?: string; source?: string }> })
+            .plugins?.filter((entry) => entry.name === `aidlc-${PLUGIN}`),
+          `${harness.name}: shared catalogue entry`,
+        ).toEqual([expect.objectContaining({ source: `./${PLUGIN}/${harness.name}` })]);
+      } else {
+        expect(existsSync(shared), `${harness.name}: no catalogue for a host that reads none`).toBe(false);
       }
       expect(existsSync(join(root, "hooks", "compose.ts"))).toBe(true);
       const inventory = fileInventory(built);

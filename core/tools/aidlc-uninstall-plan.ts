@@ -20,6 +20,7 @@ import {
   windowsPosixLauncherBodyIsOwned,
 } from "./aidlc-install-paths.ts";
 import { transactionState } from "./aidlc-transaction.ts";
+import { FIRST_PARTY_MARKETPLACE } from "./aidlc-plugin-emit.ts";
 
 export type UninstallPlan = {
   files: Array<{ path: string; expected: string }>;
@@ -266,6 +267,38 @@ export function buildUninstallPlan(purge: boolean): UninstallPlan {
         else if (stat.isFile()) addFile(path);
       }
     };
+    // The one catalogue the release's plugins share sits in dot folders beside
+    // them; a catalogue whose every entry is one of the release's own marked
+    // folders goes with the version, and any other file there stays.
+    const releaseCatalogue = (path: string): boolean => {
+      try {
+        const bytes = smallRegularFile(path);
+        const catalogue = bytes && JSON.parse(bytes.toString("utf-8")) as { name?: unknown; plugins?: unknown } | null;
+        if (!catalogue || catalogue.name !== FIRST_PARTY_MARKETPLACE) return false;
+        const entries = catalogue.plugins;
+        return Array.isArray(entries) && entries.length > 0 && entries.every((entry) => {
+          const source = (entry as { source?: unknown } | null)?.source;
+          const match = typeof source === "string" ? /^\.\/([^/]+)\/([^/]+)$/.exec(source) : null;
+          return !!match && RELEASE_NAME.test(match[1]) && RELEASE_NAME.test(match[2]) &&
+            realDirectory(join(plugins, match[1], match[2])) &&
+            releasePluginFolder(join(plugins, match[1], match[2]), match[1], match[2]);
+        });
+      } catch {
+        return false;
+      }
+    };
+    const addCatalogues = (directory: string): void => {
+      for (const name of readdirSync(directory)) {
+        const path = join(directory, name);
+        const stat = lstatSync(path);
+        if (stat.isDirectory()) addCatalogues(path);
+        else if (stat.isFile() && name === "marketplace.json" && releaseCatalogue(path)) addFile(path);
+      }
+    };
+    for (const folder of readdirSync(plugins)) {
+      const catalogueRoot = join(plugins, folder);
+      if (folder.startsWith(".") && noLinks(catalogueRoot, root) && realDirectory(catalogueRoot)) addCatalogues(catalogueRoot);
+    }
     for (const plugin of readdirSync(plugins)) {
       const pluginRoot = join(plugins, plugin);
       if (!RELEASE_NAME.test(plugin) || !realDirectory(pluginRoot)) continue;

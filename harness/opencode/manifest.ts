@@ -166,6 +166,8 @@ const manifest: HarnessManifest = {
     manifestDir: ".opencode-plugin",
     kind: "store",
     installRoots: [".opencode"],
+    // opencode installs a plugin from an npm module and reads no catalogue file.
+    hostCatalogue: false,
   },
 };
 

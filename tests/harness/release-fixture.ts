@@ -280,6 +280,16 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
       for (const plugin of readdirSync(pluginsRoot).sort()) {
         const pluginRoot = join(pluginsRoot, plugin);
         if (!statSync(pluginRoot).isDirectory()) continue;
+        // As package-release: a dot folder is the catalogue our plugins share.
+        if (plugin.startsWith(".")) {
+          const entries = archiveEntries(pluginRoot).map((entry) => ({
+            ...entry,
+            path: `plugins/${plugin}/${entry.path}`,
+          }));
+          copyRuntimeEntries.push(...entries);
+          runtimeEntries.push(...entries);
+          continue;
+        }
         for (const harness of readdirSync(pluginRoot).sort()) {
           const harnessRoot = join(pluginRoot, harness);
           if (!statSync(harnessRoot).isDirectory()) continue;

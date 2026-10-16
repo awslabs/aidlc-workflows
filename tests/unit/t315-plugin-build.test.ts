@@ -170,7 +170,7 @@ describe("t315 standalone plugin builder", () => {
       expect(Object.keys(json)).toEqual(["valid", "errors", "warnings"]);
       expect(json.valid).toBe(true);
       expect(
-        treeDiff(join(EXPECTED_ROOT, harness), outDir, asShippedBuild),
+        treeDiff(join(EXPECTED_ROOT, harness), outDir, asShippedBuild(harness)),
         harness,
       ).toEqual([]);
     }
@@ -221,7 +221,7 @@ describe("t315 standalone plugin builder", () => {
       treeDiff(
         join(EXPECTED_ROOT, "claude"),
         join(pluginRoot, "dist", "claude"),
-        asShippedBuild,
+        asShippedBuild("claude"),
       ),
     ).toEqual([]);
   });
@@ -481,7 +481,7 @@ describe("t315 standalone plugin builder", () => {
     const result = run([pluginRoot, "claude", outDir, "--json"]);
     expect(result.status, result.stderr).toBe(0);
     expect(
-      treeDiff(join(EXPECTED_ROOT, "claude"), outDir, asShippedBuild),
+      treeDiff(join(EXPECTED_ROOT, "claude"), outDir, asShippedBuild("claude")),
     ).toEqual([]);
   });
 
@@ -503,7 +503,7 @@ describe("t315 standalone plugin builder", () => {
     const outDir = join(scratch, "vendored-output");
     const result = run([pluginRoot, "claude", outDir, "--json"]);
     expect(result.status, result.stderr).toBe(0);
-    expect(treeDiff(join(EXPECTED_ROOT, "claude"), outDir, asShippedBuild)).toEqual([]);
+    expect(treeDiff(join(EXPECTED_ROOT, "claude"), outDir, asShippedBuild("claude"))).toEqual([]);
   });
 
   test("validation errors refuse the build with exit 1", () => {
