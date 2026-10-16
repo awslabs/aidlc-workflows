@@ -109,6 +109,7 @@ import {
   appendUnderHeading,
   LEARNINGS_SELECTIONS_DIR,
   normalizeDriveLetter,
+  agentFileText,
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
   errorMessage,
@@ -637,7 +638,7 @@ function parseSelectionsFile(path: string): SelectionsFile {
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(bytes.toString("utf-8"));
+    parsed = JSON.parse(agentFileText(bytes));
   } catch (e) {
     fail(`selections-json is malformed: ${errorMessage(e)}`, 1);
   }
