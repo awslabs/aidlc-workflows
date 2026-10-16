@@ -69,6 +69,8 @@ Harness-roster pins: Devin occupies option 5 of the setup wizard's harness list,
 
 ## Superseded approaches and history
 
+Build-dependent behavior changes recorded so far: 3000.11.92 flips `read_config_from` precedence to false-wins-at-any-layer (user ≤3000.11.3) and delivers `.devin/rules` regardless of the windsurf switch — both DEVIN-04; doctor's user-layer row is version-aware (`devinUserLayerOverridesProject`, floor `DEVIN_PROJECT_FALSE_WINS_VERSION = [3000,11,92]`). Neither changes the selected support floor — the shipped floor stays `3000.10.21` by owner decision, and `windsurf:true` is shipped precisely so ≤3000.11.3 still delivers `.devin/rules`.
+
 `801507ad` introduced the version/discovery helper. `5e3fcfce` unified and raised the floor. `a51bf1eb` replaced the unconditional fresh-install hook reminder with historical execution evidence. `6e208f7b` repaired the diagnostics test's literal-type inference.
 
 The 2026-10-09 change set added the `Devin hook dispatch` row, the `sessionId` marker field and session-linked warning, and the Devin native-trust branch (DEVIN-04). Its resume plan proposed a heartbeat-age staleness rule; the session-id link replaced it for the reason given above.

@@ -174,18 +174,26 @@ framework-scoped shell grants follow both Claude Code and Kiro CLI. This does
 not copy Kiro's explicit recursive-`rm` and `git push` denials.
 
 `read_config_from` states an explicit decision for every documented
-compatibility-import source: only `agents_standard` is `true` (it is how Devin
+compatibility-import source: `agents_standard` is `true` (it is how Devin
 reads the project's root `AGENTS.md`; it also admits `AGENTS.local.md`,
-`AGENT.md`, and `.windsurfrules`). The other six sources are `false` because a
-sibling AI-DLC harness installed in the same project would otherwise re-import
-the same skills under prefixed names — a `.github/skills/aidlc` twin turns
-`/aidlc` into `/devin:aidlc` + `/github:aidlc` — and start its MCP registries.
-To re-enable a source deliberately for yourself, set it in the **user** config
-(`~/.config/devin/config.json`, `%APPDATA%\devin\config.json` on Windows): on
-every tested build (3000.6.14 through 3000.11.1) the user layer overrides the
-project file for this setting and `.devin/config.local.json` does not,
-contrary to Devin's documented precedence. `devin skills list` and
-`devin mcp list` show the effective result.
+`AGENT.md`, and `.windsurfrules`), and `windsurf` is `true` because Devin
+builds before 3000.11.92 also gate `.devin/rules` delivery on that switch —
+with it `false` the always-on rules are listed but never reach the chat. The
+side effect: Devin also imports a Windsurf/Devin Desktop user's own
+`.windsurf/rules`, `.windsurf/skills`, `~/.codeium/windsurf/skills`, and
+`~/.codeium/windsurf/mcp_config.json`. The other five sources are `false`
+because a sibling AI-DLC harness installed in the same project would
+otherwise re-import the same skills under prefixed names — a
+`.github/skills/aidlc` twin turns `/aidlc` into `/devin:aidlc` +
+`/github:aidlc` — and start its MCP registries.
+To re-enable a source deliberately: on 3000.10.21 through 3000.11.3 the
+**user** config (`~/.config/devin/config.json`, `%APPDATA%\devin\config.json`
+on Windows) overrides the project file for this setting, contrary to Devin's
+documented precedence; from 3000.11.92 a `false` at any layer wins, so the
+change must go in the project file instead. Turning `claude` on also loads
+`.claude/settings.json` hooks, so a Claude Code AI-DLC install in the same
+project runs its hooks too. `devin skills list` and `devin mcp list` show
+the effective result.
 
 For existing installs, review the generated configuration before applying or
 merging it. Preserve deliberate local/team policy; local or user-level grants
@@ -236,9 +244,10 @@ model policy but does not inspect the effective organization setting/model.
 Two "Devin compatibility imports" rows report the `read_config_from`
 isolation separately for the project file and the user-level config — the
 project row warns when `.devin/config.json` leaves a documented source at
-Devin's default, and the user row warns when `~/.config/devin/config.json`
-re-enables one (on tested builds the user layer overrides the project file
-for this setting).
+Devin's default, and the user row is version-aware: it warns when
+`~/.config/devin/config.json` re-enables one and the build still lets the
+user layer win (before 3000.11.92, or the version is unknown), and reports a
+clean pass on ≥3000.11.92 where the project's `false` prevails.
 
 `/aidlc --doctor` reports Devin host health as three separate rows. `Devin
 host availability` passes when either the standalone CLI (PATH) or the Devin
