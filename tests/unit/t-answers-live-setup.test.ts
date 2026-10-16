@@ -1,10 +1,12 @@
 // covers: file:tests/harness/aidlc-answers-corpus.ts
 //
-// What the live answers check can set up in a fresh chat, the way a person meets it. A question the agent asked in
-// chat is not shown again by a bare `/aidlc`, so only its replies typed with `/aidlc` are driven live. A verification
-// command or Construction policy answer typed in a fresh chat is recorded there, so their `/aidlc` replies are driven
-// too; guard recovery's fixture cannot be met, so it is not driven live at all. And the open work carrying on after a
-// routing reply is counted from that reply, not from the rows the chat writes as it opens.
+// What the live answers check can set up in a fresh chat, the way a person meets it. A bare `/aidlc` shows again a
+// question the agent asked in chat that has no step of its own. Every reply to a Construction policy question is driven
+// live; a stage question and learnings keep to their replies typed with `/aidlc` while the drive cannot judge the
+// agent's words after a chat reply. The verification command comes back at its own checkpoint step, which the fixture
+// does not reach, so only its replies typed with `/aidlc` are driven; its answer typed in a fresh chat is recorded there.
+// Guard recovery's fixture cannot be met, so it is not driven live at all. And the open work carrying on after a routing
+// reply is counted from that reply, not from the rows the chat writes as it opens.
 //
 // Mechanism: function - the live pool over the corpus, and the engine's own steps on the fixtures (the human-turn
 // hook, the session-start hook, `next`); no agent runs.
@@ -41,28 +43,30 @@ function project(): string {
 }
 
 describe("the live answers check in a fresh chat", () => {
-  test("a question asked in chat is driven live only by its /aidlc replies, and guard recovery not at all", () => {
+  test("a question asked in chat is driven live only by its /aidlc replies, a Construction policy question by every reply, and guard recovery not at all", () => {
     const live = (question: string) => ANSWERS.filter((item) => item.question === question && liveReply(item)).map((item) => item.via);
     for (const question of ASKED_IN_CHAT) expect(live(question).every((via) => via === "aidlc"), question).toBe(true);
     expect(live("verification-command")).toEqual(["aidlc", "aidlc"]);
-    expect(live("construction-policy")).toEqual(["aidlc", "aidlc"]);
     expect(live("stage-question")).toEqual(["aidlc"]);
     expect(live("learnings")).toEqual([]);
+    // A bare /aidlc shows it again, so every reply to it is driven.
+    expect(live("construction-policy")).toHaveLength(ANSWERS.filter((item) => item.question === "construction-policy").length);
     for (const question of NOT_LIVE) expect(live(question), question).toEqual([]);
     // Every other question keeps every reply.
     const others = ANSWERS.filter((item) => !ASKED_IN_CHAT.has(item.question) && !NOT_LIVE.has(item.question));
     expect(others.every(liveReply)).toBe(true);
   });
 
-  test("a bare /aidlc in a fresh chat resumes the stage without the open chat question; with words it hands the question back", async () => {
-    // If a bare re-entry ever shows the open question, the chat replies of these questions can be driven live again.
+  test("a bare /aidlc in a fresh chat shows the open chat question again; with words it hands the question back", async () => {
     const proj = project();
     await buildQuestion(proj, "stage-question");
-    await say(proj, "/aidlc", "claude");
-    const bare = await next(proj, []);
-    expect(bare.directive?.kind).toBe("run-stage");
-    await say(proj, "/aidlc PostgreSQL", "claude");
-    const words = await next(proj, ["PostgreSQL"]);
+    await opens(proj, OTHER_CHAT);
+    await say(proj, "/aidlc", "claude", { session: OTHER_CHAT });
+    const bare = await next(proj, [], { session: OTHER_CHAT });
+    expect(bare.directive?.kind).toBe("print");
+    expect(String(bare.directive?.message ?? "")).toContain('"Which database should the to-do app use?"');
+    await say(proj, "/aidlc PostgreSQL", "claude", { session: OTHER_CHAT });
+    const words = await next(proj, ["PostgreSQL"], { session: OTHER_CHAT });
     expect(words.directive?.kind).toBe("print");
     expect(String(words.directive?.message ?? "")).toContain("has a question you asked that the person has not answered yet");
   });

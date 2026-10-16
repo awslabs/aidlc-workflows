@@ -63,8 +63,8 @@ const gate = (harness: LiveHarness): string | null => liveGate(harness, LIVE, "s
 
 // Items a real agent can be driven through: a fixture exists, nothing is waited for, and the reply is one a person can
 // give in a live chat (a dismissed box is the unit check's). Codex and Kiro CLI have no question box, so picker items
-// stay with Claude Code; a `$aidlc` line is Codex's. A question asked in chat is met only by its `/aidlc` replies, and
-// guard recovery not at all (liveReply).
+// stay with Claude Code; a `$aidlc` line is Codex's. A question asked in chat is met only by its `/aidlc` replies
+// (ASKED_IN_CHAT says which, and why), and guard recovery not at all (liveReply).
 function eligible(harness: LiveHarness): AnswersItem[] {
   return ANSWERS.filter((item) =>
     NO_FIXTURE[item.question] === undefined && waitsFor(item) === null && liveReply(item) &&

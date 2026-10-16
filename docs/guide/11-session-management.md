@@ -13,7 +13,7 @@ A workflow may span multiple harness sessions. AI-DLC persists all progress to d
 
 ## Resume Flow
 
-When you run bare `/aidlc` in a new session and the active intent's `aidlc-state.md` exists, AI-DLC carries on where the work stopped, the same as `/aidlc --resume`, and says where it picked up. To do something else, say so: redo the current stage, jump to a stage, or start fresh.
+When you run bare `/aidlc` in a new session and the active intent's `aidlc-state.md` exists, AI-DLC carries on where the work stopped, the same as `/aidlc --resume`, and says where it picked up. A question you were asked in an earlier chat and did not answer is asked again, as it was asked. To do something else, say so: redo the current stage, jump to a stage, or start fresh.
 
 ```mermaid
 flowchart TD
