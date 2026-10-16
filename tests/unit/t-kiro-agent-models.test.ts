@@ -461,6 +461,12 @@ describe("the agent-models choice through config", () => {
     expect(refused.out.replace(/\s+/g, " ")).toMatch(
       /install a preview release's copy runtime into this project \(Release Channels in the install guide\), then [^,]*config preview agent-models on --yes( --project-dir \S+)? $/,
     );
+    // Recorded on with a pin to a preview release is not already on: the run sets the pin up first.
+    writeFileSync(join(p.dir, ".aidlc-version"), `${previewVersion}\n`);
+    const recordedPinned = p.preview("agent-models", "on", "--yes");
+    expect(recordedPinned.out).not.toContain("already on");
+    expect(recordedPinned.out).toContain(`this project is pinned to ${previewVersion}`);
+    rmSync(join(p.dir, ".aidlc-version"));
     // The listing is laid out for the terminal, so a long line may wrap.
     const listed = p.preview().out.replace(/\s+/g, " ");
     expect(listed).toContain("agent-models: off (recorded on; this release is not a preview release)");
