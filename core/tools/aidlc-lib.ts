@@ -13161,12 +13161,23 @@ export function recordRelativeFileName(projectDir: string, root: string, file: s
   return inRecord ? fromRecord : given;
 }
 
+/**
+ * The text of a file the agent wrote for the engine to read. Windows
+ * PowerShell 5.1 writes UTF-8 with a byte order mark (`Set-Content -Encoding
+ * UTF8`, `Out-File -Encoding utf8`), and an editor can too; it is the same file,
+ * so one leading BOM is dropped (#2452). Anything bound to the file's bytes,
+ * such as a hash, stays over the bytes on disk.
+ */
+export function agentFileText(bytes: Buffer): string {
+  return bytes.toString("utf-8").replace(/^﻿/, "");
+}
+
 export function readVerificationCommandFile(projectDir: string, file: string): VerificationCommand {
   const root = recordDir(projectDir);
   if (!root) throw new Error("Verification command file requires an active intent record.");
   const path = recordFileTargetOrThrow(root, recordRelativeFileName(projectDir, root, file));
   return verificationCommandDetails(
-    readRegularFileNoFollowOrThrow(path, "verification command file", 16 * 1024).toString("utf-8"),
+    agentFileText(readRegularFileNoFollowOrThrow(path, "verification command file", 16 * 1024)),
   );
 }
 
@@ -13212,8 +13223,7 @@ export function readAnswerTextFile(projectDir: string, file: string): string {
     );
   }
   const path = recordFileTargetOrThrow(root, relativePath);
-  const text = readRegularFileNoFollowOrThrow(path, "answer text file", ANSWER_TEXT_MAX_BYTES)
-    .toString("utf-8")
+  const text = agentFileText(readRegularFileNoFollowOrThrow(path, "answer text file", ANSWER_TEXT_MAX_BYTES))
     .replace(/\r?\n$/, "");
   removeRecordFileNoFollow(root, relativePath);
   if (text.trim() === "") throw new Error(`The answer text file ${relativePath} is empty.`);
@@ -26566,7 +26576,7 @@ function validateUnitSourceManifestBytes(
 ): ReadUnitSourceManifestResult {
   let value: unknown;
   try {
-    value = JSON.parse(rawBytes.toString("utf-8")) as unknown;
+    value = JSON.parse(agentFileText(rawBytes)) as unknown;
   } catch (error) {
     return { ok: false, reason: `source-manifest.json is not valid JSON (${errorMessage(error)})` };
   }
