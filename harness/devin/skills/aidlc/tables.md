@@ -6,7 +6,7 @@ Generated tables, kept beside the skill as human-readable data: the engine route
 
 The orchestration engine resolves scope-level stage routing internally (it reads the compiled scope grid the table below summarises). The summary table is kept here as human-readable data - not dispatch logic - and is regenerated, never hand-edited. (One carve-out: `scope save` adds a plan the human chose to keep to the runtime scope registry (the durable `aidlc/scopes/<name>.md` record, projected into `{{HARNESS_DIR}}/scopes/aidlc-<name>.md` and a `scope-grid.json` entry) - that is the sanctioned write path for saved scopes, not a hand-edit; this summary table itself stays generated.)
 
-Source of truth: one file per scope under `.devin/scopes/aidlc-<name>.md` (identity + keywords + description + skeleton default) plus each stage's `scopes:` frontmatter (membership), transposed into the compiled grid at `bun .devin/tools/aidlc-graph.ts compile`. Adding a scope is the same muscle memory as authoring a sensor or agent — drop `.devin/scopes/aidlc-<name>.md`, tag the member stages' `scopes:` lists, recompile, then `{{INVOKE}} engine gen scope-table` to regenerate the table below + commit. No prose edit required. CI runs `scope-table --check` to prevent drift.
+Source of truth: one file per scope under `.devin/scopes/aidlc-<name>.md` (identity + keywords + description + skeleton default) plus each stage's `scopes:` frontmatter (membership), transposed into the compiled grid at `{{INVOKE}} engine graph compile`. Adding a scope is the same muscle memory as authoring a sensor or agent — drop `.devin/scopes/aidlc-<name>.md`, tag the member stages' `scopes:` lists, recompile, then `{{INVOKE}} engine gen scope-table` to regenerate the table below + commit. No prose edit required. CI runs `scope-table --check` to prevent drift.
 
 <!-- BEGIN: compiled scope grid via `{{INVOKE}} engine gen scope-table` - do NOT hand-edit -->
 
@@ -71,5 +71,3 @@ The engine reads the compiled `data/stage-graph.json` directly for all routing; 
 | feedback-optimization | 4.7 | Feedback & Optimization | Operation | CONDITIONAL | aidlc-operations-agent | aidlc-aws-platform-agent | inline |
 
 <!-- END: compiled stage graph -->
-
----
