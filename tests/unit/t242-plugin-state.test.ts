@@ -115,6 +115,8 @@ function installed(
     manifestPath: `/plugins/${key}/.claude-plugin/plugin.json`,
     enabled,
     sourceHash,
+    base: null,
+    baseProblem: null,
   };
 }
 
@@ -126,6 +128,7 @@ function evidence(
     stamps: new Map(stamps.map((value) => [value.name, value])),
     legacy: new Set(legacy),
     ownership: new Map(),
+    held: new Map(),
   };
 }
 

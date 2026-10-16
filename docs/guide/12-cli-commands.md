@@ -2760,7 +2760,16 @@ The command validates names, writes `.claude/tools/data/harness.json`, strips a 
 
 `/aidlc plugin sync` (`aidlc engine plugin sync`) runs installed plugin compose
 hooks from the host's plugin inventory, and prints `plugin sync complete: <n>
-plugin(s)` when it is done. It is safe to run repeatedly. An inventory with an
+plugin(s)` when it is done. It is safe to run repeatedly. It composes base
+plugins first, then the plugins built on them (a plugin builds on core and at
+most one base, named in its manifest's `dependencies`). A plugin it cannot
+compose on its base (not installed, outside the plugin's version range, built
+on another plugin, or two bases named) is held: sync says why once, in one line
+after the complete line, composes every other plugin and exits 0, and `--json`
+lists it in `data.held`. `aidlc engine plugin list` and doctor keep the line
+until a sync composes it; a held plugin composed before stays as it was. On a
+host whose session-start hook names only its own plugin, the hook composes that
+plugin's installed base first. An inventory with an
 invalid entry, or a plugin root with no `hooks/compose.ts`, refuses the whole
 sync and names what is wrong, so nothing is half composed. Where the host keeps
 no plugin inventory to read, it says so and stops; in a native Claude Code

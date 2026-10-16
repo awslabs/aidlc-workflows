@@ -2204,7 +2204,10 @@ for values, precedence, and isolated-run semantics.
 `aidlc engine plugin sync` routes. It normalizes the proved Claude/Codex host
 inventories (or one injected current root), validates host manifests, hashes
 compose inputs, compares project stamps, and renders the three-action status
-surface. Sync composes in staging and applies one `aidlc-transaction.ts` plan;
+surface. Sync composes base plugins before the plugins built on them, holds a
+plugin that cannot build on its base (with a `plugin-held-<key>.json` record
+that list and doctor read), composes in staging and applies one
+`aidlc-transaction.ts` plan;
 `--prune-missing` additionally requires full inventory, `--yes` when
 non-interactive (at a terminal it names what it prunes and proceeds), and a
 hash-valid `plugin-owned-<key>.json` record. These paths never open a network
