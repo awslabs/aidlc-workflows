@@ -3613,9 +3613,11 @@ function projectPolicyError(route: Route, argv: readonly string[]): string | nul
     "aidlc",
   ].some((entry) => existsSync(join(projectDir, entry))) ||
     discoverProjectHarnesses(projectDir).length > 0;
+  // Config there would set up a new project, so the line names the person's.
   return recognized
     ? null
-    : `${route.id} requires an installed project harness or recognized project directory; run aidlc config`;
+    : `${route.id} requires an installed project harness or recognized project directory; ` +
+      "run it from the project folder, or add --project-dir <path>";
 }
 
 // A project inside a machine root is never acceptable. The reverse (a machine

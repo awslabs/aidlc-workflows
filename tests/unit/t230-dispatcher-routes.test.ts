@@ -1237,6 +1237,23 @@ describe("t230 dispatcher route parity", () => {
     );
     expect(result.exitCode, result.stderr.toString()).toBe(0);
   });
+
+  // Config there would set up a new project in that folder, so the refusal
+  // names the two steps that reach the person's project.
+  test("a project-required command from a folder that is not a project names the step that works", () => {
+    const project = makeProject();
+    const outside = mkdtempSync(join(tmpdir(), "aidlc-t230-outside-"));
+    tempProjects.add(outside);
+    const refused = viaDispatcher(["engine", "plugin", "list"], outside);
+    expect(refused.exitCode).toBe(1);
+    expect(refused.stderr.toString()).toContain(
+      "plugin requires an installed project harness or recognized project directory; " +
+        "run it from the project folder, or add --project-dir <path>",
+    );
+    expect(refused.stderr.toString()).not.toContain("aidlc config");
+    const named = viaDispatcher(["engine", "plugin", "list", "--project-dir", project], outside);
+    expect(named.exitCode, named.stderr.toString()).toBe(0);
+  });
 });
 
 describe("t230 version-aware startup", () => {
