@@ -69,6 +69,7 @@ block:
   "author": { "name": "AWS AIDLC" },
   "dependencies": ["core"],           // core plus at most one base, e.g. ["core", "compliance@^1.2.0"]
   "aidlc": {
+    // "marketplace": "acme-aidlc-plugins",  // optional, your plugin's catalogue (below)
     "contributes": {                  // which subtrees this plugin ships
       "stages": "stages/",            // NEW stage files
       "overlays": "contributions/",   // CONTRIBUTION files (§3 — modify existing)
@@ -120,10 +121,9 @@ A plugin stage is an ordinary stage file (see
   `test-pro-integration-test-results`).
 
 The same logical plugin name must appear in every owned stage, scope, agent,
-and contribution. Compose derives that identity from the emitted host manifest
-(`aidlc-<name>` at the host layer, `<name>` in AIDLC frontmatter); content cannot
-rename or impersonate its package. A mismatch is skipped and recorded for
-`/aidlc --doctor`.
+and contribution. Compose takes that identity from the plugin's own manifest,
+which every build carries; content cannot rename or impersonate its package. A
+mismatch is skipped and recorded for `/aidlc --doctor`.
 
 `bundle:` was the pre-rename ownership key and is rejected with an error naming the fix - write `plugin:`. The word is reserved for a possible future collection-of-plugins concept.
 
@@ -455,15 +455,23 @@ first-party `dist/plugins/<name>/<harness>/` trees, so its byte-parity guard als
 guards external builds. Publish the output to a git repo with semver tags and a
 `marketplace.json`; teams then install through the host's native commands.
 
+The host shows your plugin under the names you chose: the plugin is the
+manifest `name`, listed in a catalogue named by `aidlc.marketplace`, or by the
+plugin's own name when you leave that out. The `aidlc` namespace is AI-DLC's own
+(our plugins show as `aidlc-<name>` in the `aidlc-plugins` catalogue), so validate
+and build refuse a catalogue named `aidlc` or starting `aidlc-`, in any letter
+case: a second `aidlc-plugins` catalogue replaces ours in Claude Code. Each repository you
+publish needs its own catalogue name, because a host keeps one catalogue per name.
+
 ### Claude / Codex (host store)
 
 ```bash
 # teams run these in their host CLI:
 /plugin marketplace add <your-org>/<your-plugin-repo>    # Claude
-/plugin install aidlc-test-pro@<marketplace>             # Claude
+/plugin install acme-standards@acme-aidlc-plugins        # Claude
 
 codex plugin marketplace add <your-org>/<your-plugin-repo>   # Codex
-codex plugin add aidlc-test-pro@<marketplace>                # Codex
+codex plugin add acme-standards@acme-aidlc-plugins           # Codex
 ```
 
 A **SessionStart hook** (bundled in the emitted plugin) calls the same
@@ -508,24 +516,23 @@ selection.
 ### Kiro (no store — folder-drop, then run the composer explicitly)
 
 ```bash
-# From the AIDLC source root, materialize the ignored local plugin projections:
-bun scripts/package.ts
-# Then copy the Kiro projection into the project:
-cp -r dist/plugins/<name>/kiro/. <project>/
+# Copy the Kiro projection's .kiro folder into the project; the plugin lands
+# in its own folder, .kiro/aidlc-plugins/<name>/, beside any other plugin:
+cp -r <projection>/.kiro <project>/
 # preferred when aidlc is on PATH:
-AIDLC_PLUGIN_ROOT="<plugin-root>" AIDLC_PROJECT_DIR="<project>" \
+AIDLC_PLUGIN_ROOT="<project>/.kiro/aidlc-plugins/<name>" AIDLC_PROJECT_DIR="<project>" \
   AIDLC_HARNESS_DIR=.kiro aidlc engine plugin sync
 
 # fallback: run the composer explicitly:
-AIDLC_PLUGIN_ROOT="<plugin-root>" AIDLC_PROJECT_DIR="<project>" \
-  AIDLC_HARNESS_DIR=.kiro bun "<plugin-root>/hooks/compose.ts"
+AIDLC_PLUGIN_ROOT="<project>/.kiro/aidlc-plugins/<name>" AIDLC_PROJECT_DIR="<project>" \
+  AIDLC_HARNESS_DIR=.kiro bun "<project>/.kiro/aidlc-plugins/<name>/hooks/compose.ts"
 # open in Kiro IDE or kiro-cli chat → /aidlc
 ```
 
 > **Kiro note.** Use the `kiro-ide` projection for Kiro IDE 1.x or Kiro CLI v3; its folder-drop
 > includes a `version: "v1"` `.kiro/hooks/aidlc-<plugin>-compose.json` SessionStart registration
-> that runs the cross-platform `hooks/aidlc-plugin-compose.ts` Bun launcher from
-> the workspace root. The `kiro` projection emits no hook registration,
+> that runs the plugin folder's cross-platform `hooks/aidlc-plugin-compose.ts` Bun
+> launcher from the workspace root. The `kiro` projection emits no hook registration,
 > so run one of the explicit composer commands above. Neither projection emits the
 > retired `.kiro.hook` plugin registration.
 

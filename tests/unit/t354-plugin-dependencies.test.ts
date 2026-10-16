@@ -34,11 +34,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { projectionPluginRoot, readPluginTargets } from "../../dist/claude/.claude/tools/aidlc-plugin-emit.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 const TOOLS = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
+const TARGETS = readPluginTargets(join(TOOLS, "data", "plugin-targets.json"));
 const HARNESSES = ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"] as const;
 const scratch = mkdtempSync(join(tmpdir(), "aidlc-t354-"));
 let counter = 0;
@@ -110,7 +112,7 @@ function plugin(spec: PluginSpec): string {
     { encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), env: cleanEnv({}) },
   );
   expect(built.status, built.stdout + built.stderr).toBe(0);
-  return out;
+  return projectionPluginRoot(out, TARGETS[spec.harness ?? "claude"]);
 }
 
 // What alpha (the team plugin) is in most cases: it builds on zeta, orders its
@@ -147,7 +149,8 @@ function project(installed: Installed): Project {
 function setInstalled(target: Project, installed: Installed): void {
   const plugins: Record<string, unknown> = {};
   for (const [name, entry] of Object.entries(installed)) {
-    plugins[`aidlc-${name}@aidlc-plugins`] = [
+    // Built by the shipped builder, so the host lists it under its own names.
+    plugins[`${name}@${name}`] = [
       { scope: "user", installPath: entry.root, version: entry.version ?? "0.1.0" },
     ];
   }

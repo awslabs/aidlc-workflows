@@ -31,6 +31,7 @@ import {
 import {
   assertPluginContentHasNoSymlinks,
   assertSupportedPluginContributionPaths,
+  pluginMarketplaceIssue,
   scanPluginFiles,
   walkPluginFiles,
 } from "./aidlc-plugin-validate.ts";
@@ -39,7 +40,7 @@ import {
   trustedCommand,
 } from "./aidlc-command.ts";
 import { sharedKnowledgeWithoutFormatDocs } from "./aidlc-inline-context.ts";
-import { runWithOwnerStampedLock } from "./aidlc-lib.ts";
+import { committedTextBytes, runWithOwnerStampedLock } from "./aidlc-lib.ts";
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 
 export type PluginTargetKind = "store" | "kiro" | "kiro-ide" | "cursor";
@@ -63,14 +64,26 @@ export interface BuildPluginProjectionOptions {
   templateHooksDir: string;
   reviewerAgents?: Iterable<string>;
   lockTimeoutMs?: number;
+  // Set only by the repository packager, for this repository's own plugins/.
+  firstParty?: boolean;
 }
 
 export interface PluginProjectionResult {
   pluginName: string;
   harness: string;
   outDir: string;
+  // The plugin inside the projection: outDir, or on Kiro its own folder.
+  pluginRoot: string;
   files: string[];
 }
+
+// AI-DLC's own plugins show in the host as aidlc-<name> in this catalogue; a
+// plugin anyone else builds shows under the names its author chose.
+const FIRST_PARTY_MARKETPLACE = "aidlc-plugins";
+// Kiro has no plugin store, so a plugin is dropped into the project: each one
+// in its own folder in AI-DLC's part of .kiro, so a second plugin never lands
+// on the first.
+const DROPPED_PLUGINS_FOLDER = "aidlc-plugins";
 
 export const PLUGIN_PROJECTION_MARKER = ".aidlc-plugin-projection.json";
 const PLUGIN_PROJECTION_MARKER_SCHEMA = 1;
@@ -288,6 +301,46 @@ function readPluginManifest(pluginRoot: string): Record<string, unknown> {
   }
 }
 
+function pluginHostNames(
+  pluginName: string,
+  manifest: Record<string, unknown>,
+  firstParty: boolean,
+): { plugin: string; marketplace: string } {
+  if (firstParty) {
+    return { plugin: `aidlc-${pluginName}`, marketplace: FIRST_PARTY_MARKETPLACE };
+  }
+  const declared = isPlainRecord(manifest.aidlc) ? manifest.aidlc.marketplace : undefined;
+  return {
+    plugin: pluginName,
+    marketplace: typeof declared === "string" ? declared : pluginName,
+  };
+}
+
+function droppedIntoProject(kind: PluginTargetKind): boolean {
+  return kind === "kiro" || kind === "kiro-ide";
+}
+
+// The plugin's folder in a Kiro projection, as the drop puts it in the project.
+// Forward slashes: the Kiro IDE hook command names it.
+function droppedPluginFolder(harnessLeaf: string, hostName: string): string {
+  return `${harnessLeaf}/${DROPPED_PLUGINS_FOLDER}/${hostName}`;
+}
+
+export function projectionPluginRoot(
+  outDir: string,
+  target: Pick<PluginTarget, "kind" | "harnessLeaf">,
+): string {
+  if (!droppedIntoProject(target.kind)) return outDir;
+  const folder = join(outDir, target.harnessLeaf, DROPPED_PLUGINS_FOLDER);
+  const names = existsSync(folder) ? readdirSync(folder) : [];
+  if (names.length !== 1) {
+    throw new Error(
+      `${outDir}: a ${target.kind} projection holds exactly one plugin folder in ${target.harnessLeaf}/${DROPPED_PLUGINS_FOLDER}/`,
+    );
+  }
+  return join(folder, names[0]);
+}
+
 function pluginNameFromManifest(
   pluginRoot: string,
   manifest: Record<string, unknown>,
@@ -332,7 +385,7 @@ function copyHookTemplates(
   }
 }
 
-function composeCommand(target: PluginTarget): string {
+function composeCommand(target: PluginTarget, hostName: string): string {
   const rootExpr =
     target.harnessName === "claude"
       ? `\${CLAUDE_PLUGIN_ROOT}`
@@ -342,8 +395,8 @@ function composeCommand(target: PluginTarget): string {
   }
   if (target.kind === "kiro-ide") {
     return (
-      `bun ./hooks/aidlc-plugin-compose.ts ${target.harnessLeaf} ` +
-      target.harnessName
+      `bun ./${droppedPluginFolder(target.harnessLeaf, hostName)}/hooks/aidlc-plugin-compose.ts ` +
+      `${target.harnessLeaf} ${target.harnessName}`
     );
   }
   const composePath = `${rootExpr}/hooks/compose.ts`;
@@ -369,39 +422,96 @@ function composeCommand(target: PluginTarget): string {
   );
 }
 
+// The Kiro IDE session-start registration a build writes beside the plugin's
+// folder. It keeps the AI-DLC name, so a rebuilt plugin's drop replaces its
+// own earlier registration instead of running beside it.
+export function kiroIdeComposeRegistration(
+  target: PluginTarget,
+  pluginName: string,
+  hostName: string,
+): { path: string; text: string } {
+  return {
+    path: `${target.harnessLeaf}/hooks/aidlc-${pluginName}-compose.json`,
+    text: `${JSON.stringify(
+      {
+        version: "v1",
+        hooks: [
+          {
+            name: `aidlc-${pluginName}-compose`,
+            trigger: "SessionStart",
+            description: `Composes the ${pluginName} AIDLC plugin at session start.`,
+            action: { type: "command", command: composeCommand(target, hostName) },
+          },
+        ],
+      },
+      null,
+      2,
+    )}\n`,
+  };
+}
+
+// The hook files in a project that are exactly the registrations the builds of
+// its dropped plugins wrote, so config can tell them from hook files a person
+// added. An edited one is not the plugin's any more; a CRLF checkout is the
+// same file.
+export function droppedPluginRegistrations(
+  projectDir: string,
+  harnessLeaf: string,
+): string[] {
+  const folder = join(projectDir, harnessLeaf, DROPPED_PLUGINS_FOLDER);
+  if (!existsSync(folder)) return [];
+  const target: PluginTarget = {
+    harnessName: "kiro-ide",
+    manifestDir: "",
+    marketplaceDir: "",
+    harnessLeaf,
+    kind: "kiro-ide",
+    installRoots: [],
+  };
+  const owned: string[] = [];
+  for (const hostName of readdirSync(folder).sort()) {
+    let pluginName: unknown;
+    try {
+      pluginName = (JSON.parse(
+        readFileSync(join(folder, hostName, ".aidlc-plugin", "plugin.json"), "utf-8"),
+      ) as { name?: unknown }).name;
+    } catch {
+      continue;
+    }
+    if (typeof pluginName !== "string" || !/^[a-z][a-z0-9-]*$/.test(pluginName)) continue;
+    const registration = kiroIdeComposeRegistration(target, pluginName, hostName);
+    try {
+      if (
+        committedTextBytes(readFileSync(join(projectDir, registration.path)))
+          .equals(Buffer.from(registration.text, "utf-8"))
+      ) {
+        owned.push(registration.path);
+      }
+    } catch {
+      // No registration: the plugin was dropped from a Kiro CLI projection.
+    }
+  }
+  return owned;
+}
+
 function writeHookWiring(
   pluginName: string,
+  hostName: string,
   outDir: string,
+  pluginDir: string,
   target: PluginTarget,
 ): void {
-  const command = composeCommand(target);
   if (target.kind === "kiro") return;
   if (target.kind === "kiro-ide") {
-    const hooksDir = join(outDir, target.harnessLeaf, "hooks");
-    mkdirSync(hooksDir, { recursive: true });
-    writeFileSync(
-      join(hooksDir, `aidlc-${pluginName}-compose.json`),
-      `${JSON.stringify(
-        {
-          version: "v1",
-          hooks: [
-            {
-              name: `aidlc-${pluginName}-compose`,
-              trigger: "SessionStart",
-              description: `Composes the ${pluginName} AIDLC plugin at session start.`,
-              action: { type: "command", command },
-            },
-          ],
-        },
-        null,
-        2,
-      )}\n`,
-    );
+    const registration = kiroIdeComposeRegistration(target, pluginName, hostName);
+    mkdirSync(join(outDir, target.harnessLeaf, "hooks"), { recursive: true });
+    writeFileSync(join(outDir, registration.path), registration.text);
     return;
   }
+  const command = composeCommand(target, hostName);
   if (target.kind === "cursor") {
     writeFileSync(
-      join(outDir, "hooks", "hooks.json"),
+      join(pluginDir, "hooks", "hooks.json"),
       `${JSON.stringify(
         {
           version: 1,
@@ -414,7 +524,7 @@ function writeHookWiring(
     return;
   }
   writeFileSync(
-    join(outDir, "hooks", "hooks.json"),
+    join(pluginDir, "hooks", "hooks.json"),
     `${JSON.stringify(
       {
         hooks: {
@@ -600,6 +710,12 @@ export function buildPluginProjection(
   const manifest = readPluginManifest(pluginRoot);
   const pluginName = pluginNameFromManifest(pluginRoot, manifest);
   assertSupportedPluginContributionPaths(manifest);
+  const firstParty = options.firstParty === true;
+  const marketplaceIssue = firstParty ? null : pluginMarketplaceIssue(manifest.aidlc);
+  if (marketplaceIssue) {
+    throw new Error(`.aidlc-plugin/plugin.json: ${marketplaceIssue.message}`);
+  }
+  const host = pluginHostNames(pluginName, manifest, firstParty);
   const version = manifest.version || "0.0.1";
   const author = manifest.author || { name: "AIDLC" };
   const description = manifest.description || "";
@@ -620,6 +736,10 @@ export function buildPluginProjection(
 
       rmSync(outDir, { recursive: true, force: true });
       mkdirSync(outDir, { recursive: true });
+      const pluginDir = droppedIntoProject(options.target.kind)
+        ? join(outDir, droppedPluginFolder(options.target.harnessLeaf, host.plugin))
+        : outDir;
+      mkdirSync(pluginDir, { recursive: true });
       writeFileSync(
         join(outDir, PLUGIN_PROJECTION_MARKER),
         `${JSON.stringify(
@@ -638,19 +758,19 @@ export function buildPluginProjection(
       // plugin sync reads the base it builds on from there. A host manifest
       // cannot carry it: Claude Code reads a `dependencies` key there as host
       // plugins to enable.
-      mkdirSync(join(outDir, ".aidlc-plugin"), { recursive: true });
+      mkdirSync(join(pluginDir, ".aidlc-plugin"), { recursive: true });
       cpSync(
         join(pluginRoot, ".aidlc-plugin", "plugin.json"),
-        join(outDir, ".aidlc-plugin", "plugin.json"),
+        join(pluginDir, ".aidlc-plugin", "plugin.json"),
       );
 
-      const hostManifestDir = join(outDir, options.target.manifestDir);
+      const hostManifestDir = join(pluginDir, options.target.manifestDir);
       mkdirSync(hostManifestDir, { recursive: true });
       writeFileSync(
         join(hostManifestDir, "plugin.json"),
         `${JSON.stringify(
           {
-            name: `aidlc-${pluginName}`,
+            name: host.plugin,
             version,
             description,
             author,
@@ -659,18 +779,18 @@ export function buildPluginProjection(
           2,
         )}\n`,
       );
-      const marketplaceDir = join(outDir, options.target.marketplaceDir);
+      const marketplaceDir = join(pluginDir, options.target.marketplaceDir);
       mkdirSync(marketplaceDir, { recursive: true });
       writeFileSync(
         join(marketplaceDir, "marketplace.json"),
         `${JSON.stringify(
           {
-            name: "aidlc-plugins",
+            name: host.marketplace,
             owner: author,
             description: "AIDLC plugin catalogue.",
             plugins: [
               {
-                name: `aidlc-${pluginName}`,
+                name: host.plugin,
                 source: ".",
                 version,
                 description,
@@ -684,17 +804,18 @@ export function buildPluginProjection(
 
       copyHookTemplates(
         pluginRoot,
-        outDir,
+        pluginDir,
         options.templateHooksDir,
         options.target,
       );
-      writeHookWiring(pluginName, outDir, options.target);
-      copyPluginContent(pluginRoot, outDir, options.target, reviewers);
+      writeHookWiring(pluginName, host.plugin, outDir, pluginDir, options.target);
+      copyPluginContent(pluginRoot, pluginDir, options.target, reviewers);
 
       return {
         pluginName,
         harness: options.target.harnessName,
         outDir,
+        pluginRoot: pluginDir,
         files: walkPluginFiles(outDir).map((file) =>
           relative(outDir, file).split(sep).join("/"),
         ),

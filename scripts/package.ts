@@ -1955,6 +1955,8 @@ function buildRepositoryPluginProjection(
     outputBoundary,
     templateHooksDir: PLUGIN_HOOKS_TEMPLATE_SRC,
     reviewerAgents: reviewerAgentSet(CORE_ROOT),
+    // This repository's own plugins/ are AI-DLC's: aidlc-<name> in aidlc-plugins.
+    firstParty: true,
   });
 }
 

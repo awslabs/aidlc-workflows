@@ -54,9 +54,9 @@ codex plugin add aidlc-test-pro@aidlc-plugins   # approve the one-time hook trus
 
 **Kiro** (no store — folder-drop + compose):
 ```bash
-cp -r dist/plugins/test-pro/kiro/. <project>/     # or git pull the plugin repo
-AIDLC_PLUGIN_ROOT=<…>/kiro AIDLC_PROJECT_DIR=<project> AIDLC_HARNESS_DIR=.kiro \
-  bun <…>/kiro/hooks/compose.ts
+cp -r dist/plugins/test-pro/kiro/.kiro <project>/   # lands in .kiro/aidlc-plugins/aidlc-test-pro/
+AIDLC_PLUGIN_ROOT=<project>/.kiro/aidlc-plugins/aidlc-test-pro AIDLC_PROJECT_DIR=<project> AIDLC_HARNESS_DIR=.kiro \
+  bun <project>/.kiro/aidlc-plugins/aidlc-test-pro/hooks/compose.ts
 ```
 
 Then confirm and run:
