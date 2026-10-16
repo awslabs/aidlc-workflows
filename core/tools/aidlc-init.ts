@@ -11320,25 +11320,41 @@ function previewSwitchLine(
   return `${head}; ${takes}.${undo}`;
 }
 
-// The release a config run sets this project up on, as preview features read
-// it before the run: its pin, else the release its tree is on. The run checks
-// on again against the release it selects.
-function previewTargetVersion(projectDir: string, treeVersion: string): string {
+// The project's pin, when `.aidlc-version` names one release; the config run
+// itself refuses any other content.
+function previewPin(projectDir: string): string | null {
   const pin = join(projectDir, ".aidlc-version");
   const pinned = regularFile(pin) ? readFileSync(pin, "utf-8").trim() : "";
-  return VERSION_ID.test(pinned) ? pinned : treeVersion;
+  return VERSION_ID.test(pinned) ? pinned : null;
+}
+
+// The one refusal of `on`, for a release that is not a preview one: said
+// before the question from the installed tree and its pin, and by the run on
+// the release it selects.
+function previewOnRefusal(
+  projectDir: string,
+  distribution: string,
+  feature: PreviewFeature,
+  version: string,
+  pin: string | null,
+): { message: string; steps: string } | null {
+  if (versionChannel(version) === PREVIEW_CHANNEL || (pin !== null && versionChannel(pin) === PREVIEW_CHANNEL)) return null;
+  return {
+    message: `${feature} needs this project on a preview release of AI-DLC; it is on ${version}${
+      pin !== null && pin !== version ? `, pinned to ${pin}` : ""
+    }`,
+    steps: previewReleaseSteps(projectDir, previewCommand(projectDir, distribution, `${feature} on --yes`), pin),
+  };
 }
 
 // How to get the preview release the project needs, as commands, ending with
 // the command to run again there. A copied runtime has no release channel to
 // follow: it takes a preview copy instead.
-function previewReleaseSteps(projectDir: string, rerun: string): string {
+function previewReleaseSteps(projectDir: string, rerun: string, pinned: string | null): string {
   const invoke = configInvocationFor(projectDir);
   if (invoke !== "aidlc") {
     return `install a preview release's copy runtime into this project (Release Channels in the install guide), then ${rerun}`;
   }
-  const pin = join(projectDir, ".aidlc-version");
-  const pinned = regularFile(pin) ? readFileSync(pin, "utf-8").trim() : "";
   const target = projectTarget(projectDir);
   return [
     ...(pinned ? [`aidlc config --unpin${target} (this project is pinned to ${pinned} in .aidlc-version)`] : []),
@@ -11400,25 +11416,21 @@ function preparePreviewSection(
     );
     return null;
   }
-  // What applies is read on the release this run sets up, which a pin can
-  // make another one than the installed tree's.
+  // What applies now is the installed tree's; a pin to another release is
+  // the run's to set up, and the run checks on again on the release it selects.
   const state = treePreviewFeature(tree.root, feature);
-  const version = previewTargetVersion(projectDir, state.version);
+  const version = state.version;
   const recorded = state.recorded;
-  const applies = recorded === "on" && versionChannel(version) === PREVIEW_CHANNEL;
-  if (choice === "on" && versionChannel(version) !== PREVIEW_CHANNEL) {
-    emitResult(
-      usage(
-        `${feature} needs this project on a preview release of AI-DLC; it is on ${version}`,
-        previewReleaseSteps(projectDir, previewCommand(projectDir, tree.distribution, `${feature} on --yes`)),
-      ),
-      options,
-    );
+  const pin = previewPin(projectDir);
+  const refusal = choice === "on" ? previewOnRefusal(projectDir, tree.distribution, feature, version, pin) : null;
+  if (refusal) {
+    emitResult(usage(refusal.message, refusal.steps), options);
     return null;
   }
-  // Nothing recorded is off, so off there changes nothing and records nothing.
-  // A recorded on that does not apply here goes on, to the release check.
-  if ((recorded ?? "off") === choice && (choice === "off" || applies)) {
+  // Nothing recorded is off, so off there changes nothing and records nothing;
+  // an on that is recorded but not applied, or a pin to another release, goes
+  // on to the run.
+  if ((recorded ?? "off") === choice && (choice === "off" || (state.on && (pin === null || pin === version)))) {
     emitResult(success(`${feature} is already ${choice} for this project`, { feature, choice }), options);
     return null;
   }
@@ -11447,7 +11459,7 @@ function preparePreviewSection(
     ? []
     : choice === "on"
     ? modelSummaryLines(current, current, tiers, harness, projectDir, { version, agentModels: choice }).notes
-    : ownSettings && applies
+    : ownSettings && state.on
     ? [KIRO_AGENT_MODELS_OFF_NOTE]
     : [];
   return {
@@ -13287,15 +13299,10 @@ export async function main(
     );
     // A preview feature turned on is checked against the release this run sets
     // up, which a pin can make another one than the installed tree's.
-    if (modelsContext?.preview?.choice === "on" && versionChannel(stamp.frameworkVersion) !== PREVIEW_CHANNEL) {
-      throw new SwitchRefusal(
-        `${modelsContext.preview.feature} needs this project on a preview release of AI-DLC; this run sets it up on ${stamp.frameworkVersion}`,
-        {
-          kind: "text",
-          text: previewReleaseSteps(projectDir, previewCommand(projectDir, stamp.distribution, `${modelsContext.preview.feature} on --yes`)),
-        },
-      );
-    }
+    const onRefusal = modelsContext?.preview?.choice === "on"
+      ? previewOnRefusal(projectDir, stamp.distribution, modelsContext.preview.feature, stamp.frameworkVersion, null)
+      : null;
+    if (onRefusal) throw new SwitchRefusal(onRefusal.message, { kind: "text", text: onRefusal.steps });
     prepared = prepareRefreshSource(
       projectDir,
       selected.root,
