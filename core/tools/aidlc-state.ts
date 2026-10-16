@@ -5277,8 +5277,8 @@ function staleReviewPreconditionError(
       `--reviewer ${reviewer} --iteration <next ordinal>\`, then record the verdict ` +
       `with the same command plus \`--verdict <READY|NOT-READY>\`. After that ` +
       `review, stop editing this stage's output documents. If the recovery pass was already ` +
-      `spent, present the situation to the human at the approval gate; a human ` +
-      `Request Changes decision resets the review attempt. Do not record a rejection ` +
+      `spent: ${recoveryGuidance(pd, content, slug)} Only a human Request Changes decision ` +
+      `resets the review attempt. Do not record a rejection ` +
       `on the human's behalf.`;
   refuseStateGuard(pd, content, stage, {
     code: "ARTIFACT_REVIEW_STALE",

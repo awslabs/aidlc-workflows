@@ -9485,13 +9485,39 @@ function validActiveDirectiveGuardRemedies(
   });
 }
 
-function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | null {
-  if (!isPlainObject(parsed)) return null;
-  const stage = typeof parsed.stage === "string" ? parsed.stage.trim() : "";
-  const unit = typeof parsed.unit === "string" ? parsed.unit.trim() : undefined;
-  const stateSha256 = typeof parsed.state_sha256 === "string" ? parsed.state_sha256 : "";
-  if (!/^[a-z][a-z0-9-]*$/.test(stage) || ("unit" in parsed && !unit) || !/^[0-9a-f]{64}$/.test(stateSha256)) return null;
-  if (parsed.version === 1) return { version: 1, stage, ...(unit ? { unit } : {}), state_sha256: stateSha256 };
+// Existing v2 markers may carry the former unattended operation name. Keep
+// their recorded answer intact while exposing only the route that now owns it.
+function normalizeLegacyGuardRecovery(
+  parsed: Record<string, unknown>,
+): Record<string, unknown> {
+  const remedies = Array.isArray(parsed.remedies)
+    ? parsed.remedies.map((remedy) =>
+      isPlainObject(remedy) && remedy.op === "unset-unattended"
+        ? { ...remedy, op: "request-changes" }
+        : remedy
+    )
+    : parsed.remedies;
+  const guardRecovery = isPlainObject(parsed.guard_recovery_response) &&
+      parsed.guard_recovery_response.selected_op === "unset-unattended"
+    ? { ...parsed.guard_recovery_response, selected_op: "request-changes" }
+    : parsed.guard_recovery_response;
+  return {
+    ...parsed,
+    ...(Array.isArray(parsed.remedies) ? { remedies } : {}),
+    ...(isPlainObject(parsed.guard_recovery_response)
+      ? { guard_recovery_response: guardRecovery }
+      : {}),
+  };
+}
+
+function parseActiveDirectiveMarker(value: unknown): ActiveDirectiveMarker | null {
+  if (!isPlainObject(value)) return null;
+  const stage = typeof value.stage === "string" ? value.stage.trim() : "";
+  const unit = typeof value.unit === "string" ? value.unit.trim() : undefined;
+  const stateSha256 = typeof value.state_sha256 === "string" ? value.state_sha256 : "";
+  if (!/^[a-z][a-z0-9-]*$/.test(stage) || ("unit" in value && !unit) || !/^[0-9a-f]{64}$/.test(stateSha256)) return null;
+  if (value.version === 1) return { version: 1, stage, ...(unit ? { unit } : {}), state_sha256: stateSha256 };
+  const parsed = normalizeLegacyGuardRecovery(value);
   const integer = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 0;
   const attempt = isPlainObject(parsed.active_attempt) ? parsed.active_attempt : null;
   const resume = isPlainObject(parsed.resume) ? parsed.resume : null;
@@ -10899,7 +10925,6 @@ const GUARD_REMEDY_ANSWER_ROUTES: Record<GuardRemedyOp, GuardRemedyAnswerPhases 
   // Present the summary (its prompt checkpoint) on the pick; record the
   // confirmation once the person gave it.
   "reconfirm-summary": { afterPick: summaryRoute("decision"), afterAnswer: summaryRoute("answer") },
-  "unset-unattended": null,
   "lower-fence": null,
 };
 
@@ -31525,7 +31550,6 @@ export const GUARD_REMEDY_OPS = [
   "produce-stage-output",
   "repair-source-boundary",
   "reconfirm-summary",
-  "unset-unattended",
   // Lower ONE fence for this piece of work. It reaches the human in whichever
   // shape the refusing site speaks: as this remedy on a guard-recovery ask when
   // the site builds a typed refusal (the review-freeze hook does), and as the
@@ -32070,15 +32094,25 @@ function lifecycleResetRemedies(
       input.teamGate?.resolved === true && input.unit
         ? ` for Unit "${input.unit}"`
         : "";
+    const requestChangesReport = renderEngineInvocation(
+      {
+        route: "orchestrate",
+        args: requestChangesReportArgs(input.stage, input.unit, input.teamGate),
+      },
+      { harnessDir: harnessDir() },
+    );
+    const submitRequestChanges =
+      "submit Request Changes with their exact text unchanged, adding it as a shell-safe " +
+      `\`--reason\` value to \`${requestChangesReport}\``;
     if (input.humanAuthority.unattended) {
       return [
         {
-          op: "unset-unattended",
+          op: "request-changes",
           action:
             "Halt unattended execution and ask a human what should change. " +
             `Unset AIDLC_UNATTENDED, ask "What should change?" for stage ` +
             `"${reportStage}"${unitContext}, and end the turn. Only after the human ` +
-            "answers may their exact text be submitted as the Request Changes reason." +
+            `answers, ${submitRequestChanges}.` +
             cost("reject"),
           requiresHuman: true,
           executableNow: true,
@@ -32090,9 +32124,8 @@ function lifecycleResetRemedies(
         op: "request-changes",
         action:
           `When the person already said what should change for stage "${reportStage}"${unitContext}, ` +
-          "submit Request Changes with their exact text unchanged as the report reason. " +
-          'Otherwise ask "What should change?" and end the turn, then submit their answer ' +
-          "the same way. Either way that unlocks revision and a fresh review." +
+          `${submitRequestChanges}. Otherwise ask "What should change?" and end the turn, then ` +
+          `${submitRequestChanges}. Either way that unlocks revision and a fresh review.` +
           cost("reject"),
         requiresHuman: true,
         executableNow: true,

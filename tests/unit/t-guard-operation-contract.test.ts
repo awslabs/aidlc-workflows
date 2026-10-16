@@ -3,9 +3,9 @@
 // function:guardOperationMatchesRemedy, function:isGuardRecoveryEngineInvocation,
 // function:sameGuardOperation, function:aidlcEngineCommand, directive:guard-recovery,
 // function:guardRecoveryAnswerAdmits, function:guardOperationMatchesEngineArgs,
-// function:parseGuardRestartContinuationCommand
+// function:parseGuardRestartContinuationCommand, function:parseActiveDirectiveMarker
 import { afterEach, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type ActiveDirectiveMarker,
@@ -33,6 +33,7 @@ import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   cleanupTestProject,
   createTestProject,
+  seededRecordDir,
   seedStateFile,
   seededStateFile,
 } from "../harness/fixtures.ts";
@@ -530,5 +531,38 @@ describe("recovery selection records the next interaction", () => {
     const response = readActiveDirectiveMarker(project, state)?.guard_recovery_response;
     expect(response?.status).toBe("ready");
     expect(response?.feedback_sha256).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  test("a v2.11 unattended recovery answer resumes through Request Changes", () => {
+    const { project, state } = publish("human-input");
+    const feedback = "Add the missing acceptance criterion.";
+    expect(consumeSharedDirectiveAsk(project, feedback)).toBe(true);
+    const current = readActiveDirectiveMarker(project, state)!;
+    const markerPath = join(seededRecordDir(project), ".aidlc-engine", "active-directive.json");
+    const legacy = JSON.parse(readFileSync(markerPath, "utf-8"));
+    legacy.remedies[0] = {
+      ...legacy.remedies[0],
+      op: "unset-unattended",
+      label: "Stop working unattended",
+      action:
+        "Halt unattended execution and ask a human what should change. " +
+        'Unset AIDLC_UNATTENDED, ask "What should change?" for stage ' +
+        '"requirements-analysis", and end the turn. Only after the human ' +
+        "answers may their exact text be submitted as the Request Changes reason.",
+    };
+    legacy.guard_recovery_response.selected_op = "unset-unattended";
+    writeFileSync(markerPath, `${JSON.stringify(legacy)}\n`);
+
+    const resumed = readActiveDirectiveMarker(project, state)!;
+    expect(resumed.remedies?.[0].op).toBe("request-changes");
+    expect(resumed.guard_recovery_response).toEqual(current.guard_recovery_response);
+    expect(resumed.delivery).toBe(current.delivery);
+    expect(guardRecoveryAnswerAdmits(resumed, [
+      "engine", "orchestrate", "report",
+      "--stage", "requirements-analysis",
+      "--result", "rejected",
+      "--user-input", "Request Changes",
+      "--reason", feedback,
+    ])).toBe(true);
   });
 });

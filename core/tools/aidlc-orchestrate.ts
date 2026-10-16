@@ -246,6 +246,7 @@ import {
   installedHarnessName,
   recordGuardRefusal,
   currentGuardRecoveryAskMarker,
+  type ActiveDirectiveGuardRemedy,
   type SummaryConfirmationEvidence,
   gridCostSummary,
   type PlanChanges,
@@ -1924,6 +1925,81 @@ function legacyPlanApprovalRecoveryDirective(): AskDirective {
   };
 }
 
+// v2.11 persisted the unattended label and action beside its retired op. The
+// parser updates the routing identity; this exact historical shape keeps the
+// answered ask current until its rejected report spends it.
+function sameGuardRecoveryRemedy(
+  current: ActiveDirectiveGuardRemedy,
+  issued: ActiveDirectiveGuardRemedy,
+): boolean {
+  if (
+    current.op === issued.op &&
+    current.label === issued.label &&
+    current.action === issued.action &&
+    current.interaction === issued.interaction &&
+    sameGuardOperation(current.operation, issued.operation)
+  ) {
+    return true;
+  }
+  if (
+    current.op !== "request-changes" ||
+    issued.op !== "request-changes" ||
+    current.label !== "Request Changes" ||
+    issued.label !== "Stop working unattended" ||
+    current.interaction !== "human-input" ||
+    issued.interaction !== current.interaction ||
+    current.operation !== undefined ||
+    issued.operation !== undefined
+  ) {
+    return false;
+  }
+  const unattendedStart =
+    "Halt unattended execution and ask a human what should change. " +
+    'Unset AIDLC_UNATTENDED, ask "What should change?" for stage ';
+  const attendedStart =
+    "When the person already said what should change for stage ";
+  const targetStart = current.action.startsWith(unattendedStart)
+    ? unattendedStart
+    : current.action.startsWith(attendedStart)
+      ? attendedStart
+      : null;
+  if (targetStart === null) return false;
+  const targetEnd = current.action.indexOf(
+    targetStart === unattendedStart
+      ? ", and end the turn."
+      : ", submit Request Changes",
+    targetStart.length,
+  );
+  if (targetEnd === -1) return false;
+  const target = current.action.slice(targetStart.length, targetEnd);
+  if (!/^"[a-z][a-z0-9-]*"(?: for Unit "[A-Za-z0-9._-]+")?$/.test(target)) {
+    return false;
+  }
+  const costAt = current.action.indexOf(
+    " Construction runs one unit at a time here, so ",
+    targetEnd,
+  );
+  const request = current.action.slice(0, costAt === -1 ? undefined : costAt);
+  if (
+    !request.includes("submit Request Changes") ||
+    !request.includes("`--reason`") ||
+    (
+      targetStart === unattendedStart
+        ? !request.endsWith("`.")
+        : !request.endsWith("Either way that unlocks revision and a fresh review.")
+    )
+  ) {
+    return false;
+  }
+  const cost = costAt === -1 ? "" : current.action.slice(costAt);
+  return issued.action ===
+    "Halt unattended execution and ask a human what should change. " +
+      `Unset AIDLC_UNATTENDED, ask "What should change?" for stage ${target}, ` +
+      "and end the turn. " +
+      "Only after the human answers may their exact text be submitted as the Request Changes reason." +
+      cost;
+}
+
 // Whether the issued marker already IS this guard-recovery ask for this state.
 function guardRecoveryAskMarkerIsCurrent(
   projectDir: string,
@@ -1942,13 +2018,10 @@ function guardRecoveryAskMarkerIsCurrent(
     current.remedies !== undefined &&
     marker.remedies !== undefined &&
     current.remedies.length === marker.remedies.length &&
-    current.remedies.every((remedy, index) =>
-      remedy.op === marker.remedies?.[index]?.op &&
-      remedy.label === marker.remedies[index]?.label &&
-      remedy.action === marker.remedies[index]?.action &&
-      remedy.interaction === marker.remedies[index]?.interaction &&
-      sameGuardOperation(remedy.operation, marker.remedies[index]?.operation)
-    );
+    current.remedies.every((remedy, index) => {
+      const issued = marker.remedies?.[index];
+      return issued !== undefined && sameGuardRecoveryRemedy(issued, remedy);
+    });
 }
 
 
