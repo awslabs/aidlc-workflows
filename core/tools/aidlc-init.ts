@@ -165,6 +165,7 @@ import {
   canonicalStageTableRegion,
   renderScopeTable,
   renderStageTable,
+  stripPluginsTurnedOff,
 } from "./aidlc-utility.ts";
 import {
   aidlcInvocation,
@@ -399,7 +400,7 @@ type PreparedRefreshSource = {
   projectOverlays?: ReadonlySet<string>;
   // Files whose merge could not be proven: a refresh replaces them only with --force.
   unproven?: ReadonlySet<string>;
-  /** Contribution sidecars whose last record the refresh retired. */
+  /** Contribution sidecars the refresh retired: their last record, or their plugin is off. */
   emptiedSidecars?: Set<string>;
   entries?: Baseline["entries"];
   notes: string[];
@@ -7055,6 +7056,23 @@ function prepareRefreshSource(
     // silently dropped into the tree about to be installed. `root` is the staged
     // projection, so the write lands there and never in the live project.
     if (materializeComposedScopeIdentities(root).length > 0) resetProjectionCaches();
+    // The replay above carries every plugin's additions forward; the one
+    // turn-off rule then takes out those of a plugin this selection leaves off
+    // or pauses, as plugin select does, and the project loses its record too.
+    const stagedData = join(stagedHarness, "tools", "data");
+    const sidecars = (): string[] =>
+      pathPresent(stagedData) && lstatSync(stagedData).isDirectory()
+        ? readdirSync(stagedData).filter((name) => /^plugin-contrib-.+\.json$/.test(name))
+        : [];
+    const recorded = sidecars();
+    stripPluginsTurnedOff();
+    const kept = new Set(sidecars());
+    for (const file of recorded.filter((name) => !kept.has(name))) {
+      const rel = `${descriptor.harnessDir}/tools/data/${file}`;
+      regenerated.delete(rel);
+      emptiedSidecars.add(rel);
+    }
+    resetProjectionCaches();
     const compiled = compileStageGraph();
     writeFileSync(process.env.AIDLC_STAGE_GRAPH, compiled.json);
     writeFileSync(stagedGrid, compiled.gridJson);
@@ -7082,6 +7100,9 @@ function prepareRefreshSource(
         "scope",
       );
       writeFileSync(tablesPath, generated);
+      // Written from the compiled graph, as stage-graph.json is, so a plugin
+      // compose or a selection that rewrote it is not the person's edit.
+      regenerated.add(relative(root, tablesPath).replaceAll("\\", "/"));
     }
     regenerated.add(`${descriptor.harnessDir}/tools/data/stage-graph.json`);
     for (const directory of skillsDirs) {
@@ -12982,7 +13003,7 @@ export async function main(
       const target = join(projectDir, rel);
       if (!regularFile(target) || operations.some((operation) => operation.path === rel)) continue;
       operations.push({ kind: "remove", path: rel, expected: expected(target) });
-      actions.push({ path: rel, action: "remove", detail: "plugin contribution record emptied" });
+      actions.push({ path: rel, action: "remove", detail: "plugin contribution record no longer needed" });
     }
     // An explicit Bedrock choice for OpenCode owns the region and profile leaves
     // of the team's opencode.json from now on, and says so once when it changes
