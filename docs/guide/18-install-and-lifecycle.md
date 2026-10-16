@@ -518,7 +518,9 @@ any setup step still outstanding); `--json` and `--quiet` output are unchanged.
 
 `--show --json` prints every agent's effective model, effort, and provenance.
 `--check` is the CI inverse and exits non-zero when the recorded policy is not
-fully reflected in the harness surfaces.
+fully reflected in the harness surfaces. On Kiro IDE, where a preset changes
+nothing, a recorded effort it cannot write is left to the session, as in
+`aidlc doctor`, and does not fail the check.
 
 Model and flag policy resolves leaf-by-leaf through this hierarchy:
 

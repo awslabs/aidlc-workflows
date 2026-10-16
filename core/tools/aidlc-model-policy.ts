@@ -911,6 +911,18 @@ function valuesDiffer(
   return issues;
 }
 
+// Efforts (preset, group dials, per-agent) are shared by every harness, so
+// on a harness where a preset changes nothing they are someone else's
+// policy, not a problem here. A model recorded for this harness by name
+// still is: someone asked for exactly that. Doctor and `config models
+// --check` both count what this returns.
+function reportedUnexpressed(
+  effective: EffectiveModelPolicy,
+  sessionSet: boolean,
+): Array<"model" | "effort"> {
+  return effective.unexpressed.filter((field) => !(sessionSet && field === "effort"));
+}
+
 export function modelPolicySurfaceDrift(
   projectDir: string,
   harnessDir: string,
@@ -927,6 +939,9 @@ export function modelPolicySurfaceDrift(
   const tiers = readAgentTiers(harnessRoot);
   const cap = resolveTierCap(join(projectDir, "aidlc", "spaces", "default", "memory"));
   const issues: string[] = [];
+  // Doctor's rule, on kiro-ide only here: Cursor and GitHub Copilot still
+  // count a shared effort in `--check`.
+  const sessionSet = harness === "kiro-ide" && presetsChangeNothing(harness, build);
   const expectedByAgent = Object.fromEntries(
     Object.entries(tiers).map(([name, tier]) => [
       name,
@@ -952,7 +967,7 @@ export function modelPolicySurfaceDrift(
       ? { ...expected, effort: kiroCollapsed[expected.model] }
       : expected;
     if (includeUnexpressed) {
-      for (const field of expected.unexpressed) {
+      for (const field of reportedUnexpressed(expected, sessionSet)) {
         issues.push(`${name}: ${field} policy is not expressible on ${harness}`);
       }
     }
@@ -1017,15 +1032,10 @@ export function modelPolicyDoctorIssues(
     .filter((name) => !(name in tiers))
     .map((name) => `orphaned agent exception: ${name}`);
   const cap = resolveTierCap(join(harnessRoot, "..", "aidlc", "spaces", "default", "memory"));
-  // Efforts (preset, group dials, per-agent) are shared by every harness, so
-  // on a harness where a preset changes nothing they are someone else's
-  // policy, not a problem here. A model recorded for this harness by name
-  // still is: someone asked for exactly that.
   const sessionSet = presetsChangeNothing(harness, build);
   for (const [name, tier] of Object.entries(tiers)) {
     const effective = resolveModelPolicy(policy, name, tier, harness, cap, build);
-    for (const field of effective.unexpressed) {
-      if (sessionSet && field === "effort") continue;
+    for (const field of reportedUnexpressed(effective, sessionSet)) {
       issues.push(`${name}: ${field} policy is not expressible on ${harness}`);
     }
   }
