@@ -581,6 +581,7 @@ composing:
 ```bash
 bun <tools-dir>/aidlc-plugin-validate.ts <plugin-root>
 bun <tools-dir>/aidlc-plugin-validate.ts <plugin-root> --json
+bun <tools-dir>/aidlc-plugin-validate.ts <plugin-root> --with <base-root>
 ```
 
 The tool is offline and standalone: `<plugin-root>` is the directory containing
@@ -603,7 +604,11 @@ Validation checks:
   `optional_produces`, even when no stage consumes it;
 - produced artifacts use the plugin-name prefix, stage bodies are non-empty,
   stage agent references resolve against the bundled core plus plugin roster,
-  and contribution targets resolve to bundled core stage slugs;
+  and contribution targets resolve to bundled core stage slugs. A plugin built
+  on a base can lead a stage with the base's agent: without the base's
+  checkout such an agent (`<base>-...`) is a warning that it is not checked;
+  `--with <base-root>` names your own checkout of the base, whose agents then
+  count, and must be the base your manifest names;
 - authored plugin content uses regular files and directories; symlinks under
   stages, scopes, agents, contributions, sensors, knowledge, tools, or hooks
   are rejected instead of being silently omitted or followed;
@@ -661,7 +666,7 @@ that install:
 
 ```bash
 bun <tools-dir>/aidlc-plugin-test.ts <plugin-root> \
-  --install <project-root> [--harness <name>] [--json]
+  --install <project-root> [--harness <name>] [--with <base-root>] [--json]
 ```
 
 The tool validates and builds first, copies the selected install surfaces into
@@ -672,7 +677,9 @@ missing plugin node, or second-pass file change exits `1`. The live install is
 hashed before and after and is never a compose target.
 
 Pass `--harness` when the install is ambiguous, including `.kiro` (Kiro CLI vs
-Kiro IDE) and `.aidlc` (Copilot vs OpenCode). `--dist <version>` is reserved
+Kiro IDE) and `.aidlc` (Copilot vs OpenCode). For a plugin built on a base,
+`--with <base-root>` composes your checkout of the base into the candidate
+first, as sync composes bases first, so the install does not need the base. `--dist <version>` is reserved
 until RFC #722 milestone 2 defines a released runtime-bundle channel.
 
 1. **Content validation** is the always-on baseline. Run
@@ -754,7 +761,8 @@ test("plugin composes into a Claude install", () => {
 - **One base at most.** A plugin builds on core and at most one base plugin:
   `"dependencies": ["core", "acme@^1.2.0"]`. The base itself builds on core
   alone. Sync composes the base first, so your stages can order after its
-  stages (`requires_stage`) and read its artifacts. If the installed base is
+  stages (`requires_stage`), read its artifacts and name its agents (check
+  those with `--with <base-root>`). If the installed base is
   missing, outside your range or builds on another plugin, your plugin is not
   composed (a version composed before stays as it was) and the person sees one
   line saying why; everything else still composes. A second base, your own name, or a range npm cannot read fails

@@ -64,6 +64,18 @@ describe("t327 top-level plugin authoring routes", () => {
     });
   });
 
+  test("plugin validate passes --with <base-root> to the validator", () => {
+    // test-pro builds on core alone, so the validator itself answers --with.
+    const result = run(["plugin", "validate", pluginRoot, "--with", scratch, "--json"], scratch);
+    expect(result.status, result.stderr).toBe(1);
+    expect(JSON.parse(result.stdout).errors).toMatchObject([
+      { rule: "base-root", message: `--with names ${scratch}, but this plugin builds on core alone` },
+    ]);
+    const bare = run(["plugin", "validate", pluginRoot, "--with"], scratch);
+    expect(bare.status).toBe(2);
+    expect(bare.stderr).toContain("--with <base-root>");
+  });
+
   test("plugin build delegates to the shared emitter with --plugin-root", () => {
     const outDir = join(scratch, "built");
     const result = run(

@@ -102,14 +102,16 @@ example stage, scope, agent, and tests README. The result is immediately valid;
 Validate an authored plugin repository before building it:
 
 ```bash
-bun <tools-dir>/aidlc-plugin-validate.ts <plugin-root>
+bun <tools-dir>/aidlc-plugin-validate.ts <plugin-root> [--with <base-root>]
 ```
 
 The shipped validator runs offline without an AIDLC project or framework
 checkout. It checks the manifest, stage schema, scope and agent identity,
 plugin-local artifact collisions, accidental test/fixture payloads under
 `tools/`, and any vendored `hooks/compose.ts` against the template bundled with
-the tool. Top-level `aidlc plugin validate|build` routes delegate to these same
+the tool. A stage agent only the plugin's base could supply is a warning unless
+`--with` names the author's checkout of that base. Top-level
+`aidlc plugin validate|build` routes delegate to these same
 implementations; `create|test` routes remain deferred to
 [RFC #723 §2e](https://github.com/awslabs/aidlc-workflows/issues/723).
 
@@ -129,14 +131,14 @@ Test composition without mutating the selected install:
 
 ```bash
 bun <tools-dir>/aidlc-plugin-test.ts <plugin-root> \
-  --install <project-root> [--harness <name>]
+  --install <project-root> [--harness <name>] [--with <base-root>]
 ```
 
 The tool builds a projection, copies only the manifest-derived install roots
 into a disposable candidate, runs the real compose hook twice, and requires a
 drop-free first pass, a clean post-compose graph containing the plugin stages
 and scopes, and a byte-stable second pass. Shared harness leaves require
-`--harness`. `--dist` is not supported; the tool refuses it.
+`--harness`. `--with` composes the base's checkout into the candidate first. `--dist` is not supported; the tool refuses it.
 
 Contribution paths are plugin-relative and may not escape the plugin root. The top level is **lenient** (unknown keys preserved, for forward-compat and cross-tool tolerance); the `aidlc` block is **strict** (unknown keys rejected, to catch authoring typos). Projection still discovers content by directory convention (`stages/`, `sensors/`, `tools/`, `contributions/`, `scopes/`, `agents/`, `knowledge/`), so each declared value must equal its canonical directory; configurable routing is deferred. `memory` declarations are rejected until that subtree can be projected. Stage numbers are display-only, so a plugin claims no number range in the manifest. `overlays` is the manifest name for canonical `contributions/`, consumed by the merge rather than copied.
 

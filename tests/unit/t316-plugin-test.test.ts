@@ -471,6 +471,63 @@ describe("t316 standalone plugin compose test", () => {
     expect(result.stderr).toContain("--harness <name>");
   });
 
+  // alpha builds on zeta: its stage leads with zeta's agent and orders after
+  // zeta's stage. --with composes the author's zeta checkout into the
+  // candidate first, so a bare install is enough.
+  test("--with <base-root> composes the base first, so a team plugin tests clean on a bare install", () => {
+    const root = join(scratch, "layered");
+    const create = (name: string): string => {
+      const pluginRoot = join(root, name);
+      const created = spawnSync(process.execPath, [join(copiedTools, "aidlc-plugin-create.ts"), name, pluginRoot], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+      });
+      expect(created.status, created.stderr).toBe(0);
+      return pluginRoot;
+    };
+    const baseRoot = create("zeta");
+    const pluginRoot = create("alpha");
+    const manifestPath = join(pluginRoot, ".aidlc-plugin", "plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
+    manifest.dependencies = ["core", "zeta@^0.1.0"];
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+    const stagePath = join(pluginRoot, "stages", "construction", "alpha-example-stage.md");
+    writeFileSync(
+      stagePath,
+      readFileSync(stagePath, "utf-8")
+        .replace("lead_agent: alpha-example-agent", "lead_agent: zeta-example-agent")
+        .replace("requires_stage: []", "requires_stage:\n  - zeta-example-stage"),
+      "utf-8",
+    );
+    const installRoot = join(root, "install");
+    cpSync(CLAUDE_INSTALL, installRoot, { recursive: true });
+    const before = treeDigest(installRoot);
+
+    const withBase = run([pluginRoot, "--install", installRoot, "--with", baseRoot, "--json"]);
+    expect(withBase.status, withBase.stdout + withBase.stderr).toBe(0);
+    const json = JSON.parse(withBase.stdout) as {
+      warnings: Array<{ rule: string }>;
+      composedFiles: string[];
+      graph: { presentStages: string[] };
+    };
+    expect(json.warnings.map((finding) => finding.rule)).not.toContain("base-reference");
+    expect(json.graph.presentStages).toEqual(["alpha-example-stage"]);
+    expect(json.composedFiles).toContain(".claude/aidlc-common/stages/construction/alpha-example-stage.md");
+    expect(json.composedFiles).not.toContain(".claude/aidlc-common/stages/construction/zeta-example-stage.md");
+
+    // Without the base the reference is unchecked, and the bare install has no
+    // zeta agent, so the candidate's graph compile fails.
+    const without = run([pluginRoot, "--install", installRoot]);
+    expect(without.status).toBe(1);
+    expect(without.stderr).toContain("[test-compose-drop]: [degraded] aidlc-graph compile failed");
+    expect(without.stderr).toContain('WARNING stages/construction/alpha-example-stage.md [base-reference]');
+    expect(treeDigest(installRoot)).toBe(before);
+
+    const bare = run([pluginRoot, "--install", installRoot, "--with"]);
+    expect(bare.status).toBe(2);
+    expect(bare.stderr).toContain("--with requires a value");
+  }, COMPOSE_CASE_TIMEOUT_MS);
+
   test("--dist is reserved and usage errors exit 2", () => {
     const { pluginRoot, installRoot } = copyFixture("usage");
     expect(run([]).status).toBe(2);
