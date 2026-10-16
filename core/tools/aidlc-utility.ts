@@ -4915,10 +4915,24 @@ export async function collectDoctorReport(
     // silently (the presence rows above cover that);
     // .devin/config.local.json is deliberately not read.
     const devinVerResult = checkDevinVersion();
+    // `projectRcf` is null when the file is unreadable — the user-row branch
+    // below then treats every user-side override as still imported.
+    let projectRcf: Record<string, unknown> | null = null;
     try {
-      const projectAudit = auditDevinImportConfig(
-        JSON.parse(readFileSync(join(projectDir, harness, "config.json"), "utf-8")),
+      const parsedProject = JSON.parse(
+        readFileSync(join(projectDir, harness, "config.json"), "utf-8"),
       );
+      const projectAudit = auditDevinImportConfig(parsedProject);
+      const rcf =
+        parsedProject !== null &&
+        typeof parsedProject === "object" &&
+        "read_config_from" in parsedProject
+          ? (parsedProject as Record<string, unknown>).read_config_from
+          : undefined;
+      projectRcf =
+        rcf !== null && typeof rcf === "object"
+          ? (rcf as Record<string, unknown>)
+          : {};
       if (projectAudit.enabled.length > 0) {
         results.push({
           pass: false,
@@ -4974,11 +4988,31 @@ export async function collectDoctorReport(
           devinVerResult.parsedVersion !== null &&
           !devinUserLayerOverridesProject(devinVerResult.parsedVersion)
         ) {
-          results.push({
-            pass: true,
-            label:
-              `Devin compatibility imports: ${userConfigPath} enables ${overrides.map((k) => `\`${k}\``).join(", ")}, but on Devin ${devinVerResult.rawVersion} a project \`false\` wins, so this project keeps them off`,
-          });
+          // False-wins only applies where the project file actually sets
+          // `false` — a user `true` still imports a key the project leaves
+          // absent or `null` on ≥3000.11.92.
+          const stillOn = overrides.filter(
+            (k) => projectRcf === null || projectRcf[k] !== false,
+          );
+          if (stillOn.length === 0) {
+            results.push({
+              pass: true,
+              label:
+                `Devin compatibility imports: ${userConfigPath} enables ${overrides.map((k) => `\`${k}\``).join(", ")}, but on Devin ${devinVerResult.parsedVersion.join(".")} a project \`false\` wins, so this project keeps them off`,
+            });
+          } else {
+            results.push({
+              pass: false,
+              severity: "warn",
+              label:
+                `Devin compatibility imports: ${userConfigPath} enables ${stillOn.map((k) => `\`${k}\``).join(", ")} and .devin/config.json does not set them to false, so Devin imports them` +
+                (stillOn.includes("claude")
+                  ? "; `claude` also loads .claude/settings.json hooks, so a Claude Code install of AI-DLC in this project runs its hooks too"
+                  : ""),
+              fix:
+                "remove the key from your user config, or accept that a coexisting Copilot/OpenCode/… harness is imported into Devin on this machine; verify with `devin skills list` / `devin mcp list`",
+            });
+          }
         } else {
           results.push({
             pass: false,

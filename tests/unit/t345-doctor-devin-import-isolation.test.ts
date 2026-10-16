@@ -214,7 +214,26 @@ describe("t345 doctor Devin read_config_from import-isolation rows", () => {
     expect(row).toBeDefined();
     expect(row!.pass).toBe(true);
     expect(row!.label).toContain("enables `claude`");
-    expect(row!.label).toContain("project `false` wins");
+    expect(row!.label).toContain("on Devin 3000.11.92 a project");
+  });
+
+  test("user config with claude:true on 3000.11.92 still warns when the project leaves the key unset", () => {
+    const proj = setupDevinInstall();
+    // Project file absent claude: a project `false` cannot win what it never
+    // set, so Devin still imports it.
+    const { claude: _removed, ...rcf } = DEVIN_IMPORT_EXPECTED;
+    patchProjectConfig(proj, rcf);
+    const rows = runDoctor(
+      proj,
+      { read_config_from: { claude: true } },
+      "3000.11.92",
+    );
+    const row = rows.find((r) => r.label.includes("does not set them to false"));
+    expect(row).toBeDefined();
+    expect(row!.pass).toBe(false);
+    expect(row!.severity).toBe("warn");
+    expect(row!.label).toContain("enables `claude`");
+    expect(row!.label).toContain("hooks");
   });
 
   test("user config that sets nothing import-related passes as 'no user-level override'", () => {
