@@ -15,15 +15,11 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";
-import * as sensor from "../../dist/claude/.claude/tools/aidlc-sensor.ts";
+import { sensorScriptPathIn } from "../../dist/claude/.claude/tools/aidlc-sensor.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 type PathRules = typeof posix;
-type ScriptPathIn = (command: string, scriptDir: string, path?: PathRules) => string;
-// Read through the module so a missing export fails each case, not the file.
-const sensorScriptPathIn = (command: string, scriptDir: string, path: PathRules): string =>
-  ((sensor as Record<string, unknown>).sensorScriptPathIn as ScriptPathIn)(command, scriptDir, path);
 
 const PLATFORMS: Array<[string, PathRules, string]> = [
   ["POSIX", posix, "/proj/.claude/tools"],
@@ -60,8 +56,6 @@ describe("t-sensor-script-path (#2695) a sensor's script stays in the tools fold
       });
 
       test("a script token that names no file is refused", () => {
-        // A refusal counts only from the resolver itself, not from its absence.
-        expect(typeof (sensor as Record<string, unknown>).sensorScriptPathIn).toBe("function");
         for (const command of ["bun ../.ts", "bun ..\\..\\.ts", "bun /", "echo no script here"]) {
           expect(() => sensorScriptPathIn(command, tools, path), command).toThrow();
         }

@@ -46,7 +46,13 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, resolve as pathResolve } from "node:path";
+import {
+	dirname,
+	isAbsolute,
+	join,
+	type posix,
+	resolve as pathResolve,
+} from "node:path";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
@@ -301,24 +307,41 @@ function dispatchError(msg: string): never {
 // generated artifact on a crashed run and makes concurrent test
 // files race on a shared directory). Unset in production → sibling resolution
 // against the compiled harness tools directory or __FILE_DIR.
-function resolveScriptPath(command: string): string {
+// Strip both separators before applying the host's path rules; otherwise
+// Windows treats a backslash traversal preserved on POSIX as directories.
+export function sensorScriptPathIn(
+	command: string,
+	scriptDir: string,
+	path: Pick<typeof posix, "join" | "dirname" | "resolve"> = { join, dirname, resolve: pathResolve },
+): string {
 	const tokens = command.trim().split(/\s+/);
 	const tsToken = tokens.find((t) => t.endsWith(".ts"));
 	const engineIndex = tokens.indexOf("engine");
 	const nativeDelegate = engineIndex >= 0 ? tokens[engineIndex + 1] : undefined;
 	if (!tsToken && !nativeDelegate?.startsWith("sensor-")) {
-		dispatchError(`manifest command lacks a .ts script: "${command}"`);
+		throw new Error(`manifest command lacks a .ts script: "${command}"`);
 	}
-	// String.split always returns a non-empty array, so the last element
-	// is always defined — indexed access keeps the basename typed as
-	// string without a non-null assertion.
-	const parts = tsToken?.split("/") ?? [];
 	const basename = nativeDelegate?.startsWith("sensor-")
 		? `aidlc-${nativeDelegate}.ts`
-		: parts[parts.length - 1];
+		: (tsToken ?? "").split(/[\\/]/).pop() ?? "";
+	if (basename === ".ts" || !basename.endsWith(".ts")) {
+		throw new Error(`manifest command names no script file: "${command}"`);
+	}
+	const resolved = path.join(scriptDir, basename);
+	if (path.resolve(path.dirname(resolved)) !== path.resolve(scriptDir)) {
+		throw new Error(`sensor script must be in ${scriptDir}: "${command}"`);
+	}
+	return resolved;
+}
+
+function resolveScriptPath(command: string): string {
 	const scriptDir = process.env.AIDLC_SENSOR_SCRIPT_DIR
 		?? (compiledExecutable() ? resolveHarnessPath(["tools"]) : __FILE_DIR);
-	return join(scriptDir, basename);
+	try {
+		return sensorScriptPathIn(command, scriptDir);
+	} catch (error) {
+		dispatchError(errorMessage(error));
+	}
 }
 
 // Which flag carries the path a sensor analyses. A manifest's `input_schema`
