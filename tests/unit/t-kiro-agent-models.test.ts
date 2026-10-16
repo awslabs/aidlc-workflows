@@ -353,7 +353,7 @@ describe("the agent-models choice through config", () => {
     const off = p.preview("agent-models", "off", "--yes");
     expect(off.status, off.out).toBe(0);
     expect(off.out.split("config preview agent-models on --yes")).toHaveLength(2);
-    expect(off.out).toContain("The models and efforts set for single agents stay recorded and are no longer written into Kiro's agent files.");
+    expect(off.out.replace(/\s+/g, " ")).toContain(policy.KIRO_AGENT_MODELS_OFF_NOTE);
     expect(p.choice()).toBe("off");
     expect(p.reviewer()).not.toMatch(/^model:/m);
     withOwnModelLine(p.reviewerPath);
@@ -467,7 +467,7 @@ describe("the agent-models choice through config", () => {
     expect(refused.status).not.toBe(0);
     expect(refused.out).toContain("agent-models needs this project on a preview release of AI-DLC; it is on 2.11.0");
     // Run through Bun, as a copied runtime runs, so the steps name a preview copy.
-    expect(refused.out).toContain("install a preview release's copy runtime into this project");
+    expect(refused.out.replace(/\s+/g, " ")).toMatch(/install a preview release's copy runtime into this project .*, then .*config preview agent-models on --yes/);
     // The listing is laid out for the terminal, so a long line may wrap.
     const listed = p.preview().out.replace(/\s+/g, " ");
     expect(listed).toContain("agent-models: off (recorded on; this release is not a preview release)");
@@ -477,6 +477,7 @@ describe("the agent-models choice through config", () => {
     expect(off.status, off.out).toBe(0);
     expect(off.out).toContain("Preview feature agent-models: on -> off in .kiro/tools/data/harness.json; nothing changes on this release.");
     expect(off.out).not.toContain("To undo");
+    expect(off.out.replace(/\s+/g, " ")).not.toContain(policy.KIRO_AGENT_MODELS_OFF_NOTE);
     expect(p.choice()).toBe("off");
     expect(p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes").status).toBe(0);
     expect(p.reviewer()).not.toMatch(/^model:/m);

@@ -43,10 +43,21 @@ afterEach(() => {
   _resetAgentsForTests();
 });
 
-// The project's Kiro tree records the choice, as `aidlc config preview` writes it.
+// The project's Kiro tree records the choice, as `aidlc config preview` writes
+// it; with no stamp the tree is one from before stamps, on the engine's release.
 function recordPreview(dir: string, value: unknown): void {
   mkdirSync(join(dir, ".kiro", "tools", "data"), { recursive: true });
-  writeFileSync(join(dir, ".kiro", "tools", "data", "harness.json"), `${JSON.stringify({ [PREVIEW_FEATURES_RECORD]: value })}\n`);
+  writeFileSync(
+    join(dir, ".kiro", "tools", "data", "harness.json"),
+    `${JSON.stringify({ harnessDir: ".kiro", [PREVIEW_FEATURES_RECORD]: value })}\n`,
+  );
+}
+
+function stampTree(dir: string, frameworkVersion: string): void {
+  writeFileSync(
+    join(dir, ".kiro", "tools", "data", "aidlc-stamp.json"),
+    `${JSON.stringify({ schemaVersion: 1, harnessDir: ".kiro", distribution: "kiro-ide", frameworkVersion })}\n`,
+  );
 }
 
 describe("the preview switch", () => {
@@ -188,13 +199,16 @@ describe("when there is no copy", () => {
       recordPreview(dir, { [REVIEWER_READ_SCOPE_FEATURE]: "off" });
       process.env.AIDLC_HARNESS_NAME = "kiro-ide";
       expect(prepareReviewCopy(dir, review, PREVIEW), "feature off").toBeNull();
-      // A preview engine on a tree stamped with a stable release: the tree's release decides.
-      writeFileSync(
-        join(dir, ".kiro", "tools", "data", "harness.json"),
-        `${JSON.stringify({ distribution: "kiro-ide", [PREVIEW_FEATURES_RECORD]: { [REVIEWER_READ_SCOPE_FEATURE]: "on" } })}\n`,
-      );
-      writeFileSync(join(dir, ".kiro", "tools", "data", "aidlc-stamp.json"), `${JSON.stringify({ schemaVersion: 1, harnessDir: ".kiro", distribution: "kiro-ide", frameworkVersion: STABLE })}\n`);
+      // The tree's stamped release decides, whatever the engine's, and a stamp
+      // that cannot be read records nothing.
+      recordPreview(dir, { [REVIEWER_READ_SCOPE_FEATURE]: "on" });
+      stampTree(dir, STABLE);
       expect(prepareReviewCopy(dir, { ...review, requestId: "legacy" }, PREVIEW), "stable tree, preview engine").toBeNull();
+      stampTree(dir, PREVIEW);
+      expect(prepareReviewCopy(dir, { ...review, requestId: "legacy" }, STABLE), "preview tree, stable engine")
+        .toEqual({ notice: expect.stringContaining("This review of alpha can read other Units' files") });
+      stampTree(dir, "not-a-version");
+      expect(prepareReviewCopy(dir, { ...review, requestId: "legacy" }, PREVIEW), "unreadable stamp").toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
