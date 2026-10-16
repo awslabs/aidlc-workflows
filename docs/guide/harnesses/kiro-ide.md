@@ -483,16 +483,18 @@ workflow.
 During a Unit's review, the reviewer is meant to read only that Unit's files
 and the shared contracts it is given. On Claude Code and the other harnesses a
 hook holds it to that; on Kiro no hook can tell the reviewer's reads apart, so
-the rule is in the reviewer's instructions only. A preview build can also have
-Kiro hold the reviewer to it. Start Kiro IDE or Kiro CLI from a terminal in
-which you ran:
+the rule is in the reviewer's instructions only. A project on a preview release
+can also have Kiro hold the reviewer to it:
 
 ```bash
-export AIDLC_PREVIEW_FEATURES=reviewer-read-scope
+aidlc config preview reviewer-read-scope on --yes
 ```
 
-(in PowerShell, `$env:AIDLC_PREVIEW_FEATURES = "reviewer-read-scope"`). A
-project `.env` file cannot set it. Then, for each Unit review, AI-DLC writes a
+The choice is kept in `.kiro/tools/data/harness.json`
+([Preview Features](../18-install-and-lifecycle.md#preview-features)), so every
+chat reads it, and it applies from the next Unit review;
+`aidlc config preview reviewer-read-scope off --yes` turns it off. Then, for
+each Unit review, AI-DLC writes a
 copy of the reviewer, `.kiro/agents/aidlc-scoped-review-<id>.md`, whose
 permissions deny reads in every other Unit's `construction/` folder (a Unit of
 the same name in another piece of work included), and dispatches that copy.
@@ -512,7 +514,7 @@ counts a hook drop: for a copy AI-DLC could not write, under `reviewer-scope`,
 naming the cause; for one Kiro did not load, under `kiro-adapter`, and that
 file (`<record>/.aidlc-engine/hooks-health/kiro-adapter.drops`) names the
 copy. Measured on Kiro CLI 2.31.0 and Kiro IDE 1.3.0, and in a whole workflow
-on Kiro CLI 2.31.1. It does nothing in a stable build, for Units built in
+on Kiro CLI 2.31.1. It does nothing on a stable release, for Units built in
 parallel, or while the reviewer read-scope check is off: under Guard Policy
 `off`, the default of every plan but enterprise, with `guard.reviewer-scope
 off`, or with `AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1`. To try it on such a plan,
@@ -531,14 +533,15 @@ then `aidlc config` in the project; `aidlc config --channel stable` and
 ([Release Channels](../18-install-and-lifecycle.md#release-channels)). Then:
 
 ```bash
-aidlc config models --agent-models on --yes
+aidlc config preview agent-models on --yes
 aidlc config models --agent architecture-reviewer --model gpt-5.6-terra --effort high --project --yes
 ```
 
 The first command turns the feature on for this project and records that in
-`.kiro/tools/data/harness.json`, so every later `aidlc config` run keeps it,
-from a terminal or from a chat request alike; no environment variable is
-involved. AI-DLC records the model and effort in `aidlc.settings.json` and writes
+`.kiro/tools/data/harness.json`
+([Preview Features](../18-install-and-lifecycle.md#preview-features)), so every
+later `aidlc config` run keeps it, from a terminal or from a chat request
+alike. AI-DLC records the model and effort in `aidlc.settings.json` and writes
 `model:` and `effortLevel:` into that agent's
 `.kiro/agents/aidlc-architecture-reviewer-agent.md`; a Unit's reviewer copy
 keeps them. Kiro reads them when it next dispatches the agent, in a chat that
@@ -556,11 +559,15 @@ Code: `aidlc config` writes those of the agents it sets and takes them out of
 the others, so change them through `aidlc config models` rather than by hand;
 `aidlc config models --check` reports a `model:` or `effortLevel:` line that
 does not match. An agent file you added yourself is not touched.
-`aidlc config models --agent-models off` takes those lines out of the agent
-files it ships in that run and keeps the recorded models and efforts, so
-`--agent-models on` puts them back. With it off, and on a stable release,
-AI-DLC leaves the Kiro agent files as they are, lines you added yourself
-included, so turn it off before you move a project back to a stable release. `effortLevel` is not in Kiro's documentation.
+`aidlc config preview agent-models off --yes` takes those lines out of the
+agent files it ships, on any release, and keeps the recorded models and
+efforts, so turning it on again puts them back; an agent file you changed since
+AI-DLC last wrote it keeps its lines, and the command names it. With it off,
+and on a stable release, `aidlc config` neither writes nor checks those lines.
+Moving the project to a stable release replaces the agent files AI-DLC wrote
+with the release's own, without the lines, but the project still records the
+feature on, so a later move back to a preview release turns it on again unless
+you turn it off. `effortLevel` is not in Kiro's documentation.
 Measured on Kiro CLI 2.31.1 on its v3 engine and Kiro IDE 1.3.0.
 
 ### Kiro's Workflows feature stops AI-DLC's reviews and helpers

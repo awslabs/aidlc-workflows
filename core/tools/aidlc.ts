@@ -415,12 +415,13 @@ export const ROUTES: readonly Route[] = [
     all: [
       "config [--harness <name>] [--from <path>|--download [--release-base-url <url>] [--ca-bundle <path>]] [--mcp <defaults|none>] [--pin <version>|--unpin] [--dry-run] [--yes] [--json] [--quiet] [--force] [--plan-token <token>] [--project-dir <path>]",
       "config models [--show [--json]|--check|--reset|--preset <name>|--from <preset|profile> --save-as <name>] [--local|--project|--global]",
-      "config models [--deciding-effort <e>] [--reviewing-effort <e>] [--writing-up-effort <e>] [--agent <name> [--effort <e>] [--model <raw-id>]] [--session-model <id>] [--agent-models <on|off>] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
+      "config models [--deciding-effort <e>] [--reviewing-effort <e>] [--writing-up-effort <e>] [--agent <name> [--effort <e>] [--model <raw-id>]] [--session-model <id>] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config runtime [--show [--json]|--check|--record-paths|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config providers [--show [--json]|--check|--reset|--provider <current|amazon-bedrock|other>] [--region <region>] [--profile <profile>] [--opencode-default <yes|no>] [--acknowledge] [--mark-done <id>] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config trust [--show [--json]|--check|--acknowledge|--kiro-workflows <on|off>|--kiro-terminal powershell|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config flags [--show [--json]|--check|--reset] [--default-scope <name>] [--swarm <on|off>] [--hook-debug <on|off>] [--sensor-timeout-ms <n>] [--question-retention-days <days|unlimited>] [--bypass <name>] [--clear-bypass <name>] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config project [--show [--json]|--check|--reset] [--plugins <names|all>] [--mcp <defaults|none>] [--completions <shell|none>] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
+      "config preview [--json] | config preview <agent-models|reviewer-read-scope> <on|off> [--harness <name>] [--dry-run] [--yes]",
       "config --pin <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline]",
       "config --statusline <on|off> [--harness <claude|codex>] [--dry-run] [--json] [--project-dir <path>]",
       "config --unpin",
@@ -1512,6 +1513,7 @@ export function renderCommandHelp(command: PublicCommand): string {
       sectionRow("trust", "Host trust and command allowlist acknowledgement"),
       sectionRow("flags", "Default scope, swarm, hook debug, sensor timeout, and bypasses"),
       sectionRow("project", "Plugins, MCP servers, and shell completions"),
+      sectionRow("preview", "Preview features this project turns on (preview releases only)"),
       "",
       heading("THE PIECE OF WORK YOU ARE ON", out),
       `  ${cmd(`${invoke} config set <key> <value>`, out)}   Change one of its settings (depth, review, guard-policy, guard.<fence>, sensors, ...)`,
@@ -3572,6 +3574,7 @@ function renderPublicGrammarFailure(
       "trust",
       "flags",
       "project",
+      "preview",
     ]
       .map((candidate) => ({
         candidate,

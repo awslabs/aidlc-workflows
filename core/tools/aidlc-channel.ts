@@ -8,6 +8,8 @@
 // current AIDLC_VERSION, the UTC build date, and a positive build counter for
 // that date. Nothing else is a version anywhere in the install tree, so a
 // version is always a safe directory name by construction.
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 export const STABLE_CHANNEL = "stable";
@@ -170,16 +172,60 @@ export function releaseBuildVersion(env: NodeJS.ProcessEnv = process.env): strin
   return configured;
 }
 
-/** The environment variable that turns preview features on, as a comma list. */
-export const PREVIEW_FEATURES_ENV = "AIDLC_PREVIEW_FEATURES";
+/** The preview features a project can turn on, by the name `aidlc config preview` takes. */
+export const PREVIEW_FEATURES = ["agent-models", "reviewer-read-scope"] as const;
+export type PreviewFeature = (typeof PREVIEW_FEATURES)[number];
+export type PreviewChoice = "on" | "off";
+
+// The harness trees each feature works in. Both are Kiro's KAS tree, which
+// Kiro IDE and the Kiro CLI v3 engine share.
+export const PREVIEW_FEATURE_HARNESSES: Readonly<Record<PreviewFeature, readonly string[]>> = Object.freeze({
+  "agent-models": ["kiro-ide"],
+  "reviewer-read-scope": ["kiro-ide"],
+});
 
 /**
- * Whether a preview feature is on: only in a preview build, and only when the
- * person started their tool with the feature named in AIDLC_PREVIEW_FEATURES.
- * Read from the process environment alone: a project `.env` cannot set an
- * AIDLC_* name (aidlc-runtime-paths.ts drops them), and no setting records it.
+ * Where a harness tree records them: a top-level object of its
+ * `tools/data/harness.json`, `{ "<feature>": "on" | "off" }`. Not in
+ * `aidlc.settings.json`, whose older readers refuse a key they do not know;
+ * a refresh carries harness.json's non-identity keys forward.
  */
-export function previewFeatureOn(name: string, version: string = AIDLC_VERSION): boolean {
-  if (versionChannel(version) !== PREVIEW_CHANNEL) return false;
-  return (process.env[PREVIEW_FEATURES_ENV] ?? "").split(",").some((entry) => entry.trim() === name);
+export const PREVIEW_FEATURES_RECORD = "previewFeatures";
+
+export function isPreviewFeature(name: string): name is PreviewFeature {
+  return (PREVIEW_FEATURES as readonly string[]).includes(name);
+}
+
+/** A tree's recorded choices; an unreadable file or entry records nothing. */
+export function readPreviewFeatures(harnessRoot: string): Partial<Record<PreviewFeature, PreviewChoice>> {
+  const path = join(harnessRoot, "tools", "data", "harness.json");
+  if (!existsSync(path)) return {};
+  try {
+    return previewFeaturesFrom((JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>)[PREVIEW_FEATURES_RECORD]);
+  } catch {
+    return {};
+  }
+}
+
+export function previewFeaturesFrom(value: unknown): Partial<Record<PreviewFeature, PreviewChoice>> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return {};
+  const choices: Partial<Record<PreviewFeature, PreviewChoice>> = {};
+  for (const name of PREVIEW_FEATURES) {
+    const choice = (value as Record<string, unknown>)[name];
+    if (choice === "on" || choice === "off") choices[name] = choice;
+  }
+  return choices;
+}
+
+/**
+ * Whether a preview feature is on: only on a preview release, and only where
+ * the tree records it on (`aidlc config preview <feature> on`). Nothing
+ * recorded is off. Every reader of either feature asks this.
+ */
+export function previewFeatureOn(
+  name: PreviewFeature,
+  choices: Partial<Record<PreviewFeature, PreviewChoice>>,
+  version: string = AIDLC_VERSION,
+): boolean {
+  return versionChannel(version) === PREVIEW_CHANNEL && choices[name] === "on";
 }

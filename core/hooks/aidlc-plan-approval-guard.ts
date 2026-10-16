@@ -1535,8 +1535,9 @@ function configToolArgs(engineArgs: readonly string[]): readonly string[] | null
 // for them. A release fetched or applied replaces the engine itself: `--download`,
 // `--release-base-url`, `--ca-bundle`, `--from` outside `config models`, or a
 // setup run with no section (other than `--help` and `--statusline`). Kiro's
-// Workflows on, the sensor timeout, which plugins are on and `config project
-// --reset` can take a check away or change the stations. Each passes once a
+// Workflows on, the sensor timeout, which plugins are on, `config project
+// --reset` and turning the reviewer-read-scope preview off can take a check
+// away or change the stations. Each passes once a
 // person has asked since the last decision (their "update AI-DLC" is that), and
 // never on an unattended run.
 const RELEASE_FLAGS = new Set(["--download", "--release-base-url", "--ca-bundle"]);
@@ -1551,7 +1552,8 @@ function configToolAdmitted(projectDir: string, rest: readonly string[]): boolea
     names.some((name) => RELEASE_FLAGS.has(name)) || (section !== "models" && names.includes("--from"));
   const lowers = release || names.some((name, index) => name === "--kiro-workflows" && valueAt(index) !== "off") ||
     names.includes("--sensor-timeout-ms") || names.includes("--plugins") ||
-    (section === "project" && names.includes("--reset"));
+    (section === "project" && names.includes("--reset")) ||
+    (section === "preview" && names.includes("reviewer-read-scope") && names.includes("off"));
   return !lowers || personAskedSinceGate(projectDir);
 }
 

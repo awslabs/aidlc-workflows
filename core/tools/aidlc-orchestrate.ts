@@ -4805,7 +4805,7 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       return {
         config: true,
         parseError:
-          `Usage: ${entrySkillInvocation()} --config [models|runtime|providers|trust|flags|project].`,
+          `Usage: ${entrySkillInvocation()} --config [models|runtime|providers|trust|flags|project|preview].`,
       };
     }
     return {

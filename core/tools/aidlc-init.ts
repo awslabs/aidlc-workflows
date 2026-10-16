@@ -111,7 +111,22 @@ import {
   ReleaseVerificationError,
 } from "./aidlc-release.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
-import { compareVersions, PREVIEW_CHANNEL, RELEASE_CHANNELS, VERSION_ID, versionChannel } from "./aidlc-channel.ts";
+import {
+  compareVersions,
+  isPreviewFeature,
+  PREVIEW_CHANNEL,
+  PREVIEW_FEATURE_HARNESSES,
+  PREVIEW_FEATURES,
+  PREVIEW_FEATURES_RECORD,
+  type PreviewChoice,
+  type PreviewFeature,
+  previewFeatureOn,
+  previewFeaturesFrom,
+  readPreviewFeatures,
+  RELEASE_CHANNELS,
+  VERSION_ID,
+  versionChannel,
+} from "./aidlc-channel.ts";
 import {
   type TransactionOperation,
   type TransactionOptions,
@@ -249,11 +264,12 @@ import {
   installedModelBuild,
   isModelId,
   isModelPreset,
-  KIRO_AGENT_MODELS_RECORD,
+  KIRO_AGENT_MODELS_FEATURE,
   kiroAgentModelsOn,
   MODEL_EFFORTS,
   MODEL_GROUPS,
   MODEL_PRESETS,
+  modelAgentStem,
   modelHarnessHonesty,
   modelPolicyAgentsDir,
   modelPolicyIsEmpty,
@@ -427,10 +443,11 @@ type ModelsMutationContext = {
   tiers: AgentTiers;
   summaryLines: string[];
   notes: string[];
-  // Absent when the recorded policy is unchanged and only kiro-ide's agent
-  // files move: a new agent-models choice, or a repair of what it applies.
+  // Absent when the recorded policy is unchanged: a preview feature's switch,
+  // or a repair of the agent files kiro-ide's agent-models applies.
   settings?: SettingsMutation;
-  agentModels?: KiroAgentModelsChoice;
+  // `config preview <feature> on|off`: the choice this run records.
+  preview?: PreviewRequest;
 };
 
 type DiagnosticSection = "runtime" | "providers" | "trust";
@@ -595,7 +612,6 @@ const MODELS_VALUE_FLAGS = new Set([
   "--save-as",
   "--session-model",
   "--writing-up-effort",
-  "--agent-models",
 ]);
 
 const MODELS_BARE_FLAGS = new Set([
@@ -906,7 +922,6 @@ function validateModelsArgs(argv: readonly string[]): string | null {
   if (grammar) return grammar;
   const mutationFlags = [
     "--agent",
-    "--agent-models",
     "--deciding-effort",
     "--effort",
     "--from",
@@ -926,10 +941,6 @@ function validateModelsArgs(argv: readonly string[]): string | null {
   }
   if (argv.includes("--save-as") && !argv.includes("--from")) {
     return "--save-as requires --from <preset|profile>";
-  }
-  const agentModels = valueAfter(argv, "--agent-models");
-  if (agentModels !== undefined && agentModels !== "on" && agentModels !== "off") {
-    return "--agent-models takes on or off";
   }
   if (argv.includes("--agent") && !argv.includes("--effort") && !argv.includes("--model")) {
     return "--agent requires --effort <value> or --model <raw-id>";
@@ -1065,13 +1076,14 @@ export function validatePublicConfigArgs(input: readonly string[]): string | nul
   const section = positionals[0];
   if (!section) return validateRootConfigArgs(argv);
   if (!VALID_CONFIG_SECTIONS.has(section.value)) {
-    return `unknown config section ${JSON.stringify(section.value)}; valid sections: models, runtime, providers, trust, flags, project`;
+    return `unknown config section ${JSON.stringify(section.value)}; valid sections: models, runtime, providers, trust, flags, project, preview`;
   }
   const sectionArgv = [
     ...argv.slice(0, section.index),
     ...argv.slice(section.index + 1),
   ];
   if (section.value === "models") return validateModelsArgs(sectionArgv);
+  if (section.value === "preview") return validatePreviewArgs(sectionArgv);
   if (
     section.value === "runtime" ||
     section.value === "providers" ||
@@ -1113,8 +1125,6 @@ function modelPolicyHelp(): string {
     "  model in your personal Kiro settings. A model without that level gets its next level down.",
     "  --session-model <id>  save this model from your Kiro account's list as your session model",
     "                        (on Kiro IDE's row, the model only: Kiro IDE uses its own model picker)",
-    "  --agent-models <on|off>  on Kiro's row in a preview build: write each agent's own model and effort into",
-    "                        its Kiro agent file (on), or stop (off); recorded in this project",
     "",
     heading("WRITE TARGET", out),
     "  --project  committed team policy (recommended in a repository)",
@@ -1154,6 +1164,8 @@ function modelStateData(
     }
   >;
   notes: string[];
+  // kiro-ide's agent-models preview feature: what is recorded, and whether it applies.
+  agentModels?: { recorded: KiroAgentModelsChoice | null; on: boolean };
 } {
   const cap = resolveTierCap(join(projectDir, "aidlc", "spaces", "default", "memory"));
   const build = projectModelBuild(projectDir, harness);
@@ -1188,10 +1200,11 @@ function modelStateData(
     policy,
     effective,
     notes: [
-      ...harnessHonestyNotes(policy, tiers, harness, cap, build, (args) => modelsCommand(projectDir, harness, args)),
+      ...harnessHonestyNotes(policy, tiers, harness, cap, build, (args) => modelsCommand(projectDir, harness, args), (args) => previewCommand(projectDir, harness, args)),
       // On Kiro CLI the session model agents inherit is the saved one.
       ...(harness === "kiro" ? [KIRO_SAVED_MODEL_NOTE] : []),
     ],
+    ...(harness === "kiro-ide" ? { agentModels: { recorded: build.agentModels ?? null, on: kiroAgentModelsOn(build) } } : {}),
   };
 }
 
@@ -1208,19 +1221,9 @@ function modelsCommand(projectDir: string, harness: ModelHarness, args: string):
   return `${configInvocationFor(projectDir)} config models ${args}${namedHarness(projectDir, harness)}${projectTarget(projectDir)}`;
 }
 
-// The line for a change of kiro-ide's agent-models choice: where it is kept,
-// when Kiro takes it, and its undo.
-function agentModelsSwitchLine(
-  projectDir: string,
-  harness: ModelHarness,
-  harnessDir: string,
-  before: ModelBuild,
-  to: KiroAgentModelsChoice,
-): string {
-  const head = `  Kiro agent models: ${before.agentModels ?? "not set"} -> ${to} in ${harnessDir}/tools/data/harness.json`;
-  const wasOn = kiroAgentModelsOn(before);
-  return `${head}; Kiro takes it at each agent's next dispatch. To undo: ` +
-    modelsCommand(projectDir, harness, `--agent-models ${wasOn ? "on" : "off"} --yes`);
+// The same for `config preview`.
+function previewCommand(projectDir: string, harness: string, args: string): string {
+  return `${configInvocationFor(projectDir)} config preview ${args}${namedHarness(projectDir, harness)}${projectTarget(projectDir)}`;
 }
 
 // The release and agent-models choice of this project's harness, for the
@@ -1286,6 +1289,18 @@ function showModels(
     }
   }
   for (const note of data.notes) output += `  Note: ${note}\n`;
+  // Named on a preview release, and wherever a recorded on is left over.
+  const agentModels = data.agentModels;
+  if (
+    agentModels &&
+    (agentModels.recorded === "on" || versionChannel(projectModelBuild(projectDir, harness).version ?? AIDLC_VERSION) === PREVIEW_CHANNEL)
+  ) {
+    output += `\nAgent models (preview): ${agentModels.on ? "on" : "off"}${
+      agentModels.recorded === "on" && !agentModels.on
+        ? `; recorded on, which applies only on a preview release - ${previewCommand(projectDir, harness, "agent-models off --yes")} clears it`
+        : ` - ${previewCommand(projectDir, harness, `agent-models ${agentModels.on ? "off" : "on"} --yes`)} turns it ${agentModels.on ? "off" : "on"}`
+    }\n`;
+  }
   const recorded = ([
     ["global", resolved.files.machine],
     ["project", resolved.files.project],
@@ -1493,7 +1508,7 @@ function modelSummaryLines(
     if (after.unexpressed.includes("effort")) {
       lines.push(
         `  ${MODEL_GROUPS[group].label.padEnd(11)} ${names.length} agents   ` +
-          `${afterDial ?? "inherit"} requested; ${harnessHonestyNotes(next, tiers, harness, cap, build, (args) => modelsCommand(projectDir, harness, args))[0]}`,
+          `${afterDial ?? "inherit"} requested; ${harnessHonestyNotes(next, tiers, harness, cap, build, (args) => modelsCommand(projectDir, harness, args), (args) => previewCommand(projectDir, harness, args))[0]}`,
       );
       continue;
     }
@@ -1507,7 +1522,7 @@ function modelSummaryLines(
     );
     if (afterDial) lines.push(`  ${effortTradeoff(group, afterDial)}`);
   }
-  const notes = harnessHonestyNotes(next, tiers, harness, cap, build, (args) => modelsCommand(projectDir, harness, args));
+  const notes = harnessHonestyNotes(next, tiers, harness, cap, build, (args) => modelsCommand(projectDir, harness, args), (args) => previewCommand(projectDir, harness, args));
   return { lines, notes };
 }
 
@@ -2744,7 +2759,7 @@ function configRerunWith(
 }
 
 function configMutationRerun(
-  section: "models" | "runtime" | "providers" | "trust" | "flags" | "project",
+  section: "models" | "runtime" | "providers" | "trust" | "flags" | "project" | "preview",
   argv: readonly string[],
 ): string {
   const args = argv.filter((arg) => arg !== "--yes").map(commandToken);
@@ -6584,7 +6599,7 @@ function prepareRefreshSource(
   diagnosticsOverride?: ConfigDiagnosticOverrides,
   force = false,
   // The caller passes the version of the release being staged.
-  agentModelsRequest: { version: string; requested?: KiroAgentModelsChoice } = { version: AIDLC_VERSION },
+  previewRequest: { version: string; request?: PreviewRequest } = { version: AIDLC_VERSION },
 ): PreparedRefreshSource {
   // A copied project is not a release: never baseline the user's edits as
   // shipped entries during an in-place record mutation.
@@ -6726,23 +6741,45 @@ function prepareRefreshSource(
     if (diagnosticsOverride.plugins === null) delete staged.plugins;
     else staged.plugins = diagnosticsOverride.plugins;
   }
-  // kiro-ide's agent-models choice: what `--agent-models` asks, else what is
-  // recorded. Lines come out only in the run that turns off a choice that was on.
+  // The tree's preview-feature choices (`config preview`): what this run asks,
+  // else what is recorded; an entry this engine does not know is kept.
+  // agent-models' lines come out only in the run that turns off a choice that
+  // was on, on any release, and only from the agent files still as AI-DLC last
+  // wrote them; one the person changed keeps them and is named.
+  const request = previewRequest.request;
+  const recordedPreview = staged[PREVIEW_FEATURES_RECORD];
+  const recordedChoices = typeof recordedPreview === "object" && recordedPreview !== null && !Array.isArray(recordedPreview)
+    ? recordedPreview as Record<string, unknown>
+    : {};
+  let previewRecorded = false;
+  if (request && recordedChoices[request.feature] !== request.choice) {
+    staged[PREVIEW_FEATURES_RECORD] = { ...recordedChoices, [request.feature]: request.choice };
+    previewRecorded = true;
+  }
   let agentModelsChoice: KiroAgentModelsChoice | null = null;
-  let agentModelsRecorded = false;
-  let agentModelsTakeOut = false;
+  let agentModelsTakeOut: ((agent: string) => boolean) | undefined;
+  const agentModelsKept: string[] = [];
   if (descriptor.distribution === "kiro-ide") {
-    const recorded = staged[KIRO_AGENT_MODELS_RECORD];
-    const before = recorded === "on" || recorded === "off" ? recorded : null;
-    agentModelsChoice = agentModelsRequest.requested ?? before;
-    agentModelsTakeOut = agentModelsRequest.requested === "off" &&
-      kiroAgentModelsOn({ version: agentModelsRequest.version, agentModels: before });
-    if (agentModelsChoice !== null && agentModelsChoice !== recorded) {
-      staged[KIRO_AGENT_MODELS_RECORD] = agentModelsChoice;
-      agentModelsRecorded = true;
+    agentModelsChoice = previewFeaturesFrom(staged[PREVIEW_FEATURES_RECORD])[KIRO_AGENT_MODELS_FEATURE] ?? null;
+    if (
+      request?.feature === KIRO_AGENT_MODELS_FEATURE && request.choice === "off" &&
+      previewFeaturesFrom(recordedChoices)[KIRO_AGENT_MODELS_FEATURE] === "on"
+    ) {
+      const agentsDir = modelPolicyAgentsDir("kiro-ide", descriptor.harnessDir) ?? descriptor.harnessDir;
+      agentModelsTakeOut = (agent) => {
+        const rel = `${agentsDir}/${modelAgentStem(agent)}.md`;
+        const priorHash = prior?.files[rel];
+        const target = join(projectDir, rel);
+        if (!regularFile(target)) return false;
+        if (priorHash !== undefined && ownedFileHash(target, [priorHash]).hash === priorHash) return true;
+        if (/^(model|effortLevel):/m.test(readFileSync(target, "utf-8").match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "")) {
+          agentModelsKept.push(rel);
+        }
+        return false;
+      };
     }
   }
-  const agentModelsBuild: ModelBuild = { version: agentModelsRequest.version, agentModels: agentModelsChoice };
+  const agentModelsBuild: ModelBuild = { version: previewRequest.version, agentModels: agentModelsChoice };
   const distribution = staged.distribution;
   if (typeof distribution !== "string") {
     throw new Error(`${stagedHarnessData}: distribution must be a string`);
@@ -6766,7 +6803,7 @@ function prepareRefreshSource(
   if (
     regularFile(currentHarnessData) ||
     diagnosticsOverride !== undefined ||
-    agentModelsRecorded
+    previewRecorded
   ) {
     writeFileSync(stagedHarnessData, `${JSON.stringify(staged, null, 2)}\n`);
     regenerated.add(`${descriptor.harnessDir}/tools/data/harness.json`);
@@ -6780,6 +6817,13 @@ function prepareRefreshSource(
     agentModelsBuild,
     agentModelsTakeOut,
   );
+  if (agentModelsKept.length > 0) {
+    notes.push(
+      `agent-models is off, but you changed ${agentModelsKept.join(", ")}, so ${
+        agentModelsKept.length === 1 ? "it keeps its" : "they keep their"
+      } model and effort lines; Kiro still follows them until you take them out.`,
+    );
+  }
   applyProjectFlagsToProjection(
     root,
     descriptor.harnessDir,
@@ -10823,7 +10867,6 @@ function prepareModelsSection(
   }
   const mutationFlags = [
     "--agent",
-    "--agent-models",
     "--deciding-effort",
     "--effort",
     "--from",
@@ -10993,65 +11036,6 @@ function prepareModelsSection(
     );
     return null;
   }
-  const agentModels = valueAfter(argv, "--agent-models") as KiroAgentModelsChoice | undefined;
-  if (agentModels !== undefined && selected.distribution !== "kiro-ide") {
-    emitResult(usage("--agent-models applies to Kiro (kiro-ide) projects only", configCommand("models --help")), options);
-    return null;
-  }
-  if (agentModels !== undefined && versionChannel(installedBuild.version ?? AIDLC_VERSION) !== PREVIEW_CHANNEL) {
-    emitResult(
-      usage(
-        "--agent-models needs this project on a preview release of AI-DLC",
-        "move this project to a preview build of AI-DLC first (Release Channels in the install guide)",
-      ),
-      options,
-    );
-    return null;
-  }
-  // The choice lives in this project's harness.json, so the switch alone asks
-  // for no settings target.
-  // Nothing recorded is off, so a change is one in what applies.
-  const agentModelsChange = agentModels !== undefined && (agentModels === "on") !== kiroAgentModelsOn(installedBuild);
-  if (agentModels !== undefined && !mutationFlags.some((flag) => flag !== "--agent-models" && argv.includes(flag))) {
-    if (!agentModelsChange) {
-      emitResult(success(`agent-models is already ${agentModels} for this project`), options);
-      return null;
-    }
-    let switchConfirm: PendingConfirm | undefined;
-    if (!argv.includes("--dry-run") && !options.yes) {
-      if (!configInputIsTty()) {
-        emitResult(
-          usage(
-            "non-interactive model policy mutation requires --yes; --yes confirms the selected policy but never chooses one",
-            configMutationRerun("models", argv),
-          ),
-          options,
-        );
-        return null;
-      }
-      switchConfirm = { question: "Apply model policy changes?", cancelled: "model policy change cancelled" };
-    }
-    const summary = modelSummaryLines(current, current, tiers, harness, projectDir, {
-      ...installedBuild,
-      agentModels,
-    });
-    return {
-      argv: modelsPipelineArgv(argv),
-      context: {
-        confirm: switchConfirm,
-        harness,
-        harnessDir: selected.harnessDir,
-        previous: current,
-        next: current,
-        tiers,
-        summaryLines: [
-          agentModelsSwitchLine(projectDir, harness, selected.harnessDir, installedBuild, agentModels),
-        ],
-        notes: summary.notes,
-        agentModels,
-      },
-    };
-  }
   const target = settingsTargetForMutation(argv, projectDir);
   const targetPath = settingsPathForTarget(projectDir, target);
   const targetCurrentSettings = readSettingsTarget(projectDir, target);
@@ -11088,14 +11072,12 @@ function prepareModelsSection(
   // setting leaves their saved effort alone.
   const kiroSessionRequest = sessionModel !== undefined ||
     (kiroCli && (argv.includes("--preset") || argv.includes("--from")));
-  // On kiro-ide an unchanged policy still goes through when the agent-models
-  // choice changes what applies, or the agent files lost what it applies.
+  // On kiro-ide an unchanged policy still goes through when the agent files
+  // lost what agent-models applies.
   const settingsUnchanged = canonical(targetCurrentSettings) === canonical(targetNextSettings);
-  const kiroIdeProjectionDue = settingsUnchanged && selected.distribution === "kiro-ide" && (
-    agentModelsChange ||
-    (kiroAgentModelsOn(installedBuild) &&
-      modelPolicySurfaceDrift(projectDir, selected.harnessDir, harness, current, installedBuild, false).length > 0)
-  );
+  const kiroIdeProjectionDue = settingsUnchanged && selected.distribution === "kiro-ide" &&
+    kiroAgentModelsOn(installedBuild) &&
+    modelPolicySurfaceDrift(projectDir, selected.harnessDir, harness, current, installedBuild, false).length > 0;
   if (settingsUnchanged && !kiroIdeProjectionDue) {
     // The recorded policy is already this, but the person's Kiro session may
     // not carry it yet (a new model, or an effort changed inside Kiro).
@@ -11157,15 +11139,7 @@ function prepareModelsSection(
       cancelled: "model policy change cancelled",
     };
   }
-  const summary = modelSummaryLines(current, next, tiers, harness, projectDir, {
-    ...installedBuild,
-    ...(agentModels !== undefined ? { agentModels } : {}),
-  });
-  if (agentModels !== undefined && agentModelsChange) {
-    summary.lines.unshift(
-      agentModelsSwitchLine(projectDir, harness, selected.harnessDir, installedBuild, agentModels),
-    );
-  }
+  const summary = modelSummaryLines(current, next, tiers, harness, projectDir, installedBuild);
   return {
     ...(kiroPlan ? { kiro: kiroPlan } : {}),
     ...(kiroNote ? { kiroNote } : {}),
@@ -11187,8 +11161,277 @@ function prepareModelsSection(
           next: targetNextSettings,
         },
       }),
-      // A switch that changes nothing in effect is not recorded.
-      ...(agentModels !== undefined && agentModelsChange ? { agentModels } : {}),
+    },
+  };
+}
+
+// `config preview`: the switch of a preview feature, recorded in the selected
+// harness tree's harness.json (aidlc-channel.ts PREVIEW_FEATURES_RECORD), so a
+// later config run, a chat and a review read the same choice.
+type PreviewRequest = { feature: PreviewFeature; choice: PreviewChoice };
+
+const PREVIEW_VALUE_FLAGS = new Set(["--harness", "--plan-token", "--project-dir"]);
+const PREVIEW_BARE_FLAGS = new Set(["--dry-run", "--help", "--json", "--no-color", "--quiet", "--show", "--verbose", "--yes"]);
+
+// What each feature does while it is on, and when a change reaches the work.
+const PREVIEW_FEATURE_TEXT: Readonly<Record<PreviewFeature, { does: string; takes: string }>> = Object.freeze({
+  "agent-models": {
+    does: "an agent's own model and effort from config models are written into its Kiro agent file",
+    takes: "Kiro takes it at each agent's next dispatch",
+  },
+  "reviewer-read-scope": {
+    does: "a Unit's reviewer reads only that Unit's files, while the reviewer read-scope check is on for the work",
+    takes: "it applies from the next Unit review",
+  },
+});
+
+// The words after `preview`: a feature and its choice, or nothing to list.
+function previewWords(argv: readonly string[]): string[] {
+  return configPositionals(argv).map((item) => item.value);
+}
+
+function validatePreviewArgs(argv: readonly string[]): string | null {
+  const target = ["--local", "--project", "--global"].find((flag) => argv.includes(flag));
+  if (target) {
+    return `${target} does not apply to config preview: a preview feature is recorded in this project's harness tree (tools/data/harness.json), not in a settings file; omit ${target}`;
+  }
+  const words = previewWords(argv);
+  const positions = new Set(configPositionals(argv).map((item) => item.index));
+  const grammar = validateConfigOptionGrammar(argv.filter((_, index) => !positions.has(index)), "preview", {
+    values: PREVIEW_VALUE_FLAGS,
+    bare: PREVIEW_BARE_FLAGS,
+    invalidKnownMessage: (flag) => `${flag} is not valid for config preview`,
+  });
+  if (grammar) return grammar;
+  const output = validateConfigOutputMode(argv);
+  if (output) return output;
+  const known = PREVIEW_FEATURES.join(", ");
+  if (words.length === 0) {
+    return argv.includes("--dry-run") || argv.includes("--yes")
+      ? `name the feature to change: config preview <feature> <on|off> (${known})`
+      : null;
+  }
+  if (!isPreviewFeature(words[0])) return `unknown preview feature ${JSON.stringify(words[0])}; preview features: ${known}`;
+  if (words.length === 1 || (words[1] !== "on" && words[1] !== "off")) {
+    return `config preview ${words[0]} takes on or off`;
+  }
+  if (words.length > 2) return `unexpected preview positional ${JSON.stringify(words[2])}`;
+  if (argv.includes("--show")) return "--show cannot be combined with a preview feature change";
+  return null;
+}
+
+function previewHelp(): string {
+  const invoke = configInvocationFor();
+  const out = process.stdout;
+  return [
+    "Turn a preview feature on or off for this project",
+    "",
+    heading("USAGE", out),
+    `  ${cmd(`${invoke} config preview [--json]`, out)}`,
+    `  ${cmd(`${invoke} config preview <feature> <on|off> [--dry-run] [--yes]`, out)}`,
+    "",
+    heading("FEATURES", out),
+    ...PREVIEW_FEATURES.map((feature) => `  ${feature}  ${PREVIEW_FEATURE_TEXT[feature].does}`),
+    "",
+    "A preview feature applies only on a preview release of AI-DLC, and only once turned on;",
+    "the choice is recorded in this project's harness tree (tools/data/harness.json). Off works",
+    "on any release. Both features are Kiro's (kiro-ide); --harness picks the tree when the",
+    "project has more than one.",
+    "",
+    heading("EXAMPLE", out),
+    `  ${cmd(`${invoke} config preview agent-models on --yes`, out)}`,
+  ].join("\n");
+}
+
+// One feature in one tree: what is recorded and whether it applies.
+function previewFeatureStates(tree: ProjectHarness): Array<{
+  harness: string;
+  feature: PreviewFeature;
+  recorded: PreviewChoice | null;
+  on: boolean;
+}> {
+  const recorded = readPreviewFeatures(tree.root);
+  const version = tree.frameworkVersion ?? AIDLC_VERSION;
+  return PREVIEW_FEATURES.filter((feature) => PREVIEW_FEATURE_HARNESSES[feature].includes(tree.distribution))
+    .map((feature) => ({
+      harness: tree.distribution,
+      feature,
+      recorded: recorded[feature] ?? null,
+      on: previewFeatureOn(feature, recorded, version),
+    }));
+}
+
+function showPreviewFeatures(
+  projectDir: string,
+  trees: readonly ProjectHarness[],
+  options: ReturnType<typeof globalOptions>,
+): void {
+  const features = trees.flatMap((tree) =>
+    previewFeatureStates(tree).map((state) => ({
+      ...state,
+      version: tree.frameworkVersion ?? AIDLC_VERSION,
+      path: `${tree.harnessDir}/tools/data/harness.json`,
+    }))
+  );
+  if (options.mode !== "human") {
+    emitResult(success("preview features", { features }), options);
+    return;
+  }
+  const out = process.stdout;
+  let output = `${heading("Preview features", out)}\n\n`;
+  if (features.length === 0) {
+    output += `  none for ${trees.map((tree) => HARNESS_PRODUCT_NAMES[modelHarness(tree.distribution)]).join(", ")}\n`;
+  }
+  for (const tree of trees) {
+    const states = features.filter((state) => state.harness === tree.distribution);
+    if (states.length === 0) continue;
+    const version = tree.frameworkVersion ?? AIDLC_VERSION;
+    const preview = versionChannel(version) === PREVIEW_CHANNEL;
+    output += `${HARNESS_PRODUCT_NAMES[modelHarness(tree.distribution)]} (${tree.harnessDir}, ${version}):\n`;
+    for (const state of states) {
+      output += `  ${state.feature}: ${state.on ? "on" : "off"}${
+        state.recorded === "on" && !state.on ? " (recorded on; this release is not a preview release)" : state.recorded === null ? " (not set)" : ""
+      }\n    ${PREVIEW_FEATURE_TEXT[state.feature].does}.\n`;
+    }
+    if (!preview) {
+      output += "  Preview features apply only on a preview release of AI-DLC; off works on any release.\n";
+    }
+  }
+  output += `\nTurn one on or off: ${previewCommand(projectDir, trees.length === 1 ? trees[0].distribution : "", "<feature> <on|off> --yes")}\n`;
+  writeMenuText(output);
+  process.exitCode = EXIT.ok;
+}
+
+// The line for a change of a preview feature: where it is kept, when the work
+// takes it, and its undo, back to what applied before.
+function previewSwitchLine(
+  projectDir: string,
+  tree: ProjectHarness,
+  feature: PreviewFeature,
+  before: PreviewChoice | null,
+  to: PreviewChoice,
+): string {
+  const version = tree.frameworkVersion ?? AIDLC_VERSION;
+  const head = `  Preview feature ${feature}: ${before ?? "not set"} -> ${to} in ${tree.harnessDir}/tools/data/harness.json`;
+  const back = previewFeatureOn(feature, before ? { [feature]: before } : {}, version) ? "on" : "off";
+  // On a release that is not a preview one, on cannot be undone into.
+  const undo = back === "on" || versionChannel(version) === PREVIEW_CHANNEL || to === "on"
+    ? ` To undo: ${previewCommand(projectDir, tree.distribution, `${feature} ${back} --yes`)}`
+    : "";
+  return `${head}; ${PREVIEW_FEATURE_TEXT[feature].takes}.${undo}`;
+}
+
+// How to get the preview release the project needs, as commands.
+function previewReleaseSteps(projectDir: string): string {
+  const pin = join(projectDir, ".aidlc-version");
+  const pinned = regularFile(pin) ? readFileSync(pin, "utf-8").trim() : "";
+  return [
+    ...(pinned ? [`${configCommand("--unpin")} (this project is pinned to ${pinned} in .aidlc-version)`] : []),
+    configCommand("--channel preview"),
+    "aidlc update",
+    configCommand(),
+  ].join(", then ");
+}
+
+function preparePreviewSection(
+  argv: string[],
+  options: ReturnType<typeof globalOptions>,
+): { argv: string[]; context: ModelsMutationContext } | null {
+  if (argv.includes("--help")) {
+    process.stdout.write(`${previewHelp()}\n`);
+    process.exitCode = EXIT.ok;
+    return null;
+  }
+  const validation = validatePreviewArgs(argv);
+  if (validation) {
+    emitResult(usage(validation, configCommand("preview --help")), options);
+    return null;
+  }
+  const projectDir = projectDirFrom(argv);
+  const requested = valueAfter(argv, "--harness");
+  const harnesses = discoverProjectHarnesses(projectDir);
+  const chosen = requested ? harnesses.filter((candidate) => candidate.distribution === requested) : harnesses;
+  if (chosen.length === 0) {
+    emitResult(
+      usage(
+        requested && harnesses.length > 0
+          ? `project uses ${harnesses.map((item) => item.distribution).join(", ")}; refusing ${requested}`
+          : `${configCommand("preview")} requires an installed project harness; run ${configCommand()} first`,
+      ),
+      options,
+    );
+    return null;
+  }
+  const words = previewWords(argv);
+  if (words.length === 0) {
+    showPreviewFeatures(projectDir, chosen, options);
+    return null;
+  }
+  if (chosen.length > 1) {
+    emitResult(usage("multiple project harnesses are present; pass one --harness <name>"), options);
+    return null;
+  }
+  const tree = chosen[0];
+  const feature = words[0] as PreviewFeature;
+  const choice = words[1] as PreviewChoice;
+  if (!PREVIEW_FEATURE_HARNESSES[feature].includes(tree.distribution)) {
+    emitResult(
+      usage(
+        `${feature} is a preview feature of ${PREVIEW_FEATURE_HARNESSES[feature].join(", ")} projects; this one uses ${tree.distribution}`,
+        configCommand("preview --help"),
+      ),
+      options,
+    );
+    return null;
+  }
+  const version = tree.frameworkVersion ?? AIDLC_VERSION;
+  if (choice === "on" && versionChannel(version) !== PREVIEW_CHANNEL) {
+    emitResult(
+      usage(
+        `${feature} needs this project on a preview release of AI-DLC; it is on ${version}`,
+        previewReleaseSteps(projectDir),
+      ),
+      options,
+    );
+    return null;
+  }
+  const recorded = readPreviewFeatures(tree.root)[feature] ?? null;
+  if (recorded === choice) {
+    emitResult(success(`${feature} is already ${choice} for this project`, { feature, choice }), options);
+    return null;
+  }
+  let confirm: PendingConfirm | undefined;
+  if (!argv.includes("--dry-run") && !options.yes) {
+    if (!configInputIsTty()) {
+      emitResult(
+        usage(
+          "non-interactive preview feature change requires --yes",
+          configMutationRerun("preview", argv),
+        ),
+        options,
+      );
+      return null;
+    }
+    confirm = { question: `Turn ${feature} ${choice}?`, cancelled: "preview feature change cancelled" };
+  }
+  const harness = modelHarness(tree.distribution);
+  const current = modelPolicyForHarness(resolveAidlcSettings(projectDir).models, harness);
+  const tiers = readAgentTiers(tree.root);
+  const notes = feature === KIRO_AGENT_MODELS_FEATURE
+    ? modelSummaryLines(current, current, tiers, harness, projectDir, { version, agentModels: choice }).notes
+    : [];
+  return {
+    argv: modelsPipelineArgv(argv),
+    context: {
+      confirm,
+      harness,
+      harnessDir: tree.harnessDir,
+      previous: current,
+      next: current,
+      tiers,
+      summaryLines: [previewSwitchLine(projectDir, tree, feature, recorded, choice)],
+      notes,
+      preview: { feature, choice },
     },
   };
 }
@@ -11203,8 +11446,7 @@ function handleSettingsOnlySection(
     return false;
   }
   const validation = section === "models"
-    ? validateModelsArgs(argv) ??
-      (argv.includes("--agent-models") ? "--agent-models applies to an installed Kiro (kiro-ide) project" : null)
+    ? validateModelsArgs(argv)
     : validateChoiceArgs("flags", argv);
   if (validation) {
     emitResult(usage(validation, configCommand(`${section} --help`)), options);
@@ -12327,8 +12569,8 @@ export async function main(
     }
     emitResult(
       usage(
-        `unknown config section ${JSON.stringify(section.value)}; valid sections: models, runtime, providers, trust, flags, project`,
-        configCommand("<models|runtime|providers|trust|flags|project> --help"),
+        `unknown config section ${JSON.stringify(section.value)}; valid sections: models, runtime, providers, trust, flags, project, preview`,
+        configCommand("<models|runtime|providers|trust|flags|project|preview> --help"),
       ),
       options,
     );
@@ -12358,7 +12600,12 @@ export async function main(
   let pendingKiroSession: KiroSessionPlan | null = null;
   let diagnosticsContext: DiagnosticsMutationContext | null = null;
   let choicesContext: ChoicesMutationContext | null = null;
-  if (section?.value === "models") {
+  if (section?.value === "preview") {
+    const prepared = preparePreviewSection([...argv.slice(0, section.index), ...argv.slice(section.index + 1)], options);
+    if (!prepared) return;
+    argv = prepared.argv;
+    modelsContext = prepared.context;
+  } else if (section?.value === "models") {
     argv = [...argv.slice(0, section.index), ...argv.slice(section.index + 1)];
     try {
       const preparedModels = prepareModelsSection(argv, options);
@@ -13021,7 +13268,7 @@ export async function main(
       argv.includes("--force"),
       {
         version: stamp.frameworkVersion,
-        ...(modelsContext?.agentModels ? { requested: modelsContext.agentModels } : {}),
+        ...(modelsContext?.preview ? { request: modelsContext.preview } : {}),
       },
     );
     prepared.notes.unshift(...sourceNotes);
@@ -13417,7 +13664,7 @@ export async function main(
       }
       const configuredSection = diagnosticsContext?.section ??
         choicesContext?.section ??
-        (modelsContext ? "models" : null);
+        (modelsContext ? (modelsContext.preview ? "preview" : "models") : null);
       emitResult(success(
         withQuietWarnings(`${configuredSection ? `${configuredSection} configuration` : "config"} plan for ${projectDir}${
           switchingFrom
@@ -13438,7 +13685,7 @@ export async function main(
                 models: {
                   previous: modelsContext.previous,
                   next: modelsContext.next,
-                  ...(modelsContext.agentModels ? { agentModels: modelsContext.agentModels } : {}),
+                  ...(modelsContext.preview ? { preview: modelsContext.preview } : {}),
                   summaries: modelsContext.summaryLines,
                   notes: modelsContext.notes,
                 },
@@ -13750,7 +13997,7 @@ export async function main(
       : diagnosticsContext
       ? `configured ${diagnosticsContext.section} settings for ${projectDir}`
       : modelsContext
-      ? `configured model policy for ${projectDir}`
+      ? `configured ${modelsContext.preview ? "preview features" : "model policy"} for ${projectDir}`
       : `configured ${projectDir} for ${descriptor.productName} ${stamp.frameworkVersion}${
         switchingFrom
           ? `, switched ${descriptor.harnessDir} in place from ${switchingFrom.distribution} to ${stamp.distribution} (aidlc/ kept)`
@@ -13802,7 +14049,7 @@ export async function main(
               models: {
                 previous: modelsContext.previous,
                 next: modelsContext.next,
-                ...(modelsContext.agentModels ? { agentModels: modelsContext.agentModels } : {}),
+                ...(modelsContext.preview ? { preview: modelsContext.preview } : {}),
                 summaries: modelsContext.summaryLines,
                 notes: modelsContext.notes,
               },

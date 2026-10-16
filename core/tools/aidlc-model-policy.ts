@@ -5,7 +5,14 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, join } from "node:path";
-import { PREVIEW_CHANNEL, versionChannel } from "./aidlc-channel.ts";
+import {
+  PREVIEW_CHANNEL,
+  type PreviewChoice,
+  type PreviewFeature,
+  previewFeatureOn,
+  readPreviewFeatures,
+  versionChannel,
+} from "./aidlc-channel.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
   kiroModelDefaults,
@@ -174,9 +181,10 @@ type HarnessHonesty = {
   readonly message: string;
 };
 
-/** A kiro-ide project's agent-models choice ("on"/"off"), a top-level key of its `tools/data/harness.json`. */
-export const KIRO_AGENT_MODELS_RECORD = "agentModels";
-export type KiroAgentModelsChoice = "on" | "off";
+// kiro-ide's agent-models choice is a preview feature (aidlc-channel.ts
+// PREVIEW_FEATURES), recorded in the tree's `tools/data/harness.json`.
+export type KiroAgentModelsChoice = PreviewChoice;
+export const KIRO_AGENT_MODELS_FEATURE: PreviewFeature = "agent-models";
 
 // What a model-policy reader knows about the build and the project it reads:
 // the release version of the tree being written or read (the running tool's by
@@ -186,17 +194,6 @@ export type ModelBuild = {
   agentModels?: KiroAgentModelsChoice | null;
 };
 
-export function readKiroAgentModelsChoice(harnessRoot: string): KiroAgentModelsChoice | null {
-  const path = join(harnessRoot, "tools", "data", "harness.json");
-  if (!existsSync(path)) return null;
-  try {
-    const value = (JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>)[KIRO_AGENT_MODELS_RECORD];
-    return value === "on" || value === "off" ? value : null;
-  } catch {
-    return null;
-  }
-}
-
 // A preview release where agent-models is not on: the note names how to turn it on.
 export function kiroAgentModelsOffInPreview(build: ModelBuild = {}): boolean {
   return versionChannel(build.version ?? AIDLC_VERSION) === PREVIEW_CHANNEL && !kiroAgentModelsOn(build);
@@ -205,14 +202,20 @@ export function kiroAgentModelsOffInPreview(build: ModelBuild = {}): boolean {
 // What a reader of an installed project knows: the release it is on and its
 // recorded agent-models choice.
 export function installedModelBuild(harnessRoot: string, version?: string): ModelBuild {
-  return { ...(version ? { version } : {}), agentModels: readKiroAgentModelsChoice(harnessRoot) };
+  return {
+    ...(version ? { version } : {}),
+    agentModels: readPreviewFeatures(harnessRoot)[KIRO_AGENT_MODELS_FEATURE] ?? null,
+  };
 }
 
-// Whether kiro-ide applies one agent's model and effort: only a tree on a
-// preview release whose project recorded "on" (`config models --agent-models
-// on`). The writer, the drift check and the take-out on off all read this.
+// Whether kiro-ide applies one agent's model and effort. The writer, the drift
+// check and the notes all read this.
 export function kiroAgentModelsOn(build: ModelBuild = {}): boolean {
-  return versionChannel(build.version ?? AIDLC_VERSION) === PREVIEW_CHANNEL && build.agentModels === "on";
+  return previewFeatureOn(
+    KIRO_AGENT_MODELS_FEATURE,
+    build.agentModels ? { [KIRO_AGENT_MODELS_FEATURE]: build.agentModels } : {},
+    build.version ?? AIDLC_VERSION,
+  );
 }
 
 // Kiro uses a delegated agent's own `model` and `effortLevel` (measured on Kiro
@@ -767,8 +770,9 @@ export function applyModelPolicyToProjection(
   policyValue?: ModelPolicyRecord | null,
   capValue?: Tier | null,
   build?: ModelBuild,
-  // The run that turns kiro-ide's agent-models off: take its lines out once.
-  takeOut = false,
+  // The run that turns kiro-ide's agent-models off takes its lines out once,
+  // from the agent files this says are still as AI-DLC last wrote them.
+  takeOut?: (agent: string) => boolean,
 ): EffectiveModelPolicy[] {
   const harnessRoot = join(projectionRoot, harnessDir);
   const policy = policyValue ?? null;
@@ -811,7 +815,9 @@ export function applyModelPolicyToProjection(
     // conductor (aidlc-aidlc.md) has no tier and is never written. With the
     // feature off the agent files are left as they are, the person's own lines
     // too, except in the run that turns it off.
+    const on = kiroAgentModelsOn(build);
     for (const item of effective) {
+      if (!on && !takeOut?.(item.agent)) continue;
       const path = join(agentsRoot, `${modelAgentStem(item.agent)}.md`);
       if (!existsSync(path)) throw new Error(`${path}: missing agent surface`);
       writeFileSync(
@@ -1012,6 +1018,8 @@ export function harnessHonestyNotes(
   build?: ModelBuild,
   // How the person runs `config models <args>` in this project.
   command: (args: string) => string = (args) => `aidlc config models ${args}`,
+  // And `config preview <args>`.
+  previewCommand: (args: string) => string = (args) => `aidlc config preview ${args}`,
 ): string[] {
   const effective = Object.entries(tiers).map(([name, tier]) =>
     resolveModelPolicy(policy, name, tier, harness, cap, build)
@@ -1026,7 +1034,7 @@ export function harnessHonestyNotes(
       !offInPreview
         ? modelHarnessHonesty(harness, build).message
         : own
-        ? `${KIRO_AGENT_MODELS_OFF_IN_PREVIEW.message} \`${command("--agent-models on --yes")}\` turns it on.`
+        ? `${KIRO_AGENT_MODELS_OFF_IN_PREVIEW.message} \`${previewCommand("agent-models on --yes")}\` turns it on.`
         : HARNESS_HONESTY["kiro-ide"].message,
     );
   }
