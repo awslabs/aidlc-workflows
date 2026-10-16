@@ -13090,18 +13090,20 @@ export async function main(
       const one = cited.length === 1;
       const listed = (paths: string[]): string => paths.length === 1 ? paths[0] : paths.join(", ");
       // No section takes --force; config itself does, from the source this run
-      // used, and the section's own change lands when it runs once more.
+      // used, and the section's own change lands when it runs once more. A
+      // mirror URL can carry its credential, so the line asks for it back
+      // instead of printing it.
       const sourceArgs = argv.flatMap((arg, index) =>
         arg === "--download"
           ? [arg]
-          : ["--from", "--harness", "--release-base-url", "--ca-bundle"].includes(arg)
+          : ["--from", "--harness", "--ca-bundle"].includes(arg)
           ? [arg, argv[index + 1]]
           : []
       );
       const force = section
         ? `run \`${
           configRerunWith(["config", ...sourceArgs], projectDir, ["--force"]) ?? configCommand("--force")
-        }\`, then the same command again`
+        }\`${argv.includes("--release-base-url") ? " with the same --release-base-url" : ""}, then the same command again`
         : "run it again with --force";
       const forward = broken.length === 0
         ? `to keep your version, move ${one ? cited[0] : "those files"} somewhere else and run ` +

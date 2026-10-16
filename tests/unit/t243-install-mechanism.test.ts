@@ -4293,7 +4293,8 @@ describe("t243 project initialization", () => {
   // No config section takes --force, so a section's conflict names config
   // itself, from the source the section used, then the section once more; on
   // a copied tool with --from and natively from the installed release, the
-  // command it names and then the section both go through.
+  // command it names and then the section both go through. A mirror URL can
+  // carry its credential, so the line asks for it back and never prints it.
   test("a section's conflict names the config command that takes --force, and it and the section go through", () => {
     const machine = temp("aidlc-t243-section-conflict-machine-");
     const launcher = join(temp("aidlc-t243-section-conflict-launcher-"), INSTALLED_EXECUTABLE);
@@ -4302,10 +4303,12 @@ describe("t243 project initialization", () => {
     } catch {
       cpSync(BUN, launcher);
     }
+    const MIRROR = "https://user:tok@mirror.example/releases";
     // A copy of Bun under the name aidlc stands in for the compiled executable.
     const channels = [
       { name: "copied", tool: BUN, from: ["--from", CLAUDE_RELEASE], named: ["bun", ".claude/tools/aidlc.ts", "config", "--from", CLAUDE_RELEASE, "--force"] },
       { name: "native", tool: launcher, from: [], named: ["aidlc", "config", "--force"] },
+      { name: "mirror", tool: launcher, from: ["--download", "--release-base-url", MIRROR], named: ["aidlc", "config", "--download", "--force"] },
     ];
     for (const channel of channels) {
       const project = temp(`aidlc-t243-section-conflict-${channel.name}-`);
@@ -4332,9 +4335,17 @@ describe("t243 project initialization", () => {
       expect(refused.status, `${channel.name}: ${refused.stdout}${refused.stderr}`).toBe(4);
       const out = refused.stdout.replace(/\s+/g, " ");
       expect(out, channel.name).not.toContain("run it again with --force");
-      const named = /to take the shipped version over it, run `([^`]+)`, then the same command again\./.exec(out)?.[1];
+      const json = config([...section, "--json"]);
+      expect(json.status, channel.name).toBe(4);
+      expect(refused.stdout + refused.stderr + json.stdout + json.stderr, channel.name).not.toContain("tok@");
+      const mirror = channel.from.includes("--release-base-url");
+      const asked = mirror ? " with the same --release-base-url" : "";
+      const named = new RegExp(`to take the shipped version over it, run \`([^\`]+)\`${asked}, then the same command again\\.`).exec(out)?.[1];
       expect(printedWords(named ?? ""), `${channel.name}: ${out}`).toEqual(channel.named);
-      const forced = config(printedWords(named ?? "").slice(channel.named.indexOf("config") + 1));
+      const forced = config([
+        ...printedWords(named ?? "").slice(channel.named.indexOf("config") + 1),
+        ...(mirror ? ["--release-base-url", MIRROR] : []),
+      ]);
       expect(forced.status, `${channel.name}: ${forced.stdout}${forced.stderr}`).toBe(0);
       expect(readFileSync(file, "utf-8"), channel.name).toBe(shipped);
       const again = config(section);
