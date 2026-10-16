@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["base", "head", "status", "summary", "decisions", "approvalId"],
+  "properties": {
+    "base": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "head": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "status": { "type": "string", "enum": ["no-product-change", "needs-approval", "approved-scope"] },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "approvalId": { "type": ["integer", "null"], "minimum": 1 },
+    "decisions": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["change", "before", "after", "question", "paths"],
+        "properties": {
+          "change": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "before": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "after": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "question": { "type": "string", "minLength": 1, "maxLength": 1000 },
+          "paths": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 20,
+            "items": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
+  }
+}

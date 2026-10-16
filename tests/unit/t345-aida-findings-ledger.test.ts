@@ -1226,7 +1226,7 @@ if (endpoint === "repos/acme/repo/pulls/42" && !args.includes("--method")) {
     expect(LEDGER_WORKFLOW).not.toContain("/dismissals");
     expect(LEDGER_WORKFLOW).not.toContain("author_association");
     expect(REVIEW_WORKFLOW).not.toContain("  issue_comment:");
-    expect(REVIEW_WORKFLOW).toContain(".github/scripts/ai-pr-ledger.ts|\\");
+    expect(REVIEW_WORKFLOW).toContain("cp .github/scripts/ai-pr-review.ts .github/scripts/ai-pr-ledger.ts");
     expect(REVIEW_WORKFLOW).toContain("ai-pr-ledger.ts fetch");
     expect(REVIEW_WORKFLOW).toContain("ai-pr-ledger.ts merge");
     expect(REVIEW_WORKFLOW).toContain("--ledger .ai-review-context/ledger.json");
@@ -1287,7 +1287,7 @@ if (endpoint === "repos/acme/repo/pulls/42" && !args.includes("--method")) {
     expect(CONTRIBUTING).toContain("all-or-nothing");
     expect(CONTRIBUTING).not.toContain("P0 and P1 findings can be accepted but not rejected");
     expect(CONTRIBUTING).toContain("Any finding can be rejected, a P0 or P1 included.");
-    expect(CONTRIBUTING).toContain("never a\nrequest for changes, so it never blocks a merge");
+    expect(CONTRIBUTING).toContain("never a request for changes. Technical findings do not block merge.");
     expect(CONTRIBUTING).toContain("`full` — make the next review cover the whole head");
   });
 });

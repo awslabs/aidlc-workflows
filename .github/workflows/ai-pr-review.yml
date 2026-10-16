@@ -1,20 +1,26 @@
 name: Adversarial AI PR Review
 
 on:
-  # Only same-repository branches are reviewed. Fork PRs are skipped.
-  pull_request:
+  # Product approval uses default-branch controls, including for fork diffs.
+  # Technical review remains limited to same-repository branches.
+  pull_request_target:
     branches:
       - main
     types:
       - opened
       - reopened
       - ready_for_review
+      - synchronize
+      - edited
   pull_request_review:
     types:
       - submitted
   pull_request_review_comment:
     types:
       - created
+  merge_group:
+    types:
+      - checks_requested
   workflow_dispatch:
     inputs:
       pr_number:
@@ -36,9 +42,8 @@ jobs:
     name: Review pull request
     if: >-
       github.event_name == 'workflow_dispatch'
-      || (github.event_name == 'pull_request'
-          && !github.event.pull_request.draft
-          && github.event.pull_request.head.repo.full_name == github.repository)
+      || (github.event_name == 'pull_request_target'
+          && !github.event.pull_request.draft)
       || (github.event_name == 'pull_request_review'
           && github.actor != 'github-actions[bot]'
           && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)
@@ -54,11 +59,12 @@ jobs:
       cancel-in-progress: false
     runs-on: ubuntu-latest
     environment: ai-pr-review
-    timeout-minutes: 110
+    timeout-minutes: 125
     permissions:
       contents: read
       id-token: write
       pull-requests: write
+      checks: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -70,10 +76,31 @@ jobs:
         with:
           bun-version: '1.3.14'
 
+      - name: Pin review controls and start product check
+        id: product_start
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          controls_sha="$(git rev-parse HEAD)"
+          mkdir -p .ai-review-controls/prompts .ai-review-controls/scripts
+          cp .github/prompts/ai-pr-review-* .ai-review-controls/prompts/
+          cp .github/prompts/ai-product-decision* .ai-review-controls/prompts/
+          cp .github/scripts/ai-pr-review.ts .github/scripts/ai-pr-ledger.ts \
+            .github/scripts/ai-product-decision.ts \
+            .github/scripts/prepare-ai-review-runtime.sh \
+            .ai-review-controls/scripts/
+          echo "::notice::AI review controls from $controls_sha"
+          bun .ai-review-controls/scripts/ai-product-decision.ts start \
+            --repo "$REPO" --pr "$PR_NUMBER"
+
       - name: Build immutable review context
         id: context
         env:
           EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           REQUESTED_PR: ${{ github.event.pull_request.number || inputs.pr_number }}
@@ -115,10 +142,11 @@ jobs:
             echo "::error::PR head $head does not match triggering head $TRIGGER_HEAD"
             exit 1
           fi
-          if [ "$head_repo" != "$REPO" ]; then
-            echo "::notice::PR #$REQUESTED_PR comes from a fork; AI review is disabled for forks"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
+          technical=true
+          if [ "$head_repo" != "$REPO" ] \
+            || { [ "$EVENT_NAME" = "pull_request_target" ] \
+              && { [ "$EVENT_ACTION" = "synchronize" ] || [ "$EVENT_ACTION" = "edited" ]; }; }; then
+            technical=false
           fi
 
           git fetch --no-tags origin "$base" \
@@ -129,43 +157,23 @@ jobs:
             exit 1
           fi
 
-          control_change=false
-          while IFS= read -r path; do
-            case "$path" in
-              .github/workflows/ai-pr-review.yml|\
-              .github/scripts/ai-pr-review.ts|\
-              .github/scripts/ai-pr-ledger.ts|\
-              .github/scripts/prepare-ai-review-runtime.sh|\
-              .github/prompts/ai-pr-review-*.md|\
-              .github/prompts/ai-pr-review-*.json)
-                control_change=true
-                break
-                ;;
-            esac
-          done < <(git diff --name-only "$base...$head")
-          if [ "$control_change" = "true" ] && [ "$EVENT_NAME" != "pull_request" ]; then
-            echo "::notice::Reviewer controls changed; self-review runs only from a pull_request event"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # pulls/<n>.base.sha can lag the default branch; controls must match
-          # the workflow revision that runs them, not the immutable review base.
-          # A controls PR self-reviews the exact immutable head it proposes.
-          controls_sha="$(git rev-parse HEAD)"
-          if [ "$control_change" = "true" ]; then
-            git checkout --detach "$head"
-            controls_sha="$(git rev-parse HEAD)"
-            echo "::notice::AI reviewer controls changed; self-review uses head $controls_sha"
-          fi
-          mkdir -p .ai-review-controls/prompts .ai-review-controls/scripts
-          cp .github/prompts/ai-pr-review-* .ai-review-controls/prompts/
-          cp .github/scripts/ai-pr-review.ts .github/scripts/ai-pr-ledger.ts \
-            .github/scripts/prepare-ai-review-runtime.sh \
-            .ai-review-controls/scripts/
-          echo "::notice::AI review controls from $controls_sha"
-
           git checkout --detach "$base"
           mkdir -p .ai-review-context
+          jq '{number, state, merged, title, body: (.body // ""), draft, base: {sha: .base.sha, ref: .base.ref}, head: {sha: .head.sha, ref: .head.ref, repo: .head.repo.full_name}, user: .user.login}' \
+            <<<"$pr_json" > .ai-review-context/pr.json
+          if [ "$technical" = "false" ]; then
+            bun .ai-review-controls/scripts/ai-pr-review.ts build-context \
+              --base "$base" --head "$head" --output .ai-review-context
+            {
+              echo "technical=false"
+              echo "already_reviewed=false"
+              echo "base=$base"
+              echo "head=$head"
+              echo "pr=$REQUESTED_PR"
+              echo "skip=false"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           bun .ai-review-controls/scripts/ai-pr-review.ts build-discussion \
             --repo "$REPO" \
             --pr "$REQUESTED_PR" \
@@ -173,8 +181,6 @@ jobs:
             --output .ai-review-context/discussion.json \
             --current-ai-output .ai-review-context/current-ai-reviews.json \
             --identity-output .ai-review-context/discussion-identity.json
-          jq '{number, state, merged, title, body: (.body // ""), draft, base: {sha: .base.sha, ref: .base.ref}, head: {sha: .head.sha, ref: .head.ref, repo: .head.repo.full_name}, user: .user.login}' \
-            <<<"$pr_json" > .ai-review-context/pr.json
           bun .ai-review-controls/scripts/ai-pr-review.ts build-context \
             --base "$base" \
             --head "$head" \
@@ -226,14 +232,25 @@ jobs:
             echo "existing_state=$existing_state"
             echo "head=$head"
             echo "pr=$REQUESTED_PR"
-            echo "self_change=$control_change"
+            echo "technical=true"
             echo "skip=false"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Add approved product scope to the shared context
+        if: steps.product_start.outputs.skip != 'true' && steps.context.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.context.outputs.pr }}
+        run: |
+          bun .ai-review-controls/scripts/ai-product-decision.ts prepare \
+            --repo "$REPO" --pr "$PR_NUMBER"
 
       - name: Start AIDA review label state
         id: label_start
         if: >-
           steps.context.outputs.skip != 'true'
+          && steps.context.outputs.technical == 'true'
           && steps.context.outputs.already_reviewed != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -254,6 +271,7 @@ jobs:
       - name: Finalize existing SHA-bound review
         if: >-
           steps.context.outputs.skip != 'true'
+          && steps.context.outputs.technical == 'true'
           && steps.context.outputs.already_reviewed == 'true'
         env:
           CONTEXT_ID: ${{ steps.context.outputs.context_id }}
@@ -308,18 +326,27 @@ jobs:
           fi
 
       - name: Install pinned review CLIs
-        if: steps.context.outputs.skip != 'true' && steps.context.outputs.already_reviewed != 'true'
+        if: >-
+          steps.context.outputs.skip != 'true'
+          && (steps.product_start.outputs.skip != 'true'
+              || (steps.context.outputs.technical == 'true' && steps.context.outputs.already_reviewed != 'true'))
         run: >-
           npm install --global --silent
           "@openai/codex@$CODEX_VERSION"
           "@anthropic-ai/claude-code@$CLAUDE_CODE_VERSION"
 
       - name: Prepare and verify unprivileged review runtimes
-        if: steps.context.outputs.skip != 'true' && steps.context.outputs.already_reviewed != 'true'
+        if: >-
+          steps.context.outputs.skip != 'true'
+          && (steps.product_start.outputs.skip != 'true'
+              || (steps.context.outputs.technical == 'true' && steps.context.outputs.already_reviewed != 'true'))
         run: bash .ai-review-controls/scripts/prepare-ai-review-runtime.sh
 
       - name: Assume dedicated Bedrock review role through OIDC
-        if: steps.context.outputs.skip != 'true' && steps.context.outputs.already_reviewed != 'true'
+        if: >-
+          steps.context.outputs.skip != 'true'
+          && (steps.product_start.outputs.skip != 'true'
+              || (steps.context.outputs.technical == 'true' && steps.context.outputs.already_reviewed != 'true'))
         uses: aws-actions/configure-aws-credentials@451ce2a72e8d729a59ebeaacab82dbce58e7af4c # v6
         with:
           role-to-assume: ${{ secrets.AWS_AI_PR_REVIEW_ROLE_ARN }}
@@ -328,10 +355,16 @@ jobs:
 
       - name: Run review passes sequentially
         id: model
-        if: steps.context.outputs.skip != 'true' && steps.context.outputs.already_reviewed != 'true'
+        if: >-
+          steps.context.outputs.skip != 'true'
+          && (steps.product_start.outputs.skip != 'true'
+              || (steps.context.outputs.technical == 'true' && steps.context.outputs.already_reviewed != 'true'))
         env:
           BASE_SHA: ${{ steps.context.outputs.base }}
           HEAD_SHA: ${{ steps.context.outputs.head }}
+          PRODUCT_SKIP: ${{ steps.product_start.outputs.skip }}
+          TECHNICAL: ${{ steps.context.outputs.technical }}
+          ALREADY_REVIEWED: ${{ steps.context.outputs.already_reviewed }}
         run: |
           set -euo pipefail
           codex_bin="$(command -v codex)"
@@ -482,6 +515,24 @@ jobs:
             echo "$name complete."
           }
 
+          if [ "$PRODUCT_SKIP" != "true" ]; then
+            product_prompt="$(cat .ai-review-controls/prompts/ai-product-decision.md)"
+            product_schema="$(jq -c . .ai-review-controls/prompts/ai-product-decision-schema.json)"
+            run_model \
+              "sol" \
+              "Product decision" \
+              "high" \
+              50000 \
+              ".ai-pr-review-final/product.json" \
+              "$product_prompt" \
+              "$product_schema"
+          fi
+          # A push checks whether product scope grew without rerunning the
+          # technical lenses or changing their labels and findings ledger.
+          if [ "$TECHNICAL" != "true" ] || [ "$ALREADY_REVIEWED" = "true" ]; then
+            exit 0
+          fi
+
           # The two security lenses emit structured JSON (same evidence shapes as
           # the final review) so the publisher can read exactly which lines and
           # files they cited: that provenance, not the judge's category, exempts a
@@ -625,9 +676,28 @@ jobs:
             .ai-pr-review-final/decision.json)"
           echo "decision=$decision" >> "$GITHUB_OUTPUT"
 
+      - name: Publish product decision check
+        if: always() && steps.product_start.outputs.check != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          product_script=".ai-review-controls/scripts/ai-product-decision.ts"
+          if [ -f .ai-pr-review-final/product.json ] \
+            && bun "$product_script" finish --repo "$REPO" --pr "$PR_NUMBER" \
+              --input .ai-pr-review-final/product.json; then
+            exit 0
+          fi
+          bun "$product_script" fail --repo "$REPO" --pr "$PR_NUMBER"
+
       - name: Publish SHA-bound review
         id: publish
-        if: steps.context.outputs.skip != 'true' && steps.context.outputs.already_reviewed != 'true'
+        if: >-
+          steps.context.outputs.skip != 'true'
+          && steps.context.outputs.technical == 'true'
+          && steps.context.outputs.already_reviewed != 'true'
         env:
           BASE_SHA: ${{ steps.context.outputs.base }}
           CONTEXT_ID: ${{ steps.context.outputs.context_id }}
@@ -785,6 +855,7 @@ jobs:
         if: >-
           cancelled()
           && steps.context.outputs.skip != 'true'
+          && steps.context.outputs.technical == 'true'
           && steps.context.outputs.already_reviewed != 'true'
           && steps.label_start.conclusion == 'success'
         env:
@@ -802,6 +873,7 @@ jobs:
           always()
           && !cancelled()
           && steps.context.outputs.skip != 'true'
+          && steps.context.outputs.technical == 'true'
           && steps.context.outputs.already_reviewed != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -847,3 +919,30 @@ jobs:
             args+=(--expected-head "$expected_head")
           fi
           bun "$review_script" "${args[@]}"
+
+  queue:
+    name: Verify queued product decisions
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      checks: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: '1.3.14'
+      - name: Verify every PR head in the group
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ github.event.merge_group.base_sha }}
+          HEAD: ${{ github.event.merge_group.head_sha }}
+        run: |
+          bun .github/scripts/ai-product-decision.ts queue \
+            --repo "$REPO" --base "$BASE" --head "$HEAD"

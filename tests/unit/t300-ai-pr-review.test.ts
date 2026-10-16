@@ -1274,23 +1274,24 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("workflow reviews internal PRs only and isolates model credentials from publication", () => {
-    expect(WORKFLOW).toContain("  pull_request:");
+  test("workflow keeps technical review internal and isolates model credentials from publication", () => {
+    expect(WORKFLOW).toContain("  pull_request_target:");
     expect(WORKFLOW).toContain("  pull_request_review:");
     expect(WORKFLOW).toContain("  pull_request_review_comment:");
     expect(WORKFLOW).not.toContain("  issue_comment:");
     expect(WORKFLOW).not.toContain("github.event.issue");
     expect(WORKFLOW).not.toContain("issues: read");
     expect(WORKFLOW).not.toContain("      - dismissed");
-    expect(WORKFLOW).not.toContain("      - synchronize");
-    expect(WORKFLOW).not.toContain("      - edited");
+    expect(WORKFLOW).toContain("      - synchronize");
+    expect(WORKFLOW).toContain("      - edited");
     expect(WORKFLOW).not.toContain("      - deleted");
     expect(WORKFLOW).not.toContain("  workflow_run:");
-    expect(WORKFLOW).not.toContain("pull_request_target:");
+    expect(WORKFLOW).not.toContain("  pull_request:");
     expect(
       WORKFLOW.match(/github\.event\.pull_request\.head\.repo\.full_name == github\.repository/g),
-    ).toHaveLength(3);
-    expect(WORKFLOW).toContain("AI review is disabled for forks");
+    ).toHaveLength(2);
+    expect(WORKFLOW).toContain('if [ "$head_repo" != "$REPO" ]');
+    expect(WORKFLOW).toContain("technical=false");
     expect(WORKFLOW).not.toContain("github.event.workflow_run");
     expect(WORKFLOW).toContain("permissions: {}");
     expect(WORKFLOW.indexOf("\nconcurrency:\n")).toBe(-1);
@@ -1365,7 +1366,6 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     const detach = WORKFLOW.indexOf('git checkout --detach "$base"');
     expect(detach).toBeGreaterThan(-1);
     const controlsSha = WORKFLOW.indexOf('controls_sha="$(git rev-parse HEAD)"');
-    const selfReviewCheckout = WORKFLOW.indexOf('git checkout --detach "$head"');
     const snapshot = WORKFLOW.indexOf("mkdir -p .ai-review-controls/prompts .ai-review-controls/scripts");
     const promptSnapshot = WORKFLOW.indexOf(
       "cp .github/prompts/ai-pr-review-* .ai-review-controls/prompts/",
@@ -1374,29 +1374,22 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
       "cp .github/scripts/ai-pr-review.ts .github/scripts/ai-pr-ledger.ts",
     );
     expect(controlsSha).toBeGreaterThan(-1);
-    expect(selfReviewCheckout).toBeGreaterThan(controlsSha);
-    expect(selfReviewCheckout).toBeLessThan(snapshot);
+    expect(WORKFLOW).not.toContain('git checkout --detach "$head"');
     expect(controlsSha).toBeLessThan(snapshot);
     expect(snapshot).toBeLessThan(promptSnapshot);
     expect(promptSnapshot).toBeLessThan(scriptSnapshot);
     expect(scriptSnapshot).toBeLessThan(detach);
     expect(WORKFLOW).toContain('echo "::notice::AI review controls from $controls_sha"');
-    const afterDetach = WORKFLOW.slice(detach);
+    const afterDetach = WORKFLOW.slice(detach, WORKFLOW.indexOf("\n  queue:\n"));
     expect(afterDetach).not.toContain("bun .github/scripts/");
     expect(afterDetach).not.toContain("cat .github/prompts");
     expect(afterDetach).not.toContain(".github/prompts/ai-pr-review-");
     expect(afterDetach).not.toMatch(/\.github\/(?:prompts|scripts)/);
     expect(WORKFLOW).not.toContain("REVIEW_CONTROL");
     expect(WORKFLOW).not.toContain("self-review is skipped");
-    expect(WORKFLOW).toContain("AI reviewer controls changed; self-review uses head");
-    expect(WORKFLOW).toContain(
-      "Reviewer controls changed; self-review runs only from a pull_request event",
-    );
-    expect(WORKFLOW).toContain('[ "$EVENT_NAME" != "pull_request" ]');
-    expect(WORKFLOW).toContain('echo "self_change=$control_change"');
-    expect(WORKFLOW).toContain(".github/prompts/ai-pr-review-*.md");
-    expect(WORKFLOW).toContain(".github/prompts/ai-pr-review-*.json");
-    expect(WORKFLOW).toContain('git diff --name-only "$base...$head"');
+    expect(WORKFLOW).not.toContain("self-review uses head");
+    expect(WORKFLOW).toContain("cp .github/prompts/ai-product-decision*");
+    expect(WORKFLOW).toContain('echo "technical=true"');
     expect(WORKFLOW).not.toContain('git diff --name-only "$base" "$head"');
     expect(WORKFLOW).toContain("Finalize existing SHA-bound review");
     // AIDA is advisory: a review left as CHANGES_REQUESTED from before still reads
@@ -1410,7 +1403,7 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
       '.state == \\"CHANGES_REQUESTED\\" or ((.body // \\"\\") | test(\\"<!-- ai-pr-review decision=(author/change|maintainer/merge) -->\\"))',
     );
     expect(WORKFLOW).toContain("Superseded by AI review of $HEAD_SHA");
-    expect(WORKFLOW).toContain("timeout-minutes: 110");
+    expect(WORKFLOW).toContain("timeout-minutes: 125");
     expect(WORKFLOW).toContain("              15m \\");
     expect(WORKFLOW).not.toContain("              35m \\");
     expect(WORKFLOW).toContain("      - reopened");
@@ -1438,13 +1431,13 @@ if (args.some(value => value === "repos/acme/repo/pulls/42")) {
     expect(WORKFLOW).not.toContain("actions/download-artifact");
     expect(WORKFLOW).not.toContain("matrix:");
     const jobs = WORKFLOW.slice(WORKFLOW.indexOf("\njobs:\n"));
-    expect(jobs.match(/^ {2}[a-z_]+:$/gm)).toEqual(["  review:"]);
+    expect(jobs.match(/^ {2}[a-z_]+:$/gm)).toEqual(["  review:", "  queue:"]);
     expect(WORKFLOW).toContain("> /dev/null 2>&1");
     expect(WORKFLOW).toContain("model transcript was suppressed");
 
     const modelStep = WORKFLOW.slice(
       WORKFLOW.indexOf("      - name: Run review passes sequentially"),
-      WORKFLOW.indexOf("      - name: Publish SHA-bound review"),
+      WORKFLOW.indexOf("      - name: Publish product decision check"),
     );
     expect(modelStep).not.toContain("GH_TOKEN:");
     expect(modelStep.indexOf('"Prompt-injection review"')).toBeLessThan(

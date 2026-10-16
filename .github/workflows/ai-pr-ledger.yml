@@ -1,6 +1,6 @@
 name: AIDA findings ledger
 
-# Maintainer commands for the AIDA findings ledger: `/aida accept|reject|reopen|status`.
+# Maintainer commands for AIDA findings and product decisions.
 # This workflow deliberately lives apart from the review workflow. It holds no model
 # credentials, assumes no cloud role, and only ever checks out the default branch, so
 # the `issue_comment` trigger never exposes a PR head or a secret. Authority is the
@@ -29,6 +29,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
+      checks: write
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -39,8 +40,21 @@ jobs:
         with:
           bun-version: '1.3.14'
 
+      - name: Apply a maintainer product decision
+        if: startsWith(github.event.comment.body, '/aida product ')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          ACTOR: ${{ github.event.comment.user.login }}
+        run: |
+          bun .github/scripts/ai-product-decision.ts command \
+            --repo "$REPO" --pr "$PR_NUMBER" --comment "$COMMENT_ID" --actor "$ACTOR"
+
       - name: Verify permission, apply the commands, update the ledger comment
         id: command
+        if: "!startsWith(github.event.comment.body, '/aida product ')"
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
