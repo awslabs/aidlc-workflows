@@ -8599,6 +8599,9 @@ export interface ActiveDirectiveGuardRecoveryResponse {
 export interface ActiveDirectiveMarker {
   version: 1 | 2; stage: string; unit?: string; state_sha256: string;
   units?: string[];
+  // The step belongs to an isolated `--single` run (its run-stage, a part of
+  // it, or the question asked over it), not to the workflow.
+  single?: true;
   revision?: number; project_sha256?: string; intent_uuid?: string | null; state_present?: boolean;
   code_generation_source_sha256?: string;
   code_generation_authority_revision?: number;
@@ -9430,6 +9433,7 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
       )) ||
     ("cursor_harness" in parsed &&
       (typeof parsed.cursor_harness !== "string" || !/^[a-z0-9][a-z0-9._-]*$/i.test(parsed.cursor_harness))) ||
+    ("single" in parsed && parsed.single !== undefined && parsed.single !== true) ||
     ("ask_type" in parsed &&
       (typeof parsed.ask_type !== "string" || !/^[a-z][a-z0-9-]*$/.test(parsed.ask_type))) ||
     ("guard_recovery_response" in parsed &&
@@ -9850,6 +9854,7 @@ export function writeActiveDirectiveMarker(
     steering_payload_receipt?: string;
     ask_type?: string;
     remedies?: ActiveDirectiveGuardRemedy[];
+    single?: true;
   },
   invocation?: {
     attemptId?: string;
@@ -10169,6 +10174,7 @@ export function writeActiveDirectiveMarker(
       ...(marker.kind === "ask" && marker.ask_type
         ? { ask_type: marker.ask_type }
         : { ask_type: undefined }),
+      ...(marker.single ? { single: true as const } : { single: undefined }),
       ...(marker.kind === "ask" &&
           marker.ask_type === GUARD_RECOVERY_ASK_TYPE &&
           marker.remedies !== undefined
@@ -35668,6 +35674,16 @@ export function singleStageAttemptField(projectDir: string, slug: string, field:
     })
     .pop();
   return attemptStart ? auditBlockField(attemptStart.block, field) : null;
+}
+
+// The Test Strategy an isolated Code Generation run took for itself, while the
+// Code Generation step issued last is that run's and its attempt is open: its
+// Testing Contract is built to it, as its run-stage is. Null otherwise, and the
+// workflow's own setting stands.
+export function isolatedCodeGenerationTestStrategy(projectDir: string): string | null {
+  const marker = readIssuedDirectiveMarker(projectDir);
+  if (marker?.single !== true || !singleStageAttemptIsOpen(projectDir, "code-generation")) return null;
+  return singleStageAttemptField(projectDir, "code-generation", "Test Strategy");
 }
 
 export function singleStageAttemptIsOpen(

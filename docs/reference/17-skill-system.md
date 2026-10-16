@@ -47,7 +47,10 @@ run's own: `next --single` records it on the synthetic `STAGE_STARTED` (`Depth`,
 leaving the workflow's settings unchanged; the typed depth also picks the
 knowledge roster. A re-run of the open attempt keeps the recorded values; a
 different one starts a new attempt (a new `STAGE_STARTED`), and the unfinished
-one is set aside, never recorded as completed.
+one is set aside, never recorded as completed. In an isolated Code Generation run the
+Testing Contract follows the run's recorded Test Strategy too, while the
+workflow's own contract and plan approval keep the workflow's (see
+[Hooks and Tools](06-hooks-and-tools.md)).
 Review, Guard Policy, a fence switch and ceremony switches are refused with an
 `error`: hooks read those from the workflow, so an isolated run cannot take its
 own.

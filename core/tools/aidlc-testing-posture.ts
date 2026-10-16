@@ -46,6 +46,7 @@ import {
   clearPlanApprovalLegacyOffer,
   clearEngineAskMark,
   clearPlanApprovalReceipt,
+  isolatedCodeGenerationTestStrategy,
   readActiveDirectiveMarker,
   authorizedVerificationCommand,
   readIssuedDirectiveMarker,
@@ -1239,7 +1240,11 @@ export function resolveTestingPosture(
   }
   return resolveTestingPostureFromSections(sections, {
     scope: (getField(state, "Scope") ?? "feature").trim().toLowerCase(),
-    testStrategy: normalizeStrategy(getField(state, "Test Strategy") ?? "standard"),
+    // An isolated Code Generation run builds to its own test strategy; the
+    // workflow's contract and plan approval keep reading the workflow's.
+    testStrategy: normalizeStrategy(
+      isolatedCodeGenerationTestStrategy(projectDir) ?? getField(state, "Test Strategy") ?? "standard",
+    ),
     projectType: normalizeProjectType(getField(state, "Project Type") ?? "greenfield"),
   });
 }

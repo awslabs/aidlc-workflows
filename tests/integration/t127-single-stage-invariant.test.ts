@@ -843,6 +843,11 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     test_strategy?: string;
   };
 
+  function nextSingleStage(proj: string, stage: string, extra: string[]): SingleDirective {
+    const r = run(TOOL, ["next", "--stage", stage, "--single", ...extra, "--project-dir", proj]);
+    return JSON.parse(r.out.trim()) as SingleDirective;
+  }
+
   function nextSingle(proj: string, extra: string[]): SingleDirective {
     const r = run(TOOL, ["next", "--stage", "build-and-test", "--single", ...extra, "--project-dir", proj]);
     return JSON.parse(r.out.trim()) as SingleDirective;
@@ -921,6 +926,44 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     const comprehensive = roster(["--depth", "comprehensive"]);
     expect(comprehensive.length).toBeGreaterThan(minimal.length);
     for (const path of minimal) expect(comprehensive).toContain(path);
+  });
+
+  test("17c3: an isolated Code Generation run's Testing Contract follows its own test strategy; the workflow's does not", () => {
+    const proj = seededSingleProject();
+    const POSTURE_TOOL = join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts");
+    const contractStrategy = (): string => {
+      const r = spawnSync(BUN, [POSTURE_TOOL, "render", "--project-dir", proj], { encoding: "utf-8" });
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+      const json = r.stdout.match(/```json\n([\s\S]*?)\n```/)?.[1] ?? "{}";
+      return (JSON.parse(json) as { test_strategy?: string }).test_strategy ?? "";
+    };
+    expect(contractStrategy()).toBe("standard");
+
+    const started = nextSingleStage(proj, "code-generation", ["--test-strategy", "comprehensive"]);
+    expect(started.kind, JSON.stringify(started)).toBe("run-stage");
+    expect(started.test_strategy).toBe("Comprehensive");
+    expect(contractStrategy()).toBe("comprehensive");
+
+    // The plan carries that contract, and the engine takes it: it asks for
+    // Plan Approval instead of calling the contract out of date.
+    const planDir = join(seededRecordDir(proj), "construction", "code-generation");
+    mkdirSync(planDir, { recursive: true });
+    const render = spawnSync(BUN, [POSTURE_TOOL, "render", "--project-dir", proj], { encoding: "utf-8" });
+    writeFileSync(
+      join(planDir, "code-generation-plan.md"),
+      "# Code Generation Plan\n\n## Summary\n\n- Builds: slugify\n\n## Steps\n\n- [ ] Step 1: write slugify\n\n" + render.stdout,
+      "utf-8",
+    );
+    writeFileSync(join(planDir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test`.\n", "utf-8");
+    const asked = nextSingleStage(proj, "code-generation", []) as SingleDirective & { ask_type?: string };
+    expect(asked.kind, JSON.stringify(asked)).toBe("ask");
+    expect(asked.ask_type).toBe("plan-approval");
+    expect(contractStrategy()).toBe("comprehensive");
+
+    // The workflow's own setting and contract stay as they were.
+    expect(run(STATE_TOOL, ["get", "Test Strategy", "--project-dir", proj]).out.trim()).toBe("Standard");
+    expect(run(TOOL, ["next", "--project-dir", proj]).status).toBe(0);
+    expect(contractStrategy()).toBe("standard");
   });
 
   test("17d: with no workflow, next --single --test-strategy runs the stage with it", () => {

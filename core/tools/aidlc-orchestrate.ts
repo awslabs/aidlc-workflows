@@ -680,6 +680,7 @@ interface PreparedEmission {
     steering_payload_receipt?: string;
     ask_type?: string;
     remedies?: Array<Pick<GuardRemedy, "op" | "label" | "action" | "operation" | "interaction">>;
+    single?: true;
   };
 }
 
@@ -1734,6 +1735,11 @@ function prepareEmission(directive: Directive): PreparedEmission {
       state_sha256: publication.stateHash,
     };
   }
+  // A step of an isolated run says so on its marker, the question asked over
+  // it included, so what reads the step can tell it from the workflow's.
+  if (marker && ((directive.kind === "run-stage" && directive.single === true) || isolatedRunQuestions.has(requested))) {
+    marker.single = true;
+  }
   return {
     transported,
     serialized,
@@ -2076,7 +2082,18 @@ function emissionProjectDir(directive: Directive): string | undefined {
 // A code-generation beat becomes "plan", "build", or the engine's Plan
 // Approval question. A route check only asks which Unit would route, and the
 // legacy Kiro IDE window keeps its own protected-choice flow.
+// The questions asked over an isolated run's step: their markers say so too.
+const isolatedRunQuestions = new WeakSet<Directive>();
+
 function withPlanApprovalRoute(directive: Directive): Directive {
+  const routed = routePlanApproval(directive);
+  if (routed !== directive && directive.kind === "run-stage" && directive.single === true) {
+    isolatedRunQuestions.add(routed);
+  }
+  return routed;
+}
+
+function routePlanApproval(directive: Directive): Directive {
   if (isRouteCheckProbe() || !isPlanApprovalBeat(directive)) return directive;
   const projectDir = emissionProjectDir(directive);
   if (!projectDir) return directive;
