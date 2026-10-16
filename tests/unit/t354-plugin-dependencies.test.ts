@@ -545,7 +545,9 @@ describe("t354 turning a base off pauses the plugin built on it", () => {
     const first = select(target, "aidlc,alpha");
     expect(first.status, first.stdout + first.stderr).toBe(0);
     expect(selection(target)).toEqual(["aidlc", "alpha"]);
-    expect(first.stdout.split(PAUSE_LINE).length - 1).toBe(1);
+    // The pause line carries it: alpha is not turned off, and turning zeta
+    // on, not alpha, brings it back.
+    expect(first.stdout.trim().split("\n")).toEqual(["Enabled plugins: aidlc, alpha", PAUSE_LINE]);
     const again = select(target, "aidlc,alpha");
     expect(again.status, again.stdout + again.stderr).toBe(0);
     expect(again.stdout).not.toContain("paused");
@@ -588,6 +590,16 @@ describe("t354 turning a base off pauses the plugin built on it", () => {
     expect(plugins?.pass).toBe(true);
     expect(plugins?.label).toContain("alpha paused: needs zeta, which is off");
     expect(plugins?.fix).toBeUndefined();
+  });
+
+  test("a plugin turned off, not paused, still gets the strip line", () => {
+    const target = composedPair();
+    const off = select(target, "aidlc,zeta");
+    expect(off.status, off.stdout + off.stderr).toBe(0);
+    expect(off.stdout).toContain(
+      "Stripped merged contributions of disabled plugin(s): alpha (re-enabling restores them on the next session start)",
+    );
+    expect(off.stdout).not.toContain("paused");
   });
 
   test("turning zeta back on brings alpha back at the next session start, with nothing else to do", () => {
