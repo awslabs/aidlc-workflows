@@ -352,7 +352,7 @@ describe("t314 standalone plugin validator", () => {
       .toEqual(["stage-schema"]);
   });
 
-  test("this plugin's own agent prefix is read before its base's", () => {
+  test("when one name prefixes the other, the longer prefix owns the agent", () => {
     // fixture-plugin builds on a base named fixture: its own typo stays an error.
     const own = layered("fixture-plugin-typo-agent", "fixture");
     expect(validatePluginRoot(own.root).errors.map((finding) => finding.message))
@@ -360,6 +360,14 @@ describe("t314 standalone plugin validator", () => {
     const fromBase = layered("fixture-reviewer-agent", "fixture");
     expect(validatePluginRoot(fromBase.root).errors).toEqual([]);
     expect(validatePluginRoot(fromBase.root).warnings.map((finding) => finding.rule)).toContain("base-reference");
+
+    // fixture-plugin builds on fixture-plugin-platform: the base's agent is the base's.
+    const longerBase = layered("fixture-plugin-platform-reviewer-agent", "fixture-plugin-platform");
+    expect(validatePluginRoot(longerBase.root).errors).toEqual([]);
+    expect(validatePluginRoot(longerBase.root).warnings.map((finding) => finding.rule)).toContain("base-reference");
+    const ownTypo = layered("fixture-plugin-typo-agent", "fixture-plugin-platform");
+    expect(validatePluginRoot(ownTypo.root).errors.map((finding) => finding.message))
+      .toEqual(['lead_agent "fixture-plugin-typo-agent" has no matching .claude/agents/*.md']);
   });
 
   test("--with names the declared base only", () => {
