@@ -13,7 +13,9 @@
 // them twice, they were asked twice. Both are failures, named in `problems`.
 //
 // The test drives with driveAidlc (sdk-drive.ts), which already fails a drive
-// whose agent records a decision the person did not make (person-turns.ts).
+// whose agent records a decision the person did not make (person-turns.ts). A
+// tool that takes one typed line per process (codex exec, copilot -p, opencode
+// run) drives with driveTyped, its own turns checking the same.
 //
 // The person keeps stock settings: Claude Code's default permission mode and
 // the project's shipped settings. Every prompt is answered yes; a prompt for
@@ -21,7 +23,7 @@
 // problem (stock-permissions.ts), and the other prompts are listed.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { parseDirectiveOutput } from "./directive-output.ts";
@@ -85,10 +87,17 @@ export interface GoldenJourney {
   lastStage: string;
   /** The work time left, as test-budget.ts measures it. */
   budget: () => number | undefined;
+  /**
+   * Typed tools: the person leaves the plan question unanswered for the day and
+   * comes back in a new session (not a resume) typing this line. The question
+   * must come first there; it counts as asked once.
+   */
+  newSessionAtPlan?: string;
 }
 
 export interface GoldenRun {
-  drive: DriveResult;
+  /** Every tool call the agent made, in order. */
+  toolResults: readonly CapturedToolResult[];
   /** Audit rows already there when the person started: a seeded leg's earlier stages. */
   start: number;
   /** What the person picked or typed, in order. */
@@ -138,10 +147,10 @@ const ANSWER_EVENTS = new Set([
   "STAGE_COMPLETED",
 ]);
 
-/** The last question the engine logged that no answer has closed yet. */
-function openDecision(proj: string): Row | undefined {
+/** The last question the engine logged since row `from` that no answer has closed yet. */
+function openDecision(proj: string, from: number): Row | undefined {
   const rows = auditRows(proj);
-  for (let i = rows.length - 1; i >= 0; i--) {
+  for (let i = rows.length - 1; i >= from; i--) {
     const row = rows[i];
     if (ANSWER_EVENTS.has(row.event)) return undefined;
     if (row.event === "DECISION_RECORDED") return row;
@@ -159,7 +168,8 @@ function lastEngineStep(results: readonly CapturedToolResult[]): Record<string, 
   for (let i = results.length - 1; i >= 0; i--) {
     const t = results[i];
     const command = typeof t.input.command === "string" ? t.input.command : "";
-    if (t.toolName !== "Bash" || !command.includes("engine orchestrate")) continue;
+    // The engine's own steps also tell the agent to run aidlc-orchestrate.ts (the plan offer's `next --propose`).
+    if (t.toolName !== "Bash" || !/engine orchestrate|aidlc-orchestrate\.ts/.test(command)) continue;
     try {
       return parseDirectiveOutput(t.resultText).directive as unknown as Record<string, unknown>;
     } catch {
@@ -196,6 +206,13 @@ export class GoldenPerson {
   private readonly reached = new Set<string>();
   private latest: readonly CapturedToolResult[] = [];
   private readonly start: number;
+  // Typed tools: every tool call, this session's calls, and the question left open for the day.
+  private readonly all: CapturedToolResult[] = [];
+  private session: CapturedToolResult[] = [];
+  private sessionFrom = 0;
+  private lastKey = "";
+  private left: string | undefined;
+  private leftOnce = false;
 
   constructor(private readonly j: GoldenJourney) {
     this.start = auditRows(j.proj).length;
@@ -226,8 +243,46 @@ export class GoldenPerson {
     problems.push(...prompts.problems);
     if (prompts.listed.length) console.log(`Prompts the person decided on stock settings:\n  ${prompts.listed.join("\n  ")}`);
     return {
-      drive, start: this.start, person: this.said, problems, planAsked: this.planAsked, ownWordsUsed: this.ownWordsUsed,
-      prompts: prompts.listed,
+      toolResults: drive.toolResults, start: this.start, person: this.said, problems, planAsked: this.planAsked,
+      ownWordsUsed: this.ownWordsUsed, prompts: prompts.listed,
+    };
+  }
+
+  /** The person's first line. */
+  get request(): string {
+    return this.j.request;
+  }
+
+  /**
+   * Typed tools: what the person types after a turn whose tool calls were
+   * `results`, and whether it opens a new session. The engine steps read are
+   * this session's only, so a new session that asks nothing is "nothing asked".
+   */
+  typedReply(turn: number, results: readonly CapturedToolResult[]): { line?: string; newSession: boolean } {
+    this.all.push(...results);
+    this.session.push(...results);
+    this.latest = this.session;
+    const plan = this.planAsked;
+    const line = this.reply(turn);
+    if (line !== undefined && this.j.newSessionAtPlan !== undefined && !this.leftOnce && this.planAsked > plan) {
+      this.said[this.said.length - 1] = `left the plan question unanswered for the day, then typed ${JSON.stringify(this.j.newSessionAtPlan)} in a new session`;
+      this.left = this.lastKey;
+      this.leftOnce = true;
+      this.session = [];
+      this.sessionFrom = auditRows(this.j.proj).length;
+      return { line: this.j.newSessionAtPlan, newSession: true };
+    }
+    return { line, newSession: false };
+  }
+
+  /** The outcome of a typed journey, read as `finish` reads a drive. */
+  typedRun(): GoldenRun {
+    const problems = [...this.problems];
+    if (this.left !== undefined) problems.push("the plan question left for the day was never offered again in the new session");
+    if (!approved(this.j.proj, this.j.lastStage)) problems.push(`${this.j.lastStage} was never approved (the journey ended at ${this.stageNow()})`);
+    return {
+      toolResults: this.all, start: this.start, person: this.said, problems, planAsked: this.planAsked,
+      ownWordsUsed: this.ownWordsUsed, prompts: [],
     };
   }
 
@@ -235,9 +290,18 @@ export class GoldenPerson {
     return readStateField(readStateFile(this.j.proj) ?? "", "Current Stage") ?? "(no work yet)";
   }
 
-  private reach(key: string, what: string): void {
+  // True for the question left open for the day coming back first in the new session: it counts once.
+  private reach(key: string, what: string): boolean {
+    this.lastKey = key;
+    if (this.left !== undefined) {
+      const left = this.left;
+      this.left = undefined;
+      if (key === left) return true;
+      this.problems.push(`the new session asked ${what} before the plan question left open for the day`);
+    }
     if (this.reached.has(key)) this.problems.push(`asked twice: ${what}`);
     this.reached.add(key);
+    return false;
   }
 
   private ownWords(stage: string): string | undefined {
@@ -252,8 +316,10 @@ export class GoldenPerson {
   private pick(q: AskUserQuestionItem): AnswerSpec {
     const stage = this.stageNow();
     const labels = q.options.map((o) => o.label);
-    this.reach(`${stage} | ${norm(q.question)}`, `"${q.question}" at ${stage}`);
-    if (labels.some((l) => /^Approve Plans?\b/.test(l))) this.planAsked++;
+    const again = this.reach(`${stage} | ${norm(q.question)}`, `"${q.question}" at ${stage}`);
+    if (labels.some((l) => /^Approve Plans?\b/.test(l))) {
+      if (!again) this.planAsked++;
+    }
     else if (labels.some((l) => /^Approve\b/.test(l)) && labels.some((l) => /^Request Changes\b/i.test(l))) {
       this.reach(`approval | ${stage}`, `the ${stage} approval`);
     }
@@ -272,13 +338,13 @@ export class GoldenPerson {
       this.problems.push(`the person typed ${MAX_TURNS} messages and ${this.j.lastStage} was still not approved (at ${stage})`);
       return undefined;
     }
-    const decision = openDecision(this.j.proj);
+    const decision = openDecision(this.j.proj, this.sessionFrom);
     if (decision) {
       const question = auditBlockField(decision.block, "Decision") ?? "";
       const at = stageField(decision) || stage;
-      const options = (auditBlockField(decision.block, "Options") ?? "").split(",").map((o) => o.trim()).filter(Boolean);
-      this.reach(`${at} | ${norm(question)}`, `"${question}" at ${at}`);
-      if (options.some((o) => /^Approve Plans?\b/.test(o))) this.planAsked++;
+      const options = decisionOptions(decision);
+      const again = this.reach(`${at} | ${norm(question)}`, `"${question}" at ${at}`);
+      if (!again && options.some((o) => /^Approve Plans?\b/.test(o))) this.planAsked++;
       const words = plainChoice(options) ?? this.ownWords(at) ?? recommended(options) ?? options[0] ?? "Go with what you recommend";
       this.said.push(`typed ${JSON.stringify(words)} for "${clip(question, 120)}" at ${at}`);
       return words;
@@ -298,13 +364,13 @@ export class GoldenPerson {
     }
     if (step?.kind === "ask") {
       const type = String(step.ask_type ?? "");
-      this.reach(`ask | ${type} | ${stage}`, `the ${type} question at ${stage}`);
+      const again = this.reach(`ask | ${type} | ${stage}`, `the ${type} question at ${stage}`);
       if (type === "plan-approval") {
-        this.planAsked++;
+        if (!again) this.planAsked++;
         this.said.push("typed \"Approve Plan\" for the plan");
         return "Approve Plan";
       }
-      const offered = ((step.options as Array<{ label?: unknown }> | undefined) ?? []).map((o) => String(o.label ?? o));
+      const offered = ((step.choices as Array<{ label?: unknown }> | undefined) ?? []).map((o) => String(o.label ?? o));
       const words = plainChoice(offered) ?? recommended(offered) ?? offered[0] ?? "Go with what you recommend";
       this.said.push(`typed ${JSON.stringify(words)} for the ${type} question at ${stage}`);
       return words;
@@ -312,6 +378,23 @@ export class GoldenPerson {
     this.problems.push(`turn ${turn} ended at ${stage} with nothing asked of the person; the engine's last step was ${clip(JSON.stringify(step ?? null))}`);
     return undefined;
   }
+}
+
+function decisionOptions(row: Row): string[] {
+  return (auditBlockField(row.block, "Options") ?? "").split(",").map((o) => o.trim()).filter(Boolean);
+}
+
+/**
+ * Typed tools: drive a golden journey where each line the person types is one
+ * process. `turn` runs the line (in a new session when asked) and returns the
+ * tool calls the agent made, in the shape the SDK drive captures them.
+ */
+export function driveTyped(
+  person: GoldenPerson, turn: (line: string, newSession: boolean) => readonly CapturedToolResult[],
+): GoldenRun {
+  let next: { line?: string; newSession: boolean } = { line: person.request, newSession: true };
+  for (let n = 1; next.line !== undefined; n++) next = person.typedReply(n, turn(next.line, next.newSession));
+  return person.typedRun();
 }
 
 /**
@@ -342,12 +425,13 @@ export function goldenPathProblems(j: GoldenJourney, run: GoldenRun): string[] {
     if (outside.includes(stageField(r))) problems.push(`${stageField(r)} was started, and ${j.scope} leaves it out`);
   }
 
-  // One approval per stage, never a change asked for.
+  // One approval per stage, never a change asked for. A typed turn carries on
+  // past the last stage's approval, so a stage after it may be waiting.
   const approvals = new Map<string, number>();
   for (const r of rows.filter((r) => r.event === "GATE_APPROVED")) approvals.set(stageField(r), (approvals.get(stageField(r)) ?? 0) + 1);
   for (const [stage, n] of approvals) if (n > 1) problems.push(`${stage} was approved ${n} times`);
   for (const r of rows.filter((r) => r.event === "STAGE_AWAITING_APPROVAL")) {
-    if (!approvals.has(stageField(r))) problems.push(`${stageField(r)} waited for approval and was never approved`);
+    if (!approvals.has(stageField(r)) && through.includes(stageField(r))) problems.push(`${stageField(r)} waited for approval and was never approved`);
   }
   for (const event of ["GATE_REJECTED", "STAGE_REVISING"]) {
     if (count(event) > 0) problems.push(`${event} recorded ${count(event)} times; the person never asked for changes`);
@@ -365,17 +449,32 @@ export function goldenPathProblems(j: GoldenJourney, run: GoldenRun): string[] {
   const summarised = sourceStages().some((s) => s.summaryConfirmation && live.includes(s.slug));
   if (!declared.summaryConfirmation && summaries > 0) problems.push(`a summary was confirmed ${summaries} times; ${j.scope} turns summary confirmation off`);
   if (declared.summaryConfirmation && summarised && summaries === 0) problems.push(`no summary was confirmed; ${j.scope} turns summary confirmation on`);
-  const learnings = run.drive.toolResults.filter((t) => t.toolName === "Bash" && String(t.input.command ?? "").includes("engine learnings surface")).length;
+  const learnings = run.toolResults.filter((t) => t.toolName === "Bash" && String(t.input.command ?? "").includes("engine learnings surface")).length;
   if (!declared.learnings && learnings > 0) problems.push(`the learnings question was raised ${learnings} times; ${j.scope} turns learnings off`);
   if (declared.learnings && learnings === 0) problems.push(`the learnings question was never raised; ${j.scope} turns learnings on`);
 
-  // The person answered one question in their own words. That every answer is
+  // The person answered one question in their own words, where the stage asked
+  // one: a stage may find the request clear and ask none. That every answer is
   // backed by their own turn is the drive's own check (person-turns.ts). The
   // check that their words are kept as their answer is re-enabled with the fix
   // that keeps the person's own words on every answer: today a picker answer in
   // their own words can be recorded as the option it is closest to.
-  if (j.ownWords && !run.ownWordsUsed) problems.push(`no question at ${j.ownWords.stage} took the person's own words`);
+  const own = j.ownWords;
+  const asked = own !== undefined && rows.some((r) => r.event === "DECISION_RECORDED" && stageField(r) === own.stage &&
+    plainChoice(decisionOptions(r)) === undefined);
+  if (own && asked && !run.ownWordsUsed) problems.push(`no question at ${own.stage} took the person's own words`);
   return problems;
+}
+
+/** Keep a journey's report beside its logs (the nightly keeps that folder) and print its one line. */
+export function writeGoldenReport(name: string, report: { problems: readonly string[] } & Record<string, unknown>): void {
+  const line = `${name} golden journey: ${report.problems.length ? "FAIL" : "PASS"}`;
+  const dir = process.env.AIDLC_TEST_LOG_DIR;
+  if (dir) {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `golden-journey-${name}.json`), `${JSON.stringify({ line, ...report }, null, 2)}\n`);
+  }
+  console.log(line);
 }
 
 /** The project's own test files, outside the AI-DLC tree and its records. */

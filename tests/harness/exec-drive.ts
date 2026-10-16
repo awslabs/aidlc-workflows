@@ -14,7 +14,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "./fixtures.ts";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
+import { STOP_HOOK_PROBE_ENV } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codexExecTimeout, codexPersonTurn, recordCodexExec } from "./codex-test-lifecycle.ts";
+import { turnEvidence } from "./codex-turn-evidence.ts";
+import type { CapturedToolResult } from "./sdk-drive.ts";
 import { LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
 const CODEX_DIST = join(REPO_ROOT, "dist", "codex");
@@ -208,6 +211,76 @@ export function execCodex(
 /** The person's next turn in the session `execCodex` opened under the same scratch `home`, recorded like the first. */
 export function execCodexResume(proj: string, home: string, prompt: string): ExecResult {
   return runCodex(proj, home, codexResumeArgs(prompt), prompt);
+}
+
+const ENGINE_STEP = /engine orchestrate|aidlc-orchestrate\.ts/;
+
+/** The shell commands of one `codex exec --json` turn, in the shape the SDK drive captures tool calls. */
+export function codexToolResults(stdout: string): CapturedToolResult[] {
+  const results: CapturedToolResult[] = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("{")) continue;
+    let event: { type?: unknown; item?: { id?: unknown; type?: unknown; command?: unknown; aggregated_output?: unknown; exit_code?: unknown } };
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const item = event.item;
+    if (event.type !== "item.completed" || item?.type !== "command_execution") continue;
+    results.push({
+      toolName: "Bash", input: { command: String(item.command ?? "") }, toolUseId: String(item.id ?? ""),
+      resultText: String(item.aggregated_output ?? ""), isError: item.exit_code !== 0,
+    });
+  }
+  return results;
+}
+
+export interface CodexJsonTurn extends ExecResult {
+  stdout: string;
+  sessionId?: string;
+  results: CapturedToolResult[];
+}
+
+/**
+ * One person turn as `codex exec --json`: a new session, or `sessionId`
+ * resumed. Recorded like every live exec (recordCodexExec: a decision no turn
+ * backs, or the sandbox refusing AI-DLC's own command, fails it). Codex can
+ * keep a finished command's output as empty (a nightly saw it); when the turn's last
+ * engine step came back empty, the engine's read-only Stop-hook probe says what
+ * it hands out now, and that stands in for it.
+ */
+export function codexJsonTurn(proj: string, home: string, prompt: string, label: string, sessionId?: string): CodexJsonTurn {
+  const argv = codexHeadlessArgs(...(sessionId ? ["exec", "resume", "--json", sessionId, prompt] : ["exec", "--json", prompt]));
+  const turn = codexPersonTurn(proj, prompt);
+  const r = spawnSync(CODEX_BIN, argv, {
+    cwd: proj,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, CODEX_HOME: home },
+    timeout: codexExecTimeout(TEST_TIMEOUT_MS),
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  const stdout = r.stdout ?? "";
+  const result = {
+    rc: r.status ?? -1, stdout, out: `${stdout}\n${r.stderr ?? ""}\n${r.error?.message ?? ""}`, signal: r.signal, error: r.error?.message,
+  };
+  recordCodexExec(label, proj, [CODEX_BIN, ...argv], result, turn);
+  const results = codexToolResults(stdout);
+  const last = results.findLast((t) => ENGINE_STEP.test(String(t.input.command)));
+  if (last && !last.isError && last.resultText === "") {
+    const probe = spawnSync("bun", [join(".codex", "tools", "aidlc.ts"), "engine", "orchestrate", "next", "--resume"], {
+      cwd: proj, encoding: "utf-8", env: { ...process.env, CODEX_HOME: home, [STOP_HOOK_PROBE_ENV]: "1" },
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS, { phase: "Codex engine probe" }),
+    });
+    if (probe.status === 0) {
+      results.push({
+        toolName: "Bash", input: { command: "engine orchestrate next --resume (read-only probe for an empty capture)" },
+        toolUseId: "probe", resultText: probe.stdout ?? "", isError: false,
+      });
+    }
+  }
+  return { ...result, results, ...(result.rc === 0 ? { sessionId: turnEvidence(stdout).sessionId } : {}) };
 }
 
 // A scratch install: dist/copilot copied verbatim (dotfiles included: the
