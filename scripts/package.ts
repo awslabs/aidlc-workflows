@@ -1067,9 +1067,6 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-// The dispatcher commands every install pre-approves exactly as written
-// (copyChannelDispatcherCommands), as the native release runs them: through
-// the installed aidlc command, never a project path.
 // Devin-only: the top-level help prints are the one read-only dispatcher
 // form the copy-channel command list does not carry, so Devin's grants add
 // them here. The guard refuses the grant the day either spelling stops being
@@ -1081,6 +1078,9 @@ for (const candidate of DEVIN_HELP_COMMANDS) {
   }
 }
 
+// The dispatcher commands every install pre-approves exactly as written
+// (copyChannelDispatcherCommands), as the native release runs them: through
+// the installed aidlc command, never a project path.
 function nativeDispatcherCommands(): string[] {
   return copyChannelDispatcherCommands().map((command) => `aidlc ${command}`);
 }
