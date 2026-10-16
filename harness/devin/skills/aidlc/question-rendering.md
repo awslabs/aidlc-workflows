@@ -132,8 +132,8 @@ The tool returns `answers[questionText]`, keyed by the exact rendered
 `selected` can contain multiple option labels; keep them associated with their
 own question rather than flattening the batch into one answer.
 
-For `selected: ["Other"]`, `custom_text` is the person's own words, not a
-substitute option label: their answer when it answers the question, or the
+For `selected: ["Other"]`, `custom_text` is the person's own words,
+not a substitute option label: their answer when it answers the question, or the
 start of a conversation about it. Route it through the Other rules in
 [Approval Gates]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#1-approval-gates)
 or [Question Format]({{HARNESS_DIR}}/aidlc-common/protocols/stage-protocol.md#3-question-format),
