@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   bundledPluginComposeTemplatePath,
@@ -158,6 +158,35 @@ tier: balanced
   return root;
 }
 
+// fixture-plugin built on a base plugin named `base`, whose own checkout sits
+// beside it with one agent, <base>-reviewer-agent; the stage leads with `lead`.
+function layered(
+  lead: string,
+  base = "zeta",
+): { root: string; baseRoot: string } {
+  const root = fixture();
+  const manifestPath = join(root, ".aidlc-plugin", "plugin.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
+  manifest.dependencies = ["core", `${base}@^1.0.0`];
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+  const stage = join(root, "stages", "construction", "fixture-plugin-stage.md");
+  writeFileSync(
+    stage,
+    readFileSync(stage, "utf-8").replace("lead_agent: aidlc-quality-agent", `lead_agent: ${lead}`),
+    "utf-8",
+  );
+  const baseRoot = join(dirname(root), base);
+  write(
+    join(baseRoot, ".aidlc-plugin", "plugin.json"),
+    `${JSON.stringify({ name: base, version: "1.0.0", aidlc: { contributes: { agents: "agents/" } } }, null, 2)}\n`,
+  );
+  write(
+    join(baseRoot, "agents", `${base}-reviewer-agent.md`),
+    `---\nname: ${base}-reviewer-agent\nplugin: ${base}\n---\n\n# Reviewer\n`,
+  );
+  return { root, baseRoot };
+}
+
 function runTool(args: string[]): {
   status: number | null;
   stdout: string;
@@ -269,6 +298,75 @@ describe("t314 standalone plugin validator", () => {
     expect(withDependencies(["core", "fixture-plugin@^1.0.0"])).toEqual([
       'manifest dependencies: "fixture-plugin@^1.0.0" names this plugin itself',
     ]);
+  });
+
+  test("a stage can use its base plugin's agent: unchecked without --with, checked with it", () => {
+    const { root, baseRoot } = layered("zeta-reviewer-agent");
+    const unchecked = validatePluginRoot(root);
+    expect(unchecked.errors).toEqual([]);
+    expect(unchecked.warnings.filter((finding) => finding.rule === "base-reference")).toEqual([
+      {
+        file: "stages/construction/fixture-plugin-stage.md",
+        rule: "base-reference",
+        message: 'agent "zeta-reviewer-agent" is not checked: it would come from zeta, the base this plugin builds on',
+        fix: "Run validate again with --with <path to your zeta checkout> to check it.",
+      },
+    ]);
+
+    const checked = validatePluginRoot(root, { baseRoot });
+    expect(checked.errors).toEqual([]);
+    expect(checked.warnings.map((finding) => finding.rule)).not.toContain("base-reference");
+
+    const missing = layered("zeta-missing-agent");
+    expect(validatePluginRoot(missing.root, { baseRoot: missing.baseRoot }).errors.map((finding) => finding.message))
+      .toEqual(['lead_agent "zeta-missing-agent" has no matching .claude/agents/*.md']);
+
+    // Neither the base nor this plugin can supply it: an error, as before.
+    expect(validatePluginRoot(layered("other-reviewer-agent").root).errors.map((finding) => finding.rule))
+      .toEqual(["stage-schema"]);
+  });
+
+  test("this plugin's own agent prefix is read before its base's", () => {
+    // fixture-plugin builds on a base named fixture: its own typo stays an error.
+    const own = layered("fixture-plugin-typo-agent", "fixture");
+    expect(validatePluginRoot(own.root).errors.map((finding) => finding.message))
+      .toEqual(['lead_agent "fixture-plugin-typo-agent" has no matching .claude/agents/*.md']);
+    const fromBase = layered("fixture-reviewer-agent", "fixture");
+    expect(validatePluginRoot(fromBase.root).errors).toEqual([]);
+    expect(validatePluginRoot(fromBase.root).warnings.map((finding) => finding.rule)).toContain("base-reference");
+  });
+
+  test("--with names the declared base only", () => {
+    const { root } = layered("zeta-reviewer-agent");
+    const other = layered("zeta-reviewer-agent", "mid");
+    const notBase = validatePluginRoot(root, { baseRoot: other.baseRoot });
+    expect(notBase.errors).toEqual([
+      {
+        file: ".aidlc-plugin/plugin.json",
+        rule: "base-root",
+        message: `--with names ${resolve(other.baseRoot)}, which is not zeta, the base this plugin builds on`,
+        fix: "Pass the root of your zeta checkout.",
+      },
+    ]);
+    const noManifest = join(dirname(root), "empty");
+    mkdirSync(noManifest, { recursive: true });
+    expect(validatePluginRoot(root, { baseRoot: noManifest }).errors.map((finding) => finding.message))
+      .toEqual([`--with names ${resolve(noManifest)}, which is not zeta, the base this plugin builds on`]);
+
+    const coreOnly = fixture();
+    expect(validatePluginRoot(coreOnly, { baseRoot: other.baseRoot }).errors).toEqual([
+      {
+        file: ".aidlc-plugin/plugin.json",
+        rule: "base-root",
+        message: `--with names ${resolve(other.baseRoot)}, but this plugin builds on core alone`,
+        fix: 'Add its base to dependencies, such as "mid@^1.2.0", or leave out --with.',
+      },
+    ]);
+
+    expect(runTool([root, "--with", layered("zeta-reviewer-agent").baseRoot]).status).toBe(0);
+    const bare = runTool([root, "--with"]);
+    expect(bare.status).toBe(2);
+    expect(bare.stderr).toContain("--with <base-root>");
   });
 
   test("b: stage frontmatter parse and schema failures are reported", () => {

@@ -480,6 +480,33 @@ describe("t315 standalone plugin builder", () => {
     expect(existsSync(outDir)).toBe(false);
   });
 
+  test("a team plugin whose stage leads with its base's agent builds, saying once that the agent is not checked", () => {
+    const pluginRoot = join(scratch, "team-plugin", "alpha");
+    const created = spawnSync(process.execPath, [join(copiedTools, "aidlc-plugin-create.ts"), "alpha", pluginRoot], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+    });
+    expect(created.status, created.stderr).toBe(0);
+    const manifestPath = join(pluginRoot, ".aidlc-plugin", "plugin.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
+    manifest.dependencies = ["core", "zeta@^0.1.0"];
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+    const stagePath = join(pluginRoot, "stages", "construction", "alpha-example-stage.md");
+    writeFileSync(
+      stagePath,
+      readFileSync(stagePath, "utf-8").replace("lead_agent: alpha-example-agent", "lead_agent: zeta-example-agent"),
+      "utf-8",
+    );
+    const outDir = join(scratch, "team-plugin-output");
+    const result = run([pluginRoot, "claude", outDir]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Plugin build: COMPLETE");
+    expect(result.stdout).toContain(
+      'WARNING stages/construction/alpha-example-stage.md [base-reference]: agent "zeta-example-agent" is not checked: it would come from zeta, the base this plugin builds on',
+    );
+    expect(existsSync(join(outDir, "stages", "construction", "alpha-example-stage.md"))).toBe(true);
+  });
+
   test("non-canonical contribution paths refuse BUILD before output creation", () => {
     const pluginRoot = copyPlugin("custom-contribution-path");
     renameSync(join(pluginRoot, "stages"), join(pluginRoot, "custom-stages"));
