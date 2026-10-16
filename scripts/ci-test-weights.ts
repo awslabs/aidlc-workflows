@@ -23,12 +23,12 @@ export const REFRESH_HINT =
   "gh run download <green merge-group run id> -p 'ci-deterministic-*' -D <dir>, then bun scripts/ci-test-weights.ts refresh <dir>";
 
 export type WeightTier = "unit" | "integration";
-const ARTIFACT = /^(?:ci|full-suite)-deterministic-(unit-\d+|integration)-(Linux|macOS|Windows)$/;
+// The guard matrix jobs run integration files too, so their evidence weighs them.
+const ARTIFACT = /^(?:ci|full-suite)-deterministic-(unit-\d+|integration|guard-matrix(?:-\d+)?)-(Linux|macOS|Windows)$/;
 
 /** tier -> name -> OS -> passing durations in seconds */
 export type Samples = Record<WeightTier, Map<string, Map<string, number[]>>>;
 
-/** The summary a deterministic job wrote, located through its recorded stamp. */
 export function summaryFromStamp(stampFile: string, logsRoot: string): string | undefined {
   if (!existsSync(stampFile)) return undefined;
   const stamp = readFileSync(stampFile, "utf8").trim();
@@ -46,13 +46,12 @@ function artifactDirs(root: string, depth = 2): Array<{ dir: string; tier: Weigh
     const dir = join(root, name);
     if (!statSync(dir).isDirectory()) continue;
     const match = ARTIFACT.exec(name);
-    if (match) found.push({ dir, tier: match[1] === "integration" ? "integration" : "unit", os: match[2] });
+    if (match) found.push({ dir, tier: match[1].startsWith("unit-") ? "unit" : "integration", os: match[2] });
     else if (depth > 0) found.push(...artifactDirs(dir, depth - 1));
   }
   return found;
 }
 
-/** Passing per-file durations from every deterministic artifact under root. */
 export function collectSamples(root: string): Samples {
   const samples: Samples = { unit: new Map(), integration: new Map() };
   for (const { dir, tier, os } of artifactDirs(root)) {
@@ -77,7 +76,6 @@ function median(values: number[]): number {
   return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
-/** Each file's median on each OS, then its slowest OS, to a tenth of a second. */
 export function slowestOsWeights(samples: Map<string, Map<string, number[]>>): Record<string, number> {
   const weights: Record<string, number> = {};
   for (const [name, byOs] of samples) {
@@ -162,7 +160,6 @@ export interface Drift {
   weight: number;
 }
 
-/** Files that ran DRIFT_SECONDS and DRIFT_RATIO past their weight, largest gap first. */
 export function weightDrift(summaryText: string, tier: WeightTier, config: OrderWeights): Drift[] {
   const key = (name: string): string => tier === "unit" ? `${name}.test.ts` : name;
   return readSummaryRows(summaryText)
@@ -175,7 +172,7 @@ export function weightDrift(summaryText: string, tier: WeightTier, config: Order
     .sort((a, b) => (b.seconds - b.weight) - (a.seconds - a.weight) || a.name.localeCompare(b.name));
 }
 
-// Workflow-command property and data escaping, so a name cannot end the command.
+// Workflow-command data escaping, so a name cannot end the command.
 const escapeData = (text: string): string => text.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
 
 /** Warning annotations and a step-summary table; never throws. */

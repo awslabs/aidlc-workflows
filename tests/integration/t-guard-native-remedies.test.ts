@@ -418,6 +418,9 @@ class Fixture {
 function restartFixture(harness: Harness = HARNESS_RUNTIMES[0], projection: Projection = "native") {
   const p = new Fixture(projection, harness, "state-mid-inception.md");
   writeFileSync(seededStateFile(p.project), p.state()
+    // No plan is written here, so plan approval is off: the report meets the
+    // recovery, not the plan's question.
+    .replace("- **Revision Count**: 0", "- **Revision Count**: 0\n- **Plan Approval**: off (set by you)")
     .replace("- **Current Stage**: requirements-analysis", "- **Current Stage**: code-generation")
     .replace("- **Lifecycle Phase**: INCEPTION", "- **Lifecycle Phase**: CONSTRUCTION")
     .replace("- [-] requirements-analysis — EXECUTE", "- [x] requirements-analysis — EXECUTE")
@@ -725,8 +728,8 @@ describe("source and native guard remedies execute their owning operations", () 
         result_sha256: createHash("sha256").update(output.stdout.trim(), "utf-8").digest("hex"),
       },
     });
-    // Source tools retain their existing trusted admission. This case verifies
-    // delivery/selection preservation, not a new source-tool consent check.
+    // Source tools retain their trusted admission. This case verifies
+    // delivery/selection preservation, not a source-tool consent check.
     expect(json(p.exact(jump))).toMatchObject({
       target: "code-generation", direction: "redo", state_updated: true,
     });
@@ -825,7 +828,7 @@ describe("source and native guard remedies execute their owning operations", () 
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
-  // t331 keeps its existing seven-source-harness proof. Here source Claude
+  // t331 keeps its seven-source-harness proof. Here source Claude
   // covers all lifecycle remedies; the same cases cross all seven native
   // runtimes, including the shared-directory Kiro/Kiro IDE and Copilot/OpenCode.
   for (const projection of ["source", "native"] as const) {

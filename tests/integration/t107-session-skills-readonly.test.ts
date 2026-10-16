@@ -1,27 +1,24 @@
 // covers: subcommand:aidlc-runtime:summary
 //
-// Structural + contract port of tests/integration/t107-session-skills-readonly.sh
-// (TAP plan 24). Mechanism = none: the subject is the three shipped read-only
-// session-skill manifests (session-cost / replay / outcomes-pack) as bytes on
-// disk. There is no process to spawn and no LLM in the loop — the test reads
-// each SKILL.md straight off the distributable and asserts on its frontmatter
-// and body, exactly as the .sh did via `grep` on the shipped files. Zero
+// Mechanism = none: the subject is the three shipped read-only session-skill
+// manifests (session-cost / replay / outcomes-pack) as bytes on disk. There is
+// no process to spawn and no LLM in the loop - the test reads each SKILL.md
+// straight off the distributable and asserts on its frontmatter and body. Zero
 // tokens, zero subprocess.
 //
-// The .sh carried NO `# covers:` header, so no registry link is being
-// preserved here. The one enumerated unit these three skills genuinely bind to
-// is the deterministic data plane every one of them sources its numbers from —
+// The one enumerated unit these three skills genuinely bind to is the
+// deterministic data plane every one of them sources its numbers from -
 // `aidlc engine runtime summary --json` — hence the
 // `subcommand:aidlc-runtime:summary` claim above. (The session-skill SKILL.md
 // files themselves are not an enumerated unit class in the coverage registry;
-// this twin proves their authored read-only contract.)
+// this test proves their authored read-only contract.)
 //
 // Source under test (the shipped, distributable manifests):
 //   dist/claude/.claude/skills/aidlc-session-cost/SKILL.md
 //   dist/claude/.claude/skills/aidlc-replay/SKILL.md
 //   dist/claude/.claude/skills/aidlc-outcomes-pack/SKILL.md
 // Each declares YAML frontmatter (name / user-invocable / classification) and
-// a Markdown body. The PR-C contract the .sh pins:
+// a Markdown body. The contract:
 //   - name == aidlc-<slug>, user-invocable: true, classification: read-only.
 //   - every skill sources numbers from `aidlc engine runtime summary --json`.
 //   - the retired "characters / 4" token heuristic must not reappear anywhere.
@@ -30,39 +27,12 @@
 //   - write surface: session-cost & replay are pure stdout (name no report
 //     artefact); only outcomes-pack writes OUTCOMES.md.
 //
-// Test-design note (house style): assert the OBSERVABLE authored contract the
-// .sh asserted — frontmatter field values and body content — and prefer
-// STRONGER where cheap: frontmatter field checks are scoped to the parsed
-// frontmatter BLOCK (not "appears anywhere in the file"), name is matched by
-// exact equality (not a `grep ^name:` prefix), and the token-heuristic /
-// audit-emit / state-advance regexes are widened to every spacing variant the
-// shipped prose could use.
-//
-// Old TAP -> new test parity (1:1, every .sh assertion -> a named test()):
-//   .sh 1  (session-cost SKILL.md exists)              -> "session-cost SKILL.md exists"
-//   .sh 2  (replay SKILL.md exists)                    -> "replay SKILL.md exists"
-//   .sh 3  (outcomes-pack SKILL.md exists)             -> "outcomes-pack SKILL.md exists"
-//   .sh 4  (session-cost declares name)                -> "session-cost frontmatter name == aidlc-session-cost"
-//   .sh 5  (replay declares name)                      -> "replay frontmatter name == aidlc-replay"
-//   .sh 6  (outcomes-pack declares name)               -> "outcomes-pack frontmatter name == aidlc-outcomes-pack"
-//   .sh 7  (session-cost user-invocable)               -> "session-cost frontmatter user-invocable: true"
-//   .sh 8  (replay user-invocable)                     -> "replay frontmatter user-invocable: true"
-//   .sh 9  (outcomes-pack user-invocable)              -> "outcomes-pack frontmatter user-invocable: true"
-//   .sh 10 (session-cost classified read-only)         -> "session-cost frontmatter classification: read-only"
-//   .sh 11 (replay classified read-only)               -> "replay frontmatter classification: read-only"
-//   .sh 12 (outcomes-pack classified read-only)        -> "outcomes-pack frontmatter classification: read-only"
-//   .sh 13 (session-cost reads summary --json)         -> "session-cost body sources aidlc engine runtime summary --json"
-//   .sh 14 (replay reads summary --json)               -> "replay body sources aidlc engine runtime summary --json"
-//   .sh 15 (outcomes-pack reads summary --json)        -> "outcomes-pack body sources aidlc engine runtime summary --json"
-//   .sh 16 (session-cost drops chars/4 heuristic)      -> "session-cost carries no chars/4 token heuristic"
-//   .sh 17 (replay carries no token heuristic)         -> "replay carries no chars/4 token heuristic"
-//   .sh 18 (outcomes-pack carries no token heuristic)  -> "outcomes-pack carries no chars/4 token heuristic"
-//   .sh 19 (session-cost no audit / no state advance)  -> "session-cost emits no audit / no state advance"
-//   .sh 20 (replay no audit / no state advance)        -> "replay emits no audit / no state advance"
-//   .sh 21 (outcomes-pack no audit / no state advance) -> "outcomes-pack emits no audit / no state advance"
-//   .sh 22 (session-cost names no report artefact)     -> "session-cost names no report artefact"
-//   .sh 23 (replay writes no SESSION-REPLAY.md)        -> "replay names no SESSION-REPLAY.md (pure stdout)"
-//   .sh 24 (outcomes-pack writes OUTCOMES.md)          -> "outcomes-pack body names OUTCOMES.md as its artefact"
+// Test-design note (house style): assert the OBSERVABLE authored contract -
+// frontmatter field values and body content. Frontmatter field checks are
+// scoped to the parsed frontmatter BLOCK (not "appears anywhere in the file"),
+// name is matched by exact equality (not a `grep ^name:` prefix), and the
+// token-heuristic / audit-emit / state-advance regexes are widened to every
+// spacing variant the shipped prose could use.
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
@@ -89,17 +59,14 @@ const PACK: Skill = {
   path: join(SKILLS_DIR, "aidlc-outcomes-pack", "SKILL.md"),
 };
 
-/** Whole-file bytes of a skill manifest. */
 function read(skill: Skill): string {
   return readFileSync(skill.path, "utf-8");
 }
 
 /**
  * Split a SKILL.md into its YAML frontmatter block and the body that follows.
- * The .sh checked `^name:` etc. — i.e. it relied on these being frontmatter
- * lines. We parse the leading `---\n...\n---` fence explicitly so the
- * frontmatter-field assertions are scoped to the BLOCK, not the whole file
- * (STRONGER than a bare `grep ^key:`).
+ * We parse the leading `---\n...\n---` fence explicitly so the frontmatter-field
+ * assertions are scoped to the BLOCK, not the whole file.
  */
 function split(skill: Skill): { frontmatter: string; body: string } {
   const src = read(skill);
@@ -123,9 +90,8 @@ function frontmatterValue(skill: Skill, key: string): string | null {
 }
 
 // The retired token heuristic, every spacing/divider variant the shipped prose
-// could carry (the .sh grepped `÷ 4` and `/ 4` with optional pluralisation;
-// widen to optional spaces around the operator so a re-formatted regression
-// can't slip through).
+// could carry (either divider, optional pluralisation, and optional spaces
+// around the operator, so a re-formatted regression can't slip through).
 const TOKEN_HEURISTIC = /char(?:acter)?s?\s*[÷/]\s*4/i;
 
 // Read-only contract: no audit-append helper, no aidlc-audit.ts reference, and
@@ -146,8 +112,8 @@ describe("t107 session skills — existence (migrated from t107-session-skills-r
 });
 
 describe("t107 session skills — frontmatter name (block-scoped, exact)", () => {
-  // STRONGER than the .sh `grep '^name: aidlc-...'`: the value must equal the
-  // slug exactly, and it must live in the parsed frontmatter block.
+  // The value must equal the slug exactly, and it must live in the parsed
+  // frontmatter block.
   test("session-cost frontmatter name == aidlc-session-cost [.sh 4]", () => {
     expect(frontmatterValue(COST, "name")).toBe("aidlc-session-cost");
   });
@@ -185,8 +151,8 @@ describe("t107 session skills — classification: read-only (block-scoped)", () 
 
 describe("t107 session skills — data-plane sourcing (summary --json)", () => {
   // Every skill must pull its numbers from the deterministic tool, no LLM-side
-  // counting. Assert on the body so a stray frontmatter mention couldn't satisfy
-  // it (STRONGER than the .sh's whole-file grep).
+  // counting. Assert on the body so a stray frontmatter mention couldn't
+  // satisfy it.
   const NEEDLE = "bun .claude/tools/aidlc.ts engine runtime summary --json";
   test("session-cost body sources aidlc engine runtime summary --json [.sh 13]", () => {
     expect(split(COST).body).toContain(NEEDLE);
@@ -200,8 +166,8 @@ describe("t107 session skills — data-plane sourcing (summary --json)", () => {
 });
 
 describe("t107 session skills — retired chars/4 token heuristic must not reappear", () => {
-  // Whole-file scan (the .sh grepped the whole file): the heuristic must not
-  // appear in frontmatter OR body of any session skill.
+  // Whole-file scan: the heuristic must not appear in frontmatter OR body of any
+  // session skill.
   test("session-cost carries no chars/4 token heuristic [.sh 16]", () => {
     expect(TOKEN_HEURISTIC.test(read(COST))).toBe(false);
   });
@@ -214,9 +180,8 @@ describe("t107 session skills — retired chars/4 token heuristic must not reapp
 });
 
 describe("t107 session skills — read-only contract (no audit emit / no state advance)", () => {
-  // Two distinct guards collapsed onto each skill exactly as the .sh did: no
-  // appendAuditEntry / aidlc-audit.ts reference, and no aidlc-state.ts
-  // advance|approve|complete call.
+  // Two distinct guards on each skill: no appendAuditEntry / aidlc-audit.ts
+  // reference, and no aidlc-state.ts advance|approve|complete call.
   test("session-cost emits no audit / no state advance [.sh 19]", () => {
     const src = read(COST);
     expect(AUDIT_EMIT.test(src)).toBe(false);
@@ -236,8 +201,7 @@ describe("t107 session skills — read-only contract (no audit emit / no state a
 
 describe("t107 session skills — write surface (only outcomes-pack writes a file)", () => {
   // session-cost and replay are pure stdout; only outcomes-pack names a report
-  // artefact (OUTCOMES.md). The .sh forbade SESSION-REPLAY.md and OUTCOMES.md
-  // in the two stdout skills and required OUTCOMES.md in the pack.
+  // artefact (OUTCOMES.md).
   test("session-cost names no report artefact [.sh 22]", () => {
     const src = read(COST);
     expect(src.includes("SESSION-REPLAY.md")).toBe(false);

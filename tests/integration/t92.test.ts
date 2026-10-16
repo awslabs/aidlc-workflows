@@ -53,6 +53,7 @@
 import { setDefaultTimeout, afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
 import {
+  chmodSync,
   copyFileSync,
   cpSync,
   existsSync,
@@ -60,6 +61,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -197,7 +199,7 @@ afterAll(() => {
 
 // --- Helpers (TS analogues of the .sh helpers) ---
 
-/** make_proj (t92-sensor-fire.sh:104-110): fresh temp project + aidlc-docs/. */
+/** make_proj (t92-sensor-fire.sh): fresh temp project + aidlc-docs/. */
 function makeProj(): string {
   // toPortablePath (cygpath -m on win32, no-op elsewhere): mkdtempSync yields a
   // path form native Windows bun can't round-trip as CLAUDE_PROJECT_DIR. The
@@ -216,7 +218,7 @@ function makeProj(): string {
 }
 
 /**
- * make_fork_sensors (t92-sensor-fire.sh:113-136): write a single fork
+ * make_fork_sensors (t92-sensor-fire.sh): write a single fork
  * sensor manifest into a fresh AIDLC_SENSORS_DIR. Returns the dir.
  */
 function makeForkSensors(
@@ -268,7 +270,7 @@ function auditEventCount(proj: string, ev: string): number {
 }
 
 /**
- * audit_field (t92-sensor-fire.sh:153-176): value of <key> from the FIRST
+ * audit_field (t92-sensor-fire.sh): value of <key> from the FIRST
  * audit block whose `**Event**:` matches <ev>. Walks the merged trail; resets
  * at `## ` headings and `---` separators; splits `**label**: value` on the
  * literal `**: ` separator.
@@ -302,7 +304,7 @@ function auditField(proj: string, ev: string, key: string): string {
 }
 
 /**
- * audit_field_count (t92-sensor-fire.sh:183-198): count `**…**:` lines in
+ * audit_field_count (t92-sensor-fire.sh): count `**...**:` lines in
  * the FIRST audit block whose `**Event**:` matches <ev>.
  */
 function auditFieldCount(proj: string, ev: string): number {
@@ -392,7 +394,7 @@ const sleep = (ms: number): Promise<void> =>
 // ============================================================
 // Group A — Argv parsing (8): exit 1 on every invalid invocation,
 // and verify NO audit file ever appears (validate-before-lock).
-// (t92-sensor-fire.sh:202-293)
+// (t92-sensor-fire.sh)
 // ============================================================
 
 describe("t92 Group A: argv validation (exit 1, no audit emit)", () => {
@@ -471,13 +473,13 @@ describe("t92 Group A: argv validation (exit 1, no audit emit)", () => {
 
 // ============================================================
 // Group B — PASSED round-trip per sensor, REAL fixtures (5).
-// (t92-sensor-fire.sh:295-395)
+// (t92-sensor-fire.sh)
 // Fires the actual shipped per-sensor scripts against real fixture content.
 // Functional round trips use shipped scripts and temporary manifest copies
 // with fixture backstops. Registry budget calibration uses explicit fork caps.
 // ============================================================
 
-/** run_passed_md_real (t92-sensor-fire.sh:321-349). */
+/** run_passed_md_real (t92-sensor-fire.sh). */
 function runPassedMdReal(
   id: string,
   stage: string,
@@ -541,7 +543,7 @@ function realSensorEnv(id: string, proj: string): Record<string, string> {
   };
 }
 
-/** run_passed_ts_real (t92-sensor-fire.sh:356-386). */
+/** run_passed_ts_real (t92-sensor-fire.sh). */
 function runPassedTsReal(
   id: string,
   stage: string,
@@ -701,10 +703,10 @@ describe("t92 Group B: PASSED real round-trip per sensor", () => {
 
 // ============================================================
 // Group C — FAILED round-trip per sensor, REAL fixtures (4).
-// (t92-sensor-fire.sh:397-505)
+// (t92-sensor-fire.sh)
 // ============================================================
 
-/** run_failed_md_real (t92-sensor-fire.sh:422-454). */
+/** run_failed_md_real (t92-sensor-fire.sh). */
 function runFailedMdReal(
   id: string,
   stage: string,
@@ -738,7 +740,7 @@ function runFailedMdReal(
   expect(path).toBe(`aidlc-docs/${outname}`);
 }
 
-/** run_failed_ts_real (t92-sensor-fire.sh:458-490). */
+/** run_failed_ts_real (t92-sensor-fire.sh). */
 function runFailedTsReal(
   id: string,
   stage: string,
@@ -802,9 +804,9 @@ describe("t92 Group C: FAILED real round-trip per sensor", () => {
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
-// Fake ESLint 8 CLI: records its argv beside itself and answers the sensor's
-// three calls (version probe, config probe, lint) the way ESLint 8 does on a
-// project whose .eslintrc names a rule it cannot load.
+// Fake ESLint 8 CLI: records its argv beside itself and
+// answers the sensor's three calls (version probe, config probe, lint) the way
+// ESLint 8 does on a project whose .eslintrc names a rule it cannot load.
 const FAKE_ESLINT_8_CLI = [
   'const fs = require("node:fs");',
   'const path = require("node:path");',
@@ -865,8 +867,34 @@ describe("t92 local ESLint resolution", () => {
     expect(localEslintPath(pkg)).toBeNull();
   });
 
-  test("eslint 8 with .eslintrc: the sensor runs the project's install and reports its finding", () => {
-    const { proj, cli } = localEslintProject("8.57.1", ".eslintrc.cjs");
+  test.each(["eslint.config.mts", "eslint.config.cts"])("a TypeScript flat config (%s) beside eslint 8 keeps the pinned fallback", (config) => {
+    const { proj } = localEslintProject("8.57.1", config);
+    expect(localEslintPath(proj)).toBeNull();
+  });
+
+  // A per-package ESLint 8 under the monorepo root's flat config, and a nested
+  // .eslintrc under it, are still governed by that root config.
+  test("a root flat config governs a nested package with its own eslint 8", () => {
+    const { proj } = localEslintProject("8.57.1", "eslint.config.js");
+    const app = join(proj, "packages", "app");
+    const pkg = join(app, "node_modules", "eslint");
+    mkdirSync(join(pkg, "bin"), { recursive: true });
+    writeFileSync(join(app, "package.json"), '{"name":"app","private":true}\n');
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "eslint", version: "8.57.1" }));
+    writeFileSync(join(pkg, "bin", "eslint.js"), "// resolver fixture; never executed\n");
+    expect(localEslintPath(app)).toBeNull();
+  });
+
+  test("a root flat config governs a nested package with its own .eslintrc", () => {
+    const { proj } = localEslintProject("8.57.1", "eslint.config.js");
+    const app = join(proj, "packages", "app");
+    mkdirSync(app, { recursive: true });
+    writeFileSync(join(app, "package.json"), '{"name":"app","private":true}\n');
+    writeFileSync(join(app, ".eslintrc.cjs"), "module.exports = {};\n");
+    expect(localEslintPath(app)).toBeNull();
+  });
+
+  function lintWithFakeEslint8(proj: string, cli: string, env: Record<string, string | undefined> = process.env) {
     writeFileSync(cli, FAKE_ESLINT_8_CLI);
     mkdirSync(join(proj, "src"));
     const file = join(proj, "src", "sample.ts");
@@ -874,7 +902,7 @@ describe("t92 local ESLint resolution", () => {
     const res = spawnSync(
       BUN,
       [join(TOOLS_DIR, "aidlc-sensor-linter.ts"), "--stage", "code-generation", "--file-path", file],
-      { encoding: "utf-8", cwd: proj, timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS) },
+      { encoding: "utf-8", cwd: proj, env, timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS) },
     );
     expect(res.status, `${res.stdout}${res.stderr}`).toBe(0);
     const verdict = JSON.parse(res.stdout);
@@ -886,13 +914,219 @@ describe("t92 local ESLint resolution", () => {
       .split("\n")
       .map((line) => (JSON.parse(line) as string[])[0]);
     expect(calls).toEqual(["--version", "--print-config", "--format"]);
+  }
+
+  test("eslint 8 with .eslintrc: the sensor runs the project's install and reports its finding", () => {
+    const { proj, cli } = localEslintProject("8.57.1", ".eslintrc.cjs");
+    lintWithFakeEslint8(proj, cli);
   });
+
+  // npm link, a file: dependency, and pnpm all leave node_modules/eslint a link
+  // whose real path the resolver returns, outside any node_modules.
+  function linkedEslintProject(): { proj: string; cli: string } {
+    const { proj } = localEslintProject("8.57.1", ".eslintrc.cjs");
+    const linked = mkdtempSync(join(tmpdir(), "aidlc-t92-linked-eslint-"));
+    tempDirs.push(linked);
+    const pkg = join(proj, "node_modules", "eslint");
+    cpSync(pkg, linked, { recursive: true });
+    rmSync(pkg, { recursive: true, force: true });
+    symlinkSync(linked, pkg, process.platform === "win32" ? "junction" : "dir");
+    return { proj, cli: join(realpathSync(linked), "bin", "eslint.js") };
+  }
+
+  test("a linked eslint 8 with .eslintrc: the sensor runs the project's install and reports its finding", () => {
+    const { proj, cli } = linkedEslintProject();
+    expect(localEslintPath(proj)).toBe(cli);
+    lintWithFakeEslint8(proj, cli);
+  });
+
+  // Stands in for Bun's install-cache copy: a resolution inside Bun's install
+  // cache is no install of the project's.
+  test("an eslint the resolver finds in Bun's install cache keeps the pinned fallback", () => {
+    const proj = mkdtempSync(join(tmpdir(), "aidlc-t92-cache-eslint-"));
+    tempDirs.push(proj);
+    writeFileSync(join(proj, "package.json"), '{"private":true}\n');
+    const cache = join(proj, ".cache");
+    mkdirSync(join(cache, "eslint", "bin"), { recursive: true });
+    writeFileSync(join(cache, "eslint", "package.json"), JSON.stringify({ name: "eslint", version: "10.11.0" }));
+    writeFileSync(join(cache, "eslint", "bin", "eslint.js"), "// resolver fixture; never executed\n");
+    const probe = (module: string) =>
+      `const { createRequire } = require("node:module");` +
+      `const m = require(${JSON.stringify(module)});` +
+      `const path = createRequire(${JSON.stringify(join(proj, "package.json"))}).resolve("eslint/package.json");` +
+      `console.log(JSON.stringify([path, m.localEslintPath(${JSON.stringify(proj)})]));`;
+    const res = spawnSync(BUN, ["--no-install", "-e", probe(join(TOOLS_DIR, "aidlc-sensor-linter.ts"))], {
+      encoding: "utf-8",
+      cwd: proj,
+      env: { ...process.env, NODE_PATH: cache, BUN_INSTALL_CACHE_DIR: cache },
+      timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
+    });
+    expect(res.status, res.stderr).toBe(0);
+    const [resolved, local] = JSON.parse(res.stdout) as [string, string | null];
+    expect(realpathSync(resolved)).toBe(realpathSync(join(cache, "eslint", "package.json")));
+    expect(local).toBeNull();
+  });
+
+  // A shared install named through NODE_PATH lies outside every node_modules
+  // ancestor, yet it is the one the project configured.
+  test("an eslint 8 on NODE_PATH with .eslintrc: the sensor runs that install and reports its finding", () => {
+    const proj = mkdtempSync(join(tmpdir(), "aidlc-t92-node-path-eslint-"));
+    const shared = mkdtempSync(join(tmpdir(), "aidlc-t92-shared-eslint-"));
+    tempDirs.push(proj, shared);
+    writeFileSync(join(proj, "package.json"), '{"private":true}\n');
+    writeFileSync(join(proj, ".eslintrc.cjs"), "module.exports = {};\n");
+    mkdirSync(join(shared, "eslint", "bin"), { recursive: true });
+    writeFileSync(join(shared, "eslint", "package.json"), JSON.stringify({ name: "eslint", version: "8.57.1" }));
+    lintWithFakeEslint8(proj, join(realpathSync(shared), "eslint", "bin", "eslint.js"), { ...process.env, NODE_PATH: shared });
+  });
+});
+
+// Under Node, ESLint reads a TypeScript flat config only through jiti, which
+// neither the eslint@10 pin nor this repository's lockfile install carries;
+// under Bun it reads one natively. These run the shipped sensor script on a
+// real config and real ESLint and expect its no-var finding, not a
+// tool-unavailable pass.
+const TS_FLAT_CONFIGS: Record<string, string> = {
+  "eslint.config.mts": 'import type { Linter } from "eslint";\nconst config: Linter.Config[] = [{ rules: { "no-var": "error" } }];\nexport default config;\n',
+  "eslint.config.cts": 'import type { Linter } from "eslint";\nconst config: Linter.Config[] = [{ rules: { "no-var": "error" } }];\nmodule.exports = config;\n',
+  "eslint.config.ts": 'import type { Linter } from "eslint";\nconst config: Linter.Config[] = [{ rules: { "no-var": "error" } }];\nexport default config;\n',
+};
+const REPO_ESLINT_CLI = join(REPO_ROOT, "node_modules", "eslint", "bin", "eslint.js");
+
+describe("t92 TypeScript flat config", () => {
+  function tsConfigProject(configFile: string, linkNodeModules: boolean): { proj: string; file: string } {
+    const proj = mkdtempSync(join(tmpdir(), "aidlc-t92-ts-config-"));
+    tempDirs.push(proj);
+    writeFileSync(join(proj, "package.json"), '{"name":"aidlc-t92-ts-config","private":true}\n');
+    writeFileSync(join(proj, configFile), TS_FLAT_CONFIGS[configFile]);
+    if (linkNodeModules) {
+      symlinkSync(join(REPO_ROOT, "node_modules"), join(proj, "node_modules"), process.platform === "win32" ? "junction" : "dir");
+    }
+    const file = join(proj, "sample.js");
+    writeFileSync(file, "var total = 1;\nconsole.log(total);\n");
+    return { proj, file };
+  }
+
+  function runLinter(file: string, cwd: string, env: Record<string, string | undefined> = process.env) {
+    return spawnSync(
+      BUN,
+      [join(TOOLS_DIR, "aidlc-sensor-linter.ts"), "--stage", "code-generation", "--file-path", file],
+      { encoding: "utf-8", cwd, env, timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS) },
+    );
+  }
+
+  function expectNoVarFinding(res: ReturnType<typeof runLinter>): void {
+    expect(res.status, `${res.stdout}${res.stderr}`).toBe(0);
+    const verdict = JSON.parse(res.stdout);
+    expect(verdict.pass).toBe(false);
+    expect(verdict.errorCount).toBe(1);
+    expect(verdict.violations[0].rule).toBe("no-var");
+  }
+
+  // Stands in for bunx so the pinned command runs offline: it accepts only the
+  // expected leading argv, then runs the lockfile ESLint under Bun with the
+  // remaining arguments.
+  function bunShim(dir: string, name: string, prefix: string[]): string {
+    const shim = join(dir, name);
+    const expected = prefix.join(" ");
+    writeFileSync(
+      shim,
+      [
+        "#!/bin/sh",
+        `case "$*" in "${expected} "*) ;; *) exit 64 ;; esac`,
+        `shift ${prefix.length}`,
+        `exec "${BUN}" "${REPO_ESLINT_CLI}" "$@"`,
+        "",
+      ].join("\n"),
+    );
+    chmodSync(shim, 0o755);
+    return shim;
+  }
+
+  test.each(Object.keys(TS_FLAT_CONFIGS))("the project's own ESLint without jiti reads %s and reports its finding", (config) => {
+    const { proj, file } = tsConfigProject(config, true);
+    expectNoVarFinding(runLinter(file, proj));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test.skipIf(process.platform === "win32")("the pinned fallback runs under Bun for a TypeScript config", () => {
+    const { proj, file } = tsConfigProject("eslint.config.mts", false);
+    const bin = mkdtempSync(join(tmpdir(), "aidlc-t92-bunx-"));
+    tempDirs.push(bin);
+    bunShim(bin, "bunx", ["--bun", "eslint@10"]);
+    const { AIDLC_COMPILED_EXECUTABLE: _native, ...env } = process.env;
+    expectNoVarFinding(runLinter(file, proj, { ...env, PATH: `${bin}:${process.env.PATH}` }));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The version decision reads the config that governs the linted file, as the
+  // runtime choice does: a nested TypeScript config beside the package root's
+  // ESLint 8 and .eslintrc takes the pin, under Bun.
+  test.skipIf(process.platform === "win32")("a nested TypeScript config beside the root's eslint 8 takes the pinned fallback", () => {
+    const proj = mkdtempSync(join(tmpdir(), "aidlc-t92-nested-ts-config-"));
+    const bin = mkdtempSync(join(tmpdir(), "aidlc-t92-bunx-"));
+    tempDirs.push(proj, bin);
+    writeFileSync(join(proj, "package.json"), '{"private":true}\n');
+    writeFileSync(join(proj, ".eslintrc.cjs"), "module.exports = {};\n");
+    mkdirSync(join(proj, "node_modules", "eslint", "bin"), { recursive: true });
+    writeFileSync(join(proj, "node_modules", "eslint", "package.json"), JSON.stringify({ name: "eslint", version: "8.57.1" }));
+    writeFileSync(join(proj, "node_modules", "eslint", "bin", "eslint.js"), FAKE_ESLINT_8_CLI);
+    mkdirSync(join(proj, "web"));
+    writeFileSync(join(proj, "web", "eslint.config.mts"), TS_FLAT_CONFIGS["eslint.config.mts"]);
+    const file = join(proj, "web", "sample.js");
+    writeFileSync(file, "var total = 1;\nconsole.log(total);\n");
+    bunShim(bin, "bunx", ["--bun", "eslint@10"]);
+    const { AIDLC_COMPILED_EXECUTABLE: _native, ...env } = process.env;
+    expectNoVarFinding(runLinter(file, proj, { ...env, PATH: `${bin}:${process.env.PATH}` }));
+    expect(existsSync(join(proj, "node_modules", "eslint", "bin", "calls.log"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A native install's executable is never run as Bun: the fallback is bunx, as
+  // before, and the project's own ESLint keeps Node.
+  test.skipIf(process.platform === "win32")("a native install never runs its own executable for ESLint", () => {
+    const bin = mkdtempSync(join(tmpdir(), "aidlc-t92-native-"));
+    tempDirs.push(bin);
+    const native = join(bin, "aidlc");
+    writeFileSync(native, `#!/bin/sh\necho "$*" >> "${join(bin, "native.log")}"\nexit 64\n`);
+    writeFileSync(join(bin, "bunx"), `#!/bin/sh\necho "$*" >> "${join(bin, "bunx.log")}"\nexit 1\n`);
+    chmodSync(native, 0o755);
+    chmodSync(join(bin, "bunx"), 0o755);
+    const env = { ...process.env, AIDLC_COMPILED_EXECUTABLE: native, PATH: `${bin}:${process.env.PATH}` };
+    const fallback = tsConfigProject("eslint.config.cts", false);
+    const unavailable = runLinter(fallback.file, fallback.proj, env);
+    expect(unavailable.status, `${unavailable.stdout}${unavailable.stderr}`).toBe(127);
+    expect(readFileSync(join(bin, "bunx.log"), "utf-8").trim()).toBe("--bun eslint@10 --version");
+    const local = tsConfigProject("eslint.config.mts", true);
+    expect(runLinter(local.file, local.proj, env).status).not.toBe(0);
+    expect(existsSync(join(bin, "native.log"))).toBe(false);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A monorepo's root config governs the nested package whose package.json is
+  // the sensor's project root, so its broken import is that package's config.
+  test("an unresolved import in an ancestor TypeScript config is a script error, not a missing tool", () => {
+    const { proj } = tsConfigProject("eslint.config.mts", true);
+    writeFileSync(join(proj, "eslint.config.mts"), 'import rules from "./missing-rules.ts";\nexport default [{ rules }];\n');
+    const app = join(proj, "packages", "app");
+    mkdirSync(app, { recursive: true });
+    writeFileSync(join(app, "package.json"), '{"name":"app","private":true}\n');
+    const file = join(app, "sample.js");
+    writeFileSync(file, "var total = 1;\nconsole.log(total);\n");
+    const res = runLinter(file, app);
+    expect(res.status, `${res.stdout}${res.stderr}`).toBe(2);
+    expect(res.stderr).toContain("config-parse-error:");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a broken TypeScript config is a script error, not a missing tool", () => {
+    const { proj, file } = tsConfigProject("eslint.config.mts", true);
+    writeFileSync(join(proj, "eslint.config.mts"), "const rules: number = ;\nexport default [];\n");
+    const res = runLinter(file, proj);
+    expect(res.status, `${res.stdout}${res.stderr}`).toBe(2);
+    expect(res.stderr).toContain("config-parse-error:");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // ============================================================
 // Group D — Tool-unavailable (2): per-sensor script exits 127.
 // Dispatcher classifies branch b -> SENSOR_PASSED Note=tool-unavailable.
-// (t92-sensor-fire.sh:507-535)
+// (t92-sensor-fire.sh)
 // ============================================================
 
 function runToolUnavailable(id: string, stage: string, matches: string): void {
@@ -920,7 +1154,7 @@ describe("t92 Group D: tool-unavailable (exit 127 -> PASSED Note)", () => {
 // ============================================================
 // Group E — Script-error fall-through (3): branches e (exit-N), f
 // (bad-output), and the detail-write-failed fallback.
-// (t92-sensor-fire.sh:537-576)
+// (t92-sensor-fire.sh)
 // ============================================================
 
 describe("t92 Group E: script-error fall-through", () => {
@@ -965,7 +1199,7 @@ describe("t92 Group E: script-error fall-through", () => {
 
 // ============================================================
 // Group F — Budget override (2): stub-slow + timeout_seconds=1.
-// (t92-sensor-fire.sh:578-624)
+// (t92-sensor-fire.sh)
 // ============================================================
 
 describe("t92 Group F: budget override (timeout -> SENSOR_BUDGET_OVERRIDE)", () => {
@@ -1009,7 +1243,7 @@ describe("t92 Group F: budget override (timeout -> SENSOR_BUDGET_OVERRIDE)", () 
 
 // ============================================================
 // Group G — Concurrency (3): happy path, lock-released-across-spawn,
-// lock-orphan recovery. (t92-sensor-fire.sh:626-708)
+// lock-orphan recovery. (t92-sensor-fire.sh)
 // ============================================================
 
 describe("t92 Group G: concurrency invariants", () => {
@@ -1130,7 +1364,7 @@ console.log(JSON.stringify({ pass: true }));
 });
 
 // ============================================================
-// Group H — Detail-file body shape (4). (t92-sensor-fire.sh:710-754)
+// Group H - Detail-file body shape (4). (t92-sensor-fire.sh)
 // ============================================================
 
 function runDetailShape(id: string, stage: string, matches = ""): void {
@@ -1176,7 +1410,7 @@ describe("t92 Group H: detail-file body shape per sensor", () => {
 });
 
 // ============================================================
-// Group I — Detail-file collision-free (1). (t92-sensor-fire.sh:756-775)
+// Group I - Detail-file collision-free (1). (t92-sensor-fire.sh)
 // ============================================================
 
 describe("t92 Group I: detail-file collision-free", () => {
@@ -1201,7 +1435,7 @@ describe("t92 Group I: detail-file collision-free", () => {
 });
 
 // ============================================================
-// Group J — Audit-row required-fields (4). (t92-sensor-fire.sh:777-840)
+// Group J - Audit-row required-fields (4). (t92-sensor-fire.sh)
 // ============================================================
 
 describe("t92 Group J: audit-row required fields per event type", () => {
@@ -1264,7 +1498,7 @@ describe("t92 Group J: audit-row required fields per event type", () => {
 
 // ============================================================
 // Group K — Native manifest delegate resolves to its sibling script (4).
-// (t92-sensor-fire.sh:842-868)
+// (t92-sensor-fire.sh)
 // ============================================================
 
 function assertManifestCommandResolves(id: string): void {
@@ -1299,7 +1533,7 @@ describe("t92 Group K: source manifest delegate resolves next to dispatcher", ()
 // ============================================================
 // Group L — Validation order (3): pre-lock failures NEVER emit
 // SENSOR_FIRED. Each case uses a fresh projectDir.
-// (t92-sensor-fire.sh:870-924)
+// (t92-sensor-fire.sh)
 // ============================================================
 
 function assertNoFiredBeforeLock(args: string[]): void {
@@ -1342,7 +1576,7 @@ describe("t92 Group L: validation order (no SENSOR_FIRED pre-lock)", () => {
 
 // ============================================================
 // Group M — upstream-coverage --consumes resolution (1).
-// (t92-sensor-fire.sh:926-950)
+// (t92-sensor-fire.sh)
 // ============================================================
 
 describe("t92 Group M: upstream-coverage --consumes resolution", () => {

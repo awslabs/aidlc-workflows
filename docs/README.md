@@ -24,8 +24,9 @@ The native installer sets up everything AI-DLC needs, every harness runtime
 included; you do not need to install Bun or Node.js. On Windows, it installs for
 the current account and automatically
 registers the bin directory in User PATH; run it from a normal PowerShell window,
-since one opened with "Run as administrator" gets a warning and a prompt. If
-another session cannot find `aidlc`, open a new terminal. Use
+since one opened with "Run as administrator" gets a warning and a prompt. A
+terminal app or IDE that was already open keeps its old PATH, so quit and reopen
+it before using `aidlc` there; a new tab inside it is not enough. Use
 [`-NoModifyPath`](guide/18-install-and-lifecycle.md#windows-powershell) to skip
 both persistent and current-process PATH changes.
 

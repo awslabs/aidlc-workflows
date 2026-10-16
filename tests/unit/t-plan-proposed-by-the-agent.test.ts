@@ -3,8 +3,9 @@
 // The plan for a request the person typed in their own words is proposed by the
 // agent, not matched from a keyword list. `next "<request>"` on a workspace
 // with no plan named keeps the request as a question and returns one print for
-// the agent: the request, every plan this install ships (its length here, what
-// it is for, its author's hints) and the two commands that answer it. The agent
+// the agent: the request, every plan this install ships (its length here,
+// whether it splits the work into Units, what it is for, its author's hints)
+// and the two commands that answer it. The agent
 // runs `next --propose <plan> --request <id>` (or `--propose compose`) and the
 // engine renders the same plan question the person always got, with that plan,
 // so their yes still runs the exact prebuilt creation command. Before, a
@@ -20,7 +21,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
-import { getField, hooksHealthDir, nextFlagShape, readAuditShardEvents, splitKiroCommandArgs, validScopes } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { getField, hooksHealthDir, loadScopeMapping, nextFlagShape, readAuditShardEvents, splitKiroCommandArgs, validScopes } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { nextArgsAreOnlyWords, parseNextFlags } from "../../dist/claude/.claude/tools/aidlc-orchestrate.ts";
 import {
   AIDLC_SRC,
@@ -66,7 +67,6 @@ function next(tools: string, proj: string, args: string[], env: NodeJS.ProcessEn
   return r.directive as Directive;
 }
 
-/** The person's message as their host delivers it to the prompt hook, in the chat `session`. */
 function reply(proj: string, prompt: string, session: string): void {
   const r = spawnSync(process.execPath, [join(CLAUDE_TOOLS, "aidlc.ts"), "engine", "hook", "record-human-turn"], {
     cwd: proj,
@@ -77,7 +77,6 @@ function reply(proj: string, prompt: string, session: string): void {
   expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
 }
 
-/** The `next` arguments of an answer command the engine handed out. */
 function answerArgs(command: unknown): string[] {
   const text = String(command);
   return text.slice(text.indexOf(" next ") + 6).split(" ");
@@ -202,14 +201,27 @@ describe("t-plan-proposed-by-the-agent: a fresh workspace", () => {
     expect(message).toContain(PROPOSAL);
     expect(message).toContain("--propose compose --request");
     expect(message).not.toContain("This looks like");
-    // Every plan, with its length here and the hints its author wrote.
-    for (const scope of validScopes()) expect(message).toMatch(new RegExp(`${scope} \\(\\d+ stages?\\):`));
+    for (const scope of validScopes()) expect(message).toMatch(new RegExp(`${scope} \\(\\d+ stages?(, [^)]*)?\\):`));
     expect(message).toContain("hints: fix, bug, broken, bugfix");
-    // The request is kept whole, with no plan, and nothing is recorded.
     const kept = questionTexts(proj);
     expect(kept.map((q) => q.text)).toContain(REQUEST_TEXT);
     expect(kept.find((q) => q.text === REQUEST_TEXT)?.proposedScope).toBe("");
     expect(readAuditShardEvents(proj).length).toBe(before);
+  });
+
+  // "Fix the two bugs as two units side by side" got bugfix, which builds in
+  // one piece: the list never said which plans have Units. Each plan says it
+  // from its own stages; reading the request stays the agent's.
+  test("the plans list says which plans split the work into Units, from each plan's own stages", () => {
+    proj = fresh();
+    const message = String(next(CLAUDE_TOOLS, proj, ["fix two bugs, as two units side by side"]).message);
+    const scopes = loadScopeMapping();
+    for (const scope of validScopes()) {
+      const marked = new RegExp(`(^|/ |Plans: )${scope} \\(\\d+ stages?, splits the work into Units\\):`).test(message);
+      expect(marked, scope).toBe(scopes[scope]?.stages["units-generation"] === "EXECUTE");
+    }
+    expect(message).toMatch(/classic \(\d+ stages, splits the work into Units\):/);
+    expect(message).toMatch(/bugfix \(\d+ stages\):/);
   });
 
   test("the proposal step re-run with its request is the same step: same id, same print", () => {
@@ -239,7 +251,6 @@ describe("t-plan-proposed-by-the-agent: a fresh workspace", () => {
     expect(String(ask.compose_command)).toMatch(/next compose --request [0-9a-f]{8}$/);
     expect(ask.scope_commands?.map((row) => row.scope)).toEqual([...validScopes()]);
     for (const row of ask.scope_commands ?? []) expect(row.stages).toMatch(/^\d+ stages?$/);
-    // The yes creates the work with that plan.
     const created = next(CLAUDE_TOOLS, proj, String(ask.confirm_command).split(" ").slice(String(ask.confirm_command).split(" ").indexOf("next") + 1));
     expect(created.kind, JSON.stringify(created).slice(0, 300)).toBe("print");
     expect(String(created.message)).toContain("intent create --scope security-patch --request");
@@ -417,7 +428,6 @@ describe("t-plan-proposed-by-the-agent: work here but none selected", () => {
 describe("t-plan-proposed-by-the-agent: a line that opens with a plan's name keeps every word, and the agent reads it", () => {
   const LINE = ["fix", "the", "login", "crash", "when", "the", "session", "expires"];
   const BOTH = "is the name of a plan and also the first word of what the person typed";
-  /** The `next` arguments of the command a print names after `lead`, as the agent runs it. */
   const commandAfter = (message: unknown, lead: RegExp): string[] => {
     const command = new RegExp(`\`([^\`]* next ${lead.source}[^\`]*)\``).exec(String(message))?.[1];
     expect(command, String(message)).toBeDefined();
@@ -499,10 +509,10 @@ describe("t-plan-proposed-by-the-agent: a line that opens with a plan's name kee
 });
 
 // The request's questions (the proposal step's, the plan question derived from
-// it) are the creation's own request: once the work exists they are gone, as
-// the plan offer's single question was before. Left behind, the proposal
-// question would meet the next words line as "the plan question they were
-// asked" (a re-ask about work already built) and take a switch typed next.
+// it) are the creation's own request: once the work exists they are answered or
+// gone. Left open, the proposal question would meet the next words line as "the
+// plan question they were asked" (a re-ask about work already built) and take a
+// switch typed next.
 describe("t-plan-proposed-by-the-agent: creation retires the request's whole chain", () => {
   const OTHER_CHAT = "01995000-7a11-7000-8000-0000000000c2";
   const OPEN_FRONT = "has not answered the plan question";
@@ -576,6 +586,8 @@ describe("t-plan-proposed-by-the-agent: creation retires the request's whole cha
     // Work exists but none is selected here: the reading print, the agent's plan, the plan question.
     const offer = follow(CLAUDE_TOOLS, proj, ["add", "a", "CSV", "export"], "feature", chat).last;
     expect(offer.ask_type, JSON.stringify(offer).slice(0, 300)).toBe("scope-confirm");
+    // The person goes ahead with the plan.
+    reply(proj, "1", OTHER_CHAT);
     createFromConfirm(proj, offer, chat);
     const record = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", "active-intent"), "utf-8").trim();
     const state = readFileSync(join(proj, "aidlc", "spaces", "default", "intents", record, "aidlc-state.md"), "utf-8");

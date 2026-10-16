@@ -29,14 +29,14 @@
 // (Construction), deployment-pipeline, and deployment-execution (Operation).
 // On a fresh greenfield project (--no-aidlc-docs ->
 // noAidlcDocs:true) reverse-engineering is auto-downgraded to SKIP
-// (aidlc-utility.ts:1958-1968), leaving requirements-analysis as the first
+// (aidlc-utility.ts), leaving requirements-analysis as the first
 // post-init stage. The deterministic seed runs
 // `aidlc-utility.ts init --scope bugfix` directly, which writes
 // the full aidlc-state.md and the audit's WORKFLOW_STARTED / PHASE_STARTED /
 // PHASE_SKIPPED / STAGE_STARTED+COMPLETED×3 / WORKSPACE_* events plus the
 // init->Inception phase hand-off (a 4th STAGE_STARTED naming requirements-
 // analysis). Crucially the init tool emits a STAGE_STARTED block for EXECUTE
-// stages ONLY (aidlc-utility.ts:1813,1907,1928,2134) — the SKIP stages
+// stages ONLY (aidlc-utility.ts) - the SKIP stages
 // (every Ideation stage, five Operation stages, etc.) get a
 // `[ ] <slug> — SKIP` row in Stage Progress and a `## Scope Configuration`
 // Skip-list entry, but NO audit STAGE_STARTED. The SDK portion proves the live
@@ -47,16 +47,16 @@
 //
 // ASSERTION MAP (.sh test -> deterministic SDK surface):
 //   1  assert_file_exists STATE             -> readStateFile(proj) !== undefined
-//                                              (init writes aidlc-state.md, utility.ts:2099)
+//                                              (init writes aidlc-state.md, utility.ts)
 //   2  no ideation artifacts (empty/absent) -> no files under aidlc-docs/ideation/ on disk
-//                                              (init scaffolds empty stage dirs only, utility.ts:1818-1838;
+//                                              (init scaffolds empty stage dirs only, utility.ts;
 //                                               every Ideation stage is SKIP so no stage writes there)
 //   3  0× `[x] <ideation-stage>`            -> STRONGER: each of the 7 Ideation stage rows in Stage
 //                                              Progress is `[ ] <slug> — SKIP` (never [x]); asserted
-//                                              per-stage on the state file (utility.ts:1996-1998)
+//                                              per-stage on the state file (utility.ts)
 //   4  grep STATE reverse-engineering|requirements-analysis (Inception present)
 //                                           -> state file contains "requirements-analysis" (the first
-//                                              post-init EXECUTE stage, Stage Progress row, utility.ts:1998)
+//                                              post-init EXECUTE stage, Stage Progress row, utility.ts)
 //   5  grep STATE code-generation|build-and-test (Construction present)
 //                                           -> state file contains "code-generation — EXECUTE" AND
 //                                              "build-and-test — EXECUTE" (the 2 Construction EXECUTE rows)
@@ -64,9 +64,9 @@
 //                                              deployment-execution are EXECUTE;
 //                                              the other 5 rows are SKIP (never [x])
 //   7-9 `[x] <init-stage>` × 3              -> the 3 init rows are `[x] <slug> — EXECUTE`; asserted
-//                                              per-stage (utility.ts:1995-1998 marker=[x] for init phase)
+//                                              per-stage (utility.ts marker=[x] for init phase)
 //   11 grep STATE [Bb]ugfix                 -> readStateField(state,"Scope") === "bugfix"
-//                                              (## Project Information Scope line, utility.ts:2049)
+//                                              (## Project Information Scope line, utility.ts)
 //   12 COMPLETED < 12 (`^- [x]` lines)      -> STRONGER: bugfix marks the 3 init stages [x] at init;
 //                                              the count of `[x]` Stage-Progress rows is bounded < 12
 //                                              the way the .sh did, AND the SKIP invariant below pins WHY.
@@ -74,17 +74,18 @@
 //   NEW (audit, the test's own unproven thesis — .sh asserted NOTHING here):
 //     SKIP stages emit zero STAGE_STARTED -> every STAGE_STARTED block in audit.md
 //       names an EXECUTE stage; NO SKIP-stage slug ever appears as a STAGE_STARTED
-//       `**Stage**:` field (utility.ts emits STAGE_STARTED only at :1813/:1907/:1928/:2134,
-//       all EXECUTE). assertAuditEvent(r,"STAGE_STARTED") first proves the event class fired.
+//       `**Stage**:` field (every utility.ts call site that emits STAGE_STARTED
+//       starts an EXECUTE stage). assertAuditEvent(r,"STAGE_STARTED") first proves the event class fired.
 //
 // Known-answer literals (read from the SHIPPED handler / scope-mapping, not guessed):
 //   - bugfix scope mapping (Ideation all SKIP, EXECUTE = init×3 + reverse-engineering +
 //     requirements-analysis + code-generation + build-and-test +
 //     deployment-pipeline + deployment-execution): scope-mapping.json "bugfix"
-//   - greenfield downgrades reverse-engineering EXECUTE->SKIP: aidlc-utility.ts:1958-1968
-//   - Stage Progress row shape `- [x|-| ] <slug> — EXECUTE|SKIP`: aidlc-utility.ts:1996-1998
-//   - Scope line "- **Scope**: bugfix": aidlc-utility.ts:2049
-//   - STAGE_STARTED emitted for EXECUTE stages only: aidlc-utility.ts:1813,1907,1928,2134
+//   - greenfield downgrades reverse-engineering EXECUTE->SKIP: aidlc-utility.ts
+//   - Stage Progress row shape `- [x|-| ] <slug>`, an em dash, then EXECUTE|SKIP, as the
+//     state file writes it and stageRow's regex reads it: aidlc-utility.ts
+//   - Scope line "- **Scope**: bugfix": aidlc-utility.ts
+//   - STAGE_STARTED emitted for EXECUTE stages only: aidlc-utility.ts
 //
 // It SPENDS TOKENS — driveAidlc drives the real /aidlc bugfix on
 // Opus/Bedrock until the deterministic run-stage directive. Generous per-test
@@ -102,7 +103,6 @@ import {
 } from "../harness/fixtures.ts";
 import { driveAidlc, readAuditText } from "../harness/sdk-drive.ts";
 
-// ---------------------------------------------------------------------------
 // AIDLC_TEST_TIMEOUT bounds the entire case, including setup and cleanup.
 const TIMEOUT_S = Number(process.env.AIDLC_TEST_TIMEOUT);
 // Preserve the existing work allowance and reserve fixture/startup/cleanup separately.
@@ -120,10 +120,10 @@ function remainingWorkMs(): number {
 }
 
 
-// Known-answer stage slugs from the SHIPPED scope-mapping.json "bugfix" entry.
+// Known-answer stage slugs from the SHIPPED scope-grid.json "bugfix" entry.
 // The Ideation phase is ENTIRELY SKIP for bugfix; the 3 init stages EXECUTE;
 // Deployment Pipeline and Deployment Execution execute in Operation while the
-// other five Operation stages skip. (scope-mapping.json "bugfix".stages)
+// other five Operation stages skip. (scope-grid.json "bugfix".stages)
 const IDEATION_STAGES = [
   "intent-capture",
   "market-research",
@@ -152,8 +152,8 @@ const INIT_STAGES = ["workspace-scaffold", "workspace-detection", "state-init"];
  * elsewhere and can otherwise pollute audit.md before the bugfix run begins. */
 function seedBugfixState(proj: string): void {
   const utility = join(proj, ".claude", "tools", "aidlc-utility.ts");
-  // The seed is a plain, deterministic init (TRAP 2). The live journey stops
-  // at the first orchestrator directive, before any gate, so it needs no mode.
+  // The seed is a plain, deterministic intent-create. The live journey stops
+  // at the first run-stage directive, before any gate, so it needs no mode.
   const res = spawnSync(
     process.execPath,
     [utility, "intent-create", "--scope", "bugfix", "--project-dir", proj],
@@ -165,8 +165,9 @@ function seedBugfixState(proj: string): void {
 
 /** Read the Stage-Progress row for a given stage slug from the post-run state
  *  file. Rows have the shape `- [<marker>] <slug> — <EXECUTE|SKIP>`
- *  (aidlc-utility.ts:1996-1998). Returns the marker char (e.g. "x", " ", "-")
- *  and the EXECUTE/SKIP suffix, or undefined if the slug has no row. */
+ *  (aidlc-utility.ts handleIntentCreateStateBuild). Returns the marker char
+ *  (e.g. "x", " ", "-") and the EXECUTE/SKIP suffix, or undefined if the slug
+ *  has no row. */
 function stageRow(
   stateText: string,
   slug: string,
@@ -179,16 +180,14 @@ function stageRow(
   return m ? { marker: m[1], action: m[2] } : undefined;
 }
 
-/** Count `- [x]` Stage-Progress rows in the post-run state file — the
- *  deterministic equivalent of the .sh's `grep -c '^\- \[x\]'`. */
+/** Count `- [x]` Stage-Progress rows in the post-run state file. */
 function completedRowCount(stateText: string): number {
   return (stateText.match(/^- \[x\] /gm) ?? []).length;
 }
 
-/** Files (not dirs) under <proj>/aidlc-docs/ideation/, recursively. The init
- *  tool scaffolds EMPTY stage dirs; because every Ideation stage is SKIP for
- *  bugfix, nothing should ever write a file there. Mirrors the .sh's
- *  `find aidlc-docs/ideation -type f`. */
+/** Files (not dirs) under <proj>/aidlc-docs/ideation/, recursively. This helper
+ *  checks the legacy flat path; the created intent's stage directories are under
+ *  its per-intent record. */
 function ideationFiles(proj: string): string[] {
   const dir = join(proj, "aidlc-docs", "ideation");
   if (!existsSync(dir)) return [];
@@ -205,11 +204,11 @@ function ideationFiles(proj: string): string[] {
 }
 
 /** Extract the `**Stage**:` slug from every STAGE_STARTED block in the raw
- *  audit.md. Each audit block is "## <Heading>\n**Timestamp**: ...\n
+ *  audit shards. Each audit block is "## <Heading>\n**Timestamp**: ...\n
  *  **Event**: <TYPE>\n**Stage**: <slug>\n..." (aidlc-audit format; see
- *  aidlc-utility.ts:1813 etc.). We pair each STAGE_STARTED Event line with the
- *  Stage line in the SAME block so a non-STAGE_STARTED Stage field can't leak
- *  in. Returns the slugs in file order. */
+ *  aidlc-utility.ts handleIntentCreateStateBuild). We pair each STAGE_STARTED
+ *  Event line with the Stage line in the SAME block so a non-STAGE_STARTED Stage
+ *  field can't leak in. Returns the slugs in file order. */
 function stageStartedStages(proj: string): string[] {
   // Every shard: the audit folder can hold more than one file.
   const blocks = readAuditText(proj).split(/\n---\n/);
@@ -226,8 +225,8 @@ describe("t53 /aidlc bugfix scope routing (sdk)", () => {
   test(
     "bugfix skips Ideation and most Operation stages, marks init [x], records bugfix scope; STAGE_STARTED names EXECUTE stages only",
     async () => {
-      // --no-aidlc-docs: fresh greenfield project; init creates aidlc-docs/ from
-      // scratch and downgrades reverse-engineering to SKIP (greenfield).
+      // noAidlcDocs: fresh greenfield project; intent-create creates the per-intent
+      // record from scratch and downgrades reverse-engineering to SKIP (greenfield).
       const proj = setupIntegrationProject({ noAidlcDocs: true });
       try {
         seedBugfixState(proj);
@@ -237,7 +236,7 @@ describe("t53 /aidlc bugfix scope routing (sdk)", () => {
           timeoutMs: remainingWorkMs(),
           stopAfterToolResult: {
             toolName: "Bash",
-            // The run-stage directive, not the load-steering part that now
+            // The run-stage directive, not the load-steering part that
             // precedes it (that result also names the stage and would stop
             // the drive one beat early).
             resultIncludes: '"kind":"run-stage","stage":"requirements-analysis"',
@@ -253,20 +252,15 @@ describe("t53 /aidlc bugfix scope routing (sdk)", () => {
         );
         expect(directive).toBeDefined();
 
-        // ---- .sh test 1: state file created ----
         // driveAidlc reads it off disk into r.stateFile after the run.
         expect(r.stateFile).toBeDefined();
         const state = r.stateFile as string;
 
-        // ---- .sh test 11: bugfix scope recorded ----
-        // The ## Project Information Scope line (aidlc-utility.ts:2049). Stronger
-        // than the .sh's case-insensitive [Bb]ugfix grep: an exact field read.
+        // The ## Project Information Scope line (aidlc-utility.ts
+        // handleIntentCreateStateBuild).
         const scope = state.match(/^- \*\*Scope\*\*: (\S+)$/m)?.[1];
         expect(scope).toBe("bugfix");
 
-        // ---- .sh test 3: no Ideation stage marked [x] ----
-        // STRONGER: every Ideation stage row is `[ ] <slug> — SKIP`, asserted
-        // per-stage (the .sh only counted [x] occurrences == 0).
         for (const slug of IDEATION_STAGES) {
           const row = stageRow(state, slug);
           expect(row).toBeDefined();
@@ -274,7 +268,6 @@ describe("t53 /aidlc bugfix scope routing (sdk)", () => {
           expect(row!.marker).not.toBe("x");
         }
 
-        // ---- .sh test 6: only the two deployment stages execute in Operation ----
         for (const slug of OPERATION_EXECUTE_STAGES) {
           const row = stageRow(state, slug);
           expect(row).toBeDefined();
@@ -287,7 +280,6 @@ describe("t53 /aidlc bugfix scope routing (sdk)", () => {
           expect(row!.marker).not.toBe("x");
         }
 
-        // ---- .sh tests 7-9: all 3 init stages marked [x] ----
         for (const slug of INIT_STAGES) {
           const row = stageRow(state, slug);
           expect(row).toBeDefined();
@@ -295,7 +287,6 @@ describe("t53 /aidlc bugfix scope routing (sdk)", () => {
           expect(row!.marker).toBe("x");
         }
 
-        // ---- .sh test 4: Inception stages present ----
         // requirements-analysis is the first post-init EXECUTE stage for bugfix
         // (reverse-engineering downgraded to SKIP on greenfield); its EXECUTE
         // row must be present.
@@ -303,33 +294,28 @@ describe("t53 /aidlc bugfix scope routing (sdk)", () => {
         expect(reqRow).toBeDefined();
         expect(reqRow!.action).toBe("EXECUTE");
 
-        // ---- .sh test 5: Construction stages present ----
-        // Both Construction EXECUTE stages for bugfix.
         for (const slug of ["code-generation", "build-and-test"]) {
           const row = stageRow(state, slug);
           expect(row).toBeDefined();
           expect(row!.action).toBe("EXECUTE");
         }
 
-        // ---- .sh test 2: no Ideation artifacts created ----
-        // init scaffolds empty stage dirs; every Ideation stage is SKIP, so no
-        // stage ever writes a file under aidlc-docs/ideation/.
+        // Every Ideation stage is SKIP, so no stage should write an artifact under
+        // aidlc-docs/ideation/; this assertion checks only that legacy path.
         expect(ideationFiles(proj)).toEqual([]);
 
-        // ---- .sh test 12: completed stages < 12 (bugfix scope constraint) ----
-        // The count of `- [x]` Stage-Progress rows. bugfix marks the 3 init
-        // stages [x] at init; the run stops at the first directive (before any
-        // gate), so nothing beyond init can complete. The .sh bounded this < 12.
+        // The count of `- [x]` Stage-Progress rows. bugfix marks the 3 init stages [x]
+        // at init; the run stops at the first run-stage directive (before any gate), so
+        // nothing beyond init can complete.
         expect(completedRowCount(state)).toBeLessThan(12);
 
-        // ---- NEW (audit): SKIP stages emit zero STAGE_STARTED ----
+        // ---- Audit: SKIP stages emit zero STAGE_STARTED ----
         // First prove the STAGE_STARTED class fired at all (no vacuous pass).
         assertAuditEvent(r, "STAGE_STARTED");
-        // Then: every STAGE_STARTED block names an EXECUTE stage. No SKIP-for-
-        // scope slug (any Ideation or skipped Operation stage) ever appears as a
-        // STAGE_STARTED `**Stage**:` field — the test's own thesis, made data.
+        // Then: no SKIP-for-scope slug from the checked Ideation or Operation sets
+        // appears as a STAGE_STARTED `**Stage**:` field.
         const started = new Set(stageStartedStages(proj));
-        expect(started.size).toBeGreaterThan(0); // the audit DID record starts
+        expect(started.size).toBeGreaterThan(0);
         for (const slug of [...IDEATION_STAGES, ...OPERATION_SKIP_STAGES]) {
           expect(started.has(slug)).toBe(false);
         }

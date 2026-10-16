@@ -82,7 +82,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    its bytes and the currently claimed source bytes into `REVIEW_REQUESTED`; it
    refuses before dispatch when the manifest is missing or invalid. The
    successful request's JSON returns `requestId` and `reviewFile`: the
-   project-relative path, under `<record>/.aidlc-engine/reviews/`, where this
+   path, under `<record>/.aidlc-engine/reviews/`, where this
    request's review is written. The request opens that slot (an earlier draft
    left there by an incomplete dispatch of the same iteration is removed), so
    the file the reviewer leaves is this dispatch's review and no other. It also
@@ -126,6 +126,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    - The resolved paths in `directive.consumes` - all upstream artifacts the stage declares - paths only, per the context-budget rule. This applies to **every** reviewer-bearing stage, not only per-unit ones:
      - For a **workflow-level** stage with no `directive.unit` (e.g. `contract-design`), these are the upstream artifacts that justify the produced output - the unit DAG (`unit-of-work.md`, `unit-of-work-dependency.md`), the component catalogue (`components.md`), and `requirements.md` - so the reviewer can verify the contracts against the boundaries, entities, and NFRs they formalise rather than reviewing the summary in isolation.
    - The validation tools list from the stage definition's frontmatter (if any)
+   - The request JSON's `test_command`, when it has one (a Code Generation review of a Unit in a parallel batch): the reviewer runs the tests the person approved with it, exactly as written, as a command of its own from the session's folder (the project's main folder) with no `cd` before it, and quotes its result
    - The review-content boundary: tell the reviewer not to raise a finding whose sole subject is this stage's own review bookkeeping. Treat text as this stage's own review bookkeeping when its sole purpose is to record a review iteration, revision count or revision-round label, to list or status this stage's findings in any form including a table or a section of its own, to state the stage's own review state (`draft`, `awaiting review`, `awaiting re-review`, `reviewed`), or to name this stage's review-record path; judge the product claims instead. An inline tag naming an upstream stage's finding is provenance; a tag naming this stage's own finding is bookkeeping.
 
    Do NOT pass: `memory.md` (builder's diary) or any plan/reasoning files, and never a verdict to write or to prefer. The reviewer forms independent judgment.
@@ -249,7 +250,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    stage, or of a Unit they already approved, record it through AI-DLC the
    first time they ask, under every Guard Policy (`strict`, `relaxed`, and
    `off` alike): run step 1's `{{INVOKE}} engine log review` request for that
-   stage (and `--unit`) at the next iteration, dispatch the reviewer, and
+   stage (and `--unit`) at the next iteration with `--person-asked`, dispatch the reviewer, and
    record its verdict as in step 3. The engine never refuses it for want of
    passes, past the cap or a spent recovery; the cap and the one recovery
    bound only the reviews you start on your own. Never write a review file by
@@ -259,7 +260,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    recovery review on its own (a review the person asks for still runs, as
    above): the gate or completion records one `CHANGE_ACCEPTED` row, the engine's `report`
    directive (or the tool's JSON) carries one `change_notices` line for the
-   human, and the Review brief below says `Reviewed content differs` with the
+   human, and the Review brief below says `Changed after review` with the
    changed paths (a Unit's own brief, with `--unit`, says only that Unit's). The reviewer's verdict is never altered. Under `relaxed` or
    `off`, a change the person asks for after the verdict ("rename the handler",
    "fix that answer") is made directly, with no Request Changes round and no
@@ -339,7 +340,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    claimed source path was written after the terminal receipt and voided it,
    the engine permits exactly one recovery request at the next ordinal; record
    its verdict, stop editing those same surfaces, and present the gate using
-   the Review brief with `Why now: Re-check after the artifact changed.`
+   the Review brief.
 
    **On an `adversarial` review**, the reviewer-repair module, which the engine
    names then, says how to branch on the verdict.
@@ -352,8 +353,7 @@ the revised bytes, so step 3 cannot mistake the old review for coverage of the
 revision. An `adversarial` review re-enters with
 the same lead-alone loop and iteration budget as at first entry; an
 `advisory` review re-runs as one fresh advisory pass (its findings ride the
-re-presented gate using the required Review brief with `Why now: Revision
-re-checked.`).
+re-presented gate using the required Review brief).
 
 > **Gate and completion precondition (enforced by the engine).** Every gate
 > opening (`gate-start` and `revise`) and completion path (`approve`, `advance`,

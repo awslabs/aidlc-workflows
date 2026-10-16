@@ -54,6 +54,10 @@ import {
   isCustomClaudeStatusLine,
   jsoncRootMembers,
   jsoncSettingValue,
+  kiroAllowChanged,
+  kiroUpgradeBackup,
+  kiroUpgradedAgentFile,
+  kiroUpgradeKeptFields,
   legacyAidlcHookTarget,
   mergeBlock,
   mergeJsonEntries,
@@ -132,13 +136,19 @@ import {
   _resetStageGraphForTests,
   activeSpace,
   activeWorkflowDescriptions,
+  commandAtPersonsTerminal,
   DEFAULT_SPACE,
   escapeRegex,
+  fenceKeyBypassed,
   fileIdentity,
+  guardSwitchRefusal,
+  type GuardSwitch,
   normalizeProjectFlagsRecord,
+  personAskedForThisLowering,
   RECORDABLE_PROJECT_BYPASSES,
   type ProjectFlagsRecord,
   normalizeDriveLetter,
+  resolveInvokingSessionId,
   sameFileIdentity,
   withAuditLock,
   writeFileAtomic,
@@ -170,6 +180,7 @@ import {
   KIRO_AUTO_DEFINITION,
   KIRO_EFFORT_LABEL,
   KIRO_PRESET_EFFORT,
+  KIRO_SAVED_MODEL_NOTE,
   kiroAutoRecommendation,
   kiroCliPath,
   type KiroModel,
@@ -188,6 +199,7 @@ import {
 import {
   KIRO_WORKFLOWS_ISSUE_ID,
   KIRO_WORKFLOWS_QUESTION,
+  KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID,
   kiroWorkflowsKeptLine,
   kiroWorkflowsOffLine,
   kiroWorkflowsOnLine,
@@ -322,6 +334,8 @@ import {
   LOCAL_SETTINGS_FILE,
   invalidateSettingsCache,
   modelPolicyForHarness,
+  PERSON_CHECK_SWITCH_LABELS,
+  PERSON_CHECK_SWITCHES,
   readSettingsTarget,
   resolveAidlcSettings,
   resolveAidlcSettingsWithOverride,
@@ -336,7 +350,13 @@ import {
   type ResolvedAidlcSettings,
   type SettingsTarget,
 } from "./aidlc-settings.ts";
-import { recordSwitchChange, switchesOffLines, unrecordedSwitchLine } from "./aidlc-recorded-switches.ts";
+import {
+  alreadyOffLines,
+  backOnFromChatLines,
+  recordSwitchChange,
+  switchesOffLines,
+  unrecordedSwitchLine,
+} from "./aidlc-recorded-switches.ts";
 
 type RootContribution =
   | { policy: "managed-block"; hash: string; marker?: string }
@@ -842,7 +862,8 @@ function flagsMutationFor(
 
 // A bypass typed with no layer is the person's own switch. --bypass records it
 // in their local file; --clear-bypass clears it from every layer that records
-// it, so turning a check back on does just that. Any other change with no
+// it, so turning a check back on does just that (from a chat, while the shared
+// or machine file records it, chatBackOnLines answers first). Any other change with no
 // layer, or one that both adds and clears, is asked about as before (null).
 function bypassSettingsTargets(
   argv: readonly string[],
@@ -1149,7 +1170,11 @@ function modelStateData(
     harness,
     policy,
     effective,
-    notes: harnessHonestyNotes(policy, tiers, harness, cap),
+    notes: [
+      ...harnessHonestyNotes(policy, tiers, harness, cap),
+      // On Kiro CLI the session model agents inherit is the saved one.
+      ...(harness === "kiro" ? [KIRO_SAVED_MODEL_NOTE] : []),
+    ],
   };
 }
 
@@ -1872,7 +1897,12 @@ function showDiagnosticSection(
     };
     output += `  Allowlist reviewed: ${status.record?.reviewed === true ? "yes" : "not recorded"}\n`;
     if (status.kiroWorkflows?.settingsPath) {
-      output += `  Kiro Workflows: ${status.kiroWorkflows.enabled ? "on" : "off"} (${status.kiroWorkflows.settingsPath})\n`;
+      const workflows = status.kiroWorkflows.readable === false
+        ? "could not be read"
+        : status.kiroWorkflows.enabled
+        ? "on"
+        : "off";
+      output += `  Kiro Workflows: ${workflows} (${status.kiroWorkflows.settingsPath})\n`;
     }
     if (status.kiroTerminal?.commandPrompt) {
       output += `  Kiro terminal: Command Prompt (${status.kiroTerminal.settingsPath})\n`;
@@ -2255,13 +2285,19 @@ function diagnosticWizard(
   if (selected.harness === "kiro-ide") askKiroTerminal(projectDir);
   // Codex's own hook trust comes first, so the review question below never
   // reads as that step.
-  const codexStep = selected.harness === "codex"
+  const issues = selected.harness === "codex" || selected.harness === "kiro-ide"
     ? trustStatus(projectDir, selected.harnessDir, selected.harness).issues
-      .map((issue) => codexHookTrustStep(issue.id)).find((step) => step !== null)
+    : [];
+  const codexStep = selected.harness === "codex"
+    ? issues.map((issue) => codexHookTrustStep(issue.id)).find((step) => step !== null)
     : undefined;
   if (codexStep) writeMenuRow("  ", `${CODEX_HOOK_TRUST_UNMET}: ${codexStep}.`);
+  // A Kiro settings file with an error is the person's to fix; the review
+  // question below does not clear it.
+  const kiroUnreadable = issues.find((issue) => issue.id === KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID);
+  if (kiroUnreadable) writeMenuRow("  ", `${kiroUnreadable.message}: ${kiroUnreadable.remediation}.`);
   const answer = promptYesDefault(
-    codexStep
+    codexStep || kiroUnreadable
       ? "  Separately, record that you reviewed AI-DLC's trust and allowlist files?"
       : "  Record that you reviewed the trust and allowlist files?",
     false,
@@ -2344,7 +2380,7 @@ function kiroWorkflowsSwitch(
   if (!state.settingsPath) return failure("Kiro IDE's settings are not in reach here", EXIT.failure);
   const enabled = value === "on";
   const data = (answer: KiroWorkflowsAnswer | null) => ({
-    kiroWorkflows: { enabled, settingsPath: state.settingsPath, answer },
+    kiroWorkflows: { enabled, readable: state.readable, settingsPath: state.settingsPath, answer },
   });
   if (argv.includes("--dry-run")) {
     return success(`would turn Kiro's Workflows feature ${value} in ${state.settingsPath}`, data(readKiroWorkflowsAnswer()));
@@ -3232,6 +3268,14 @@ function prepareDiagnosticSection(
   };
 }
 
+// What a refusal calls a recorded switch: plan approval and summary confirmation
+// by their own words, every other check by its label.
+function bypassedCheck(name: RecordableProjectBypass): GuardSwitch | { check: string } {
+  if (name === "AIDLC_DISABLE_PLAN_APPROVAL_GUARD") return { key: "plan-approval", value: "off" };
+  if (name === "AIDLC_DISABLE_SUMMARY_CONFIRMATION") return { key: "summary-confirmation", value: "off" };
+  return { check: (PERSON_CHECK_SWITCH_LABELS[name] ?? name).replace(/ check$/, "") };
+}
+
 function validateChoiceArgs(
   section: ChoiceSection,
   argv: readonly string[],
@@ -3280,6 +3324,27 @@ function validateChoiceArgs(
   if (section === "flags" && process.env.AIDLC_UNATTENDED === "1" && valuesAfter(argv, "--bypass").length > 0) {
     return "An unattended run does not turn a check off (AIDLC_UNATTENDED=1 is set): run it from an attended session.";
   }
+  // A check the person relies on is switched off for the project only when they
+  // asked, by the rule every lowering follows (personAskedForThisLowering): from
+  // a chat, a turn of theirs since the last decision, or before any work their
+  // message there. A command no chat is named for (a script, a test) records as
+  // before.
+  const lowered = section === "flags"
+    ? valuesAfter(argv, "--bypass").find((name): name is RecordableProjectBypass =>
+      (PERSON_CHECK_SWITCHES as readonly string[]).includes(name))
+    : undefined;
+  if (lowered !== undefined) {
+    const projectDir = projectDirFrom(argv);
+    let chat: string | null = null;
+    try {
+      chat = resolveInvokingSessionId(projectDir);
+    } catch {
+      chat = null;
+    }
+    if (chat !== null && !personAskedForThisLowering(projectDir, chat) && !fenceKeyBypassed(projectDir, chat)) {
+      return guardSwitchRefusal(bypassedCheck(lowered), projectDir);
+    }
+  }
   const mutationFlags = section === "flags"
     ? [
         "--bypass",
@@ -3318,7 +3383,7 @@ function choiceHelp(section: ChoiceSection): string {
         "  --local    personal project policy in aidlc.settings.local.json",
         "  --global   machine policy in the install-root aidlc.settings.json",
         "Outside an installed project, --global is the only valid target and is inferred.",
-        "In an installed project a bypass needs none: --bypass records in aidlc.settings.local.json, and --clear-bypass clears every file that records it.",
+        "In an installed project a bypass needs none: --bypass records in aidlc.settings.local.json, and --clear-bypass typed at your own terminal clears every file that records it (run from a chat, it clears aidlc.settings.local.json and names any other file that keeps the check off).",
       ]
     : [
         heading("Project choices:", out),
@@ -3991,7 +4056,10 @@ function prepareChoiceSection(
       next as ProjectFlagsRecord | null,
     );
     if (canonical(targetCurrentSettings) === canonical(nextSettings)) {
-      emitResult(success("flags configuration unchanged"), options);
+      // A check the person asked to turn off that is already off there: they
+      // hear that, with the one wider place, instead of a note about the file.
+      const already = alreadyOffLines(projectDir, target, valuesAfter(argv, "--bypass"));
+      emitResult(success(already.length > 0 ? already.join("\n") : "flags configuration unchanged"), options);
       return null;
     }
     const nextResolved = resolveAidlcSettingsWithOverride(
@@ -4984,7 +5052,7 @@ function replaceGeneratedRegion(
     const beginLineEnd = content.indexOf("-->", begin);
     const endAt = content.indexOf(end, beginLineEnd);
     if (begin < 0 || beginLineEnd < 0 || endAt < 0) {
-      throw new Error(`SKILL.md is missing the compiled ${noun} region`);
+      throw new Error(`tables.md is missing the compiled ${noun} region`);
     }
     return {
       begin,
@@ -5870,7 +5938,11 @@ function planCodexEntries(
       ? pristine
       : record !== undefined &&
         (perValue ? record === sha256Bytes(codexValueText(now.value)) : legacyCurrent[legacyKey] === record);
-    if (unedited) {
+    // The space pointer an earlier release shipped, at whichever space a switch
+    // left it, is AI-DLC's: it takes the empty value this release ships.
+    const earlierPointer = key === CODEX_SPACE_POINTER && target === "" &&
+      typeof now.value === "string" && CODEX_SPACE_MEMORY.test(now.value);
+    if (unedited || earlierPointer) {
       sets.push(leaf);
       expected.set(key, target);
       continue;
@@ -6322,16 +6394,15 @@ function personalKiroMcpPath(env: NodeJS.ProcessEnv = process.env): string | nul
 // Kiro CLI offers an agent only the MCP servers its tools name, one
 // `@<server>` each; it has no grant for every server (measured on Kiro CLI
 // 2.29.0: `@*`, `@mcp` and `@*/*` grant nothing, and `*` adds built-in tools).
-// So the AI-DLC agent's staged copy names every server config finds in the
-// project's mcp.json and in the person's own, and allowedTools stays as
-// shipped, so each call still asks first. A server added later is named at
-// the next config run. True when the project's copy is the release's own
-// bytes (a copy install puts them there before config runs), so the named copy
-// replaces it; any other copy meets the ownership check.
-function grantKiroMcpServers(projectDir: string, sourceRoot: string, stagedRoot: string, harnessDir: string): boolean {
-  const rel = `${harnessDir}/agents/aidlc.json`;
-  const agentPath = join(stagedRoot, rel);
-  const names = new Set<string>();
+// So the staged copy of every agent that opts into the MCP files (the AI-DLC
+// agent and its specialists) names every server config finds in the project's
+// mcp.json and in the person's own, and allowedTools stays as shipped, so each
+// call still asks first. A server added later is named at the next config run.
+// Returns the agent files whose project copy is the release's own bytes (a
+// copy install puts them there before config runs), so the named copy replaces
+// it; any other copy meets the ownership check.
+function grantKiroMcpServers(projectDir: string, sourceRoot: string, stagedRoot: string, harnessDir: string): string[] {
+  const found = new Set<string>();
   const personal = personalKiroMcpPath();
   for (const path of [join(stagedRoot, harnessDir, "settings", "mcp.json"), personal]) {
     // The person's own file may be a link (a dotfiles folder): follow it.
@@ -6341,44 +6412,52 @@ function grantKiroMcpServers(projectDir: string, sourceRoot: string, stagedRoot:
     if (path === null || !file) continue;
     try {
       const servers = (readJsonFile(path) as Record<string, unknown>).mcpServers;
-      if (isRecord(servers)) for (const name of Object.keys(servers)) names.add(name);
+      if (isRecord(servers)) for (const name of Object.keys(servers)) found.add(name);
     } catch {
       // A file Kiro cannot read names no server.
     }
   }
-  // The agent file travels with the project (a team's clone), so a server it
-  // already names stays named: a teammate's run adds theirs and keeps yours.
-  // Kiro ignores a grant for a server it does not have.
-  const current = join(projectDir, rel);
-  if (regularFile(current)) {
+  const agentsDir = join(stagedRoot, harnessDir, "agents");
+  const replaced: string[] = [];
+  for (const file of pathPresent(agentsDir) ? readdirSync(agentsDir).filter((name) => name.endsWith(".json")).sort() : []) {
+    const rel = `${harnessDir}/agents/${file}`;
+    const agentPath = join(stagedRoot, rel);
+    if (!regularFile(agentPath)) continue;
+    const agentText = readFileSync(agentPath, "utf-8");
+    let agent: unknown;
     try {
-      const tools = (JSON.parse(withoutBom(readFileSync(current, "utf-8"))) as Record<string, unknown>).tools;
-      if (Array.isArray(tools)) {
-        for (const tool of tools) if (typeof tool === "string" && tool.startsWith("@")) names.add(tool.slice(1));
-      }
+      agent = JSON.parse(withoutBom(agentText));
     } catch {
-      // A copy config cannot read keeps no grant; the ownership check reports it.
+      continue;
     }
+    if (!isRecord(agent) || agent.includeMcpJson !== true || !Array.isArray(agent.tools)) continue;
+    // The agent file travels with the project (a team's clone), so a server it
+    // already names stays named: a teammate's run adds theirs and keeps yours.
+    // Kiro ignores a grant for a server it does not have.
+    const names = new Set(found);
+    const current = join(projectDir, rel);
+    if (regularFile(current)) {
+      try {
+        const tools = (JSON.parse(withoutBom(readFileSync(current, "utf-8"))) as Record<string, unknown>).tools;
+        if (Array.isArray(tools)) {
+          for (const tool of tools) if (typeof tool === "string" && tool.startsWith("@")) names.add(tool.slice(1));
+        }
+      } catch {
+        // A copy config cannot read keeps no grant; the ownership check reports it.
+      }
+    }
+    const tools = [
+      ...agent.tools.filter((tool) => typeof tool !== "string" || !tool.startsWith("@")),
+      ...[...names].map((name) => `@${name}`),
+    ];
+    if (canonical(tools) === canonical(agent.tools)) continue;
+    writeFileSync(agentPath, jsonFileText({ ...agent, tools }, agentText));
+    const release = join(sourceRoot, rel);
+    if (!regularFile(current) || !regularFile(release)) continue;
+    const releaseHash = sha256File(release);
+    if (sha256Matching(readFileSync(current), [releaseHash]) === releaseHash) replaced.push(rel);
   }
-  if (!regularFile(agentPath)) return false;
-  const agentText = readFileSync(agentPath, "utf-8");
-  let agent: unknown;
-  try {
-    agent = JSON.parse(withoutBom(agentText));
-  } catch {
-    return false;
-  }
-  if (!isRecord(agent) || !Array.isArray(agent.tools)) return false;
-  const tools = [
-    ...agent.tools.filter((tool) => typeof tool !== "string" || !tool.startsWith("@")),
-    ...[...names].map((name) => `@${name}`),
-  ];
-  if (canonical(tools) === canonical(agent.tools)) return false;
-  writeFileSync(agentPath, jsonFileText({ ...agent, tools }, agentText));
-  const release = join(sourceRoot, rel);
-  if (!regularFile(current) || !regularFile(release)) return false;
-  const releaseHash = sha256File(release);
-  return sha256Matching(readFileSync(current), [releaseHash]) === releaseHash;
+  return replaced;
 }
 
 function preserveUserProviderFields(
@@ -6753,8 +6832,8 @@ function prepareRefreshSource(
       regenerated.add(rel);
       if (entries) entries[rel] = owned;
     }
-    if (!projectProjection && grantKiroMcpServers(projectDir, sourceRoot, root, descriptor.harnessDir)) {
-      regenerated.add(`${descriptor.harnessDir}/agents/aidlc.json`);
+    if (!projectProjection) {
+      for (const rel of grantKiroMcpServers(projectDir, sourceRoot, root, descriptor.harnessDir)) regenerated.add(rel);
     }
   }
 
@@ -6986,8 +7065,10 @@ function prepareRefreshSource(
     const skillsDirs = [join(stagedHarness, "skills"), ...SHARED_SURFACE_DIRS.map((dir) => join(root, dir, "skills"))];
     const skillPath = skillsDirs.map((dir) => join(dir, "aidlc", "SKILL.md")).find((path) => existsSync(path)) ??
       join(stagedHarness, "skills", "aidlc", "SKILL.md");
-    if (existsSync(skillPath)) {
-      let generated = readFileSync(skillPath, "utf-8");
+    // The generated tables live beside the skill, out of its body.
+    const tablesPath = join(dirname(skillPath), "tables.md");
+    if (existsSync(tablesPath)) {
+      let generated = readFileSync(tablesPath, "utf-8");
       generated = replaceGeneratedRegion(
         generated,
         canonicalStageTableRegion(renderStageTable()),
@@ -6998,7 +7079,7 @@ function prepareRefreshSource(
         canonicalScopeTableRegion(renderScopeTable()),
         "scope",
       );
-      writeFileSync(skillPath, generated);
+      writeFileSync(tablesPath, generated);
     }
     regenerated.add(`${descriptor.harnessDir}/tools/data/stage-graph.json`);
     for (const directory of skillsDirs) {
@@ -7053,6 +7134,49 @@ const KEPT_GITIGNORE_LINES_DETAIL = "kept your own ignore lines";
 const KEPT_TITLE_LINE_DETAIL = "kept your title line";
 const KEPT_GITIGNORE_LINES_NOTE =
   "Kept your .gitignore entries for node_modules, dist and editor files; AI-DLC now adds only its own lines.";
+// An agent file Kiro upgraded for its 3.0 engine (kiroUpgradedAgentFile) is
+// kept as Kiro left it, so it misses what this release changed in it; the
+// note names the way to take the release's files.
+const KIRO_UPGRADED_DETAIL = "upgraded by Kiro for its 3.0 engine";
+
+function kiroUpgradedNote(count: number, harnessDir: string, force: string): string {
+  const one = count === 1;
+  return `Kiro upgraded ${count} agent ${one ? "file" : "files"} in ${harnessDir}/agents for its 3.0 engine and ` +
+    `${one ? "it was kept as it is" : "they were kept as they are"}; to take this release's ` +
+    `${one ? "version" : "versions"} run \`${force}\`, and Kiro upgrades ${one ? "it" : "them"} again the next ` +
+    "time it starts on its 3.0 engine.";
+}
+
+// When the release changes what such a file allows, config puts the release's
+// file back where Kiro upgrades it again by itself (kiroAutoUpgradeOn), the
+// file Kiro upgraded from is provably the one AI-DLC wrote and Kiro's copy
+// keeps its fields; otherwise it keeps Kiro's copy and says what that leaves.
+const KIRO_KEPT_CHANGED_DETAIL = "upgraded by Kiro for its 3.0 engine: kept with an older release's allows";
+
+function kiroKeptChangedNote(count: number, harnessDir: string, force: string): string {
+  const one = count === 1;
+  return `${count} agent ${one ? "file" : "files"} in ${harnessDir}/agents that Kiro upgraded for its 3.0 engine ` +
+    `${one ? "was kept and still allows" : "were kept and still allow"} what an older release allowed; ` +
+    `\`${force}\` takes this release's ${one ? "version" : "versions"}.`;
+}
+
+// Whether Kiro puts an agent file back into its 3.0 format by itself at its
+// next 3.0 start: `chat.enableAutoAgentUpgrade` true in the person's own Kiro
+// settings, read and never written (kiro-cli 2.29.0: without it, Kiro asks
+// first or runs its default agent in the file's place). A project's
+// settings/cli.json would win, but a refresh stops on a change to AI-DLC's
+// copy and leaves one without the setting. Under the test runner only a
+// KIRO_HOME the test names is read, never the host's ~/.kiro.
+function kiroAutoUpgradeOn(env: NodeJS.ProcessEnv = process.env): boolean {
+  const home = kiroEnv(env).KIRO_HOME;
+  if (!home && env.AIDLC_TEST_NAME !== undefined) return false;
+  try {
+    const path = join(home || join(homedir(), ".kiro"), "settings", "cli.json");
+    return JSON.parse(readFileSync(path, "utf-8"))?.["chat.enableAutoAgentUpgrade"] === true;
+  } catch {
+    return false;
+  }
+}
 
 function unchangedManagedBlockHash(
   projectDir: string,
@@ -7446,14 +7570,14 @@ function selectSource(
   if (configInputIsTty()) {
     process.stdout.write("Select a harness for this project:\n\n");
     for (const [index, candidate] of versionFiltered.entries()) {
-      process.stdout.write(
-        `  ${index + 1}. ${candidate.descriptor.productName}\n`,
-      );
+      const note = candidate.descriptor.choiceNote;
+      if (note) writeMenuRow(`  ${index + 1}. ${choiceName(candidate).padEnd(16)}`, note);
+      else process.stdout.write(`  ${index + 1}. ${choiceName(candidate)}\n`);
     }
     const selected = versionFiltered[
       promptChoice("Harness", versionFiltered.length) - 1
     ];
-    process.stdout.write(`Using ${selected.descriptor.productName}.\n`);
+    process.stdout.write(`Using ${choiceName(selected)}.\n`);
     return selected;
   }
   throw new Error(
@@ -7912,20 +8036,11 @@ function detectedCandidateChoices(
   candidates: readonly InstalledSourceCandidate[],
   detection: FirstRunDetection,
 ): InstalledSourceCandidate[] {
+  // Both Kiro trees count a supported `kiro-cli`; when both are found, a
+  // release's own list puts Kiro CLI (V2) first, so it is the default.
   const detected = candidates.filter((candidate) =>
     detection.harnesses[candidate.stamp.distribution]?.found
   );
-  // Both Kiro rows count a supported `kiro-cli`. The kiro-ide row pins Kiro's
-  // v3 engine in its settings/cli.json and the kiro row pins none, so Kiro
-  // picks that row's engine; when both are found, kiro-ide comes first of the
-  // two. Every other harness keeps its order, and the editor lead below still
-  // comes first.
-  const kiro = detected.findIndex((candidate) => candidate.stamp.distribution === "kiro");
-  const kiroIde = detected.findIndex((candidate) => candidate.stamp.distribution === "kiro-ide");
-  if (kiro !== -1 && kiroIde > kiro) {
-    const [preferred] = detected.splice(kiroIde, 1);
-    detected.splice(kiro, 0, preferred);
-  }
   // In the terminal of a harness's own editor, that harness leads: it is
   // chosen outright when no other harness CLI is found, and is the default
   // when one is.
@@ -7947,12 +8062,17 @@ function renderHarnessChoices(
       ...(!detected?.found && detected?.probed === false ? ["not probed"] : []),
       ...(candidate.stamp.distribution === defaultDistribution ? ["default"] : []),
     ];
-    process.stdout.write(
-      `    ${index + 1}. ${candidate.descriptor.productName.padEnd(16)}${
-        tags.length > 0 ? `(${tags.join(", ")})` : ""
-      }\n`,
-    );
+    const note = [
+      ...(tags.length > 0 ? [`(${tags.join(", ")})`] : []),
+      ...(candidate.descriptor.choiceNote ? [candidate.descriptor.choiceNote] : []),
+    ].join("  ");
+    writeMenuRow(`    ${index + 1}. ${choiceName(candidate).padEnd(16)}`, note);
   }
+}
+
+// The name the harness lists show for a candidate.
+function choiceName(candidate: InstalledSourceCandidate): string {
+  return candidate.descriptor.choiceName ?? candidate.descriptor.productName;
 }
 
 function chooseHarness(
@@ -7972,7 +8092,7 @@ function chooseHarness(
     defaultIndex && defaultIndex > 0 ? defaultIndex : undefined,
   );
   const candidate = candidates[selected - 1];
-  process.stdout.write(`  Using ${candidate.descriptor.productName}.\n\n`);
+  process.stdout.write(`  Using ${choiceName(candidate)}.\n\n`);
   return candidate;
 }
 
@@ -8739,6 +8859,9 @@ function customizeFirstRun(
     providerVerified: detection.bedrockReachable === true,
     opencodeDefault: true,
   };
+  // Step 3 records whether the person's pick is that harness's default, so a
+  // later harness change moves only a default preset.
+  let presetIsDefault = true;
   const editStep = (step: number): void => {
     if (step === 1) {
       process.stdout.write("  Step 1 of 6 - Harness\n");
@@ -8747,7 +8870,7 @@ function customizeFirstRun(
         "  Detected on this machine: ",
         `${
           detected.length > 0
-            ? detected.map((item) => item.descriptor.productName).join(", ")
+            ? detected.map(choiceName).join(", ")
             : "none"
         }.`,
       );
@@ -8761,7 +8884,7 @@ function customizeFirstRun(
       if (choices.candidate.stamp.distribution !== previousDistribution) {
         choices.kiro = undefined;
         // The default preset follows the harness; a preset the person chose stays.
-        if (choices.preset === firstRunDefaultPreset(previousDistribution)) {
+        if (presetIsDefault) {
           choices.preset = firstRunDefaultPreset(choices.candidate.stamp.distribution);
         }
       }
@@ -8777,7 +8900,7 @@ function customizeFirstRun(
     if (step === 2) {
       const distribution = choices.candidate.stamp.distribution;
       // Kiro IDE's row asks only when kiro-cli is there to read; without it
-      // the step says model access comes with Kiro IDE, as before.
+      // the step says model access comes with Kiro.
       if (distribution === "kiro-ide" && choices.kiro === undefined) choices.kiro = kiroSessionFor(distribution);
       if (distribution === "kiro-ide" && choices.kiro) {
         process.stdout.write("  Step 2 of 6 - Session model\n");
@@ -8894,6 +9017,7 @@ function customizeFirstRun(
         choices.preset === "balanced" ? 1 : choices.preset === "thorough" ? 2 : choices.preset === "minimal" ? 3 : 4,
       );
       choices.preset = selected === 1 ? "balanced" : selected === 2 ? "thorough" : selected === 3 ? "minimal" : "unchanged";
+      presetIsDefault = choices.preset === firstRunDefaultPreset(choices.candidate.stamp.distribution);
       process.stdout.write(choices.preset === "unchanged"
         ? "  Keeping existing settings unchanged; no preset recorded.\n\n"
         : `  Using the ${choices.preset} preset.\n\n`);
@@ -8954,7 +9078,7 @@ function customizeFirstRun(
   for (let step = 1; step <= 6; step++) editStep(step);
   while (true) {
     process.stdout.write("  Your choices - Enter to apply, or a number to change:\n");
-    process.stdout.write(`    1. Harness      ${choices.candidate.descriptor.productName}\n`);
+    process.stdout.write(`    1. Harness      ${choiceName(choices.candidate)}\n`);
     const kiroCli = choices.candidate.stamp.distribution === "kiro";
     // A harness changed to a Kiro row here has not visited step 2: show the
     // session it would keep, read now; step 2 is one number away. Kiro IDE's
@@ -9452,6 +9576,48 @@ function planManagedFiles(
           actions.push({ path: rel, action: "update", detail: KEPT_TITLE_LINE_DETAIL });
           continue;
         }
+      }
+      // The person ran Kiro's upgrade for its 3.0 engine: the agent file stays
+      // as Kiro left it, and the rest of the release lands around it, unless this
+      // release changes what it allows, Kiro upgrades it again by itself and the
+      // file Kiro upgraded from is provably AI-DLC's; then the release's file
+      // goes back. A kept file's record stays what AI-DLC last wrote there, so a
+      // later refresh can still prove that.
+      if (!force && kiroUpgradedAgentFile(projectDir, rel)) {
+        const recordedAsCopied = nextHashes[rel];
+        if (recordedAsCopied !== undefined && priorHash !== undefined) nextHashes[rel] = priorHash;
+        const backup = kiroUpgradeBackup(projectDir, rel);
+        const parsed = (path: string): unknown => {
+          try {
+            return JSON.parse(readFileSync(path, "utf-8"));
+          } catch {
+            return undefined;
+          }
+        };
+        const was = backup === null ? undefined : parsed(backup);
+        if (was === undefined || !kiroAllowChanged(was, parsed(source))) {
+          actions.push({ path: rel, action: "preserve", detail: KIRO_UPGRADED_DETAIL });
+          continue;
+        }
+        const known = [priorHash, ...(descriptor.legacyManagedFileHashes?.[rel] ?? [])];
+        const aidlcWroteIt = priorHash !== undefined && known.includes(ownedFileHash(backup!, known).hash);
+        if (
+          !kiroAutoUpgradeOn() || !aidlcWroteIt || !kiroUpgradeKeptFields(parsed(target), was)
+        ) {
+          actions.push({ path: rel, action: "preserve", detail: KIRO_KEPT_CHANGED_DETAIL });
+          continue;
+        }
+        if (recordedAsCopied !== undefined) nextHashes[rel] = recordedAsCopied;
+        operations.push({
+          kind: "copy",
+          path: rel,
+          source,
+          sourceHash: hash,
+          expected: expected(target),
+          mode: statSync(source).mode & 0o777,
+        });
+        actions.push({ path: rel, action: "update" });
+        continue;
       }
       if (
         targetExists &&
@@ -11267,8 +11433,10 @@ function settingsChangeLines(
     const path = settingsPathForTarget(projectDir, target);
     return target === "global" ? path : relative(projectDir, path);
   };
-  // `target` null: the no-layer form, which --clear-bypass reads as "every file
-  // that records the switch"; it is the one way back every other line names.
+  // `target` null: the no-layer form, which --clear-bypass reads at the
+  // person's own terminal as "every file that records the switch"; it is the
+  // one way back every other line names. From a chat it clears only their own
+  // file, so the undo of a record in the shared or machine file names that file.
   // An undo that already names its harness (one agent's model) is not given it twice.
   const command = (section: "flags" | "models", args: string[], target: SettingsTarget | null): string =>
     `${configInvocationFor(projectDir)} config ${section} ${
@@ -11281,7 +11449,8 @@ function settingsChangeLines(
     const after = new Set(change.next?.flags?.bypasses ?? []);
     for (const name of after) {
       if (!before.has(name)) {
-        lines.push(`Recorded ${name} in ${file}. To undo: ${command("flags", ["--clear-bypass", name], null)}`);
+        const place = change.target === "local" || commandAtPersonsTerminal() ? null : change.target;
+        lines.push(`Recorded ${name} in ${file}. To undo: ${command("flags", ["--clear-bypass", name], place)}`);
       }
     }
     for (const name of before) {
@@ -11660,16 +11829,16 @@ function afterProjectSettings(
   }
 }
 
-/**
- * A `--clear-bypass` of switches that no settings file records would change
- * nothing, yet the flags path would still create a file and say how open work
- * picks the change up. When the command is ONLY such clears (plus --yes, a
- * layer, --project-dir and the output mode), say what is true in one line per
- * switch and write nothing. Anything else takes the normal path: a name that
- * is not a switch keeps its error, a change riding beside the clear is made.
- */
-function unrecordedClearLines(argv: readonly string[], projectDir: string): string[] | null {
+// The switches a command that is ONLY `--clear-bypass` pairs names (plus
+// --yes, a layer, --project-dir and the output mode), and whether it named a
+// layer. Null for anything else, or a name that is not a switch, so the normal
+// path keeps its error and makes a change riding beside the clear.
+function clearOnlySwitches(
+  argv: readonly string[],
+  projectDir: string,
+): { names: RecordableProjectBypass[]; layered: boolean } | null {
   const clears: string[] = [];
+  let layered = false;
   for (let index = 0; index < argv.length; index++) {
     const token = argv[index];
     if (token === "--clear-bypass" || token === "--project-dir") {
@@ -11679,13 +11848,36 @@ function unrecordedClearLines(argv: readonly string[], projectDir: string): stri
       index++;
       continue;
     }
-    if (["--yes", "--local", "--project", "--global", "--json", "--quiet", "--no-color"].includes(token)) continue;
+    if (["--local", "--project", "--global"].includes(token)) {
+      layered = true;
+      continue;
+    }
+    if (["--yes", "--json", "--quiet", "--no-color"].includes(token)) continue;
     return null;
   }
   if (clears.length === 0 || !settingsProjectAvailable(projectDir)) return null;
   if (!clears.every((name) => (RECORDABLE_PROJECT_BYPASSES as readonly string[]).includes(name))) return null;
-  if (!clears.every((name) => layersRecordingBypass(projectDir, name).length === 0)) return null;
-  return clears.map((name) => unrecordedSwitchLine(projectDir, name as RecordableProjectBypass));
+  return { names: clears as RecordableProjectBypass[], layered };
+}
+
+/**
+ * A `--clear-bypass` of switches that no settings file records would change
+ * nothing, yet the flags path would still create a file and say how open work
+ * picks the change up. When the command is ONLY such clears, say what is true
+ * in one line per switch and write nothing.
+ */
+function unrecordedClearLines(argv: readonly string[], projectDir: string): string[] | null {
+  const clears = clearOnlySwitches(argv, projectDir);
+  if (clears === null || !clears.names.every((name) => layersRecordingBypass(projectDir, name).length === 0)) return null;
+  return clears.names.map((name) => unrecordedSwitchLine(projectDir, name));
+}
+
+// A clear naming no file, run from a chat, turns the check back on the way the
+// setter does (backOnFromChatLines): never the project's shared file or this
+// machine's. Null hands it to the normal path, which clears as typed.
+function chatBackOnLines(argv: readonly string[], projectDir: string): string[] | null {
+  const clears = clearOnlySwitches(argv, projectDir);
+  return clears === null || clears.layered ? null : backOnFromChatLines(projectDir, clears.names);
 }
 
 function recordBypassesOnly(
@@ -12072,16 +12264,25 @@ export async function main(
   } else if (section?.value === "flags" || section?.value === "project") {
     const choiceSection = section.value;
     argv = [...argv.slice(0, section.index), ...argv.slice(section.index + 1)];
-    const unrecorded = choiceSection === "flags" && !argv.includes("--show") && !argv.includes("--check") &&
-        !argv.includes("--dry-run") && !argv.includes("--help")
-      ? unrecordedClearLines(argv, projectDirFrom(argv))
-      : null;
+    const clearsOnly = choiceSection === "flags" && !argv.includes("--show") && !argv.includes("--check") &&
+      !argv.includes("--dry-run") && !argv.includes("--help");
+    const unrecorded = clearsOnly ? unrecordedClearLines(argv, projectDirFrom(argv)) : null;
     if (unrecorded !== null) {
       if (options.mode === "human") {
         writeMenuLines("", unrecorded);
         process.exitCode = EXIT.ok;
       } else {
         emitResult(success(unrecorded.join(" "), { projectDir: projectDirFrom(argv), changed: false, notes: unrecorded }), options);
+      }
+      return;
+    }
+    const backOn = clearsOnly ? chatBackOnLines(argv, projectDirFrom(argv)) : null;
+    if (backOn !== null) {
+      if (options.mode === "human") {
+        writeMenuLines("", backOn);
+        process.exitCode = EXIT.ok;
+      } else {
+        emitResult(success(backOn.join(" "), { projectDir: projectDirFrom(argv), switches: backOn }), options);
       }
       return;
     }
@@ -12941,6 +13142,11 @@ export async function main(
     if (actions.some((action) => action.detail === KEPT_GITIGNORE_LINES_DETAIL)) {
       prepared.notes.push(KEPT_GITIGNORE_LINES_NOTE);
     }
+    const kiroForce = configCommandForHarness(descriptor.harnessDir, `--harness ${stamp.distribution} --force`);
+    const kiroUpgraded = actions.filter((action) => action.detail === KIRO_UPGRADED_DETAIL).length;
+    if (kiroUpgraded > 0) prepared.notes.push(kiroUpgradedNote(kiroUpgraded, descriptor.harnessDir, kiroForce));
+    const kiroKeptChanged = actions.filter((action) => action.detail === KIRO_KEPT_CHANGED_DETAIL).length;
+    if (kiroKeptChanged > 0) prepared.notes.push(kiroKeptChangedNote(kiroKeptChanged, descriptor.harnessDir, kiroForce));
     // Older releases shipped an effort map in the project's Kiro settings; a
     // refresh that removes it says where the session's effort lives now.
     const legacyKiroMap = stamp.distribution === "kiro" &&

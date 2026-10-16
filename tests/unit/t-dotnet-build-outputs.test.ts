@@ -355,11 +355,13 @@ describe("t-dotnet-build-outputs", () => {
     expect(codekbSourceFingerprint(dir, ["App/bin/"])).not.toBe(focused);
   });
 
-  test("the developer brief and guide say to follow .gitignore and skip build outputs", () => {
+  test("the developer brief and guide say to list with file tools, follow .gitignore, only read, and skip build outputs", () => {
     const prose = (...parts: string[]) => readFileSync(join(REPO_ROOT, "core", ...parts), "utf-8").replace(/\s+/g, " ");
     const stage = prose("aidlc-common", "stages", "inception", "reverse-engineering.md");
     const step2 = stage.slice(stage.indexOf("### Step 2:"), stage.indexOf("### Step 3:"));
-    expect(step2).toContain("follow the repo's `.gitignore` files");
+    // Listing with file tools and reading .gitignore asks the person for no git command.
+    expect(step2).toContain("find the files with its file tools, one folder at a time, reading the repo's `.gitignore` files and leaving out what they ignore");
+    expect(step2).toContain("The scan only reads the code: it runs none of the project's tests, builds or programs unless the person asked for that.");
     expect(step2).toContain("skip build outputs, dependency folders, and IDE and tool caches");
     expect(step2).toContain("\"What to Skip\"");
     expect(step2).toContain("beside a project file), without opening them.");
@@ -370,7 +372,8 @@ describe("t-dotnet-build-outputs", () => {
 
     const guide = prose("knowledge", "aidlc-developer-agent", "code-analysis-guide.md");
     const skip = guide.slice(guide.indexOf("## What to Skip"), guide.indexOf("## Source File Classification"));
-    expect(skip).toContain("Follow the repository's `.gitignore` files");
+    expect(skip).toContain("Find the files with your file tools, one folder at a time: your directory read where you have one, otherwise one plain `ls` of the folder.");
+    expect(skip).toContain("Read the repository's `.gitignore` files and leave out what they ignore");
     expect(skip).toContain(".NET `bin/` and `obj/` beside a `.csproj`");
     expect(skip).toContain("Node's `bin/www`");
     expect(guide).toContain("Classify every source file that \"What to Skip\" leaves in");
@@ -382,7 +385,6 @@ describe("t-dotnet-build-outputs", () => {
     expect(skip).not.toContain("Open a file in it to tell which.");
     // A path the scan was asked for, or a registered source path, stays source.
     expect(skip).toContain("A folder the brief names to scan, or one listed in `.aidlc-source-paths.json`, is source whatever sits beside it.");
-    // The record says the folders were left out, not skimmed.
     expect(skip).toContain("List the folders you skip under **Left out** in the scan's coverage, not under **Skimmed only**.");
     const artifacts = prose("knowledge", "aidlc-developer-agent", "re-artifacts.md");
     expect(artifacts).toContain("- **Left out**: [folders not opened because \"What to Skip\" in code-analysis-guide.md skips them");

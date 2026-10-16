@@ -2,13 +2,13 @@
 // function:withAuditLock, function:holdsAuditLock,
 // function:_posixGateLibraryCandidatesForTests, function:_setAuditLockFaultHooksForTests
 //
-// t161 — P3 per-intent lock keying + stale-lock reaper. Mechanism: in-process
-// for the keying invariants + the reaper liveness logic (deterministic, no LLM,
-// no process boundary); t145 covers the cross-process state-lock race separately.
+// t161 - per-intent lock keying + stale-lock reaper. Mechanism: in-process for
+// the keying invariants + reaper fault injection, with child processes for the
+// handoff races; t145 covers the cross-process state-lock race separately.
 //
-// The audit lock is now keyed PER INTENT (composite projectDir+space+intent), so
+// The audit lock is keyed PER INTENT (composite projectDir+space+intent), so
 // two intents lock independently; an intent-OMITTED call hashes a RESERVED
-// __workspace__ sentinel bucket distinct from every per-intent bucket (P4's
+// __workspace__ sentinel bucket distinct from every per-intent bucket (intent
 // auto-create + every intents.json write depend on this). The reaper stamps owner
 // PID+generation-token on acquire and reclaims only a provably-dead (ESRCH)
 // owner or an old genuinely-missing stamp. Live/malformed/unreadable owners
@@ -83,7 +83,6 @@ function seedLiveOwner(lockDir: string): string {
   return owner;
 }
 
-// Clean any lock dirs this test family might leave under tmpdir() between cases.
 function cleanLocks(): void {
   for (const f of readdirSync(tmpdir())) {
     if (f.startsWith(".aidlc-audit-") || f.includes(".aidlc-audit-")) {
@@ -116,7 +115,6 @@ describe("t161 keying invariants", () => {
     const a2 = auditLockDir(PD, "auth-aaaaaaaa", "default");
     expect(a).not.toBe(b);
     expect(a).toBe(a2);
-    // The workspace bucket is distinct from both per-intent buckets.
     const ws = auditLockDir(PD);
     expect(ws).not.toBe(a);
     expect(ws).not.toBe(b);
@@ -279,8 +277,9 @@ describe("t161 explicit audit acquisition allowances", () => {
   test.each(cases)("$label uses its nominal retry allowance without reaping a live owner", ({ raw, retryMs, waits }) => {
     const lockDir = auditLockDir(PD);
     const owner = seedLiveOwner(lockDir);
-    // Intercept only the sleep; the real acquisition/reaper must refuse this
-    // live stamp. Counting requests avoids waiting for the production default.
+    // Intercept the sleep and the process probe; the real acquisition/reaper must
+    // refuse this live stamp. Counting requests avoids waiting for the production
+    // default.
     _setAuditLockFaultHooksForTests({
       processProbe: () => ({ alive: true, generation: null }),
     });
@@ -379,7 +378,6 @@ describe("t161 per-intent lock independence", () => {
 
   test("two intents can be held concurrently in-process without contention", () => {
     expect(acquireAuditLock(PD, 0, 1, "auth-aaaaaaaa", "default")).toBe(true);
-    // A DIFFERENT intent acquires immediately (0 retries) — no shared lock.
     expect(acquireAuditLock(PD, 0, 1, "export-bbbbbbbb", "default")).toBe(true);
     releaseAuditLock(PD, "auth-aaaaaaaa", "default");
     releaseAuditLock(PD, "export-bbbbbbbb", "default");
@@ -471,7 +469,7 @@ describe("t161 per-intent lock independence", () => {
 
   test("persistent retirement failure retains receipt and exit recovery ownership", () => {
     // Initial release and pending-release retry both exhaust the production
-    // loop. The failure never clears, so a zero contention budget bounds it.
+    // loop. The failure never clears, so a 25 ms contention budget bounds it.
     withLockTimeout("AIDLC_AUDIT_LOCK_TIMEOUT_MS", "25", () => {
       const lockDir = auditLockDir(PD);
       _setAuditLockFaultHooksForTests({
@@ -835,7 +833,7 @@ describe("t161 per-intent lock independence", () => {
   test("withAuditLock keys depth per-identity — two intents don't share a depth counter", () => {
     let innerRan = false;
     withAuditLock(PD, () => {
-      expect(holdsAuditLock(PD, "auth-aaaaaaaa", "default")).toBe(false); // not held yet
+      expect(holdsAuditLock(PD, "auth-aaaaaaaa", "default")).toBe(false);
       withAuditLock(PD, () => {
         innerRan = true;
         expect(holdsAuditLock(PD, "auth-aaaaaaaa", "default")).toBe(true);
@@ -843,7 +841,7 @@ describe("t161 per-intent lock independence", () => {
       }, "auth-aaaaaaaa", "default");
     });
     expect(innerRan).toBe(true);
-    expect(holdsAuditLock(PD, "auth-aaaaaaaa", "default")).toBe(false); // released
+    expect(holdsAuditLock(PD, "auth-aaaaaaaa", "default")).toBe(false);
   });
 });
 
@@ -1271,7 +1269,6 @@ describe("t161 stale-lock reaper", () => {
     mkdirSync(recDir, { recursive: true });
     writeFileSync(join(recDir, "aidlc-state.md"), "- **Current Stage**: x\n", "utf-8");
     writeFileSync(join(realPd, "aidlc", "active-space"), "default\n", "utf-8");
-    // Stamp a DEAD-owner lock on that intent's bucket.
     const lockDir = auditLockDir(realPd, "auth-deadbeef", "default");
     mkdirSync(lockDir, { recursive: true });
     writeFileSync(join(lockDir, "owner.json"), JSON.stringify({ pid: 2_000_000_000, startedAtMs: 0 }), "utf-8");

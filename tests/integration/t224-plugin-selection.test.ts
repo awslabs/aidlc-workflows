@@ -142,7 +142,7 @@ function runOrchestrate(project: string, args: string[]) {
 }
 
 function stageTableRegion(project: string): string {
-  const skill = readFileSync(join(project, ".claude", "skills", "aidlc", "SKILL.md"), "utf-8");
+  const skill = readFileSync(join(project, ".claude", "skills", "aidlc", "tables.md"), "utf-8");
   const begin = skill.indexOf(STAGE_TABLE_BEGIN);
   const end = skill.indexOf(STAGE_TABLE_END, begin);
   expect(begin).toBeGreaterThanOrEqual(0);
@@ -524,6 +524,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
     const agentsSkill = join(noSkillsProj, ".agents", "skills", "aidlc", "SKILL.md");
     mkdirSync(dirname(agentsSkill), { recursive: true });
     cpSync(join(noSkillsProj, ".claude", "skills", "aidlc", "SKILL.md"), agentsSkill);
+    cpSync(join(noSkillsProj, ".claude", "skills", "aidlc", "tables.md"), join(dirname(agentsSkill), "tables.md"));
     rmSync(join(noSkillsProj, ".claude", "skills"), { recursive: true, force: true });
 
     const result = runUtility(noSkillsProj, ["select-plugins", "test-pro"]);

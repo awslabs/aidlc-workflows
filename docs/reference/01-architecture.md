@@ -507,7 +507,10 @@ prompt. On Kiro IDE it also reads Kiro's Workflows switch
 sub-agent tool from chats; `core/tools/aidlc-kiro-ide-workflows.ts` changes that
 one JSONC key on the person's answer (`--kiro-workflows`, setup, `config --yes`,
 or the once-per-machine chat ask from session start) and keeps the answer in the
-install root's `kiro-ide-workflows` marker. On Windows it also reads Kiro's
+install root's `kiro-ide-workflows` marker. A settings file it cannot read as
+JSONC is reported as unknown, never as off (trust, setup, doctor), and session
+start tells the chat once per error, keeping the file's path and fingerprint in
+the `kiro-ide-settings-error-told` marker. On Windows it also reads Kiro's
 default terminal profile (`terminal.integrated.defaultProfile.windows`): in
 Command Prompt the agent's AI-DLC commands split the person's words and every
 command reports exit code -1, so `core/tools/aidlc-kiro-ide-terminal.ts` sets
@@ -662,9 +665,12 @@ out-of-band Bun-shaped `aidlc-copy-runtime-X.Y.Z.tar.gz` and each
 uploads that candidate without signing. Unix and Windows lifecycle jobs verify
 its checksums and test it. The `update-from-previous` job, on Linux, macOS and
 Windows, installs the last stable release with its own installer, sets up a
-project for every harness, runs `aidlc update` to the candidate, and checks that
-each project's hooks, `aidlc config --yes` refresh and doctor still work. A
-stable release does not publish when it fails; a preview publishes with a
+project for every harness with the person's work waiting at a gate, runs
+`aidlc update` to the candidate, and checks that each project's hooks,
+`aidlc config --yes` refresh and doctor still work, and that the person picks
+their work up at that gate with nothing asked again. Its copy leg does the same
+for projects copied from the last release's copy runtime, which refresh with
+their own `config --from`. A stable release does not publish when it fails; a preview publishes with a
 warning in its notes. `publish` downloads the same candidate, re-verifies
 it, attests it, adds the exported `aidlc-release.intoto.jsonl` bundle, validates
 the complete inventory, and uploads one `attested-release` workflow artifact.
@@ -892,7 +898,8 @@ a conversation outside the selected workflow writes nothing into it and is not h
 by its gates, while runtime integrity, direct lifecycle-command refusals and the
 claimed-checkout write bound still apply. The engine treats such a conversation as
 having no active intent (`next` asks which intent to work on; `continue`, `report`
-and `park` refuse). When participation cannot be decided because a sibling-only
+and `park` refuse with a step for the agent: list the work, select the one the request is for, run the
+same command again). When participation cannot be decided because a sibling-only
 worktree's delegated metadata is malformed or stale, no workflow is selected: hooks
 write nothing, the reviewer read scope fails open, gates do not stand aside so
 Plan Approval refuses mutations, and the engine refuses with the file to repair
@@ -926,18 +933,23 @@ length and PID are validated; process handles are closed on every path.
 Creation times stay lossless in PID receipts. Each parent must predate its child,
 so a recycled parent PID cannot join the walk to a newer process. Receipts
 without a verified Windows creation time do not establish session ownership.
-Lookup failure, an ambiguous parent edge, or exhaustion of the existing
-50 ms / 64-ancestor budget yields no ancestry session; null barriers and the
+Lookup failure, an ambiguous parent edge, or exhaustion of the
+2-second / 64-ancestor limit yields no ancestry session; null barriers and the
 negative cache retain their existing behavior. Linux reads `/proc` for each hop; macOS
 reads the whole process table (pid, parent, `lstart`) with one `ps` call per walk and
-every hop from it, inside a 250 ms budget because that one call is slower than a
-`/proc` read and slower again on a busy Mac, and the recorded start times
+every hop from it, and the recorded start times
 are the strings a per-pid lookup prints. One process reuses that table for up to a
-second (the negative cache's window); a SessionStart write clears it.
+second (the negative cache's window); a SessionStart write clears it. The limit
+is the same on every OS and only bounds a walk that cannot finish (a `ps` that
+never answers): a walk ends as soon as it has its answer, a few milliseconds on
+an idle machine, and on a busy one it finishes instead of losing the chat.
 
 Multiple Kiro IDE chats
 and opencode sessions can still share one process; process ancestry cannot
-distinguish those conversations. Spawned tools with unavailable or ambiguous
+distinguish those conversations. AI-DLC's opencode plugin gives each shell
+command its chat as `AIDLC_SESSION_OVERRIDE` (opencode's `shell.env` hook); a
+file write's audit and sensors, and the to-do list sync, still go by the
+process there. Spawned tools with unavailable or ambiguous
 ancestry use shared-cursor behavior unless a payload-bearing hook or the harness
 process supplies `AIDLC_SESSION_OVERRIDE`.
 
@@ -990,7 +1002,7 @@ readers read the rows they share once (`copiedAuditBlocks` in
 
 7. **Flat agent files** -- Each agent is a single `.md` file in `agents/` (not a subdirectory with `agent.md` + `knowledge/`). This simplifies the structure and makes agents discoverable. Methodology knowledge lives separately in `knowledge/[agent]/`.
 
-8. **Scope-driven adaptive depth** -- Eleven named scopes (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, classic, workshop, express) plus a plan the agent proposes from freeform words determine which stages execute and at what depth. Each scope is a `.claude/scopes/aidlc-<name>.md` file (identity); membership is a per-stage `scopes:` frontmatter tag, transposed at compile into the EXECUTE/SKIP grid (`.claude/tools/data/scope-grid.json`, authoritative) and compiled into a summary table in SKILL.md (informational). The plan proposal step hands each scope's `keywords` from its `.md` frontmatter to the agent as hints; no tool matches them. The user can override at any approval gate.
+8. **Scope-driven adaptive depth** -- Eleven named scopes (enterprise, feature, mvp, poc, bugfix, refactor, infra, security-patch, classic, workshop, express) plus a plan the agent proposes from freeform words determine which stages execute and at what depth. Each scope is a `.claude/scopes/aidlc-<name>.md` file (identity); membership is a per-stage `scopes:` frontmatter tag, transposed at compile into the EXECUTE/SKIP grid (`.claude/tools/data/scope-grid.json`, authoritative) and compiled into a summary table in `tables.md` beside the orchestrator skill (informational). The plan proposal step hands each scope's `keywords` from its `.md` frontmatter to the agent as hints; no tool matches them. The user can override at any approval gate.
 
 9. **Rules stay method, not reference** -- The active space memory layer (`aidlc/spaces/<active-space>/memory/`, pulled in via the `.claude/rules/aidlc.md` @-import stub) holds the framework's working defaults and the guardrails. Everything else (verification, brownfield safeguards, audit format, adaptive patterns) lives in `knowledge/aidlc-shared/` or the static/conditional protocol files. This prevents context bloat in non-AI-DLC conversations since rules are always loaded.
 
@@ -998,7 +1010,7 @@ readers read the rows they share once (`copiedAuditBlocks` in
 
 11. **Phase boundary verification** -- Traceability checks run at the end of Ideation, Inception and Construction (the Initialization->Ideation transition has none), written by the phase's last stage to `<record>/verification/`. This catches missing requirements-to-design links, orphaned artifacts, and inconsistencies before downstream stages build on incomplete foundations.
 
-12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 118-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
+12. **Hook-based audit logging** -- A PostToolUse hook on Write/Edit operations automatically logs artifact creation and modification to the intent's `audit/` shards. A PreCompact hook validates state file structure before context compaction. A SubagentStop hook logs subagent completions. The 119-event taxonomy (defined in `knowledge/aidlc-shared/audit-format.md`; see [State Machine](12-state-machine.md) for the emitter registry) enables post-hoc analysis -- key events include `STAGE_STARTED`, `STAGE_COMPLETED`, `DECISION_RECORDED`, `SCOPE_CHANGED`, and `RULE_LEARNED`.
 
 13. **No nested delegation** -- The conductor (SKILL.md) performs every agent Task call. Agents never invoke each other or spawn subagents. This keeps the delegation graph flat and debuggable.
 

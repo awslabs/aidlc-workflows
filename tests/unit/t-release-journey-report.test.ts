@@ -9,10 +9,13 @@
 // Mechanism: function - runs the journey runner with a journey that throws.
 
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type ReleaseJourneyReport, runReleaseJourney } from "../harness/release-journey.ts";
+import { PersonTurnError } from "../harness/person-turns.ts";
+import {
+  checkReleaseJourneyTurn, expectPersonFirstInJourney, type ReleaseJourneyReport, runReleaseJourney,
+} from "../harness/release-journey.ts";
 
 const logDir = mkdtempSync(join(tmpdir(), "aidlc-release-journey-report-"));
 const previousLogDir = process.env.AIDLC_TEST_LOG_DIR;
@@ -41,5 +44,34 @@ describe("t-release-journey-report: the pasted line says FAIL when a journey sto
     expect(report.problems).toEqual([]);
     const written = JSON.parse(readFileSync(join(logDir, "release-journey-copilot.json"), "utf8")) as { line: string };
     expect(written.line).toContain(": PASS (0.5 min of turns");
+  });
+});
+
+// Work started before the person answered is a person-turn failure, which the
+// runner never retries. It is read off the journey's record, never off the
+// words of a problem, which can quote a tool's output.
+describe("t-release-journey-report: running ahead of the person is a person-turn failure", () => {
+  const project = (work: unknown[]): string => {
+    const proj = mkdtempSync(join(logDir, "proj-"));
+    mkdirSync(join(proj, "aidlc", "spaces", "default", "intents"), { recursive: true });
+    if (work.length) writeFileSync(join(proj, "aidlc", "spaces", "default", "intents", "intents.json"), JSON.stringify(work));
+    return proj;
+  };
+  const report = (): ReleaseJourneyReport => ({ harness: "copilot", toolVersion: "1.0.96", turns: [], extra: {}, problems: [] });
+
+  test("work recorded before the plan question's answer fails as a PersonTurnError", () => {
+    const run = report();
+    checkReleaseJourneyTurn(run, project([{ scope: "bugfix" }]), 1, "/aidlc fix the greeter");
+    expect(run.ranAhead).toBe(true);
+    expect(run.problems).toContain('after "/aidlc fix the greeter": work was started before the person answered the plan question');
+    expect(() => expectPersonFirstInJourney(run)).toThrow(PersonTurnError);
+  });
+
+  test("a problem that only quotes those words is an ordinary failure", () => {
+    const run = report();
+    checkReleaseJourneyTurn(run, project([]), 1, "/aidlc fix the greeter");
+    run.problems.push('Copilot ended "1" with exit 1: ... work was started before the person answered the plan question ...');
+    expect(run.ranAhead).toBeUndefined();
+    expect(() => expectPersonFirstInJourney(run)).not.toThrow();
   });
 });

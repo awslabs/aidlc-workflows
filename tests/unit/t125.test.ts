@@ -1,18 +1,16 @@
 // covers: invariant:audit-first-atomicity
 //   sub-ids (one per state-mutating + audit-emitting handler):
-//     invariant:audit-first-atomicity:approve            (handleApprove   :675)
-//     invariant:audit-first-atomicity:reject             (handleReject    :769)
-//     invariant:audit-first-atomicity:skip               (handleSkip      :839)
-//     invariant:audit-first-atomicity:advance            (handleAdvance   :275)
-//     invariant:audit-first-atomicity:gate-start         (handleGateStart :635)
-//     invariant:audit-first-atomicity:complete-workflow  (handleCompleteWorkflow :520)
-//     invariant:audit-first-atomicity:reuse-artifact     (handleReuseArtifact    :1307, audit-only)
+//     invariant:audit-first-atomicity:approve            (handleApprove)
+//     invariant:audit-first-atomicity:reject             (handleReject)
+//     invariant:audit-first-atomicity:skip               (handleSkip)
+//     invariant:audit-first-atomicity:advance            (handleAdvance)
+//     invariant:audit-first-atomicity:gate-start         (handleGateStart)
+//     invariant:audit-first-atomicity:complete-workflow  (handleCompleteWorkflow)
+//     invariant:audit-first-atomicity:reuse-artifact     (handleReuseArtifact, audit-only)
 //   plus a FINDING-pinning block:
-//     finding:finalize-is-not-audit-first  (handleFinalize :456 emits NO audit)
+//     finding:finalize-is-not-audit-first  (handleFinalize emits NO audit)
 //
 // t125 — audit-first atomicity invariant sweep.
-// (Renumbered from t114 at the v0.5.12 reconcile to clear main's v0.6.0 unit
-// t114-orchestrate-next.sh; same-tier ID collision.)
 // Mechanism: none (Bun.spawnSync of aidlc-state.ts against a temp project on
 // disk; zero LLM, zero tokens). Technique: invariant sweep + EISDIR fault
 // injection.
@@ -33,8 +31,8 @@
 //
 // FAULT INJECTION (reused verbatim from t17 Test 65, ~line 620). The seeded
 // audit.md FILE is replaced by a DIRECTORY at the same path. aidlc-audit.ts
-// appends via appendFileSync(path, block) (aidlc-audit.ts:257); ensureAuditFile
-// (:174) sees existsSync(path) === true for the directory and returns it
+// appends via appendFileSync(path, block) (aidlc-audit.ts); ensureAuditFile
+// sees existsSync(path) === true for the directory and returns it
 // unchanged, so appendFileSync throws EISDIR. This is uid-independent — "append
 // to a directory" is a kernel-enforced type error, not a permission check, so
 // it fails identically for root and non-root (the old chmod 0444 approach was
@@ -49,14 +47,12 @@
 // (a)+(b) together are the audit-first guarantee: emit failed ⇒ no state write.
 //
 // FINDING — handleFinalize is NOT audit-first because it emits NO audit at all.
-// handleFinalize (:456) calls writeStateFile(:508) with zero emitAudit() calls
+// handleFinalize calls writeStateFile with zero emitAudit() calls
 // in its body (grep-verified). It is therefore outside the audit-first contract:
 // under the same EISDIR injection it exits ZERO and MUTATES state. That is the
 // CORRECT behaviour for a handler that emits nothing — there is no audit row to
 // keep consistent — but it is a real asymmetry worth pinning so a future change
 // that adds an emitAudit() to finalize without ordering it audit-first is caught.
-// The block below asserts finalize's ACTUAL behaviour (rc=0, state changed) and
-// the test stays green; see this file's notes for the flag.
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -83,7 +79,6 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-// --- Paths resolved relative to THIS test file (tests/unit/) ---
 const HERE = import.meta.dir;
 const REPO_ROOT = resolve(HERE, "..", "..");
 const TOOL = join(
@@ -94,17 +89,16 @@ const TOOL = join(
   "aidlc-state.ts"
 );
 const FIXTURES = join(REPO_ROOT, "tests", "fixtures");
-const BUN = process.execPath; // the bun binary running this test
+const BUN = process.execPath;
 
 // --- Helpers ---------------------------------------------------------------
 
-// P9 per-intent layout: the flat aidlc-docs/ root is retired. The state file
-// lives in the active intent's record (seedStateFile seeds it so the cursor
-// resolves for the spawned tool), and the audit trail is a per-clone SHARD under
-// the record's audit/ dir. We PIN a deterministic clone-id so the shard path the
-// spawned tool resolves is known — the EISDIR sabotage targets exactly that
-// shard. No audit-seed is needed (ensureAuditFile creates the shard; the error()
-// path only needs the state file to exist).
+// The state file lives in the active intent's record (seedStateFile seeds it so
+// the cursor resolves for the spawned tool), and the audit trail is a per-clone
+// SHARD under the record's audit/ dir. We PIN a deterministic clone-id so the
+// shard path the spawned tool resolves is known - the EISDIR sabotage targets
+// exactly that shard. No audit-seed is needed: the error() path only needs the
+// state file to exist.
 const PINNED_CLONE_ID = "testcloneid125";
 function pinClone(proj: string): void {
   writeFileSync(join(proj, "aidlc", ".aidlc-clone-id"), `${PINNED_CLONE_ID}\n`, "utf-8");
@@ -130,8 +124,9 @@ function seedProjectFromContent(content: string): string {
 }
 
 // Replace the resolved audit SHARD (a file) with a DIRECTORY at the same path →
-// appendFileSync throws EISDIR for ALL uids. This is the t17 Test 65 injection,
-// retargeted at the per-clone shard the (clone-id-pinned) tool resolves.
+// the shard open (openSync) throws EISDIR for ALL uids. This is the t17 Test 65
+// injection, retargeted at the per-clone shard the (clone-id-pinned) tool
+// resolves.
 function sabotageAudit(proj: string): void {
   const auditShard = auditFilePath(proj);
   mkdirSync(join(auditShard, ".."), { recursive: true });
@@ -150,7 +145,6 @@ function readState(proj: string): string {
   return readFileSync(statePath(proj), "utf-8");
 }
 
-// Run aidlc-state.ts with --project-dir injected. Returns the exit status.
 function runState(proj: string, args: string[]): number {
   const r = spawnSync(
     BUN,
@@ -164,7 +158,8 @@ function runState(proj: string, args: string[]): number {
       },
     },
   );
-  // spawnSync sets status to null only on signal kill; treat that as failure.
+  // spawnSync leaves status null on a signal kill or a spawn failure; treat that
+  // as failure.
   return r.status === null ? -1 : r.status;
 }
 
@@ -179,7 +174,7 @@ function cleanup(proj: string): void {
 //   3. inject EISDIR,
 //   4. run the handler under test,
 //   5. assert NON-ZERO exit AND byte-identical state.
-// Returns nothing; throws via expect() on violation.
+// Returns { rc }; throws via expect() on violation.
 function assertAuditFirst(
   proj: string,
   handlerArgs: string[],
@@ -187,16 +182,14 @@ function assertAuditFirst(
 ): { rc: number } {
   if (preludeArgs) {
     const prc = runState(proj, preludeArgs);
-    expect(prc).toBe(0); // precondition setup must succeed
+    expect(prc).toBe(0);
   }
   const before = readState(proj);
   sabotageAudit(proj);
   const rc = runState(proj, handlerArgs);
   const after = readState(proj);
 
-  // (a) audit failure aborted the command.
   expect(rc).not.toBe(0);
-  // (b) the mutation did not happen — state is byte-identical.
   expect(after).toBe(before);
   return { rc };
 }
@@ -324,8 +317,8 @@ describe("invariant: audit-first atomicity (emit-then-write) across state-mutati
 // --- Finding: finalize is NOT audit-first (it emits no audit) --------------
 
 describe("finding: handleFinalize emits no audit ⇒ NOT subject to audit-first", () => {
-  // handleFinalize (:456) has zero emitAudit() calls — only writeStateFile
-  // (:508). Under the SAME EISDIR injection that aborts every audit-emitting
+  // handleFinalize has zero emitAudit() calls - only writeStateFile.
+  // Under the SAME EISDIR injection that aborts every audit-emitting
   // handler above, finalize exits 0 and mutates state, because the broken
   // audit.md is never touched. This is correct for an emit-free handler, but
   // pinned here so the asymmetry is visible: if someone later adds an

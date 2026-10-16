@@ -20,8 +20,8 @@
 //      NO EMERGENT carve-out and both Artifact
 //      Re-use overrides.
 //   4. dist/claude/.claude/aidlc-common/protocols/stage-protocol-recovery.md
-//      — the crash-resume bullet (logged-but-not-jumped detection), now under
-//      "Session resume" rather than "Stage re-run".
+//      - the crash-resume bullet (logged-but-not-jumped detection), under
+//      "Session resume".
 //
 // FIXTURE DISCIPLINE: inputs are the REAL committed shipped files (AIDLC_SRC
 // = <repo>/dist/claude/.claude from tests/harness/fixtures.ts) plus authored
@@ -81,7 +81,7 @@ describe("t305 build-and-test.md — Step 9 failure-escalation ladder", () => {
       "**On failure**: Run the same failure-escalation ladder for command failures,\n" +
         "`Not Met` targets, and `Unverified` targets:",
     );
-    // The retired flat prose must be gone (replaced, not duplicated).
+    // The flat prose must be absent, not duplicated.
     expect(STAGE).not.toContain(
       "If unable to fix after 2 attempts, log the failure in test-results.md and present the issue to the user at the approval gate",
     );
@@ -363,7 +363,7 @@ describe("t305 construction protocol module — Build-and-Test failure loop-back
     expect(tail).toContain("**Keep** for all other units");
     expect(tail).toContain("**Modify** for build-and-test itself");
     expect(tail).toContain("Redo is forbidden there — it would erase the Loop-Back Log");
-    // Nit fix: the audit call is spelled out in full (positional slug +
+    // The audit call is spelled out in full (positional slug +
     // --artifacts), never abbreviated to a form that errors if run literally.
     expect(tail).toContain(
       'aidlc-state.ts reuse-artifact <slug>\n--decision <keep|modify> --artifacts "<comma-separated list of existing\nartifacts found>"',
@@ -534,7 +534,6 @@ describe("t305 stage-protocol-recovery.md — crash-resume bullet", () => {
     expect(RECOVERY).toContain(
       "re-execute the jump per the loop-back\nprotocol module (`aidlc-common/protocols/stage-protocol-loopback.md`)",
     );
-    // A loop-back cut off between two Units' reopens reopens the rest.
     expect(RECOVERY).toContain("reopen the others\nthe same way before going on");
   });
 

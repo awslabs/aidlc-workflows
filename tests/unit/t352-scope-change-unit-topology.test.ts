@@ -120,13 +120,21 @@ function switchTo(p: string, scope = "refactor", extra: string[] = [], tool?: st
   expect(state(p)).toContain(`- **Scope**: ${scope}`);
   return result.stdout;
 }
+// `next`, then `continue <receipt>` through any rules parts, as the agent runs
+// them: the step it acts on.
 function next(p: string): Record<string, unknown> {
-  const result = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", p], {
-    encoding: "utf8", env, timeout: NATIVE_STARTUP_TIMEOUT_MS,
-  });
-  const line = result.stdout.split("\n").find((l) => l.trim().startsWith("{"));
-  expect(line, result.stdout + result.stderr).toBeDefined();
-  return JSON.parse(line!) as Record<string, unknown>;
+  let args = ["next"];
+  for (let hop = 0; hop < 10; hop++) {
+    const result = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts"), ...args, "--project-dir", p], {
+      encoding: "utf8", env, timeout: NATIVE_STARTUP_TIMEOUT_MS,
+    });
+    const line = result.stdout.split("\n").find((l) => l.trim().startsWith("{"));
+    expect(line, result.stdout + result.stderr).toBeDefined();
+    const directive = JSON.parse(line!) as Record<string, unknown>;
+    if (directive.kind !== "load-steering") return directive;
+    args = ["continue", String(directive.receipt ?? "")];
+  }
+  throw new Error("the rules parts did not reach the step in 10 hops");
 }
 
 describe("the switch goes through and names the Unit work it drops", () => {
@@ -218,7 +226,7 @@ describe("the Units carry on per Unit after the switch (#1401)", () => {
     const p = fixture(ownership);
     gate(p, "STAGE_AWAITING_APPROVAL", "beta");
     switchTo(p);
-    // On main this fell back to one stage-level step that no Unit gate reads.
+    // A fallback to one stage-level step would leave work that no Unit gate reads.
     const directive = next(p);
     expect(directive).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "alpha" });
     expect((directive.produces as string[])[0]).toContain("/construction/alpha/functional-design/");

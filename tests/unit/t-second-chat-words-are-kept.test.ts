@@ -86,7 +86,6 @@ function said(proj: string, prompt: string, session = SECOND, extra: Record<stri
   expect(result.status, result.stderr).toBe(0);
 }
 
-/** The setter as the agent runs it in the second chat. */
 function configSet(proj: string, args: string[]): { status: number; out: string } {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "config", "set", ...args, "--project-dir", proj], {
     cwd: proj,

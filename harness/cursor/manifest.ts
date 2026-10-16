@@ -61,6 +61,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored aidlc/active-memory/ (the
           // engine's copy of the active space's method).
           "sha256:cf4554ef90011ebc4bc70c7fbc6ca572c513d5c1e7daa328e406d1069f98e635",
+          // The variant shipped before the block ignored aidlc/.aidlc-request-text/
+          // (a request the engine has not read yet).
+          "sha256:ae1878ec98301ceb4510e711cf79f58dfb44cb486744007acd03ae5e61860665",
         ],
       },
     },
@@ -83,6 +86,9 @@ const manifest: HarnessManifest = {
         ],
       },
     },
+    // The copy runtime's installer (copyOnly below): the native projection
+    // drops this entry with the file, so a refresh retires the one an earlier
+    // native setup wrote.
     {
       path: "install.ts",
       policy: "whole-file",
@@ -115,6 +121,7 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
     { src: "skills/aidlc/composer.md", dst: "skills/aidlc/composer.md" },
+    { src: "skills/aidlc/tables.md", dst: "skills/aidlc/tables.md" },
     // Cursor-native shortcut skills. Cursor's commands/ surface is legacy;
     // skills are the current slash-invocation primitive.
     { src: "skills/aidlc-status/SKILL.md", dst: "skills/aidlc-status/SKILL.md" },
@@ -122,8 +129,8 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc-scope/SKILL.md", dst: "skills/aidlc-scope/SKILL.md" },
     // AIDLC method pointers: standing layers always apply; phase guidance is
     // agent-decided. Cursor has no @-import expansion, so each carries a READ
-    // instruction naming the active-space file. /aidlc space re-points every
-    // explicit path in place (aidlc-includes.ts cursor arm).
+    // instruction naming aidlc/active-memory/. /aidlc space refreshes that
+    // copy (aidlc-includes.ts refreshActiveMemory).
     { src: "rules-aidlc.mdc", dst: "rules/aidlc.mdc" },
     { src: "rules-aidlc-phase-ideation.mdc", dst: "rules/aidlc-phase-ideation.mdc" },
     { src: "rules-aidlc-phase-inception.mdc", dst: "rules/aidlc-phase-inception.mdc" },
@@ -140,9 +147,11 @@ const manifest: HarnessManifest = {
     // (permissions only, documented contract).
     { src: "cli.json", dst: "cli.json" },
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
-    // Distribution-local, non-destructive install command. It merges the
-    // project-owned Cursor config and onboarding surfaces before copying.
-    { src: "install.ts", dst: "install.ts", projectRoot: true },
+    // The copy runtime's non-destructive installer, run from the extracted
+    // runtime (`bun "$RUNTIME_ROOT/cursor/install.ts" your-project`). It merges
+    // the project-owned Cursor config and onboarding surfaces before copying.
+    // Native setup never writes it into a project.
+    { src: "install.ts", dst: "install.ts", projectRoot: true, copyOnly: true },
   ],
 
   // AGENTS.md at the project root — Cursor auto-reads it (root + nested) as

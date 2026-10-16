@@ -12,6 +12,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  ANSWERS_HEADING,
+  type AnswersSummary,
+  answersSection,
+  collectAnswers,
   collectFailures,
   FAILED_SUITE_POINTER,
   FAILED_SUITE_WARNING,
@@ -26,6 +30,7 @@ import {
   stagePreviewNotes,
   updateReport,
 } from "../../scripts/ci-preview-test-report.ts";
+import { MODEL_API_REASON } from "../lib/file-retry.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -62,6 +67,29 @@ const OUTER = [
   "",
 ].join("\n");
 
+const ANSWERS: AnswersSummary = {
+  harness: "claude", stamp: "2026-10-15T21-40-00-000Z", reportOnly: true, items: 23, passed: 21,
+  sample: "Sample: the nightly's one item per question, night 3 of the rotation from 2026-10-15 (2026-10-18).",
+  misses: { setup: 1, record: 1, question: 0, words: 1 },
+  missed: [{ id: "gate-2", group: "gate", kinds: ["record", "words"] }, { id: "ln-01", group: "learnings", kinds: ["setup"] }],
+};
+const ANSWERS_LINES = [
+  "### Answers corpus",
+  "",
+  "Claude Code: 21 of 23 replies passed; misses: setup 1, record 1, question 0, words 1. Sample: the nightly's one item per question, night 3 of the rotation from 2026-10-15 (2026-10-18). Report-only: these misses do not fail the suite.",
+  "",
+  "- `gate-2` (gate): record, words",
+  "- `ln-01` (learnings): setup",
+  "",
+  "A setup miss is the check's own: the agent never showed the question, or the drive could not account for a decision.",
+  "Drive a miss again with `AIDLC_ANSWERS_LIVE=1 AIDLC_ANSWERS_HARNESSES=<tool> AIDLC_ANSWERS_SAMPLE=<id>`.",
+  "The report and transcripts are in the `full-suite-live-*` artifact, under `aidlc-answers-live`.",
+  "",
+].join("\n");
+const answersAt = (evidence: string, artifact: string, attempt: number, summary: unknown, stamp = ANSWERS.stamp) =>
+  put(evidence, `${artifact}/2026-10-15T21-15-00Z-p77/e2e-artifacts/e2e-t-live-aidlc-answers-corpus.serial/attempt-${attempt}/aidlc-answers-live/SUMMARY-claude-abc1234-${stamp}.json`,
+    typeof summary === "string" ? summary : `${JSON.stringify(summary)}\n`);
+
 function report(runs: RunFailures[], overrides: Partial<Parameters<typeof renderReport>[0]> = {}): string {
   return renderReport({
     fullSuiteResult: "failure",
@@ -85,6 +113,14 @@ describe("t-ci-preview-test-report", () => {
       { name: "Linux / result", url: "https://github.com/j/2" },
       { name: "Windows / codex 1/1", url: "https://github.com/j/1" },
     ]);
+  });
+
+  // The runner writes this reason for a file the model service failed
+  // (tests/lib/file-retry.ts); the report says it beside the file.
+  test("a file the model service failed says so in the report", () => {
+    const run = parseFailures("live-claude-sdk-2-macOS", `FAIL: t138-scope-exclusion-counts (${MODEL_API_REASON})\n`);
+    expect(run.files).toEqual([{ name: "t138-scope-exclusion-counts", reason: MODEL_API_REASON, cases: [] }]);
+    expect(report([run])).toContain(`- \`t138-scope-exclusion-counts\` (${MODEL_API_REASON}) in \`live-claude-sdk-2-macOS\``);
   });
 
   test("failure files yield failing files, deduplicated cases and runner errors", () => {
@@ -221,6 +257,47 @@ describe("t-ci-preview-test-report", () => {
     expect(report([], { legs: { plan: "success" } })).toContain("Failed legs: none recorded.");
   });
 
+  test("the answers corpus's nightly reading ends the report, passing or failing, and stays out of the published notes", () => {
+    expect(answersSection([ANSWERS])).toBe(ANSWERS_LINES);
+    expect(report([], { fullSuiteResult: "success", answers: [ANSWERS] })).toBe(
+      `## Nightly test report\n\nFull Suite **passed** for \`0123456789ab\` in [run 42](${RUN_URL}).\n\n${ANSWERS_LINES}`,
+    );
+    expect(report([], { fullSuiteResult: "success", answers: [] })).toEndWith(
+      `\n\n${ANSWERS_HEADING}\n\nNo answers corpus summary was in the downloaded evidence.\n`,
+    );
+    const clean = { ...ANSWERS, passed: 23, misses: { setup: 0, record: 0, question: 0, words: 0 }, missed: [] };
+    expect(answersSection([clean])).not.toContain("Drive a miss again");
+    expect(answersSection([clean])).not.toContain("A setup miss");
+    expect(answersSection([{ ...ANSWERS, reportOnly: false }])).not.toContain("Report-only");
+
+    const runs = [parseFailures("deterministic-unit-7-Linux", OUTER)];
+    const failed = report(runs, { answers: [ANSWERS] });
+    expect(failed).toBe(`${report(runs)}\n${ANSWERS_LINES}`);
+    const body = "- change\n\nSource commit: owner/repo@a\n";
+    expect(stagePreviewNotes(body, failed)).toBe(stagePreviewNotes(body, report(runs)));
+    expect(stagePreviewNotes(body, failed)).not.toContain(ANSWERS_HEADING);
+    expect(stagePreviewNotes(body, failed, RELEASE_BODY_LIMIT, { suite: false, updateRunUrl: "https://x/run/9" })).not.toContain(ANSWERS_HEADING);
+
+    // A failure report cut to its budget still ends with the whole answers section.
+    const long = "x".repeat(400);
+    const huge = report(Array.from({ length: 40 }, (_, index) => parseFailures(`a${index}`, [
+      `FAIL: t${index} (${long})`, ...Array.from({ length: 8 }, (_, item) => `  (fail) ${item} ${long} [1ms]`),
+    ].join("\n"))), { answers: [ANSWERS] });
+    expect(huge.length).toBeLessThanOrEqual(MAX_REPORT);
+    expect(huge).toEndWith(`\n- ...report truncated; see [run 42](${RUN_URL}).\n\n${ANSWERS_LINES}`);
+  });
+
+  test("the answers summary is read from the live artifacts only, the last attempt per tool, and a malformed one is skipped", () => {
+    const evidence = fixture();
+    expect(collectAnswers(join(evidence, "absent"))).toEqual([]);
+    answersAt(evidence, "full-suite-live-claude-sdk-1-Linux", 1, { ...ANSWERS, passed: 3, stamp: "2026-10-15T21-20-00-000Z" }, "2026-10-15T21-20-00-000Z");
+    answersAt(evidence, "full-suite-live-claude-sdk-1-Linux", 2, ANSWERS);
+    answersAt(evidence, "full-suite-live-claude-sdk-1-Linux", 3, "{ not json", "2026-10-15T23-00-00-000Z");
+    answersAt(evidence, "full-suite-live-claude-sdk-1-Linux", 4, { ...ANSWERS, items: "23", stamp: "2026-10-15T23-30-00-000Z" }, "2026-10-15T23-30-00-000Z");
+    answersAt(evidence, "full-suite-deterministic-unit-7-Linux", 1, { ...ANSWERS, stamp: "2026-10-16T00-00-00-000Z" }, "2026-10-16T00-00-00-000Z");
+    expect(collectAnswers(evidence)).toEqual([ANSWERS]);
+  });
+
   test("a leg the suite skips by design is not listed as failed; a required leg that skipped is", () => {
     // The nightly release-purpose suite omits these two legs, as its result file says.
     const nightly = { plan: "success", deterministic: "skipped", production_guards: "skipped", live_windows: "failure" };
@@ -278,7 +355,6 @@ describe("t-ci-preview-test-report", () => {
     expect(trimmed).toStartWith(`${FAILED_SUITE_WARNING}${body}\n## Nightly test report\n\n- \`t0\`\n`);
     expect(trimmed).toEndWith("`\n- ...report truncated; the run summary has the full report.\n");
 
-    // Near the limit the source footer survives and the body still fits.
     const large = `- ${"x".repeat(124_700)}\n\nSource commit: owner/repo@a\n`;
     const near = stagePreviewNotes(large, report);
     expect(near.length).toBeLessThanOrEqual(RELEASE_BODY_LIMIT);
@@ -299,8 +375,8 @@ describe("t-ci-preview-test-report", () => {
     const body = "- change\n\nSource commit: owner/repo@a\n";
     const report = `## Nightly test report\n\n${Array.from({ length: 200 }, (_, index) => `- \`t${index}\`\n`).join("")}`;
     const line = updateReport("https://x/run/9");
-    expect(line).toContain("[the preview run](https://x/run/9)");
-    // A passing suite adds no report of its own, and nothing failed changes nothing.
+    // Either channel's update can fail it, so the line names neither command.
+    expect(line).toBe("## Update from the last release\n\nUpdating from the last release to this preview **failed** in [the preview run](https://x/run/9).\n");
     expect(stagePreviewNotes(body, report, RELEASE_BODY_LIMIT, { suite: false, updateRunUrl: "https://x/run/9" }))
       .toBe(`${FAILED_UPDATE_WARNING}${body}\n${line}`);
     expect(stagePreviewNotes(body, report, RELEASE_BODY_LIMIT, { suite: false })).toBe(body);
@@ -310,7 +386,6 @@ describe("t-ci-preview-test-report", () => {
     const cut = stagePreviewNotes(body, report, full.length - 1, both);
     expect(cut).toStartWith(`${FAILED_SUITE_WARNING}${FAILED_UPDATE_WARNING}${body}\n${line}\n## Nightly test report\n`);
     expect(cut).toEndWith("\n- ...report truncated; the run summary has the full report.\n");
-    // With no room for a report the update warning stays beside the pointer.
     const pointed = "x".repeat(RELEASE_BODY_LIMIT - FAILED_SUITE_POINTER.length - FAILED_UPDATE_WARNING.length);
     expect(stagePreviewNotes(pointed, report, RELEASE_BODY_LIMIT, both))
       .toBe(`${FAILED_SUITE_POINTER}${FAILED_UPDATE_WARNING}${pointed}`);
@@ -346,6 +421,7 @@ describe("t-ci-preview-test-report", () => {
       legs: { deterministic: "failure", production_guards: "skipped" }, omittedLegs: ["production_guards"],
     }));
     put(evidence, "full-suite-deterministic-unit-7-Windows/tests/logs/2026-09-24T21-52-16Z-p7036/failures.txt", OUTER);
+    answersAt(evidence, "full-suite-live-claude-sdk-1-Linux", 1, ANSWERS);
     put(root, "jobs.json", JSON.stringify([{ jobs: [{ name: "full_suite / result", conclusion: "failure", html_url: "https://x/1" }] }]));
     const env = {
       ...process.env,
@@ -364,6 +440,7 @@ describe("t-ci-preview-test-report", () => {
       legs: { deterministic: "failure", production_guards: "skipped" },
       omittedLegs: ["production_guards"],
       jobs: [{ name: "result", url: "https://x/1" }],
+      answers: [ANSWERS],
     }));
 
     const noJobs = Bun.spawnSync([process.execPath, cli, join(root, "absent"), join(root, "absent.json"), output], { env, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });

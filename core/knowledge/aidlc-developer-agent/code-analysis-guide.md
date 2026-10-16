@@ -33,8 +33,10 @@ Identify frameworks by scanning imports and configuration:
 
 ## What to Skip
 
-Scan what people wrote. Follow the repository's `.gitignore` files, and also
-skip generated and installed content that nothing ignores:
+Scan what people wrote. Find the files with your file tools, one folder at a
+time: your directory read where you have one, otherwise one plain `ls` of the
+folder. Read the repository's `.gitignore` files and leave out what they
+ignore, and also skip generated and installed content that nothing ignores:
 
 - **Build outputs**: .NET `bin/` and `obj/` beside a `.csproj`, `.fsproj` or
   `.vbproj` (and `out/` from `dotnet publish -o out`), `dist/`, `build/`,

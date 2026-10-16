@@ -11,7 +11,8 @@
 //       in that same state, and the same refusal does not come back after its
 //       step (a deadlock);
 //   (e) before the approval the developer dispatch and a source write are
-//       refused with that way past; after it both are admitted.
+//       refused with that way past; after it both are admitted;
+//   (f) a call to one of the person's MCP servers runs, whatever the state.
 //
 // The states and the seven shapes live in tests/harness/code-generation-states.ts.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -58,7 +59,6 @@ function developerBrief(proj: string): string {
     : `AIDLC-STAGE: code-generation\nAIDLC-TESTING-CONTRACT: sha256:${"a".repeat(64)}\n`;
 }
 
-/** The step's own work, as tool calls, derived from the directive's fields and never from prose. */
 function stepWork(proj: string, step: Step): ToolCall[] {
   const calls: ToolCall[] = [];
   const planFile = join(stageDir(proj), "code-generation-plan.md");
@@ -224,6 +224,27 @@ describe("the Code Generation no-dead-end sweep", () => {
   }
 });
 
+// The person's lookup while the plan is written ran into a refusal on Kiro IDE;
+// on every harness and in every state an MCP call they ask for is theirs to make,
+// and the host's own card asks them.
+describe("a call to one of the person's MCP servers runs in every Code Generation state", () => {
+  for (const builder of STATES) {
+    test(`${builder.id}: ${builder.name}`, async () => {
+      const state = builder.build();
+      created.push(state.proj);
+      // The person asks for the lookup, as on Kiro IDE: "quick one while you write the plan".
+      expect(reply(state.proj, "quick one: use the everything MCP server to echo this back", state.session).status).toBe(0);
+      const refused: string[] = [];
+      for (const shape of SHAPES) {
+        shape.install(state.proj);
+        const verdict = await shape.mcp(state.proj, state.session);
+        if (verdict.code !== 0) refused.push(`[${shape.name}] ${verdict.said}`);
+      }
+      expect(refused).toEqual([]);
+    });
+  }
+});
+
 // What the guard judges and what it leaves alone, pinned in the Claude shape at
 // the planning step (S1), the open question (S3) and the open gate (S11a):
 // AI-DLC's records and AI-DLC's own commands pass; the doors, the engine's own
@@ -249,7 +270,7 @@ describe("the guard judges only the build: records and engine commands pass, the
       }
       // A command whose writes cannot be seen waits at the planning step; at the
       // open question it is the person's own side work (a test run, an install)
-      // and runs, as it does on main.
+      // and runs.
       const unseen: ToolCall[] = id === "S1"
         ? [{ tool: "Bash", command: "bash build.sh" }, { tool: "Bash", command: "bun -e 'console.log(1)'" }]
         : [];
@@ -295,7 +316,7 @@ describe("the guard judges only the build: records and engine commands pass, the
 
   test("the recorded bypass switch waits for a person to have asked, then passes", async () => {
     // S3: the question is open and no person has spoken yet (an approval turn
-    // counts as a person's turn for this switch, on main as here).
+    // counts as a person's turn for this switch).
     const state = STATES.find((builder) => builder.id === "S3")!.build();
     created.push(state.proj);
     const bypass = "bun .claude/tools/aidlc.ts config flags --bypass AIDLC_DISABLE_PLAN_APPROVAL_GUARD --local --yes";
@@ -333,7 +354,6 @@ describe("the guard judges only the build: records and engine commands pass, the
       expect(reply(state.proj, "update AI-DLC").status).toBe(0);
       expect(latestHumanTurnWords(state.proj)).toBe("update AI-DLC");
       await verdicts(0, "refused after the person asked");
-      // The update answers nothing: next still asks the plan question.
       const step = next(state.proj);
       expect(step.kind, JSON.stringify(step)).toBe("ask");
       expect(step.ask_type, JSON.stringify(step)).toBe("plan-approval");
@@ -461,14 +481,11 @@ describe("the six plan-answer cases from the hook's gate, at the open question",
       expect(step.kind, JSON.stringify(step)).toBe("run-stage");
       expect(step.plan_approval?.status, JSON.stringify(step)).toBe("approved");
       expect(builds).toBe(true);
-      // The build's doors are open, in the Claude shape.
       const claude = SHAPES[0];
       const dispatch = await claude.call(state.proj, SESSION, { tool: "Task", agent: DEVELOPER, prompt: developerBrief(state.proj) });
       expect(dispatch.code, dispatch.said).toBe(0);
       const write = await claude.call(state.proj, SESSION, { tool: "Write", path: join(state.proj, "src", "slugify.ts") });
       expect(write.code, write.said).toBe(0);
-      // The approval is on record, or with plan approval turned off the engine
-      // recorded that it built without asking.
       expect(auditEvents(state.proj).some((row) =>
         row.event === "PLAN_APPROVAL_RECORDED" || row.event === "PLAN_APPROVAL_SKIPPED")).toBe(true);
     });

@@ -479,10 +479,58 @@ describe("t318 session binding helpers", () => {
     }
   });
 
-  test("only macOS gets the longer walk budget", () => {
-    for (const [platform, budget] of [["darwin", 250], ["linux", 50], ["win32", 50]] as const) {
+  test("every OS gives the walk the same two-second ceiling", () => {
+    for (const platform of ["darwin", "linux", "win32"] as const) {
       process.env.AIDLC_TEST_SESSION_PLATFORM = platform;
-      expect(sessionAncestryBudgetMs()).toBe(budget);
+      expect(sessionAncestryBudgetMs()).toBe(2000);
+    }
+  });
+
+  // This host's own process reads (Linux /proc, macOS `ps -A`, Windows native
+  // handles), on a machine so busy that every step of the walk takes a tenth of
+  // a second: the walk still ends with its answer, it does not give up.
+  test("on a busy machine SessionStart records its chat and a command finds it", () => {
+    let now = 1000;
+    const clock = spyOn(Date, "now").mockImplementation(() => (now += 100));
+    try {
+      writeSessionPidAncestry(proj, "busy-host-session");
+      const entry = JSON.parse(readFileSync(join(sessionPidMapDir(proj), String(process.ppid)), "utf-8"));
+      expect(entry.sessionId).toBe("busy-host-session");
+      expect(resolveSessionIdFromAncestry(proj)).toBe("busy-host-session");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("on a very busy Mac (a 300 ms ps) SessionStart records its chat and a command finds it", () => {
+    const lookup = mockMacProcessTree(new Map([[process.ppid, process.pid]]), 300);
+    try {
+      writeSessionPidAncestry(proj, "very-busy-session");
+      const entry = JSON.parse(readFileSync(join(sessionPidMapDir(proj), String(process.ppid)), "utf-8"));
+      expect(entry).toEqual({ sessionId: "very-busy-session", startTime: `fixture-start-${process.ppid}` });
+      expect(resolveSessionIdFromAncestry(proj)).toBe("very-busy-session");
+    } finally {
+      lookup.restore();
+    }
+  });
+
+  test("a Windows SessionStart whose process reads are slow still records its chat", () => {
+    process.env.AIDLC_TEST_SESSION_PLATFORM = "win32";
+    let now = 1000;
+    const clock = spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      writeSessionPidAncestry(proj, "slow-windows-session", (pid) => {
+        now += 60;
+        return pid === process.pid
+          ? { ppid: process.ppid, startTime: "win32:0000000000000010" }
+          : { ppid: 1, startTime: "win32:0000000000000001" };
+      });
+      expect(JSON.parse(readFileSync(join(sessionPidMapDir(proj), String(process.ppid)), "utf-8"))).toEqual({
+        sessionId: "slow-windows-session",
+        startTime: "win32:0000000000000001",
+      });
+    } finally {
+      clock.mockRestore();
     }
   });
 
@@ -510,15 +558,15 @@ describe("t318 session binding helpers", () => {
     }
   });
 
-  test("a ps that never answers costs a macOS walk at most a quarter second", () => {
+  test("a ps that never answers costs a macOS walk at most its ceiling", () => {
     const lookup = mockMacProcessTree(new Map([[process.ppid, process.pid]]), 60_000);
     try {
       let started = Date.now();
       writeSessionPidAncestry(proj, "stuck-session");
-      expect(Date.now() - started).toBeLessThanOrEqual(250);
+      expect(Date.now() - started).toBeLessThanOrEqual(sessionAncestryBudgetMs());
       started = Date.now();
       expect(resolveSessionIdFromAncestry(proj)).toBeNull();
-      expect(Date.now() - started).toBeLessThanOrEqual(250);
+      expect(Date.now() - started).toBeLessThanOrEqual(sessionAncestryBudgetMs());
     } finally {
       lookup.restore();
     }
@@ -585,7 +633,7 @@ describe("t318 session binding helpers", () => {
       };
       const started = performance.now();
       found = resolveSessionIdFromAncestry(proj);
-      ranOut = entry.sessionId !== "real-session" || (found === null && performance.now() - started >= 245);
+      ranOut = entry.sessionId !== "real-session" || (found === null && performance.now() - started >= sessionAncestryBudgetMs() - 5);
     }
     if (found !== "real-session" && ranOut) return;
     expect(found).toBe("real-session");
@@ -669,7 +717,7 @@ describe("t318 session binding helpers", () => {
               ? null
               : { ppid: process.ppid, startTime: "win32:0000000000000010" };
           }
-          if (failure === "deadline") now = 1051;
+          if (failure === "deadline") now = 1000 + sessionAncestryBudgetMs() + 1;
           return failure === "parent"
             ? null
             : { ppid: 1, startTime: "win32:0000000000000001" };

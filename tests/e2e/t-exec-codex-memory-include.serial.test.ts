@@ -1,17 +1,9 @@
 // covers: file:dist/codex/.codex/config.toml, file:dist/codex/AGENTS.md
 //
-// t-exec-codex-memory-include.serial.test.ts — the LIVE empirical probe that
-// finalizes the Codex method-include seam t156 test 8 could only DOC-VERIFY.
-//
-// WHAT t156 left open. The AIDLC method ("memory") relocated to the workspace
-// root at aidlc/spaces/default/memory/, read by each harness via its own native
-// include. For Claude (@-import) and Kiro (resources glob) t156 probes the seam
-// directly; for Codex it asserted only the STATIC wiring (the AIDLC_RULES_DIR
-// value in config.toml + the shipped AGENTS.md) and flagged the include
-// "untested" because an early spike's `codex exec` hung at exit 124. This test
-// closes that gap: it drives the SHIPPED dist/codex tree through `codex exec`
-// and proves Codex resolves an @aidlc/spaces/default/memory/<file> mention to
-// the relocated tree and pulls its content into context.
+// t-exec-codex-memory-include.serial.test.ts - the LIVE probe that drives the
+// SHIPPED dist/codex tree through `codex exec` and proves Codex resolves an
+// @aidlc/spaces/default/memory/<file> mention to the method tree and pulls its
+// content into context.
 //
 // MECHANISM. A unique sentinel string is injected into the active space's
 // org.md, then a single `codex exec` is asked to read the method file by its
@@ -23,8 +15,6 @@
 // LIVE GATE: requires AIDLC_CODEX_EXEC_LIVE=1 + a codex >= 0.145.0 binary
 // (AIDLC_CODEX_BIN or PATH). Bedrock uses the AWS default credential chain;
 // AIDLC_CODEX_AWS_PROFILE selects a named profile when needed.
-// Verified live 2026-06-24 (codex-cli 0.139.0, openai.gpt-5.5 on Bedrock):
-// the @-mention resolved org.md and the sentinel round-tripped (exit 0).
 
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs, NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { describe, expect, test } from "bun:test";

@@ -55,7 +55,6 @@ function run(tool: string, args: string[], proj: string): { status: number | nul
   return { status: result.exitCode, stdout: result.stdout.toString(), stderr: result.stderr.toString() };
 }
 
-// What the person types, through the real UserPromptSubmit route.
 function says(proj: string, prompt: string): void {
   const result = Bun.spawnSync({
     cmd: [BUN, join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"],

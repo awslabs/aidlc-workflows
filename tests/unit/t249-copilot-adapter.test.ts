@@ -4,9 +4,10 @@
 // covers: file:hooks/aidlc-continue-workflow.ts, file:hooks/aidlc-session-start.ts, file:hooks/aidlc-write-audit-log.ts, file:hooks/aidlc-log-subagent.ts, file:hooks/aidlc-session-end.ts, file:hooks/aidlc-deliver-stage-rules.ts, file:hooks/aidlc-plan-approval-guard.ts, file:hooks/aidlc-review-freeze.ts, function:ACTIVE_DIRECTIVE_MESSAGE_MAX_BYTES, function:invalidateActiveDirectiveContext, function:recordCopilotHumanSequence, function:claimCopilotCommand, function:settleCopilotCommand, function:copilotStopEvidence, function:consumeCopilotConversation, function:settleCopilotIntentBoundary, function:updateCopilotStopCount, audit:SUBAGENT_PROMPT_UNMATCHED, function:appendSubagentPromptUnmatched, audit:COORDINATION_STOOD_ASIDE, function:appendCoordinationStoodAside, function:clearSessionIntentSwitch, function:recordIntentKey, function:parseRecordIntentKey, function:RECORD_INTENT_PREFIX
 //
 // WHAT. Each case pipes a fixture from tests/fixtures/copilot-hook-payloads/
-// (field-verbatim captures off Copilot CLI 1.0.74, sanitized for publication) into
-// the generated Copilot adapter inside a scratch project carrying an active
-// workflow state, then asserts the observable core-hook effect:
+// (field-verbatim captures off Copilot CLI 1.0.74, plus a task launch off 1.0.74
+// and 1.0.96, sanitized for publication) into the generated Copilot adapter
+// inside a scratch project carrying an active workflow state, then asserts the
+// observable core-hook effect:
 //   continue-workflow → block fields at top level for CLI and under
 //                    hookSpecificOutput for VS Code; silent with no state.
 //   session-start  → additionalContext at top level for CLI and under
@@ -801,12 +802,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   test("4: guard-tool-call block converts to the permissionDecision deny JSON", () => {
     const dir = scratchProject(true);
-    // A direct lifecycle call on aidlc-state.ts is exactly what the
-    // state-transition guard refuses (exit 2 + reason on stderr in core).
+    // A tool call that invokes a hook is what the state-transition guard's
+    // runtime-integrity check refuses (exit 2 + reason on stderr in core).
     const payload = withCwd(
       {
         ...FIXTURES.preToolUse_bash,
-        tool_input: { command: "bun .aidlc/tools/aidlc-state.ts approve" },
+        tool_input: { command: "bun .aidlc/tools/aidlc.ts engine hook record-human-turn" },
       },
       dir,
     );
@@ -1147,14 +1148,14 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
 
   test("14: documented VS Code tool names normalize to the core contract", () => {
     const dir = scratchProject(true);
-    // VS Code's documented shell tool name with a blocked lifecycle command:
+    // VS Code's documented shell tool name with a refused command:
     // the alias table must canonicalize runTerminalCommand -> Bash.
     const r = runAdapter(dir, "guard-tool-call", {
       hook_event_name: "PreToolUse",
       session_id: "11111111-2222-4333-8444-555555555555",
       cwd: dir,
       toolName: "runTerminalCommand",
-      toolInput: { command: "bun .aidlc/tools/aidlc-state.ts approve" },
+      toolInput: { command: "bun .aidlc/tools/aidlc.ts engine hook record-human-turn" },
     });
     expect(r.code).toBe(0);
     const parsed = JSON.parse(r.stdout) as {
@@ -3119,6 +3120,97 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
+  // The claim's hints are the flags the engine's own reading takes: a `--resume`
+  // among the person's words behind `--` asks for nothing.
+  test("23c-words: a --resume among the person's words leaves the waiting Resume question as it is", () => {
+    const dir = orchestrationProject();
+    const session = "words-resume-waiting";
+    driveToRunStage(dir, session);
+    rewriteMarker(dir, (value) => {
+      value.kind = "ask";
+      value.delivery = "issued";
+      value.needs_rehydrate = false;
+      delete value.continue_token;
+      delete value.continue_token_sha256;
+      value.resume = {
+        status: "waiting",
+        issuing_stage: "requirements-analysis",
+        issuing_state_sha256: value.state_sha256,
+        issuing_session: session,
+        issuing_intent_uuid: value.intent_uuid,
+      };
+    });
+    const spec = commandSpec(dir, "direct", ["next", "--", "fix", "the", "--resume", "bug"]);
+    runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, "words-resume"));
+    expect(marker(dir).resume).toMatchObject({ status: "waiting" });
+  });
+
+  // The attempt id rides right after the verb, where the engine reads it: behind
+  // the person's words it would be two of their words and the attempt is lost.
+  test("23c-attempt: the attempt id goes in front of the person's words, marked or not, and the attempt is claimed", () => {
+    for (const words of [["--", "fix", "the", "bug"], ["fix", "the", "bug"]]) {
+      const dir = orchestrationProject();
+      const session = `words-attempt-${words.length}`;
+      const attempt = `words-attempt-${words.length}`;
+      const spec = commandSpec(dir, "direct", ["next", ...words]);
+      const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, session, spec.text, attempt));
+      const rewritten = rewrittenCommand(pre);
+      expect(rewritten, spec.text).toBe(
+        `bun .aidlc/tools/aidlc-orchestrate.ts "next" --aidlc-attempt-id ${attempt} ${words.map((word) => JSON.stringify(word)).join(" ")}`,
+      );
+      const executed = runShell(dir, rewritten);
+      expect(executed.status, executed.stderr).toBe(0);
+      expect(executed.stdout, rewritten).not.toContain("stale or superseded");
+      runAdapter(dir, "post-tool", commandPayload(dir, session, rewritten, attempt, true, executed.stdout));
+      expect(marker(dir), rewritten).toMatchObject({ active_attempt: { id: attempt } });
+    }
+  });
+
+  // The person's words behind `--` may name the engine's own option; the claim
+  // reads it as theirs, as the engine does, and still gives the command its id.
+  test("23c-option-word: an attempt option among the words behind -- is theirs, not one the agent already set", () => {
+    const dir = orchestrationProject();
+    const spec = commandSpec(dir, "direct", ["next", "--", "add", "an", "--aidlc-attempt-id", "option"]);
+    const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, "words-option", spec.text, "words-option"));
+    expect(rewrittenCommand(pre), pre.stdout).toBe(
+      'bun .aidlc/tools/aidlc-orchestrate.ts "next" --aidlc-attempt-id words-option "--" "add" "an" "--aidlc-attempt-id" "option"',
+    );
+  });
+
+  // A folder named in front of the verb is the launcher's, and the attempt id
+  // still goes right after the verb.
+  test("23c-lead: with the folder named in front of next, the attempt id goes right after next", () => {
+    const dir = orchestrationProject();
+    const text = `bun .aidlc/tools/aidlc-orchestrate.ts --project-dir ${JSON.stringify(dir)} next fix the bug`;
+    const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, "lead-folder", text, "lead-folder"));
+    expect(rewrittenCommand(pre), pre.stdout).toBe(
+      `bun .aidlc/tools/aidlc-orchestrate.ts --project-dir ${JSON.stringify(dir)} next --aidlc-attempt-id lead-folder fix the bug`,
+    );
+  });
+
+  // The claim reads the launcher's folder where the dispatcher reads it, so a
+  // folder the dispatcher would run the work in is checked, whatever comes before it.
+  test("23c-dispatcher-folder: a folder the dispatcher takes after a flag and a word is still checked", () => {
+    const dir = orchestrationProject();
+    const other = scratchProject(true);
+    const pre = runAdapter(dir, "guard-tool-call", commandPayload(dir, "dispatcher-folder", `aidlc next --new-intent notes --project-dir ${JSON.stringify(other)}`, "dispatcher-folder"));
+    expect(pre.stdout).toContain("targets a different physical project");
+    // Its own flag in front of the words: the dispatcher takes every folder on the line.
+    const global = runAdapter(dir, "guard-tool-call", commandPayload(dir, "dispatcher-folder-global", `aidlc next --json fix bug --project-dir ${JSON.stringify(other)}`, "dispatcher-folder-global"));
+    expect(global.stdout).toContain("targets a different physical project");
+  });
+
+  // A folder left off the end is the agent's slip only where the engine would
+  // read the option; among the person's words the token is theirs.
+  test("23c-folder-word: `--project-dir` at the end of the person's words is not a missing folder", () => {
+    const dir = orchestrationProject();
+    const slip = "`--project-dir` needs this project's folder after it";
+    const words = runAdapter(dir, "guard-tool-call", commandPayload(dir, "folder-word", "aidlc next add a flag named --project-dir", "folder-word"));
+    expect(words.stdout).not.toContain(slip);
+    const missing = runAdapter(dir, "guard-tool-call", commandPayload(dir, "folder-slip", "aidlc next --project-dir", "folder-slip"));
+    expect(missing.stdout).toContain(slip);
+  });
+
   // A `next` that reaches the engine outside the chat's own answer (a
   // terminal, a delegate) while the resume question waits is not published.
   // Retrying repeats that, so it names the answer, and the answer goes through.
@@ -4225,6 +4317,53 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(humanTurnCount(dir)).toBe(1);
   });
 
+  // The Copilot CLI hands a task launch's brief to the hooks as the first prompt
+  // of the subagent's own session: under its own id on 1.0.95 and later, under
+  // the task call's id on 1.0.74 (live-captured, both in the fixture). Nothing
+  // else in the payload marks it. The launch's record is spent there, and the
+  // person's chat keeps every line they type.
+  test("35g: a brief the Copilot CLI delivers under the subagent's own session is not the person's turn", () => {
+    const dir = rulesProject();
+    appendInteractionEvent(dir, "STAGE_STARTED", "requirements-analysis");
+    const chat = String(FIXTURES.preToolUse_task.session_id);
+    const agent = "aidlc-architecture-reviewer-agent";
+    const messageTexts = (): string[] => {
+      const messages = join(dir, "aidlc", ".aidlc-sessions", "messages");
+      return existsSync(messages)
+        ? readdirSync(messages).map((name) => String((JSON.parse(readFileSync(join(messages, name), "utf-8")) as { text?: unknown }).text))
+        : [];
+    };
+    for (const arrival of [FIXTURES.userPromptSubmit_subagentBrief, FIXTURES.userPromptSubmit_subagentBrief_1_0_74]) {
+      const pre = runAdapter(dir, "guard-tool-call", withCwd({
+        ...FIXTURES.preToolUse_task,
+        tool_input: { ...(FIXTURES.preToolUse_task.tool_input as Record<string, unknown>), agent_type: agent, prompt: SUBAGENT_BRIEFING },
+      }, dir));
+      expect(pre.code, pre.stderr).toBe(0);
+      const delivered = String(hostRewrite(pre.stdout)?.prompt ?? "");
+      expect(delivered).toContain("AIDLC_DISPATCH_RULES_BEGIN");
+      const start = runAdapter(dir, "subagent-start", withCwd({ ...FIXTURES.subagentStart_task, agentName: agent }, dir));
+      expect(start.code, start.stderr).toBe(0);
+      const brief = runAdapter(dir, "record-human-turn", withCwd({ ...arrival, prompt: delivered }, dir));
+      expect(brief.code, brief.stderr).toBe(0);
+      expect(humanTurnCount(dir), String(arrival.session_id)).toBe(0);
+      runAdapter(dir, "log-subagent", withCwd({ ...FIXTURES.subagentStop_task, agent_type: agent, agent_name: agent }, dir));
+    }
+    expect(messageTexts()).toEqual([]);
+    expect(keptWords(dir)).toBe("");
+    expect(humanSequence(dir)).toBeUndefined();
+    expect(JSON.parse(readFileSync(briefingsPath(dir), "utf-8"))).toHaveLength(0);
+    expect(auditRows(dir, "SUBAGENT_PROMPT_UNMATCHED")).toHaveLength(0);
+
+    // The person's own line in the chat counts, and so do the brief's words
+    // when they type them after the subagent started.
+    settleSubagentStarts(dir);
+    expect(typedPrompt(dir, chat, "Approve").code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(1);
+    expect(typedPrompt(dir, chat, SUBAGENT_BRIEFING).code).toBe(0);
+    expect(humanTurnCount(dir)).toBe(2);
+    expect(messageTexts().sort()).toEqual(["Approve", SUBAGENT_BRIEFING].sort());
+  });
+
   // #1411: VS Code asks "Run command? Allow / Skip" before every shell call no
   // hook allowed, so each AI-DLC step waited on a click. In VS Code, AI-DLC's
   // own simple commands carry the allow; on the Copilot CLI they get no
@@ -4388,14 +4527,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       expect(pre.stdout, command).not.toContain('"permissionDecision":"allow"');
     }
 
-    // Denies are unchanged and never carry an allow: compounds and redirects, a
-    // direct lifecycle verb, and the host-only routes and hook files the
-    // state-transition guard refuses (a model cannot mint a human turn).
+    // Denies are unchanged and never carry an allow: compounds and redirects,
+    // and the host-only routes and hook files the state-transition guard
+    // refuses (a model cannot mint a human turn).
     for (const command of [
       "bun .aidlc/tools/aidlc.ts doctor > doctor.txt",
       "bun .aidlc/tools/aidlc-orchestrate.ts next && echo done",
-      "bun .aidlc/tools/aidlc-state.ts approve requirements-analysis",
-      "bun .aidlc/tools/aidlc.ts engine state approve requirements-analysis",
       "bun .aidlc/tools/aidlc.ts engine hook record-human-turn",
       "bun .aidlc/tools/aidlc.ts engine adapter copilot record-human-turn",
       "bun .aidlc/hooks/aidlc-record-human-turn.ts",
@@ -4406,6 +4543,60 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       const out = JSON.parse(pre.stdout) as { hookSpecificOutput?: Record<string, unknown> };
       expect(out.hookSpecificOutput?.permissionDecision, command).toBe("deny");
       expect(out.hookSpecificOutput?.updatedInput, command).toBeUndefined();
+    }
+  });
+
+  // The Allow prompt and the state tool read one check (decideFence), so they
+  // agree: in VS Code a direct stage-status command runs click-free exactly
+  // when the state tool refuses it, and keeps the prompt exactly when it would
+  // run, whatever the Guard Policy or the person's own switch.
+  test("36b: a direct state command keeps the Allow prompt exactly when the state tool would run it", () => {
+    // [policy, how the state file says it, whether the state tool refuses]
+    const policies: Array<[string, (state: string) => string, boolean]> = [
+      ["strict", (state) => state, true],
+      ["relaxed", (state) => state.replace(/^- \*\*Change Control\*\*:.*$/m, "- **Guard Policy**: relaxed (set by you)"), true],
+      ["off", (state) => state.replace(/^- \*\*Change Control\*\*:.*$/m, "- **Guard Policy**: off (set by you)"), false],
+      ["own switch", (state) => state.replace(
+        "## Scope Configuration\n",
+        "## Scope Configuration\n- **Guards Off**: state-transition (set by you)\n",
+      ), false],
+    ];
+    for (const [label, setPolicy, refusedByStateTool] of policies) {
+      const dir = orchestrationProject();
+      const statePath = seededStateFile(dir);
+      writeFileSync(statePath, setPolicy(readFileSync(statePath, "utf-8")));
+      for (const command of [
+        "bun .aidlc/tools/aidlc-state.ts approve requirements-analysis",
+        "bun .aidlc/tools/aidlc.ts engine state approve requirements-analysis",
+      ]) {
+        const pre = runAdapter(dir, "guard-tool-call", {
+          hook_event_name: "PreToolUse",
+          session_id: "direct-state",
+          tool_use_id: `direct-state-${label}`,
+          cwd: dir,
+          tool_name: "run_in_terminal",
+          tool_input: { command, explanation: "AI-DLC step", goal: "AI-DLC step", mode: "sync" },
+        });
+        expect(pre.code, `${label}: ${command}`).toBe(0);
+        if (refusedByStateTool) {
+          const out = JSON.parse(pre.stdout) as { hookSpecificOutput?: { permissionDecision?: string } };
+          expect(out.hookSpecificOutput?.permissionDecision, `${label}: ${command}`).toBe("allow");
+        } else {
+          expect(pre.stdout, `${label}: ${command}`).toBe("");
+        }
+      }
+      const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined };
+      delete env.AIDLC_STATE_TRANSITION_OWNER;
+      delete env.AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS;
+      const ran = spawnSync("bun", [join(dir, ".aidlc", "tools", "aidlc-state.ts"), "approve", "requirements-analysis"], {
+        cwd: dir,
+        encoding: "utf-8",
+        env,
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      const words = `${ran.stdout}${ran.stderr}`;
+      expect(words.includes("Stage status cannot be changed with aidlc-state.ts approve"), `${label}: ${words}`)
+        .toBe(refusedByStateTool);
     }
   });
 

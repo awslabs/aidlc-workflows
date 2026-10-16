@@ -5,9 +5,9 @@
 // aidlc-orchestrate.ts `next` CLI-contract test.
 //
 // SUBJECT: `next` is the read-only orchestration engine handler
-// (aidlc-orchestrate.ts:785 handleNext). It reads workflow state + the compiled
+// (aidlc-orchestrate.ts handleNext). It reads workflow state + the compiled
 // stage graph and emits EXACTLY ONE validated directive (JSON) to stdout via
-// `console.log(JSON.stringify(...))` (:147), mutating no workflow state. The
+// `console.log(JSON.stringify(...))`, mutating no workflow state. The
 // table drives it over the existing state fixtures and asserts (state + args) →
 // directive kind + key fields, the flag-precedence ladder (state > flag > env >
 // default), read-only dispatch (--status/--version → print), the
@@ -16,7 +16,7 @@
 //
 // SPAWN (not in-process): the whole contract is the argv-dispatch / process
 // boundary of aidlc-orchestrate.ts. `handleNext` is NOT exported (internal,
-// reached only through `main()` at :1965 via the `next` case at :1984). The
+// reached only through `main()` via the `next` case). The
 // directive lands on stdout through `console.log`; errors land through the
 // composed sibling tools the non-happy-path branches shell out to
 // (aidlc-jump.ts resolve/execute, aidlc-utility.ts resolve-env-scope /
@@ -57,16 +57,16 @@
 // mechanism and were dropped with it; issue #369.)
 //
 // Source cites (dist/claude/.claude/tools/aidlc-orchestrate.ts):
-//   :785 handleNext — the read-only branch ladder.
-//   :793 Branch 1  --status/--version -> print.
-//   :804 Branch 2  --stage + --phase -> "Cannot use --stage and --phase together".
-//   :822 Branch 3  --init -> print naming the scaffold cmd.
-//   :858 Branch 3b UNCONDITIONAL invalid --scope -> "Unknown scope ...".
-//   :873 Branch 4  env source -> shells resolve-env-scope -> verbatim "Invalid AWS_AIDLC_DEFAULT_SCOPE ...".
-//   :934 Branch 5  scope-change print ("scope change --scope <s>").
-//  :1034 Branch 7  --stage/--phase jump -> emitJumpDirective; with-state -> print "aidlc-jump.ts execute --target ... --direction ...".
-//  :1116 Branch 10 happy path -> run-stage for the in-flight current stage.
-//   :754 computeGate -> gate:true for every EXECUTE stage except initialization (the gate axis is NOT the execution axis).
+//   handleNext - the read-only branch ladder.
+//   Branch 1  --status/--version -> print.
+//   Branch 2  --stage + --phase -> "Cannot use --stage and --phase together".
+//   Branch 3  --init -> print naming the scaffold cmd.
+//   Branch 3b UNCONDITIONAL invalid --scope -> "Unknown scope ...".
+//   Branch 4  env source -> shells resolve-env-scope -> verbatim "Invalid AWS_AIDLC_DEFAULT_SCOPE ...".
+//   Branch 5  scope-change print ("scope change --scope <s>").
+//   Branch 7  --stage/--phase jump -> emitJumpDirective; with-state -> print "aidlc-jump.ts execute --target ... --direction ...".
+//   Branch 10 happy path -> run-stage for the in-flight current stage.
+//   computeGate -> gate:true for every EXECUTE stage except initialization (the gate axis is NOT the execution axis).
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -75,13 +75,14 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createOrchestrationTestProject,
   createTestProject,
+  DEFAULT_RECORD_DIR,
   FIXTURES_DIR,
   followProposal,
   REPO_ROOT,
@@ -97,7 +98,7 @@ import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const TOOL = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const NATIVE_TOOL = join(
   REPO_ROOT,
@@ -125,7 +126,7 @@ const MID_INCEPTION = join(FIXTURES_DIR, "state-mid-inception.md");
 
 interface RunResult {
   rc: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string; // combined stdout+stderr
 }
 
 // Run `bun aidlc-orchestrate.ts next <args> --project-dir <proj>`. `extraEnv`
@@ -154,7 +155,6 @@ afterEach(() => {
 
 // ===========================================================================
 // Happy path — in-flight current stage -> run-stage carrying graph fields
-// (.sh tests 1-4)
 // ===========================================================================
 describe("t114 happy path: in-flight current stage -> run-stage", () => {
   test("1: in-flight current stage -> run-stage directive", () => {
@@ -212,7 +212,7 @@ describe("t114 happy path: in-flight current stage -> run-stage", () => {
 });
 
 // ===========================================================================
-// Scope precedence ladder + scope validation (.sh tests 5-8)
+// Scope precedence ladder + scope validation
 // ===========================================================================
 describe("t114 scope precedence + validation", () => {
   test("5: invalid --scope errors unconditionally over valid state [finding 4]", () => {
@@ -423,7 +423,7 @@ describe("t114 scope precedence + validation", () => {
 });
 
 // ===========================================================================
-// Read-only dispatch + mutual-exclusion guard (.sh tests 9-11)
+// Read-only dispatch + mutual-exclusion guard
 // ===========================================================================
 describe("t114 read-only dispatch + guards", () => {
   test("9: --status -> print directive (read-only dispatch)", () => {
@@ -510,10 +510,10 @@ describe("t114 in-session config alias", () => {
   });
 
   test("a modifier next refuses stays terminal over an active workflow", () => {
-    // Full Suite 36549553601: `/aidlc --depth extreme` must not count as
-    // engagement on the marker path (Kiro CLI, opencode) either. The value its
-    // table does not hold goes to the agent as a reading step naming the words
-    // it does hold, which is still no workflow work.
+    // `/aidlc --depth extreme` must not count as engagement on the marker path
+    // (Kiro CLI, opencode) either. The value its table does not hold goes to the
+    // agent as a reading step naming the words it does hold, which is still no
+    // workflow work.
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     const before = readFileSync(seededStateFile(proj), "utf-8");
@@ -521,9 +521,9 @@ describe("t114 in-session config alias", () => {
       [["--depth", "extreme"], "--depth", "extreme"],
       [["--review", "loud"], "--review", "loud"],
       [["--guard-policy", "loose"], "--guard-policy", "loose"],
-      // Full Suite 38087105892: the agent sent the person's typed value beside
-      // its own `--resume`. next answers the same reading step and takes
-      // nothing else from the line, so the marker stays untouched here too.
+      // The agent sent the person's typed value beside its own `--resume`. next
+      // answers the same reading step and takes nothing else from the line, so the
+      // marker stays untouched here too.
       [["--resume", "--depth", "extreme"], "--depth", "extreme"],
       [["--depth", "extreme", "--resume"], "--depth", "extreme"],
     ];
@@ -833,7 +833,7 @@ describe("t114 knowledge (DocumentKB) terminal routing", () => {
 });
 
 // ===========================================================================
-// With-state jump commits via an `execute` print directive (.sh test 12)
+// With-state jump commits via an `execute` print directive
 // ===========================================================================
 describe("t114 with-state jump -> execute print", () => {
   test("12: with-state --phase jump -> print naming execute (commit is a mutation, next stays read-only)", () => {
@@ -854,7 +854,7 @@ describe("t114 with-state jump -> execute print", () => {
 
 // ===========================================================================
 // gate axis is the human-judgement boundary, NOT conditional-inclusion
-// (.sh test 13 — regression guard for the gate-derivation fix)
+// (regression guard for the gate-derivation fix)
 // ===========================================================================
 describe("t114 gate axis != execution axis", () => {
   test("13: ALWAYS-execution gated stage (intent-capture) -> gate:true (not derived from execution axis)", () => {
@@ -871,14 +871,14 @@ describe("t114 gate axis != execution axis", () => {
 });
 
 // ===========================================================================
-// Cutover invocation is engine-compatible: no dropped-arg wrapper (.sh test 14)
+// Invocation is engine-compatible: no dropped-arg wrapper
 // ===========================================================================
 describe("t114 cutover: no --args swallow", () => {
   test("14a: SKILL.md forwarding loop has no 'next --args' wrapper", () => {
     // SKILL.md invokes the engine as `next $ARGUMENTS` (argv word-split into the
     // parser). A `next --args "$ARGUMENTS"` wrapper would silently drop every
     // flag-bearing invocation. Pin half (a): the shipped prose must NOT document
-    // a `--args` wrapper. (The .sh grepped the file directly; we read the bytes.)
+    // a `--args` wrapper.
     expect(existsSync(SKILL_MD)).toBe(true);
     const skill = readFileSync(SKILL_MD, "utf-8");
     expect(skill.includes("next --args")).toBe(false);
@@ -1149,10 +1149,10 @@ describe("t114 parked branch (#367)", () => {
 
 // ===========================================================================
 // Branch 9c - mid-flow freeform prose -> routing ask (the offer backstop).
-// Fresh-start prose gets Branch 8's routing ask; mid-flow prose used to fall
-// through to Branch 10 with the typed text silently discarded, which let a
+// Fresh-start prose gets Branch 8's routing ask; mid-flow prose falling
+// through to Branch 10 with the typed text silently discarded lets a
 // conductor skip the continue-vs-new-work judgment and pour new-work prose
-// into the active intent's stage. The engine now surfaces the question.
+// into the active intent's stage. The engine surfaces the question.
 // ===========================================================================
 describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
   // Words alone over active work may ask to redo, jump, or start fresh: the
@@ -1182,7 +1182,6 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     expect(read.message).not.toContain("ask the person in one short question");
     // None of the person's words ride the directive.
     expect(read.message).not.toContain("intent capture");
-    // The same words asked about as work keep them.
     const ask = JSON.parse(askedAbout("take me back to intent capture")) as { ask_type?: string; new_work_description?: string };
     expect(ask.ask_type).toBe("new-work-routing");
     expect(ask.new_work_description).toBe("take me back to intent capture");
@@ -1214,10 +1213,8 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
       "a completely separate standalone metrics dashboard",
     );
     expect(directive.proposed_scope).toBeTruthy();
-    // The ask names the active work and echoes the typed prose.
     expect(out).toContain("already in progress");
     expect(out).toContain("standalone metrics dashboard");
-    // The three routes ride the question; the affirmative leads with Yes.
     expect(out).toContain("continue");
     expect(out).toContain("Yes, set it up alongside");
     expect(out).toContain("plan");
@@ -1254,9 +1251,9 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
     expect(out).not.toContain('"kind":"ask"');
   });
 
-  // Arden decision 6: words typed with a differing --scope over open work are
-  // never dropped. One question, new work first (what the words most often
-  // mean): new work with that scope, or a scope change for the open work.
+  // Words typed with a differing --scope over open work are never dropped. One
+  // question, new work first (what the words most often mean): new work with
+  // that scope, or a scope change for the open work.
   test("prose WITH a differing --scope asks once: new work with it first, or change the open work's scope", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION); // scope: feature
@@ -1351,12 +1348,12 @@ describe("t114 mid-flow freeform prose -> routing ask (Branch 9c)", () => {
 
 // ===========================================================================
 // Branch 4d - a NEW description over a FINISHED workflow (issue #1535).
-// A finished workflow cannot take a description. It used to fall through to
-// a plain `done` (`--scope <same>`) or to Branch 9c's "work is already in
-// progress" question (prose alone), so the person who asked to start new work
-// was told the old work was finished, or asked whether to continue it. A typed
-// scope now starts the new work with that scope; prose alone gets the
-// fresh-start plan offer. A bare `next` still reports `done`.
+// A finished workflow cannot take a description. Falling through to a plain
+// `done` (`--scope <same>`) or to Branch 9c's "work is already in progress"
+// question (prose alone) would tell the person who asked to start new work
+// that the old work is finished, or ask whether to continue it. A typed scope
+// starts the new work with that scope; prose alone gets the fresh-start plan
+// offer. A bare `next` still reports `done`.
 // ===========================================================================
 describe("t114 new description over a finished workflow -> new work (#1535)", () => {
   for (const typed of ["feature", "bugfix"]) {
@@ -1397,13 +1394,84 @@ describe("t114 new description over a finished workflow -> new work (#1535)", ()
     const out = runNext(proj, ["--resume", "a standalone metrics dashboard"]).out;
     expect(out).not.toContain("intent create");
   });
+
+  // Words beside finished work may ask to go back to one of its stages ("go
+  // back to code generation for a second round"): the print names the work and
+  // the way back beside the plans, and leaves the reading to the agent.
+  const GO_BACK = "go back to code generation for a second round on both units";
+  const proposalPrint = (args: string[]): string => {
+    const d = runOrchestrateNext(TOOL, proj, args, { cwd: proj, env: { ...process.env } }).directive as
+      { kind?: string; message?: string } | null;
+    expect(d?.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
+    return String(d?.message);
+  };
+  const intents = () => join(proj, "aidlc", "spaces", "default", "intents");
+
+  test("words over the selected finished workflow name it and the way back to a stage", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    const message = proposalPrint([GO_BACK]);
+    expect(message).toStartWith(`The person said: "${GO_BACK}".`);
+    expect(message).not.toContain("asked for new work");
+    expect(message).toContain(`This project's work \`fixture\` (record: \`${DEFAULT_RECORD_DIR}\`) is finished.`);
+    expect(message).toContain("next --stage <stage slug>` (add `--unit <unit>` or `--every-unit`");
+    // It is selected here, so nothing to select first.
+    expect(message).not.toContain(`intent ${DEFAULT_RECORD_DIR}`);
+    expect(message).toContain("--propose <plan> --request ");
+    expect(message).toContain("Plans: ");
+  });
+
+  test("in a fresh clone the finished work is named with the command that selects it", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    rmSync(join(intents(), "active-intent"), { force: true });
+    const message = proposalPrint([GO_BACK]);
+    expect(message).toStartWith(`The person said: "${GO_BACK}".`);
+    expect(message).toContain("is finished, and it is not selected in this chat.");
+    expect(message).toContain(`intent ${DEFAULT_RECORD_DIR}\`, then \``);
+    expect(message).toContain("next --stage <stage slug>`");
+    expect(message).toContain("--propose <plan> --request ");
+  });
+
+  test("a finished record named outside the record-name shape is not written into a command", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    rmSync(join(intents(), "active-intent"), { force: true });
+    renameSync(join(intents(), DEFAULT_RECORD_DIR), join(intents(), "customer work"));
+    const registry = join(intents(), "intents.json");
+    writeFileSync(registry, readFileSync(registry, "utf-8").replaceAll(`"${DEFAULT_RECORD_DIR}"`, '"customer work"'));
+    const message = proposalPrint([GO_BACK]);
+    expect(message).not.toContain("customer work");
+    expect(message).toStartWith("The person asked for new work: ");
+  });
+
+  // A jump takes no settings (--review beside --stage is refused), so the way
+  // back sets what they typed first, or it would be dropped without a word.
+  test("a setting typed with the words rides the way back, set before the stage step", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    rmSync(join(intents(), "active-intent"), { force: true });
+    const message = proposalPrint(["--review", "none", GO_BACK]);
+    const select = message.indexOf(`intent ${DEFAULT_RECORD_DIR}\``);
+    const set = message.indexOf("config set review none` and say the line it prints, then `");
+    const stage = message.indexOf("next --stage <stage slug>`");
+    expect({ select: select >= 0, set: set > select, stage: stage > set }).toEqual({ select: true, set: true, stage: true });
+  });
+
+  test("new work the person confirmed beside finished work gets the plan step alone", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    const message = proposalPrint(["--new-intent", "a standalone metrics dashboard"]);
+    expect(message).toStartWith("The person asked for new work: ");
+    expect(message).not.toContain("is finished");
+  });
 });
 
 // ===========================================================================
 // Branch 9c - replies that are not new work. The answer to the current
 // stage's open logged question (the Stop hook's DECISION_RECORDED pairing) and
-// the routing ask's own option given back as prose used to come back as a
-// fresh new-work routing ask, which asked the same question again forever.
+// the routing ask's own option given back as prose must not come back as a
+// fresh new-work routing ask, which asks the same question again forever.
 // ===========================================================================
 describe("t114 Branch 9c: replies that are not new work", () => {
   const ANSWER =
@@ -1448,7 +1516,6 @@ describe("t114 Branch 9c: replies that are not new work", () => {
     compose_command?: string;
   };
   const directive = (args: string[]) => JSON.parse(runNext(proj, args).out) as Directive;
-  // The engine's own command, run as emitted (every word after `next`).
   const runCommand = (command: string) =>
     directive(command.slice(command.indexOf(" next ") + " next ".length).split(" ").filter(Boolean));
   // The `next --request` the reading print names, with the plan the agent read
@@ -1735,12 +1802,12 @@ describe("t114 Branch 9c: replies that are not new work", () => {
 // ===========================================================================
 // Retired flags (--init / --force) are consumed, never intent text
 // ===========================================================================
-// Branch 3 (`--init`) retired in P4; #847 later made unknown flag-looking
-// tokens lossless task text. Together they leaked retired flags into the
-// created intent's DESCRIPTION (`--arguments=--init`). These pin the repair:
-// retired flags vanish, genuinely-unknown tokens still ride as task text,
-// the `--` delimiter still passes a literal `--init` through, and an invocation
-// containing only retired flags stops with current replacement guidance.
+// Treating retired flags as task text leaked them into the created intent's
+// DESCRIPTION (`--arguments=--init`). These pin the contract: retired flags
+// vanish, an unknown flag-looking token among the words comes back as a
+// reading step rather than task text, the `--` delimiter still passes a
+// literal `--init` through, and an invocation containing only retired flags
+// stops with current replacement guidance.
 describe("t114 retired flags are consumed, not description text", () => {
   test("--init with --new-intent + prose creates without leaking the flag", () => {
     proj = createOrchestrationTestProject();
@@ -1824,7 +1891,6 @@ describe("t114 retired flags are consumed, not description text", () => {
     proj = createOrchestrationTestProject();
     seedStateFile(proj, MID_IDEATION);
     const out = runNext(proj, ["add", "a", "--project-dir", "flag", "to", "the", "CLI"]).out;
-    // No word of theirs is read as a folder to work in, and none is made.
     expect(existsSync(join(proj, "flag"))).toBe(false);
     // Their line comes back whole, as the step for a flag this engine does not
     // take among their words, and no work is started on a cut-down sentence.

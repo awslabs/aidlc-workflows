@@ -1,7 +1,7 @@
 // covers: cli:aidlc-audit(append-protected,append-batch-protected,append-raw-event-line,reserved-field-keys), function:findAllEvents, subcommand:aidlc-bolt:set-autonomy, function:humanActedSinceGate, function:hasUnsafeSingleLineCharacter, function:isNonAnswer, function:formatReceivedReply, function:selfAttributedDecisionMarker, function:isAutonomousConstructionDecision
 //
 // t261 — the authority floor on the audit surface (issue 681, claims 3/4/7/8).
-// Four related guarantees, each with a REFUSE case and an ALLOW case so the
+// Five related guarantees, each with a REFUSE case and an ALLOW case so the
 // floor neither leaks nor over-blocks:
 //
 //   1. The public audit CLI cannot forge authority-bearing receipts: `append`
@@ -200,7 +200,6 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
       expect(r.out).toMatch(/authority-bearing receipt|reserved for its owning hook\/tool/);
       expect(r.out).toContain(event);
     }
-    // nothing landed on disk
     expect(readAllAuditShards(proj)).not.toContain("STAGE_COMPLETED");
     expect(readAllAuditShards(proj)).not.toContain("HUMAN_TURN");
     expect(readAllAuditShards(proj)).not.toContain("QUESTION_UNANSWERED");
@@ -379,12 +378,11 @@ describe("t261 set-autonomy escalation requires and consumes a human turn", () =
     const p = createTestProject();
     // Deliberately NOT seeding `Construction Autonomy Mode`. The fixture omits
     // it exactly as the generated state file does, so these tests exercise the
-    // real production shape: set-autonomy has to CREATE the line. An earlier
-    // version of this helper appended `- **Construction Autonomy Mode**: gated`
-    // here, which manufactured the one precondition the production path lacks
-    // and made every assertion below incapable of catching issue #1045 (the
-    // grant threw `Field not found in state file` before reaching the audit
-    // emission).
+    // real production shape: set-autonomy has to CREATE the line. Appending
+    // `- **Construction Autonomy Mode**: gated` here would manufacture the one
+    // precondition the production path lacks and make every assertion below
+    // incapable of catching issue #1045 (the grant threw `Field not found in
+    // state file` before reaching the audit emission).
     seedStateFile(p, join(FIXTURES, "state-construction.md"));
     // Seed one row so the empty-ledger fail-open path does not apply.
     const seed = guarded(AUDIT, ["append", "ERROR_LOGGED", "--field", "Details=seed"], p);
@@ -638,7 +636,7 @@ describe("t261 an implied confirmation is nobody's decision", () => {
     expect(readAllAuditShards(proj)).not.toContain("DECISION_RECORDED");
     // A question in the agent's own words, one quoting the phrase as an
     // example, and questions about consent rules in the person's own app are
-    // recorded as before.
+    // recorded.
     for (const decision of [
       "Which storage backend?",
       'Did you mean "implicitly confirmed" as a term?',

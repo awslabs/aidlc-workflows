@@ -176,7 +176,6 @@ function utilityError(stderr: string): string {
   return parsed.error;
 }
 
-/** A project with the shipped memory and one intent on `scope`. */
 // A command typed at the person's own terminal, with no chat around it and no
 // agent host's mark on it.
 const TERMINAL: NodeJS.ProcessEnv = {
@@ -217,7 +216,6 @@ function memoryFile(proj: string, layer: "org" | "team" | "project"): string {
   return join(proj, "aidlc", "spaces", "default", "memory", `${layer}.md`);
 }
 
-/** Declare a Mode under the shipped `## Guard Policy` heading. */
 function declareMemoryMode(proj: string, layer: "org" | "team" | "project", mode: string): void {
   const path = memoryFile(proj, layer);
   const content = readFileSync(path, "utf-8");
@@ -295,12 +293,10 @@ function rowsOf(proj: string, event: string) {
   return readAuditShardEvents(proj).filter((entry) => entry.event === event);
 }
 
-/** How many times the one-line rename notice appears in a stream. */
 function renameNotices(stream: string): number {
   return stream.split("\n").filter((line) => line === GUARD_POLICY_RENAME_NOTICE).length;
 }
 
-/** The frontmatter block of a shipped scope file. */
 function scopeFrontmatter(scope: string): string {
   const body = readFileSync(join(AIDLC_SRC, "scopes", `aidlc-${scope}.md`), "utf-8");
   const match = /^---\n([\s\S]*?)\n---/.exec(body);
@@ -422,7 +418,6 @@ describe("t333 (2) the grammar", () => {
     expect(structuredField("Ordering:\n  tests first.", "Ordering")).toBe("tests first.");
   });
 
-  // These layouts were already accepted before wrapped values were supported.
   // Nested notes, sibling fields, and new blocks are not part of the field;
   // only wrapped prose belongs to its value.
   test("a field value ends at the next item of any marker, a sibling field, or a block", () => {
@@ -695,7 +690,6 @@ describe("t333 (3) resolution precedence", () => {
     const sentence = fenceSwitchSentence(proj, "review-freeze", content);
     expect(sentence).toContain("cannot be turned off from chat");
     expect(sentence).not.toContain("guard.review-freeze off");
-    // It says where the repair is made.
     expect(sentence).toContain("correct it there");
   });
 
@@ -794,7 +788,6 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(auditBlockField(rows[0].block, "Old Value")).toBe("strict");
     expect(auditBlockField(rows[0].block, "New Value")).toBe("off");
     expect(auditBlockField(rows[0].block, "Source")).toBe("you");
-    // Run again, the setter says it already holds.
     const unchanged = run(UTILITY, ["config-change", "--guard-policy", "off"], proj, FENCE_ENV_CLEAR);
     expect(unchanged.status, unchanged.stderr).toBe(0);
     expect(unchanged.stdout).toContain("Guard Policy is already off (set by you)");
@@ -817,7 +810,6 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     });
     expect(JSON.parse(listed.stdout)).not.toHaveProperty("guard.human-presence");
     expect(run(UTILITY, ["config-get", "guard.human-presence"], proj, FENCE_ENV_CLEAR).stdout).toBe("on (default)\n");
-    // Back to strict: the row records the move from off.
     const restored = run(UTILITY, ["config-change", "--guard-policy", "strict"], proj);
     expect(restored.status, restored.stderr).toBe(0);
     const after = guardPolicyRows(proj);
@@ -890,7 +882,6 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(strictStatus.stdout).not.toContain(STATUS_FENCES);
   });
 
-  /** The last JSON line `next` printed, narrowed to the two fields these tests read. */
   function lastDirective(stdout: string): { kind: string; message: string } {
     const parsed: unknown = JSON.parse(stdout.trim().split("\n").pop() ?? "");
     if (
@@ -975,7 +966,6 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(read.status, read.stderr).toBe(0);
     expect(read.stdout).toBe("strict (set by you)\n");
     expect(renameNotices(read.stderr)).toBe(1);
-    // The new key prints no notice, and the list carries only the new key.
     const current = run(UTILITY, ["config-get", "guard-policy"], proj);
     expect(current.stdout).toBe("strict (set by you)\n");
     expect(renameNotices(current.stderr)).toBe(0);
@@ -1015,7 +1005,6 @@ describe("t333 (4) config-change, the slash flag, and the status line", () => {
     expect(lastDirective(routed.stdout).message).toContain("engine config set guard-policy relaxed");
     expect(lastDirective(routed.stdout).message).not.toContain("already applied");
     expect(guardPolicyRows(proj)).toHaveLength(0);
-    // A value the state does not hold yet names the setter too.
     const strict = lastDirective(run(ORCHESTRATE, ["next", "--guard-policy", "strict"], proj).stdout);
     expect(strict.message).toContain("engine config set guard-policy strict");
   });
@@ -1740,7 +1729,6 @@ describe("t333 (8) intent-create --space is the creation target end to end", () 
     expect(rows.map((row) => row.event)).toContain("WORKFLOW_STARTED");
     expect(rows.map((row) => row.event)).toContain("WORKSPACE_INITIALISED");
     expect(existsSync(join(altIntents, createdDir, "verification"))).toBe(true);
-    // The active space is untouched: cursor, registry, records, rows.
     expect(snapshot(selected.proj, "default")).toEqual(defaultBefore);
     expect(readAuditShardEvents(selected.proj, selected.defaultIntent, "default")).toEqual(defaultRows);
     expect(readFileSync(join(selected.proj, "aidlc", "active-space"), "utf-8").trim()).toBe("default");
@@ -1981,7 +1969,6 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
       "review-freeze",
     ]);
     expect(run(UTILITY, ["config-get", "guard.human-presence"], proj, FENCE_ENV_CLEAR).stdout).toBe("on (default)\n");
-    // Back on: GUARD_RESTORED, the line shrinks, the read returns to the default.
     recordHumanPrompt(proj, "/aidlc config set guard.state-transition on");
     const restored = run(UTILITY, ["config-change", "--guard.state-transition", "on"], proj, FENCE_ENV_CLEAR);
     expect(restored.status, restored.stderr).toBe(0);
@@ -2776,7 +2763,6 @@ describe("t333 (9) fences: the policy lowers a fixed set; per-run switches can l
     // No harness session: a plain CLI run, where the machine switch counts
     // (t-plan-approval-switch covers the session-start stamp).
     const env = { ...FENCE_ENV_CLEAR, AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1", AIDLC_SESSION_OVERRIDE: "" };
-    // The machine switch turns plan approval off on this machine, and the switch reads that.
     expect(run(UTILITY, ["config-get", "guard.plan-approval"], proj, env).stdout).toBe(
       "off (from env AIDLC_DISABLE_PLAN_APPROVAL_GUARD)\n",
     );

@@ -5,6 +5,7 @@
 // settings only (its scope is "application"), so the switch covers every
 // project on the computer: AI-DLC turns it off only when the person says yes,
 // and keeps their answer once per machine so no project asks again.
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -15,12 +16,15 @@ import { writeFileAtomic } from "./aidlc-lib.ts";
 
 export const KIRO_WORKFLOWS_SETTING = "kiroAgent.workflows.enabled";
 export const KIRO_WORKFLOWS_ISSUE_ID = "kiro-workflows-on";
+export const KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID = "kiro-workflows-unreadable";
 
 /** The person's answer, kept per machine: they turned Workflows off or kept it
  *  on, or a chat already asked them. Any answer means AI-DLC does not ask again. */
 export type KiroWorkflowsAnswer = "off" | "on" | "asked";
 const ANSWERS: readonly KiroWorkflowsAnswer[] = ["off", "on", "asked"];
 export const KIRO_WORKFLOWS_ANSWER_FILE = "kiro-ide-workflows";
+/** The settings file error a chat last told the person about. */
+const KIRO_SETTINGS_ERROR_TOLD_FILE = "kiro-ide-settings-error-told";
 
 export type KiroIdeWorkflows = {
   /** "" when no Kiro IDE settings are in reach (under the test runner). */
@@ -39,7 +43,7 @@ function hostValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
   return value && !setByDotenvFile(name) ? value : undefined;
 }
 
-/** True in a process Kiro IDE started (its hooks and the agent's commands). */
+/** True in a process Kiro IDE started (its hooks, not the agent's commands). */
 export function insideKiroIde(env: NodeJS.ProcessEnv = process.env): boolean {
   return hostValue(env, "VSCODE_CODE_CACHE_PATH") !== undefined;
 }
@@ -150,7 +154,6 @@ export const KIRO_WORKFLOWS_QUESTION =
   "running in your chats. Turn Workflows off? It is a Kiro setting for all your projects, and you can turn it " +
   "back on any time.";
 
-/** The line after AI-DLC turned Workflows off. */
 export function kiroWorkflowsOffLine(): string {
   return "Turned Kiro's Workflows feature off, so AI-DLC's reviews and helpers run in your chats. It is a Kiro " +
     `setting for all your projects. ${RELOAD_STEP} You can turn it back on any time.`;
@@ -160,7 +163,6 @@ export function kiroWorkflowsOnLine(): string {
   return `Turned Kiro's Workflows feature back on (a Kiro setting for all your projects). ${RELOAD_STEP}`;
 }
 
-/** The line after the person kept Workflows on at a question. */
 export function kiroWorkflowsKeptLine(invoke: string): string {
   return "Kept Kiro's Workflows feature on; AI-DLC will not ask again. To turn it off later: " +
     `\`${invoke} config trust --kiro-workflows off\`.`;
@@ -176,13 +178,70 @@ export function kiroWorkflowsFix(invoke: string): string {
     "(a Kiro setting for all your projects); then run Developer: Reload Window from the Command Palette";
 }
 
+// A settings file AI-DLC cannot read as JSONC may still be one Kiro reads
+// (measured: Kiro IDE 1.2.37 turned Workflows on from a file missing a comma),
+// so it is named as unknown, never as off, until the file reads again. AI-DLC
+// cannot edit it, and Kiro's own settings commands write the same file, so the
+// step is fixing the error; it names the file, since setup's list shows it alone.
+export function kiroWorkflowsUnreadableMessage(): string {
+  return "Kiro Workflows: Kiro's settings file has an error, so AI-DLC cannot tell whether Workflows is on";
+}
+
+export function kiroWorkflowsUnreadableFix(settingsPath: string): string {
+  return `fix the error in ${settingsPath}`;
+}
+
+// The chat line for that file, once for each error: the marker keeps one line
+// per settings file (its path, then a fingerprint of its text), so a different
+// error is told again and another Kiro's file keeps its own line. null while
+// the file reads.
+function kiroSettingsErrorNotice(env: NodeJS.ProcessEnv): string | null {
+  const state = readKiroIdeWorkflows(env);
+  if (state.readable) return null;
+  let error: string;
+  try {
+    error = createHash("sha256").update(readFileSync(state.settingsPath)).digest("hex");
+  } catch {
+    return "";
+  }
+  const told = join(installRoot(), KIRO_SETTINGS_ERROR_TOLD_FILE);
+  const lines = new Map<string, string>();
+  try {
+    for (const line of readFileSync(told, "utf-8").split("\n")) {
+      const tab = line.lastIndexOf("\t");
+      if (tab > 0) lines.set(line.slice(0, tab), line.slice(tab + 1));
+    }
+  } catch {
+    // Not told yet.
+  }
+  if (lines.get(state.settingsPath) === error) return "";
+  lines.set(state.settingsPath, error);
+  try {
+    mkdirSync(dirname(told), { recursive: true });
+    writeFileAtomic(told, [...lines].map(([path, hash]) => `${path}\t${hash}\n`).join(""));
+  } catch {
+    // Not told rather than told in every chat.
+    return "";
+  }
+  return "TELL ONCE: after you answer the person's message, tell them this in their language: " +
+    `"Kiro's settings file (${state.settingsPath}) has an error, so AI-DLC cannot tell whether Kiro's Workflows ` +
+    "feature is on. While Kiro's Workflows feature is on, AI-DLC's reviews and helpers do not run in your chats. " +
+    "Fix the error in that file and AI-DLC can tell again.\" Do not say it again.";
+}
+
 /**
  * The one chat line a Kiro IDE chat gives the agent while Workflows is on and the
  * person was never asked on this machine, or "". Asking counts as their answer:
- * a "no" is simply not acting, and no chat asks again.
+ * a "no" is simply not acting, and no chat asks again. While the settings file
+ * has an error, the line tells them that instead, whatever they answered.
  */
 export function kiroIdeWorkflowsAsk(invoke: string, env: NodeJS.ProcessEnv = process.env): string {
-  if (!insideKiroIde(env) || !kiroWorkflowsQuestionDue(env)) return "";
+  if (!insideKiroIde(env)) return "";
+  // A settings file with an error is told instead, since a yes could not turn
+  // Workflows off in it.
+  const notice = kiroSettingsErrorNotice(env);
+  if (notice !== null) return notice;
+  if (!kiroWorkflowsQuestionDue(env)) return "";
   try {
     recordKiroWorkflowsAnswer("asked");
   } catch {

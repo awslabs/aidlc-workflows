@@ -254,7 +254,6 @@ describe("t352 creation: the person's word sets the project type", () => {
     const s = state(proj);
     expect(field(s, "Project Type")).toBe("Greenfield");
     expect(field(s, "Project Type Source")).toBe("you");
-    // The scan still fills in the stack.
     expect(field(s, "Languages")).toBe("TypeScript");
     expect(field(s, "Stages to Skip")).toContain(GREENFIELD_MARK);
   });
@@ -337,7 +336,7 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
   });
 
   test("a value other than greenfield or brownfield goes to the agent, naming the two words", () => {
-    // A value this engine's table does not hold is a reading step now
+    // A value this engine's table does not hold is a reading step
     // (t-three-ways-to-read-a-line): it names the words it holds, shows theirs
     // as a quoted string, and applies nothing.
     const proj = project();
@@ -447,7 +446,7 @@ describe("t352 a folder set up as new gains code", () => {
 
 // From a live run: the code arrived while a gate was open, the person typed
 // "approve", and the agent answered the engine's existing-code question itself;
-// the record said "Brownfield (you)". Now only the person's word records it.
+// the record said "Brownfield (you)". Only the person's word records it.
 describe("t352 what the folder is, is the person's word", () => {
   test("the agent's own answer is refused, and the person's answer goes through", () => {
     const proj = project();
@@ -505,7 +504,6 @@ describe("t352 the folder question needs the person's word after it", () => {
     expect(agents.status).not.toBe(0);
     expect(said(agents)).toContain("Ask them the question you were given, end the turn");
     expect(state(proj)).toBe(before);
-    // Their answer to it goes through.
     appendAuditEntry("HUMAN_TURN", {}, proj);
     const theirs = reclassifyUnsaid(proj, "brownfield");
     expect(theirs.status, said(theirs)).toBe(0);
@@ -1059,7 +1057,7 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     expect(String(nextIn(proj).narration ?? "")).not.toContain("Setting up a poc workflow");
   });
 
-  test("what a bugfix plan leaves out is said with the first stage", () => {
+  test("the first stage says the bugfix plan's size, not its settings", () => {
     const proj = project();
     const creation = nextIn(proj, ["--scope", "bugfix", "rows dated on the last day are left out of the report"]);
     expect(creation.kind).toBe("print");
@@ -1070,8 +1068,8 @@ describe("t352 the lines the person must hear ride the next step the agent speak
     ], { encoding: "utf-8", env: chat, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
     expect(created.status, `${created.stdout}${created.stderr}`).toBe(0);
     const said = String(nextIn(proj).narration);
-    expect(said).toStartWith("Setting up a bugfix workflow for this");
-    expect(said).toContain("; no learnings ritual or summary confirmation; lead agent only.");
+    expect(said).toMatch(/^Setting up a bugfix workflow for this: \d+ stages, \d+ approval gates\./);
+    expect(said).not.toContain("lead agent only");
   });
 
   test("how a pasted document was split is said with the first stage", () => {

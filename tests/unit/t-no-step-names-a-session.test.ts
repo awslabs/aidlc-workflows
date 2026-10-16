@@ -30,9 +30,6 @@ afterEach(() => {
   for (const dir of created.splice(0)) cleanupTestProject(dir);
 });
 
-// Everything the agent reads: the stages and protocols, the orchestrator skills
-// of every harness, the agent personas, the shipped knowledge, the method and
-// the onboarding templates.
 const SHIPPED = [
   join(REPO_ROOT, "core", "aidlc-common"),
   join(REPO_ROOT, "core", "skills"),

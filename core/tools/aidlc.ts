@@ -93,6 +93,8 @@ export type Route = {
   all?: readonly string[];
   helpSummary?: string;
   helpSections?: readonly HelpSection[];
+  /** The tool answers `<verb> --help` with that verb's flags (#2449). */
+  verbHelp?: true;
 };
 
 export type NamespaceHelpOptions = {
@@ -212,7 +214,7 @@ export const ENGINE_NAMESPACE_HELP: NamespaceHelpOptions = {
 export const SYSTEM_NAMESPACE_HELP: NamespaceHelpOptions = {
   namespace: "system",
   usage: "aidlc system <noun> <verb> [args]",
-  header: "Operations on this user's aidlc installation; never a system-wide or root install:",
+  header: "Operations on this user's aidlc installation; never system-wide (root only with --allow-root):",
 };
 
 // ROUTES_TABLE_START
@@ -496,7 +498,7 @@ export const ROUTES: readonly Route[] = [
     mutationScope: "machine",
     outputModes: ["human", "quiet", "json"],
     human: [{ command: "uninstall [--purge]", summary: "remove the machine installation" }],
-    all: ["uninstall [--purge] [--yes] [--json|--quiet]"],
+    all: ["uninstall [--purge] [--yes] [--allow-root] [--json|--quiet]"],
   },
   {
     id: "top-completions",
@@ -762,6 +764,7 @@ export const ROUTES: readonly Route[] = [
     classification: "passthrough",
     verbs: ["list", "describe", "fire"],
     tool: TOOLS.sensor,
+    verbHelp: true,
     ...HIDDEN_ENGINE,
   },
   {
@@ -780,6 +783,7 @@ export const ROUTES: readonly Route[] = [
     classification: "passthrough",
     verbs: ["start", "complete", "fail", "abort", "set-autonomy", "checkpoint", "swarm-checkpoint", "dispatch-event", "hold-merge", "release-merge"],
     tool: TOOLS.bolt,
+    verbHelp: true,
     ...HIDDEN_ENGINE,
   },
   {
@@ -789,6 +793,7 @@ export const ROUTES: readonly Route[] = [
     classification: "passthrough",
     verbs: ["create", "merge", "discard", "restore", "purge", "list", "verify", "info"],
     tool: TOOLS.worktree,
+    verbHelp: true,
     ...HIDDEN_ENGINE,
   },
   {
@@ -807,6 +812,7 @@ export const ROUTES: readonly Route[] = [
     classification: "passthrough",
     verbs: ["decision", "answer", "answers", "review", "link"],
     tool: TOOLS.log,
+    verbHelp: true,
     ...HIDDEN_ENGINE,
   },
   {
@@ -1218,6 +1224,7 @@ export type Action =
   | { type: "version"; json: boolean }
   | { type: "stub"; message: string; code: number }
   | { type: "help"; scope: "human" | "engine" | "system" | "all" | "config" }
+  | { type: "noun-help"; message: string }
   | { type: "error"; message: string; humanMessage?: string; code: number };
 
 function text(fd: number, value: string | Uint8Array): void {
@@ -1547,7 +1554,7 @@ export function renderCommandHelp(command: PublicCommand): string {
       `  ${invoke} update --channel preview`,
     ],
     use: [`  ${invoke} use 2.6.2`],
-    uninstall: [`  ${invoke} uninstall`, `  ${invoke} uninstall --purge`],
+    uninstall: [`  ${invoke} uninstall`, `  ${invoke} uninstall --purge`, `  ${invoke} uninstall --allow-root`],
   };
   return [
     descriptions[command],
@@ -1733,6 +1740,19 @@ function nounError(noun: string, verb: string | undefined, namespace: "engine" |
     type: "error",
     code: 2,
     message: `aidlc: ${detail} for ${namespace} noun '${noun}'; try 'aidlc ${namespace} --help'\n`,
+  };
+}
+
+// `engine <noun> --help` (#2449): the noun's verbs, from the routes that own
+// them. A verb's tool owns its flags, so the way to them is named only where
+// every route of the noun says its tool answers `<verb> --help`.
+function nounHelp(noun: string, routes: readonly Route[], namespace: "engine" | "system"): Action {
+  const invoke = `${aidlcInvocation()} ${namespace} ${noun}`;
+  const verbHelp = routes.every((route) => route.verbHelp === true);
+  return {
+    type: "noun-help",
+    message: `usage: ${invoke} <verb> [flags]\nverbs: ${routes.flatMap((route) => route.verbs).join(", ")}\n` +
+      (verbHelp ? `For a verb's flags, run '${invoke} <verb> --help'.\n` : ""),
   };
 }
 
@@ -1988,6 +2008,7 @@ function resolveNoun(argv: string[], namespace: Exclude<RouteNamespace, "public"
 
   const custom = routes.find((route) => route.kind === "custom");
   if (custom) return handleCustom(custom, argv);
+  if (argv[1] === "--help" || argv[1] === "-h") return nounHelp(noun, routes, namespace);
   return nounError(noun, argv[1], namespace);
 }
 
@@ -2694,7 +2715,6 @@ async function runAdapter(action: Extract<Action, { type: "adapter" }>): Promise
       input = await readStdin();
     } else if (
       action.target === "audit-and-sensors" ||
-      action.target === "enforce-approval-gate" ||
       action.target === "log-subagent" ||
       action.target === "plan-approval-guard" ||
       action.target === "record-human-turn" ||
@@ -2997,6 +3017,10 @@ async function execute(action: Action): Promise<number> {
         // Ambient discovery never makes help fail.
       }
     }
+    return 0;
+  }
+  if (action.type === "noun-help") {
+    text(1, action.message);
     return 0;
   }
   if (action.type === "version") {

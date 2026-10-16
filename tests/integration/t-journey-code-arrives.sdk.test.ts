@@ -69,7 +69,6 @@ const NEW_PROJECT_LINE = "The folder has no code yet, so I'm starting this as a 
 const CREATED = "State initialized:";
 // The existing-code question, as `next` returns it.
 const ASKED = '"ask_type":"project-type"';
-// Reverse Engineering handed to the agent to run.
 const RE_RUNS = '"kind":"run-stage","stage":"reverse-engineering"';
 const ANSWER = "yes, it is our existing code";
 
@@ -87,7 +86,6 @@ function reStageRow(state: string): string | undefined {
   return /^- \[.\] reverse-engineering \S+ (EXECUTE|SKIP)$/m.exec(state)?.[1];
 }
 
-// A small TypeScript service the team copies in after the work started.
 function teamCodeArrives(proj: string): void {
   const repo = join(proj, "lunch-poll");
   mkdirSync(join(repo, "src"), { recursive: true });
@@ -140,7 +138,6 @@ describe("t-journey-code-arrives (sdk): a new project gains the team's code", ()
 
         const asks = answered.toolResults.filter((t) => t.toolName === "Bash" && t.resultText.includes(ASKED));
         expect(asks.length, "the existing-code question was never asked").toBeGreaterThanOrEqual(1);
-        // Shown once, in a picker, and no other question before Reverse Engineering.
         const shown = answered.askedQuestions.map((m) => m.questions.map((q) => q.question));
         expect(shown, `pickers in chat 2: ${JSON.stringify(shown)}`).toHaveLength(1);
         expect(atQuestion, "the person was never given the question").toBeDefined();

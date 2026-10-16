@@ -1,34 +1,34 @@
 #!/usr/bin/env bun
 // scripts/package.ts — THE build entry for the one-core-N-harnesses layout.
 //
-//   bun scripts/package.ts            regenerate dist/{claude,kiro,kiro-ide,codex}
+//   bun scripts/package.ts            regenerate dist/ and dist-release/ for every harness, plus plugins
 //   bun scripts/package.ts --check     determinism guard (exit 1 on mismatch)
 //   bun scripts/package.ts <name>      regenerate just one harness
 //   bun scripts/package.ts <name> --check
 //
-// PIPELINE PER HARNESS (per the engine design, generalized from the proven S4 prototype and
-// the package-codex.ts engine):
+// PIPELINE PER HARNESS:
 //   1. COPY core/<src> → dist/<name>/<harnessDir>/<dst>, substituting
-//      {{HARNESS_DIR}} → harnessDir in .md prose (the ONE transform class) and
+//      {{HARNESS_DIR}} -> harnessDir in .md prose (see transform()) and
 //      applying the manifest's rules-dir rename.
 //   2. COPY harness/<name>/<src> → dist/<name>/<harnessDir>/<dst> (authored
 //      surfaces: orchestrator skill, settings/config), same token substitution
 //      on .md; render neutral onboarding and native setup from their skeletons.
 //   3. COMPILE the stage graph into the assembled tree (emits harness-correct
 //      stage-graph.json + scope-grid.json — compiled data lives only in dist).
-//   4. GENERATE runners into the assembled tree by composing aidlc-runner-gen's
-//      exported render fns under AIDLC_HARNESS_DIR (the proven codex idiom, now
-//      uniform for all shipped harnesses).
-//   5. EMIT via harness/<name>/emit.ts if the manifest declares one (codex only
-//      today: config.toml, hooks.json, trust-seed, agent TOMLs, .agents/skills).
+//   4. GENERATE runners into the assembled tree by running aidlc-runner-gen's
+//      write and scopes CLIs under AIDLC_HARNESS_DIR (skipped when the manifest
+//      sets skipRunnerGen).
+//   5. EMIT via harness/<name>/emit.ts if the manifest declares one (codex,
+//      copilot and opencode today; for codex: config.toml, hooks.json,
+//      trust-seed, agent TOMLs, .agents/skills).
 //   6. REFRESH generated stage/scope table regions in the assembled orchestrator
 //      skill from the just-compiled graph and scope grid.
 //
-// THE TRANSFORM CLASS (T5 — the only permitted text transform): the harness-dir
-// token. core/ prose carries {{HARNESS_DIR}}; here it becomes `.claude`/`.kiro`/
-// `.codex`. Truthful carve-outs in core (workspace-detection's 3-dir list, the
-// `$CLAUDE_PROJECT_DIR on Claude Code` note) never carried the token, so they
-// pass through untouched.
+// THE TOKENS: core/ prose carries {{HARNESS_DIR}}, {{INVOKE}}, {{TOOL_PREFIX}} and
+// {{TRUSTED_NAMESPACE}}; here they become the harness's own values (the dir is
+// `.claude`/`.kiro`/`.codex`/`.aidlc`/`.cursor`). Truthful carve-outs in core
+// (workspace-detection's 3-dir list, the `$CLAUDE_PROJECT_DIR on Claude Code`
+// note) never carried the token, so they pass through untouched.
 //
 // --check builds the complete copy-channel, native-release, and plugin
 // projections twice in independent temp roots, then compares them byte for
@@ -69,6 +69,7 @@ import {
 } from "./agent-knowledge.ts";
 import { renderNeutralOnboarding, renderOnboarding } from "./onboarding.ts";
 import { keepOwnHarnessBindings } from "./harness-bindings.ts";
+import { EARLIER_RELEASE_REGIONS, earlierReleasesReadSkill } from "./earlier-release-regions.ts";
 import { forgetPackagedSources, packageInputsFingerprint, recordPackagedSources } from "./package-sources.ts";
 import {
   buildPluginProjection as emitPluginProjection,
@@ -100,7 +101,7 @@ import {
 import { copyChannelDispatcherCommands, copyChannelToolScripts, ROUTES, TOOLS } from "../core/tools/aidlc.ts";
 import { AIDLC_VERSION } from "../core/tools/aidlc-version.ts";
 import { BUILD_VERSION_ENV, releaseBuildVersion } from "../core/tools/aidlc-channel.ts";
-import { copyStartsWithout, sha256Bytes, writtenRootIntegration } from "../core/tools/aidlc-distribution.ts";
+import { copyStartsWithout, harnessChoiceTextIsPlain, sha256Bytes, writtenRootIntegration } from "../core/tools/aidlc-distribution.ts";
 import { kiroIdeSteering } from "../core/tools/aidlc-includes.ts";
 import { SHIPPED_FORMAT_DOCS } from "../core/tools/aidlc-inline-context.ts";
 import { AIDLC_SETTINGS_SCHEMA } from "../core/tools/aidlc-settings.ts";
@@ -198,7 +199,7 @@ function discoverHarnessNames(): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Transform: the ONE class. Token substitution on authored prose and the
+// Transform: token substitution on authored prose and the
 // TypeScript invocation seam; compiled JSON is regenerated per tree.
 // ---------------------------------------------------------------------------
 function substituteInvocationTokens(
@@ -224,8 +225,7 @@ function substituteToken(
 // Rewrite in-prose `<harnessDir>/rules/` → `<harnessDir>/<rulesRename>/` for a
 // harness that renames its rules dir (kiro: steering, codex: aidlc-rules).
 // Anchored on the post-substitution harness-dir form so it can't touch an
-// unrelated `rules/` mention — the proven STEERING_RENAME step from the spike
-// packagers. No-op when rulesRename is null (claude).
+// unrelated `rules/` mention. No-op when rulesRename is null (claude).
 function applyRulesRename(s: string, harnessDir: string, rulesRename: string | null): string {
   if (!rulesRename) return s;
   // Codex's native Starlark permission file is not an AIDLC markdown rule.
@@ -517,18 +517,15 @@ const SETTINGS_SCHEMA_DATA = "tools/data/aidlc-settings.schema.json";
 const STAMP_DATA = "tools/data/aidlc-stamp.json";
 const PROJECTION_DATA = "tools/data/aidlc-projection.json";
 
-// The relocated method ("memory") — the single hand-editable source of truth
+// The method ("memory"): the single hand-editable source of truth
 // for the layered practices (org/team/project + phases/). It is HARNESS-NEUTRAL
 // (identical bytes on every harness — neutral filenames, no {{HARNESS_DIR}}
 // token), so the source dir + the dist destination are constants here, not
-// per-manifest. The authored source already carries the renamed/nested layout
-// (core/rules/aidlc-org.md → core/memory/org.md; flat aidlc-phase-<p>.md →
-// core/memory/phases/<p>.md) — the per-file rename map is realized by that move,
-// so the packager copies the tree verbatim. The destination sits at the
-// WORKSPACE ROOT (beside the harness dir), under the always-present `default`
+// per-manifest, and the packager copies the tree verbatim. The destination sits
+// at the WORKSPACE ROOT (beside the harness dir), under the always-present `default`
 // space, so a fresh `dist/<harness>/` copy ships a resolving method tree and the
-// per-harness native include points at it (Claude @-stub, Kiro resources glob,
-// Codex AGENTS.md/@-mention) — one copy, no drift.
+// per-harness native include points at it (see aidlc-includes.ts) - one copy,
+// no drift.
 const MEMORY_SRC = "memory";
 const MEMORY_DST = join("aidlc", "spaces", "default", "memory");
 
@@ -597,7 +594,7 @@ function writeHarnessData(treeRoot: string, m: HarnessManifest): void {
       ? { runnerFrontmatterAdditions: m.runnerFrontmatterAdditions }
       : {}),
   };
-  // Emitted only when a manifest sets it, so the three-field output stays
+  // Emitted only when a manifest sets it, so the output stays
   // byte-identical for every harness that does not -- which is all of them today.
   if (m.documentExtractors) data.documentExtractors = m.documentExtractors;
   // Likewise conditional: only a host whose hooks wait on the person (trust, engine) declares it.
@@ -631,6 +628,9 @@ function writeSettingsSchemaData(treeRoot: string): void {
 }
 
 function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManifest): void {
+  if (!harnessChoiceTextIsPlain(m)) {
+    throw new Error(`[${m.name}] choiceName or choiceNote is not text the harness lists can show`);
+  }
   const rootIntegrationPaths = new Set(m.rootIntegrations.map((item) => item.path));
   if (rootIntegrationPaths.size !== m.rootIntegrations.length) {
     throw new Error(`[${m.name}] duplicate root integration path`);
@@ -710,6 +710,8 @@ function writeProjectionData(outRoot: string, treeRoot: string, m: HarnessManife
     schemaVersion: 1,
     distribution: m.name,
     productName: m.productName,
+    ...(m.choiceName ? { choiceName: m.choiceName } : {}),
+    ...(m.choiceNote ? { choiceNote: m.choiceNote } : {}),
     configNextStep: m.configNextStep,
     ...(m.firstRunSteps ? { firstRunSteps: m.firstRunSteps } : {}),
     ...(m.editorTerminalApp ? { editorTerminalApp: m.editorTerminalApp } : {}),
@@ -835,7 +837,7 @@ function buildTree(
 ): string[] {
   const harnessDir = m.harnessDir;
   const treeRoot = join(outRoot, harnessDir);
-  // Every harness projects onto ONE of the five flavors the tier module
+  // Every harness projects onto ONE of the six flavors the tier module
   // knows (Kiro CLI and Kiro IDE share the "kiro" flavor - identical model
   // dial). Declared per manifest, never inferred from the harness name.
   const harnessKind = m.tierFlavor;
@@ -1056,6 +1058,8 @@ function buildTree(
   //    them only after emit(), because Codex and Copilot place the orchestrator
   //    skill outside <harnessDir>/skills/.
   refreshGeneratedSkillRegions(outRoot, treeRoot, harnessDir, m);
+  // 7. The place an earlier release's refresh writes the tables into the skill.
+  keepEarlierReleaseRegions(outRoot, m);
   return [...walk(outRoot)];
 }
 
@@ -1235,14 +1239,18 @@ function expandClaudeToolAllows(treeRoot: string, m: HarnessManifest): void {
 // dispatcher's engine commands, each dispatcher command a copy channel
 // pre-approves exactly as AI-DLC runs it (copyChannelDispatcherCommands), and
 // the tool scripts it pre-approves (copyChannelToolScripts), bare or followed
-// by arguments, never a longer file name. A script behind a machine-changing
-// command, and any config command but the read-only forms, then waits for the
-// person in Kiro CLI. Both trees get it; the native rewrite then turns every
-// bun entry into the one trusted prefix.
+// by arguments, never a longer file name, one entry each, with the path bare
+// or in either quote spelled out: Kiro's upgrade for its 3.0 engine turns each
+// spelling into its own glob, an optional quote into a `*` that also matches
+// `/`, and drops an entry with more spellings than its limit (kiro-cli
+// 2.29.0). A script behind a machine-changing command, and any config command
+// but the read-only forms, then waits for the person in Kiro CLI. Both trees
+// get it; the native rewrite then turns every bun entry into the one trusted
+// prefix.
 function expandKiroToolAllows(treeRoot: string, m: HarnessManifest): void {
   if (m.name !== "kiro") return;
   const agentsDir = join(treeRoot, "agents");
-  const prefix = (dir: string) => `bun (run )?["']?${dir}/`;
+  const bun = (path: string) => `bun (run )?(${path}|"${path}"|'${path}')`;
   let expanded = 0;
   for (const file of walk(agentsDir).filter((path) => path.endsWith(".json"))) {
     const value = JSON.parse(readFileSync(file, "utf-8")) as {
@@ -1259,11 +1267,11 @@ function expandKiroToolAllows(treeRoot: string, m: HarnessManifest): void {
       const tools = `${match[1]}/tools`;
       const scripts = copyChannelToolScripts().map((script) => escapeRegExp(script.slice(0, -".ts".length)));
       return [
-        `${prefix(tools)}aidlc\\.ts["']? engine( .*)?`,
+        `${bun(`${tools}/aidlc\\.ts`)} engine( .*)?`,
         ...copyChannelDispatcherCommands().map((command) =>
-          `${prefix(tools)}aidlc\\.ts["']? ${escapeRegExp(command)}`
+          `${bun(`${tools}/aidlc\\.ts`)} ${escapeRegExp(command)}`
         ),
-        `${prefix(tools)}(${scripts.join("|")})\\.ts["']?( .*)?`,
+        ...scripts.map((script) => `${bun(`${tools}/${script}\\.ts`)}( .*)?`),
       ];
     });
     value.toolsSettings!.execute_bash!.allowedCommands = next;
@@ -1396,7 +1404,7 @@ function rewriteNativeOnboarding(value: string, exactReads = false): string {
   return value
     .replace(
       /^- \*\*bun\*\*:.*$/gm,
-      "- **Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available.",
+      "- **Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available. If `aidlc` is not found in this tool, give the person both fixes in one line, then end your turn without installing anything or working around it: if AI-DLC was installed while this tool was open, quit the tool fully and reopen it (a new tab or reloaded window is not enough); otherwise the installer's bin folder is not on PATH (an install with `-NoModifyPath`, or a Unix install whose PATH line was not applied), so add the folder the installer printed to PATH, or rerun the installer without `-NoModifyPath`, then reopen the tool.",
     )
     .replace(
       /^- \*\*Hook permissions\*\*:.*$/gm,
@@ -1419,6 +1427,24 @@ function rewriteNativeOnboarding(value: string, exactReads = false): string {
       /^\*\*CWD drift warning\*\*: If a stage runs `cd` in Bash.*$/gm,
       "**CWD drift warning**: Native release commands resolve `aidlc` from `PATH`, so changing directories does not change the engine path. Keep project-relative file arguments anchored to the project root, or run `cd` commands in subshells: `(cd subdir && npm install)`.",
     );
+}
+
+// A copyOnly harness file ships in the copy runtime alone. The native tree
+// drops it and the root integration of the same path, so `aidlc config` never
+// writes it into a project.
+function dropCopyOnlyFiles(outRoot: string, m: HarnessManifest): void {
+  const copyOnly = m.harnessFiles.filter((file) => file.copyOnly);
+  if (copyOnly.length === 0) return;
+  for (const file of copyOnly) {
+    rmSync(file.projectRoot ? join(outRoot, file.dst) : join(outRoot, m.harnessDir, file.dst), { force: true });
+  }
+  const dropped = new Set(copyOnly.filter((file) => file.projectRoot).map((file) => file.dst));
+  const descriptorPath = join(outRoot, m.harnessDir, PROJECTION_DATA);
+  const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
+    rootIntegrations: Array<Record<string, unknown>>;
+  };
+  descriptor.rootIntegrations = descriptor.rootIntegrations.filter((item) => !dropped.has(String(item.path)));
+  writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
 }
 
 function projectNativeRootIntegrations(outRoot: string, m: HarnessManifest): void {
@@ -1467,11 +1493,11 @@ function rewriteNativeInvocations(
   m: HarnessManifest,
   copyRoot: string,
 ): void {
+  dropCopyOnlyFiles(outRoot, m);
   projectNativeRootIntegrations(outRoot, m);
   applyNativeReplacements(outRoot, m);
   const harnessDir = escapeRegExp(m.harnessDir);
-  // The hand-maintained list had drifted to 23 of 33 tools, omitting review-brief.
-  // Deriving it from TOOLS keeps new delegates' bare bun aidlc-<name>.ts forms
+  // Deriving the delegate list from TOOLS keeps new delegates' bare bun aidlc-<name>.ts forms
   // covered by both the rewrite and bareToolCheck. The leftover checks below
   // still reject a rewrite to a non-route.
   const delegateNames = Object.values(TOOLS)
@@ -1742,7 +1768,9 @@ function refreshGeneratedSkillRegions(
   harnessDir: string,
   manifest: HarnessManifest,
 ): void {
-  const skillPath = assembledOrchestratorSkill(outRoot, manifest);
+  // The generated tables live beside the skill (tables.md), out of its body.
+  const skillPath = join(dirname(assembledOrchestratorSkill(outRoot, manifest)), "tables.md");
+  if (!existsSync(skillPath)) return;
   let body = readFileSync(skillPath, "utf-8").replace(/\r\n/g, "\n");
 
   for (const region of GENERATED_SKILL_REGIONS) {
@@ -1775,10 +1803,18 @@ function refreshGeneratedSkillRegions(
   writeFileSync(skillPath, body, "utf-8");
 }
 
+// See scripts/earlier-release-regions.ts.
+function keepEarlierReleaseRegions(outRoot: string, manifest: HarnessManifest): void {
+  const skillPath = assembledOrchestratorSkill(outRoot, manifest);
+  if (!earlierReleasesReadSkill(relative(outRoot, skillPath), manifest.harnessDir)) return;
+  const body = readFileSync(skillPath, "utf-8").replace(/\n*$/, "");
+  writeFileSync(skillPath, `${body}\n\n${EARLIER_RELEASE_REGIONS}\n`, "utf-8");
+}
+
 // Defense-in-depth backstop: rewrite any residual "<harnessDir>/rules/" →
-// "<harnessDir>/<rulesRename>/" in the compiled JSON path strings. Since the
-// rulesSubdir() seam landed, compile (run under AIDLC_HARNESS_DIR) emits the
-// renamed segment directly, so this normally matches nothing (guarded by the
+// "<harnessDir>/<rulesRename>/" in the compiled JSON path strings. Compile (run
+// under AIDLC_HARNESS_DIR) emits the renamed segment directly through
+// rulesSubdir(), so this normally matches nothing (guarded by the
 // `out !== s` check). It stays as a safety net in case a future code path emits
 // a literal "rules" segment that bypasses the seam. Slash-anchored, so it can
 // only touch the rules path family.
@@ -2132,7 +2168,7 @@ if (argv[0] === "plugin" && argv[1] === "build") {
     console.error("usage: package.ts plugin build <plugin> <harness> <outDir>");
     process.exit(1);
   }
-  // Proper usage errors, never a raw ENOENT/rmSync stack (round-3).
+  // Proper usage errors, never a raw ENOENT/rmSync stack.
   // Reserved-name check FIRST so the error names the real problem even when
   // the directory doesn't exist yet (same rule discoverPluginNames enforces).
   if (pluginName === "aidlc" || pluginName.startsWith("aidlc-")) {
@@ -2198,7 +2234,6 @@ if (check) {
   }
   assertIdenticalRootIntegrations(join(REPO_ROOT, "dist"), targets);
   assertIdenticalRootIntegrations(join(REPO_ROOT, "dist-release"), targets);
-  // Emit plugin projections (the hybrid: per-harness host plugins from plugins/<name>/)
   emitPlugins(targets);
   // Last, so only a finished build from unchanged sources is recorded as current.
   if (!recordPackagedSources(REPO_ROOT, targets, builtFrom)) {

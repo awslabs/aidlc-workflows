@@ -28,6 +28,7 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { auditBlockField, getField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -66,7 +67,6 @@ const state = (proj: string, args: string[], extra: Record<string, string> = {})
   run(STATE, [...args, "--project-dir", proj], { AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1", ...extra });
 const events = (proj: string, name: string) => readAuditShardEvents(proj).filter((row) => row.event === name);
 
-// `report` as the agent runs it.
 function report(proj: string, args: string[], extra: Record<string, string> = {}): Record<string, unknown> {
   const r = run(ORCHESTRATE, ["report", ...args, "--project-dir", proj], extra);
   const line = r.out.split("\n").find((entry) => entry.startsWith("{"));
@@ -74,7 +74,6 @@ function report(proj: string, args: string[], extra: Record<string, string> = {}
   return JSON.parse(line as string) as Record<string, unknown>;
 }
 
-// What the person types, through the real UserPromptSubmit route every harness uses.
 function says(proj: string, prompt: string): void {
   const env: Record<string, string | undefined> = {
     ...process.env,
@@ -94,7 +93,6 @@ function says(proj: string, prompt: string): void {
   expect(result.status, result.stderr).toBe(0);
 }
 
-// The stage's outputs exist and the agent asked the reviewer, who never answered.
 function reviewAskedNeverFinished(proj: string): void {
   const dir = join(seededRecordDir(proj), "inception", SLUG);
   mkdirSync(dir, { recursive: true });
@@ -318,12 +316,25 @@ describe("Code Generation: the person's approval goes over a review of changed s
   // The code reviewed READY, the source changed after it (strict makes that
   // review stale), and the person asked for the review again: that one
   // recovery pass never finished.
+  // The plan the build went ahead on: `next` asks, the person approves.
+  function planApproved(dir: string): void {
+    writeFileSync(join(dir, "code-generation-plan.md"),
+      `# Plan\n\n${renderTestingContract(resolveTestingPosture(proj))}\n## Steps\n\n- [ ] Step 1: fix the total\n`);
+    writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test`.\n");
+    const asked = run(ORCHESTRATE, ["next", "--project-dir", proj]);
+    expect(asked.out).toContain('"ask_type":"plan-approval"');
+    says(proj, "approve the plan");
+    const answered = run(LOG, ["answer", "--stage", CG, "--checkpoint", "plan-approval", "--details", "Approve Plan", "--project-dir", proj]);
+    expect(answered.rc, answered.out).toBe(0);
+  }
+
   function recoveryOfChangedSource(): void {
     mkdirSync(join(proj, "src"), { recursive: true });
     writeFileSync(join(proj, "src", "app.ts"), "export const total = 1;\n");
     const dir = join(seededRecordDir(proj), "construction", CG);
     mkdirSync(dir, { recursive: true });
-    for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "code-summary.md", "traceability.json"]) {
+    planApproved(dir);
+    for (const name of ["code-summary.md", "traceability.json"]) {
       writeFileSync(join(dir, name), name.endsWith(".json") ? "{}\n" : `# ${name}\n`);
     }
     const first = cgReview(1);

@@ -61,7 +61,7 @@ const EXPECTED_V2_REGISTRATIONS: Array<{
   { file: "aidlc-session-start.json", trigger: "SessionStart", matcher: null, adapterTarget: "session-start" },
   // Kiro IDE shows a card for every hook run (#2022): one card for each
   // message (the turn record, then a typed AI-DLC command), one before each
-  // write, command or hand-off (the five tool-call checks, after it finishes
+  // write, command or hand-off (the four tool-call checks, after it finishes
   // what the last write or command left to do), and none after a write or a
   // command.
   { file: "aidlc-record-human-turn.json", trigger: "UserPromptSubmit", matcher: null, adapterTarget: "person-message" },
@@ -77,8 +77,10 @@ const RETIRED_HOOK_BASENAMES = [
   "runtime-compile",
   "stop",
   "sync-statusline",
-  // Folded into aidlc-guard-tool-call and aidlc-after-shell (#2022).
+  // Nothing runs it: the engine holds an approval to the person's reply itself.
   "enforce-approval-gate",
+  // Run by the guard-tool-call card: the four checks directly, the last two as
+  // its catch-up step (#2022).
   "plan-approval-guard",
   "review-freeze",
   "state-transition-guard",
@@ -159,7 +161,7 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
         const matcher = new RegExp(parsed.hooks[0].matcher ?? "");
         for (const name of [
           "read", "fs_read", "read_file", "read_files", "read_code", "list_directory", "file_search", "glob",
-          "grep_search", "grep", "web_fetch", "web_search", "disclose_context", "thinking", "todo_list",
+          "grep_search", "grep", "web_fetch", "web_search", "disclose_context", "tool_load", "thinking", "todo_list",
           "report_progress", "subagent_response",
         ]) {
           expect(isPlanApprovalSafeReadTool(name), name).toBe(true);
@@ -310,13 +312,12 @@ describe("t245 Kiro IDE hook registrations (v2 schema contract)", () => {
   });
 });
 
-// Each check that now shares a registration keeps the tools its own
-// registration selected, in the order Kiro ran those files (file-name order).
+// Each check that shares a registration keeps the tools its own registration
+// selected, in the order Kiro ran those files (file-name order).
 describe("t245 one card runs the checks that had their own cards", () => {
-  test("the guard card finishes the last call's work, then runs the five tool-call checks in their old order with their old matchers", () => {
+  test("the guard card finishes the last call's work, then runs the four tool-call checks in their old order with their old matchers", () => {
     expect(KIRO_HOOK_GROUPS["guard-tool-call"]).toEqual([
       { target: "catch-up", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse },
-      { target: "enforce-approval-gate", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse },
       { target: "plan-approval-guard", matcher: KIRO_HOOK_MATCHERS.notReadPreToolUse },
       { target: "review-freeze", matcher: KIRO_HOOK_MATCHERS.writeOrShellPreToolUse },
       { target: "state-transition-guard", matcher: KIRO_HOOK_MATCHERS.writeOrShellPreToolUse },
@@ -359,7 +360,7 @@ describe("t245 one card runs the checks that had their own cards", () => {
 // The names Kiro CLI v3 and Kiro IDE 1.x report for writes, shells, delegations
 // and reads (as seen in PreToolUse payloads on Kiro CLI 2.27.1 and Kiro IDE
 // 1.2.4; the captures are not in this repository) keep the classification the
-// adapter gave them before the table. This pins the table, not the capture.
+// adapter gives them. This pins the table, not the capture.
 describe("t245 Kiro tool-name table keeps the adapter's classification", () => {
   test("writes, shells and delegations on both surfaces", () => {
     expect(canonicalWriteTool("fs_write")).toBe("Write");

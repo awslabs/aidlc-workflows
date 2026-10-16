@@ -12,13 +12,13 @@
 // The hook records the person's message whole and applies nothing: a setting
 // typed as a flag is the agent's to read and the setter's to apply, once the
 // agent runs the command `next` names.
-// appendAuditEntryUnlocked resolves the active intent from the on-disk cursor. No workflow state means nothing
-// to gate, so the hook skips ledger writes (same self-gate as
-// aidlc-session-start.ts) - otherwise every prompt in a project that carries the
-// harness shell but never ran the framework would scaffold and grow audit
-// shards. The gate fails open on an empty ledger, so skipping the mint there is
-// safe. The mint is fail-open (try/catch, exit 0): a mint failure must never
-// block the human's turn.
+// appendAuditEntryUnlocked uses the workflow selection enterHookWorkflow pins
+// for this chat. No workflow state means nothing to gate, so the hook skips
+// ledger writes (same self-gate as aidlc-session-start.ts) - otherwise every
+// prompt in a project that carries the harness shell but never ran the
+// framework would scaffold and grow audit shards. The gate fails open on an
+// empty ledger, so skipping the mint there is safe. The mint is fail-open
+// (try/catch, exit 0): a mint failure must never block the human's turn.
 //
 // The same seam also touches the .aidlc-engine/human-turn marker (markHumanTurn). The
 // ledger event serves the human-presence GATE; the marker serves the Stop hook's
@@ -45,8 +45,7 @@
 // This is the same doctrine the engine already applies elsewhere — an unattended
 // autonomous Construction run "has no human at the gate", which is why
 // aidlc-utility refuses scope changes and plan re-shapes and aidlc-state refuses
-// park under it. This closes the one path where an unattended turn still
-// manufactured a human.
+// park under it.
 //
 // Fail direction: the flag can only ever WITHHOLD authority. If it leaks into an
 // interactive shell the human's approvals get refused until it is unset —
@@ -55,14 +54,14 @@
 //
 // The MARKER is deliberately still written. It is not an authority signal, and
 // suppressing it would change the Stop hook's conversational carve-out, which is
-// a separate behaviour with its own tests. Reviewers who want the marker
-// suppressed too should say so — it is a one-line follow-on, not a silent choice.
+// a separate behaviour with its own tests.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   CLAUDE_HOST_TEMPLATES,
   auditBlockField,
   carryPendingPersonLines,
+  classifyTerminalCommand,
   claudeTranscriptOrigin,
   clearSessionIntentHandoff,
   emptyPickerResult,
@@ -96,6 +95,7 @@ import {
   stripRecommendedDecorator,
   suppliedTurnOrigin,
   swarmWorkerWorktreeMeta,
+  terminalCommandRelay,
   type TurnOrigin,
   validSessionId,
   withAuditLock,
@@ -122,7 +122,7 @@ import { MESSAGE_PICKER_MAX_CHARS, MESSAGE_TEXT_MAX_CHARS, saveMessage, type Sto
 // parser, and everything after them is the person's words. A prompt that does
 // not start with the entry word is words only. A line the parser refuses keeps
 // the words and no settings: the record proves what was said; the command
-// itself is refused later, as today. `command` is structure the parse holds: an
+// itself is refused later. `command` is structure the parse holds: an
 // `/aidlc` line with no words after its flags, with its words behind `--` (the
 // person marked them as the work), or one the parser refused is a command to
 // AIDLC and no reply to an open question; any line with words after the entry
@@ -248,7 +248,6 @@ function singlePickerQuestion(value: unknown): Record<string, unknown> | null {
   return question !== null && typeof question === "object" ? question as Record<string, unknown> : null;
 }
 
-// The option labels of a single-question picker, as strings or `{label}`.
 function extractOptionLabels(value: unknown): string[] | null {
   const question = singlePickerQuestion(value);
   if (question === null) return null;
@@ -367,9 +366,11 @@ function pickedGateLabel(text: string, picker: PlanApprovalPickerQuestion | unde
 // reply by its question; Codex keys it by the question's id, with a list of
 // picks (its adapter passes the box's reply as picker_reply). Nothing here
 // reads meaning into the reply.
-// What the box carried back: one entry per question it asked, in the order shown, `reply` null where the person left
-// a question blank (AIDA F8 on #2107: an entry only for answered questions read "asked and left blank" as "never
-// asked"). A pick for a question the box did not list follows them. Strings are cut to the store's limit.
+// What the box carried back: one entry per question it asked, in the order
+// shown, `reply` null where the person left a question blank (#2107: an entry
+// only for answered questions read "asked and left blank" as "never asked"). A
+// pick for a question the box did not list follows them. Strings are cut to the
+// store's limit.
 function pickerReplies(
   input: string,
   limit = Number.POSITIVE_INFINITY,
@@ -458,6 +459,24 @@ function pickedLabels(toolResponse: unknown): string[] {
 //
 // What the agent should hear from this turn is printed once, as one context
 // line: Claude Code reads a single hook response, and two lines make it drop both.
+// The help a typed help request gets rides last, and only while the whole line
+// fits what a host takes from a hook (Claude Code keeps 10,000 characters of a
+// field); past that the agent runs the help itself, as with no hook.
+const PROMPT_CONTEXT_MAX_CHARS = 9_500;
+
+// The help, handed to the agent with the person's own line when that line asks
+// for it and nothing else (the engine's own reading of a typed command), so the
+// agent shows it with no command to run. Only AI-DLC's own help: a help typed
+// after a command family (`knowledge help`) is that family's, and its command
+// runs as before.
+async function helpRelay(typedPrompt: string, projectDir: string, sessionId: string): Promise<string | null> {
+  const entryWords = aidlcEntryWords(typedPrompt);
+  if (entryWords === null) return null;
+  const command = classifyTerminalCommand(splitKiroCommandArgs(entryWords), projectDir, sessionId || undefined);
+  if (command?.subcommand !== "help" || command.source !== "read-only-flag") return null;
+  const { renderHelpText } = await import("../tools/aidlc-utility.ts");
+  return terminalCommandRelay(typedPrompt.trim(), renderHelpText());
+}
 //
 // What the PERSON hears does not travel that way. A host may fold hook output
 // away, an adapter may drop it, and an agent may not pass it on, which is how a
@@ -468,8 +487,9 @@ function pickedLabels(toolResponse: unknown): string[] {
 async function run(input: string): Promise<number> {
   const notes: string[] = [];
   const forThePerson: Array<() => void> = [];
+  const handover: { help: string | null } = { help: null };
   try {
-    return await respond(input, notes, forThePerson);
+    return await respond(input, notes, forThePerson, handover);
   } finally {
     for (const queue of forThePerson) {
       try {
@@ -478,11 +498,19 @@ async function run(input: string): Promise<number> {
         // A line the person may miss never blocks their turn.
       }
     }
+    if (handover.help !== null && [...notes, handover.help].join("\n").length <= PROMPT_CONTEXT_MAX_CHARS) {
+      notes.push(handover.help);
+    }
     if (notes.length > 0) process.stdout.write(hookContextLine("UserPromptSubmit", notes.join("\n")));
   }
 }
 
-async function respond(input: string, notes: string[], forThePerson: Array<() => void>): Promise<number> {
+async function respond(
+  input: string,
+  notes: string[],
+  forThePerson: Array<() => void>,
+  handover: { help: string | null },
+): Promise<number> {
 try {
   const projectDir = resolveProjectDirFromHook(import.meta.url);
   let sessionId = "";
@@ -504,6 +532,9 @@ try {
   // `origin`; Claude Code's transcript is read here; anything unknown is a
   // person (kiroTurnOrigin, claudeTranscriptOrigin in aidlc-lib.ts).
   let turnOrigin: TurnOrigin = { kind: "person" };
+  // An adapter whose own prompt hook runs a command the person typed and hands
+  // the agent its output (Kiro's) says so; the help is then left to it.
+  let relaysTerminalOutput = false;
   try {
     const parsed = JSON.parse(input) as {
       hook_event_name?: unknown;
@@ -519,7 +550,9 @@ try {
       origin?: unknown;
       prompt_id?: unknown;
       transcript_path?: unknown;
+      relays_terminal_output?: unknown;
     };
+    relaysTerminalOutput = parsed.relays_terminal_output === true;
     if (typeof parsed.session_id === "string") sessionId = validSessionId(parsed.session_id.trim()) ?? "";
     questionText = extractQuestionText(parsed.tool_input ?? parsed.toolInput);
     // A host that wraps the person's turn in its own context (Kiro Crew) hands
@@ -599,6 +632,16 @@ try {
   // the conversational marker still land, as under AIDLC_UNATTENDED=1.
   const workerWorktree = swarmWorkerWorktreeMeta(projectDir) !== null;
   const personHere = mintAllowed && !workerWorktree;
+  // A help request the person typed is answered here, before any work exists
+  // or this chat joins one, on every host that hands this hook's line to the
+  // agent (Claude Code, Codex). A host's own turn never gets it.
+  if (personHere && promptSubmitted && typedPrompt && turnOrigin.kind !== "host" && !relaysTerminalOutput) {
+    try {
+      handover.help = await helpRelay(typedPrompt, projectDir, sessionId);
+    } catch {
+      // The agent runs the help itself, as with no hook.
+    }
+  }
   // The message record: proof that a person said this in this chat, and
   // exactly what they said (aidlc-message-store.ts). Written before the
   // state-file gate so a message before any work exists is kept, and for a
@@ -623,7 +666,8 @@ try {
         ? noWords
         : { ...noWords, words: humanResponseText.trim() || null };
       const full = promptSubmitted ? typedPrompt : humanResponseText;
-      // Every stored string is cut (AIDA F5 on #2107: uncut words once put a record past the reader's cap).
+      // Every stored string is cut (#2107: uncut words once put a record past the
+      // reader's cap).
       const picker = promptSubmitted ? null : pickerReplies(input, MESSAGE_PICKER_MAX_CHARS);
       const words = parsed.words !== null && parsed.words.length > MESSAGE_TEXT_MAX_CHARS
         ? parsed.words.slice(0, MESSAGE_TEXT_MAX_CHARS)
@@ -756,8 +800,6 @@ try {
           // "/aidlc --guard-policy off approve the plan") are a reply.
           appendAuditEntryUnlocked("HUMAN_TURN", {
             ...(sessionId ? { Session: sessionId } : {}),
-            // Who sent it and how, so a host's turn and a person's are told
-            // apart in the record from now on.
             Origin: "person",
             ...(promptSubmitted ? { Source: "typed" } : pickerQuestion !== undefined ? { Source: "picker" } : {}),
             ...(notAReply || answersEngineQuestion ? { Reply: COMMAND_TURN_REPLY } : {}),
@@ -837,7 +879,7 @@ try {
           if (fileAnswer !== null) notes.push(fileAnswer);
         }
       } catch {
-        // Their words stay on the line; the agent reads them as before.
+        // Their words stay on the line; the agent reads them.
       }
       try {
         // A reply the engine's guard-recovery ask took as its answer is that

@@ -1,11 +1,11 @@
 // covers: subcommand:aidlc-utility:intent-create, subcommand:aidlc-utility:intent, subcommand:aidlc-utility:space, subcommand:aidlc-utility:space-create, function:createIntent, function:listSpaces, function:listIntents, function:slugify, function:updateIntentStatus, function:migrateFlatLayout, function:leaveCreationReceipt, function:resolveIntentRepoSet, function:discoverSiblingRepos, function:handleIntentLifecycle, function:resolveIntentByName, function:refuseUnlessArchivable, function:auditReason, function:clearActiveIntentCursor, function:isArchivedIntent, function:ARCHIVED_INTENT_STATUS, function:runningWorkflows, audit:WORKFLOW_ARCHIVED, audit:WORKFLOW_UNARCHIVED
 //
 // Mechanism: cli (spawned dist tools) + in-process pure-function asserts.
-// P4 - retire the user-facing --init; the engine auto-creates the first intent
-// CONDUCTOR-SIDE (the read-only routing tool NAMES the move, the deterministic
-// `intent-create` handler mutates), plus the intent/space verb families + the
-// deterministic query layer (listSpaces/listIntents, --json) + the intent
-// status lifecycle + the migration wiring.
+// The engine auto-creates the first intent CONDUCTOR-SIDE (the read-only routing
+// tool NAMES the move, the deterministic `intent-create` handler mutates), plus
+// the intent/space verb families + the deterministic query layer
+// (listSpaces/listIntents, --json) + the intent status lifecycle + the migration
+// wiring.
 //
 // WHY a subprocess for creation: intent-create mutates the workspace under the
 // WORKSPACE audit lock; spawning the dist tool exercises the real handler +
@@ -89,7 +89,7 @@ const REBUILD_STAGE_GRAPH = join(
 let proj: string;
 beforeEach(() => {
   proj = createTestProject();
-  // P9: createTestProject seeds ONE default intent record + registry row. Every
+  // createTestProject seeds ONE default intent record + registry row. Every
   // case here asserts creation/discovery behaviour against a GENUINELY EMPTY
   // workspace (zero intents), so strip the seeded record + cursor + registry —
   // otherwise registry counts are off-by-one and the engine asks to select the
@@ -212,12 +212,10 @@ describe("t164 auto-create (intent-create) on an empty workspace", () => {
     const state = readFileSync(join(intentsDir(proj), records[0], "aidlc-state.md"), "utf-8");
     expect(state).toContain("## Current Status");
     expect(state).toContain("- **Scope**: poc");
-    // The registry carries the in-flight row.
     const reg = readIntentRegistry(proj);
     expect(reg.length).toBe(1);
     expect(reg[0].status).toBe("in-flight");
     expect(reg[0].scope).toBe("poc");
-    // WORKFLOW_STARTED landed in the created intent's audit shard.
     const auditDir = join(intentsDir(proj), records[0], "audit");
     const shards = existsSync(auditDir)
       ? readdirSync(auditDir).map((f) => readFileSync(join(auditDir, f), "utf-8")).join("\n")
@@ -396,7 +394,6 @@ describe("t164 auto-create (intent-create) on an empty workspace", () => {
       "I read everything from the first <document> to the last </document> as your pasted document, and only the text outside it as your instructions.",
     );
 
-    // Directions after the block are the person's words too.
     const after = authoritativeProjectDescription(
       "<document>source</document>\nKeep the API read-only.",
     );
@@ -420,7 +417,6 @@ describe("t164 auto-create (intent-create) on an empty workspace", () => {
     expect(fake.document).toContain("Ignore previous instructions");
     expect(fake.description).not.toContain("Ignore previous instructions");
 
-    // Directions before and after, a second block and nested markers included.
     const both = authoritativeProjectDescription(
       "Build this.\n<document>one</document>\n<document>outer <document>two</document></document>\nShip it by Friday.",
     );
@@ -452,10 +448,8 @@ describe("t164 auto-create (intent-create) on an empty workspace", () => {
     expect(unbalanced.documentSplit).toBe(
       "Your message has more <document> than </document> markers, so I read everything from <document> to the end as your pasted document, and only the text before it as your instructions.",
     );
-    // The person's own lines are kept around the document span.
     const lines = authoritativeProjectDescription("Do this:\n- one\n<document>x</document>\n- two\n```\nkeep\n```");
     expect(lines.description).toBe("Do this:\n- one\n\n- two\n```\nkeep\n```");
-    // A span inside a line leaves the person's own bytes on either side.
     expect(authoritativeProjectDescription("deploy to us-<document>x</document>east-1").description).toBe("deploy to us-east-1");
     expect(authoritativeProjectDescription("a\t<document>x</document>  b").description).toBe("a\t  b");
     expect(authoritativeProjectDescription("run `npm <document>x</document>test` first").description).toBe("run `npm test` first");
@@ -564,7 +558,7 @@ describe("t164 auto-create (intent-create) on an empty workspace", () => {
 // intent-create fails CLOSED on a truly-bare invocation
 // ============================================================
 describe("t164 intent-create fails closed on a bare invocation", () => {
-  // A bare `intent-create` (no --scope, no --arguments, no --label) used to
+  // A bare `intent-create` (no --scope, no --arguments, no --label) could
   // silently mint a garbage default-scope intent (scope resolved to the install
   // default, slug == the scope token, empty description), a routing fumble that
   // became actual corrupt workspace state. Creation is a mutation; a bare call is
@@ -573,10 +567,8 @@ describe("t164 intent-create fails closed on a bare invocation", () => {
   test("bare intent-create is refused (exit 1) and mints NOTHING", () => {
     const r = util(["intent-create"]);
     expect(r.status).toBe(1);
-    // Actionable refusal naming the missing flags + the blessed paths.
     expect(r.out).toContain("intent-create refused");
     expect(r.out).toContain("--scope");
-    // No mutation: no intents dir, no state file, no registry.
     expect(existsSync(intentsDir(proj))).toBe(false);
     expect(existsSync(seededStateFile(proj))).toBe(false);
     expect(readIntentRegistry(proj).length).toBe(0);
@@ -641,7 +633,6 @@ describe("t164 done-on-completed carries the new-work hint", () => {
     const r = next([]);
     const d = JSON.parse(r.stdout.trim());
     expect(d.kind).toBe("done");
-    // The completion reason is preserved AND the new-work hint is appended.
     expect(d.reason).toContain("Workflow complete");
     expect(d.reason).toContain("next --new-intent --scope");
     // It's a HINT, not an auto-create: the reason still frames it as an offer
@@ -839,7 +830,7 @@ describe("t164 --new-intent creation carries on in the same chat", () => {
     const d = JSON.parse(r.stdout.trim());
     expect(d.kind).toBe("print");
     expect(d.message).toContain("intent create --scope bugfix");
-    // Fresh-start tail is unchanged (the creation-directive pins expect this too):
+    // Fresh-start tail (the creation-directive pins expect this too):
     // continue in-session, no fresh-session hand-off.
     expect(d.message).toContain("re-run `next` to continue");
     expect(d.message).not.toContain("STOP");
@@ -848,7 +839,7 @@ describe("t164 --new-intent creation carries on in the same chat", () => {
 });
 
 // ============================================================
-// P7 - an intent records its repo set at creation (--repos / sibling discovery)
+// An intent records its repo set at creation (--repos / sibling discovery)
 // ============================================================
 describe("t165 P7 intent repo set captured at creation", () => {
   // Make a child dir of the workspace look like a git repo (a .git dir is enough
@@ -864,7 +855,6 @@ describe("t165 P7 intent repo set captured at creation", () => {
     expect(reg.length).toBe(1);
     // Sorted + deduped by resolveIntentRepoSet.
     expect(reg[0].repos).toEqual(["repo-a", "repo-b"]);
-    // listIntents surfaces the same set through the query layer.
     expect(listIntents(proj)[0].repos).toEqual(["repo-a", "repo-b"]);
   });
 
@@ -921,7 +911,6 @@ describe("t165 P7 intent repo set captured at creation", () => {
     const r = util(["intent-create", "--scope", "feature", "--repos", "../escape"]);
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("Invalid --repos entry");
-    // Nothing was created.
     expect(existsSync(intentsDir(proj))).toBe(false);
   });
 });
@@ -948,7 +937,6 @@ describe("t164 concurrent creation integrity", () => {
     const codes = await Promise.all(procs.map((c) => c.exited));
     expect(codes).toEqual([0, 0]);
 
-    // Two distinct record dirs.
     const records = readdirSync(intentsDir(proj)).filter((d) =>
       existsSync(join(intentsDir(proj), d, "aidlc-state.md")),
     );
@@ -972,7 +960,6 @@ describe("t164 new-work-while-active", () => {
     expect(util(["intent-create", "--scope", "feature", "--arguments", "second feature"]).status).toBe(0);
     const reg = readIntentRegistry(proj);
     expect(reg.length).toBe(2);
-    // The active-intent cursor now points at the SECOND (most recent) creation.
     const second = activeIntent(proj);
     expect(second).not.toBe(first);
   });
@@ -982,7 +969,7 @@ describe("t164 new-work-while-active", () => {
     // With state present, `next` resolves the happy path - never a creation print.
     const r = next([]);
     const d = JSON.parse(r.stdout.trim());
-    expect(d.kind).not.toBe("print"); // not a creation
+    expect(d.kind).not.toBe("print");
     expect(r.out).not.toContain("intent create");
   });
 });
@@ -1006,7 +993,7 @@ describe("t164 slugify", () => {
   test("deterministic + idempotent (slugify(slugify(x)) === slugify(x))", () => {
     for (const input of ["Build the Auth Service", "a--b__c", "trailing---"]) {
       const once = slugify(input);
-      expect(slugify(input)).toBe(once); // deterministic
+      expect(slugify(input)).toBe(once);
       expect(slugify(once)).toBe(once); // idempotent
     }
   });
@@ -1110,7 +1097,6 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
     // the one remaining in-flight record resolves through the lone-record fallback.
     expect(existsSync(cursorFile())).toBe(false);
     expect(activeIntent(proj)).toBe(a);
-    // Nothing was moved or deleted.
     expect(existsSync(join(recordPath(b), "aidlc-state.md"))).toBe(true);
   });
 
@@ -1194,7 +1180,6 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
     expect(stateStatus(a)).toBe("Running");
     expect(auditText(a)).toContain("WORKFLOW_UNARCHIVED");
     expect(activeIntent(proj)).toBe(b);
-    // It is switchable again like any in-flight intent.
     expect(util(["intent", a]).status).toBe(0);
     expect(activeIntent(proj)).toBe(a);
     expect(util(["intent"]).stdout).not.toContain("hidden");
@@ -1315,7 +1300,6 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
     const archived = codex(["intent", "archive", a]);
     expect(archived.status, archived.out).toBe(0);
     expect(archived.stdout).toContain(`$aidlc intent list --all shows it and $aidlc intent unarchive ${a} brings it back.`);
-    // Refusals while it is archived name it too.
     const codexWorktree = join(REPO_ROOT, "dist", "codex", ".codex", "tools", "aidlc-worktree.ts");
     const merge = Bun.spawnSync({
       cmd: [BUN, codexWorktree, "merge", "--slug", "auth-service", "--target", "main", "--strategy", "squash", "--intent", a, "--project-dir", proj],
@@ -1331,7 +1315,6 @@ describe("t165 intent archive / unarchive (issue #980)", () => {
     expect(back.stdout).toContain(`Switch to it with $aidlc intent ${a}.`);
     expect(codex(["intent", "nope"]).out).toContain("run $aidlc intent list --all to see them");
     for (const r of [archived, back]) expect(r.out).not.toContain("/aidlc ");
-    // Help and the space replies name it too.
     const help = codex(["help"]).stdout;
     expect(help).toContain("Usage: $aidlc [command]");
     expect(help).not.toMatch(/^\s*\/aidlc /m);
@@ -1475,7 +1458,6 @@ describe("t164 query layer (listSpaces / listIntents + --json)", () => {
     expect(Array.isArray(parsed.intents)).toBe(true);
     expect(parsed.intents.length).toBe(1);
     expect(parsed.intents[0].status).toBe("in-flight");
-    // The human listing names the same active record dir.
     expect(human).toContain(parsed.active);
   });
 
@@ -1520,7 +1502,6 @@ describe("t164 query layer (listSpaces / listIntents + --json)", () => {
     expect(util(["intent-create", "--scope", "feature"]).status).toBe(0);
     const b = activeIntent(proj) as string;
     expect(b).not.toBe(a);
-    // Switch back to the first by its record-dir name.
     expect(util(["intent", a]).status).toBe(0);
     expect(activeIntent(proj)).toBe(a);
   });
@@ -1563,7 +1544,6 @@ describe("t164 query layer (listSpaces / listIntents + --json)", () => {
     const c = util(["space-create", "-h"]);
     expect(c.status).not.toBe(0);
     expect(c.out).toContain("Did you mean /aidlc --help");
-    // No space was created - neither "h" nor anything help-shaped.
     expect(existsSync(join(proj, "aidlc", "spaces", "h"))).toBe(false);
   });
 
@@ -1579,8 +1559,8 @@ describe("t164 query layer (listSpaces / listIntents + --json)", () => {
   });
 
   test("an unknown-intent switch fails without inviting new work", () => {
-    // The error must steer to the read-only listing ONLY - the old "describe
-    // what to build to start a new one" tail read as an instruction to create an intent.
+    // The error must steer to the read-only listing ONLY - "describe
+    // what to build to start a new one" reads as an instruction to create an intent.
     // die() JSON-encodes the message, so inner quotes arrive escaped - match
     // on quote-free fragments.
     const r = util(["intent", "no-such-intent"]);
@@ -1593,11 +1573,11 @@ describe("t164 query layer (listSpaces / listIntents + --json)", () => {
 });
 
 // ============================================================
-// Doctor readiness against the shipped shell (P4: no --init artifact)
+// Doctor readiness against the shipped shell (no --init artifact)
 // ============================================================
 describe("t164 doctor readiness against the shipped shell", () => {
   test("a project with .claude/ + aidlc/spaces/default/memory/ passes the shell-ready row", () => {
-    // P9: createTestProject seeds the shell (incl. aidlc/spaces/default/memory/);
+    // createTestProject seeds the shell (incl. aidlc/spaces/default/memory/);
     // add .claude/ so the readiness row has both halves it checks. (mkdir is
     // idempotent — memory/ already exists from the seed.)
     mkdirSync(join(proj, ".claude"), { recursive: true });
@@ -1610,7 +1590,7 @@ describe("t164 doctor readiness against the shipped shell", () => {
 
   test("a project missing the default memory dir fails the shell-ready row", () => {
     mkdirSync(join(proj, ".claude"), { recursive: true });
-    // P9: createTestProject seeds the shipped shell INCLUDING
+    // createTestProject seeds the shipped shell INCLUDING
     // aidlc/spaces/default/memory/; this case needs it ABSENT so the readiness
     // row fails. Strip the seeded memory dir.
     rmSync(join(proj, "aidlc", "spaces", "default", "memory"), {
@@ -1685,7 +1665,6 @@ describe("t164 migration wiring (flat → per-intent on first creation)", () => 
         "utf-8",
       ).trim(),
     ).toBe(readIntentRegistry(proj)[0]?.uuid);
-    // The migrated record carries the flat project's state (Project field).
     const migrated = readFileSync(join(intentsDir(proj), records[0], "aidlc-state.md"), "utf-8");
     expect(migrated).toContain("Legacy App");
     expect(migrated).toContain("- **Review Override**: none");
@@ -1694,7 +1673,6 @@ describe("t164 migration wiring (flat → per-intent on first creation)", () => 
     expect(migratedAudit).toContain("**Review Override**: none");
     // The .migrated marker was written (idempotency key).
     expect(existsSync(join(proj, "aidlc", ".migrated"))).toBe(true);
-    // The flat tree was removed from the working tree post-move (git-rm step).
     expect(existsSync(join(flat, "aidlc-state.md"))).toBe(false);
 
     // No-op re-run: a second creation does NOT re-migrate (marker present) - it

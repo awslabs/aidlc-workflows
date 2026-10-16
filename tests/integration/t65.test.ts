@@ -1,60 +1,37 @@
 // covers: function:parseStageFrontmatter, function:emitStageFrontmatter, function:loadAgents
 //
-// t65 — end-to-end stage-file migration integrity across all 32 committed
-// stage .md files. Mechanism: none (pure functions over read-only on-disk
-// stage files + the committed stage-graph.json; zero CLI spawns, zero LLM,
-// zero tokens).
+// t65 - end-to-end stage-file integrity across all 33 shipped stage .md files.
+// Mechanism: none (pure functions over read-only on-disk stage files + the
+// generated stage-graph.json; zero CLI spawns, zero LLM, zero tokens).
 // Technique: aggregation-then-assert (one beforeAll walk, 22 example-based
 // assertions read off the aggregate).
 //
-// In-process migration of tests/integration/t65-stage-file-migration.sh (TAP
-// plan 22). The .sh ran ONE big `bun -e` block that imported
-// parseStageFrontmatter / emitStageFrontmatter / loadAgents from aidlc-lib.ts
-// and validateStageFrontmatter from aidlc-stage-schema.ts, walked every
-// stage file under skills/aidlc/stages/<phase>/*.md, emitted a JSON blob,
-// then queried that blob with 22 `bun -e` JSON reads (`j <field>`) wrapped in
-// TAP ok/not_ok. None of the 22 touched a CLI shell, argv, or process.exit:
-// the bash layer only existed to JSON-query the single bun aggregation and
-// emit TAP. So all 22 port to direct in-process calls with NO Bun.spawnSync
-// env-seam case retained — the entire walk runs once in beforeAll() and each
-// assertion reads off the aggregate, mirroring the .sh's `j` queries.
+// MECHANISM SPLIT: ALL in-process. (No spawn cases.)
 //
-// MECHANISM SPLIT: ALL in-process. (No spawn cases — the .sh's only use of
-// bash was the TAP harness + JSON querying of the single bun blob.)
-//
-// COVERS NOTE: the .sh also exercised validateStageFrontmatter (assertions 2
-// and 3 — non-init validate WITH ctx.agents, init validate WITHOUT ctx). It
-// is faithfully exercised here too, but validateStageFrontmatter is NOT a
-// tracked coverage-registry unit (grep of tests/.coverage-registry.json
+// COVERS NOTE: validateStageFrontmatter is exercised too (non-init validate
+// WITH ctx.agents, init validate WITHOUT ctx), but it is NOT a tracked
+// coverage-registry unit (aidlc-stage-schema.ts is not among the enumerated
+// function sources; the generated tests/.coverage-registry.json
 // returns no `function:validateStageFrontmatter` entry), so it is
 // deliberately omitted from the covers: header. parseStageFrontmatter,
 // emitStageFrontmatter, and loadAgents all carry minMechanism: none in the
-// registry and are creditable from this .none file.
+// registry and are creditable from this file.
 //
-// Sources read for this port:
+// Sources under test:
 //   dist/claude/.claude/tools/aidlc-lib.ts
-//     :805 loadAgents(): AgentMetadata[] — sorted-by-slug; each has .slug.
-//     :893 parseStageFrontmatter(raw): Record<string, unknown>.
-//     :1165 emitStageFrontmatter(obj): string — FIELD_ORDER-pinned YAML.
+//     loadAgents(): AgentMetadata[] - sorted-by-slug; each has .slug.
+//     parseStageFrontmatter(raw): Record<string, unknown>.
+//     emitStageFrontmatter(obj): string - FIELD_ORDER-pinned YAML.
 //   dist/claude/.claude/tools/aidlc-stage-schema.ts
-//     :108 validateStageFrontmatter(obj, ctx?) => {valid,data}|{valid,errors};
-//          ValidationContext.agents (:38) — when present, lead_agent +
-//          support_agents[] must be in the list. The .sh passed
+//     validateStageFrontmatter(obj, ctx?) => {valid,data}|{valid,errors};
+//          ValidationContext.agents - when present, lead_agent +
+//          support_agents[] must be in the list. This test passes
 //          ctx={agents:agentSlugs} for non-init phases and ctx=undefined for
 //          initialization (lead_agent: orchestrator is not an agent slug).
 //
-// PARITY NOTE (assertion 12, verified): the .sh's `produces[] union > 100`
-// check is a NO-OP gate — BOTH branches call `ok` (the .sh comments
-// "actual count below 100 acceptable for v0.3.0 shape"). It never fails; it
-// only records the count. Ported here as a soft lower-bound (>0) plus an
-// explicit count pin so the observable fact (a positive distinct count) is
-// represented at equal fidelity without inventing a brittle exact number the
-// .sh itself refused to assert.
-//
-// FIXTURE DISCIPLINE: this port reads the REAL committed stage tree and the
-// REAL committed stage-graph.json (read-only — same files the .sh pointed
-// $STAGES_DIR / $GRAPH_JSON at). Nothing is written; no tempdir needed; no
-// file under tests/fixtures/** is touched.
+// FIXTURE DISCIPLINE: this test reads the REAL shipped stage tree and the REAL
+// generated stage-graph.json, read-only. Nothing is written; no tempdir needed;
+// no file under tests/fixtures/** is touched.
 
 import { beforeAll, describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -70,15 +47,13 @@ const AIDLC_SRC = join(import.meta.dir, "..", "..", "dist", "claude", ".claude")
 const STAGES_DIR = join(AIDLC_SRC, "aidlc-common", "stages");
 const GRAPH_JSON = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 
-// Mirror the .sh's ARTIFACT_RE for the produces[]-slug-shape check.
 const ARTIFACT_RE = /^[a-z][a-z0-9-]*$/;
 
 type StageObj = Record<string, unknown>;
 type Parsed = { slug: string; phase: string; obj: StageObj };
 type GraphNode = { slug: string; number: string; phase: string };
 
-// --- Aggregate computed once in beforeAll (transcribed verbatim from the .sh's
-//     single `bun -e` block). Each field maps 1:1 to a `j <field>` query. ---
+// --- Aggregate computed once in beforeAll. ---
 interface Aggregate {
   totalParsed: number;
   parseErrors: Array<{ slug: string; phase: string; error: string }>;
@@ -143,14 +118,13 @@ beforeAll(() => {
       }
       parsed.push({ slug, phase, obj });
 
-      // The .sh passes ctx.agents for every non-initialization phase and
+      // Pass ctx.agents for every non-initialization phase and
       // ctx=undefined for initialization (lead_agent: orchestrator is not an
       // agent slug, so agent-slug lookup must be skipped there).
       const ctx = phase === "initialization" ? undefined : { agents: agentSlugs };
       const r = validateStageFrontmatter(obj, ctx);
       if (!r.valid) validateErrors.push({ slug, phase, errors: r.errors });
 
-      // Round-trip via deep-equal (JSON.stringify compare, like the .sh).
       try {
         const yaml2 = emitStageFrontmatter(obj);
         const obj2 = parseStageFrontmatter(yaml2);
@@ -163,7 +137,7 @@ beforeAll(() => {
     }
   }
 
-  // Aggregate checks (transcribed from the .sh block).
+  // Aggregate checks.
   const phaseCounts = parsed.reduce<Record<string, number>>((m, p) => {
     m[p.phase] = (m[p.phase] || 0) + 1;
     return m;
@@ -176,7 +150,7 @@ beforeAll(() => {
     .map((p) => p.slug)
     .sort();
   const usesAgentTeam = parsed.some((p) => p.obj.mode === "agent-team");
-  // 2.5.0 ensemble census: the mob showcase is exactly user-stories; every
+  // Ensemble census: the mob showcase is exactly user-stories; every
   // pipeline/mob stage must carry support agents (schema coupling, asserted
   // here against the real tree as well).
   const mobStages = parsed.filter((p) => p.obj.mode === "mob").map((p) => p.slug);
@@ -409,25 +383,23 @@ beforeAll(() => {
 });
 
 // ============================================================
-// Parse + schema validation (.sh assertions 1-3)
+// Parse + schema validation
 // ============================================================
 describe("t65 parse + schema validation (in-process)", () => {
-  // .sh #1: "all 32 stage files parse via parseStageFrontmatter"
   test("all 33 stage files parse via parseStageFrontmatter (total=33, no errors)", () => {
     expect(agg.parseErrors).toEqual([]);
     expect(agg.totalParsed).toBe(33);
   });
 
-  // .sh #2: "non-init stages validate against milestone 5 schema with ctx.agents"
   test("non-init stages validate against schema with ctx.agents (no validate errors)", () => {
     expect(agg.validateErrors).toEqual([]);
   });
 
-  // .sh #3: "init stages validate without ctx.agents (lead_agent=orchestrator
-  // allowed)". The .sh hard-coded this `ok` because init stages are validated
-  // with ctx=undefined inside the same loop as #2; since validateErrors is the
-  // union across ALL phases (init validated ctx-free, non-init with ctx), an
-  // empty validateErrors proves BOTH. Pin the init-specific fact directly.
+  // Init stages validate without ctx.agents (lead_agent=orchestrator allowed).
+  // Init stages are validated with ctx=undefined inside the same loop as the
+  // non-init stages; since validateErrors is the union across ALL phases (init
+  // validated ctx-free, non-init with ctx), an empty validateErrors proves BOTH.
+  // Pin the init-specific fact directly.
   test("init stages validate without ctx.agents (orchestrator lead_agent allowed)", () => {
     const initErrs = agg.validateErrors.filter((e) => e.phase === "initialization");
     expect(initErrs).toEqual([]);
@@ -435,10 +407,9 @@ describe("t65 parse + schema validation (in-process)", () => {
 });
 
 // ============================================================
-// Per-phase stage counts (.sh assertions 4-8)
+// Per-phase stage counts
 // ============================================================
 describe("t65 per-phase stage counts (in-process)", () => {
-  // .sh #4-8: init=3, ideation=7, inception=8, construction=7, operation=7.
   const expected: Array<[string, number]> = [
     ["initialization", 3],
     ["ideation", 7],
@@ -454,17 +425,15 @@ describe("t65 per-phase stage counts (in-process)", () => {
 });
 
 // ============================================================
-// for_each + mode (.sh assertions 9-11)
+// for_each + mode
 // ============================================================
 describe("t65 for_each + mode (in-process)", () => {
-  // .sh #9: "exactly 5 stages have for_each: unit-of-work, all in construction"
   test("exactly 5 stages have for_each: unit-of-work, all in construction", () => {
     expect(agg.forEachCount).toBe(5);
     expect(agg.forEachNonConstruction).toEqual([]);
     expect(agg.forEachValue).toEqual(["unit-of-work"]);
   });
 
-  // .sh #10: "mode 'subagent' used at least once"
   test("mode 'subagent' used at least once", () => {
     expect(agg.usesSubagent).toBe(true);
   });
@@ -476,19 +445,18 @@ describe("t65 for_each + mode (in-process)", () => {
     ]);
   });
 
-  // .sh #11: "mode 'agent-team' reserved — used zero times"
   test("mode 'agent-team' reserved — used zero times", () => {
     expect(agg.usesAgentTeam).toBe(false);
   });
 
-  // 2.5.0: the mob showcase ships on exactly user-stories; every ensemble
+  // The mob showcase ships on exactly user-stories; every ensemble
   // stage (pipeline/mob) carries support agents.
   test("mode 'mob' used by exactly user-stories (the 2.5.0 showcase)", () => {
     expect(agg.mobStages).toEqual(["user-stories"]);
   });
 
   // reverse-engineering's two-link body (developer scans, architect
-  // synthesizes and writes) IS the chain topology; 2.5.0 re-modes it to say so.
+  // synthesizes and writes) IS the chain topology.
   test("mode 'pipeline' used by exactly reverse-engineering", () => {
     expect(agg.pipelineStages).toEqual(["reverse-engineering"]);
   });
@@ -499,45 +467,35 @@ describe("t65 for_each + mode (in-process)", () => {
 });
 
 // ============================================================
-// produces[] union + slug shape (.sh assertions 12-13)
+// produces[] union + slug shape
 // ============================================================
 describe("t65 produces[] union + slug shape (in-process)", () => {
-  // .sh #12: NO-OP gate in the .sh (both branches `ok`; it only records the
-  // count). Pinned here as the observable fact: a positive distinct count.
   test("produces[] union has a positive distinct slug count", () => {
     expect(agg.producesCount).toBeGreaterThan(0);
   });
 
-  // .sh #13: "all produces[] entries match ARTIFACT_SLUG_RE"
   test("all produces[] entries match ARTIFACT_SLUG_RE", () => {
     expect(agg.badSlugs).toEqual([]);
   });
 });
 
 // ============================================================
-// Cross-stage integrity (.sh assertions 14-17)
+// Cross-stage integrity
 // ============================================================
 describe("t65 cross-stage integrity (in-process)", () => {
-  // .sh #14: "every consumes[].artifact appears in some stage's produces[]"
   test("every consumes[].artifact appears in some stage's produces[]", () => {
     expect(agg.missingProducers).toEqual([]);
   });
 
-  // .sh #15: "every requires_stage entry resolves to a known stage slug"
   test("every requires_stage entry resolves to a known stage slug", () => {
     expect(agg.badRequires).toEqual([]);
   });
 
-  // .sh #16: "cross-phase consumes[] artifacts have upstream producers in
-  // requires_stage"
   test("cross-phase consumes[] artifacts have upstream producers in requires_stage", () => {
     expect(agg.crossPhaseGaps).toEqual([]);
   });
 
-  // .sh #17: "topo-sort over requires_stage preserves stage-graph.json
-  // numbering". The .sh asserted the boolean; pin the boolean AND the orders
-  // so a failure surfaces the divergence (stronger than the .sh's sample-only
-  // diagnostic).
+  // Pin the boolean AND the orders so a failure surfaces the divergence.
   test("topo-sort over requires_stage preserves stage-graph.json numbering", () => {
     expect(agg.topoMatches).toBe(true);
     expect(agg.topoOrder).toEqual(agg.jsonOrder);
@@ -545,38 +503,30 @@ describe("t65 cross-stage integrity (in-process)", () => {
 });
 
 // ============================================================
-// Shape guards (.sh assertions 18-21)
+// Shape guards
 // ============================================================
 describe("t65 shape guards (in-process)", () => {
-  // .sh #18: "all 3 init stages have empty produces[]"
   test("all 3 init stages have empty produces[]", () => {
     expect(agg.initNonEmpty).toEqual([]);
   });
 
-  // .sh #19: "no stage contains reserved keys (when, on_failure, blocks_on,
-  // timeout, retry)"
   test("no stage contains reserved keys (when, on_failure, blocks_on, timeout, retry)", () => {
     expect(agg.reservedHits).toEqual([]);
   });
 
-  // .sh #20: "round-trip (parse → emit → parse) yields deep-equal object for
-  // all 32 stages"
   test("round-trip (parse -> emit -> parse) deep-equals original for all 33 stages", () => {
     expect(agg.roundTripMismatches).toEqual([]);
   });
 
-  // .sh #21: "every stage has non-empty inputs, outputs, condition"
   test("every stage has non-empty inputs, outputs, condition", () => {
     expect(agg.emptyProse).toEqual([]);
   });
 });
 
 // ============================================================
-// YAML <-> JSON consistency (.sh assertion 22)
+// YAML <-> JSON consistency
 // ============================================================
 describe("t65 YAML <-> stage-graph.json consistency (in-process)", () => {
-  // .sh #22: "YAML slugs ↔ stage-graph.json slugs match 1:1 with matching
-  // phases"
   test("YAML slugs <-> stage-graph.json slugs match 1:1 with matching phases", () => {
     expect(agg.extraYaml).toEqual([]);
     expect(agg.extraJson).toEqual([]);

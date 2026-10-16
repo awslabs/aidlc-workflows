@@ -1,39 +1,25 @@
 // covers: subcommand:aidlc-state:get, subcommand:aidlc-state:set, subcommand:aidlc-state:checkbox, subcommand:aidlc-state:count, subcommand:aidlc-state:advance, subcommand:aidlc-state:lookup, subcommand:aidlc-state:finalize, subcommand:aidlc-state:complete-workflow, subcommand:aidlc-state:resume, subcommand:aidlc-state:gate-start, subcommand:aidlc-state:approve, subcommand:aidlc-state:reject, subcommand:aidlc-state:revise, subcommand:aidlc-state:skip, subcommand:aidlc-state:reuse-artifact, subcommand:aidlc-state:park, subcommand:aidlc-state:unpark, audit:WORKFLOW_PARKED, audit:WORKFLOW_UNPARKED
 //
 // bun:test port of tests/unit/t17-tool-state.sh (TAP plan 83), mechanism = cli.
-// Faithful 1:1 migration of the aidlc-state.ts CLI-contract test — EQUAL fidelity,
-// not a rewrite. Every .sh assertion that ran `bun aidlc-state.ts <sub> ... --project-dir <p>`
-// is ported to a spawnSync of the REAL CLI, preserving the full process boundary:
-// exit code (res.status), stdout (res.stdout), and stderr (res.stderr). The .sh
-// folded stdout+stderr with `2>&1`; we reproduce that with a combined() helper so
-// `error()`-on-stderr assertions still match.
 //
 // SPAWN vs IN-PROCESS: the contract under test is entirely the argv-dispatch /
 // process boundary of aidlc-state.ts (and, for a handful of setup steps, the
-// aidlc-utility.ts init driver) — exit code + emitted JSON on stdout + error text
-// on stderr + on-disk mutations to aidlc-docs/aidlc-state.md and aidlc-docs/audit.md.
-// There are NO pure-function assertions in t17; every one of the 83 is an
-// observable side effect of running the tool. So ALL 124 invocations stay spawns
-// (124 in-process = 0). Calling the handlers in-process would forfeit the exit-code
-// and stderr halves of the contract, exactly the trap the t72 spike called out.
-//
-// As a .cli-mechanism file this legitimately credits the 15 aidlc-state subcommand
-// units it exercises (get, set, checkbox, count, advance, lookup, finalize,
-// complete-workflow, resume, gate-start, approve, reject, revise, skip,
-// reuse-artifact). fork / merge / practices-event / practices-promote /
-// acknowledge-compaction are NOT exercised by t17 and are therefore NOT claimed.
+// aidlc-utility.ts intent-create driver) - exit code + emitted JSON on stdout +
+// error text on stderr + on-disk mutations to aidlc-state.md and the audit
+// shards. There are NO pure-function assertions in t17; every assertion is an
+// observable side effect of running the tool, so every tool invocation stays a
+// spawn. Calling the handlers in-process would forfeit the exit-code and stderr
+// halves of the contract.
 //
 // FIXTURE DISCIPLINE: each case builds a fresh temp project via createTestProject()
-// + seedStateFile()/seedAuditFile() (the .ts analogues of fixtures.sh's
-// create_test_project / seed_state_file / seed_audit_file), so mutations never bleed
-// between cases. Cleanup runs in afterEach. NOTHING is written under tests/fixtures/**.
+// + seedStateFile()/seedAuditFile(), so mutations never bleed between cases.
+// Cleanup runs in afterEach. NOTHING is written under tests/fixtures/**.
 //
-// HARDENING ADDITIONS (beyond .sh parity, in the reject/revise describe):
-// reject accepts a direct Active → Revising transition when gate-start was
-// skipped, without fabricating STAGE_AWAITING_APPROVAL; the organic [?] path
-// retains its one real gate row, revise's re-entry gate row is never tagged,
-// and a terminal-state slug still rejects. Test 51 now uses a [ ] pending slug
-// (reject accepts [?] AND [-]).
+// In the reject/revise describe: reject accepts a direct Active -> Revising
+// transition when gate-start was skipped, without fabricating
+// STAGE_AWAITING_APPROVAL; the organic [?] path retains its one real gate row,
+// revise's re-entry gate row is never tagged, and a terminal-state slug still
+// rejects. Test 51 uses a [ ] pending slug (reject accepts [?] AND [-]).
 
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -64,7 +50,7 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const TOOLS_DIR = join(
   import.meta.dir,
   "..",
@@ -84,9 +70,6 @@ interface RunResult {
   combined: string;
 }
 
-// Run the real aidlc-state CLI. Mirrors `bun "$TOOL" <args> --project-dir "$PROJ"`.
-// combined = stdout+stderr (the .sh's `2>&1`). The .sh always appended
-// `--project-dir "$PROJ"`, so callers pass everything-but-that and we add it.
 function runState(proj: string, args: string[]): RunResult {
   const res = spawnSync(BUN, [TOOL, ...args, "--project-dir", proj], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -110,8 +93,6 @@ function runStateBare(args: string[]): RunResult {
   return { rc: res.status ?? -1, stdout, stderr, combined: `${stdout}${stderr}` };
 }
 
-// Run the utility init driver. Mirrors
-// `bun "$AIDLC_SRC/tools/aidlc-utility.ts" init --scope <s> --project-dir "$PROJ"`.
 function runInit(proj: string, scope: string): RunResult {
   const res = spawnSync(BUN, [UTILITY, "intent-create", "--scope", scope, "--project-dir", proj], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -171,11 +152,11 @@ function recordRequirementsReview(proj: string): void {
   }
 }
 
-// P4: intent-create (which runInit triggers) writes state into the created intent's
-// per-intent record dir (aidlc/spaces/<space>/intents/<slug>-<id8>/), not the flat
-// aidlc-docs/. Resolve the record dir from the active-space + active-intent
-// cursors, falling back to the flat layout for a seeded-flat project (the many
-// seedStateFile cases never call runInit, so they stay flat).
+// intent-create (which runInit triggers) writes state into the created intent's
+// per-intent record dir (aidlc/spaces/<space>/intents/<YYMMDD>-<label>/), not
+// the flat aidlc-docs/. Resolve the record dir from the active-space +
+// active-intent cursors, falling back to the flat layout for a seeded-flat
+// project (the many seedStateFile cases never call runInit, so they stay flat).
 function recordDirOf(proj: string): string {
   const spaceCursor = join(proj, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -210,7 +191,7 @@ function auditMd(proj: string): string {
   return seededAuditShard(proj);
 }
 const readState = (proj: string) => readFileSync(stateMd(proj), "utf-8");
-// Concatenate every audit shard under the created record's audit/ dir (Stage B);
+// Concatenate every audit shard under the created record's audit/ dir;
 // fall back to the flat aidlc-docs/audit.md for a seeded-flat / pre-migration
 // project. Matches the tool's own readAllAuditShards resolution.
 function readAudit(proj: string): string {
@@ -225,18 +206,15 @@ function readAudit(proj: string): string {
   return existsSync(flat) ? readFileSync(flat, "utf-8") : "";
 }
 
-// Count anchored lines `**Event**: <EVENT>` (the .sh's `grep -c "^\*\*Event\*\*: X"`).
 function countEvent(text: string, event: string): number {
   return text
     .split("\n")
     .filter((l) => l.startsWith(`**Event**: ${event}`)).length;
 }
-// True if any line begins with `**Event**: <EVENT>` (`grep -q "^\*\*Event\*\*: X"`).
 function hasEvent(text: string, event: string): boolean {
   return countEvent(text, event) > 0;
 }
 
-// Per-case temp project, torn down after each test.
 let proj = "";
 afterEach(() => {
   resetAidlcEnv();
@@ -505,7 +483,6 @@ describe("t17 advance emission + complete-workflow", () => {
   test("26: advance auto-logs STAGE_COMPLETED + STAGE_STARTED atomically", () => {
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
-    // Ensure audit.md exists but is empty (just header).
     writeFileSync(auditMd(proj), "# AI-DLC Audit Log\n", "utf-8");
     runState(proj, ["advance", "feasibility", "scope-definition"]);
     const audit = readAudit(proj);
@@ -514,8 +491,6 @@ describe("t17 advance emission + complete-workflow", () => {
   });
 
   test("27: complete-workflow sets Status=Completed", () => {
-    // .sh reuses the SAME $PROJ from Test 26 (no fresh create), then re-seeds the
-    // state file before complete-workflow. Mirror that: seed mid-ideation fresh.
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
     expect(runState(proj, ["complete-workflow", "scope-definition"]).combined).toContain(
@@ -599,7 +574,6 @@ describe("t17 advance validation", () => {
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
     const current = runState(proj, ["get", "Current Stage"]).combined.trim();
-    // Nuke the Scope field — `sed -i '/^- \*\*Scope\*\*:/d'`
     const stripped = readState(proj)
       .split("\n")
       .filter((l) => !l.startsWith("- **Scope**:"))
@@ -644,7 +618,6 @@ describe("t17 advance validation", () => {
     const audit = readAudit(proj);
     expect(hasEvent(audit, "PHASE_COMPLETED")).toBe(true);
     expect(hasEvent(audit, "PHASE_VERIFIED")).toBe(true);
-    // .sh: grep -q "^\*\*Phase\*\*: inception"
     expect(audit.split("\n").some((l) => l.startsWith("**Phase**: inception"))).toBe(true);
   });
 
@@ -1073,7 +1046,6 @@ describe("t17 skip", () => {
     seedStateFile(proj, MID_IDEATION);
     runState(proj, ["gate-start", "feasibility"]);
     runState(proj, ["reject", "feasibility", "--feedback", "x"]);
-    // Now [R] — skip should be allowed
     runState(proj, ["skip", "feasibility", "--reason", "cut from scope"]);
     expect(readState(proj)).toContain("[S] feasibility");
   });
@@ -1159,7 +1131,6 @@ describe("t17 cross-phase advance idempotency", () => {
     const completedBefore = countEvent(audit1, "PHASE_COMPLETED");
     const verifiedBefore = countEvent(audit1, "PHASE_VERIFIED");
     const startedBefore = countEvent(audit1, "PHASE_STARTED");
-    // Replay the SAME advance — should be a no-op.
     runState(proj, ["advance", "requirements-analysis"]);
     const audit2 = readAudit(proj);
     expect(countEvent(audit2, "PHASE_COMPLETED")).toBe(completedBefore);
@@ -1188,7 +1159,6 @@ describe("t17 park/unpark", () => {
     expect(s).toContain("- **Parked**:");
     expect(s).toContain("- **Parked At Stage**: feasibility");
     expect(countEvent(readAudit(proj), "WORKFLOW_PARKED")).toBe(1);
-    // park does NOT advance the pointer or flip any checkbox.
     expect(runState(proj, ["get", "Current Stage"]).combined.trim()).toBe("feasibility");
   });
 
@@ -1236,7 +1206,6 @@ describe("t17 park/unpark", () => {
     const r = runState(proj, ["park"]);
     expect(r.rc).not.toBe(0);
     expect(r.combined).toContain("autonomous");
-    // State untouched: no Parked marker written.
     expect(readState(proj)).not.toContain("- **Parked**:");
   });
 });
@@ -1283,7 +1252,6 @@ describe("t17 approve artifact guard (#366)", () => {
     expect(refusal.error).toContain(
       'Cannot complete "feasibility": none of its declared artifacts exist',
     );
-    // State untouched: not marked [x].
     expect(readState(proj)).not.toContain("[x] feasibility");
   });
 });

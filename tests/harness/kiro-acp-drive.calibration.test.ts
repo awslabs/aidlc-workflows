@@ -83,14 +83,15 @@ const SKIP_REASON = skipReason();
 
 // Known-answer strings read from the SHIPPED handlers (same provenance as the
 // SDK calibration — real, not guessed):
-//   aidlc-utility.ts handleDoctor() + aidlc-config-diagnostics.ts: the copy
-//   projection uses bun; Kiro wiring includes its adapter and agent config.
+//   aidlc-doctor.ts humanReport() + aidlc-utility.ts collectDoctorReport() +
+//   aidlc-config-diagnostics.ts runtimeDoctorChecks(): the copy projection uses
+//   bun; Kiro wiring includes its adapter and agent config.
 const DOCTOR_HEADER = "AI-DLC doctor";
 const DOCTOR_RUNTIME_LABEL = "Runtime hook PATH: bun";
 const DOCTOR_ADAPTER_LABEL = "aidlc-kiro-adapter.ts present";
 const DOCTOR_AGENT_LABEL = "agents/aidlc.json or agents/aidlc-aidlc.md present (conductor wiring)";
 
-// `/aidlc --status/--doctor/--version` now runs in userPromptSubmit, before
+// `/aidlc --status/--doctor/--version` runs in userPromptSubmit, before
 // ACP tool calls. Calibrate the tool-output channel by explicitly requesting a
 // fixture tool that invokes the real shipped utility. Its stdout is saved as
 // bytes and framed in one write, so transport framing cannot hide a changed
@@ -201,7 +202,7 @@ describe("kiro-acp-drive calibration (known-answer)", () => {
     `2. planted state fields surface verbatim in the status tool output${SKIP_REASON ? ` — SKIP: ${SKIP_REASON}` : ""}`,
     async () => {
       // state-brownfield-feature.md plants: Scope=feature, Current Stage=
-      // requirements-analysis, Completed=12 (verified by grep at authoring).
+      // requirements-analysis, Completed=12.
       const proj = setupTuiProject({
         harness: "kiro",
         withState: "state-brownfield-feature.md",
@@ -250,7 +251,6 @@ describe("kiro-acp-drive calibration (known-answer)", () => {
           timeoutMs: remainingWorkMs(),
         });
         recordCalibration("version-negative", r, version);
-        // version ran; doctor did NOT — find() must come back empty for it.
         expect(r.toolCalls.find((t) => commandInput(t) === version.command)).toBeDefined();
         expect(r.toolCalls.find((t) => commandInput(t) === doctor.command)).toBeUndefined();
         expect(r.toolCalls.map(commandInput).filter((command) => command !== undefined)).toEqual([version.command]);

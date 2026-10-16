@@ -35,7 +35,7 @@
 //      parking is an inter-stage pause, never a stage completion; the #367
 //      rubber-stamp escape would have flipped it), and
 //   4. the run ended cleanly (resultEvent is defined and not is_error), i.e. the
-//      hook ALLOWED the turn to end rather than trapping it.
+//      turn ended without being trapped.
 // We assert on toolResults (verbatim tool stdout) + resultEvent + on-disk state,
 // NEVER on assistantText (the LLM's reworded prose). The driver writes an ndjson
 // trace to tests/logs/<stamp>/sdk-drive-<pid>.ndjson when AIDLC_TEST_DEBUG=true.
@@ -69,7 +69,7 @@ const TEST_TIMEOUT_MS = liveCaseTimeoutMs(LIVE_WORK_TIMEOUT_MS);
 
 // The single remaining stage in state-final-stage.md (feedback-optimization at
 // [-]). The row literal carries a U+2014 em dash COPIED VERBATIM from the
-// fixture (state-final-stage.md:86); it is load-bearing, the exact bytes the
+// fixture's feedback-optimization row; it is load-bearing, the exact bytes the
 // state file holds. We introduce NO other non-keyboard characters in this file.
 const PENDING_STAGE = "feedback-optimization";
 const PENDING_ROW = `- [-] ${PENDING_STAGE} — EXECUTE`;
@@ -163,9 +163,8 @@ describe("t187 park + conversational carve-out (sdk): a conductor asked to pause
         expect(state).not.toContain(COMPLETED_ROW);
 
         // ASSERTION 4: the run ended cleanly. resultEvent is defined and not an
-        // error, proof the Stop hook ALLOWED the turn to end (the terminal
-        // `parked` allow) rather than trapping it on the pending run-stage. The
-        // park signal above plus a clean end together close the #365 loop.
+        // error; the run ended rather than being trapped on the pending run-stage.
+        // The park signal above plus a clean end together close the #365 loop.
         expect(
           r.resultEvent,
           "expected a terminal result event (the run ended rather than being trapped)",

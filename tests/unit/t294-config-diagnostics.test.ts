@@ -10,6 +10,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -2447,7 +2448,7 @@ describe("t294 trust diagnostics", () => {
     expect(kiroDisabledHookChecks(ide, ".kiro")).toEqual([
       {
         pass: false,
-        label: "AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks: approvals, the approved plan, reviewed work and AI-DLC's records are not protected",
+        label: "AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks: the approved plan, reviewed work and AI-DLC's records are not protected",
         fix: 'turn aidlc-guard-tool-call back on under Kiro\'s Agent Hooks, or set "enabled": true in .kiro/hooks/aidlc-guard-tool-call.json',
       },
       {
@@ -2502,7 +2503,7 @@ describe("t294 trust diagnostics", () => {
     if (result.error) throw result.error;
     expect(JSON.parse(result.stdout).data.checks).toContainEqual(expect.objectContaining({
       pass: false,
-      label: "AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks: approvals, the approved plan, reviewed work and AI-DLC's records are not protected",
+      label: "AI-DLC hook aidlc-guard-tool-call is switched off in Kiro's Agent Hooks: the approved plan, reviewed work and AI-DLC's records are not protected",
     }));
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
@@ -3824,54 +3825,51 @@ describe("t294 config diagnostics CLI", () => {
     expect(readFileSync(configPath, "utf-8")).toBe(edited);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("Codex refresh removes the space pointer an earlier release shipped, at whichever space a switch left it", () => {
+  test("Codex refresh empties the space pointer an earlier release shipped, at whichever space a switch left it", () => {
     const env = runtimeEnv();
-    // Earlier releases shipped `AIDLC_RULES_DIR` under [shell_environment_policy]
-    // and a space switch rewrote it in place; this release ships neither, and
-    // the engine reads the active space itself.
-    const shipped = (value: string) =>
-      `[shell_environment_policy]\nset = { AIDLC_RULES_DIR = "${value}" }\n\n[sandbox_workspace_write]`;
-    for (const [label, value, form] of [
-      ["the default space", "aidlc/spaces/default/memory", "inline"],
-      ["a switched space", "aidlc/spaces/teamb/memory", "inline"],
-      ["a switched space, dotted", "aidlc/spaces/teamb/memory", "dotted"],
+    // 2.11.0 shipped `AIDLC_RULES_DIR` under [shell_environment_policy] and a
+    // space switch rewrote it in place; this release ships it empty (2.11.0's
+    // own refresh cannot take the member out), and the engine reads the active
+    // space itself.
+    const EMPTY = 'set = { AIDLC_RULES_DIR = "" }';
+    for (const [label, older, refreshedTo] of [
+      ["the default space", 'set = { AIDLC_RULES_DIR = "aidlc/spaces/default/memory" }', EMPTY],
+      ["a switched space", 'set = { AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory" }', EMPTY],
+      ["a switched space, dotted", 'set.AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory"', 'set.AIDLC_RULES_DIR = ""'],
     ] as const) {
       const project = install("codex");
       const configPath = join(project, ".codex", "config.toml");
       const clean = readFileSync(configPath, "utf-8");
-      const older = clean.replace(
-        "[sandbox_workspace_write]",
-        form === "inline"
-          ? shipped(value)
-          : `[shell_environment_policy]\nset.AIDLC_RULES_DIR = "${value}"\n\n[sandbox_workspace_write]`,
-      );
-      expect(older, label).not.toBe(clean);
-      writeFileSync(configPath, older);
+      expect(clean, label).toContain(EMPTY);
+      writeFileSync(configPath, clean.replace(EMPTY, older));
       const refreshed = run(["config", "--project-dir", project, "--yes"], project, env);
       expect(refreshed.status, `${label}: ${refreshed.stdout}${refreshed.stderr}`).toBe(0);
       expect(refreshed.stdout, label).not.toContain("Note:");
-      // The table and its one line go; the blank line that separated it stays.
-      expect(readFileSync(configPath, "utf-8").replace("\n\n\n[sandbox_workspace_write]", "\n\n[sandbox_workspace_write]"), label).toBe(clean);
+      expect(readFileSync(configPath, "utf-8"), label).toBe(clean.replace(EMPTY, refreshedTo));
     }
-    // A table the project extended: only the pointer member goes, the project's
-    // own member and the table stay, whichever order they were written in.
+    // A table the project extended: only the pointer's value changes, the
+    // project's own members and the table stay, whichever order they were in.
     for (const [members, left] of [
-      ['AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory", PROJECT_VAR = "must-stay"', 'PROJECT_VAR = "must-stay"'],
-      ['PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory"', 'PROJECT_VAR = "must-stay"'],
-      ['PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = "aidlc/spaces/default/memory", OTHER = 1', 'PROJECT_VAR = "must-stay", OTHER = 1'],
+      ['AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory", PROJECT_VAR = "must-stay"', 'AIDLC_RULES_DIR = "", PROJECT_VAR = "must-stay"'],
+      ['PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = "aidlc/spaces/teamb/memory"', 'PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = ""'],
+      ['PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = "aidlc/spaces/default/memory", OTHER = 1', 'PROJECT_VAR = "must-stay", AIDLC_RULES_DIR = "", OTHER = 1'],
     ] as const) {
       const extended = install("codex");
       const extendedPath = join(extended, ".codex", "config.toml");
-      const before = readFileSync(extendedPath, "utf-8").replace(
-        "[sandbox_workspace_write]",
-        `[shell_environment_policy]\nset = { ${members} }\n\n[sandbox_workspace_write]`,
-      );
+      const before = readFileSync(extendedPath, "utf-8").replace(EMPTY, `set = { ${members} }`);
       writeFileSync(extendedPath, before);
       const refreshed = run(["config", "--project-dir", extended, "--yes"], extended, env);
       expect(refreshed.status, `${members}: ${refreshed.stdout}${refreshed.stderr}`).toBe(0);
       expect(refreshed.stdout, members).not.toContain("Note:");
       expect(readFileSync(extendedPath, "utf-8"), members).toBe(before.replace(`set = { ${members} }`, `set = { ${left} }`));
     }
+    // A folder of the person's own is theirs, and stays.
+    const own = install("codex");
+    const ownPath = join(own, ".codex", "config.toml");
+    writeFileSync(ownPath, readFileSync(ownPath, "utf-8").replace(EMPTY, 'set = { AIDLC_RULES_DIR = "team/rules" }'));
+    const kept = run(["config", "--project-dir", own, "--yes"], own, env);
+    expect(kept.status, kept.stdout + kept.stderr).toBe(0);
+    expect(readFileSync(ownPath, "utf-8")).toContain('set = { AIDLC_RULES_DIR = "team/rules" }');
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("first Codex install keeps a project's own config.toml and adds AI-DLC's settings", () => {
@@ -5192,6 +5190,7 @@ process.exit(0);
       features: hash,
       sandbox_mode: hash,
       sandbox_workspace_write: hash,
+      shell_environment_policy: hash,
       suppress_unstable_features_warning: hash,
       tool_output_token_limit: hash,
       tools: hash,
@@ -5201,6 +5200,7 @@ process.exit(0);
       'value:["suppress_unstable_features_warning"]': hash,
       'value:["tool_output_token_limit"]': hash,
       'value:["sandbox_workspace_write","network_access"]': hash,
+      'value:["shell_environment_policy","set","AIDLC_RULES_DIR"]': hash,
       'value:["agents","max_depth"]': hash,
       'value:["tools","experimental_request_user_input","enabled"]': hash,
       'value:["features","default_mode_request_user_input"]': hash,
@@ -6443,7 +6443,7 @@ process.exit(0);
     const show = run([...args, "--show"], project, env);
     expect(show.status, show.stdout + show.stderr).toBe(0);
     expect(show.stdout).toContain(
-      "Model access: comes with Kiro IDE; AI-DLC configures no model provider",
+      "Model access: comes with Kiro; AI-DLC configures no model provider",
     );
     expect(show.stdout).toContain("Legacy provider answer present and ignored;");
     expect(show.stdout).toContain("config providers --reset");
@@ -6661,8 +6661,9 @@ process.exit(0);
 
   // Kiro CLI offers an agent only the servers its tools name: config names
   // every server in the project's file and in the person's own Kiro settings
-  // for the AI-DLC agent, and reads the person's file without writing it.
-  test("Kiro CLI config grants the AI-DLC agent every MCP server it finds", () => {
+  // for the AI-DLC agent and its 14 specialists, and reads the person's file
+  // without writing it.
+  test("Kiro CLI config grants the AI-DLC agent and its specialists every MCP server it finds", () => {
     type Agent = { includeMcpJson?: unknown; tools: string[]; allowedTools: string[] };
     const kiroHome = temp("aidlc-t294-kiro-home-");
     mkdirSync(join(kiroHome, "settings"), { recursive: true });
@@ -6678,6 +6679,21 @@ process.exit(0);
       readFileSync(join(DIST_RELEASE, "kiro", ".kiro", "settings", "mcp.json"), "utf-8"),
     ) as { mcpServers: Record<string, unknown> }).mcpServers);
     const agentPath = join(project, ".kiro", "agents", "aidlc.json");
+    // Each specialist keeps its own tools and allowedTools, with the grants given.
+    const specialists = readdirSync(join(DIST_RELEASE, "kiro", ".kiro", "agents"))
+      .filter((file) => /^aidlc-.+-agent\.json$/.test(file));
+    expect(specialists).toHaveLength(14);
+    const specialistGrants = (root: string, grants: string[], file?: string) => {
+      for (const name of file ? [file] : specialists) {
+        const shipped = JSON.parse(readFileSync(join(DIST_RELEASE, "kiro", ".kiro", "agents", name), "utf-8")) as Agent;
+        const current = JSON.parse(readFileSync(join(root, ".kiro", "agents", name), "utf-8")) as Agent;
+        expect(current.includeMcpJson, name).toBe(true);
+        expect(current.tools, name).toEqual([...shipped.tools.filter((tool) => !tool.startsWith("@")), ...grants]);
+        expect(current.allowedTools, name).toEqual(shipped.allowedTools);
+      }
+    };
+    const grantsOf = (path: string) =>
+      (JSON.parse(readFileSync(path, "utf-8")) as Agent).tools.filter((tool) => tool.startsWith("@"));
 
     const setup = run(args, project, env);
     expect(setup.status, setup.stdout + setup.stderr).toBe(0);
@@ -6685,6 +6701,7 @@ process.exit(0);
     expect(agent.includeMcpJson).toBe(true);
     expect(agent.tools).toEqual([...shippedAgent.tools, ...shippedServers.map((name) => `@${name}`), "@my-docs"]);
     expect(agent.allowedTools).toEqual(shippedAgent.allowedTools);
+    specialistGrants(project, grantsOf(agentPath));
 
     // A server the person adds to the project's file reaches the agent the
     // next time config runs.
@@ -6701,6 +6718,7 @@ process.exit(0);
       "@my-docs",
     ]);
     expect(agent.allowedTools).toEqual(shippedAgent.allowedTools);
+    specialistGrants(project, grantsOf(agentPath));
     expect(readFileSync(personalMcp)).toEqual(personalBefore);
 
     // The agent file travels with the project, so a teammate's config run
@@ -6718,6 +6736,7 @@ process.exit(0);
       ...shippedAgent.tools,
       ...[...shippedServers, "team-docs", "their-docs", "my-docs"].map((name) => `@${name}`),
     ]);
+    specialistGrants(project, grantsOf(agentPath));
 
     // A personal file kept as a link (a dotfiles folder) is read through it.
     const linkedHome = temp("aidlc-t294-kiro-home-linked-");
@@ -6731,6 +6750,7 @@ process.exit(0);
     const linked = run(args, project, { KIRO_HOME: linkedHome });
     expect(linked.status, linked.stdout + linked.stderr).toBe(0);
     expect((JSON.parse(readFileSync(agentPath, "utf-8")) as Agent).tools).toContain("@linked-docs");
+    specialistGrants(project, grantsOf(agentPath));
 
     // A copy install puts the runtime's files in the project before config
     // runs: the agent file as shipped is AI-DLC's, so setup names the servers
@@ -6743,6 +6763,17 @@ process.exit(0);
     const copiedAgentPath = join(copied, ".kiro", "agents", "aidlc.json");
     expect((JSON.parse(readFileSync(copiedAgentPath, "utf-8")) as Agent).tools)
       .toEqual([...shippedAgent.tools, ...shippedServers.map((name) => `@${name}`), "@my-docs"]);
+    specialistGrants(copied, grantsOf(copiedAgentPath));
+    // A grant added by hand to one specialist stays on that one, not the others.
+    const developerPath = join(copied, ".kiro", "agents", "aidlc-developer-agent.json");
+    const developer = JSON.parse(readFileSync(developerPath, "utf-8")) as Agent;
+    developer.tools.push("@hand-docs");
+    writeFileSync(developerPath, `${JSON.stringify(developer, null, 2)}\n`);
+    const handRun = run([...args.slice(0, 2), copied, ...args.slice(3)], copied, env);
+    expect(handRun.status, handRun.stdout + handRun.stderr).toBe(0);
+    specialistGrants(copied, [...grantsOf(copiedAgentPath), "@hand-docs"], "aidlc-developer-agent.json");
+    specialistGrants(copied, grantsOf(copiedAgentPath), "aidlc-architect-agent.json");
+    expect(grantsOf(copiedAgentPath)).not.toContain("@hand-docs");
     // A grant added by hand stays named like any other; another hand edit, such
     // as a built-in tool, stops config and keeps the person's bytes.
     const edited = JSON.parse(readFileSync(copiedAgentPath, "utf-8")) as Agent;

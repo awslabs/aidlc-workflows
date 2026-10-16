@@ -1,8 +1,11 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import {
   KIRO_WORKFLOWS_ISSUE_ID,
+  KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID,
   kiroWorkflowsFix,
   kiroWorkflowsIssueMessage,
+  kiroWorkflowsUnreadableFix,
+  kiroWorkflowsUnreadableMessage,
   readKiroIdeWorkflows,
   readKiroWorkflowsAnswer,
   type KiroWorkflowsAnswer,
@@ -38,6 +41,7 @@ import {
   jsonFileText,
   jsoncRootMembers,
   jsoncSettingValue,
+  kiroUpgradedAgentFile,
   managedBlockIsSafe,
   managedBlockMarkers,
   mergeBlock,
@@ -260,7 +264,7 @@ export type TrustStatus = {
   files: string[];
   issues: DiagnosticIssue[];
   /** Kiro IDE only: its Workflows switch and the person's answer on this machine. */
-  kiroWorkflows?: { enabled: boolean; settingsPath: string; answer: KiroWorkflowsAnswer | null };
+  kiroWorkflows?: { enabled: boolean; readable: boolean; settingsPath: string; answer: KiroWorkflowsAnswer | null };
   /** Kiro IDE on Windows only: whether its terminal is Command Prompt, and the person's answer on this machine. */
   kiroTerminal?: { commandPrompt: boolean; profile: string | null; settingsPath: string; answer: KiroTerminalAnswer | null };
 };
@@ -730,7 +734,6 @@ function pathAssignments(
   return entries;
 }
 
-// systemd environment.d: every *.conf in the directory, sorted, PATH= lines.
 function environmentDirectoryPaths(directory: string, home: string): string[] {
   let files: string[];
   try {
@@ -1480,13 +1483,13 @@ export function hasLegacyCodexProviderConfig(
 }
 
 // The `aws-mcp` region in `.kiro/settings/mcp.json` is plain MCP configuration.
-// Kiro CLI no longer asks a provider question, so no record drives it; but every
+// Kiro CLI does not ask a provider question, so no record drives it; but every
 // refresh restages that file from the release bytes, which would silently move a
 // region the project already carries (set by an earlier build's Bedrock answer,
 // or by hand) back to the shipped one. Carry the project's current endpoint
-// region and `AWS_REGION` metadata into the staged file instead, so the staged
-// bytes equal the current bytes and the refresh preserves the file. Reads only
-// the two aws-mcp arguments; everything else comes from the release.
+// region and `AWS_REGION` metadata into the staged file instead, so the refresh
+// preserves the region. Reads only the two aws-mcp arguments; everything else
+// comes from the release.
 export function preserveKiroMcpRegion(
   projectDir: string,
   stagedRoot: string,
@@ -1538,9 +1541,8 @@ export function preserveKiroMcpRegion(
 }
 
 
-// A staged opencode.json as plain JSON, or null when it is the team's own file
-// with comments (a copy's own tree), which holds no provider block AI-DLC
-// writes or clears here.
+// A staged opencode.json as plain JSON, or null when it cannot be read as an
+// object, including the team's own file with comments (a copy's own tree).
 function openCodeJsonOrNull(path: string): Record<string, unknown> | null {
   try {
     const value = readJsonFile(path);
@@ -2422,11 +2424,11 @@ export function copilotConfigPath(
 }
 
 // The global opencode config files that merge before a project opencode.json,
-// in opencode's own order (v1.18.18 config/config.ts:258-260 and :401-403):
-// config.json, opencode.json and opencode.jsonc under its config directory,
-// then the file OPENCODE_CONFIG names. The directory is xdg-basedir's
-// (XDG_CONFIG_HOME, else os.homedir()/.config, on every platform; the home is
-// USERPROFILE on Windows, never APPDATA) plus "opencode" (core/global.ts:13).
+// in opencode's own order (v1.18.18 config/config.ts): config.json,
+// opencode.json and opencode.jsonc under its config directory, then the file
+// OPENCODE_CONFIG names. The directory is xdg-basedir's (XDG_CONFIG_HOME, else
+// os.homedir()/.config, on every platform; the home is USERPROFILE on Windows,
+// never APPDATA) plus "opencode" (core/global.ts).
 export function openCodeGlobalConfigFiles(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = hostPlatform(),
@@ -2664,10 +2666,10 @@ export function codexTrustIssues(
 }
 
 // A missing sibling is repaired by the same `--harness` refresh as a missing
-// shell. The old remediation was a bare `aidlc config`, which on a project that
-// already has a harness directory takes the interactive walk and rebuilds
-// nothing. `harnessDir` selects the channel-correct command; callers without one
-// (tests) get the native spelling.
+// shell. A bare `aidlc config` on a project that already has a harness
+// directory takes the interactive walk and rebuilds nothing. `harnessDir`
+// selects the channel-correct command; callers without one (tests) get the
+// native spelling.
 export function workspaceSiblingIssues(
   projectDir: string,
   harness: ModelHarness,
@@ -2824,7 +2826,22 @@ export function trustStatus(
   let kiroWorkflows: TrustStatus["kiroWorkflows"];
   if (harness === "kiro-ide") {
     const state = readKiroIdeWorkflows(env);
-    kiroWorkflows = { enabled: state.enabled, settingsPath: state.settingsPath, answer: readKiroWorkflowsAnswer() };
+    kiroWorkflows = {
+      enabled: state.enabled,
+      readable: state.readable,
+      settingsPath: state.settingsPath,
+      answer: readKiroWorkflowsAnswer(),
+    };
+    // A file AI-DLC cannot read may hold Workflows on whatever the person
+    // answered before, so it is named while the file stays that way, as doctor does.
+    if (!state.readable) {
+      issues.push({
+        id: KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID,
+        message: kiroWorkflowsUnreadableMessage(),
+        remediation: kiroWorkflowsUnreadableFix(state.settingsPath),
+        severity: "warn",
+      });
+    }
     if (state.enabled && kiroWorkflows.answer === null) {
       issues.push({
         id: KIRO_WORKFLOWS_ISSUE_ID,
@@ -2950,6 +2967,17 @@ export function postApplyOutstandingActions(
           id: issue.id,
           message: issue.message,
           command: `${invoke} config trust --kiro-workflows off`,
+        };
+      }
+      // No AI-DLC command repairs the file: the step is the person's, and the
+      // command only checks the result.
+      if (issue.id === KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID) {
+        return {
+          section: "trust" as const,
+          id: issue.id,
+          message: issue.message,
+          command: `${invoke} config trust --check`,
+          step: issue.remediation,
         };
       }
       if (issue.id === KIRO_TERMINAL_ISSUE_ID) {
@@ -3409,8 +3437,8 @@ export function kiroIdeWorkflowsDoctorCheck(
     return {
       pass: false,
       severity: "warn",
-      label: `Kiro Workflows: ${state.settingsPath} could not be read as JSONC`,
-      fix: "correct the file, or in Kiro run Disable Workflows from the Command Palette",
+      label: kiroWorkflowsUnreadableMessage(),
+      fix: kiroWorkflowsUnreadableFix(state.settingsPath),
     };
   }
   if (!state.enabled) return { pass: true, label: "Kiro Workflows is off" };
@@ -3537,7 +3565,6 @@ export function vscodeWorkspaceRequestCapDoctorCheck(
 
 const REQUEST_CAP_PAUSES = 'below 100, VS Code stops a long stage to ask "Continue to iterate?" and the chat waits until someone answers';
 
-// The install's added-once record for .vscode/settings.json.
 function requestCapAddedBefore(harnessRoot: string): boolean {
   try {
     const baseline = readJsonFile(join(harnessRoot, "tools", "data", "aidlc-manifest.json")) as {
@@ -3873,8 +3900,18 @@ export function frameworkFilesDoctorCheck(
     // The instruction row reports a missing or unreadable record.
     return { pass: true, label: "AI-DLC files: not checked, no record of what AI-DLC wrote" };
   }
-  const changed = changedFrameworkFiles(projectDir, selected.harnessDir, selected.harness, baseline);
-  if (changed.length === 0) return { pass: true, label: "AI-DLC files: unchanged since AI-DLC wrote them" };
+  const differ = changedFrameworkFiles(projectDir, selected.harnessDir, selected.harness, baseline);
+  // An agent file Kiro upgraded for its 3.0 engine is not the person's change.
+  const upgraded = differ.filter((rel) => kiroUpgradedAgentFile(projectDir, rel));
+  const changed = differ.filter((rel) => !upgraded.includes(rel));
+  if (changed.length === 0) {
+    const kept = upgraded.length === 0
+      ? ""
+      : `, apart from ${upgraded.length} agent ${
+        upgraded.length === 1 ? "file" : "files"
+      } Kiro upgraded for its 3.0 engine`;
+    return { pass: true, label: `AI-DLC files: unchanged since AI-DLC wrote them${kept}` };
+  }
   const invoke = invocationForHarness(selected.harnessDir);
   const one = changed.length === 1;
   const shown = changed.slice(0, 10).join(", ");

@@ -1,4 +1,4 @@
-// Learning-gate tool — the tool-as-actor half of stage-protocol §13's
+// Learning-gate tool -- the tool-as-actor half of stage-protocol section 13's
 // Learnings Ritual. Two subcommands:
 //
 //   surface --slug <stage-slug> [--project-dir <path>]
@@ -10,10 +10,9 @@
 //       the AUQ, runs the single-line admission conflict-check (KNOWLEDGE),
 //       and the user decides keep/heading/scope (JUDGEMENT).
 //       ALSO binds the space + intent active AT SURFACE TIME into the
-//       output (LOCAL FIX, #735 follow-up / PR #747 review) — see
-//       "Provenance binding" below.
+//       output -- see "Provenance binding" below.
 //
-//   persist --slug <stage-slug> --selections-json <path> [--project-dir <path>]
+//   persist --slug <stage-slug> --selections-json <selections_file> [--project-dir <path>]
 //       The deterministic WRITER. Reads the post-AUQ selections-json
 //       (conflict-clear / user-escalated only — persist never judges),
 //       and inside ONE withAuditLock body (decide-inside-lock): re-reads
@@ -21,14 +20,12 @@
 //       fresh audit + an in-memory cid-marker content-presence check,
 //       writes a confirmed learning as a PRACTICE under the orchestrator-
 //       routed heading in {project,team}.md (the relocated method files the
-//       resolver reads — a learning IS a practice, vision §6; the heading is
-//       ensure-exists so an absent target is created, never a throw), or
-//       scaffolds + two-write-binds a project-tier sensor manifest, then
-//       emits RULE_LEARNED / SENSOR_PROPOSED.
+//       resolver reads -- a learning IS a practice, vision section 6; the
+//       heading is ensure-exists so an absent target is created, never a
+//       throw), or scaffolds + two-write-binds a project-tier sensor
+//       manifest, then emits RULE_LEARNED / SENSOR_PROPOSED.
 //
-// --- Provenance binding + content-addressed dedup (#735 follow-up, PR #747
-//     review) ---
-// Twelve findings from PR #747's five review rounds, fixed here:
+// --- Provenance binding + content-addressed dedup ---
 //   1. Candidate ids restart at c1 on EVERY surface() call, so a later run
 //      of the same stage in the SAME intent reused c1 for a completely
 //      different learning and the old (intent, stage, candidate-id) marker
@@ -41,10 +38,9 @@
 //      time and threading that SAME value through persist's audit read,
 //      audit write, and lock identity — never re-resolved from the live
 //      cursor inside persist.
-//   3. The (intent, stage, candidate-id) marker/row shape this file has
-//      shipped before, the original pre-#735 (stage, candidate-id) shape,
-//      and the earlier PR revision's truncated content hash are recognized
-//      as legacy-compatible dedup matches so a post-upgrade retry does not
+//   3. The (intent, stage, candidate-id) marker/row shape, the (stage,
+//      candidate-id) shape, and the truncated content hash are recognized as
+//      legacy-compatible dedup matches so a post-upgrade retry does not
 //      duplicate an already-persisted learning under the full-hash marker.
 //   4. Ambiguous intent resolution (multiple intent records, no valid
 //      cursor) must fail closed rather than silently degrading to the same
@@ -56,14 +52,13 @@
 //      whatever space happened to be LIVE-active when persist ran, not the
 //      one the selection was surfaced under. Fixed by threading the pinned
 //      space through practiceFilePath into memoryDirFor.
-//   6. The sensor branch's own dedup (priorSensorProposedRow, formerly
-//      priorAuditRow) still keyed on (stage, candidate_id) — the same
-//      unstable-key defect class finding #1 fixed for learnings, recurring
-//      for sensors: a later surface() run proposing the SAME sensor id
-//      under a different candidate id re-emitted a duplicate
-//      SENSOR_PROPOSED. Fixed by keying on (stage, the sensor's own stable
-//      manifest id) instead of (stage, candidate_id) — stage stays in the
-//      key because binding is legitimately per-stage even though the
+//   6. The sensor branch's own dedup (priorSensorProposedRow) still keyed on
+//      (stage, candidate_id) -- the same unstable-key defect class finding #1
+//      fixed for learnings, recurring for sensors: a later surface() run
+//      proposing the SAME sensor id under a different candidate id re-emitted
+//      a duplicate SENSOR_PROPOSED. Fixed by keying on (stage, the sensor's
+//      own stable manifest id) instead of (stage, candidate_id) -- stage stays
+//      in the key because binding is legitimately per-stage even though the
 //      manifest itself is a per-project singleton; dropping stage entirely
 //      would make the no-op branch global and block a second, unrelated
 //      stage from ever binding a sensor another stage had already proposed.
@@ -95,23 +90,27 @@
 //      misattribute the marker and audit row. Fixed by rejecting a mismatch.
 //
 // The conflict COMPARISON is the orchestrator-LLM's job (the "single-line
-// variant" of the §5 gate model); persist receives only conflict-clear or
-// user-escalated selections and never judges. See docs/reference/
+// variant" of the section 5 gate model); persist receives only conflict-clear
+// or user-escalated selections and never judges. See docs/reference/
 // 07-sensor-system.md "Gate-ritual handoff" for the round-trip.
 //
-// Three-concerns split (explainer §6:712): detection + surfacing +
+// Three-concerns split (explainer section 6): detection + surfacing +
 // routing + writing are deterministic (this tool); the conflict-check
 // comparison is knowledge (orchestrator-LLM); revise/skip/escalate is
 // judgement (user). No LLM call lives in this tool.
 
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { memoryDirFor } from "./aidlc-graph.ts";
 import {
   activeIntent,
   appendUnderHeading,
+  LEARNINGS_SELECTIONS_DIR,
+  normalizeDriveLetter,
+  readRegularFileNoFollowOrThrow,
+  recordFileTargetOrThrow,
   errorMessage,
   findAllEvents,
   findStageBySlug,
@@ -138,6 +137,7 @@ import {
   harnessDir,
 } from "./aidlc-lib.ts";
 import { constructionCheckpointKind, resolveConstructionCheckpoint } from "./aidlc-construction-checkpoints.ts";
+import { SLUG_RE } from "./aidlc-stage-schema.ts";
 
 // --- Exit-code convention (plan §2) ---
 //   0 success
@@ -154,18 +154,17 @@ function fail(message: string, code: 1 | 2): never {
 
 // --- Path helpers ---
 
-// A confirmed learning IS a practice (vision §6). It lands in the relocated
-// method file the resolver reads — team.md / project.md under
+// A confirmed learning IS a practice (vision section 6). It lands in the
+// relocated method file the resolver reads -- team.md / project.md under
 // aidlc/spaces/<space>/memory/ (neutral names, no `aidlc-` prefix) — NOT a
 // parallel dated `*-learnings.md` log. memoryDirFor() derives the path from
 // the SAME MEMORY_SEGMENTS loadRules()/the packager use, so the writer can
-// never drift from the reader root (P5 relocated the reader; P6 closes the
-// seam by pointing the writer at the same place).
-// `space` MUST be the space PINNED at surface() time (PR #747 review, round
-// 2) — memoryDirFor's own space arg is optional and falls back to the LIVE
-// active-space cursor when omitted, which is exactly the bug: the lock and
-// audit read/write were already pinned to the surfaced space, but this path
-// alone kept reading whatever space happened to be active when persist ran.
+// never drift from the reader root.
+// `space` MUST be the space PINNED at surface() time -- memoryDirFor's own
+// space arg is optional and falls back to the LIVE active-space cursor when
+// omitted, which is exactly the bug: the lock and audit read/write were
+// already pinned to the surfaced space, but this path alone kept reading
+// whatever space happened to be active when persist ran.
 function practiceFilePath(projectDir: string, scope: "project" | "team", space: string): string {
   return join(memoryDirFor(projectDir, space), `${scope}.md`);
 }
@@ -187,7 +186,7 @@ function isRealFile(path: string): boolean {
 }
 
 // Project-tier sensor manifest path. The learning loop scaffolds to the
-// PROJECT's .claude/sensors/, never the framework distribution (plan
+// PROJECT's harnessDir()/sensors/, never the framework distribution (plan
 // sanctioned deviation 3.4).
 function sensorManifestPath(projectDir: string, sensorId: string): string {
   return join(projectDir, harnessDir(), "sensors", `aidlc-${sensorId}.md`);
@@ -222,9 +221,62 @@ interface SurfaceOutput {
   phase: string;
   space: string;
   intent: string | null;
+  /** Where the conductor writes the person's picks for `persist` (#1592). */
+  selections_file: string;
   memory_entries_total: number;
   candidates: SurfaceCandidate[];
   parked_open_questions: SurfaceParkedQuestion[];
+}
+
+const SELECTIONS_MAX_BYTES = 1024 * 1024;
+
+interface SelectionsHome {
+  /** The record, or with no intent record the space's intents folder. */
+  root: string;
+  /** The file under `root`, posix form. */
+  rel: string;
+  /** The file relative to the project, posix form: what surface prints. */
+  display: string;
+}
+
+// The selections file's one home per stage per piece of work (#1592). Nothing
+// used to name it, so two chats in one project wrote the same obvious spot and
+// one saved the other's picks while its own person's picks were lost. It sits
+// in the engine folder of the record, or with no intent record of the space's
+// intents folder (where the composer proposal lives); both are gitignored.
+function selectionsHome(projectDir: string, space: string, intent: string | null, slug: string): SelectionsHome {
+  const intents = intentsDir(projectDir, space);
+  const root = intent === null ? intents : join(intents, intent);
+  const rel = `${LEARNINGS_SELECTIONS_DIR}/${slug}-selections.json`;
+  return { root, rel, display: relative(projectDir, join(root, rel)).replaceAll("\\", "/") };
+}
+
+// persist reads only the file surface named for the piece of work the picks
+// are bound to, reached through no link. Anywhere else it may be another
+// chat's picks. The way on names no path taken from the misplaced file, whose
+// space and intent may be another chat's: surface prints this chat's own path
+// again, and is read-only.
+function assertSelectionsFileHome(projectDir: string, path: string, sel: SelectionsFile): void {
+  if (!SLUG_RE.test(sel.stage_slug)) {
+    fail("selections-json is malformed: stage_slug must be a stage slug (bind it from surface's output)", 1);
+  }
+  const home = selectionsHome(projectDir, sel.space, sel.intent, sel.stage_slug);
+  if (normalizeDriveLetter(path) !== normalizeDriveLetter(join(home.root, home.rel))) {
+    fail(
+      `selections-json must be the selections_file that \`learnings surface --slug ${sel.stage_slug}\` printed ` +
+        "for this piece of work. Write the picks there with your file tool and run persist again with that path.",
+      1
+    );
+  }
+  try {
+    recordFileTargetOrThrow(home.root, home.rel);
+  } catch (e) {
+    fail(
+      `selections-json could not be read through no link (${errorMessage(e)}). ` +
+        `Make every folder on the way to ${home.display} a plain folder, then run persist again.`,
+      1
+    );
+  }
 }
 
 // Resolve the (space, intent) provenance to bind at SURFACE time. Two
@@ -294,16 +346,16 @@ function readRuntimeStageRow(
 // The stage's diary path — taken from the runtime-graph row when one is
 // recorded, recomputed when it is not.
 //
-// runtime-graph.json is a DERIVED, gitignored, machine-local cache. Only the
-// rebuild-stage-graph hook ever writes it, and only on a transition-class
-// command (`state`/`jump`/`bolt`/`unit`/`utility`, or `orchestrate report` — see
-// classifyRuntimeCompileCommand). The §13 ritual runs BEFORE the first of those:
-// stage-protocol.md §2 Part 0 orders it between the completion message and the
-// `orchestrate report --result awaiting-approval` that emits
-// STAGE_AWAITING_APPROVAL. So on the FIRST gated stage of a fresh workflow the
-// graph has never been compiled, and hard-failing here stranded the mandatory
-// ritual behind a bare "not found". A fresh clone (the graph is gitignored) or a
-// dropped hook compile leaves the same hole at any stage.
+// runtime-graph.json is a DERIVED, gitignored, machine-local cache. The
+// rebuild-stage-graph hook writes it on a transition-class command
+// (`state`/`jump`/`bolt`/`unit`/`utility`, or `orchestrate report` -- see
+// classifyRuntimeCompileCommand). The section 13 ritual runs BEFORE the first
+// of those: stage-protocol.md section 2 Part 0 orders it between the
+// completion message and the `orchestrate report --result awaiting-approval`
+// that emits STAGE_AWAITING_APPROVAL. So on the FIRST gated stage of a fresh
+// workflow the graph has never been compiled, and hard-failing here stranded
+// the mandatory ritual behind a bare "not found". A fresh clone (the graph is
+// gitignored) or a dropped hook compile leaves the same hole at any stage.
 //
 // Recomputing is exact, not a guess: compile derives the row's memory_path
 // itself, as relativeMemoryPath(<the stage's phase>, <slug>, <record prefix>)
@@ -398,12 +450,12 @@ function handleSurface(args: string[], projectDir: string): void {
     fail("Usage: aidlc-learnings.ts surface --slug <stage-slug> [--project-dir <path>]", 1);
   }
 
-  // LOCAL FIX (#747 review): resolve space/intent FIRST, before touching any
-  // per-intent path. A genuinely ambiguous workspace (multiple intent
-  // records, no valid cursor) must fail here with a clear message — not
-  // fall through to readStateFile()'s OWN internal resolution, which (given
-  // the same ambiguity) resolves to the bare/legacy path and fails with an
-  // unrelated-looking "state file not found" instead.
+  // Resolve space/intent FIRST, before touching any per-intent path. A
+  // genuinely ambiguous workspace (multiple intent records, no valid cursor)
+  // must fail here with a clear message -- not fall through to readStateFile()'s
+  // OWN internal resolution, which (given the same ambiguity) resolves to the
+  // bare/legacy path and fails with an unrelated-looking "state file not found"
+  // instead.
   const selection = resolveWorkflowSelection(projectDir);
   const space = selection.space;
   const intent = selection.binding
@@ -466,6 +518,7 @@ function handleSurface(args: string[], projectDir: string): void {
     phase,
     space,
     intent,
+    selections_file: selectionsHome(projectDir, space, intent, slug).display,
     memory_entries_total: entries.length,
     candidates,
     parked_open_questions: parked,
@@ -507,8 +560,8 @@ type Selection = LearningSelection | SensorSelection;
 
 interface SelectionsFile {
   stage_slug: string;
-  // Provenance pinned at surface() time (LOCAL FIX, #747 review) — persist
-  // uses these, never re-resolving the live active-intent cursor itself.
+  // Provenance pinned at surface() time -- persist uses these, never
+  // re-resolving the live active-intent cursor itself.
   space: string;
   intent: string | null;
   selections: Selection[];
@@ -564,7 +617,6 @@ function narrowSelection(raw: unknown): Selection {
     return { candidate_id: candidateId, type: "sensor", origin_stage: originStage, manifest_fields: manifestFields, source };
   }
 
-  // Default to a learning selection.
   const scope = raw.scope === "team" ? "team" : "project";
   const heading = str(raw.heading);
   const text = str(raw.text);
@@ -575,12 +627,17 @@ function narrowSelection(raw: unknown): Selection {
 }
 
 function parseSelectionsFile(path: string): SelectionsFile {
-  if (!existsSync(path)) {
-    fail(`selections-json not found: ${path}`, 1);
+  let bytes: Buffer;
+  try {
+    // A plain file, read through no link at its last step (#1592).
+    bytes = readRegularFileNoFollowOrThrow(path, "selections-json", SELECTIONS_MAX_BYTES);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") fail(`selections-json not found: ${path}`, 1);
+    fail(errorMessage(e), 1);
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(path, "utf-8"));
+    parsed = JSON.parse(bytes.toString("utf-8"));
   } catch (e) {
     fail(`selections-json is malformed: ${errorMessage(e)}`, 1);
   }
@@ -588,8 +645,6 @@ function parseSelectionsFile(path: string): SelectionsFile {
     fail("selections-json is malformed: expected { stage_slug, space, intent, selections[] }", 1);
   }
   // Provenance pinned at surface() time — required, not inferred here.
-  // (LOCAL FIX, #747 review: re-deriving it in persist is the exact defect
-  // this fix removes.)
   if (typeof parsed.space !== "string") {
     fail("selections-json is malformed: missing or non-string space (bind it from surface's output)", 1);
   }
@@ -631,28 +686,25 @@ function parseSelectionsFile(path: string): SelectionsFile {
 }
 
 // A prior SENSOR_PROPOSED row for this (origin stage, sensor id)? Keyed on
-// the sensor's own stable manifest id, not the positional candidate_id (PR
-// #747 review, round 2): candidate ids restart at c1 on every surface()
-// call, so a later run of the SAME stage proposing the SAME sensor id under
-// a different candidate id would miss a (stage, candidate_id) match and
-// re-emit a duplicate SENSOR_PROPOSED for a sensor already proposed by that
-// stage — the same unstable-key defect class #735's own fix closed for
-// RULE_LEARNED, recurring here in the sensor branch.
+// the sensor's own stable manifest id, not the positional candidate_id:
+// candidate ids restart at c1 on every surface() call, so a later run of the
+// SAME stage proposing the SAME sensor id under a different candidate id
+// would miss a (stage, candidate_id) match and re-emit a duplicate
+// SENSOR_PROPOSED for a sensor already proposed by that stage.
 //
 // Stage stays IN the key, though: a sensor manifest is a per-project
 // singleton (sensorManifestPath), but BINDING it to a stage's frontmatter is
 // legitimately per-stage (Destinations is an array for exactly this reason
 // -- two unrelated stages can each independently recommend the same sensor
 // and each needs its own frontmatter bind). Dropping stage from the key
-// entirely (an earlier version of this fix) made the no-op branch global:
-// once ANY stage had proposed a sensor, no OTHER stage could ever bind that
-// same sensor to its own frontmatter again. `stage` here is the SAME value
-// the SENSOR_PROPOSED audit row's own Stage field is written from (the
-// persist call's top-level stageSlug, not sel.origin_stage), so the read
-// side matches exactly what the write side stored. The two coincide in
-// every real invocation (surface() only ever proposes a sensor for the
-// stage whose Learnings Ritual is currently running, i.e. the same stage
-// persist is being invoked for).
+// entirely would make the no-op branch global: once ANY stage had proposed a
+// sensor, no OTHER stage could ever bind that same sensor to its own
+// frontmatter again. `stage` here is the SAME value the SENSOR_PROPOSED
+// audit row's own Stage field is written from (the persist call's top-level
+// stageSlug, not sel.origin_stage), so the read side matches exactly what
+// the write side stored. The two coincide in every real invocation (surface()
+// only ever proposes a sensor for the stage whose Learnings Ritual is
+// currently running, i.e. the same stage persist is being invoked for).
 function priorSensorProposedRow(auditContent: string, stage: string, sensorId: string): boolean {
   const rows = findAllEvents(auditContent, "SENSOR_PROPOSED");
   const stageRe = new RegExp(`^\\*\\*Stage\\*\\*:\\s*${escapeRegex(stage)}\\s*$`, "m");
@@ -673,21 +725,21 @@ function priorAuditRowByHash(auditContent: string, slug: string, hash: string): 
   return rows.some((r) => stageRe.test(r.block) && hashRe.test(r.block));
 }
 
-// Compatibility for PR revisions that persisted only the first 8 hex chars
-// of SHA-256. Require the exact short hash field and a text-gated marker match
+// Compatibility for rows that persisted only the first 8 hex chars of
+// SHA-256. Require the exact short hash field and a text-gated marker match
 // at the call site so a 32-bit collision cannot suppress different content.
 function priorTruncatedHashAuditRow(auditContent: string, slug: string, hash: string): boolean {
   return priorAuditRowByHash(auditContent, slug, hash.slice(0, 8));
 }
 
-// Legacy-compat match ONLY: a row written before this fix ever shipped
-// (Candidate-ID present, Content-Hash ABSENT). The Content-Hash absence
-// check is load-bearing, not decorative — without it, a row the NEW code
-// itself wrote for a genuinely different learning that happens to reuse the
-// same candidate_id (candidate ids restart at c1 every run) would be
-// mistaken for the same legacy retry this exists to catch, silently
-// reintroducing finding #1's collision. A row missing Content-Hash can only
-// have been written by code older than this fix.
+// Legacy-compat match ONLY: a row written by older code (Candidate-ID
+// present, Content-Hash ABSENT). The Content-Hash absence check is
+// load-bearing, not decorative -- without it, a row the current code itself
+// wrote for a genuinely different learning that happens to reuse the same
+// candidate_id (candidate ids restart at c1 every run) would be mistaken for
+// the same legacy retry this exists to catch, silently reintroducing finding
+// #1's collision. A row missing Content-Hash can only have been written by
+// older code: every RULE_LEARNED row this tool writes carries Content-Hash.
 const CONTENT_HASH_FIELD_RE = /^\*\*Content-Hash\*\*:/m;
 function priorLegacyAuditRow(auditContent: string, slug: string, candidateId: string): boolean {
   const rows = findAllEvents(auditContent, "RULE_LEARNED");
@@ -740,17 +792,15 @@ function ensureHeading(content: string, heading: string): string {
 
 // cid marker — stable, content-addressed idempotency key per written line.
 //
-// LOCAL FIX (#735 follow-up, PR #747 review): keying on candidate_id (even
-// scoped by intent, as this file's first #735 fix did) is not stable —
-// candidate ids restart at c1 on EVERY surface() call, so a later run of
-// the same stage in the SAME intent reuses c1 for a completely different
-// learning. The old scheme treated that as the same idempotency key and
-// silently dropped the second write (reviewer-reproduced: two differently
-// worded c1 selections in one intent, second persist reports
-// rule_learned: 0). The key's third component is now a hash of the
-// learning's own text — the actually-stable identity: an exact retry
-// (crash recovery) still hashes identically and dedups; two DIFFERENT
-// texts landing on the same positional candidate_id never collide.
+// Keying on candidate_id (even scoped by intent) is not stable -- candidate
+// ids restart at c1 on EVERY surface() call, so a later run of the same stage
+// in the SAME intent reuses c1 for a completely different learning. The old
+// scheme treated that as the same idempotency key and silently dropped the
+// second write (two differently worded c1 selections in one intent, second
+// persist reports rule_learned: 0). The key's third component is a hash of
+// the learning's own text -- the actually-stable identity: an exact retry
+// (crash recovery) still hashes identically and dedups; two DIFFERENT texts
+// landing on the same positional candidate_id never collide.
 function cidMarker(intentSlug: string, slug: string, hash: string): string {
   return `<!-- cid:${intentSlug}:${slug}:${hash} -->`;
 }
@@ -764,24 +814,22 @@ function contentHash(text: string): string {
 
 // Legacy marker shapes this tool has ever written. Kept ONLY so a
 // post-upgrade retry of an already-persisted learning is recognized and
-// not duplicated under the new marker (PR #747 review: "existing markers
-// are duplicated after upgrade") — never written going forward.
+// not duplicated under the new marker -- never written going forward.
 function legacyMarkerPreIntentScope(slug: string, candidateId: string): string {
-  return `<!-- cid:${slug}:${candidateId} -->`; // pre-#735
+  return `<!-- cid:${slug}:${candidateId} -->`;
 }
 function legacyMarkerCandidateIdScoped(intentSlug: string, slug: string, candidateId: string): string {
-  return `<!-- cid:${intentSlug}:${slug}:${candidateId} -->`; // #735's own first fix (PR #747 head)
+  return `<!-- cid:${intentSlug}:${slug}:${candidateId} -->`;
 }
 
 // A legacy marker match is a genuine retry ONLY when the marked line's own
-// text equals the current selection's text (PR #747 review, round 2):
-// "two different learnings landing on the same positional candidate id
-// never collide" does not hold across the upgrade boundary — a legacy
-// marker is keyed on candidate_id alone (no content hash), so a DIFFERENT
-// learning that happens to land on the same positional candidate_id
-// post-upgrade would otherwise be silently dropped as a false "retry" of
-// the original. Matches the exact line shape persist itself writes:
-// `- <text> (learned <date>) <marker>`.
+// text equals the current selection's text: "two different learnings landing
+// on the same positional candidate id never collide" does not hold across
+// the upgrade boundary -- a legacy marker is keyed on candidate_id alone (no
+// content hash), so a DIFFERENT learning that happens to land on the same
+// positional candidate_id post-upgrade would otherwise be silently dropped
+// as a false "retry" of the original. Matches the exact line shape persist
+// itself writes: `- <text> (learned <date>) <marker>`.
 function legacyLineMatchesText(content: string, marker: string, text: string): boolean {
   const re = new RegExp(
     `^- ${escapeRegex(text)} \\(learned \\d{4}-\\d{2}-\\d{2}\\) ${escapeRegex(marker)}\\s*$`,
@@ -796,12 +844,16 @@ function handlePersist(args: string[], projectDir: string): void {
   const selectionsJson = flags["selections-json"];
   if (!selectionsJson) {
     fail(
-      "Usage: aidlc-learnings.ts persist --slug <stage-slug> --selections-json <path> [--project-dir <path>]",
+      "Usage: aidlc-learnings.ts persist --slug <stage-slug> --selections-json <selections_file> [--project-dir <path>]",
       1
     );
   }
 
-  const selFile = parseSelectionsFile(selectionsJson);
+  // One normalized path for the read and the check, named from the project as
+  // surface prints it, whatever folder the shell sits in and however an
+  // absolute path is spelled (#1592).
+  const selectionsPath = resolve(projectDir, selectionsJson);
+  const selFile = parseSelectionsFile(selectionsPath);
   if (slug !== undefined && slug !== selFile.stage_slug) {
     fail(
       `slug mismatch: selections were surfaced for "${selFile.stage_slug}" but persist requested "${slug}"`,
@@ -809,21 +861,21 @@ function handlePersist(args: string[], projectDir: string): void {
     );
   }
   const stageSlug = selFile.stage_slug;
-  // LOCAL FIX (#747 review): bound at surface() time (selFile.space/.intent),
-  // NOT re-resolved here against the live active-intent cursor. Re-resolving
-  // live let a surface-under-A / switch-to-B / persist sequence write under
-  // B's marker instead of A's ("selections are not bound to their
-  // originating intent"). null is the legitimate flat/unscoped case
-  // established at surface time — not "couldn't figure it out now."
+  // Bound at surface() time (selFile.space/.intent), NOT re-resolved here
+  // against the live active-intent cursor. Re-resolving live let a
+  // surface-under-A / switch-to-B / persist sequence write under B's marker
+  // instead of A's ("selections are not bound to their originating intent").
+  // null is the legitimate flat/unscoped case established at surface time --
+  // not "couldn't figure it out now."
   const pinnedSpace = selFile.space;
   const pinnedIntent = selFile.intent ?? undefined;
   const intentSlug = selFile.intent ?? "unscoped";
 
-  // ONE withAuditLock body — decide-inside-lock (plan §0.4). Re-read the
+  // ONE withAuditLock body -- decide-inside-lock (plan section 0.4). Re-read the
   // audit fresh INSIDE the lock; never reuse a pre-lock read. Lock identity
   // and the audit read below are both pinned to the SAME surface-time
   // space/intent so the audit row and the practice line can never land
-  // under different intents (PR #747 review note).
+  // under different intents.
   let lockResult: { rule_learned: number; sensor_proposed: number; bound_stages: string[] };
   try {
     lockResult = withAuditLock(projectDir, () => {
@@ -839,6 +891,16 @@ function handlePersist(args: string[], projectDir: string): void {
         fail(
           `cannot persist an unscoped selections replay in space "${pinnedSpace}": the selections ` +
             "file was surfaced when the space had no intent records, but intent records now exist. " +
+            "Re-run the stage's surface step and regenerate the selections file, then retry.",
+          1
+        );
+      }
+      // With no intent record, the space's state is the evidence it exists, as
+      // it is for surface: writing the picks' file makes the space's folder, so
+      // the folder alone proves nothing (#1592).
+      if (selFile.intent === null && !isRealFile(join(intentsDir(projectDir, pinnedSpace), "aidlc-state.md"))) {
+        fail(
+          `cannot persist selections for missing space "${pinnedSpace}": it has no workflow state. ` +
             "Re-run the stage's surface step and regenerate the selections file, then retry.",
           1
         );
@@ -859,8 +921,9 @@ function handlePersist(args: string[], projectDir: string): void {
           1
         );
       }
-      // Read across every per-clone audit shard of the PINNED intent (single
-      // shard in the common case).
+      // The picks came from the file surface named for this piece of work,
+      // never a spot another chat may have written (#1592).
+      assertSelectionsFileHome(projectDir, selectionsPath, selFile);
       const auditContent = readAllAuditShards(projectDir, pinnedIntent, pinnedSpace);
       const batchRuleHashes = new Set<string>();
 
@@ -910,10 +973,9 @@ function handlePersist(args: string[], projectDir: string): void {
         const heading = practiceHeading(sel.heading);
 
         // Content-hash match is the stable check; the legacy candidate-id
-        // match is the upgrade-compat fallback for rows/lines written before
-        // this fix shipped. A legacy match is gated on the marked LINE's own
-        // text equalling sel.text (PR #747 review, round 2) — see
-        // legacyLineMatchesText's own comment for why candidate_id alone is
+        // match is the upgrade-compat fallback for rows/lines older code wrote. A
+        // legacy match is gated on the marked LINE's own text equalling sel.text --
+        // see legacyLineMatchesText's own comment for why candidate_id alone is
         // not a safe legacy-retry key. priorLegacyAuditRow itself additionally
         // requires Content-Hash's ABSENCE so it can never mistake a fresh,
         // different-content row for a legacy retry — see its own comment.
@@ -934,7 +996,6 @@ function handlePersist(args: string[], projectDir: string): void {
           (legacyLineMatch && priorLegacyAuditRow(auditContent, stageSlug, sel.candidate_id));
         const hasLine = content.includes(marker) || truncatedHashLineMatch || legacyLineMatch;
 
-        // no-op: audit row AND line both present.
         if (hasRow && hasLine) {
           batchRuleHashes.add(hash);
           continue;
@@ -974,13 +1035,12 @@ function handlePersist(args: string[], projectDir: string): void {
         batchRuleHashes.add(hash);
       }
 
-      // Flush each method file once (atomic).
       for (const [path, content] of fileContent) {
         mkdirSync(dirname(path), { recursive: true });
         writeFileAtomic(path, content);
       }
 
-      // --- Sensors: two-write atomic bind (manifest + stage frontmatter). ---
+      // --- Sensors: two-write bind (manifest + stage frontmatter). ---
       const sensors = selFile.selections.filter(
         (s): s is SensorSelection => s.type === "sensor"
       );
@@ -998,7 +1058,6 @@ function handlePersist(args: string[], projectDir: string): void {
         const hasManifest = existsSync(manifestPath);
 
         if (hasRow && hasManifest) {
-          // no-op
           boundStages.push(sel.origin_stage);
           continue;
         }
@@ -1098,8 +1157,8 @@ function renderSensorManifest(f: SensorManifestFields): string {
 }
 
 // Refuse to write a manifest into the framework distribution tree
-// (dist/claude/.claude/sensors). A learning loop scaffolds to the
-// PROJECT's .claude/sensors only (plan deviation 3.4).
+// (e.g. dist/claude/.claude/sensors). A learning loop scaffolds to the
+// PROJECT's harnessDir()/sensors only (plan deviation 3.4).
 function isFrameworkDistributionPath(path: string): boolean {
   return (
     path.includes(join("dist", "claude", ".claude", "sensors")) ||
@@ -1133,10 +1192,10 @@ function findStageFile(projectDir: string, slug: string): string | null {
 
 // Append a sensor id to a stage file's `sensors:` frontmatter list, in
 // place. The immutable ## Steps / ## Sensors / ## Learn body is untouched —
-// only the authored frontmatter import list grows (explainer §6:1049
+// only the authored frontmatter import list grows (explainer section 6
 // "stage frontmatter is immutable in shape, not in contents"). Returns true
 // when the id was newly added (or already present); false when the stage
-// file could not be located.
+// file could not be located or has no frontmatter.
 function bindSensorToStage(projectDir: string, slug: string, sensorId: string): boolean {
   const stageFile = findStageFile(projectDir, slug);
   if (!stageFile) return false;
@@ -1220,7 +1279,7 @@ function printHelp(): void {
       "  surface --slug <stage-slug> [--project-dir <path>]",
       "      Read memory.md for the active stage; emit structured candidates",
       "      (Interpretations/Deviations/Tradeoffs) + parked open questions.",
-      "  persist --slug <stage-slug> --selections-json <path> [--project-dir <path>]",
+      "  persist --slug <stage-slug> --selections-json <selections_file> [--project-dir <path>]",
       "      Write confirmed learnings as practices under the routed heading in",
       "      {project,team}.md (the relocated method files) and/or scaffold + bind",
       "      a project-tier sensor manifest; emit RULE_LEARNED / SENSOR_PROPOSED",

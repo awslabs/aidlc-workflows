@@ -21,7 +21,6 @@ import {
 
 const INVOCATION = "bun .claude/tools/aidlc-orchestrate.ts";
 
-/** A run-stage as the engine builds one for a Unit's Construction step. */
 function runStage(policy: Record<string, unknown>): Record<string, unknown> {
   return {
     kind: "run-stage",

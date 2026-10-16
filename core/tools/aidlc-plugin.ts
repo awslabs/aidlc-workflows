@@ -917,7 +917,7 @@ function writeCompositionRecords(
     }
   } else {
     // A plugin whose vendored compose hook predates the record: prove
-    // ownership from the source bytes, as before.
+    // ownership from the source bytes.
     for (const candidate of pluginPrimitiveTargets(plugin, stagedProject, harnessDir)) {
       if (claimedPaths.has(candidate.path)) continue;
       const target = join(stagedProject, candidate.path);
@@ -1433,9 +1433,10 @@ function refreshGeneratedTable(
       }`,
     );
   }
+  // The generated tables live beside the skill, out of its body.
   const skillPath = harnessDir === ".codex"
-    ? join(stagedProject, ".agents", "skills", "aidlc", "SKILL.md")
-    : join(stagedProject, harnessDir, "skills", "aidlc", "SKILL.md");
+    ? join(stagedProject, ".agents", "skills", "aidlc", "tables.md")
+    : join(stagedProject, harnessDir, "skills", "aidlc", "tables.md");
   if (!existsSync(skillPath)) return;
   const before = readFileSync(skillPath, "utf-8");
   const region = new RegExp(

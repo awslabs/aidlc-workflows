@@ -1,5 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS, LONG_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { hasStoredMessages, latestMessage } from "./aidlc-message-store.ts";
+import { hasStoredMessages } from "./aidlc-message-store.ts";
 import { createHash, randomUUID } from "node:crypto";
 import {
   constants as fsConstants,
@@ -205,9 +205,6 @@ import {
   CEREMONY_KEYS,
   type CeremonyKey,
   type CeremonyPolicy,
-  ceremonyOffClause,
-  ceremonyOffList,
-  ceremonyPolicyValues,
   formatCeremony,
   parseCeremonySetting,
   parseCeremonyStateLine,
@@ -315,6 +312,7 @@ import {
   removeField,
   PLAN_FIELD,
   type PlanChanges,
+  plannedStages,
   planWithChanges,
   composedPlanLabel,
   PLAN_NAME_PATTERN,
@@ -427,6 +425,7 @@ import {
   humanPresenceGuardDisabled,
   OWN_TERMINAL_PRESENCE_STEP,
   personAtOwnTerminal,
+  personAskedForThisLowering,
   personSpokeSinceGate,
   personSaidProjectType,
   clearProjectTypeAsked,
@@ -447,6 +446,7 @@ import {
   captureStageValidationBasis,
   codeArrivedStageLine,
   inspectStageValidity,
+  stageDefinitionChangedLine,
   stageLabel,
   staleStageNote,
 } from "./aidlc-validity.ts";
@@ -994,17 +994,17 @@ function findGeneratedRegion(
   const lastEndIdx = body.lastIndexOf(endMarker);
   if (beginIdx === -1 || endIdx === -1) {
     throw new Error(
-      `SKILL.md at ${skillPath} is missing ${verb} markers. Expected:\n  ${beginMarker}\n  ${endMarker}`,
+      `${skillPath} is missing ${verb} markers. Expected:\n  ${beginMarker}\n  ${endMarker}`,
     );
   }
   if (beginIdx !== lastBeginIdx || endIdx !== lastEndIdx) {
     throw new Error(
-      `SKILL.md at ${skillPath} has duplicate ${verb} markers. Expected exactly one BEGIN and one END.`,
+      `${skillPath} has duplicate ${verb} markers. Expected exactly one BEGIN and one END.`,
     );
   }
   if (endIdx < beginIdx) {
     throw new Error(
-      `SKILL.md at ${skillPath} has ${verb} markers out of order (END before BEGIN).`,
+      `${skillPath} has ${verb} markers out of order (END before BEGIN).`,
     );
   }
   return { beginIdx, endIdx, regionEndIdx: endIdx + endMarker.length };
@@ -1016,7 +1016,7 @@ function replaceGeneratedRegion(
   endMarker: string,
   region: string,
 ): void {
-  const path = skillMdPath();
+  const path = tablesMdPath();
   const before = readFileSync(path, "utf-8").replace(/\r\n/g, "\n");
   const located = findGeneratedRegion(before, beginMarker, endMarker, verb, path);
   const after = before.slice(0, located.beginIdx) + region + before.slice(located.regionEndIdx);
@@ -2123,28 +2123,23 @@ To get started:
     statusLine = `${statusLine} (${currentName} skipped)`;
   }
 
-  // Checkbox counts - filter to the EFFECTIVE plan when scope is known: the
-  // state file's per-stage EXECUTE/SKIP suffixes (a recomposed plan) override
-  // the static grid, so status counts against what the router will actually
-  // run, not the pre-recompose column.
+  // The count is the stages the plan runs after Initialization: the count the
+  // plan offer gave, each stage's start says and the progress line uses, from
+  // the one list they read. A stage the person skipped is not work left to do:
+  // it is counted out and named, the way a stage a plan change dropped already
+  // is. Initialization's setup, done when the work was created, keeps its row
+  // below and stays out of the count.
   const checkboxes = parseCheckboxes(content);
-  const suffixOverrides = parseStateStageSuffixes(content);
-  const inScopeInfo = stagesInScope(scope);
-  const inScopeSlugs = new Set(
-    inScopeInfo
-      .filter((s) => (suffixOverrides.get(s.slug) ?? s.action) === "EXECUTE")
-      .map((s) => s.slug)
-  );
-  const scopedCheckboxes =
-    scope !== "Unknown" && inScopeSlugs.size > 0
-      ? checkboxes.filter((c) => inScopeSlugs.has(c.slug))
-      : checkboxes;
-  // A stage the person skipped is not work left to do: it is counted out of
-  // the total and named, the way a stage a plan change dropped already is.
-  const completed = scopedCheckboxes.filter((c) => c.state === "completed").length;
-  const skippedSlugs = scopedCheckboxes.filter((c) => c.state === "skipped").map((c) => c.slug);
-  const total = scopedCheckboxes.length - skippedSlugs.length;
-  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+  const planned = new Set(plannedStages(content, scope).map((s) => s.slug));
+  const setup = new Set(graph.filter((s) => s.phase === "initialization").map((s) => s.slug));
+  const scopedCheckboxes = checkboxes.filter((c) =>
+    planned.has(c.slug) ||
+    ((setup.has(c.slug) || c.state === "skipped") && effectivePlanAction(c.slug, scope, content) === "EXECUTE"));
+  const completed = scopedCheckboxes.filter((c) => planned.has(c.slug) && c.state === "completed").length;
+  const skippedSlugs = scopedCheckboxes.filter((c) => !planned.has(c.slug) && !setup.has(c.slug)).map((c) => c.slug);
+  const total = planned.size;
+  // Every stage the plan runs skipped leaves nothing to do.
+  const pct = total > 0 ? Math.round((completed / total) * 100) : 100;
   const skippedNote = skippedSlugs.length > 0 ? `, skipped: ${stageNames(skippedSlugs)}` : "";
 
   // Build phase progress bars
@@ -2227,6 +2222,17 @@ To get started:
       const otherNames = stageNames(others);
       validityOutput = staleStageNote(earliestName, earliestIssue, content) +
         `${otherNames ? ` Also affected: ${otherNames}.` : ""}\n`;
+    }
+    // Finished stages AI-DLC itself now does differently, told or not on the
+    // way: the work stands, and the way back is named.
+    const pending = new Set(validity.redefined.map((entry) => entry.stage));
+    const redefined = graph.map((stage) => stage.slug)
+      .filter((slug) => pending.has(slug) || validity.renewed.includes(slug));
+    if (redefined.length > 0) {
+      validityOutput += `${stageDefinitionChangedLine(
+        redefined.map((slug) => stageLabel(findStageBySlug(slug), slug) ?? slug),
+        redefined[0],
+      )}\n`;
     }
   } catch {
     // Unreadable receipts change nothing the person can act on here.
@@ -3686,10 +3692,9 @@ async function devinHookDispatchProbe(projectDir: string): Promise<DevinDispatch
 // What stops working when the person switches an AI-DLC hook off in Kiro's
 // Agent Hooks. Legacy names stay while config has not yet removed their files.
 const FLOW_ALTERING_KIRO_HOOKS: Record<string, string> = {
-  "aidlc-guard-tool-call": "approvals, the approved plan, reviewed work and AI-DLC's records are not protected",
+  "aidlc-guard-tool-call": "the approved plan, reviewed work and AI-DLC's records are not protected",
   "aidlc-record-human-turn": "your replies are not recorded, so approval gates cannot tell your answer from the assistant's, and /aidlc commands typed in chat are not run directly",
   "aidlc-continue-workflow": "a workflow with work left is not kept moving when the assistant stops (on Kiro CLI v3; Kiro IDE only records it)",
-  "aidlc-enforce-approval-gate": "the assistant is not held while an approval waits for your answer",
   "aidlc-plan-approval-guard": "the build is not kept to the plan you approved",
   "aidlc-terminal-command-guard": "commands are not checked before they run",
   "aidlc-state-transition-guard": "workflow state can change without the engine",
@@ -6624,7 +6629,8 @@ export async function collectDoctorReport(
   // Sub-case (c): PRACTICES_OVERRIDE Reason filter — write-failure-* rows
   //   without a following PRACTICES_AFFIRMED are flagged as orphan; rows
   //   carrying Reason: bolt-plan-marker-conflict are expected behaviour and
-  //   ignored. audit-format.md:138 anchors the discriminator routing.
+  //   ignored. The PRACTICES_OVERRIDE row in audit-format.md anchors the
+  //   discriminator routing.
   //
   // Sub-case (c) shares the orphan-audit umbrella because both classes ride
   // the same audit-walker pass; per plan-v3 §51, this is one Check, not two.
@@ -6734,8 +6740,7 @@ export async function collectDoctorReport(
   //
   // Read `Practices Affirmed Timestamp` from main state. Compare to now.
   // Empty / missing → informational pass (never affirmed). Within 90 days → ✓.
-  // Older → advisory pass=true (does NOT fail exit code; mirrors heartbeat
-  // and state/audit drift advisory pattern at aidlc-utility.ts:421-466).
+  // Older → advisory pass=true (does NOT fail exit code).
   // Invalid ISO timestamp → fail readable.
   // ---------------------------------------------------------------------------
   try {
@@ -6785,8 +6790,9 @@ export async function collectDoctorReport(
   // ---------------------------------------------------------------------------
   // Check 6 — MERGE_DISPATCH advisory
   //
-  // Walk MERGE_DISPATCH_INVOKED rows; an INVOKED row should pair with either
-  // _RETURNED or _FALLBACK for the same slug within MERGE_DISPATCH_TIMEOUT_SEC.
+  // Walk MERGE_DISPATCH_INVOKED rows; an INVOKED row older than
+  // MERGE_DISPATCH_TIMEOUT_SEC should pair with a _RETURNED or _FALLBACK for
+  // the same slug recorded at any time after it. A younger one is in flight.
   // Orphan INVOKED rows are reported as advisory (pass=true) — observation-
   // time drift on an in-memory LLM dispatch is not a fail-loud condition. A
   // future observer layer may take over this reconciliation.
@@ -6848,7 +6854,7 @@ export async function collectDoctorReport(
       pass: true,
       label: orphans === 0
         ? `MERGE_DISPATCH: 0 orphan INVOKED (${invokedRows.length} bracketed)`
-        : `MERGE_DISPATCH: ${orphans} orphan INVOKED (advisory - a merge started but no matching finish was recorded within ${MERGE_DISPATCH_TIMEOUT_SEC}s)`,
+        : `MERGE_DISPATCH: ${orphans} orphan INVOKED (advisory - a merge started more than ${MERGE_DISPATCH_TIMEOUT_SEC}s ago and no matching finish was recorded after it)`,
     });
   } catch {
     // MERGE_DISPATCH check failure is non-fatal for doctor report
@@ -8478,22 +8484,12 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   // the work they pick instead of a refusal telling the agent to create the work
   // and run the setter afterwards.
   // Their own words, or their own terminal: either makes the lowering theirs, so
-  // the work records it as set by them. Before any work exists there is no
-  // decision for a turn to be "since", and no HUMAN_TURN row either: the hook
-  // writes that row only once a state file is there, and keeps the person's
-  // message from their first prompt on (aidlc-message-store.ts). The message of
-  // this chat is the proof then, as the turn is once work exists. Per chat,
-  // never the project's messages: a teammate's turn in their own chat is not
-  // this one's.
-  const personAskedForThisLowering = (): boolean =>
-    commandAtPersonsTerminal() ||
-    (existsSync(stateFilePath(projectDir))
-      ? personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true })
-      : latestMessage(projectDir, initialSelection.sessionId) !== null);
+  // the work records it as set by them (personAskedForThisLowering).
   // A recorded presence bypass authorizes the lowering, as it does on main, but
   // it is nobody's word: the setting stays "set by a command".
   const loweringAuthorized = (): boolean =>
-    personAskedForThisLowering() || fenceKeyBypassed(projectDir, initialSelection.sessionId);
+    personAskedForThisLowering(projectDir, initialSelection.sessionId) ||
+    fenceKeyBypassed(projectDir, initialSelection.sessionId);
   // A check typed off is the person's call too, under the same rule. A team's
   // strict Guard Policy keeps it on, as it keeps a check granted before the
   // work existed (fencesAsked above): the work is created with the check on,
@@ -10912,12 +10908,20 @@ function handleCodekbSnapshot(
               `source, leaving that one out.`),
       );
     }
+    // The commit the Run Record names, so the scan agent runs no git for it.
+    // git finds the repository above a project folder too.
+    const head = spawnSync("git", ["rev-parse", "--verify", "-q", "HEAD"], {
+      cwd: repoDir,
+      encoding: "utf-8",
+      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+    });
     return {
       repo,
       store: `${relativeCodekbDir(projectDir, repo, space)}/`,
       paths,
       store_generation: codekbStoreGeneration(storeDir),
       source_fingerprint: sourceFingerprint,
+      head_commit: head.status === 0 ? head.stdout.trim() : "unknown",
     };
   });
   if (flags.json === "true") {
@@ -10927,7 +10931,8 @@ function handleCodekbSnapshot(
   process.stdout.write(
     `STORE_GENERATION ${snapshot.store_generation}\n` +
       `SOURCE_FINGERPRINT ${snapshot.source_fingerprint}\n` +
-      `SOURCE_PATHS ${snapshot.paths.join(",")}\n`,
+      `SOURCE_PATHS ${snapshot.paths.join(",")}\n` +
+      `HEAD_COMMIT ${snapshot.head_commit}\n`,
   );
 }
 
@@ -12180,10 +12185,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         : 0;
       const stageDelta = executeStages.length - oldExecuteCount;
       const deltaStr = stageDelta >= 0 ? `+${stageDelta}` : String(stageDelta);
-      const summary = {
-        ...gridCostSummary(adjustedMapping as Record<string, "EXECUTE" | "SKIP">),
-        off: ceremonyOffList(newScope, ceremonyPolicyValues(newScope, content)),
-      };
+      const summary = gridCostSummary(adjustedMapping as Record<string, "EXECUTE" | "SKIP">);
       const gates = summary.gates;
       const effectiveDepth = getField(content, "Depth") || "unknown";
       auditEntries.unshift(
@@ -12233,7 +12235,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       // is what they asked for, and `next` carries on into it.
       outputLines = [
         `Switched to ${newScope} (${SCOPE_GLOSS}): ${summary.shown} stages (${shownDone} done), ` +
-          `${gates} approval gates${ceremonyOffClause(summary)}.` +
+          `${gates} approval gates.` +
           (isScopeName(oldScope) ? ` You can switch back to ${oldScope} any time.` : ""),
         ...skippedNow.map(({ slug, was }) =>
           `Skipped ${findStageBySlug(slug)?.name ?? slug} (${was}): ${newScope} does not run it. ` +
@@ -13050,15 +13052,15 @@ export function findScopeByKeyword(kw: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// scope-table - compiled summary of the scope grid for SKILL.md
+// scope-table - compiled summary of the scope grid for tables.md
 //
-// Emits a Markdown table delimited by BEGIN/END HTML comments. SKILL.md
-// has a matching region that is regenerated via this tool. --check mode
-// byte-compares the current SKILL.md region against the rendered output
+// Emits a Markdown table delimited by BEGIN/END HTML comments. tables.md
+// (beside the skill) has a matching region that is regenerated via this tool.
+// --check mode byte-compares the current tables.md region against the rendered output
 // and exits 1 on drift. Mirrors aidlc-graph.ts compile / compile --check.
 //
 // AIDLC_SKILL_MD_PATH env-seam lets t67 sandbox --check against a
-// fixture SKILL.md (so drift tests never mutate the real file).
+// fixture tables.md (so drift tests never mutate the real file).
 
 const SCOPE_TABLE_BEGIN =
   `<!-- BEGIN: compiled scope grid via \`${aidlcDispatcherInvocation("gen scope-table")}\` - do NOT hand-edit -->`;
@@ -13090,6 +13092,13 @@ export function renderScopeTable(): string {
 /** Canonical byte-shape: BEGIN\n\n<table>\n\nEND. */
 export function canonicalScopeTableRegion(table: string): string {
   return `${SCOPE_TABLE_BEGIN}\n\n${table}\n\n${SCOPE_TABLE_END}`;
+}
+
+// The generated scope and stage tables live beside the skill, out of its body.
+// AIDLC_SKILL_MD_PATH names a test fixture that holds the regions.
+function tablesMdPath(): string {
+  if (process.env.AIDLC_SKILL_MD_PATH) return process.env.AIDLC_SKILL_MD_PATH;
+  return join(dirname(skillMdPath()), "tables.md");
 }
 
 function skillMdPath(projectDir?: string, harnessDir?: string): string {
@@ -13145,13 +13154,13 @@ function checkGeneratedTableRegion(
   endMarker: string,
   renderRegion: () => string,
 ): void {
-  const skillPath = skillMdPath();
+  const skillPath = tablesMdPath();
   let skillRaw: string;
   try {
     skillRaw = readFileSync(skillPath, "utf-8");
   } catch (err) {
     console.error(
-      `SKILL.md not readable at ${skillPath}: ${errorMessage(err)}`
+      `tables.md not readable at ${skillPath}: ${errorMessage(err)}`
     );
     process.exit(1);
   }
@@ -13176,7 +13185,7 @@ function checkGeneratedTableRegion(
   }
 
   console.error(
-    `SKILL.md ${verb} region is out of date. Refresh it from \`${aidlcDispatcherInvocation(`gen ${verb}`)}\`.`
+    `tables.md ${verb} region is out of date. Refresh it from \`${aidlcDispatcherInvocation(`gen ${verb}`)}\`.`
   );
   process.exit(1);
 }
@@ -13203,15 +13212,15 @@ function handleScopeTable(
 }
 
 // ---------------------------------------------------------------------------
-// stage-table — compiled summary of the stage graph for SKILL.md
+// stage-table — compiled summary of the stage graph for tables.md
 //
-// Emits a Markdown table delimited by BEGIN/END HTML comments. SKILL.md
-// has a matching region that is regenerated via this tool. --check mode
-// byte-compares the current SKILL.md region against the rendered output
+// Emits a Markdown table delimited by BEGIN/END HTML comments. tables.md
+// (beside the skill) has a matching region that is regenerated via this tool. --check mode
+// byte-compares the current tables.md region against the rendered output
 // and exits 1 on drift. Mirrors scope-table above.
 //
 // AIDLC_SKILL_MD_PATH env-seam lets tests sandbox --check against a
-// fixture SKILL.md (so drift tests never mutate the real file).
+// fixture tables.md (so drift tests never mutate the real file).
 
 const STAGE_TABLE_BEGIN =
   `<!-- BEGIN: compiled stage graph via \`${aidlcDispatcherInvocation("gen stage-table")}\` - do NOT hand-edit -->`;

@@ -1166,7 +1166,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(existsSync(filesRecord)).toBe(false);
     expect(existsSync(stage)).toBe(false);
     expect(readFileSync(
-      join(project, ".claude", "skills", "aidlc", "SKILL.md"),
+      join(project, ".claude", "skills", "aidlc", "tables.md"),
       "utf-8",
     )).not.toContain("| test-pro-integration |");
     expect(existsSync(join(
@@ -1182,7 +1182,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(restored.synced).toEqual(["test-pro"]);
     expect(existsSync(stage)).toBe(true);
     expect(readFileSync(
-      join(project, ".claude", "skills", "aidlc", "SKILL.md"),
+      join(project, ".claude", "skills", "aidlc", "tables.md"),
       "utf-8",
     )).toContain("| test-pro-integration |");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

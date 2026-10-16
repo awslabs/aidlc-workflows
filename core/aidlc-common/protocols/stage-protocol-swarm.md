@@ -296,9 +296,25 @@ finishes the staged landing and records the fix under `Landed changes`. If you
 cannot fix it, stop, leave the checkout as git left it, and say what `staged`
 lists.
 
-A normal non-zero result before `[merge-succeeded:<sha>]` preserves the
-worktree: resolve the conflict or target checkout problem and retry the same
-merge, without rerunning `finalize`. If the message carries
+A landing that clashes with a Unit landed before it returns `status:
+"conflict"` with the files git could not merge (`conflict_files`) and a `next`
+step, and leaves the landing staged in the main checkout. Combine both sides in
+each of them so each Unit keeps what its approved plan asked for, never dropping
+one Unit's side; while the batch is out they are the main checkout's only files
+you can write. Then `git add` them (`git rm` one that stays deleted) and run the
+same merge again: it finishes the landing and returns one
+notice naming the files combined; say it once. If the two plans want different
+things there, stop and say which files clash and that `git reset --merge` in
+that checkout drops the landing; run it only when the person asks. A landing
+git did not start because files it changes hold changes not committed in the
+main checkout (an AI-DLC update to `.gitignore` the person has not committed,
+say) names them and the step: say it in one line, commit those changes only on
+the person's word, then run the same merge again.
+
+Any other non-zero result before `[merge-succeeded:<sha>]` preserves the
+worktree and names its own step: follow it and run the same merge again,
+without rerunning `finalize`; when it names none, stop and say it in one line,
+with the checkout as it is. If the message carries
 `[merge-succeeded:<sha>]` and `SWARM_SOURCE_MERGED` exists, the reviewed source
 is already authoritative and only cleanup failed; rerun the same merge, which
 performs cleanup-only reconciliation without reapplying source or duplicating

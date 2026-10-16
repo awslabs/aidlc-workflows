@@ -59,7 +59,6 @@ function project(): { proj: string; state: string } {
   return { proj, state: join(intents, active, "aidlc-state.md") };
 }
 
-/** The person types this in their chat; the host's hook records the turn. */
 function said(proj: string, prompt: string): void {
   const result = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
     cwd: proj,

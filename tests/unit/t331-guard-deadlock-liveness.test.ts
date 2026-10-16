@@ -2034,7 +2034,6 @@ describe("AttemptView projections and refusal streaks", () => {
     expect(recordGuardRefusal(project, refusalA, attempt).count).toBe(2);
     const capped = recordGuardRefusal(project, refusalB, attempt);
     expect(capped.count).toBe(3);
-    // A repeat says so in the person's words; the codes carry the rest.
     expect(capped.ask.question).toBe(
       "Functional Design still can't go ahead as things stand: which way would you like to go on?",
     );
@@ -2107,7 +2106,6 @@ describe("AttemptView projections and refusal streaks", () => {
       { count: 1, codes: [refusal.code], signature: "f".repeat(64), atCap: false },
     );
     expect(stuck.question.startsWith("I stopped at Functional Design for alpha: ")).toBe(true);
-    // No engine words reach the person in the line the engine writes.
     for (const question of [ask?.question ?? "", stuck.question.replace(" summary blocked", "")]) {
       expect(question).not.toMatch(/guard|authorit|refus|remed|action|functional-design/i);
     }
@@ -2230,16 +2228,12 @@ describe("AttemptView projections and refusal streaks", () => {
     });
     expect(refusal.remedies.map((remedy) => remedy.op)).toEqual(["record-verdict", "retry-pending", "request-changes"]);
 
-    // First time: the agent saves the review result or asks the reviewer again
-    // itself. Nothing is put to the person.
     const first = recordGuardRefusal(project, refusal, attempt);
     expect(first.ask.agent_work).toBe(true);
     expect(first.ask.remedies.map((remedy) => remedy.op)).toEqual(["record-verdict", "retry-pending"]);
     for (const remedy of first.ask.remedies) expect(remedy.interaction).toBe("external-work");
     expect(validateDirective(first.ask).valid).toBe(true);
 
-    // It came back unchanged: now the person decides, and only between ways on
-    // that need them, each in plain words.
     const again = recordGuardRefusal(project, refusal, attempt);
     expect(again.ask.agent_work).toBeUndefined();
     expect(again.ask.question).toBe("Functional Design still can't go ahead as things stand: which way would you like to go on?");
@@ -2247,7 +2241,6 @@ describe("AttemptView projections and refusal streaks", () => {
       {
         op: "request-changes",
         label: "Request Changes",
-        // One Unit at a time, a rejection reaches every Unit: the person reads that too.
         description: "Tell me what should change in Functional Design, and I'll revise it. This also throws away " +
           "every Unit's finished Functional Design work, and each needs its review and approval again.",
       },
@@ -2261,6 +2254,89 @@ describe("AttemptView projections and refusal streaks", () => {
       .toBe(false);
     const { label: _label, ...unworded } = again.ask.remedies[0];
     expect(validateDirective({ ...again.ask, remedies: [unworded] }).valid).toBe(false);
+  });
+
+  // Two refusals whose way on is the agent's own step: the missing pipeline
+  // links, and the gate after a review pass nobody asked for. The first time is
+  // the agent's own work; only a repeat asks the person, as it does today.
+  function ownThenTheirs(refusal: ReturnType<typeof evaluateGuardRefusal>, attempt: GuardRefusalInput["attempt"]) {
+    const project = mkdtempSync(join(tmpdir(), "aidlc-guard-own-way-on-"));
+    projects.push(project);
+    const first = recordGuardRefusal(project, refusal, attempt);
+    const again = recordGuardRefusal(project, refusal, attempt);
+    expect(validateDirective(first.ask).valid).toBe(true);
+    expect(validateDirective(again.ask).valid).toBe(true);
+    return { first: first.ask, again: again.ask };
+  }
+
+  test("a missing pipeline handoff is the agent's to dispatch, never a review request", () => {
+    const wayOn = "Cannot complete \"reverse-engineering\" because these pipeline handoffs have not been recorded for " +
+      "the current run: aidlc-architect-agent. Dispatch the missing pipeline links in their declared order.";
+    const attempt = {
+      recovery: "available" as const,
+      summaryCoverage: "current" as const,
+      reviewCoverage: "missing" as const,
+      sourceCoverage: "current" as const,
+    };
+    const pipeline = (marker: "-" | "?" | "R") => evaluateGuardRefusal({
+      code: "PIPELINE_EVIDENCE_MISSING",
+      blockedAction: "present-approval-gate",
+      stage: "reverse-engineering",
+      stateContent: `# AI-DLC State\n- **Scope**: feature\n- [${marker}] reverse-engineering \u2014 EXECUTE\n`,
+      invariant: "Every required pipeline handoff is recorded in the current attempt.",
+      userMessage: wayOn,
+      attempt,
+      humanAuthority: { freshTurn: false, unattended: false },
+    });
+    for (const marker of ["-", "?", "R"] as const) {
+      const dispatch = pipeline(marker).remedies[0];
+      expect(dispatch, marker).toMatchObject({
+        op: "dispatch-pipeline-links", action: wayOn, requiresHuman: false, executableNow: true,
+        interaction: "external-work",
+      });
+      expect(pipeline(marker).remedies.map((remedy) => remedy.op), marker).not.toContain("request-review");
+    }
+    const refusal = pipeline("?");
+    expect(refusal.remedies.map((remedy) => remedy.op)).toEqual(["dispatch-pipeline-links", "request-changes"]);
+    const { first, again } = ownThenTheirs(refusal, attempt);
+    expect(first.agent_work).toBe(true);
+    expect(first.remedies.map((remedy) => [remedy.op, remedy.action])).toEqual([["dispatch-pipeline-links", wayOn]]);
+    expect(again.agent_work).toBeUndefined();
+    expect(again.question).toBe("Reverse Engineering still can't go ahead as things stand: which way would you like to go on?");
+    expect(again.remedies.map((remedy) => remedy.op)).toEqual(["request-changes"]);
+  });
+
+  test("a review pass past the cap that nobody asked for hands the agent the gate, with the findings", () => {
+    const attempt = {
+      recovery: "available" as const,
+      summaryCoverage: "current" as const,
+      reviewCoverage: "current" as const,
+      sourceCoverage: "current" as const,
+      reviewBudget: { used: 1, limit: 1 },
+    };
+    const refusal = evaluateGuardRefusal({
+      code: "REVIEW_BUDGET_EXHAUSTED",
+      blockedAction: "request-review",
+      stage: "requirements-analysis",
+      stateContent: "# AI-DLC State\n- **Scope**: classic\n- [-] requirements-analysis \u2014 EXECUTE\n",
+      invariant: "Review requests do not exceed the configured attempt budget.",
+      userMessage: "Cannot request review pass 2 for \"requirements-analysis\" because this stage allows 1 review pass.",
+      attempt,
+      humanAuthority: { freshTurn: false, unattended: false },
+    });
+    const gateAction = "Present the unresolved review findings at the approval gate for the human instead of " +
+      "starting another review pass.";
+    expect(refusal.remedies.map((remedy) => remedy.op))
+      .toEqual(["present-findings-at-gate", "present-approval-gate", "request-changes"]);
+    expect(refusal.remedies[0]).toMatchObject({
+      action: gateAction, requiresHuman: false, executableNow: true, interaction: "external-work",
+    });
+    const { first, again } = ownThenTheirs(refusal, attempt);
+    expect(first.agent_work).toBe(true);
+    expect(first.remedies.map((remedy) => [remedy.op, remedy.action])).toEqual([["present-findings-at-gate", gateAction]]);
+    expect(again.agent_work).toBeUndefined();
+    expect(again.question).toBe("Requirements Analysis still can't go ahead as things stand: which way would you like to go on?");
+    expect(again.remedies.map((remedy) => remedy.label)).toEqual(["Decide at approval", "Request Changes"]);
   });
 
   test("every way on put to the person reads in plain words; the agent's own carry none", () => {
@@ -2324,6 +2400,8 @@ describe("AttemptView projections and refusal streaks", () => {
       { ...base, stateContent: state("-"), attempt: current, humanAuthority: { freshTurn: false, unattended: true } },
       { ...base, stateContent: state("-"), attempt: current, autonomousBolt: { unit: "billing", slug: "billing-1", batch: null } },
       { ...base, code: "UNIT_COMPLETION_MISSING", unit: "billing", stateContent: state("-"), attempt: current },
+      { ...base, code: "PIPELINE_EVIDENCE_MISSING", stateContent: state("-"), attempt: { ...current, reviewCoverage: "missing" } },
+      { ...base, code: "REVIEW_BUDGET_EXHAUSTED", stateContent: state("-"), attempt: spentBudget },
       { ...base, stateContent: state("-"), attempt: current, fence: "review-freeze" },
       // A solo unit-major walk with beta on Code Generation.
       { ...base, stage: "code-generation", unit: "beta", stateContent: walk(), attempt: { ...current, reviewCoverage: "missing" } },
@@ -2794,7 +2872,6 @@ describe("unit-major resets name what they throw away", () => {
     expect(guidance).not.toContain("--stage code-generation");
     expect(guidance).toContain('Start "code-generation" again for unit "beta" only');
     expect(guidance).toContain("reopen --target code-generation --units beta`");
-    // With no Unit on record the person names the one that does it again.
     expect(recoveryGuidance("/nonexistent-project", walkState(), "code-generation")).toContain(
       'Ask the person which unit should do "code-generation" again, then run ' +
         "/aidlc --stage code-generation --unit <name>.",

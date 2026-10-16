@@ -53,11 +53,11 @@ An explicitly named scope on a fresh workspace (no intent yet: no `aidlc-state.m
 When the argument is freeform text (not a known scope keyword):
 
 1. Reads guardrails from `aidlc/spaces/<active-space>/memory/`.
-2. Keeps the request as a question (`--request <8hex id>`) and returns a `print` for the agent: the request as written, every plan this install ships (its stage count for this project, what it is for, and the `keywords` hints its author wrote), and the two commands that answer it: `next --propose <plan> --request <id>` for the plan that fits what the person described, or `next --propose compose --request <id>` when no ready-made plan fits. No tool reads the request for meaning; the agent does. Settings typed with the request are stored on that question and ride the answer. Re-run with the same `--request <id>`, the step returns the same print with the same id.
+2. Keeps the request as a question (`--request <8hex id>`) and returns a `print` for the agent: the request as written, every plan this install ships (its stage count for this project, whether its stages split the work into Units, what it is for, and the `keywords` hints its author wrote), and the two commands that answer it: `next --propose <plan> --request <id>` for the plan that fits what the person described, or `next --propose compose --request <id>` when no ready-made plan fits. Words on finished work (the selected workflow is finished, or nothing is selected in this chat and finished work is here) may instead ask to go back to one of its stages, so there the print opens with the person's words rather than calling them new work, names that work, and gives the way back beside the plans: `intent <record>` when it is not selected in this chat, then `next --stage <slug>` with `--unit <unit>` or `--every-unit` when they named Units. New work the person confirmed with `--new-intent` gets the plan step alone. No tool reads the request for meaning; the agent does. Settings typed with the request are stored on that question and ride the answer. Re-run with the same `--request <id>`, the step returns the same print with the same id.
 3. `next --propose <plan> --request <id>` emits the typed `scope-confirm` ask naming the effective ceremony from the compiled grid and workspace scan: the plan, a request preview, stage count, approval gates, and the choice to confirm, change plan, or compose a tailored plan. The directive carries `response_route: "next"`, a `confirm_command` (`next --scope <plan> --request <id>`), a `compose_command`, and `scope_commands` (one row per valid scope with its `stages` count), so the person's yes runs the exact prebuilt command.
 4. `next --propose compose --request <id>` emits the typed `compose-offer` ask with `response_route: "next"`, `compose_command`, and `scope_commands`; each `scope_commands` row carries its plan's `stages` count for this project ("15 stages", the stages after Initialization), counted the same way as the question.
 5. `--propose` with a word outside the plan table is the value reading step naming the plans; `--propose` with no value, or without `--request`, is a `print` for the agent naming the command shape. None of these reaches the person.
-6. On confirmation, the conductor runs the ask's complete shell-safe `next` command instead of calling `report`. Scope and compose commands carry `--request <8hex id>`, never the request text. For a different scope, it runs the `scope_commands` entry whose `scope` matches the chosen plan; a name with no entry is not a valid scope. The engine resolves the id to the stored full description, which intent creation records as `Project` in `aidlc-state.md`.
+6. On confirmation, the conductor runs the ask's complete shell-safe `next` command instead of calling `report`. Scope and compose commands carry `--request <8hex id>`, never the request text. For a different scope, it runs the `scope_commands` entry whose `scope` matches the chosen plan; a name with no entry is not a valid scope. The engine resolves the id to the stored full description, which intent creation records as `Project` in `aidlc-state.md`. An answer that picks a plan (a scope, the tailored plan, or the question's own) runs only once a message of the person's is on record after the question was asked (their typed reply, or a question-box pick the harness forwards to the human-turn hook; a message keeps whole seconds, so one in the question's own second counts; a typed `/aidlc` line that only sets something is no reply): until then `next` creates nothing and returns a `print` telling the agent to show the question and end its turn, as a stage gate needs a reply after it was shown. The human presence check's switch, the person's own terminal, and a project with no message on record at all are unchanged.
 7. If the user overrides the proposed plan, uses the user's chosen scope instead.
 
 The engine keeps a copy of each question's request as `{id, text, proposedScope, origin, askedAbout?, newWork?, composedFrom?, stateSha256?, settings?, approvedRequest?, createdAt}` (`settings`, on a routing question, holds `{newWork, existingWork}`: the `next` flag tokens carried by its new-work answers and by its answers about existing work, each token a flag name or a one-word value, a stage list joined by commas, checked on read; this includes the routing question asked about new work typed while a stage question is open, and an answer that arrives without its option's command, a reply naming the option or the plain `next --request <id>`, gets these settings from the question; `approvedRequest` is the id of the question whose answer the routing question stopped, such as a plan approval in a fresh clone: new work started from the routing question answers that request, so it starts once and words said at that question reach it, and every route carries on with that work once it exists. An approved plan's `--skip`/`--add` ride only its own plan's new-work answers.) (`newWork` marks a question asked for new work through `next --new-intent`, so its answer starts that work instead of asking which existing record was meant) in its own gitignored file under `aidlc/.aidlc-sessions/questions/`, written once and never rewritten, so concurrent sessions in one clone never share or invalidate each other's asks; asking again is a new question with a new id, and the earlier one stays answerable. The copies follow the same operating-system permissions as the rest of the workspace, where the request lands anyway once work starts, and are reached through no symlinked path. The copy is removed once its answer starts work, and the other questions of the same request (the one it was derived from through `composedFrom` and the others derived from that root, such as the proposal step's question and the routing question beside it) are marked `answeredBy` that request: none of them meets the person's next words as a question still open, and a repeated answer by any of them carries on with that work; an unanswered question is kept unless `question-retention-days` (or `AIDLC_QUESTION_RETENTION_DAYS`) sets a retention period, and a question whose copy is gone errors with a describe-the-work-again message. Intent creation builds the whole record before listing it: the folder, audit, and project description first, then the workflow state, which names the question as `Question Id`, and last the `intents.json` row, which records it as `request`. A retry that finds a finished record its start never listed (a start stopped between the two) lists that record instead of building another. A folder without `aidlc-state.md` is invisible to every record scan, so a start cut off before its state lands lists nothing and trying again creates the work (under the next free folder name). A repeated answer never creates work twice: `intent create` and `next` find the row carrying that question id, continue work still in flight (`Already started <record>, continuing it.`), and for archived or completed work ask first (`You already started this as <record>, which is archived. Start it again as new work?`), starting it again from that record's stored description on the scope it last ran on (a scope change records the new scope on its `intents.json` row). Late answers: a new-work question's start or new-plan answer acts as answered even after other work became active, starting the new work alongside it; a `new-work-routing` question is bound to the space and records (by folder and uuid) it named, and its `continue_command` and `compose_command` act only on one of those, asking the routing question again, with the scope the human confirmed, when another is selected. On a legacy flat-layout (pre-workspace) project, a question-backed creation refuses before anything moves and keeps the question answerable; the refusal names the one-time `intent create --scope <scope>` that moves the flat workflow into its own intent, after which the same command creates the request. Conductors do not read or rewrite these runtime files and must not substitute the preview for the full request.
@@ -98,7 +98,15 @@ which, and every seam that runs before an agent sees the line reads the same
 answer (`classifyTerminalCommand` and `isReadOnlyNextArgv`, which the Kiro CLI
 verb intercept and pre-dispatch, the Kiro IDE terminal seam and the Copilot
 claim gate all consult), so nothing acts off-band on a line the engine would
-hand to the agent. **Exact**: every token read under the grammar, with any free
+hand to the agent. Which token is a flag, which is a flag's value and which is
+the person's is decided once as well: `readNextTokens` reads only the tokens in
+front of the `--` mark, so neither the mark nor a word behind it is ever a flag
+or a flag's value. `parseNextFlags` takes its flags from it, and the Copilot
+claim and the Plan Approval guard ask `nextLineFlags` which flags a line
+carries; the orchestrator's own `--project-dir`
+and attempt id are taken off the line by `readOrchestratorLauncherOptions`, the
+reading the engine's `main()` uses and hooks such as the Copilot claim and the
+Stop hook share. **Exact**: every token read under the grammar, with any free
 words marked as theirs (the `--` delimiter, or a plan named with a colon); it
 acts as it always has. **Words**: nothing on the line was read, so it is a
 request. **A reading step** otherwise: the `print` above, with no `narration`,
@@ -401,7 +409,7 @@ Authoritative data lives in the `.claude/scopes/aidlc-<name>.md` files plus each
 
 ## Stage Execution Engine
 
-Every stage follows one of the four active execution patterns: inline, subagent, pipeline, or mob (29 / 2 / 1 / 1 in the shipped graph). The compiled stage graph (`tools/data/stage-graph.json`) carries each stage's mode; the engine reads it and delivers it on the `run-stage` directive as `directive.mode`. The Stage Graph table in SKILL.md is a human-readable mirror, not the dispatch source.
+Every stage follows one of the four active execution patterns: inline, subagent, pipeline, or mob (29 / 2 / 1 / 1 in the shipped graph). The compiled stage graph (`tools/data/stage-graph.json`) carries each stage's mode; the engine reads it and delivers it on the `run-stage` directive as `directive.mode`. The Stage Graph table in `tables.md`, beside the orchestrator skill, is a human-readable mirror, not the dispatch source.
 
 ### Full Stage Lifecycle
 
@@ -415,8 +423,8 @@ sequenceDiagram
     participant S as aidlc-state.md
     participant AU as audit/ shard
 
-    O->>A: 1. Apply load-steering parts, then read inline_context_paths
-    Note over A: Rules arrive as content - persona and knowledge remain path-loaded
+    O->>A: 1. Apply load-steering parts, take on lead_persona, then read inline_context_paths
+    Note over A: Rules and the lead's persona arrive as content - other personas and knowledge remain path-loaded
 
     O->>SF: 2. Read stage file
     Note over SF: directive.stage_file
@@ -506,7 +514,7 @@ Inline stages run directly in the orchestrator conversation. The user can intera
 
 The 6-step process:
 
-1. **Load the stage steering.** Follow the ordered `load-steering` sequence until `run-stage`; it delivers every substantive active-space rule as content. Then read every `inline_context_paths` entry. Persona and knowledge remain path-loaded; missing, unreadable, or invalid UTF-8 optional files are omitted from the roster and reported through specific or aggregated `context_warnings`.
+1. **Load the stage steering.** Follow the ordered `load-steering` sequence until `run-stage`; it delivers every substantive active-space rule as content. The step carries the lead's persona as content (`lead_persona`); take it on, then read every `inline_context_paths` entry. Support personas and knowledge remain path-loaded (a lead persona too large to ride beside its step is listed first instead); missing, unreadable, or invalid UTF-8 optional files are omitted from the roster and reported through specific or aggregated `context_warnings`.
 2. **Read the stage file.** The conductor reads the exact `directive.stage_file`.
 3. **Read resolved inputs.** The conductor reads the existing artifacts in `directive.consumes`, applying the stage's documented fallback for expected absent inputs.
 4. **Load conditional protocol modules.** Read every file named by
@@ -538,9 +546,9 @@ The 6-step process:
 1. **Load delivered rules, read stage and inputs.** Apply every ordered
    `load-steering` part before `run-stage`. Use the exact directive paths for
    the stage file and artifacts.
-2. **Load conductor-owned context.** A mob directive carries its lead's complete
-   path roster in `inline_context_paths`; fully dispatched subagent/pipeline
-   directives carry an empty roster.
+2. **Load conductor-owned context.** A mob directive carries its lead's persona
+   in `lead_persona` and the lead's knowledge roster in `inline_context_paths`;
+   fully dispatched subagent/pipeline directives carry neither.
 3. **Prepare briefs: rules as content, artifacts as paths.** Deliver the
    stage's rules per `stage-protocol.md` § "For subagent stages" step 2; pass relevant artifact paths and task
    instructions. The named
@@ -561,7 +569,7 @@ The 6-step process:
 Some stages involve multiple agents: a lead agent and one or more support agents. The coordination pattern follows `directive.mode` — the stage's communication topology — and is always orchestrator-mediated:
 
 1. Execute the lead agent's work first, producing primary artifacts.
-2. Bring in each support agent per the topology. On an `inline` stage the orchestrator reads every lead/support entry in `directive.inline_context_paths` and adopts those perspectives rather than dispatching them. On `mob`, it reads the lead-only roster and performs the lead work inline, while each support is a real dispatch. On `subagent` (hub-and-spoke) and `pipeline` (chain), the lead and supports are dispatched: mutually-blind spokes on subagent, ordered enrichment hops on pipeline, and parallel blind contributions plus a bounded objection round on mob (`stage-protocol-ensemble.md`). Every returned pipeline hop is recorded with `aidlc-log.ts link`; multi-repo chains include `--repo`, isolated runs include `--single`, and repo-scoped reuse rows suppress dispatch for reused stores.
+2. Bring in each support agent per the topology. On an `inline` stage the orchestrator takes on the lead's persona from `directive.lead_persona`, reads every support entry in `directive.inline_context_paths` and adopts those perspectives rather than dispatching them. On `mob`, it takes on the lead's persona, reads the lead's knowledge roster and performs the lead work inline, while each support is a real dispatch. On `subagent` (hub-and-spoke) and `pipeline` (chain), the lead and supports are dispatched: mutually-blind spokes on subagent, ordered enrichment hops on pipeline, and parallel blind contributions plus a bounded objection round on mob (`stage-protocol-ensemble.md`). Every returned pipeline hop is recorded with `aidlc-log.ts link`; multi-repo chains include `--repo`, isolated runs include `--single`, and repo-scoped reuse rows suppress dispatch for reused stores.
 3. Synthesize all agent outputs into the final stage artifacts — dispatched support agents write contribution files (Contribution + Positions, `stage-protocol-collaborators.md`) that the lead integrates; the lead alone edits the `produces[]` artifacts (pipeline links advance them directly); unresolved mob judgment calls surface to the human mid-stage, and maintained dissent is quoted verbatim at the gate.
 4. Agents do NOT invoke each other -- only the orchestrator delegates. Authored core and Claude personas enforce this with `disallowedTools: Task`; harness projections use their native tool policy instead where needed. Kiro omits that unsupported Markdown key and excludes the `subagent` tool from delegate JSON/frontmatter allowlists.
 
@@ -877,7 +885,7 @@ The orchestration engine owns every transition above. The conductor reports outc
 
 1. **Run completion verification** - check artifacts exist on disk, guardrails respected. This is a correctness check, not a state transition. This is also enforced deterministically: `approve` refuses a gated stage whose declared `produces` artifacts are missing (unless `AIDLC_SKIP_ARTIFACT_GUARD=1`), so a stage cannot be marked complete without its outputs (#366). Per-unit Construction stages are verified by the swarm referee instead.
 
-2. **Enter the gate**: `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. Before the state transaction opens, the engine fires each gate-bound sensor once per existing declared deliverable when a person will answer the gate; a gate the engine approves itself under Construction autonomy fires only its blocking sensors, since advisory evidence has no reader there. A blocking binding requires a verified pass; findings, unavailable execution, malformed verdicts, and timeouts refuse the transition. To override interactively, first record and present the separate `Fix findings` / `Override blocking sensors` decision through `aidlc-log.ts`, wait for and record the exact human answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`. Autonomous runs cannot override. Otherwise the engine marks `[-]` → `[?]`, emits `STAGE_AWAITING_APPROVAL`, and makes `/aidlc --status` show "Awaiting your approval on \<stage\>".
+2. **Enter the gate**: `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. Before the state transaction opens, the engine fires each gate-bound sensor once per existing declared deliverable (`upstream-coverage` and `claim-sources` once per output folder) when a person will answer the gate; a gate the engine approves itself under Construction autonomy fires only its blocking sensors, since advisory evidence has no reader there. A blocking binding requires a verified pass; findings, unavailable execution, malformed verdicts, and timeouts refuse the transition. To override interactively, first record and present the separate `Fix findings` / `Override blocking sensors` decision through `aidlc-log.ts`, wait for and record the exact human answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`. Autonomous runs cannot override. Otherwise the engine marks `[-]` → `[?]`, emits `STAGE_AWAITING_APPROVAL`, and makes `/aidlc --status` show "Awaiting your approval on \<stage\>".
 
 3. **Present the approval gate** (AskUserQuestion).
 
@@ -1279,8 +1287,23 @@ the change, and reads the person's answer in their own words: a yes is their
 redo request; anything else carries on.
 Under Guard Policy `relaxed` or `off` an edit to a document that is still there
 is not raised on `next`: the guard accepts it and says it once. A document that
-is gone, a project-type change and a stage-graph change still are, and
-`/aidlc --status` still lists every stage behind.
+is gone and a project-type change still are, and `/aidlc --status` still lists
+every stage behind.
+When only the stage itself changed (an AI-DLC update, a plugin turned on, or the
+team's own stage edit changed what it reads, writes or when it runs) and nothing
+of the person's work did, the stage is not behind and no later stage is
+affected, under every Guard Policy. When the stage now needs an input it did not
+need when it ran (a new required input, or one made required), the next step the
+person hears carries one `change_notices` line that asks nothing: "AI-DLC now
+does Functional Design differently from when yours ran; your work stands, and
+`/aidlc --stage functional-design` goes back to it (the stages after it reopen
+too)." Any other change to the stage itself (an optional input or output added
+or removed, an input made optional, a changed condition) is not said. Either
+way, once a step is said, a `STAGE_DEFINITION_CHANGED` audit row records the
+stage's receipt for its new definition, so no later step or conversation says it
+again, `/aidlc --status` names the stage with that line, and a later change to
+what the stage now reads is raised as usual. A change to the person's work in
+the same window keeps the question above.
 Inspection-unavailable stages remain a per-turn advisory because they need
 attention. Receipt-less histories are not shown by `next` or by
 `/aidlc --status`, so migration adds no warning.

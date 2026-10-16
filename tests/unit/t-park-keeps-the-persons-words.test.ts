@@ -85,7 +85,6 @@ const state = (proj: string, args: string[]) =>
   run(STATE, [...args, "--project-dir", proj], { AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1" });
 const events = (proj: string, name: string) => readAuditShardEvents(proj).filter((row) => row.event === name);
 
-// `report` as the agent runs it in this chat.
 function report(proj: string, args: string[]): { kind: string; message?: string } {
   const r = run(ORCHESTRATE, ["report", ...args, "--project-dir", proj]);
   const line = r.out.split("\n").find((entry) => entry.startsWith("{"));
@@ -105,7 +104,6 @@ function says(proj: string, prompt: string): void {
   expect(result.status, result.stderr).toBe(0);
 }
 
-// The one park row, and the words it kept.
 function parkedWords(proj: string): string | null {
   const rows = events(proj, "WORKFLOW_PARKED");
   expect(rows).toHaveLength(1);
@@ -123,7 +121,6 @@ function rowOrder(proj: string): string {
   return [read, ...rows].join("\n");
 }
 
-// The first step of the next chat, where the work was parked.
 function resumed(proj: string, args: string[] = ["--resume"]): Record<string, unknown> {
   const r = runOrchestrateNext(ORCHESTRATE, proj, args, { cwd: proj, env: env(LATER) });
   expect(r.directive?.kind, r.out).toBe("run-stage");
@@ -158,7 +155,6 @@ describe("the park row keeps the words that stopped the work", () => {
   });
   afterEach(() => cleanupTestProject(proj));
 
-  // The live path: the approval and the stop in one message, one call.
   test("approve and stop in one call: the approval row and the park row both carry their words", () => {
     state(proj, ["gate-start", STAGE]);
     says(proj, WORDS);
@@ -291,7 +287,6 @@ describe("the step that resumes where the work was parked carries them", () => {
     const reply = directive.parked_reply as ParkedReply;
     expect(reply?.words).toBe(WORDS);
     expect(reply?.note).toBe(NOTE);
-    // The step is a valid directive with the field on it.
     expect(validateDirective(directive).valid).toBe(true);
   });
 
@@ -301,7 +296,6 @@ describe("the step that resumes where the work was parked carries them", () => {
     expect((resumed(proj, []).parked_reply as ParkedReply)?.words).toBe(WORDS);
   });
 
-  // The field ends at the first row of that stage after the park.
   test.each(["DECISION_RECORDED", "QUESTION_ANSWERED", "STAGE_STARTED", "GATE_REJECTED"])(
     "a %s row for the stage after the park ends it",
     (event) => {
@@ -438,6 +432,26 @@ describe("a long reply is carried only as far as the step can take it", () => {
     expect(reply?.note).toContain(NOTE);
     expect(reply?.note).toContain("whole message");
     expect(validateDirective(directive).valid).toBe(true);
+  });
+
+  // A new chat's first step carries the conductor's persona and the lead's
+  // persona text. Their words outrank the lead's text, which the step can list
+  // as a file to read instead: the words drop only when even that cannot fit.
+  test("a long stop reply resumed in a new chat keeps its words, and the step lists the lead's persona instead", () => {
+    // About 12,000 bytes: a stop said at length in Japanese ("approve, and stop here"), three bytes a character.
+    const words = "\u627f\u8a8d\u3057\u307e\u3059\u3002\u3053\u3053\u3067\u6b62\u3081\u3066\u304f\u3060\u3055\u3044\u3002".repeat(240);
+    appendAuditEntry("WORKFLOW_PARKED", { Stage: STAGE, "Person Reply": words }, proj);
+    // The next chat as Claude Code names it, so the conductor's persona rides too.
+    const r = runOrchestrateNext(ORCHESTRATE, proj, [], { cwd: proj, env: { ...env(LATER), CLAUDE_CODE_SESSION_ID: LATER, CLAUDECODE: "1" } });
+    expect(r.directive?.kind, r.out).toBe("run-stage");
+    const directive = r.directive as Record<string, unknown>;
+    // In the step, or sent ahead of it on the rules' first part.
+    expect([directive, ...r.steering].some((part) => part.conductor_persona !== undefined)).toBe(true);
+    expect(directive.stage).toBe(STAGE);
+    expect((directive.parked_reply as ParkedReply)?.words).toBe(words);
+    expect(directive.lead_persona).toBeUndefined();
+    expect((directive.inline_context_paths as string[])[0]).toMatch(/agents\/aidlc-[a-z-]+-agent\.md$/);
+    expect(directive.context_note).toContain("read the persona and knowledge files this step lists");
   });
 
   test("a reply that fits is carried whole, with the plain note", () => {

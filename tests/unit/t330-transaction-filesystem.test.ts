@@ -430,7 +430,6 @@ describe("t330 lock ownership", () => {
       expectProject(root);
       deadOwner = out.owner!;
       expect(() => process.kill(deadOwner.pid, 0)).toThrow();
-      // Every new lock records its holder's process generation.
       expect(deadOwner.processGeneration).toEqual(expect.any(String));
     }
     return { ...deadOwner };
@@ -554,7 +553,6 @@ for (const [pause, fallback, crash] of [
     });
     const stdout = new Response(child.stdout).text(), stderr = new Response(child.stderr).text();
     try {
-      // The holder must reach the synchronized lock boundary and say which.
       const ready = join(dirname(root), "ready");
       expect(await waitForBarrierLine(ready, { writer: child, timeoutMs: 10_000 })).toBe(`${pause}\n`);
       const before = readdirSync(root).sort(), content = readFileSync(join(root, "existing.txt"), "utf8");

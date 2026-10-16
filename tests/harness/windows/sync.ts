@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Sync the current git tree to the MR10 Windows test host through SSM.
+// Sync a git ref (HEAD by default) to the Windows test host through SSM.
 
 import { spawnSync } from "node:child_process";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../test-budget.ts";

@@ -188,9 +188,10 @@ Choose `<source paths>` as follows:
 - Focused scan of a STALE, UNVERIFIED, UNKNOWN_SCOPE, or NO_STORE store: the
   intended focused paths.
 
-Keep the returned `store_generation`, `source_fingerprint`, and `paths` keyed
-by repo. They bind synthesis to both the exact shared CodeKB generation and the
-source bytes the scan is about to inspect. If the developer later reports an
+Keep the returned `store_generation`, `source_fingerprint`, `paths`, and
+`head_commit` keyed by repo. The first three bind synthesis to both the exact
+shared CodeKB generation and the source bytes the scan is about to inspect. If
+the developer later reports an
 `analyzed.paths` entry outside the snapshot's `paths`, discard that result and
 repeat the snapshot plus scan over the expanded path set; never widen verified
 coverage after the scan without a matching pre-scan source snapshot.
@@ -221,7 +222,8 @@ The conductor owns the store/reuse decision but does NOT inspect application
 source, enumerate the repo, or precompute the file list before this dispatch.
 That duplicates the developer link. Give the developer the repo root, the
 intent, the chosen breadth, the active Minimal/Standard/Comprehensive depth,
-and the exact handoff path below; the developer discovers the source surface.
+the exact handoff path below, and the snapshot's `head_commit` for the Run
+Record; the developer discovers the source surface.
 
 Brief the developer with the scan breadth chosen at the Step 1 guard (full
 rescan = the whole repo; focused scan = the intent's area, named explicitly in
@@ -250,7 +252,9 @@ not to scan or document it:
   `.agents/` (Codex): the `aidlc`-named ones, and every skill whose `SKILL.md`
   frontmatter says `generated-by: aidlc-runner-gen` (stage runners, plugin
   stages included);
-- the root file AI-DLC writes whole: Cursor's `install.ts` beside `.cursor/`;
+- the root files AI-DLC writes whole: the whole-file root integrations the
+  installed harness lists in `<harness directory>/tools/data/aidlc-projection.json`
+  (the `install.ts` a copied Cursor runtime brings);
 - AI-DLC's marked sections of shared root files such as `AGENTS.md` and
   `.gitignore`, the MCP servers it adds to `.mcp.json`, and its entries in
   opencode's `opencode.json` (named under `rootContributions` in
@@ -259,11 +263,13 @@ not to scan or document it:
 The rest of `.github/`, `.agents/`, `AGENTS.md`, `.gitignore`, and
 `opencode.json` is the project's own and is scanned as usual.
 
-Tell the developer to scan only what people wrote: follow the repo's
-`.gitignore` files, and skip build outputs, dependency folders, and IDE and
-tool caches even where nothing ignores them (for example .NET `bin/` and
-`obj/` beside a project file), without opening them. The "What to Skip"
-section of
+Tell the developer to scan only what people wrote: find the files with its
+file tools, one folder at a time, reading the repo's `.gitignore` files and
+leaving out what they ignore, and skip build outputs, dependency folders, and
+IDE and tool caches even where nothing ignores them (for example .NET `bin/` and
+`obj/` beside a project file), without opening them. The scan only reads the
+code: it runs none of the project's tests, builds or programs unless the person
+asked for that. The "What to Skip" section of
 `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/code-analysis-guide.md` lists
 them and says how the files beside a folder tell when one of those names holds
 hand-written code.
@@ -311,6 +317,7 @@ Delegate to Task tool with aidlc-architect-agent:
 - Pass the template path, `{{HARNESS_DIR}}/knowledge/aidlc-developer-agent/re-artifacts.md`:
   the architect writes the nine artifacts and the Scope of Analysis block from it
 - Include workspace state from aidlc-state.md
+- Pass the snapshot's `head_commit` for the Run Record
 - Tell the architect that when it checks the project's source it follows the
   developer's rule: it leaves AI-DLC's own install and every folder the "What
   to Skip" section of

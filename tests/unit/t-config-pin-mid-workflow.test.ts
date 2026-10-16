@@ -69,7 +69,6 @@ function dropStamp(dir: string): void {
   writeFileSync(join(data, "harness.json"), `${JSON.stringify({ harnessDir: ".claude", rulesSubdir: "rules" })}\n`);
 }
 
-// A second harness, last refreshed to `version`.
 function addKiro(dir: string, version: string): void {
   cpSync(join(KIRO_RELEASE, ".kiro"), join(dir, ".kiro"), { recursive: true });
   const stampPath = join(dir, ".kiro", "tools", "data", "aidlc-stamp.json");

@@ -172,7 +172,6 @@ describe("t195 pending-compose Stop-hook carve-out (tier 2b)", () => {
     const r = runHook(proj);
     expect(r.rc).toBe(0);
     expect(r.out).not.toContain('"decision":"block"');
-    // A fresh marker is the live-gate signal; the hook does not disturb it.
     expect(existsSync(markerPath(proj))).toBe(true);
   });
 
@@ -188,7 +187,6 @@ describe("t195 pending-compose Stop-hook carve-out (tier 2b)", () => {
     utimesSync(markerPath(proj), when, when);
     const r = runHook(proj);
     expect(r.rc).toBe(0);
-    // Carve-out not honoured -> the enforcement block fires again.
     expect(r.out).toContain('"decision":"block"');
     // The janitor removed the orphaned marker so it cannot re-disable the loop.
     expect(existsSync(markerPath(proj))).toBe(false);

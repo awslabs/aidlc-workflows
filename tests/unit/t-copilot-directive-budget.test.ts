@@ -157,7 +157,6 @@ function addKnowledge(proj: string, harnessDir: string, agent: string, count: nu
   }
 }
 
-// The same project with the Claude harness installed beside Copilot's.
 function withClaude(proj: string, root: string): void {
   cpSync(join(root, "claude", ".claude"), join(proj, ".claude"), { recursive: true });
 }
@@ -180,12 +179,10 @@ function projectEngine(proj: string, harnessDir: string): Engine {
   return (args) => [process.execPath, join(proj, harnessDir, "tools", "aidlc-orchestrate.ts"), ...args];
 }
 
-// A native install's `aidlc` command.
 function nativeEngine(executable: string): Engine {
   return (args) => [executable, "engine", "orchestrate", ...args];
 }
 
-// Another tree's Bun tools pointed at the project.
 function treeEngine(root: string, harnessDir: string, proj: string): Engine {
   return (args) => [
     process.execPath, join(root, harnessDir, "tools", "aidlc-orchestrate.ts"), ...args, "--project-dir", proj,
@@ -379,9 +376,16 @@ describe("t-copilot-directive-budget: every Copilot directive fits VS Code's ter
     const deliveries = await stockDeliveries();
     expectWholeDeliveries(deliveries);
     for (const { stage, results } of deliveries) {
-      // Shipped rules fit one load-steering part when they do not fit inline.
-      expect(results.length, `${stage}: ${results.map(({ directive }) => directive.kind).join(" -> ")}`)
-        .toBeLessThanOrEqual(2);
+      // Shipped rules fit one load-steering part when they do not fit inline;
+      // the first stage's conductor persona may go ahead on a part of its own
+      // (the lead's persona rides the run-stage beside it).
+      const route = `${stage}: ${results.map(({ directive }) => directive.kind).join(" -> ")}`;
+      const parts = results.filter(({ directive }) => directive.kind === "load-steering");
+      const rulesParts = parts.filter(({ directive }) => (directive.rules_content ?? []).length > 0);
+      expect(rulesParts.length, route).toBeLessThanOrEqual(1);
+      for (const { directive } of parts) {
+        if ((directive.rules_content ?? []).length === 0) expect(directive.conductor_persona ?? "", route).toContain("conductor");
+      }
     }
   });
 
@@ -452,7 +456,6 @@ describe("t-copilot-directive-budget: every Copilot directive fits VS Code's ter
     const path = join(proj, ".aidlc", "tools", "data", "harness.json");
     writeFileSync(path, `${JSON.stringify({ ...shippedHarnessData(join(proj, ".aidlc")), directiveMaxBytes: own }, null, 2)}\n`);
     const { results, final } = await deliverIn(proj, ".aidlc", "functional-design");
-    // Refused at once, before any rules part is sent.
     expect(results.map(({ directive }) => directive.kind)).toEqual(["error"]);
     for (const { stdout } of results) expect(Buffer.byteLength(stdout, "utf-8")).toBeLessThanOrEqual(own);
     expect(final.kind).toBe("error");
@@ -555,9 +558,13 @@ describe("t-copilot-directive-budget: every Copilot directive fits VS Code's ter
       expect(body, skill).toContain("conductor_persona");
       const proj = projectFor(COPILOT_ROOT, ".aidlc", "functional-design", false);
       const delivery = await deliverIn(proj, ".aidlc", "functional-design", projectEngine(proj, ".aidlc"), first);
-      expect(delivery.results.map(({ directive }) => directive.kind), skill).toEqual(["load-steering", "run-stage"]);
+      // The rules come in a part (and, for the stage runner, whose step always
+      // carries the conductor persona, that persona in one before it).
+      const kinds = delivery.results.map(({ directive }) => directive.kind);
+      expect(kinds.at(-1), skill).toBe("run-stage");
+      expect(kinds.slice(0, -1).length, skill).toBeGreaterThan(0);
+      expect(kinds.slice(0, -1).every((kind) => kind === "load-steering"), skill).toBe(true);
       expectWholeDeliveries([delivery]);
-      // A single-stage run stays single across its rules parts.
       const single = (delivery.final as Printed & { single?: boolean }).single === true;
       expect(single, skill).toBe(first.includes("--single"));
     }
@@ -572,14 +579,19 @@ describe("t-copilot-directive-budget: every Copilot directive fits VS Code's ter
     expectWholeDeliveries(deliveries);
   });
 
-  test("functional-design, where #1411 was reported, steers on Copilot and stays one message on Claude", async () => {
+  // functional-design, where #1411 was reported, now takes its rules in a part
+  // on Claude too (the lead's persona rides its step), so Requirements Analysis
+  // shows that Copilot's limit stays Copilot's.
+  test("functional-design steers on Copilot, and a step that steers on Copilot stays one message on Claude", async () => {
     const kinds = (delivery: Delivery | undefined) => delivery?.results.map(({ directive }) => directive.kind);
-    const copilot = (await stockDeliveries()).find(({ stage }) => stage === "functional-design");
-    expect(kinds(copilot)).toEqual(["load-steering", "run-stage"]);
+    const stock = await stockDeliveries();
+    expect(kinds(stock.find(({ stage }) => stage === "functional-design"))).toEqual(["load-steering", "run-stage"]);
+    expect(kinds(stock.find(({ stage }) => stage === "requirements-analysis"))).toEqual(["load-steering", "run-stage"]);
     expect(existsSync(join(CLAUDE_ROOT, ".claude"))).toBe(true);
-    const claude = await deliver(CLAUDE_ROOT, ".claude", "functional-design", false);
+    const claude = await deliver(CLAUDE_ROOT, ".claude", "requirements-analysis", false);
     expect(kinds(claude)).toEqual(["run-stage"]);
     expect(claude.final.rules_content?.length ?? 0).toBeGreaterThan(0);
+    expect(Buffer.byteLength(claude.results[0]?.stdout ?? "", "utf-8")).toBeGreaterThan(copilotBudget());
   });
 });
 
@@ -661,8 +673,8 @@ describe("t-copilot-directive-budget: a workflow already under way when AI-DLC i
       },
     ] as const;
     for (const { runtime, change } of cases) {
-      const proj = releasedProject("functional-design", change);
-      const { results, final } = await deliverIn(proj, ".aidlc", "functional-design", nativeEngine(nativeRelease(runtime)));
+      const proj = releasedProject("requirements-analysis", change);
+      const { results, final } = await deliverIn(proj, ".aidlc", "requirements-analysis", nativeEngine(nativeRelease(runtime)));
       expect(results.map(({ directive }) => directive.kind), runtime).toEqual(["run-stage"]);
       expect(final.rules_content?.length ?? 0, runtime).toBeGreaterThan(0);
       expect(Buffer.byteLength(results[0]?.stdout ?? "", "utf-8"), runtime).toBeGreaterThan(copilotBudget());
@@ -741,7 +753,6 @@ function copilotTool(proj: string, path: string[], args: string[], input?: strin
   return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
 }
 
-// The person's reply in chat, read by the human-turn hook.
 function reply(proj: string, prompt: string): void {
   const { status, out } = copilotTool(proj, ["tools", "aidlc.ts"], ["engine", "hook", "record-human-turn"], JSON.stringify({
     hook_event_name: "UserPromptSubmit", session_id: SESSION, prompt,

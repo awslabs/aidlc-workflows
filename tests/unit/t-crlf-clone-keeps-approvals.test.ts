@@ -134,7 +134,6 @@ function recordCommand(p: string) {
   }
 }
 
-// Verify, ask and approve a Unit at its checkpoint.
 function approve(p: string, unit: string): void {
   recordCommand(p);
   const checkpoint = (args: string[]) => {

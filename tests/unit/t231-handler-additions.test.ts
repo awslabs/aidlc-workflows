@@ -202,7 +202,6 @@ describe("t231 config get/list/set handlers", () => {
       "--learnings", "off", "--summary-confirmation", "off", "--guard.state-transition", "off",
     ], project, FENCE_ENV_CLEAR);
     expect(changed.status, changed.stderr).toBe(0);
-    // Their setter already landed the policy, so this run says it stands.
     expect(changed.stdout).toContain("Guard Policy is already relaxed (set by you)");
     expect(changed.stdout).toContain("The state transition check is already off");
     expect(renameNotices(changed.stderr)).toBe(0);

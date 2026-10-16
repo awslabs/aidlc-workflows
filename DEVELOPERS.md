@@ -43,6 +43,21 @@ Read the decision even when the review check is green: it can still ask for
 changes. The [PR guidelines](CONTRIBUTING.md#submitting-your-pr) explain its
 labels and review criteria.
 
+### Dependency updates
+
+[Dependabot](.github/dependabot.yml) checks the root Bun dependencies
+(`package.json` and `bun.lock`), the uv documentation dependencies
+(`pyproject.toml` and `uv.lock`), and GitHub Actions weekly. Minor and patch
+updates are grouped by ecosystem; major updates get separate PRs. Each
+ecosystem has a limit of three open version-update PRs. These PRs follow the
+same checks and merge queue as other changes.
+
+Version updates become active when the configuration is merged into the
+default branch, `main`. To check the setting, open **Settings → Advanced
+Security → Dependabot version updates**. To inspect update jobs, open
+**Insights → Dependency graph → Dependabot**. Dependabot security updates
+have a separate setting under **Settings → Advanced Security**.
+
 ## 2. Merge to `main`
 
 Once the checks and review feedback are addressed, a maintainer adds the PR to
@@ -189,8 +204,8 @@ Each call owns its checkout. Default PR CI includes Linux integration; the merge
 queue and expanded manual CI also run deterministic E2E. Ordinary nightly and
 release Full Suite runs do not repeat those tiers or production-guard jobs.
 
-Hosted live coverage uses 26 jobs: on each existing OS, two Claude SDK shards
-(four on Linux), three Claude TUI shards, one Codex shard, one Copilot CLI shard
+Hosted live coverage uses 27 jobs: on each existing OS, two Claude SDK shards
+(five on Linux), three Claude TUI shards, one Codex shard, one Copilot CLI shard
 and one opencode shard. Each shard runs
 at most two files concurrently, restoring the checkout and application home
 between files and retrying only a failed file after confirmed cleanup. Platform

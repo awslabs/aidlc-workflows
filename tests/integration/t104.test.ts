@@ -13,17 +13,17 @@
 // orchestrator-LLM's at observation time — doctor never blocks on it.
 //
 // SPAWN (not in-process): the handler is `handleDoctor(projectDir)` which
-// terminates with `process.exit(failed > 0 ? 1 : 0)` (aidlc-utility.ts:1385)
-// and writes its report via `process.stdout.write` (:1373). The rule-drift row
+// terminates with `process.exit(failed > 0 ? 1 : 0)` (aidlc-utility.ts)
+// and writes its report via `process.stdout.write`. The rule-drift row
 // is only observable on that stdout, and the AIDLC_RULES_DIR / AIDLC_STAGE_GRAPH
-// fixture-isolation seams (aidlc-graph.ts:160-162) are evaluated inside the
+// fixture-isolation seams (aidlc-graph.ts) are evaluated inside the
 // subprocess. An in-process twin would lose the env-seam isolation and the
 // process.exit shell the .sh's `|| true` is written around. spawnCount = all.
 //
 // EXIT-CODE NOTE: the .sh runs `bun "$UTIL" doctor ... 2>&1 || true` — it
 // SWALLOWS the exit code, because a bare temp project fails the hook/settings
-// checks (doctor exits 1 on any failure, :1385). The rule-drift row is an
-// always-`pass:true` advisory (:1239,:1268,:1276) regardless. So like the .sh
+// checks (doctor exits 1 on any failure). The rule-drift row is an
+// always-`pass:true` advisory regardless. So like the .sh
 // we assert on stdout content, not on res.status — the row renders identically
 // at exit 1. (We DO capture status to mirror the `|| true` semantics.)
 //
@@ -53,7 +53,7 @@
 //       stdout.
 //   - .sh case 3  DRIFT_LINE prefixed `^✓` (advisory pass)  -> test 3: the
 //       grepped `Rule drift:` line starts with `✓ ` (✓ + two spaces, the
-//       tool's pass prefix at :1361), proving it did NOT push `failed`.
+//       tool's pass prefix), proving it did NOT push `failed`.
 //   - .sh case 4  N=0 fixture -> "Rule drift: no team/project rule overlaps
 //       org policy" AND `^✓`  -> test 4: both, on the same grepped line.
 //   - .sh case 5  org-absent fixture -> "Rule drift: org rules absent
@@ -76,7 +76,7 @@ import { toPortablePath } from "../harness/fixtures.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const AIDLC_SRC = join(REPO_ROOT, "dist", "claude", ".claude");
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -88,17 +88,12 @@ afterAll(() => {
   for (const d of tempDirs) rmSync(d, { recursive: true, force: true });
 });
 
-/** Fresh temp dir registered for afterAll teardown (mirrors the .sh mktemp -d). */
 function mkTemp(tag: string): string {
   const d = toPortablePath(mkdtempSync(join(tmpdir(), `aidlc-t104-${tag}-`)));
   tempDirs.push(d);
   return d;
 }
 
-/**
- * Build a rules fixture dir from the given filename->body map (the relocated
- * method files org.md / team.md / project.md, neutral names).
- */
 function rulesDir(files: Record<string, string>): string {
   const rd = mkTemp("rules");
   for (const [name, body] of Object.entries(files)) {
@@ -109,15 +104,15 @@ function rulesDir(files: Record<string, string>): string {
 
 interface DoctorResult {
   status: number;
-  out: string; // combined stdout+stderr (mirrors the .sh's 2>&1)
+  out: string; // combined stdout+stderr
 }
 
 /**
- * run_doctor (t104:37-45): a fresh project dir with aidlc-docs/, then
- * `AIDLC_RULES_DIR=<rd> AIDLC_STAGE_GRAPH=<seed> bun UTIL doctor --project-dir <proj>`
- * captured 2>&1. The .sh swallows the exit code with `|| true` (bare temp
- * projects fail unrelated hook/settings checks); we capture it for parity but
- * assert on stdout, where the always-pass rule-drift row renders.
+ * A fresh project dir with aidlc-docs/, then
+ * `AIDLC_RULES_DIR=<rd> AIDLC_STAGE_GRAPH=<seed> bun UTIL doctor --verbose --project-dir <proj>`
+ * captured stdout+stderr. Bare temp projects fail unrelated hook/settings
+ * checks; we capture status but assert on stdout, where the always-pass
+ * rule-drift row renders.
  */
 function runDoctor(rd: string): DoctorResult {
   const proj = mkTemp("proj");
@@ -136,7 +131,6 @@ function runDoctor(rd: string): DoctorResult {
   };
 }
 
-/** The single `Rule drift:` line from doctor's report (the .sh's grep "Rule drift:"). */
 function driftLine(out: string): string {
   return out.split("\n").find((l) => l.includes("Rule drift:")) ?? "";
 }
@@ -148,7 +142,7 @@ function driftLines(out: string): string[] {
 describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-doctor-rule-drift.sh, plan 6)", () => {
   // ===========================================================================
   // N=1 drift fixture: org ## Testing Posture + team ## Testing Posture with
-  // contradicting content. P6: a learning IS a practice (no `*-learnings.md`
+  // contradicting content. A learning IS a practice (no `*-learnings.md`
   // slot) — team.md is the team-scoped surface the drift walk reads. Drives
   // cases 1, 2, 3.
   // ===========================================================================
@@ -168,9 +162,9 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
 
   test("2: detail carries file + heading + quoted org sentence (co-located on one line)", () => {
     const r = runDoctor(rulesDir(DRIFT_RULES));
-    // STRONGER than the .sh's three independent greps: assert all three appear
-    // on the SAME rendered drift line, in the tool's `<file> ## <heading> ⇄
-    // org "<sentence>"` detail format (aidlc-utility.ts:1273).
+    // Assert all three appear on the SAME rendered drift line, in the tool's
+    // `<file> ## <heading> <-> org "<sentence>"` detail format (aidlc-utility.ts
+    // collectDoctorReport).
     const line = driftLine(r.out);
     expect(line).toContain("team.md");
     expect(line).toContain("Testing Posture");
@@ -183,12 +177,11 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
     const r = runDoctor(rulesDir(DRIFT_RULES));
     // The tool prefixes a pass row with the fixed-column `ok` verdict;
     // a failed row would carry `fail`.
-    // Mirrors the .sh `grep -q "^✓"` on the drift line.
     expect(driftLine(r.out).startsWith("  ok")).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // ===========================================================================
-  // Case 4 — N=0 fixture (no overlap) → quiet headline, ✓.
+  // Case 4 - N=0 fixture (no overlap) -> quiet headline, ok.
   // org ## Way of Working + team ## Code Style: disjoint headings, no overlap.
   // ===========================================================================
   test("4: N=0 fixture → quiet '✓ no overlap' render", () => {
@@ -206,7 +199,7 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
 
   // ===========================================================================
   // Case 5 — Org-absent fixture → informational pass, no crash.
-  // team-only ## Testing Posture with no aidlc-org.md to compare against.
+  // team-only ## Testing Posture with no org.md to compare against.
   // ===========================================================================
   test("5: org-absent fixture → informational pass", () => {
     const r = runDoctor(
@@ -217,8 +210,8 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
     );
     const line = driftLine(r.out);
     expect(line).toContain("Rule drift: org rules absent (informational)");
-    // STRONGER than the .sh (which only grepped the label): the informational
-    // row is also an advisory pass (aidlc-utility.ts:1239), so it carries ✓.
+    // The informational row is also an advisory pass (aidlc-utility.ts
+    // collectDoctorReport), so it carries ok.
     expect(line.startsWith("  ok")).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -237,9 +230,9 @@ describe("t104 aidlc-utility doctor — rule-drift row (migrated from t104-docto
           "# Project\n\n## Testing Posture\n\nThis project overrides the posture.\n",
       }),
     );
-    // STRONGER: both the unique fixture token and the N=1 headline land on the
-    // same rendered drift line — the quoted sentence is sourced from the
-    // fixture org, not the shipped aidlc-org.md.
+    // Both the unique fixture token and the N=1 headline land on the same
+    // rendered drift line - the quoted sentence is sourced from the fixture
+    // org, not the shipped org.md.
     const line = driftLine(r.out);
     expect(line).toContain("UNIQUEFIXTURETOKEN");
     expect(line).toContain(

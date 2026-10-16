@@ -537,10 +537,10 @@ function writeExport(
     mkdirSync(outParent, { recursive: true });
     // Merge the legacy environment/config checks (bun present, hooks wired,
     // settings intact) into the exported analysis so report.md/report.json
-    // carry the SAME findings the live report shows \u2014 the bundle exists so
+    // carry the SAME findings the live report shows - the bundle exists so
     // the maintainer does NOT need the user's project, so a failing env check
     // must reach it. The live render and the exit code are untouched; this
-    // only enriches what buildBundle serializes. (Arden round-3 #1.)
+    // only enriches what buildBundle serializes.
     const analysisForExport = {
       ...analysis,
       findings: mergeFindings(report.checks.map(adaptLegacyResult), analysis.findings),

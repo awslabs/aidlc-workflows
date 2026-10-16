@@ -1,33 +1,21 @@
 // covers: subcommand:aidlc-runtime:compile
 //
-// CLI-contract port of tests/integration/t90-runtime-compile.sh (TAP plan 29),
-// mechanism = cli. Equal-fidelity migration: every .sh assertion that
-// shelled out to `bun aidlc-runtime.ts compile ...` (and one `read ...`
-// at case 14) is preserved by SPAWNING the real CLI via node:child_process
-// spawnSync, asserting on res.status / res.stdout+stderr and the file
-// effects the tool writes (runtime-graph.json + the MEMORY_EMPTY rows it
-// appends to audit.md). The contract under test is the PROCESS boundary
-// plus those side effects, so it stays a spawn — an in-process compile()
-// twin would lose the exit-0-on-missing-state half (case 8) and the
-// handleCompile process.exit shell the .sh's `$?` arm relies on.
+// Mechanism = cli. Every assertion that shells out to
+// `bun aidlc-runtime.ts compile ...` (and one `read ...` at case 14) SPAWNS
+// the real CLI via node:child_process spawnSync, asserting on res.status /
+// res.stdout+stderr and the file effects the tool writes (runtime-graph.json
+// + the MEMORY_EMPTY rows it appends to the audit shard). The contract under
+// test is the PROCESS boundary plus those side effects, so it stays a spawn -
+// an in-process compile() twin would lose the exit-0-on-missing-state half
+// (case 8) and the handleCompile process.exit shell.
 //
 // SPAWN vs IN-PROCESS split: ALL cases are spawn-based. Every behaviour
 // (pairing outcomes, MEMORY_EMPTY emit/suppress, re-init filtering,
 // idempotency hashing, missing-state exit code, the read subcommand's
 // null-tolerant parse) is observed through the real CLI subprocess + the
-// runtime-graph.json / audit.md it writes. spawnCount = all; inProcess = 0.
+// runtime-graph.json / audit shard it writes. spawnCount = all; inProcess = 0.
 //
-// EQUAL-OR-STRONGER PARITY: the .sh used `jq -r '.stages[0].outcome'` etc.
-// to project single scalars out of runtime-graph.json. In-process we
-// JSON.parse the graph the tool wrote and assert against the real object
-// (e.g. expect(graph.stages[0].outcome).toBe("approved")) — same observable
-// (the materialised field value), expressed against the actual return shape
-// rather than its jq projection. Cases that grep `^\*\*Event\*\*: MEMORY_EMPTY`
-// become a line-filter count over the same audit.md the tool appended to.
-// (The .sh's Case 6 --test-run check was dropped per #369 when the test-run
-// mechanism was removed.) STRONGER additions are noted inline (S1..S3).
-//
-// FIXTURE DISCIPLINE (mirrors the .sh's make_project + mktemp -d + rm -rf):
+// FIXTURE DISCIPLINE:
 //   - Each case uses a FRESH temp project dir (mkdtempSync) wrapped in
 //     toPortablePath — `compile` WRITES runtime-graph.json + MEMORY_EMPTY
 //     audit rows under CLAUDE_PROJECT_DIR, so a shared dir would
@@ -36,8 +24,8 @@
 //     Windows the project dir must be cygpath-rewritten or the read-back
 //     finds the wrong path (mirrors createTestProject / t92's makeProj).
 //   - NOTHING is written under tests/fixtures/**; audit + state + memory.md
-//     combos are built inline (the .sh's L1 rationale: too combinatorial
-//     for an on-disk fixtures dir).
+//     combos are built inline (too combinatorial for an on-disk fixtures
+//     dir).
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";
@@ -62,16 +50,16 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-// P9: with no intent cursor seeded, the compile tool resolves the BARE space
+// With no intent cursor seeded, the compile tool resolves the BARE space
 // record root (docsRoot -> spaceRecordRoot) at aidlc/spaces/default/intents/.
 // State, runtime-graph, per-stage memory, and the per-clone audit SHARD all
-// live under it (the flat aidlc-docs/ root is retired — there is no fallback).
+// live under it; there is no flat aidlc-docs/ fallback.
 const RECORD_REL = join("aidlc", "spaces", "default", "intents");
 function recordRoot(proj: string): string {
   return join(proj, RECORD_REL);
 }
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const REPO_ROOT = join(import.meta.dir, "..", "..");
 const RUNTIME_TS = join(
   REPO_ROOT,
@@ -93,7 +81,6 @@ interface SpawnResult {
   out: string;
 }
 
-/** run_compile (t90:47-50): CLAUDE_PROJECT_DIR=<proj> bun RUNTIME_TS compile [args], 2>&1. */
 function runCompile(proj: string, ...args: string[]): SpawnResult {
   const res = spawnSync(BUN, [RUNTIME_TS, "compile", ...args], {
     encoding: "utf-8",
@@ -112,10 +99,10 @@ function runRead(proj: string, slug: string): SpawnResult {
 }
 
 /**
- * make_project (t90:36-45): fresh temp project with the given audit.md +
- * aidlc-state.md under aidlc-docs/. toPortablePath: the tool resolves
- * audit/graph paths through forward-slash helpers, so on Windows the raw
- * mktemp path can't round-trip — mirrors createTestProject (fixtures.ts).
+ * Fresh temp project with the given audit shard + aidlc-state.md under the
+ * bare space record root. toPortablePath: the tool resolves audit/graph paths
+ * through forward-slash helpers, so on Windows the raw mktemp path can't
+ * round-trip - mirrors createTestProject (fixtures.ts).
  */
 function makeProject(audit: string, state: string): string {
   const proj = toPortablePath(mkdtempSync(join(tmpdir(), "aidlc-t90-")));
@@ -142,7 +129,6 @@ function makeBareProject(): string {
 const graphPath = (proj: string): string =>
   join(recordRoot(proj), "runtime-graph.json");
 
-/** Parse the runtime-graph.json the tool wrote. */
 // biome-ignore lint/suspicious/noExplicitAny: test reads arbitrary graph shape
 function readGraph(proj: string): any {
   return JSON.parse(readFileSync(graphPath(proj), "utf-8"));
@@ -151,15 +137,10 @@ function readGraph(proj: string): any {
 /** Append-only audit writes (case 13) target the resolved shard directly. */
 const auditShardPath = (proj: string): string => auditFilePath(proj);
 
-/** Read the merged audit trail (per-clone shards; one here). */
 function readAudit(proj: string): string {
   return readAllAuditShards(proj);
 }
 
-/**
- * Count MEMORY_EMPTY rows, mirroring the .sh's
- * `grep -c "^\*\*Event\*\*: MEMORY_EMPTY"`.
- */
 function memoryEmptyCount(proj: string): number {
   return readAudit(proj)
     .split("\n")
@@ -167,9 +148,8 @@ function memoryEmptyCount(proj: string): number {
 }
 
 /**
- * The .sh writes per-stage memory.md under aidlc-docs/<phase>/<slug>/; P9
- * reroots that under the bare space record root. intent-capture lives in the
- * ideation phase (stage-graph.json).
+ * Per-stage memory.md lives under the bare space record root. intent-capture
+ * lives in the ideation phase (stage-graph.json).
  */
 function writeMemory(proj: string, phase: string, slug: string, body: string): void {
   const dir = join(recordRoot(proj), phase, slug);
@@ -185,7 +165,7 @@ const STATE_FEATURE = ["- **Scope**: feature", "- **Current Stage**: scope-defin
 );
 
 // Synthetic single-stage pair, field shapes copied exactly from
-// handleSingleReport's append-batch transaction (aidlc-orchestrate.ts):
+// ensureSingleStageStarted and handleSingleReport (aidlc-orchestrate.ts):
 // STAGE_STARTED carries Stage + Agent + Workflow; STAGE_COMPLETED carries
 // Stage + Details + Workflow. The Workflow value is the synthetic
 // `single-stage:<slug>` id that marks the pair as belonging to NO main
@@ -210,7 +190,6 @@ const SINGLE_STAGE_PAIR = `## Stage Start
 ---
 `;
 
-// Standard 1-stage approved audit (t90:53-78).
 const AUDIT_ONE_APPROVED = `## Workflow Start
 **Timestamp**: 2026-05-27T10:00:00Z
 **Event**: WORKFLOW_STARTED
@@ -237,18 +216,16 @@ const AUDIT_ONE_APPROVED = `## Workflow Start
 `;
 
 describe("t90 aidlc-runtime compile — CLI contract (migrated from t90-runtime-compile.sh, plan 29)", () => {
-  // --- Case 1: one approved stage -> one approved row + memory_entries 1 ---
   test("1: one approved stage -> outcome approved, memory_entries 1", () => {
     const proj = makeProject(AUDIT_ONE_APPROVED, STATE_FEATURE);
     writeMemory(proj, "ideation", "intent-capture", "## Interpretations\n- entry one\n");
     const r = runCompile(proj);
-    expect(r.rc).toBe(0); // S1: .sh discarded stdout; we also pin clean exit
+    expect(r.rc).toBe(0);
     const g = readGraph(proj);
     expect(g.stages[0].outcome).toBe("approved");
     expect(g.stages[0].memory_entries).toBe(1);
   });
 
-  // --- Case 2: STAGE_STARTED without COMPLETED -> pending, completed_at null ---
   test("2: STAGE_STARTED without COMPLETED -> pending, completed_at null", () => {
     const auditPending = `## Workflow Start
 **Timestamp**: 2026-05-27T10:00:00Z
@@ -272,7 +249,6 @@ describe("t90 aidlc-runtime compile — CLI contract (migrated from t90-runtime-
     expect(g.stages[0].completed_at).toBeNull();
   });
 
-  // --- Case 3: re-jump -> one row per slug, latest STARTED wins (pending) ---
   test("3: re-jump -> 1 row, pending, started_at = latest STARTED", () => {
     const auditRejump = `## Workflow Start
 **Timestamp**: 2026-05-27T10:00:00Z
@@ -312,7 +288,6 @@ describe("t90 aidlc-runtime compile — CLI contract (migrated from t90-runtime-
     expect(g.stages[0].started_at).toBe("2026-05-27T10:10:00Z");
   });
 
-  // --- Case 4: missing memory.md -> entries/breakdown null, no MEMORY_EMPTY ---
   test("4: missing memory.md -> memory_entries null, breakdown null, no MEMORY_EMPTY", () => {
     const proj = makeProject(AUDIT_ONE_APPROVED, STATE_FEATURE);
     // no memory.md created
@@ -323,7 +298,6 @@ describe("t90 aidlc-runtime compile — CLI contract (migrated from t90-runtime-
     expect(memoryEmptyCount(proj)).toBe(0);
   });
 
-  // --- Case 5: empty memory.md -> memory_entries 0 + one MEMORY_EMPTY ---
   test("5: empty memory.md (approved) -> memory_entries 0, one MEMORY_EMPTY", () => {
     const proj = makeProject(AUDIT_ONE_APPROVED, STATE_FEATURE);
     writeMemory(proj, "ideation", "intent-capture", "\n");
@@ -333,10 +307,6 @@ describe("t90 aidlc-runtime compile — CLI contract (migrated from t90-runtime-
     expect(memoryEmptyCount(proj)).toBe(1);
   });
 
-  // Case 6 (--test-run -> MEMORY_EMPTY carries Test-Run: true) was dropped per
-  // #369: the engine removed both --test-run on compile and the Test-Run stamp.
-
-  // --- Case 7: idempotency -> byte-equivalent runtime-graph.json ---
   test("7: two compiles -> byte-equivalent runtime-graph.json", () => {
     const proj = makeProject(AUDIT_ONE_APPROVED, STATE_FEATURE);
     writeMemory(proj, "ideation", "intent-capture", "## Interpretations\n- entry\n");
@@ -347,15 +317,13 @@ describe("t90 aidlc-runtime compile — CLI contract (migrated from t90-runtime-
     expect(hash2).toBe(hash1);
   });
 
-  // --- Case 8: missing state.md -> exit 0, no graph written ---
   test("8: missing state.md -> exit 0, no runtime-graph.json written", () => {
     const proj = makeBareProject();
     const r = runCompile(proj);
-    expect(r.rc).toBe(0); // S2: .sh swallowed $? with `|| true`; we pin exit 0
+    expect(r.rc).toBe(0);
     expect(existsSync(graphPath(proj))).toBe(false);
   });
 
-  // --- Case 9: approved + non-zero entries -> NO MEMORY_EMPTY (negative cover) ---
   test("9: approved + populated memory.md -> memory_entries 2, no MEMORY_EMPTY", () => {
     const proj = makeProject(AUDIT_ONE_APPROVED, STATE_FEATURE);
     writeMemory(proj, "ideation", "intent-capture", "## Interpretations\n- one entry\n- another entry\n");
@@ -365,7 +333,6 @@ describe("t90 aidlc-runtime compile — CLI contract (migrated from t90-runtime-
     expect(memoryEmptyCount(proj)).toBe(0);
   });
 
-  // --- Case 10: ISO-second tie -> deterministic source-order rows + stable hash ---
   test("10: ISO-second tie -> source-order rows, ordering deterministic across compiles", () => {
     const auditCollision = `## Workflow Start
 **Timestamp**: 2026-05-27T10:00:00Z
@@ -415,7 +382,6 @@ describe("t90 aidlc-runtime compile — CLI contract (migrated from t90-runtime-
     expect(hash2).toBe(hash1);
   });
 
-  // --- Case 11: re-init -> latest WORKFLOW_STARTED wins, prior rows filtered ---
   test("11: re-init -> workflow_id is latest WORKFLOW_STARTED, 1 row, pending", () => {
     const auditReinit = `## Workflow Start
 **Timestamp**: 2026-05-27T08:00:00Z
@@ -582,7 +548,7 @@ describe("t90 aidlc-runtime compile — CLI contract (migrated from t90-runtime-
     };
     writeFileSync(graphPath(proj), `${JSON.stringify(handGraph, null, 2)}\n`, "utf-8");
     const r = runRead(proj, "code-generation");
-    expect(r.rc).toBe(0); // S3: .sh only checked the jq -e predicate; we also pin exit 0
+    expect(r.rc).toBe(0);
     const row = JSON.parse(r.out);
     expect(row.started_at).toBeNull();
     expect(row.agent).toBeNull();

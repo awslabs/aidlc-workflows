@@ -12,8 +12,8 @@
 // Dictated: yes|no`); `yes` is said once with the verdict in the person's words,
 // and the approval gate says it once more under strict. `no`, an absent line, or
 // a line the tool cannot read as one value records nothing new and refuses
-// nothing. No dispatch prompt is read for it any more: the words the conductor
-// used to pass the verdict are the reviewer's to read, not a pattern's.
+// nothing. No dispatch prompt is read for it: the words the conductor used to
+// pass the verdict are the reviewer's to read, not a pattern's.
 //
 // Mechanism: the real log and state tools spawned over a real ledger (DIST
 // tree), plus the pure helpers in-process.
@@ -155,7 +155,6 @@ function blocks(p: string, event: string): string[] {
   return readAllAuditShards(p).split("\n---\n").filter((b) => b.includes(`**Event**: ${event}`));
 }
 
-/** The whole flow after the request: the reviewer writes, finishes, and the verdict is recorded. */
 function recorded(p: string, text: string, verdict: "READY" | "NOT-READY"): { notices: string[]; completion: string } {
   const reviewFile = request(p);
   reviewerWrites(p, reviewFile, text);
@@ -177,7 +176,6 @@ describe("the reviewer's own line says whether it was told what to conclude", ()
     expect(completion).toContain("**Verdict**: READY");
     expect(completion).toContain(`**${REVIEW_DICTATED_FIELD}**: yes`);
     expect(reviewCompletionDictated(completion)).toBe(true);
-    // The reviewer left the bytes it wrote: not an edited review, and nothing accepted.
     expect(completion).not.toContain("Review Edited After Reviewer");
     expect(blocks(p, "CHANGE_ACCEPTED")).toHaveLength(0);
     const gate = gateStart(p);
@@ -276,7 +274,6 @@ describe("the pure helpers", () => {
     expect(latestReviewerRowAfter(events, "SUBAGENT_COMPLETED", REVIEWER, REQUEST,
       (candidate: AuditShardEvent) => auditBlockField(candidate.block, "Agent Id") === "a1")).toBe(first);
     expect(latestReviewerRowAfter([before, REQUEST, other], "SUBAGENT_COMPLETED", REVIEWER, REQUEST)).toBeNull();
-    // The completion lookup is the same walk.
     expect(reviewerCompletionAfter(events, REVIEWER, REQUEST)).toBe(second);
   });
 

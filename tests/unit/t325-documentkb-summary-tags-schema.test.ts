@@ -3,9 +3,6 @@
 // t325 - DocumentKB S3a: the `tags` field and a pinning check of the existing
 // `summary` state-transition validation in aidlc-documentkb-schema.ts.
 //
-// NOTE ON NUMBERING: rebasing onto v2 found t300-t324 already allocated, so
-// t325 is the next free unit number.
-//
 // Mechanism: none. Pure data-in/data-out validators, zero I/O/spawn/LLM. A
 // direct import satisfies the "none" minMechanism.
 //
@@ -22,11 +19,11 @@
 //   nothing". Each tag is a non-empty string, capped at MAX_TAG_LENGTH chars;
 //   the array itself is capped at MAX_TAGS_PER_DOCUMENT entries.
 //
-//   `summary` is a two-state union (`absent` | `generated`) that was ALREADY
-//   shipped complete as of S1: `generated` already requires its path bound to
-//   documentkb/<id>/summary.md and a sha256 `source_revision`. This suite
-//   pins that existing behaviour (§8.13: don't just read the validator, drive
-//   it) rather than re-deriving new gaps — measured, not assumed.
+//   `summary` is a two-state union (`absent` | `generated`): `generated`
+//   requires its path bound to documentkb/<id>/summary.md and a sha256
+//   `source_revision`. This suite pins that behaviour (section 8.13: don't just
+//   read the validator, drive it) rather than re-deriving new gaps - measured,
+//   not assumed.
 
 import { describe, expect, test } from "bun:test";
 import {
@@ -172,7 +169,7 @@ describe("t325 tags hardening (S3a follow-up) — trim, dedupe, control chars", 
   test("NFC vs NFD lookalike 'é' duplicates are refused", () => {
     const nfc = "é"; // é, precomposed
     const nfd = "é"; // e + combining acute accent
-    expect(nfc.normalize("NFC")).not.toBe(nfd); // confirm they differ as raw strings
+    expect(nfc.normalize("NFC")).not.toBe(nfd);
     const r = validateDocumentIndex(index([row({ tags: [nfc, nfd] })]));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(errorMatching(r.errors, /tags\[1\]/)).toMatch(/duplicates/);

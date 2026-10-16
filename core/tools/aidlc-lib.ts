@@ -1010,23 +1010,6 @@ export function leadingOrchestratorVerb(args: readonly string[]): OrchestratorVe
   return null;
 }
 
-// parseNextFlags in aidlc-orchestrate.ts consumes these values regardless of
-// spelling: `--report --status` composes from a file named "--status", not a
-// read-only mode switch. --review, --change-control and ceremony flags refuse
-// --prefixed values and are deliberately absent.
-const VALUED_NEXT_FLAGS: ReadonlySet<string> = new Set([
-  "--scope",
-  "--stage",
-  "--phase",
-  "--depth",
-  "--test-strategy",
-  "--report",
-  "--claim",
-  "--release",
-  "--team",
-  "--rhythm",
-]);
-
 const RETIRED_NEXT_FLAGS: ReadonlySet<string> = new Set(["--init", "--force"]);
 
 // Retired initialization flags are terminal only when they are the whole
@@ -1049,8 +1032,9 @@ export function isRetiredOnlyNextArgv(args: readonly string[]): boolean {
 }
 
 // A next made only of modifier flags, one of whose values parseNextFlags refuses
-// (a depth, test-strategy, review, Guard Policy or ceremony word it does not
-// accept, or a missing value), returns that refusal before naming any command.
+// (a depth, test-strategy, review, Guard Policy, ceremony or switchable
+// `--guard.<check>` word it does not accept, or a missing value), returns that
+// refusal before naming any command.
 // It is terminal, not workflow engagement (t-tui-t27, Full Suite 36549553601).
 // A flag that takes no value beside them (`--resume`, which the agent adds on a
 // re-entry, `--single`, `--new-intent`, ...: the `none` shapes in NEXT_FLAGS)
@@ -1072,7 +1056,9 @@ export function isRefusedModifierNextArgv(args: readonly string[]): boolean {
       ? ["adversarial", "advisory", "none"]
       : flag === "--depth" || flag === "--test-strategy"
         ? ["minimal", "standard", "comprehensive"]
-        : null;
+        : flag.startsWith("--") && guardFenceFromConfigKey(flag.slice(2)) !== null
+          ? ["on", "off"]
+          : null;
     if (!words && !ceremony && !guard) return false;
     const value = args[i + 1];
     if (value === undefined || value.startsWith("--")) {
@@ -1120,8 +1106,8 @@ export function isReadOnlyNextArgv(argv: readonly string[]): boolean {
   if (verb === "park") return false;
   // Mirror engine Branch 1b2: typed config commands are terminal, not workflow engagement.
   if (args[0] === "config" && (args[1] === "set" || args[1] === "get" || args[1] === "list")) return true;
-  // parseNextFlags returns on --config at any position (config print or usage refusal) before workflow inspection, without honoring the -- delimiter.
-  if (args.includes("--config")) return true;
+  // parseNextFlags returns on --config anywhere in front of the -- delimiter (config print or usage refusal) before workflow inspection; behind it the token is one of their words.
+  if (beforeDelimiter(args).includes("--config")) return true;
   // A leading --statusline is the person's status line switch (or its usage line).
   if (args[0] === "--statusline") return true;
   // Leading plugin/knowledge nouns own the argv and are not in routeNext's marker exclusion, so a trailing read-only spelling is theirs, not a mode switch.
@@ -1129,31 +1115,119 @@ export function isReadOnlyNextArgv(argv: readonly string[]): boolean {
   const workspace = parseWorkspaceCommand(args);
   if (workspace.kind !== "not-workspace") return workspace.kind !== "create-intent";
   if (nextArgsCarryRequestWords(args)) return false;
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === "--") break;
-    if (READ_ONLY_FLAGS.has(arg)) return true;
-    if (VALUED_NEXT_FLAGS.has(arg)) i++;
-  }
-  return false;
+  // A utility flag the engine's reading takes, never a flag's value.
+  return readNextTokens(args).tokens.some((token) => token.role === "read-only");
 }
 
-// Match aidlc-orchestrate.main's launcher-option extraction before subcommand
-// routing; the literal delimiter preserves all following intent text. A trailing
-// option without a value stays, as in main().
-export function stripOrchestratorLauncherOptions(args: readonly string[]): string[] {
-  const normalized: string[] = [];
+/**
+ * The words that make a `next` line this engine's own command in a fixed shape
+ * rather than a request of the person's: the workspace commands, this
+ * orchestrator's own verbs, its configuration verb and its help. A line that
+ * opens with one of these carries no word of theirs, so its options are its own
+ * wherever they sit.
+ */
+const NEXT_OWN_COMMAND_WORDS: ReadonlySet<string> = new Set([
+  ...WORKSPACE_VERBS,
+  ...ORCHESTRATOR_VERBS,
+  "config",
+  "help",
+]);
+
+/**
+ * Where a request of the person's own begins on a `next` line: at its first
+ * bare word. This engine's own launcher options ride ahead of that word, which
+ * is where every caller puts them, so among their words the same token is a
+ * word of their request and nothing of theirs is read as a folder to work in or
+ * an attempt to claim. The `--` mark already separates their words itself. The
+ * dispatcher reads its own options to the same boundary (aidlc.ts
+ * theirWordsBegin), so the launcher's two layers take the same tokens.
+ */
+export function requestWordsBeginAt(rawArgs: readonly string[]): number {
+  if (rawArgs[0] !== "next") return Number.POSITIVE_INFINITY;
+  for (let i = 1; i < rawArgs.length; i++) {
+    const token = rawArgs[i];
+    if (token === "--") return Number.POSITIVE_INFINITY;
+    if (token.startsWith("-")) {
+      // A token after a flag is that flag's value, never a word of theirs.
+      if (rawArgs[i + 1] !== undefined && !rawArgs[i + 1].startsWith("-")) i++;
+      continue;
+    }
+    return NEXT_OWN_COMMAND_WORDS.has(token) ? Number.POSITIVE_INFINITY : i;
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
+/** The options the orchestrator's launcher takes off the line before the subcommand reads it. */
+export const ORCHESTRATOR_LAUNCHER_OPTIONS = ["--project-dir", "--aidlc-attempt-id"] as const;
+
+/**
+ * The orchestrator's launcher options, taken off `[subcommand, ...args]` the
+ * one way aidlc-orchestrate's main() does: each with the token after it, only
+ * in front of the `--` mark and of the person's own words (requestWordsBeginAt),
+ * and never with the mark as its value. A Copilot claim and the engine hash the
+ * line that is left, so both read it here, as do the other hooks that need it.
+ */
+export function readOrchestratorLauncherOptions(rawArgs: readonly string[]): {
+  args: string[];
+  /** Where each option it took stands in `rawArgs` (its value is the next token). */
+  taken: number[];
+  /** Where the subcommand stands, after the options in front of it. */
+  verbAt: number;
+  /** Where an option stands that it would take but nothing it can take follows. */
+  dangling?: number;
+  projectDir?: string;
+  attemptId?: string;
+  conflictingAttemptId: boolean;
+} {
+  const isOption = (token: string | undefined) =>
+    (ORCHESTRATOR_LAUNCHER_OPTIONS as readonly (string | undefined)[]).includes(token);
+  let verbAt = 0;
+  while (isOption(rawArgs[verbAt]) && rawArgs[verbAt + 1] !== undefined && rawArgs[verbAt + 1] !== "--") verbAt += 2;
+  const requestFrom = verbAt + requestWordsBeginAt(rawArgs.slice(verbAt));
+  const args: string[] = [];
+  const taken: number[] = [];
+  let dangling: number | undefined;
+  let projectDir: string | undefined;
+  let attemptId: string | undefined;
+  let conflictingAttemptId = false;
   let literal = false;
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
+  for (let i = 0; i < rawArgs.length; i++) {
+    const arg = rawArgs[i];
+    const value = rawArgs[i + 1];
     if (arg === "--") literal = true;
-    if (!literal && (arg === "--project-dir" || arg === "--aidlc-attempt-id") && i + 1 < args.length) {
-      i++;
+    const launcher = !literal && i < requestFrom && value !== undefined && value !== "--";
+    if (!literal && i < requestFrom && !launcher && isOption(arg)) dangling ??= i;
+    if (launcher && arg === "--project-dir") {
+      projectDir = value;
+      taken.push(i++);
+    } else if (launcher && arg === "--aidlc-attempt-id") {
+      if (/^[A-Za-z0-9._:-]{1,128}$/.test(value)) {
+        if (attemptId !== undefined && attemptId !== value) conflictingAttemptId = true;
+        attemptId = value;
+      }
+      taken.push(i++);
     } else {
-      normalized.push(arg);
+      args.push(arg);
     }
   }
-  return normalized;
+  return {
+    args,
+    taken,
+    verbAt,
+    ...(dangling === undefined ? {} : { dangling }),
+    ...(projectDir === undefined ? {} : { projectDir }),
+    ...(attemptId === undefined ? {} : { attemptId }),
+    conflictingAttemptId,
+  };
+}
+
+// aidlc-orchestrate.main's launcher-option extraction before subcommand
+// routing (readOrchestratorLauncherOptions); the literal delimiter preserves
+// all following intent text. A trailing option without a value stays, as in
+// main(). Its one caller (the Kiro CLI agent-v1 row) passes the words after
+// `next` without the verb, so their unmarked words are not told apart here.
+export function stripOrchestratorLauncherOptions(args: readonly string[]): string[] {
+  return readOrchestratorLauncherOptions(args).args;
 }
 
 export const WORKSPACE_NOUNS = ["intent", "space"] as const;
@@ -1268,9 +1342,10 @@ function isIntentRepoVerb(token: string | undefined): token is IntentRepoVerb {
 // `intent list [--json] [--all]` / `space list [--json]`. The flags may appear
 // in either order after the verb. `--all` (intents only) includes archived
 // records, which the default listing hides; the `all` field is set only when
-// requested so the plain list keeps its two-field shape.
+// requested so the plain list keeps its two-field shape. Behind the `--` mark a
+// token is one of the person's words, never one of these.
 function explicitWorkspaceList(noun: WorkspaceNoun, tokens: readonly string[]): WorkspaceCommand {
-  const flags = tokens.slice(2);
+  const flags = beforeDelimiter(tokens.slice(2));
   const command: WorkspaceCommand = { kind: "list", noun, json: flags.includes("--json") };
   if (noun === "intent" && flags.includes("--all")) command.all = true;
   return command;
@@ -1701,8 +1776,8 @@ function terminalCommandFromKnowledgeCommand(
 
 // The allowlisted trailing flags `--doctor` accepts (diagnostic export). Kept
 
-// The allowlisted trailing flags `--doctor` accepts. Kept
-// as a set here so the engine (parseNextFlags) and this classifier — the two
+// The allowlisted trailing flags `--doctor` accepts, read once by
+// readNextTokens, so the engine (parseNextFlags) and this classifier — the two
 // terminal-command deciders — stay byte-for-byte in agreement. A fixed
 // allowlist, so an arbitrary token can never ride the read-only path into the
 // tool.
@@ -1711,27 +1786,6 @@ export const DOCTOR_EXPORT_FLAGS: ReadonlySet<string> = new Set([
   "--output",
   "--verbose",
 ]);
-
-// Collect the allowlisted `--doctor` args (`--export`, `--output <dir>`,
-// `--verbose`)
-// from the token stream after the `--doctor` match, so the seam runs the same
-// command the engine's directive names. Mirrors parseNextFlags in the engine.
-function collectDoctorExportArgs(args: string[], doctorIdx: number): string[] {
-  const extra: string[] = [];
-  for (let j = doctorIdx + 1; j < args.length; j++) {
-    const t = args[j];
-    if (!DOCTOR_EXPORT_FLAGS.has(t)) continue;
-    extra.push(t);
-    if (t === "--output") {
-      const val = args[j + 1];
-      if (val !== undefined && !val.startsWith("--")) {
-        extra.push(val);
-        j++;
-      }
-    }
-  }
-  return extra;
-}
 
 function terminalCommandFromWorkspaceCommand(
   command: WorkspaceCommand,
@@ -1829,22 +1883,26 @@ export function classifyTerminalCommand(argv: string[], projectDir?: string, ses
   }
   // Among the person's own words a utility flag is part of their request.
   if (nextArgsCarryRequestWords(args)) return null;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (READ_ONLY_FLAGS.has(a)) {
-      const subcommand = a.replace(/^--/, "");
-      // --doctor carries allowlisted args (--export, --output <dir>, --verbose)
-      // so the documented diagnostic surfaces reach the tool through the
-      // Kiro/Codex seam too, not only a direct invocation. Carried via `args` (v2's
-      // forwarded-args field), mirrored by the engine's parseNextFlags.
-      if (a === "--doctor") {
-        const extra = collectDoctorExportArgs(args, i);
-        if (extra.length > 0) return { subcommand, source: "read-only-flag", args: extra };
-      }
-      return { subcommand, source: "read-only-flag" };
-    }
-  }
-  return null;
+  // The utility the engine runs is the last one its reading takes, never a
+  // flag's value (`--report --status` reports from a file named `--status`).
+  const { tokens } = readNextTokens(args);
+  // A flag `next` takes with nothing it can take after it (`--depth --status`)
+  // is answered by the engine about that flag before any utility runs.
+  if (tokens.some(nextFlagLacksValue)) return null;
+  const utility = tokens.filter((token) => token.role === "read-only").at(-1);
+  if (utility === undefined) return null;
+  const subcommand = utility.token.replace(/^--/, "");
+  // --doctor carries allowlisted args (--export, --output <dir>, --verbose)
+  // so the documented diagnostic surfaces reach the tool through the
+  // Kiro/Codex seam too, not only a direct invocation. Carried via `args` (v2's
+  // forwarded-args field), as the engine's parseNextFlags reads them.
+  const extra = utility.token === "--doctor"
+    ? tokens.filter((token) => token.role === "doctor-arg")
+      .flatMap((token) => [token.token, ...(token.value === undefined ? [] : [token.value])])
+    : [];
+  return extra.length > 0
+    ? { subcommand, source: "read-only-flag", args: extra }
+    : { subcommand, source: "read-only-flag" };
 }
 
 // A host that drives the CLI for the person may deliver each turn as ONE prompt
@@ -2247,6 +2305,19 @@ export function fenceCommandOutput(output: string, exitCode?: number): string {
   );
 }
 
+// What a prompt hook hands the agent with a command it already ran for the
+// person's own line (`command`, as they typed it): the output to show them,
+// and that nothing else is to run this turn. One wording for every host whose
+// prompt hook does this (the core human-turn hook, both Kiro adapters).
+export function terminalCommandRelay(command: string, output: string, exitCode?: number): string {
+  return (
+    `The command \`${command}\` has already run; it carries no workflow work. ` +
+    `Relay the output below to the person ${relayAsTextBlock(output)}, then stop. ` +
+    "Run no shell command and no AI-DLC command this turn, and do not advance, resume, or run any workflow stage.\n\n" +
+    fenceCommandOutput(output, exitCode)
+  );
+}
+
 // --- Engine command detectors (hook classifier seam) ---
 //
 // These raw command-string classifiers are shared by hooks and tests. They do
@@ -2589,16 +2660,18 @@ function engineInvocationFromWords(
   }
   const native = command === "aidlc";
   let projectDir: string | null = null;
-  // Match dispatcher global extraction, then the orchestrator's own attempt
-  // selector extraction. Neither consumes options after the literal delimiter.
-  const stripGlobals = (args: string[], attempt: boolean): string[] | null => {
+  // Match dispatcher global extraction, then the orchestrator's own launcher
+  // options, read the one way its main() reads them. Neither consumes options
+  // after the literal delimiter, and the dispatcher takes no `--`-prefixed
+  // token as a folder (it refuses that line).
+  const stripGlobals = (args: string[], attempt: boolean, wordsFrom = Number.POSITIVE_INFINITY): string[] | null => {
     const clean: string[] = [];
     let literal = false;
     for (let i = 0; i < args.length; i++) {
       const arg = args[i];
-      if (arg === "--") literal = true;
+      if (arg === "--" || i >= wordsFrom) literal = true;
       if (!literal && (arg === "--project-dir" || (attempt && arg === "--aidlc-attempt-id"))) {
-        if (i + 1 >= args.length) return null;
+        if (i + 1 >= args.length || (native && args[i + 1].startsWith("--"))) return null;
         if (arg === "--project-dir") projectDir = args[i + 1];
         i++;
       } else if (!literal && arg.startsWith("--project-dir=")) {
@@ -2609,13 +2682,28 @@ function engineInvocationFromWords(
     }
     return clean;
   };
-  let args = stripGlobals(tokens.slice(commandIndex + 1), !native);
+  const orchestratorArgs = (args: string[]): string[] => {
+    const read = readOrchestratorLauncherOptions(args);
+    if (read.projectDir !== undefined) projectDir = read.projectDir;
+    return read.args;
+  };
+  if (/^aidlc-orchestrate(?:\.ts)?$/.test(command)) {
+    return { command, args: orchestratorArgs(tokens.slice(commandIndex + 1)), projectDir };
+  }
+  const raw = tokens.slice(commandIndex + 1);
+  // The dispatcher reads its own options on a `next` line only in front of the
+  // person's words (aidlc.ts theirWordsBegin), the boundary the orchestrator's
+  // launcher reads too (requestWordsBeginAt).
+  const verb = raw.findIndex((token, at) => token === "next" && raw[at - 1] !== "--project-dir");
+  const route = native && verb >= 0 ? stripGlobals(raw.slice(0, verb), false)?.join(" ") : undefined;
+  const wordsFrom = route === "" || route === "orchestrate" || route === "engine orchestrate"
+    ? verb + requestWordsBeginAt(raw.slice(verb))
+    : Number.POSITIVE_INFINITY;
+  let args = stripGlobals(raw, !native, wordsFrom);
   if (!args) return null;
   if (native && args[0] === "engine") args.shift();
-  if (native && ["orchestrate", "next", "report", "park"].includes(args[0])) {
-    args = stripGlobals(args, true);
-    if (!args) return null;
-  }
+  if (native && args[0] === "orchestrate") args = ["orchestrate", ...orchestratorArgs(args.slice(1))];
+  else if (native && ["next", "report", "park"].includes(args[0])) args = orchestratorArgs(args);
   return { command, args, projectDir };
 }
 
@@ -2650,9 +2738,11 @@ function isTerminalUtilityNext(invocation: { command: string; args: string[] }):
 // slot, and says what fills it, for the agent to put the reply that asked there.
 export const PERSON_WORDS_SLOT = "<their words>";
 export const PERSON_WORDS_FILL = `, with ${PERSON_WORDS_SLOT} the person's reply that asked for it, word for word`;
-const CONFIGURATION_STEP = new RegExp(
-  `^Run \`([^\`]+)\` to update the configuration(${escapeRegex(PERSON_WORDS_FILL)})?, then print its output verbatim and stop\\.$`,
+const dispatchStep = (doing: string): RegExp => new RegExp(
+  `^Run \`([^\`]+)\` to ${doing}(${escapeRegex(PERSON_WORDS_FILL)})?, then print its output verbatim and stop\\.$`,
 );
+const CONFIGURATION_STEP = dispatchStep("update the configuration");
+const SCOPE_CHANGE_STEP = dispatchStep("change scope");
 
 // A modifier-only next, or one naming a scope, can initialize work or dispatch
 // configuration or a scope change depending on state. Its own successful
@@ -2688,8 +2778,13 @@ function isTerminalConfigurationDispatch(
     "--guard-policy": "guard-policy",
     "--change-control": "guard-policy",
     ...Object.fromEntries(CEREMONY_KEYS.map((key) => [CEREMONY_FLAGS[key], CEREMONY_FLAGS[key].slice(2)])),
+    // A check typed for this work; `guard.plan-approval` is another way to say plan approval.
+    ...Object.fromEntries(SWITCHABLE_GUARD_FENCES.map((fence) =>
+      [`--guard.${fence}`, fence === "plan-approval" ? "plan-approval" : `guard.${fence}`]
+    )),
   };
-  const order = ["depth", "test-strategy", "review", "guard-policy", ...CEREMONY_KEYS.map((key) => CEREMONY_FLAGS[key].slice(2))];
+  const fences = SWITCHABLE_GUARD_FENCES.filter((fence) => fence !== "plan-approval").map((fence) => `guard.${fence}`);
+  const order = ["depth", "test-strategy", "review", "guard-policy", ...CEREMONY_KEYS.map((key) => CEREMONY_FLAGS[key].slice(2)), ...fences];
   const values = new Map<string, string>();
   // A scope change names its own command, carrying any setting typed with it.
   let scope: string | undefined;
@@ -2701,10 +2796,12 @@ function isTerminalConfigurationDispatch(
     const name = modifierFlags[args[i]];
     if (name === undefined || values.has(name)) return false;
     // The engine names the parsed value: the guard policy and ceremony words,
-    // and the depth, test-strategy, and review words lowercased (it refuses
-    // any other word before naming a command).
+    // and the depth, test-strategy, review, and check words lowercased (it
+    // refuses any other word before naming a command).
     const raw = args[i + 1];
-    const levels = name === "review" ? ["adversarial", "advisory", "none"] : ["minimal", "standard", "comprehensive"];
+    const levels = name === "review"
+      ? ["adversarial", "advisory", "none"]
+      : args[i].startsWith("--guard.") ? ["on", "off"] : ["minimal", "standard", "comprehensive"];
     const value = name === "guard-policy"
       ? parseGuardPolicy(raw)
       : CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === args[i])
@@ -2735,7 +2832,7 @@ function isTerminalConfigurationDispatch(
     const validated = validateDirective(parsed);
     if (!validated.valid || validated.data.kind !== "print") return false;
     const match = (scope !== undefined
-      ? /^Run `([^`]+)` to change scope, then print its output verbatim and stop\.$/
+      ? SCOPE_CHANGE_STEP
       : CONFIGURATION_STEP).exec(validated.data.message);
     if (!match) return false;
     if (match[2] !== undefined) expected.push("--person-words", PERSON_WORDS_SLOT);
@@ -4481,18 +4578,36 @@ export function workToPickUp(
 ): Array<{ intent: IntentInfo; state: string }> | null {
   const recorded = listIntents(projectDir, space, selectedIntent).filter((intent) => !isArchivedIntent(intent));
   if (recorded.length === 0 || recorded.some((intent) => intent.active)) return null;
-  const unfinished = recorded.map((intent) => {
-    let state = "";
-    if (intent.dirName) {
-      try {
-        state = readFileSync(stateFilePath(projectDir, intent.dirName, space), "utf-8");
-      } catch {
-        // Registry-only or incomplete record: leave unannotated.
-      }
-    }
-    return { intent, state };
-  }).filter(({ intent, state }) => !isCompletedIntent(intent) && getField(state, "Status") !== "Completed");
+  const unfinished = recorded.map((intent) => ({ intent, state: recordStateText(projectDir, intent, space) }))
+    .filter(({ intent, state }) => !isFinishedWork(intent, state));
   return unfinished.some(({ intent }) => intent.dirName) ? unfinished : null;
+}
+
+/**
+ * The finished work in `space` whose record is in this checkout, archived work
+ * left out: what words on finished work may ask to go back to. The same
+ * finished test as `workToPickUp`, which leaves this work out.
+ */
+export function finishedWork(projectDir: string, space: string, selectedIntent: string | null): IntentInfo[] {
+  return listIntents(projectDir, space, selectedIntent)
+    .filter((intent) => intent.dirName !== null && !isArchivedIntent(intent))
+    .filter((intent) => isFinishedWork(intent, recordStateText(projectDir, intent, space)));
+}
+
+// Either signal marks work finished: the registry row, or the state file a
+// finalize completed.
+function isFinishedWork(intent: IntentInfo, state: string): boolean {
+  return isCompletedIntent(intent) || getField(state, "Status") === "Completed";
+}
+
+function recordStateText(projectDir: string, intent: IntentInfo, space: string): string {
+  if (!intent.dirName) return "";
+  try {
+    return readFileSync(stateFilePath(projectDir, intent.dirName, space), "utf-8");
+  } catch {
+    // Registry-only or incomplete record: leave unannotated.
+    return "";
+  }
 }
 
 export function listIntents(
@@ -6676,12 +6791,11 @@ export function reviewCheckOffer(
       : [...new Set(attempt.filter((event) => event.event === "REVIEW_COMPLETED")
         .map((event) => auditBlockField(event.block, "Unit") ?? undefined))];
     for (const each of units) {
-      const mine = attempt.filter((event) => (auditBlockField(event.block, "Unit") ?? undefined) === each);
-      const review = mine.filter((event) => event.event === "REVIEW_COMPLETED").at(-1);
-      const change = mine.filter((event) =>
-        event.event === "CHANGE_ACCEPTED" && auditBlockField(event.block, "Checkpoint") === "review-receipt" &&
+      const reviewed = attempt.some((event) =>
+        event.event === "REVIEW_COMPLETED" && (auditBlockField(event.block, "Unit") ?? undefined) === each);
+      const change = changesSinceLastReview(projectDir, attempt, stage.slug, each).filter((event) =>
         ![null, "", "(paths unavailable)"].includes(auditBlockField(event.block, "Changed"))).at(-1);
-      if (!review || !change || !attemptEventDefinitelyBefore(review, change)) continue;
+      if (!reviewed || !change) continue;
       const used = reviewAttemptAccounting(
         projectDir, reviewAttemptWindow(projectDir, state, stage, rows), state, stage, stage.reviewer, each, undefined,
         { eventFilter: (row) => reviewAttemptEventMatchesCurrentClaim(projectDir, state, each, row) },
@@ -6692,6 +6806,25 @@ export function reviewCheckOffer(
     return null;
   }
   return null;
+}
+
+// The kept changes to a stage's reviewed work (its CHANGE_ACCEPTED rows at the
+// review receipt), for one Unit or for the stage itself, that came after the
+// latest finished review of the same work: what no review has seen. A review
+// that did not finish saw nothing. `events` are the attempt's rows, in order.
+export function changesSinceLastReview(
+  projectDir: string,
+  events: ReadonlyArray<AuditShardEvent>,
+  stage: string,
+  unit: string | undefined,
+): AuditShardEvent[] {
+  const mine = events.filter((event) =>
+    auditBlockField(event.block, "Stage") === stage && (auditBlockField(event.block, "Unit") ?? undefined) === unit);
+  const review = mine.filter((event) =>
+    event.event === "REVIEW_COMPLETED" && !reviewCompletionDidNotFinish(projectDir, event.block)).at(-1);
+  return mine.filter((event) =>
+    event.event === "CHANGE_ACCEPTED" && auditBlockField(event.block, "Checkpoint") === "review-receipt" &&
+    (review === undefined || attemptEventDefinitelyBefore(review, event)));
 }
 
 // What the person hears about a finished stage that is behind something it
@@ -6712,11 +6845,13 @@ export interface ProcessIdentity {
   startTime: string | null;
 }
 
-// The whole time one walk may spend finding its chat. macOS reads the process
-// table with one `ps -A`, about 16 ms on an idle machine and several times that
-// on a busy one, so it gets longer; Linux and Windows read each hop natively.
+// The most one walk may spend finding its chat, on every OS. A walk ends as
+// soon as it has its answer (a few ms when idle), so this bounds only one that
+// cannot finish, such as a `ps -A` that never answers. It is checked between
+// steps, so on a busy machine a shorter one never saved the time a slow step
+// took; it only lost the chat.
 export function sessionAncestryBudgetMs(): number {
-  return sessionProcessPlatform() === "darwin" ? 250 : 50;
+  return 2000;
 }
 const SESSION_ANCESTRY_MAX_DEPTH = 64;
 const SESSION_ANCESTRY_CACHE_MS = 1000;
@@ -7516,7 +7651,12 @@ export function workflowParticipation(
 export function enterHookWorkflow(
   projectDir: string,
   payloadSessionId: unknown,
-): { selection: WorkflowSelection | null; participation: WorkflowParticipation; restore: () => void } {
+): {
+  selection: WorkflowSelection | null;
+  participation: WorkflowParticipation;
+  projectDir: string;
+  restore: () => void;
+} {
   const raw = typeof payloadSessionId === "string" ? validSessionId(payloadSessionId) : null;
   const chat = raw === null ? null : resolveChat(projectDir, raw, { bind: false });
   // Placed: this chat has a binding, or the id belongs to a chat an adapter named.
@@ -7538,34 +7678,66 @@ export function enterHookWorkflow(
   }
   try {
     const selection = resolveWorkflowSelection(projectDir);
-    return { selection, participation: workflowParticipation(projectDir, selection), restore };
+    return {
+      selection,
+      participation: workflowParticipation(projectDir, selection),
+      projectDir,
+      restore,
+    };
   } catch {
-    return { selection: null, participation: "indeterminate", restore };
+    return { selection: null, participation: "indeterminate", projectDir, restore };
   }
 }
 
-// A hook stands outside when its selection names a record this conversation has
-// not joined, or when participation cannot be decided. Hooks that only write into
-// the record skip on it. A selection with no record (a cold workspace) is not
-// "outside": there is nothing to protect, and hooks keep their pre-workflow
-// behaviour.
-export function hookStandsOutside(workflow: ReturnType<typeof enterHookWorkflow>): boolean {
+// This conversation has not joined the selected record, or participation cannot
+// be decided. A selection with no record (a cold workspace) has not failed to
+// join one: there is nothing to protect.
+function conversationHasNotJoined(workflow: ReturnType<typeof enterHookWorkflow>): boolean {
   if (workflow.selection === null) return true;
   if (workflow.selection.intent !== null) return workflow.participation !== "participant";
   // Bound to no record because the record it found was not joined: still outside
   // that record, unlike a session in a workspace that has none.
-  const source = workflow.selection.binding?.source;
-  return source === "unjoined";
+  return workflow.selection.binding?.source === "unjoined";
+}
+
+// The selected record's own Status. Completed and Archived are finished work:
+// the conversation may still be the one that did it, and the record stays
+// selected, but a later chat event is not part of that work.
+export function selectedRecordIsFinished(
+  projectDir: string,
+  selection: WorkflowSelection | null,
+): boolean {
+  if (!projectDir || selection === null) return false;
+  let content: string;
+  try {
+    content = readFileSync(stateFilePathForSelection(projectDir, selection), "utf-8");
+  } catch {
+    return false;
+  }
+  const status = getField(content, "Status");
+  return status === "Completed" || status === "Archived";
+}
+
+// A hook stands outside when its selection names a record this conversation has
+// not joined, when participation cannot be decided, or when that record is
+// finished (Completed or Archived). Hooks that only write into the record skip
+// on it. A selection with no record (a cold workspace) is not "outside": there
+// is nothing to protect, and hooks keep their pre-workflow behaviour.
+export function hookStandsOutside(workflow: ReturnType<typeof enterHookWorkflow>): boolean {
+  if (conversationHasNotJoined(workflow)) return true;
+  return selectedRecordIsFinished(workflow.projectDir, workflow.selection);
 }
 
 // Whether a gate may stand aside for this conversation: only when the selection
-// resolved and the conversation is known not to have joined it. A selection that
-// failed to resolve, or a participation that cannot be decided (malformed or
-// stale delegated worktree metadata), does not lower a gate: the gate takes its
-// ordinary path, which fails closed on the same error.
+// resolved and the conversation is known not to have joined it. Finished work
+// is not that case: the conversation did join it, so a gate keeps the path it
+// takes for a participant. A selection that failed to resolve, or a
+// participation that cannot be decided (malformed or stale delegated worktree
+// metadata), does not lower a gate: the gate takes its ordinary path, which
+// fails closed on the same error.
 export function hookOutsideGate(workflow: ReturnType<typeof enterHookWorkflow>): boolean {
   if (workflow.selection === null || workflow.participation === "indeterminate") return false;
-  return hookStandsOutside(workflow);
+  return conversationHasNotJoined(workflow);
 }
 
 export function stateFilePathForSelection(
@@ -10607,6 +10779,9 @@ const summaryRoute = (logVerb: "decision" | "answer"): GuardRemedyAnswerRoute =>
     lastEngineFlag(rest, "--checkpoint") === "summary-confirmation";
 const GUARD_REMEDY_ANSWER_ROUTES: Record<GuardRemedyOp, GuardRemedyAnswerPhases | null> = {
   "present-approval-gate": { afterPick: reportResult("awaiting-approval") },
+  // The conductor's own work only: an own-work ask writes no marker, so there
+  // is no pick to route.
+  "present-findings-at-gate": null,
   "request-review": { afterPick: reviewRoute },
   "start-recovery-review": { afterPick: reviewRoute },
   "apply-repairs-then-request": { afterPick: reviewRoute },
@@ -10629,6 +10804,8 @@ const GUARD_REMEDY_ANSWER_ROUTES: Record<GuardRemedyOp, GuardRemedyAnswerPhases 
   "restore-scope": null,
   "abort-bolt": null,
   "record-unit-completion": null,
+  // The conductor's own work only, as present-findings-at-gate.
+  "dispatch-pipeline-links": null,
   "repair-source-boundary": { afterPick: reviewRoute },
   // Present the summary (its prompt checkpoint) on the pick; record the
   // confirmation once the person gave it.
@@ -12430,6 +12607,23 @@ export function personAskedSinceGate(projectDir: string): boolean {
     personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true });
 }
 
+// The person asked for the lowering the agent's command carries out: they ran
+// it at their own terminal, or a turn of theirs since the last decision stands
+// behind it. Before any work exists there is no decision for a turn to be
+// "since", and no HUMAN_TURN row either: the hook writes that row only once a
+// state file is there, and keeps the person's message from their first prompt
+// on (aidlc-message-store.ts). The message of this chat is the proof then, as
+// the turn is once work exists. Per chat, never the project's messages: a
+// teammate's turn in their own chat is not this one's.
+export function personAskedForThisLowering(projectDir: string, sessionId: string | null): boolean {
+  if (commandAtPersonsTerminal()) return true;
+  if (existsSync(stateFilePath(projectDir))) {
+    return personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true });
+  }
+  const { latestMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+  return latestMessage(projectDir, sessionId) !== null;
+}
+
 // The person's checks a setter switches for this piece of work, and the values
 // that turn each one on (only adding a stop) or off (the person's call).
 const PERSON_CHECK_SWITCH_VALUES: Readonly<Record<string, { on: readonly string[]; off: readonly string[] }>> = {
@@ -12823,98 +13017,6 @@ export function approvedConstructionUnits(
   return approved;
 }
 
-// True when any stage sits at [?] (awaiting-approval) in the state file: the
-// "a gate is actually OPEN" predicate for the per-harness preToolUse floors.
-// Without it a floor would keep refusing tool calls AFTER a legitimate approval
-// (the resolution then follows the turn's only HUMAN_TURN), blocking the
-// same-turn continuation the stage protocol mandates.
-export function hasOpenGate(stateContent: string | null): boolean {
-  if (!stateContent) return false;
-  return parseCheckboxes(stateContent).some((c) => c.state === "awaiting-approval");
-}
-
-const CONSTRUCTION_POLICY_SETTER_FIELDS: Readonly<Record<string, string>> = {
-  "set-construction-iteration": "Construction Iteration",
-  "set-construction-checkpoints": "Construction Checkpoints",
-  "set-construction-execution": "Construction Execution",
-};
-
-// One Construction policy setter in exactly a form the engine issues, and the
-// field and value it sets, or null: `aidlc engine state <setter> <value>`,
-// `bun <harness>/tools/aidlc.ts engine state <setter> <value>`, or
-// `bun <harness>/tools/aidlc-state.ts <setter> <value>`, with the executable
-// named bare. No prelude, environment assignment, wrapper, interpreter option,
-// other path, chain, pipe, redirection or expansion matches.
-function literalConstructionPolicySetter(command: string): { field: string; value: string } | null {
-  const literal = parseLiteralShellInvocation(command);
-  if (!literal || literal.directory !== null) return null;
-  const words = literal.argv;
-  if (words.length !== literal.rawWords.length || words.some((word, i) => word !== literal.rawWords[i])) {
-    return null;
-  }
-  const tools = `${harnessDir()}/tools`;
-  let rest: string[];
-  if (words[0] === "aidlc" && words[1] === "engine" && words[2] === "state") rest = words.slice(3);
-  else if (words[0] === "bun" && words[1] === `${tools}/aidlc.ts` && words[2] === "engine" && words[3] === "state") {
-    rest = words.slice(4);
-  } else if (words[0] === "bun" && words[1] === `${tools}/aidlc-state.ts`) rest = words.slice(2);
-  else return null;
-  const field = CONSTRUCTION_POLICY_SETTER_FIELDS[rest[0] ?? ""];
-  return field !== undefined && rest.length === 2 ? { field, value: rest[1] } : null;
-}
-
-// The Review brief the protocol prints at the gate, before its question:
-// `bun <harness>/tools/aidlc-review-brief.ts review|summary ...`, or the same
-// through `aidlc engine review-brief` or `bun <harness>/tools/aidlc.ts engine
-// review-brief`, named bare as one command. It only reads.
-function literalReviewBriefRead(command: string): boolean {
-  const literal = parseLiteralShellInvocation(command);
-  if (!literal || literal.directory !== null) return false;
-  const words = literal.argv;
-  const tools = `${harnessDir()}/tools`;
-  let rest: string[];
-  if (words[0] === "aidlc" && words[1] === "engine" && words[2] === "review-brief") rest = words.slice(3);
-  else if (words[0] === "bun" && words[1] === `${tools}/aidlc.ts` && words[2] === "engine" && words[3] === "review-brief") {
-    rest = words.slice(4);
-  } else if (words[0] === "bun" && words[1] === `${tools}/aidlc-review-brief.ts`) rest = words.slice(2);
-  else return false;
-  return rest[0] === "review" || rest[0] === "summary";
-}
-
-// The human-presence floors' one rule (Kiro CLI and Kiro IDE): whether a tool
-// call waits for the person's turn. It holds only while a stage gate the person
-// must answer is open and no turn of theirs is on record since it opened. A
-// gate the engine approves itself (isAutonomousConstructionGate, the rule its
-// approval uses) does not need them, and the one Construction policy setter
-// their recorded choice authorizes (the setter's own check) runs while a gate
-// stays open for its later approval, as does the Review brief, which only
-// reads. None lets through what the engine would refuse, and a setter whose
-// receipt cannot be read leaves the floor holding.
-export function presenceFloorHolds(
-  projectDir: string,
-  stateContent: string | null,
-  command: string,
-): boolean {
-  if (!stateContent || !hasOpenGate(stateContent)) return false;
-  if (humanActedSinceGate(projectDir)) return false;
-  if (literalReviewBriefRead(command)) return false;
-  const setter = literalConstructionPolicySetter(command);
-  try {
-    if (setter !== null && constructionPolicyChangeAllowed(projectDir, setter.field, setter.value)) {
-      return false;
-    }
-  } catch { /* an unreadable receipt authorizes nothing */ }
-  return parseCheckboxes(stateContent).some((entry) => {
-    if (entry.state !== "awaiting-approval") return false;
-    try {
-      const stage = findStageBySlug(entry.slug);
-      return stage === undefined || !isAutonomousConstructionGate(stateContent, stage, projectDir);
-    } catch {
-      return true; // a gate that cannot be classified is the person's
-    }
-  });
-}
-
 // The interview path (handleAnswer) uses the SAME resolution-boundary check: a
 // QUESTION_ANSWERED is itself a gate resolution, so "a human turn since the last
 // resolution" bounds what a reply can answer (the caller lets one reply answer
@@ -12949,10 +13051,28 @@ export function verificationCommandDetails(command: string): VerificationCommand
   };
 }
 
+/**
+ * The record-relative name of a file the agent names for the engine to read
+ * from the work's record. Named from the record, from the project folder, or in
+ * full, it is the same file (#2167, #2451): the prompts say to write it to
+ * `<record>/<name>`, and `<record>` is a project-relative path. A `.` part
+ * (`./aidlc/...`) names nothing and is dropped. A name with a `..` part, or one
+ * that is not inside the record from the project folder, is returned as given,
+ * for the record reader to take or refuse.
+ */
+export function recordRelativeFileName(projectDir: string, root: string, file: string): string {
+  const parts = file.replaceAll("\\", "/").split("/");
+  if (parts.includes("..")) return file.replaceAll("\\", "/");
+  const given = parts.filter((part, index) => part !== "." || index === parts.length - 1).join("/");
+  const fromRecord = relative(root, resolvePath(projectDir, given)).replaceAll("\\", "/");
+  const inRecord = fromRecord !== "" && fromRecord !== ".." && !fromRecord.startsWith("../") && !isAbsolute(fromRecord);
+  return inRecord ? fromRecord : given;
+}
+
 export function readVerificationCommandFile(projectDir: string, file: string): VerificationCommand {
   const root = recordDir(projectDir);
   if (!root) throw new Error("Verification command file requires an active intent record.");
-  const path = recordFileTargetOrThrow(root, file);
+  const path = recordFileTargetOrThrow(root, recordRelativeFileName(projectDir, root, file));
   return verificationCommandDetails(
     readRegularFileNoFollowOrThrow(path, "verification command file", 16 * 1024).toString("utf-8"),
   );
@@ -12963,6 +13083,16 @@ export function readVerificationCommandFile(projectDir: string, file: string): V
  *  without passing through any shell (bash, PowerShell, or cmd.exe). */
 export const ANSWER_TEXT_DIR = ".aidlc-engine/answer-text";
 const ANSWER_TEXT_MAX_BYTES = 64 * 1024;
+
+/** The folder in a piece of work's record where the agent writes a stage's
+ *  learnings picks for `learnings persist --selections-json` (#1592): one file
+ *  per stage, the path `learnings surface` returns, the only one persist reads. */
+export const LEARNINGS_SELECTIONS_DIR = `${ENGINE_DIR}/learnings`;
+
+/** The record folders the agent may write while Plan Approval waits: text only
+ *  the engine reads (answer text, learnings picks), never a planning authority
+ *  file. The plan-approval guard and every adapter that mirrors it read this. */
+export const ENGINE_TEXT_DIRS: readonly string[] = [ANSWER_TEXT_DIR, LEARNINGS_SELECTIONS_DIR];
 
 /** The project folder where a person's request for `next --request-file` is
  *  written, so the words reach the engine without passing through any shell.
@@ -12980,13 +13110,9 @@ export function readAnswerTextFile(projectDir: string, file: string): string {
   const inFolder = (name: string): boolean =>
     !name.split("/").some((part) => part === ".." || part === ".") &&
     name.startsWith(`${ANSWER_TEXT_DIR}/`) && name.length > ANSWER_TEXT_DIR.length + 1;
-  const given = file.replaceAll("\\", "/");
-  // Named from the project folder or in full, it is the same file (#2167):
-  // read it under its name in the record, which still has to be in the folder.
-  const fromRecord = relative(root, resolvePath(projectDir, given)).replaceAll("\\", "/");
-  const relativePath = !isAbsolute(file) && inFolder(given)
-    ? given
-    : !isAbsolute(fromRecord) && inFolder(fromRecord) ? fromRecord : null;
+  // Read it under its name in the record, which still has to be in the folder.
+  const name = recordRelativeFileName(projectDir, root, file);
+  const relativePath = inFolder(name) ? name : null;
   if (relativePath === null) {
     throw new Error(
       `An answer text file must be inside ${ANSWER_TEXT_DIR}/ in the work's record, named relative to the record ` +
@@ -25950,6 +26076,15 @@ export function unclaimableIgnoredSourceKeys(
   return unclaimable;
 }
 
+function registryExcludesSourcePath(
+  registry: SourceFingerprintRegistry,
+  path: string,
+): boolean {
+  const under = (entry: string): boolean => path === entry || path.startsWith(`${entry}/`);
+  return [...registry.excludes].some(under) &&
+    ![...registry.paths].some((entry) => under(entry) || entry.startsWith(`${path}/`));
+}
+
 /**
  * The source keys (`<repo>\0<path>`) among `keys` that the `exclude` list of
  * that repo root's `.aidlc-source-paths.json` now leaves out of the walk: the
@@ -25979,10 +26114,7 @@ export function registryExcludedSourceKeys(
     }
     const registry = registries.get(root);
     if (!registry) continue;
-    const under = (entry: string): boolean => parsed.path === entry || parsed.path.startsWith(`${entry}/`);
-    if (![...registry.excludes].some(under)) continue;
-    const registered = [...registry.paths].some((entry) => under(entry) || entry.startsWith(`${parsed.path}/`));
-    if (!registered) excluded.add(key);
+    if (registryExcludesSourcePath(registry, parsed.path)) excluded.add(key);
   }
   return excluded;
 }
@@ -26114,7 +26246,16 @@ function ignoredSourceClaimReason(
     if (ignoredDescendants.status !== 0) {
       return `Git could not enumerate ignored source below ${JSON.stringify(path)}`;
     }
-    const firstIgnored = ignoredDescendants.stdout.split("\0").find(Boolean);
+    // A directory claim covers the declared source boundary, not build output
+    // the repo's registry explicitly leaves out. Keep the same paths-over-exclude
+    // rule as completion; an unreadable registry exempts nothing.
+    const failure = lastSourceFailure;
+    const registry = sourceFingerprintRegistry(sourceRepoDir, carriesWorkspaceShell);
+    lastSourceFailure = failure;
+    const firstIgnored = ignoredDescendants.stdout.split("\0").find((descendant) =>
+      descendant.length > 0 &&
+      (registry === null || !registryExcludesSourcePath(registry, descendant))
+    );
     return firstIgnored
       ? `${JSON.stringify(path)} contains ignored application source ${JSON.stringify(firstIgnored)}`
       : null;
@@ -31242,10 +31383,10 @@ export function removeField(content: string, field: string): string {
 // --- Refs-list field operations (Bolt Refs in v7 state template) ---
 //
 // `Bolt Refs` is a list-shaped single-line value with a literal `[empty list]`
-// placeholder when empty (state-template.md:11) — `aidlc-utility.ts`'s init
-// emitter at line 1391 also produces a bare-empty shape (no value after the
-// colon). Both are tolerated on parse; emit always produces `[empty list]`
-// when empty for round-trip determinism.
+// placeholder when empty; `aidlc-utility.ts` handleIntentCreateStateBuild
+// writes a bare-empty shape (no value after the colon). Both are tolerated on
+// parse; emit always produces `[empty list]` when empty for round-trip
+// determinism.
 export function parseRefsList(value: string): string[] {
   const trimmed = value.trim();
   if (trimmed === "" || trimmed === "[empty list]") return [];
@@ -31359,6 +31500,9 @@ export type GuardLifecycleState =
 // values; the `action` sentence beside each is presentation.
 export const GUARD_REMEDY_OPS = [
   "present-approval-gate",
+  // The same gate as the conductor's own step: the review cap refused a pass
+  // nobody asked for, so the findings go to the gate and the person decides there.
+  "present-findings-at-gate",
   "request-review",
   "start-recovery-review",
   "apply-repairs-then-request",
@@ -31384,6 +31528,8 @@ export const GUARD_REMEDY_OPS = [
   // Record a Unit's missing UNIT_COMPLETED receipt from the artifacts already
   // on disk, when the gate needs it and the Unit's work is done.
   "record-unit-completion",
+  // Dispatch the pipeline links the stage has not recorded, and record each.
+  "dispatch-pipeline-links",
   "repair-source-boundary",
   "reconfirm-summary",
   "unset-unattended",
@@ -32095,6 +32241,18 @@ export function evaluateGuardRefusal(
         executableNow: true,
       });
     }
+    // A pipeline handoff is missing: the way on is the conductor's own, to
+    // dispatch the links and record each, which the refusal's sentence says
+    // (pipelineLinkWayOn, with the links named). No review records a link.
+    const pipelineLinks = input.code === "PIPELINE_EVIDENCE_MISSING";
+    if (pipelineLinks) {
+      remedies.push({
+        op: "dispatch-pipeline-links",
+        action: input.userMessage,
+        requiresHuman: false,
+        executableNow: openForWork || state === "revising",
+      });
+    }
     if (input.attempt.pendingReview) {
       if (
         input.attempt.pendingReview.verdictRecordable !== false &&
@@ -32200,14 +32358,26 @@ export function evaluateGuardRefusal(
         route: "orchestrate",
         args: ["next", ...(input.projectDir ? ["--project-dir", input.projectDir] : [])],
       }, { harnessDir: harnessDir() });
+      const presentGate = checkpointUnit === null
+        ? "Present the unresolved review findings at the approval gate for the " +
+          "human instead of starting another review pass."
+        : `Present the unresolved review findings at unit "${checkpointUnit}"'s checkpoint ` +
+          `for the human instead of starting another review pass: run \`${showCheckpoint}\`, ` +
+          "which shows that checkpoint again, and ask it with the findings.";
+      // The cap refused a pass nobody asked for (the log tool sends this code
+      // here only when the person has not spoken since the last request): the
+      // gate is the conductor's own step. A repeat still offers it to the person.
+      if (input.code === "REVIEW_BUDGET_EXHAUSTED") {
+        remedies.push({
+          op: "present-findings-at-gate",
+          action: presentGate,
+          requiresHuman: false,
+          executableNow: true,
+        });
+      }
       remedies.push({
         op: "present-approval-gate",
-        action: checkpointUnit === null
-          ? "Present the unresolved review findings at the approval gate for the " +
-            "human instead of starting another review pass."
-          : `Present the unresolved review findings at unit "${checkpointUnit}"'s checkpoint ` +
-            `for the human instead of starting another review pass: run \`${showCheckpoint}\`, ` +
-            "which shows that checkpoint again, and ask it with the findings.",
+        action: presentGate,
         requiresHuman: true,
         executableNow: true,
       });
@@ -32232,7 +32402,8 @@ export function evaluateGuardRefusal(
     } else if (
       reviewBudgetAvailable &&
       input.attempt.reviewCoverage === "missing" &&
-      noReviewInFlight
+      noReviewInFlight &&
+      !pipelineLinks
     ) {
       remedies.push({
         op: "request-review",
@@ -36033,6 +36204,33 @@ export function pipelineLinkEvidence(
   return { links, repos, receipts, reusedRepos, completed, missing };
 }
 
+// The way on for missing pipeline handoffs, one sentence for the engine's
+// refusal and the state tool's floor: the conductor's own step. The evidence
+// switch is the person's, so neither names it. At an open gate `next` shows
+// the gate only once the links are in, so it comes last there; with the
+// person's approval in hand, `approval` (the step that applies it) comes last
+// instead, so they are never asked again.
+export function pipelineLinkWayOn(
+  projectDir: string,
+  slug: string,
+  options: { repos: boolean; singleRun?: boolean; gateOpen?: boolean; approval?: string },
+): string {
+  const singleRun = options.singleRun === true;
+  const next = `\`${aidlcToolInvocation("orchestrate")} next${singleRun ? ` --single --stage ${slug}` : ""}\``;
+  const link = `\`${aidlcToolInvocation("log")} link --stage ${slug} ` +
+    `--link <agent>${options.repos ? " --repo <repo>" : ""}${singleRun ? " --single" : ""}\``;
+  const last = options.approval !== undefined
+    ? `; then run ${options.approval}: the person's approval stands, so they are not asked again`
+    : options.gateOpen ? `; then re-run ${next}, which shows the gate again` : "";
+  return (last ? "Dispatch" : `Re-run ${next} and dispatch`) +
+    " the missing pipeline links in their declared order, carrying the human's revision feedback. " +
+    (guardPolicyAcceptsChanges(projectDir)
+      ? ""
+      : "Rejection starts a new attempt: earlier scans and receipts cannot certify this revision, even for a targeted artifact edit. ") +
+    `After each link returns, run ${link}${last}. ` +
+    "Do not re-stamp an old handoff or disable evidence checks to reopen the gate.";
+}
+
 export type UnitGateScope = "per-stage" | "unit-end";
 export type UnitGateStatus =
   | "pending"
@@ -38460,6 +38658,7 @@ export function parseStageFrontmatter(
     // an empty-string value.
     if (key === "optional_produces") continue;
     if (key === "required_sections") continue;
+    if (key === "cites") continue;
     // The key was discovered at the start of some line, so it IS
     // present. scalarField returns "" for both absent AND empty-quoted
     // ("") — since we know it's present, assign the result
@@ -38505,6 +38704,12 @@ export function parseStageFrontmatter(
   // "required_sections must be array, got string".
   if (topLevelKeys.has("required_sections")) {
     obj.required_sections = listField(fm, "required_sections");
+  }
+
+  // cites is an OPTIONAL array field: absent key -> absent property, so only the
+  // stages that author it carry it through compile.
+  if (topLevelKeys.has("cites")) {
+    obj.cites = listField(fm, "cites");
   }
 
   // reviewer_max_iterations is the one numeric scalar field. The generic
@@ -38744,8 +38949,8 @@ export function parseMemoryEntries(raw: string): Array<{
 }
 
 // Split a single counted memory line into ts / unit / summary / context. The
-// canonical shape is `- <ISO> — <summary>; <context>` (stage-protocol.md
-// :876-879). Tolerates a missing `;` (tail → summary, context empty) and a
+// canonical shape is `- <ISO> — <summary>; <context>`.
+// Tolerates a missing `;` (tail → summary, context empty) and a
 // missing ts/em-dash (degrade to summary = the whole line, ts empty).
 // A Unit's iteration of a stage adds `[unit <name>]` after the timestamp.
 function parseMemoryEntryLine(trimmed: string): {
@@ -38780,7 +38985,7 @@ function parseMemoryEntryLine(trimmed: string): {
 // emitStageFrontmatter is the inverse — turns a StageFrontmatter-shaped
 // object back into YAML bytes. Symmetric with parseStageFrontmatter:
 // parse → emit → parse yields the same object. Field order is pinned
-// to stage-definition.md:84-110's worked example so diffs stay stable.
+// to the worked example in stage-definition.md so diffs stay stable.
 export function emitStageFrontmatter(obj: Record<string, unknown>): string {
   const needsQuote = (v: string): boolean => /[:#]|^\s|\s$/.test(v);
   const emitScalar = (v: string): string =>
@@ -38808,6 +39013,7 @@ export function emitStageFrontmatter(obj: Record<string, unknown>): string {
     "optional_produces",
     "produces_kinds",
     "consumes",
+    "cites",
     "requires_stage",
     "sensors",
     "scopes",
@@ -39170,7 +39376,7 @@ export function nextInScopeStage(
   // subgraphForScope-based iteration — proven by t66 walk parity across
   // all 11 scopes. The uncommon case (a hand-edited state file promoting
   // a scope-SKIP stage to EXECUTE) is the power-user escape hatch
-  // aidlc-state.ts:276-284's explicit-advance path also honours; keeping
+  // aidlc-state.ts's explicit-advance path (handleAdvance) also honours; keeping
   // both callers consistent on the same input.
   const graph = loadStageGraph();
   const currentIdx = graph.findIndex((s) => s.slug === afterSlug);
@@ -39235,6 +39441,18 @@ export function effectivePlanAction(
     : undefined;
   if (stateAction !== undefined) return stateAction;
   return scope ? loadScopeMapping()[scope]?.stages[slug] : undefined;
+}
+
+// The stages the plan runs after Initialization, in run order: every one that
+// finished, and every one not skipped that the plan executes. Status, the
+// progress line and each stage's start line count from this one list.
+export function plannedStages(stateContent: string, scope: string): StageEntry[] {
+  const boxes = parseCheckboxes(stateContent);
+  const stateOf = (slug: string) => boxes.find((c) => c.slug === slug)?.state;
+  const runs = (slug: string) =>
+    stateOf(slug) === "completed" ||
+    (stateOf(slug) !== "skipped" && effectivePlanAction(slug, scope, stateContent) === "EXECUTE");
+  return loadStageGraph().filter((stage) => stage.phase !== "initialization" && runs(stage.slug));
 }
 
 // --- Plans composed for one piece of work ---
@@ -39650,17 +39868,6 @@ export function scopeCostSummary(scope: string): ScopeCostSummary | null {
   return summary;
 }
 
-/** Human-readable policy clause appended to the scope's stage/gate counts.
- * Collaborators off reads as what runs instead: the lead agent alone. */
-export function ceremonyOffClause(summary: ScopeCostSummary): string {
-  const off = summary.off.filter((label) => label !== "collaborators");
-  const leadOnly = off.length < summary.off.length ? "; lead agent only" : "";
-  if (off.length === 0) return leadOnly;
-  if (off.length === 1) return `; no ${off[0]}${leadOnly}`;
-  if (off.length === 2) return `; no ${off[0]} or ${off[1]}${leadOnly}`;
-  return `; no ${off.slice(0, -1).join(", ")}, or ${off[off.length - 1]}${leadOnly}`;
-}
-
 // --- Timestamp ---
 
 export function isoTimestamp(): string {
@@ -39938,6 +40145,24 @@ function waitAtErrorEmitSelectionBarrier(selection: WorkflowSelection): void {
     }
     Atomics.wait(waitCell, 0, 0, 10);
   }
+}
+
+/**
+ * An engine subcommand's arguments ask for its usage (#2449). Read before any
+ * flag parsing, so `--help` never needs a value, is never an error, and adds no
+ * audit row. Only the first argument counts: later, a `--help` can be a piece
+ * of the person's words that a bare double quote split off (`Run "todo --help"
+ * first` arrives as `--details "Run todo" --help first`), and the tool's own
+ * split-value refusal keeps those words instead of printing usage over them.
+ */
+export function asksForHelp(args: readonly string[]): boolean {
+  return args[0] === "--help" || args[0] === "-h" || args[0] === "help";
+}
+
+/** Print a subcommand's usage and exit 0: help is never an error. */
+export function printUsageAndExit(usage: string): never {
+  process.stdout.write(usage.endsWith("\n") ? usage : `${usage}\n`);
+  process.exit(0);
 }
 
 // Failures are swallowed: we're already exiting, the caller gets the JSON
@@ -40313,13 +40538,17 @@ export const formatChangeControl = formatGuardPolicy;
 /**
  * What `next` does with the token after each flag it takes: `none` takes no
  * value, `free` takes any word, `words` only the words listed. `needsFollowing`
- * marks the four whose branch reads `a === "--x" && i + 1 < args.length`, so
- * with nothing after them this engine does not take them at all.
+ * marks the four this engine does not take at all with nothing after them.
+ * `valueMayLookLikeFlag` marks the flags whose value is the next token whatever
+ * it looks like (`--report --status` reports from a file named `--status`);
+ * every other flag takes the next token as its value only when it does not
+ * start with `--`. A value is never the `--` mark or a word behind it.
  */
 export interface NextFlagShape {
   value: "none" | "free" | "words";
   words?: readonly string[];
   needsFollowing?: true;
+  valueMayLookLikeFlag?: true;
 }
 
 // Written out rather than imported from aidlc-guard-switch.ts, which imports
@@ -40354,13 +40583,13 @@ export const NEXT_FLAGS: ReadonlyMap<string, NextFlagShape> = new Map<string, Ne
   // Retired, still taken so the token never becomes task text.
   ["--init", { value: "none" }],
   ["--force", { value: "none" }],
-  ["--scope", { value: "free", needsFollowing: true }],
+  ["--scope", { value: "free", needsFollowing: true, valueMayLookLikeFlag: true }],
   // The plan the agent proposes for a request; its words are read at call time
   // (nextFlagShape), and a missing value is an agent-facing step, not a refusal.
   ["--propose", { value: "free" }],
-  ["--stage", { value: "free", needsFollowing: true }],
-  ["--phase", { value: "free", needsFollowing: true }],
-  ["--report", { value: "free", needsFollowing: true }],
+  ["--stage", { value: "free", needsFollowing: true, valueMayLookLikeFlag: true }],
+  ["--phase", { value: "free", needsFollowing: true, valueMayLookLikeFlag: true }],
+  ["--report", { value: "free", needsFollowing: true, valueMayLookLikeFlag: true }],
   // Valued: a missing or `--`-prefixed value is this engine's own refusal, with
   // the flag named, not a token it does not take.
   ["--request", { value: "free" }],
@@ -40369,10 +40598,10 @@ export const NEXT_FLAGS: ReadonlyMap<string, NextFlagShape> = new Map<string, Ne
   ["--plan-name", { value: "free" }],
   ["--skip", { value: "free" }],
   ["--add", { value: "free" }],
-  ["--claim", { value: "free" }],
-  ["--release", { value: "free" }],
-  ["--team", { value: "free" }],
-  ["--rhythm", { value: "free" }],
+  ["--claim", { value: "free", valueMayLookLikeFlag: true }],
+  ["--release", { value: "free", valueMayLookLikeFlag: true }],
+  ["--team", { value: "free", valueMayLookLikeFlag: true }],
+  ["--rhythm", { value: "free", valueMayLookLikeFlag: true }],
   ["--depth", { value: "words", words: DEPTH_VALUES }],
   ["--test-strategy", { value: "words", words: DEPTH_VALUES }],
   ["--review", { value: "words", words: ["adversarial", "advisory", "none"] }],
@@ -40478,13 +40707,112 @@ export function splitFlagShapedArguments(argv: readonly string[]): string[] {
   ).filter((token) => token.length > 0);
 }
 
+/**
+ * The tokens in front of the `--` mark, which are the only ones a command
+ * reads as its options: behind it every token is the person's word, as
+ * `parseArgs` reads it for every tool.
+ */
+export function beforeDelimiter(args: readonly string[]): string[] {
+  const mark = args.indexOf("--");
+  return mark < 0 ? [...args] : args.slice(0, mark);
+}
+
+/**
+ * What one token in front of the `--` mark is to `next`: a flag it takes (with
+ * the value that flag takes), a flag-shaped token it does not take (with the
+ * word after it), a word of the person's, a utility flag (only on a line with
+ * no words of theirs), one of `--doctor`'s own options, or the leading
+ * `compose` verb. `at` is its place in the arguments.
+ */
+export interface NextToken {
+  role: "flag" | "untaken" | "word" | "read-only" | "doctor-arg" | "compose";
+  token: string;
+  at: number;
+  value?: string;
+}
+
+/**
+ * The one reading of which tokens on a `next` line are this engine's own and
+ * which are the person's. parseNextFlags takes its flags from it, readNextLine
+ * reads the line from it, and seams such as the Copilot claim ask it
+ * (nextLineFlags for the flags `next` takes, the `read-only` role for a utility
+ * flag), so they never read a word of the person's as one of those flags, or a
+ * flag's value as a flag of its own. `literal` is
+ * every word behind the mark, kept as typed; null when there is no mark.
+ */
+export function readNextTokens(args: readonly string[]): {
+  head: string[];
+  literal: string[] | null;
+  tokens: NextToken[];
+} {
+  const mark = args.indexOf("--");
+  const head = beforeDelimiter(args);
+  // Among the person's own words a utility flag is part of what they asked for.
+  const requestWords = nextArgsCarryRequestWords(args);
+  const tokens: NextToken[] = [];
+  let readOnly: string | undefined;
+  for (let at = 0; at < head.length; at++) {
+    const token = head[at];
+    const following = head[at + 1];
+    if (READ_ONLY_FLAGS.has(token) && !requestWords) {
+      readOnly = token;
+      tokens.push({ role: "read-only", token, at });
+      continue;
+    }
+    // `--doctor`'s own options count only once it has matched.
+    if (readOnly === "--doctor" && DOCTOR_EXPORT_FLAGS.has(token) && token !== "--output") {
+      tokens.push({ role: "doctor-arg", token, at });
+      continue;
+    }
+    if (readOnly === "--doctor" && token === "--output") {
+      const value = following !== undefined && !following.startsWith("--") ? following : undefined;
+      tokens.push({ role: "doctor-arg", token, at, ...(value === undefined ? {} : { value }) });
+      if (value !== undefined) at++;
+      continue;
+    }
+    if (at === 0 && token === "compose") {
+      tokens.push({ role: "compose", token, at });
+      continue;
+    }
+    const kind = nextTokenKind(token, following);
+    if (kind === "words") {
+      tokens.push({ role: "word", token, at });
+      continue;
+    }
+    const shape = kind === "flag" ? nextFlagShape(token) : null;
+    const takesValue = kind === "untaken" || (shape !== null && shape.value !== "none");
+    const value = takesValue && following !== undefined &&
+        (shape?.valueMayLookLikeFlag === true || !following.startsWith("--"))
+      ? following
+      : undefined;
+    tokens.push({ role: kind, token, at, ...(value === undefined ? {} : { value }) });
+    if (value !== undefined) at++;
+  }
+  return { head, literal: mark < 0 ? null : args.slice(mark + 1), tokens };
+}
+
+/**
+ * Whether a flag `next` takes stands with nothing it can take as its value, so
+ * the engine answers the line about that flag (its refusal, or for an empty
+ * `--propose` the agent's own step) before anything else on it.
+ */
+export function nextFlagLacksValue(token: NextToken): boolean {
+  if (token.role !== "flag" || token.value !== undefined) return false;
+  return nextFlagShape(token.token)?.value !== "none";
+}
+
+/** The flags `next` takes on this line, each with the value it takes (readNextTokens). */
+export function nextLineFlags(args: readonly string[]): NextToken[] {
+  return readNextTokens(args).tokens.filter((token) => token.role === "flag");
+}
+
 export function readNextLine(argv: readonly string[]): NextLineReading {
   const args = splitFlagShapedArguments(argv);
   if (args.length === 0) return { kind: "exact" };
   // Words behind the delimiter are theirs and marked, so what is in front of it
   // decides and their words never make a reading step.
   const mark = args.indexOf("--");
-  const head = mark >= 0 ? args.slice(0, mark) : args;
+  const head = beforeDelimiter(args);
   if (head.length === 0) return mark + 1 < args.length ? { kind: "words" } : { kind: "exact" };
 
   // A leading noun owns its argv, and that noun's own parser says whether it can
@@ -40514,47 +40842,24 @@ export function readNextLine(argv: readonly string[]): NextLineReading {
   if (head[0] === "--statusline") return { kind: "exact" };
   if (head.length === 1 && (head[0] === "help" || head[0] === "-h")) return { kind: "exact" };
 
-  const requestWords = nextArgsCarryRequestWords(args);
   const words: string[] = [];
   let took = false;
-  let readOnly: string | undefined;
-  for (let i = 0; i < head.length; i++) {
-    const token = head[i];
-    const following = head[i + 1];
-    // A utility flag among their own words is one of their words; alone, or
-    // among other flags, it is the utility.
-    if (READ_ONLY_FLAGS.has(token) && !requestWords) {
-      readOnly = token;
-      took = true;
-      continue;
-    }
-    if (readOnly === "--doctor" && (token === "--export" || token === "--verbose")) {
-      took = true;
-      continue;
-    }
-    if (readOnly === "--doctor" && token === "--output") {
-      took = true;
-      if (following !== undefined && !following.startsWith("--")) i++;
-      continue;
-    }
-    const kind = nextTokenKind(token, following);
-    if (kind === "words") {
+  for (const { role, token, value } of readNextTokens(args).tokens) {
+    // A utility flag among their own words is one of their words (a word here);
+    // alone, or among other flags, it is the utility.
+    if (role === "word") {
       words.push(token);
       continue;
     }
-    if (kind === "untaken") {
-      return { kind: "untaken-flag", token, ...(following !== undefined && !following.startsWith("--") ? { value: following } : {}) };
-    }
+    if (role === "untaken") return { kind: "untaken-flag", token, ...(value === undefined ? {} : { value }) };
     took = true;
-    const shape = nextFlagShape(token);
-    if (shape === null || shape.value === "none") continue;
-    if (following === undefined || following.startsWith("--")) continue; // the engine's own refusal, by name
-    i++;
+    // A flag with no value it can take is the engine's own refusal, by name.
+    const shape = role === "flag" ? nextFlagShape(token) : null;
     // A flag this engine takes, with a value its own table does not hold: the
     // person meant one of the words it does hold, and the agent re-runs it.
-    if (shape.value === "words" && shape.words !== undefined &&
-      !shape.words.includes(following.toLowerCase())) {
-      return { kind: "value", flag: token, value: following, valid: shape.words };
+    if (value !== undefined && shape?.value === "words" && shape.words !== undefined &&
+      !shape.words.includes(value.toLowerCase())) {
+      return { kind: "value", flag: token, value, valid: shape.words };
     }
   }
   if (!took && words.length === 0) return { kind: "exact" };
@@ -41159,6 +41464,28 @@ export const GUARD_FENCE_LABELS: Record<GuardFence, string> = {
   "human-presence": "Human presence (a real human turn behind approvals and answers)",
 };
 
+/**
+ * The stage-status verbs only the engine runs. The state tool refuses each one
+ * from any other caller, whatever spelling ran it; the hooks and adapters that
+ * name these verbs read this set.
+ */
+export const ENGINE_OWNED_STATE_TRANSITIONS: ReadonlySet<string> = new Set([
+  "set",
+  "checkbox",
+  "advance",
+  "finalize",
+  "complete-workflow",
+  "gate-start",
+  "approve",
+  "reject",
+  "revise",
+  "skip",
+  "park",
+  "refresh-unit-progress",
+  "sync-unit-scope-stage",
+  "fold-unit-merge",
+]);
+
 /** The fences the policy word lowers by itself. */
 export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[] {
   if (policy === "off") return ["plan-approval", "review-freeze", "state-transition", "reviewer-scope"];
@@ -41167,7 +41494,9 @@ export function fencesLoweredByPolicy(policy: GuardPolicy): readonly GuardFence[
 }
 
 export function guardSwitchRefusal(
-  wanted: GuardSwitch,
+  // A check with no per-work key (a project switch such as the human presence
+  // check) is named by its own words.
+  wanted: GuardSwitch | { check: string },
   projectDir?: string,
 ): string {
   // A terminal their own tool runs (Copilot in VS Code, Kiro IDE, Cursor): the
@@ -41175,7 +41504,9 @@ export function guardSwitchRefusal(
   // Their tool is named as they know it, with no environment variable in sight.
   const host = agentTerminalHost();
   if (host !== null) {
-    const what = wanted.key === "guard-policy"
+    const what = "check" in wanted
+      ? `turn the ${wanted.check} check off`
+      : wanted.key === "guard-policy"
       ? `set Guard Policy ${wanted.value}`
       : wanted.key === "plan-approval"
       ? "turn plan approval off"
@@ -41194,6 +41525,7 @@ export function guardSwitchRefusal(
   const wait = ownTerminal
     ? ""
     : " No reply from the person has arrived since the last decision: run it when they ask for it.";
+  if ("check" in wanted) return `Turning the ${wanted.check} check off is the person's call.${wait}${hint}`;
   if (wanted.key === "plan-approval") {
     return `Turning plan approval off lets code generation start without the person approving the plan, so it is their call.${wait}${hint}`;
   }
@@ -43505,7 +43837,6 @@ export type BoltDagResolution =
       batches: string[][];
       units: string[];
       unitKinds: Map<string, string> | null;
-      healed: boolean;
     }
   | { state: "none" }
   | { state: "malformed"; reason: string; detail: string };
@@ -43580,7 +43911,6 @@ export function resolveBoltDag(
             batches: typedBatches,
             units,
             unitKinds: unitKinds.size > 0 ? unitKinds : null,
-            healed: false,
           };
         }
       }
@@ -43612,7 +43942,6 @@ export function resolveBoltDag(
     batches: parsed.batches,
     units: parsed.batches.flat(),
     unitKinds: unitKinds.size > 0 ? unitKinds : null,
-    healed: true,
   };
   return cached !== null && boltDagMatches(cached, authored) ? cached : authored;
 }

@@ -1,17 +1,15 @@
 // covers: function:acquireAuditLock, function:withAuditLock
 //
 // t163 — REAPER STEAL mutual-exclusion PROPERTY test under REAL spawn contention.
-// Mechanism: cli (process-boundary). This is the spawn-contention coverage the
-// Stage B review flagged as MISSING for the reaper (t161 covers only the
-// SEQUENTIAL, in-process invariants; nothing exercised the dead-lock reclaim
-// under genuine multi-process contention). It is the closure for the review's
-// concurrency-coverage debt — NOT a pre-fix↔post-fix discriminator (see HONESTY).
+// Mechanism: cli (process-boundary). t161 covers only the SEQUENTIAL, in-process
+// invariants; this test exercises the dead-lock reclaim under genuine
+// multi-process contention.
 //
 // WHY CLI (process-boundary, not in-process): the subject IS concurrency — the
 // reaper steal (aidlc-lib.ts reapStaleLock) only fires when independent OS
 // processes race to reclaim the SAME stale lock dir. bun:test runs serially
 // inside one process, so an in-process loop could never overlap two reapers'
-// decide→steal windows. This twin adds the missing real-concurrency dimension.
+// decide->steal windows. This test adds the real-concurrency dimension.
 //
 // THE INVARIANT WITH TEETH: seed ONE stale (dead-PID) lock, fire N processes that
 // each make one acquire call with the production retry budget. Reaping and
@@ -174,7 +172,7 @@ function seedStaleLock(generation: number): string {
   rmSync(releasedDirPath(), { recursive: true, force: true });
   writeFileSync(evidenceStatePath(), JSON.stringify({ pid: STALE_OWNER_PID }), "utf-8");
   // pid is an unlikely-live high value (ESRCH → dead owner), startedAtMs far in
-  // the past (over the tightened stale threshold the test sets via env).
+  // the past (over the stale threshold the test sets via env).
   const token = `00000000-0000-4000-8000-${String(generation).padStart(12, "0")}`;
   mkdirSync(join(lockDir, token));
   writeFileSync(
@@ -230,9 +228,10 @@ afterEach(() => {
 
 describe("t163 reaper steal-race — exactly one process reclaims a stale lock (cli — parallel spawn)", () => {
   // -------------------------------------------------------------------------
-  // N contenders, ONE stale lock, ONE acquisition. Repeated over GENERATIONS
-  // for stability. Production acquisition retries provide progress through
-  // transient gate contention; winner/predecessor evidence checks exclusion.
+  // N contenders, ONE stale lock, ONE acquisition of the seeded lock. Repeated
+  // over GENERATIONS for stability. Production acquisition retries provide
+  // progress through transient gate contention; winner/predecessor evidence
+  // checks exclusion.
   // -------------------------------------------------------------------------
   test("N concurrent contenders against one stale lock — exactly one wins, every generation", async () => {
     const N = 12;
@@ -294,10 +293,10 @@ describe("t163 reaper steal-race — exactly one process reclaims a stale lock (
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // -------------------------------------------------------------------------
-  // A live, UNDER-AGE holder is never robbed under contention: seed a FRESH
-  // this-not-applicable... seed a live (current test PID), under-age lock, then
-  // fire N contenders. ZERO may win — the reaper must refuse to reclaim a fresh
-  // live holder even with many processes hammering it.
+  // A live, UNDER-AGE holder is never robbed under contention: seed a live
+  // (current test PID), under-age lock, then fire N contenders. ZERO may win -
+  // the reaper must refuse to reclaim a fresh live holder even with many
+  // processes hammering it.
   // -------------------------------------------------------------------------
   test("a fresh live holder is never reclaimed under N-way contention [zero winners]", async () => {
     const lockDir = auditLockDir(proj, INTENT, SPACE);
@@ -334,7 +333,6 @@ describe("t163 reaper steal-race — exactly one process reclaims a stale lock (
       ).toMatch(/^(?:LOST|WON \d+ (?:true|false))$/);
     }
     const wins = winnerEvidence(outs).length;
-    // The live, under-age holder is never robbed → no contender acquires.
     expect(wins).toBe(0);
     // The original live lock, not merely a replacement directory, is intact.
     expect(existsSync(lockDir)).toBe(true);

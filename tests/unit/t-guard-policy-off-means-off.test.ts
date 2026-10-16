@@ -231,7 +231,6 @@ describe("a file no unit claims", () => {
     const refused = approve(dir);
     expect(refused.rc).toBe(1);
     expect(refused.out).toContain("lists the path in its source manifest");
-    // The named step: claim the path in its Unit and record that Unit's review.
     review(dir, record, "alpha", ["app.ts", "extra.ts"]);
     const done = approve(dir);
     expect(done.rc, done.out).toBe(0);
@@ -396,7 +395,6 @@ describe("the project source cannot be read on this machine", () => {
     const done = approve(dir);
     expect(done.rc, done.out).toBe(0);
     expect(done.out).toContain("could not be checked against the Code Generation review on this machine; carrying on.");
-    // Doctor says what happens here, and nothing is refused.
     const doctor = cli(join(AIDLC_SRC, "tools", "aidlc-utility.ts"), ["doctor"], dir);
     expect(doctor.out).toContain("Workspace source boundary binds: no (");
     expect(doctor.out).toContain("the build starts without a check of the project's files");

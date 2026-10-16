@@ -55,11 +55,13 @@ import {
 	loadSensors,
 	memoryTemplatesDir,
 	producersOf,
+	STAGE_WIDE_SENSOR_IDS,
 	type SensorFile,
 	templateEligibleArtifacts,
 } from "./aidlc-graph.ts";
 import {
 	artifactFilename,
+	asksForHelp,
 	auditLockDir,
 	codekbDir,
 	errorMessage,
@@ -68,6 +70,7 @@ import {
 	isoTimestamp,
 	isPlainObject,
 	KNOWN_CODEKB_STAGES,
+	printUsageAndExit,
 	readRegularFileNoFollowOrThrow,
 	readStateFile,
 	recordDir,
@@ -78,6 +81,7 @@ import {
 	withAuditLock,
 } from "./aidlc-lib.ts";
 import {
+	aidlcDispatcherInvocation,
 	compiledExecutable,
 	resolveHarnessPath,
 } from "./aidlc-runtime-paths.ts";
@@ -163,7 +167,7 @@ interface FireContext {
 	outputPath: string;
 	fireId: string;
 	detailPath: string;
-	scriptArgs: string[]; // CLI args appended to the script invocation
+	scriptArgs: string[];
 	scriptAbsPath: string; // sibling-resolved absolute path
 	timeoutMs: number;
 }
@@ -288,18 +292,17 @@ function dispatchError(msg: string): never {
 // and resolves it next to itself.
 // This decouples script discovery from cwd — works in tests where
 // projectDir doesn't carry a .claude/tools/ tree, AND in production where
-// it does. Sibling resolution mirrors aidlc-bolt.ts:84.
+// it does. Sibling resolution mirrors spawnSibling in aidlc-bolt.ts.
 //
 // AIDLC_SENSOR_SCRIPT_DIR overrides the resolution directory — the script
 // seam mirroring AIDLC_SENSORS_DIR for manifests. Tests that exercise stub
 // per-sensor scripts point it at an isolated temp dir so they NEVER copy
 // stubs into the shipped dist/.../tools/ tree (which both pollutes the
-// version-controlled artifact on a crashed run and makes concurrent test
+// generated artifact on a crashed run and makes concurrent test
 // files race on a shared directory). Unset in production → sibling resolution
-// against __FILE_DIR, exactly as before.
+// against the compiled harness tools directory or __FILE_DIR.
 function resolveScriptPath(command: string): string {
 	const tokens = command.trim().split(/\s+/);
-	// Find the first .ts token (drops the "bun" prefix or any flags).
 	const tsToken = tokens.find((t) => t.endsWith(".ts"));
 	const engineIndex = tokens.indexOf("engine");
 	const nativeDelegate = engineIndex >= 0 ? tokens[engineIndex + 1] : undefined;
@@ -370,7 +373,6 @@ function handleList(): void {
 	if (sensors.length === 0) {
 		return;
 	}
-	// Tabular output: id  kind  description
 	for (const s of sensors) {
 		console.log(`${s.id}\t${s.manifest.kind}\t${s.manifest.description}`);
 	}
@@ -501,7 +503,8 @@ function consumeWithProducer(slug: string): string {
 // Step 1 — validate + resolve all inputs + generate Fire id (no lock).
 // Step 4-8 — emit FIRED, spawn, decide outcome, write detail (if FAILED),
 //            emit terminal row.
-// Step 9 — exit 0.
+// Step 9 -- print the machine-readable verdict.
+// Step 10 -- exit 0.
 function handleFire(args: string[]): void {
 	const id = args[0];
 	if (!id || id.startsWith("--")) {
@@ -584,11 +587,14 @@ function handleFire(args: string[]): void {
 	// "art1:producer1,art2:producer2,..." sourced from the
 	// GraphStage.consumes[].artifact field (producer resolved via
 	// producersOf so a producing-directory citation can count as
-	// coverage), filtered to artifacts that exist on disk: a consume
-	// whose producing stage was skipped by the scope (or runtime-skipped,
-	// e.g. reverse-engineering on greenfield) never produced its file,
-	// and demanding the output prose reference it would be a guaranteed
-	// false SENSOR_FAILED on every run of that stage in that scope.
+	// coverage), filtered to the required artifacts that exist on disk: a
+	// consume whose producing stage was skipped by the scope (or
+	// runtime-skipped, e.g. reverse-engineering on greenfield) never produced
+	// its file, and demanding the output prose reference it would be a
+	// guaranteed false SENSOR_FAILED on every run of that stage in that scope.
+	// An optional consume (`required: false`) may not have informed the
+	// output, and citing one that did not would be false provenance, unless the
+	// stage lists it under `cites:` (its deliverables cite it when it exists).
 	const isCodeSensor = sensorTakesFilePath(sensor.manifest, id);
 	const scriptArgs: string[] = ["--stage", stageSlug];
 	if (isCodeSensor) {
@@ -597,7 +603,9 @@ function handleFire(args: string[]): void {
 		scriptArgs.push("--output-path", outputPath);
 	}
 	if (id === "upstream-coverage") {
+		const cited = new Set(stageNode.cites ?? []);
 		const consumeSlugs = (stageNode.consumes ?? [])
+			.filter((c) => c.required !== false || cited.has(c.artifact))
 			.map((c) => c.artifact)
 			.filter((a) => typeof a === "string" && a.length > 0);
 		scriptArgs.push(
@@ -611,7 +619,7 @@ function handleFire(args: string[]): void {
 	// not only the file whose write triggered the hook. Questions/timestamp
 	// scaffolding is excluded from that union. claim-sources still locates the
 	// sibling questions file explicitly as its source universe.
-	if (id === "upstream-coverage" || id === "claim-sources") {
+	if (STAGE_WIDE_SENSOR_IDS.has(id)) {
 		scriptArgs.push(
 			"--deliverables",
 			templateEligibleArtifacts([
@@ -653,7 +661,6 @@ function handleFire(args: string[]): void {
 		// §10 MIDDLE branch: the framework-default templates dir (engine-shipped,
 		// read-only, space-independent). The sensor consults it ONLY when the team
 		// override above misses, so resolution is team → framework-default → floor.
-		// Ships zero files at GA → the branch gracefully falls through to the floor.
 		scriptArgs.push("--framework-templates-dir", frameworkTemplatesDir());
 	}
 	const detailDir = join(sensorsDir(projectDir), stageSlug);
@@ -742,7 +749,7 @@ function handleFire(args: string[]): void {
 	// Named per fire id, so a pass cannot overwrite an earlier failure's report;
 	// without this the directory keeps showing a failure that no longer exists.
 	// A noted pass (tool-unavailable, script-error, detail-write-failed) and a
-	// budget override evaluated nothing, so they supersede nothing.
+	// budget override do not verify a clean output, so they supersede nothing.
 	if (finalOutcome.kind === "passed" && finalOutcome.note === undefined) {
 		pruneSupersededDetailFiles(detailDir, id, outputPath, startedAt);
 	}
@@ -1018,7 +1025,7 @@ function decideOutcome(
 // generically. Fork sensors that omit the field fall back to 0; doctor's
 // sibling-coverage check will surface that as a fork-sensor contract gap.
 //
-// Rationale: v3 control-plane / data-plane separation puts per-sensor
+// Rationale: control-plane / data-plane separation puts per-sensor
 // findings derivation in the script (the script knows its own pass
 // threshold; e.g., required-sections script knows 2 H2 sections is the
 // minimum). The dispatcher stays generic and adds new framework sensors
@@ -1191,33 +1198,39 @@ function globToRegex(glob: string): RegExp {
 
 // --- Help ---
 
-function printHelp(): void {
-	console.log(`Usage: aidlc-sensor <subcommand>
-
-Subcommands:
-  list                              List framework sensors
-  describe <id>                     Print manifest fields
-  fire <id> --stage <slug>          Fire a sensor against an output;
-       --output-path <path>           emits SENSOR_FIRED + paired terminal row
-       [--unit <name>]                (the Unit, when named, is on both rows)
-
-  --help, -h                        Show this message`);
+// What `--help` prints, for the tool or one subcommand (#2449).
+function sensorUsage(subcommand: string | undefined): string {
+	const invoke = (verb: string) => aidlcDispatcherInvocation(`sensor ${verb}`);
+	const usage: Record<string, string[]> = {
+		list: [invoke("list"), "  Lists the framework sensors: id, kind and description."],
+		describe: [
+			`${invoke("describe")} <id>`,
+			"  Prints one sensor's manifest fields. Required: <id>.",
+		],
+		fire: [
+			`${invoke("fire")} <id> --stage <slug> --output-path <path>`,
+			"  Fires a sensor against a stage output; emits SENSOR_FIRED and its paired result row.",
+			"  Required: <id>, --stage, --output-path. Options: --unit <name> (named on both rows)",
+		],
+	};
+	if (subcommand !== undefined && usage[subcommand]) return usage[subcommand].join("\n");
+	return `Usage: aidlc-sensor <subcommand>\n\n${Object.values(usage)
+		.map((lines) => lines.join("\n"))
+		.join("\n\n")}`;
 }
 
 // --- main ---
 
 export function main(argv: string[]): void {
 	const [cmd, ...args] = argv;
-	if (cmd === "--help" || cmd === "-h") {
-		printHelp();
-		return;
-	}
+	if (cmd !== undefined && asksForHelp([cmd])) printUsageAndExit(sensorUsage(undefined));
 	if (cmd === undefined) {
 		process.stderr.write(
 			"Usage: aidlc-sensor <subcommand>. Valid: describe, fire, list. Run with --help for detail.\n",
 		);
 		process.exit(1);
 	}
+	if (asksForHelp(args)) printUsageAndExit(sensorUsage(cmd));
 	switch (cmd) {
 		case "list":
 			handleList();

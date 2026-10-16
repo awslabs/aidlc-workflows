@@ -20,14 +20,13 @@
 // their migration behavior. This test seeds rows directly into the deterministic
 // audit shard (no git worktrees, no live model) to control the converged set.
 //
-// SOURCE UNDER TEST (dist/claude/.claude/tools/aidlc-orchestrate.ts):
-//   - tryEmitSwarm (batch selection + terminal settle) + swarmConvergedUnits
-//     (the audit-ledger reader), wired into BOTH handleNext call sites.
-// NONE are exported (the tool has zero exports), so the behaviour is observable
-// only on the JSON directive the spawned engine emits to stdout; mechanism =
-// cli: SPAWN `bun aidlc-orchestrate.ts next` and assert the parsed directive, the
-// SAME process boundary t135 (invoke-swarm emission) and t186 (per-unit
-// iteration) drive.
+// SOURCE UNDER TEST:
+//   - aidlc-orchestrate.ts tryEmitSwarm (batch selection + terminal settle).
+//   - aidlc-lib.ts swarmConvergedUnits (the exported audit-ledger reader).
+// The routing behaviour is observed on the JSON directive the spawned engine
+// emits to stdout; mechanism = cli: SPAWN `bun aidlc-orchestrate.ts next` and
+// assert the parsed directive, the SAME process boundary t135 (invoke-swarm
+// emission) and t186 (per-unit iteration) drive.
 //
 // FIXTURE DISCIPLINE (mirrors t186's fresh-temp-per-case + clean single-row
 // state): each case uses a FRESH temp project (createTestProject seeds the
@@ -66,7 +65,7 @@ setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
 resetAidlcEnv();
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const ORCH = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 
 const tempDirs: string[] = [];
@@ -150,14 +149,12 @@ function auditBlock(
   return `${body}\n---\n`;
 }
 
-/** Append raw block content to the deterministic audit shard. */
 function appendShard(proj: string, content: string): void {
   const shard = seededAuditShard(proj);
   mkdirSync(dirname(shard), { recursive: true });
   writeFileSync(shard, content, { flag: "a" });
 }
 
-/** The fixture timestamp shape shared by the seeders below. */
 function fixtureTs(atSecond: number): string {
   return `2026-07-05T00:00:${String(atSecond).padStart(2, "0")}.000Z`;
 }
@@ -246,7 +243,6 @@ function seedStageStarted(
   );
 }
 
-/** Seed a fresh autonomous Construction project at code-generation. */
 function seedProject(): string {
   const proj = createTestProject();
   tempDirs.push(proj);
@@ -255,7 +251,6 @@ function seedProject(): string {
   return proj;
 }
 
-/** Run `aidlc-orchestrate.ts next` and parse the emitted directive. */
 function runNext(
   proj: string,
   extraEnv: Record<string, string> = {},
@@ -686,7 +681,7 @@ describe("t201 converged-row attempt identity (Stage + Run floor stamp)", () => 
     expect(d.units).toEqual(["auth"]);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-  // 12: pre-2.5.0 rows without the stamp fail CLOSED - the affected units
+  // 12: rows without the stamp fail CLOSED - the affected units
   // re-fan (finalize's re-verify makes the re-run safe), never silently count.
   test("12: unstamped legacy rows are not coverage", () => {
     const proj = seedProject();

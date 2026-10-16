@@ -53,13 +53,13 @@ import {
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-// P9 per-intent layout: the flat aidlc-docs/ root is retired. Bolt's audit lands
-// in a per-clone shard under the record (or the bare space record root when no
-// state seeds a resolvable cursor); state lives in the active intent's record.
-// We PIN a deterministic clone-id on disk so every SPAWNED bolt invocation in a
-// project writes the SAME shard — that keeps the lifecycle test's positional
-// "BOLT_STARTED precedes BOLT_COMPLETED" assertion deterministic (two spawns =
-// one shard, append order preserved) and lets reads glob a single shard.
+// Bolt's audit lands in a per-clone shard under the record (or the bare space
+// record root when no state seeds a resolvable cursor); state lives in the
+// active intent's record. We PIN a deterministic clone-id on disk so every
+// SPAWNED bolt invocation in a project writes the SAME shard - that keeps the
+// lifecycle test's positional "BOLT_STARTED precedes BOLT_COMPLETED" assertion
+// deterministic (two spawns = one shard, append order preserved) and lets reads
+// glob a single shard.
 const PINNED_CLONE_ID = "testcloneid33";
 /** createTestProject + pin the clone-id (so spawned tools share one audit shard). */
 function mkProj(): string {
@@ -68,7 +68,7 @@ function mkProj(): string {
   return p;
 }
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 const TOOL = join(
   import.meta.dir,
   "..",
@@ -81,11 +81,11 @@ const TOOL = join(
 
 interface RunResult {
   status: number;
-  out: string; // stdout+stderr combined, mirroring the .sh's `2>&1`
+  out: string;
 }
 
-// Spawn the real CLI in the project dir. Passes --project-dir like every .sh
-// invocation (the authoritative project seam) and combines stdout+stderr.
+// Spawn the real CLI in the project dir. Passes --project-dir (the
+// authoritative project seam) and combines stdout+stderr.
 function runBolt(proj: string, ...args: string[]): RunResult {
   const res = spawnSync(BUN, [TOOL, ...args, "--project-dir", proj], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -102,11 +102,11 @@ function readState(proj: string): string {
   return readFileSync(seededStateFile(proj), "utf-8");
 }
 
-// Mirror the .sh's setup_construction_project (lines 89-98): seed the
-// Construction state fixture (so the active-intent cursor resolves and set-autonomy
-// can read/write the record's state), then append the Construction Autonomy Mode
-// field (the fixture pre-dates it; setFieldStrict parses by key, not location, so
-// end-of-file append is fine). Bolt's audit shard is created lazily on first emit.
+// Seed the Construction state fixture (so the active-intent cursor resolves and
+// set-autonomy can read/write the record's state), then append the Construction
+// Autonomy Mode field (the fixture pre-dates it; setFieldStrict parses by key,
+// not location, so end-of-file append is fine). Bolt's audit shard is created
+// lazily on first emit.
 function setupConstructionProject(): string {
   const proj = mkProj();
   seedStateFile(proj, join(FIXTURES_DIR, "state-construction.md"));
@@ -127,22 +127,18 @@ describe("t33 start: BOLT_STARTED audit emission", () => {
     proj = "";
   });
 
-  // Test 1: start emits BOLT_STARTED
   test("start emits BOLT_STARTED", () => {
     proj = mkProj();
     runBolt(proj, "start", "--name", "auth-service", "--batch", "1");
-    // .sh: assert_grep '^\*\*Event\*\*: BOLT_STARTED' (line-anchored literal)
     expect(readAudit(proj)).toMatch(/^\*\*Event\*\*: BOLT_STARTED/m);
   });
 
-  // Test 2: start records Batch number
   test("start records Batch number", () => {
     proj = mkProj();
     runBolt(proj, "start", "--name", "auth-service", "--batch", "1");
     expect(readAudit(proj)).toContain("**Batch number**: 1");
   });
 
-  // Test 3: start accepts CSV bolt names (parallel batch)
   test("start records CSV bolt names", () => {
     proj = mkProj();
     runBolt(
@@ -156,14 +152,12 @@ describe("t33 start: BOLT_STARTED audit emission", () => {
     expect(readAudit(proj)).toContain("auth-service,payment-service,user-service");
   });
 
-  // Test 4: start --walking-skeleton true flags Walking skeleton=true
   test("start --walking-skeleton true flags correctly", () => {
     proj = mkProj();
     runBolt(proj, "start", "--name", "b1", "--batch", "1", "--walking-skeleton", "true");
     expect(readAudit(proj)).toContain("**Walking skeleton**: true");
   });
 
-  // Test 21: start without --walking-skeleton defaults to false
   test("start without --walking-skeleton defaults to false", () => {
     proj = mkProj();
     runBolt(proj, "start", "--name", "b1", "--batch", "1");
@@ -179,25 +173,21 @@ describe("t33 start: input validation", () => {
     proj = "";
   });
 
-  // Test 5: start missing --name exits 1
   test("start missing --name exits 1", () => {
     proj = mkProj();
     expect(runBolt(proj, "start", "--batch", "1").status).toBe(1);
   });
 
-  // Test 6: start missing --batch exits 1
   test("start missing --batch exits 1", () => {
     proj = mkProj();
     expect(runBolt(proj, "start", "--name", "b1").status).toBe(1);
   });
 
-  // Test 18: start --batch non-numeric exits 1
   test("start --batch non-numeric exits 1", () => {
     proj = mkProj();
     expect(runBolt(proj, "start", "--name", "b1", "--batch", "not-a-number").status).toBe(1);
   });
 
-  // Test 19: start --batch 0 exits 1 (must be positive)
   test("start --batch 0 exits 1 (must be positive)", () => {
     proj = mkProj();
     expect(runBolt(proj, "start", "--name", "b1", "--batch", "0").status).toBe(1);
@@ -218,15 +208,12 @@ describe("t33 start/complete: JSON ack + completion audit", () => {
     proj = "";
   });
 
-  // Test 22: start prints JSON ack on stdout
   test("start prints JSON with emitted field", () => {
     proj = mkProj();
     const res = runBolt(proj, "start", "--name", "b1", "--batch", "1");
-    // .sh: assert_contains "$OUT" '"emitted":"BOLT_STARTED"' (fixed-string)
     expect(res.out).toContain('"emitted":"BOLT_STARTED"');
   });
 
-  // Test 7: complete emits BOLT_COMPLETED
   test("complete emits BOLT_COMPLETED", () => {
     proj = mkProj();
     runBolt(proj, "complete", "--name", "auth-service", "--batch", "1");
@@ -242,14 +229,12 @@ describe("t33 fail: BOLT_FAILED audit fields", () => {
     proj = "";
   });
 
-  // Test 8: fail emits BOLT_FAILED with error summary
   test("fail records Error summary", () => {
     proj = mkProj();
     runBolt(proj, "fail", "--name", "auth-service", "--error", "Compilation failed");
     expect(readAudit(proj)).toContain("**Error summary**: Compilation failed");
   });
 
-  // Test 9: fail --succeeded-siblings records sibling bolts
   test("fail records Succeeded siblings", () => {
     proj = mkProj();
     runBolt(
@@ -274,41 +259,34 @@ describe("t33 set-autonomy: emission, state update, validation", () => {
     proj = "";
   });
 
-  // Test 10: set-autonomy emits AUTONOMY_MODE_SET
   test("set-autonomy emits AUTONOMY_MODE_SET", () => {
     proj = setupConstructionProject();
     runBolt(proj, "set-autonomy", "--mode", "autonomous");
     expect(readAudit(proj)).toMatch(/^\*\*Event\*\*: AUTONOMY_MODE_SET/m);
   });
 
-  // Test 11: set-autonomy updates Construction Autonomy Mode in state file
   test("set-autonomy updates state field", () => {
     proj = setupConstructionProject();
     runBolt(proj, "set-autonomy", "--mode", "autonomous");
-    // .sh: assert_grep 'Construction Autonomy Mode.*autonomous' (basic regex)
     expect(readState(proj)).toMatch(/Construction Autonomy Mode.*autonomous/);
   });
 
-  // Test 12: set-autonomy --mode gated is accepted
   test("set-autonomy --mode gated updates state", () => {
     proj = setupConstructionProject();
     runBolt(proj, "set-autonomy", "--mode", "gated");
     expect(readState(proj)).toMatch(/Construction Autonomy Mode.*gated/);
   });
 
-  // Test 13: set-autonomy --mode bogus exits 1
   test("set-autonomy --mode bogus exits 1", () => {
     proj = setupConstructionProject();
     expect(runBolt(proj, "set-autonomy", "--mode", "bogus").status).toBe(1);
   });
 
-  // Test 14: set-autonomy missing --mode exits 1
   test("set-autonomy missing --mode exits 1", () => {
     proj = setupConstructionProject();
     expect(runBolt(proj, "set-autonomy").status).toBe(1);
   });
 
-  // Test 23: set-autonomy JSON ack includes state_updated:true
   test("set-autonomy JSON ack includes state_updated:true", () => {
     proj = setupConstructionProject();
     const res = runBolt(proj, "set-autonomy", "--mode", "autonomous");
@@ -319,8 +297,7 @@ describe("t33 set-autonomy: emission, state update, validation", () => {
 // --- Tests 15, 17: v4 state-file guard (no Construction Autonomy Mode field) -
 describe("t33 set-autonomy: v4 state-file guard (audit-first)", () => {
   let proj = "";
-  // Minimal v4-shaped state file WITHOUT the Construction Autonomy Mode field
-  // (mirrors the heredoc in .sh Tests 15 & 17).
+  // Minimal v4-shaped state file WITHOUT the Construction Autonomy Mode field.
   const V4_STATE = `# AIDLC State
 - **Scope**: feature
 - **Status**: Running
@@ -338,21 +315,19 @@ describe("t33 set-autonomy: v4 state-file guard (audit-first)", () => {
     proj = "";
   });
 
-  // Test 15: set-autonomy errors cleanly when state field is absent
   test("set-autonomy exits 1 when Construction Autonomy Mode absent (v4 state file guard)", () => {
     seedV4();
     expect(runBolt(proj, "set-autonomy", "--mode", "autonomous").status).toBe(1);
   });
 
   // Test 17: set-autonomy on v4 state file leaves NO orphan audit (audit-first).
-  // Regression: previously emitted AUTONOMY_MODE_SET before validating the
-  // state field, leaving an orphan audit row when the field was absent. ONE
-  // process invocation drives BOTH assertions, exactly as the .sh did.
+  // Regression: emitting AUTONOMY_MODE_SET before validating the state field
+  // leaves an orphan audit row when the field is absent. ONE process invocation
+  // drives BOTH assertions.
   test("set-autonomy on v4 state file exits 1 AND leaves no orphan AUTONOMY_MODE_SET in audit", () => {
     seedV4();
     const res = runBolt(proj, "set-autonomy", "--mode", "autonomous");
-    expect(res.status).toBe(1); // .sh: assert_eq "$RC" "1"
-    // .sh: assert_not_grep "AUTONOMY_MODE_SET" in audit.md
+    expect(res.status).toBe(1);
     expect(readAudit(proj)).not.toContain("AUTONOMY_MODE_SET");
   });
 });
@@ -392,7 +367,6 @@ describe("t33 lifecycle: BOLT_STARTED precedes BOLT_COMPLETED", () => {
       "true",
     );
     runBolt(proj, "complete", "--name", "auth-service", "--batch", "1");
-    // .sh: grep -n line numbers, assert START_LINE < COMPLETE_LINE.
     const lines = readAudit(proj).split("\n");
     const startLine = lines.findIndex((l) => /^\*\*Event\*\*: BOLT_STARTED/.test(l));
     const completeLine = lines.findIndex((l) => /^\*\*Event\*\*: BOLT_COMPLETED/.test(l));

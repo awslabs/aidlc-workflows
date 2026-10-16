@@ -224,7 +224,6 @@ function Confirm-UacElevatedInstall {
     $principal = [Security.Principal.WindowsPrincipal]::new(
       [Security.Principal.WindowsIdentity]::GetCurrent()
     )
-    # A session without administrator rights has no elevated token to check.
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { return }
     try {
       $ElevationType = Get-InstallTokenElevationType
@@ -802,8 +801,8 @@ try {
       '',
       "Next: $($data.nextSteps[0])"
     )
-    if ($data.ready -and -not $NoModifyPath) {
-      $lines += 'Restart existing terminals or IDEs if they cannot find aidlc.'
+    if ($data.ready -and $pathChanged) {
+      $lines += 'Quit and reopen any terminal app or IDE that was already open (Kiro, VS Code, Cursor): it keeps the PATH it started with, so it cannot find aidlc until it restarts. A new tab inside it is not enough.'
     }
     if ($data.nextSteps.Count -gt 1) { $lines += $data.nextSteps[1..($data.nextSteps.Count - 1)] }
     $message = $lines -join [Environment]::NewLine

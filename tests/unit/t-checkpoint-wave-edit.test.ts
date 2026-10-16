@@ -258,7 +258,6 @@ describe("t-checkpoint-wave-edit: an approved Unit's document edited after a wav
       approve(p, "alpha");
       editAlphaDocument(p, by);
       const beat = next(p);
-      // The checkpoint, not the stage again.
       expect(beat, JSON.stringify(beat)).toMatchObject({ stage: "code-generation", unit: "alpha", gate: true });
       expect(beat.construction_checkpoint?.rereview?.stage, JSON.stringify(beat)).toBe(DOCUMENT_STAGE);
       expect(reviewThroughLog(p, review(DOCUMENT_STAGE, "alpha", 2)).recovery).toBe("stale-receipt");
@@ -441,7 +440,6 @@ describe("t-checkpoint-wave-edit: an approved Unit's document edited after a wav
     expect(status.errors).toContain(`${DOCUMENT_STAGE}: current Unit completion evidence is missing or stale.`);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // A document that is gone is work still to do, under every Guard Policy.
   for (const policy of ["strict (set by you)", "off (from scope classic)"]) {
     test(`Guard Policy ${policy.split(" ")[0]}: a document removed after its wave completion is made again`, () => {
       const p = fixture(policy);

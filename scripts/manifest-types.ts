@@ -16,8 +16,11 @@ export type DirMap = { src: string; dst: string };
  * By default <dst> is relative to <harnessDir>/ (e.g. .kiro/skills/aidlc/SKILL.md).
  * Set projectRoot:true to land it at the dist tree ROOT instead, beside the
  * harness dir (e.g. dist/kiro/AGENTS.md) — Kiro/Codex put AGENTS.md there.
+ * Set copyOnly:true for a file only the copy runtime (dist/<name>/) ships,
+ * such as Cursor's copy installer: the native projection, and so
+ * `aidlc config`, leaves it out.
  */
-export type FileMap = { src: string; dst: string; projectRoot?: boolean };
+export type FileMap = { src: string; dst: string; projectRoot?: boolean; copyOnly?: boolean };
 
 /**
  * Context handed to a harness emit() plugin. Everything it needs to write
@@ -35,7 +38,7 @@ export type EmitContext = {
   harnessName: string;
   /** Absolute path to the dist tree root for this harness (e.g. <repo>/dist/codex). */
   distRoot: string;
-  /** The harness directory name (".claude" | ".kiro" | ".codex"). */
+  /** The harness directory name (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;
   /** Route-table-derived namespace trusted by native host permission surfaces. */
   trustedRouteNamespace: string;
@@ -125,6 +128,13 @@ export type HarnessManifest = {
   name: string;
   /** User-facing product name used by lifecycle output. */
   productName: string;
+  /**
+   * The name the harness lists show instead of productName, for a harness
+   * told apart from another of the same product (Kiro CLI's v2 engine).
+   */
+  choiceName?: string;
+  /** What the harness lists show beside the name: which tools and engine it runs on. */
+  choiceNote?: string;
   /** Exact host action printed after `aidlc config` completes. */
   configNextStep: string;
   /**
@@ -345,7 +355,7 @@ export type HarnessManifest = {
    */
   skipRunnerGen?: boolean;
   /**
-   * Optional per-shell emission plugin (codex only today). It always writes
+   * Optional per-shell emission plugin (codex, copilot and opencode today). It always writes
    * into ctx.distRoot; under --check the packager invokes it in two independent
    * temporary roots and compares the complete generated trees.
    */

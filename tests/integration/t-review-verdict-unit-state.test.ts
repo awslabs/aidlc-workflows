@@ -3,7 +3,7 @@
 // function:reviewAttemptAccounting, function:evaluateGuardRefusal,
 // directive:guard-recovery
 //
-// OMP F1: terminal summary refusal must use the team Unit gate, not the
+// Terminal summary refusal must use the team Unit gate, not the
 // still-in-progress global checkbox. Start/complete, rejection, summary
 // authorization, output descent, and the pending request use their owning
 // commands/hooks; no review or lifecycle audit rows are fabricated.
@@ -408,8 +408,8 @@ describe("OMP F1: terminal review refusal respects the team Unit gate", () => {
         expect(p.state()).toBe(stateBefore);
         expect(p.accounting().pendingRequests.get(1)).toEqual(pending.pendingRequests.get(1));
 
-        // Primary F1 assertion: before the fix this is "in-progress", inherited
-        // from the global checkbox despite the proven revising Unit gate.
+        // The refusal must not inherit "in-progress" from the global checkbox despite
+        // the proven revising Unit gate.
         expect(p.refusal()).toMatchObject({
           code: scenario.code, blockedAction: "review-verdict",
           stage: STAGE, unit: UNIT, state: "revising",

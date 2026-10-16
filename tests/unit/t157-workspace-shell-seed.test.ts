@@ -63,6 +63,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { __resetGraphCache, loadRules } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
+import { REQUEST_TEXT_DIR } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { HARNESS_MATRIX } from "../harness/harness-matrix.ts";
 
@@ -155,7 +156,8 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
       } else if (harness.capabilities.memoryInclude === "codex-engine") {
         // Codex has no ambient include: the engine hands each step its rules.
         const config = readFileSync(join(harness.engineRoot, "config.toml"), "utf-8");
-        expect(config).not.toContain("AIDLC_RULES_DIR");
+        // Its AIDLC_RULES_DIR ships empty: it names no folder.
+        expect(config).not.toMatch(/AIDLC_RULES_DIR = "[^"]/);
         expect(existsSync(harness.onboardingDist)).toBe(true);
       } else if (harness.capabilities.memoryInclude === "copilot-agents-md") {
         // Copilot: the project-root AGENTS.md's @-import lines are the
@@ -318,6 +320,25 @@ describe("t157 seeded workspace shell + re-rooted .gitignore (SEED)", () => {
         hasActiveIgnore("aidlc-docs/runtime-graph.json"),
         `${h}: no flat aidlc-docs/runtime-graph.json ignore`,
       ).toBe(false);
+    }
+  });
+
+  // A request the agent wrote for the engine stays in its folder when the
+  // command never went ahead; the person's words are never theirs to commit.
+  test("8b: the gitignore ignores a request left in the request folder", () => {
+    for (const h of HARNESSES) {
+      const gi = readFileSync(gitignore(h), "utf-8");
+      expect(gi.split("\n").map((l) => l.trim()), `${h}: ignores the request folder`).toContain(
+        `${REQUEST_TEXT_DIR}/`,
+      );
+      const repo = mkdtempSync(join(tmpdir(), `aidlc-t157-request-${h}-`));
+      tempDirs.push(repo);
+      expect(spawnSync("git", ["init", "-q"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: repo }).status, `${h}: git init`).toBe(0);
+      writeFileSync(join(repo, ".gitignore"), gi, "utf-8");
+      expect(
+        spawnSync("git", ["check-ignore", "-q", `${REQUEST_TEXT_DIR}/request.txt`], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), cwd: repo }).status,
+        `${h}: a left request is functionally ignored`,
+      ).toBe(0);
     }
   });
 

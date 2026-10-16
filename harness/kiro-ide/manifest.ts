@@ -46,7 +46,9 @@ const DELEGATION_AGENTS = [
 // (the proposalPath detect --json prints). It writes no scope and not the
 // scope grid; saving a scope is the engine's `scope save`.
 const composerProposalPath = "aidlc/spaces/*/intents/.aidlc-engine/composer-proposal.json";
-const spacePaths = ["aidlc/spaces/**"];
+// A side-by-side worker's own unit records sit in its worktree, a top-level dot
+// entry (`.aidlc/worktrees/bolt-<id8>_<slug>`); its code there still asks.
+const spacePaths = ["aidlc/spaces/**", ".aidlc/worktrees/*/aidlc/spaces/**"];
 
 const quoted = (paths: readonly string[]) =>
   paths.map((path) => `        - "${path}"`);
@@ -82,13 +84,15 @@ const SHELL_FORM_ASKS = RISKY_SHELL_FORMS.map((form) => `bun .kiro/tools/aidlc*$
 // conductor's tools list selects those (agents/aidlc-aidlc.md). On that path its
 // shell allow is not applied, the conductor's is (delegate-shell-deny.ts); the
 // allow still serves a persona the person selects directly. tools is enforced on
-// every dispatch path; it names no MCP server, so a persona reaches none (an
-// @mcp wildcard would expose every user- and workspace-level server).
+// every dispatch path. includeMcpJson gives a persona every server in the
+// person's workspace and user mcp.json; no rule allows an MCP call, so each
+// one asks.
 function personaFrontmatter(agent: string): string[] {
   const writePaths = agent === "aidlc-composer-agent" ? [composerProposalPath] : spacePaths;
   // Engine-owned trees are never a persona's to write; a deny beats every allow.
   return [
     `tools: ["read", "write", "shell"]`,
+    "includeMcpJson: true",
     "permissions:",
     "  rules:",
     "    - capability: shell",
@@ -165,7 +169,9 @@ const KIRO_HOOKS_OFF_AGENT =
 
 const manifest: HarnessManifest = {
   name: "kiro-ide",
-  productName: "Kiro IDE",
+  // One tree for Kiro IDE and Kiro CLI, so it is named after neither.
+  productName: "Kiro",
+  choiceNote: "Kiro IDE and Kiro CLI on its v3 engine",
   configNextStep: "open this project in Kiro IDE; if the Restricted Mode banner shows at the top of the window and you know what is in this folder, select Manage on it, then Trust; run `Developer: Reload Window` from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), choose the aidlc agent in the chat panel's agent picker, then run `/aidlc --doctor` (in Kiro CLI, start `kiro-cli` in the project instead and run `/aidlc --doctor`)",
   // Kiro IDE runs a folder's hooks and loads its aidlc agent only after the
   // folder is trusted and the window reloads; until then the first approval
@@ -229,7 +235,9 @@ const manifest: HarnessManifest = {
       "folder in Kiro IDE: choose Trust Folder & Continue when Kiro asks whether you trust it, or " +
       "select Manage on the Restricted Mode banner, then Trust. Then run Developer: Reload Window " +
       "from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS), send a message and run " +
-      "doctor again. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.",
+      "doctor again. If AI-DLC was installed while Kiro IDE was open, quit Kiro IDE fully and reopen " +
+      "it instead: it keeps the PATH it started with, so its hooks cannot find aidlc, and Reload " +
+      "Window does not change that. In Kiro CLI, quit Kiro and start `kiro-cli` again in this folder.",
     // A second cause, measured live on Kiro IDE 1.2.37 (#2167): a folder
     // trusted after Kiro opened it runs the agent's commands, but Kiro's agent
     // started with hooks off for the untrusted folder ("hooks.v2.execution
@@ -272,6 +280,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored aidlc/active-memory/ (the
           // engine's copy of the active space's method).
           "sha256:a21217e44700aa0d6e703ebb524c4e07a3c4c12f7097d1923034b10b9a6d0549",
+          // The variant shipped before the block ignored aidlc/.aidlc-request-text/
+          // (a request the engine has not read yet).
+          "sha256:6c6ff7641c17829d77fdd023f340b938db11dcc26c734a0c452d5213f9bd19cf",
         ],
       },
     },
@@ -326,6 +337,7 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
     { src: "skills/aidlc/composer.md", dst: "skills/aidlc/composer.md" },
+    { src: "skills/aidlc/tables.md", dst: "skills/aidlc/tables.md" },
     // The reference form; the packager writes the shipped memory's text over
     // it, as the engine does with the project's own memory for every chat.
     { src: "steering/aidlc-active-memory.md", dst: "steering/aidlc-active-memory.md" },
@@ -341,7 +353,7 @@ const manifest: HarnessManifest = {
     { src: "hooks/aidlc-kiro-adapter.ts", dst: "hooks/aidlc-kiro-adapter.ts" },
     { src: "hooks/aidlc-kiro-tool-names.ts", dst: "hooks/aidlc-kiro-tool-names.ts" },
     // Kiro IDE shows a card for every hook run, so one registration runs the two
-    // hooks for each message and another the five tool-call checks (#2022). What
+    // hooks for each message and another the four tool-call checks (#2022). What
     // ran after a write or a command is done by the next card (catch-up).
     { src: "hooks/aidlc-record-human-turn.json", dst: "hooks/aidlc-record-human-turn.json" },
     { src: "hooks/aidlc-guard-tool-call.json", dst: "hooks/aidlc-guard-tool-call.json" },

@@ -136,7 +136,13 @@ Distribution coverage is split by contract:
   without failing the preview workflow.
 - `t-ci-preview-test-report.test.ts` covers the preview's Full Suite report:
   failing files and cases from each artifact's own run (never the runner's
-  fixture runs), failed jobs, inert markup, and the report size budget.
+  fixture runs), failed jobs, inert markup, the report size budget, and the
+  answers corpus section (read from the live artifacts' last attempt, on a pass
+  and a failure, kept out of the published notes).
+- `t-live-answers-nightly.test.ts` covers the answers corpus's nightly run: the
+  date rotation, the switch that opens it in the Claude SDK live job, a miss
+  reported but not owed while a drive that throws still fails, and the summary
+  the nightly report reads back.
 - `t-ci-full-suite-evidence.test.ts` covers the stable release Full Suite gate:
   which earlier runs may supply evidence, which results qualify for the exact
   tagged commit, the fallback to running the suite, and the `release.yml` wiring
@@ -222,6 +228,7 @@ Verifies the orchestrator's structural correctness without invoking the LLM. If 
 - Scope-stage mapping, graph consistency, stage I/O contract chains, protocol compliance (integration)
 - Stage output-to-step validation: all declared outputs referenced in instruction steps (integration, deterministic via the `aidlc-validate.ts` CLI tool)
 - Scope runs: every shipped scope driven from the person's first request to done (integration, `tests/integration/t-scope-run-*`; see below)
+- Scope-host runs: one classic journey on every harness tree (Claude, Codex, Copilot CLI, Kiro CLI, Kiro IDE, Cursor, opencode), through each tree's own hooks (integration, `tests/integration/t-scope-host-*`; see below)
 - Guard matrix: what the person meets when files change under approved work, per Guard Policy, review cap and plan approval (integration, `tests/integration/t-guard-matrix-*`; see below)
 
 No test in the deterministic tiers may depend on a harness CLI being installed on the machine that runs it — a host binary is shimmed on `PATH` in the test (the t150 `codex` and t331 `devin` shims) or reached only behind an `AIDLC_*_LIVE` gate that skips cleanly without it.
@@ -230,9 +237,9 @@ No test in the deterministic tiers may depend on a harness CLI being installed o
 integration level, so the run needs the LLM and opens the live-model gate
 whenever the `claude` CLI is on PATH. `--no-llm` closes that gate and keeps this
 layer LLM-free; the deterministic tests still run. `bash tests/run-tests.sh` is a
-compatibility wrapper for existing POSIX commands. The scope runs and the guard
-matrix run only when a `--filter` selects them, or with `--release`/`--all` (see
-the CLI reference).
+compatibility wrapper for existing POSIX commands. The scope runs, the
+scope-host runs and the guard matrix run only when a `--filter` selects them, or
+with `--release`/`--all` (see the CLI reference).
 
 ### Scope runs
 
@@ -263,6 +270,48 @@ their own integration job: Linux on pull requests and in the merge queue, and
 Linux, macOS and Windows in the nightly Full Suite (its `scope_runs` job) and in
 a `full_verification` Full Suite.
 
+### Scope runs on every harness tree
+
+`tests/harness/scope-hosts.ts` runs the same stand-in and person script on
+another tool's tree, through that tool's own hooks. Each host installs the tree
+as it ships, gives the agent's shell what that tool gives it (Codex's
+`CODEX_THREAD_ID`, Kiro's `KIRO_SESSION_ID`), and at every moment (a chat
+starts, the person types or picks, a shell or file tool runs, a helper is sent,
+the turn ends) runs each command the tree's wiring registers, fed that tool's
+payload: `.codex/hooks.json`, `.github/hooks/aidlc.json`, Kiro CLI's agent JSON
+(`.kiro/agents/<agent>.json`, glob matchers over a tool's name and its alias; a
+helper runs its own agent's hooks under a session of its own) and Kiro IDE's
+hook cards (`.kiro/hooks/*.json`, regex matchers in file-name order; no card runs
+after a write or a command, so the next card does that work, as in Kiro),
+Cursor's `.cursor/hooks.json` (no matchers; every answer is JSON at exit 0, and
+the turn end can only send a follow-up message, which the journey reads as a
+blocked hand-off) and opencode's plugin (loaded into one opencode process, a
+worker thread the host waits on; a refusal is the hook's thrown error).
+`tests/unit/t-scope-hosts.test.ts` pins those payloads against the ones recorded
+from each tool (`tests/fixtures/<tool>-hook-payloads`). Each tool's answer is
+read in its own form: Codex and Kiro refuse with exit 2, Copilot with a deny
+decision, Copilot runs the command its hook rewrote, and Kiro's person-turn hook
+may run the turn's first `next` itself, so the agent acts on that reply. Every
+tool call fires the hooks, so a refusal stops the run, and a hook command that
+fails is a problem. A host can also run on a project an installed release set
+up (`ScopeHost.launcher`): the agent's commands and the wiring's hooks then run
+through the person's `aidlc`, and the stand-in acts on the `aidlc engine ...`
+commands the installed engine names. The release's update check uses that.
+
+Each `t-scope-host-<harness>.test.ts` (`claude`, `codex`, `copilot`, `kiro`,
+`kiro-ide`, `cursor`, `opencode`) drives one
+journey: classic with its design stages skipped and two Units built one at a
+time, a checkpoint each. After the first Unit's checkpoint the person stops for
+the day, picks the work up from a fresh clone (the folder left with only what a
+clone holds, the first clone's audit shard sorting last), and carries on in a
+second chat with `/aidlc --resume`. The journey checks what the scope runs
+check, plus two audit shards, two chats, each Unit's checkpoint asked once, and
+no detour the person should not meet (such as being told to resume work they
+just picked up). CI runs them as their
+own integration job (`scope-hosts`): Linux on pull requests and in the merge
+queue, and Linux, macOS and Windows in the nightly Full Suite (its `scope_runs`
+job) and in a `full_verification` Full Suite.
+
 ### Guard matrix
 
 `tests/harness/guard-matrix.ts` uses the same stand-in to drive classic with two
@@ -292,7 +341,8 @@ command it names. Each case checks:
 
 A case the engine blocks today is a `test.todo` named after the block, with the
 real check as its body, so the fix turns it on. CI runs the guard matrix where
-it runs the scope runs, as a job of its own.
+it runs the scope runs, in two jobs of its own split by file name
+(`guard-matrix-1` takes `t-guard-matrix-[a-h]*`, `guard-matrix-2` the rest).
 
 ## Layer 2: Stage (CI push, LLM, minutes)
 
@@ -677,11 +727,11 @@ so a broken enumerator reds the gate.
 | Trigger | Layer | Command | Where |
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
-| Pull request push | Fast deterministic gate | `ci.yml`: contract checks + Linux smoke, twelve unit shards and deterministic integration (the scope runs and the guard matrix in jobs of their own), using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
-| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows (the scope runs and the guard matrix on Linux only; on macOS the unit tier runs only the unit files that name macOS and the ones the change touches, in two jobs instead of twelve shards), adding isolated E2E on each, retrying an assertion-failed smoke, unit or integration file once with a `Flaky test` warning, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
+| Pull request push | Fast deterministic gate | `ci.yml`: contract checks + Linux smoke, sixteen unit shards and deterministic integration (the scope runs, the scope-host runs and the guard matrix in jobs of their own), using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
+| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows (the scope runs, the scope-host runs and the guard matrix on Linux only; on macOS the unit tier runs only the unit files that name macOS and the ones the change touches, in two jobs instead of sixteen shards), adding isolated E2E on each, retrying an assertion-failed smoke, unit or integration file once with a `Flaky test` warning, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
 | Manual deterministic workflow dispatch | Targeted deterministic reproduction | `deterministic-tests.yml` accepts an immutable source SHA, runner, tier, required N/M shard for unit and optional manual-only `diagnostic_filter`; non-unit tiers omit the shard; one runner executes with model gates closed | GitHub Actions |
-| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, twelve unit shards, integration and isolated E2E as separate jobs in the shared workflow, with the scope runs and the guard matrix on Linux | GitHub Actions |
-| Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running native obligations, release contracts, bounded hosted live shards, and the scope runs and the guard matrix on Linux, macOS and Windows | GitHub Actions |
+| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, sixteen unit shards, integration and isolated E2E as separate jobs in the shared workflow, with the scope runs, the scope-host runs and the guard matrix on Linux | GitHub Actions |
+| Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running native obligations, release contracts, bounded hosted live shards, and the scope runs, the scope-host runs and the guard matrix on Linux, macOS and Windows | GitHub Actions |
 | Explicit manual Full Suite with `full_verification=true` | Credential-free candidate verification | Runs every job that receives no OIDC or AWS credentials for the selected workflow head, including an unmerged PR; live lanes need `live_verification`; separate evidence is not consumed by stable publication | GitHub Actions |
 | Explicit manual Full Suite with `live_verification=true` | Candidate live verification | Runs live preparation and hosted live/release-contract jobs for the selected workflow head only; separate evidence is not consumed by stable publication | GitHub Actions |
 | Stable tag | Exact-source release validation | `release.yml` validates the tag and source, reuses a passing release-purpose `full-suite-result` for the exact tagged commit or calls `full-suite.yml` for it, and runs contract checks, builds, and native/installer/lifecycle validation alongside; `publish` and `release` require the passing Full Suite | GitHub Actions |
@@ -720,7 +770,12 @@ Windows runner timing out cases) may have run up to 45 minutes and
 still gets its one retry; `retries.json` marks it `caseTimeoutsOnly`. The rule lives in
 `tests/lib/file-retry.ts`, shared with the isolated live retry. A crash or
 nonzero exit without failed cases, a file that executed no cases, a file that
-ran past its deadline, and a second failure are never retried. Only a retry that passes every case the
+ran past its deadline, and a second failure are never retried. Neither is a
+person-turn failure: a case that fails with the drives' `PersonTurnError`
+(`tests/harness/person-turns.ts`: a decision recorded as the person's with no
+reply of theirs behind it, or work started before they answered) keeps its file
+red with a `NO RETRY` line, because a pass on a second attempt would hide the
+break a person would meet. Only a retry that passes every case the
 first attempt ran replaces the first failure: a second failure, or a retry that
 skips one of those cases or executes none, stays a failure.
 The retry starts only after the first attempt's evidence is moved aside whole;
@@ -740,7 +795,7 @@ In the queue only, `ci.yml` passes `macos-merge-selection` to the macOS unit
 shards, and `scripts/ci-macos-unit-selection.ts` picks the unit files whose
 source names macOS or darwin (computed on each run, never a kept list) plus the
 unit files the change touches against its first parent (the queue entry ahead),
-spread over the twelve shards by weight, about 60 job-minutes in all. A selected
+spread over the queue's two macOS unit jobs by weight, about 60 job-minutes in all. A selected
 file brings the rest of its affinity group (t249 reads the binary t238 builds).
 Each shard runs its share as one whole shard (`--shard 1/1`, so the shard rules
 such as required compiled coverage hold) and leaves the other files out with
@@ -781,13 +836,15 @@ called by the preview are never cancelled this way.
 `.github/workflows/deterministic-tests.yml`. Callers select the immutable `ref`,
 runner, tier, unit shard, an optional file `filter` and `exclude` (both empty
 by default, so the whole tier runs) and artifact label. Both split integration
-in three jobs: the scope runs (`filter`, `t-scope-run-*`), the guard matrix
-(`filter`, `t-guard-matrix-*`) and everything else (`exclude` of both). PR CI
-selects Linux smoke, twelve weighted unit shards, and the three integration
-jobs; a `full_verification` Full Suite selects smoke, the same twelve shards,
-the three integration jobs, and isolated E2E on Linux/macOS/Windows. The
-nightly Full Suite runs no deterministic tier; its `scope_runs` job calls the
-shared workflow for the scope runs and the guard matrix on all three. Integration and
+in five jobs: the scope runs (`filter`, `t-scope-run-*`), the scope-host runs
+(`filter`, `t-scope-host-*`), the guard matrix in two halves by file name
+(`filter`, `t-guard-matrix-[a-h]*` and the rest of `t-guard-matrix-*`) and
+everything else (`exclude` of all three). PR CI selects Linux smoke, sixteen
+weighted unit shards, and the five integration jobs; a `full_verification` Full
+Suite selects smoke, the same sixteen shards, the five integration jobs, and
+isolated E2E on Linux/macOS/Windows. The nightly Full Suite runs no
+deterministic tier; its `scope_runs` job calls the shared workflow for the scope
+runs, the scope-host runs and the guard matrix on all three. Integration and
 E2E run as independent jobs per OS, each with a fresh Bun runner process.
 Every call owns a fresh checkout, installs frozen dependencies under Bun 1.4.2,
 regenerates projections, and invokes the Bash wrapper with `--debug -P 8
@@ -800,7 +857,7 @@ job backstop and a 270-minute execution step. The runner shares a four-hour
 work deadline across the invocation, with a two-hour deadline per file,
 including smoke and isolated deterministic E2E.
 This hierarchy leaves time to retire processes, finish reports, sanitize logs
-and upload evidence after work stops. Unit work remains partitioned into twelve
+and upload evidence after work stops. Unit work remains partitioned into sixteen
 weighted shards per OS without duplication; compiled producer/consumer
 affinity is preserved.
 
@@ -908,7 +965,7 @@ What people type after `/aidlc`, and in plain chat once work is under way: one i
 
 ### Answers Corpus: `tests/fixtures/aidlc-answers/corpus.json`
 
-What people reply to every question AI-DLC asks them: one item per reply at the state where that question is open (the stage gate, the gate with Accept as-is, a blocking-sensor question, the code plan question, the Unit and batch checkpoints, the verification command, a Construction policy change, the summary confirmation, a stage question the agent asked, the interaction-mode question, the routing question, the plan offer and scope confirmation, the record pick, the project-type question, a paused Unit, a guard-recovery ask, re-entry, a reopened stage, the learnings question, a jump target), with `meaning` (what the person means), `reader` (`tool` when the reply is an exact pick as the options were shown, `agent` otherwise), `expected.engine` (the choice a tool may record from the reply alone, the words that must be kept, the engine's step) and `expected.end` (what the person ends with after a real agent acted, for the live check). Replies are typed in plain chat, typed after `/aidlc` or `$aidlc`, or picked in the question box. Items whose expectation needs a change not merged yet carry `after` and are skipped until it lands. The shared mechanics live in `tests/harness/aidlc-answers-corpus.ts`; `tests/unit/t-aidlc-answers-corpus.test.ts` runs every item through each host's human-turn hook, then the engine's step and the agent's answer command (`AIDLC_ANSWERS_ONLY=<ids>` narrows a run, `AIDLC_ANSWERS_PARALLEL` sets the pool). `tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts` drives a sample through real agents on demand (`AIDLC_ANSWERS_LIVE=1`): the real agent shows the question first (a bare `/aidlc` at the fixture's state), then the person replies in chat, after `/aidlc`, or in the question box; the script judges what is on disk against `expected.end` (the choice recorded with the person's words beside it, the message record, a question asked twice), a model judges what the agent told the person against `meaning` and `says`, and a report with a score per question and every miss with its transcript excerpt lands under `AIDLC_ANSWERS_REPORT_DIR`. The two live checks share `tests/harness/live-corpus.ts` (gates, the seeded sample, scratch projects and homes, the home digests, the model judge, the report).
+What people reply to every question AI-DLC asks them: one item per reply at the state where that question is open (the stage gate, the gate with Accept as-is, a blocking-sensor question, the code plan question, the Unit and batch checkpoints, the verification command, a Construction policy change, the summary confirmation, a stage question the agent asked, the interaction-mode question, the routing question, the plan offer and scope confirmation, the record pick, the project-type question, a paused Unit, a guard-recovery ask, re-entry, a reopened stage, the learnings question, a jump target), with `meaning` (what the person means), `reader` (`tool` when the reply is an exact pick as the options were shown, `agent` otherwise), `expected.engine` (the choice a tool may record from the reply alone, the words that must be kept, the engine's step) and `expected.end` (what the person ends with after a real agent acted, for the live check). Replies are typed in plain chat, typed after `/aidlc` or `$aidlc`, or picked in the question box. Items whose expectation needs a change not merged yet carry `after` and are skipped until it lands. The shared mechanics live in `tests/harness/aidlc-answers-corpus.ts`; `tests/unit/t-aidlc-answers-corpus.test.ts` runs every item through each host's human-turn hook, then the engine's step and the agent's answer command (`AIDLC_ANSWERS_ONLY=<ids>` narrows a run, `AIDLC_ANSWERS_PARALLEL` sets the pool). `tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts` drives a sample through real agents on demand (`AIDLC_ANSWERS_LIVE=1`): the real agent shows the question first (a bare `/aidlc` at the fixture's state), then the person replies in chat, after `/aidlc`, or in the question box; the script judges what is on disk against `expected.end` (the choice recorded with the person's words beside it, the message record, a question asked twice), a model judges what the agent told the person against `meaning` and `says`, and a report with a score per question and every miss with its transcript excerpt, and a summary for the nightly report, lands under `AIDLC_ANSWERS_REPORT_DIR`. The nightly runs it too, in the Claude SDK family's Linux live job, where no switch of its own reaches the file: on GitHub Actions with `AIDLC_CLAUDE_SDK_LIVE=1` it drives Claude Code only, one item per question chosen by a date rotation (night N of the rotation from 2026-10-15 drives each question's item N modulo the question's item count, in corpus order, so every item comes round within as many nights as the largest question has items), and it reports every miss without failing (`NIGHTLY_MISSES_FAIL` in the file makes misses fail it, as on demand). A drive that throws, a run that drives no item, or a changed real home still fails the file. The nightly report's Answers corpus section shows the result (see [Nightly full-suite matrix and provisioning](#nightly-full-suite-matrix-and-provisioning)). The two live checks share `tests/harness/live-corpus.ts` (gates, the seeded sample and the nightly's rotation, scratch projects and homes, the home digests, the model judge, the report and its summary).
 
 ## State Fixtures
 
@@ -986,8 +1043,9 @@ Evidence committed to the repository is minimal by policy:
 | `AIDLC_INPUT_SEED` | `1` | Seed of the live input check's sample, so a re-run drives the same items. |
 | `AIDLC_ANSWERS_LIVE` | unset | Set to `1` to drive a sample of the answers corpus through real agents (`tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts`); each harness keeps its own gate (`AIDLC_CODEX_EXEC_LIVE`, `AIDLC_KIRO_ACP_LIVE`, the `claude` binary). |
 | `AIDLC_ANSWERS_HARNESSES` | `claude,codex,kiro` | Which agents the live answers check drives. |
-| `AIDLC_ANSWERS_SAMPLE` | `2` | Items per question for the live answers check, or a comma list of item ids. |
+| `AIDLC_ANSWERS_SAMPLE` | `2` | Items per question for the live answers check, or a comma list of item ids. The pool is the replies a fresh chat can meet: a question the agent asked in chat (a stage question, learnings) is not shown again by a bare `/aidlc`, so only its replies typed with `/aidlc` are driven, as the whole exchange; a verification command or Construction policy answer is recorded only from the chat that asked it, and guard recovery's fixture cannot be met, so those are read by the unit check only (`liveReply` in `tests/harness/aidlc-answers-corpus.ts`). |
 | `AIDLC_ANSWERS_SEED` | `1` | Seed of the live answers check's sample, so a re-run drives the same items. |
+| `AIDLC_ANSWERS_REPORT_DIR` | `aidlc-answers-live` in the run's log folder (`AIDLC_TEST_LOG_DIR`, else `tests/logs`) | Where the live answers check writes its report, its transcripts and the summary the nightly report reads. |
 | `AIDLC_INPUT_REPORT_DIR` | `tests/logs/aidlc-input-live` | Where the live input check writes its report (a score per category and every miss with its transcript excerpt). |
 | `AIDLC_INPUT_ONLY` | unset | Comma list of corpus item ids that narrows the unit input check (`tests/unit/t-aidlc-input-corpus.test.ts`). |
 | `AIDLC_INPUT_PARALLEL` | `6` | Fixture pool size of the unit input check. |
@@ -1070,11 +1128,12 @@ are left out of the tier, and the rest keep their ordinary, unfiltered rules
 below. With `--shard`, the shard is chosen first and then the files it matches
 are left out of it.
 
-The scope runs and the guard matrix (`t-scope-run-*`, `t-guard-matrix-*`) take
-minutes per file, so a run with no `--filter` leaves them out and says so; the
-full `--release` and `--all` acceptance keeps them. Run them alone with
-`--integration -P 8 --filter '^t-(scope-run|guard-matrix)-'`, as their CI jobs
-do.
+The scope runs, the scope-host runs and the guard matrix (`t-scope-run-*`,
+`t-scope-host-*`, `t-guard-matrix-*`) take minutes per file, so a run with no
+`--filter` leaves them out and says so; the full `--release` and `--all`
+acceptance keeps them. Run them alone with
+`--integration -P 8 --filter '^t-(scope-run|scope-host|guard-matrix)-'`, as
+their CI jobs do.
 
 An explicit **`--filter` requires execution in each selected file**. A file
 whose cases are all skipped (or which declares no cases) fails the run even
@@ -1183,7 +1242,7 @@ journeys. Full Suite additionally requires complete coverage for that selection.
 
 All 8 parallel calls observed `cache_read=73789`. This historical help-command probe observed prompt-cache reuse without throttling or corruption; it does not establish capacity for concurrent full workflows.
 
-**What stays serial.** Smoke and unit tiers ignore `--parallel` and run serially within one checkout. Unit CI reduces wall-clock time with isolated shards instead: each shared-workflow call owns a fresh checkout and runs its assigned files serially, so packaging tests can regenerate `dist/` without racing readers. PR CI uses twelve weighted unit shards on Linux and eight workers for integration, which start the longest integration files first. Manual Full Suite `full_verification` uses the same shard definition on Linux, macOS, and Windows; smoke runs once per OS, and deterministic integration and isolated E2E run in separate jobs with eight workers each. Adding `-P 8` to a combined smoke/unit command alone does not parallelize those tiers. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
+**What stays serial.** Smoke and unit tiers ignore `--parallel` and run serially within one checkout. Unit CI reduces wall-clock time with isolated shards instead: each shared-workflow call owns a fresh checkout and runs its assigned files serially, so packaging tests can regenerate `dist/` without racing readers. PR CI uses sixteen weighted unit shards on Linux and eight workers for integration, which start the longest integration files first. Manual Full Suite `full_verification` uses the same shard definition on Linux, macOS, and Windows; smoke runs once per OS, and deterministic integration and isolated E2E run in separate jobs with eight workers each. Adding `-P 8` to a combined smoke/unit command alone does not parallelize those tiers. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
 
 **Output under parallelism.** `START` markers stream live; several can appear before the first `DONE`. In normal/verbose mode, the TypeScript coordinator buffers each test's TAP body and writes it as one block when that file finishes. In `--debug` mode, Bun stdout/stderr streams live while still being written to each per-test log; parallel debug output is prefixed by file basename so overlapping workers remain attributable. SDK/TUI/Kiro-ACP/Devin-ACP driver traces are written beside the logs as `$LOG_DIR/sdk-drive-*.ndjson`, `$LOG_DIR/tui-drive-*.ndjson`, `$LOG_DIR/kiro-acp-drive-*.ndjson`, and `$LOG_DIR/devin-acp-drive-*.ndjson`; isolated E2E places them under the file's artifact directory. The runner prints their paths at startup and at each test start. Kiro-ACP traces include tool calls and updates, output previews, permission answers, process stderr, and result/timeout/end events so a timeout can be investigated from retained evidence.
 
@@ -1530,13 +1589,34 @@ matrix again; Full Suite owns its test coverage. A failing Full Suite does not
 stop the preview build. The `Release tests` job renders a report of the failed
 legs, failed jobs and failing test cases with `scripts/ci-preview-test-report.ts`.
 It writes the report to the run summary and a `preview-test-report` artifact.
+Passing or failing, the report ends with the answers corpus's nightly reading
+(`### Answers corpus`): the replies that passed, the misses by kind (setup,
+the check's own when the agent never showed the question; record, question,
+words) and each missed item by id, from the summary the live check
+leaves in its `full-suite-live-*` artifact, or a line that none was there. That
+section is report-only and never goes into the published notes.
 The published preview notes then open with a warning and end with that report.
 The planned notes stay whole. The report, and when even that leaves no room the
 warning, gives way first, so a failing suite never stops a preview whose planned
 notes fit GitHub's 125,000-character release limit.
 The `update-from-previous` job (`scripts/ci-update-from-previous.ts`) updates an
 install of the last stable release to the candidate on Linux, macOS and Windows
-and runs every harness project's hooks, refresh and doctor. When it fails, the
+and runs every harness project's hooks, refresh and doctor. Each project holds
+the person's own committed app, `.gitignore` and `AGENTS.md`, and their work
+waits at a gate: before the update, on the last release's own engine and hooks,
+the scripted stand-in (`tests/harness/work-open.ts`, on that tool's scope host)
+starts a bugfix, answers the Requirements questions and stops for the day at
+the open Requirements gate, in all seven projects side by side. After the
+refresh, the person types `/aidlc --resume` in a new chat and approves. The
+check fails when the gate does not come back, the stage runs again, an answer
+is asked for again, the approval is not backed by the person's reply, the next
+stage does not start, or a file they committed changed outside AI-DLC's marked
+part. When the stand-in cannot leave work open on the last release at all, the
+check says so in its own line. A second leg of the job (`--channel copy`) does
+the same for the copy channel: each project is `runtime/<harness>/` copied from
+the last release's copy runtime, checked against its `.sha256` and set up with
+its own `config --from`, and refreshes with that command from the candidate's
+copy runtime, as the guide's Copy Channel says. When either leg fails, the
 preview still publishes, its notes open with a warning and the report gains a
 line for it; `release.yml` does not publish a stable release that fails it.
 `Release result` requires successful preview publication or an intentional
@@ -1659,7 +1739,7 @@ Windows release-contract job also runs.
 
 The declared coverage is:
 
-- In manual `full_verification` only: deterministic smoke, twelve independent
+- In manual `full_verification` only: deterministic smoke, sixteen independent
   unit shards, integration and isolated E2E on Linux, macOS and Windows. Integration and E2E have separate jobs,
   each with eight workers and its own runner process and evidence. Every unit file is
   assigned to one shard per OS; each shard retains its own debug logs and results.
@@ -1689,8 +1769,9 @@ After authorization and dependency installation, the plan emits `--matrix
 linux`, `--matrix macos` and `--matrix windows` as the dynamic matrices of the
 `live_linux`, `live_macos` and `live_windows` jobs. Each row's `shard: N/M`
 selects a duration-balanced group for its family/platform. Each OS has two Claude
-SDK (four on Linux, which alone runs the golden journeys), three Claude TUI, one
-Codex, one Copilot and one opencode shard: 26 live harness jobs in all. Timing weights in
+SDK (five on Linux, which alone runs the golden journeys and the answers corpus,
+the corpus on a shard of its own), three Claude TUI, one Codex, one Copilot and one
+opencode shard: 27 live harness jobs in all. Timing weights in
 `tests/live-shard-weights.json` are scheduling hints;
 discovery still assigns every eligible file exactly once per platform. Each OS
 has its own concurrency cap: four Linux, two macOS and three Windows live jobs.
@@ -1705,11 +1786,36 @@ Installed tools and dependencies are reused. The existing process/transport
 retirement checks must succeed before a slot is reused. Cleanup uncertainty
 stops dispatch and marks remaining files incomplete.
 
+Stock permission settings: the two golden journeys drive Claude Code in its
+default permission mode with the project's shipped settings (setting sources
+user, project and local; user is the drive's scratch config folder) and answer
+every prompt yes. A prompt for AI-DLC's own command or record (one that names
+`aidlc/` or `.claude/`), or a write outside the project, fails the journey;
+every other prompt is listed in its log (`tests/harness/stock-permissions.ts`).
+The other Claude SDK drives keep `bypassPermissions`. The Codex `--json`
+journeys run the shipped `workspace-write` sandbox, and a command naming
+`.codex/` or `aidlc/` that the sandbox refused fails the turn. Copilot CLI runs
+with `--allow-all-tools` (AI-DLC ships no Copilot CLI allow rules, so the
+person's own `--allow-tool` rules decide), the Claude terminal journeys skip
+permission prompts, and opencode already runs without `--auto`.
+
 `--file-retries 1` retries only a short failed file after confirmed cleanup, in
 fresh state, while retaining both attempts under `e2e-artifacts/<file>/attempt-N`.
 (Without `--isolated-files`, the same flag retries smoke, unit and integration
 files in a fresh process; the merge queue uses that, as described above.)
-Timeouts, incomplete evidence and cleanup failures are not retried. Passing
+Timeouts, incomplete evidence, cleanup failures and person-turn failures are
+not retried; a person-turn failure also prints a `Person-turn failure` error
+line. A pass on the retry prints a `Flaky live test` warning. A file that
+failed because the model service did (the SDK drive's `ModelApiError`: Claude
+Code ended the run on a 429, a 5xx or a dropped connection, never a 4xx the
+request caused) keeps its one retry and prints a `Model service failure`
+warning; when every failed case is the service's, its line in `failures.txt` and
+the preview report reads "the model service failed, not AI-DLC: infrastructure,
+not a test result", and a real failure beside one keeps the file's ordinary
+reason. The Windows live
+job keeps the isolated child's output out of its log, so it says these lines
+from the collected `e2e-results.json` (`bun scripts/ci-retry-report.ts --live
+tests/logs`), in fixed words and the test file's name only. Passing
 files are not rerun. Each shard retains its authenticated isolation and required
 capability preflights. Manual `--family FAMILY --test <repository-path>` selects
 only that file on its declared platforms while preserving its shard identity.
@@ -1737,7 +1843,7 @@ generic plugin helper does not claim coverage for every provider it supports.
 Unit gate-fixture tests are deterministic, not live families. `PLATFORM_ONLY`
 names the files that run on some platforms only, and, with no platform, the
 on-demand checks that open only with a switch of their own that no live job sets
-(the input and answers corpus checks); it never hides a skipped case inside a
+(the input corpus check); it never hides a skipped case inside a
 selected file. All live provider legs use `--require-coverage`;
 release-contract files retain platform-conditional cases and do not use that flag.
 
@@ -1773,8 +1879,10 @@ Artifacts are `full-suite-native-plan`, `full-suite-native-<job>` (complete log
 stamp directories and JUnit), `full-suite-native-result`,
 `full-suite-production-guards`,
 `full-suite-deterministic-<suite>-<OS>` (suite is `smoke`, `unit-1` through
-`unit-12`, `integration`, `scope-runs`, `guard-matrix`, or `e2e`),
-`full-suite-scope-runs-<OS>` and `full-suite-guard-matrix-<OS>` (the release
+`unit-16`, `integration`, `scope-runs`, `scope-hosts`, `guard-matrix-1`,
+`guard-matrix-2`, or `e2e`), `full-suite-scope-runs-<OS>`,
+`full-suite-scope-hosts-<OS>`, `full-suite-guard-matrix-1-<OS>` and
+`full-suite-guard-matrix-2-<OS>` (the release
 `scope_runs` job), `full-suite-live-<family>-<slice-number>-<OS>`,
 `full-suite-live-release-contract-Windows`, and the purpose-specific result
 (90-day retention): `full-suite-result` for `purpose: "release"`,
@@ -1806,7 +1914,7 @@ receipt reconciliation still discovers the receipts recursively.
 Shared deterministic artifacts contain `tests/logs/<stamp>/` and
 `tmp/ci-deterministic/` (full stdout/stderr plus the literal stamp path). CI
 artifacts use `ci-deterministic-<suite>-<OS>`, where suite is smoke,
-unit-1 through unit-12, integration, or e2e (expanded manual matrix only).
+unit-1 through unit-16, integration, or e2e (expanded manual matrix only).
 An upload requires both log locations
 to pass sanitization, including after a failed test command.
 
@@ -1943,7 +2051,9 @@ The broker stays under the runner identity; only nonsecret routes and model pins
 cross into the live user's environment. Failed isolation proofs block execution.
 
 Windows Codex also provisions its two native sandbox identities and verifies
-both using fresh test homes. The readiness command runs through PowerShell and
+both using fresh test homes. A provisioning run that exits non-zero runs once
+more on the same fresh host, its logs kept beside the first run's; a timeout
+or an unfinished output drain still fails closed at once. The readiness command runs through PowerShell and
 Bun under the actual sandbox: the shell must start in the project, Bun must
 canonicalize its path, and credential reads and writes outside the workspace
 must remain denied. The sandbox identities receive directory metadata and
@@ -2072,7 +2182,7 @@ Sharded unit execution requires t249 to resolve this handoff; a missing artifact
 fails instead of silently skipping the compiled cases, even when an explicit
 executable or an old repository build exists. Direct, non-sharded t249 runs can
 still opt into `AIDLC_TEST_COMPILED_EXECUTABLE` or a local native build result.
-The smoke runner contract verifies that all twelve CI shards are non-empty,
+The smoke runner contract verifies that all sixteen CI shards are non-empty,
 disjoint, cover the complete unit inventory, preserve producer/consumer ordering,
 and fail compiled coverage when the producer is filtered out.
 

@@ -270,10 +270,18 @@ export interface RunStageDirective {
   // the returned `done` as terminal.
   single?: boolean;
   // Exact persona + knowledge files the conductor must read for work it owns
-  // inline: lead + supports on inline stages, lead only on a mob (supports are
-  // dispatched), and empty on fully-dispatched subagent/pipeline topologies.
-  // Carrying paths makes persona loading observable and enforceable in traces.
+  // inline: the supports' personas on inline stages, then the knowledge of the
+  // lead and of every agent the chat works as (the lead alone on a mob, whose
+  // supports are dispatched), and empty on fully-dispatched subagent/pipeline
+  // topologies. The lead's own persona is listed only when it does not ride in
+  // lead_persona. Carrying paths makes loading observable in traces.
   inline_context_paths: string[];
+  // The lead's persona, the file the list would have named and its text, on a
+  // step whose body the chat works as the lead: the agent takes it on with
+  // nothing to read first, so no read order can put the work ahead of it.
+  // Absent on a dispatched stage, on a step whose body does not run, and when
+  // it would not fit beside the step (the file is then listed first instead).
+  lead_persona?: { path: string; text: string };
   // Non-fatal problems discovered while building the path-loaded persona /
   // knowledge roster. The conductor shows these actionable warnings and
   // continues with the readable context; rule-delivery failures are blocking
@@ -918,6 +926,7 @@ const RUN_STAGE_FIELDS = [
   "pipeline",
   "single",
   "inline_context_paths",
+  "lead_persona",
   "context_warnings",
   "kept_replies",
   "parked_reply",
@@ -1162,6 +1171,15 @@ export function gateOnlyNote(): string {
     "run the stage again or change what it produced.";
 }
 
+// The step whose note is gateOnlyNote, in the notes' own order: the agent shows
+// the gate and ends its turn, so the engine marks the turn as ended there.
+export function showsGateAgain(d: Record<string, unknown>): boolean {
+  return d.kind === "run-stage" &&
+    (d.construction_checkpoint as { command_authorized?: unknown } | undefined)?.command_authorized !== false &&
+    d.gate !== GATE_UNRESOLVED &&
+    d.gate_only === true;
+}
+
 // The protocol files a step runs by, named from its own stage file, so a chat
 // with no skill loaded reads them (seen live: a Unit's step looped on a review
 // and an autonomy question the agent never knew about).
@@ -1246,15 +1264,21 @@ export function answerModeNote(mode: StageAnswerMode, stage: string, logInvocati
 // What the agent reads before the stage's work: the persona and knowledge files
 // the engine already filtered for this topology (lead and supports inline, the
 // lead alone on a mob, none when every agent is dispatched), then the stage
-// file and the inputs that exist. The note points at the step's own lists by
-// meaning, not by field name and not by repeating them: a large step sits
-// close to the transport cap, and a repeated list is what would push it over.
-export function contextNote(paths: readonly string[], consumes: readonly string[]): string {
+// file and the inputs that exist. The lead's persona usually rides in the step
+// itself, so there is nothing to read before it. The note points at the step's
+// own lists by meaning, not by field name and not by repeating them: a large
+// step sits close to the transport cap, and a repeated list is what would push
+// it over.
+export function contextNote(paths: readonly string[], consumes: readonly string[], leadCarried = false): string {
   const inputs = consumes.length > 0 ? " and the inputs it names" : "";
+  const lead = leadCarried ? "Work this stage as the lead whose persona this step carries. " : "";
   if (paths.length === 0) {
-    return `Read the stage file this step names${inputs}; the agents you dispatch load their own persona and knowledge.`;
+    return leadCarried
+      ? `${lead}Read the stage file this step names${inputs}.`
+      : `Read the stage file this step names${inputs}; the agents you dispatch load their own persona and knowledge.`;
   }
-  return "Before anything else, read the persona and knowledge files this step lists, one at a time and in the order " +
+  const files = leadCarried ? "files" : "persona and knowledge files";
+  return `${lead}Before anything else, read the ${files} this step lists, one at a time and in the order ` +
     `listed, with your file tool, and wait for each result. Then read the stage file it names${inputs}.`;
 }
 
@@ -1431,7 +1455,7 @@ export function knownDirectiveFieldNames(): string[] {
 // Whether a stage step runs its body here: a gate shown again, a settled swarm,
 // a Unit or batch checkpoint and a team gate are handled without it, and a wave
 // hands the body to its builders. Notes about the body ride only when it runs.
-function bodyRuns(d: Record<string, unknown>): boolean {
+export function bodyRuns(d: Record<string, unknown>): boolean {
   if (d.gate_only === true || d.swarm_settled === true) return false;
   if ("construction_checkpoint" in d || "swarm_checkpoint" in d || "unit_gate" in d || "wave" in d) return false;
   return (d.construction_policy as { completion_only?: boolean } | undefined)?.completion_only !== true;
@@ -1484,7 +1508,7 @@ export function withAgentNotes<T extends object>(
     if (bodyRuns(d)) {
       const paths = Array.isArray(d.inline_context_paths) ? d.inline_context_paths.filter((p): p is string => typeof p === "string") : [];
       const consumes = Array.isArray(d.consumes) ? d.consumes.filter((p): p is string => typeof p === "string") : [];
-      notes.context_note = contextNote(paths, consumes);
+      notes.context_note = contextNote(paths, consumes, isPlainObject(d.lead_persona));
       if (isPlainObject(d.ceremony) && (d.ceremony.summary_confirmation === "on" || d.ceremony.summary_confirmation === "off")) {
         notes.ceremony_note = ceremonyNote(d.ceremony.summary_confirmation);
       }
@@ -1515,7 +1539,7 @@ export function withAgentNotes<T extends object>(
       notes.gate_note = verificationCommandRecovery(typeof d.stage === "string" ? d.stage : undefined, logInvocation, stateInvocation);
     } else if (d.gate === GATE_UNRESOLVED) {
       notes.gate_note = unresolvedGateNote(invocation);
-    } else if (d.gate_only === true) {
+    } else if (showsGateAgain(d)) {
       notes.gate_note = gateOnlyNote();
     } else if (
       d.gate === false && typeof d.unit === "string" &&
@@ -1961,6 +1985,12 @@ function checkRunStageShared(
   checkEnum(o, "mode", VALID_MODES, kind, errors);
   checkOptionalPipeline(o, kind, errors);
   checkStringArray(o, "inline_context_paths", kind, errors);
+  if (o.lead_persona !== undefined) {
+    const persona = o.lead_persona;
+    if (!isPlainObject(persona) || typeof persona.path !== "string" || typeof persona.text !== "string") {
+      errors.push(`${kind}: lead_persona must be an object with string path and text`);
+    }
+  }
   checkOptionalStringArray(o, "context_warnings", kind, errors);
   checkOptionalKeptReplies(o, kind, errors);
   checkOptionalParkedReply(o, kind, errors);

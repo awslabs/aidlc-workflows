@@ -54,12 +54,10 @@ function parseOutputs(outputsLine: string): string[] {
 
   while (parenMatch !== null) {
     const inner = parenMatch[1];
-    // Extract .md filenames from inside parens
     const mdFiles = inner.match(/(?:CONDITIONAL:\s*)?[\w-]+\.md/g);
     if (mdFiles) {
       hasParenFiles = true;
       for (const f of mdFiles) {
-        // Strip CONDITIONAL: prefix
         const clean = f.replace(/^CONDITIONAL:\s*/, "");
         filenames.push(clean);
       }
@@ -74,9 +72,7 @@ function parseOutputs(outputsLine: string): string[] {
   const parts = outputsLine.split(",");
   for (const part of parts) {
     const trimmed = part.trim();
-    // Strip CONDITIONAL: prefix
     const cleaned = trimmed.replace(/^CONDITIONAL:\s*/, "");
-    // Match paths ending in .md (but not parenthesized descriptions)
     const mdMatch = cleaned.match(/([\w{}.-]+\.md)/);
     if (mdMatch) {
       filenames.push(basename(mdMatch[1]));
@@ -93,15 +89,12 @@ function parseOutputs(outputsLine: string): string[] {
  * Handles both `## Steps` and `## PART 1:` section styles.
  */
 function extractBodySection(content: string): string {
-  // Try ## Steps first, then ## PART, then first ### Step
   for (const marker of ["## Steps", "## PART"]) {
     const idx = content.indexOf(marker);
     if (idx !== -1) return content.slice(idx);
   }
-  // Fallback: find first ### heading
   const stepIdx = content.indexOf("### Step");
   if (stepIdx !== -1) return content.slice(stepIdx);
-  // Last resort: everything after the MANDATORY line
   const mandIdx = content.indexOf("MANDATORY:");
   if (mandIdx !== -1) {
     const nextLine = content.indexOf("\n", mandIdx);
@@ -136,15 +129,11 @@ function isOutputReferenced(filename: string, bodyText: string): boolean {
 
   if (keywords.length === 0) return true; // too short to validate
 
-  // All significant keywords must appear as substrings (case-insensitive).
-  // Handle singular/plural: try both "keyword" and "keyword" without trailing "s".
   return keywords.every((kw) => {
     const kwLower = kw.toLowerCase();
     if (lower.includes(kwLower)) return true;
-    // Try singular form (strip trailing 's')
     if (kwLower.endsWith("s") && lower.includes(kwLower.slice(0, -1)))
       return true;
-    // Try plural form (add trailing 's')
     if (lower.includes(`${kwLower}s`)) return true;
     return false;
   });
@@ -247,7 +236,6 @@ function handleOutputs(phaseArg: string): void {
     });
   }
 
-  // If single phase, output single result; if "all", output array
   if (phaseArg === "all") {
     const allPass = results.every((r) => r.pass);
     jsonSuccess({ phases: results, pass: allPass });

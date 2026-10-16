@@ -27,8 +27,7 @@ is fixed or the human-backed override flow above completes. Autonomous mode
 cannot override a blocking sensor.
 
 Failed checks emit a `SENSOR_FAILED` audit row and write findings to
-`<record>/.aidlc-engine/sensors/<stage-slug>/<sensor>-<fire-id>.md`; use that detail
-file to correct the output and run the check again.
+`<record>/.aidlc-engine/sensors/<stage-slug>/<sensor>-<fire-id>.md`.
 
 When a gate opens, or is shown again, the engine's reply names each check that
 still fails on a declared output in its `narration`
@@ -46,8 +45,9 @@ particular files. Timestamp markers (`<slug>-timestamp.md`) are run records
 and always pass.
 
 `upstream-coverage` compares output prose with the stage's `consumes:`
-frontmatter. Every declared artefact must be referenced so the output shows
-which upstream inputs informed it. Stages with an empty `consumes:` list pass
+frontmatter. Every required artefact that exists must be referenced so the
+output shows which upstream inputs informed it; an optional one
+(`required: false`) is not checked unless the stage lists it under `cites:`. Stages with no required or cited `consumes:` pass
 this check trivially. The compact `Imports:` and `Upstream targets:` lines in
 each stage file are the local summary; frontmatter remains authoritative when
 checks are resolved.

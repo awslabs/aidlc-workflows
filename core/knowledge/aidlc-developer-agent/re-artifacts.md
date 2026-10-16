@@ -101,7 +101,7 @@ below:
 ## Run Record
 
 - Date: [ISO-8601 date of this run]
-- Commit: [HEAD commit hash, or "unknown" when not available]
+- Commit: [the commit the brief gives from the snapshot, or "unknown"]
 ```
 
 ### Scope of Analysis Block (reverse-engineering-timestamp.md)

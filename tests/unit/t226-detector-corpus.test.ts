@@ -1269,6 +1269,40 @@ describe("detector corpus", () => {
     }
   });
 
+  test("a scope change or a check typed with next is the same dispatch, with the words flag its step names", () => {
+    const fill = ", with <their words> the person's reply that asked for it, word for word";
+    const step = (named: string, said: string, verb: string): string => JSON.stringify({
+      kind: "print",
+      message: `Run \`${named}\` to ${verb}${said}, then print its output verbatim and stop.`,
+    });
+    const engine = "bun .claude/tools/aidlc.ts engine";
+    for (const [typed, named, verb] of [
+      ["--scope mvp --sensors off", "scope change --scope mvp --sensors off", "change scope"],
+      ["--scope mvp --guard.review-freeze Off", "scope change --scope mvp --guard.review-freeze off", "change scope"],
+      ["--guard.review-freeze off", "config set guard.review-freeze off", "update the configuration"],
+      ["--depth minimal --guard.state-transition off", "config set depth minimal --guard.state-transition off", "update the configuration"],
+      // `guard.plan-approval` is another way to say plan approval.
+      ["--guard.plan-approval off", "config set plan-approval off", "update the configuration"],
+    ]) {
+      const command = `${engine} orchestrate next ${typed}`;
+      const setter = `${engine} ${named}`;
+      expect(isEngineToolCall("Bash", { command }, step(`${setter} --person-words '<their words>'`, fill, verb)), command).toBe(false);
+      for (const other of [
+        step(`${setter} --person-words 'please'`, fill, verb),
+        step(`${setter} --person-words`, fill, verb),
+        step(`${setter} --person-words '<their words>'`, "", verb),
+        step(setter, fill, verb),
+        step(`${setter.replace(" off", " on")} --person-words '<their words>'`, fill, verb),
+      ]) {
+        expect(isEngineToolCall("Bash", { command }, other), `${command}: ${other}`).toBe(true);
+      }
+    }
+    // A check word the engine refuses, or no word, is its own terminal refusal, as a depth word is.
+    for (const typed of ["--guard.review-freeze maybe", "--guard.review-freeze", "--guard.state-transition off --depth bogus"]) {
+      expect(isEngineToolCall("Bash", { command: `${engine} orchestrate next ${typed}` }), typed).toBe(false);
+    }
+  });
+
   test("a scope change needs its exact authoritative dispatch output", () => {
     const command = "bun .claude/tools/aidlc.ts engine orchestrate next --scope mvp";
     const directive = {
@@ -1407,7 +1441,10 @@ describe("detector corpus", () => {
           [`${entry} --project-dir '${otherProjectDir}' next --depth standard`, true],
           [`${terminal} --project-dir '${projectDir}'`, false],
           [`${terminal} --project-dir='${otherProjectDir}'`, true],
-          [`${terminal} --project-dir='${projectDir}'`, false],
+          // The orchestrator takes its folder only as two tokens: there
+          // `--project-dir=<dir>` is a token `next` does not take, so the line is
+          // not this terminal command. The dispatcher's own grammar reads it.
+          [`${terminal} --project-dir='${projectDir}'`, entry.endsWith("aidlc-orchestrate.ts")],
           [`cd '${projectDir}' && ${terminal} --project-dir '${otherProjectDir}'`, true],
           [`cd '${otherProjectDir}' && ${terminal} --project-dir '${projectDir}'`, true],
           [`${terminal} --project-dir .`, false],
@@ -1423,7 +1460,7 @@ describe("detector corpus", () => {
       const terminal = "bun .claude/tools/aidlc-orchestrate.ts next --depth standard";
       for (const [selectors, engaged] of [
         [`--project-dir '${projectDir}' --project-dir='${otherProjectDir}'`, true],
-        [`--project-dir='${otherProjectDir}' --project-dir '${projectDir}'`, false],
+        [`--project-dir='${otherProjectDir}' --project-dir '${projectDir}'`, true],
       ] as const) {
         const command = `${terminal} ${selectors}`;
         expect(isEngineToolCall("Bash", { command }, output, projectDir), command).toBe(engaged);

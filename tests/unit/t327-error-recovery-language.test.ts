@@ -28,7 +28,6 @@ function functionBody(source: string, start: string, end: string): string {
 const TRANSCRIPT_RELAY_HARNESSES: ReadonlySet<string> = new Set(["claude", "codex"]);
 const VERBATIM_ERROR_ROW =
   '| `error` | Print `directive.message` verbatim and STOP. Do not recover, retry, or smooth it over: the message is the user-facing error. When it names no step for the person, add one line: /aidlc --doctor shows what to fix. |';
-// The added line names the doctor the way each harness's entry is typed.
 const relayedErrorRow = (entry: string): string =>
   "| `error` | STOP. When a hook note after the result says the person has already been shown this engine error, the harness displayed `directive.message` exactly as the engine wrote it: do not restate, quote, summarize, or paraphrase it, and add no text of your own. Without that note, print `directive.message` verbatim. Never recover, retry, or work around it; the message is the user-facing error. " +
   `When you print it yourself and it names no step for the person, add one line: ${entry} --doctor shows what to fix. |`;
@@ -69,22 +68,12 @@ describe("t327 refusal narration contract", () => {
       const names = clauses.get(clause) ?? [];
       names.push(harness.name);
       clauses.set(clause, names);
-      expect(clause).toContain('emits `directive.kind === "error"`');
-      expect(clause).toContain("Corrected incidental arguments retain the identity");
-      expect(clause).toContain("changing the operation or target creates a new identity");
-      expect(clause).toContain("even if unrelated actions succeeded between attempts");
-      expect(clause).toContain("when that identity succeeds");
-      expect(clause).toContain("the human explicitly abandons it");
-      expect(clause).toContain("a workflow transition changes its operation or target");
-      expect(clause).toContain("two refused review requests with corrected flags reach the limit");
-      expect(clause).toContain("a successful unrelated status check between them does not reset it");
+      // How to say a refusal and when to stop is the stage protocol's (the test above).
+      expect(clause).toContain("The stage protocol says how to say a refusal and when to stop.");
       // The plan-approval guard's refusal is the person's sentence only; its steps are here.
       expect(clause).toContain('"Nothing is built or changed while the plan waits for your approval."');
       expect(clause).toContain("show that question again and end the turn");
       expect(clause).toContain("when they reply, record the choice they made, then run `{{INVOKE}} engine orchestrate next` as a command of its own");
-      expect(clause).toContain("a different review target");
-      expect(clause).toContain("never read framework or workflow source files");
-      expect(clause).toContain("follow the `error` row under \"Acting on a step\"");
       expect(clause).not.toContain("print that terminal, user-facing message verbatim");
       const relayed = relayedErrorRow(harnessEntry(harness.name));
       expect(body).toContain(
@@ -195,13 +184,14 @@ describe("t327 rewritten refusal strings stay in project language", () => {
     const plan = read("core/hooks/aidlc-plan-approval-guard.ts");
     const scope = read("core/hooks/aidlc-reviewer-scope.ts");
     const transition = read("core/hooks/aidlc-state-transition-guard.ts");
+    const stateTool = read("core/tools/aidlc-state.ts");
     expect(plan).toContain("Code generation cannot start");
     expect(plan).toContain("code-generation-plan.md");
     expect(scope).toContain("This review cannot open");
     expect(scope).toContain("variables cannot be checked");
     expect(scope).toContain("the current unit.");
-    expect(transition).toContain("Stage status cannot be changed");
-    expect(transition).toContain("aidlc-orchestrate.ts report");
+    expect(stateTool).toContain("Stage status cannot be changed");
+    expect(stateTool).toContain("aidlc-orchestrate.ts report");
     expect(plan).not.toContain("`plan-approval guard:");
     expect(scope).not.toContain("reviewer read-scope:");
     expect(transition).not.toContain("workflow lifecycle and routing are conductor-owned");

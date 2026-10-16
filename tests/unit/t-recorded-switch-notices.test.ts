@@ -142,7 +142,6 @@ function dispatch(proj: string, args: string[], input?: string, extra: Record<st
   return { status: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
-// The person typing in the chat, through the real human-turn hook.
 function says(proj: string, prompt: string): void {
   const result = dispatch(
     proj,
@@ -153,6 +152,17 @@ function says(proj: string, prompt: string): void {
   expect(result.status, result.stderr).toBe(0);
 }
 
+// The person's own shell: both ends a terminal, no chat bound to it, and none of
+// the marks an agent's host puts on the commands it runs (the runner's own
+// environment may carry its host's), as commandAtPersonsTerminal reads it.
+function ownTerminal(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { AIDLC_TEST_CONFIG_TTY: "1", TERM_PROGRAM: undefined };
+  for (const key of Object.keys(process.env)) {
+    if (/^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_)/i.test(key)) env[key] = undefined;
+  }
+  return env;
+}
+
 function flags(proj: string, ...args: string[]) {
   const result = dispatch(proj, ["config", "flags", "--project-dir", proj, ...args]);
   invalidateSettingsCache();
@@ -160,7 +170,6 @@ function flags(proj: string, ...args: string[]) {
 }
 
 
-// `next` as the agent runs it: from the project.
 function notices(proj: string, extra: Record<string, string | undefined> = {}): string[] {
   const result = runOrchestrateNext(ORCHESTRATE, proj, [], { cwd: proj, env: quietEnv(extra) });
   expect(result.status, result.out).toBe(0);
@@ -205,7 +214,6 @@ describe("a check switched off for the project is always said, never refused", (
     expect(recorded.stdout).not.toContain(OFFER);
     expect(resolveProjectFlag(NAME, NONE, proj)).toBe("1");
 
-    // The engine's next directive says it once; the one after does not.
     const first = notices(proj);
     expect(first).toHaveLength(1);
     expect(first[0]).toStartWith(OFF);
@@ -306,7 +314,6 @@ describe("a check switched off for the project is always said, never refused", (
 
   test("turned back on while something else still keeps it off, the command says what does", () => {
     const proj = installedProject();
-    // The environment still sets it.
     expect(flags(proj, "--bypass", NAME, "--local", "--yes").status).toBe(0);
     const underEnv = dispatch(proj, ["config", "flags", "--project-dir", proj, "--clear-bypass", NAME, "--local", "--yes"], undefined, {
       [NAME]: "1",
@@ -327,10 +334,17 @@ describe("a check switched off for the project is always said, never refused", (
     expect(local.stdout).not.toContain("is on again");
     expect(resolveProjectFlag(NAME, NONE, proj)).toBe("1");
 
-    // The way back the notice names clears every file that records it.
+    // The way back the notice names, typed at the person's own terminal, clears
+    // every file that records it.
     expect(flags(proj, "--bypass", NAME, "--local", "--yes").status).toBe(0);
     const wayBack = clearSwitchCommand(NAME);
-    const back = flags(proj, ...wayBack.slice(wayBack.indexOf(" config flags ") + " config flags ".length).split(" "));
+    const back = dispatch(
+      proj,
+      ["config", "flags", "--project-dir", proj, ...wayBack.slice(wayBack.indexOf(" config flags ") + " config flags ".length).split(" ")],
+      undefined,
+      ownTerminal(),
+    );
+    invalidateSettingsCache();
     expect(back.status, back.stdout + back.stderr).toBe(0);
     expect(back.stdout).toContain("The review freeze check is on again for this project.");
     expect(back.stdout.match(/is on again/g)).toHaveLength(1);

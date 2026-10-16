@@ -34,6 +34,7 @@ import {
   auditBlockField,
   inspectSubagentInflight,
   readAuditShardEvents,
+  readSessionBinding,
   subagentInflightMarkerPath,
   writeSessionBinding,
   stateDigest,
@@ -857,7 +858,7 @@ describe("t241 OpenCode adapter reviewer scope", () => {
 });
 
 describe("t241 OpenCode adapter state-transition guard", () => {
-  test("blocks direct lifecycle verbs and allows read-only state queries", async () => {
+  test("leaves a direct lifecycle verb to the state tool and allows read-only state queries", async () => {
     const root = freshProject();
     copyCore(root, "hooks/aidlc-state-transition-guard.ts");
     copyCore(root, "hooks/review-freeze-command.ts");
@@ -881,9 +882,10 @@ describe("t241 OpenCode adapter state-transition guard", () => {
         { tool: "bash", sessionID: "main", callID },
         { args: { command } },
       );
+    // The state tool refuses it when it runs, whatever the spelling.
     await expect(
-      invoke("blocked", "bun .aidlc/tools/aidlc-state.ts approve user-stories"),
-    ).rejects.toThrow(/Stage status cannot be changed with aidlc-state\.ts approve/i);
+      invoke("direct", "bun .aidlc/tools/aidlc-state.ts approve user-stories"),
+    ).resolves.toBeUndefined();
     await expect(
       invoke("readonly", "bun .aidlc/tools/aidlc-state.ts show"),
     ).resolves.toBeUndefined();
@@ -1281,6 +1283,52 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
     await adapter.event(idle);
     expect(prompts).toHaveLength(1);
     expect(prompts[0].text).toContain("[aidlc-forwarding-nudge]");
+  });
+
+  test("two chats in one opencode process: each chat's shell command acts on its own work", async () => {
+    const root = freshInstalledProject();
+    const { client } = fakeClient({ ses_a_helper: "ses_a" });
+    const adapter = await createAdapter({ client, directory: root });
+    // opencode asks the plugin for each shell command's environment.
+    const shellEnv = async (sessionID?: string) => {
+      const output = { env: {} as Record<string, string> };
+      await adapter["shell.env"]({ cwd: root, sessionID, callID: "call" }, output);
+      return output.env;
+    };
+    const engine = async (chat: string, ...args: string[]) => {
+      const run = Bun.spawnSync({
+        cmd: [process.execPath, join(root, ".aidlc", "tools", "aidlc.ts"), "--project-dir", root, "engine", ...args],
+        cwd: root,
+        env: { ...process.env, ...(await shellEnv(chat)) },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect(run.exitCode, run.stderr.toString()).toBe(0);
+      return run.stdout.toString();
+    };
+    const startWork = async (chat: string, request: string, label: string) => {
+      // The second piece of work is asked whether it is new; both answers carry the request.
+      const offer = await engine(chat, "orchestrate", "next", "--scope", "poc", request);
+      const id = /--request ([0-9a-f]{8})/.exec(offer)?.[1];
+      expect(id, offer).toBeDefined();
+      await engine(chat, "intent", "create", "--scope", "poc", "--request", id ?? "", "--label", label);
+    };
+    const on = (chat: string) => {
+      const binding = readSessionBinding(root, chat);
+      return `${(binding?.intent ?? "none").replace(/^.*-(farewell|version)$/, "$1")} ${binding?.source}`;
+    };
+    // B's session-start runs last, so the process names chat B.
+    await adapter["chat.message"]({ sessionID: "ses_a" }, { parts: [{ type: "text", text: "add a farewell command" }] });
+    await adapter["chat.message"]({ sessionID: "ses_b" }, { parts: [{ type: "text", text: "add a version flag" }] });
+    await startWork("ses_a", "add a farewell command", "farewell");
+    expect([on("ses_a"), on("ses_b")]).toEqual(["farewell create", "none none"]);
+    await startWork("ses_b", "add a version flag", "version");
+    expect([on("ses_a"), on("ses_b")]).toEqual(["farewell create", "version create"]);
+    await engine("ses_a", "intent", readSessionBinding(root, "ses_a")?.intent ?? "");
+    expect([on("ses_a"), on("ses_b")]).toEqual(["farewell switch", "version create"]);
+    // A helper's commands are its owner's; opencode's own terminal names no chat.
+    expect(await shellEnv("ses_a_helper")).toEqual({ AIDLC_SESSION_OVERRIDE: "ses_a", AIDLC_SESSION_OVERRIDE_SOURCE: "payload" });
+    expect(await shellEnv(undefined)).toEqual({});
   });
 
   test("idle suppresses its nudge for an open logged question and restores it after the answer", async () => {

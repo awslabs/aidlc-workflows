@@ -239,7 +239,6 @@ describe("t260 receipts are the transition, artifacts the evidence", () => {
 
   test("artifacts without a receipt do not settle a unit once the ledger is in use", () => {
     constructionProject();
-    // unit-a earns a real receipt; unit-b gets artifacts only.
     expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
     writeUnitArtifacts(proj, "unit-a");
     expect(unitVerb(proj, "complete", "unit-a").rc).toBe(0);
@@ -494,10 +493,8 @@ describe("t260 single active unit", () => {
   test("pause/complete/resume validate against the active checkpoint", () => {
     constructionProject();
     expect(unitVerb(proj, "start", "unit-a").rc).toBe(0);
-    // pause/complete of a NON-active unit refuses
     expect(unitVerb(proj, "pause", "unit-b", ["--reason", "r", "--next-action", "n"]).rc).not.toBe(0);
     expect(unitVerb(proj, "complete", "unit-b").rc).not.toBe(0);
-    // resume of a non-paused unit refuses
     expect(unitVerb(proj, "resume", "unit-a").rc).not.toBe(0);
   });
 
@@ -723,7 +720,6 @@ describe("t260 pause carries the checkpoint and hard-stops the engine", () => {
 
     expect(unitVerb(proj, "resume", "unit-a").rc).toBe(0);
     expect(unitVerb(proj, "complete", "unit-a").rc).toBe(0);
-    // the checkpoint mirror is cleared on complete
     const state = readFileSync(seededStateFile(proj), "utf-8");
     expect(state).not.toContain("- **Active Unit**:");
     expect(state).not.toContain("- **Unit Pause Reason**:");
@@ -1375,7 +1371,7 @@ describe("t260 finished Units keep their receipts across a Construction policy c
 // The receipt waits for the Unit's review: a request open with no verdict is a
 // finding still owed, so a completion over it would hand the walk on with the
 // finding lost. Only that case refuses; the person's words, their pick on a
-// recovery ask, and every freshness question stay as they were.
+// recovery ask, and every freshness question stay outside this check.
 describe("t260 the receipt waits for the Unit's review", () => {
   const REVIEWER = "aidlc-architecture-reviewer-agent";
   const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
@@ -1480,7 +1476,6 @@ describe("t260 the receipt waits for the Unit's review", () => {
     );
     expect(refused.out).not.toContain("run this completion again");
     expect(readAllAuditShards(proj)).not.toContain("UNIT_COMPLETED");
-    // The way on is the review's verdict.
     recordVerdict(reviewFile, "READY");
     const done = unitVerb(proj, "complete", "unit-a");
     expect(done.rc, done.out).toBe(0);

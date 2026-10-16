@@ -1,12 +1,12 @@
 // covers: render-surface:statusline-complete
 //
-// t-tui-render-complete.serial.tui.test.ts — the statusline COMPLETE sentinel
+// t-tui-render-complete.serial.test.ts - the statusline COMPLETE sentinel
 // branch (§5-C render row, §7 Phase 1), driven SEEDED-STATE in a REAL terminal
 // with ZERO Bedrock tokens.
 //
-// The branch under test (aidlc-statusline.ts ~:230): when the seeded state's
+// The branch under test (aidlc-statusline.ts main): when the seeded state's
 // Status is "Completed"/"Complete" the hook prints
-//   "[AIDLC] COMPLETE <completeBar>"
+//   "[AIDLC] <prefix>COMPLETE <completeBar>"
 // where completeBar is the natural phase bar when it resolves, else a forced full
 // bar. The completed fixture has OPERATION fully [x] (7/7), so progressBar(7,7)
 // fills all 10 cells -> "[▓▓▓▓▓▓▓▓▓▓]". Assert the EXACT sentinel + full grid the
@@ -148,8 +148,8 @@ describe("t-tui-render statusline COMPLETE sentinel (seeded completed, no tokens
         if (startup.rc !== 0) throw new Error(`TUI startup failed: ${startup.stderr}`);
 
         // --- wait for the COMPLETE sentinel + assert the full grid ------------
-        // P9: the orientation prefix ("<intent-slug> · ") sits between [AIDLC]
-        // and COMPLETE, so match with .* rather than a contiguous gap.
+        // The orientation prefix (the intent slug and a middle-dot separator) sits
+        // between [AIDLC] and COMPLETE, so match with .* rather than a contiguous gap.
         const sawMarker = waitFor(session, "\\[AIDLC\\].*COMPLETE", remainingWorkMs(), 1000);
         const pane = drive(["capture", "--session", session]).stdout;
         if (!sawMarker) {
@@ -158,7 +158,6 @@ describe("t-tui-render statusline COMPLETE sentinel (seeded completed, no tokens
               `---- last pane ----\n${pane}\n-------------------`,
           );
         }
-        // EXACT orientation separator + sentinel + full 10-cell bar.
         expect(pane).toContain(
           "[AIDLC] fixture · COMPLETE [▓▓▓▓▓▓▓▓▓▓]",
         );

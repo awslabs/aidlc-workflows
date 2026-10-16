@@ -23,14 +23,11 @@
 // this preflight doubles as (§6.2/§7) — a harness-instrument claim, the same
 // no-op-join form gen-coverage-registry.test.ts uses for the coverage generator
 // (there is no enumerated `harness-instrument` unit class; the claim documents
-// the calibration intent without inflating any covered count). The six
-// `render-surface:*` statusline units the registry now enumerates are NOT
-// claimed by these tests: as written, the tui tests assert the base `[AIDLC]
-// ready` render, the live phase token, and the AUQ menu strip/footer — none is a
-// glyph-level assertion of a specific statusline branch (phase bar / counter /
-// stage name / colour / align / COMPLETE). Per the coverage-plan §4.2 "no
-// guarantee weaker than the claim" rule they stay DEFERRED-tui (honestly listed),
-// until a test asserts a specific branch's painted output.
+// the calibration intent without inflating any covered count). The
+// `render-surface:*` statusline units the registry enumerates are NOT claimed
+// here: this preflight asserts a known-answer UTF-8 + ANSI payload, never a
+// statusline branch; the t-tui-render-* tests claim those units by asserting
+// each branch's painted output.
 
 import { liveCaseTimeoutMs, LIVE_LONG_OPERATION_TIMEOUT_MS, remainingOperationTimeoutMs, remainingCleanupTimeoutMs, fileCleanupReserveMs, NATIVE_TERMINAL_CLEANUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { beforeEach, describe, expect, test } from "bun:test";

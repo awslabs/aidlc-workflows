@@ -4,7 +4,7 @@
 // covers: subcommand:aidlc-state:set, subcommand:aidlc-state:set-construction-iteration
 // covers: audit:CONSTRUCTION_POLICY_RECORDED, function:authorizedConstructionPolicyChange, function:recordProtectedHumanResponse
 // covers: function:constructionPolicyChangeAuthority, function:constructionPolicyChangeAllowed
-// covers: function:hasPendingDecision, function:presenceFloorHolds
+// covers: function:hasPendingDecision
 // covers: function:guardRecoveryAskFromRefusalText, function:unitOpenCheckpoints, subcommand:aidlc-state:unit, subcommand:aidlc-log:review, hook:aidlc-session-start
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
@@ -39,8 +39,8 @@ import {
 import {
   artifactFilename, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   reviewArtifactFingerprint, authorizedConstructionPolicyChange, auditBlockField, readAuditShardEvents, setField, unitCompletedReceipts,
-  hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts, getField, presenceFloorHolds, REDO_REUSE_SOURCE,
-  _resetStageGraphForTests, _resetScopeMappingForTests, constructionCheckpointGaps,
+  hasPendingDecision, guardRecoveryAskFromRefusalText, freshReviewReceipts, getField, REDO_REUSE_SOURCE,
+  _resetScopeMappingForTests, constructionCheckpointGaps,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -643,51 +643,6 @@ describe("t342 Construction checkpoint routing", () => {
     expect(JSON.parse(report.stdout).kind, report.stdout).not.toBe("error");
   }
 
-  // The Kiro presence floors read the engine's own approval rule: a stage gate
-  // the engine records itself once every Unit's checkpoint is approved never
-  // waits for the person's turn, and a gate that needs them still does.
-  test("the presence floor stands aside only for a gate the engine approves itself", () => {
-    const p = fixture();
-    for (const unit of ["alpha", "beta"]) {
-      cover(p, unit);
-      approve(p, unit);
-    }
-    const gate = routed(p);
-    expect(gate.construction_policy?.completion_only, JSON.stringify(gate)).toBe(true);
-    reportStage(p, "functional-design", "awaiting-approval");
-    const approveCommand =
-      `bun .kiro/tools/aidlc.ts engine orchestrate report --stage functional-design --result approved`;
-    const state = () => readFileSync(seededStateFile(p), "utf-8");
-    expect(state()).toMatch(/^- \[\?\] functional-design /m);
-    // The person's last turn went to beta's checkpoint approval.
-    expect(presenceFloorHolds(p, state(), approveCommand)).toBe(false);
-    // beta's code changes, so its checkpoint needs the person again, and so
-    // does the stage gate.
-    writeFileSync(join(p, "src", "beta.ts"), "export const beta = 2;\n");
-    expect(presenceFloorHolds(p, state(), approveCommand)).toBe(true);
-    writeFileSync(join(p, "src", "beta.ts"), "export const beta = 1;\n");
-    // The engine agrees: it records the gate without the person.
-    expect(presenceFloorHolds(p, state(), approveCommand)).toBe(false);
-    // A stage graph the floor cannot read leaves the gate to the person.
-    const graph = process.env.AIDLC_STAGE_GRAPH;
-    writeFileSync(join(p, "not-json-graph.json"), "{");
-    writeFileSync(join(p, "object-graph.json"), "{}");
-    try {
-      for (const broken of ["missing-graph.json", "not-json-graph.json", "object-graph.json"]) {
-        process.env.AIDLC_STAGE_GRAPH = join(p, broken);
-        _resetStageGraphForTests();
-        expect(presenceFloorHolds(p, state(), approveCommand), broken).toBe(true);
-      }
-    } finally {
-      if (graph === undefined) delete process.env.AIDLC_STAGE_GRAPH;
-      else process.env.AIDLC_STAGE_GRAPH = graph;
-      _resetStageGraphForTests();
-    }
-    expect(presenceFloorHolds(p, state(), approveCommand)).toBe(false);
-    reportStage(p, "functional-design", "approved");
-    expect(state()).toMatch(/^- \[x\] functional-design /m);
-  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
-
   // Both Units are approved, so the stage gates run and functional-design is
   // approved and marked [x]. beta's code then changes, so its checkpoint is
   // presented again. Request Changes there asks for all of beta's work again,
@@ -738,7 +693,6 @@ describe("t342 Construction checkpoint routing", () => {
     expect(checkpointStatus(p, "alpha").approved).toBe(true);
     expect(checkpointStatus(p, "beta").approved).toBe(true);
 
-    // The workflow continues at the next stage gate, which is bookkeeping.
     const resumed = routed(p);
     expect(resumed.stage, JSON.stringify(resumed)).toBe("nfr-requirements");
     expect(resumed.construction_checkpoint).toBeUndefined();
@@ -1618,7 +1572,6 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(said).toContain("reopen --target nfr-design --stages nfr-design,infrastructure-design,code-generation --units beta ");
     expect(next(p)).toMatchObject({ stage: "nfr-design", unit: "beta" });
     expect(approved(p, "alpha")).toBe(true);
-    // The line the person is given names that unit.
     expect(message).toContain("--stage nfr-requirements --unit beta` reopens it");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1738,7 +1691,6 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     // redone, the walk takes beta through Infrastructure Design again.
     expect(unitCompletedReceipts(p, "infrastructure-design").has("beta")).toBe(false);
     expect(unitCompletedReceipts(p, "infrastructure-design").has("alpha")).toBe(true);
-    // The status shows the step beta is on once it starts it.
     expect(tool(p, "state", ["unit", "start", "--stage", "nfr-design", "--unit", "beta"]).status).toBe(0);
     expect(tool(p, "utility", ["status"]).stdout).toContain("Current Step:   nfr-design for unit beta");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -1988,7 +1940,6 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(said.message).toContain("If they say yes, run `next --stage nfr-design --every-unit`");
     expect(readFileSync(seededStateFile(p), "utf-8")).toBe(before);
     expect(jumped(p)).toBe(0);
-    // Saying "for every unit" then does it.
     const every = JSON.parse(tool(p, "orchestrate", ["next", "--stage", "nfr-design", "--every-unit"]).stdout);
     expect(every.kind, JSON.stringify(every)).toBe("print");
     expect(every.message).toContain('"Reopened NFR Design and the steps after it for every unit."');
@@ -2027,6 +1978,8 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       const started = tool(p, "state", ["unit", "start", "--stage", slug, "--unit", "alpha"]);
       expect(started.status, started.out).toBe(0);
       cover(p, "alpha", [slug], false);
+      // Code Generation is redone plan included: its plan is approved again.
+      if (slug === "code-generation") planApproved(p, "alpha");
       const completed = tool(p, "state", ["unit", "complete", "--stage", slug, "--unit", "alpha"]);
       expect(completed.status, completed.out).toBe(0);
     }
@@ -2147,6 +2100,9 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     const banner = JSON.parse(hook.stdout.trim()).additionalContext as string;
     expect(banner).toContain("Active Unit: beta on code-generation (in-progress)");
     expect(banner).toContain("Current Step: code-generation for unit beta");
+    // beta's Code Generation completes once its plan is approved and built.
+    cover(p, "beta", ["code-generation"], false);
+    planApproved(p, "beta");
     const completed = tool(p, "state", ["unit", "complete", "--stage", "code-generation", "--unit", "beta"]);
     expect(completed.status, completed.out).toBe(0);
     expect(readFileSync(seededStateFile(p), "utf-8")).not.toContain("- **Unit Stage**:");
@@ -2302,12 +2258,10 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     return result.stdout ?? "";
   }
 
-  // beta's Code Generation as #1586 resumes it: beta started the step, the
-  // person approved its plan, the build started (the approval receipt is in
-  // generation), and steps 1 and 2 were built and ticked before it stopped.
-  function startedBuild(p: string) {
-    expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]).status).toBe(0);
-    const dir = codeGenerationRecordDir(p, "beta");
+  // A Unit's code plan as the person approves it: the plan is written, `next`
+  // asks, they approve in their own words, and the agent records that choice.
+  function planApproved(p: string, unit: string) {
+    const dir = codeGenerationRecordDir(p, unit);
     const planFile = join(dir, "code-generation-plan.md");
     mkdirSync(dir, { recursive: true });
     const steps = [1, 2, 3, 4].map((n) => `Step ${n}: build part ${n} in \`src/part${n}.ts\``);
@@ -2315,8 +2269,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       "# Code Generation Plan\n\n## Summary\n\n- Builds: four parts\n- Touches: src/\n- Tests: 4 unit tests\n\n" +
       `## Steps\n\n${steps.map((step) => `- [ ] ${step}`).join("\n")}\n\n${renderTestingContract(resolveTestingPosture(p))}`);
     writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test src/parts.test.ts`.\n");
-    expect(next(p)).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit: "beta" });
-    // The person approves in their own words; the agent records that choice.
+    expect(next(p)).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit });
     hookCall(p, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
       hook_event_name: "UserPromptSubmit", prompt: "approve",
     });
@@ -2327,6 +2280,15 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     ], env);
     expect(recorded.status, recorded.out).toBe(0);
     expect(next(p).plan_approval).toEqual({ status: "approved" });
+    return planFile;
+  }
+
+  // beta's Code Generation as #1586 resumes it: beta started the step, the
+  // person approved its plan, the build started (the approval receipt is in
+  // generation), and steps 1 and 2 were built and ticked before it stopped.
+  function startedBuild(p: string) {
+    expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "beta"]).status).toBe(0);
+    const planFile = planApproved(p, "beta");
     const brief = tool(p, "testing-posture", ["brief", "--unit", "beta"]);
     expect(brief.status, brief.out).toBe(0);
     hookCall(p, [join(AIDLC_SRC, "hooks/aidlc-plan-approval-guard.ts")], {
@@ -2445,7 +2407,6 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       expect(message).toContain(`Run \`next --stage ${stage}\``);
       expect(message).not.toContain("code-generation");
     }
-    // The step beta is on is beta's own redo.
     expect(redoNamed(p, "code-generation")).toContain('Redo accepted at "code-generation" for unit "beta"');
     const said = reopenFor(p, ["--stage", "functional-design"]);
     expect(said).toContain(
@@ -2592,8 +2553,6 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
 
     const handedBack = next(p);
     expect(handedBack, JSON.stringify(handedBack).slice(0, 800)).toMatchObject({ stage: design.slug, unit: "alpha" });
-    // The conductor's run of the step: start it, make the document, review it
-    // at the next pass, complete it.
     const started = tool(p, "state", ["unit", "start", "--stage", design.slug, "--unit", "alpha"]);
     expect(started.status, started.out).toBe(0);
     cover(p, "alpha", [design.slug], false);
@@ -2972,9 +2931,10 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
-  // The one review pass bounds the reviews the agent asks for on its own; a
-  // review the person asks for runs and is recorded, whatever the Guard Policy,
-  // and after Code Generation has finished too.
+  // The one review pass bounds the reviews the agent asks for on its own, a
+  // message that asks for no review included; a review the person asks for
+  // (the agent passes --person-asked) runs and is recorded, whatever the Guard
+  // Policy, and after Code Generation has finished too.
   for (const policy of ["strict (set by you)", "relaxed (set by you)", "off (set by you)"]) {
     test(`a review the person asks for runs past the stage's one pass (${policy.split(" ")[0]})`, () => {
       const p = policyFixture("classic", policy);
@@ -2983,8 +2943,12 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       const own = tool(p, "log", codeReview("alpha", 2));
       expect(own.status).not.toBe(0);
       expect(own.out).toContain("allows 1 review pass");
+      policyHuman(p, "ok");
+      const afterOk = tool(p, "log", codeReview("alpha", 2));
+      expect(afterOk.status).not.toBe(0);
+      expect(afterOk.out).toContain("If the person asked for this review, run the same command again with --person-asked.");
       policyHuman(p, "Please review alpha's code again");
-      const asked = reviewThroughLog(p, codeReview("alpha", 2));
+      const asked = reviewThroughLog(p, [...codeReview("alpha", 2), "--person-asked"]);
       expect(asked.status, asked.out).toBe(0);
       const again = tool(p, "log", codeReview("alpha", 3));
       expect(again.status).not.toBe(0);
@@ -2994,7 +2958,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
         .replace(/^- \[ \] code-generation/m, "- [x] code-generation"));
       policyHuman(p, "Please review alpha again, and count it as AI-DLC's own review");
-      const finished = reviewThroughLog(p, codeReview("alpha", 3));
+      const finished = reviewThroughLog(p, [...codeReview("alpha", 3), "--person-asked"]);
       expect(finished.status, finished.out).toBe(0);
       expect(readAuditShardEvents(p).filter((row) =>
         row.event === "REVIEW_COMPLETED" && auditBlockField(row.block, "Unit") === "alpha" &&
@@ -3015,7 +2979,6 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
         stage: "nfr-requirements", iteration: index + 2,
       });
       if (index === 0) {
-        // Verifying first names what changed as the stage's own reviewed work.
         recordCommand(p);
         const early = tool(p, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "verify"]);
         expect(early.status, early.out).not.toBe(0);
@@ -3198,13 +3161,13 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       const own = tool(p, "log", codeReview("alpha", 2));
       expect(own.out).toContain("allows 1 review pass");
       policyHuman(p, "Please review Unit 1 (alpha) again, and count it as AI-DLC's own review");
-      const asked = reviewThroughLog(p, codeReview("alpha", 2));
+      const asked = reviewThroughLog(p, [...codeReview("alpha", 2), "--person-asked"]);
       expect(asked.status, asked.out).toBe(0);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
   // An answer to another question is not a request for a review: the cap
-  // still holds until the person asks in their own words.
+  // still holds, --person-asked or not, until the person asks in their own words.
   test("a picker answer to another question does not count as asking for a review", () => {
     const p = policyFixture("classic", "off (set by you)");
     buildReviewed(p, "alpha");
@@ -3217,11 +3180,11 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     policyHuman(p, "No", "t342-pick");
     const answered = policyCli(p, "log", ["answer", "--stage", "code-generation", "--details", "No", "--session", "t342-pick"]);
     expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
-    const own = tool(p, "log", codeReview("alpha", 2));
+    const own = tool(p, "log", [...codeReview("alpha", 2), "--person-asked"]);
     expect(own.status).not.toBe(0);
     expect(own.out).toContain("allows 1 review pass");
     policyHuman(p, "Please review alpha again", "t342-pick");
-    expect(reviewThroughLog(p, codeReview("alpha", 2)).status).toBe(0);
+    expect(reviewThroughLog(p, [...codeReview("alpha", 2), "--person-asked"]).status).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 

@@ -219,7 +219,7 @@ aidlc engine plugin select aidlc,test-pro
 names found on compiled nodes and scope files) while holding the workspace
 mutation lock. It copies the project surfaces to staging, strips disabled
 contributions there, writes `harness.json`, recompiles the graph/grid,
-regenerates stage/scope runners, and refreshes the generated SKILL.md tables.
+regenerates stage/scope runners, and refreshes the generated tables in `tables.md`, beside the orchestrator skill.
 Only then does it diff staging against the live project and submit the complete
 set of changed files to `aidlc-transaction.ts`. The audit append is the
 transaction's committed validator: if it fails, the engine restores every

@@ -4,19 +4,20 @@
 //
 // A GUARD-RECOVERY ASK IS A HUMAN WAIT, AND THE HUMAN'S SELECTION SURVIVES.
 //
-// The scenario is the one a spike measured on the earlier branch: per-Unit
-// Construction routes functional-design for a Unit whose design artifacts exist
-// but whose summary was never confirmed. `next` refuses at routing time and emits
-// a guard-recovery ask. The human picks the action-only remedy ("ask what should
-// change and end the turn"), the conductor asks and ends the turn.
+// The scenario: per-Unit Construction routes functional-design for a Unit whose
+// design artifacts exist but whose summary was never confirmed. `next` refuses
+// at routing time and emits a guard-recovery ask. The human picks the
+// action-only remedy ("ask what should change and end the turn"), the
+// conductor asks and ends the turn.
 //
-// On that branch the Stop hook then re-probed, found the same ask, blocked with
-// "render the ask", and the conductor's obedient `next` rewrote the marker and
-// discarded the selection: the byte-identical question was asked again on every
-// cycle until the no-progress cap released the turn. Here the Stop hook releases
-// on the ask, and a repeated `next` for the same state returns the same ask
-// without touching the marker, so the consumed selection is still there when the
-// human's feedback arrives and the Request Changes report binds to it.
+// The failure this pins: the Stop hook re-probed, found the same ask, blocked
+// with "render the ask", and the conductor's obedient `next` rewrote the
+// marker and discarded the selection: the byte-identical question was asked
+// again on every cycle until the no-progress cap released the turn. Here the
+// Stop hook releases on the ask, and a repeated `next` for the same state
+// returns the same ask without touching the marker, so the consumed selection
+// is still there when the human's feedback arrives and the Request Changes
+// report binds to it.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { setDefaultTimeout, afterAll, describe, expect, test } from "bun:test";

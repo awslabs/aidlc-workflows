@@ -52,7 +52,7 @@ Ships with the framework. Contains shared principles and per-agent methodology r
 .claude/knowledge/
 +-- aidlc-shared/                       # Methodology loaded by every agent, plus format references
 |   +-- ai-dlc-principles.md        # Core methodology principles
-|   +-- audit-format.md             # 118-event audit taxonomy
+|   +-- audit-format.md             # 119-event audit taxonomy
 |   +-- brownfield.md               # Brownfield safeguards and reverse-engineering guidance
 |   +-- knowledge-readme-template.md # Optional README template a team can copy into Tier 2
 |   +-- memory-template.md          # The per-stage diary template
@@ -74,7 +74,7 @@ The format references in `aidlc-shared/` (the audit taxonomy and the state, memo
 
 **Location:** the active space — `aidlc/knowledge/` (shorthand for `aidlc/spaces/<space>/knowledge/`)
 
-User-managed. Contains your company-specific standards, policies, and conventions. It is a sibling of the space's `memory/`, `codekb/`, and `intents/` — so team knowledge accumulates across every intent in the space, not inside any one intent's record. It is **free-form and empty at bootstrap**: the engine just creates the empty `aidlc/knowledge/` directory on your first `/aidlc`. There is no fixed file set and no mandated structure. The convention below — an `aidlc-shared/` directory plus one per agent — is what the agent personas look for, so create the subdirectories you want as you go:
+User-managed. Contains your company-specific standards, policies, and conventions. It belongs to one space; [what carries over](03-spaces-and-intents.md#what-carries-over-and-what-doesnt) between spaces and projects is listed in Spaces and Intents. It is a sibling of the space's `memory/`, `codekb/`, and `intents/` — so team knowledge accumulates across every intent in the space, not inside any one intent's record. It is **free-form and empty at bootstrap**: the engine just creates the empty `aidlc/knowledge/` directory on your first `/aidlc`. There is no fixed file set and no mandated structure. The convention below — an `aidlc-shared/` directory plus one per agent — is what the agent personas look for, so create the subdirectories you want as you go:
 
 ```
 aidlc/knowledge/                  # empty at bootstrap; create the subdirs you need

@@ -46,7 +46,7 @@ interface Flags {
 	// consulted only when the team dir misses. Threaded by the dispatcher.
 	// Absent or a clean miss → fall through to the generic ≥2-H2 floor (or a
 	// timestamp marker's pass). The
-	// framework ships zero defaults at GA, so this normally misses.
+	// framework ships zero defaults, so this normally misses.
 	frameworkTemplatesDir?: string;
 	// Comma-joined set of artifact NAMES (output-filename stems) this stage
 	// declares template-eligible — the `produces` entries that are NOT
@@ -156,7 +156,7 @@ export function main(argv: string[]): void {
 
 	// Timestamp markers (`<artifact>-timestamp.md`) are run records, not
 	// documents: practices-discovery specifies a single `Discovered: ...` line,
-	// so the floor failed every to-spec file. They pass, with their headings
+	// so the floor would fail every to-spec file. They pass, with their headings
 	// still reported. Questions markers keep the floor: each question is its own
 	// `##` section, so real question files clear it. The `-timestamp` suffix is
 	// the marker convention templateEligibleArtifacts (aidlc-graph.ts) keys on.
@@ -165,8 +165,7 @@ export function main(argv: string[]): void {
 
 	const h2_count = headings.length;
 	let pass = timestampMarker || h2_count >= 2;
-	// findings_count derivation per locked plan: max(0, 2 - h2_count).
-	// Emitted by the script (not the dispatcher) per the v3 control-
+	// Emitted by the script (not the dispatcher) per the control-
 	// plane / data-plane separation: per-sensor scripts own their own
 	// findings derivation; the dispatcher reads out.findings_count
 	// generically and is sensor-id-agnostic.
@@ -179,16 +178,16 @@ export function main(argv: string[]): void {
 	// present in the output (expected ⊆ output); the missing ones are precise
 	// findings. Whole-doc, no merge. No LLM — byte-reproducible.
 	//
-	// Resolution (vision §10), override-before-default, FIRST hit wins:
+	// Resolution, override-before-default, FIRST hit wins:
 	//   1. team template      <templates-dir>/<stem>.md             (--templates-dir)
 	//   2. framework default   <framework-templates-dir>/<stem>.md  (--framework-templates-dir)
 	//   3. else                the generic ≥2-H2 floor              (no template)
-	// The artifact name IS the output filename stem (the X→X.md convention;
-	// resolveArtifactPath builds `<...>/${name}.md`, aidlc-orchestrate.ts:649).
-	// The framework ships zero defaults at GA, so tier 2 normally misses and the
-	// behaviour is identical to today (everything hits the floor) — but the
-	// branch exists so a later PR can drop in a default <stem>.md without touching
-	// resolution. The agent reads the SAME order (stage-protocol.md) — no drift.
+	// The template key IS the output filename stem: the artifact name, unless
+	// artifactFilename (aidlc-artifact-vocabulary.ts) gives that name another file.
+	// The framework ships zero defaults, so tier 2 normally misses and everything
+	// hits the floor; the branch exists so a default <stem>.md can be dropped in
+	// without touching resolution. The agent reads the SAME order
+	// (stage-protocol.md) - no drift.
 	//
 	// ELIGIBILITY GATE (required, not optional): the stem==artifact key is
 	// unsound for questions/timestamp markers (a `*-questions.md` file's
@@ -202,8 +201,6 @@ export function main(argv: string[]): void {
 	if (templatePath) {
 		const eligible = (flags.templateEligible ?? []).includes(stem);
 		if (!eligible) {
-			// Template resolves but the artifact is not declared eligible —
-			// ignore it (keep the verdict above) + surface a config warning.
 			result.template = "ineligible";
 			result.config_warning =
 				`template ${stem}.md resolved but artifact "${stem}" is not ` +

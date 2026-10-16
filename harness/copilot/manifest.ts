@@ -109,6 +109,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored aidlc/active-memory/ (the
           // engine's copy of the active space's method).
           "sha256:a2fb9d52cb1ad3a360d7abdaddabb6920965b6b1a7acceb14881ad93b4975bbe",
+          // The variant shipped before the block ignored aidlc/.aidlc-request-text/
+          // (a request the engine has not read yet).
+          "sha256:2091d36da7f7306179da27227857564334f3a455327f365984db6c94a4cc6412",
         ],
       },
     },
@@ -189,11 +192,22 @@ const manifest: HarnessManifest = {
           "sha256:6130b11ceb91e334f30940d3a3a1f40b41e82519ac777b0177c089b35f348442",
           // The variant whose setter rows named no --person-words.
           "sha256:ad6ccb9e0d8fbfc3224448ed45c6d3b278ffb8afdffe697ef2f362cfafeb44bf",
+          // The variant shipped by the Devin-harness work before the 0f39a808
+          // merge (branch-era).
+          "sha256:2821ab2aa7bed053d82a2dbe31b8629bb3cba8e051207e1a8eb49f00e2d4b258",
+          // The variant whose Guards paragraph did not say a remark about a check is not a request to change it.
+          "sha256:fde31c458f35dc77c83845acdad3d4715a4c87a219f2004fc6c96625c7933d29",
+          // The variant whose Guards paragraph had the agent work out and ask the wider-place
+          // question itself (the switch's own line now carries it).
+          "sha256:724c2e36547e1eab35a3637595cea3f4bf1ddecf75fb798e0e165932c06cd93e",
+          // The variant whose Guards paragraph said the clear with no file named clears a
+          // switch everywhere it is recorded (from a chat it now leaves the shared file).
+          "sha256:b0f5e39317a501be8567bbb0ecbdff651116abc28a500b9c451b732ca8f2e088",
           // The variant shipped by the Devin-harness work before this merge
           // (branch-era).
-          "sha256:2821ab2aa7bed053d82a2dbe31b8629bb3cba8e051207e1a8eb49f00e2d4b258",
-          // The variant shipped upstream at the merge point (0f39a808).
-          "sha256:fde31c458f35dc77c83845acdad3d4715a4c87a219f2004fc6c96625c7933d29",
+          "sha256:bd7a3a74e81cc207b899565bbb30da1da201d7b6fd0e99d332f25abc2c4a5d49",
+          // The variant shipped upstream at the merge point (ffd75428).
+          "sha256:b87a3ec2c39cb24074c6fa37f626e9d150d435d18069fbd0c762fdbd70719c5c",
         ],
       },
     },

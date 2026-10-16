@@ -484,6 +484,11 @@ function protectedInvocation(
   if (HOOK_FILE.test(executable)) return true;
   const name = executableName(executable);
   if (/^aidlc(?:\.ts)?$/.test(name)) {
+    // A launcher can drop a `--` right after the script it runs (Bun does), so
+    // the dispatcher's own first argument may be the one after it
+    // (`bun aidlc.ts -- engine hook ...`). Read that way for every launcher: a
+    // binary that keeps the `--` refuses the line itself.
+    if (args[0] === "--") args = args.slice(1);
     // Host hooks reach these routes without a tool call; `engine adapter` is the
     // per-harness hook entry, so a model shell running it would mint the human
     // turn the host hook records. Global flags may precede the route. A route
@@ -500,7 +505,10 @@ function protectedInvocation(
     };
     return computed(0) ||
       route[0] === "engine" && (route[1] === "hook" || route[1] === "adapter" || computed(1)) ||
-      args.includes("--internal-aidlc-record-human-turn");
+      // The dispatcher runs its internal human-turn entry only as its first
+      // argument (aidlc.ts main); anywhere else, a `next` line's `--` included,
+      // the token is a word of the line.
+      args[0] === "--internal-aidlc-record-human-turn";
   }
   const kind = interpreter(name);
   if (!kind) return false;
@@ -1000,20 +1008,20 @@ function protectedAuditTrailPath(path: unknown, cwd: string): boolean {
   return AUDIT_TRAIL_PATH.test(absolute) || AUDIT_TRAIL_PATH.test(canonicalExistingPath(absolute));
 }
 
-// The shared parser resolves a relative write against the hook's cwd and drops
-// a word it cannot resolve ($VAR, glob). For the audit trail that gap is too
-// wide: `cd <record> && ... >> audit/<shard>.md`, `>> $RECORD/audit/...`, or
+// The shared parser resolves a relative write against cwd and each literal
+// directory change, and drops a word it cannot resolve ($VAR, glob). For the
+// audit trail that gap is too wide: `>> $RECORD/audit/...` or
 // `P=<record>/audit/<shard>.md; ... >> $P` would forge the HUMAN_TURN evidence
 // human-presence checks read. So this pass re-reads each write word: literal
-// assignments made earlier in the command are expanded, a relative word is
-// resolved against every directory a literal cd or pushd could leave the
-// shell in, and each result is checked against the anchored audit-trail path,
-// so a project's own `src/audit/` stays writable. When a word still cannot be
-// decided (an unknown variable, a glob, a computed cd), it is refused if the
-// command could be aiming at the audit trail at all: the word or the command
-// names an `audit` segment. A backslash `\audit\` spelling, which a
-// PowerShell host resolves but the POSIX parser does not, is refused outright.
-// A false refusal only points at the owning commands.
+// assignments in the command are expanded, a relative word is resolved against
+// every directory a literal cd or pushd could leave the shell in, and each
+// result is checked against the anchored audit-trail path, so a project's own
+// `src/audit/` stays writable. When a word still cannot be decided (an unknown
+// variable, a glob, a computed cd), it is refused if the command could be aiming
+// at the audit trail at all: the word or the command names an `audit` segment. A
+// backslash `\audit\` spelling, which a PowerShell host resolves but the POSIX
+// parser does not, is refused outright. A false refusal only points at the
+// owning commands.
 const AUDIT_SEGMENT = /(?:^|[\\/])audit(?:[\\/]|$)/i;
 // protectedShell replaces a command substitution it cannot evaluate with this
 // placeholder, so it marks a computed word as surely as `$` does.
@@ -1115,16 +1123,16 @@ function expandWord(word: string, values: Map<string, Array<string | null>>): Ar
 }
 
 function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string): boolean {
-  // The walk's `visible` text turns unquoted braces into separators, which
-  // mangles `${NAME}`, so words, assignments and directory changes are also
-  // read from the command as written.
+  // The walk's `visible` text has rewritten what it evaluated (a substitution
+  // as its literal output or a placeholder, a heredoc as its header, unquoted
+  // parentheses and braces as separators), so words, assignments and directory
+  // changes are also read from the command as written.
   const words: string[] = [];
   shellWriteTargets(visible, cwd, words);
   shellWriteTargets(command, cwd, words);
   if (words.length === 0) return false;
   if (/\\audit\\/i.test(command)) return true;
   const values = literalAssignments(command, cwd);
-  // Every directory the shell could be in when a write runs.
   const roots = [cwd];
   let computedRoot = false;
   // The shared reading of each directory change; $HOME and a directory the

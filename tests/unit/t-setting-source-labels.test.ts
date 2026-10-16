@@ -75,7 +75,6 @@ describe("t-setting-source-labels: who a setting's label says set it", () => {
   test("a check the person asked in the chat to turn off is theirs", () => {
     const proj = openWork();
     reply(proj, "skip the summary confirmation for this work");
-    // The agent names the reply that asked.
     const off = run(proj, DISPATCHER, [
       "engine", "config", "set", "summary-confirmation", "off", "--person-words", "skip the summary confirmation for this work",
     ]);

@@ -7,19 +7,11 @@
 // run driver (no tmux, no painted screen; the model's final message + the
 // project's on-disk state are the observables).
 //
-// LIVE-PROVEN (2026-07-26, cursor-agent 2026.07.23 on Linux, Pro account):
-// the same rig shape ran rules discovery (alwaysApply .mdc), /command
-// invocation with inline args, native skill invocation, hooks.json firing
-// (sessionStart context injection, preToolUse permission-deny), and subagent
-// dispatch from .cursor/agents, recorded in the private compatibility-spike
-// evidence. This test pins the cheap status journey so CI can
-// re-verify the shipped tree end-to-end without burning a whole workflow.
+// This test pins the cheap status journey so CI can re-verify the shipped tree
+// end-to-end without burning a whole workflow.
 //
 // SCOPE: the no-state case ONLY (status with no workflow = print-directive
-// terminal arm — turn-stable). With an ACTIVE workflow the conductor may
-// legitimately resume it inside the same run turn (the forwarding loop lives
-// in-turn), so a with-state "status is read-only" assert is not turn-stable
-// here — same carve-out as the codex/opencode twins.
+// terminal arm - turn-stable).
 //
 // What this proves on the SHIPPED tree, structurally:
 //   - the /aidlc skill entry (.cursor/skills/aidlc/SKILL.md) resolves in a
@@ -109,11 +101,7 @@ describe("t-run-cursor-status — /aidlc --status on the shipped dist/cursor via
         // An auth/plan failure also exits 0; refuse to call that green.
         expect(r.out).not.toContain("Authentication required");
         expect(r.out).not.toContain("Named models unavailable");
-        // The engine's no-workflow status text, surfaced verbatim by the
-        // print-directive terminal arm.
         expect(r.out.toLowerCase()).toContain("no active");
-        // A read-only utility scaffolds nothing: no intent record, no
-        // workflow state anywhere under the workspace tree.
         expect(existsSync(join(proj, "aidlc", "spaces", "default", "intents", "intents.json"))).toBe(
           false,
         );

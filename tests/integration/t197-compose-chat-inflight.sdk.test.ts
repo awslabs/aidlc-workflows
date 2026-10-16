@@ -120,7 +120,6 @@ describe("t197 chat-first in-flight reshape (plain chat, no compose verb, sdk li
         const cursorAfter = /- \*\*Current Stage\*\*: (.*)/.exec(after)?.[1];
         expect(cursorAfter).toBe(cursorBefore);
         expect(checkboxMarkers(after)).toBe(markersBefore);
-        // Derived fields rebuilt against the reshaped plan.
         const totalBefore = Number(/- \*\*Total Stages\*\*: (\d+)/.exec(before)?.[1]);
         const totalAfter = Number(/- \*\*Total Stages\*\*: (\d+)/.exec(after)?.[1]);
         expect(totalAfter).toBeLessThan(totalBefore);

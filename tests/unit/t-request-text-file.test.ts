@@ -149,6 +149,15 @@ describe("next --request-file: the person's words arrive exactly, through no she
     expect(keptRequests(proj)).toEqual([]);
   });
 
+  // Behind the `--` mark the flag's name is one of the person's words, as every
+  // flag is: their request to build that option reaches AI-DLC whole.
+  test("the flag's name among the words behind -- is theirs, not a second way to send the request", () => {
+    const proj = installed();
+    const directive = next(proj, ["--", ..."add a --request-file option to the CLI".split(" ")]);
+    expect(directive.kind, JSON.stringify(directive)).toBe("ask");
+    expect(new Set(keptRequests(proj))).toEqual(new Set(["add a --request-file option to the CLI"]));
+  });
+
   test("a next stopped before any work keeps the file, so the same command runs again", () => {
     const proj = installed();
     writeRequest(proj, WORDS);

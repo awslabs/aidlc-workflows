@@ -420,19 +420,23 @@ describe("t345 complete nightly coverage", () => {
       };
       const runners = evaluate(matrix.runner as string) as string[];
       const excluded = evaluate(matrix.exclude!) as Array<{ runner?: string; suite: { name: string; tier: string } }>;
-      // The scope runs and the guard matrix stay on Linux in the queue; the
-      // nightly runs them on every OS.
+      // The scope runs, the scope-host runs and the guard matrix stay on Linux
+      // in the queue; the nightly runs them on every OS.
       const scopeRuns = { name: "scope-runs", tier: "integration", filter: "^t-scope-run-" };
-      const guardMatrix = { name: "guard-matrix", tier: "integration", filter: "^t-guard-matrix-" };
+      const scopeHosts = { name: "scope-hosts", tier: "integration", filter: "^t-scope-host-" };
+      const guardMatrix1 = { name: "guard-matrix-1", tier: "integration", filter: "^t-guard-matrix-[a-h]" };
+      const guardMatrix2 = { name: "guard-matrix-2", tier: "integration", filter: "^t-guard-matrix-[^a-h]" };
       // In the queue, macOS runs its selected unit files in two jobs, unit-1 and unit-2.
       const queue = event === "merge_group";
-      const macosUnitsLeftOut = Array.from({ length: 10 }, (_, index) => ({
-        runner: "macos-15", suite: { name: `unit-${index + 3}`, tier: "unit", shard: `${index + 3}/12` },
+      const macosUnitsLeftOut = Array.from({ length: 14 }, (_, index) => ({
+        runner: "macos-15", suite: { name: `unit-${index + 3}`, tier: "unit", shard: `${index + 3}/16` },
       }));
       expect(excluded).toEqual(expanded
         ? [
           { runner: "macos-15", suite: scopeRuns }, { runner: "windows-latest", suite: scopeRuns },
-          { runner: "macos-15", suite: guardMatrix }, { runner: "windows-latest", suite: guardMatrix },
+          { runner: "macos-15", suite: scopeHosts }, { runner: "windows-latest", suite: scopeHosts },
+          { runner: "macos-15", suite: guardMatrix1 }, { runner: "windows-latest", suite: guardMatrix1 },
+          { runner: "macos-15", suite: guardMatrix2 }, { runner: "windows-latest", suite: guardMatrix2 },
           ...(queue ? macosUnitsLeftOut : []),
         ]
         : [{ suite: { name: "e2e", tier: "e2e" } }]);
@@ -440,12 +444,12 @@ describe("t345 complete nightly coverage", () => {
         !excluded.some((row) => (row.runner ?? runner) === runner && row.suite.name === suite.name && row.suite.tier === suite.tier));
       const suites = suitesOn("ubuntu-latest");
       expect(runners).toEqual(expanded ? ["ubuntu-latest", "macos-15", "windows-latest"] : ["ubuntu-latest"]);
-      expect(suites.map((suite) => suite.tier)).toEqual(["smoke", ...Array(12).fill("unit"), "integration", "integration", "integration", ...(expanded ? ["e2e"] : [])]);
-      expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.shard)).toEqual(Array.from({ length: 12 }, (_, index) => `${index + 1}/12`));
-      expect(new Set(runners.flatMap((runner) => suitesOn(runner).map((suite) => `${runner}/${suite.name}`))).size).toBe(queue ? 37 : expanded ? 47 : 16);
+      expect(suites.map((suite) => suite.tier)).toEqual(["smoke", ...Array(16).fill("unit"), ...Array(5).fill("integration"), ...(expanded ? ["e2e"] : [])]);
+      expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.shard)).toEqual(Array.from({ length: 16 }, (_, index) => `${index + 1}/16`));
+      expect(new Set(runners.flatMap((runner) => suitesOn(runner).map((suite) => `${runner}/${suite.name}`))).size).toBe(queue ? 47 : expanded ? 61 : 22);
       if (expanded) {
         expect(suites).toEqual(matrixOf(workflow.jobs.deterministic).suite!);
-        expect(suitesOn("windows-latest").map((suite) => suite.name)).toEqual(suitesOn("ubuntu-latest").map((suite) => suite.name).filter((name) => name !== "scope-runs" && name !== "guard-matrix"));
+        expect(suitesOn("windows-latest").map((suite) => suite.name)).toEqual(suitesOn("ubuntu-latest").map((suite) => suite.name).filter((name) => !["scope-runs", "scope-hosts", "guard-matrix-1", "guard-matrix-2"].includes(name)));
         expect(suitesOn("macos-15").map((suite) => suite.name)).toEqual(queue
           ? ["smoke", "unit-1", "unit-2", "integration", "e2e"]
           : suitesOn("windows-latest").map((suite) => suite.name));
@@ -463,32 +467,41 @@ describe("t345 complete nightly coverage", () => {
         }
       }
     }
-    // One integration job runs everything but the scope runs and the guard
-    // matrix; the other two run only those.
+    // One integration job runs everything but the scope runs, the scope-host
+    // runs and the guard matrix; the other four run only those, the guard
+    // matrix in two halves by name.
     const integration = matrix.suite!.filter((suite) => suite.tier === "integration");
     expect(integration.map(({ name, filter, exclude }) => [name, filter, exclude])).toEqual([
-      ["integration", undefined, "^t-(scope-run|guard-matrix)-"],
+      ["integration", undefined, "^t-(scope-run|scope-host|guard-matrix)-"],
       ["scope-runs", "^t-scope-run-", undefined],
-      ["guard-matrix", "^t-guard-matrix-", undefined],
+      ["scope-hosts", "^t-scope-host-", undefined],
+      ["guard-matrix-1", "^t-guard-matrix-[a-h]", undefined],
+      ["guard-matrix-2", "^t-guard-matrix-[^a-h]", undefined],
     ]);
     // The runner matches a filter against a file's base name, stem and
     // tier-qualified stem (run-tests.ts matchesE2eFilter): every integration
-    // file lands in exactly one of the three jobs.
+    // file lands in exactly one of the five jobs.
     const names = (file: string) => [file, file.replace(/\.test\.ts$/, ""), `integration-${file.replace(/\.test\.ts$/, "")}`];
     const files = readdirSync(join(REPO_ROOT, "tests", "integration")).filter((file) => file.endsWith(".test.ts"));
     const left = new RegExp(integration[0].exclude!);
     const scoped = new RegExp(integration[1].filter!);
-    const matrixed = new RegExp(integration[2].filter!);
+    const hosted = new RegExp(integration[2].filter!);
+    const halves = [new RegExp(integration[3].filter!), new RegExp(integration[4].filter!)];
+    const halfFiles: string[][] = [[], []];
     for (const file of files) {
       const jobs = [
         !names(file).some((name) => left.test(name)),
         names(file).some((name) => scoped.test(name)),
-        names(file).some((name) => matrixed.test(name)),
+        names(file).some((name) => hosted.test(name)),
+        ...halves.map((half) => names(file).some((name) => half.test(name))),
       ];
       expect([file, jobs.filter(Boolean).length], file).toEqual([file, 1]);
-      expect([file, jobs[1], jobs[2]], file)
-        .toEqual([file, file.startsWith("t-scope-run-"), file.startsWith("t-guard-matrix-")]);
+      expect([file, jobs[1], jobs[2], jobs[3] || jobs[4]], file)
+        .toEqual([file, file.startsWith("t-scope-run-"), file.startsWith("t-scope-host-"), file.startsWith("t-guard-matrix-")]);
+      if (jobs[3]) halfFiles[0].push(file);
+      if (jobs[4]) halfFiles[1].push(file);
     }
+    expect(halfFiles.map((half) => half.length > 0)).toEqual([true, true]);
     // An existing caller that names no filter runs its whole tier, as before.
     expect(deterministic.on.workflow_call.inputs.filter).toMatchObject({ default: "", type: "string" });
     expect(deterministic.on.workflow_call.inputs.filter.required).toBeUndefined();
@@ -580,14 +593,14 @@ describe("t345 complete nightly coverage", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-    // Here, the twelve shards split the named files exactly once, and each
+    // Here, the sixteen shards split the named files exactly once, and each
     // shard's exclude keeps exactly its share under every name --exclude reads.
     const named = macosNamedUnitFiles(join(REPO_ROOT, "tests", "unit"));
     expect(named.length).toBeGreaterThan(0);
     const all = readdirSync(join(REPO_ROOT, "tests", "unit")).filter((file) => file.endsWith(".test.ts"));
     const seen: string[] = [];
-    for (let index = 1; index <= 12; index++) {
-      const selection = macosUnitSelection(REPO_ROOT, [], `${index}/12`);
+    for (let index = 1; index <= 16; index++) {
+      const selection = macosUnitSelection(REPO_ROOT, [], `${index}/16`);
       expect(selection.mode).not.toBe("full");
       if (selection.mode !== "selected") continue;
       seen.push(...selection.files);
@@ -1036,6 +1049,27 @@ describe("t345 complete nightly coverage", () => {
     expect(callers).not.toContain("preview-release.yml:full_suite");
   });
 
+  // The POSIX live jobs stream the runner's own lines; the Windows job keeps
+  // the isolated child's output to itself, so it says them from the collected
+  // results file (scripts/ci-retry-report.ts --live) and nothing else.
+  test("the Windows live job says the Flaky and person-turn lines from the collected results", () => {
+    const windows = steps(workflow.jobs.live_windows);
+    const index = (name: string) => windows.findIndex((step) => step.name === name);
+    const report = windows[index("Report retries and person-turn failures")];
+    expect(report).toEqual({
+      name: "Report retries and person-turn failures",
+      if: `\${{ always() }}`,
+      "continue-on-error": true,
+      run: "bun scripts/ci-retry-report.ts --live tests/logs",
+    });
+    expect(index("Collect isolated live logs")).toBeLessThan(index("Report retries and person-turn failures"));
+    // Sanitize stays right before the upload (the upload rule below).
+    expect(index("Report retries and person-turn failures")).toBeLessThan(index("Sanitize diagnostic logs"));
+    for (const name of ["live_linux", "live_macos"]) {
+      expect(steps(workflow.jobs[name]).some((step) => step.run?.includes("ci-retry-report.ts")), name).toBe(false);
+    }
+  });
+
   test("each credentialed live job stops at once, without echoing it, when the role secret is empty", () => {
     const oidcJobs = Object.entries(workflow.jobs).filter(([, job]) => job.permissions?.["id-token"] === "write");
     expect(oidcJobs.length).toBeGreaterThan(0);
@@ -1469,7 +1503,7 @@ describe("t345 complete nightly coverage", () => {
     for (const example of [
       "Linux / plan", "Linux / result", "Linux / live-prepare", "macOS / live-prepare", "Windows / release-contract",
       "Linux / deterministic unit-3", "macOS / deterministic e2e", "Windows / native-terminal bun",
-      "Windows / scope-runs", "macOS / guard-matrix",
+      "Windows / scope-runs", "Windows / scope-hosts", "macOS / guard-matrix-1", "Linux / deterministic guard-matrix-2",
       `Linux / claude-tui 3/${shards("linux", "claude-tui")}`, `macOS / codex 1/${shards("macos", "codex")}`,
     ]) {
       expect(names).toContain(example);
@@ -1886,7 +1920,7 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("the nightly runs the scope runs and the guard matrix on every OS, through the shared workflow", () => {
+  test("the nightly runs the scope runs, the scope-host runs and the guard matrix on every OS, through the shared workflow", () => {
     const job = workflow.jobs.scope_runs;
     expect(job.if).toBe("needs.plan.outputs.purpose == 'release'");
     expect(job.needs).toBe("plan");
@@ -1897,7 +1931,9 @@ describe("t345 complete nightly coverage", () => {
     // Its legs name no tier: the job runs integration for both.
     expect(matrix.suite as unknown[]).toEqual([
       { name: "scope-runs", filter: "^t-scope-run-" },
-      { name: "guard-matrix", filter: "^t-guard-matrix-" },
+      { name: "scope-hosts", filter: "^t-scope-host-" },
+      { name: "guard-matrix-1", filter: "^t-guard-matrix-[a-h]" },
+      { name: "guard-matrix-2", filter: "^t-guard-matrix-[^a-h]" },
     ]);
     // The same selections as the PR and full_verification jobs.
     const deterministic = matrixOf(workflow.jobs.deterministic).suite!;
@@ -1922,17 +1958,19 @@ describe("t345 complete nightly coverage", () => {
     expect(matrix.runner).toEqual(["ubuntu-latest", "macos-15", "windows-latest"]);
     const suites = matrix.suite!;
     expect(suites.filter((suite) => suite.tier === "smoke")).toHaveLength(1);
-    // Integration runs as three jobs: the scope runs, the guard matrix, and everything else.
+    // Integration runs as five jobs: the scope runs, the scope-host runs, the guard matrix in two halves, and everything else.
     expect(suites.filter((suite) => suite.tier === "integration")).toEqual([
-      { name: "integration", tier: "integration", exclude: "^t-(scope-run|guard-matrix)-" },
+      { name: "integration", tier: "integration", exclude: "^t-(scope-run|scope-host|guard-matrix)-" },
       { name: "scope-runs", tier: "integration", filter: "^t-scope-run-" },
-      { name: "guard-matrix", tier: "integration", filter: "^t-guard-matrix-" },
+      { name: "scope-hosts", tier: "integration", filter: "^t-scope-host-" },
+      { name: "guard-matrix-1", tier: "integration", filter: "^t-guard-matrix-[a-h]" },
+      { name: "guard-matrix-2", tier: "integration", filter: "^t-guard-matrix-[^a-h]" },
     ]);
     expect(suites.filter((suite) => suite.tier === "e2e")).toEqual([{ name: "e2e", tier: "e2e" }]);
     expect(suites.some((suite) => suite.tier === "deep")).toBe(false);
     expect(new Set(suites.map((suite) => suite.name)).size).toBe(suites.length);
     const shards = suites.filter((suite) => suite.tier === "unit");
-    expect(shards.map((suite) => suite.shard)).toEqual(Array.from({ length: 12 }, (_, index) => `${index + 1}/12`));
+    expect(shards.map((suite) => suite.shard)).toEqual(Array.from({ length: 16 }, (_, index) => `${index + 1}/16`));
     const files = readdirSync(join(REPO_ROOT, "tests/unit")).filter((file) => file.endsWith(".test.ts")).sort();
     const config = JSON.parse(readFileSync(join(REPO_ROOT, "tests/unit-shard-weights.json"), "utf8")) as ShardConfig;
     const assignments = shards.map((suite) => selectShard(files, parseShardSpec(suite.shard!), config));

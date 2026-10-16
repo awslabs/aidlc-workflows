@@ -82,7 +82,6 @@ async function runnerWitness(child: Bun.Subprocess, witness: string): Promise<vo
       throw new Error(`inner native runner exited (${child.exitCode}) before native test witness`);
     }
     if (Date.now() >= deadline) throw new Error("timed out waiting for native test witness with inner runner still active");
-    // Exit wakes this immediately, even if the next poll has not fired.
     await Promise.race([child.exited, pause(20)]);
   }
 }

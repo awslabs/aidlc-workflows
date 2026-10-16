@@ -69,7 +69,7 @@ const TEST_TIMEOUT_MS = Number.isSafeInteger(TIMEOUT_S) && TIMEOUT_S > 0
   : liveCaseTimeoutMs(LIVE_LONG_OPERATION_TIMEOUT_MS);
 
 // The user types "teamB"; the engine slugifies it on disk (slugify lowercases —
-// aidlc-lib.ts:463), so the SPACE DIR + cursor + registry key are "teamb".
+// aidlc-lib.ts), so the SPACE DIR + cursor + registry key are "teamb".
 const TEAM_B_SLUG = "teamb";
 
 /** Prompt the conductor to run the deterministic intent-create UTILITY directly
@@ -141,12 +141,10 @@ function setupCodexJourney(): WorkspaceJourney {
       `[shell_environment_policy]`,
       `exclude = ["AWS_*", "AIDLC_BROKER_*", "ANTHROPIC_*", "KIRO_API_KEY", "CURSOR_API_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ACTIONS_*"]`,
       ``,
-      // Space switches repoint the project's native memory include. Like the
-      // front-compose fixture, grant only this project's protected .codex dir;
-      // headless exec cannot ask for permission to update config.toml.
-      `[sandbox_workspace_write]`,
-      `writable_roots = ${JSON.stringify([join(root, ".codex")])}`,
-      ``,
+      // The shipped workspace-write sandbox, with no extra writable root: a
+      // person on stock settings has none, and the space verbs write nothing
+      // under .codex/ (measured 2026-10-14), so a refusal there is a prompt
+      // that person meets.
       `[projects.${JSON.stringify(root)}]`,
       `trust_level = "trusted"`,
       ``,
@@ -238,7 +236,7 @@ describe("t-exec-codex-journey-workspace (live codex-exec multi-repo·intent·sp
       await withCodexFixture(root, () => cleanupWorkspaceJourney(journey), () => {
         // --- Step 1: auto-create A spanning both siblings ---------------------
         // Name the scope explicitly: a bare prose `/aidlc "<desc>"` emits an `ask`
-        // scope-confirm (orchestrate Branch 8 :1148) that the ONE-SHOT codex exec
+        // scope-confirm (orchestrate Branch 8) that the ONE-SHOT codex exec
         // spawn cannot answer (no stdin), so the run would end before creation.
         // `--scope feature` creates via Branch 9a with no gate; the repo span is
         // still captured by sibling auto-discovery.

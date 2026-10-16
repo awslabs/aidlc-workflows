@@ -48,7 +48,7 @@ function prose(note: string): string {
   return note.replace(/`[^`]*`/g, " ");
 }
 
-/** True when the text names a JSON field (one with an underscore) as a word, outside a code span. */
+/** The JSON fields (ones with an underscore) the text names as words, outside a code span. */
 function namesAField(text: string): string[] {
   const plain = prose(text);
   return knownDirectiveFieldNames()
@@ -315,7 +315,6 @@ describe("the engine renders every question it asks", () => {
       ["The bugfix plan", `${INVOCATION} next --scope bugfix --request a1b2c3d4`],
       ["The classic plan", `${INVOCATION} next --scope classic --request a1b2c3d4`],
     ]);
-    // A plan offer shows each ready-made plan with its length, as the rows did.
     expect(str(notes(ask("compose-offer")).numbered_prose_question)).toContain("2. **The bugfix plan** \u2014 7 stages");
   });
 

@@ -41,9 +41,8 @@ import {
   setupIntegrationProject,
 } from "../harness/fixtures.ts";
 
-const BUN = process.execPath; // the bun running this test
+const BUN = process.execPath;
 
-// In-process helper under test, plus the shipped sources for the seam runs.
 import { compileStageGraph, stageGraphDrift } from "../../core/tools/aidlc-graph.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -99,7 +98,6 @@ function doctor(proj: string): SpawnResult {
   return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
-/** Fire the sandbox's session-start hook, returning the decoded additionalContext. */
 function sessionStartContext(proj: string): string {
   const hook = join(proj, ".claude", "hooks", "aidlc-session-start.ts");
   const r = Bun.spawnSync({
@@ -188,7 +186,6 @@ describe("t184 stage-graph drift detection (issue #364)", () => {
         process.env.AIDLC_STAGES_DIR = tmp;
         const d = stageGraphDrift();
         expect(d.missingFiles.length).toBeGreaterThan(0);
-        // Result is sorted, deterministic.
         expect(d.missingFiles).toEqual([...d.missingFiles].sort());
       } finally {
         rmSync(tmp, { recursive: true, force: true });
@@ -281,7 +278,6 @@ describe("t184 stage-graph drift detection (issue #364)", () => {
         "utf-8",
       );
       const r = doctor(proj);
-      // The advisory fired and NAMED the slug (drift surfaced, not silent).
       expect(r.out).toContain("not in the compiled graph");
       expect(r.out).toContain(CUSTOM_SLUG);
       expect(r.out).toContain("bun .claude/tools/aidlc-graph.ts compile");

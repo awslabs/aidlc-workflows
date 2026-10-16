@@ -58,7 +58,7 @@ The fixed Devin CLI version is not yet confirmed. Remove the workaround only aft
 |------------------|------------|
 | `Checksum mismatch for <asset>.` or `<asset>: checksum mismatch` | Stop. Do not reuse the downloaded directory. Download the complete release asset set and `checksums.txt` again from the same release. |
 | `command not found: aidlc` after `install.sh` | Add the installer-reported bin directory to `PATH` (normally `export PATH="$HOME/.local/bin:$PATH"`), open a new shell, and run `aidlc doctor`. |
-| `aidlc` is not recognized after `install.ps1` | The default install registers User PATH for the account that ran PowerShell. If another session cannot find it, open a new terminal; restart the terminal app or IDE if needed. With [`-NoModifyPath`](18-install-and-lifecycle.md#windows-powershell), use the printed direct command (normally `& "$env:LOCALAPPDATA\aidlc\bin\aidlc.cmd" config`) or rerun the installer without that switch to register PATH. |
+| `aidlc` is not recognized after `install.ps1` | The default install registers User PATH for the account that ran PowerShell. A terminal app or IDE that was already open during the install (Kiro, VS Code, Cursor) keeps the PATH it started with: quit it fully and reopen it. A new tab or Reload Window inside it is not enough. With [`-NoModifyPath`](18-install-and-lifecycle.md#windows-powershell), use the printed direct command (normally `& "$env:LOCALAPPDATA\aidlc\bin\aidlc.cmd" config`) or rerun the installer without that switch to register PATH. |
 | `aidlc` works in PowerShell or CMD but not in Git Bash (or another MSYS shell) | Those shells resolve a command with Unix `execvp` rules and ignore `PATHEXT`, so a bare `aidlc` never finds `aidlc.cmd`. The installer writes an extensionless `aidlc` launcher beside `aidlc.cmd` in the bin directory (normally `%LOCALAPPDATA%\aidlc\bin`) precisely so the bare name resolves in these shells; if it is missing, rerun the installer or `aidlc use <version>` (from PowerShell or CMD, where `aidlc` already resolves) to rewrite it. One known cause of a hook that `/hooks` lists as registered yet never fires on Windows is this: the hook shell cannot resolve `aidlc`. `aidlc doctor` shows it as a failed `Windows launcher (Git Bash)` row that names the step to take. **If a file named `aidlc` that AI-DLC did not write (for example an earlier hand-made forwarder) is already in that bin directory, the installer, `aidlc update` and `aidlc use` ask once at a terminal whether to replace it, and keep your file as `aidlc.bak-<time>` beside it. `--yes` (`-Yes` for the installer) answers yes. Without a terminal or `--yes`, they leave the file as it is and say to move it aside. A directory named `aidlc` there is never replaced: remove or rename it, then rerun the installer or `aidlc use <version>`.** |
 | `This PowerShell window is running as administrator` | For the safest install, answer N, open PowerShell normally (not "Run as administrator"), and run the installer again. To continue as administrator anyway, answer y, or pass `-Yes` to the installer. `aidlc uninstall` asks nothing: it prints the same warning and goes ahead, so for the safest uninstall run it from a normal PowerShell window. AI-DLC is per-user and does not need admin rights. The built-in Administrator on Windows Server and other sessions without UAC elevation see no warning. |
 | Windows install reports a PATH conflict | The files are installed, but persistent PATH selects another command. Use the printed full command path for `config`, or resolve the reported conflict. JSON reports `status: "warning"` and `data.ready: false` even though the exit code is 0. |
@@ -376,7 +376,7 @@ The check reads the on-disk managed-settings **file** (`/etc/claude-code/managed
 
 ### A Kiro hook switched off under Agent Hooks
 
-Kiro lets you switch any project hook off in its Agent Hooks panel, and then writes `"enabled": false` into that hook's file in `.kiro/hooks/`. The hook stops running with no other sign. `/aidlc --doctor` reads that flag on every AI-DLC hook file. When `aidlc-guard-tool-call` is off, approvals, the approved plan, reviewed work and AI-DLC's records are not protected; when `aidlc-record-human-turn` is off, your replies are not recorded, so an approval waits for an answer it cannot see, and `/aidlc` commands typed in chat are not run directly. Either one fails a row naming the hook, and so does `aidlc-continue-workflow`, which keeps a workflow moving where Kiro lets a Stop hook block (Kiro CLI v3; Kiro IDE only records it). Any other AI-DLC hook switched off is a warning that says what is lost. Turn the hook back on under Kiro's Agent Hooks, or set `"enabled": true` in the file doctor names. The next AI-DLC step says the same once per change, as one line before its work, and while `aidlc-record-human-turn` is off an approval tells you to turn it back on under Agent Hooks rather than to trust the folder; nothing turns a hook back on for you.
+Kiro lets you switch any project hook off in its Agent Hooks panel, and then writes `"enabled": false` into that hook's file in `.kiro/hooks/`. The hook stops running with no other sign. `/aidlc --doctor` reads that flag on every AI-DLC hook file. When `aidlc-guard-tool-call` is off, the approved plan, reviewed work and AI-DLC's records are not protected; when `aidlc-record-human-turn` is off, your replies are not recorded, so an approval waits for an answer it cannot see, and `/aidlc` commands typed in chat are not run directly. Either one fails a row naming the hook, and so does `aidlc-continue-workflow`, which keeps a workflow moving where Kiro lets a Stop hook block (Kiro CLI v3; Kiro IDE only records it). Any other AI-DLC hook switched off is a warning that says what is lost. Turn the hook back on under Kiro's Agent Hooks, or set `"enabled": true` in the file doctor names. The next AI-DLC step says the same once per change, as one line before its work, and while `aidlc-record-human-turn` is off an approval tells you to turn it back on under Agent Hooks rather than to trust the folder; nothing turns a hook back on for you.
 
 ---
 
@@ -558,6 +558,20 @@ the verdict, or starting/resuming another session re-arms the freeze. Restoring
 output-document bytes does not clear audit-recorded artifact staleness. After a
 session restart, retry the same pending request before replacing the Review
 section. The gate remains closed until the matching verdict is recorded.
+
+### A directory source manifest is refused because it contains ignored output
+
+**Symptom**: A directory claim such as `src/` answers with
+`contains ignored application source "src/main.js.map"` after a build.
+
+Git ignore rules alone do not remove files from the review source boundary.
+For generated output outside that boundary, add its exact path (or its output
+directory) to `exclude` in the repo root's `.aidlc-source-paths.json`, for
+example `{"version":1,"exclude":["src/main.js.map"]}`, then retry the review.
+The directory claim can still cover the source beside it. A registered `paths`
+entry takes precedence over `exclude`, and other ignored files still inside
+the boundary retain the refusal. Exact-file claims must still name admissible
+source; an exclusion does not make ignored output review evidence.
 
 ### Code Generation cannot complete because files changed that no Unit covers
 

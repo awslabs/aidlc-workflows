@@ -112,7 +112,6 @@ describe("t-config-show-every-section", () => {
     const human = run(DISPATCHER, ["config", "--show", "--no-color"], fixture.dir, fixture.machine);
     expect(human.status, human.stdout + human.stderr).toBe(0);
     expect(human.stdout).not.toContain("unknown config option");
-    // One heading line per section, in CONFIG_SECTIONS order.
     const lines = human.stdout.split("\n");
     const headings = CONFIG_SECTIONS.map((section) => lines.indexOf(section));
     expect(headings.every((index) => index >= 0), human.stdout).toBe(true);

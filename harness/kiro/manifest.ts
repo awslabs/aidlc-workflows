@@ -43,6 +43,9 @@ const PERSONA_AGENTS = [
 const manifest: HarnessManifest = {
   name: "kiro",
   productName: "Kiro CLI",
+  // This tree's agents are built for Kiro CLI's v2 engine; the kiro-ide tree,
+  // listed as Kiro, is the one for Kiro IDE and Kiro CLI on v3.
+  choiceName: "Kiro CLI (V2)",
   configNextStep: "run `kiro-cli chat`, then `/aidlc --doctor`",
   // Kiro CLI's engines read disjoint hook registrations. This tree registers
   // its hooks in the agent JSON `hooks` block, which the v2 engine runs while
@@ -122,6 +125,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored aidlc/active-memory/ (the
           // engine's copy of the active space's method).
           "sha256:28a69800dcac189aa2a976820db237b45bcf6dd7d7e6d4fae5c1603225b9957a",
+          // The variant shipped before the block ignored aidlc/.aidlc-request-text/
+          // (a request the engine has not read yet).
+          "sha256:99b4560aa1bd95f26077eb69a0c6c2a40f81146a212e70d876c27bb84f2b1789",
         ],
       },
     },
@@ -180,6 +186,7 @@ const manifest: HarnessManifest = {
     { src: "skills/aidlc/SKILL.md", dst: "skills/aidlc/SKILL.md" },
     { src: "skills/aidlc/question-rendering.md", dst: "skills/aidlc/question-rendering.md" },
     { src: "skills/aidlc/composer.md", dst: "skills/aidlc/composer.md" },
+    { src: "skills/aidlc/tables.md", dst: "skills/aidlc/tables.md" },
     { src: "agents/aidlc.json", dst: "agents/aidlc.json" },
     { src: "agents/aidlc-architect-agent.json", dst: "agents/aidlc-architect-agent.json" },
     { src: "agents/aidlc-developer-agent.json", dst: "agents/aidlc-developer-agent.json" },
@@ -212,11 +219,11 @@ const manifest: HarnessManifest = {
     { src: "dot-gitignore", dst: ".gitignore", projectRoot: true },
   ],
 
-  // The Kiro IDE row's tools line, without its permissions: on v2 the JSON
-  // still decides, and the .md is only its prompt.
+  // The Kiro IDE row's tools and MCP lines, without its permissions: on v2 the
+  // JSON still decides, and the .md is only its prompt.
   frontmatterAdditions: PERSONA_AGENTS.map((agent) => ({
     file: `agents/${agent}.md`,
-    lines: [`tools: ["read", "write", "shell"]`],
+    lines: [`tools: ["read", "write", "shell"]`, "includeMcpJson: true"],
   })),
 
   // Neutral root guidance is shared; native setup is loaded through agent resources.

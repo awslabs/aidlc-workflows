@@ -127,6 +127,7 @@ const CLAUDE_RELEASE = join(REPO_ROOT, "dist-release", "claude");
 const CODEX_RELEASE = join(REPO_ROOT, "dist-release", "codex");
 const COPILOT_RELEASE = join(REPO_ROOT, "dist-release", "copilot");
 const CURSOR_RELEASE = join(REPO_ROOT, "dist-release", "cursor");
+const CURSOR_COPY = join(REPO_ROOT, "dist", "cursor");
 const KIRO_IDE_COPY = join(REPO_ROOT, "dist", "kiro-ide");
 const KIRO_IDE_RELEASE = join(REPO_ROOT, "dist-release", "kiro-ide");
 const OPENCODE_RELEASE = join(REPO_ROOT, "dist-release", "opencode");
@@ -3015,12 +3016,14 @@ describe("t243 project initialization", () => {
     mkdirSync(join(project, ".git"));
     const config = join(project, "install.ts");
     writeFileSync(config, "// the project's own install script\n");
+    // The copy runtime is the tree that still writes a whole file (its
+    // installer); native setup leaves it out.
     const initialized = run(INIT, [
       "config",
       "--project-dir",
       project,
       "--from",
-      CURSOR_RELEASE,
+      CURSOR_COPY,
       "--harness",
       "cursor",
       "--force",
@@ -5762,6 +5765,196 @@ describe("t243 release lifecycle", () => {
     }));
   });
 
+  test("Unix installer refuses root unless opted in, and never under sudo or a non-root home", () => {
+    if (process.platform === "win32") return;
+    // CI does not run as root, so an `id` shim first on PATH reports uid 0.
+    // An invalid --version makes every run stop right after the root check:
+    // reaching the usage error (exit 2) proves the root check let it through.
+    const shims = temp("aidlc-t243-installer-root-shim-");
+    writeFileSync(
+      join(shims, "id"),
+      '#!/bin/sh\nif [ "$1" = "-u" ]; then echo 0; else exec /usr/bin/id "$@"; fi\n',
+    );
+    chmodSync(join(shims, "id"), 0o755);
+    const userHome = temp("aidlc-t243-installer-root-user-home-");
+    const run = (args: string[], env: Record<string, string>) => {
+      const childEnv: Record<string, string | undefined> = { ...process.env, ...env };
+      childEnv.PATH = `${shims}${delimiter}${process.env.PATH ?? ""}`;
+      if (!("SUDO_USER" in env)) delete childEnv.SUDO_USER;
+      if (!("AIDLC_ALLOW_ROOT" in env)) delete childEnv.AIDLC_ALLOW_ROOT;
+      if (!("AIDLC_BIN_DIR" in env)) delete childEnv.AIDLC_BIN_DIR;
+      if (!("AIDLC_INSTALL_ROOT" in env)) delete childEnv.AIDLC_INSTALL_ROOT;
+      delete childEnv.XDG_DATA_HOME;
+      return spawnSync("sh", [INSTALLER, ...args, "--version", "not-a-version", "--json"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+        env: childEnv,
+      });
+    };
+    const parsed = (result: ReturnType<typeof run>) => JSON.parse(result.stdout ?? "") as {
+      code: number;
+      status: string;
+      message: string;
+    };
+
+    // "/" is owned by root on every Unix runner, so it stands in for root's own home.
+    const refused = run([], { HOME: "/" });
+    expect(refused.status).toBe(4);
+    expect(parsed(refused).message).toContain("refusing a root install");
+    expect(parsed(refused).message).toContain("--allow-root");
+
+    for (const [args, env] of [
+      [["--allow-root"], { HOME: "/" }],
+      [[], { HOME: "/", AIDLC_ALLOW_ROOT: "1" }],
+      [[], { HOME: "/", AIDLC_ALLOW_ROOT: "true" }],
+    ] as const) {
+      const allowed = run([...args], { ...env });
+      expect(allowed.status).toBe(2);
+      expect(parsed(allowed).status).toBe("usage");
+      expect(parsed(allowed).message).toContain("invalid --version");
+    }
+
+    const underSudo = run(["--allow-root"], { HOME: "/", SUDO_USER: "alice" });
+    expect(underSudo.status).toBe(4);
+    expect(parsed(underSudo).message).toContain("under sudo");
+
+    const userOwnedHome = run(["--allow-root"], { HOME: userHome });
+    expect(userOwnedHome.status).toBe(4);
+    expect(parsed(userOwnedHome).message).toContain("not owned by root");
+
+    // An unset HOME is refused rather than guessed.
+    const unsetHome = run(["--allow-root"], { HOME: "" });
+    expect(unsetHome.status).toBe(4);
+    expect(parsed(unsetHome).message).toContain("HOME unset");
+
+    // A symlinked home is judged by the directory it points at.
+    const linkedHome = join(temp("aidlc-t243-installer-root-linked-home-"), "home");
+    symlinkSync("/", linkedHome);
+    const linkedRootHome = run(["--allow-root"], { HOME: linkedHome });
+    expect(linkedRootHome.status).toBe(2);
+    expect(parsed(linkedRootHome).message).toContain("invalid --version");
+    const linkedUserHome = join(temp("aidlc-t243-installer-root-linked-user-"), "home");
+    symlinkSync(userHome, linkedUserHome);
+    const linkedToUser = run(["--allow-root"], { HOME: linkedUserHome });
+    expect(linkedToUser.status).toBe(4);
+    expect(parsed(linkedToUser).message).toContain("not owned by root");
+
+    // A root install stays per-user: destinations outside root's home are
+    // refused. /usr is root-owned on every Unix runner and stands in for a home.
+    // These runs use a missing --from directory instead of a bad --version:
+    // the destination check comes after version validation, and reaching the
+    // offline-source error (exit 2) proves the destinations were accepted.
+    const missingRelease = join(temp("aidlc-t243-installer-root-dest-"), "missing");
+    const runFrom = (env: Record<string, string>) => {
+      const childEnv: Record<string, string | undefined> = { ...process.env, ...env };
+      childEnv.PATH = `${shims}${delimiter}${process.env.PATH ?? ""}`;
+      for (const name of ["SUDO_USER", "AIDLC_ALLOW_ROOT", "AIDLC_BIN_DIR", "AIDLC_INSTALL_ROOT", "XDG_DATA_HOME"]) {
+        if (!(name in env)) delete childEnv[name];
+      }
+      return spawnSync("sh", [INSTALLER, "--allow-root", "--from", missingRelease, "--json"], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        cwd: REPO_ROOT,
+        encoding: "utf-8",
+        env: childEnv,
+      });
+    };
+    for (const [variable, value] of [
+      ["AIDLC_BIN_DIR", "/opt/aidlc-bin"],
+      ["AIDLC_INSTALL_ROOT", "/opt/aidlc"],
+      ["AIDLC_BIN_DIR", "/usr/../opt/aidlc-bin"],
+    ] as const) {
+      const outside = runFrom({ HOME: "/usr", [variable]: value });
+      expect(outside.status, `${variable}=${value}`).toBe(4);
+      expect(parsed(outside).message).toContain(`${variable} outside root's home`);
+    }
+    const inside = runFrom({
+      HOME: "/usr",
+      AIDLC_BIN_DIR: "/usr/local/aidlc-bin",
+      AIDLC_INSTALL_ROOT: "/usr/local/aidlc",
+    });
+    expect(inside.status).toBe(2);
+    expect(parsed(inside).message).toContain("offline source is not a directory");
+  });
+
+  test("Unix installer warns, then installs, a root release that cannot uninstall itself as root", async () => {
+    if (process.platform === "win32") return;
+    const shims = temp("aidlc-t243-installer-root-release-shim-");
+    writeFileSync(
+      join(shims, "id"),
+      '#!/bin/sh\nif [ "$1" = "-u" ]; then echo 0; else exec /usr/bin/id "$@"; fi\n',
+    );
+    chmodSync(join(shims, "id"), 0o755);
+    const release = fixtureReleaseBytes();
+    const binaryName = releaseBinaryName();
+    const binaryPath = join(release, binaryName);
+    const sentinel = join(temp("aidlc-t243-installer-root-release-sentinel-"), "invoked");
+    // A stand-in binary: reaching it proves the installer accepted the release.
+    writeFileSync(
+      binaryPath,
+      ["#!/bin/sh", 'printf "invoked\\n" >"$AIDLC_BINARY_SENTINEL"', "exit 99", ""].join("\n"),
+      { mode: 0o755 },
+    );
+    const manifestPath = join(release, "version.json");
+    const writeRelease = (capabilities: string[] | undefined) => {
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+        assets: Array<{ name: string; sha256: string; bytes: number }>;
+        capabilities?: string[];
+      };
+      if (capabilities === undefined) delete manifest.capabilities;
+      else manifest.capabilities = capabilities;
+      const binaryAsset = manifest.assets.find((asset) => asset.name === binaryName);
+      if (!binaryAsset) throw new Error("fixture release has no binary asset");
+      binaryAsset.sha256 = digest(binaryPath);
+      binaryAsset.bytes = statSync(binaryPath).size;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      writeFileSync(
+        join(release, "checksums.txt"),
+        `${["version.json", ...manifest.assets.map((asset) => asset.name)]
+          .map((name) => `${digest(join(release, name))}  ${name}`).join("\n")}\n`,
+      );
+    };
+    const home = temp("aidlc-t243-installer-root-release-home-");
+    const machine = join(home, "machine");
+    const install = async () => {
+      rmSync(sentinel, { force: true });
+      const childEnv: Record<string, string | undefined> = {
+        ...process.env,
+        PATH: `${shims}${delimiter}${process.env.PATH ?? ""}`,
+        // "/" is owned by root everywhere, so it stands in for root's home;
+        // the destinations below sit under it.
+        HOME: "/",
+        AIDLC_BINARY_SENTINEL: sentinel,
+        AIDLC_INSTALL_ROOT: machine,
+        AIDLC_BIN_DIR: join(machine, "bin"),
+      };
+      delete childEnv.SUDO_USER;
+      const child = Bun.spawn(
+        ["sh", INSTALLER, "--from", release, "--offline", "--json", "--allow-root"],
+        { cwd: REPO_ROOT, env: childEnv, stdout: "pipe", stderr: "pipe" },
+      );
+      const [status, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      return { status, output: `${stdout}${stderr}` };
+    };
+
+    // The person chose the release: it proceeds to the release binary, with
+    // the way to remove it later.
+    writeRelease(undefined);
+    const legacy = await install();
+    expect(existsSync(sentinel), legacy.output).toBe(true);
+    expect(legacy.output).toContain("cannot uninstall itself as root");
+    expect(legacy.output).toContain("run aidlc update, then aidlc uninstall --allow-root");
+
+    writeRelease(["root-lifecycle"]);
+    const capable = await install();
+    expect(existsSync(sentinel), capable.output).toBe(true);
+    expect(capable.output).not.toContain("cannot uninstall itself as root");
+  });
+
   test("Unix installer rejects an authenticated version mismatch before acquiring or invoking assets", async () => {
     if (process.platform === "win32") return;
     const release = fixtureReleaseBytes();
@@ -8243,6 +8436,7 @@ describe("t243 projection channel", () => {
           "sha256:051866aa49f8ed915ab5ae30707422068df814ca5be806a1fe28784c543a4aab",
           "sha256:a618a3a615ef7159c7eed634a5a332bf9d017f8e28d6b0f0adad9db1d2d725e0",
           "sha256:3cc1cbd212d2ca0dbf1e525eb9a40d4694a585eb7864d8b877f8fe8bd99122dc",
+          "sha256:839f98012dd457ed13dcf19547b992130a2c44ef7afa73fb3faf000137a087d7",
         ],
       },
       codex: {
@@ -8254,6 +8448,7 @@ describe("t243 projection channel", () => {
           "sha256:25e76c09640300e354ab34e3c67e89d2dfe473940b65bd56c227ca4d5ea92c7b",
           "sha256:51cb399f2257236cbf63e18cb2e317d75913f1771b5402707a2508cf5f81fa57",
           "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
+          "sha256:c2b1232b28a8b5474f7ef8363452f75399366ef227c59d75fa85d7aa2edca7ac",
         ],
         "AGENTS.md": [
           "sha256:30a9f5f43d87cd29b63e75333b8ef6695f8f4e11909fd6af64e2b6cf0b8cb292",
@@ -8288,6 +8483,7 @@ describe("t243 projection channel", () => {
           "sha256:f08d78b3e456c3a7cd7c998196c9bf6d59d24900e2ccf78cf30a1b189e766c2c",
           "sha256:28a69800dcac189aa2a976820db237b45bcf6dd7d7e6d4fae5c1603225b9957a",
           "sha256:99b4560aa1bd95f26077eb69a0c6c2a40f81146a212e70d876c27bb84f2b1789",
+          "sha256:6df8b41c1c9011d8b6d386d389f96bbfa27812386f434103c260bf58641d6b5d",
         ],
         "AGENTS.md": [
           "sha256:4f7133cc1a9bb1243245c25c28fad57c3660b35e251ea36cea3aa2db431bf55f",
@@ -8318,6 +8514,7 @@ describe("t243 projection channel", () => {
           "sha256:28a69800dcac189aa2a976820db237b45bcf6dd7d7e6d4fae5c1603225b9957a",
           "sha256:a21217e44700aa0d6e703ebb524c4e07a3c4c12f7097d1923034b10b9a6d0549",
           "sha256:6c6ff7641c17829d77fdd023f340b938db11dcc26c734a0c452d5213f9bd19cf",
+          "sha256:f9d49a8c823df8174ea7d8a83209380202e5673b5ee8c1ff6b9cce90bcfd550e",
         ],
         "AGENTS.md": [
           "sha256:4d539288363565feb6cf1a8d2468d1aca4373d46d354936d89e609f9862b2b9f",
@@ -8346,6 +8543,7 @@ describe("t243 projection channel", () => {
           "sha256:8c5a09fbee163fa2a02fbccb1695c2f66a79507a180456240dd380b681b97506",
           "sha256:cf4554ef90011ebc4bc70c7fbc6ca572c513d5c1e7daa328e406d1069f98e635",
           "sha256:ae1878ec98301ceb4510e711cf79f58dfb44cb486744007acd03ae5e61860665",
+          "sha256:55d4cfabe04aca4193d53032c003002d3c9c7de4eef90be0afb411d8a6f7e340",
         ],
         "AGENTS.md": [
           "sha256:78c906200a55665f3a3ce410272c71d4bdcb5764174407da0f69d8ad6d143184",
@@ -8367,6 +8565,7 @@ describe("t243 projection channel", () => {
           "sha256:25e76c09640300e354ab34e3c67e89d2dfe473940b65bd56c227ca4d5ea92c7b",
           "sha256:51cb399f2257236cbf63e18cb2e317d75913f1771b5402707a2508cf5f81fa57",
           "sha256:345fbe9fe620718510ecfe9d478233ccf4a5318522884b50fc5540559ace3eed",
+          "sha256:c2b1232b28a8b5474f7ef8363452f75399366ef227c59d75fa85d7aa2edca7ac",
         ],
         "AGENTS.md": [
           "sha256:d791057d6b667517197a450bc6ba633c36e148d62e09c90a8992d787c914a44f",
@@ -8468,6 +8667,7 @@ describe("t243 projection channel", () => {
           "sha256:d23129d2d4de49fdd943b9966c2995cc5064b365a2741c8b4a8f50c0facf2c1a",
           "sha256:a2fb9d52cb1ad3a360d7abdaddabb6920965b6b1a7acceb14881ad93b4975bbe",
           "sha256:2091d36da7f7306179da27227857564334f3a455327f365984db6c94a4cc6412",
+          "sha256:0ece34fe64acc940324082a0ed97621ff2472ddc0e611e745a6d7388e532fcea",
         ],
         "AGENTS.md": [
           "sha256:9550b31b8f3f32992c1ae1035bfa57a782f04821530214a2f2e1fd1690e209ab",
@@ -8494,7 +8694,11 @@ describe("t243 projection channel", () => {
           "sha256:ad6ccb9e0d8fbfc3224448ed45c6d3b278ffb8afdffe697ef2f362cfafeb44bf",
           "sha256:2821ab2aa7bed053d82a2dbe31b8629bb3cba8e051207e1a8eb49f00e2d4b258",
           "sha256:fde31c458f35dc77c83845acdad3d4715a4c87a219f2004fc6c96625c7933d29",
+          "sha256:724c2e36547e1eab35a3637595cea3f4bf1ddecf75fb798e0e165932c06cd93e",
+          "sha256:b0f5e39317a501be8567bbb0ecbdff651116abc28a500b9c451b732ca8f2e088",
           "sha256:bd7a3a74e81cc207b899565bbb30da1da201d7b6fd0e99d332f25abc2c4a5d49",
+          "sha256:b87a3ec2c39cb24074c6fa37f626e9d150d435d18069fbd0c762fdbd70719c5c",
+          "sha256:18656963c7684c1f61343ec6d910d511007767ac171b82fe544dc70662302c84",
         ],
       },
     };
@@ -8610,10 +8814,20 @@ describe("t243 projection channel", () => {
           expect(allowed.some((command) => command.includes(`aidlc ${namespace}`))).toBe(false);
         }
       }
-      expect(readFileSync(join(root, ".kiro", "steering", "aidlc-onboarding.md"), "utf-8"))
-        .toContain(
-          "**Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available.",
-        );
+      const kiroOnboarding = readFileSync(join(root, ".kiro", "steering", "aidlc-onboarding.md"), "utf-8");
+      expect(kiroOnboarding).toContain(
+        "**Runtime**: Framework commands run through `aidlc`; keep that command and its runtime available.",
+      );
+      // aidlc not found has two causes, and the agent gives both fixes: a tool
+      // opened before the install keeps its old PATH (restart it), while an
+      // install that left PATH alone needs the bin folder added, which a
+      // restart never does (#2396).
+      expect(kiroOnboarding).toContain(
+        "if AI-DLC was installed while this tool was open, quit the tool fully and reopen it (a new tab or reloaded window is not enough)",
+      );
+      expect(kiroOnboarding).toContain(
+        "otherwise the installer's bin folder is not on PATH (an install with `-NoModifyPath`, or a Unix install whose PATH line was not applied), so add the folder the installer printed to PATH, or rerun the installer without `-NoModifyPath`, then reopen the tool.",
+      );
     }
     // The unified Kiro row carries its native grant in the Markdown
     // conductor's permissions, not in .vscode settings Kiro IDE 1.x ignores.

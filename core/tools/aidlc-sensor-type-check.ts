@@ -5,9 +5,10 @@
 // shared project resolver to keep incremental state under the active record,
 // then wraps `bunx --package typescript@6 tsc --project <tsconfig> --noEmit
 // --pretty false --incremental --tsBuildInfoFile <record cache path>` and
-// prints the locked stdout JSON shape:
+// prints the locked stdout JSON shape (a native install, which has no bunx,
+// runs the project's own TypeScript under Node instead; see tscCommand):
 //
-//   {"pass": <bool>, "errors": [{file, line, column, message}, ...]}
+//   {"pass": <bool>, "errors": [{file, line, column, message}, ...], "findings_count": <number>}
 //
 // Per-sensor script contract decisions:
 //
@@ -17,11 +18,11 @@
 //   with Note=script-error: exit-1.
 //
 // * Why --project (not bare-file): `bunx tsc --noEmit foo.ts` ignores
-//   tsconfig and falls back to default options (target ES3, no strict,
-//   no module resolution, no path mappings). Verdict is checked-but-
-//   meaningless on any real project. --project tsconfig.json honours the
-//   project's actual settings; we post-filter diagnostics back to
-//   --file-path.
+//   tsconfig and falls back to default options instead of the project's
+//   target, strictness, module resolution, and path mappings. Verdict is
+//   checked-but-meaningless on any real project. --project tsconfig.json
+//   honours the project's actual settings; we post-filter diagnostics back
+//   to --file-path.
 //
 // * Why --noEmit --pretty false: --noEmit skips .js writes that would
 //   pollute the working tree; --pretty false strips ANSI codes and
@@ -47,20 +48,18 @@
 // * Continuation-line append: tsc with --pretty false emits one primary
 //   diagnostic line followed by 0+ indented continuation lines for
 //   related-info / multi-line context. Without joining continuation
-//   into the primary's `message`, Findings count under-reports and
-//   detail-file Findings prose is meaningless.
+//   into the primary's `message`, detail-file Findings prose is incomplete.
 //
 // * Post-filter to --file-path: tsc with --project checks the WHOLE
 //   project. We narrow attribution to <path> by filtering parsed errors
-//   whose `file` field equals or contains <path>. Match either absolute
+//   whose `file` field equals or ends with <path>. Match either absolute
 //   or tsconfig-relative form for defensiveness — tsc's path emission
 //   varies with cwd / rootDir.
 //
 //   KNOWN LIMITATION: cross-file errors that <path> introduced (e.g., a
 //   removed export breaking the consumer) report with the consumer's
 //   file in tsc's `file` field, not <path>. The sensor emits PASS for
-//   <path> while the consumer file shows the error. Flagged in the
-//   CHANGELOG forward-note as a known limitation; not fixed here.
+//   <path> while the consumer file shows the error.
 //
 // Exit codes:
 //   0   pass or fail (the JSON pass field carries the verdict)
@@ -79,6 +78,7 @@ import {
 	DEFAULT_SUBPROCESS_TIMEOUT_MS,
 	LONG_SUBPROCESS_TIMEOUT_MS,
 } from "./aidlc-runtime-budget.ts";
+import { compiledExecutable, projectPackage } from "./aidlc-runtime-paths.ts";
 
 interface ParsedError {
 	file: string;
@@ -132,7 +132,8 @@ function printHelp(): void {
 	process.stdout.write(
 		`Usage: aidlc-sensor-type-check --stage <slug> --file-path <path>\n\n` +
 			`Wraps \`bunx --package typescript@6 tsc --project <tsconfig> --noEmit --pretty false\` and\n` +
-			`prints {pass, errors[]} JSON to stdout (filtered to --file-path).\n`,
+			`prints {pass, errors[]} JSON to stdout (filtered to --file-path).\n` +
+			`A native install runs the project's own TypeScript (4 or newer) under Node instead.\n`,
 	);
 }
 
@@ -160,12 +161,31 @@ function findTsconfig(filePath: string): string | null {
 // tool resolution.
 const TSC_ARGS = ["--package", "typescript@6", "tsc"] as const;
 
+// A native install has no bunx, and it fetches nothing while it checks: it
+// runs the project's own TypeScript under Node, as the linter runs the
+// project's own ESLint, or the probe reads tool-unavailable. TypeScript before 4
+// rejects --incremental beside a noEmit tsconfig with an error located in
+// tsconfig.json, which the per-file filter drops, so it would pass every file
+// unchecked; it is not run.
+function projectTsc(cwd: string): string | null {
+	const own = projectPackage(cwd, "typescript");
+	if (!own || !(own.major >= 4)) return null;
+	const tsc = join(own.root, "bin", "tsc");
+	return existsSync(tsc) ? tsc : null;
+}
+
+function tscCommand(cwd: string, args: string[]): [string, string[]] {
+	const own = compiledExecutable() ? projectTsc(cwd) : null;
+	return own ? ["node", [own, ...args]] : ["bunx", [...TSC_ARGS, ...args]];
+}
+
 // Probe the same TypeScript command used for the real compile. `bunx`
 // returns non-127 codes for several failure modes (network-fetch, package-
 // resolution, registry timeout). The dispatcher's branch b (status === 127)
 // won't catch those — propagate by exiting 127 ourselves on any non-zero.
 function probeTscAvailable(cwd: string): void {
-	const result = spawnSync("bunx", [...TSC_ARGS, "--version"], {
+	const [command, args] = tscCommand(cwd, ["--version"]);
+	const result = spawnSync(command, args, {
 		encoding: "utf-8",
 		timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
 		cwd,
@@ -181,21 +201,17 @@ function runTsc(opts: {
 	tsBuildInfoFile: string;
 	cwd: string;
 }): { output: string; status: number | null } {
-	const result = spawnSync(
-		"bunx",
-		[
-			...TSC_ARGS,
-			"--project",
-			opts.tsconfigPath,
-			"--noEmit",
-			"--pretty",
-			"false",
-			"--incremental",
-			"--tsBuildInfoFile",
-			opts.tsBuildInfoFile,
-		],
-		{ encoding: "utf-8", timeout: LONG_SUBPROCESS_TIMEOUT_MS, cwd: opts.cwd },
-	);
+	const [command, args] = tscCommand(opts.cwd, [
+		"--project",
+		opts.tsconfigPath,
+		"--noEmit",
+		"--pretty",
+		"false",
+		"--incremental",
+		"--tsBuildInfoFile",
+		opts.tsBuildInfoFile,
+	]);
+	const result = spawnSync(command, args, { encoding: "utf-8", timeout: LONG_SUBPROCESS_TIMEOUT_MS, cwd: opts.cwd });
 	// Partial diagnostics (or none) after a kill do not prove a clean compile.
 	// Preserve the dispatcher's script-error path instead of emitting pass:true.
 	if (result.error || result.signal || result.status === null) {
@@ -211,7 +227,7 @@ function runTsc(opts: {
 //   <path>(<line>,<column>): error TS<code>: <message>
 // Continuation lines start with whitespace and append (with "\n  ") to
 // the previous primary's message. Without joining continuations,
-// Findings count under-reports.
+// Findings detail is incomplete.
 const PRIMARY_RE = /^(.+?)\((\d+),(\d+)\):\s+error\s+TS\d+:\s+(.+)$/;
 
 function parseTscOutput(stdout: string): ParsedError[] {
@@ -228,9 +244,6 @@ function parseTscOutput(stdout: string): ParsedError[] {
 			});
 			continue;
 		}
-		// Continuation: indented (whitespace prefix). Append to previous
-		// primary if any. We don't drop unmatched lines that aren't
-		// indented either — but those shouldn't appear with --pretty false.
 		if (errs.length > 0 && /^\s/.test(rawLine)) {
 			const last = errs[errs.length - 1];
 			last.message = `${last.message}\n  ${rawLine.trim()}`;
@@ -241,8 +254,8 @@ function parseTscOutput(stdout: string): ParsedError[] {
 	return errs;
 }
 
-// Filter parsed errors to those whose file equals or contains
-// --file-path. tsc's path emission varies with cwd: paths may be
+// Filter parsed errors to those whose file resolves to --file-path or ends with
+// its tsconfig-relative form. tsc's path emission varies with cwd: paths may be
 // relative to the tsconfig dir OR absolute. We match either form.
 function filterToFilePath(
 	errs: ParsedError[],
@@ -253,8 +266,8 @@ function filterToFilePath(
 	const relTargetFromTsconfig = relative(tsconfigDir, absTarget);
 	return errs.filter((e) => {
 		// tsc may emit absolute or relative; resolve against tsconfigDir if
-		// relative, then compare. Also keep the substring fallback so
-		// platform path-separator drift doesn't drop matches.
+		// relative, then compare. Also keep the suffix fallback so
+		// a path emitted under another prefix still matches.
 		const emitted = isAbsolute(e.file) ? e.file : resolve(tsconfigDir, e.file);
 		if (emitted === absTarget) return true;
 		if (e.file === absTarget) return true;
@@ -300,7 +313,6 @@ export function main(argv: string[]): void {
 	}
 	const tsBuildInfoFile = join(sensorsBaseDir, `.tsbuildinfo-${tsconfigHash}`);
 
-	// Probe tsc availability first. cwd doesn't matter for --version.
 	probeTscAvailable(tsconfigDir);
 
 	const { output, status } = runTsc({

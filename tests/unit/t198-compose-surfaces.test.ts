@@ -1,24 +1,20 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:detect
 // covers: function:classifyTerminalCommand, function:composerProposalPath, subcommand:aidlc-graph:validate-grid
 //
-// t198 - the P0 compose surfaces (adaptive workflows):
+// t198 - the compose surfaces (adaptive workflows):
 //   - `compose` as a LEADING verb reaches the composer-dispatch branch (Branch
 //     4c) in BOTH worlds: cold start (front) and with-state (in-flight). A
 //     mid-flow bare `compose` must NOT fall through to Branch 10 and advance
 //     the current stage.
 //   - `--new-scope` and `--report <path>` are parsed flags: --report CONSUMES
 //     its value (an unrecognized valued flag would leak the path into
-//     flags.intent - the spike-F trap), and both force the composer dispatch.
+//     flags.intent), and both force the composer dispatch.
 //   - compose is NOT in WORKSPACE_VERBS / classifyTerminalCommand: on Kiro the
 //     verb-intercept hook classifies every leading terminal verb and runs it
 //     off-band as an aidlc-utility subcommand + arms the roll-forward latch. A
 //     compose entry there would spawn a nonexistent subcommand and neuter the
 //     same-turn creation `next` - so classifyTerminalCommand(["compose", ...])
 //     must stay null (the Kiro-adapter regression pin).
-//   - Branch 8 (cold-start freeform, no --scope) now routes by keyword
-//     inference instead of the static static-default confirm: a clear keyword
-//     hit (<=5 words) asks a one-line confirm NAMING THE MATCHED SCOPE; rich /
-//     unmatched prose asks the COMPOSE OFFER (never a silent default).
 //   - `detect --json` is a pure read: prints the workspace scan + the resolved
 //     scopesDir/scopeGridPath (so the composer is TOLD where to write) and
 //     leaves the project dir untouched.
@@ -104,7 +100,7 @@ afterEach(() => {
 });
 
 // ===========================================================================
-// The Kiro verb-intercept regression pin (review trap 1). compose must never
+// The Kiro verb-intercept regression pin. compose must never
 // classify as a terminal command - a WORKSPACE_VERBS entry would make the Kiro
 // hook run `aidlc-utility.ts compose` off-band and arm the roll-forward latch.
 // ===========================================================================
@@ -150,7 +146,7 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
     const d = directiveOf(runNext(proj, ["compose", "--report", "sonar.json"]).out);
     expect(d.kind).toBe("print");
     expect(String(d.message)).toContain('scan report at "sonar.json"');
-    // The spike-F leak shape was intent text "compose sonar.json" - the path
+    // The leak shape was intent text "compose sonar.json" - the path
     // must ride the report slot, not the task-text slot.
     expect(String(d.message)).not.toContain('for: "sonar.json"');
     expect(String(d.message)).toContain("nonblank `creationDescription`");
@@ -240,7 +236,7 @@ describe("t198 cold-start compose surfaces -> composer dispatch", () => {
 // ===========================================================================
 // With-state (in-flight): a bare mid-flow compose reaches the IN-FLIGHT
 // composer dispatch - NOT Branch 10 (which would silently advance the current
-// stage: the spike-F trap this branch exists to close).
+// stage).
 // ===========================================================================
 describe("t198 mid-flow compose -> in-flight dispatch, not an advance", () => {
   test.each(["dist", "dist-release"])(
@@ -334,15 +330,13 @@ describe("t198 mid-flow compose -> in-flight dispatch, not an advance", () => {
 });
 
 // ===========================================================================
-// Branch 8 rewiring: inference-driven confirm vs the compose offer. The old
-// behavior was a static static-default confirm for ALL freeform prose.
+// Branch 8: agent-proposed plan confirmation vs the compose offer.
 // ===========================================================================
 describe("t198 Branch 8: inference confirm + compose offer", () => {
   test("clear keyword hit (<=5 words) -> one-line confirm naming the MATCHED scope", () => {
     proj = createTestProject();
     const d = directiveOf(runNext(proj, ["fix login bug"]).out);
     expect(d.kind).toBe("ask");
-    // bugfix carries keyword "fix"; the old code would have said "feature".
     expect(String(d.question)).toContain('"bugfix"');
     expect(String(d.question)).toContain("tailor one to this task");
   });
@@ -402,7 +396,6 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     const featureCommand = (ask.scope_commands as Array<{ scope: string; command: string }>)
       .find((entry) => entry.scope === "feature")?.command;
     expect(featureCommand).toContain("--depth comprehensive --test-strategy minimal");
-    // The confirmed answer names the creation with the person's own levels.
     const created = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
     expect(created.kind).toBe("print");
     expect(String(created.message)).toContain("intent create --scope bugfix");
@@ -435,7 +428,6 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(dispatch.kind, String(dispatch.message)).toBe("print");
     expect(String(dispatch.message)).toContain(`This request carries ${typed}: add exactly that to the approval's \`next\` command`);
     expect(String(dispatch.message)).toContain("A switch typed here is the person's choice");
-    // "go ahead": the creation the engine names carries the switch, and the saved work has it.
     const created = directiveOf(runNext(proj, confirm.slice(confirm.indexOf(" next ") + 6).split(" ")).out);
     expect(created.kind).toBe("print");
     const message = String(created.message);
@@ -515,8 +507,7 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
   // The person typed plan approval off with the work they were describing, so
   // it belongs to the work they pick: every answer the offer names carries it,
   // and creation takes it from the command (t-flags-next-does-not-take holds
-  // the whole path). Before this it rode only as `on`, and an `off` reached the
-  // new work through the human-turn hook's grant alone.
+  // the whole path).
   test("a typed plan approval off rides every answer the offer names", () => {
     proj = createTestProject();
     removeWorkspaceRecord(proj);
@@ -549,7 +540,6 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
   });
 
-  // The recommended answer ("compose") keeps the levels the person typed too.
   test.each([
     ["fresh workspace", false],
     ["beside an active workflow", true],
@@ -724,12 +714,10 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     const created = createdThrough(runEmitted(String(ask.new_intent_command)));
     const message = String(created.message);
     const create = /Run `([^`]+)` to start the new intent/.exec(message)?.[1] ?? "";
-    // One step: nothing is left to apply once the work exists.
     expect(create).toContain("intent create --scope bugfix");
     expect(create).toContain("--review none");
     expect(create).toContain("--guard-policy strict");
     expect(message).not.toContain("config set");
-    // Run it: the new work has them, the active work keeps its own.
     const before = readFileSync(seededStateFile(proj), "utf-8");
     const requestId = /--request (\S+)/.exec(create)?.[1] as string;
     const made = runUtility(proj, [
@@ -755,7 +743,6 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
       "--depth", "minimal", "--guard-policy", "relaxed", "Fix the login crash when the session expires",
     ]).out);
     expect(ask.ask_type).toBe("new-work-routing");
-    // Continuing the active work takes the typed Guard Policy with it.
     const kept = directiveOf(runNext(proj, ["1"]).out);
     expect(String(kept.message)).toContain(
       "config set depth minimal --guard-policy relaxed --person-words '<their words>'` to update the configuration",
@@ -788,11 +775,11 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
   });
 
   test("a raw line of loose words after a plan word goes to the agent, with nothing asked of them", () => {
-    // Settled 2026-10-10: a plan's name at the START of their own sentence,
-    // with nothing marking which it is, has two readings and only the agent can
-    // tell. Named in its own argument with the request in one more (the test
-    // above, and what the orchestrator skill asks the agent for) the reading is
-    // already made and the plan acts.
+    // A plan's name at the START of their own sentence, with nothing marking which
+    // it is, has two readings and only the agent can tell. Named in its own
+    // argument with the request in one more (the test above, and what the
+    // orchestrator skill asks the agent for) the reading is already made and the
+    // plan acts.
     proj = createTestProject();
     seedAidlcMemory(proj);
     seedStateFile(proj, MID_IDEATION);
@@ -816,7 +803,6 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     ));
     const ask = directiveOf(runNext(proj, ["--guard-policy", "relaxed", "Fix the login crash when the session expires"]).out);
     expect(ask.ask_type).toBe("new-work-routing");
-    // Other work is selected before the answer runs.
     expect(runUtility(proj, ["intent-create", "--scope", "poc", "--label", "spike"]).rc).toBe(0);
     const created = createdThrough(runEmitted(String(ask.new_intent_command)));
     expect(String(created.narration)).toContain(
@@ -931,7 +917,7 @@ describe("t198 detect --json is a pure read that names the write target", () => 
     expect(payload.scopes as string[]).toContain("bugfix");
     expect((payload.scopes as string[]).length).toBe(11);
     const after = readdirSync(proj).sort().join(",");
-    expect(after).toBe(before); // no dir created, no file written
+    expect(after).toBe(before);
   });
 });
 
@@ -993,7 +979,6 @@ describe("t198 the composer's grid proposal lives in the project, not the temp d
     expect(read.rc, read.out).toBe(0);
     const body = JSON.parse(read.out) as { valid: boolean; nearest_stock: { scope: string; diff: number }[] };
     expect(body.valid).toBe(true);
-    // The grid it checked is the one written there.
     expect(body.nearest_stock.find((s) => s.scope === "bugfix")?.diff).toBe(0);
     expect(body.nearest_stock.find((s) => s.scope === "feature")?.diff).toBeGreaterThan(0);
   });

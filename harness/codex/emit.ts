@@ -1,19 +1,19 @@
 // harness/codex/emit.ts — the Codex CLI per-shell emission plugin.
 //
-// The unified packager copies core/ → dist/codex/.codex/ (rules → aidlc-rules)
-// and runs graph compile, then calls this emit() for everything that is CODE,
-// not declarative data: the Codex config, hook wiring, trust pre-seed, the
-// onboarding skills-path rewrite, per-agent TOML transpositions, and .agents/skills/
-// tree (orchestrator + generated runners + session skills + openai.yaml guards).
+// The unified packager copies core/ -> dist/codex/.codex/ (rules prose ->
+// aidlc-rules) and runs graph compile, then calls this emit() for everything
+// that is CODE, not declarative data: the Codex config, hook wiring, trust
+// pre-seed, the onboarding skills-path rewrite, per-agent TOML transpositions,
+// and .agents/skills/ tree (orchestrator + generated runners + session
+// skills + openai.yaml guards).
 //
-// Ported faithfully from the proven scripts/package-codex.ts emission half
-// (spike tip d465886). The ONE transform class is the harness-dir token /
-// anchored-prefix family, exposed via ctx.substituteToken plus a local
-// aidlc-rules rename mirroring the packager's. Nothing here invents a new sed.
+// The harness-dir token / anchored-prefix transform is exposed via
+// ctx.substituteToken, plus a local aidlc-rules rename mirroring the
+// packager's (rewriteProse).
 //
-// emit() also owns the codex compiled-data + skills layout: skills do NOT ship
-// in .codex/skills/ (Codex discovers skills at <project>/.agents/skills/), so
-// the manifest sets skipRunnerGen and emit composes the runners here.
+// emit() also owns the codex skills layout: skills do NOT ship in
+// .codex/skills/ (Codex discovers skills at <project>/.agents/skills/), so the
+// manifest sets skipRunnerGen and emit composes the runners here.
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, posix, relative, win32 } from "node:path";
@@ -165,6 +165,13 @@ experimental_request_user_input = { enabled = true }
 
 [features]
 default_mode_request_user_input = true
+
+# Release 2.11.0 shipped AIDLC_RULES_DIR in this table, pointed at a space, and
+# its own refresh of a copied project cannot take one member out of the table,
+# so the member stays, empty: the engine reads an empty AIDLC_RULES_DIR as none.
+# It can go when no supported project refreshes with a 2.11.0 tool.
+[shell_environment_policy]
+set = { AIDLC_RULES_DIR = "" }
 `;
 }
 
@@ -223,7 +230,7 @@ const SNAKE: Record<string, string> = {
 };
 
 // Trust entries keyed on "<abs hooks.json path>:<event_snake>:<group>:<idx>".
-// Exported so the `trust` subcommand (aidlc-codex-trust.ts) can print
+// Exported so the `trust` subcommand (scripts/package.ts) can print
 // installer-substituted entries.
 export function trustEntries(
   projectDir: string,
@@ -291,7 +298,7 @@ export function emitTrustSeed(
 }
 
 // --- Agent transposition: persona .md → .codex/agents/*.toml ----------------
-// The old D7 model map is DERIVED from the tier projection module. Codex reads
+// The model map is DERIVED from the tier projection module. Codex reads
 // `tier:` from the core agent .md (authoritative source of truth) and looks up
 // {model, effort} via projectTier. A null projected value means the TOML key
 // is OMITTED: the spawned role inherits the session value. Judgment and
@@ -474,7 +481,7 @@ export default function emit(ctx: EmitContext): void {
   }
 
   // (a) authored orchestrator shell with the standard token projection.
-  for (const f of ["SKILL.md", "question-rendering.md", "composer.md"]) {
+  for (const f of ["SKILL.md", "question-rendering.md", "composer.md", "tables.md"]) {
     emissions.push({
       path: join(SKILLS_DST, "aidlc", f),
       content: () =>

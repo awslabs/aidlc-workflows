@@ -8,6 +8,7 @@
       "tests/e2e/t-exec-codex-journey-workspace.serial.test.ts": 207,
       "tests/e2e/t-exec-codex-memory-include.serial.test.ts": 13,
       "tests/e2e/t-exec-codex-status.serial.test.ts": 14,
+      "tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts": 2800,
       "tests/e2e/t-run-opencode-status.serial.test.ts": 29,
       "tests/e2e/t-tui-compose-front.serial.test.ts": 324,
       "tests/e2e/t-tui-custom-harness.serial.test.ts": 264,

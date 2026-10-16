@@ -273,4 +273,4 @@ aidlc-operations-agent
 - [Agent System](../05-agent-system.md)
 - [Stage Documentation](../04-stages/)
 - [Agents chapter in the User Guide (philosophy and rationale)](../../guide/06-agents.md)
-- [SKILL.md (Conductor authored source)](../../../harness/claude/skills/aidlc/SKILL.md) -- the forwarding loop that acts on engine directives; carries a human-readable stage-graph mirror
+- [SKILL.md (Conductor authored source)](../../../harness/claude/skills/aidlc/SKILL.md) -- the forwarding loop that acts on engine directives; its human-readable stage-graph mirror is [tables.md](../../../harness/claude/skills/aidlc/tables.md) beside it

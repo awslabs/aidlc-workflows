@@ -56,9 +56,9 @@ const SUPPORT_AGENTS = [
   "aidlc-developer-agent",
   "aidlc-quality-agent",
 ] as const;
-// One distinctive token per substantive shipped rule file. A support brief
-// must carry the content marker; a path alone is the rejected legacy contract.
-// team.md/project.md ship as comment-only placeholders and are absent.
+// One distinctive token from each of org.md and phases/inception.md. A support
+// brief must carry the content marker; a path alone is the rejected contract.
+// team.md/project.md ship as unpopulated templates and have no markers here.
 const RULE_MARKERS = [
   { marker: "first-class" },
   { marker: "Given/When/Then" },
@@ -328,6 +328,30 @@ function readIndex(
   );
 }
 
+const LEAD_PERSONA = ".claude/agents/aidlc-product-agent.md";
+
+// The User Stories step the engine handed the agent, and the lead persona it
+// carried: the agent works as the lead with nothing to read first.
+function userStoriesStep(results: CapturedToolResult[]): CapturedToolResult | undefined {
+  return results.find(
+    (toolResult) =>
+      toolResult.toolName === "Bash" &&
+      /"kind"\s*:\s*"run-stage"/.test(toolResult.resultText) &&
+      /"stage"\s*:\s*"user-stories"/.test(toolResult.resultText),
+  );
+}
+
+function expectLeadPersonaHandedOver(step: CapturedToolResult | undefined): void {
+  expect(step, "expected the engine's user-stories run-stage directive").toBeDefined();
+  const directive = JSON.parse(step?.resultText ?? "{}") as {
+    lead_persona?: { path?: string; text?: string };
+    inline_context_paths?: string[];
+  };
+  expect(directive.lead_persona?.path, "the step did not carry the lead persona").toBe(LEAD_PERSONA);
+  expect(directive.lead_persona?.text).toContain("name: aidlc-product-agent");
+  expect(directive.inline_context_paths).not.toContain(LEAD_PERSONA);
+}
+
 function shellCommand(result: CapturedToolResult): string | undefined {
   if (result.toolName !== "Bash" && result.toolName !== "Shell") return undefined;
   return typeof result.input.command === "string"
@@ -365,7 +389,7 @@ function logKnowledgeReadDiagnostics(result: DriveResult): void {
   const knownTools = ["Read", "Bash", "Shell", "Task", "Agent", "Write", "Edit",
     "MultiEdit", "Skill", "AskUserQuestion", "Glob", "Grep", "TodoWrite"];
   const targets = [
-    ["persona", ".claude/agents/aidlc-product-agent.md"],
+    ["persona", LEAD_PERSONA],
     ["knowledge", LIVE_KNOWLEDGE_REL],
     ["stage", ".claude/aidlc-common/stages/inception/user-stories.md"],
     ["requirements", "requirements.md"],
@@ -448,19 +472,11 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
         logKnowledgeReadDiagnostics(result);
         expect(result.timedOut).toBe(false);
         expect(result.stoppedAfterToolResult).toBe(true);
-        const leadPersonaPath = ".claude/agents/aidlc-product-agent.md";
-        const leadReadIndex = readIndex(result.toolResults, leadPersonaPath);
-        const projectKnowledgeReadIndex = readIndex(
-          result.toolResults,
-          LIVE_KNOWLEDGE_REL,
-        );
-        expect(leadReadIndex, "the inline mob lead persona was not read").toBeGreaterThanOrEqual(0);
+        expectLeadPersonaHandedOver(userStoriesStep(result.toolResults));
         expect(
-          projectKnowledgeReadIndex,
+          readIndex(result.toolResults, LIVE_KNOWLEDGE_REL),
           "the inline mob lead's project knowledge was not read",
-        ).toBeGreaterThan(
-          leadReadIndex,
-        );
+        ).toBeGreaterThanOrEqual(0);
         expect(
           result.toolResults.some(
             (toolResult) =>
@@ -485,8 +501,6 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
       try {
         seedUserStoriesProject(projectDir);
 
-        // Deterministic control on this exact live fixture: approval is refused
-        // before the mob writes its evidence, and the refusal commits no gate.
         const approvedBefore = eventCount(projectDir, "GATE_APPROVED");
         const refused = reportApprovedWithoutEvidence(projectDir);
         expect(refused.kind).toBe("error");
@@ -587,14 +601,8 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
           ).toBe(false);
         }
 
-        // The live turn actually received and acted on user-stories run-stage.
-        const runStage = result.toolResults.find(
-          (toolResult) =>
-            toolResult.toolName === "Bash" &&
-            /"kind"\s*:\s*"run-stage"/.test(toolResult.resultText) &&
-            /"stage"\s*:\s*"user-stories"/.test(toolResult.resultText),
-        );
-        expect(runStage, "expected the engine's user-stories run-stage directive").toBeDefined();
+        const runStage = userStoriesStep(result.toolResults);
+        expectLeadPersonaHandedOver(runStage);
         const runStageDirective = JSON.parse(runStage?.resultText ?? "{}") as {
           next_stage?: string | null;
         };
@@ -602,31 +610,11 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
           runStageDirective.next_stage,
           "the terminal live fixture routed to another stage after user-stories",
         ).toBeNull();
-        expect(runStage?.resultText).toContain(
-          ".claude/agents/aidlc-product-agent.md",
-        );
         for (const support of SUPPORT_AGENTS) {
           expect(runStage?.resultText).not.toContain(
             `.claude/agents/${support}.md`,
           );
         }
-        // inline_context_paths is only the manifest. The conductor contract
-        // requires it to read each inline persona before any stage/consume read.
-        const leadPersonaPath = ".claude/agents/aidlc-product-agent.md";
-        const leadReadIndex = readIndex(result.toolResults, leadPersonaPath);
-        const stageReadIndex = readIndex(
-          result.toolResults,
-          ".claude/aidlc-common/stages/inception/user-stories.md",
-        );
-        const consumeReadIndex = readIndex(result.toolResults, "requirements.md");
-        expect(leadReadIndex, "the conductor did not read the inline mob lead persona")
-          .toBeGreaterThanOrEqual(0);
-        expect(stageReadIndex, "stage_file read preceded the lead persona read").toBeGreaterThan(
-          leadReadIndex,
-        );
-        expect(consumeReadIndex, "consume read preceded the lead persona read").toBeGreaterThan(
-          leadReadIndex,
-        );
 
         // Round 1 dispatched every declared support. Each brief names the
         // shared draft/input, carries the active-space rules delivered by the
@@ -647,8 +635,8 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
           expect(prompt).toContain("requirements.md");
           expect(prompt).toContain(`${agent}.md`);
           // Rule steering reached the brief as content: each distinctive
-          // marker must survive the transfer. A path alone is the legacy
-          // contract and does not satisfy this assertion.
+          // marker must survive the transfer. A path alone
+          // does not satisfy this assertion.
           for (const { marker } of RULE_MARKERS) {
             expect(
               prompt.includes(marker),
@@ -664,8 +652,6 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
           }
         }
 
-        // After all support results return, the lead must perform a write/edit
-        // of a produced artifact (or dispatch the product lead to integrate).
         const lastSupportResult = Math.max(
           ...SUPPORT_AGENTS.map((agent) =>
             result.toolResults.indexOf(roundOne.get(agent) as CapturedToolResult)
@@ -687,7 +673,6 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
           "expected a lead-owned integration step after all round-1 support results",
         ).toBe(true);
 
-        // Permanent evidence and final lead-owned artifacts landed on disk.
         for (const agent of SUPPORT_AGENTS) {
           const path = contributionPath(projectDir, agent);
           expect(existsSync(path), `missing ${path}`).toBe(true);
@@ -714,8 +699,6 @@ describe("t238 user-stories mob topology (Claude SDK live)", () => {
           expect(readFileSync(path, "utf-8").trim().length).toBeGreaterThan(0);
         }
 
-        // The human approval menu appeared only after all evidence existed;
-        // report then committed the gate and completed this terminal fixture.
         expect(approvalMenuSeen).toBe(true);
         expect(evidenceCompleteAtApproval).toBe(true);
         expect(result.auditEvents).toContain("GATE_APPROVED");

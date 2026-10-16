@@ -213,7 +213,6 @@ describe("t349 audit trail guard: shell commands", () => {
       `echo x >> ${AUDIT}/*.md`,
       `cd ${RECORD} && echo x >> audit/host.md`,
       `pushd ${RECORD} && printf x | tee -a audit/host.md`,
-      // A whole-path variable, a split path, and an exported one.
       `P=${SHARD}; echo x >> $P`,
       `P="${SHARD}"; echo x >> "$P"`,
       `D=aud; E=it; echo x >> ${RECORD}/\${D}\${E}/host.md`,
@@ -232,7 +231,6 @@ describe("t349 audit trail guard: shell commands", () => {
       `P=${RECORD}/au\\\ndit/host.md; printf forged >> "$P"`,
       `P=${RECORD}/$(printf au)dit/host.md; printf forged >> "$P"`,
       `printf forged >> "${RECORD}/$(printf au)dit/host.md"`,
-      // Appending assembles the path too.
       `P=${RECORD}/aud; P+=it/host.md; printf forged >> "$P"`,
       // A later safe reassignment does not hide the write that used the shard.
       `P=${SHARD}; printf forged >> "$P"; P=notes.md`,
@@ -312,7 +310,6 @@ describe("t349 audit trail guard: the hooks refuse with the owning routes named"
         expect(r.stderr).not.toContain("AIDLC runtime records and hooks belong to the harness");
       }
     }
-    // Nothing reached the shard.
     expect(readFileSync(shard, "utf-8")).toBe(before);
     expect(readdirSync(seededAuditDir(project))).toEqual([basename(shard)]);
   });

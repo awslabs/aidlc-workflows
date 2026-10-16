@@ -283,7 +283,6 @@ describe("t-ci-full-suite-evidence release.yml wiring", () => {
       expect(recheck.env?.FULL_SUITE_SHA).toBe(`\${{ needs.full_suite_gate.outputs.sha }}`);
       expect(recheck.run).toContain('test "$FULL_SUITE_SHA" = "$AUTHORIZED_SHA"');
     }
-    // Builds and lifecycle checks run alongside the suite instead of waiting for it.
     for (const name of ["verify", "native-smoke", "build", "musl-smoke", "stage-release", "windows-lifecycle", "unix-lifecycle"]) {
       const needs = [jobs[name].needs ?? []].flat();
       expect(needs.some((need) => need.startsWith("full_suite")), name).toBe(false);
@@ -322,7 +321,6 @@ describe("t-ci-full-suite-evidence release.yml wiring", () => {
       const reused = gate(passing("555"), { REUSED_RUN_ID: "555", FULL_SUITE_RESULT: "skipped" });
       expect(reused.status, reused.stderr).toBe(0);
       expect(reused.output).toBe(`sha=${SHA}\nrun_id=555\n`);
-      // A called suite that did not succeed refuses publication even beside a passing file.
       const failed = gate(passing("700"), { REUSED_RUN_ID: "", FULL_SUITE_RESULT: "failure" });
       expect(failed.status).toBe(1);
       expect(failed.stdout).toContain(`::error::The Full Suite this release ran for ${SHA} ended with result failure`);

@@ -1,8 +1,7 @@
 // SubagentStop hook: Emit SUBAGENT_COMPLETED when a subagent finishes.
-// Replaces the previous free-form `## Subagent Completed` markdown write with
-// a canonical audit event.
 //
-// Receives JSON on stdin with subagent info. No-op unless a workflow is running.
+// Receives JSON on stdin with subagent info. Audits only while a workflow is
+// running.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
@@ -79,7 +78,6 @@ export async function run(input: string): Promise<number> {
   const intent = selection.intent ?? undefined;
   const space = intent ? selection.space : undefined;
 
-  // Write health heartbeat
   const healthDir = hooksHealthDir(projectDir, intent, space);
   writeHookStatusFile(healthDir, "log-subagent.last", isoTimestamp());
 
@@ -107,10 +105,10 @@ export async function run(input: string): Promise<number> {
   if (agentMessage) fields.Message = agentMessage;
   // What a reviewer left in the review file of every request still open for
   // it, at the moment it finished. The review is the reviewer's: the verdict
-  // compares the bytes it records with this digest and refuses a file that
-  // changed since (aidlc-log.ts review --verdict), and the review-freeze hook
-  // refuses the write that would change it. Evidence only: a ledger or record
-  // that cannot be read leaves the row as it was.
+  // compares the bytes it records with this digest and marks a file that
+  // changed since (aidlc-log.ts review --verdict) as edited after the reviewer.
+  // Evidence only: a ledger or record that cannot be read leaves the row as
+  // it was.
   try {
     const record = recordDir(projectDir, intent, space);
     if (record !== null) {

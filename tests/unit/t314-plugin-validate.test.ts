@@ -286,7 +286,6 @@ describe("t314 standalone plugin validator", () => {
     const messages = findings.map((finding) => finding.message).join("\n");
     expect(messages).toContain("ars.targets[1] must be one of iae | csu | ve | r | ua");
     expect(messages).toContain("ars.cost must be null or an integer 1..5, got number");
-    // A well-formed block validates green.
     writeFileSync(
       stage,
       readFileSync(stage, "utf-8").replace(

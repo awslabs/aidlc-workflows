@@ -5,8 +5,9 @@
 // when a plan is being composed. It lives in composer.md beside SKILL.md, and
 // the engine's composer dispatch print tells the agent to read it at that
 // moment. The plain-chat rules that sat beside it (reshape requests, named
-// stage changes, project type, collaborators, the person's checks, settings,
-// saving a plan) apply in any chat, so they stay in SKILL.md.
+// stage changes, project type, collaborators, settings, saving a plan) apply
+// in any chat, so they stay in SKILL.md; the person's checks ride the onboarding
+// file every harness loads in every chat.
 //
 // Mechanism: readFileSync over every harness source and dist tree, plus one
 // CLI spawn of the shipped dist engine for each dispatch mode; no LLM.
@@ -43,12 +44,10 @@ const ANY_CHAT = [
   "**Named stage changes are done at once.**",
   "**New project or existing code, in plain chat.**",
   "**Collaborators in plain chat.**",
-  "**The person's checks, off or on when they ask.**",
-  "| review freeze | `guard.review-freeze` | `AIDLC_DISABLE_REVIEW_FREEZE_HOOK` |",
   "**Saving a plan for next time.**",
   "Mid-workflow, when the human asks in plain chat to turn sensors, learnings, summary confirmation, or reviews on or off, or plan approval on, just do it",
   "A review level set for the piece of work replaces its scope's ceiling",
-  "After turning one on, check it with",
+  "When that output says `AIDLC_DISABLE_<NAME>=1` is set in the environment, never look for where it is set",
   "to skip plan approval, the harness records it and creation turns it off",
 ];
 
@@ -107,6 +106,8 @@ describe("the composer block loads only when a plan is being composed", () => {
       for (const phrase of ANY_CHAT) {
         if (!skill.includes(phrase)) gaps.push(`${label}: SKILL.md lost ${phrase}`);
       }
+      // The setter clears the person's own local switch itself; an agent clear would also clear the team's file.
+      if (skill.includes("config flags --clear-bypass")) gaps.push(`${label}: SKILL.md tells the agent to clear a switch itself`);
     }
     expect(gaps).toEqual([]);
   });

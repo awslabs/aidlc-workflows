@@ -38,7 +38,6 @@ const HARNESS_DIRS = {
 } as const;
 const COPY = "aidlc/active-memory";
 const TEAM = "aidlc/spaces/teamb/memory";
-// Every copied file starts with the line naming the file to edit.
 const copyHeader = (space: string, rel: string): string =>
   `<!-- AI-DLC keeps this copy in step with aidlc/spaces/${space}/memory/${rel}. Edit that file; this copy is replaced. -->\n`;
 
@@ -80,8 +79,6 @@ function conflicts(project: string, from: string, harness: string): string[] {
   return (parsed.data?.actions ?? []).filter((item) => item.action === "conflict").map((item) => `${item.path} (${item.detail})`);
 }
 
-// The tool's files that carry `at`, by workspace-relative path (the shipped
-// tools and the memory itself left out).
 function pointing(project: string, at: string): string[] {
   return walkFiles(project)
     .map((rel) => rel.replaceAll("\\", "/"))
@@ -102,7 +99,6 @@ function installed(harness: keyof typeof HARNESS_DIRS, from: string): string {
   return project;
 }
 
-// A configured project switched to the space `teamb`, as the person does it.
 function switched(harness: keyof typeof HARNESS_DIRS, from: string): { project: string; includes: Map<string, string> } {
   const project = installed(harness, from);
   const includes = new Map(pointing(project, COPY).map((rel) => [rel, readFileSync(join(project, rel), "utf-8")]));
@@ -129,9 +125,10 @@ function earlierRelease(harness: string): string {
   }
   if (harness === "codex") {
     const path = join(prior, ".codex", "config.toml");
+    // 2.11.0's pointer, in the member this release ships empty.
     writeFileSync(path, readFileSync(path, "utf-8").replace(
-      "[sandbox_workspace_write]",
-      `[shell_environment_policy]\nset = { AIDLC_RULES_DIR = "${DEFAULT}" }\n\n[sandbox_workspace_write]`,
+      'set = { AIDLC_RULES_DIR = "" }',
+      `set = { AIDLC_RULES_DIR = "${DEFAULT}" }`,
     ));
   }
   return prior;
@@ -193,11 +190,9 @@ describe("a space switch changes no tracked file, and a refresh after it is no c
       expect(conflicts(project, release(harness), harness)).toEqual([]);
       const refreshed = config(project, release(harness), harness, "--yes");
       expect(refreshed.status, refreshed.out).toBe(0);
-      // No file names the other space any more: the includes read the copy,
-      // and Codex's config.toml has no pointer at all.
       expect(pointing(project, TEAM)).toEqual([]);
       if (harness === "codex") {
-        expect(readFileSync(join(project, ".codex", "config.toml"), "utf-8")).not.toContain("AIDLC_RULES_DIR");
+        expect(readFileSync(join(project, ".codex", "config.toml"), "utf-8")).toContain('set = { AIDLC_RULES_DIR = "" }');
       } else {
         expect(pointing(project, COPY).length).toBeGreaterThan(0);
       }

@@ -18,7 +18,6 @@ const SKILL_FILES = ["SKILL.md", "question-rendering.md", "composer.md"] as cons
 const RESOURCES = SKILL_FILES.map((file) => `file://.kiro/skills/aidlc/${file}`);
 const PROMPT_ITEM =
   "the aidlc skill (.kiro/skills/aidlc/SKILL.md) and the two files beside it (question-rendering.md and composer.md) are in your context from the start of this chat: follow them, and never read them with your file tool; read every other AI-DLC file they send you to (a protocol module, a stage file) with your file tool in parts of at most 200 lines, to its last line;";
-// The read step the skill and the prompts carried while the agent read the skill itself.
 const OLD_READ_STEP = "with your file tool in parts of at most 40 lines";
 
 // What Kiro loads as the skill: the text after the front matter.
