@@ -265,12 +265,10 @@ import {
   isModelPreset,
   KIRO_AGENT_MODELS_FEATURE,
   KIRO_AGENT_MODELS_OFF_NOTE,
-  kiroAgentFileHasModelLines,
   kiroAgentModelsOn,
   MODEL_EFFORTS,
   MODEL_GROUPS,
   MODEL_PRESETS,
-  modelAgentStem,
   modelHarnessHonesty,
   modelPolicyAgentsDir,
   modelPolicyIsEmpty,
@@ -6746,8 +6744,8 @@ function prepareRefreshSource(
   // The tree's preview-feature choices (`config preview`): what this run asks,
   // else what is recorded; an entry this engine does not know is kept.
   // agent-models' lines come out only in the run that turns off a choice that
-  // was on, on any release, and only from the agent files still as AI-DLC last
-  // wrote them; one the person changed keeps them and is named.
+  // was on, on any release: the model and effort keys AI-DLC owns while it is
+  // on, out of every agent file it ships, the rest of each file as it is.
   const request = previewRequest.request;
   const recordedPreview = staged[PREVIEW_FEATURES_RECORD];
   const recordedChoices = typeof recordedPreview === "object" && recordedPreview !== null && !Array.isArray(recordedPreview)
@@ -6759,24 +6757,14 @@ function prepareRefreshSource(
     previewRecorded = true;
   }
   let agentModelsChoice: KiroAgentModelsChoice | null = null;
-  let agentModelsTakeOut: ((agent: string) => boolean) | undefined;
-  const agentModelsKept: string[] = [];
+  let agentModelsTakeOut = false;
   if (descriptor.distribution === "kiro-ide") {
     agentModelsChoice = previewFeaturesFrom(staged[PREVIEW_FEATURES_RECORD])[KIRO_AGENT_MODELS_FEATURE] ?? null;
     if (
       request?.feature === KIRO_AGENT_MODELS_FEATURE && request.choice === "off" &&
       previewFeaturesFrom(recordedChoices)[KIRO_AGENT_MODELS_FEATURE] === "on"
     ) {
-      const agentsDir = modelPolicyAgentsDir("kiro-ide", descriptor.harnessDir) ?? descriptor.harnessDir;
-      agentModelsTakeOut = (agent) => {
-        const rel = `${agentsDir}/${modelAgentStem(agent)}.md`;
-        const priorHash = prior?.files[rel];
-        const target = join(projectDir, rel);
-        if (!regularFile(target)) return false;
-        if (priorHash !== undefined && ownedFileHash(target, [priorHash]).hash === priorHash) return true;
-        if (kiroAgentFileHasModelLines(readFileSync(target, "utf-8"))) agentModelsKept.push(rel);
-        return false;
-      };
+      agentModelsTakeOut = true;
     }
   }
   const agentModelsBuild: ModelBuild = { version: previewRequest.version, agentModels: agentModelsChoice };
@@ -6817,13 +6805,6 @@ function prepareRefreshSource(
     agentModelsBuild,
     agentModelsTakeOut,
   );
-  if (agentModelsKept.length > 0) {
-    notes.push(
-      `agent-models is off, but AI-DLC cannot tell that ${agentModelsKept.join(", ")} ${
-        agentModelsKept.length === 1 ? "is as it last wrote it, so it keeps its" : "are as it last wrote them, so they keep their"
-      } model and effort lines; Kiro still follows them until you take them out.`,
-    );
-  }
   applyProjectFlagsToProjection(
     root,
     descriptor.harnessDir,
@@ -11321,11 +11302,17 @@ function previewSwitchLine(
   to: PreviewChoice,
 ): string {
   const version = tree.frameworkVersion ?? AIDLC_VERSION;
-  const head = `  Preview feature ${feature}: ${before ?? "not set"} -> ${to} in ${tree.harnessDir}/tools/data/harness.json`;
+  const head = before === to
+    ? `  Preview feature ${feature}: ${to}, as recorded in ${tree.harnessDir}/tools/data/harness.json`
+    : `  Preview feature ${feature}: ${before ?? "not set"} -> ${to} in ${tree.harnessDir}/tools/data/harness.json`;
   // Back to what applied before; a recorded on that did not apply (a stable
-  // release) has no way back to undo into.
+  // release) comes back only on a preview release.
   const back = previewFeatureOn(feature, before ? { [feature]: before } : {}, version) ? "on" : "off";
-  const undo = back !== to ? ` To undo: ${previewCommand(projectDir, tree.distribution, `${feature} ${back} --yes`)}` : "";
+  const undo = back !== to
+    ? ` To undo: ${previewCommand(projectDir, tree.distribution, `${feature} ${back} --yes`)}`
+    : before === "on"
+    ? ` To have it again: on a preview release, ${previewCommand(projectDir, tree.distribution, `${feature} on --yes`)}`
+    : "";
   // A switch that changes nothing in effect (on to off on a stable release) says so.
   const takes = back === "on" || previewFeatureOn(feature, { [feature]: to }, version)
     ? PREVIEW_FEATURE_TEXT[feature].takes
@@ -11404,21 +11391,14 @@ function preparePreviewSection(
     );
     return null;
   }
+  // Whether `on` can apply is decided against the release this run sets up,
+  // which a pin or --download can make another one than the installed tree's.
   const state = treePreviewFeature(tree.root, feature);
   const version = state.version;
-  if (choice === "on" && versionChannel(version) !== PREVIEW_CHANNEL) {
-    emitResult(
-      usage(
-        `${feature} needs this project on a preview release of AI-DLC; it is on ${version}`,
-        previewReleaseSteps(projectDir, previewCommand(projectDir, tree.distribution, `${feature} on --yes`)),
-      ),
-      options,
-    );
-    return null;
-  }
   const recorded = state.recorded;
   // Nothing recorded is off, so off there changes nothing and records nothing.
-  if ((recorded ?? "off") === choice) {
+  // A recorded on that does not apply here goes on, to the release check.
+  if ((recorded ?? "off") === choice && (choice === "off" || state.on)) {
     emitResult(success(`${feature} is already ${choice} for this project`, { feature, choice }), options);
     return null;
   }
@@ -13289,10 +13269,12 @@ export async function main(
     // A preview feature turned on is checked against the release this run sets
     // up, which a pin can make another one than the installed tree's.
     if (modelsContext?.preview?.choice === "on" && versionChannel(stamp.frameworkVersion) !== PREVIEW_CHANNEL) {
-      throw new Error(
-        `${modelsContext.preview.feature} needs this project on a preview release of AI-DLC; this run sets it up on ${stamp.frameworkVersion}; ${
-          previewReleaseSteps(projectDir, previewCommand(projectDir, stamp.distribution, `${modelsContext.preview.feature} on --yes`))
-        }`,
+      throw new SwitchRefusal(
+        `${modelsContext.preview.feature} needs this project on a preview release of AI-DLC; this run sets it up on ${stamp.frameworkVersion}`,
+        {
+          kind: "text",
+          text: previewReleaseSteps(projectDir, previewCommand(projectDir, stamp.distribution, `${modelsContext.preview.feature} on --yes`)),
+        },
       );
     }
     prepared = prepareRefreshSource(

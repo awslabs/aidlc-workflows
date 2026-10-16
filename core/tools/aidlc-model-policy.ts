@@ -795,9 +795,8 @@ export function applyModelPolicyToProjection(
   policyValue?: ModelPolicyRecord | null,
   capValue?: Tier | null,
   build?: ModelBuild,
-  // The run that turns kiro-ide's agent-models off takes its lines out once,
-  // from the agent files this says are still as AI-DLC last wrote them.
-  takeOut?: (agent: string) => boolean,
+  // The run that turns kiro-ide's agent-models off: take its lines out once.
+  takeOut = false,
 ): EffectiveModelPolicy[] {
   const harnessRoot = join(projectionRoot, harnessDir);
   const policy = policyValue ?? null;
@@ -840,9 +839,7 @@ export function applyModelPolicyToProjection(
     // conductor (aidlc-aidlc.md) has no tier and is never written. With the
     // feature off the agent files are left as they are, the person's own lines
     // too, except in the run that turns it off.
-    const on = kiroAgentModelsOn(build);
     for (const item of effective) {
-      if (!on && !takeOut?.(item.agent)) continue;
       const path = join(agentsRoot, `${modelAgentStem(item.agent)}.md`);
       if (!existsSync(path)) throw new Error(`${path}: missing agent surface`);
       writeFileSync(
@@ -868,16 +865,6 @@ export function applyModelPolicyToProjection(
     );
   }
   return effective;
-}
-
-// Whether a Kiro agent file carries a `model:` or `effortLevel:` line, by key
-// as the writer takes them out, whatever its value.
-export function kiroAgentFileHasModelLines(content: string): boolean {
-  const fm = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "";
-  return fm.split(/\r?\n/).some((line) => {
-    const key = /^([A-Za-z_][\w-]*):/.exec(line)?.[1];
-    return key === "model" || key === "effortLevel";
-  });
 }
 
 function markdownSurfaceValues(

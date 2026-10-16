@@ -561,8 +561,8 @@ the others, so change them through `aidlc config models` rather than by hand;
 does not match. An agent file you added yourself is not touched.
 `aidlc config preview agent-models off --yes` takes those lines out of the
 agent files it ships, on any release, and keeps the recorded models and
-efforts, so turning it on again puts them back; an agent file you changed since
-AI-DLC last wrote it keeps its lines, and the command names it. With it off,
+efforts, so turning it on again puts them back; the rest of each file, an edit of
+yours included, stays as it is. With it off,
 and on a stable release, `aidlc config` neither writes nor checks those lines.
 Moving the project to a stable release replaces the agent files AI-DLC wrote
 with the release's own, without the lines, but the project still records the

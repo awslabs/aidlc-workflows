@@ -8880,7 +8880,9 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const target = selected ? `the ${selected} section` : "project configuration";
     // A named section always gets the question, even when it is already clean;
     // the human asked to configure it (t297 saw a clean trust section end silently).
-    const ask = selected
+    const ask = selected === "preview"
+      ? `then, when it lists no preview feature for this project, say so in one line and stop without asking; otherwise ask which feature the human wants on or off, leaving it unchanged, even when it is already as they want`
+      : selected
       ? `then ask what the human wants to change in it, offering the choices \`${invoke} config ${selected} --help\` lists and leaving it unchanged, even when it is already clean`
       : "then ask which sections the human wants to consider, and skip any section they leave unchanged";
     emit(printDirective(
