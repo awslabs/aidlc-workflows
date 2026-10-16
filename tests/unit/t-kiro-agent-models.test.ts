@@ -1,4 +1,4 @@
-// covers: file:tools/aidlc-model-policy.ts, function:isModelId, function:modelHarnessHonesty, function:presetsChangeNothing, function:kiroAgentModelsDropped, function:applyModelPolicyToProjection, function:modelPolicySurfaceDrift, function:sessionModelsDetail
+// covers: file:tools/aidlc-model-policy.ts, function:isModelId, function:modelHarnessHonesty, function:presetsChangeNothing, function:kiroAgentModelsChoice, function:applyModelPolicyToProjection, function:modelPolicySurfaceDrift, function:sessionModelsDetail
 //
 // On Kiro (kiro-ide) a delegated agent runs on its own `model` and
 // `effortLevel` (Kiro CLI 2.31.1 on its v3 engine, Kiro IDE 1.3.0). With the
@@ -88,7 +88,7 @@ describe("the agent-models switch", () => {
       "AI-DLC does not write a model or effort into its Kiro agent files, so every agent runs on your chat's model and effort (Kiro IDE's model picker, or Kiro CLI's session model); a model or effort set here is kept for other tools and changes nothing in Kiro.";
     expect(policy.modelHarnessHonesty("kiro-ide", STABLE).message).toBe(off);
     expect(policy.modelHarnessHonesty("kiro-ide", PREVIEW).message).toBe(
-      `${off} In this preview build, \`aidlc config models --agent-models on\` applies a model and effort set for one agent.`,
+      `${off} In this preview build, turning agent-models on (\`config models --agent-models on\`) applies a model and effort set for one agent.`,
     );
     featureOn();
     expect(policy.modelHarnessHonesty("kiro-ide", STABLE).message).toBe(off);
@@ -153,7 +153,7 @@ describe("writing kiro-ide agent files", () => {
     policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, PREVIEW);
     const after = agentFiles(root);
     const fm = frontmatter(after[REVIEWER_FILE]);
-    expect(fm).toMatch(/^model: gpt-5\.6-terra$/m);
+    expect(fm).toMatch(/^model: "gpt-5\.6-terra"$/m);
     expect(fm).toMatch(/^effortLevel: high$/m);
     expect(fm).not.toMatch(/^effort:/m);
     for (const [name, text] of Object.entries(before)) {
@@ -164,16 +164,38 @@ describe("writing kiro-ide agent files", () => {
     expect(policy.modelPolicySurfaceDrift(root, ".kiro", "kiro-ide", pinned, PREVIEW)).toEqual([]);
   });
 
-  test("without the switch nothing is written, and a line left behind reads as drift", () => {
+  test("with the feature off the agent files are left as they are, the person's own lines too, and --check reads none", () => {
     const root = projection();
+    const path = join(root, ".kiro", "agents", REVIEWER_FILE);
+    writeFileSync(path, readFileSync(path, "utf-8").replace(/\n---\n/, "\nmodel: claude-sonnet-5.5\n---\n"));
     const before = agentFiles(root);
     policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, STABLE);
+    policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, { ...PREVIEW, agentModels: "off" });
     expect(agentFiles(root)).toEqual(before);
+    expect(policy.modelPolicySurfaceDrift(root, ".kiro", "kiro-ide", null, STABLE)).toEqual([]);
+  });
+
+  test("the run that turns it off takes the lines out, and later runs leave a line the person adds", () => {
+    featureOn();
+    const root = projection();
+    policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, PREVIEW);
+    policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, { ...PREVIEW, agentModels: "off", takeOut: true });
     const path = join(root, ".kiro", "agents", REVIEWER_FILE);
-    writeFileSync(path, before[REVIEWER_FILE].replace(/\n---\n/, "\nmodel: gpt-5.6-terra\n---\n"));
-    expect(policy.modelPolicySurfaceDrift(root, ".kiro", "kiro-ide", null, STABLE)).toContain(
-      `${REVIEWER}: model gpt-5.6-terra != inherit`,
-    );
+    expect(frontmatter(readFileSync(path, "utf-8"))).not.toMatch(/^(model|effortLevel):/m);
+    writeFileSync(path, readFileSync(path, "utf-8").replace(/\n---\n/, "\nmodel: claude-sonnet-5.5\n---\n"));
+    policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, { ...PREVIEW, agentModels: "off" });
+    expect(frontmatter(readFileSync(path, "utf-8"))).toMatch(/^model: claude-sonnet-5\.5$/m);
+  });
+
+  test("a model id YAML would read as null, a number or a mapping is written quoted and reads back as the id", () => {
+    featureOn();
+    for (const id of ["null", "gpt:", "1.5"]) {
+      const value: ModelPolicyRecord = { schemaVersion: 1, agents: { [REVIEWER]: { model: id } } };
+      const root = projection();
+      policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", value, null, PREVIEW);
+      expect(frontmatter(agentFiles(root)[REVIEWER_FILE])).toContain(`model: ${JSON.stringify(id)}`);
+      expect(policy.modelPolicySurfaceDrift(root, ".kiro", "kiro-ide", value, PREVIEW), id).toEqual([]);
+    }
   });
 
   test("an edited effortLevel reads as drift with the switch on", () => {
@@ -187,29 +209,13 @@ describe("writing kiro-ide agent files", () => {
     );
   });
 
-  test("a refresh without the switch names the agents whose model and effort it takes out", () => {
+  test("the choice a config run records: the flag, then the record, then the switch on a preview release", () => {
+    expect(policy.kiroAgentModelsChoice("on", "off", PREVIEW.version)).toBe("off");
+    expect(policy.kiroAgentModelsChoice("off", undefined, PREVIEW.version)).toBe("off");
+    expect(policy.kiroAgentModelsChoice(undefined, undefined, PREVIEW.version)).toBeNull();
     featureOn();
-    const project = projection();
-    policy.applyModelPolicyToProjection(project, ".kiro", "kiro-ide", pinned, null, PREVIEW);
-    const staged = projection();
-    policy.applyModelPolicyToProjection(staged, ".kiro", "kiro-ide", pinned, null, STABLE);
-    expect(policy.kiroAgentModelsDropped(join(project, ".kiro", "agents"), join(staged, ".kiro", "agents"), pinned))
-      .toEqual([REVIEWER]);
-    expect(policy.kiroAgentModelsDropped(join(staged, ".kiro", "agents"), join(staged, ".kiro", "agents"), pinned))
-      .toEqual([]);
-  });
-
-  test("an agent the person added keeps its own model line, and the refresh does not name it", () => {
-    const project = projection();
-    const staged = projection();
-    const own = "aidlc-my-helper-agent.md";
-    writeFileSync(
-      join(project, ".kiro", "agents", own),
-      "---\nname: aidlc-my-helper-agent\ndescription: mine\nmodel: gpt-5.6-luna\n---\n\nHelp.\n",
-    );
-    const mine: ModelPolicyRecord = { schemaVersion: 1, agents: { "my-helper": { model: "gpt-5.6-luna" } } };
-    expect(policy.kiroAgentModelsDropped(join(project, ".kiro", "agents"), join(staged, ".kiro", "agents"), mine))
-      .toEqual([]);
+    expect(policy.kiroAgentModelsChoice(undefined, undefined, PREVIEW.version)).toBe("on");
+    expect(policy.kiroAgentModelsChoice(undefined, undefined, STABLE.version)).toBeNull();
   });
 
   test("a review's reviewer copy keeps the reviewer's model and effortLevel", () => {
@@ -223,7 +229,7 @@ describe("writing kiro-ide agent files", () => {
     );
     expect(copy).not.toBeNull();
     const fm = frontmatter(copy ?? "");
-    expect(fm).toMatch(/^model: gpt-5\.6-terra$/m);
+    expect(fm).toMatch(/^model: "gpt-5\.6-terra"$/m);
     expect(fm).toMatch(/^effortLevel: high$/m);
   });
 });
@@ -256,6 +262,12 @@ describe("the --model value", () => {
       policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", value, null, PREVIEW);
       expect(agentFiles(root)[REVIEWER_FILE], JSON.stringify(recorded)).toBe(before);
     }
+    const tiers = policy.readAgentTiers(join(projection(), ".kiro"));
+    expect(
+      policy.harnessHonestyNotes({ schemaVersion: 1, agents: { [REVIEWER]: { model: "#gpt" } } }, tiers, "kiro-ide", null, PREVIEW),
+    ).toContain(
+      `The model id recorded for ${REVIEWER} is not one plain id, so it is not written; set it again with \`config models --agent ${REVIEWER} --model <id>\`.`,
+    );
     expect(policy.isModelId("claude-opus-4-8[1m]")).toBe(true);
     expect(policy.isModelId("arn:aws:bedrock:us-east-1::foundation-model/x")).toBe(true);
   });
@@ -339,11 +351,10 @@ describe("the agent-models choice through config", () => {
     const pin = p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--effort", "high", "--yes"], true);
     expect(pin.status, pin.out).toBe(0);
     expect(p.choice()).toBe("on");
-    expect(p.reviewer()).toMatch(/^model: gpt-5\.6-terra$/m);
+    expect(p.reviewer()).toMatch(/^model: "gpt-5\.6-terra"$/m);
     const other = p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", "developer", "--effort", "low", "--yes"]);
     expect(other.status, other.out).toBe(0);
     expect(p.reviewer()).toMatch(/^effortLevel: high$/m);
-    expect(other.out).not.toContain("no longer apply");
     const check = p.run(["config", "models", "--project-dir", p.dir, "--check"]);
     expect(check.status, check.out).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
@@ -352,11 +363,12 @@ describe("the agent-models choice through config", () => {
     const p = project(previewRuntime());
     expect(p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes"], true).status).toBe(0);
     const dry = p.run(["config", "models", "--project-dir", p.dir, "--agent-models", "off", "--dry-run"], true);
-    expect(dry.out).toContain(`This will take the model and effort set for ${REVIEWER} out of their Kiro agent files`);
-    expect(p.reviewer()).toMatch(/^model: gpt-5\.6-terra$/m);
+    expect(dry.out).toContain("Kiro agent models: on -> off in .kiro/tools/data/harness.json");
+    expect(p.reviewer()).toMatch(/^model: "gpt-5\.6-terra"$/m);
     const off = p.run(["config", "models", "--project-dir", p.dir, "--agent-models", "off", "--yes"], true);
     expect(off.status, off.out).toBe(0);
-    expect(off.out).toContain(`The model and effort set for ${REVIEWER} no longer apply in Kiro: agent-models is off for this project.`);
+    expect(off.out).toContain("Kiro takes it at each agent's next dispatch. To undo: ");
+    expect(off.out).toContain("config models --agent-models on --yes");
     expect(p.choice()).toBe("off");
     expect(p.reviewer()).not.toMatch(/^model:/m);
     expect(p.run(["config", "--project-dir", p.dir, "--yes"], true).status).toBe(0);
@@ -364,7 +376,7 @@ describe("the agent-models choice through config", () => {
     const on = p.run(["config", "models", "--project-dir", p.dir, "--agent-models", "on", "--yes"]);
     expect(on.status, on.out).toBe(0);
     expect(p.choice()).toBe("on");
-    expect(p.reviewer()).toMatch(/^model: gpt-5\.6-terra$/m);
+    expect(p.reviewer()).toMatch(/^model: "gpt-5\.6-terra"$/m);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 3);
 
   test("the same pin again with the switch on records it and writes the lines a stable-time pin left unwritten", () => {

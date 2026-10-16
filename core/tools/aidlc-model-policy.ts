@@ -187,6 +187,8 @@ export type KiroAgentModelsChoice = "on" | "off";
 export type ModelBuild = {
   version?: string;
   agentModels?: KiroAgentModelsChoice | null;
+  // This run turns agent-models off: the kiro-ide writer takes its lines out once.
+  takeOut?: boolean;
 };
 
 export function readKiroAgentModelsChoice(harnessRoot: string): KiroAgentModelsChoice | null {
@@ -198,6 +200,19 @@ export function readKiroAgentModelsChoice(harnessRoot: string): KiroAgentModelsC
   } catch {
     return null;
   }
+}
+
+// The choice a config run records for a kiro-ide project: `--agent-models`
+// wins, then what is recorded; with neither, a preview release with the switch
+// on records "on", so later runs keep the pins without it.
+export function kiroAgentModelsChoice(
+  recorded: unknown,
+  requested: KiroAgentModelsChoice | undefined,
+  version: string,
+): KiroAgentModelsChoice | null {
+  if (requested !== undefined) return requested;
+  if (recorded === "on" || recorded === "off") return recorded;
+  return kiroAgentModelsOn({ version }) ? "on" : null;
 }
 
 // What a reader of an installed project knows: the release it is on and its
@@ -233,7 +248,7 @@ const KIRO_AGENT_MODELS_HONESTY: HarnessHonesty = Object.freeze({
 const KIRO_AGENT_MODELS_OFF_IN_PREVIEW: HarnessHonesty = Object.freeze({
   ...HARNESS_HONESTY["kiro-ide"],
   message:
-    `${HARNESS_HONESTY["kiro-ide"].message} In this preview build, \`aidlc config models --agent-models on\` applies a model and effort set for one agent.`,
+    `${HARNESS_HONESTY["kiro-ide"].message} In this preview build, turning agent-models on (\`config models --agent-models on\`) applies a model and effort set for one agent.`,
 });
 
 // What a harness can express in this build. Every reader asks this rather than
@@ -626,6 +641,9 @@ type MarkdownEffortKey = "effort" | "variant" | "effortLevel";
 
 type MarkdownProjectionOptions = {
   effortKey?: MarkdownEffortKey;
+  // Write the model as a YAML double-quoted string (kiro-ide), so an id YAML
+  // would read as null, a number or a mapping stays the id.
+  quoteModel?: boolean;
   insertBeforeKeys?: readonly string[];
   removeKeys?: readonly string[];
   afterProjectionLines?: readonly string[];
@@ -634,9 +652,12 @@ type MarkdownProjectionOptions = {
 function effectiveProjectionLines(
   effective: Pick<EffectiveModelPolicy, "model" | "effort">,
   effortKey: MarkdownEffortKey,
+  quoteModel = false,
 ): string[] {
   return [
-    ...(effective.model !== undefined ? [`model: ${effective.model}`] : []),
+    ...(effective.model !== undefined
+      ? [`model: ${quoteModel ? JSON.stringify(effective.model) : effective.model}`]
+      : []),
     ...(effective.effort !== undefined ? [`${effortKey}: ${effective.effort}`] : []),
   ];
 }
@@ -674,7 +695,7 @@ export function writeMarkdownAgentSurface(
   }).length;
   const target = Math.max(0, insertAt - removedBefore);
   const projected = [
-    ...effectiveProjectionLines(effective, effortKey),
+    ...effectiveProjectionLines(effective, effortKey, options.quoteModel),
     ...(options.afterProjectionLines ?? []),
   ];
   kept.splice(target, 0, ...projected);
@@ -802,15 +823,17 @@ export function applyModelPolicyToProjection(
         }),
       );
     }
-  } else if (harness === "kiro-ide") {
+  } else if (harness === "kiro-ide" && (kiroAgentModelsOn(build) || build?.takeOut)) {
     // Kiro reads `model` and `effortLevel` from the agent at each dispatch; the
-    // conductor (aidlc-aidlc.md) has no tier and is never written.
+    // conductor (aidlc-aidlc.md) has no tier and is never written. With the
+    // feature off the agent files are left as they are, the person's own lines
+    // too, except in the run that turns it off.
     for (const item of effective) {
       const path = join(agentsRoot, `${modelAgentStem(item.agent)}.md`);
       if (!existsSync(path)) throw new Error(`${path}: missing agent surface`);
       writeFileSync(
         path,
-        writeMarkdownAgentSurface(readFileSync(path, "utf-8"), item, { effortKey: "effortLevel" }),
+        writeMarkdownAgentSurface(readFileSync(path, "utf-8"), item, { effortKey: "effortLevel", quoteModel: true }),
       );
     }
   } else if (harness === "kiro") {
@@ -838,7 +861,15 @@ function markdownSurfaceValues(
   effortKey: MarkdownEffortKey,
 ): { model?: string; effort?: ModelEffort } {
   const fm = content.match(/^---\r?\n([\s\S]*?)\r?\n---/)?.[1] ?? "";
-  const model = /^model:\s*(\S+)\s*$/m.exec(fm)?.[1];
+  const raw = /^model:\s*("(?:[^"\\]|\\.)*"|\S+)\s*$/m.exec(fm)?.[1];
+  let model = raw;
+  if (raw?.startsWith('"')) {
+    try {
+      model = JSON.parse(raw) as string;
+    } catch {
+      model = raw;
+    }
+  }
   const effort = new RegExp(`^${effortKey}:\\s*(\\S+)\\s*$`, "m").exec(fm)?.[1];
   return {
     ...(model ? { model } : {}),
@@ -921,7 +952,7 @@ export function modelPolicySurfaceDrift(
     } else if (harness === "opencode") {
       path = join(agentsRoot, `${modelAgentStem(name)}.md`);
       if (existsSync(path)) actual = markdownSurfaceValues(readFileSync(path, "utf-8"), "variant");
-    } else if (harness === "kiro-ide") {
+    } else if (harness === "kiro-ide" && kiroAgentModelsOn(build)) {
       path = join(agentsRoot, `${modelAgentStem(name)}.md`);
       if (existsSync(path)) actual = markdownSurfaceValues(readFileSync(path, "utf-8"), "effortLevel");
     } else if (harness === "kiro") {
@@ -956,32 +987,6 @@ export function modelPolicySurfaceDrift(
     }
   }
   return [...new Set(issues)];
-}
-
-// The shipped agents whose recorded model or effort the project's Kiro
-// (kiro-ide) file carries and the staged projection no longer does: a refresh
-// run without the agent-models preview takes them out, and setup says so once.
-// An agent the person added is not staged and keeps its file, so it is not one.
-export function kiroAgentModelsDropped(
-  projectAgentsDir: string,
-  stagedAgentsDir: string,
-  policyValue: ModelPolicyRecord | null,
-): string[] {
-  const pinned = Object.entries(normalizeModelPolicy(policyValue)?.agents ?? {})
-    .filter(([, own]) => own.model !== undefined || own.effort !== undefined)
-    .map(([name]) => name);
-  const dropped: string[] = [];
-  for (const name of pinned.sort()) {
-    const file = `${modelAgentStem(name)}.md`;
-    const projectPath = join(projectAgentsDir, file);
-    const stagedPath = join(stagedAgentsDir, file);
-    if (!existsSync(projectPath) || !existsSync(stagedPath)) continue;
-    const before = markdownSurfaceValues(readFileSync(projectPath, "utf-8"), "effortLevel");
-    const after = markdownSurfaceValues(readFileSync(stagedPath, "utf-8"), "effortLevel");
-    const carried = before.model !== undefined || before.effort !== undefined;
-    if (carried && after.model === undefined && after.effort === undefined) dropped.push(name);
-  }
-  return dropped;
 }
 
 export function modelPolicyDoctorIssues(
@@ -1031,6 +1036,17 @@ export function harnessHonestyNotes(
     notes.push(
       honesty === KIRO_AGENT_MODELS_OFF_IN_PREVIEW && !own ? HARNESS_HONESTY["kiro-ide"].message : honesty.message,
     );
+  }
+  // A recorded kiro-ide id that is not one plain id is never written; name it,
+  // so the person sets it again rather than reading the line above as Kiro's.
+  if (harness === "kiro-ide" && kiroAgentModelsOn(build)) {
+    for (const [name, own] of Object.entries(normalizeModelPolicy(policy)?.agents ?? {}).sort()) {
+      if (own.model !== undefined && !isModelId(own.model)) {
+        notes.push(
+          `The model id recorded for ${name} is not one plain id, so it is not written; set it again with \`config models --agent ${name} --model <id>\`.`,
+        );
+      }
+    }
   }
   for (const item of effective) {
     if (item.clampedEffort) {

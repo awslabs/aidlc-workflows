@@ -250,12 +250,11 @@ import {
   isModelId,
   isModelPreset,
   KIRO_AGENT_MODELS_RECORD,
-  kiroAgentModelsDropped,
+  kiroAgentModelsChoice,
   kiroAgentModelsOn,
   MODEL_EFFORTS,
   MODEL_GROUPS,
   MODEL_PRESETS,
-  modelAgentStem,
   modelHarnessHonesty,
   modelPolicyAgentsDir,
   modelPolicyIsEmpty,
@@ -408,9 +407,6 @@ type PreparedRefreshSource = {
   emptiedSidecars?: Set<string>;
   entries?: Baseline["entries"];
   notes: string[];
-  // kiro-ide agents whose model and effort the staged files no longer carry,
-  // and whether the release staged is a preview one (the note's wording).
-  agentModelDrops?: { agents: string[]; previewRelease: boolean };
 };
 
 type PlannedAction = {
@@ -1552,9 +1548,10 @@ function modelsWizard(
       : targetCurrent;
   }
   if (choice === "3") {
+    const build = projectModelBuild(projectDir, harness);
     let next = targetCurrent;
     for (const name of Object.keys(tiers).sort()) {
-      const currentValue = resolveModelPolicy(current, name, tiers[name], harness, null, projectModelBuild(projectDir, harness));
+      const currentValue = resolveModelPolicy(current, name, tiers[name], harness, null, build);
       writeMenuText(
         `${name}: current ${currentValue.model ?? "inherit"}/${currentValue.effort ?? "inherit"}.\n`,
       );
@@ -6560,32 +6557,6 @@ function unrecordedLegacyProviderMigration(
   return null;
 }
 
-// The one line for kiro-ide agents whose model and effort leave their files:
-// what will happen on a dry run, what happened otherwise, and the way back
-// only where there is one.
-function agentModelsDropLine(
-  drops: NonNullable<PreparedRefreshSource["agentModelDrops"]>,
-  actions: readonly PlannedAction[],
-  harnessDir: string,
-  dryRun: boolean,
-  projectDir: string,
-): string | null {
-  const rewritten = drops.agents.filter((name) =>
-    actions.some((item) =>
-      item.path === `${harnessDir}/agents/${modelAgentStem(name)}.md` &&
-      (item.action === "update" || item.action === "merge" || item.action === "create")
-    )
-  );
-  if (rewritten.length === 0) return null;
-  const names = rewritten.join(", ");
-  const what = dryRun
-    ? `This will take the model and effort set for ${names} out of their Kiro agent files`
-    : `The model and effort set for ${names} no longer apply in Kiro`;
-  return drops.previewRelease
-    ? `${what}: agent-models is off for this project. \`${configInvocationFor(projectDir)} config models --agent-models on\` puts them back.`
-    : `${what}: this release of AI-DLC does not write a model or effort into Kiro agent files.`;
-}
-
 function prepareRefreshSource(
   projectDir: string,
   sourceRoot: string,
@@ -6746,16 +6717,17 @@ function prepareRefreshSource(
   let agentModelsRecorded = false;
   if (descriptor.distribution === "kiro-ide") {
     const recorded = staged[KIRO_AGENT_MODELS_RECORD];
-    agentModelsChoice = agentModelsRequest.requested ?? (recorded === "on" || recorded === "off" ? recorded : null);
-    if (agentModelsChoice === null && kiroAgentModelsOn({ version: agentModelsRequest.version })) {
-      agentModelsChoice = "on";
-    }
+    agentModelsChoice = kiroAgentModelsChoice(recorded, agentModelsRequest.requested, agentModelsRequest.version);
     if (agentModelsChoice !== null && agentModelsChoice !== recorded) {
       staged[KIRO_AGENT_MODELS_RECORD] = agentModelsChoice;
       agentModelsRecorded = true;
     }
   }
-  const agentModelsBuild = { version: agentModelsRequest.version, agentModels: agentModelsChoice };
+  const agentModelsBuild: ModelBuild = {
+    version: agentModelsRequest.version,
+    agentModels: agentModelsChoice,
+    takeOut: agentModelsRequest.requested === "off",
+  };
   const distribution = staged.distribution;
   if (typeof distribution !== "string") {
     throw new Error(`${stagedHarnessData}: distribution must be a string`);
@@ -6792,14 +6764,6 @@ function prepareRefreshSource(
     undefined,
     agentModelsBuild,
   );
-  let agentModelDrops: PreparedRefreshSource["agentModelDrops"];
-  const agentsDir = modelPolicyAgentsDir(modelHarness(distribution), descriptor.harnessDir);
-  if (descriptor.distribution === "kiro-ide" && agentsDir !== null && !kiroAgentModelsOn(agentModelsBuild)) {
-    const agents = kiroAgentModelsDropped(join(projectDir, agentsDir), join(root, agentsDir), modelPolicy);
-    if (agents.length > 0) {
-      agentModelDrops = { agents, previewRelease: versionChannel(agentModelsRequest.version) === PREVIEW_CHANNEL };
-    }
-  }
   applyProjectFlagsToProjection(
     root,
     descriptor.harnessDir,
@@ -7209,10 +7173,7 @@ function prepareRefreshSource(
       }
     }
   }
-  return {
-    root, cleanup, regenerated, retiredManagedFiles, projectOverlays, unproven, emptiedSidecars, entries, notes,
-    ...(agentModelDrops ? { agentModelDrops } : {}),
-  };
+  return { root, cleanup, regenerated, retiredManagedFiles, projectOverlays, unproven, emptiedSidecars, entries, notes };
   } catch (error) {
     rmSync(cleanup, { recursive: true, force: true });
     throw error;
@@ -11025,7 +10986,7 @@ function prepareModelsSection(
     emitResult(
       usage(
         "--agent-models needs this project on a preview release of AI-DLC",
-        "run `aidlc config --channel preview` and `aidlc update`, then `aidlc config` in this project",
+        "move this project to a preview build of AI-DLC first (Release Channels in the install guide)",
       ),
       options,
     );
@@ -11068,7 +11029,8 @@ function prepareModelsSection(
         tiers,
         summaryLines: [
           `  Kiro agent models: ${installedBuild.agentModels ?? "not set"} -> ${agentModels} in ` +
-            `${selected.harnessDir}/tools/data/harness.json`,
+            `${selected.harnessDir}/tools/data/harness.json; Kiro takes it at each agent's next dispatch. To undo: ` +
+            `${modelsCommand(projectDir, harness, `--agent-models ${agentModels === "on" ? "off" : "on"} --yes`)}`,
         ],
         notes: summary.notes,
         agentModels,
@@ -11116,7 +11078,8 @@ function prepareModelsSection(
   // files lost what the choice applies.
   const kiroIdeProjectionDue = selected.distribution === "kiro-ide" && (
     agentModelsChange ||
-    (installedBuild.agentModels == null && kiroAgentModelsOn({ version: installedBuild.version })) ||
+    (installedBuild.agentModels == null &&
+      kiroAgentModelsChoice(null, undefined, installedBuild.version ?? AIDLC_VERSION) !== null) ||
     (kiroAgentModelsOn(installedBuild) &&
       modelPolicySurfaceDrift(projectDir, selected.harnessDir, harness, current, installedBuild).length > 0)
   );
@@ -13322,18 +13285,7 @@ export async function main(
     if (kiroUpgraded > 0) prepared.notes.push(kiroUpgradedNote(kiroUpgraded, descriptor.harnessDir, kiroForce));
     const kiroKeptChanged = actions.filter((action) => action.detail === KIRO_KEPT_CHANGED_DETAIL).length;
     if (kiroKeptChanged > 0) prepared.notes.push(kiroKeptChangedNote(kiroKeptChanged, descriptor.harnessDir, kiroForce));
-    // A kiro-ide agent whose model and effort the refresh takes out is named
-    // only when the plan really rewrites its file.
-    const agentModelLine = prepared.agentModelDrops
-      ? agentModelsDropLine(
-        prepared.agentModelDrops,
-        actions,
-        descriptor.harnessDir,
-        argv.includes("--dry-run"),
-        projectDir,
-      )
-      : null;
-    if (agentModelLine) prepared.notes.push(agentModelLine);
+
     // Older releases shipped an effort map in the project's Kiro settings; a
     // refresh that removes it says where the session's effort lives now.
     const legacyKiroMap = stamp.distribution === "kiro" &&
@@ -13346,12 +13298,7 @@ export async function main(
     // edit map AI-DLC writes into this project; the person hears it once here.
     const shortForm = stamp.distribution === "opencode" ? openCodeGlobalShortFormNote() : null;
     if (shortForm) prepared.notes.push(shortForm);
-    const quietWarnings = [
-      ...hiddenRecords,
-      ...switchWarnings,
-      ...(shortForm ? [shortForm] : []),
-      ...(agentModelLine ? [agentModelLine] : []),
-    ];
+    const quietWarnings = [...hiddenRecords, ...switchWarnings, ...(shortForm ? [shortForm] : [])];
     const withQuietWarnings = (message: string): string =>
       options.mode === "quiet" && quietWarnings.length > 0
         ? `${message}${quietWarnings.map((warning) => `\nWarning: ${warning}`).join("")}`

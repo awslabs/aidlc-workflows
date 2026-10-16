@@ -551,13 +551,15 @@ at the model's own default, and an agent given a model but no effort runs at
 that model's default effort, not your chat's. `--model default` and
 `--effort default` take them out again. A preset or a group effort
 (`--preset`, `--reviewing-effort`) still changes nothing on Kiro, and the
-conductor keeps your chat's model. `aidlc config models --agent-models off`
-takes every agent's lines out and keeps the recorded models and efforts, so
-`--agent-models on` puts them back; off holds even with the variable set.
-`aidlc config models --check` reports a line that does not match. A project on
-a stable release writes none of them, whatever is recorded. `effortLevel` is
-not in Kiro's documentation. Measured on Kiro CLI 2.31.1 on its v3 engine and
-Kiro IDE 1.3.0.
+conductor keeps your chat's model. While it is on, AI-DLC owns those two lines
+in the `aidlc-*-agent.md` files and `aidlc config models --check` reports one
+that does not match. `aidlc config models --agent-models off` takes every
+agent's lines out in that run and keeps the recorded models and efforts, so
+`--agent-models on` puts them back; off holds even with the variable set. With
+it off, and on a stable release, AI-DLC leaves the Kiro agent files as they
+are, lines you added yourself included, so turn it off before you move a
+project back to a stable release. `effortLevel` is not in Kiro's documentation.
+Measured on Kiro CLI 2.31.1 on its v3 engine and Kiro IDE 1.3.0.
 
 ### Kiro's Workflows feature stops AI-DLC's reviews and helpers
 
