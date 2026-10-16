@@ -1758,6 +1758,32 @@ describe("t304 executable review brief scenarios", () => {
     }
   });
 
+  test("the summary brief names what it will generate, never the questions file the person answered in", () => {
+    const { proj, relativeArtifact, questions } = requirementProject([]);
+    const relativeQuestions = relative(proj, questions).replaceAll("\\", "/");
+    expect(
+      renderSummaryConfirmationBrief(proj, findStageBySlug("requirements-analysis")!, questions),
+    ).toContain(
+      `**Confirming:** Consolidated answers in \`${relativeQuestions}\` before generating \`${relativeArtifact}\`.\n`,
+    );
+
+    const planning = join(seededRecordDir(proj), "inception", "delivery-planning");
+    mkdirSync(planning, { recursive: true });
+    const planningQuestions = join(planning, "delivery-planning-questions.md");
+    writeFileSync(planningQuestions, "# Questions\n", "utf-8");
+    const planningRelative = relative(proj, planning).replaceAll("\\", "/");
+    const generated = renderSummaryConfirmationBrief(proj, findStageBySlug("delivery-planning")!, planningQuestions)
+      .split("before generating ")[1]
+      .split("\n")[0];
+    expect(generated).toBe(
+      `${
+        ["bolt-plan", "team-allocation", "risk-and-sequencing-rationale", "external-dependency-map"]
+          .map((name) => `\`${planningRelative}/${name}.md\``)
+          .join(", ")
+      }.`,
+    );
+  });
+
   test("the shipped CLI renders the same summary brief", () => {
     const { proj, questions } = requirementProject([]);
     const result = run(
