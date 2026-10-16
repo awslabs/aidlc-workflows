@@ -2020,9 +2020,10 @@ preserve any backticks in the command. The human can also open
 `<record>/verification-command.txt`.
 
 
-Wait for the human's **Approve** / **Request Changes** reply in that
-session. Only **Approve** authorizes the receipt; an unrelated reply,
-**Request Changes**, or a reply from another session does not. Never write
+Wait for the human's **Approve** / **Request Changes** reply, in that chat
+or a new one while it is the newest question asked. Only **Approve** authorizes
+the receipt; an unrelated reply, **Request Changes**, or a reply to another
+question does not. Never write
 `--details "Approve"` unless the human chose it. Only then run:
 
 ```bash

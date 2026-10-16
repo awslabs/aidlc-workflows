@@ -1640,7 +1640,9 @@ function pendingSummaryDecision(
   };
 }
 
-function pendingVerificationDecision(pd: string, stage: string, sha256: string, session: string): boolean {
+// Which chat's reply answers it is the protected question's (requireProtectedResponse):
+// the one this chat asked, or the one another chat asked that the person's reply here took.
+function pendingVerificationDecision(pd: string, stage: string, sha256: string): boolean {
   const unreadable: string[] = [];
   const rows = readAuditShardEvents(pd, undefined, undefined, unreadable).filter(
     (row) => !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
@@ -1659,11 +1661,10 @@ function pendingVerificationDecision(pd: string, stage: string, sha256: string, 
   return decision.event === "DECISION_RECORDED" &&
     attemptEventDefinitelyBefore(workflows[0], decision) &&
     auditBlockField(decision.block, "Stage") === stage &&
-    auditBlockField(decision.block, "Command SHA-256") === sha256 &&
-    auditBlockField(decision.block, "Session") === session;
+    auditBlockField(decision.block, "Command SHA-256") === sha256;
 }
 
-function pendingConstructionPolicyDecision(pd: string, stage: string, field: string, value: string, session: string): boolean {
+function pendingConstructionPolicyDecision(pd: string, stage: string, field: string, value: string): boolean {
   const unreadable: string[] = [];
   const rows = readAuditShardEvents(pd, undefined, undefined, unreadable).filter(
     (row) => !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:"),
@@ -1684,8 +1685,7 @@ function pendingConstructionPolicyDecision(pd: string, stage: string, field: str
     auditBlockField(decision.block, "Checkpoint") === CONSTRUCTION_POLICY_CHECKPOINT &&
     auditBlockField(decision.block, "Stage") === stage &&
     auditBlockField(decision.block, "Field") === field &&
-    auditBlockField(decision.block, "Value") === value &&
-    auditBlockField(decision.block, "Session") === session;
+    auditBlockField(decision.block, "Value") === value;
 }
 
 
@@ -2147,8 +2147,8 @@ function handleAnswer(args: string[]): void {
     }
 
     if (verificationCommand) {
-      if (!pendingVerificationDecision(pd, flags.stage, verificationCommand.sha256, fields.Session)) {
-        error("No matching pending DECISION_RECORDED with the same Command SHA-256 and Session exists in the current workflow. " + verificationCommandRecovery(flags.stage));
+      if (!pendingVerificationDecision(pd, flags.stage, verificationCommand.sha256)) {
+        error("No matching pending DECISION_RECORDED with the same Command SHA-256 exists in the current workflow. " + verificationCommandRecovery(flags.stage));
       }
       // Neither presence bypass nor autonomy supplies the person's recorded reply.
       requireProtectedResponse(pd, fields.Session, {
@@ -2166,8 +2166,8 @@ function handleAnswer(args: string[]): void {
     }
 
     if (policyFields) {
-      if (!pendingConstructionPolicyDecision(pd, flags.stage, fields.Field, fields.Value, fields.Session)) {
-        error("No matching pending DECISION_RECORDED with the same Field, Value, and Session exists in the current workflow. " + CONSTRUCTION_POLICY_RECOVERY);
+      if (!pendingConstructionPolicyDecision(pd, flags.stage, fields.Field, fields.Value)) {
+        error("No matching pending DECISION_RECORDED with the same Field and Value exists in the current workflow. " + CONSTRUCTION_POLICY_RECOVERY);
       }
       requireProtectedResponse(pd, fields.Session, {
         kind: "construction-policy",

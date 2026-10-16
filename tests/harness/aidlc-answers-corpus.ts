@@ -81,12 +81,10 @@ export const NO_FIXTURE: Partial<Record<Question, string>> = {};
 /** Questions the agent asks in chat. A fresh chat's bare `/aidlc` does not show them again: the engine hands an open
  * chat question back only with the person's words (openQuestionReplyDirective in aidlc-orchestrate.ts). So a live
  * drive, a fresh chat, can meet only their replies typed with `/aidlc`, as the whole exchange. */
-export const ASKED_IN_CHAT: ReadonlySet<Question> = new Set(["stage-question", "learnings"]);
-/** Questions a live drive cannot set up. A verification command or Construction policy answer is recorded only from
- * the chat that asked it (`log answer` matches the question's Session), and a live drive is a new chat. Guard
- * recovery's fixture writes the ask marker by hand, and the engine asks it from the guard's own refusal record. The
- * unit check reads their replies. */
-export const NOT_LIVE: ReadonlySet<Question> = new Set(["verification-command", "construction-policy", "guard-recovery"]);
+export const ASKED_IN_CHAT: ReadonlySet<Question> = new Set(["stage-question", "learnings", "verification-command", "construction-policy"]);
+/** Questions a live drive cannot set up. Guard recovery's fixture writes the ask marker by hand, and the engine asks it
+ * from the guard's own refusal record. The unit check reads its replies. */
+export const NOT_LIVE: ReadonlySet<Question> = new Set(["guard-recovery"]);
 /** Whether a live drive can meet this reply the way a person would. */
 export const liveReply = (item: AnswersItem): boolean =>
   !NOT_LIVE.has(item.question) && (!ASKED_IN_CHAT.has(item.question) || item.via === "aidlc");
@@ -381,13 +379,17 @@ export async function buildQuestion(proj: string, question: Question): Promise<v
       await tool(proj, BOLT, [...verify, "--action", "ask", "--session", SESSION]);
       return;
     }
+    // Both asked inside the current stage, after its start, as a run asks them.
     case "verification-command":
       constructionFixture(proj);
-      await tool(proj, LOG, ["decision", "--stage", "code-generation", "--checkpoint", "verification-command", "--command", "npm test", "--session", SESSION,
+      appendAuditEntry("STAGE_STARTED", { Stage: "functional-design" }, proj);
+      writeFileSync(join(seededRecordDir(proj), "verification-command.txt"), "npm test", "utf-8");
+      await tool(proj, LOG, ["decision", "--stage", "functional-design", "--checkpoint", "verification-command", "--command-file", "verification-command.txt", "--session", SESSION,
         "--decision", "Use this command to verify each completed Unit?", "--options", "Approve,Request Changes"]);
       return;
     case "construction-policy":
       constructionFixture(proj);
+      appendAuditEntry("STAGE_STARTED", { Stage: "functional-design" }, proj);
       await tool(proj, LOG, ["decision", "--stage", "functional-design", "--checkpoint", "construction-policy", "--field", "Construction Execution", "--value", "swarm",
         "--session", SESSION, "--decision", "Switch Construction to build the Units in parallel (swarm)?", "--options", "Approve,Request Changes"]);
       return;
@@ -710,7 +712,7 @@ export async function recordByAgent(proj: string, item: AnswersItem, choice: str
       return { event: approved ? "GATE_APPROVED" : "GATE_REJECTED", exec: result };
     }
     case "verification-command":
-      return emitted(await log(["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "npm test", "--session", SESSION, "--details", choice]), "QUESTION_ANSWERED");
+      return emitted(await log(["--stage", "functional-design", "--checkpoint", "verification-command", "--command", "npm test", "--session", SESSION, "--details", choice]), "QUESTION_ANSWERED");
     case "construction-policy":
       return emitted(await log(["--stage", "functional-design", "--checkpoint", "construction-policy", "--field", "Construction Execution", "--value", "swarm", "--session", SESSION, "--details", choice]), "QUESTION_ANSWERED");
     case "summary-confirmation": {

@@ -172,6 +172,9 @@ import {
   attemptEventIsCrossShardTied,
   artifactFilename,
   auditBlockField,
+  CONSTRUCTION_POLICY_CHECKPOINT,
+  VERIFICATION_COMMAND_CHECKPOINT,
+  validConstructionPolicyChange,
   auditFilePath,
   REDO_REUSE_SOURCE,
   boltSlugForUnit,
@@ -3499,12 +3502,30 @@ function openQuestionReplyDirective(stage: string, block: string, requestId: str
       ? [`${aidlcToolInvocation("bolt")} swarm-checkpoint`,
         batch && units ? ` --batch ${shellArg(batch)} --units ${shellArg(units)}` : ""]
       : [null, ""];
+  // The verification command and a Construction policy question name their
+  // two choices (the only ones `log decision` takes for them), their own
+  // flags, and the setter an approval runs; the command itself stays in its
+  // file, never on a shell line.
+  const field = auditBlockField(block, "Field") ?? "";
+  const value = auditBlockField(block, "Value") ?? "";
+  const [flags, setter] = checkpoint === VERIFICATION_COMMAND_CHECKPOINT
+    ? [" --checkpoint verification-command --command-file verification-command.txt",
+      "set-construction-verification-command --command-file verification-command.txt"]
+    : checkpoint === CONSTRUCTION_POLICY_CHECKPOINT && validConstructionPolicyChange(field, value)
+      ? [` --checkpoint construction-policy --field ${shellArg(field)} --value ${shellArg(value)}`,
+        `set-${field.toLowerCase().replaceAll(" ", "-")} ${shellArg(value)}`]
+      : [null, null];
   const answer = gate
     ? `answer it through that checkpoint, never \`log answer\` (which would not approve it): run \`${gate} --action ` +
       `approve${target}\` or \`${gate} --action reject${target}\`${target ? "" : " for that Unit or batch"}, passing ` +
       "the person's reply unchanged as `--user-input` (and their feedback as `--reason` when they ask for changes)"
-    : `record it with \`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)} --details '<their exact reply>'\` ` +
-      "(with the checkpoint flags that question was logged with, when it has them)";
+    : flags !== null
+      ? "its choices are 1. Approve and 2. Request Changes; " +
+        `record the choice they made with \`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)}${flags} ` +
+        `--details '<Approve or Request Changes>'\`; after an Approve, run \`${aidlcToolInvocation("state")} ${setter}\` and ` +
+        "say its notice line"
+      : `record it with \`${aidlcToolInvocation("log")} answer --stage ${shellArg(stage)} --details '<their exact reply>'\` ` +
+        "(with the checkpoint flags that question was logged with, when it has them)";
   return printDirective(
     `Stage "${stage}" has a question you asked that the person has not answered yet. Read their reply. ` +
       `If it answers that question, ${answer}, then carry on with "${stage}" from where you asked and run bare ` +
