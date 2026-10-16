@@ -28,6 +28,7 @@ import {
   aidlcInvocation,
   compiledExecutable,
   LinkedFolderError,
+  quoteCommandArgument,
   refuseLinkOnTheWay,
   resolveHarnessPath,
   resolveSkillsPath,
@@ -301,8 +302,10 @@ function currentRoots(): string[] {
   ].map((value) => value?.trim() ?? "").filter(Boolean).map(absolute))];
 }
 
-function harnessKind(harnessDir = runtimeHarnessDir()): PluginInventory["harness"] {
-  const declared = process.env.AIDLC_HARNESS_NAME?.trim();
+function harnessKind(harnessDir = runtimeHarnessDir(), projectDir = resolveProjectDir()): PluginInventory["harness"] {
+  // The install's harness.json names it where the folder does not: opencode
+  // and Copilot share .aidlc.
+  const declared = runtimeHarnessName(projectDir, harnessDir);
   if (
     declared === "claude" ||
     declared === "codex" ||
@@ -612,7 +615,7 @@ export function discoverPluginInventory(
   harnessDir = runtimeHarnessDir(),
   projectDir = resolveProjectDir(),
 ): PluginInventory {
-  const harness = harnessKind(harnessDir);
+  const harness = harnessKind(harnessDir, projectDir);
   if (harness === "claude") return claudeInventory(projectDir);
   if (harness === "codex") return codexInventory();
   return currentRootInventory(harness);
@@ -1656,9 +1659,20 @@ export type BaseView =
 
 export type HeldPlugin = { plugin: InstalledPlugin; reason: string };
 
-// The words a held line needs that only the host knows: its name, and when a
-// waiting plugin composes (Kiro CLI composes only when the person runs sync).
-export type HeldWords = { hostName: string; nextCompose: (base: string) => string };
+// What a held line needs to know about the host: its name, and which harness
+// this is, for when a waiting plugin composes.
+export type HeldWords = { hostName: string; harnessName: string };
+
+// When a plugin composes next, for every line that says so. Kiro CLI and
+// opencode run no compose hook (opencode reads no hooks.json), so there it is
+// when the person runs sync with the plugin's folder (`root`, when the tool
+// knows it), after `base` when the plugin waits for one.
+export function nextCompose(harnessName: string, key: string, root: string | null, base?: string): string {
+  if (harnessName !== "kiro" && harnessName !== "opencode") return "at the next session start";
+  const folder = root === null ? `<${key}'s folder>` : quoteCommandArgument(root);
+  return `when you run \`${aidlcInvocation()} engine plugin sync --plugin-root ${folder}\`` +
+    (base === undefined ? "" : ` after ${base} composes`);
+}
 
 type HeldProblem =
   | { kind: "missing"; base: PluginDependency; why: "not-installed" | "host-disabled" | "not-in-project" }
@@ -1684,7 +1698,7 @@ function heldLine(
         ? [`needs ${problem.base.name}, which is disabled in ${words.hostName}`, `Enable ${problem.base.name} there, or disable ${key}.`]
         : [
           `needs ${needs(problem.base)}, which this project does not have yet`,
-          `If ${problem.base.name} is installed, ${key} composes at ${words.nextCompose(problem.base.name)}; if not, install ${problem.base.name}.`,
+          `If ${problem.base.name} is installed, ${key} composes ${nextCompose(words.harnessName, key, plugin.root, problem.base.name)}; if not, install ${problem.base.name}.`,
         ]
     : problem.kind === "deep"
       ? [`builds on ${problem.base}, which builds on ${problem.baseOfBase}`, "A plugin can build only on a base that builds on core alone."]
@@ -1767,7 +1781,7 @@ export async function syncPlugins(
   newlyHeld: HeldRecord[];
   paused: string[];
 }> {
-  const harness = harnessKind(harnessDir);
+  const harness = harnessKind(harnessDir, projectDir);
   const inventory = currentRoots().length > 0
     ? currentRootInventory(harness)
     : discoverPluginInventory(harnessDir, projectDir);
@@ -1842,7 +1856,7 @@ export async function syncPlugins(
     (key) => evidence.stamps.get(key)?.version ?? null,
     {
       hostName: harness === "codex" ? "Codex" : "Claude Code",
-      nextCompose: (base) => harnessName === "kiro" ? `the next plugin sync after ${base}` : "the next session start",
+      harnessName,
     },
   );
   plugins = order.ordered;

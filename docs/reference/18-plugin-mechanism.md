@@ -402,8 +402,12 @@ own sentinel markers. On disable, `select-plugins` and every config refresh
 stage source inside their own rollback transaction, through one rule
 (`stripPluginsTurnedOff()`), so a disabled or paused plugin's contributions stop
 steering enabled stages. Re-enabling restores them on the next session start (on
-Kiro CLI, at the next `aidlc engine plugin sync`): the plugin's compose hook
-re-merges, byte-identical.
+Kiro CLI and opencode, which run no compose hook, when the person runs
+`aidlc engine plugin sync --plugin-root <folder>` with the plugin's folder): the
+plugin's compose re-merges, byte-identical. The select line says which, and so
+does a held plugin's line, from one rule (`nextCompose()` in `aidlc-plugin.ts`);
+the held line names the folder sync ran with, and the select line, which no
+record tells the folder, says `<plugin's folder>`.
 
 Compose hooks and `select-plugins` serialize planning on the same realpath-keyed
 workspace lock; live project changes then commit through the transaction

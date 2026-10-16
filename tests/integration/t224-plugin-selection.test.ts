@@ -279,7 +279,9 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
 
     const disable = runUtility(proj, ["select-plugins", "aidlc"]);
     expect(disable.status).toBe(0);
-    expect(disable.stdout).toContain("Stripped merged contributions of disabled plugin(s): test-pro");
+    expect(disable.stdout).toContain(
+      "What test-pro added to other stages and agents is taken out; turn test-pro back on and it returns at the next session start.",
+    );
     const stripped = readFileSync(stagePath, "utf-8");
     expect(stripped).not.toContain("test-pro-regression-suite");
     expect(stripped).not.toContain("Step 8a (test-pro)");
@@ -363,7 +365,7 @@ describe("t224 plugin selection - install chooses visible plugin surfaces", () =
 
     const core = runUtility(proj, ["select-plugins", "aidlc"]);
     expect(core.status, core.stderr).toBe(0);
-    expect(core.stdout).toContain(`Stripped merged contributions of disabled plugin(s): ${PLUGIN}`);
+    expect(core.stdout).toContain(`What ${PLUGIN} added to other stages and agents is taken out;`);
     expect(buildSensors()).not.toContain("coverage-threshold");
     expect(buildSensors()).not.toContain("requirement-coverage");
   });
