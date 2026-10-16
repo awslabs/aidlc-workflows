@@ -12310,10 +12310,21 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
     const newErrors = validation.errors.filter((e) => !baseErrors.has(e));
     // A stage the person named is skipped as they asked (the engine's skip
     // step passes its own reason for that): the stages after it run from what
-    // there is, as they do after a stage skipped where it stood.
-    if (newErrors.length > 0 && reason !== PERSON_ASKED_SKIP_REASON) {
+    // there is, as they do after a stage skipped where it stood. That covers
+    // only what the skips leave without input. A stage added in the same
+    // change is checked as if it were added alone: the base plan plus the
+    // adds, with no skips. Starvation that shows up there is the add's own,
+    // so it is refused even with the person's reason.
+    let blocking = newErrors;
+    if (reason === PERSON_ASKED_SKIP_REASON && newErrors.length > 0) {
+      const addsOnly: Record<string, string> = { ...baseGrid };
+      for (const slug of addList) addsOnly[slug] = "EXECUTE";
+      const addErrors = new Set(validateGrid(addsOnly, { strict: true, projectType: pt, label }).errors);
+      blocking = newErrors.filter((e) => addErrors.has(e));
+    }
+    if (blocking.length > 0) {
       die(
-        `Recompose rejected by the strict validator:\n${newErrors.map((e) => `  - ${e}`).join("\n")}\n` +
+        `Recompose rejected by the strict validator:\n${blocking.map((e) => `  - ${e}`).join("\n")}\n` +
           "To make the change, also add a stage that produces what is missing, or also skip the stage that needs it." +
           (addList.length > 0 ? ` To run a stage without changing the plan, type ${typed("--stage <stage> --single")}.` : ""),
       );

@@ -413,6 +413,46 @@ describe("t194 recompose - rejections", () => {
     expect(run(proj, "aidlc-utility.ts", ["recompose"]).status).not.toBe(0);
   });
 
+  // The person's own skip (PERSON_ASKED_SKIP_REASON) is carried out over the
+  // strict check, but only for what the skips leave without input. A stage
+  // added in the same change is still checked as if it were added alone.
+  const PERSON = "the person asked to skip it";
+
+  test("a person-asked skip does not carry a starved add past the strict check", () => {
+    const proj = createdProject("mvp");
+    const before = readState(proj);
+    const alone = run(proj, "aidlc-utility.ts", ["recompose", "--add", "performance-validation"]);
+    expect(alone.status, alone.out).not.toBe(0);
+    expect(alone.out).toMatch(/performance-validation\\?" requires artifact \\?"dashboards/);
+    const withSkip = run(proj, "aidlc-utility.ts", [
+      "recompose", "--skip", "contract-design", "--add", "performance-validation", "--reason", PERSON,
+    ]);
+    expect(withSkip.status, withSkip.out).not.toBe(0);
+    expect(withSkip.out).toContain("Recompose rejected by the strict validator");
+    expect(withSkip.out).toMatch(/performance-validation\\?" requires artifact \\?"dashboards/);
+    expect(readState(proj)).toBe(before);
+    expect(auditText(proj)).not.toContain("**Event**: RECOMPOSED");
+  });
+
+  test("a person-asked skip alone still passes the starvation it causes", () => {
+    const proj = createdProject("mvp");
+    const refused = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "nfr-requirements"]);
+    expect(refused.status, refused.out).not.toBe(0);
+    expect(refused.out).toContain("nfr-requirements");
+    const asked = run(proj, "aidlc-utility.ts", ["recompose", "--skip", "nfr-requirements", "--reason", PERSON]);
+    expect(asked.status, asked.out).toBe(0);
+    expect(readState(proj)).toMatch(/nfr-requirements.*SKIP/);
+  });
+
+  test("a person-asked skip that starves a stage, next to an add that does not, still passes", () => {
+    const proj = createdProject("mvp");
+    const r = run(proj, "aidlc-utility.ts", [
+      "recompose", "--skip", "nfr-requirements", "--add", "market-research", "--reason", PERSON,
+    ]);
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).toContain("1 skipped (nfr-requirements), 1 added (market-research)");
+  });
+
   test("OFF path is inert: a rejected recompose leaves the state file byte-identical", () => {
     const proj = createdProject();
     const before = readState(proj);
