@@ -541,6 +541,7 @@ import {
   codeGenerationStartNarration,
   notePlanApprovalOverrideOffered,
   promotableTestingPosture,
+  setTestingPostureRoute,
 } from "./aidlc-testing-posture.ts";
 import {
   checksAre,
@@ -14012,6 +14013,7 @@ function emitSingleRunStage(
     ));
     return;
   }
+  if (node.slug === "code-generation") setTestingPostureRoute(started.settings["Test Strategy"] ?? null);
   // Build the directive only after the synthetic start is durable. Steering
   // continuation tokens bind the current audit/state route; writing the start
   // after token construction would make the engine invalidate its own first
@@ -17617,6 +17619,7 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   const singleSettings = payload.x && singleStageAttemptIsOpen(pd, node.slug)
     ? recordedSingleRunSettings(pd, node.slug)
     : {};
+  if (payload.x && node.slug === "code-generation") setTestingPostureRoute(singleSettings["Test Strategy"] ?? null);
 
   const directive = buildRunStageDirective(
     node,
@@ -18013,6 +18016,9 @@ function nextArgsWithRequestFile(
 
 export function main(argv: string[]): void {
   const rawArgs = argv;
+  // Every route answers for the workflow unless it is an isolated Code
+  // Generation run (emitSingleRunStage, handleContinue say so).
+  setTestingPostureRoute(null);
 
   // Extract --project-dir and the attempt id (mirrors aidlc-jump.ts /
   // aidlc-state.ts), the one way a Copilot claim reads them too.

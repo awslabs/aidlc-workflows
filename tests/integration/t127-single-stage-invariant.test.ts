@@ -56,6 +56,11 @@ import {
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  createCodeGenerationProject,
+  next as codeGenerationNext,
+  writePlan,
+} from "../harness/code-generation-states.ts";
+import {
   artifactFilename,
   loadStageGraphAll,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
@@ -911,21 +916,32 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     expect(nextSingle(proj, []).depth).toBe("Standard");
   });
 
-  test("17c2: a typed depth picks the knowledge the stage loads, through the steering continuation", () => {
-    const roster = (extra: string[]): string[] => {
+  test("17c2: a typed depth picks the knowledge the stage loads, on the first part and after the steering continuation", () => {
+    const roster = (extra: string[], steered: boolean) => {
       const proj = freshProject();
-      const r = run(TOOL, [
-        "next", "--scope", "bugfix", "--stage", "requirements-analysis", "--single", ...extra, "--project-dir", proj,
+      // Rules too large for one message make the step arrive in parts, so the
+      // final run-stage is the one `continue` rebuilds from the recorded start.
+      if (steered) {
+        writeFileSync(join(proj, "aidlc/spaces/default/memory/org.md"),
+          Array.from({ length: 180 }, (_, i) => `## Rule ${i}\n\n${"x".repeat(320)}\n`).join("\n"));
+      }
+      const r = runOrchestrateNext(TOOL, proj, [
+        "--scope", "bugfix", "--stage", "requirements-analysis", "--single", ...extra,
       ]);
-      const directive = JSON.parse(r.out.trim()) as { kind?: string; inline_context_paths?: string[] };
-      expect(directive.kind, r.out).toBe("run-stage");
-      return directive.inline_context_paths ?? [];
+      const directive = r.directive as { kind?: string; depth?: string; test_strategy?: string; inline_context_paths?: string[] } | null;
+      expect(directive?.kind, r.out).toBe("run-stage");
+      if (steered) expect(r.steering.length, r.out).toBeGreaterThan(1);
+      return { paths: directive?.inline_context_paths ?? [], depth: directive?.depth, testStrategy: directive?.test_strategy };
     };
     // bugfix runs at Minimal, which prunes the lead's knowledge.
-    const minimal = roster([]);
-    const comprehensive = roster(["--depth", "comprehensive"]);
-    expect(comprehensive.length).toBeGreaterThan(minimal.length);
-    for (const path of minimal) expect(comprehensive).toContain(path);
+    const minimal = roster([], false);
+    const comprehensive = roster(["--depth", "comprehensive"], false);
+    expect(comprehensive.paths.length).toBeGreaterThan(minimal.paths.length);
+    for (const path of minimal.paths) expect(comprehensive.paths).toContain(path);
+    const continued = roster(["--depth", "comprehensive", "--test-strategy", "comprehensive"], true);
+    expect(continued.depth).toBe("Comprehensive");
+    expect(continued.testStrategy).toBe("Comprehensive");
+    expect(continued.paths).toEqual(comprehensive.paths);
   });
 
   test("17c3: an isolated Code Generation run's Testing Contract follows its own test strategy; the workflow's does not", () => {
@@ -964,6 +980,19 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
     expect(run(STATE_TOOL, ["get", "Test Strategy", "--project-dir", proj]).out.trim()).toBe("Standard");
     expect(run(TOOL, ["next", "--project-dir", proj]).status).toBe(0);
     expect(contractStrategy()).toBe("standard");
+  });
+
+  test("17c4: an interrupted isolated Code Generation run leaves the workflow's own plan approval as it was", () => {
+    const proj = createCodeGenerationProject();
+    projects.push(proj);
+    writePlan(proj);
+    // The workflow's Standard plan is ready: the engine asks to approve it.
+    expect(codeGenerationNext(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    // An isolated Comprehensive run starts and is left open.
+    const isolated = codeGenerationNext(proj, ["--stage", "code-generation", "--single", "--test-strategy", "comprehensive"]);
+    expect(isolated).toMatchObject({ kind: "run-stage", single: true, test_strategy: "Comprehensive" });
+    // Back on the workflow, its plan still matches its own Testing Contract.
+    expect(codeGenerationNext(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
   });
 
   test("17d: with no workflow, next --single --test-strategy runs the stage with it", () => {

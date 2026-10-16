@@ -1103,7 +1103,10 @@ Generation step issued last carries it and the run's `single-stage:code-generati
 attempt is open, `resolveTestingPosture` builds the Testing Contract to the run's
 recorded Test Strategy (`isolatedCodeGenerationTestStrategy`), so every check of
 that contract agrees with the run. Any other step leaves the contract on the
-workflow's own `aidlc-state.md`.
+workflow's own `aidlc-state.md`. The engine itself does not read the marker for
+this: it decides Plan Approval before it publishes its step, so it sets the
+route it is answering (`setTestingPostureRoute`), and a workflow `next` after an
+interrupted isolated run keeps the workflow's contract.
 
 Copilot answers the same way. The adapter claimed the call as `continue`, and
 the engine publishes the `next` answer under that claim, so the attempt settles
