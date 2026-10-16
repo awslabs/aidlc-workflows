@@ -19,10 +19,11 @@ import { describe, expect, test, afterEach } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   DEVIN_IMPORT_EXPECTED,
+  devinUserLayerOverridesProject,
   userDevinConfigPath,
 } from "../../core/tools/aidlc-devin-config.ts";
 
@@ -64,11 +65,36 @@ interface DoctorRow {
   fix?: string;
 }
 
+// A fake devin CLI keeps the spawned doctor hermetic: checkDevinVersion()
+// resolves `devin` through the child's PATH and runs `<bin> --version`, so
+// a shim first on PATH decides the version-aware user row deterministically
+// (same mechanism as t331 9d). `devinVersion` of "none" hides the binary by
+// running on a PATH that holds only Bun's own directory.
+function devinShim(root: string, version: string | "none"): string {
+  if (version === "none") return join(BUN, "..") + delimiter;
+  const dir = join(root, "bin");
+  mkdirSync(dir, { recursive: true });
+  if (process.platform === "win32") {
+    writeFileSync(
+      join(dir, "devin.cmd"),
+      `@echo off\r\necho devin ${version} (t345-shim)\r\n`,
+    );
+  } else {
+    writeFileSync(
+      join(dir, "devin"),
+      `#!/bin/sh\necho "devin ${version} (t345-shim)"\n`,
+      { mode: 0o755 },
+    );
+  }
+  return `${dir}${delimiter}${process.env.PATH ?? ""}`;
+}
+
 // The user layer is ALWAYS redirected to a scratch XDG dir so the
 // contributor's real ~/.config/devin/config.json can never participate.
 function runDoctor(
   proj: string,
   userConfig?: Record<string, unknown>,
+  devinVersion: string | "none" = "none",
 ): DoctorRow[] {
   const xdg = mkdtempSync(join(tmpdir(), "t345-xdg-"));
   created.push(xdg);
@@ -91,6 +117,7 @@ function runDoctor(
         AIDLC_HARNESS_DIR: ".devin",
         XDG_CONFIG_HOME: xdg,
         APPDATA: appData,
+        PATH: devinShim(proj, devinVersion),
       },
     },
   );
@@ -148,7 +175,7 @@ describe("t345 doctor Devin read_config_from import-isolation rows", () => {
     expect(rows.filter((r) => r.label.includes(".devin/config.json"))).toHaveLength(0);
   });
 
-  test("user config with zed:true warns naming zed (user layer overrides project)", () => {
+  test("user config with zed:true warns naming zed (no devin on PATH: user layer may override)", () => {
     const proj = setupDevinInstall();
     const rows = runDoctor(proj, { read_config_from: { zed: true } });
     const row = rows.find((r) => r.label.includes("user"));
@@ -156,8 +183,38 @@ describe("t345 doctor Devin read_config_from import-isolation rows", () => {
     expect(row!.pass).toBe(false);
     expect(row!.severity).toBe("warn");
     expect(row!.label).toContain("enables `zed`");
-    expect(row!.label).toContain("user layer overrides the project file");
+    expect(row!.label).toContain("before 3000.11.92 the user config overrides the project file");
     expect(row!.fix).toContain("devin skills list");
+  });
+
+  test("user config with claude:true on 3000.11.3 warns, and names the Claude hook side effect", () => {
+    const proj = setupDevinInstall();
+    const rows = runDoctor(
+      proj,
+      { read_config_from: { claude: true } },
+      "3000.11.3",
+    );
+    const row = rows.find((r) => r.label.includes("user"));
+    expect(row).toBeDefined();
+    expect(row!.pass).toBe(false);
+    expect(row!.severity).toBe("warn");
+    expect(row!.label).toContain("enables `claude`");
+    expect(row!.label).toContain("before 3000.11.92");
+    expect(row!.label).toContain("hooks");
+  });
+
+  test("user config with claude:true on 3000.11.92 passes — a project `false` wins there", () => {
+    const proj = setupDevinInstall();
+    const rows = runDoctor(
+      proj,
+      { read_config_from: { claude: true } },
+      "3000.11.92",
+    );
+    const row = rows.find((r) => !r.label.includes(".devin/config.json"));
+    expect(row).toBeDefined();
+    expect(row!.pass).toBe(true);
+    expect(row!.label).toContain("enables `claude`");
+    expect(row!.label).toContain("project `false` wins");
   });
 
   test("user config that sets nothing import-related passes as 'no user-level override'", () => {
@@ -168,6 +225,20 @@ describe("t345 doctor Devin read_config_from import-isolation rows", () => {
     expect(row!.label).toBe(
       "Devin compatibility imports: no user-level read_config_from override",
     );
+  });
+});
+
+describe("t345 devinUserLayerOverridesProject (per-build read_config_from precedence)", () => {
+  test("unknown version keeps the old precedence (override possible)", () => {
+    expect(devinUserLayerOverridesProject(null)).toBe(true);
+  });
+  test("below 3000.11.92 the user layer overrides", () => {
+    expect(devinUserLayerOverridesProject([3000, 11, 3])).toBe(true);
+    expect(devinUserLayerOverridesProject([3000, 11, 91])).toBe(true);
+  });
+  test("from 3000.11.92 a project `false` wins at every layer", () => {
+    expect(devinUserLayerOverridesProject([3000, 11, 92])).toBe(false);
+    expect(devinUserLayerOverridesProject([3001, 0, 0])).toBe(false);
   });
 });
 

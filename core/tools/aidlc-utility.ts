@@ -139,6 +139,7 @@ import {
 } from "./aidlc-devin-version.ts";
 import {
   auditDevinImportConfig,
+  devinUserLayerOverridesProject,
   userDevinConfigPath,
 } from "./aidlc-devin-config.ts";
 import {
@@ -4906,12 +4907,14 @@ export async function collectDoctorReport(
       });
     }
     // Compatibility-import isolation (read_config_from). The project file is
-    // the team contract; on tested builds the USER layer overrides it for this
-    // setting, so the two rows are reported separately and doctor never
-    // computes an "effective" value — `devin skills list` / `devin mcp list`
-    // print the truth. Unreadable files are skipped silently (the presence
-    // rows above cover that); .devin/config.local.json is deliberately not
-    // read (it cannot override the project file for this key).
+    // the team contract; whether the USER layer overrides it depends on the
+    // build — before 3000.11.92 the user config wins, from 3000.11.92 a
+    // `false` at any layer wins — so the two rows are reported separately
+    // and doctor never computes an "effective" value — `devin skills list` /
+    // `devin mcp list` print the truth. Unreadable files are skipped
+    // silently (the presence rows above cover that);
+    // .devin/config.local.json is deliberately not read.
+    const devinVerResult = checkDevinVersion();
     try {
       const projectAudit = auditDevinImportConfig(
         JSON.parse(readFileSync(join(projectDir, harness, "config.json"), "utf-8")),
@@ -4967,14 +4970,28 @@ export async function collectDoctorReport(
           : new Set<string>();
       const overrides = userAudit.enabled.filter((k) => userKeys.has(k));
       if (overrides.length > 0) {
-        results.push({
-          pass: false,
-          severity: "warn",
-          label:
-            `Devin compatibility imports: ${userConfigPath} enables ${overrides.map((k) => `\`${k}\``).join(", ")} — on tested builds the user layer overrides the project file for this setting`,
-          fix:
-            "remove the key from your user config, or accept that a coexisting Copilot/OpenCode/… harness is imported into Devin on this machine; verify with `devin skills list` / `devin mcp list`",
-        });
+        if (
+          devinVerResult.parsedVersion !== null &&
+          !devinUserLayerOverridesProject(devinVerResult.parsedVersion)
+        ) {
+          results.push({
+            pass: true,
+            label:
+              `Devin compatibility imports: ${userConfigPath} enables ${overrides.map((k) => `\`${k}\``).join(", ")}, but on Devin ${devinVerResult.rawVersion} a project \`false\` wins, so this project keeps them off`,
+          });
+        } else {
+          results.push({
+            pass: false,
+            severity: "warn",
+            label:
+              `Devin compatibility imports: ${userConfigPath} enables ${overrides.map((k) => `\`${k}\``).join(", ")} — on Devin CLI before 3000.11.92 the user config overrides the project file for this setting` +
+              (overrides.includes("claude")
+                ? "; `claude` also loads .claude/settings.json hooks, so a Claude Code install of AI-DLC in this project runs its hooks too"
+                : ""),
+            fix:
+              "remove the key from your user config, or accept that a coexisting Copilot/OpenCode/… harness is imported into Devin on this machine; verify with `devin skills list` / `devin mcp list`",
+          });
+        }
       } else {
         results.push({
           pass: true,
@@ -4999,7 +5016,6 @@ export async function collectDoctorReport(
     //      Absence is advisory because CLI-only use is supported.
     // See core/tools/aidlc-devin-version.ts for the discovery/exec/parse
     // logic and the injectable test seams.
-    const devinVerResult = checkDevinVersion();
     const devinDesktopResult = checkDevinDesktop();
     const hostAvailability = checkDevinHostAvailability(
       devinVerResult.binaryPath,

@@ -33,6 +33,7 @@
 
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { compareTriples } from "./aidlc-devin-version.ts";
 
 /** The seven documented `read_config_from` keys, in the order of Devin's
  *  options table (read-config-from.mdx:138-146). */
@@ -96,6 +97,24 @@ export function auditDevinImportConfig(raw: unknown): DevinImportAudit {
     if (DEVIN_IMPORT_EXPECTED[key] === false && value !== false) enabled.push(key);
   }
   return { missing, nullValued, enabled };
+}
+
+/** The first build where a `false` at ANY layer wins for read_config_from —
+ *  user config and .devin/config.local.json can no longer re-enable an
+ *  import the project file disables (measured on `devin skills list`,
+ *  2026-10-15). */
+export const DEVIN_PROJECT_FALSE_WINS_VERSION = [3000, 11, 92] as const;
+
+/** Whether the user config still overrides the project file for
+ *  read_config_from on this build: `true` when the version is unknown
+ *  (`null`) or below DEVIN_PROJECT_FALSE_WINS_VERSION. */
+export function devinUserLayerOverridesProject(
+  version: readonly [number, number, number] | null,
+): boolean {
+  return (
+    version === null ||
+    compareTriples(version, DEVIN_PROJECT_FALSE_WINS_VERSION) < 0
+  );
 }
 
 /** The user-level Devin config path: $XDG_CONFIG_HOME/devin/config.json,
