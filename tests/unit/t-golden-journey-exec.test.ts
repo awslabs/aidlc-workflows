@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { codexToolResults } from "../harness/exec-drive.ts";
+import { codexToolResults, copilotToolResults } from "../harness/exec-drive.ts";
 import { cleanupTestProject, createTestProject, seededAuditShard, seededStateFile } from "../harness/fixtures.ts";
 import { type GoldenJourney, type GoldenRun, goldenPathProblems, GoldenPerson } from "../harness/golden-journey.ts";
 import type { CapturedToolResult } from "../harness/sdk-drive.ts";
@@ -140,6 +140,26 @@ describe("Codex exec's JSON stream", () => {
     expect(codexToolResults(stdout)).toEqual([
       { toolName: "Bash", input: { command: "/bin/bash -lc 'bun .codex/tools/aidlc.ts engine orchestrate next'" }, toolUseId: "item_2", resultText: '{"kind":"ask"}\n', isError: false },
       { toolName: "Bash", input: { command: "/bin/bash -lc 'false'" }, toolUseId: "item_3", resultText: "", isError: true },
+    ]);
+  });
+});
+
+describe("Copilot CLI's JSON stream", () => {
+  test("each finished shell command, bash or powershell, becomes a tool call with what it printed", () => {
+    const event = (type: string, data: Record<string, unknown>) => JSON.stringify({ type, data });
+    const stdout = [
+      event("user.message", { content: "/aidlc fix the greeter" }),
+      event("tool.execution_start", { toolCallId: "call_1", toolName: "bash", arguments: { command: "bun .aidlc/tools/aidlc.ts engine orchestrate next", description: "Run" } }),
+      event("tool.execution_start", { toolCallId: "call_2", toolName: "view", arguments: { path: "README.md" } }),
+      event("tool.execution_complete", { toolCallId: "call_2", success: true, result: { content: "# greeter" } }),
+      event("tool.execution_complete", { toolCallId: "call_1", success: true, result: { content: '{"kind":"ask"}\n<shellId: 0 completed with exit code 0>' } }),
+      event("tool.execution_start", { toolCallId: "call_3", toolName: "powershell", arguments: { command: "bun .aidlc/tools/aidlc.ts engine orchestrate next" } }),
+      event("tool.execution_complete", { toolCallId: "call_3", success: false, result: { content: "refused" } }),
+      "not json",
+    ].join("\n");
+    expect(copilotToolResults(stdout)).toEqual([
+      { toolName: "Bash", input: { command: "bun .aidlc/tools/aidlc.ts engine orchestrate next" }, toolUseId: "call_1", resultText: '{"kind":"ask"}\n<shellId: 0 completed with exit code 0>', isError: false },
+      { toolName: "Bash", input: { command: "bun .aidlc/tools/aidlc.ts engine orchestrate next" }, toolUseId: "call_3", resultText: "refused", isError: true },
     ]);
   });
 });

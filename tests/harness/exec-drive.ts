@@ -330,6 +330,8 @@ export interface CopilotTurnOptions {
   /** Where Copilot writes the session's token usage. */
   usageFile?: string;
   timeoutMs?: number;
+  /** Print the turn as JSON events (one per line), which `copilotToolResults` reads. */
+  json?: boolean;
 }
 
 // One person turn in a named Copilot CLI session: the typed line rides the
@@ -342,6 +344,7 @@ export function copilotTurn(proj: string, line: string, options: CopilotTurnOpti
       "-p", line, "-s", "--no-remote", "--allow-all-tools",
       ...(options.resume ? ["--resume", options.sessionId] : ["--session-id", options.sessionId]),
       ...(options.usageFile ? ["--usage-output-file", options.usageFile] : []),
+      ...(options.json ? ["--output-format", "json"] : []),
     ],
     {
       cwd: proj,
@@ -349,12 +352,42 @@ export function copilotTurn(proj: string, line: string, options: CopilotTurnOpti
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, PWD: proj, COPILOT_HOME: options.copilotHome },
       timeout: remainingOperationTimeoutMs(options.timeoutMs ?? TEST_TIMEOUT_MS, { phase: "Copilot turn" }),
+      // A JSON turn prints an event per streamed token: several MB for one stage.
+      maxBuffer: 64 * 1024 * 1024,
     },
   );
   return {
     rc: result.status ?? -1,
-    out: `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
+    out: `${result.stdout ?? ""}\n${result.stderr ?? ""}${result.error ? `\n${result.error.message}` : ""}`,
   };
+}
+
+/**
+ * The shell commands of one `copilot --output-format json` turn (its `bash`
+ * tool, `powershell` on Windows), in the shape the SDK drive captures tool calls.
+ */
+export function copilotToolResults(stdout: string): CapturedToolResult[] {
+  const commands = new Map<string, string>();
+  const results: CapturedToolResult[] = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("{")) continue;
+    let event: { type?: unknown; data?: { toolCallId?: unknown; arguments?: { command?: unknown }; success?: unknown; result?: { content?: unknown } } };
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const id = String(event.data?.toolCallId ?? "");
+    if (event.type === "tool.execution_start" && typeof event.data?.arguments?.command === "string") {
+      commands.set(id, event.data.arguments.command);
+    } else if (event.type === "tool.execution_complete" && commands.has(id)) {
+      results.push({
+        toolName: "Bash", input: { command: commands.get(id)! }, toolUseId: id,
+        resultText: String(event.data?.result?.content ?? ""), isError: event.data?.success === false,
+      });
+    }
+  }
+  return results;
 }
 
 export interface OpencodeProject {
