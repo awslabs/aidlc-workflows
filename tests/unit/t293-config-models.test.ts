@@ -741,7 +741,7 @@ describe("t293 config models CLI", () => {
     expect(result.status).toBe(2);
     expect(result.stdout).toContain("unknown config section");
     expect(result.stdout).toContain(
-      "valid sections: models, runtime, providers, trust, flags, project",
+      "valid sections: models, runtime, providers, trust, flags, project, preview",
     );
     expect(existsSync(join(project, ".claude"))).toBe(false);
   });

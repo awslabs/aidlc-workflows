@@ -1,11 +1,12 @@
 // covers: subcommand:aidlc-log:review, function:prepareReviewCopy, function:removeReviewCopy, function:reviewRequestNote, hook:aidlc-log-subagent
 //
 // The reviewer read-scope preview feature on Kiro (kiro-ide), end to end on an
-// installed tree: a Unit's review request in a preview build, with the feature
-// named in AIDLC_PREVIEW_FEATURES, writes a copy of the installed reviewer that
-// carries the review's read scope and hands its name back; the completion Kiro
-// reports under the copy's name is the reviewer's; the verdict removes the
-// copy. In a stable build the same request is the request it was.
+// installed tree: a Unit's review request on a preview release, with the
+// feature turned on in the project's Kiro tree (`aidlc config preview`),
+// writes a copy of the installed reviewer that carries the review's read scope
+// and hands its name back; the completion Kiro reports under the copy's name is
+// the reviewer's; the verdict removes the copy. On a stable release the same
+// request, with the same record, is the request it was.
 // Kiro itself is not driven here: that a delegated agent's fs_read deny with an
 // exclude is enforced was measured on Kiro CLI 2.31.0 and Kiro IDE 1.3.0.
 
@@ -62,8 +63,13 @@ class KiroUnitReview {
         readFileSync(versionFile, "utf-8").replace(/AIDLC_VERSION = "[^"]+"/, `AIDLC_VERSION = "${PREVIEW_VERSION}"`),
       );
     }
-    this.env = { ...process.env, AIDLC_PROJECT_DIR: this.dir, AIDLC_PREVIEW_FEATURES: "reviewer-read-scope" };
-    for (const key of ["AIDLC_HARNESS_DIR", "AIDLC_AGENTS_DIR", "AIDLC_HARNESS_NAME", "CLAUDE_PROJECT_DIR"]) {
+    const harnessData = join(this.dir, ".kiro", "tools", "data", "harness.json");
+    writeFileSync(
+      harnessData,
+      `${JSON.stringify({ ...JSON.parse(readFileSync(harnessData, "utf-8")), previewFeatures: { "reviewer-read-scope": "on" } }, null, 2)}\n`,
+    );
+    this.env = { ...process.env, AIDLC_PROJECT_DIR: this.dir };
+    for (const key of ["AIDLC_HARNESS_DIR", "AIDLC_AGENTS_DIR", "AIDLC_HARNESS_NAME", "AIDLC_PREVIEW_FEATURES", "CLAUDE_PROJECT_DIR"]) {
       delete this.env[key];
     }
     writeFileSync(seededStateFile(this.dir), [

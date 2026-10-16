@@ -1899,6 +1899,10 @@ describe("t265b hook lifecycle", () => {
         "config flags --reset --local --yes",
         "config flags --local --yes",
         "config project --mcp none --completions none --yes",
+        "config preview --show --json",
+        "config preview agent-models on --yes",
+        "config preview agent-models off --yes",
+        "config preview reviewer-read-scope on --yes",
         "config models --preset minimal --dry-run",
         "config models --preset balanced --harness kiro --plan-token abc123 --yes",
         `config models --preset balanced --project-dir '${proj}' --quiet --no-color --verbose --yes`,
@@ -1914,6 +1918,8 @@ describe("t265b hook lifecycle", () => {
         "config project --plugins all --yes",
         "config project --plugins=test-pro --yes",
         "config project --reset --yes",
+        "config preview reviewer-read-scope off --yes",
+        "config preview --harness kiro-ide reviewer-read-scope off --dry-run",
       ];
       for (const args of asked) {
         for (const command of spellings(args)) expectCode(command, 2);

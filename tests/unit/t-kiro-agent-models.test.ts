@@ -1,12 +1,14 @@
-// covers: file:tools/aidlc-model-policy.ts, function:isModelId, function:modelHarnessHonesty, function:presetsChangeNothing, function:kiroAgentModelsOn, function:kiroAgentModelsOffInPreview, function:readKiroAgentModelsChoice, function:applyModelPolicyToProjection, function:modelPolicySurfaceDrift, function:sessionModelsDetail
+// covers: file:tools/aidlc-model-policy.ts, function:isModelId, function:modelHarnessHonesty, function:presetsChangeNothing, function:kiroAgentModelsOn, function:kiroAgentModelsOffInPreview, function:installedModelBuild, function:applyModelPolicyToProjection, function:modelPolicySurfaceDrift, function:sessionModelsDetail, function:preparePreviewSection, function:validatePreviewArgs, function:showPreviewFeatures
 //
 // On Kiro (kiro-ide) a delegated agent runs on its own `model` and
 // `effortLevel` (Kiro CLI 2.31.1 on its v3 engine, Kiro IDE 1.3.0). On a
 // project on a preview release that turned agent-models on
-// (`aidlc config models --agent-models on`, recorded in its harness.json),
+// (`aidlc config preview agent-models on`, recorded in its harness.json),
 // `aidlc config models --agent <name>` writes that agent's model and effort
-// into its Kiro agent file. Off, or on a stable release, the agent files are
-// left as they are. A preset or group effort has no per-agent Kiro surface.
+// into its Kiro agent file. Off, or on a stable release, config neither writes
+// nor checks those lines. A preset or group effort has no per-agent Kiro
+// surface. `config preview` is also the switch of the reviewer read-scope
+// preview feature, which only records.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -162,7 +164,7 @@ describe("writing kiro-ide agent files", () => {
     const root = projection();
     const path = join(root, ".kiro", "agents", REVIEWER_FILE);
     policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, ON);
-    policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, { ...PREVIEW, agentModels: "off" }, true);
+    policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, { ...PREVIEW, agentModels: "off" }, () => true);
     expect(frontmatter(readFileSync(path, "utf-8"))).not.toMatch(/^(model|effortLevel):/m);
     withOwnModelLine(path);
     policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, { ...PREVIEW, agentModels: "off" });
@@ -193,14 +195,27 @@ describe("writing kiro-ide agent files", () => {
     expect(policy.modelPolicySurfaceDrift(root, ".kiro", "kiro-ide", pinned, ON)).toContain(`${REVIEWER}: effort low != high`);
   });
 
-  test("the choice is read from harness.json as on or off, nothing else", () => {
+  test("the take-out leaves an agent file it is not given as it is", () => {
+    const root = projection();
+    const path = join(root, ".kiro", "agents", REVIEWER_FILE);
+    policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, ON);
+    const written = readFileSync(path, "utf-8");
+    policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, { ...STABLE, agentModels: "off" }, () => false);
+    expect(readFileSync(path, "utf-8")).toBe(written);
+    policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, { ...STABLE, agentModels: "off" }, () => true);
+    expect(frontmatter(readFileSync(path, "utf-8"))).not.toMatch(/^(model|effortLevel):/m);
+  });
+
+  test("the choice is read from harness.json previewFeatures as on or off, nothing else", () => {
     const root = projection();
     const harness = join(root, ".kiro", "tools", "data", "harness.json");
     const data = JSON.parse(readFileSync(harness, "utf-8")) as Record<string, unknown>;
     for (const [value, read] of [["on", "on"], ["off", "off"], ["yes", null], [true, null]] as const) {
-      writeFileSync(harness, JSON.stringify({ ...data, agentModels: value }));
-      expect(policy.readKiroAgentModelsChoice(join(root, ".kiro"))).toBe(read);
+      writeFileSync(harness, JSON.stringify({ ...data, previewFeatures: { "agent-models": value } }));
+      expect(policy.installedModelBuild(join(root, ".kiro")).agentModels).toBe(read);
     }
+    writeFileSync(harness, JSON.stringify({ ...data, agentModels: "on" }));
+    expect(policy.installedModelBuild(join(root, ".kiro")).agentModels).toBeNull();
   });
 
   test("a review's reviewer copy keeps the reviewer's model and effortLevel", () => {
@@ -254,9 +269,11 @@ describe("the doctor and the notes on kiro-ide", () => {
 });
 
 // The commands a person runs, on a project installed from a preview release
-// (the release tree with a preview version stamped in).
+// (the release tree with a preview version stamped in, one that sorts below
+// the stable release it is built from, so moving to that release is a refresh).
 describe("the agent-models choice through config", () => {
-  const previewVersion = "2.11.1-preview.20261016.1";
+  const previewVersion = "2.11.0-preview.20261016.1";
+  const stableRelease = join(REPO_ROOT, "dist-release", "kiro-ide");
   function previewRuntime(): string {
     const runtime = temp("aidlc-kiro-agent-models-runtime-");
     cpSync(KIRO_IDE_RELEASE, join(runtime, "kiro-ide"), { recursive: true });
@@ -290,18 +307,24 @@ describe("the agent-models choice through config", () => {
     expect(install.status, install.out).toBe(0);
     const reviewerPath = join(dir, ".kiro", "agents", REVIEWER_FILE);
     const reviewer = () => frontmatter(readFileSync(reviewerPath, "utf-8"));
-    const choice = () =>
-      (JSON.parse(readFileSync(join(dir, ".kiro", "tools", "data", "harness.json"), "utf-8")) as Record<string, unknown>).agentModels;
+    const recorded = () =>
+      (JSON.parse(readFileSync(join(dir, ".kiro", "tools", "data", "harness.json"), "utf-8")) as Record<string, unknown>)
+        .previewFeatures as Record<string, string> | undefined;
+    const choice = () => recorded()?.["agent-models"];
     const models = (...args: string[]) => run(["config", "models", "--project-dir", dir, ...args]);
-    return { dir, run, models, reviewer, reviewerPath, choice };
+    const preview = (...args: string[]) => run(["config", "preview", "--project-dir", dir, ...args]);
+    return { dir, run, models, preview, reviewer, reviewerPath, recorded, choice };
   }
+  const json = (out: string) => JSON.parse(out.trim().split("\n").at(-1) ?? "{}") as { data?: Record<string, unknown> };
 
   test("on is recorded, the pin is written and survives a later config run, and --check agrees", () => {
     const p = project(previewRuntime());
-    const on = p.models("--agent-models", "on", "--yes");
+    const on = p.preview("agent-models", "on", "--yes");
     expect(on.status, on.out).toBe(0);
-    expect(on.out).toContain("Kiro agent models: not set -> on in .kiro/tools/data/harness.json; Kiro takes it at each agent's next dispatch. To undo: ");
-    expect(on.out).toContain("--agent-models off --yes");
+    expect(on.out).toContain(
+      "Preview feature agent-models: not set -> on in .kiro/tools/data/harness.json; Kiro takes it at each agent's next dispatch. To undo: ",
+    );
+    expect(on.out).toContain("config preview agent-models off --yes");
     expect(p.choice()).toBe("on");
     const pin = p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--effort", "high", "--yes");
     expect(pin.status, pin.out).toBe(0);
@@ -315,36 +338,48 @@ describe("the agent-models choice through config", () => {
 
   test("off takes AI-DLC's lines out once with its undo, stays off, and on puts them back", () => {
     const p = project(previewRuntime());
-    expect(p.models("--agent-models", "on", "--yes").status).toBe(0);
+    expect(p.preview("agent-models", "on", "--yes").status).toBe(0);
     expect(p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes").status).toBe(0);
-    const dry = p.models("--agent-models", "off", "--dry-run");
-    expect(dry.out).toContain("Kiro agent models: on -> off in .kiro/tools/data/harness.json");
+    const dry = p.preview("agent-models", "off", "--dry-run");
+    expect(dry.out).toContain("Preview feature agent-models: on -> off in .kiro/tools/data/harness.json");
     expect(p.reviewer()).toMatch(/^model: "gpt-5\.6-terra"$/m);
-    const off = p.models("--agent-models", "off", "--yes");
+    const off = p.preview("agent-models", "off", "--yes");
     expect(off.status, off.out).toBe(0);
-    expect(off.out).toContain("--agent-models on --yes");
+    expect(off.out).toContain("config preview agent-models on --yes");
     expect(p.choice()).toBe("off");
     expect(p.reviewer()).not.toMatch(/^model:/m);
     withOwnModelLine(p.reviewerPath);
     expect(p.models("--project", "--agent", "developer", "--effort", "low", "--yes").status).toBe(0);
     expect(p.reviewer()).toMatch(/^model: claude-sonnet-5\.5$/m);
     writeFileSync(p.reviewerPath, readFileSync(p.reviewerPath, "utf-8").replace("model: claude-sonnet-5.5\n", ""));
-    const on = p.models("--agent-models", "on", "--yes");
+    const on = p.preview("agent-models", "on", "--yes");
     expect(on.status, on.out).toBe(0);
     expect(p.reviewer()).toMatch(/^model: "gpt-5\.6-terra"$/m);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 3);
 
-  test("off where it was never on is already off and leaves the person's line", () => {
+  test("off keeps the lines of an agent file the person changed since AI-DLC wrote it, and names it", () => {
+    const p = project(previewRuntime());
+    expect(p.preview("agent-models", "on", "--yes").status).toBe(0);
+    expect(p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes").status).toBe(0);
+    writeFileSync(p.reviewerPath, `${readFileSync(p.reviewerPath, "utf-8")}\nA line of my own.\n`);
+    const off = p.preview("agent-models", "off", "--yes");
+    expect(off.status, off.out).toBe(0);
+    expect(off.out).toContain(`you changed .kiro/agents/${REVIEWER_FILE}, so it keeps its model and effort lines`);
+    expect(p.reviewer()).toMatch(/^model: "gpt-5\.6-terra"$/m);
+    expect(readFileSync(p.reviewerPath, "utf-8")).toContain("A line of my own.");
+    expect(p.choice()).toBe("off");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
+
+  test("off where it was never on records off and leaves the person's line", () => {
     const p = project(previewRuntime());
     withOwnModelLine(p.reviewerPath);
-    const off = p.models("--agent-models", "off", "--yes");
+    const off = p.preview("agent-models", "off", "--yes");
     expect(off.status, off.out).toBe(0);
-    expect(off.out).toContain("agent-models is already off for this project");
+    expect(off.out).toContain("Preview feature agent-models: not set -> off");
     expect(p.reviewer()).toMatch(/^model: claude-sonnet-5\.5$/m);
-    const both = p.models("--project", "--agent-models", "off", "--agent", "developer", "--effort", "low", "--yes");
-    expect(both.status, both.out).toBe(0);
-    expect(both.out).not.toContain("Kiro agent models:");
-    expect(p.choice()).toBeUndefined();
+    expect(p.choice()).toBe("off");
+    const again = p.preview("agent-models", "off", "--yes");
+    expect(again.out).toContain("agent-models is already off for this project");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
   test("AIDLC_PREVIEW_FEATURES naming agent-models writes and records nothing", () => {
@@ -358,32 +393,76 @@ describe("the agent-models choice through config", () => {
     expect(p.choice()).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
-  test("the switch with a policy flag says the switch line, the JSON names it, and an unchanged pin under a preset stays unchanged", () => {
+  test("the switch names itself in JSON, refuses a settings target with the reason, and models no longer takes it", () => {
     const p = project(previewRuntime());
-    expect(p.models("--project", "--preset", "balanced", "--yes").status).toBe(0);
-    const both = p.models("--project", "--agent-models", "on", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes", "--json");
-    expect(both.status, both.out).toBe(0);
-    const payload = JSON.parse(both.out.trim().split("\n").at(-1) ?? "{}") as {
-      data?: { models?: { agentModels?: string; summaries?: string[] } };
-    };
-    expect(payload.data?.models?.agentModels).toBe("on");
-    expect(payload.data?.models?.summaries?.[0]).toContain("Kiro agent models: not set -> on in .kiro/tools/data/harness.json");
-    expect(p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes").out).toContain("model policy unchanged");
-    const bare = temp("aidlc-kiro-agent-models-bare-");
-    const refused = p.run(["config", "models", "--project-dir", bare, "--agent-models", "on", "--preset", "balanced", "--global", "--dry-run"]);
-    expect(refused.status).not.toBe(0);
-    expect(refused.out).toContain("--agent-models applies to an installed Kiro (kiro-ide) project");
+    const on = p.preview("agent-models", "on", "--yes", "--json");
+    expect(on.status, on.out).toBe(0);
+    const models = json(on.out).data?.models as { preview?: unknown; summaries?: string[] } | undefined;
+    expect(models?.preview).toEqual({ feature: "agent-models", choice: "on" });
+    expect(models?.summaries?.[0]).toContain("Preview feature agent-models: not set -> on in .kiro/tools/data/harness.json");
+    for (const target of ["--local", "--project", "--global"]) {
+      const refused = p.preview("reviewer-read-scope", "on", target, "--yes");
+      expect(refused.status, target).not.toBe(0);
+      expect(refused.out).toContain(`${target} does not apply to config preview`);
+    }
+    expect(p.recorded()).toEqual({ "agent-models": "on" });
+    const old = p.models("--agent-models", "off", "--yes");
+    expect(old.status).not.toBe(0);
+    expect(old.out).toContain("unknown models option --agent-models");
+    expect(p.choice()).toBe("on");
+    const unknown = p.preview("agent-modles", "on", "--yes");
+    expect(unknown.out).toContain('unknown preview feature "agent-modles"; preview features: agent-models, reviewer-read-scope');
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
-  test("a project on a stable release refuses --agent-models and writes no pin", () => {
-    const p = project(join(REPO_ROOT, "dist-release"));
-    const refused = p.models("--agent-models", "on", "--yes");
+  test("reviewer-read-scope only records: the agent files stay as they are, and agent-models stays on", () => {
+    const p = project(previewRuntime());
+    expect(p.preview("agent-models", "on", "--yes").status).toBe(0);
+    expect(p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes").status).toBe(0);
+    const before = agentFiles(p.dir);
+    const on = p.preview("reviewer-read-scope", "on", "--yes");
+    expect(on.status, on.out).toBe(0);
+    expect(on.out).toContain("Preview feature reviewer-read-scope: not set -> on in .kiro/tools/data/harness.json; it applies from the next Unit review.");
+    expect(agentFiles(p.dir)).toEqual(before);
+    expect(p.recorded()).toEqual({ "agent-models": "on", "reviewer-read-scope": "on" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
+
+  test("config preview and config models --show say what is recorded and what applies", () => {
+    const p = project(previewRuntime());
+    expect(p.preview("agent-models", "on", "--yes").status).toBe(0);
+    const list = p.preview("--json");
+    expect(list.status, list.out).toBe(0);
+    expect(json(list.out).data?.features).toEqual([
+      { harness: "kiro-ide", feature: "agent-models", recorded: "on", on: true, version: previewVersion, path: ".kiro/tools/data/harness.json" },
+      { harness: "kiro-ide", feature: "reviewer-read-scope", recorded: null, on: false, version: previewVersion, path: ".kiro/tools/data/harness.json" },
+    ]);
+    const human = p.preview();
+    expect(human.out).toContain("agent-models: on");
+    expect(human.out).toContain("reviewer-read-scope: off (not set)");
+    const show = p.models("--show", "--json");
+    expect(json(show.out).data?.agentModels).toEqual({ recorded: "on", on: true });
+    expect(p.models("--show").out).toContain("Agent models (preview): on");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
+
+  test("moving to a stable release replaces the agent files AI-DLC wrote and keeps the record; off clears it there", () => {
+    const p = project(previewRuntime());
+    expect(p.preview("agent-models", "on", "--yes").status).toBe(0);
+    expect(p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes").status).toBe(0);
+    expect(p.reviewer()).toMatch(/^model: "gpt-5\.6-terra"$/m);
+    const stable = p.run(["config", "--project-dir", p.dir, "--from", stableRelease, "--yes"]);
+    expect(stable.status, stable.out).toBe(0);
+    expect(p.reviewer()).not.toMatch(/^(model|effortLevel):/m);
+    expect(p.choice()).toBe("on");
+    expect(p.models("--show").out).toContain("recorded on, which applies only on a preview release");
+    const refused = p.preview("agent-models", "on", "--yes");
     expect(refused.status).not.toBe(0);
-    expect(refused.out).toContain("--agent-models needs this project on a preview release of AI-DLC");
+    expect(refused.out).toContain("agent-models needs this project on a preview release of AI-DLC; it is on 2.11.0");
+    expect(refused.out).toContain("config --channel preview");
+    const off = p.preview("agent-models", "off", "--yes");
+    expect(off.status, off.out).toBe(0);
+    expect(p.choice()).toBe("off");
     expect(p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes").status).toBe(0);
     expect(p.reviewer()).not.toMatch(/^model:/m);
-    expect(p.choice()).toBeUndefined();
-  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 3);
 
   test("a model id with a line break is refused before anything is recorded", () => {
     const p = project(previewRuntime());

@@ -487,7 +487,7 @@ describe("t114 in-session config alias", () => {
       const out = runNext(proj, args).out;
       expect(out).toContain('"kind":"error"');
       expect(out).toContain(
-        "Usage: /aidlc --config [models|runtime|providers|trust|flags|project].",
+        "Usage: /aidlc --config [models|runtime|providers|trust|flags|project|preview].",
       );
       expect(out).not.toContain('"kind":"run-stage"');
       expect(existsSync(engineTouchMarkerPath(proj))).toBe(false);

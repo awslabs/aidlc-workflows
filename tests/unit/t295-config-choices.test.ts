@@ -202,7 +202,7 @@ describe("t295 config choice dispatch", () => {
     ], project);
     expect(unknown.status).toBe(2);
     expect(unknown.stdout).toContain(
-      "valid sections: models, runtime, providers, trust, flags, project",
+      "valid sections: models, runtime, providers, trust, flags, project, preview",
     );
 
     const flagsPlugin = run([
