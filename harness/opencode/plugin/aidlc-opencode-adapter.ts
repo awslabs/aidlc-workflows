@@ -12,6 +12,7 @@
 //   ----------------------------------------------------------------------------
 //   chat.message (until a workflow is active) -> aidlc-session-start.ts  (SessionStart)
 //   chat.message (every human turn)           -> aidlc-record-human-turn.ts  (UserPromptSubmit)
+//   shell.env (every shell command)           -> names the command's chat (AIDLC_SESSION_OVERRIDE)
 //   tool.execute.before task                  -> aidlc-deliver-stage-rules.ts rewrite + plan-approval guard (PreToolUse)
 //   tool.execute.before other tools           -> entrypoint boundary + state-transition, review-freeze, plan-approval and reviewer-scope guards (PreToolUse)
 //   tool.execute.after write|edit|apply_patch -> aidlc-write-audit-log.ts + aidlc-run-sensors.ts (PostToolUse Write|Edit)
@@ -707,6 +708,23 @@ export default async ({
     ) => {
       if (input.command !== "aidlc") return;
       typedCommands.set(input.sessionID, showTypedCommand(output.parts, input.arguments));
+    },
+
+    // One opencode process hosts every chat of a window, so the process tree
+    // names only the chat that started last. opencode asks for each shell
+    // command's environment and names the chat it runs for; that chat's owner
+    // makes the engine act on its own work. opencode's own terminal names no chat.
+    "shell.env": async (
+      input: { cwd: string; sessionID?: string; callID?: string },
+      output: { env: Record<string, string> },
+    ) => {
+      if (!input.sessionID) return;
+      try {
+        output.env.AIDLC_SESSION_OVERRIDE = await owningSession(input.sessionID);
+        output.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
+      } catch {
+        // A throw here fails the person's command; unconfirmed, the engine finds the chat as before.
+      }
     },
 
     "tool.execute.before": async (

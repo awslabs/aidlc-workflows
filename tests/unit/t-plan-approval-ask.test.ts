@@ -520,6 +520,11 @@ describe("the engine asks for Plan Approval", () => {
     const answerText = join(seededRecordDir(proj), ".aidlc-engine", "answer-text");
     expect(guardWrite(proj, join(answerText, "answer.txt")).code).toBe(0);
     expect(guardWrite(proj, join(seededRecordDir(proj), ".aidlc-engine", "answer.txt")).code).toBe(2);
+    // So are a stage's learnings picks for `learnings persist` (#1592): the
+    // ritual runs while Code Generation is the current stage, so its file
+    // must be writable while the plan waits.
+    const learnings = join(seededRecordDir(proj), ".aidlc-engine", "learnings");
+    expect(guardWrite(proj, join(learnings, "code-generation-selections.json")).code).toBe(0);
     // A traversal out of it lands on the plan file: AI-DLC's record, which
     // passes on its own (a plan changed under the question is asked about again).
     expect(guardWrite(proj, join(answerText, "..", "..", "construction", "code-generation", "code-generation-plan.md")).code)

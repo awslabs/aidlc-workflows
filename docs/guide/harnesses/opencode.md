@@ -37,7 +37,7 @@ script (top-level dispatch, `process.exit`) crashes the session
 
 - **opencode ≥ 1.17** — the plugin hook surface this install relies on
   (`tool.execute.before`, `tool.execute.after`, `chat.message`, `session.idle`,
-  `experimental.session.compacting`) and project-local skill/agent discovery.
+  `experimental.session.compacting`, `shell.env`) and project-local skill/agent discovery.
   Check with `opencode --version`.
 - **bun** only when generating or running the source/development `dist/`
   projection. Native installs and versioned release runtimes dispatch through

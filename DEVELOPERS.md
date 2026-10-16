@@ -43,6 +43,21 @@ Read the decision even when the review check is green: it can still ask for
 changes. The [PR guidelines](CONTRIBUTING.md#submitting-your-pr) explain its
 labels and review criteria.
 
+### Dependency updates
+
+[Dependabot](.github/dependabot.yml) checks the root Bun dependencies
+(`package.json` and `bun.lock`), the uv documentation dependencies
+(`pyproject.toml` and `uv.lock`), and GitHub Actions weekly. Minor and patch
+updates are grouped by ecosystem; major updates get separate PRs. Each
+ecosystem has a limit of three open version-update PRs. These PRs follow the
+same checks and merge queue as other changes.
+
+Version updates become active when the configuration is merged into the
+default branch, `main`. To check the setting, open **Settings → Advanced
+Security → Dependabot version updates**. To inspect update jobs, open
+**Insights → Dependency graph → Dependabot**. Dependabot security updates
+have a separate setting under **Settings → Advanced Security**.
+
 ## 2. Merge to `main`
 
 Once the checks and review feedback are addressed, a maintainer adds the PR to

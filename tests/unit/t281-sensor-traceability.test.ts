@@ -1569,6 +1569,7 @@ describe("t281 Build and Test: every requirement and criterion is built", () => 
     built_in?: string[];
     through?: string[];
     not_built?: string[];
+    not_applicable?: string[];
   }
   interface FinalCoverage {
     pass: boolean;
@@ -1761,6 +1762,135 @@ describe("t281 Build and Test: every requirement and criterion is built", () => 
       through: ["code-generation: NFR1.1", "code-generation: NFR1.2"],
       not_built: ["code-generation: NFR1.2"],
     });
+  });
+
+  // An N/A with its reason is settled, not unbuilt; one with no reason is not.
+  test("with stories, an N/A with its reason at User Stories, or in every Unit's NFR Requirements, is settled", () => {
+    const proj = project();
+    seedStoryPath(proj, { status: "OK", target: "src/profile/reset.ts" });
+    write(proj, "inception/requirements-analysis/requirements.md", `${GROUPED}\n- NFR2 Data retention\n- FR3 Admin console\n`);
+    type Row = { status: string; target?: string };
+    const stories = (fr3: Row) => trace(proj, "inception/user-stories/traceability.json", {
+      stage: "user-stories",
+      upstream_ids: ["FR1.1", "FR1.2", "FR2.1", "FR3", "NFR1", "NFR2"],
+      coverage: [
+        { id: "FR1.1", status: "OK", target: "US1.1" },
+        { id: "FR1.2", status: "OK", target: "US1.1" },
+        { id: "FR2.1", status: "OK", target: "US1.2" },
+        { id: "FR3", ...fr3 },
+        { id: "NFR1", status: "Deferred", target: "nfr-requirements" },
+        { id: "NFR2", status: "Deferred", target: "nfr-requirements" },
+      ],
+    });
+    const nfr = (unit: string, child: string, nfr2: Row) => trace(proj, `construction/${unit}/nfr-requirements/traceability.json`, {
+      stage: "nfr-requirements",
+      unit,
+      upstream_ids: ["NFR1", "NFR2"],
+      coverage: [{ id: "NFR1", status: "OK", target: child }, { id: "NFR2", ...nfr2 }],
+    });
+    const tables = [
+      ["user-stories", stories({ status: "N/A", target: "the admin console is another team's product" })],
+      ["nfr-requirements", nfr("u1-auth", "NFR1.1", { status: "N/A", target: "this Unit stores no personal data" })],
+      ["nfr-requirements", nfr("u2-profile", "NFR1.2", { status: "N/A", target: "reset tokens are never stored" })],
+    ];
+    for (const [stage, table] of tables) {
+      const own = run(proj, stage, table);
+      expect(own.result.pass, own.result.reason).toBe(true);
+    }
+
+    let out = runFinal(proj);
+    expect(out.reason).toBeUndefined();
+    expect(out.uncovered).toEqual([]);
+    expect(out.pass).toBe(true);
+    expect(row(out, "FR3")).toEqual({ id: "FR3", covered: true, not_applicable: ["user-stories: the admin console is another team's product"] });
+    expect(row(out, "NFR2")).toEqual({
+      id: "NFR2",
+      covered: true,
+      not_applicable: ["u1-auth/nfr-requirements: this Unit stores no personal data", "u2-profile/nfr-requirements: reset tokens are never stored"],
+    });
+
+    stories({ status: "N/A" });
+    nfr("u2-profile", "NFR1.2", { status: "Deferred", target: "operations" });
+    out = runFinal(proj);
+    expect(out.pass).toBe(false);
+    expect(out.uncovered).toEqual(["FR3", "NFR2"]);
+    expect(row(out, "FR3")).toEqual({ id: "FR3", covered: false });
+    expect(row(out, "NFR2")).toEqual({ id: "NFR2", covered: false });
+  });
+
+  test("a Code Generation N/A with its reason settles its criterion, what is built through it, and an FR's own row", () => {
+    const proj = project();
+    const tables = seedStoryPath(proj, { status: "N/A", target: "the identity provider sends reset links" });
+    let own = run(proj, "code-generation", tables.profile);
+    expect(own.result.pass, own.result.reason).toBe(true);
+    let out = runFinal(proj);
+    expect(out.uncovered).toEqual([]);
+    expect(out.pass).toBe(true);
+    expect(row(out, "FR2.1")).toEqual({ id: "FR2.1", covered: true, through: ["AC1.2.1"] });
+    expect(row(out, "AC1.2.1")).toEqual({ id: "AC1.2.1", covered: true, not_applicable: ["u2-profile/code-generation: the identity provider sends reset links"] });
+
+    // A Unit's own sub-requirement, settled in its own table.
+    trace(proj, "construction/u2-profile/code-generation/traceability.json", {
+      stage: "code-generation",
+      unit: "u2-profile",
+      upstream_ids: ["AC1.2.1", "NFR1.2"],
+      coverage: [
+        { id: "AC1.2.1", status: "OK", target: "src/profile/reset.ts" },
+        { id: "NFR1.2", status: "N/A", target: "TLS ends at the load balancer" },
+      ],
+    });
+    out = runFinal(proj);
+    expect(out.pass).toBe(true);
+    expect(row(out, "NFR1")).toEqual({
+      id: "NFR1",
+      covered: true,
+      through: ["u1-auth: NFR1.1", "u2-profile: NFR1.2"],
+      not_applicable: ["u2-profile: NFR1.2: TLS ends at the load balancer"],
+    });
+    write(proj, "construction/u2-profile/nfr-requirements/security-requirements.md", "# Security\n\n- NFR1.2 Sign reset links\n- NFR1.3 Expire reset links\n");
+    expect(row(runFinal(proj), "NFR1")).toEqual({
+      id: "NFR1",
+      covered: false,
+      through: ["u1-auth: NFR1.1", "u2-profile: NFR1.2", "u2-profile: NFR1.3"],
+      not_built: ["u2-profile: NFR1.3"],
+      not_applicable: ["u2-profile: NFR1.2: TLS ends at the load balancer"],
+    });
+
+    // Without stories, the latest stage that traced an ID decides: Code
+    // Generation's Deferred after NFR Requirements' N/A leaves NFR2 unbuilt.
+    const direct = project();
+    write(direct, "inception/requirements-analysis/requirements.md", `${GROUPED}\n- NFR2 Data retention\n`);
+    write(direct, "construction/nfr-requirements/security-requirements.md", "# Security\n\n- NFR1.1 Hash passwords\n");
+    const nfrTable = trace(direct, "construction/nfr-requirements/traceability.json", {
+      stage: "nfr-requirements",
+      upstream_ids: ["NFR1", "NFR2"],
+      coverage: [{ id: "NFR1", status: "OK", target: "NFR1.1" }, { id: "NFR2", status: "N/A", target: "nothing is stored" }],
+    });
+    source(direct, "src/app.ts");
+    const codeTable = (nfr2: { status: string; target?: string }) => trace(direct, "construction/code-generation/traceability.json", {
+      stage: "code-generation",
+      upstream_ids: ["FR1.1", "FR1.2", "FR2.1", "NFR2", "NFR1.1"],
+      coverage: [
+        { id: "FR1.1", status: "OK", target: "src/app.ts" },
+        { id: "FR1.2", status: "N/A", target: "the identity provider locks accounts" },
+        { id: "FR2.1", status: "OK", target: "src/app.ts" },
+        { id: "NFR2", ...nfr2 },
+        { id: "NFR1.1", status: "OK", target: "src/app.ts" },
+      ],
+    });
+    for (const [stage, table] of [["nfr-requirements", nfrTable], ["code-generation", codeTable({ status: "Deferred", target: "operations" })]]) {
+      own = run(direct, stage, table);
+      expect(own.result.pass, own.result.reason).toBe(true);
+    }
+    out = runFinal(direct);
+    expect(out.uncovered).toEqual(["NFR2"]);
+    expect(row(out, "FR1.2")).toEqual({ id: "FR1.2", covered: true, not_applicable: ["code-generation: the identity provider locks accounts"] });
+    expect(row(out, "NFR2")).toEqual({ id: "NFR2", covered: false });
+
+    codeTable({ status: "N/A", target: "the service keeps no records" });
+    out = runFinal(direct);
+    expect(out.pass).toBe(true);
+    expect(row(out, "NFR2")).toEqual({ id: "NFR2", covered: true, not_applicable: ["code-generation: the service keeps no records"] });
   });
 
   test("a missing input is said, never read as built", () => {

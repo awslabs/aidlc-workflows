@@ -16,7 +16,8 @@
 //      first, and the person's pick records it;
 //   2. every remedy that runs a command waits for the person's pick, so each
 //      Unit-receipt question the engine builds passes the directive check
-//      (the team gate's, and finishing a Unit's step with the review it has).
+//      (the team gate's, and finishing a Unit's step with the review it has,
+//      which the agent first takes as its own step with no command).
 //
 // SOURCE UNDER TEST (dist/claude/.claude/tools/): aidlc-orchestrate.ts next,
 // aidlc-state.ts unit complete, aidlc-lib.ts evaluateGuardRefusal, through the
@@ -237,8 +238,12 @@ describe("a Unit done without its receipts is offered recording them", () => {
       },
       humanAuthority: { freshTurn: false, unattended: false },
     });
+    // Mid-step, finishing with the review it has is first the agent's own step
+    // (no command, no pick); the same way on with its command follows.
+    expect(midStep.remedies[0]?.op).toBe("finish-unit-step");
+    expect(midStep.remedies[0]?.interaction).toBe("external-work");
     for (const [label, refusal] of [["team gate", teamGate], ["mid-step", midStep]] as const) {
-      expect(refusal.remedies[0]?.op, label).toBe("record-unit-completion");
+      expect(refusal.remedies.find((remedy) => remedy.operation)?.op, label).toBe("record-unit-completion");
       const ask = guardRecoveryAskForRefusal(refusal);
       expect(ask, label).not.toBeNull();
       const checked = validateDirective(ask);

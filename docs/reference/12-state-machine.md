@@ -382,6 +382,27 @@ only a different fingerprint requires the existing re-save / re-review recovery,
 with parser-semantics changes as a possible cause. Stored evidence is not
 rewritten; the migration grants no approval or extra review allowance.
 
+**Code Generation completion waits for its plan.** While the plan behind Code
+Generation does not let it build (no plan yet, not approved, sent back, or
+changed since its approval under strict), `report --stage code-generation` with
+`awaiting-approval`, `revised`, `completed`, or `approved` while no gate is open
+answers with a step and changes nothing: "The code plan is not approved yet: run
+`next` and follow the step it prints." So does `unit complete --stage
+code-generation` for a Unit whose own plan waits. The plan's approval is judged
+as the build judges it (`codeGenerationCompletionPlanWaits`, over
+`codeGenerationExecutionAllowed`): a current receipt, plan approval off (the
+scope, the person, or the machine switch `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`
+where it is trusted, read as `next` reads it), or a lowered Guard Policy
+building an approved plan that changed. It is read for each target the report
+covers (the zero-Unit target, the Unit named, or the Units with Code Generation
+work), never from the step marker, so the gate shown again after a review, once
+its opening retired the build step, goes through. A Unit whose completion or
+skip is recorded is not judged again, so a Testing Contract that reads stale
+since (an update) never holds the gate. The person's answer at the open gate and
+the remedy they picked at the recovery question are theirs and are not held. The
+check runs after the stage's own completion checks, so their refusals keep their
+words.
+
 **Ensemble evidence gate.** On a `mob` or `subagent`-with-supports stage, the
 report path refuses `awaiting-approval`, `revised`, and `approved` while a
 declared support agent's contribution file
@@ -1475,17 +1496,25 @@ closed `op` from `GUARD_REMEDY_OPS` in `aidlc-lib.ts` (`present-approval-gate`,
 `record-verdict`, `retry-pending`, `request-changes`, `finish-revision`, `redo-jump`,
 `restore-or-jump`, `restart-stage`, `redo-unit-step`, `reopen-unit-step`,
 `review-advisory-gate`, `change-scope`, `restore-scope`, `abort-bolt`, `record-unit-completion`,
-`dispatch-pipeline-links`, `repair-source-boundary`, `reconfirm-summary`,
-`unset-unattended`, `lower-fence`). Routing decisions compare `op` and never the
-remedy sentence; the directive contract refuses an unknown `op`. Two refusals
+`finish-unit-step`, `dispatch-pipeline-links`, `produce-stage-output`, `repair-source-boundary`,
+`reconfirm-summary`, `unset-unattended`, `lower-fence`). Routing decisions compare `op` and never the
+remedy sentence; the directive contract refuses an unknown `op`. These refusals
 are the conductor's own step: a missing pipeline handoff
 (`PIPELINE_EVIDENCE_MISSING`) offers `dispatch-pipeline-links`, whose action is
 the refusal's own sentence naming the links (at an open gate they are recorded
 first, then `next` shows the gate again; when the refused step was the person's
-approval, the same approval runs again, so they are not asked twice), and a
-review pass the cap refuses with nobody having asked for it
+approval, the same approval runs again, so they are not asked twice); a stage
+reported before its outputs or its code exist (`REQUIRED_ARTIFACTS_MISSING`,
+`REQUIRED_SOURCE_WORK_MISSING`) offers `produce-stage-output`, the refusal's own
+sentence, which ends with the same report again; the source changed after its
+review (`SOURCE_REVIEW_STALE`, the source still readable) offers the one
+`start-recovery-review`, as a changed output does, and that remedy names its
+exact request; and a review pass the cap refuses with nobody having asked for it
 (`REVIEW_BUDGET_EXHAUSTED`) offers `present-findings-at-gate` before
-`present-approval-gate`, the same gate with its findings. `lower-fence`
+`present-approval-gate`, the same gate with its findings, or, part way through a
+Unit's step in a walk one Unit at a time, `finish-unit-step` (the Unit's step
+finished with the review it has, then `next`) before the same finish and the
+redo put to the person. `lower-fence`
 is the one remedy a refusal adds LAST, and only when the refusal is a fence
 holding. It is a `command` choice: its `operation` is
 `{kind: "lower-fence", fence}` and its `command` is the setter, so the way past
@@ -1554,8 +1583,8 @@ words (`GUARD_REMEDY_WORDING` in `aidlc-lib.ts`). The first time a refusal has
 an executable `external-work` remedy, the ask is the conductor's own work
 (`agent_work: true`, only those remedies, never published): it carries out the
 first that applies without asking, and the turn does not end on it (the Stop
-hook hands the work back if the conductor stops). A `request-review` names its exact
-request command, then the reviewer dispatched as a subagent to write the `reviewFile` it
+hook hands the work back if the conductor stops). A `request-review` or
+`start-recovery-review` names its exact request command, then the reviewer dispatched as a subagent to write the `reviewFile` it
 returns (never the conductor itself), and the `recordVerdict` it returns, as `record-verdict`
 names its own command, so a conductor with no reviewer protocol in the chat can still take it.
 When the same refusal comes back, or there

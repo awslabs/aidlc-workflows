@@ -188,10 +188,10 @@ export function shellWords(command: string): string[] {
 }
 
 /** An engine command spelled `bun .claude/tools/... ...`, run as the agent would. */
-export function runNamed(proj: string, command: string): RunResult {
+export function runNamed(proj: string, command: string, extra: NodeJS.ProcessEnv = {}): RunResult {
   const words = shellWords(command);
   if (words[0] !== "bun") throw new Error(`not an engine command: ${command}`);
-  return run(proj, [...words.slice(1)]);
+  return run(proj, [...words.slice(1)], undefined, extra);
 }
 
 export function auditEvents(proj: string) {

@@ -73,6 +73,7 @@ import {
   auditBlockField,
   currentSwarmSourceMergeChain,
   gitCommitSourceListing,
+  guardRecoveryAskFromRefusalText,
   readAllAuditShards,
   readWorkspaceSourceSnapshot,
   sourceBaselineAuditFields,
@@ -2445,6 +2446,11 @@ describe("t314 receipt stamping + completion guard (cli)", () => {
     ]);
     expect(refused.rc).not.toBe(0);
     expect(refused.out).toContain("project source changed after");
+    // That one recovery review is the agent's own step, naming the pass it takes.
+    const ask = guardRecoveryAskFromRefusalText((JSON.parse(refused.out) as { error: string }).error);
+    expect(ask?.agent_work, refused.out).toBe(true);
+    expect(ask?.remedies.map((remedy) => remedy.op)).toEqual(["start-recovery-review"]);
+    expect(ask?.remedies[0]?.action).toMatch(/`bun [^`]*aidlc-log(?:\.ts)? review --stage code-generation --reviewer [^`]* --iteration 2 /);
 
     recordReview(proj);
     const audit = readAllAuditShards(proj);
@@ -2842,6 +2848,40 @@ describe("t314 multi-unit source attribution", () => {
     const r = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
     expect(r.out).not.toContain("source-fingerprint mismatch");
     expect(r.rc).toBe(0);
+  }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+  // The source changed after the last Unit's review: the one recovery review
+  // the agent is handed is that Unit's own, and taking it lets the approval
+  // land.
+  function reviewBothUnits(): void {
+    writeFileSync(join(proj, "alpha.ts"), "export const alpha = 1;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "alpha code"]);
+    recordReview(proj, "code-generation", REVIEWER, "alpha", "READY", [{ path: "alpha.ts" }]);
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 2;\n", "utf-8");
+    git(proj, ["add", "-A"]);
+    git(proj, ["commit", "-qm", "beta code"]);
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+  }
+  const askOf = (out: string) => guardRecoveryAskFromRefusalText((JSON.parse(out) as { error: string }).error);
+
+  test("the source changed after a Unit's review hands the agent that Unit's one recovery review", () => {
+    reviewBothUnits();
+    writeFileSync(join(proj, "beta.ts"), "export const beta = 3; // after its review\n", "utf-8");
+    const refused = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("project source changed after");
+    const ask = askOf(refused.out);
+    expect(ask?.agent_work, refused.out).toBe(true);
+    expect(ask?.remedies.map((remedy) => remedy.op)).toEqual(["start-recovery-review"]);
+    expect(ask?.remedies[0]?.action).toMatch(
+      /`bun [^`]*aidlc-log(?:\.ts)? review --stage code-generation --reviewer [^`]* --unit beta --iteration 2 /,
+    );
+    // The step it names: beta's next pass, admitted as the one recovery review.
+    recordReview(proj, "code-generation", REVIEWER, "beta", "READY", [{ path: "beta.ts" }]);
+    expect(readAllAuditShards(proj)).toContain("**Recovery**: stale-receipt");
+    const approved = guarded(proj, ["approve", "code-generation", "--user-input", "ship it"]);
+    expect(approved.rc, approved.out).toBe(0);
   }, NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
   // Units built one at a time: an AI-DLC update after the last Unit's review

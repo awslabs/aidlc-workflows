@@ -429,7 +429,9 @@ export const GUARD_REMEDY_WORDING = {
             `I'll finish ${c.stage} for ${c.unit ?? "this Unit"} with the review it already has. ` +
             "What the review raised comes to you when its work is up for approval.",
         },
+  "finish-unit-step": null,
   "dispatch-pipeline-links": null,
+  "produce-stage-output": null,
   "repair-source-boundary": null,
   "reconfirm-summary": (c) => ({
     label: "Confirm the summary again",

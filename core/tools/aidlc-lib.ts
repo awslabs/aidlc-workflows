@@ -1032,8 +1032,9 @@ export function isRetiredOnlyNextArgv(args: readonly string[]): boolean {
 }
 
 // A next made only of modifier flags, one of whose values parseNextFlags refuses
-// (a depth, test-strategy, review, Guard Policy or ceremony word it does not
-// accept, or a missing value), returns that refusal before naming any command.
+// (a depth, test-strategy, review, Guard Policy, ceremony or switchable
+// `--guard.<check>` word it does not accept, or a missing value), returns that
+// refusal before naming any command.
 // It is terminal, not workflow engagement (t-tui-t27, Full Suite 36549553601).
 // A flag that takes no value beside them (`--resume`, which the agent adds on a
 // re-entry, `--single`, `--new-intent`, ...: the `none` shapes in NEXT_FLAGS)
@@ -1055,7 +1056,9 @@ export function isRefusedModifierNextArgv(args: readonly string[]): boolean {
       ? ["adversarial", "advisory", "none"]
       : flag === "--depth" || flag === "--test-strategy"
         ? ["minimal", "standard", "comprehensive"]
-        : null;
+        : flag.startsWith("--") && guardFenceFromConfigKey(flag.slice(2)) !== null
+          ? ["on", "off"]
+          : null;
     if (!words && !ceremony && !guard) return false;
     const value = args[i + 1];
     if (value === undefined || value.startsWith("--")) {
@@ -2735,9 +2738,11 @@ function isTerminalUtilityNext(invocation: { command: string; args: string[] }):
 // slot, and says what fills it, for the agent to put the reply that asked there.
 export const PERSON_WORDS_SLOT = "<their words>";
 export const PERSON_WORDS_FILL = `, with ${PERSON_WORDS_SLOT} the person's reply that asked for it, word for word`;
-const CONFIGURATION_STEP = new RegExp(
-  `^Run \`([^\`]+)\` to update the configuration(${escapeRegex(PERSON_WORDS_FILL)})?, then print its output verbatim and stop\\.$`,
+const dispatchStep = (doing: string): RegExp => new RegExp(
+  `^Run \`([^\`]+)\` to ${doing}(${escapeRegex(PERSON_WORDS_FILL)})?, then print its output verbatim and stop\\.$`,
 );
+const CONFIGURATION_STEP = dispatchStep("update the configuration");
+const SCOPE_CHANGE_STEP = dispatchStep("change scope");
 
 // A modifier-only next, or one naming a scope, can initialize work or dispatch
 // configuration or a scope change depending on state. Its own successful
@@ -2773,8 +2778,13 @@ function isTerminalConfigurationDispatch(
     "--guard-policy": "guard-policy",
     "--change-control": "guard-policy",
     ...Object.fromEntries(CEREMONY_KEYS.map((key) => [CEREMONY_FLAGS[key], CEREMONY_FLAGS[key].slice(2)])),
+    // A check typed for this work; `guard.plan-approval` is another way to say plan approval.
+    ...Object.fromEntries(SWITCHABLE_GUARD_FENCES.map((fence) =>
+      [`--guard.${fence}`, fence === "plan-approval" ? "plan-approval" : `guard.${fence}`]
+    )),
   };
-  const order = ["depth", "test-strategy", "review", "guard-policy", ...CEREMONY_KEYS.map((key) => CEREMONY_FLAGS[key].slice(2))];
+  const fences = SWITCHABLE_GUARD_FENCES.filter((fence) => fence !== "plan-approval").map((fence) => `guard.${fence}`);
+  const order = ["depth", "test-strategy", "review", "guard-policy", ...CEREMONY_KEYS.map((key) => CEREMONY_FLAGS[key].slice(2)), ...fences];
   const values = new Map<string, string>();
   // A scope change names its own command, carrying any setting typed with it.
   let scope: string | undefined;
@@ -2786,10 +2796,12 @@ function isTerminalConfigurationDispatch(
     const name = modifierFlags[args[i]];
     if (name === undefined || values.has(name)) return false;
     // The engine names the parsed value: the guard policy and ceremony words,
-    // and the depth, test-strategy, and review words lowercased (it refuses
-    // any other word before naming a command).
+    // and the depth, test-strategy, review, and check words lowercased (it
+    // refuses any other word before naming a command).
     const raw = args[i + 1];
-    const levels = name === "review" ? ["adversarial", "advisory", "none"] : ["minimal", "standard", "comprehensive"];
+    const levels = name === "review"
+      ? ["adversarial", "advisory", "none"]
+      : args[i].startsWith("--guard.") ? ["on", "off"] : ["minimal", "standard", "comprehensive"];
     const value = name === "guard-policy"
       ? parseGuardPolicy(raw)
       : CEREMONY_KEYS.some((key) => CEREMONY_FLAGS[key] === args[i])
@@ -2820,7 +2832,7 @@ function isTerminalConfigurationDispatch(
     const validated = validateDirective(parsed);
     if (!validated.valid || validated.data.kind !== "print") return false;
     const match = (scope !== undefined
-      ? /^Run `([^`]+)` to change scope, then print its output verbatim and stop\.$/
+      ? SCOPE_CHANGE_STEP
       : CONFIGURATION_STEP).exec(validated.data.message);
     if (!match) return false;
     if (match[2] !== undefined) expected.push("--person-words", PERSON_WORDS_SLOT);
@@ -4566,18 +4578,49 @@ export function workToPickUp(
 ): Array<{ intent: IntentInfo; state: string }> | null {
   const recorded = listIntents(projectDir, space, selectedIntent).filter((intent) => !isArchivedIntent(intent));
   if (recorded.length === 0 || recorded.some((intent) => intent.active)) return null;
-  const unfinished = recorded.map((intent) => {
-    let state = "";
-    if (intent.dirName) {
-      try {
-        state = readFileSync(stateFilePath(projectDir, intent.dirName, space), "utf-8");
-      } catch {
-        // Registry-only or incomplete record: leave unannotated.
-      }
-    }
-    return { intent, state };
-  }).filter(({ intent, state }) => !isCompletedIntent(intent) && getField(state, "Status") !== "Completed");
+  const unfinished = recorded.map((intent) => ({ intent, state: recordStateText(projectDir, intent, space) }))
+    .filter(({ intent, state }) => !isFinishedWork(intent, state));
   return unfinished.some(({ intent }) => intent.dirName) ? unfinished : null;
+}
+
+/**
+ * The finished work in `space` whose record is in this checkout, archived work
+ * left out: what words on finished work may ask to go back to. The same
+ * finished test as `workToPickUp`, which leaves this work out.
+ */
+export function finishedWork(projectDir: string, space: string, selectedIntent: string | null): IntentInfo[] {
+  return listIntents(projectDir, space, selectedIntent)
+    .filter((intent) => intent.dirName !== null && !isArchivedIntent(intent))
+    .filter((intent) => isFinishedWork(intent, recordStateText(projectDir, intent, space)));
+}
+
+/**
+ * Where a piece of work stands, in the stage names the person sees: "at
+ * <stage>", or "in <Phase>" for work going Unit by Unit, whose Current Stage
+ * stays on the first per-Unit stage while each Unit works through the later
+ * ones. Empty when the state names no known stage.
+ */
+export function workStanding(state: string): string {
+  const stage = findStageBySlug((getField(state, "Current Stage") ?? "").trim());
+  if (!stage) return "";
+  const unitByUnit = isPerUnitStage(stage) && getField(state, "Construction Iteration")?.trim() === "unit-major";
+  return unitByUnit ? `in ${stage.phase.charAt(0).toUpperCase()}${stage.phase.slice(1)}` : `at ${stage.name}`;
+}
+
+// Either signal marks work finished: the registry row, or the state file a
+// finalize completed.
+function isFinishedWork(intent: IntentInfo, state: string): boolean {
+  return isCompletedIntent(intent) || getField(state, "Status") === "Completed";
+}
+
+function recordStateText(projectDir: string, intent: IntentInfo, space: string): string {
+  if (!intent.dirName) return "";
+  try {
+    return readFileSync(stateFilePath(projectDir, intent.dirName, space), "utf-8");
+  } catch {
+    // Registry-only or incomplete record: leave unannotated.
+    return "";
+  }
 }
 
 export function listIntents(
@@ -10775,7 +10818,9 @@ const GUARD_REMEDY_ANSWER_ROUTES: Record<GuardRemedyOp, GuardRemedyAnswerPhases 
   "abort-bolt": null,
   "record-unit-completion": null,
   // The conductor's own work only, as present-findings-at-gate.
+  "finish-unit-step": null,
   "dispatch-pipeline-links": null,
+  "produce-stage-output": null,
   "repair-source-boundary": { afterPick: reviewRoute },
   // Present the summary (its prompt checkpoint) on the pick; record the
   // confirmation once the person gave it.
@@ -13053,6 +13098,16 @@ export function readVerificationCommandFile(projectDir: string, file: string): V
  *  without passing through any shell (bash, PowerShell, or cmd.exe). */
 export const ANSWER_TEXT_DIR = ".aidlc-engine/answer-text";
 const ANSWER_TEXT_MAX_BYTES = 64 * 1024;
+
+/** The folder in a piece of work's record where the agent writes a stage's
+ *  learnings picks for `learnings persist --selections-json` (#1592): one file
+ *  per stage, the path `learnings surface` returns, the only one persist reads. */
+export const LEARNINGS_SELECTIONS_DIR = `${ENGINE_DIR}/learnings`;
+
+/** The record folders the agent may write while Plan Approval waits: text only
+ *  the engine reads (answer text, learnings picks), never a planning authority
+ *  file. The plan-approval guard and every adapter that mirrors it read this. */
+export const ENGINE_TEXT_DIRS: readonly string[] = [ANSWER_TEXT_DIR, LEARNINGS_SELECTIONS_DIR];
 
 /** The project folder where a person's request for `next --request-file` is
  *  written, so the words reach the engine without passing through any shell.
@@ -31298,8 +31353,13 @@ export const GUARD_REMEDY_OPS = [
   // Record a Unit's missing UNIT_COMPLETED receipt from the artifacts already
   // on disk, when the gate needs it and the Unit's work is done.
   "record-unit-completion",
+  // record-unit-completion's finish as the conductor's own step: the review cap
+  // refused a pass nobody asked for part way through a Unit's step.
+  "finish-unit-step",
   // Dispatch the pipeline links the stage has not recorded, and record each.
   "dispatch-pipeline-links",
+  // Write the outputs or the code a stage was reported without.
+  "produce-stage-output",
   "repair-source-boundary",
   "reconfirm-summary",
   "unset-unattended",
@@ -31369,7 +31429,8 @@ export interface GuardAttemptState {
   requestReview?: string;
   summaryCoverage: "current" | "stale" | "missing";
   reviewCoverage: "current" | "stale" | "missing";
-  sourceCoverage: "current" | "stale" | "missing" | "unbindable";
+  // "unreadable": this machine could not read the source to compare it.
+  sourceCoverage: "current" | "stale" | "missing" | "unbindable" | "unreadable";
 }
 
 export interface GuardHumanAuthorityState {
@@ -32023,6 +32084,19 @@ export function evaluateGuardRefusal(
         executableNow: openForWork || state === "revising",
       });
     }
+    // The stage was reported before its outputs or its code exist: writing
+    // them is the conductor's own step, which the refusal's sentence names.
+    // No review or reset produces them.
+    const missingOutput = input.code === "REQUIRED_ARTIFACTS_MISSING" ||
+      input.code === "REQUIRED_SOURCE_WORK_MISSING";
+    if (missingOutput) {
+      remedies.push({
+        op: "produce-stage-output",
+        action: input.userMessage,
+        requiresHuman: false,
+        executableNow: openForWork || state === "revising",
+      });
+    }
     if (input.attempt.pendingReview) {
       if (
         input.attempt.pendingReview.verdictRecordable !== false &&
@@ -32111,7 +32185,14 @@ export function evaluateGuardRefusal(
       ? unitStepInProgress(input)
       : null;
     if (midStep !== null) {
-      remedies.push(finishUnitStepRemedy(input.stage, midStep), reopenUnitStepRemedy(input.stage, midStep));
+      const finish = finishUnitStepRemedy(input.stage, midStep);
+      // The cap refused a pass nobody asked for, as at a gate below: finishing
+      // the step with the review it has is the conductor's own step. A repeat
+      // still offers the person both.
+      if (input.code === "REVIEW_BUDGET_EXHAUSTED") {
+        remedies.push({ op: "finish-unit-step", action: finish.action, requiresHuman: false, executableNow: true });
+      }
+      remedies.push(finish, reopenUnitStepRemedy(input.stage, midStep));
     } else if (
       !reviewBudgetAvailable &&
       input.attempt.reviewCoverage === "current" &&
@@ -32156,16 +32237,20 @@ export function evaluateGuardRefusal(
       !input.attempt.pendingReview &&
       !input.attempt.repairReview &&
       !input.attempt.nextReview;
+    // The source changed after a review that still stands for the output: the
+    // one recovery review clears it, as it clears a changed output.
+    const sourceRecovery = input.code === "SOURCE_REVIEW_STALE" && input.attempt.sourceCoverage === "stale";
     if (
       input.attempt.recovery === "available" &&
-      input.attempt.reviewCoverage === "stale" &&
+      (input.attempt.reviewCoverage === "stale" || sourceRecovery) &&
       noReviewInFlight
     ) {
       remedies.push({
         op: "start-recovery-review",
-        action:
-          "Start the one stale-review recovery review against the current " +
-          "artifact and source state.",
+        action: reviewRequestAction(
+          "Start the one stale-review recovery review against the current artifact and source state",
+          input.attempt.requestReview,
+        ),
         requiresHuman: false,
         executableNow: input.attempt.summaryCoverage === "current" && openForWork,
       });
@@ -32173,7 +32258,8 @@ export function evaluateGuardRefusal(
       reviewBudgetAvailable &&
       input.attempt.reviewCoverage === "missing" &&
       noReviewInFlight &&
-      !pipelineLinks
+      !pipelineLinks &&
+      !missingOutput
     ) {
       remedies.push({
         op: "request-review",
@@ -32469,11 +32555,13 @@ export function guardAttemptState(
     sourceCoverage:
       receipts?.sourceStaleReason === "boundary-unbindable"
         ? "unbindable"
-        : receipts?.sourceStale
-          ? "stale"
-          : receipts?.newestSourceFingerprint
-            ? "current"
-            : "missing",
+        : receipts?.sourceStaleReason === "source-unreadable"
+          ? "unreadable"
+          : receipts?.sourceStale
+            ? "stale"
+            : receipts?.newestSourceFingerprint
+              ? "current"
+              : "missing",
   };
   return {
     attempt,
@@ -43625,7 +43713,6 @@ export type BoltDagResolution =
       batches: string[][];
       units: string[];
       unitKinds: Map<string, string> | null;
-      healed: boolean;
     }
   | { state: "none" }
   | { state: "malformed"; reason: string; detail: string };
@@ -43700,7 +43787,6 @@ export function resolveBoltDag(
             batches: typedBatches,
             units,
             unitKinds: unitKinds.size > 0 ? unitKinds : null,
-            healed: false,
           };
         }
       }
@@ -43732,7 +43818,6 @@ export function resolveBoltDag(
     batches: parsed.batches,
     units: parsed.batches.flat(),
     unitKinds: unitKinds.size > 0 ? unitKinds : null,
-    healed: true,
   };
   return cached !== null && boltDagMatches(cached, authored) ? cached : authored;
 }

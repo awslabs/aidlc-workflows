@@ -5,7 +5,8 @@
 // shared project resolver to keep incremental state under the active record,
 // then wraps `bunx --package typescript@6 tsc --project <tsconfig> --noEmit
 // --pretty false --incremental --tsBuildInfoFile <record cache path>` and
-// prints the locked stdout JSON shape:
+// prints the locked stdout JSON shape (a native install, which has no bunx,
+// runs the project's own TypeScript under Node instead; see tscCommand):
 //
 //   {"pass": <bool>, "errors": [{file, line, column, message}, ...], "findings_count": <number>}
 //
@@ -77,6 +78,7 @@ import {
 	DEFAULT_SUBPROCESS_TIMEOUT_MS,
 	LONG_SUBPROCESS_TIMEOUT_MS,
 } from "./aidlc-runtime-budget.ts";
+import { compiledExecutable, projectPackage } from "./aidlc-runtime-paths.ts";
 
 interface ParsedError {
 	file: string;
@@ -130,7 +132,8 @@ function printHelp(): void {
 	process.stdout.write(
 		`Usage: aidlc-sensor-type-check --stage <slug> --file-path <path>\n\n` +
 			`Wraps \`bunx --package typescript@6 tsc --project <tsconfig> --noEmit --pretty false\` and\n` +
-			`prints {pass, errors[]} JSON to stdout (filtered to --file-path).\n`,
+			`prints {pass, errors[]} JSON to stdout (filtered to --file-path).\n` +
+			`A native install runs the project's own TypeScript (4 or newer) under Node instead.\n`,
 	);
 }
 
@@ -158,12 +161,31 @@ function findTsconfig(filePath: string): string | null {
 // tool resolution.
 const TSC_ARGS = ["--package", "typescript@6", "tsc"] as const;
 
+// A native install has no bunx, and it fetches nothing while it checks: it
+// runs the project's own TypeScript under Node, as the linter runs the
+// project's own ESLint, or the probe reads tool-unavailable. TypeScript before 4
+// rejects --incremental beside a noEmit tsconfig with an error located in
+// tsconfig.json, which the per-file filter drops, so it would pass every file
+// unchecked; it is not run.
+function projectTsc(cwd: string): string | null {
+	const own = projectPackage(cwd, "typescript");
+	if (!own || !(own.major >= 4)) return null;
+	const tsc = join(own.root, "bin", "tsc");
+	return existsSync(tsc) ? tsc : null;
+}
+
+function tscCommand(cwd: string, args: string[]): [string, string[]] {
+	const own = compiledExecutable() ? projectTsc(cwd) : null;
+	return own ? ["node", [own, ...args]] : ["bunx", [...TSC_ARGS, ...args]];
+}
+
 // Probe the same TypeScript command used for the real compile. `bunx`
 // returns non-127 codes for several failure modes (network-fetch, package-
 // resolution, registry timeout). The dispatcher's branch b (status === 127)
 // won't catch those — propagate by exiting 127 ourselves on any non-zero.
 function probeTscAvailable(cwd: string): void {
-	const result = spawnSync("bunx", [...TSC_ARGS, "--version"], {
+	const [command, args] = tscCommand(cwd, ["--version"]);
+	const result = spawnSync(command, args, {
 		encoding: "utf-8",
 		timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
 		cwd,
@@ -179,21 +201,17 @@ function runTsc(opts: {
 	tsBuildInfoFile: string;
 	cwd: string;
 }): { output: string; status: number | null } {
-	const result = spawnSync(
-		"bunx",
-		[
-			...TSC_ARGS,
-			"--project",
-			opts.tsconfigPath,
-			"--noEmit",
-			"--pretty",
-			"false",
-			"--incremental",
-			"--tsBuildInfoFile",
-			opts.tsBuildInfoFile,
-		],
-		{ encoding: "utf-8", timeout: LONG_SUBPROCESS_TIMEOUT_MS, cwd: opts.cwd },
-	);
+	const [command, args] = tscCommand(opts.cwd, [
+		"--project",
+		opts.tsconfigPath,
+		"--noEmit",
+		"--pretty",
+		"false",
+		"--incremental",
+		"--tsBuildInfoFile",
+		opts.tsBuildInfoFile,
+	]);
+	const result = spawnSync(command, args, { encoding: "utf-8", timeout: LONG_SUBPROCESS_TIMEOUT_MS, cwd: opts.cwd });
 	// Partial diagnostics (or none) after a kill do not prove a clean compile.
 	// Preserve the dispatcher's script-error path instead of emitting pass:true.
 	if (result.error || result.signal || result.status === null) {

@@ -44,9 +44,9 @@ describe("t237 linter sensor eslint version pin", () => {
 
   test("no spawnSync bunx invocation passes bare 'eslint' as the tool arg", () => {
     // Every `spawnSync("bunx", [<first-arg>, ...])` in the script must use
-    // ESLINT_SPEC. A literal "eslint" first element would resolve through
-    // node_modules/PATH and reintroduce the shadowing bug.
-    const bunxFirstArgs = [...src.matchAll(/spawnSync\(\s*"bunx",\s*\[\s*("(?:[^"]*)"|[A-Za-z_$][\w$]*)/g)].map(
+    // ESLINT_SPEC after its runtime flags. A literal "eslint" first element
+    // would resolve through node_modules/PATH and reintroduce the shadowing bug.
+    const bunxFirstArgs = [...src.matchAll(/spawnSync\(\s*"bunx",\s*\[\s*(?:\.\.\.runtime,\s*)?("(?:[^"]*)"|[A-Za-z_$][\w$]*)/g)].map(
       (m) => m[1],
     );
     expect(bunxFirstArgs.length).toBeGreaterThan(0);

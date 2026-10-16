@@ -533,7 +533,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.unit).toBe("alpha");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("8: stale DAG healing preserves unit kinds and warns exactly once per next", () => {
+  test("8: stale DAG healing preserves unit kinds and says nothing", () => {
     const proj = seedProject("unit-major");
     seedStaleKindDependency(proj);
 
@@ -556,9 +556,7 @@ describe("t209 opt-in unit-major construction design iteration", () => {
     expect(d.produces?.some((path) => path.endsWith("/functional-spec.md"))).toBe(true);
     expect(d.produces?.some((path) => path.endsWith("/frontend-components.md"))).toBe(false);
 
-    const warning =
-      "runtime-graph.json bolt_dag is missing or stale; recomputed 1 unit batch(es)";
-    expect(run.stderr.split(warning).length - 1).toBe(1);
+    expect(run.stderr).not.toContain("bolt_dag");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("9: reviews recorded during the unit-major walk survive a later STAGE_STARTED", () => {

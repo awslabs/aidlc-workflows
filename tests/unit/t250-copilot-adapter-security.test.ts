@@ -2041,6 +2041,43 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
     }
   });
 
+  test("27l2: the person's words handed to a setter are text, never a path", () => {
+    const s = scratch();
+    try {
+      seedAidlcScripts(s);
+      const decision = (command: string, env: Record<string, string | undefined> = {}, shell = "bash") =>
+        shellDecision(runAdapter(s, "guard-tool-call", { ...shellCall(command), tool_input: { command, shell } }, {
+          T250_CHECK_SWITCH: "guard.review-freeze=off", ...env,
+        })).hookSpecificOutput?.permissionDecision;
+      // A reply that starts like a path, word for word, on every command that takes it.
+      for (const words of ["/aidlc turn the review freeze off", "../ turn it off", "/etc"]) {
+        for (const [command, env] of [
+          [`aidlc engine config set guard.review-freeze off --person-words '${words}'`, {}],
+          [`aidlc engine intent create --scope mvp --sensors off --person-words '${words}'`, {}],
+          [`aidlc engine recompose --skip security-review --sensors off --person-words '${words}'`, { T250_HUMAN_ACTED: "1" }],
+        ] as const) expect(decision(command, env), command).toBe("allow");
+      }
+      // In a Windows terminal they are checked as any other argument.
+      for (const shell of ["powershell", "C:\\Windows\\System32\\cmd.exe"]) {
+        expect(decision("aidlc engine config set guard.review-freeze off --person-words '/aidlc turn it off'", {}, shell), shell).toBeUndefined();
+      }
+      for (const [command, env] of [
+        // The file that holds their words is still a path.
+        ["aidlc engine config set guard.review-freeze off --person-words-file ../answer.txt", {}],
+        // A command that takes no words of theirs reads that value as it reads any other.
+        ["aidlc engine log answers --person-words ../outside", {}],
+        // A flag after a bare --person-words is not its value, so its path is still read.
+        ["aidlc engine intent create --scope mvp --sensors off --person-words --repos=../elsewhere", {}],
+        // Their words change none of the conditions that keep the prompt.
+        ["aidlc engine recompose --skip security-review --sensors off --person-words 'yes, do it'", {}],
+        ["aidlc engine scope change --scope mvp --sensors off --person-words 'switch to mvp'", { T250_HUMAN_ACTED: "1" }],
+        ["aidlc engine config set depth minimal --person-words 'go minimal'", {}],
+      ] as const) expect(decision(command, env), command).toBeUndefined();
+    } finally {
+      s.cleanup();
+    }
+  });
+
   test("27h: in a Windows terminal a backslash is a plain path separator; under a POSIX shell it keeps the prompt", () => {
     // VS Code's Windows terminal is PowerShell or cmd, where `C:\work\app` is
     // an ordinary path (#1411). The payload's shell is simulated
