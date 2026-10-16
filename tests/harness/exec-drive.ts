@@ -423,6 +423,61 @@ export function setupOpencodeProject(): OpencodeProject {
   return { proj, root };
 }
 
+/**
+ * The argv of one `opencode run` turn for a line the person typed: `/aidlc ...`
+ * runs the shipped command with the words after it, any other line goes to the
+ * session as it is. Each word is its own argument: `opencode run` quotes an
+ * argument that holds a space, so a whole line would arrive in quotation marks.
+ */
+export function opencodeRunArgs(line: string, sessionId?: string): string[] {
+  const command = /^\/aidlc(?:\s|$)/.test(line);
+  const words = (command ? line.replace(/^\/aidlc\s*/, "") : line).split(/\s+/).filter(Boolean);
+  return [
+    "run", ...(sessionId ? ["-s", sessionId] : []), ...(command ? ["--command", "aidlc"] : []),
+    "-m", OPENCODE_MODEL, "--format", "json", ...(words.length ? ["--", ...words] : []),
+  ];
+}
+
+/** The session and tool calls of one `opencode run --format json` turn, in the shape the SDK drive captures tool calls. */
+export function opencodeToolResults(stdout: string): { sessionId?: string; results: CapturedToolResult[] } {
+  let sessionId: string | undefined;
+  const results: CapturedToolResult[] = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("{")) continue;
+    let event: { type?: unknown; sessionID?: unknown; part?: { tool?: unknown; callID?: unknown; state?: { status?: unknown; input?: Record<string, unknown>; output?: unknown; error?: unknown } } };
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (sessionId === undefined && typeof event.sessionID === "string") sessionId = event.sessionID;
+    const state = event.part?.state;
+    if (event.type !== "tool_use" || !state) continue;
+    results.push({
+      toolName: event.part?.tool === "bash" ? "Bash" : String(event.part?.tool), input: state.input ?? {},
+      toolUseId: String(event.part?.callID ?? ""), resultText: String(state.output ?? state.error ?? ""), isError: state.status === "error",
+    });
+  }
+  return { sessionId, results };
+}
+
+/** One person turn as `opencode run --format json`: a new session, or `sessionId` continued. */
+export function opencodeTurn(proj: string, line: string, options: { sessionId?: string; timeoutMs?: number } = {}): ExecResult & { stdout: string } {
+  const result = spawnSync(OPENCODE_BIN, opencodeRunArgs(line, options.sessionId), {
+    cwd: proj,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env, PWD: proj },
+    timeout: remainingOperationTimeoutMs(options.timeoutMs ?? TEST_TIMEOUT_MS, { phase: "opencode turn" }),
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  return {
+    rc: result.status ?? -1,
+    stdout: result.stdout ?? "",
+    out: `${result.stdout ?? ""}\n${result.stderr ?? ""}${result.error ? `\n${result.error.message}` : ""}`,
+  };
+}
+
 // `--command aidlc` invokes the shipped .opencode/command/aidlc.md; the
 // message tokens after `--` land in its $ARGUMENTS. No --auto: an unexpected
 // permission ask auto-rejects and fails the asserts (the honest signal).

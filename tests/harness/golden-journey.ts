@@ -93,6 +93,11 @@ export interface GoldenJourney {
    * must come first there; it counts as asked once.
    */
   newSessionAtPlan?: string;
+  /**
+   * The person's first reply to this stage's approval asks for this change
+   * instead; the gate offered again after the revision counts as asked once.
+   */
+  changeRequest?: { stage: string; words: string };
 }
 
 export interface GoldenRun {
@@ -222,6 +227,7 @@ export class GoldenPerson {
   private lastKey = "";
   private left: string | undefined;
   private leftOnce = false;
+  private changed = false;
 
   constructor(private readonly j: GoldenJourney) {
     this.start = auditRows(j.proj).length;
@@ -361,6 +367,13 @@ export class GoldenPerson {
     const waiting = stageAwaitingApproval(this.j.proj);
     if (waiting) {
       this.reach(`approval | ${waiting}`, `the ${waiting} approval`);
+      const change = this.j.changeRequest;
+      if (change?.stage === waiting && !this.changed) {
+        this.changed = true;
+        this.reached.delete(`approval | ${waiting}`);
+        this.said.push(`typed ${JSON.stringify(change.words)} for the ${waiting} approval`);
+        return change.words;
+      }
       this.said.push(`typed "Approve" for the ${waiting} approval`);
       return "Approve";
     }
@@ -442,8 +455,17 @@ export function goldenPathProblems(j: GoldenJourney, run: GoldenRun): string[] {
   for (const r of rows.filter((r) => r.event === "STAGE_AWAITING_APPROVAL")) {
     if (!approvals.has(stageField(r)) && through.includes(stageField(r))) problems.push(`${stageField(r)} waited for approval and was never approved`);
   }
+  const change = j.changeRequest;
   for (const event of ["GATE_REJECTED", "STAGE_REVISING"]) {
-    if (count(event) > 0) problems.push(`${event} recorded ${count(event)} times; the person never asked for changes`);
+    const at = rows.filter((r) => r.event === event);
+    if (!change && at.length > 0) problems.push(`${event} recorded ${at.length} times; the person never asked for changes`);
+    if (change && (at.length !== 1 || stageField(at[0]) !== change.stage)) {
+      problems.push(`${event} recorded ${at.length} times; the person asked for one change, at ${change.stage}`);
+    }
+  }
+  const rejected = change && rows.find((r) => r.event === "GATE_REJECTED" && stageField(r) === change.stage);
+  if (change && rejected && !(auditBlockField(rejected.block, "Feedback") ?? "").includes(change.words)) {
+    problems.push(`the change the person asked for at ${change.stage} is not on the record in their words`);
   }
 
   // The plan: asked once and approved once where the scope asks, never otherwise.

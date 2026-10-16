@@ -1750,7 +1750,10 @@ The declared coverage is:
   with the plan question left for the day and approved in a new session; Copilot's
   (`tests/e2e/t-exec-copilot-journey-golden-bugfix.serial.test.ts`, Linux only:
   on Windows it runs past the 25 minutes a retry allows) does the same on the
-  copy-channel install of its release journey.
+  copy-channel install of its release journey. opencode's
+  (`tests/e2e/t-run-opencode-journey-golden-change.serial.test.ts`, Linux) takes the
+  same request to Reverse Engineering, where the person asks for one change in
+  their own words and approves the revision, on the shipped permission table.
 - Kiro ACP, TUI and IDE are declared exclusions pending a dedicated isolated
   Windows desktop host; local live runs remain their coverage path.
 - Cursor is excluded: no credential separation is available because its vendor

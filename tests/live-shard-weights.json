@@ -11,6 +11,7 @@
       "tests/e2e/t-exec-codex-status.serial.test.ts": 14,
       "tests/e2e/t-exec-copilot-journey-golden-bugfix.serial.test.ts": 840,
       "tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts": 2800,
+      "tests/e2e/t-run-opencode-journey-golden-change.serial.test.ts": 500,
       "tests/e2e/t-run-opencode-status.serial.test.ts": 29,
       "tests/e2e/t-tui-compose-front.serial.test.ts": 324,
       "tests/e2e/t-tui-custom-harness.serial.test.ts": 264,

@@ -112,6 +112,7 @@ export const PLATFORM_ONLY: Record<string, readonly NodeJS.Platform[]> = {
   // the Codex journey runs about 17 on Windows, Copilot's longer than that.
   "tests/e2e/t-exec-codex-journey-golden-bugfix.serial.test.ts": ["linux", "win32"],
   "tests/e2e/t-exec-copilot-journey-golden-bugfix.serial.test.ts": ["linux"],
+  "tests/e2e/t-run-opencode-journey-golden-change.serial.test.ts": ["linux"],
   // The answers corpus opens on the family's gate in a live job too: one item
   // per question a night, by a date rotation, on Linux (its own shard).
   "tests/e2e/t-live-aidlc-answers-corpus.serial.test.ts": ["linux"],
