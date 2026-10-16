@@ -3,7 +3,7 @@ import { setDefaultTimeout, afterAll, describe, expect, spyOn, test } from "bun:
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import {
-  existsSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, symlinkSync, writeFileSync,
+  existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync,
 } from "node:fs";
 import fs from "node:fs";
 import { connect, type Socket } from "node:net";
@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bunSessionPaths, createBunBackend } from "../harness/tui-bun-backend.ts";
 import { publishSupervisorStop } from "../harness/tui-bun-process.ts";
+import { TUI_TEST_FIXTURE_MARKER } from "../harness/tui-drive.ts";
 import { acquireNativeLock, getNativeProcessIdentity } from "../harness/tui-process-identity.ts";
 import { ensurePrivateRoot, privateDirectoryIdentity, publishTuiRecord, readPrivateRecord } from "../harness/tui-record-file.ts";
 import { physicalTuiText, type TuiSnapshot } from "../harness/tui-screen.ts";
@@ -666,6 +667,51 @@ setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
       } finally {
         if (sessions.has(session)) await stop(session);
       }
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // The person-turn check backs an answer the agent records quoting the
+  // person's pick only with a turn that holds the pick's words (run
+  // 38809298225 on Windows).
+  test("a pick on a lone menu goes into the drive's record of the person's turns in its own words", async () => {
+    const fixture = realpathSync(mkdtempSync(join(tmpdir(), "aidlc-tui-")));
+    writeFileSync(join(fixture, TUI_TEST_FIXTURE_MARKER), JSON.stringify({ cwd: fixture, ownerPid: process.pid }));
+    const personTurns = { AIDLC_PERSON_TURNS_DIR: mkdtempSync(join(scratch, "person-turns-")) };
+    const session = `lone-pick-${randomUUID()}`;
+    const picked = join(root, `${session}-picked`);
+    const program = join(root, `${session}.ts`);
+    writeFileSync(program, `
+import { writeFileSync } from "node:fs";
+process.stdin.setRawMode(true);
+process.stdin.resume();
+const esc = String.fromCharCode(27);
+const menu = ["─".repeat(120), " ☐ Answer mode", "", "│ How would you like to answer the questions?", "",
+  "❯ 1. Guide me", "     I'll walk you through each question here.", "  2. Chat", "  3. Type something.",
+  "Enter to select · ↑/↓ to navigate · Esc to cancel"];
+for (let row=0; row<14; row++) process.stdout.write(esc+"["+(row+1)+";1H"+(menu[row]??"").padEnd(120));
+process.stdin.on("data", bytes => {
+  if (!bytes.includes(13)) return;
+  process.stdout.write(esc+"[2J"+esc+"[HPICKED");
+  writeFileSync(${JSON.stringify(picked)}, "Enter");
+});
+setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
+`);
+    sessions.add(session);
+    try {
+      const started = await drive(["start", "--session", session, "--cwd", fixture, "--width", "120", "--height", "14",
+        "--", process.execPath, program], personTurns);
+      expect(started.code, started.stderr).toBe(0);
+      await ok(["startup", "--session", session, "--ready-pattern", "\\n❯ 1\\. ", "--timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)]);
+      const answered = await drive(["answer-gate", "--session", session, "--project-dir", fixture,
+        "--until-file", picked, "--overall-timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS), "--per-gate-timeout-ms", String(NATIVE_STARTUP_TIMEOUT_MS)], personTurns);
+      expect(answered.code, answered.stderr).toBe(0);
+      const folder = personTurns.AIDLC_PERSON_TURNS_DIR;
+      const [ledger] = readdirSync(folder).filter((name) => name.startsWith("ledger-"));
+      const lines = readFileSync(join(folder, ledger), "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+      expect(lines.filter((line) => line.kind === "turn")).toEqual([{ kind: "turn", words: "Guide me", cursor: [], selections: 1 }]);
+    } finally {
+      if (sessions.has(session)) await stop(session);
+      rmSync(fixture, { recursive: true, force: true });
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
