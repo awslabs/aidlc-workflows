@@ -164,7 +164,7 @@ describe("writing kiro-ide agent files", () => {
     const root = projection();
     const path = join(root, ".kiro", "agents", REVIEWER_FILE);
     policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, ON);
-    policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, { ...PREVIEW, agentModels: "off" }, () => true);
+    policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, { ...PREVIEW, agentModels: "off" }, true);
     expect(frontmatter(readFileSync(path, "utf-8"))).not.toMatch(/^(model|effortLevel):/m);
     withOwnModelLine(path);
     policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, { ...PREVIEW, agentModels: "off" });
@@ -181,13 +181,6 @@ describe("writing kiro-ide agent files", () => {
     }
   });
 
-  test("a model or effortLevel line counts by its key, whatever its value", () => {
-    for (const line of ['effortLevel: "high"', "model: my model # pinned", "model:"]) {
-      expect(policy.kiroAgentFileHasModelLines(`---\nname: x\n${line}\n---\nBody\n`), line).toBe(true);
-    }
-    expect(policy.kiroAgentFileHasModelLines("---\nname: x\n---\nmodel: in the body\n")).toBe(false);
-  });
-
   test("the shared Markdown writer takes an effortLevel line out only of a Kiro agent file", () => {
     const text = "---\nname: x\neffortLevel: low\n---\nBody\n";
     expect(policy.writeMarkdownAgentSurface(text, { model: "m" })).toContain("effortLevel: low");
@@ -202,15 +195,14 @@ describe("writing kiro-ide agent files", () => {
     expect(policy.modelPolicySurfaceDrift(root, ".kiro", "kiro-ide", pinned, ON)).toContain(`${REVIEWER}: effort low != high`);
   });
 
-  test("the take-out leaves an agent file it is not given as it is", () => {
+  test("the take-out on a stable release takes the lines out and leaves the rest of the file", () => {
     const root = projection();
     const path = join(root, ".kiro", "agents", REVIEWER_FILE);
     policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, ON);
-    const written = readFileSync(path, "utf-8");
-    policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, { ...STABLE, agentModels: "off" }, () => false);
-    expect(readFileSync(path, "utf-8")).toBe(written);
-    policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, { ...STABLE, agentModels: "off" }, () => true);
+    writeFileSync(path, `${readFileSync(path, "utf-8")}\nA line of my own.\n`);
+    policy.applyModelPolicyToProjection(root, ".kiro", "kiro-ide", pinned, null, { ...STABLE, agentModels: "off" }, true);
     expect(frontmatter(readFileSync(path, "utf-8"))).not.toMatch(/^(model|effortLevel):/m);
+    expect(readFileSync(path, "utf-8")).toContain("A line of my own.");
   });
 
   test("the choice is read from harness.json previewFeatures as on or off, nothing else", () => {
@@ -365,15 +357,14 @@ describe("the agent-models choice through config", () => {
     expect(p.reviewer()).toMatch(/^model: "gpt-5\.6-terra"$/m);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 3);
 
-  test("off keeps the lines of an agent file not as AI-DLC last wrote it, and names it", () => {
+  test("off takes the lines out of an agent file the person changed and keeps the change", () => {
     const p = project(previewRuntime());
     expect(p.preview("agent-models", "on", "--yes").status).toBe(0);
     expect(p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes").status).toBe(0);
     writeFileSync(p.reviewerPath, `${readFileSync(p.reviewerPath, "utf-8")}\nA line of my own.\n`);
     const off = p.preview("agent-models", "off", "--yes");
     expect(off.status, off.out).toBe(0);
-    expect(off.out).toContain(`AI-DLC cannot tell that .kiro/agents/${REVIEWER_FILE} is as it last wrote it, so it keeps its model and effort lines`);
-    expect(p.reviewer()).toMatch(/^model: "gpt-5\.6-terra"$/m);
+    expect(p.reviewer()).not.toMatch(/^(model|effortLevel):/m);
     expect(readFileSync(p.reviewerPath, "utf-8")).toContain("A line of my own.");
     expect(p.choice()).toBe("off");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
@@ -465,7 +456,7 @@ describe("the agent-models choice through config", () => {
     expect(p.models("--show").out).toContain("recorded on, which applies only on a preview release");
     const refused = p.preview("agent-models", "on", "--yes");
     expect(refused.status).not.toBe(0);
-    expect(refused.out).toContain("agent-models needs this project on a preview release of AI-DLC; it is on 2.11.0");
+    expect(refused.out).toContain("agent-models needs this project on a preview release of AI-DLC; this run sets it up on 2.11.0");
     // Run through Bun, as a copied runtime runs, so the steps name a preview copy.
     expect(refused.out.replace(/\s+/g, " ")).toMatch(
       /install a preview release's copy runtime into this project \(Release Channels in the install guide\), then [^,]*config preview agent-models on --yes( --project-dir \S+)? $/,
@@ -479,11 +470,19 @@ describe("the agent-models choice through config", () => {
     expect(off.status, off.out).toBe(0);
     expect(off.out).toContain("Preview feature agent-models: on -> off in .kiro/tools/data/harness.json; nothing changes on this release.");
     expect(off.out).not.toContain("To undo");
+    expect(off.out.replace(/\s+/g, " ")).toMatch(/To have it again: on a preview release, \S.*config preview agent-models on --yes/);
     expect(off.out.replace(/\s+/g, " ")).not.toContain(policy.KIRO_AGENT_MODELS_OFF_NOTE);
     expect(p.choice()).toBe("off");
     expect(p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes").status).toBe(0);
     expect(p.reviewer()).not.toMatch(/^model:/m);
-  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 3);
+    // A pin to a preview release is not refused from the stable tree: the run
+    // sets the project up on the pin, which a copied runtime downloads first.
+    writeFileSync(join(p.dir, ".aidlc-version"), `${previewVersion}\n`);
+    const pinned = p.preview("agent-models", "on", "--yes");
+    expect(pinned.out).toContain(`this project is pinned to ${previewVersion}`);
+    expect(pinned.out).not.toContain("needs this project on a preview release");
+    expect(pinned.out).toMatch(/fix: .*config preview .*agent-models on --yes --download/);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 4);
 
   test("a tree no preview feature works in lists none and offers no command", () => {
     const dir = temp("aidlc-kiro-agent-models-claude-");

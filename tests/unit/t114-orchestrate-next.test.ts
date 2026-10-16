@@ -484,6 +484,7 @@ describe("t114 in-session config alias", () => {
     expect(out).toContain('"kind":"print"');
     expect(out).toContain("bun .claude/tools/aidlc.ts config preview --show --json");
     expect(out).toContain("bun .claude/tools/aidlc.ts config preview <feature> <on|off> --yes");
+    expect(out).toContain("when it lists no preview feature for this project, say so in one line and stop without asking");
   });
 
   test("--config rejects unknown or extra trailing tokens as usage errors", () => {
