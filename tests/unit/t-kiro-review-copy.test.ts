@@ -188,6 +188,13 @@ describe("when there is no copy", () => {
       recordPreview(dir, { [REVIEWER_READ_SCOPE_FEATURE]: "off" });
       process.env.AIDLC_HARNESS_NAME = "kiro-ide";
       expect(prepareReviewCopy(dir, review, PREVIEW), "feature off").toBeNull();
+      // A preview engine on a tree stamped with a stable release: the tree's release decides.
+      writeFileSync(
+        join(dir, ".kiro", "tools", "data", "harness.json"),
+        `${JSON.stringify({ distribution: "kiro-ide", [PREVIEW_FEATURES_RECORD]: { [REVIEWER_READ_SCOPE_FEATURE]: "on" } })}\n`,
+      );
+      writeFileSync(join(dir, ".kiro", "tools", "data", "aidlc-stamp.json"), `${JSON.stringify({ schemaVersion: 1, harnessDir: ".kiro", distribution: "kiro-ide", frameworkVersion: STABLE })}\n`);
+      expect(prepareReviewCopy(dir, { ...review, requestId: "legacy" }, PREVIEW), "stable tree, preview engine").toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

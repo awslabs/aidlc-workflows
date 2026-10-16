@@ -353,7 +353,7 @@ describe("the agent-models choice through config", () => {
     const off = p.preview("agent-models", "off", "--yes");
     expect(off.status, off.out).toBe(0);
     expect(off.out.split("config preview agent-models on --yes")).toHaveLength(2);
-    expect(off.out).toContain(OFF_LINE);
+    expect(off.out).toContain("The models and efforts set for single agents stay recorded and are no longer written into Kiro's agent files.");
     expect(p.choice()).toBe("off");
     expect(p.reviewer()).not.toMatch(/^model:/m);
     withOwnModelLine(p.reviewerPath);
@@ -417,7 +417,9 @@ describe("the agent-models choice through config", () => {
     expect(old.out).toContain("unknown models option --agent-models");
     expect(p.choice()).toBe("on");
     const download = p.preview("reviewer-read-scope", "on", "--download", "--dry-run");
-    expect(download.out).not.toContain("--download");
+    expect(download.status, download.out).toBe(0);
+    expect(download.out).toContain("Preview feature reviewer-read-scope: not set -> on");
+    expect(p.preview("--download").out).toContain("name the feature to change");
     const unknown = p.preview("agent-modles", "on", "--yes");
     expect(unknown.out).toContain('unknown preview feature "agent-modles"; preview features: agent-models, reviewer-read-scope');
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);

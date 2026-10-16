@@ -56,11 +56,17 @@ class KiroUnitReview {
     seedAidlcMemory(this.dir);
     cpSync(KIRO_IDE_TREE, join(this.dir, ".kiro"), { recursive: true });
     if (preview) {
-      // A preview build is the same tree with a preview version stamped in.
+      // A preview build is the same tree with a preview version stamped in,
+      // in its engine and in the tree's stamp the feature reads.
       const versionFile = join(this.dir, ".kiro", "tools", "aidlc-version.ts");
       writeFileSync(
         versionFile,
         readFileSync(versionFile, "utf-8").replace(/AIDLC_VERSION = "[^"]+"/, `AIDLC_VERSION = "${PREVIEW_VERSION}"`),
+      );
+      const stampFile = join(this.dir, ".kiro", "tools", "data", "aidlc-stamp.json");
+      writeFileSync(
+        stampFile,
+        readFileSync(stampFile, "utf-8").replace(/"frameworkVersion": "[^"]+"/, `"frameworkVersion": "${PREVIEW_VERSION}"`),
       );
     }
     const harnessData = join(this.dir, ".kiro", "tools", "data", "harness.json");
