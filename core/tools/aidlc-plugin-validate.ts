@@ -778,14 +778,17 @@ function validateStages(
     }
 
     // Without the base's checkout, an agent only the base could supply is
-    // said once and not checked. This plugin's own prefix is read first, so
-    // for a plugin acme-backend on base acme a typo in its own agent stays an
-    // error.
+    // said once and not checked. When one name prefixes the other, the longer
+    // prefix owns the agent: for acme-backend on base acme a typo in its own
+    // agent stays an error, and acme on base acme-platform can still name
+    // acme-platform-review-agent.
+    const ownedHere = (agent: string): boolean =>
+      pluginName.length > (uncheckedBase ?? "").length && agent.startsWith(`${pluginName}-`);
     const unchecked = uncheckedBase && context?.agents
       ? [...new Set(stageAgentReferences(parsed))].filter((agent) =>
           !context.agents?.includes(agent) &&
-          !agent.startsWith(`${pluginName}-`) &&
-          agent.startsWith(`${uncheckedBase}-`)
+          agent.startsWith(`${uncheckedBase}-`) &&
+          !ownedHere(agent)
         )
       : [];
     for (const agent of unchecked) {
