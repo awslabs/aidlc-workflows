@@ -1784,11 +1784,15 @@ function devinStateTransitionGuardGate(artifact: string): GateResult {
     cpSync(join(REPO_ROOT, "dist-release", "devin", ".devin"), join(project, ".devin"), {
       recursive: true,
     });
+    // The guard blocks only delegated agents (payloads carrying agent_type)
+    // after upstream 92d3d8b3 — the conductor's own exec goes through and the
+    // state tool emits the direct-change refusal instead.
     const input = JSON.stringify({
       hook_event_name: "PreToolUse",
       cwd: project,
       session_id: `binary-gate-${Date.now()}`,
       tool_name: "exec",
+      agent_type: "aidlc-developer-agent",
       tool_input: {
         command: "bun .devin/tools/aidlc-state.ts reject feasibility",
       },
@@ -1804,11 +1808,13 @@ function devinStateTransitionGuardGate(artifact: string): GateResult {
       "adapter-devin-state-transition-guard",
       result,
       result.status === 2 &&
-        result.stderr.includes("Stage status cannot be changed") &&
+        result.stderr.includes(
+          "only the main workflow session can change stage status or routing",
+        ) &&
         !runtimeCrash(output) &&
         !output.includes("does not export run(input)"),
       {
-        expected: "compiled Devin adapter blocks a direct state transition with the guard's reason",
+        expected: "compiled Devin adapter blocks a delegated state transition with the guard's reason",
         actual: result.stderr.trim() || `exit ${result.status}`,
       },
     );
