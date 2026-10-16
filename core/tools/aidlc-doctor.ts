@@ -229,7 +229,7 @@ function pluginCheck(projectDir: string, verbose: boolean): DoctorCheck {
       pass: false,
       severity: "warn",
       label: `Plugins: ${drift.length} require sync${paused}${detail}`,
-      fix: "run `aidlc config`",
+      fix: `run \`${aidlcInvocation()} engine plugin sync\``,
     };
   }
   if (inventory.capability !== "full-inventory") {

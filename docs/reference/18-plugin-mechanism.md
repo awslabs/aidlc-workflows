@@ -291,7 +291,7 @@ edits and path-only renames are visible.
 
 `aidlc engine plugin list [--verbose|--json]` compares the host inventory with those
 stamps. Default output deliberately has only three actions: `current`,
-`run: aidlc config`, or `needs attention: <remediation>`. On a host with no
+`run: aidlc engine plugin sync`, or `needs attention: <remediation>`. On a host with no
 plugin list, a composed plugin reads `not compared: no host plugin list` and
 needs nothing. Verbose and JSON output retain the internal reason: version differs,
 source changed, not composed, legacy unstamped, disabled, missing,
