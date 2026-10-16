@@ -456,7 +456,7 @@ describe("the agent-models choice through config", () => {
     expect(p.models("--show").out).toContain("recorded on, which applies only on a preview release");
     const refused = p.preview("agent-models", "on", "--yes");
     expect(refused.status).not.toBe(0);
-    expect(refused.out).toContain("agent-models needs this project on a preview release of AI-DLC; this run sets it up on 2.11.0");
+    expect(refused.out).toContain("agent-models needs this project on a preview release of AI-DLC; it is on 2.11.0");
     // Run through Bun, as a copied runtime runs, so the steps name a preview copy.
     expect(refused.out.replace(/\s+/g, " ")).toMatch(
       /install a preview release's copy runtime into this project \(Release Channels in the install guide\), then [^,]*config preview agent-models on --yes( --project-dir \S+)? $/,
