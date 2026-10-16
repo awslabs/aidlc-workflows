@@ -21,6 +21,16 @@ if (!Number.isFinite(timeoutMs) || timeoutMs < 1 || timeoutMs > 600_000) {
   throw new Error("AIDLC_MLOPS_LIVE_TIMEOUT_MS must be between 1 and 600000.");
 }
 
+// A CLI may return valid JSON wrapped in a markdown code fence even when asked
+// for raw JSON. Strip a single leading/trailing fence before parsing; the
+// fenced content is unchanged, so this adds robustness without masking a real
+// malformed response.
+function parseJsonMaybeFenced(text: string): unknown {
+  const trimmed = text.trim();
+  const fence = /^```(?:json)?\s*\n([\s\S]*?)\n?```$/.exec(trimmed);
+  return JSON.parse(fence ? fence[1] : trimmed);
+}
+
 for (const harness of ["claude", "codex"] as const) {
   test.skipIf(!live)(`${harness}: supplied method guides six controlled cases`, async () => {
     const bin = process.env[harness === "claude" ? "AIDLC_MLOPS_CLAUDE_BIN" : "AIDLC_CODEX_BIN"] ?? harness;
@@ -49,11 +59,11 @@ for (const harness of ["claude", "codex"] as const) {
         if (harness === "claude") {
           const envelope = JSON.parse(stdout) as { result?: string; modelUsage?: Record<string, unknown> };
           modelIds = Object.keys(envelope.modelUsage ?? {});
-          value = JSON.parse(envelope.result ?? "");
+          value = parseJsonMaybeFenced(envelope.result ?? "");
         } else {
           const headerModel = /^model:\s*(.+)$/m.exec(`${stderr}\n${stdout}`)?.[1];
           modelIds = headerModel ? [headerModel] : [];
-          value = JSON.parse(readFileSync(outputPath, "utf-8"));
+          value = parseJsonMaybeFenced(readFileSync(outputPath, "utf-8"));
         }
       } catch (error) {
         parseError = error instanceof Error ? error.message : String(error);
