@@ -137,7 +137,7 @@ export const DELEGATE_ADMITTED_VERBS: Readonly<Record<string, readonly string[]>
   "aidlc-testing-posture.ts": ["resolve", "render", "verify", "reply", "brief"],
   "aidlc-swarm.ts": ["check"],
   "aidlc-worktree.ts": ["list", "verify", "info"],
-  "aidlc-audit.ts": ["history"],
+  "aidlc-audit.ts": ["history", "timeline"],
   "aidlc-plugin.ts": ["list"],
   "aidlc-graph.ts": [
     "artifacts", "producers", "consumers", "topo", "cycles", "scope", "validate-scope", "validate-grid", "ars",

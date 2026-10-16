@@ -1864,10 +1864,17 @@ harness machinery, not a stable interface for your own scripts.
 ```bash
 aidlc engine log answers --stage requirements-analysis
 aidlc engine audit history
+aidlc engine audit timeline [--gap-minutes <n>] [--json]
 ```
 
 `log answers` returns JSON with paired answers, open questions, and the rare ambiguous answer (one with no question before it, or two writers tied at one second). One reply closes every question logged for the menu it answered.
 `audit history` returns a JSON timeline of events and free-form notes.
+`audit timeline` prints, per stage and per Unit, when it started and finished,
+time working, time waiting for your reply, long gaps (15 minutes or more between
+ledger rows by default, listed on their own), your turns, gates, and redo signals.
+It reads only the audit ledger, so it gives the same answer on every harness; see
+[Stage timeline](../reference/06-hooks-and-tools.md#stage-timeline) for how the
+split is computed and what it cannot see.
 
 An answer whose text holds a character a shell acts on (`$`, a backtick, a quote,
 `%`, `&`, `|`, `<`, `>`, `^`, `!`, or a line break) reaches `log answer` through
