@@ -248,7 +248,7 @@ const KIRO_AGENT_MODELS_HONESTY: HarnessHonesty = Object.freeze({
 const KIRO_AGENT_MODELS_OFF_IN_PREVIEW: HarnessHonesty = Object.freeze({
   ...HARNESS_HONESTY["kiro-ide"],
   message:
-    `${HARNESS_HONESTY["kiro-ide"].message} In this preview build, turning agent-models on (\`config models --agent-models on\`) applies a model and effort set for one agent.`,
+    `${HARNESS_HONESTY["kiro-ide"].message} In this preview build, turning agent-models on applies a model and effort set for one agent.`,
 });
 
 // What a harness can express in this build. Every reader asks this rather than
@@ -284,8 +284,7 @@ export function presetsChangeNothing(harness: ModelHarness, build?: ModelBuild):
 // this, so they never disagree on where a change lands.
 export function modelPolicyAgentsDir(harness: ModelHarness, harnessDir: string): string | null {
   if (harness === "opencode") return ".opencode/agents";
-  // kiro-ide's directory stands with the preview switch off too, so the drift
-  // check still sees a model or effort line a switched-on run left behind.
+  // kiro-ide's writer and drift check use it only while agent-models is on.
   if (harness === "claude" || harness === "codex" || harness === "kiro" || harness === "kiro-ide") {
     return `${harnessDir}/agents`;
   }
@@ -1023,6 +1022,8 @@ export function harnessHonestyNotes(
   harness: ModelHarness,
   cap: Tier | null = null,
   build?: ModelBuild,
+  // How the person runs `config models <args>` in this project.
+  command: (args: string) => string = (args) => `aidlc config models ${args}`,
 ): string[] {
   const effective = Object.entries(tiers).map(([name, tier]) =>
     resolveModelPolicy(policy, name, tier, harness, cap, build)
@@ -1034,7 +1035,11 @@ export function harnessHonestyNotes(
     const own = effective.some((item) => item.layer === "agent-exception" && item.unexpressed.length > 0);
     const honesty = modelHarnessHonesty(harness, build);
     notes.push(
-      honesty === KIRO_AGENT_MODELS_OFF_IN_PREVIEW && !own ? HARNESS_HONESTY["kiro-ide"].message : honesty.message,
+      honesty !== KIRO_AGENT_MODELS_OFF_IN_PREVIEW
+        ? honesty.message
+        : own
+        ? `${honesty.message} \`${command("--agent-models on --yes")}\` turns it on.`
+        : HARNESS_HONESTY["kiro-ide"].message,
     );
   }
   // A recorded kiro-ide id that is not one plain id is never written; name it,
@@ -1043,7 +1048,7 @@ export function harnessHonestyNotes(
     for (const [name, own] of Object.entries(normalizeModelPolicy(policy)?.agents ?? {}).sort()) {
       if (own.model !== undefined && !isModelId(own.model)) {
         notes.push(
-          `The model id recorded for ${name} is not one plain id, so it is not written; set it again with \`config models --agent ${name} --model <id>\`.`,
+          `The model id recorded for ${name} is not one plain id, so it is not written; set it again with \`${command(`--agent ${name} --model <id>`)}\`.`,
         );
       }
     }

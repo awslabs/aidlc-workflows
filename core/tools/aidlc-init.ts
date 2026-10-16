@@ -428,7 +428,8 @@ type ModelsMutationContext = {
   tiers: AgentTiers;
   summaryLines: string[];
   notes: string[];
-  // Absent when only kiro-ide's agent-models choice changes.
+  // Absent when the recorded policy is unchanged and only kiro-ide's agent
+  // files move: a new agent-models choice, or a repair of what it applies.
   settings?: SettingsMutation;
   agentModels?: KiroAgentModelsChoice;
 };
@@ -1188,7 +1189,7 @@ function modelStateData(
     policy,
     effective,
     notes: [
-      ...harnessHonestyNotes(policy, tiers, harness, cap, build),
+      ...harnessHonestyNotes(policy, tiers, harness, cap, build, (args) => modelsCommand(projectDir, harness, args)),
       // On Kiro CLI the session model agents inherit is the saved one.
       ...(harness === "kiro" ? [KIRO_SAVED_MODEL_NOTE] : []),
     ],
@@ -1206,6 +1207,20 @@ function namedHarness(projectDir: string, harness: string | undefined): string {
 // from where the user is.
 function modelsCommand(projectDir: string, harness: ModelHarness, args: string): string {
   return `${configInvocationFor(projectDir)} config models ${args}${namedHarness(projectDir, harness)}${projectTarget(projectDir)}`;
+}
+
+// The line for a change of kiro-ide's agent-models choice: where it is kept,
+// when Kiro takes it, and its undo.
+function agentModelsSwitchLine(
+  projectDir: string,
+  harness: ModelHarness,
+  harnessDir: string,
+  from: KiroAgentModelsChoice | null | undefined,
+  to: KiroAgentModelsChoice,
+): string {
+  return `  Kiro agent models: ${from ?? "not set"} -> ${to} in ${harnessDir}/tools/data/harness.json; ` +
+    `Kiro takes it at each agent's next dispatch. To undo: ` +
+    modelsCommand(projectDir, harness, `--agent-models ${to === "on" ? "off" : "on"} --yes`);
 }
 
 // The release and agent-models choice of this project's harness, for the
@@ -1478,7 +1493,7 @@ function modelSummaryLines(
     if (after.unexpressed.includes("effort")) {
       lines.push(
         `  ${MODEL_GROUPS[group].label.padEnd(11)} ${names.length} agents   ` +
-          `${afterDial ?? "inherit"} requested; ${harnessHonestyNotes(next, tiers, harness, cap, build)[0]}`,
+          `${afterDial ?? "inherit"} requested; ${harnessHonestyNotes(next, tiers, harness, cap, build, (args) => modelsCommand(projectDir, harness, args))[0]}`,
       );
       continue;
     }
@@ -1492,7 +1507,7 @@ function modelSummaryLines(
     );
     if (afterDial) lines.push(`  ${effortTradeoff(group, afterDial)}`);
   }
-  const notes = harnessHonestyNotes(next, tiers, harness, cap, build);
+  const notes = harnessHonestyNotes(next, tiers, harness, cap, build, (args) => modelsCommand(projectDir, harness, args));
   return { lines, notes };
 }
 
@@ -11028,9 +11043,7 @@ function prepareModelsSection(
         next: current,
         tiers,
         summaryLines: [
-          `  Kiro agent models: ${installedBuild.agentModels ?? "not set"} -> ${agentModels} in ` +
-            `${selected.harnessDir}/tools/data/harness.json; Kiro takes it at each agent's next dispatch. To undo: ` +
-            `${modelsCommand(projectDir, harness, `--agent-models ${agentModels === "on" ? "off" : "on"} --yes`)}`,
+          agentModelsSwitchLine(projectDir, harness, selected.harnessDir, installedBuild.agentModels, agentModels),
         ],
         notes: summary.notes,
         agentModels,
@@ -11076,14 +11089,15 @@ function prepareModelsSection(
   // On kiro-ide an unchanged policy still goes through when the agent-models
   // choice is new (asked, or the switch about to be recorded) or the agent
   // files lost what the choice applies.
-  const kiroIdeProjectionDue = selected.distribution === "kiro-ide" && (
+  const settingsUnchanged = canonical(targetCurrentSettings) === canonical(targetNextSettings);
+  const kiroIdeProjectionDue = settingsUnchanged && selected.distribution === "kiro-ide" && (
     agentModelsChange ||
     (installedBuild.agentModels == null &&
       kiroAgentModelsChoice(null, undefined, installedBuild.version ?? AIDLC_VERSION) !== null) ||
     (kiroAgentModelsOn(installedBuild) &&
-      modelPolicySurfaceDrift(projectDir, selected.harnessDir, harness, current, installedBuild).length > 0)
+      modelPolicySurfaceDrift(projectDir, selected.harnessDir, harness, current, installedBuild)
+        .some((issue) => !issue.endsWith("is not expressible on kiro-ide")))
   );
-  const settingsUnchanged = canonical(targetCurrentSettings) === canonical(targetNextSettings);
   if (settingsUnchanged && !kiroIdeProjectionDue) {
     // The recorded policy is already this, but the person's Kiro session may
     // not carry it yet (a new model, or an effort changed inside Kiro).
@@ -11149,6 +11163,11 @@ function prepareModelsSection(
     ...installedBuild,
     ...(agentModels !== undefined ? { agentModels } : {}),
   });
+  if (agentModels !== undefined && agentModelsChange) {
+    summary.lines.unshift(
+      agentModelsSwitchLine(projectDir, harness, selected.harnessDir, installedBuild.agentModels, agentModels),
+    );
+  }
   return {
     ...(kiroPlan ? { kiro: kiroPlan } : {}),
     ...(kiroNote ? { kiroNote } : {}),
@@ -11185,7 +11204,8 @@ function handleSettingsOnlySection(
     return false;
   }
   const validation = section === "models"
-    ? validateModelsArgs(argv)
+    ? validateModelsArgs(argv) ??
+      (argv.includes("--agent-models") ? "--agent-models applies to an installed Kiro (kiro-ide) project" : null)
     : validateChoiceArgs("flags", argv);
   if (validation) {
     emitResult(usage(validation, configCommand(`${section} --help`)), options);
@@ -13419,6 +13439,7 @@ export async function main(
                 models: {
                   previous: modelsContext.previous,
                   next: modelsContext.next,
+                  ...(modelsContext.agentModels ? { agentModels: modelsContext.agentModels } : {}),
                   summaries: modelsContext.summaryLines,
                   notes: modelsContext.notes,
                 },
@@ -13782,6 +13803,7 @@ export async function main(
               models: {
                 previous: modelsContext.previous,
                 next: modelsContext.next,
+                ...(modelsContext.agentModels ? { agentModels: modelsContext.agentModels } : {}),
                 summaries: modelsContext.summaryLines,
                 notes: modelsContext.notes,
               },

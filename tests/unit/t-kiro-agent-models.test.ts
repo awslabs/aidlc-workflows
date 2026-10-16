@@ -88,7 +88,7 @@ describe("the agent-models switch", () => {
       "AI-DLC does not write a model or effort into its Kiro agent files, so every agent runs on your chat's model and effort (Kiro IDE's model picker, or Kiro CLI's session model); a model or effort set here is kept for other tools and changes nothing in Kiro.";
     expect(policy.modelHarnessHonesty("kiro-ide", STABLE).message).toBe(off);
     expect(policy.modelHarnessHonesty("kiro-ide", PREVIEW).message).toBe(
-      `${off} In this preview build, turning agent-models on (\`config models --agent-models on\`) applies a model and effort set for one agent.`,
+      `${off} In this preview build, turning agent-models on applies a model and effort set for one agent.`,
     );
     featureOn();
     expect(policy.modelHarnessHonesty("kiro-ide", STABLE).message).toBe(off);
@@ -266,7 +266,7 @@ describe("the --model value", () => {
     expect(
       policy.harnessHonestyNotes({ schemaVersion: 1, agents: { [REVIEWER]: { model: "#gpt" } } }, tiers, "kiro-ide", null, PREVIEW),
     ).toContain(
-      `The model id recorded for ${REVIEWER} is not one plain id, so it is not written; set it again with \`config models --agent ${REVIEWER} --model <id>\`.`,
+      `The model id recorded for ${REVIEWER} is not one plain id, so it is not written; set it again with \`aidlc config models --agent ${REVIEWER} --model <id>\`.`,
     );
     expect(policy.isModelId("claude-opus-4-8[1m]")).toBe(true);
     expect(policy.isModelId("arn:aws:bedrock:us-east-1::foundation-model/x")).toBe(true);
@@ -387,6 +387,24 @@ describe("the agent-models choice through config", () => {
     expect(again.status, again.out).toBe(0);
     expect(p.choice()).toBe("on");
     expect(p.reviewer()).toMatch(/^effortLevel: high$/m);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
+
+  test("the switch with a policy flag says the switch line, the JSON names it, and an unchanged pin under a preset stays unchanged", () => {
+    const p = project(previewRuntime());
+    expect(p.run(["config", "models", "--project-dir", p.dir, "--project", "--preset", "balanced", "--yes"]).status).toBe(0);
+    const both = p.run([
+      "config", "models", "--project-dir", p.dir, "--project", "--agent-models", "on", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes", "--json",
+    ]);
+    expect(both.status, both.out).toBe(0);
+    const payload = JSON.parse(both.out.trim().split("\n").at(-1) ?? "{}") as { data?: { models?: { agentModels?: string; summaries?: string[] } } };
+    expect(payload.data?.models?.agentModels).toBe("on");
+    expect(payload.data?.models?.summaries?.[0]).toContain("Kiro agent models: not set -> on in .kiro/tools/data/harness.json");
+    const again = p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes"]);
+    expect(again.out).toContain("model policy unchanged");
+    const bare = temp("aidlc-kiro-agent-models-bare-");
+    const refused = p.run(["config", "models", "--project-dir", bare, "--agent-models", "on", "--preset", "balanced", "--global", "--dry-run"]);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("--agent-models applies to an installed Kiro (kiro-ide) project");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
   test("a project on a stable release writes and records nothing with the switch on, and refuses --agent-models", () => {

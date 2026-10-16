@@ -313,11 +313,11 @@ export function modelsPolicyCheck(projectDir: string, verbose: boolean): DoctorC
       ...(configured.length > 0 ? [`recorded policy is expressible on ${named(configured)}`] : []),
       ...(unconfigured.length > 0 ? [`no recorded policy for ${named(unconfigured)}`] : []),
       ...sessionSet.map((distribution) => {
-        const installed = harnesses.find((harness) => harness.distribution === distribution);
+        const tree = harnesses.find((harness) => harness.distribution === distribution);
         return sessionModelsDetail(
           distribution,
           others.length === 0 ? policyFor(distribution) : null,
-          installed ? installedModelBuild(installed.root, installed.frameworkVersion) : {},
+          tree ? installedModelBuild(tree.root, tree.frameworkVersion) : {},
         );
       }),
     ];
