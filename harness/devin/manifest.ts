@@ -93,6 +93,8 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored aidlc/.aidlc-request-text/
           // (a request the engine has not read yet).
           "sha256:07122ee7d74669b22d693783f07053b9562e53978e73f15df5305fea06ac69c3",
+          // The variant shipped with the Devin harness (current projection).
+          "sha256:c146d9268a379667d040075e6df9c1a76872c5e983daf7ce0766a4b8b128e686",
         ],
       },
     },
