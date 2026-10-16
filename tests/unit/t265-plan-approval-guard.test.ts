@@ -578,8 +578,10 @@ function scratchProject(): string {
     // aidlc-log.ts imports the note builders from here.
     "aidlc-directive.ts",
     "aidlc-log.ts",
-    // aidlc-log.ts writes and removes the Kiro reviewer copy through this.
+    // aidlc-log.ts writes and removes the Kiro reviewer copy through this;
+    // it reads its preview choice through aidlc-model-policy.ts, which loads this.
     "aidlc-kiro-review-copy.ts",
+    "aidlc-tiers.ts",
     "aidlc-message-store.ts",
     "aidlc-review-brief.ts",
     "aidlc-construction-checkpoints.ts",
