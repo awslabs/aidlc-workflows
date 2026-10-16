@@ -44,12 +44,12 @@ afterEach(() => {
 });
 
 // The project's Kiro tree records the choice, as `aidlc config preview` writes
-// it; with no stamp the tree is one from before stamps, on the engine's release.
-function recordPreview(dir: string, value: unknown): void {
+// it; with no stamp the tree is on the engine's release.
+function recordPreview(dir: string, value: unknown, distribution = "kiro-ide"): void {
   mkdirSync(join(dir, ".kiro", "tools", "data"), { recursive: true });
   writeFileSync(
     join(dir, ".kiro", "tools", "data", "harness.json"),
-    `${JSON.stringify({ harnessDir: ".kiro", [PREVIEW_FEATURES_RECORD]: value })}\n`,
+    `${JSON.stringify({ schemaVersion: 1, harnessDir: ".kiro", distribution, [PREVIEW_FEATURES_RECORD]: value })}\n`,
   );
 }
 
@@ -209,6 +209,10 @@ describe("when there is no copy", () => {
         .toEqual({ notice: expect.stringContaining("This review of alpha can read other Units' files") });
       stampTree(dir, "not-a-version");
       expect(prepareReviewCopy(dir, { ...review, requestId: "legacy" }, PREVIEW), "unreadable stamp").toBeNull();
+      // A Kiro tree the feature is not for (the Kiro CLI v2 row), whose record config preview would not change.
+      rmSync(join(dir, ".kiro", "tools", "data", "aidlc-stamp.json"));
+      recordPreview(dir, { [REVIEWER_READ_SCOPE_FEATURE]: "on" }, "kiro");
+      expect(prepareReviewCopy(dir, { ...review, requestId: "legacy" }, PREVIEW), "kiro row").toBeNull();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
