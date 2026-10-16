@@ -231,6 +231,24 @@ plugins, per-plugin enabled-stage counts, and hard-fails if the graph's
 `aidlc engine plugin list` is a separate installed-versus-composed status command; it
 does not print or change the project selection.
 
+**A plugin whose base is left out is paused.** The selection is the whole list,
+so a person who leaves a base plugin out and keeps a plugin built on it typed
+that plugin themselves; `select-plugins` (and `aidlc config project --plugins`)
+writes the list exactly as typed and says one line, once, at that change:
+`zeta is off. alpha builds on zeta, so alpha is paused until zeta is on again.
+To turn alpha off as well: /aidlc plugin select aidlc.` While paused, nothing
+the plugin adds runs: its stages, scopes and runners are filtered and its merged
+contributions stripped, as for a plugin turned off, and sync leaves it alone and
+says nothing. The rule has one owner, `pluginsEnabled()` in `aidlc-lib.ts` (the
+selection less the paused plugins; the base comes from the plugin's composition
+stamp), which every runtime reader and doctor's selection-agreement check
+read; `pluginsSelected()` is the list as typed. `plugin list` shows the plugin
+as `paused: needs zeta, which is off` and doctor lists it as information. Turning
+the base back on brings the plugin back at the next session start. A pause that
+would strand open work is refused like any turn-off, naming the plugin and the
+base. Through `aidlc config project --plugins`, a plugin turned off or paused
+keeps its merged contributions until the next `select-plugins`.
+
 ## 5a. Installed inventory, composition stamps, and sync
 
 The host owns published-versus-installed state. AIDLC compares that installed
@@ -277,9 +295,9 @@ stamps. Default output deliberately has only three actions: `current`,
 plugin list, a composed plugin reads `not compared: no host plugin list` and
 needs nothing. Verbose and JSON output retain the internal reason: version differs,
 source changed, not composed, legacy unstamped, disabled, missing,
-invalid/ambiguous, inventory unavailable, or held for its base
+invalid/ambiguous, inventory unavailable, held for its base
 (`dependency-unmet`, whose STATUS is `needs attention:` and the line sync
-said; §8).
+said; §8), or paused because its base is off (`paused`, a plain state; §5).
 
 `aidlc engine plugin sync` composes every enabled installed plugin in a staged project,
 bases first (§8), regenerates graph and runner surfaces, writes composition and ownership records,

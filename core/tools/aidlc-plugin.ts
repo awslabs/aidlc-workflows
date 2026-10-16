@@ -1597,6 +1597,7 @@ function compositionIsCurrent(
   evidence: ProjectEvidence,
   projectDir: string,
   harnessDir: string,
+  selection: ReadonlySet<string> | null,
 ): boolean {
   const stamp = evidence.stamps.get(plugin.key);
   if (
@@ -1606,8 +1607,10 @@ function compositionIsCurrent(
     (stamp.base ?? null) !== (plugin.base?.name ?? null)
   ) return false;
   // Turning a plugin off strips what it merged into core stages and removes
-  // its record of that, so when it is on again its compose merges it back.
+  // its record of that, so when it is on again its compose merges it back. A
+  // plugin that is off merges nothing, so it has no record to miss.
   if (
+    (selection === null || selection.has(plugin.key)) &&
     regularFiles(join(plugin.root, "contributions")).some((path) => path.endsWith(".md")) &&
     !existsSync(join(harnessDataDir(projectDir, harnessDir), `plugin-contrib-${plugin.key}.json`))
   ) return false;
@@ -1869,7 +1872,7 @@ export async function syncPlugins(
     pruned.length === 0 &&
     staleHeld.length === 0 &&
     newlyHeld.length === 0 &&
-    plugins.every((plugin) => compositionIsCurrent(plugin, evidence, projectDir, harnessDir))
+    plugins.every((plugin) => compositionIsCurrent(plugin, evidence, projectDir, harnessDir, selection))
   ) {
     return {
       synced: plugins.map((plugin) => plugin.key).sort(),
@@ -1957,7 +1960,7 @@ export async function syncPlugins(
       if (
         pruned.length === 0 &&
         plugins.every((plugin) =>
-          compositionIsCurrent(plugin, refreshedEvidence, projectDir, harnessDir)
+          compositionIsCurrent(plugin, refreshedEvidence, projectDir, harnessDir, selection)
         )
       ) {
         return {
