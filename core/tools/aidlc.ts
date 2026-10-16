@@ -34,6 +34,8 @@ import {
   packagedDistributionRoot,
   discoverableRuntimeHarnessDir,
   runtimeHarnessDir,
+  hookSessionProjectDir,
+  hostWorktreeProjectDir,
   runtimeProjectDir,
   runtimeHarnessName,
 } from "./aidlc-runtime-paths.ts";
@@ -1219,12 +1221,13 @@ export const ROUTES: readonly Route[] = [
 
 export type Action =
   | { type: "delegate"; tool: string; args: string[] }
-  | { type: "hook"; name: string; path: string; projectDir?: string }
+  | { type: "hook"; name: string; path: string; projectDir?: string; hostResolved?: boolean }
   | {
     type: "hook-group";
     name: string;
     members: ReadonlyArray<HookGroupMember & { path: string }>;
     projectDir?: string;
+    hostResolved?: boolean;
   }
   | { type: "statusline"; path: string; projectDir?: string }
   | { type: "adapter"; harness: AdapterHarness; target: string; extraArgs: string[]; path: string; projectDir?: string }
@@ -2556,6 +2559,12 @@ function resolveActionFrom(
     } else if (action.type === "hook") {
       action.projectDir = absoluteProjectDir;
       action.path = resolveHookPath(`aidlc-${action.name}.ts`, undefined, absoluteProjectDir);
+    } else if (action.type === "hook-group") {
+      action.projectDir = absoluteProjectDir;
+      action.members = action.members.map((member) => ({
+        ...member,
+        path: resolveHookPath(`aidlc-${member.hook}.ts`, undefined, absoluteProjectDir),
+      }));
     } else if (action.type === "statusline") {
       action.projectDir = absoluteProjectDir;
       action.path = resolveHookPath("aidlc-statusline.ts", undefined, absoluteProjectDir);
@@ -2566,13 +2575,20 @@ function resolveActionFrom(
     } else if (action.type === "sensor-script-file") {
       action.projectDir = absoluteProjectDir;
     }
-  } else if (compiled && (action.type === "hook" || action.type === "sensor-script-file")) {
+  } else if (
+    compiled &&
+    (action.type === "hook" || action.type === "hook-group" || action.type === "sensor-script-file")
+  ) {
     // The compiled engine loads these modules from the runtime payload beside
     // the executable, so a module's own path names the install, never the
     // project. Pin the host's project: its project environment, else the
     // directory it launched the command in. The statusline and the adapters
     // resolve a project from their host first and hand it to what they run.
     action.projectDir = dispatcherProjectDirFrom(argv, limit);
+    if (action.type === "hook" || action.type === "hook-group") {
+      action.hostResolved =
+        !projectDirFlag(argv.slice(0, limit)).value && !process.env.AIDLC_PROJECT_DIR;
+    }
   }
   if (action.type === "delegate") {
     const delimiter = action.args.indexOf("--");
@@ -3254,10 +3270,18 @@ async function execute(action: Action): Promise<number> {
     return 0;
   }
   if (action.type === "hook") {
-    return await withProjectDir(action.projectDir, () => runHook(action));
+    // A host may run a worktree session's hook from the main checkout it names
+    // as the project; the payload says where the session really works.
+    const projectDir = action.hostResolved && action.projectDir
+      ? hookSessionProjectDir(action.projectDir, await readStdin())
+      : action.projectDir;
+    return await withProjectDir(projectDir, () => runHook({ ...action, projectDir }));
   }
   if (action.type === "hook-group") {
-    return await withProjectDir(action.projectDir, () => runHookGroup(action));
+    const projectDir = action.hostResolved && action.projectDir
+      ? hookSessionProjectDir(action.projectDir, await readStdin())
+      : action.projectDir;
+    return await withProjectDir(projectDir, () => runHookGroup({ ...action, projectDir }));
   }
   if (action.type === "statusline") {
     return await withProjectDir(action.projectDir, () => runStatusline(action));
@@ -3512,11 +3536,21 @@ function dispatcherProjectDirFrom(
   // reader of the line takes the same slice, so none of them can answer them
   // about an option they did not use.
   const explicit = projectDirFlag(argv.slice(0, limit)).value;
-  const value = explicit || process.env.AIDLC_PROJECT_DIR ||
-    process.env.CLAUDE_PROJECT_DIR || process.env.KIRO_PROJECT_DIR;
-  return value
-    ? (isAbsolute(value) ? value : resolve(process.cwd(), value))
-    : process.cwd();
+  const own = explicit || process.env.AIDLC_PROJECT_DIR;
+  if (own) return isAbsolute(own) ? own : resolve(process.cwd(), own);
+  const host = process.env.CLAUDE_PROJECT_DIR || process.env.KIRO_PROJECT_DIR;
+  if (!host) return process.cwd();
+  const hostDir = isAbsolute(host) ? host : resolve(process.cwd(), host);
+  // A host session in a git worktree of the project may still name the main
+  // checkout; the worktree holding the workspace shell is the project then.
+  return hostWorktreeProjectDir(hostDir) ?? hostDir;
+}
+
+// Whether the dispatcher's project directory comes from the host (its
+// CLAUDE_PROJECT_DIR or KIRO_PROJECT_DIR, or the working directory), not from
+// the person's --project-dir or the engine's own AIDLC_PROJECT_DIR.
+function dispatcherHostResolved(argv: readonly string[]): boolean {
+  return !projectDirFlag(argv.slice(0, ourFlagLimit([...argv]))).value && !process.env.AIDLC_PROJECT_DIR;
 }
 
 // The dispatcher owns the --project-dir grammar before the `--` delimiter:
@@ -3554,7 +3588,13 @@ async function dispatchPinnedVersion(
   input: string | null,
 ): Promise<number | null> {
   if (routePinPolicy(argv) !== "pinned") return null;
-  const projectDir = dispatcherProjectDirFrom(argv);
+  // A host may run a worktree session's hook from the main checkout it names
+  // as the project; the hook then acts on the checkout its payload names, so
+  // that checkout's pin is the one that runs it.
+  const hostDir = dispatcherProjectDirFrom(argv);
+  const projectDir = input !== null && dispatcherHostResolved(argv)
+    ? hookSessionProjectDir(hostDir, input)
+    : hostDir;
   const pinPath = join(projectDir, ".aidlc-version");
   if (!existsSync(pinPath)) return null;
   const { resolvePinnedDispatch } = await import("./aidlc-lifecycle.ts");

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { type Dirent, existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
@@ -425,11 +426,111 @@ function explicitRuntimeProjectDir(): string | null {
       ? argv[index + 1]
       : resolve(process.cwd(), argv[index + 1]);
   }
-  const explicit = process.env.AIDLC_PROJECT_DIR ??
-    process.env.CLAUDE_PROJECT_DIR ?? process.env.KIRO_PROJECT_DIR;
-  return explicit
-    ? isAbsolute(explicit) ? explicit : resolve(process.cwd(), explicit)
-    : null;
+  const own = process.env.AIDLC_PROJECT_DIR;
+  if (own) return isAbsolute(own) ? own : resolve(process.cwd(), own);
+  const host = process.env.CLAUDE_PROJECT_DIR ?? process.env.KIRO_PROJECT_DIR;
+  if (!host) return null;
+  const hostDir = isAbsolute(host) ? host : resolve(process.cwd(), host);
+  return hostWorktreeProjectDir(hostDir) ?? hostDir;
+}
+
+// A host that opens a session in a git worktree of the project may still name
+// the main checkout as the project (Claude Code's desktop app sets
+// CLAUDE_PROJECT_DIR that way). The hooks then run with the worktree as their
+// working directory but act on the main checkout: its record, its audit, its
+// claim stamp. When the working directory is inside a different checkout that
+// holds the AI-DLC workspace shell itself, that checkout is the project.
+export function hostWorktreeProjectDir(hostDir: string, from = process.cwd()): string | null {
+  if (!existsSync(from)) return null;
+  const top = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd: from,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (top.status !== 0) return null;
+  const cwdTop = (top.stdout ?? "").trim();
+  if (!cwdTop || samePath(cwdTop, hostDir)) return null;
+  if (!existsSync(join(cwdTop, "aidlc"))) return null;
+  if (discoverProjectHarnesses(cwdTop).length === 0) return null;
+  // A worktree of the project the host named, not some other checkout that
+  // happens to hold a workspace: both share one git common directory.
+  const commonDir = (dir: string): string | null => {
+    const result = spawnSync("git", ["rev-parse", "--git-common-dir"], {
+      cwd: dir,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const out = (result.stdout ?? "").trim();
+    if (result.status !== 0 || !out) return null;
+    try {
+      return realpathSync(resolve(dir, out));
+    } catch {
+      return null;
+    }
+  };
+  const hostCommon = commonDir(hostDir);
+  return hostCommon !== null && hostCommon === commonDir(cwdTop) ? cwdTop : null;
+}
+
+// The directories a host's hook payload says its session works in: the
+// payload's own `cwd`, then the `cwd` the session's transcript records. Claude
+// Code's desktop app runs a worktree session's hooks from the main checkout it
+// names as the project, so the payload is where the worktree shows.
+export function hookSessionDirectories(payload: string): string[] {
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(payload) as Record<string, unknown>;
+  } catch {
+    return [];
+  }
+  if (!parsed || typeof parsed !== "object") return [];
+  const dirs: string[] = [];
+  if (typeof parsed.cwd === "string" && parsed.cwd) dirs.push(parsed.cwd);
+  const transcript = parsed.transcript_path;
+  if (typeof transcript === "string" && transcript && existsSync(transcript)) {
+    try {
+      // The first rows are enough: every row carries the session's cwd.
+      const head = readFileSync(transcript, { encoding: "utf-8", flag: "r" }).slice(0, 262_144);
+      for (const line of head.split("\n").slice(0, 200)) {
+        if (!line.includes('"cwd"')) continue;
+        try {
+          const row = JSON.parse(line) as { cwd?: unknown };
+          if (typeof row.cwd === "string" && row.cwd) {
+            dirs.push(row.cwd);
+            break;
+          }
+        } catch {
+          // A partial last line; keep looking.
+        }
+      }
+    } catch {
+      // Unreadable transcript: the payload's cwd is all there is.
+    }
+  }
+  return [...new Set(dirs)];
+}
+
+// The project a hook acts on, given the directory the host resolved and the
+// hook's payload: the session's own checkout when the payload names a
+// different git checkout that holds the AI-DLC workspace shell, else the
+// host's directory.
+export function hookSessionProjectDir(hostDir: string, payload: string): string {
+  for (const dir of hookSessionDirectories(payload)) {
+    const found = hostWorktreeProjectDir(hostDir, dir);
+    if (found) return found;
+  }
+  return hostDir;
+}
+
+function samePath(left: string, right: string): boolean {
+  const real = (path: string): string => {
+    try {
+      return realpathSync(path);
+    } catch {
+      return resolve(path);
+    }
+  };
+  return real(left) === real(right);
 }
 
 export function runtimeProjectDir(): string {
