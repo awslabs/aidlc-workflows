@@ -13113,30 +13113,34 @@ export async function main(
       // No section takes --force; config itself does, from the source this run
       // used, and the section's own change lands when it runs once more. A
       // mirror URL can carry its credential, so the line asks for it back
-      // instead of printing it.
-      const sourceArgs = argv.flatMap((arg, index) =>
-        arg === "--download"
-          ? [arg]
-          : ["--from", "--harness", "--ca-bundle"].includes(arg)
-          ? [arg, argv[index + 1]]
-          : []
-      );
+      // instead of printing it. A download the person said yes to is named,
+      // so the next run does not ask again; config takes --download once.
+      const downloaded = downloadCleanup !== undefined && !argv.includes("--download");
+      const sourceArgs = [
+        ...argv.flatMap((arg, index) =>
+          arg === "--download"
+            ? [arg]
+            : ["--from", "--harness", "--ca-bundle"].includes(arg)
+            ? [arg, argv[index + 1]]
+            : []
+        ),
+        ...(downloaded ? ["--download"] : []),
+      ];
       const force = section
         ? `run \`${
           configRerunWith(["config", ...sourceArgs], projectDir, ["--force"]) ?? configCommand("--force")
         }\`${argv.includes("--release-base-url") ? " with the same --release-base-url" : ""}, then the same command again`
-        : "run it again with --force";
+        : `run it again with --force${downloaded ? " --download" : ""}`;
+      // A dry run stops on the same conflict, so the line names none.
       const forward = broken.length === 0
         ? `to keep your version, move ${one ? cited[0] : "those files"} somewhere else and run ` +
           `the same command again; to take the shipped ${one ? "version" : "versions"} over ` +
-          `${one ? "it" : "them"}, ${force}. ` +
-          `\`${configCommand("--dry-run --verbose")}\` lists every change first.`
+          `${one ? "it" : "them"}, ${force}.`
         : broken.length < cited.length
         ? `move ${listed(cited)} somewhere else (or fix ${listed(broken)} in place instead of moving ` +
-          `${broken.length === 1 ? "it" : "them"}), then run the same command again. ` +
-          `\`${configCommand("--dry-run --verbose")}\` lists every change first.`
+          `${broken.length === 1 ? "it" : "them"}), then run the same command again.`
         : `fix ${listed(broken)} in place, or move ${one ? "it" : "them"} somewhere else, then run the same ` +
-          `command again. \`${configCommand("--dry-run --verbose")}\` lists every change first.`;
+          `command again.`;
       emitResult({
         ...failure(
           `${conflicts.length} config conflict(s): ${conflicts.map((item) => `${item.path} (${item.detail})`).join(", ")}`,

@@ -868,6 +868,47 @@ describe("t304 copied projection configuration", () => {
     }
   }, 180_000);
 
+  // A yes at the download question covers this command's download, so the
+  // force step a conflict then names downloads too instead of asking again: a
+  // section names the config command with --download, a root run says it.
+  test("after a yes at the download question, a conflict's force step downloads without asking again", async () => {
+    const agent = join(".claude", "agents", "aidlc-developer-agent.md");
+    const edit = (project: string) =>
+      writeFileSync(join(project, agent), `${readFileSync(join(project, agent), "utf-8")}\nmy own notes\n`);
+    const pinned = configuredFullCopy();
+    writeFileSync(join(pinned, ".aidlc-version"), `${OTHER_VERSION}\n`);
+    edit(pinned);
+    const unpinned = configuredFullCopy();
+    edit(unpinned);
+    const newer = releaseServer(OTHER_VERSION);
+    const same = releaseServer(AIDLC_VERSION);
+    const plain = (release: { baseUrl: string }) => ({ AIDLC_RELEASE_BASE_URL: release.baseUrl, AIDLC_GH_BIN: FAKE_GH });
+    const tty = (release: { baseUrl: string }) => ({ ...plain(release), AIDLC_TEST_CONFIG_TTY: "1" });
+    try {
+      const section = ["config", "project", "--mcp", "defaults"];
+      const refused = await runCopiedAsync(pinned, section, { env: tty(newer), input: "y\n" });
+      expect(refused.status, refused.stdout + refused.stderr).toBe(4);
+      const force = /run `([^`]+)`, then the same command again\./.exec(fixLine(refused.stdout))?.[1];
+      expect(force).toBe("bun .claude/tools/aidlc.ts config --download --force");
+      // Run as printed where nothing can be answered: it must need no answer.
+      const forced = await followFix(force ?? "", pinned, plain(newer));
+      expect(forced.status, forced.stdout + forced.stderr).toBe(0);
+      const again = await runCopiedAsync(pinned, [...section, "--yes"], { env: plain(newer) });
+      expect(again.status, again.stdout + again.stderr).toBe(0);
+      expect(harnessJson(pinned).project.mcp).toBe("defaults");
+
+      const root = ["config", "--harness", "claude"];
+      const stopped = await runCopiedAsync(unpinned, root, { env: tty(same), input: "y\n" });
+      expect(stopped.status, stopped.stdout + stopped.stderr).toBe(4);
+      expect(fixLine(stopped.stdout)).toContain("to take the shipped version over it, run it again with --force --download.");
+      const rerun = await runCopiedAsync(unpinned, [...root, "--force", "--download"], { env: plain(same) });
+      expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
+    } finally {
+      newer.stop();
+      same.stop();
+    }
+  }, 240_000);
+
   test("a failed checksum or attestation stops with nothing changed and no way around it", async () => {
     const project = configuredFullCopy();
     writeFileSync(join(project, ".aidlc-version"), `${OTHER_VERSION}\n`);

@@ -32,7 +32,7 @@ knowledge rather than editing the file (see
 ```text
 $ aidlc config --harness claude --yes
 error: 1 config conflict(s): .claude/agents/aidlc-architect-agent.md (locally modified or unowned)
-fix: to keep your version, move .claude/agents/aidlc-architect-agent.md somewhere else and run the same command again; to take the shipped version over it, run it again with --force. `aidlc config --dry-run --verbose` lists every change first.
+fix: to keep your version, move .claude/agents/aidlc-architect-agent.md somewhere else and run the same command again; to take the shipped version over it, run it again with --force.
 ```
  A genuinely new persona is a different
 move: a new file, owned by you, that survives upgrades.

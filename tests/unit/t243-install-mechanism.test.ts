@@ -4335,6 +4335,8 @@ describe("t243 project initialization", () => {
       expect(refused.status, `${channel.name}: ${refused.stdout}${refused.stderr}`).toBe(4);
       const out = refused.stdout.replace(/\s+/g, " ");
       expect(out, channel.name).not.toContain("run it again with --force");
+      // A dry run repeats this conflict while it stands, so the line names none.
+      expect(out, channel.name).not.toContain("--dry-run");
       const json = config([...section, "--json"]);
       expect(json.status, channel.name).toBe(4);
       expect(refused.stdout + refused.stderr + json.stdout + json.stderr, channel.name).not.toContain("tok@");
@@ -4353,9 +4355,9 @@ describe("t243 project initialization", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // The command a conflict names is the one of the harness being set up, not
-  // the first install a project shows: a first Codex install names Codex's own.
-  test("a first install's conflict names the command of the harness being set up", () => {
+  // A first install's conflict names no other harness's tool: a first Codex
+  // install never points at .claude.
+  test("a first install's conflict names no other harness's command", () => {
     for (const [harness, release, agent] of [
       ["codex", CODEX_RELEASE, join(".codex", "agents", "aidlc-developer-agent.toml")],
       ["claude", CLAUDE_RELEASE, join(".claude", "agents", "aidlc-developer-agent.md")],
@@ -4371,8 +4373,8 @@ describe("t243 project initialization", () => {
       const out = refused.stdout.replace(/\s+/g, " ");
       // The conflict line names the path with forward slashes on every OS.
       expect(out).toContain(`${agent.replaceAll("\\", "/")} (locally modified or unowned)`);
-      const dir = harness === "codex" ? ".codex" : ".claude";
-      expect(out, harness).toContain(`\`bun ${dir}/tools/aidlc.ts config --dry-run --verbose\` lists every change first`);
+      expect(out, harness).toContain("to take the shipped version over it, run it again with --force.");
+      expect(out, harness).not.toContain("--dry-run");
       if (harness === "codex") expect(out).not.toContain(".claude/tools/aidlc.ts");
       expect(readFileSync(join(project, agent), "utf-8")).toBe("my own agent\n");
     }
