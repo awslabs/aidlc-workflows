@@ -3178,6 +3178,114 @@ describe("t265b hook lifecycle", () => {
     }
   });
 
+  // #2456: while the plan-approval guard is refusing the build, doctor and
+  // status are where the person gets the whole picture of why. An agent's
+  // terminal is often not at the project root - VS Code and the Copilot CLI
+  // keep the folder an earlier command left it in - so the agent writes the
+  // `cd` that gets it there. Those are the spellings the reported run was
+  // refused, as a "mutation-capable shell command", and sent back to `next`;
+  // switching the guard off was the only way it reached a diagnosis.
+  //
+  // This case pins only that the reads run. How that is settled is open:
+  // #2523 argues for fewer guard exceptions rather than one more, and both
+  // an exemption and a simpler guard satisfy what is asserted here.
+  test("#2456: the doctor and status reads run while the plan-approval guard blocks the build", () => {
+    const proj = scratchProject();
+    const machine = mkdtempSync(join(realpathSync.native(tmpdir()), "aidlc-t265-doctor-"));
+    // A folder outside the project: there a bare `aidlc doctor` reads some
+    // other project or none, so the `cd` form is the only one that diagnoses
+    // this one.
+    const elsewhere = mkdtempSync(join(realpathSync.native(tmpdir()), "aidlc-t265-outside-"));
+    try {
+      seedState(proj);
+      seedActiveDirective(proj, "code-generation");
+      seedUnit(proj, null, { plan: true, answer: null });
+      const windows = process.platform === "win32";
+      const launcher = join(machine, "bin", windows ? "aidlc.cmd" : "aidlc");
+      const active = join(machine, "versions", "9.9.9", windows ? "aidlc.exe" : "aidlc");
+      for (const file of [launcher, active]) {
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, "fixture\n");
+      }
+      writeFileSync(join(machine, "active-executable"), `${active}\n`);
+      writeFileSync(join(proj, ".claude", "tools", "aidlc-doctor.ts"), "// installed tool\n");
+      const env = { AIDLC_INSTALL_ROOT: machine, AIDLC_BIN_DIR: join(machine, "bin") };
+      const subfolder = join(proj, "other");
+      mkdirSync(subfolder, { recursive: true });
+
+      // The guard is blocking: the build's own write is refused, which is the
+      // state the person needs the diagnosis for.
+      const build = runHook(proj, WRITE(join(proj, "src", "app.ts")), env);
+      expect(build.code).toBe(2);
+      expect(build.stderr).toContain("the plan is not approved yet");
+
+      // Every one of these runs the read in the project, from a terminal that
+      // is somewhere else.
+      const reads = [
+        `cd '${proj}' && aidlc doctor`,
+        `cd '${proj}'; aidlc doctor`,
+        `cd '${proj}' && aidlc --doctor`,
+        `cd '${proj}' && aidlc doctor --verbose`,
+        `cd '${proj}' && bun .claude/tools/aidlc.ts doctor`,
+        `cd '${proj}' && bun .claude/tools/aidlc-doctor.ts doctor`,
+        `cd '${proj}' && aidlc status`,
+      ];
+      // The POSIX reading every harness keeps, and the PowerShell reading an
+      // adapter marks (Copilot in VS Code, Kiro IDE): the same reads, from a
+      // subfolder of the project and from outside it.
+      for (const marked of [false, true]) {
+        for (const terminal of [subfolder, elsewhere]) {
+          for (const command of reads) {
+            const result = runHook(
+              proj,
+              {
+                ...BASH(command),
+                cwd: terminal,
+                ...(marked ? { aidlc_shell: "powershell" } : {}),
+              },
+              env,
+            );
+            expect(
+              result.code,
+              `${marked ? "powershell" : "posix"} in ${terminal}: ${command}\n${result.stderr}`,
+            ).toBe(0);
+          }
+        }
+      }
+
+      // Not the spelling: from the same terminal, the forms that name the
+      // project outright pass today and keep passing.
+      for (const command of [
+        `bun '${join(proj, ".claude", "tools", "aidlc.ts")}' doctor`,
+        `aidlc doctor --project-dir '${proj}'`,
+        `aidlc status --project-dir '${proj}'`,
+      ]) {
+        const result = runHook(proj, { ...BASH(command), cwd: elsewhere }, env);
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+
+      // Not the folder either: the same reads run with the guard switched off,
+      // which was the reported run's only way to a diagnosis, and once the
+      // person has approved the plan. What refuses them is the block itself.
+      for (const command of reads) {
+        const off = runHook(proj, { ...BASH(command), cwd: elsewhere }, {
+          ...env,
+          AIDLC_DISABLE_PLAN_APPROVAL_GUARD: "1",
+        });
+        expect(off.code, `${command}\n${off.stderr}`).toBe(0);
+      }
+      seedUnit(proj, null, { plan: true, answer: "A. Approve Plan" });
+      for (const command of reads) {
+        const result = runHook(proj, { ...BASH(command), cwd: elsewhere }, env);
+        expect(result.code, `${command}\n${result.stderr}`).toBe(0);
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+      rmSync(machine, { recursive: true, force: true });
+      rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
   // Keep real Git-backed authority/fingerprint checks and both hook processes;
   // the aggregate fixture work can exceed Bun's 5s default on hosted macOS.
   test("a conductor-authored Approve Plan markdown answer has no authority receipt", () => {
