@@ -10896,9 +10896,10 @@ function prepareModelsSection(
       harness,
       current,
     );
-    // On GitHub Copilot the session sets every agent's model and effort, so a
-    // clean check names the session, as doctor does, not the recorded policy.
-    const sessionSet = harness === "copilot";
+    // On Cursor and GitHub Copilot the session sets every agent's model and
+    // effort, so a clean check names the session, as doctor does, not the
+    // recorded policy.
+    const sessionSet = harness === "cursor" || harness === "copilot";
     emitResult(
       drift.length === 0
         ? success(

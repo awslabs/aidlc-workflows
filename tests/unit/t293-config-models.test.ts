@@ -1799,6 +1799,44 @@ describe("t293 doctor model policy advisory", () => {
       ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"],
     );
   });
+
+  test("config models --check on Cursor leaves a shared effort to the session, as doctor does", () => {
+    const check = (models: unknown, ...extra: string[]) => {
+      const project = temp("aidlc-t293-check-cursor-");
+      cpSync(join(DIST, "cursor"), project, { recursive: true });
+      writeFileSync(projectSettingsPath(project), `${JSON.stringify({ schemaVersion: 1, models }, null, 2)}\n`);
+      return run(["config", "models", "--project-dir", project, "--check", ...extra], project, runtimeEnv());
+    };
+    const policy = { schemaVersion: 1, preset: "balanced", groups: { reviewing: { effort: "max" } } };
+    // Nothing recorded applies on Cursor, so a clean check names the session,
+    // in doctor's words, rather than calling the policy reflected.
+    const session = "every agent uses your Cursor session's model and effort; " +
+      "the recorded balanced preset does not apply here";
+    const shared = check(policy);
+    expect(shared.status, shared.stdout).toBe(0);
+    expect(shared.stdout).toContain(session);
+    expect(shared.stdout).not.toContain("model policy is reflected");
+    const agentEffort = check({ schemaVersion: 1, agents: { architect: { effort: "high" } } });
+    expect(agentEffort.status, agentEffort.stdout).toBe(0);
+    expect(agentEffort.stdout).toContain(
+      "every agent uses your Cursor session's model and effort; the recorded policy does not apply here",
+    );
+    const json = check(policy, "--json");
+    expect(json.status, json.stdout).toBe(0);
+    expect(JSON.parse(json.stdout)).toEqual(expect.objectContaining({
+      ok: true,
+      message: session,
+      data: { harness: "cursor", drift: [] },
+    }));
+    // A model recorded for Cursor by name is still drift there; its effort is not.
+    const named = check({
+      schemaVersion: 1,
+      agents: { architect: { model: { cursor: "vendor/raw" }, effort: "high" } },
+    });
+    expect(named.status).toBe(1);
+    expect(named.stdout).toContain("architect: model policy is not expressible on cursor");
+    expect(named.stdout).not.toContain("architect: effort");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t293 projection application", () => {
