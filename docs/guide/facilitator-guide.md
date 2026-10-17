@@ -156,6 +156,26 @@ to `Minimal`. `classic`, `feature`, and `workshop` default to `Standard`. See
 
 ---
 
+## Fewer stops: learnings and summary confirmation
+
+`workshop` keeps two checks at every stage: the "Anything to add for next
+time?" learnings question and the `Looks correct` summary confirmation. In a
+room that is often more stops than the group needs. Turn both off when the
+work starts:
+
+```
+/aidlc workshop --learnings off --summary-confirmation off <the work>
+```
+
+Questions and approval gates still run. Learnings off means nothing from the
+run is saved to project or team memory; summary confirmation off means a
+misread answer is caught at the approval gate instead of before the artifact is
+written. Keep learnings on when teaching the learning loop is part of the
+session. See
+[Fewer stops](05-scopes-and-depth.md#fewer-stops-for-a-workshop-or-small-work).
+
+---
+
 ## Construction: one Unit at a time
 
 When Inception splits the work into several Units, Construction can run them
