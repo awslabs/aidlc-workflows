@@ -1498,6 +1498,100 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(blocked.stdout).toContain("aidlc-delegated-agent");
   });
 
+  // Live-captured Copilot CLI 1.0.96 order (#2582): the parent's Agent
+  // dispatch; SubagentStart (camelCase) naming only the parent chat; the brief
+  // as the first prompt of the subagent's OWN session; the subagent's calls
+  // under that session; SubagentStop from the parent naming it as agent_id.
+  // Before, the subagent's calls read as the conductor's and the entry stayed.
+  test("20d: a CLI subagent's own session is bound at its brief, its calls are its own, and its stop clears it", () => {
+    const dir = rulesProject();
+    const parent = "f42699f7-43ca-4eaf-9fb0-37e967d1663f";
+    const child = "92069f34-cb0d-4a69-96f4-abe6fd27fba1";
+    const agent = "aidlc-architecture-reviewer-agent";
+    const pre = launch(dir, LAUNCHERS[1], agent, "Review the code generation plan for this Unit.", parent);
+    expect(pre.code, pre.stderr).toBe(0);
+    const brief = String(hostRewrite(pre.stdout)?.prompt ?? "Review the code generation plan for this Unit.");
+    runAdapter(dir, "subagent-start", {
+      sessionId: parent, timestamp: Date.now(), cwd: dir, agentName: agent, agentDisplayName: agent, agentDescription: "Reviewer.",
+    });
+    runAdapter(dir, "record-human-turn", { hook_event_name: "UserPromptSubmit", session_id: child, cwd: dir, prompt: brief });
+    const ledger = () => JSON.parse(readFileSync(ledgerPath(dir), "utf-8")) as Array<{ name: string; childSessionId?: string }>;
+    expect(ledger()).toMatchObject([{ name: agent, childSessionId: child }]);
+    expect(readAudit(dir)).not.toContain(brief.slice(0, 40));
+
+    const report = (session: string) => runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse", session_id: session, cwd: dir, tool_name: "Bash",
+      tool_input: { command: "aidlc engine orchestrate report --stage code-generation --result approved", description: "x" },
+    });
+    expect(report(child).stdout).toContain(`Delegated agent \\"${agent}\\"`);
+    expect(report(parent).stdout).not.toContain("Delegated agent");
+
+    runAdapter(dir, "log-subagent", {
+      hook_event_name: "SubagentStop", session_id: parent, cwd: dir, agent_id: child, agent_type: agent, agent_name: agent, stop_reason: "end_turn",
+    });
+    expect(ledger()).toEqual([]);
+    expect(report(child).stdout).not.toContain("Delegated agent");
+  });
+
+  test("20e: a CLI SubagentStop clears its chat's entry even when the brief never bound a session", () => {
+    const dir = scratchProject(true);
+    const parent = "f42699f7-43ca-4eaf-9fb0-37e967d1663f";
+    for (const agent of ["aidlc-developer-agent", "aidlc-quality-agent"]) {
+      runAdapter(dir, "subagent-start", { sessionId: parent, timestamp: Date.now(), cwd: dir, agentName: agent });
+    }
+    runAdapter(dir, "log-subagent", {
+      hook_event_name: "SubagentStop", session_id: parent, cwd: dir,
+      agent_id: "92069f34-cb0d-4a69-96f4-abe6fd27fba1", agent_type: "aidlc-developer-agent", agent_name: "aidlc-developer-agent", stop_reason: "end_turn",
+    });
+    const left = JSON.parse(readFileSync(ledgerPath(dir), "utf-8")) as Array<{ name: string }>;
+    expect(left.map((entry) => entry.name)).toEqual(["aidlc-quality-agent"]);
+  });
+
+  // Live-captured Copilot CLI 1.0.98 order: SubagentStart and every subagent
+  // event now carry agent_id, agent_type and parent_agent_id, the subagent's
+  // calls under its own session (= agent_id). Its calls name it themselves and
+  // its stop clears its entry by id.
+  test("20f: a CLI subagent whose events name it (agent_id, agent_type) is attributed and cleared", () => {
+    const dir = scratchProject(true);
+    const parent = "af25255d-230f-496a-8443-25ae723908c0";
+    const child = "fc992767-91f3-4b68-8b8e-502f9dba4f2f";
+    const agent = "aidlc-quality-agent";
+    runAdapter(dir, "subagent-start", {
+      sessionId: parent, timestamp: Date.now(), cwd: dir, agentName: agent, agentDisplayName: agent, agentDescription: "Quality.",
+      agent_id: child, agent_type: agent, parent_agent_id: parent,
+    });
+    const report = (session: string, identity: Record<string, string>) => runAdapter(dir, "guard-tool-call", {
+      hook_event_name: "PreToolUse", session_id: session, cwd: dir, ...identity, tool_name: "Bash",
+      tool_input: { command: "aidlc engine orchestrate report --stage code-generation --result approved", description: "x" },
+    });
+    expect(report(child, { agent_id: child, agent_type: agent, parent_agent_id: parent }).stdout).toContain(`Delegated agent \\"${agent}\\"`);
+    expect(report(parent, {}).stdout).not.toContain("Delegated agent");
+    runAdapter(dir, "log-subagent", {
+      hook_event_name: "SubagentStop", session_id: parent, cwd: dir, agent_id: child, agent_type: agent, parent_agent_id: parent,
+      agent_name: agent, agent_display_name: agent, stop_reason: "end_turn",
+    });
+    expect(JSON.parse(readFileSync(ledgerPath(dir), "utf-8"))).toEqual([]);
+  });
+
+  // A chat that ends mid-delegation sends no SubagentStop. When that chat
+  // starts or resumes, the entries left under it go, so a resumed conductor is
+  // not read as a subagent that no longer runs. Another chat's running
+  // subagent keeps its entry.
+  test("20g: a chat that starts again drops only its own leftover subagent entries", () => {
+    const dir = scratchProject(true);
+    const chatA = "af25255d-230f-496a-8443-25ae723908c0";
+    const chatB = "44444444-5555-4666-8777-888888888888";
+    runAdapter(dir, "subagent-start", {
+      sessionId: chatA, timestamp: Date.now(), cwd: dir, agentName: "aidlc-quality-agent",
+      agent_id: "fc992767-91f3-4b68-8b8e-502f9dba4f2f", agent_type: "aidlc-quality-agent", parent_agent_id: chatA,
+    });
+    runAdapter(dir, "subagent-start", { sessionId: chatA, timestamp: Date.now(), cwd: dir, agentName: "aidlc-developer-agent" });
+    runAdapter(dir, "subagent-start", { sessionId: chatB, timestamp: Date.now(), cwd: dir, agentName: "aidlc-product-agent" });
+    runAdapter(dir, "session-start", { hook_event_name: "SessionStart", session_id: chatA, cwd: dir, source: "resume" });
+    const left = JSON.parse(readFileSync(ledgerPath(dir), "utf-8")) as Array<{ hostSessionId: string; name: string }>;
+    expect(left.map((entry) => [entry.hostSessionId, entry.name])).toEqual([[chatB, "aidlc-product-agent"]]);
+  });
+
   test("15: fresh-session source 'new' maps to startup (SESSION_STARTED lands)", () => {
     const dir = scratchProject(true);
     const r = runAdapter(dir, "session-start", withCwd(FIXTURES.sessionStart, dir));

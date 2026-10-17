@@ -16,12 +16,15 @@
 //   1. File-tool input keys differ: Copilot sends `path` + `file_text` /
 //      `old_str` / `new_str` where the core hooks read `file_path`. The shim
 //      re-keys. Tool NAMES already match (Bash/Write/Edit/Read).
-//   2. PreToolUse carries NO agent identity. SubagentStart/SubagentStop bracket
-//      each delegation, so the shim keeps a locked per-project ledger keyed by
-//      host session + subagent id. VS Code tool calls correlate through their
-//      ordinary session_id; CLI toolu_* calls use an exactly-one-active CLI
-//      fallback. Zero or several candidates forward no identity, so reviewer
-//      scope fails open rather than mis-attributing the call.
+//   2. PreToolUse may carry NO agent identity. SubagentStart/SubagentStop
+//      bracket each delegation, so the shim keeps a locked per-project ledger
+//      keyed by host session + subagent id. A call is attributed, in order: to
+//      the entry whose bound child session it arrives under (a CLI subagent's
+//      own session, bound at its brief); to a self-named entry whose own
+//      session it is (CLI events that carry agent_id and parent_agent_id);
+//      then by the older guesses, VS Code's correlated session or the CLI's
+//      exactly-one-active toolu_* fallback. Zero or several candidates forward
+//      no identity, so reviewer scope fails open rather than mis-attributing.
 //   3. SubagentStart arrives camelCase (agentName, sessionId — live-verified
 //      quirk) while every other PascalCase-registered event arrives
 //      snake_case. Field reads tolerate both casings.
@@ -154,6 +157,7 @@ interface CopilotHookInput {
   agentName?: string;
   agent_type?: string;
   agent_id?: string;
+  parent_agent_id?: string;
   agentId?: string;
   agent_display_name?: string;
   stop_reason?: string;
@@ -1424,12 +1428,15 @@ export async function run(
 
   // --- Active-subagent ledger (difference #2) ---------------------------------
   //
-  // VS Code carries a stable host session_id plus agent_id on SubagentStart /
-  // Stop, while ordinary PreToolUse carries only that host session_id. CLI
-  // lacks an explicit subagent id and identifies delegated tool calls with a
-  // toolu_* session id, so it retains a separate exactly-one-active fallback.
-  // Every entry is namespaced by host session plus subagent id; ambiguity
-  // always fails open rather than mis-attributing a reviewer.
+  // Copilot names a subagent in three ways, and activeSubagentCandidates reads
+  // them in this order. A CLI subagent with no identity fields runs under its
+  // own session, which the entry records as childSessionId when its brief is
+  // spent there. A CLI subagent whose events carry agent_id and parent_agent_id
+  // is self-named: matched by its own session, never guessed for a call that
+  // names no agent. The older guesses stay for hosts that send neither: VS
+  // Code's correlated host session_id, and the CLI's exactly-one-active
+  // toolu_* fallback. Every entry is namespaced by host session plus subagent
+  // id; ambiguity always fails open rather than mis-attributing a reviewer.
   // One project key for the ledger, its lock, and the brief record. VS Code
   // hooks spell the drive c:\ where its terminal spells C:\ (#811).
   const PROJECT_KEY = createHash("sha256").update(normalizeDriveLetter(projectDir)).digest("hex").slice(0, 16);
@@ -1447,6 +1454,18 @@ export async function run(
     name: string;
     hostCorrelated: boolean;
     ts: number;
+    // The session a CLI subagent's own calls arrive under (#2582). SubagentStart
+    // names only the parent chat; the subagent's first prompt, its brief, is the
+    // first event under its own session, so the id is bound when that brief is
+    // spent.
+    childSessionId?: string;
+    // The host names this subagent on each of its own events (Copilot CLI
+    // 1.0.98 sends agent_id, agent_type and parent_agent_id, the subagent's
+    // calls under its own session = agent_id). Such an entry is never a guess
+    // for a call that names no agent: that call is the conductor's, and
+    // reading it as the subagent's refused the conductor's own next and report
+    // until the entry lapsed (#2450).
+    selfNamed?: boolean;
   }
 
   interface LedgerLockOwner {
@@ -1576,7 +1595,9 @@ export async function run(
           typeof value.subagentId === "string" &&
           typeof value.name === "string" &&
           typeof value.hostCorrelated === "boolean" &&
-          typeof value.ts === "number";
+          typeof value.ts === "number" &&
+          (value.childSessionId === undefined || typeof value.childSessionId === "string") &&
+          (value.selfNamed === undefined || typeof value.selfNamed === "boolean");
       };
       if (strict && parsed.some(entry => !validEntry(entry))) throw new LedgerMutationError("read", "INVALID_LEDGER");
       return parsed.filter(
@@ -1653,9 +1674,14 @@ export async function run(
 
   function activeSubagentCandidates(): LedgerEntry[] {
     const entries = readLedger();
+    const bound = sessionId
+      ? entries.filter((entry) => entry.childSessionId === sessionId || (entry.selfNamed && entry.subagentId === sessionId))
+      : [];
+    if (bound.length > 0) return bound;
+    const guessable = entries.filter((entry) => !entry.selfNamed);
     return sessionId.startsWith("toolu_")
-      ? entries.filter((entry) => !entry.hostCorrelated)
-      : entries.filter(
+      ? guessable.filter((entry) => !entry.hostCorrelated)
+      : guessable.filter(
           (entry) => entry.hostCorrelated && entry.hostSessionId === sessionId,
         );
   }
@@ -1710,6 +1736,9 @@ export async function run(
     digests: string[];
     ts: number;
     session?: string;
+    // The dispatched agent, so a CLI brief spent in a new session names the
+    // ledger entry that session belongs to.
+    agent?: string;
   }
 
   function briefingDigest(text: string): string {
@@ -1744,6 +1773,7 @@ export async function run(
       (entry as BriefingEntry).digests.every((digest) => typeof digest === "string") &&
       typeof (entry as BriefingEntry).ts === "number" &&
       ((entry as BriefingEntry).session === undefined || typeof (entry as BriefingEntry).session === "string") &&
+      ((entry as BriefingEntry).agent === undefined || typeof (entry as BriefingEntry).agent === "string") &&
       (entry as BriefingEntry).ts >= cutoff);
   }
 
@@ -1788,7 +1818,7 @@ export async function run(
   }
 
   // A transient write failure is retried; a lock that stays busy is not.
-  function recordBriefings(prompts: unknown[], chat: string): boolean {
+  function recordBriefings(prompts: unknown[], chat: string, agent: string): boolean {
     const digests = [...new Set(
       prompts
         .filter((prompt): prompt is string => typeof prompt === "string" && prompt.trim().length > 0)
@@ -1797,7 +1827,7 @@ export async function run(
     if (digests.length === 0) return true;
     for (let attempt = 0; attempt < 3; attempt++) {
       const result = transactBriefings((entries) => {
-        entries.push({ digests, ts: Date.now(), ...(chat ? { session: chat } : {}) });
+        entries.push({ digests, ts: Date.now(), ...(chat ? { session: chat } : {}), ...(agent ? { agent } : {}) });
         return { value: true, changed: true };
       }, false);
       if (result.committed) return true;
@@ -1810,6 +1840,8 @@ export async function run(
   // "briefing" spends the matching launch's record; "unknown" means the
   // record could not be read even under the lock. A VS Code launch from
   // another chat never matches: its brief arrives under that chat's session.
+  // The record spent is kept in spentBriefing for the caller.
+  let spentBriefing: BriefingEntry | null = null;
   function checkBriefing(prompt: unknown): "briefing" | "not-briefing" | "unknown" {
     if (typeof prompt !== "string" || prompt.trim().length === 0) return "not-briefing";
     const digest = briefingDigest(prompt);
@@ -1817,7 +1849,7 @@ export async function run(
       entry.digests.includes(digest) && (!entry.session || !sessionId || entry.session === sessionId);
     const spent = transactBriefings((entries) => {
       const index = entries.findIndex(matches);
-      if (index >= 0) entries.splice(index, 1);
+      if (index >= 0) spentBriefing = entries.splice(index, 1)[0];
       return { value: index >= 0, changed: index >= 0 };
     }, true);
     if (spent.read) return spent.value ? "briefing" : "not-briefing";
@@ -1827,6 +1859,23 @@ export async function run(
     } catch {
       return "unknown";
     }
+  }
+
+  // A CLI brief spent from a session other than the chat that dispatched it
+  // arrived in the subagent's own session (#2582): bind that session to the
+  // oldest waiting entry for the dispatched agent, so its calls are its own and
+  // its SubagentStop (whose agent_id is that session) clears it. Two waiting
+  // entries for one agent are interchangeable for attribution.
+  function bindSubagentSession(spent: BriefingEntry | null): void {
+    if (!spent || spent.session || !spent.agent || !sessionId || sessionId.startsWith("toolu_")) return;
+    const agent = spent.agent;
+    updateLedger((entries) => {
+      if (entries.some((entry) => entry.childSessionId === sessionId)) return;
+      const waiting = entries
+        .filter((entry) => !entry.hostCorrelated && !entry.childSessionId && entry.name === agent && entry.hostSessionId !== sessionId)
+        .sort((a, b) => a.ts - b.ts)[0];
+      if (waiting) waiting.childSessionId = sessionId;
+    });
   }
 
   // The subagent that started in this chat within the last few seconds, if any.
@@ -1874,6 +1923,17 @@ export async function run(
   switch (target) {
     case "session-start": {
       reconcilePriorSession();
+      // A chat that starts or resumes has no delegation still running from
+      // before, so an entry left under it (a chat that ended mid-delegation
+      // sends no SubagentStop) is dropped. Other chats' entries stay; two chats
+      // can run in one project at once.
+      if (sessionId && readLedger().some((entry) => entry.hostSessionId === sessionId)) {
+        updateLedger((entries) => {
+          for (let i = entries.length - 1; i >= 0; i--) {
+            if (entries[i].hostSessionId === sessionId) entries.splice(i, 1);
+          }
+        });
+      }
       // Copilot delivers source "new" for a fresh session (live-captured);
       // the core hook's emission map knows startup|clear|resume|compact —
       // forward "new" as "startup" so SESSION_STARTED and the per-session
@@ -1921,7 +1981,10 @@ export async function run(
       // sequence. A different prompt typed while the subagent runs still
       // counts once the first few seconds after its start have passed.
       const brief = checkBriefing(prompt);
-      if (brief === "briefing") return 0;
+      if (brief === "briefing") {
+        bindSubagentSession(spentBriefing);
+        return 0;
+      }
       const started = justStartedSubagent();
       if (started) {
         // A subagent has just started in this chat and this prompt matched
@@ -2043,7 +2106,7 @@ export async function run(
         const delivered = hostInput(dispatchInput);
         // The subagent's first message is the brief as delivered (difference #8),
         // in this chat only for VS Code's runSubagent.
-        if (!recordBriefings([delivered.prompt, native.prompt], rawToolName === "runSubagent" ? sessionId : "")) {
+        if (!recordBriefings([delivered.prompt, native.prompt], rawToolName === "runSubagent" ? sessionId : "", dispatchTarget)) {
           process.stdout.write(denyJson(BRIEFING_BUSY));
           return 0;
         }
@@ -2335,6 +2398,7 @@ export async function run(
           name: subagentName,
           hostCorrelated,
           ts: Date.now(),
+          ...(hostCorrelated && typeof copilot.parent_agent_id === "string" && copilot.parent_agent_id ? { selfNamed: true } : {}),
         };
         // The subagent's id beside the chat's session is the one fact the engine
         // cannot learn by itself: noted once, a payload or shell carrying the
@@ -2366,22 +2430,28 @@ export async function run(
         const updated = updateLedger((entries) => {
           let idx = -1;
           if (explicitSubagentId) {
+            // VS Code's correlated id, or the CLI subagent's own session
+            // (#2582: the CLI's SubagentStop names it as agent_id).
             idx = entries.findIndex(
               (entry) =>
-                entry.hostCorrelated &&
-                entry.hostSessionId === sessionId &&
-                entry.subagentId === explicitSubagentId,
+                (entry.hostCorrelated &&
+                  entry.hostSessionId === sessionId &&
+                  entry.subagentId === explicitSubagentId) ||
+                entry.childSessionId === explicitSubagentId,
             );
-          } else {
-            for (let i = entries.length - 1; i >= 0; i--) {
-              const entry = entries[i];
-              if (
-                !entry.hostCorrelated &&
-                entry.hostSessionId === sessionId &&
-                entry.name === subagentName
-              ) {
-                idx = i;
-                break;
+          }
+          // A CLI start whose brief was never matched is still this chat's
+          // entry for that agent; one not bound to another live subagent goes
+          // first.
+          if (idx < 0) {
+            const ownEntry = (entry: LedgerEntry, unboundOnly: boolean): boolean =>
+              !entry.hostCorrelated &&
+              entry.hostSessionId === sessionId &&
+              entry.name === subagentName &&
+              (!unboundOnly || !entry.childSessionId);
+            for (const unboundOnly of [true, false]) {
+              for (let i = entries.length - 1; i >= 0 && idx < 0; i--) {
+                if (ownEntry(entries[i], unboundOnly)) idx = i;
               }
             }
           }
