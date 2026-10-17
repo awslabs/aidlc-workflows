@@ -368,7 +368,7 @@ describe("t220 shipped projection bytes (codex TOML, kiro JSON + md)", () => {
     // their personal Kiro settings and reset every other model's effort.
     expect(
       JSON.parse(readFileSync(dist("kiro", ".kiro", "settings", "cli.json"), "utf-8")),
-    ).toEqual({ "chat.defaultAgent": "aidlc" });
+    ).toEqual({ "chat.defaultAgent": "aidlc", "api.subagentTimeout": 900 });
     expect(
       JSON.parse(readFileSync(dist("kiro-ide", ".kiro", "settings", "cli.json"), "utf-8")),
     ).toEqual({ "chat.agentEngine": "v3", "chat.defaultAgent": "aidlc" });

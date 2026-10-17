@@ -121,6 +121,14 @@ so the AI-DLC conductor agent is active by default — `/aidlc` just works.
 have configured**; if you prefer your own default, remove that setting and use
 `kiro-cli chat --agent aidlc` instead.
 
+The same file sets `api.subagentTimeout` to `900`. Kiro CLI cancels a helper
+(a reviewer, a persona, a Unit builder) that shows no progress for that many
+seconds, and its own default is 3600. A helper that never starts would
+otherwise hold the stage for an hour before AI-DLC can send it again; with 900
+it costs 15 minutes. A workspace value overrides the one in your personal Kiro
+settings, so if your helpers run long commands that print nothing for more than
+15 minutes, raise it in `.kiro/settings/cli.json` (`0` turns the deadline off).
+
 No shipped agent pins a model: a pinned ID resolves only when that
 model is enabled on the user's Kiro install. A chat, and each of the 14
 personas the conductor dispatches, starts on your session model: the one
@@ -294,6 +302,7 @@ CLI on its v3 engine, use the
 | Dispatched stages (2.1 pipeline, 2.2 subagent, 2.4 mob, 3.5 subagent) | `Task` tool | Kiro `subagent` tool → the agent configs (all 14 personas ship configs) |
 | Construction swarm | Parallel `Task` floor, optional ultracode Workflow | Subagent fan-out only; `AIDLC_USE_SWARM=1` is announced as a no-op |
 | Session audit events | `SESSION_STARTED/RESUMED/ENDED`, `SESSION_COMPACTED` | `SESSION_STARTED` only (Kiro has no session-end / pre-compaction hooks) |
+| Helper idle deadline | Not set by AI-DLC | `.kiro/settings/cli.json` sets `api.subagentTimeout` to 900 seconds, so Kiro CLI cancels a helper with no progress after 15 minutes rather than after Kiro's default of 60 minutes, and the conductor can send it again sooner |
 | Forwarding-loop enforcement (Stop hook) | Interactive + headless | Interactive sessions only — `--no-interactive` runs do not honor the stop-hook block |
 | Permissions | `settings.json` allowlist | Source-generated projection: AI-DLC's own project-relative workflow commands (engine, read-only dispatcher commands, AI-DLC tool scripts); native and versioned release runtimes: `aidlc engine *`. Other shell commands prompt. |
 | Welcome message | Rendered at session start from `settings.json` `companyAnnouncements` | None — Kiro has no welcome-render equivalent; the session-start hook injects resume context only |

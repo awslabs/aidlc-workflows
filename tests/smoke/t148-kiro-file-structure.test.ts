@@ -1327,7 +1327,16 @@ describe("t148 dist/kiro file structure", () => {
     // authored default nor a resurrected projection entry can return.
     const s = readJson(join(K, "settings", "cli.json"));
     expect(s["chat.modelDefaults"]).toBeUndefined();
-    expect(Object.keys(s).sort()).toEqual(["chat.defaultAgent"]);
+    expect(Object.keys(s).sort()).toEqual(["api.subagentTimeout", "chat.defaultAgent"]);
+  });
+
+  test("workspace bounds a Kiro helper's idle deadline at 15 minutes", () => {
+    // Kiro CLI cancels a helper that makes no progress for api.subagentTimeout
+    // seconds (its default is 3600). A reviewer helper that never takes a turn
+    // then holds the stage for an hour before AI-DLC can re-send it. 900 s keeps
+    // that wait short while leaving room for a long, quiet command in a helper.
+    const s = readJson(join(K, "settings", "cli.json"));
+    expect(s["api.subagentTimeout"]).toBe(900);
   });
 
   test("no shipped Kiro agent surface pins a model (#601: agents inherit the session model)", () => {

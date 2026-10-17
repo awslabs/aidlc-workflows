@@ -1,3 +1,4 @@
 {
-  "chat.defaultAgent": "aidlc"
+  "chat.defaultAgent": "aidlc",
+  "api.subagentTimeout": 900
 }
