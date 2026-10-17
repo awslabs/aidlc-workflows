@@ -1481,7 +1481,11 @@ Windows Job Object and sharing-handle checks, and compatibility backends have
 explicit owners. The profile targets Linux arm64, macOS arm64 (`macos-15`) and
 Windows x64; declare separate matching obligations for another architecture.
 Platform-specific controls live in separately selectable test files. Their
-assertions remain required by the profile.
+assertions remain required by the profile. A case added to a file the profile
+names must be added to each job that runs the file: on Linux the unit tier's
+`t-native-terminal-profile.test.ts` lists every case of those files without
+running them and fails on one the profile does not list, so a PR meets it
+before the Full Suite does.
 
 Prepare one plan before dispatch, using the authored source that every host will
 receive:
