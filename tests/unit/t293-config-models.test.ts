@@ -1665,21 +1665,22 @@ describe("t293 doctor model policy advisory", () => {
       }, null, 2)}\n`);
       invalidateSettingsCache(settings);
     };
-    for (const [harness, product] of [
-      ["copilot", "GitHub Copilot"],
-      ["cursor", "Cursor"],
-      ["kiro-ide", "Kiro"],
+    // Kiro takes one agent's own model and effort, so its line says so.
+    for (const [harness, product, own] of [
+      ["copilot", "GitHub Copilot", ""],
+      ["cursor", "Cursor", ""],
+      ["kiro-ide", "Kiro", " unless a model or effort is set for that agent"],
     ] as const) {
       const project = temp(`aidlc-t293-doctor-session-${harness}-`);
       cpSync(join(DIST, harness), project, { recursive: true });
       expect(modelsPolicyCheck(project, true), harness).toEqual({
         pass: true,
-        label: `Models: every agent uses your ${product} session's model and effort`,
+        label: `Models: every agent uses your ${product} session's model and effort${own}`,
       });
       preset(project);
       expect(modelsPolicyCheck(project, true), harness).toEqual({
         pass: true,
-        label: `Models: every agent uses your ${product} session's model and effort; ` +
+        label: `Models: every agent uses your ${product} session's model and effort${own}; ` +
           "the recorded balanced preset does not apply here",
       });
     }
