@@ -352,6 +352,12 @@ recorded command through verification:
 aidlc engine bolt checkpoint --action verify --unit "notification-core" --kind skeleton
 ```
 
+For a longer project check, add `--timeout-ms 3600000` to `--action verify`
+(one hour). The default is 30 minutes; the value must be a positive integer
+of at most 2,147,483,647 milliseconds. A timeout retires the owned process
+group/tree and records a failed verification, reporting incomplete cleanup if
+it cannot confirm termination. See the [timeout contract](../reference/12-state-machine.md#construction-checkpoint-verification-timeout).
+
 Only after `verify` reports `verified: true` and the current checkpoint has
 `ready: true` does the conductor open its session-bound approval question:
 

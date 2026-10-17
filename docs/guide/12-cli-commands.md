@@ -1920,6 +1920,25 @@ always need the human. Pre-generation summary confirmation needs the human only 
 workflows without `Construction Checkpoints` retain their legacy first-stage
 and late stage approvals; team-owned Unit gates retain their own policy.
 
+### Checkpoint verification timeout
+
+`aidlc engine bolt checkpoint --unit <unit> --kind unit --action verify`
+runs the approved project check with a default limit of 30 minutes. For a
+longer check, add `--timeout-ms 3600000` (one hour). The value must be an integer
+from 1 through 2,147,483,647 milliseconds and is accepted only with
+`--action verify`. Each execution, including an evidence-refresh retry, uses
+that budget.
+
+A timeout retires the owned process group on POSIX or process tree on Windows
+before recording a failed verification, reporting incomplete cleanup if it
+cannot confirm termination. On POSIX, stopping verification with SIGINT,
+SIGTERM or SIGHUP forwards that signal to the owned group; processes that
+ignore it are killed after a short grace period. Cleanup can add up to four
+seconds. A watcher in the owned POSIX group also retires it if the verifier is killed
+with SIGKILL, which cannot be forwarded. An interrupted verifier cannot record
+a passing proof; a hard kill leaves its started proof unfinished and unverified.
+Independently detached POSIX processes are outside that group.
+
 ### Construction order and execution
 
 New source-producing solo Unit workflows with Unit decomposition in scope record
