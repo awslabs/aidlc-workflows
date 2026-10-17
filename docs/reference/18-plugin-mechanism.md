@@ -169,7 +169,10 @@ hash-proven record `tools/data/plugin-owned-<key>.json`, written by
 changed is never overwritten: the compose drops log names it and the step (move
 the change elsewhere, remove the file, re-run compose). A file the record does
 not cover (core, another plugin, a copy composed before the record existed, or a
-local edit) is kept and reported the same way. A prose fragment the new version
+local edit) is kept and reported the same way, unless it differs from the
+plugin's copy only in the knowledge preflight paragraph the plugin builder writes
+(an agent 2.11.0 reshaped at install and never recorded): that is the plugin's
+own older copy, and compose replaces and records it. A prose fragment the new version
 no longer ships at its old anchor and order is removed from the stage and from
 the contribution sidecar, so a moved fragment appears once.
 
@@ -179,7 +182,11 @@ plugin-owned files and sidecars may remain while graph entries and contribution
 merges disappear. Re-run `/aidlc plugin sync` after every engine upgrade; hosts
 with a compose hook also repair the surface on the next session start. The
 doctor's **Composed plugin surface** check detects both missing plugin graph
-entries and stale structural or prose contributions. Unreadable or malformed
+entries and stale structural or prose contributions, and sync reads the same
+check: a plugin whose recorded addition is gone (a structural value, a
+fragment's markers, or a fragment nested inside another) composes again. A
+fragment whose markers are in place but whose text was changed is the person's
+edit: sync leaves it, and doctor keeps naming it. Unreadable or malformed
 enabled-plugin sidecars and records that target a missing stage also fail the
 check rather than being skipped. Because an already-composed structural value
 cannot be attributed safely after its provenance is corrupted, recover an

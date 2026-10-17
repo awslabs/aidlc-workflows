@@ -3294,8 +3294,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     { harness: "copilot", leaf: ".aidlc", manifestDir: ".plugin", agentSource: "agents" },
   ];
   for (const { harness, leaf, manifestDir, agentSource } of RESHAPING_HARNESSES) {
-    test(`plugin sync records a reshaped ${harness} agent and a later update replaces it`, () => {
-      const projectDir = mkdtempSync(join(tmp, `sync-reshape-${harness}-`));
+    const reshapeProject = (tag: string): { projectDir: string; root: string; sync: () => SpawnSyncReturns<string> } => {
+      const projectDir = mkdtempSync(join(tmp, `sync-${tag}-${harness}-`));
       if (harness === "cursor") {
         const install = spawnSync(BUN, [join(harnessByName("cursor").distRoot, "install.ts"), projectDir], {
           cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
@@ -3304,7 +3304,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       } else {
         copyHarnessInstall(harness, projectDir);
       }
-      const root = join(tmp, `plugin-reshape-${harness}`);
+      const root = join(tmp, `plugin-${tag}-${harness}`);
       cpSync(pluginRootIn(pluginBuilds.get(harness)!, harness), root, { recursive: true });
       const sync = (): SpawnSyncReturns<string> =>
         spawnSync(BUN, [join(projectDir, leaf, "tools", "aidlc-plugin.ts"), "sync"], {
@@ -3320,6 +3320,17 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
             AIDLC_HARNESS_NAME: harness,
           },
         });
+      return { projectDir, root, sync };
+    };
+    const bumpVersion = (root: string): void => {
+      const manifestPath = join(root, manifestDir, "plugin.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as { version?: string };
+      manifest.version = "9.9.9";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    };
+
+    test(`plugin sync records a reshaped ${harness} agent and a later update replaces it`, () => {
+      const { projectDir, root, sync } = reshapeProject("reshape");
 
       const first = sync();
       expect(first.status, first.stderr).toBe(0);
@@ -3335,14 +3346,70 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       // The plugin's next version changes that agent's prose.
       const source = join(root, agentSource, "test-pro-metrics-agent.md");
       writeFileSync(source, `${readFileSync(source, "utf-8")}\nRESHAPE-UPDATE marker.\n`);
-      const manifestPath = join(root, manifestDir, "plugin.json");
-      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as { version?: string };
-      manifest.version = "9.9.9";
-      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      bumpVersion(root);
 
       const second = sync();
       expect(second.status, second.stderr).toBe(0);
       expect(readFileSync(installedAgent, "utf-8")).toContain("RESHAPE-UPDATE marker");
+    });
+
+    // A project composed by 2.11.0, whose engine never recorded an agent the
+    // harness reshapes, and a newer build of the plugin whose builder words the
+    // agent's knowledge preflight differently. A file that differs only there is
+    // the plugin's older copy; one with the person's change in it is theirs.
+    const KNOWLEDGE_PREFLIGHT = /^<!-- aidlc-delegated-knowledge-preflight -->\n[^\n]*\n/m;
+    const asTwoElevenLeftIt = (projectDir: string, change = ""): string => {
+      const agentRel = `${leaf}/agents/test-pro-metrics-agent.md`;
+      const installedAgent = join(projectDir, agentRel);
+      const installed = readFileSync(installedAgent, "utf-8");
+      expect(installed).toMatch(KNOWLEDGE_PREFLIGHT);
+      writeFileSync(
+        installedAgent,
+        `${installed.replace(
+          KNOWLEDGE_PREFLIGHT,
+          "<!-- aidlc-delegated-knowledge-preflight -->\n**Delegated knowledge preflight (mandatory):** an earlier builder's wording.\n",
+        )}${change}`,
+      );
+      const recordPath = join(projectDir, leaf, "tools", "data", "plugin-owned-test-pro.json");
+      const record = JSON.parse(readFileSync(recordPath, "utf-8")) as { files: Array<{ path: string }> };
+      record.files = record.files.filter((file) => file.path !== agentRel);
+      writeFileSync(recordPath, `${JSON.stringify(record, null, 2)}\n`);
+      return installed;
+    };
+
+    test(`an unrecorded ${harness} agent that differs only in its knowledge preflight is the plugin's older copy`, () => {
+      const { projectDir, root, sync } = reshapeProject("preflight");
+      const first = sync();
+      expect(first.status, first.stderr).toBe(0);
+      const composed = asTwoElevenLeftIt(projectDir);
+      bumpVersion(root);
+
+      const second = sync();
+      expect(second.status, second.stderr).toBe(0);
+      expect(second.stderr).not.toContain("collides");
+      const agentRel = `${leaf}/agents/test-pro-metrics-agent.md`;
+      const installedAgent = join(projectDir, agentRel);
+      expect(readFileSync(installedAgent, "utf-8")).toBe(composed);
+      const record = JSON.parse(
+        readFileSync(join(projectDir, leaf, "tools", "data", "plugin-owned-test-pro.json"), "utf-8"),
+      ) as { files: Array<{ path: string; sha256: string }> };
+      expect(record.files.find((file) => file.path === agentRel)?.sha256).toBe(sha256Of(installedAgent));
+    });
+
+    test(`an unrecorded ${harness} agent with the person's change in it stays theirs`, () => {
+      const { projectDir, root, sync } = reshapeProject("preflight-edit");
+      const first = sync();
+      expect(first.status, first.stderr).toBe(0);
+      asTwoElevenLeftIt(projectDir, "\nOur team's note.\n");
+      const installedAgent = join(projectDir, leaf, "agents", "test-pro-metrics-agent.md");
+      const theirs = readFileSync(installedAgent, "utf-8");
+      bumpVersion(root);
+
+      const second = sync();
+      expect(second.stderr).toContain(
+        'agents "test-pro-metrics-agent.md" collides with an existing file this plugin has no record of installing',
+      );
+      expect(readFileSync(installedAgent, "utf-8")).toBe(theirs);
     });
   }
 
