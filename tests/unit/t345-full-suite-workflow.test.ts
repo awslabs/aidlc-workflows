@@ -1211,7 +1211,7 @@ describe("t345 complete nightly coverage", () => {
     const job = ci.jobs.check;
     const all = steps(job);
     const commands = all.filter((step) => step.run
-      && !["Report smoke tests that passed on retry", "Sanitize check evidence"].includes(step.name!)).map((step) => step.name);
+      && !["Set cumulative check deadline", "Report smoke tests that passed on retry", "Sanitize check evidence"].includes(step.name!)).map((step) => step.name);
     expect(commands).toEqual([
       "Install dependencies", "Run contract checks", "ShellCheck installer",
       "Prepare test and coverage projections", "Fail if a unit lost coverage against the first parent",
@@ -1275,12 +1275,28 @@ describe("t345 complete nightly coverage", () => {
     }
   });
 
-  test("combined smoke and guard steps preserve selection, retry policy, evidence and failure status", () => {
+  test("combined smoke and guard steps share a deadline and preserve selection, retries, evidence and failure status", () => {
     const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
       jobs: Record<string, Job>;
     };
     const root = mkdtempSync(join(tmpdir(), "t345-combined-checks-"));
+    const clock = 'date() { printf "%s\\n" "$TEST_CLOCK_SECONDS"; }\n';
+    const runStep = (step: Step, extra: Record<string, string>) => spawnSync("bash", ["-e", "-c", clock + step.run!], {
+      cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+      env: stepRunEnv(step, {
+        GITHUB_WORKSPACE: root.replaceAll("\\", "/"), TEST_CLOCK_SECONDS: "1000",
+        CHECK_WORK_DEADLINE: "17200", ...extra,
+      }),
+    });
     try {
+      const deadline = steps(ci.jobs.check)[0];
+      expect(deadline.name).toBe("Set cumulative check deadline");
+      const environment = join(root, "check.env");
+      const initialized = runStep(deadline, { GITHUB_ENV: environment.replaceAll("\\", "/") });
+      expect(initialized.status, initialized.stderr).toBe(0);
+      const workSeconds = Number(readFileSync(environment, "utf8").trim().split("=")[1]) - 1000;
+      expect(workSeconds).toBe(270 * 60);
+      expect(Number(ci.jobs.check["timeout-minutes"]) * 60 - workSeconds).toBe(30 * 60);
       mkdirSync(join(root, "tests"));
       writeFileSync(join(root, "tests/run-tests.sh"), [
         "#!/bin/bash", "set -e",
@@ -1302,16 +1318,11 @@ describe("t345 complete nightly coverage", () => {
         const step = steps(ci.jobs.check).find((entry) => entry.name === name)!;
         for (const [exit, omit] of [["0", "0"], ["7", "0"], ["0", "1"]]) {
           rmSync(join(root, "tests/logs"), { recursive: true, force: true });
-          const result = spawnSync("bash", ["-e", "-c", step.run!], {
-            cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
-            env: stepRunEnv(step, {
-              GITHUB_WORKSPACE: root.replaceAll("\\", "/"), RETRY_ONCE: retry, FIXTURE_EXIT: exit, OMIT_SUMMARY: omit,
-            }),
-          });
+          const result = runStep(step, { RETRY_ONCE: retry, FIXTURE_EXIT: exit, OMIT_SUMMARY: omit });
           const smoke = name === "Run Linux smoke";
           expect(result.status, `${name}\n${result.stdout}\n${result.stderr}`).toBe(smoke && omit === "1" ? 1 : Number(exit));
           expect(readFileSync(join(root, "argv.bin"), "utf8").split("\0").filter(Boolean)).toEqual([
-            ...expected, "--file-timeout", "7200", "--run-timeout", "14400",
+            ...expected, "--file-timeout", "7200", "--run-timeout", smoke ? "8100" : "14400",
             ...(smoke ? [] : ["--filter", "^(t-runner-production-guards|t-guard-recovery-production)"]),
           ]);
           const log = readFileSync(join(root, "tmp", capture), "utf8");
@@ -1319,6 +1330,28 @@ describe("t345 complete nightly coverage", () => {
           expect(log).toContain("captured check error");
           if (smoke) expect(readFileSync(join(root, "tmp/ci-smoke/stamp.txt"), "utf8").trim())
             .toBe(`${root.replaceAll("\\", "/")}/tests/logs/fixture`);
+        }
+      }
+      // Ten minutes of setup, then smoke using its whole allowance: both
+      // commands still fit the original deadline, leaving cleanup time intact.
+      for (const [name, now, budget] of [
+        ["Run Linux smoke", "1600", "7800"],
+        ["Exercise recovery with production guards", "9400", "7800"],
+      ]) {
+        const step = steps(ci.jobs.check).find((entry) => entry.name === name)!;
+        const result = runStep(step, { TEST_CLOCK_SECONDS: now, RETRY_ONCE: "false", FIXTURE_EXIT: "0", OMIT_SUMMARY: "0" });
+        expect(result.status, result.stderr).toBe(0);
+        const args = readFileSync(join(root, "argv.bin"), "utf8").split("\0");
+        expect(args[args.indexOf("--run-timeout") + 1]).toBe(budget);
+      }
+      for (const name of ["Run Linux smoke", "Exercise recovery with production guards"]) {
+        const step = steps(ci.jobs.check).find((entry) => entry.name === name)!;
+        for (const now of ["17200", "17201"]) {
+          rmSync(join(root, "argv.bin"), { force: true });
+          const result = runStep(step, { TEST_CLOCK_SECONDS: now, RETRY_ONCE: "false", FIXTURE_EXIT: "0", OMIT_SUMMARY: "0" });
+          expect(result.status, result.stderr).toBe(1);
+          expect(result.stdout).toContain("combined check budget exhausted");
+          expect(existsSync(join(root, "argv.bin"))).toBe(false);
         }
       }
     } finally {
@@ -2062,7 +2095,9 @@ describe("t345 complete nightly coverage", () => {
       const execution = steps(job).find((step) => step.name === stepName)!;
       expect(job["timeout-minutes"], stepName).toBe(300);
       expect(execution["timeout-minutes"], stepName).toBe(270);
-      expect(execution.run, stepName).toContain("--file-timeout 7200 --run-timeout 14400");
+      expect(execution.run, stepName).toContain(job === ci.jobs.check
+        ? '--file-timeout 7200 --run-timeout "$run_budget"'
+        : "--file-timeout 7200 --run-timeout 14400");
     }
     expect(steps(workflow.jobs.result).at(-1)?.with).toMatchObject({ "if-no-files-found": "error" });
     for (const job of [...Object.values(workflow.jobs), ...Object.values(deterministic.jobs)]) {

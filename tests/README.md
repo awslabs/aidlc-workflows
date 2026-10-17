@@ -205,6 +205,9 @@ performance calibration tests keep their own bounds.
 PR CI runs ten weighted Linux unit shards and deterministic integration. Linux
 smoke shares the combined check job with code contracts and production guards,
 using separate runner processes; macOS and Windows keep their own smoke jobs.
+The combined job has one work deadline that includes setup/contracts: smoke
+gets half the remaining time, guards get what remains, and thirty minutes are
+reserved for cleanup and evidence collection.
 PR CI uses 17 runners, including its required-result job.
 Full Suite full verification runs smoke, sixteen unit shards per OS, integration, and isolated
 E2E on Linux/macOS/Windows. Integration and E2E have independent jobs per OS

@@ -53,6 +53,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 300
     steps:
+      - name: Set cumulative check deadline
+        # Include setup/contracts and leave thirty minutes for process cleanup
+        # and evidence collection outside the shared work deadline.
+        run: echo "CHECK_WORK_DEADLINE=$(( $(date +%s) + 270 * 60 ))" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         id: checkout
         with:
@@ -106,11 +111,18 @@ jobs:
           set -euo pipefail
           capture="$GITHUB_WORKSPACE/tmp/ci-smoke"
           mkdir -p "$capture"
+          # Reserve half the remaining work budget for production guards.
+          run_budget=$(( (CHECK_WORK_DEADLINE - $(date +%s)) / 2 ))
+          if [ "$run_budget" -gt 14400 ]; then run_budget=14400; fi
+          if [ "$run_budget" -le 0 ]; then
+            echo "::error::combined check budget exhausted before smoke"
+            exit 1
+          fi
           args=(--smoke)
           if [ "$RETRY_ONCE" = true ]; then args+=(--file-retries 1); fi
           result=0
           bash tests/run-tests.sh --debug -P 8 --no-llm "${args[@]}" \
-            --file-timeout 7200 --run-timeout 14400 > "$capture/run.log" 2>&1 || result=$?
+            --file-timeout 7200 --run-timeout "$run_budget" > "$capture/run.log" 2>&1 || result=$?
           stamp="$(sed -n '/^Verbose mode: logging to /{s/^Verbose mode: logging to //;p;q;}' "$capture/run.log" | tr -d '\r')"
           printf '%s\n' "$stamp" > "$capture/stamp.txt"
           if [ "$result" -eq 0 ] && { [ -z "$stamp" ] || [ ! -f "$stamp/summary.txt" ]; }; then
@@ -131,7 +143,13 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/tmp/ci-guard-contract"
-          bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration --no-llm --file-timeout 7200 --run-timeout 14400 --filter '^(t-runner-production-guards|t-guard-recovery-production)' > "$GITHUB_WORKSPACE/tmp/ci-guard-contract/production-run.log" 2>&1
+          run_budget=$(( CHECK_WORK_DEADLINE - $(date +%s) ))
+          if [ "$run_budget" -gt 14400 ]; then run_budget=14400; fi
+          if [ "$run_budget" -le 0 ]; then
+            echo "::error::combined check budget exhausted before production guards"
+            exit 1
+          fi
+          bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration --no-llm --file-timeout 7200 --run-timeout "$run_budget" --filter '^(t-runner-production-guards|t-guard-recovery-production)' > "$GITHUB_WORKSPACE/tmp/ci-guard-contract/production-run.log" 2>&1
 
       - name: Sanitize check evidence
         if: ${{ always() && steps.install.outcome == 'success' }}

@@ -931,7 +931,7 @@ macOS and three Windows jobs. These are per-matrix limits, not an organization
 quota; concurrent workflows still share hosted capacity. Lower concurrency
 can lengthen a Full Suite run while reducing contention with PRs and the queue.
 
-Deterministic, native-terminal, and production-guard test jobs use a five-hour
+Standalone deterministic, native-terminal, and production-guard test jobs use a five-hour
 job backstop and a 270-minute execution step. The runner shares a four-hour
 work deadline across the invocation, with a two-hour deadline per file,
 including smoke and isolated deterministic E2E.
@@ -940,6 +940,15 @@ and upload evidence after work stops. Unit work remains partitioned without dupl
 sixteen Windows shards, two selected macOS shards in the merge queue, and
 sixteen macOS shards in expanded manual CI. Full Suite full verification uses
 sixteen per OS. Compiled producer/consumer affinity is preserved.
+
+The combined CI check job starts a shared 270-minute work deadline before
+checkout, leaving thirty minutes of its five-hour job ceiling for process
+cleanup and evidence collection. Setup and contract time count against that
+deadline. Smoke receives at most half the remaining work time, reserving the
+other half for production guards; guards receive the actual time left when
+their step starts. Each invocation also retains the four-hour upper bound.
+An exhausted budget fails the step before launching tests. Existing case and
+file ceilings still apply within each invocation's remaining budget.
 
 The same hierarchy applies to merge-queue native-terminal checks, Full Suite
 native obligations and production-guard checks. These paths
@@ -2001,10 +2010,12 @@ receipt reconciliation still discovers the receipts recursively.
 
 Shared deterministic artifacts contain `tests/logs/<stamp>/` and
 `tmp/ci-deterministic/` (full stdout/stderr plus the literal stamp path). CI
-artifacts use `ci-deterministic-<suite>-<OS>`, where suite is smoke,
-unit-1 through unit-12 on Linux, unit-1 through unit-16 on Windows and manual
+artifacts use `ci-deterministic-<suite>-<OS>`, where suite is smoke on expanded
+macOS/Windows runs, unit-1 through unit-10 on Linux, unit-1 through unit-16 on Windows and manual
 macOS, unit-1 through unit-2 on merge-queue macOS, integration, scope-runs,
 scope-hosts, guard-matrix-1, guard-matrix-2, or e2e (expanded matrix only).
+Linux smoke and production-guard evidence instead share `ci-check-evidence`,
+including `tmp/ci-smoke/`, `tmp/ci-guard-contract/` and `tests/logs/`.
 An upload requires both log locations
 to pass sanitization, including after a failed test command.
 
