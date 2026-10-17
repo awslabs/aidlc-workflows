@@ -520,7 +520,9 @@ any setup step still outstanding); `--json` and `--quiet` output are unchanged.
 `--check` is the CI inverse and exits non-zero when the recorded policy is not
 fully reflected in the harness surfaces. On Kiro IDE and Cursor, where a preset
 changes nothing, a recorded effort it cannot write is left to the session, as in
-`aidlc doctor`, and does not fail the check.
+`aidlc doctor`, and does not fail the check. On Cursor, where the session sets
+every agent's model and effort, a clean check says so, as `aidlc doctor` does,
+instead of calling the recorded policy reflected.
 
 Model and flag policy resolves leaf-by-leaf through this hierarchy:
 

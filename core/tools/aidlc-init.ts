@@ -10943,12 +10943,17 @@ function prepareModelsSection(
       current,
       installedBuild,
     );
+    // On Cursor the session sets every agent's model and effort, so a
+    // clean check names the session, as doctor does, not the recorded policy.
+    const sessionSet = harness === "cursor";
     emitResult(
       drift.length === 0
-        ? success(`model policy is reflected on ${harness}`, {
-            harness,
-            drift: [],
-          })
+        ? success(
+            sessionSet
+              ? sessionModelsDetail(harness, current, installedBuild)
+              : `model policy is reflected on ${harness}`,
+            { harness, drift: [] },
+          )
         : failure(
             `model policy drift: ${drift.join("; ")}`,
             EXIT.failure,
