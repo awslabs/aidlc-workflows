@@ -4,15 +4,17 @@
 // own reaches a live file there), drives one item per question by a date rotation, and reports every miss without
 // failing. The summary it writes beside its report is what the nightly report reads.
 //
-// Mechanism: function - the rotation, the nightly switch, an item's owed misses and the summary, read back from an
-// evidence folder laid out as the live job uploads it; no agent runs.
+// Mechanism: function - the rotation, the nightly switch, the judge's verdict, an item's owed misses and the summary,
+// read back from an evidence folder laid out as the live job uploads it; no agent runs.
 import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { collectAnswers } from "../../scripts/ci-preview-test-report.ts";
 import { ANSWERS } from "../harness/aidlc-answers-corpus.ts";
-import { inNightly, type LiveOutcome, type LiveReport, liveItem, liveSummary, nightOf, ROTATION_START, rotateByGroup } from "../harness/live-corpus.ts";
+import {
+  inNightly, judgeVerdict, type LiveOutcome, type LiveReport, liveItem, liveSummary, missKinds, nightOf, ROTATION_START, rotateByGroup,
+} from "../harness/live-corpus.ts";
 
 interface Item { id: string; meaning: string; group: string }
 const item = (id: string, group: string): Item => ({ id, meaning: `meaning of ${id}`, group });
@@ -74,6 +76,15 @@ describe("the answers corpus in the nightly", () => {
     expect(outcomes).toHaveLength(2);
     await expect(liveItem(async () => { throw new Error("the driver crashed"); }, outcomes, true)).rejects.toThrow("the driver crashed");
     expect(outcomes).toHaveLength(2);
+  });
+
+  test("a verdict the judge wrote that does not parse is the judge's miss, counted as words, not a throw", () => {
+    expect(judgeVerdict('{"ok": true, "asked": 1, "reason": "plain words"}')).toEqual({ failure: null, asked: 1 });
+    expect(judgeVerdict('Verdict: {"ok": false, "asked": 0, "reason": "it named a hook"}')).toEqual({ failure: "the agent's words: it named a hook", asked: 0 });
+    const unreadable = '{"ok": false, "asked": 0, "reason": "it says "Approve" twice"}';
+    const verdict = judgeVerdict(unreadable);
+    expect(verdict).toEqual({ failure: `the judge gave no verdict: ${unreadable}`, asked: null });
+    expect(missKinds([verdict.failure as string])).toEqual({ record: false, question: false, words: true });
   });
 
   test("the summary counts each miss by kind, the check's own apart, names its item, and the nightly report reads it back", () => {
