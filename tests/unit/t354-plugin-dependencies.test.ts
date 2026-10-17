@@ -513,7 +513,7 @@ describe("t354 a team scope runs the base stages it includes", () => {
       zeta: zetaWith("0.1.1", ["zeta-intake-v2"]),
     });
     const ran = sync(target);
-    const line = "alpha is not composed: it needs zeta-intake and zeta-research for its alpha-example scope, which zeta 0.1.1 does not have. Install a zeta version that has them, or a version of alpha made for zeta 0.1.1.";
+    const line = "alpha is not composed: it needs zeta-intake and zeta-research for its alpha-example scope, which zeta 0.1.1 does not have. Install a version of zeta that has them, or a version of alpha made for zeta 0.1.1.";
     expect(ran.status, ran.stdout + ran.stderr).toBe(0);
     expect(ran.stdout).toContain(line);
     expect(statusOf(target, "zeta")?.state).toBe("current");
@@ -527,7 +527,7 @@ describe("t354 a team scope runs the base stages it includes", () => {
     expect(column(target, "alpha-example")).toEqual([...INIT, "zeta-intake"]);
     setInstalled(target, { alpha: { root: team }, zeta: zetaWith("0.1.1", ["zeta-intake-v2"]) });
     const ran = sync(target);
-    const line = "alpha stays as composed before, but it needs zeta-intake for its alpha-example scope, which zeta 0.1.1 does not have, so alpha-example runs without it. Install a zeta version that has it, or a version of alpha made for zeta 0.1.1.";
+    const line = "alpha stays as composed before, but it needs zeta-intake for its alpha-example scope, which zeta 0.1.1 does not have, so alpha-example runs without it. Install a version of zeta that has it, or a version of alpha made for zeta 0.1.1.";
     expect(ran.status, ran.stdout + ran.stderr).toBe(0);
     expect(ran.stdout).toContain(line);
     expect(stamp(target, "alpha")?.version).toBe("0.1.0");
@@ -548,7 +548,7 @@ describe("t354 a team scope runs the base stages it includes", () => {
     const ran = sync(held, { hookRoot: alpha({ includes: ["zeta-intake"] }), hostList: false });
     expect(ran.status, ran.stdout + ran.stderr).toBe(0);
     expect(ran.stdout).toContain(
-      "alpha is not composed: it needs zeta-intake for its alpha-example scope, which zeta 0.1.1 does not have. Install a zeta version that has it, or a version of alpha made for zeta 0.1.1.",
+      "alpha is not composed: it needs zeta-intake for its alpha-example scope, which zeta 0.1.1 does not have. Install a version of zeta that has it, or a version of alpha made for zeta 0.1.1.",
     );
 
     const composed = project({});
