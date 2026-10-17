@@ -14994,6 +14994,18 @@ export function auditBlockField(block: string, fieldName: string): string | null
   return null;
 }
 
+// Whether a `GATE_REJECTED` row is a fresh attempt rather than the person's
+// change request. `aidlc-jump.ts reopen` marks its rows `Reopen: jump` (a
+// `/aidlc --stage` reopen) or `Reopen: redo` (redo on re-entry): the person
+// asked to do the step again, not to change it, so its plan comes back for
+// approval as it stands. `Reopen: change` and a row with no `Reopen` (a gate's
+// Request Changes) are the person's change request. Told apart by that field's
+// value alone, never by the row's feedback text.
+export function rejectionIsFreshAttempt(block: string): boolean {
+  const reopen = auditBlockField(block, "Reopen");
+  return reopen !== null && reopen !== "change";
+}
+
 // The audit events that close a DECISION_RECORDED. `aidlc-log answer` answers
 // an ordinary question with QUESTION_ANSWERED, but a Consolidated Summary
 // Confirmation, an approved verification command, an approved construction

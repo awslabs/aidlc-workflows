@@ -1029,7 +1029,11 @@ This stage has a **two-part structure**: planning followed by generation.
    Code Generation completion gate, a Unit checkpoint, or a swarm batch
    checkpoint), while the plan is still the one approved before, `next` first
    returns `revise` with the person's words from that gate, so the question
-   that follows shows the revised plan. Re-running `next`, or a
+   that follows shows the revised plan. A reopen or a Redo of the step
+   (`/aidlc --stage code-generation`, whose row is `Reopen: jump` or
+   `Reopen: redo`) is not a rejection: the person asked for no change, so it
+   starts a fresh attempt and `next` asks about the plan as it stands; only
+   `Reopen: change` returns `revise`. Re-running `next`, or a
    reissued directive for the same target and attempt, never reopens it, and
    neither does whatever the engine said in between: a chat that compacted, a
    piece of work parked and resumed, or a guard-recovery question. `next` reads
