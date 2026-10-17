@@ -184,9 +184,12 @@ with a compose hook also repair the surface on the next session start. The
 doctor's **Composed plugin surface** check detects both missing plugin graph
 entries and stale structural or prose contributions, and sync reads the same
 check: a plugin whose recorded addition is gone (a structural value, a
-fragment's markers, or a fragment nested inside another) composes again. A
-fragment whose markers are in place but whose text was changed is the person's
-edit: sync leaves it, and doctor keeps naming it. Unreadable or malformed
+fragment's markers, or a fragment nested inside another of the same plugin's)
+composes again. A fragment whose markers are in place but whose text was changed
+is the person's edit. When that is the plugin's only gap, sync leaves it and
+doctor keeps naming it; when another of the plugin's additions is gone, sync
+composes the whole plugin again, which rewrites its fragments with the plugin's
+text, as a plugin update does. Unreadable or malformed
 enabled-plugin sidecars and records that target a missing stage also fail the
 check rather than being skipped. Because an already-composed structural value
 cannot be attributed safely after its provenance is corrupted, recover an

@@ -201,8 +201,9 @@ describe("t314 doctor detects plugin composition erased by an engine reinstall",
   // keep everything else (a copy of the new runtime over the project), or leave
   // the fragments that share an anchor nested (an earlier release's refresh
   // merge). The plugin's stamp and files are unchanged, so only its recorded
-  // additions tell sync to compose it again. A person's edit inside a fragment
-  // is theirs, so sync leaves it and doctor keeps naming it.
+  // additions tell sync to compose it again. A person's edit inside a fragment,
+  // when it is the plugin's only gap, does not: sync leaves it and doctor keeps
+  // naming it.
   function syncPlugin(project: string): number {
     const synced = spawnSync(BUN, [join(project, ".claude", "tools", "aidlc.ts"), "engine", "plugin", "sync", "--json"], {
       cwd: project,
