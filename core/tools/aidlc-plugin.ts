@@ -1706,7 +1706,7 @@ function heldLine(
         : problem.kind === "include"
         ? [
           `needs ${listed(problem.missing.map(({ scope, stages }) => `${listed(stages)} for its ${scope} scope`))}, which ${problem.base} ${problem.version} does not have`,
-          `Install a ${problem.base} version that has ${it}, or a version of ${key} made for ${problem.base} ${problem.version}.`,
+          `Install a version of ${problem.base} that has ${it}, or a version of ${key} made for ${problem.base} ${problem.version}.`,
         ]
         : problem.kind === "bases"
           ? [`names more than one base plugin (${problem.names.join(", ")})`, "A plugin builds on core and at most one base."]
