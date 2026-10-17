@@ -374,7 +374,10 @@ describe("t305 strict source-manifest validation", () => {
     });
     const prefix = readUnitSourceManifest(project, "code-generation", "alpha");
     expect(prefix.ok).toBe(false);
-    if (!prefix.ok) expect(prefix.reason).toContain("contains ignored application source");
+    if (!prefix.ok) {
+      expect(prefix.reason).toContain("contains ignored application source");
+      expect(prefix.reason).not.toContain("neither tracked at HEAD");
+    }
 
     writeFileSync(join(project, "force-only.secret"), "staged but uncommitted\n");
     writeFileSync(
@@ -428,6 +431,55 @@ describe("t305 strict source-manifest validation", () => {
     );
     expect(slashless.ok).toBe(false);
     if (!slashless.ok) expect(slashless.reason).toContain("must end with");
+  });
+
+  test("a gitignored exact dependency file cannot be registered as source", () => {
+    const { project, record } = fixture();
+    mkdirSync(join(project, "node_modules/pkg"), { recursive: true });
+    writeFileSync(join(project, "node_modules/pkg/index.js"), "module.exports = {};\n");
+    writeFileSync(join(project, ".gitignore"), "node_modules/\n");
+    manifest(record, "alpha", { stage: "code-generation", unit: "alpha", version: 1,
+      writes: [{ path: "node_modules/pkg/index.js" }] });
+    const refused = readUnitSourceManifest(project, "code-generation", "alpha");
+    expect(refused.ok).toBe(false);
+    if (!refused.ok) {
+      expect(refused.reason).toContain("omit this exact claim");
+      expect(refused.reason).not.toContain('"paths":[');
+    }
+  });
+
+  test("ignored exact-file admission distinguishes index tracking, HEAD membership, and source registration", () => {
+    const { project, record } = fixture();
+    mkdirSync(join(project, "src"));
+    const file = join(project, "src/main.js.map");
+    writeFileSync(file, "{}\n");
+    writeFileSync(join(project, ".gitignore"), "*.js.map\n");
+    manifest(record, "alpha", { stage: "code-generation", unit: "alpha", version: 1, writes: [{ path: "src/main.js.map" }] });
+    const first = readUnitSourceManifest(project, "code-generation", "alpha");
+    expect(first.ok).toBe(false);
+    if (!first.ok) {
+      expect(first.reason).toContain('"src/main.js.map" is ignored by Git and cannot be source-review evidence');
+      expect(first.reason).toContain("neither tracked at HEAD nor explicitly registered as source");
+      expect(first.reason).toContain("Git index-only additions (including force-add) or jj tracking alone");
+      expect(first.reason).toContain('{"version":1,"paths":["src/main.js.map"]}');
+      expect(first.reason).toContain(".aidlc-source-paths.json in this repository's root (merge with existing entries)");
+      expect(first.reason).toContain("omit this exact claim");
+      expect(first.reason).toContain("exclude list instead of paths");
+    }
+    git(project, ["add", "-f", "--", "src/main.js.map"]);
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+    const registry = join(project, ".aidlc-source-paths.json");
+    writeFileSync(registry, JSON.stringify({ version: 1, paths: ["src/main.js.map"], exclude: ["src/main.js.map"] }));
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(true);
+    expect(workspaceSourceListing(project)?.has("\0src/main.js.map")).toBe(true);
+    // Removing registration restores the refusal even when exclude is present.
+    writeFileSync(registry, JSON.stringify({ version: 1, exclude: ["src/main.js.map"] }));
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(false);
+    rmSync(registry);
+    git(project, ["commit", "-qm", "track ignored file in HEAD"]);
+    expect(readUnitSourceManifest(project, "code-generation", "alpha").ok).toBe(true);
+    expect(readFileSync(file, "utf-8")).toBe("{}\n");
+    expect(readFileSync(join(project, ".gitignore"), "utf-8")).toBe("*.js.map\n");
   });
 
   test("rechecks mixed ignore matches and negations on each read of the same manifest", () => {
@@ -1446,6 +1498,9 @@ describe("t305 real receipt and guard flows", () => {
     const refused = cli(LOG, args, project);
     expect(refused.rc).toBe(1);
     expect(refused.out).toContain("ignored by Git");
+    expect(refused.out).toContain("neither tracked at HEAD nor explicitly registered as source");
+    const diagnostic = JSON.parse(refused.out) as { error: string };
+    expect(diagnostic.error).toContain('{"version":1,"paths":["ignored.ts"]}');
     expect(readAllAuditShards(project)).not.toMatch(
       /\*\*Event\*\*: REVIEW_REQUESTED[\s\S]*?\*\*Unit\*\*: alpha/,
     );

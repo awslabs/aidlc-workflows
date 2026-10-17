@@ -26284,7 +26284,13 @@ function ignoredSourceClaimReason(
     ) {
       return null;
     }
-    return `${JSON.stringify(path)} is ignored by Git and cannot be source-review evidence`;
+    const refusal = `${JSON.stringify(path)} is ignored by Git and cannot be source-review evidence`;
+    if (prefix || currentIsDirectory) return refusal;
+    if (sourcePathPhysicallyExcluded(literalPath, false, new Set<string>())) {
+      return `${refusal}; it lies under a folder AI-DLC never treats as source; omit this exact claim`;
+    }
+    const registration = JSON.stringify({ version: 1, paths: [literalPath] });
+    return `${refusal}. This exact file is neither tracked at HEAD nor explicitly registered as source. Git index-only additions (including force-add) or jj tracking alone do not establish HEAD membership. If intended as reviewed source, add ${registration} to .aidlc-source-paths.json in this repository's root (merge with existing entries), then retry. If it is output rather than source, omit this exact claim and use the registry's exclude list instead of paths to leave it outside the source boundary`;
   }
   if (!prefix && currentIsDirectory) {
     const currentMode = currentGitPathMode(
