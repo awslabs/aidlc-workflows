@@ -1231,7 +1231,7 @@ export function reviewRequestNote(
   recordVerdict: string,
   dispatchAgent: string | null = null,
 ): string {
-  // A reviewer copy (Kiro preview) is dispatched by its own name; the brief and
+  // A reviewer copy (Kiro) is dispatched by its own name; the brief and
   // the verdict keep the reviewer's.
   const dispatch = dispatchAgent === null
     ? `Dispatch ${reviewer} as a subagent`

@@ -1,12 +1,11 @@
 // covers: subcommand:aidlc-log:review, function:prepareReviewCopy, function:removeReviewCopy, function:reviewRequestNote, hook:aidlc-log-subagent
 //
-// The reviewer read-scope preview feature on Kiro (kiro-ide), end to end on an
-// installed tree: a Unit's review request on a preview release, with the
-// feature turned on in the project's Kiro tree (`aidlc config preview`),
-// writes a copy of the installed reviewer that carries the review's read scope
-// and hands its name back; the completion Kiro reports under the copy's name is
-// the reviewer's; the verdict removes the copy. On a stable release the same
-// request, with the same record, is the request it was.
+// The reviewer read-scope copy on Kiro (kiro-ide), end to end on an installed
+// tree of a stable release: a Unit's review request writes a copy of the
+// installed reviewer that carries the review's read scope and hands its name
+// back; the completion Kiro reports under the copy's name is the reviewer's;
+// the verdict removes the copy. With the reviewer read-scope check off, the
+// request is the request it was.
 // Kiro itself is not driven here: that a delegated agent's fs_read deny with an
 // exclude is enforced was measured on Kiro CLI 2.31.0 and Kiro IDE 1.3.0.
 
@@ -31,7 +30,6 @@ const STAGE = "functional-design";
 const UNIT = "alpha";
 const REVIEWER = "aidlc-architecture-reviewer-agent";
 const KIRO_IDE_TREE = join(REPO_ROOT, "dist", "kiro-ide", ".kiro");
-const PREVIEW_VERSION = "2.11.0-preview.20261015.1";
 const projects: string[] = [];
 
 afterAll(() => {
@@ -50,32 +48,19 @@ class KiroUnitReview {
   readonly dir: string;
   readonly env: NodeJS.ProcessEnv;
 
-  constructor(preview: boolean) {
+  constructor() {
     this.dir = createTestProject();
     projects.push(this.dir);
     seedAidlcMemory(this.dir);
     cpSync(KIRO_IDE_TREE, join(this.dir, ".kiro"), { recursive: true });
-    if (preview) {
-      // A preview build is the same tree with a preview version stamped in,
-      // in its engine and in the tree's stamp the feature reads.
-      const versionFile = join(this.dir, ".kiro", "tools", "aidlc-version.ts");
-      writeFileSync(
-        versionFile,
-        readFileSync(versionFile, "utf-8").replace(/AIDLC_VERSION = "[^"]+"/, `AIDLC_VERSION = "${PREVIEW_VERSION}"`),
-      );
-      const stampFile = join(this.dir, ".kiro", "tools", "data", "aidlc-stamp.json");
-      writeFileSync(
-        stampFile,
-        readFileSync(stampFile, "utf-8").replace(/"frameworkVersion": "[^"]+"/, `"frameworkVersion": "${PREVIEW_VERSION}"`),
-      );
-    }
+    // A record the dropped preview switch left behind changes nothing.
     const harnessData = join(this.dir, ".kiro", "tools", "data", "harness.json");
     writeFileSync(
       harnessData,
-      `${JSON.stringify({ ...JSON.parse(readFileSync(harnessData, "utf-8")), previewFeatures: { "reviewer-read-scope": "on" } }, null, 2)}\n`,
+      `${JSON.stringify({ ...JSON.parse(readFileSync(harnessData, "utf-8")), previewFeatures: { "reviewer-read-scope": "off" } }, null, 2)}\n`,
     );
     this.env = { ...process.env, AIDLC_PROJECT_DIR: this.dir };
-    for (const key of ["AIDLC_HARNESS_DIR", "AIDLC_AGENTS_DIR", "AIDLC_HARNESS_NAME", "AIDLC_PREVIEW_FEATURES", "CLAUDE_PROJECT_DIR"]) {
+    for (const key of ["AIDLC_HARNESS_DIR", "AIDLC_AGENTS_DIR", "AIDLC_HARNESS_NAME", "AIDLC_DISABLE_REVIEWER_SCOPE_HOOK", "CLAUDE_PROJECT_DIR"]) {
       delete this.env[key];
     }
     writeFileSync(seededStateFile(this.dir), [
@@ -155,9 +140,9 @@ class KiroUnitReview {
   }
 }
 
-describe("the reviewer read-scope copy on Kiro (preview)", () => {
-  test("a preview request writes the copy and names it; its completion is the reviewer's; the verdict removes it", () => {
-    const p = new KiroUnitReview(true);
+describe("the reviewer read-scope copy on Kiro", () => {
+  test("a request on a stable release writes the copy and names it; its completion is the reviewer's; the verdict removes it", () => {
+    const p = new KiroUnitReview();
     const shippedAgents = p.agents();
     const requested = json(p.log(p.reviewArgs()), "Request the Unit's review");
     expect(requested.emitted).toBe("REVIEW_REQUESTED");
@@ -202,13 +187,13 @@ describe("the reviewer read-scope copy on Kiro (preview)", () => {
   });
 
   test("a dispatch Kiro cannot find is no completion, so the reviewer it falls back to finishes the review", () => {
-    const p = new KiroUnitReview(true);
+    const p = new KiroUnitReview();
     const requested = json(p.log(p.reviewArgs()), "Request the Unit's review");
     const copyName = String(requested.dispatchAgent);
     expect(copyName).toMatch(/^aidlc-scoped-review-[0-9a-f]{12}$/);
     expect(p.dispatched(copyName, `Agent '${copyName}' not found in registry`).code).toBe(0);
     expect(p.completions()).toEqual([]);
-    // The fallback is said where doctor looks: the scope the person turned on was not held.
+    // The fallback is said where doctor looks: the read scope was not held.
     expect(readFileSync(join(seededRecordDir(p.dir), ".aidlc-engine", "hooks-health", "kiro-adapter.drops"), "utf-8"))
       .toContain(`Kiro has no agent named ${copyName}`);
     expect(p.dispatched(REVIEWER, `**Reviewer:** ${REVIEWER}\n\nVerdict: READY`).code).toBe(0);
@@ -216,7 +201,7 @@ describe("the reviewer read-scope copy on Kiro (preview)", () => {
   });
 
   test("a copy that cannot be written is said in one line, and the reviewer itself is dispatched", () => {
-    const p = new KiroUnitReview(true);
+    const p = new KiroUnitReview();
     const reviewerFile = join(p.dir, ".kiro", "agents", `${REVIEWER}.md`);
     writeFileSync(reviewerFile, readFileSync(reviewerFile, "utf-8").replace(/\npermissions:\n/, "\nreviewer_permissions:\n"));
     const requested = json(p.log(p.reviewArgs()), "Request the Unit's review");
@@ -232,8 +217,9 @@ describe("the reviewer read-scope copy on Kiro (preview)", () => {
     expect(shown.length).toBeLessThanOrEqual(120);
   });
 
-  test("a stable build's request is the request it was", () => {
-    const p = new KiroUnitReview(false);
+  test("with the reviewer read-scope check switched off, the request is the request it was", () => {
+    const p = new KiroUnitReview();
+    p.env.AIDLC_DISABLE_REVIEWER_SCOPE_HOOK = "1";
     const shippedAgents = p.agents();
     const requested = json(p.log(p.reviewArgs()), "Request the Unit's review");
     expect(requested.emitted).toBe("REVIEW_REQUESTED");

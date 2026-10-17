@@ -38,7 +38,7 @@
 //                   also fail-closes on any effort-like key in agent JSON,
 //                   so no tier writes one into a Kiro agent (a person's own
 //                   per-agent `effortLevel` on the kiro-ide row is written by
-//                   aidlc-model-policy.ts, behind the agent-models preview);
+//                   aidlc-model-policy.ts);
 //                   a per-model effort default can only ride on cli.json
 //                   chat.modelDefaults (see kiroModelDefaults below). The
 //                   session's own model and effort live in the person's

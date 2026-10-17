@@ -99,7 +99,7 @@ export async function run(input: string): Promise<number> {
       : "unknown";
   const agentId: string = parsed.agent_id ?? "";
   const agentMessage: string = (parsed.last_assistant_message ?? "").slice(0, 200);
-  // A reviewer copy (Kiro preview, aidlc-kiro-review-copy.ts) is its request's
+  // A reviewer copy (Kiro, aidlc-kiro-review-copy.ts) is its request's
   // reviewer under another name: the row names the reviewer, so the review's
   // evidence is found as the reviewer's, and keeps the copy's name beside it.
   // Only a copy whose request is still open is read this way.

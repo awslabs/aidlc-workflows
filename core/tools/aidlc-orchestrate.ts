@@ -4905,7 +4905,7 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       return {
         config: true,
         parseError:
-          `Usage: ${entrySkillInvocation()} --config [models|runtime|providers|trust|flags|project|preview].`,
+          `Usage: ${entrySkillInvocation()} --config [models|runtime|providers|trust|flags|project].`,
       };
     }
     return {
@@ -8984,13 +8984,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const target = selected ? `the ${selected} section` : "project configuration";
     // A named section always gets the question, even when it is already clean;
     // the human asked to configure it (t297 saw a clean trust section end silently).
-    const ask = selected === "preview"
-      ? `then, when it lists no preview feature for this project, say so in one line and stop without asking; otherwise ask which feature the human wants on or off, leaving it unchanged, even when it is already as they want`
-      : selected
+    const ask = selected
       ? `then ask what the human wants to change in it, offering the choices \`${invoke} config ${selected} --help\` lists and leaving it unchanged, even when it is already clean`
       : "then ask which sections the human wants to consider, and skip any section they leave unchanged";
     emit(printDirective(
-      `Configure ${target} conversationally. Read current state first with \`${show}\`, ${ask}. Use the native question picker for enumerable choices. Land each accepted change with exactly one \`${invoke} config <section> <explicit value flags> --yes\` command (for preview, \`${invoke} config preview <feature> <on|off> --yes\`), relaying the human's answers verbatim as flags; show the exact command and its output. Never invent values, regions, or plugin names, and never run bare \`${invoke} config --yes\`. After the changes land, or after the human declines, STOP: do NOT run \`next\`, advance, resume, or run any workflow stage.`,
+      `Configure ${target} conversationally. Read current state first with \`${show}\`, ${ask}. Use the native question picker for enumerable choices. Land each accepted change with exactly one \`${invoke} config <section> <explicit value flags> --yes\` command, relaying the human's answers verbatim as flags; show the exact command and its output. Never invent values, regions, or plugin names, and never run bare \`${invoke} config --yes\`. After the changes land, or after the human declines, STOP: do NOT run \`next\`, advance, resume, or run any workflow stage.`,
     ));
     return;
   }

@@ -1,5 +1,4 @@
-// The per-review reviewer copy on Kiro (the KAS layout: kiro-ide), a preview
-// feature.
+// The per-review reviewer copy on Kiro (the KAS layout: kiro-ide).
 //
 // Kiro's hook payloads do not say which agent made a tool call, so the
 // reviewer-scope PreToolUse hook cannot hold a per-unit reviewer to its unit
@@ -17,7 +16,6 @@
 
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import type { PreviewFeature } from "./aidlc-channel.ts";
 import {
   decideFence,
   installedKiroLayout,
@@ -28,12 +26,7 @@ import {
   swarmWorkerWorktreeMeta,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
-import { treePreviewFeature } from "./aidlc-model-policy.ts";
 import { resolveHarnessPath } from "./aidlc-runtime-paths.ts";
-import { AIDLC_VERSION } from "./aidlc-version.ts";
-
-/** The preview feature this module implements. */
-export const REVIEWER_READ_SCOPE_FEATURE: PreviewFeature = "reviewer-read-scope";
 
 // Where the reviewer can reach the Units' folders: every intent's record, and
 // a parallel batch's worktrees under .aidlc/worktrees/ (the reviewer's own
@@ -118,29 +111,25 @@ function writableAgentsDir(projectDir: string): string {
 export type ReviewCopyOutcome =
   /** Dispatch this agent: the reviewer with the review's read scope. */
   | { dispatchAgent: string }
-  /** The feature asked for a copy and none could be written: this review runs
+  /** A copy was due and none could be written: this review runs
    *  without its read scope, and `notice` tells the person so in one line. */
   | { notice: string };
 
 /**
  * Write this review's reviewer copy and say which agent the conductor
- * dispatches, or null when the feature does not apply and the review goes to
- * the reviewer itself as it always has: the feature is off, the project's Kiro
- * tree is not the KAS layout, the review is not a Unit's, it runs in a parallel
- * batch's worktree, or the reviewer read-scope check stands aside for this
- * work. Never refuses. A copy the feature asked for but could not write leaves
+ * dispatches, or null when no copy is due and the review goes to the
+ * reviewer itself: the project's Kiro tree is not the KAS layout, the review is
+ * not a Unit's, it runs in a parallel batch's worktree, or the reviewer
+ * read-scope check stands aside for this work. Never refuses. A copy that was
+ * due but could not be written leaves
  * a line among the reviewer-scope drops doctor counts, naming the cause, and a
  * notice.
  */
 export function prepareReviewCopy(
   projectDir: string,
   review: { requestId: string; reviewer: string; unit?: string },
-  version: string = AIDLC_VERSION,
 ): ReviewCopyOutcome | null {
-  // The project's Kiro tree is always `.kiro`, the folder the layout check
-  // reads too; read through a link as it is, so a copy that cannot be written
-  // there is still said.
-  if (!review.unit || !treePreviewFeature(join(projectDir, ".kiro"), REVIEWER_READ_SCOPE_FEATURE, version).on) return null;
+  if (!review.unit) return null;
   // Doctor lists a drop by its reason up to the first ": ", cut short, so the
   // reason starts with a short cause and the details follow it.
   const drop = (cause: string, detail: string) =>
@@ -149,7 +138,7 @@ export function prepareReviewCopy(
       "reviewer-scope",
       `reviewer copy not written, ${cause}: ${review.reviewer} for unit ${review.unit}${detail ? `; ${detail}` : ""}`,
     );
-  // Whether the feature applies here at all. A check that cannot be read
+  // Whether a copy is due here at all. A check that cannot be read
   // leaves the review as it always was, with a drop line and no notice: it is
   // not known that the person's check was on.
   try {

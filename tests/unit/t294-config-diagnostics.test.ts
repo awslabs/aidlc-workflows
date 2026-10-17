@@ -261,7 +261,7 @@ describe("t294 config section dispatch", () => {
     ], project);
     expect(unknown.status).toBe(2);
     expect(unknown.stdout).toContain(
-      "valid sections: models, runtime, providers, trust, flags, project, preview",
+      "valid sections: models, runtime, providers, trust, flags, project",
     );
     expect(existsSync(join(project, ".claude"))).toBe(false);
 

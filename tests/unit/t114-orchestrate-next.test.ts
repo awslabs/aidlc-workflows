@@ -478,15 +478,6 @@ describe("t114 in-session config alias", () => {
     expect(out).not.toContain("ask which sections");
   });
 
-  test("--config takes every section the usage line names, preview included", () => {
-    proj = createOrchestrationTestProject();
-    const out = runNext(proj, ["--config", "preview"]).out;
-    expect(out).toContain('"kind":"print"');
-    expect(out).toContain("bun .claude/tools/aidlc.ts config preview --show --json");
-    expect(out).toContain("bun .claude/tools/aidlc.ts config preview <feature> <on|off> --yes");
-    expect(out).toContain("when it lists no preview feature for this project, say so in one line and stop without asking");
-  });
-
   test("--config rejects unknown or extra trailing tokens as usage errors", () => {
     proj = createOrchestrationTestProject();
     for (const args of [
@@ -496,7 +487,7 @@ describe("t114 in-session config alias", () => {
       const out = runNext(proj, args).out;
       expect(out).toContain('"kind":"error"');
       expect(out).toContain(
-        "Usage: /aidlc --config [models|runtime|providers|trust|flags|project|preview].",
+        "Usage: /aidlc --config [models|runtime|providers|trust|flags|project].",
       );
       expect(out).not.toContain('"kind":"run-stage"');
       expect(existsSync(engineTouchMarkerPath(proj))).toBe(false);

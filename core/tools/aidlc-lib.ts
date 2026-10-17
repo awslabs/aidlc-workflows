@@ -38677,8 +38677,8 @@ export function isKiroConductorAgentFile(name: string): boolean {
   return KIRO_CONDUCTOR_AGENT_FILES.includes(basename(name));
 }
 
-// A reviewer copy one review request writes on Kiro (kiro-ide) when the
-// reviewer read-scope preview feature is on (aidlc-kiro-review-copy.ts): the
+// A reviewer copy one review request writes on Kiro (kiro-ide) while the
+// reviewer read-scope check holds (aidlc-kiro-review-copy.ts): the
 // installed reviewer with that review's read scope added, named from the
 // request id so the name stands for that one request. It is the reviewer under
 // another name, never a persona of its own.

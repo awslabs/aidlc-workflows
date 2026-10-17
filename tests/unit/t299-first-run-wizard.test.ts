@@ -1388,7 +1388,7 @@ describe("t299 first-run setup wizard", () => {
       "  Set up AI-DLC for Kiro with recommended defaults?",
       "",
       "    1. Yes, use recommended defaults   all plugins, no provider settings; model access comes with Kiro",
-      underRecommended("Records no model preset: every agent uses your Kiro session's model and effort."),
+      underRecommended("Records no model preset: every agent uses your Kiro session's model and effort unless a model or effort is set for that agent."),
       "    2. No, customize step by step      harness, provider, preset, plugins, MCP, record layer",
       "    3. Exit, nothing written",
       "",
@@ -1410,7 +1410,9 @@ describe("t299 first-run setup wizard", () => {
       underRecommended("with Kiro"),
       underRecommended("Records no model preset: every"),
       underRecommended("agent uses your Kiro session's"),
-      underRecommended("model and effort."),
+      underRecommended("model and effort unless a"),
+      underRecommended("model or effort is set for"),
+      underRecommended("that agent."),
       "    2. No, customize step by step      harness, provider, preset,",
       underRecommended("plugins, MCP, record layer"),
       "    3. Exit, nothing written",
@@ -1651,7 +1653,7 @@ describe("t299 first-run setup wizard", () => {
       expect(run.status, run.stdout + run.stderr).toBe(0);
     }
     expect(complete.stdout).toMatch(
-      /\n {2}Writing project files \.\.\. done {2}\(\.kiro\/ and aidlc\/, \d+ files\)\n {2}Model preset \.\.\. not needed {2}\(every agent uses your Kiro session's model and effort\)\n/,
+      /\n {2}Writing project files \.\.\. done {2}\(\.kiro\/ and aidlc\/, \d+ files\)\n {2}Model preset \.\.\. not needed {2}\(every agent uses your Kiro session's model and effort unless a model or effort is set for that agent\)\n/,
     );
     expect(complete.stdout).toContain([
       "    Hooks run outside your interactive shell PATH, and aidlc is not available there.",
@@ -1672,7 +1674,7 @@ describe("t299 first-run setup wizard", () => {
     // the session instead of asking for a policy, and the walk never offers it.
     expect(check.stdout).toContain([
       "    [ok]     Harnesses   kiro-ide recorded",
-      "    [ok]     Models      every agent uses your Kiro session's model and effort",
+      "    [ok]     Models      every agent uses your Kiro session's model and effort unless a model or effort is set for that agent",
       "    [needs]  Runtime     aidlc is absent from the non-interactive hook PATH",
     ].join("\n"));
     expect(check.stdout).toContain([
@@ -1704,7 +1706,7 @@ describe("t299 first-run setup wizard", () => {
     // Kiro CLI's walk opens its session model and preset menu.
     expect(walks["harness-kiro"].stdout).toContain("Models [Enter keep everything, 1 session model, 2 preset]:");
     expect(walks["models-preset"].stdout).toContain([
-      "Recorded in: nothing; every agent uses your Kiro session's model and effort",
+      "Recorded in: nothing; every agent uses your Kiro session's model and effort unless a model or effort is set for that agent",
       "Full per-agent list: bun .kiro/tools/aidlc.ts config models --show --json",
       "Pins bind in both directions, and shipped tiers never raise an agent above the session.",
       "Models [Enter keep everything, 1 preset, 2 group efforts, 3 set each one myself]: Presets:",

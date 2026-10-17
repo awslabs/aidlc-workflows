@@ -4104,7 +4104,7 @@ function handleReview(args: string[]): void {
     // A Unit of a parallel batch, reviewed in its worktree: the reviewer runs the
     // tests the person approved through AI-DLC's own check, as its worker does.
     const swarmUnit = flags.stage === "code-generation" && flags.unit ? swarmWorkerWorktreeMeta(pd) : null;
-    // On Kiro (kiro-ide), with the reviewer read-scope preview feature on, this
+    // On Kiro (kiro-ide), while the reviewer read-scope check holds, this
     // review's reviewer is dispatched as a copy that carries its read scope; a
     // replaced request's copy goes with it.
     if (replaces !== null) removeReviewCopy(pd, replaces);
@@ -4752,7 +4752,7 @@ function handleReview(args: string[]): void {
   // the reviewer-scope hook reads it. Remove that one too, when it is this
   // review's own record; another Unit's review keeps its window.
   removeParentReviewerDispatch(pd, { reviewer: flags.reviewer, stage: flags.stage, unit: flags.unit });
-  // The verdict closes the request, so its reviewer copy (Kiro preview) goes too.
+  // The verdict closes the request, so its reviewer copy (Kiro) goes too.
   removeReviewCopy(pd, fields["Request Id"]);
 
   const agentNote = recorded.context === undefined
