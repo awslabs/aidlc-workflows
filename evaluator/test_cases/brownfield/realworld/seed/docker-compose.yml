@@ -1,0 +1,33 @@
+services:
+  realword-app:
+    build: .
+    command: >
+      sh -c "
+      python manage.py makemigrations &&
+      python manage.py migrate &&
+      python manage.py runserver 0.0.0.0:8000"
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    depends_on:
+      - db
+    environment:
+      - DATABASE_URL=postgresql://postgres:0000@db:5432/postgres
+      - ALLOWED_HOSTS=*
+
+  db:
+    image: postgres:18
+    restart: always
+    # ports:  # uncomment to expose to host on port 5433
+    # - 5433:5432
+    volumes:
+      - db-data:/var/lib/postgresql
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=0000
+      - POSTGRES_DB=postgres
+
+
+volumes:
+  db-data:

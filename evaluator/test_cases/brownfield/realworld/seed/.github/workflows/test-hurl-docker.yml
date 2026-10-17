@@ -1,0 +1,28 @@
+name: Test Hurl Docker
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      max-parallel: 4
+    timeout-minutes: 10
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: true
+    - name: Install Hurl
+      run: |
+        curl -sSL https://github.com/Orange-OpenSource/hurl/releases/download/8.0.1/hurl-8.0.1-x86_64-unknown-linux-gnu.tar.gz | tar xz
+        echo "$PWD/hurl-8.0.1-x86_64-unknown-linux-gnu/bin" >> "$GITHUB_PATH"
+    - name: Compose Up
+      run: |
+        docker compose up -d --wait
+        timeout 30 bash -c 'while ! curl -s http://localhost:8000/api/tags > /dev/null 2>&1; do sleep 0.2; done'
+    - name: Run Tests
+      run: make test-hurl

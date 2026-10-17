@@ -1,0 +1,16 @@
+[project]
+name = "aidlc-quantitative"
+version = "0.1.0"
+description = "Code evaluation — linting, security scanning, and code organization analysis"
+requires-python = ">=3.13"
+dependencies = [
+    "pyyaml>=6.0",
+    "defusedxml>=0.7.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/quantitative"]
