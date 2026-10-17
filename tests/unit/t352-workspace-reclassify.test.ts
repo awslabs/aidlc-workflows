@@ -381,6 +381,24 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
     // Said again on its own, it rescans and replies again rather than being skipped.
     expect(String(next(proj, ["--project-type", "brownfield"]).message)).toContain("engine workspace reclassify --project-type brownfield");
   });
+
+  test("said with the words of a request, the change records those words, which reach it in a file no shell reads", () => {
+    const proj = project();
+    expect(create(proj, "classic").status).toBe(0);
+    const words = "it's our existing service: \"harden\" the $DEPLOY pipeline";
+    const file = ".aidlc-engine/answer-text/project-type-words.txt";
+    const step = String(next(proj, ["--project-type", "brownfield", words]).message);
+    expect(step).toContain(`--space default --person-words-file ${file} --then-rerun\` and act on the directive it returns.`);
+    expect(readFileSync(join(recordDir(proj), file), "utf-8")).toBe(words);
+    const rerun = run(UTIL, proj, ["reclassify", "--project-type", "brownfield", "--person-words-file", file, "--then-rerun"]);
+    expect(rerun.status, said(rerun)).toBe(0);
+    expect(auditText(proj)).toContain(`**Person Words**: ${words}`);
+    expect(existsSync(join(recordDir(proj), file))).toBe(false);
+    // Said on its own there are no words to record, and a file that is gone records none.
+    expect(String(next(proj, ["--project-type", "greenfield"]).message)).not.toContain("--person-words-file");
+    expect(run(UTIL, proj, ["reclassify", "--project-type", "greenfield", "--person-words-file", file]).status).toBe(0);
+    expect(auditText(proj).split("**Person Words**").length).toBe(2);
+  });
 });
 
 describe("t352 a folder set up as new gains code", () => {

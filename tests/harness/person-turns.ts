@@ -157,6 +157,12 @@ const gateItem = (row: AuditShardEvent) =>
  * that holds the words its Instruction quotes; the words, not the field, are
  * what back it.
  *
+ * A project-type change that quotes the words the person said it in (Person
+ * Words, which the engine takes from the request `next` was given) is backed
+ * by any turn of this work that holds them: the drive's, or one the driver
+ * sent earlier in this work (`earlier`), such as the opening request a later
+ * chat's change stands on.
+ *
  * Which rows are the engine's own comes from the trail and the stage graph,
  * never from a field a row carries. An approval is the engine's when the
  * person's grant of autonomous Construction is in force (the latest
@@ -177,7 +183,9 @@ const gateItem = (row: AuditShardEvent) =>
  * the shard began or a later one: every reply leaves its own row in the shard
  * its chat writes, so no older turn can back a row there.
  */
-export function unbackedDecisions(projectDir: string, start: AuditCursor, turns: readonly PersonTurn[]): string[] {
+export function unbackedDecisions(
+  projectDir: string, start: AuditCursor, turns: readonly PersonTurn[], earlier: readonly string[] = [],
+): string[] {
   const { decisionAnsweredBy, nextOpenDecision, DECISION_CLOSING_EVENTS } = audit();
   const problems: string[] = [];
   // How many answers each turn has backed so far.
@@ -232,6 +240,8 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
       let reply = true;
       let answer = false;
       let instruction: string | undefined;
+      // The words a project-type change quotes as the person's.
+      let said: string | undefined;
       // Where a menu submission sent before a late-logged question may start.
       let menuSince: number | undefined;
       if (closes) {
@@ -265,6 +275,7 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
       } else if (row.event === "WORKSPACE_RECLASSIFIED") {
         since = workspace;
         reply = false;
+        said = auditBlockField(row.block, "Person Words") ?? undefined;
       } else if (row.event === "AUTONOMY_MODE_SET" && auditBlockField(row.block, "Mode") === "autonomous") {
         since = resolved;
         reply = false;
@@ -283,8 +294,10 @@ export function unbackedDecisions(projectDir: string, start: AuditCursor, turns:
         let backing = quoted === "" ? -1 : backs(after, false);
         if (backing === -1 && menuSince !== undefined) backing = backs(Math.max(menuSince + 1, first), true);
         if (backing === -1 && closes && quoted === undefined) backing = namedMessageTurn(projectDir, events, index, turns, born, key);
-        if (backing === -1) problems.push(describe(row, key, turns));
-        else if (answer) used[backing]++;
+        const quote = said;
+        const quotedBy = quote !== undefined && [...turns.map((turn) => turn.words), ...earlier].some((words) => holdsQuote(words, quote));
+        if (backing === -1 && !quotedBy) problems.push(describe(row, key, turns));
+        else if (backing !== -1 && answer) used[backing]++;
       }
       if (row.event === "DECISION_RECORDED" || closes || gate) {
         const next = nextOpenDecision(pending?.block ?? null, row.event, row.block);
@@ -410,7 +423,8 @@ export class PersonTurnLedger {
   readonly turns: PersonTurn[] = [];
   readonly start: AuditCursor;
 
-  constructor(readonly projectDir: string) {
+  /** `earlier`: what the driver sent in this work before this ledger began, read only for a quote of the person's words. */
+  constructor(readonly projectDir: string, readonly earlier: readonly string[] = []) {
     this.start = auditCursor(projectDir);
   }
 
@@ -420,7 +434,7 @@ export class PersonTurnLedger {
   }
 
   unbacked(): string[] {
-    return unbackedDecisions(this.projectDir, this.start, this.turns);
+    return unbackedDecisions(this.projectDir, this.start, this.turns, this.earlier);
   }
 }
 

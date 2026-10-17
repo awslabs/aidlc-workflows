@@ -54,10 +54,15 @@ export function codexExecDiagnostic(result: CodexExecution): string {
     limit(result.out ?? `STDOUT:\n${result.stdout ?? ""}\nSTDERR:\n${result.stderr ?? ""}`);
 }
 
+// What each project's earlier execs sent: a later exec's change can quote the person's words from one of them.
+const sentInProject = new Map<string, string[]>();
+
 /** Begin a codex turn just before its exec: the prompt is the person's turn. */
 export function codexPersonTurn(proj: string, prompt: string): PersonTurnLedger {
-  const turn = new PersonTurnLedger(proj);
+  const earlier = sentInProject.get(proj) ?? [];
+  const turn = new PersonTurnLedger(proj, earlier);
   turn.sent(prompt);
+  sentInProject.set(proj, [...earlier, prompt]);
   return turn;
 }
 

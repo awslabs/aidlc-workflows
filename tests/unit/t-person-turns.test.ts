@@ -222,6 +222,33 @@ describe("person-turn check", () => {
     expect(drive.unbacked()).toHaveLength(1);
   });
 
+  // The rows of the 2026-10-16 nightly's compose-front run: the person's only words came in the first chat; the
+  // second chat's "Approve" created the work as a new project, and the agent changed it to existing code in those words.
+  test("a project type changed in the person's own words is backed by the turn that holds them, from an earlier chat too", () => {
+    const words = "harden the deployment pipeline and add observability for our existing service - no new features, compose a custom plan for exactly this";
+    const opening = `Use the $aidlc skill to run: /aidlc compose "${words}"`;
+    const beat = (earlier: string[], quoted?: string) => {
+      const dir = createTestProject();
+      projects.push(dir);
+      const drive = new PersonTurnLedger(dir, earlier);
+      drive.sent("Approve");
+      row(dir, "WORKFLOW_STARTED");
+      row(dir, "WORKSPACE_INITIALISED", { "Project Type": "Greenfield", "Project Type Source": "scan" });
+      row(dir, "WORKSPACE_RECLASSIFIED", {
+        "Old Project Type": "Greenfield (scan)", "New Project Type": "Brownfield (you)", ...(quoted === undefined ? {} : { "Person Words": quoted }),
+      });
+      return drive.unbacked();
+    };
+    expect(beat([opening], words)).toEqual([]);
+    // The run's own failure stays for a change that quotes nothing, words the person never sent, or a turn not in the work.
+    const failure = 'recorded words "Brownfield (you)": no reply from the person after it opened; the driver sent 1 turn(s): "Approve"';
+    for (const problems of [beat([opening]), beat([opening], "it is an existing service"), beat([], words)]) {
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toStartWith("WORKSPACE_RECLASSIFIED at ");
+      expect(problems[0]).toEndWith(failure);
+    }
+  });
+
   test("decisions written before the drive started are not this drive's", () => {
     const dir = project();
     row(dir, "STAGE_AWAITING_APPROVAL", { Stage: "intent-capture" });

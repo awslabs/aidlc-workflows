@@ -425,6 +425,8 @@ import {
   withdrawProtectedReplyWords,
   writeActiveDirectiveMarker,
   writeEngineFileNoFollow,
+  ANSWER_TEXT_DIR,
+  writeRecordFileNoFollow,
   type PlanApprovalLegacyOfferCandidate,
   workspaceCommandUtilityArgv,
   workspaceRecordExists,
@@ -4079,6 +4081,22 @@ function reclassifyCommand(projectDir: string, type: "greenfield" | "brownfield"
     ? ` --intent ${shellArg(selection.intent)} --space ${shellArg(selection.space)}`
     : "";
   return `${aidlcDispatcherInvocation("workspace reclassify")} --project-type ${type}${target}`;
+}
+
+// The answer text file the words a project-type change was said in go to.
+const PROJECT_TYPE_WORDS_FILE = `${ANSWER_TEXT_DIR}/project-type-words.txt`;
+
+// ` --person-words-file <file>` once the words are in the work's answer text file;
+// nothing when they cannot be written, and the change is recorded without them.
+function projectTypeWordsArg(projectDir: string, words: string): string {
+  const root = recordDir(projectDir);
+  if (root === null || isReadOnlyEngineProbe()) return "";
+  try {
+    writeRecordFileNoFollow(root, PROJECT_TYPE_WORDS_FILE, words);
+  } catch {
+    return "";
+  }
+  return ` --person-words-file ${PROJECT_TYPE_WORDS_FILE}`;
 }
 
 // True when `--project-type` is the whole request: nothing else for routing
@@ -9376,9 +9394,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const alone = projectTypeIsWholeRequest(flags);
     if (alone || !projectTypeRecordedAsPersons(stateContent, flags.projectType)) {
       // Said with more of a request, the reclassify directive says to run
-      // the same `next` again so the rest of the request is carried on.
+      // the same `next` again so the rest of the request is carried on. The
+      // words it was said in reach reclassify in a file no shell reads on the
+      // way, and are recorded beside the change.
+      const words = flags.intent?.trim() ? projectTypeWordsArg(pd, flags.intent) : "";
       emit(printDirective(
-        `Run \`${reclassifyCommand(pd, flags.projectType)}${alone ? "" : " --then-rerun"}\` ` +
+        `Run \`${reclassifyCommand(pd, flags.projectType)}${words}${alone ? "" : " --then-rerun"}\` ` +
           "and act on the directive it returns.",
       ));
       return;
