@@ -404,6 +404,10 @@ type PreparedRefreshSource = {
   unproven?: ReadonlySet<string>;
   /** Contribution sidecars the refresh retired: their last record, or their plugin is off. */
   emptiedSidecars?: Set<string>;
+  /** What to record for each composed file it carried over: the file without the plugin's additions. */
+  composedRecords?: ReadonlyMap<string, string>;
+  /** Composed files this row no longer ships whose record proves them AI-DLC's. */
+  provenRetired?: ReadonlySet<string>;
   entries?: Baseline["entries"];
   notes: string[];
 };
@@ -4757,6 +4761,7 @@ type StageContribRecord = {
   produces?: string[];
   sensors?: string[];
   consumes?: Array<string | ConsumeContribRecord>;
+  scopes?: string[];
   requires_stage?: string[];
   required_sections?: string[];
   required_sections_created?: boolean;
@@ -4861,6 +4866,7 @@ function stripRecordedContributions(content: string, record: StageContribRecord)
   for (const [field, items] of [
     ["produces", record.produces],
     ["sensors", record.sensors],
+    ["scopes", record.scopes],
     ["requires_stage", record.requires_stage],
     ["required_sections", record.required_sections],
   ] as const) {
@@ -6889,6 +6895,7 @@ function prepareRefreshSource(
           produces: [...new Set([...(priorRecord.produces ?? []), ...(record.produces ?? [])])],
           sensors: [...new Set([...(priorRecord.sensors ?? []), ...(record.sensors ?? [])])],
           consumes: [...new Set([...(priorRecord.consumes ?? []), ...(record.consumes ?? [])])],
+          scopes: [...new Set([...(priorRecord.scopes ?? []), ...(record.scopes ?? [])])],
           requires_stage: [...new Set([...(priorRecord.requires_stage ?? []), ...(record.requires_stage ?? [])])],
           required_sections: [
             ...new Set([...(priorRecord.required_sections ?? []), ...(record.required_sections ?? [])]),
@@ -6905,6 +6912,8 @@ function prepareRefreshSource(
   // owning it, so its sidecar stops recording it. Otherwise a disable would
   // strip a core edge, and doctor would report a refused edge as missing.
   const retiredEdges = new Map<string, Set<string>>();
+  const composedRecords = new Map<string, string>();
+  const provenRetired = new Set<string>();
   const requiresEdgeHolds = requiresEdgeOracle(join(root, descriptor.harnessDir));
   // Composed files whose recorded contributions must survive the refresh:
   // every stage source, plus the personas (which carry prose fragments only).
@@ -6927,8 +6936,10 @@ function prepareRefreshSource(
     for (const file of readdirSync(personaRoot).filter((name) => name.endsWith(".md"))) {
       const slug = file.slice(0, -3);
       composedTargets.push({ rel: `${descriptor.harnessDir}/agents/${file}`, slug });
-      // The persona's native twins carry the same fragments.
-      for (const rel of personaTwinRels(descriptor.distribution, descriptor.harnessDir, slug)) {
+      // The persona's native twins carry the same fragments, the previous
+      // row's too when the project switches rows (Kiro IDE to Kiro CLI).
+      const rows = new Set([descriptor.distribution, prior?.distribution ?? descriptor.distribution]);
+      for (const rel of new Set([...rows].flatMap((row) => personaTwinRels(row, descriptor.harnessDir, slug)))) {
         composedTargets.push({ rel, slug });
       }
     }
@@ -6937,7 +6948,7 @@ function prepareRefreshSource(
     const priorHash = prior?.files[rel];
     const currentPath = join(projectDir, rel);
     const stagedPath = join(root, rel);
-    if (!regularFile(currentPath) || !existsSync(stagedPath)) continue;
+    if (!regularFile(currentPath)) continue;
     // Read as AI-DLC wrote it: a CRLF checkout is the same file.
     const current = readFileSync(currentPath, "utf-8").replaceAll("\r\n", "\n");
     const record = records.get(slug) ?? {};
@@ -6951,6 +6962,11 @@ function prepareRefreshSource(
     const currentHash = sha256Bytes(current);
     const strippedHash = sha256Bytes(stripRecordedContributions(current, record));
     if (priorHash && currentHash !== priorHash && strippedHash !== priorHash) continue;
+    // A file this row no longer ships is AI-DLC's to remove.
+    if (!existsSync(stagedPath)) {
+      if (priorHash) provenRetired.add(rel);
+      continue;
+    }
     let fresh = readFileSync(stagedPath, "utf-8");
     // A stage carried over from the project (a plugin stage) is not core's,
     // so its edges are not core-owned, and it already holds the recorded
@@ -6961,10 +6977,18 @@ function prepareRefreshSource(
     const staleEdges = pluginEdges.filter((dependency) => !replayedEdges.includes(dependency));
     const retired = (record.requires_stage ?? []).filter((dependency) => !replayedEdges.includes(dependency));
     if (retired.length > 0) retiredEdges.set(slug, new Set(retired));
-    fresh = mergeListField(fresh, "produces", record.produces ?? []);
-    fresh = mergeListField(fresh, "sensors", record.sensors ?? []);
+    // In the order the file has them, as compose wrote them, so the refresh
+    // writes the same bytes compose does.
+    const inFileOrder = (field: string, items: readonly string[]): string[] => {
+      const order = listFieldItems(current, field);
+      const rank = (item: string): number => order.includes(item) ? order.indexOf(item) : order.length;
+      return [...items].sort((left, right) => rank(left) - rank(right));
+    };
+    fresh = mergeListField(fresh, "produces", inFileOrder("produces", record.produces ?? []));
+    fresh = mergeListField(fresh, "sensors", inFileOrder("sensors", record.sensors ?? []));
+    fresh = mergeListField(fresh, "scopes", inFileOrder("scopes", record.scopes ?? []));
     fresh = removeListItems(fresh, "requires_stage", staleEdges);
-    fresh = mergeListField(fresh, "requires_stage", replayedEdges);
+    fresh = mergeListField(fresh, "requires_stage", inFileOrder("requires_stage", replayedEdges));
     fresh = mergeConsumes(
       fresh,
       consumeBlocks(
@@ -6972,7 +6996,10 @@ function prepareRefreshSource(
         new Set((record.consumes ?? []).map((entry) => typeof entry === "string" ? entry : entry.artifact)),
       ),
     );
-    fresh = mergeRequiredSections(fresh, record);
+    fresh = mergeRequiredSections(fresh, {
+      ...record,
+      required_sections: inFileOrder("required_sections", record.required_sections ?? []),
+    });
     if (rel.endsWith(".toml")) {
       // A Codex twin: its fragments live inside the developer_instructions string.
       const merged = editTomlInstructions(fresh, (body) => mergePluginFragments(body, fragments));
@@ -6983,6 +7010,10 @@ function prepareRefreshSource(
     }
     writeFileSync(stagedPath, fresh);
     if (prior) regenerated.add(rel);
+    // The record holds the file without the plugin's additions, as config
+    // records it before any compose, so the test above still proves it after
+    // a later compose rewrites them.
+    composedRecords.set(rel, sha256Bytes(stripRecordedContributions(fresh, { ...record, requires_stage: replayedEdges })));
   }
   const emptiedSidecars = new Set<string>();
   if (retiredEdges.size > 0 && pathPresent(dataDir) && lstatSync(dataDir).isDirectory()) {
@@ -7151,7 +7182,19 @@ function prepareRefreshSource(
       }
     }
   }
-  return { root, cleanup, regenerated, retiredManagedFiles, projectOverlays, unproven, emptiedSidecars, entries, notes };
+  return {
+    root,
+    cleanup,
+    regenerated,
+    retiredManagedFiles,
+    projectOverlays,
+    unproven,
+    emptiedSidecars,
+    composedRecords,
+    provenRetired,
+    entries,
+    notes,
+  };
   } catch (error) {
     rmSync(cleanup, { recursive: true, force: true });
     throw error;
@@ -9550,6 +9593,8 @@ function planManagedFiles(
   retainBaseline: boolean,
   projectOverlays: ReadonlySet<string> = new Set(),
   unproven: ReadonlySet<string> = new Set(),
+  composedRecords: ReadonlyMap<string, string> = new Map(),
+  provenRetired: ReadonlySet<string> = new Set(),
 ): void {
   const shipped = new Set<string>();
   for (const directory of descriptor.managedDirectories) {
@@ -9602,8 +9647,8 @@ function planManagedFiles(
       if (!projectOwned && !unbaselinedGenerated(descriptor.harnessDir).includes(rel)) {
         // In-place answers can advance ownership only from an unmodified base.
         const nextHash = retainBaseline
-          ? regenerated.has(rel) && targetRegular && currentHash === priorHash ? hash : priorHash
-          : hash;
+          ? regenerated.has(rel) && targetRegular && currentHash === priorHash ? composedRecords.get(rel) ?? hash : priorHash
+          : composedRecords.get(rel) ?? hash;
         if (nextHash !== undefined) nextHashes[rel] = nextHash;
       }
       if (runtimeGenerated(rel, descriptor.harnessDir, regenerated)) {
@@ -9735,7 +9780,8 @@ function planManagedFiles(
     ) continue;
     const target = join(projectDir, rel);
     if (!pathPresent(target)) continue;
-    if ((!regularFile(target) || sha256FileMatching(target, [priorHash]) !== priorHash) && !force) {
+    const owned = regularFile(target) && (provenRetired.has(rel) || sha256FileMatching(target, [priorHash]) === priorHash);
+    if (!owned && !force) {
       actions.push({ path: rel, action: "conflict", detail: "removed upstream but locally modified" });
       continue;
     }
@@ -13056,6 +13102,8 @@ export async function main(
       retainBaseline,
       prepared.projectOverlays,
       prepared.unproven,
+      prepared.composedRecords,
+      prepared.provenRetired,
     );
     for (const rel of prepared.retiredManagedFiles) {
       const target = join(projectDir, rel);

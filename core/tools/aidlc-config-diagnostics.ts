@@ -64,6 +64,7 @@ import {
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import { compareVersions, VERSION_ID } from "./aidlc-channel.ts";
 import { installedExecutablePath } from "./aidlc-install-paths.ts";
+import { personaTwinRels } from "./aidlc-plugin.ts";
 import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
 import {
   HARNESS_PRODUCT_NAMES,
@@ -3826,11 +3827,13 @@ function changedFrameworkFiles(
 ): string[] {
   const data = join(projectDir, harnessDir, "tools", "data");
   let onboarding = harness === "claude" ? `${harnessDir}/CLAUDE.md` : undefined;
+  let distribution: string = harness;
   try {
     const descriptor: unknown = JSON.parse(readFileSync(join(data, "aidlc-projection.json"), "utf-8"));
     if (isRecord(descriptor) && isSafeOnboardingPath(descriptor.onboarding, harnessDir)) {
       onboarding = descriptor.onboarding;
     }
+    if (isRecord(descriptor) && typeof descriptor.distribution === "string") distribution = descriptor.distribution;
   } catch {
     // The instruction row reports an unreadable descriptor.
   }
@@ -3839,9 +3842,30 @@ function changedFrameworkFiles(
     // The engine writes Kiro IDE's steering copy of the project's memory itself.
     `${harnessDir}/steering/aidlc-active-memory.md`,
   ];
-  // Config takes a plugin's additions to stage files out before it compares.
-  const pluginStages = existsSync(data) &&
-    readdirSync(data).some((name) => /^plugin-contrib-.+\.json$/.test(name));
+  // Config takes a plugin's additions to stage files and personas, and the
+  // personas' per-harness copies, out before it compares. A persona carries
+  // only fragments, so one a plugin composed holds that plugin's marker.
+  const composedBy = existsSync(data)
+    ? readdirSync(data).flatMap((name) => /^plugin-contrib-(.+)\.json$/.exec(name)?.[1] ?? [])
+    : [];
+  const pluginStages = composedBy.length > 0;
+  const carriesFragment = (rel: string): boolean => {
+    try {
+      const text = readFileSync(join(projectDir, rel), "utf-8");
+      return composedBy.some((name) => text.includes(`<!-- plugin:${name}:`));
+    } catch {
+      return false;
+    }
+  };
+  const personas = new Set<string>();
+  const personaDir = `${harnessDir}/agents/`;
+  for (const rel of pluginStages ? Object.keys(baseline.files ?? {}) : []) {
+    const slug = rel.startsWith(personaDir) && rel.endsWith(".md") ? rel.slice(personaDir.length, -3) : "";
+    if (slug === "" || slug.includes("/")) continue;
+    for (const file of [rel, ...personaTwinRels(distribution, harnessDir, slug)]) {
+      if (carriesFragment(file)) personas.add(file);
+    }
+  }
   const changed: string[] = [];
   for (const [rel, hash] of Object.entries(baseline.files ?? {})) {
     if (
@@ -3850,6 +3874,7 @@ function changedFrameworkFiles(
       baseline.entries?.[rel] !== undefined ||
       generated.includes(rel) ||
       (pluginStages && rel.startsWith(`${harnessDir}/aidlc-common/stages/`)) ||
+      personas.has(rel) ||
       rel.startsWith("/") ||
       rel.split("/").includes("..")
     ) continue;
