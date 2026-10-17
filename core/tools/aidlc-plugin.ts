@@ -1414,7 +1414,9 @@ export function fragmentProseHash(content: string): string {
 // absent, or a fragment holding a marker of its own plugin (a release whose
 // refresh merge nested the blocks that share an anchor). A fragment whose
 // markers are in place but whose text differs is a person's edit: it is
-// missing, but not gone, so sync leaves it.
+// missing, but not gone, so on its own it does not make sync compose again.
+// When another addition is gone, the whole-plugin compose rewrites the plugin's
+// fragments, the edited one included, as a plugin update does.
 export function recordedContributionGaps(
   parsed: Record<string, unknown>,
   content: string,
