@@ -222,6 +222,14 @@ entries with no known order across writers. Free-form notes appear as `NOTE`
 entries with their heading and body text. `--event NOTE` selects notes;
 `--stage` excludes them.
 
+Run `aidlc engine audit timeline` to see where the time went: one row per stage
+(and per Unit under unit-major Construction) with started, done, wall, working,
+waiting for your reply, long gaps, your turns, questions, gates, and redo counts
+(rejected / reopened / review sent again), then the long gaps themselves with
+what was open during each. Add `--gap-minutes <n>` to change the 15-minute gap
+threshold, or `--json` for the same data as JSON. It reads the ledger only and
+changes nothing.
+
 Run `aidlc engine log answers --stage <slug>` (add `--unit <unit>` for a Unit)
 for paired earlier questions and answers. One reply pairs with every question
 logged for the menu it answered. Open questions and the rare ambiguous answer

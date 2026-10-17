@@ -21,6 +21,7 @@ import {
   assertNoSymlinkInChainOrThrow,
   auditFilePath,
   auditBlockField,
+  type AuditShardEvent,
   auditShardHostSegment,
   readActiveAuditShardEvents,
   UNTRUSTED_AUDIT_NOTICE,
@@ -2039,6 +2040,415 @@ function handleHistory(args: string[], projectDir: string): void {
   }
 }
 
+// --- Subcommand: timeline ---
+//
+// A read-only per-stage (and per-Unit) time breakdown computed from the audit
+// ledger alone, so it reads the same on every harness. It never writes: no
+// lock, no ERROR_LOGGED row, no cache.
+//
+// The method, and its limits (docs/reference/06-hooks-and-tools.md, "Stage
+// timeline"):
+// - The ledger is cut into stretches between consecutive rows. A stretch
+//   belongs to the stage (and Unit) the earlier row names. A row with no Stage
+//   field (HUMAN_TURN, SUBAGENT_COMPLETED, ...) keeps the previous owner, and a
+//   row about a stage that already completed (a late MEMORY_EMPTY or sensor
+//   row) does not move it back. STAGE_STARTED, STAGE_JUMPED (its Target),
+//   GATE_REJECTED and STAGE_REVISING reopen a completed stage.
+// - Waiting: from a question or gate being put to the person
+//   (STAGE_AWAITING_APPROVAL, DECISION_RECORDED, QUESTION_UNANSWERED,
+//   WORKFLOW_PARKED) to the next HUMAN_TURN. When the engine settles the
+//   question with no HUMAN_TURN first (an autonomous gate), the stretch was
+//   not a wait for a person and counts as working. A question still open at
+//   the last row counts as waiting.
+// - Working: every other stretch. The ledger has no record of when an AI turn
+//   ends, so idle time with nothing asked counts as working.
+// - Long gaps: any stretch of the threshold or more (default 15 min). Listed
+//   on their own and counted as neither working nor waiting, labelled by what
+//   was open: a question, a review dispatch, an ended session, or nothing.
+// - working + waiting + gaps = wall for every row, and the rows add up to the
+//   time from the first ledger row to the last.
+
+export const TIMELINE_DEFAULT_GAP_MINUTES = 15;
+
+// Rows that put a question or a gate to the person.
+const TIMELINE_ASKS = new Set([
+  "STAGE_AWAITING_APPROVAL",
+  "DECISION_RECORDED",
+  "QUESTION_UNANSWERED",
+  "WORKFLOW_PARKED",
+]);
+
+// Rows that settle an open question without a HUMAN_TURN in between (an
+// autonomous gate, a recorded answer, an unpark).
+const TIMELINE_SETTLES = new Set([
+  "GATE_APPROVED",
+  "GATE_REJECTED",
+  "QUESTION_ANSWERED",
+  "QUESTION_REPLIED",
+  "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED",
+  "CONSTRUCTION_POLICY_RECORDED",
+  "PLAN_APPROVAL_RECORDED",
+  "AUTONOMY_MODE_SET",
+  "REQUEST_ROUTED",
+  "WORKFLOW_UNPARKED",
+]);
+
+export type TimelineGapDuring = "awaiting-reply" | "review-in-flight" | "session-ended" | "no-ledger-activity";
+
+export interface TimelineEntry {
+  timestamp: string;
+  event: string;
+  stage: string | null;
+  unit: string | null;
+  target?: string | null;
+  direction?: string | null;
+}
+
+export interface TimelineRow {
+  stage: string | null;
+  unit: string | null;
+  started: string | null;
+  completed: string | null;
+  skipped: boolean;
+  wall_s: number;
+  working_s: number;
+  waiting_s: number;
+  gap_s: number;
+  human_turns: number;
+  questions: number;
+  gates: number;
+  rejected: number;
+  reopened: number;
+  redispatched: number;
+  long_gaps: number;
+}
+
+export interface TimelineStage extends TimelineRow {
+  units: TimelineRow[];
+}
+
+export interface TimelineGap {
+  from: string;
+  to: string;
+  seconds: number;
+  stage: string | null;
+  unit: string | null;
+  during: TimelineGapDuring;
+}
+
+export interface StageTimeline {
+  gap_minutes: number;
+  first_event: { timestamp: string; event: string } | null;
+  last_event: { timestamp: string; event: string } | null;
+  unparsed_rows: number;
+  totals: Omit<TimelineRow, "stage" | "unit" | "started" | "completed" | "skipped">;
+  stages: TimelineStage[];
+  gaps: TimelineGap[];
+}
+
+function emptyTimelineRow(stage: string | null, unit: string | null): TimelineRow {
+  return {
+    stage, unit, started: null, completed: null, skipped: false,
+    wall_s: 0, working_s: 0, waiting_s: 0, gap_s: 0,
+    human_turns: 0, questions: 0, gates: 0, rejected: 0, reopened: 0, redispatched: 0, long_gaps: 0,
+  };
+}
+
+const TIMELINE_SUMS = [
+  "wall_s", "working_s", "waiting_s", "gap_s", "human_turns", "questions", "gates",
+  "rejected", "reopened", "redispatched", "long_gaps",
+] as const;
+
+const roundSeconds = (ms: number): number => Math.round(ms) / 1000;
+
+/** Pure: ordered ledger rows in, per-stage and per-Unit timeline out. */
+export function computeStageTimeline(entries: readonly TimelineEntry[], gapMinutes = TIMELINE_DEFAULT_GAP_MINUTES): StageTimeline {
+  const gapMs = gapMinutes * 60_000;
+  const rows = entries.filter((entry) => Number.isFinite(Date.parse(entry.timestamp)));
+  const unparsed = entries.length - rows.length;
+  // Row keys are JSON pairs so no stage or Unit name can collide with another.
+  const table = new Map<string, TimelineRow & { ms: { working: number; waiting: number; gap: number } }>();
+  const order: string[] = [];
+  const rowFor = (stage: string | null, unit: string | null) => {
+    const key = JSON.stringify([stage, unit]);
+    let row = table.get(key);
+    if (!row) {
+      row = { ...emptyTimelineRow(stage, unit), ms: { working: 0, waiting: 0, gap: 0 } };
+      table.set(key, row);
+      order.push(key);
+    }
+    return row;
+  };
+  const touch = (row: TimelineRow, timestamp: string) => {
+    if (row.started === null) row.started = timestamp;
+  };
+  const gaps: TimelineGap[] = [];
+  const closed = new Set<string>();
+  const reviewOpen = new Set<string>();
+  let owner: { stage: string | null; unit: string | null } = { stage: null, unit: null };
+  let asked = false;
+  let dispatching = false;
+  let sessionEnded = false;
+  // Stretches with a question open, until we know whether a person answered it.
+  let pending: Array<{ ms: { working: number; waiting: number }; span: number }> = [];
+  const settle = (as: "working" | "waiting") => {
+    for (const p of pending) p.ms[as] += p.span;
+    pending = [];
+  };
+
+  for (let i = 0; i < rows.length; i++) {
+    const e = rows[i];
+    const stage = e.stage || null;
+    const unit = e.unit || null;
+
+    // 1. Who owns the stretch that starts at this row.
+    const target = e.event === "STAGE_JUMPED" ? e.target || null : null;
+    if (target !== null) {
+      closed.delete(target);
+      owner = { stage: target, unit: null };
+      const direction = (e.direction ?? "").toUpperCase();
+      if (direction === "BACKWARD" || direction === "REDO") rowFor(target, null).reopened++;
+    } else if (stage !== null) {
+      const reopens = e.event === "STAGE_STARTED" || e.event === "GATE_REJECTED" || e.event === "STAGE_REVISING";
+      if (reopens) closed.delete(stage);
+      if (!closed.has(stage)) owner = { stage, unit };
+    }
+
+    // 2. Counts go to the row the event names, else to the current owner.
+    const counted = stage !== null ? { stage, unit } : owner;
+    const own = () => {
+      const row = rowFor(counted.stage, counted.unit);
+      touch(row, e.timestamp);
+      return row;
+    };
+    if (e.event === "HUMAN_TURN") own().human_turns++;
+    if (e.event === "QUESTION_ANSWERED" || e.event === "SUMMARY_CONFIRMATION_RECORDED") own().questions++;
+    if (e.event === "GATE_APPROVED" || e.event === "GATE_REJECTED" || e.event === "PLAN_APPROVAL_RECORDED") own().gates++;
+    if (e.event === "GATE_REJECTED") own().rejected++;
+    if (e.event === "REVIEW_REQUESTED") {
+      const key = JSON.stringify([stage, unit]);
+      if (reviewOpen.has(key)) own().redispatched++;
+      reviewOpen.add(key);
+    }
+    if (e.event === "REVIEW_COMPLETED") reviewOpen.delete(JSON.stringify([stage, unit]));
+    if (e.event === "STAGE_STARTED" && stage !== null) touch(rowFor(stage, null), e.timestamp);
+    if (e.event === "UNIT_STARTED" && stage !== null && unit !== null) touch(rowFor(stage, unit), e.timestamp);
+    if (e.event === "UNIT_COMPLETED" && stage !== null && unit !== null) own().completed = e.timestamp;
+    if ((e.event === "STAGE_COMPLETED" || e.event === "STAGE_SKIPPED") && stage !== null) {
+      const row = rowFor(stage, null);
+      touch(row, e.timestamp);
+      row.completed = e.timestamp;
+      row.skipped = e.event === "STAGE_SKIPPED";
+      closed.add(stage);
+      if (owner.stage === stage) owner = { stage: null, unit: null };
+    }
+
+    // 3. What is open during the stretch.
+    if (e.event === "HUMAN_TURN") {
+      settle("waiting");
+      asked = false;
+    } else if (TIMELINE_SETTLES.has(e.event)) {
+      settle("working");
+      asked = false;
+    }
+    if (TIMELINE_ASKS.has(e.event)) asked = true;
+    if (e.event === "REVIEW_REQUESTED") dispatching = true;
+    if (e.event === "SUBAGENT_COMPLETED" || e.event === "REVIEW_COMPLETED") dispatching = false;
+    if (e.event === "SESSION_ENDED") sessionEnded = true;
+    if (e.event === "SESSION_STARTED" || e.event === "SESSION_RESUMED" || e.event === "HUMAN_TURN") sessionEnded = false;
+
+    // 4. The stretch to the next row.
+    if (i + 1 >= rows.length) continue;
+    const ms = Date.parse(rows[i + 1].timestamp) - Date.parse(e.timestamp);
+    if (!(ms > 0)) continue;
+    const row = rowFor(owner.stage, owner.unit);
+    touch(row, e.timestamp);
+    if (ms >= gapMs) {
+      row.ms.gap += ms;
+      row.long_gaps++;
+      gaps.push({
+        from: e.timestamp,
+        to: rows[i + 1].timestamp,
+        seconds: roundSeconds(ms),
+        stage: owner.stage,
+        unit: owner.unit,
+        during: asked ? "awaiting-reply" : dispatching ? "review-in-flight" : sessionEnded ? "session-ended" : "no-ledger-activity",
+      });
+    } else if (asked) {
+      pending.push({ ms: row.ms, span: ms });
+    } else {
+      row.ms.working += ms;
+    }
+  }
+
+  settle("waiting");
+
+  const finish = (row: TimelineRow & { ms: { working: number; waiting: number; gap: number } }): TimelineRow => {
+    const { ms, ...rest } = row;
+    return {
+      ...rest,
+      working_s: roundSeconds(ms.working),
+      waiting_s: roundSeconds(ms.waiting),
+      gap_s: roundSeconds(ms.gap),
+      wall_s: roundSeconds(ms.working + ms.waiting + ms.gap),
+    };
+  };
+  const add = (into: Record<(typeof TIMELINE_SUMS)[number], number>, row: TimelineRow) => {
+    for (const k of TIMELINE_SUMS) into[k] = Math.round((into[k] + row[k]) * 1000) / 1000;
+  };
+
+  const stages: TimelineStage[] = [];
+  const byStage = new Map<string, TimelineStage>();
+  for (const key of order) {
+    const row = finish(table.get(key)!);
+    const stageKey = JSON.stringify(row.stage);
+    let parent = byStage.get(stageKey);
+    if (!parent) {
+      parent = { ...emptyTimelineRow(row.stage, null), units: [] };
+      byStage.set(stageKey, parent);
+      stages.push(parent);
+    }
+    add(parent, row);
+    if (row.started !== null && (parent.started === null || Date.parse(row.started) < Date.parse(parent.started))) {
+      parent.started = row.started;
+    }
+    if (row.unit === null) {
+      parent.completed = row.completed;
+      parent.skipped = row.skipped;
+    } else {
+      parent.units.push(row);
+    }
+  }
+  const totals = Object.fromEntries(TIMELINE_SUMS.map((k) => [k, 0])) as Record<(typeof TIMELINE_SUMS)[number], number>;
+  for (const stage of stages) add(totals, stage);
+  const pick = (entry: TimelineEntry | undefined) => entry ? { timestamp: entry.timestamp, event: entry.event } : null;
+  return {
+    gap_minutes: gapMinutes,
+    first_event: pick(rows[0]),
+    last_event: pick(rows[rows.length - 1]),
+    unparsed_rows: unparsed,
+    totals,
+    stages,
+    gaps,
+  };
+}
+
+function formatTimelineDuration(seconds: number): string {
+  if (seconds <= 0) return "0";
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const minutes = Math.round(seconds / 60);
+  return minutes >= 60 ? `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m` : `${minutes}m`;
+}
+
+// Ledger text is untrusted: print names as one bounded line of plain characters.
+function timelineLabel(value: string | null, fallback: string): string {
+  if (value === null) return fallback;
+  const plain = value.replace(/[^\x20-\x7e]/g, "?");
+  return plain.length > 40 ? `${plain.slice(0, 39)}~` : plain;
+}
+
+const timelineClock = (timestamp: string | null): string =>
+  timestamp === null ? "-" : new Date(Date.parse(timestamp)).toISOString().slice(5, 16).replace("T", " ");
+
+export function renderStageTimeline(timeline: StageTimeline, nowMs = Date.now()): string {
+  const out: string[] = [];
+  const threshold = `${timeline.gap_minutes} min`;
+  out.push("Stage timeline (from the audit ledger; read-only)");
+  if (timeline.first_event === null || timeline.last_event === null) {
+    out.push("No ledger rows yet.");
+    return `${out.join("\n")}\n`;
+  }
+  const age = Math.max(0, (nowMs - Date.parse(timeline.last_event.timestamp)) / 1000);
+  out.push(
+    `Run: ${timeline.first_event.timestamp} to ${timeline.last_event.timestamp}; ` +
+      `last row ${timelineLabel(timeline.last_event.event, "-")}, ${formatTimelineDuration(age)} ago`,
+  );
+  out.push("");
+  const header = ["Stage / Unit", "Started", "Done", "Wall", "Working", "Waiting", "Gaps", "Turns", "Qs", "Gates", "Redo"];
+  const lines: string[][] = [header];
+  const cells = (row: TimelineRow, label: string): string[] => [
+    label,
+    timelineClock(row.started),
+    row.skipped ? "skipped" : timelineClock(row.completed),
+    formatTimelineDuration(row.wall_s),
+    formatTimelineDuration(row.working_s),
+    formatTimelineDuration(row.waiting_s),
+    formatTimelineDuration(row.gap_s),
+    String(row.human_turns),
+    String(row.questions),
+    String(row.gates),
+    `${row.rejected}/${row.reopened}/${row.redispatched}`,
+  ];
+  for (const stage of timeline.stages) {
+    lines.push(cells(stage, timelineLabel(stage.stage, "(no stage open)")));
+    for (const unit of stage.units) lines.push(cells(unit, `  ${timelineLabel(unit.unit, "-")}`));
+  }
+  const t = timeline.totals;
+  lines.push([
+    "Total", "", "", formatTimelineDuration(t.wall_s), formatTimelineDuration(t.working_s),
+    formatTimelineDuration(t.waiting_s), formatTimelineDuration(t.gap_s), String(t.human_turns),
+    String(t.questions), String(t.gates), `${t.rejected}/${t.reopened}/${t.redispatched}`,
+  ]);
+  const widths = header.map((_, c) => Math.max(...lines.map((line) => line[c].length)));
+  for (const line of lines) out.push(line.map((cell, c) => cell.padEnd(widths[c])).join("  ").trimEnd());
+  out.push("");
+  out.push(`Long gaps (${threshold} or more between ledger rows; not counted as working or waiting):`);
+  if (timeline.gaps.length === 0) out.push("  none");
+  for (const gap of timeline.gaps) {
+    const owner = gap.unit === null ? timelineLabel(gap.stage, "(no stage open)") : `${timelineLabel(gap.stage, "-")} / ${timelineLabel(gap.unit, "-")}`;
+    out.push(`  ${gap.from} to ${gap.to}  ${formatTimelineDuration(gap.seconds)}  ${owner}  ${gap.during}`);
+  }
+  out.push("");
+  out.push(
+    "Waiting = from a question or gate being put (STAGE_AWAITING_APPROVAL, DECISION_RECORDED, " +
+      "QUESTION_UNANSWERED, WORKFLOW_PARKED) to the next HUMAN_TURN (settled with no HUMAN_TURN = working). " +
+      "Working = the other stretches " +
+      "shorter than the gap threshold; the ledger does not record when an AI turn ends, so idle time " +
+      "with nothing asked counts as working. Times are UTC. Redo = rejected/reopened/re-dispatched.",
+  );
+  if (timeline.unparsed_rows > 0) out.push(`${timeline.unparsed_rows} ledger row(s) had no readable timestamp and were left out.`);
+  return `${out.join("\n")}\n`;
+}
+
+function handleTimeline(args: string[], projectDir: string): void {
+  let gapMinutes = TIMELINE_DEFAULT_GAP_MINUTES;
+  let json = false;
+  for (let i = 0; i < args.length; i++) {
+    const flag = args[i];
+    if (flag === "--json") {
+      json = true;
+      continue;
+    }
+    if (flag !== "--gap-minutes") jsonError(`Unknown timeline argument: ${flag}`);
+    const value = args[i + 1];
+    if (!value || !/^(?:[0-9]+(?:\.[0-9]+)?)$/.test(value) || !(Number(value) > 0)) {
+      jsonError("--gap-minutes expects a positive number of minutes.");
+    }
+    gapMinutes = Number(value);
+    i++;
+  }
+  let timeline: StageTimeline;
+  try {
+    const rows = sortAttemptEvents(readActiveAuditShardEvents(projectDir) as AuditShardEvent[]);
+    timeline = computeStageTimeline(rows.map((row) => ({
+      timestamp: row.timestamp,
+      event: row.event,
+      stage: auditBlockField(row.block, "Stage"),
+      unit: auditBlockField(row.block, "Unit"),
+      target: auditBlockField(row.block, "Target"),
+      direction: auditBlockField(row.block, "Direction"),
+    })), gapMinutes);
+  } catch (e) {
+    jsonError(errorMessage(e));
+  }
+  if (json) {
+    jsonSuccess({ data_notice: UNTRUSTED_AUDIT_NOTICE, ...timeline });
+    return;
+  }
+  process.stdout.write(renderStageTimeline(timeline));
+}
+
 // --- CLI entry point ---
 
 export function main(argv: string[]): void {
@@ -2060,12 +2470,16 @@ export function main(argv: string[]): void {
   const subcommand = filteredArgs[0];
 
   if (!subcommand) {
-    jsonError("Usage: aidlc-audit <append|append-batch|append-raw|history|audit-fork|audit-merge> [args...]");
+    jsonError("Usage: aidlc-audit <append|append-batch|append-raw|history|timeline|audit-fork|audit-merge> [args...]");
   }
 
   switch (subcommand) {
     case "history":
       handleHistory(filteredArgs.slice(1), projectDir);
+      break;
+
+    case "timeline":
+      handleTimeline(filteredArgs.slice(1), projectDir);
       break;
 
     case "append": {
@@ -2110,7 +2524,7 @@ export function main(argv: string[]): void {
       break;
 
     default:
-      jsonError(`Unknown subcommand: ${subcommand}. Expected: append, append-batch, append-raw, history, audit-fork, audit-merge`);
+      jsonError(`Unknown subcommand: ${subcommand}. Expected: append, append-batch, append-raw, history, timeline, audit-fork, audit-merge`);
   }
 }
 

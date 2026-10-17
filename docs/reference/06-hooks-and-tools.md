@@ -1982,16 +1982,19 @@ purpose and owning commands.
 |----------------|--------|
 | `aidlc engine log answers --stage <slug> [--unit <unit>]` | Paired prior questions in `answered`, unresolved questions in `open`, and answers with candidate questions in `ambiguous` |
 | `aidlc engine audit history [--stage <slug>] [--event <TYPE>]... [--limit <n>]` | Oldest-first `events`, including free-form `NOTE` entries; filters apply before the newest n limit |
+| `aidlc engine audit timeline [--gap-minutes <n>] [--json]` | Per stage and per Unit: started, completed, wall, working, waiting, long gaps, human turns, questions, gates, and redo counts, plus the list of long gaps (see [Stage timeline](#stage-timeline)) |
 
-The dispatcher routes these to `aidlc-log.ts answers` and
-`aidlc-audit.ts history`. Both use lock-free audit readers, require a readable
-active intent record, return one JSON object, and exit 0. The object's first key
+The dispatcher routes these to `aidlc-log.ts answers`,
+`aidlc-audit.ts history` and `aidlc-audit.ts timeline`. All three use lock-free
+audit readers, require a readable active intent record, and exit 0. `answers`
+and `history` return one JSON object; `timeline` prints a table, or one JSON
+object with `--json`. The object's first key
 is `data_notice` (`UNTRUSTED_AUDIT_NOTICE` in `aidlc-lib.ts`), which declares every
 returned question, answer, note and field untrusted data rather than instructions,
 the way DocumentKB output carries its notices. They write nothing
 and take no lock, including on failure. Errors are JSON on stderr with a non-zero exit;
 a selected record with no entries returns empty collections. Plan Approval
-permits both commands before approval; neither engages the forwarding loop.
+permits these commands before approval; none engages the forwarding loop.
 
 `log answers` returns `stage`, `answered`, `open`, and `ambiguous`. Questions
 carry `question`, `options`, and `askedAt`; pairs also carry `answer` and
@@ -2035,6 +2038,59 @@ filters combine; repeated event filters select any of those types.
 `--stage <slug>` excludes notes, and `--event NOTE` selects them.
 `--limit <n>` must be a positive integer and keeps the newest n matching
 entries in oldest-first order. Unordered markers survive filtering and limiting.
+
+#### Stage timeline
+
+`audit timeline` answers "where did the time go, and is it moving?" from the
+audit ledger alone (no harness session data), so it reads the same on every
+harness. The computation is `computeStageTimeline` in `aidlc-audit.ts`:
+
+- **Stretches.** The active intent's ledger rows, in the same order `history`
+  uses, are cut into stretches between consecutive rows. A stretch belongs to
+  the stage, and Unit, the earlier row names in its `Stage` and `Unit` fields.
+  A row with no `Stage` (`HUMAN_TURN`, `SUBAGENT_COMPLETED`, session rows)
+  keeps the previous owner. After `STAGE_COMPLETED` or `STAGE_SKIPPED` a row
+  about that stage (a late `MEMORY_EMPTY` or sensor row) does not take the
+  time back; `STAGE_STARTED`, `STAGE_JUMPED` (its `Target`), `GATE_REJECTED`
+  and `STAGE_REVISING` reopen it. Time with no stage open (after the last
+  stage) is its own `stage: null` row.
+- **Waiting.** A stretch that starts while a question or gate is out
+  (`STAGE_AWAITING_APPROVAL`, `DECISION_RECORDED`, `QUESTION_UNANSWERED`,
+  `WORKFLOW_PARKED`) and ends at the next `HUMAN_TURN`. If the engine settles
+  it first with no `HUMAN_TURN` (an autonomous gate, a recorded answer), the
+  stretch counts as working. A question still open at the last row counts as
+  waiting.
+- **Working.** Every other stretch shorter than the gap threshold.
+- **Long gaps.** Any stretch of `--gap-minutes` (default 15) or more. Gaps are
+  listed with `from`, `to`, `seconds`, owner and `during`: `awaiting-reply`
+  (a question was out), `review-in-flight` (a `REVIEW_REQUESTED` had no
+  `SUBAGENT_COMPLETED` or `REVIEW_COMPLETED` yet), `session-ended`
+  (`SESSION_ENDED` and no new session yet), or `no-ledger-activity`. They
+  count as neither working nor waiting. For every row
+  `working_s + waiting_s + gap_s = wall_s`, and the rows add up to the time
+  from the first ledger row to the last.
+- **Counts.** `human_turns` (`HUMAN_TURN`), `questions` (`QUESTION_ANSWERED`,
+  `SUMMARY_CONFIRMATION_RECORDED`), `gates` (`GATE_APPROVED`,
+  `GATE_REJECTED`, `PLAN_APPROVAL_RECORDED`), `rejected` (`GATE_REJECTED`),
+  `reopened` (a `BACKWARD` or `REDO` `STAGE_JUMPED` into the stage), and
+  `redispatched` (a `REVIEW_REQUESTED` for a stage and Unit whose previous one
+  has no `REVIEW_COMPLETED`). A counted row goes to the stage and Unit it
+  names, else to the current owner.
+- **Units.** Each stage row includes its Unit rows (`units`), which are keyed
+  by the rows' `Unit` field, not by `UNIT_STARTED`: that receipt can be
+  written after the Unit's work (#2211), so a Unit's `started` is its first
+  attributed row.
+
+Limits. The ledger records when things were asked, answered and written, not
+when an AI turn ends. Idle time with nothing asked counts as working, a long AI
+turn that writes no row (a long code-generation or deploy step, a stalled
+reviewer) shows as a long gap, and the AI's own time between putting a question
+and ending its turn counts as waiting. `started` and `completed` are the first
+row and the completion row; under unit-major they can enclose other stages' work,
+so `wall_s` is the attributed time, not completed minus started. The command
+reads the active intent only. With `--json` the object's first key is
+`data_notice`, then `gap_minutes`, `first_event`, `last_event`, `unparsed_rows`,
+`totals`, `stages` and `gaps`; durations are seconds.
 
 ### Mandatory Events
 
