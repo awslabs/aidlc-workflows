@@ -541,15 +541,17 @@ AI-DLC owns the model and effort lines (`model:`, `effortLevel:`, and the
 ships, as it does on Claude Code: `aidlc config` writes those of the agents
 that have a setting, so change them through `aidlc config models` rather than
 by hand; `aidlc config models --check` reports a `model:` or `effortLevel:`
-line that does not match the setting, one you added by hand included. An agent
-file you added yourself is not touched.
+line that does not match the setting, one you added by hand included, and the
+next `aidlc config` puts the recorded value back. An agent file you added
+yourself is not touched.
 
 An agent's effort is shared by every tool, while its model is recorded per
 tool, so an effort recorded for one agent for another tool applies on Kiro too.
-The first `aidlc config` run, other than a `config models` change, that writes
-such a line into a Kiro agent file says so in one line, with the command that
-takes it out of the settings file it is recorded in (for example
-`aidlc config models --agent <agent> --effort default --project --yes`).
+The `aidlc config` run that first writes such a line into a Kiro agent file,
+other than a setting that run makes itself, says so in one line and names
+`aidlc config models --show --harness kiro-ide`, which shows where each value
+is set; `--effort default` (or `--model default`) for that agent in that
+settings file takes it out.
 `effortLevel` is not in Kiro's documentation. Measured on Kiro CLI 2.31.1 on
 its v3 engine and Kiro IDE 1.3.0.
 

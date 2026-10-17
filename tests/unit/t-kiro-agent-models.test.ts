@@ -273,16 +273,16 @@ describe("an agent's model and effort through config", () => {
     expect(refresh.status, refresh.out).toBe(0);
     const said = refresh.out.replace(/\s+/g, " ");
     expect(said).toContain(
-      "Kiro now runs developer on effort low, as set for that agent with config models (an agent's effort is shared with your other tools). To take it out: `",
+      "Kiro now runs developer on effort low, as set for that agent with config models (an agent's effort is shared with your other tools); `",
     );
-    expect(said).toMatch(/To take it out: `[^`]*config models --agent developer --effort default --project --yes( --project-dir \S+)?`\./);
+    expect(said).toMatch(/; `[^`]*config models --show --harness kiro-ide( --project-dir \S+)?` shows where each is set\./);
     expect(p.agent("aidlc-developer-agent.md")).toMatch(/^effortLevel: low$/m);
     expect(p.models("--check").status).toBe(0);
     const again = p.run(["config", "--project-dir", p.dir, "--yes"]);
     expect(again.out).not.toContain("Kiro now runs");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
-  test("a models change for one agent names another agent's setting it writes for the first time", () => {
+  test("a models change names what it writes that it does not set itself: another agent's setting, or the same agent's other one", () => {
     const p = project();
     const settings = projectSettingsPath(p.dir);
     const current = existsSync(settings) ? JSON.parse(readFileSync(settings, "utf-8")) as Record<string, unknown> : {};
@@ -293,9 +293,15 @@ describe("an agent's model and effort through config", () => {
     expect(said).toContain("Kiro now runs developer on effort low, as set for that agent with config models");
     expect(said).not.toContain(`Kiro now runs ${REVIEWER}`);
     expect(p.agent("aidlc-developer-agent.md")).toMatch(/^effortLevel: low$/m);
+    // The reviewer's effort recorded before, its model set now: the effort is the one to name.
+    writeFileSync(settings, `${JSON.stringify({ schemaVersion: 1, ...current, models: { schemaVersion: 1, agents: { [REVIEWER]: { effort: "low" } } } }, null, 2)}\n`);
+    const again = p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes");
+    expect(again.status, again.out).toBe(0);
+    expect(again.out.replace(/\s+/g, " ")).toContain(`Kiro now runs ${REVIEWER} on effort low, as set for that agent`);
+    expect(again.out).not.toContain("on model gpt-5.6-terra");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
-  test("Kiro added beside another harness names itself in the undo", () => {
+  test("Kiro added beside another harness names its tree in the --show command", () => {
     const dir = temp("aidlc-kiro-agent-models-two-");
     mkdirSync(join(dir, ".git"));
     const machine = temp("aidlc-kiro-agent-models-m-");
@@ -319,10 +325,12 @@ describe("an agent's model and effort through config", () => {
     writeFileSync(projectSettingsPath(dir), `${JSON.stringify({ schemaVersion: 1, models: { schemaVersion: 1, agents: { developer: { effort: "low" } } } }, null, 2)}\n`);
     const kiro = run(["config", "--project-dir", dir, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none", "--yes"]);
     expect(kiro.status, kiro.out).toBe(0);
-    expect(kiro.out.replace(/\s+/g, " ")).toMatch(/To take it out: `[^`]*config models --agent developer --effort default --harness kiro-ide --project --yes/);
+    const said = kiro.out.replace(/\s+/g, " ");
+    expect(said).toContain("Kiro now runs developer on effort low");
+    expect(said).toMatch(/`[^`]*config models --show --harness kiro-ide( --project-dir \S+)?` shows where each is set\./);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
-  test("the same model again puts back lines the agent file lost", () => {
+  test("the same model again puts back lines the agent file lost, and does not name them as news", () => {
     const p = project();
     expect(p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes").status).toBe(0);
     const path = join(p.dir, ".kiro", "agents", REVIEWER_FILE);
@@ -330,6 +338,7 @@ describe("an agent's model and effort through config", () => {
     const again = p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes");
     expect(again.status, again.out).toBe(0);
     expect(p.agent(REVIEWER_FILE)).toMatch(/^model: "gpt-5\.6-terra"$/m);
+    expect(again.out).not.toContain("Kiro now runs");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
   test("config preview is not a section", () => {
