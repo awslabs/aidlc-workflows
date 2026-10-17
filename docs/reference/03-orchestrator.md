@@ -474,6 +474,19 @@ no current part and the stored route could not be verified. Issue a fresh
 `next --scope <scope> --stage <stage>`, adding `--single` if it was a single run.
 See [Rule delivery and the continuation cursor](06-hooks-and-tools.md#rule-delivery-and-the-continuation-cursor).
 
+### Code Generation Unit record recovery
+
+When a Unit's files are written and its remaining step is a review or completion
+record, Code Generation keeps a `run-stage` directive naming that Unit and
+carries the exact commands in `unit_record_step` (also its `gate_note`). The
+conductor runs those commands and `next`, without rebuilding the stage body or
+presenting the whole stage's gate. Normal directive publication refreshes stale
+state authority before the Plan Approval hook sees the command. Normal plan
+routing still applies: a changed or unapproved plan gets its repair or approval
+step instead of a completion command. Unit artifacts, fresh review, and the
+completion receipt keep their existing checks. Other stages retain their short
+`print` recovery step; read-only routing probes publish nothing.
+
 ### Lines carried to the next spoken step
 
 Some person-facing lines arrive on a step the agent passes through without

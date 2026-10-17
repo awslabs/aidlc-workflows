@@ -1466,7 +1466,8 @@ function prepareEmission(directive: Directive): PreparedEmission {
   // the plan, so the two lines never disagree.
   // The line is about the run-stage being issued, not the directive on disk,
   // so a repeated `next` or a `continue` of its rules says the same line.
-  if (directive.kind === "run-stage" && directive.plan_approval?.status === "approved") {
+  if (directive.kind === "run-stage" && directive.plan_approval?.status === "approved" &&
+    directive.unit_record_step === undefined) {
     const projectDir = emissionProjectDir(directive);
     const unit = directive.unit ?? null;
     const issued = { kind: "run-stage" as const, ...(unit !== null ? { unit } : {}) };
@@ -2302,6 +2303,12 @@ function withParkedReply(directive: Directive): Directive {
 
 function emit(requested: Directive): void {
   const directive = withBuiltPlanReviewRoute(withPlanApprovalRoute(requested));
+  if (directive.kind === "run-stage" && directive.unit_record_step !== undefined &&
+    directive.plan_approval?.status !== "approved") {
+    delete directive.unit_record_step;
+  } else if (directive.kind === "run-stage" && directive.unit_record_step !== undefined) {
+    directive.mode = "inline";
+  }
   // A refusal that offers building the plan anyway keeps when it was first
   // shown, so a reply of the person's after it can be told from one before.
   if (planApprovalOverrideOffers.has(directive) && !isReadOnlyEngineProbe()) {
@@ -11728,6 +11735,15 @@ function unitWorkIsThisAttempts(projectDir: string, slug: string, unit: string, 
 // the Unit's stage, so the named start command matches the engine's route.
 function emitUnitStepOrStage(step: string | null, directive: Directive): void {
   if (step === null || isReadOnlyEngineProbe()) {
+    emit(directive);
+    return;
+  }
+  if (directive.kind === "run-stage" && directive.stage === "code-generation") {
+    // Keep the routed Unit and its authority on the normal publication path.
+    // A print alone leaves a stale marker in place, so the hook refuses the
+    // very completion next names. Plan Approval routing still runs before this
+    // recovery is delivered; an unapproved plan gets its own applicable step.
+    directive.unit_record_step = `${step} Then run \`${aidlcToolInvocation("orchestrate")} next\`.`;
     emit(directive);
     return;
   }
