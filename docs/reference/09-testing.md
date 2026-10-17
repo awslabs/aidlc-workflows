@@ -692,8 +692,9 @@ one entry per unit with its claims and status.
 
 The registry is **never committed**. A committed copy changed in nearly every
 PR, so queued PRs collided on it or had to regenerate it after each rebase. CI
-builds it fresh instead: the **Coverage ratchet** job, part of the required
-`Tests (smoke + unit)` check, runs `--check --base HEAD^1`. That builds the
+builds it fresh instead: the coverage step in the combined **Contract checks**
+job, part of the required `Tests (smoke + unit)` check, runs
+`--check --base HEAD^1`. That builds the
 registry for the commit under test and for its first parent (the PR's base, or
 the queue entry ahead), the parent with its own packager and generator in a
 temp directory, and fails naming each unit the parent covers that the commit
