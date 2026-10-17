@@ -7,6 +7,8 @@
 
 import { createHash } from "node:crypto";
 import {
+  accessSync,
+  constants,
   cpSync,
   existsSync,
   lstatSync,
@@ -112,11 +114,30 @@ function canonicalOutputPath(path: string): string {
   return join(existing, ...missing);
 }
 
+// The lock folder is created 0700. Linux shares one /tmp between users, so a
+// folder every user shared would belong to whoever built first, and nobody
+// else could take a lock in it. Windows keeps the plain name: its temp folder
+// is already the user's own.
 export function pluginBuildLockPath(outDir: string): string {
   const key = createHash("sha256")
     .update(canonicalOutputPath(outDir))
     .digest("hex");
-  return join(tmpdir(), "aidlc-plugin-build-locks", key);
+  const uid = process.getuid?.();
+  const folder = uid === undefined
+    ? "aidlc-plugin-build-locks"
+    : `aidlc-plugin-build-locks-u${uid}`;
+  return join(tmpdir(), folder, key);
+}
+
+// A lock folder this user cannot write. The plugin build and plugin test
+// commands print `fix` as the finding's Fix line in place of their generic one.
+export class PluginBuildLockFolderError extends Error {
+  readonly fix = "Set TMPDIR to a folder you own, then run the command again.";
+
+  constructor(folder: string, code: string) {
+    super(`cannot write the plugin build lock folder "${folder}" (${code})`);
+    this.name = "PluginBuildLockFolderError";
+  }
 }
 
 function withPluginBuildOutputLock<T>(
@@ -125,7 +146,22 @@ function withPluginBuildOutputLock<T>(
   action: () => T,
 ): T {
   const lockDir = pluginBuildLockPath(outDir);
-  mkdirSync(dirname(lockDir), { recursive: true, mode: 0o700 });
+  const lockFolder = dirname(lockDir);
+  mkdirSync(lockFolder, { recursive: true, mode: 0o700 });
+  // acquireOwnerStampedLock retries every create that fails, so a folder this
+  // user cannot write would wait out the whole budget and then read as a busy
+  // lock. On Windows access() does not read the ACLs that guard a folder, so it
+  // is not asked there.
+  if (process.platform !== "win32") {
+    try {
+      accessSync(lockFolder, constants.W_OK | constants.X_OK);
+    } catch (error) {
+      throw new PluginBuildLockFolderError(
+        lockFolder,
+        (error as NodeJS.ErrnoException).code ?? String(error),
+      );
+    }
+  }
   const result = runWithOwnerStampedLock(
     lockDir,
     Math.max(0, Math.floor(timeoutMs / PLUGIN_BUILD_LOCK_RETRY_MS)),

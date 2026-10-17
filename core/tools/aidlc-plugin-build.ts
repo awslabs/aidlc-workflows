@@ -12,6 +12,7 @@ import {
 } from "node:path";
 import {
   buildPluginProjection,
+  PluginBuildLockFolderError,
   readPluginTargets,
 } from "./aidlc-plugin-emit.ts";
 import {
@@ -206,7 +207,9 @@ export function main(argv: string[]): number {
       outDir,
       "build-output",
       error instanceof Error ? error.message : String(error),
-      "Choose a fresh output directory or correct the plugin source and retry.",
+      error instanceof PluginBuildLockFolderError
+        ? error.fix
+        : "Choose a fresh output directory or correct the plugin source and retry.",
     );
   }
 
