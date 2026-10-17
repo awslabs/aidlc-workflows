@@ -194,6 +194,20 @@ describe("a refresh after a later compose carries the plugin's additions over", 
     });
   }
 
+  test("kiro-ide: config, then the switch to Kiro CLI: no conflict, the persona copy only Kiro IDE ships removed, the fragment kept", () => {
+    const project = composed("kiro-ide");
+    expect(config(project, "--yes").status).toBe(0);
+    const twin = join(project.dir, ".kiro", "aidlc-common", "personas", "aidlc-quality-agent.md");
+    expect(readFileSync(twin, "utf-8")).toContain(PERSONA_LINE[0]);
+    const cli: Project = { ...project, harness: "kiro" };
+
+    expect(conflicts(cli)).toEqual([]);
+    const switched = config(cli, "--yes");
+    expect(switched.status, switched.out).toBe(0);
+    expect(existsSync(twin)).toBe(false);
+    expect(readFileSync(join(project.dir, ".kiro", PERSONA), "utf-8")).toContain(PERSONA_LINE[0]);
+  });
+
   test("kiro-ide: a persona the plugin did not compose, changed by the person, still shows in doctor's row", () => {
     const project = composed("kiro-ide");
     expect(config(project, "--yes").status).toBe(0);
