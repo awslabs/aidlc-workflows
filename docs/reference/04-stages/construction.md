@@ -1097,7 +1097,7 @@ This stage has a **two-part structure**: planning followed by generation.
      hashes. Contextual dependencies do not receive additional target markers.
    - Design artifacts for the CURRENT UNIT ONLY (not all units)
    - A 1-2 line summary of each inception-phase artifact with its file path
-     (requirements summary, stories summary, app design summary) -- the
+     (requirements summary, stories summary, domain design summary) -- the
      subagent can Read specific files if it needs full content
    - The current plan and unit-test-instructions.md, which that
      output already carries using the approval-content projection: the plan
