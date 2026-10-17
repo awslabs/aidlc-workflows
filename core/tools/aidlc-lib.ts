@@ -38188,6 +38188,9 @@ interface ScopeMetadata {
    *  resolveGuardPolicy. */
   guardPolicy?: GuardPolicy;
   ceremony?: Partial<CeremonyPolicy>;
+  /** `include_stages:`, the base plugin's stages a team plugin's scope runs
+   *  (compileStageGraph folds them into the column). */
+  includeStages?: string[];
 }
 
 let _scopeMetadata: Record<string, ScopeMetadata> | null = null;
@@ -38319,6 +38322,8 @@ export function loadScopeMetadataAll(): Record<string, ScopeMetadata> {
       if (existingCode === "true") meta.existingCode = true;
     }
     if (scalarField(fm, "freeform_default") === "true") meta.freeformDefault = true;
+    const includeStages = listField(fm, "include_stages");
+    if (includeStages.length > 0) meta.includeStages = includeStages;
     const reviewCap = scalarField(fm, "review_cap");
     if (reviewCap) {
       if (
