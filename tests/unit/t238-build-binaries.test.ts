@@ -1066,6 +1066,20 @@ describe("t238 build-binaries release builder", () => {
       expect(readFileSync(join(output, "install.ps1"), "utf-8")).toContain(
         `$PackagedVersion = '${AIDLC_VERSION}'`,
       );
+      // The runtime's plugins/ folder is one catalogue of AI-DLC's own plugins
+      // a person adds once; no plugin in it carries a catalogue of its own.
+      const copy = join(root, "copy-runtime");
+      extractTarGz(join(output, releaseCopyRuntimeAsset(AIDLC_VERSION)), copy);
+      const catalogue = JSON.parse(
+        readFileSync(join(copy, "plugins", ".claude-plugin", "marketplace.json"), "utf-8"),
+      ) as { name: string; plugins: Array<{ name: string; source: string }> };
+      expect(catalogue.name).toBe("aidlc-plugins");
+      expect(catalogue.plugins).toContainEqual(expect.objectContaining({
+        name: "aidlc-test-pro",
+        source: "./test-pro/claude",
+      }));
+      expect(existsSync(join(copy, "plugins", ".agents", "plugins", "marketplace.json"))).toBe(true);
+      expect(existsSync(join(copy, "plugins", "test-pro", "claude", ".claude-plugin", "marketplace.json"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

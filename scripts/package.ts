@@ -73,6 +73,7 @@ import { EARLIER_RELEASE_REGIONS, earlierReleasesReadSkill } from "./earlier-rel
 import { forgetPackagedSources, packageInputsFingerprint, recordPackagedSources } from "./package-sources.ts";
 import {
   buildPluginProjection as emitPluginProjection,
+  writeFirstPartyCatalogues,
   type PluginTarget,
   type PluginTargetTable,
 } from "../core/tools/aidlc-plugin-emit.ts";
@@ -1924,6 +1925,8 @@ function pluginTargets(): PluginTargetTable {
       harnessName: manifest.name,
       manifestDir,
       marketplaceDir: manifest.plugin?.marketplaceDir ?? manifestDir,
+      hostCatalogue: manifest.plugin?.hostCatalogue ??
+        ["store", "cursor"].includes(manifest.plugin?.kind ?? "store"),
       harnessLeaf: manifest.harnessDir,
       kind: manifest.plugin?.kind ?? "store",
       installRoots: [...installRoots].sort(),
@@ -1983,6 +1986,10 @@ function emitPlugins(
         console.log(`[plugin:${pluginName}] emitted dist/plugins/${pluginName}/${harnessName}/`);
       }
     }
+  }
+  const built = pluginHarnessesFor(harnesses).map((name) => pluginTargetFor(name) as PluginTarget);
+  for (const file of writeFirstPartyCatalogues(join(distRoot, "plugins"), built)) {
+    if (log) console.log(`[plugins] emitted dist/plugins/${file}`);
   }
 }
 

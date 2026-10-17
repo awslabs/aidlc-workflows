@@ -411,6 +411,42 @@ describe("uninstall file ownership plans", () => {
     }, { legacy: true });
   });
 
+  // The same release also unpacks the one catalogue its plugins share, in dot
+  // folders beside them. It goes with the version when everything it lists is
+  // one of the release's own marked plugin folders; any other file stays.
+  test("legacy runtime-only ownership removes the release's shared plugin catalogue, nothing else", () => {
+    withInstall((fixture) => {
+      const plugins = join(fixture.version, "plugins");
+      for (const harness of ["claude", "codex"]) {
+        put(join(plugins, "example", harness, ".aidlc-plugin-projection.json"),
+          `${JSON.stringify({ schema: 1, producer: "aidlc-plugin-build", plugin: "example", harness }, null, 2)}\n`);
+      }
+      const catalogue = (sources: string[]) => `${JSON.stringify({
+        name: "aidlc-plugins",
+        plugins: sources.map((source) => ({ name: "aidlc-example", source })),
+      }, null, 2)}\n`;
+      const owned = [
+        join(plugins, ".claude-plugin", "marketplace.json"),
+        join(plugins, ".agents", "plugins", "marketplace.json"),
+      ];
+      put(owned[0], catalogue(["./example/claude"]));
+      put(owned[1], catalogue(["./example/codex"]));
+      const kept = [
+        join(plugins, ".plugin", "marketplace.json"),
+        join(plugins, ".cursor-plugin", "marketplace.json"),
+        join(plugins, ".claude-plugin", "notes.md"),
+      ];
+      put(kept[0], catalogue(["./example/claude", "./unmarked/copilot"]));
+      put(kept[1], `${JSON.stringify({ name: "someone-else", plugins: [{ name: "x", source: "./example/claude" }] })}\n`);
+      put(kept[2], "user-owned sentinel\n");
+      const result = plan(fixture);
+      const planned = result.files.map((file) => file.path);
+      expect(planned).toEqual(expect.arrayContaining(owned));
+      expect(result.preserved).toEqual(expect.arrayContaining(kept));
+      for (const path of kept) expect(planned, path).not.toContain(path);
+    }, { legacy: true });
+  });
+
   test("a full inventory keeps an unrecorded file even inside a marked plugin folder", () => {
     withInstall((fixture) => {
       const release = join(fixture.version, "plugins", "example", "claude");

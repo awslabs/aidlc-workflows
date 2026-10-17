@@ -82,10 +82,10 @@ describe("t327 top-level plugin authoring routes", () => {
     expect(JSON.parse(result.stdout).valid).toBe(true);
     // The shipped route builds test-pro under its own names; the packager's
     // tree is AI-DLC's own, aidlc-test-pro in aidlc-plugins.
-    const expected = asShippedBuild(
+    const expected = asShippedBuild("claude")(
       new Map(files(EXPECTED).map((file) => [file, readFileSync(join(EXPECTED, file))])),
     );
-    expect(files(outDir)).toEqual([...expected.keys()]);
+    expect(files(outDir).sort()).toEqual([...expected.keys()].sort());
     for (const [file, bytes] of expected) {
       expect(readFileSync(join(outDir, file)).equals(bytes), file).toBe(true);
     }
