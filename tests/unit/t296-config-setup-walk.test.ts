@@ -796,10 +796,11 @@ describe("t296 first-run config setup walk", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("where the session sets every agent's model and effort, the Models row names it and is never walked", () => {
-    // These hosts cannot pin an agent's model or effort, so a recorded policy
-    // changes nothing there. The row says where the lever is, counts as done,
-    // and never sends the person into the models wizard or the closing list.
+  test("where a preset changes nothing, the Models row names the session and is never walked", () => {
+    // On these hosts a preset or group effort changes nothing (Kiro takes only
+    // one agent's own model and effort). The row says where the lever is,
+    // counts as done, and never sends the person into the models wizard or the
+    // closing list.
     const hosts = [
       ["copilot", ".aidlc", "GitHub Copilot"],
       ["cursor", ".cursor", "Cursor"],
@@ -817,7 +818,9 @@ describe("t296 first-run config setup walk", () => {
       const models = setupRows(fresh.stdout).find((line) => line.includes("Models"));
       expect(models, harness).toContain("[ok]");
       expect(models, harness).toContain(
-        `every agent uses your ${product} session's model and effort`,
+        `every agent uses your ${product} session's model and effort${
+          harness === "kiro-ide" ? " unless a model or effort is set for that agent" : ""
+        }`,
       );
       expect(models, harness).not.toContain("does not apply");
       // No provider answer on these hosts is the session's own model access,

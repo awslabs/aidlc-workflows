@@ -1655,9 +1655,9 @@ describe("t293 doctor model policy advisory", () => {
     expect(named.stdout).not.toContain("not expressible");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("doctor names the session where it sets every agent, and Kiro CLI carries the preset", () => {
+  test("doctor names the session where a preset changes nothing, and Kiro CLI carries the preset", () => {
     // A preset recorded for the team (setup records none on these hosts) is
-    // not a problem to fix where the host cannot pin an agent's model or effort.
+    // not a problem to fix where a preset changes nothing.
     const preset = (project: string) => {
       const settings = projectSettingsPath(project);
       writeFileSync(settings, `${JSON.stringify({
