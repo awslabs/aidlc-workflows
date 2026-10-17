@@ -7,6 +7,12 @@ export interface ShardConfig {
   defaultSeconds: number;
   weights: Record<string, number>;
   affinityGroups: string[][];
+  /** Per-OS measurements override the conservative fallback, never the inventory. */
+  platformWeights?: Record<string, Record<string, number>>;
+}
+
+export function shardConfigForPlatform(config: ShardConfig, platform: string): ShardConfig {
+  return { ...config, weights: { ...config.weights, ...config.platformWeights?.[platform] } };
 }
 
 interface WeightedGroup {

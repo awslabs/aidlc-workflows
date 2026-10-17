@@ -419,6 +419,38 @@ describe("explicit runner coverage uses real JUnit execution evidence", () => {
     expect(existsSync(join(fixture.root, "executed.txt"))).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("filtered integration shards execute every selected file once and preserve failures", () => {
+    const fixture = runnerFixture({
+      "integration/t-guard-matrix-a.test.ts": PASSING_CASE,
+      "integration/t-guard-matrix-b.test.ts": PASSING_CASE,
+      "integration/t-guard-matrix-c.test.ts": 'import { test, expect } from "bun:test"; test("failure remains blocking", () => expect(1).toBe(2));',
+      "integration/t-guard-matrix-d.test.ts": PASSING_CASE,
+      "integration/t-unrelated.test.ts": 'throw new Error("unrelated file must not run");',
+      "integration-weights.json": JSON.stringify({
+        defaultSeconds: 1, weights: {
+          "t-guard-matrix-a": 8, "t-guard-matrix-b": 7,
+          "t-guard-matrix-c": 2, "t-guard-matrix-d": 1, "t-unrelated": 100,
+        },
+      }),
+    });
+    const runs = ["1/2", "2/2"].map((shard) => fixture.run([
+      "--integration", "--no-llm", "--shard", shard, "--filter", "^t-guard-matrix-",
+    ]));
+    expect(runs.map((run) => run.status)).toEqual([0, 1]);
+    expect(runs[0].summary).toContain("Executed test cases: 2");
+    expect(runs[1].summary).toContain("Executed test cases: 2");
+    for (const name of ["a", "b", "c", "d"]) {
+      expect(runs.filter((run) => run.out.includes(`=== DONE t-guard-matrix-${name}.test.ts`))).toHaveLength(1);
+    }
+    for (const run of runs) expect(run.out).not.toContain("t-unrelated");
+    const excluded = fixture.run([
+      "--integration", "--no-llm", "--shard", "2/2", "--filter", "^t-guard-matrix-", "--exclude", "^t-guard-matrix-c",
+    ]);
+    expect(excluded.status).toBe(0);
+    expect(excluded.summary).toContain("Executed test cases: 1");
+    expect(excluded.out).toContain("=== DONE t-guard-matrix-b.test.ts (PASS)");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("--exclude leaves a weighted file out of its unit shard and the rest of the shard runs", () => {
     const fixture = runnerFixture({
       "unit/t-weighted.test.ts": PASSING_CASE,

@@ -339,8 +339,14 @@ command it names. Each case checks:
 
 A case the engine blocks today is a `test.todo` named after the block, with the
 real check as its body, so the fix turns it on. CI runs the guard matrix where
-it runs the scope runs, in two jobs of its own split by file name
-(`guard-matrix-1` takes `t-guard-matrix-[a-h]*`, `guard-matrix-2` the rest).
+it runs the scope runs, in two duration-balanced jobs. Both select
+`^t-guard-matrix-`; `--shard 1/2` and `--shard 2/2` partition that inventory
+without overlaps. The longest change matrices separate agent edits from hand
+edits, and unit-by-unit deletion from stage-by-stage deletion, into smaller
+files. Every scenario still starts a fresh project and runs its complete
+workflow with the same person-experience and record checks.
+Each split file starts with half its former file's duration as an estimate;
+the normal weight refresh replaces it with observed timings.
 
 ## Layer 2: Stage (CI push, LLM, minutes)
 
@@ -727,7 +733,7 @@ so a broken enumerator reds the gate.
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
 | Pull request push | Fast deterministic gate | `ci.yml`: contract checks + Linux smoke, sixteen unit shards and deterministic integration (the scope runs, the scope-host runs and the guard matrix in jobs of their own), using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
 | Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows (the scope runs, the scope-host runs and the guard matrix on Linux only; on macOS the unit tier runs only the unit files that name macOS and the ones the change touches, in two jobs instead of sixteen shards), adding isolated E2E on each, retrying an assertion-failed smoke, unit or integration file once with a `Flaky test` warning, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
-| Manual deterministic workflow dispatch | Targeted deterministic reproduction | `deterministic-tests.yml` accepts an immutable source SHA, runner, tier, required N/M shard for unit and optional manual-only `diagnostic_filter`; non-unit tiers omit the shard; one runner executes with model gates closed | GitHub Actions |
+| Manual deterministic workflow dispatch | Targeted deterministic reproduction | `deterministic-tests.yml` accepts an immutable source SHA, runner, tier, required N/M shard for unit, optional `integration-shard`, and optional manual-only `diagnostic_filter`; one runner executes with model gates closed | GitHub Actions |
 | Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, sixteen unit shards, integration and isolated E2E as separate jobs in the shared workflow, with the scope runs, the scope-host runs and the guard matrix on Linux | GitHub Actions |
 | Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running native obligations, release contracts, bounded hosted live shards, and the scope runs, the scope-host runs and the guard matrix on Linux, macOS and Windows | GitHub Actions |
 | Explicit manual Full Suite with `full_verification=true` | Credential-free candidate verification | Runs every job that receives no OIDC or AWS credentials for the selected workflow head, including an unmerged PR; live lanes need `live_verification`; separate evidence is not consumed by stable publication | GitHub Actions |
@@ -835,11 +841,11 @@ called by the preview are never cancelled this way.
 
 `ci.yml` and `full-suite.yml` call the same reusable
 `.github/workflows/deterministic-tests.yml`. Callers select the immutable `ref`,
-runner, tier, unit shard, an optional file `filter` and `exclude` (both empty
+runner, tier, unit or integration shard, an optional file `filter` and `exclude` (both empty
 by default, so the whole tier runs) and artifact label. Both split integration
 in five jobs: the scope runs (`filter`, `t-scope-run-*`), the scope-host runs
-(`filter`, `t-scope-host-*`), the guard matrix in two halves by file name
-(`filter`, `t-guard-matrix-[a-h]*` and the rest of `t-guard-matrix-*`) and
+(`filter`, `t-scope-host-*`), the guard matrix in two duration-balanced shards
+(`filter: ^t-guard-matrix-`, `integration-shard: 1/2` or `2/2`) and
 everything else (`exclude` of all three). PR CI selects Linux smoke, sixteen
 weighted unit shards, and the five integration jobs; a `full_verification` Full
 Suite selects smoke, the same sixteen shards, the five integration jobs, and
@@ -848,7 +854,7 @@ deterministic tier; its `scope_runs` job calls the shared workflow for the scope
 runs, the scope-host runs and the guard matrix on all three. Integration and
 E2E run as independent jobs per OS, each with a fresh Bun runner process.
 Every call owns a fresh checkout, installs frozen dependencies under Bun 1.4.2,
-regenerates projections, and invokes the Bash wrapper with `--debug -P 8
+regenerates projections once, and invokes the Bash wrapper with `--debug -P 8
 --no-llm`. E2E runs retain `--isolated-e2e`; smoke and unit remain serial within
 each checkout. Sharing the workflow shares the commands and setup, not previous
 test results.
@@ -882,8 +888,9 @@ gh workflow run deterministic-tests.yml --ref '<candidate-branch>' \
 `diagnostic_filter` is a manual-only filename regex and is not exposed to
 reusable CI callers. The unit tier requires `unit-shard=N/M`; `1/1` selects all
 unit files before filtering. For smoke, integration or e2e, omit `unit-shard`;
-its default is empty. For example, use `-f tier=integration` without a shard
-input. Each reproduction uses one fresh runner with model gates closed and
+its default is empty. Integration may additionally use `integration-shard=N/M`
+to reproduce one partition of its filtered inventory. Each reproduction uses
+one fresh runner with model gates closed and
 the same immutable checkout, bounded runner and sanitized evidence paths.
 The default artifact is
 `ci-deterministic-probe-<OS>`. These targeted diagnostics do not qualify a full
@@ -1079,8 +1086,8 @@ bash tests/run-tests.sh       # POSIX compatibility wrapper
 --file-timeout N  # Independent file ceiling in seconds for every tier; caps isolated E2E too.
                   # Default: 7200 outside isolated E2E.
 --run-timeout N   # Shared work deadline in seconds across setup and all selected files.
---shard N/M     # Run one duration-balanced unit shard.
-                # Requires --unit with no other level or profile flags.
+--shard N/M     # Run one duration-balanced unit or integration shard.
+                # Requires --unit or --integration with no other tier/profile.
 --isolated-e2e  # Run e2e in independent checkouts; -P sets worker count.
 --e2e-plan      # Print selected files/resources without builds or test execution.
                 # Requires --e2e; implies --isolated-e2e, not --e2e.
@@ -2171,8 +2178,9 @@ calibration; it does not change this adapter's conservative injection policy.
 
 `--unit --shard N/M` assigns every discovered unit file to exactly one of `M`
 duration-balanced shards. Assignment is deterministic and uses
-`tests/unit-shard-weights.json`, which records each file's duration on its
-slowest CI OS. Unlisted files receive a one-second default weight, so new tests
+`tests/unit-shard-weights.json`, which records each file's duration per OS.
+The current platform's measurements take precedence; files not measured there
+use their slowest-OS fallback. Unlisted files receive a one-second default weight, so new tests
 join the least-loaded shard without changing the command. The runner exits 2 when `M` exceeds the number of
 assignable groups, so no valid shard command can report success after running
 zero files.
@@ -2203,11 +2211,21 @@ a long file never starts last and sets the tier's wall time. Unweighted files
 and ties keep name order; with no readable weights file, files start in name
 order. Serial files and the smoke and unit tiers are unaffected.
 
+`--integration --shard N/M` balances the filtered integration inventory using
+the same integration weights. Filtering happens before partitioning; exclusions
+apply afterward, so excluding a file does not move other files between shards.
+The two guard jobs use this mode with the same filter. The number of hosted
+jobs and the worker limit remain unchanged.
+
 Weights only balance and order files; they never select, skip, or fail one.
 `scripts/ci-test-weights.ts refresh <dir>` rewrites both weight files from
 deterministic CI evidence downloaded with
 `gh run download <run-id> -p 'ci-deterministic-*' -D <dir>` (use several green
-merge-group runs: each file takes its median per OS, then its slowest OS).
+merge-group runs: each file takes its median per OS; the slowest median also
+updates its fallback). Platform measurements not present in a refresh are
+retained. The initial platform weights were collected from successful
+merge-group run `39029896320`; scheduling gains must be checked against
+subsequent runs, not just those training measurements.
 After each unit and integration job, the advisory "Report outdated test
 weights" step runs `scripts/ci-test-weights.ts report`: a file that ran more
 than a minute and more than 1.5 times past its weight gets a warning

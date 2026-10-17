@@ -52,6 +52,7 @@ import {
   orderLongestFirst,
   parseOrderWeights,
   parseShardSpec,
+  shardConfigForPlatform,
   type ShardConfig,
 } from "../lib/test-sharding.ts";
 
@@ -60,9 +61,9 @@ import {
 // in the test path, and `bash <script>` is the runner's documented entrypoint.
 const TESTS_ROOT = join(REPO_ROOT, "tests");
 const RUNNER = join(TESTS_ROOT, "run-tests.sh");
-const UNIT_SHARD_CONFIG = JSON.parse(
+const UNIT_SHARD_CONFIG = shardConfigForPlatform(JSON.parse(
   readFileSync(join(TESTS_ROOT, "unit-shard-weights.json"), "utf-8"),
-) as ShardConfig;
+) as ShardConfig, process.platform);
 
 interface RunResult {
   status: number;
@@ -178,17 +179,17 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     expect(missing.out).toContain("ERROR: --shard");
   }, PER_TEST_TIMEOUT);
 
-  test("--shard is restricted to a unit-only invocation", () => {
+  test("--shard is restricted to one unit or integration tier", () => {
     const smoke = run(["--smoke", "--shard", "1/4"]);
     expect(smoke.status).toBe(2);
     expect(smoke.out).toContain(
-      "ERROR: --shard requires --unit with no other level or profile flags",
+      "ERROR: --shard requires --unit or --integration with no other level or profile flags",
     );
 
     const profile = run(["--ci", "--shard", "1/4"]);
     expect(profile.status).toBe(2);
     expect(profile.out).toContain(
-      "ERROR: --shard requires --unit with no other level or profile flags",
+      "ERROR: --shard requires --unit or --integration with no other level or profile flags",
     );
   }, PER_TEST_TIMEOUT);
 

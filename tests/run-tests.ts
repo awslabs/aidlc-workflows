@@ -51,6 +51,7 @@ import {
   orderLongestFirst,
   parseOrderWeights,
   selectShard,
+  shardConfigForPlatform,
   type ShardConfig,
 } from "./lib/test-sharding.ts";
 import type { E2eWorker } from "./lib/e2e-workers.ts";
@@ -170,8 +171,8 @@ OUTPUT MODIFIERS (combinable with any tier/profile):
   --parallel N    Run up to N test files concurrently within a tier (alias: -P N).
                   Default: 1 (serial). Smoke and unit tiers always run serially.
                   Recommended range: 1-8. See docs/reference/09-testing.md.
-  --shard N/M     Run one deterministic, duration-balanced unit-test shard.
-                  Requires --unit with no other level or profile flags.
+  --shard N/M     Run one duration-balanced unit or integration shard.
+                  Requires --unit or --integration with no other level/profile.
   --file-timeout N  Independent per-file work ceiling in seconds for every tier.
                   Default: 7200 outside isolated e2e; caps its existing deadline.
   --run-timeout N   Shared work ceiling in seconds, including setup and all files.
@@ -1268,7 +1269,7 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
   const files = existsSync(dir)
     ? readdirSync(dir)
         .filter((f) => f.endsWith(".test.ts"))
-        .filter((f) => !excludeSet.has(f))
+        .filter((f) => (level === "integration" && args.shard !== null) || !excludeSet.has(f))
         .filter((f) => level !== "integration" || args.filter || args.fullProfile || !SELECTED_ONLY.test(f))
         .sort()
         .map((f) => join(dir, f))
@@ -1288,11 +1289,13 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
     files.push(...pluginTestFiles().filter((f) => {
       const m = f.replace(/\\/g, "/").match(/\/plugins\/([^/]+)\/tests\//);
       const qualified = m ? `plugin-${m[1]}-${basename(f).replace(/\.test\.ts$/, "")}` : basename(f);
-      return !excludeSet.has(qualified);
+      return args.shard !== null || !excludeSet.has(qualified);
     }));
   }
   if (level === "unit" && args.shard) {
-    const config = JSON.parse(readFileSync(UNIT_SHARD_CONFIG, "utf8")) as ShardConfig;
+    const config = shardConfigForPlatform(
+      JSON.parse(readFileSync(UNIT_SHARD_CONFIG, "utf8")) as ShardConfig, process.platform,
+    );
     const names = files.map((file) => basename(file));
     try {
       const selected = new Set(selectShard(names, args.shard, config));
@@ -1303,6 +1306,23 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
       );
       process.exit(2);
     }
+  }
+  if (level === "integration" && args.shard) {
+    // Filter first so the two guard jobs partition the guard inventory, not
+    // unrelated integration tests. Exclusions still apply after assignment.
+    const filter = args.filter ? new RegExp(args.filter) : null;
+    const candidates = files.filter((file) => matchesE2eFilter(file, filter));
+    if (candidates.length === 0) return [];
+    const order = integrationOrderWeights() ?? { defaultSeconds: 1, weights: {} };
+    const names = candidates.map(legacyResultName);
+    const config: ShardConfig = {
+      defaultSeconds: order.defaultSeconds,
+      weights: Object.fromEntries(names.filter((name) => name in order.weights).map((name) => [name, order.weights[name]])),
+      affinityGroups: [],
+    };
+    const selected = new Set(selectShard(names, args.shard, config));
+    return candidates.filter((file) => selected.has(legacyResultName(file)) && kept(file) &&
+      !excludeSet.has(basename(file)) && !excludeSet.has(legacyResultName(file)));
   }
   return files.filter(kept);
 }
