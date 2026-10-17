@@ -1377,6 +1377,8 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
   test("a Unit's Fix findings pick at a blocking check floors only that Unit's review receipt", () => {
     const proj = seedProject({ ownership: "team" });
     for (const unit of ["alpha", "beta"]) {
+      // A team Unit's records hang off its start: each teammate's own.
+      appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: unit, "Run floor": "unstarted#0" }, proj);
       coverUnit(proj, unit, "functional-design");
       logReviewReady(proj, "functional-design", unit, "aidlc-architecture-reviewer-agent");
     }
