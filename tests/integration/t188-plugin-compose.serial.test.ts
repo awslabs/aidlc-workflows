@@ -314,6 +314,21 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         name?: string;
       };
       expect(hostManifest.name, harness.name).toBe(`aidlc-${PLUGIN}`);
+      // The catalogue sits where the host reads one: Codex adds a folder as a
+      // marketplace only through .agents/plugins/marketplace.json.
+      const catalogue = join(built, harness.capabilities.plugin.marketplaceDir, "marketplace.json");
+      expect(existsSync(catalogue), `${harness.name}: catalogue`).toBe(true);
+      expect(
+        (JSON.parse(readFileSync(catalogue, "utf-8")) as { plugins?: Array<{ name?: string }> })
+          .plugins?.map((entry) => entry.name),
+        `${harness.name}: catalogue entry`,
+      ).toEqual([`aidlc-${PLUGIN}`]);
+      if (harness.capabilities.plugin.marketplaceDir !== harness.capabilities.plugin.manifestDir) {
+        expect(
+          existsSync(join(built, harness.capabilities.plugin.manifestDir, "marketplace.json")),
+          `${harness.name}: no second catalogue`,
+        ).toBe(false);
+      }
       expect(existsSync(join(built, "hooks", "compose.ts"))).toBe(true);
       const inventory = fileInventory(built);
       if (harness.name === "kiro") {

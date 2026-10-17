@@ -234,7 +234,9 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
 - `emit` — the optional plugin (Step 3), `null` for harnesses that need none.
 - `plugin` (optional) — the host plugin manifest directory and delivery kind.
   Omitting it derives `<harnessDir>-plugin` plus store delivery; set `kind:
-  "kiro"` only for a folder-drop host.
+  "kiro"` only for a folder-drop host. Set `marketplaceDir` when the host reads a
+  plugin catalogue from somewhere other than the manifest directory (Codex:
+  `.agents/plugins`).
 
 Claude's manifest is the minimal reference (no rename, no emit); Kiro's adds a
 rename + `harnessFiles` (agent JSONs and adapter) plus split root/native onboarding;

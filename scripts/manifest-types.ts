@@ -374,6 +374,11 @@ export type HarnessManifest = {
   plugin?: {
     /** Host plugin-manifest dir name (for example ".claude-plugin" or ".cursor-plugin"). */
     manifestDir: string;
+    /**
+     * Where the host reads a plugin catalogue (`marketplace.json`) when the
+     * person adds the projection as a marketplace. Defaults to `manifestDir`.
+     */
+    marketplaceDir?: string;
     /** Host-specific plugin hook projection shape. */
     kind: "store" | "kiro" | "kiro-ide" | "cursor";
     /**
