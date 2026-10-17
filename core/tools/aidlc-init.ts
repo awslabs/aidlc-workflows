@@ -5073,6 +5073,32 @@ function replaceGeneratedRegion(
   }${current.slice(target.end)}`;
 }
 
+// Releases 2.8.0 to 2.11.0 kept the scope and stage tables inside the skill,
+// and a plugin sync there rewrote them, so the skill no longer matches its
+// record. With its tables put back to the ones this release ships (2.9.0 to
+// 2.11.0 shipped the same ones), it is the file the record says AI-DLC wrote,
+// and the refresh writes this release's skill over it. A skill recorded with
+// other tables, or changed anywhere else, keeps the conflict.
+function earlierSkillTablesOnly(
+  skillPath: string,
+  releaseTablesPath: string,
+  priorHash: string | undefined,
+): boolean {
+  if (priorHash === undefined || !regularFile(skillPath) || !regularFile(releaseTablesPath)) return false;
+  if (ownedFileHash(skillPath, [priorHash]).hash === priorHash) return false;
+  const tables = readFileSync(releaseTablesPath, "utf-8").replaceAll("\r\n", "\n");
+  let restored = readFileSync(skillPath, "utf-8").replaceAll("\r\n", "\n");
+  try {
+    restored = replaceGeneratedRegion(restored, tables, "stage");
+    restored = replaceGeneratedRegion(restored, tables, "scope");
+  } catch {
+    // A skill without both marker pairs (Copilot's own, or one an earlier tool's
+    // scope table swallowed) has none to put back.
+    return false;
+  }
+  return ownedHash(Buffer.from(restored, "utf-8"), [priorHash]).hash === priorHash;
+}
+
 // The folders outside the harness dir where a harness keeps the skills and
 // agents the engine generates and a plugin composes: Codex's `.agents/`, and
 // Copilot's `.github/` (its skills and agent files both live there).
@@ -7088,6 +7114,14 @@ function prepareRefreshSource(
     // The generated tables live beside the skill, out of its body.
     const tablesPath = join(dirname(skillPath), "tables.md");
     if (existsSync(tablesPath)) {
+      const skillRel = relative(root, skillPath).replaceAll("\\", "/");
+      if (earlierSkillTablesOnly(
+        join(projectDir, skillRel),
+        join(sourceRoot, relative(root, tablesPath)),
+        prior?.files[skillRel],
+      )) {
+        regenerated.add(skillRel);
+      }
       let generated = readFileSync(tablesPath, "utf-8");
       generated = replaceGeneratedRegion(
         generated,
@@ -9472,7 +9506,10 @@ function workspaceState(rel: string): boolean {
 // space switch pointed at another space are set aside (those files are
 // AI-DLC's, and the refresh writes the shipped file over them).
 function ownedFileHash(path: string, known: readonly (string | undefined)[]): { hash: string } {
-  const bytes = readFileSync(path);
+  return ownedHash(readFileSync(path), known);
+}
+
+function ownedHash(bytes: Buffer, known: readonly (string | undefined)[]): { hash: string } {
   const hash = sha256Matching(bytes, known);
   if (known.includes(hash)) return { hash };
   const text = bytes.toString("utf-8");
