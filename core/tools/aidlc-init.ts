@@ -11182,15 +11182,17 @@ type PreviewRequest = { feature: PreviewFeature; choice: PreviewChoice };
 const PREVIEW_VALUE_FLAGS = new Set(["--harness", "--plan-token", "--project-dir"]);
 const PREVIEW_BARE_FLAGS = new Set(["--dry-run", "--help", "--json", "--no-color", "--quiet", "--show", "--verbose", "--yes"]);
 
-// What each feature does while it is on, and when a change reaches the work.
-const PREVIEW_FEATURE_TEXT: Readonly<Record<PreviewFeature, { does: string; takes: string }>> = Object.freeze({
+// What each feature does while it is on, and when turning it on or off reaches the work.
+const PREVIEW_FEATURE_TEXT: Readonly<Record<PreviewFeature, { does: string; takes: string; stops: string }>> = Object.freeze({
   "agent-models": {
     does: "an agent's own model and effort from config models are written into its Kiro agent file",
     takes: "Kiro takes it at each agent's next dispatch",
+    stops: "it stops at each agent's next dispatch",
   },
   "reviewer-read-scope": {
     does: "a Unit's reviewer reads only that Unit's files, while the reviewer read-scope check is on for the work",
     takes: "it applies from the next Unit review",
+    stops: "it stops from the next Unit review",
   },
 });
 
@@ -11348,9 +11350,12 @@ export function previewSwitchLine(
     : before === "on" && !beforeOn
     ? ` To have it again: ${on}`
     : "";
-  // A switch that changes nothing in effect (on to off on a stable release) says so.
-  const takes = back === "on" || previewFeatureOn(feature, { [feature]: to }, version)
+  // What applies after the run, against what applied before it: a switch
+  // that changes nothing in effect (on to off on a stable release) says so.
+  const takes = previewFeatureOn(feature, { [feature]: to }, version)
     ? PREVIEW_FEATURE_TEXT[feature].takes
+    : beforeOn
+    ? PREVIEW_FEATURE_TEXT[feature].stops
     : "nothing changes on this release";
   return `${head}; ${takes}.${undo}`;
 }
