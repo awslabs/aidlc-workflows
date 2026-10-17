@@ -890,7 +890,7 @@ describe("t341 verification command consent", () => {
     expect(readAuditShardEvents(dir).some((row) => row.event === "DECISION_RECORDED" || row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // Like t137, this injects an append failure using a readable, unwritable shard.
+  // Like t47-failure-injection, this uses a readable, unwritable audit shard.
   // Native Windows does not enforce chmod's write denial.
   for (const choice of ["Approve", "Request Changes"] as const) {
     (process.platform === "win32" ? test.skip : test)(`an audit append failure preserves ${choice} for exactly one successful retry`, () => {

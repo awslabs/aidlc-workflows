@@ -30,6 +30,49 @@ integration** (so the integration level rides along on every local
 shows where each level sits conceptually — the profile flags below are how you
 actually select them.
 
+### Test boundaries and ownership
+
+The directory is an execution selector, not a promise about cost. In particular,
+`unit` currently includes CLI, installer, native-build and complete workflow
+tests. `--no-llm` closes model gates; it does not make a test an isolated unit
+test. Classify a test by the boundary its assertions exercise:
+
+| Kind | What it proves | Existing examples |
+| --- | --- | --- |
+| Unit | A rule or transformation through direct function calls, with controlled inputs | Version grammar, document schemas, shard selection |
+| Process or adapter contract | Exit status, stdin/stdout, filesystem effects, or a harness payload at the real boundary | Hook adapters, installation, process cleanup |
+| Deterministic journey | Several engine steps, replies and guards compose into the expected outcome | Plan approval, scope runs, guard matrix |
+| Live journey | The real agent and harness deliver the person's expected result | SDK, terminal and IDE acceptance journeys |
+
+Keep input variations in the cheapest layer that faithfully exercises the
+contract. Keep process, concurrency and platform checks when that boundary is
+the behavior being tested. A live journey does not replace an exact failure
+injection, and replaying every unit input through every harness is not required
+to prove adapter wiring.
+
+Before adding a regression, find the suite that owns the same behavior. Extend
+it when the setup and boundary match. A second `covers:` claim does not require
+a second execution of identical inputs and assertions: one case can cover the
+command, state changes and audit event together. Compare fixtures, hooks,
+parameter tables and platform implementations before removing a repeated body.
+
+The onboarding contract belongs to `t-tui-onboarding`; `t-e2e-driver-isolation`
+owns the IDE process/profile isolation cases. `t47-failure-injection` owns the
+four CLI failures and their `ERROR_LOGGED` evidence. Their distinct assertions
+remain in those suites rather than being replayed in a second file.
+
+Release fixtures read the generated copy/native trees and construct independent
+archives, applying the requested version to each archive's stamp in memory.
+They do not need another disk copy of every distribution. Each call reads the
+current source and owns its output; later source changes are visible, and
+damaging one fixture cannot change another fixture or the generated trees.
+
+The four selectors and current CI destinations remain in place while the
+broader inventory is reorganized in issue #2774. Moving a file must preserve its
+discovery, coverage claims, platform selection, shard affinity and required
+pre-merge execution. Measure setup time, test time and runner use separately;
+a directory move or a lower case count alone is not a performance result.
+
 The shared policy in `tests/harness/test-budget.ts` treats timeouts as failure
 backstops. Cold imports, antivirus, process creation and provider scheduling vary
 widely between runners; a fast run does not define a suitable timeout.
@@ -216,7 +259,7 @@ security coverage.
   HTML comment, processing instruction, declaration, CDATA section, or closing
   raw tag on the same line is a claim.
 
-## Layer 1: Protocol (every change, no LLM, seconds)
+## Layer 1: Protocol (every change, no LLM)
 
 Verifies the orchestrator's structural correctness without invoking the LLM. If these pass, the protocol is internally consistent — stages reference valid files, inputs/outputs chain correctly, routing tables match stage files.
 
@@ -1086,7 +1129,7 @@ bash tests/run-tests.sh       # POSIX compatibility wrapper
 
 # Level flags (combinable)
 --smoke         # Structural validation
---unit          # Single-component isolation
+--unit          # Unit directory, including existing process and workflow contracts
 --integration   # Cross-component contracts and stage/CLI utilities
 --e2e           # Full lifecycle, worktree, and rendered terminal journeys
 

@@ -82,6 +82,8 @@ import {
   acquireRelease,
   digest,
   readReleaseManifest,
+  releaseCopyRuntimeAsset,
+  releaseRuntimeAsset,
   verifyReleaseDirectory,
 } from "../../core/tools/aidlc-release.ts";
 import {
@@ -800,6 +802,44 @@ describe("t243 archive and transaction safety", () => {
     expect(left.hostileArchives).toHaveLength(2);
     for (const path of left.hostileArchives) {
       expect(() => readTarGz(path)).toThrow();
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("release fixtures isolate versions and outputs while observing changed source files", () => {
+    const source = temp("aidlc-release-fixture-source-");
+    mkdirSync(join(source, "scripts"));
+    for (const installer of ["install.sh", "install.ps1"]) {
+      cpSync(join(REPO_ROOT, "scripts", installer), join(source, "scripts", installer));
+    }
+    const stampPath = ".claude/tools/data/aidlc-stamp.json";
+    const probePath = ".claude/tools/aidlc-version.ts";
+    const sourceStamps: string[] = [];
+    for (const tree of ["dist", "dist-release"]) {
+      const root = join(source, tree, "claude");
+      cpSync(join(REPO_ROOT, tree, "claude"), root, { recursive: true });
+      sourceStamps.push(readFileSync(join(root, stampPath), "utf8"));
+    }
+    const first = temp("aidlc-release-fixture-version-first-");
+    writeReleaseFixture({ root: first, repoRoot: source, version: AIDLC_VERSION, distributions: ["claude"] });
+    const original = readFileSync(join(first, releaseRuntimeAsset(AIDLC_VERSION)));
+    const changed = "export const AIDLC_VERSION = 'fixture source changed';\n";
+    for (const tree of ["dist", "dist-release"]) {
+      writeFileSync(join(source, tree, "claude", probePath), changed);
+    }
+    const second = temp("aidlc-release-fixture-version-second-");
+    writeReleaseFixture({ root: second, repoRoot: source, version: NEXT_VERSION, distributions: ["claude"] });
+    for (const asset of [releaseRuntimeAsset(NEXT_VERSION), releaseCopyRuntimeAsset(NEXT_VERSION)]) {
+      const entries = readTarGz(join(second, asset));
+      const stamp = entries.find((entry) => entry.path === `runtime/claude/${stampPath}`)!;
+      expect(JSON.parse(stamp.data.toString()).frameworkVersion).toBe(NEXT_VERSION);
+      expect(entries.find((entry) => entry.path === `runtime/claude/${probePath}`)?.data.toString()).toBe(changed);
+    }
+    expect(readFileSync(join(first, releaseRuntimeAsset(AIDLC_VERSION))).equals(original)).toBe(true);
+    writeFileSync(join(second, releaseRuntimeAsset(NEXT_VERSION)), "damaged fixture");
+    expect(readFileSync(join(first, releaseRuntimeAsset(AIDLC_VERSION))).equals(original)).toBe(true);
+    for (const [index, tree] of ["dist", "dist-release"].entries()) {
+      expect(readFileSync(join(source, tree, "claude", stampPath), "utf8")).toBe(sourceStamps[index]);
+      expect(readFileSync(join(source, tree, "claude", probePath), "utf8")).toBe(changed);
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
@@ -5981,14 +6021,20 @@ describe("t243 release lifecycle", () => {
     };
     const home = temp("aidlc-t243-installer-root-release-home-");
     const machine = join(home, "machine");
+    let rootHome = home;
+    while (statSync(rootHome).uid !== 0) {
+      const parent = dirname(rootHome);
+      if (parent === rootHome) throw new Error("root-install fixture has no root-owned ancestor");
+      rootHome = parent;
+    }
     const install = async () => {
       rmSync(sentinel, { force: true });
       const childEnv: Record<string, string | undefined> = {
         ...process.env,
         PATH: `${shims}${delimiter}${process.env.PATH ?? ""}`,
-        // "/" is owned by root everywhere, so it stands in for root's home;
-        // the destinations below sit under it.
-        HOME: "/",
+        // Model a root-owned home containing these disposable destinations.
+        // Using "/" depends on shell handling of an empty trimmed prefix.
+        HOME: rootHome,
         AIDLC_BINARY_SENTINEL: sentinel,
         AIDLC_INSTALL_ROOT: machine,
         AIDLC_BIN_DIR: join(machine, "bin"),
