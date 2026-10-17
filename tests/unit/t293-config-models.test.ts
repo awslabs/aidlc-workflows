@@ -1744,6 +1744,26 @@ describe("t293 doctor model policy advisory", () => {
     });
   });
 
+  test("config models --check on GitHub Copilot leaves a shared effort to the session, as doctor does", () => {
+    const check = (models: unknown) => {
+      const project = temp("aidlc-t293-check-copilot-");
+      cpSync(join(DIST, "copilot"), project, { recursive: true });
+      writeFileSync(projectSettingsPath(project), `${JSON.stringify({ schemaVersion: 1, models }, null, 2)}\n`);
+      return run(["config", "models", "--project-dir", project, "--check"], project, runtimeEnv());
+    };
+    const shared = check({ schemaVersion: 1, preset: "balanced", groups: { reviewing: { effort: "max" } } });
+    expect(shared.status, shared.stdout).toBe(0);
+    expect(shared.stdout).toContain("model policy is reflected on copilot");
+    // A model recorded for Copilot by name is still drift there; its effort is not.
+    const named = check({
+      schemaVersion: 1,
+      agents: { architect: { model: { copilot: "vendor/raw" }, effort: "high" } },
+    });
+    expect(named.status).toBe(1);
+    expect(named.stdout).toContain("architect: model policy is not expressible on copilot");
+    expect(named.stdout).not.toContain("architect: effort");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("the host names messages use match each shipped harness", () => {
     // The names are fixed in the tools so a project file cannot change them;
     // they must still say what each harness calls itself.
