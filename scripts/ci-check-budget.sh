@@ -15,4 +15,9 @@ fi
 
 # GNU timeout owns the subprocess group, including package/typecheck children.
 # The short TERM-to-KILL interval stays inside the separate cleanup reserve.
-exec timeout --signal=TERM --kill-after=5s "${remaining}s" "$@"
+result=0
+timeout --signal=TERM --kill-after=5s "${remaining}s" "$@" || result=$?
+if { [ "$result" -eq 124 ] || [ "$result" -eq 137 ]; } && [ "$(date +%s)" -ge "$CHECK_WORK_DEADLINE" ]; then
+  echo "::error::combined check work budget exhausted while running $1; inspect this step's logs and resolve the slow command before retrying" >&2
+fi
+exit "$result"

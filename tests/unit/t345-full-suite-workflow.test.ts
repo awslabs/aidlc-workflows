@@ -1284,13 +1284,18 @@ describe("t345 complete nightly coverage", () => {
   (process.platform === "linux" ? test : test.skip)("setup and contract subprocesses stop at the shared work cutoff", () => {
     const root = mkdtempSync(join(tmpdir(), "t345-check-budget-"));
     const marker = join(root, "completed");
+    const clock = join(root, "clock-called");
     const wrapper = join(REPO_ROOT, "scripts/ci-check-budget.sh");
-    const run = (deadline: string, command: string[]) => spawnSync("bash", [
-      "-c", 'date() { printf "1000\\n"; }; export -f date; exec bash "$@"', "check-budget", wrapper, ...command,
-    ], {
-      encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
-      env: { ...process.env, CHECK_WORK_DEADLINE: deadline, WORK_RESULT: marker },
-    });
+    const run = (deadline: string, command: string[]) => {
+      rmSync(clock, { force: true });
+      return spawnSync("bash", [
+        "-c", 'date() { if [ -f "$CHECK_CLOCK_CALLED" ]; then printf "1001\\n"; else : > "$CHECK_CLOCK_CALLED"; printf "1000\\n"; fi; }; export -f date; exec bash "$@"',
+        "check-budget", wrapper, ...command,
+      ], {
+        encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+        env: { ...process.env, CHECK_WORK_DEADLINE: deadline, WORK_RESULT: marker, CHECK_CLOCK_CALLED: clock },
+      });
+    };
     try {
       const write = ["bash", "-c", 'printf done > "$WORK_RESULT"'];
       expect(run("", write).status).toBe(2);
@@ -1298,10 +1303,17 @@ describe("t345 complete nightly coverage", () => {
       expect(run("999", write).status).toBe(1);
       expect(existsSync(marker)).toBe(false);
       expect(run("1010", ["bash", "-c", "exit 7"]).status).toBe(7);
+      for (const code of [124, 137]) {
+        const ordinary = run("1010", ["bash", "-c", `exit ${code}`]);
+        expect(ordinary.status).toBe(code);
+        expect(ordinary.stderr).not.toContain("work budget exhausted");
+      }
       expect(run("1010", write).status).toBe(0);
       rmSync(marker);
       const expired = run("1001", ["bash", "-c", 'sleep 5; printf late > "$WORK_RESULT"']);
       expect(expired.status, expired.stderr).toBe(124);
+      expect(expired.stderr).toContain("::error::combined check work budget exhausted while running bash");
+      expect(expired.stderr).toContain("before retrying");
       expect(existsSync(marker)).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
