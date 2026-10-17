@@ -165,7 +165,7 @@ jobs:
         if: steps.source.outputs.purpose != 'live-verification'
         run: |
           bun tests/reconcile-tests.ts prepare --profile tests/native-terminal-profile.json --cohort "nightly-${{ github.run_id }}-${{ github.run_attempt }}" --repo . --output "$RUNNER_TEMP/native-plan.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: steps.source.outputs.purpose != 'live-verification'
         with:
           name: full-suite-native-plan
@@ -266,7 +266,7 @@ jobs:
           bun scripts/ci-sanitize-logs.ts tmp/full-suite-native
       - name: "Upload diagnostic logs"
         if: "${{ always() && steps.sanitize.outcome == 'success' }}"
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: "full-suite-native-${{ matrix.job }}"
           path: |
@@ -304,7 +304,7 @@ jobs:
             process.exit(child.exitCode);
           '
       - if: "${{ always() }}"
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: full-suite-native-result
           path: "${{ runner.temp }}/native-matrix-result.json"
@@ -421,7 +421,7 @@ jobs:
           bun scripts/ci-sanitize-logs.ts tmp/full-suite-production-guards
       - name: "Upload production guard evidence"
         if: "${{ always() && steps.sanitize.outcome == 'success' }}"
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: full-suite-production-guards
           path: |
@@ -610,7 +610,7 @@ jobs:
         run: bun scripts/ci-sanitize-logs.ts tests/logs
       - name: "Upload diagnostic logs"
         if: "${{ always() && steps.sanitize.outcome == 'success' }}"
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: "full-suite-live-${{ matrix.slice }}-${{ runner.os }}"
           path: tests/logs/
@@ -770,7 +770,7 @@ jobs:
         run: bun scripts/ci-sanitize-logs.ts tests/logs
       - name: "Upload diagnostic logs"
         if: "${{ always() && steps.sanitize.outcome == 'success' }}"
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: "full-suite-live-${{ matrix.slice }}-${{ runner.os }}"
           path: tests/logs/
@@ -909,7 +909,7 @@ jobs:
         run: bun scripts/ci-sanitize-logs.ts tests/logs
       - name: "Upload diagnostic logs"
         if: "${{ always() && steps.sanitize.outcome == 'success' }}"
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: "full-suite-live-${{ matrix.slice }}-Windows"
           path: tests/logs/
@@ -946,7 +946,7 @@ jobs:
         run: bun scripts/ci-sanitize-logs.ts tests/logs
       - name: "Upload diagnostic logs"
         if: "${{ always() && steps.sanitize.outcome == 'success' }}"
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: full-suite-live-release-contract-Windows
           path: tests/logs/
@@ -986,7 +986,7 @@ jobs:
         run: |
           bun scripts/ci-full-suite-result.ts "$RUNNER_TEMP/full-suite-result.json"
       - if: "${{ always() }}"
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: "${{ needs.plan.outputs.purpose == 'live-verification' && 'full-suite-live-verification-result' || needs.plan.outputs.purpose == 'full-verification' && 'full-suite-verification-result' || 'full-suite-result' }}"
           path: "${{ runner.temp }}/full-suite-result.json"
