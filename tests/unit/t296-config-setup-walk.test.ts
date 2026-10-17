@@ -849,8 +849,9 @@ describe("t296 first-run config setup walk", () => {
       expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
       expect(setupRows(rerun.stdout).find((line) => line.includes("Models")), harness)
         .toContain(
-          `[ok]     Models      every agent uses your ${product} session's model and effort; ` +
-            "the recorded balanced preset does not apply here",
+          `[ok]     Models      every agent uses your ${product} session's model and effort${
+            harness === "kiro-ide" ? " unless a model or effort is set for that agent" : ""
+          }; the recorded balanced preset does not apply here`,
         );
       expect(rerun.stdout, harness).not.toContain("config models");
       expect(readFileSync(join(path, dir, "tools", "data", "harness.json"), "utf-8"), harness)

@@ -306,9 +306,10 @@ describe("t293 model policy resolution", () => {
       schemaVersion: 1,
       agents: { architect: { model: "raw/model", effort: "high" } },
     }, "architect", "judgment", "kiro-ide");
-    expect(ide.model).toBeUndefined();
-    expect(ide.effort).toBeUndefined();
-    expect(ide.unexpressed.sort()).toEqual(["effort", "model"]);
+    // Kiro takes one agent's own model and effort.
+    expect(ide.model).toBe("raw/model");
+    expect(ide.effort).toBe("high");
+    expect(ide.unexpressed).toEqual([]);
 
     const cursor = resolveModelPolicy({
       schemaVersion: 1,
