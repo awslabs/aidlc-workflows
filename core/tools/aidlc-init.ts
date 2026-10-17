@@ -5092,7 +5092,8 @@ function earlierSkillTablesOnly(
     restored = replaceGeneratedRegion(restored, tables, "stage");
     restored = replaceGeneratedRegion(restored, tables, "scope");
   } catch {
-    // A skill without the tables (this release's own) has none to put back.
+    // A skill without both marker pairs (Copilot's own, or one an earlier tool's
+    // scope table swallowed) has none to put back.
     return false;
   }
   return ownedHash(Buffer.from(restored, "utf-8"), [priorHash]).hash === priorHash;

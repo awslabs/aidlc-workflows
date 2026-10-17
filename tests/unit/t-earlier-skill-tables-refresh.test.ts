@@ -10,6 +10,7 @@
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -33,6 +34,13 @@ const HARNESS_DIRS = {
 } as const;
 type Harness = keyof typeof HARNESS_DIRS;
 const TABLES = ["scope grid", "stage graph"] as const;
+// sha256 of each table's body (between its BEGIN and END lines) in the /aidlc
+// skill 2.9.0, 2.10.0 and 2.11.0 shipped, the same on every harness, measured
+// from their aidlc-runtime-X.Y.Z.tar.gz release assets.
+const EARLIER_BODIES = {
+  "scope grid": "e2e83c1396b6b651c022b5112d0f7bc9ddb73427ac06d5e8860daeed4eb5bc4b",
+  "stage graph": "4a498112f5cb5953b57daf5c87a53aee747e24dd05d9b8e0f08d529fa6c8b214",
+} as const;
 
 const temporary: string[] = [];
 afterAll(() => {
@@ -142,6 +150,23 @@ function composedProject(harness: Harness): { project: string; rel: string } {
 }
 
 describe("a skill whose tables an earlier release's plugin sync rewrote refreshes as AI-DLC's", () => {
+  // The proof puts this release's tables back, so it holds only while they are
+  // the ones those releases shipped.
+  test.each(Object.keys(HARNESS_DIRS) as Harness[])("%s: the tables this release ships are the ones 2.9.0 to 2.11.0 shipped", (harness) => {
+    const tablesPath = join(dirname(join(release(harness), skillRel(release(harness), harness))), "tables.md");
+    const tables = lf(readFileSync(tablesPath, "utf-8"));
+    for (const noun of TABLES) {
+      const at = region(tables, noun);
+      const body = createHash("sha256").update(tables.slice(at.open, at.close)).digest("hex");
+      expect(
+        body,
+        `the core ${noun} in ${tablesPath} is no longer the one 2.9.0 to 2.11.0 kept in their /aidlc skill, so ` +
+          "earlierSkillTablesOnly (core/tools/aidlc-init.ts) cannot prove those projects' skills and their config stops " +
+          `again: give it that ${noun} body (sha256 ${EARLIER_BODIES[noun]}) to put back as well, then pin this release's here`,
+      ).toBe(EARLIER_BODIES[noun]);
+    }
+  });
+
   for (const harness of Object.keys(HARNESS_DIRS) as Harness[]) {
     test(`${harness}: config plans no conflict and brings the skill to this release's`, () => {
       const { project, rel } = composedProject(harness);
