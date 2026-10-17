@@ -51,7 +51,7 @@ interface RuntimeGraph {
 }
 
 interface BoltDag {
-  units: { name: string; depends_on: string[]; kind?: string }[]; // verbatim from the authored edge block; new names use lowercase kebab-case, while safe legacy single-segment names beginning with a digit or containing uppercase letters, underscores, or dots remain accepted (the swarm derives a separate internal Bolt slug); kind (service|spec|ui|packaging|library) present only when the edge block tags the unit
+  units: { name: string; depends_on: string[]; kind?: string; repos?: string[] }[]; // verbatim from the authored edge block; new names use lowercase kebab-case, while safe legacy single-segment names beginning with a digit or containing uppercase letters, underscores, or dots remain accepted (the swarm derives a separate internal Bolt slug); kind (service|spec|ui|packaging|library) present only when the edge block tags the unit; repos (likely repos, a guide only) present only when the edge block names them
   batches: string[][];            // topological levels; each level = units whose deps are all satisfied by prior levels; level entries sorted lexicographically (deterministic)
 }
 
@@ -136,6 +136,13 @@ artifacts are filtered to the ones that apply to each unit's kind. An untagged
 unit carries no `kind` key and keeps the full design-artifact matrix. An invalid
 kind value makes the whole block `malformed` (see below), so a typo fails loud at
 the 2.7 gate rather than pruning wrong.
+
+Each unit may also carry `repos:`, its likely repos, when the work records
+repos: a list of repo names, or folders inside one repo
+(`platform/services/billing`), inline or as `- item` lines under `repos:`. It
+rides verbatim into `bolt_dag.units[].repos` and is a guide only: routing never
+reads it, and a name the work does not record is said once after Units
+Generation and kept as written.
 
 `compile` parses *that structured block* — a pure-data parse, no model
 call — into `units` (verbatim edges) and `batches` (topological

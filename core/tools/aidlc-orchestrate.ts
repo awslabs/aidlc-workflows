@@ -656,6 +656,7 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import { localRepoOverrideLines, REPOS_FILE } from "./aidlc-workspace-manifest.ts";
 import { noteReposManifestOffered, reposManifestOffered } from "./aidlc-workspace-repos.ts";
+import { unknownLikelyReposLine } from "./aidlc-unit-teams.ts";
 import { terminalDispatcherArgv } from "./aidlc.ts";
 import {
   appendAuditEntries,
@@ -13581,6 +13582,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   }
   if (intentRepos(pd).length > 0) {
     for (const line of localRepoOverrideLines(pd)) sayWithStepOnce(pd, line);
+  }
+  if (currentSlug === "units-generation") {
+    const unknown = unknownLikelyReposLine(pd);
+    if (unknown !== null) sayWithStepOnce(pd, unknown);
   }
   // Same swarm guard on the advance path: an eligible per-unit build stage
   // under autonomy fans out as a batch rather than a single run-stage. Off the
