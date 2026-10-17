@@ -144,8 +144,14 @@ describe("the switch line on a release a pin selects", () => {
   });
   test("off from a preview tree onto a stable pin names the steps back to a preview release", () => {
     const line = previewSwitchLine(dir, tree, "agent-models", "on", true, "off", "2.11.0", "2.11.0");
-    expect(line).toContain("Kiro takes it at each agent's next dispatch.");
+    expect(line).toContain("; it stops at each agent's next dispatch.");
+    expect(line).not.toContain("Kiro takes it");
     expect(line).toMatch(/To undo: .*, then \S.*config preview agent-models on --yes/);
+  });
+  test("reviewer-read-scope off from a preview tree onto a stable pin says it stops", () => {
+    const line = previewSwitchLine(dir, tree, "reviewer-read-scope", "on", true, "off", "2.11.0", "2.11.0");
+    expect(line).toContain("; it stops from the next Unit review.");
+    expect(line).not.toContain("it applies");
   });
   test("on that applied, run again onto another preview pin, offers no way back to it", () => {
     const line = previewSwitchLine(dir, tree, "agent-models", "on", true, "on", "2.11.0-preview.20261017.1", "2.11.0-preview.20261017.1");
