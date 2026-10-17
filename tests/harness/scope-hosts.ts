@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { Worker } from "node:worker_threads";
 import { basename, dirname, join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
+import { compareVersions } from "../../dist/claude/.claude/tools/aidlc-channel.ts";
 import { auditShardHostSegment, cloneIdFileContent, cloneIdPath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { copilotSkillPrompt } from "./aidlc-input-corpus.ts";
 import { FIXTURES_DIR, REPO_ROOT } from "./fixtures.ts";
@@ -922,6 +923,9 @@ interface PluginAnswer {
   nudges?: string[];
 }
 
+/** The first build whose opencode plugin names each shell command's chat (its `shell.env` hook). */
+const FIRST_RELEASE_NAMING_THE_CHAT = "2.11.1-preview.20261016.1";
+
 /**
  * opencode: AI-DLC's plugin (`.opencode/plugin/aidlc-opencode-adapter.ts`)
  * loaded into one opencode process, here a worker thread the host waits on
@@ -944,6 +948,13 @@ export class OpencodeScopeHost extends ScopeHost {
   private readonly hostNumber = ++hostCount;
   private child: string | null = null;
   private uses = 0;
+  /**
+   * The published release the project's plugin came from, when a drive set the
+   * project up from one (the update check's previous release); null for a tree
+   * this repository built. A release from before the plugin named the chat runs
+   * its commands without one, as opencode ran them then.
+   */
+  release: string | null = null;
 
   constructor(proj: string, base?: NodeJS.ProcessEnv) {
     super(proj, base);
@@ -1041,7 +1052,8 @@ export class OpencodeScopeHost extends ScopeHost {
       const ran = String(args.command ?? line);
       // opencode asks the plugin for the command's environment, which names its chat.
       const env = this.hookCall("shell.env", { cwd: this.proj, ...call }, { env: {} }).output?.env as Record<string, string> | undefined;
-      if (!env?.AIDLC_SESSION_OVERRIDE) throw new ScopeRunStuck(`the opencode plugin named no chat for ${clip(ran, 200)}`);
+      const named = this.release === null || compareVersions(this.release, FIRST_RELEASE_NAMING_THE_CHAT) >= 0;
+      if (named && !env?.AIDLC_SESSION_OVERRIDE) throw new ScopeRunStuck(`the opencode plugin named no chat for ${clip(ran, 200)}`);
       return this.spawn(ran, this.argv(ran), undefined, { ...this.env, OPENCODE: "1", ...env });
     }, (res) => `${res.stdout}${res.stderr}`);
   }

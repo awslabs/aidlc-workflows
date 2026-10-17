@@ -375,7 +375,7 @@ async function check(previous: string, candidate: string, target: string, root: 
   const began = Date.now();
   const works = projects.map(({ harness, project }) => ({
     harness,
-    proc: Bun.spawn([process.execPath, WORK_OPEN, harness, project, copy ? "copy" : machine, signals, String(deadline)], {
+    proc: Bun.spawn([process.execPath, WORK_OPEN, harness, project, copy ? "copy" : machine, signals, String(deadline), previous], {
       cwd: project,
       env,
       stdout: Bun.file(join(signals, `${harness}.log`)),
