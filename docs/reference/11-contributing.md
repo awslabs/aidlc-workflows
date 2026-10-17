@@ -90,14 +90,15 @@ the GitHub Release in this repository with `GITHUB_TOKEN`, and verifies the
 uploaded asset inventory. Never rebuild, repackage, or substitute the
 candidate.
 
-Stable releases start from pushed version tags in `.github/workflows/release.yml`.
-Before tagging, merge the release-preparation PR and confirm its required branch
-checks, then run the Kiro CLI release journey on the commit to be tagged and post
-its one-line result as a comment on that PR ([Testing](09-testing.md); Kiro needs
-a signed-in identity, so it has no hosted lane). Stable publication validates the
-exact tag source and release assets and
-requires a passing Full Suite for the tagged commit: `release.yml` reuses a
-passing `full-suite-result` or calls `full-suite.yml` itself.
+Stable releases promote the source commit of a selected published preview.
+Run `promote-release.yml` on `main` with a preview tag, stable version and release
+notes, or with no inputs to list available previews. The prepared tag contains
+one child commit with version metadata and pinned publication controls;
+`release.yml` validates that relationship and builds the stable artifacts.
+It runs packaging and native/installer/lifecycle/upgrade checks without repeating
+CI or Full Suite. Preview results and failures remain visible in the release
+notes. After publication, a metadata-only branch and PR link record the version
+on current `main`. See [the release steps](../../DEVELOPERS.md#4-promote-a-preview-to-production).
 The isolated `.github/workflows/preview-release.yml` workflow schedules or
 manually dispatches preview builds from `main`, gates them through contract
 checks and release-asset validation, runs native obligations and the bounded live suite (deterministic tiers remain in PR/merge CI),

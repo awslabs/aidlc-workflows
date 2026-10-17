@@ -1045,7 +1045,7 @@ describe("t345 complete nightly coverage", () => {
         expect(job.secrets, `${file}:${name}`).toBe("inherit");
       }
     }
-    expect(callers).toContain("release.yml:full_suite");
+    expect(callers).not.toContain("release.yml:full_suite");
     expect(callers).not.toContain("preview-release.yml:full_suite");
   });
 

@@ -143,10 +143,10 @@ Distribution coverage is split by contract:
   date rotation, the switch that opens it in the Claude SDK live job, a miss
   reported but not owed while a drive that throws still fails, and the summary
   the nightly report reads back.
-- `t-ci-full-suite-evidence.test.ts` covers the stable release Full Suite gate:
-  which earlier runs may supply evidence, which results qualify for the exact
-  tagged commit, the fallback to running the suite, and the `release.yml` wiring
-  that keeps publication behind a passing result.
+- `t-ci-full-suite-evidence.test.ts` covers the optional Full Suite evidence
+  inspector and exact commit/run matching. `t-release-promotion.test.ts` uses
+  real Git histories to cover preview selection, exact source preservation,
+  metadata, control snapshots, retries and main metadata synchronization.
 
 The test runner regenerates all projections under a process lock before test
 discovery, so a fresh clone has no dependency on pre-existing `dist/` bytes.
@@ -732,7 +732,7 @@ so a broken enumerator reds the gate.
 | Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running native obligations, release contracts, bounded hosted live shards, and the scope runs, the scope-host runs and the guard matrix on Linux, macOS and Windows | GitHub Actions |
 | Explicit manual Full Suite with `full_verification=true` | Credential-free candidate verification | Runs every job that receives no OIDC or AWS credentials for the selected workflow head, including an unmerged PR; live lanes need `live_verification`; separate evidence is not consumed by stable publication | GitHub Actions |
 | Explicit manual Full Suite with `live_verification=true` | Candidate live verification | Runs live preparation and hosted live/release-contract jobs for the selected workflow head only; separate evidence is not consumed by stable publication | GitHub Actions |
-| Stable tag | Exact-source release validation | `release.yml` validates the tag and source, reuses a passing release-purpose `full-suite-result` for the exact tagged commit or calls `full-suite.yml` for it, and runs contract checks, builds, and native/installer/lifecycle validation alongside; `publish` and `release` require the passing Full Suite | GitHub Actions |
+| Preview promotion | Exact-source release validation | `release.yml` validates the preview parent and allowed metadata/control changes, builds with the stable version and checks native/installer/lifecycle/upgrade behavior; it does not repeat CI or Full Suite | GitHub Actions |
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 
@@ -808,23 +808,15 @@ Windows, PR CI and the nightly Full Suite run every file. `t345` pins this.
 above, while required hosted live tiers run in
 `full-suite.yml`. `preview-release.yml` dispatches it every night as a separate
 run for the preview source SHA. Its failures remain visible in that run and in
-the preview notes, without failing the preview workflow. By maintainer decision on 2026-09-26, which reverses the
-2026-09-21 decision that stable releases need no Full Suite result, a stable
-release publishes only after a release-purpose Full Suite passed for the exact
-tagged commit.
+the preview notes, without failing the preview workflow. Stable promotion
+selects a published preview's source and adds only version metadata and pinned
+publication controls. It does not repeat CI or Full Suite. The preview's prior
+results remain visible, including failures; choosing to promote is the
+maintainer's decision. The newly built stable binaries still pass packaging,
+installer, lifecycle and update checks before publication. See
+[the promotion steps](../../DEVELOPERS.md#4-promote-a-preview-to-production).
 
-Create the stable tag only after the release-preparation commit has passed its
-required branch checks. The tag workflow's `Find Full Suite evidence` job looks
-for a passing `full-suite-result` for the tagged commit from a successful
-Preview Release run of that commit or a successful manual `full-suite.yml`
-dispatch on `main` with `ref=<sha>`, and reuses the first that qualifies.
-Otherwise `release.yml` calls `full-suite.yml` for the tagged commit, which adds
-the suite's hours to the release. Builds and lifecycle checks run alongside it;
-`Require a passing Full Suite` gates `publish` and `release`. A tag outside
-`main` fails validation, because a release-purpose Full Suite only tests commits
-already on `main`. To keep the suite out of the release run, let the nightly
-preview build the release commit first, or dispatch `full-suite.yml` on `main`
-with `ref=<sha>`. A newer dispatch on the same workflow ref
+A newer dispatch on the same workflow ref
 with the same verification selection cancels the older run, so redispatching
 live verification after a push supersedes the run for the previous head.
 Release-purpose dispatches also key on the `ref` input, and Full Suite runs
@@ -1613,14 +1605,14 @@ line for it; `release.yml` does not publish a stable release that fails it.
 `Release result` requires successful preview publication or an intentional
 skip. Full Suite runs separately: the preview records its run ID, downloads
 that run's evidence and reports its real result, without propagating its failure.
-An unchanged source skips publication but still receives the test report. Stable releases consume `full-suite-result`: the tag
-workflow validates that the exact tagged commit is on `main` and matches the
-authored version, reuses or produces a passing release-purpose Full Suite result
-for that commit, and runs contract checks and validates built native binaries,
-installers, lifecycle flows, checksums, and provenance. Deterministic source tiers and production guards remain in PR/merge CI and manual
-`full_verification`; the ordinary release Full Suite omits them. Preview also runs contract
-checks and Full Suite once, with publication deduplication applied only to the
-subsequent build and publication chain.
+An unchanged source skips publication but still receives the test report. Stable
+promotion validates the selected preview's source and the new version commit,
+then builds and checks native binaries, installers, lifecycle flows, upgrades,
+checksums and provenance without repeating source CI or Full Suite. Deterministic
+source tiers and production guards remain in PR/merge CI and manual
+`full_verification`; the ordinary release-purpose Full Suite omits them. Preview
+runs contract checks and Full Suite once, with publication deduplication applied
+only to the subsequent build and publication chain.
 
 For user-approved full validation of an unmerged PR, select its branch and set
 `ref` to that branch's exact workflow-head SHA:
@@ -1723,9 +1715,10 @@ live jobs using the existing `ai-pr-review` environment. There is no separate
 live opt-in switch in this release workflow. Missing
 prerequisites, skipped jobs, or failed tests fail an ordinary Full Suite run.
 They do not block preview publication: the preview still builds, its notes end
-with a Full Suite failure report, and only the separate Full Suite run stays red. They block stable
-publication: `release.yml` refuses to publish without a passing result for the
-tagged commit. The credential-free
+with a Full Suite failure report, and only the separate Full Suite run stays red.
+Stable promotion preserves those results and warnings; it does not repeat the
+suite or claim that a previous failure passed. Stable publication still requires
+the new binaries to pass installation and upgrade checks. The credential-free
 Windows release-contract job also runs.
 
 The declared coverage is:
@@ -1898,13 +1891,14 @@ historical disabled-live reports. `complete` additionally requires
 no excluded families; it remains false with the documented Kiro and Cursor
 exclusions and is not the preview-publication predicate. Those exclusions warn
 without failing the suite; disabled required jobs fail it.
-The stable gate, `scripts/ci-full-suite-evidence.ts check`, accepts a result only
-when `sha` is the tagged commit, `runId` is the run it came from, `purpose` is
+The optional inspector, `scripts/ci-full-suite-evidence.ts check`, accepts a result only
+when `sha` is the requested commit, `runId` is the run it came from, `purpose` is
 `"release"`, `verificationFamily` is `"all"`, `coveragePolicy` is
 `required-hosted-live-shards-v3`, `passed` is true, `disabledLegs` is empty, and
 `omittedLegs` is exactly the two deterministic/production-guard job IDs. Those jobs
 must be skipped; all other declared jobs and extra legs must have succeeded.
-It does not require `complete`, so the documented exclusions only warn.
+It does not require `complete`, so the documented exclusions only warn. Promotion
+does not invoke this inspector or require it to pass.
 Neither job success nor this policy marker asserts full case coverage across OSes.
 
 Native jobs use the Bash wrapper with `--debug -P 8` and their unchanged
@@ -1941,9 +1935,9 @@ On Linux it gives Kiro a scratch home and keeps the machine's sign-in, so
 `~/.kiro` is not touched. It takes about five minutes and about eleven Kiro
 credits, and prints one line, for example `Kiro CLI 2.29.0 release journey on
 <commit>: PASS (4.7 min of turns, 10.46 credits, 0 permission prompts)`, that
-goes into a comment on the release-preparation PR. Nothing in the workflows reads
-that comment: a failed pass means a fix on `main` and a new release-preparation
-PR, or a maintainer who releases anyway and says so in the comment.
+is recorded with the selected preview before promotion. Nothing in the workflows
+reads that manual result: the maintainer reviews it when choosing a preview. A
+fix ships in another preview before it is selected for promotion.
 
 The live jobs use the existing `ai-pr-review` environment and role. Verify these
 prerequisites before running Full Suite:

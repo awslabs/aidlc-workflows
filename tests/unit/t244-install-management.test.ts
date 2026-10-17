@@ -3466,13 +3466,10 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(workflow).not.toContain("bun scripts/verify-release.ts controls");
     expect(workflow).toContain(`ref: \${{ needs.validate.outputs.sha }}`);
     expect(workflow).toContain('"refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"');
-    expect(workflow).toContain("tag_sha=");
+    expect(workflow).toContain("bun scripts/release-promotion.ts verify");
     expect(workflow).toContain('test "$GITHUB_REF" = "refs/tags/$RELEASE_TAG"');
     expect(workflow).toContain("\n  push:");
-    expect(workflow).toContain(
-      `awk -F'"' '/^export const AIDLC_VERSION = "/ { print $2 }'`,
-    );
-    expect(workflow).toContain('test "$RELEASE_TAG" = "v$version"');
+    expect(workflow).toContain('test "$(git rev-parse "HEAD^{commit}")" = "$GITHUB_SHA"');
     expect(workflow).not.toContain("origin/v2");
     expect(workflow).toContain('test "$(git rev-parse HEAD)" = "$AUTHORIZED_SHA"');
     expect(workflow).toContain("AIDLC_RELEASE_SOURCE_DIGEST:");
@@ -3514,15 +3511,14 @@ describe("t244 Windows and completion release surfaces", () => {
       workflow.indexOf("  native-smoke:"),
     );
     expect(verifyJob).toContain(regen);
-    expect(verifyJob.indexOf(regen)).toBeLessThan(verifyJob.indexOf("- run: bun run check"));
+    expect(verifyJob.indexOf(regen)).toBeLessThan(verifyJob.indexOf("- run: bun scripts/package.ts --check"));
     for (const name of ["test_smoke", "test_unit", "test_deep", "test"]) {
       expect(parsed.jobs[name], `stable release must not rerun source tier: ${name}`).toBeUndefined();
     }
     expect(workflow).not.toContain("Require passing full-suite evidence");
-    // Stable publication requires a passing Full Suite for the tag; the suite owns
-    // the source tiers, so release.yml calls it instead of running them itself.
-    expect(workflow).toContain("uses: ./.github/workflows/full-suite.yml");
-    expect(workflow).toContain("bun scripts/ci-full-suite-evidence.ts check");
+    // Source coverage belongs to the selected preview; promotion does not repeat it.
+    expect(workflow).not.toContain("uses: ./.github/workflows/full-suite.yml");
+    expect(workflow).not.toContain("bun scripts/ci-full-suite-evidence.ts check");
     expect(workflow).not.toContain("tests/run-tests.");
     const nativeSmokeJob = workflow.slice(
       workflow.indexOf("  native-smoke:"),
@@ -3569,14 +3565,8 @@ describe("t244 Windows and completion release surfaces", () => {
       .filter(([, job]) => job.permissions?.[permission] === "write")
       .map(([name]) => name);
     expect(jobsWith("attestations")).toEqual(["publish"]);
-    // The Full Suite call forwards OIDC only to its live jobs' ai-pr-review
-    // role, as the preview call does. It has no steps of its own, and a
-    // certificate minted in a called job names full-suite.yml, not the
-    // release.yml signer that installers require.
-    expect(jobsWith("id-token")).toEqual(["full_suite", "publish"]);
-    expect(parsed.jobs.full_suite.uses).toBe("./.github/workflows/full-suite.yml");
-    expect(parsed.jobs.full_suite.steps).toBeUndefined();
-    expect(parsed.jobs.full_suite.permissions).toEqual({ contents: "read", "id-token": "write" });
+    expect(jobsWith("id-token")).toEqual(["publish"]);
+    expect(parsed.jobs.full_suite).toBeUndefined();
     expect(parsed.jobs["stage-release"].permissions).toEqual({ contents: "read" });
     expect(parsed.jobs.publish.permissions).toEqual({
       contents: "read",
@@ -3863,7 +3853,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(publish).toContain("name: Stage offline provenance bundle");
     expect(publish).toContain("steps.provenance.outputs.bundle-path");
     expect(publish).toContain("name: Validate complete attested release candidate");
-    expect(publish).toContain("bun scripts/verify-release.ts candidate");
+    expect(publish).toContain("bun release-tools/scripts/verify-release.ts candidate");
     expect(publish).toContain('--source-digest "$AUTHORIZED_SHA"');
     expect(publish).toContain("name: attested-release");
     expect(publish).toContain(
@@ -3876,8 +3866,8 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(publish.indexOf("name: Attest staged release assets"))
       .toBeLessThan(publish.indexOf("name: Stage offline provenance bundle"));
     expect(publish.indexOf("name: Stage offline provenance bundle"))
-      .toBeLessThan(publish.indexOf("bun scripts/verify-release.ts candidate"));
-    expect(publish.indexOf("bun scripts/verify-release.ts candidate"))
+      .toBeLessThan(publish.indexOf("bun release-tools/scripts/verify-release.ts candidate"));
+    expect(publish.indexOf("bun release-tools/scripts/verify-release.ts candidate"))
       .toBeLessThan(publish.indexOf("name: attested-release"));
   });
 
@@ -3890,7 +3880,7 @@ describe("t244 Windows and completion release surfaces", () => {
         environment?: string;
       }>;
     };
-    expect(parsed.jobs.release.needs).toEqual(["validate", "publish", "full_suite_gate"]);
+    expect(parsed.jobs.release.needs).toEqual(["validate", "publish"]);
     expect(parsed.jobs.release.permissions).toEqual({ contents: "write" });
     expect(parsed.jobs.release.environment).toBe("release");
     const release = workflowJob(workflow, "release");
@@ -3899,14 +3889,14 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(release).toContain("--verify-tag");
     // The body is this version's CHANGELOG entry, never GitHub's generated
     // list, which names every contributing account by handle.
-    expect(release).toContain("name: Build release notes from CHANGELOG.md");
-    expect(release).toContain("bun scripts/release-notes.ts");
+    expect(release).toContain("name: Build release notes from the promotion");
+    expect(release).toContain("bun scripts/release-promotion.ts notes");
     expect(release).toContain('--notes-file "$RUNNER_TEMP/release-notes.md"');
     expect(release).not.toContain("--generate-notes");
     // The notes are written after the source recheck, so the body can only come
     // from the commit the release was authorized for.
     expect(release.indexOf("name: Recheck release source"))
-      .toBeLessThan(release.indexOf("name: Build release notes from CHANGELOG.md"));
+      .toBeLessThan(release.indexOf("name: Build release notes from the promotion"));
     expect(release).toContain("oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6");
     expect(release).toContain("name: Verify uploaded asset inventory");
     expect(release).toContain('gh release view "$RELEASE_TAG" --json assets');

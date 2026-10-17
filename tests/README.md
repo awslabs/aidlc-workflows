@@ -240,7 +240,7 @@ runs and the guard matrix on Linux, macOS and Windows (the `scope_runs` job). Cu
 because its CLI exposes vendor API keys to agent environments. Ordinary Full Suite dispatches accept any requested
 branch or commit, including unmerged PRs, with both verification flags false.
 Every job uses the resolved immutable SHA. Stable publication separately
-requires a tagged commit on `main` and trusted workflow evidence.
+requires a published preview whose source is on `main`.
 
 To run the deterministic and native matrix on an unmerged PR, select its branch,
 set `ref` to that branch's exact workflow-head SHA, and set
@@ -333,13 +333,11 @@ remain warnings. Outside the native
 profile, individual deterministic/release-contract cases are not reconciled
 across OSes, so successful jobs do not establish full case coverage or convert
 platform-inapplicable skips into passes. Dispatch `full-suite.yml` on `main` with `ref=<sha>` to rerun preview readiness
-for an unchanged SHA or to prepare stable evidence. Preview runs its contract
-checks and Full Suite once; it does not also run the PR CI matrix. Stable release
-requires a passing release-purpose Full Suite for the tagged commit: it reuses a
-qualifying `full-suite-result` from a successful preview of that commit or a
-manual dispatch on `main`, or calls `full-suite.yml` itself, and validates the
-exact tag source, contract checks, and native binary/installer/lifecycle release
-assets.
+for an unchanged SHA. Preview runs its contract checks and Full Suite once;
+it does not also run the PR CI matrix. Stable promotion selects that preview's
+source and retains its recorded results. It does not repeat CI or Full Suite.
+The new stable build still requires exact-source validation, packaging
+checks and native binary, installer, lifecycle and upgrade checks.
 
 Hosted Bedrock agents run under a separate unprivileged OS identity on Linux,
 macOS and Windows, with no access to runner process memory or Actions credentials;

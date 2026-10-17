@@ -1332,7 +1332,7 @@ describe("t332 preview publication pipeline", () => {
     };
 
     expect(Object.keys(ci.on)).toContain("workflow_call");
-    expect(Object.keys(stable.on)).toEqual(["push"]);
+    expect(Object.keys(stable.on).sort()).toEqual(["push", "workflow_dispatch"]);
     expect(stable.on.push?.tags).toEqual(["v*.*.*", "!v*-preview.*"]);
     expect(stable.concurrency).toEqual({
       group: "release-stable",
@@ -1349,77 +1349,22 @@ describe("t332 preview publication pipeline", () => {
     expect(stable.jobs.validate.outputs).toEqual({
       tag: `\${{ steps.validate.outputs.tag }}`,
       sha: `\${{ steps.validate.outputs.sha }}`,
+      controls: `\${{ steps.validate.outputs.controls }}`,
     });
     expect(stable.jobs.release.environment).toBe("release");
-    expect(stable.jobs["release-result"].needs).toEqual(["validate", "full_suite_gate", "release"]);
+    expect(stable.jobs["release-result"].needs).toEqual(["validate", "release"]);
     expect(stableText).not.toContain("plan-preview-release.ts");
     expect(stableText).not.toContain("AIDLC_BUILD_VERSION");
     expect(stableText).not.toContain("./.github/workflows/ci.yml");
     expect(stable.jobs.validate.permissions).toEqual({ contents: "read" });
     expect(stable.jobs.validate.steps?.some((step) => step.name === "Require passing full-suite evidence")).toBe(false);
-    // Stable publication requires a passing Full Suite for the tagged commit;
-    // t-ci-full-suite-evidence pins the gate.
-    expect(stable.jobs.full_suite.uses).toBe("./.github/workflows/full-suite.yml");
-    expect(stable.jobs.full_suite.secrets).toBe("inherit");
-
-    const releaseRunbooks = [
-      "CONTRIBUTING.md",
-      "DEVELOPERS.md",
-      "docs/reference/09-testing.md",
-      "docs/reference/11-contributing.md",
-      "docs/reference/19-supply-chain-security.md",
-      "tests/README.md",
-    ];
-    const obsoleteStableGateClaims = [
-      // The release workflow obtains its own evidence; maintainers need not before tagging.
-      "obtain evidence for the final commit",
-      "release-preparation commit needs its own evidence",
-      "tag push validates the recorded test evidence",
-      "evidence artifact is missing or expired",
-      "stable gate also accepts",
-      "does not satisfy the stable gate",
-      "before tagging, obtain exact-sha passing preview evidence",
-      "failed tests block preview and stable publication",
-      "stable promotion can reject historical disabled-live reports",
-      "tiers. those run before tagging through pr checks",
-      "stable releases do not download or consume `full-suite-result`",
-      "does not consume full suite evidence",
-      "is not a prerequisite for stable publication",
-      "requires no recovery action before tagging",
-      "stable publication does not require a preview run or a full suite artifact",
-      "they do not block stable publication",
-      "does not require a separate full suite evidence artifact",
-      "stable publication does not consume that evidence",
-      "stable release does not consume full suite evidence",
-      "the stable workflow does not query preview runs",
-      "neither is a stable-publication prerequisite",
-      // A preview publishes the commit it tested while main advances (#1460).
-      "is still the tip of `main`",
-      "start a new preview from the new tip",
-    ];
-    for (const path of releaseRunbooks) {
-      const runbook = readFileSync(join(REPO_ROOT, path), "utf8").toLowerCase().replace(/\s+/g, " ");
-      for (const obsoleteClaim of obsoleteStableGateClaims) {
-        expect(
-          runbook,
-          `${path} contains obsolete release guidance`,
-        ).not.toContain(obsoleteClaim);
-      }
-    }
-
+    expect(stable.jobs.full_suite).toBeUndefined();
+    expect(stable.jobs.full_suite_gate).toBeUndefined();
     const normalizedSupplyChain = readFileSync(
-      join(REPO_ROOT, "docs/reference/19-supply-chain-security.md"),
-      "utf8",
-    )
-      .toLowerCase()
-      .replace(/\s+/g, " ");
-    expect(normalizedSupplyChain).toContain(
-      "required pr checks provide linux smoke, unit, and deterministic integration coverage",
-    );
-    expect(normalizedSupplyChain).toContain(
-      "stable publication requires a passing release-purpose full suite for the exact tagged commit",
-    );
-    expect(normalizedSupplyChain).toContain("reverses the 2026-09-21 decision");
+      join(REPO_ROOT, "docs/reference/19-supply-chain-security.md"), "utf8",
+    ).toLowerCase().replace(/\s+/g, " ");
+    expect(normalizedSupplyChain).toContain("stable promotion does not repeat ci or full suite");
+    expect(normalizedSupplyChain).toContain("lifecycle and upgrade failures");
     const normalizedTestingGuide = readFileSync(
       join(REPO_ROOT, "docs/reference/09-testing.md"),
       "utf8",
@@ -1432,10 +1377,7 @@ describe("t332 preview publication pipeline", () => {
     expect(normalizedTestingGuide).toContain(
       "they do not block preview publication",
     );
-    expect(normalizedTestingGuide).toContain(
-      "they block stable publication",
-    );
-    expect(normalizedTestingGuide).toContain("reverses the 2026-09-21 decision");
+    expect(normalizedTestingGuide).toContain("stable promotion preserves those results and warnings");
     const normalizedContributing = readFileSync(join(REPO_ROOT, "docs/reference/11-contributing.md"), "utf8")
       .toLowerCase()
       .replace(/\s+/g, " ");
@@ -1542,16 +1484,15 @@ describe("t332 preview publication pipeline", () => {
       for (const dependency of ["validate", "verify", "native-smoke"]) {
         expect(required.has(dependency), `stable ${name} must descend from ${dependency}`).toBe(true);
       }
-      // Builds run alongside the Full Suite; only publication waits for its gate.
-      expect(required.has("full_suite_gate"), `stable ${name} and the Full Suite gate`).toBe(name === "publish" || name === "release");
+      expect(required.has("full_suite_gate"), `stable ${name} does not repeat Full Suite`).toBe(false);
     }
     // A stable release people on the last release cannot update to does not
     // publish; a preview reports it.
     expect(stable.jobs.publish.needs)
-      .toEqual(["validate", "musl-smoke", "windows-lifecycle", "unix-lifecycle", "update-from-previous", "full_suite_gate"]);
+      .toEqual(["validate", "musl-smoke", "windows-lifecycle", "unix-lifecycle", "update-from-previous"]);
     expect(stable.jobs.publish.if).toContain("needs.update-from-previous.result == 'success'");
     expect(preview.jobs.publish.needs).not.toContain("update-from-previous");
-    expect(stable.jobs.release.needs).toEqual(["validate", "publish", "full_suite_gate"]);
+    expect(stable.jobs.release.needs).toEqual(["validate", "publish"]);
 
     for (const key of ["tag", "sha", "skip", "preview_version", "preview_plan"]) {
       expect(preview.jobs.validate.outputs?.[key], key).toBeDefined();
