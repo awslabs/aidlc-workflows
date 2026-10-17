@@ -197,6 +197,101 @@ describe("t314 doctor detects plugin composition erased by an engine reinstall",
     expect(graph(project).some((stage) => stage.slug === "test-pro-full-suite")).toBe(true);
   });
 
+  // An upgrade can put the shipped core stage back over the composed one and
+  // keep everything else (a copy of the new runtime over the project), or leave
+  // the fragments that share an anchor nested (an earlier release's refresh
+  // merge). The plugin's stamp and files are unchanged, so only its recorded
+  // additions tell sync to compose it again. A person's edit inside a fragment,
+  // when it is the plugin's only gap, does not: sync leaves it and doctor keeps
+  // naming it.
+  function syncPlugin(project: string): number {
+    const synced = spawnSync(BUN, [join(project, ".claude", "tools", "aidlc.ts"), "engine", "plugin", "sync", "--json"], {
+      cwd: project,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: project,
+        AIDLC_HARNESS_DIR: ".claude",
+        AIDLC_PLUGIN_ROOT: pluginBuilt,
+      },
+    });
+    expect(synced.status, `${synced.stdout}\n${synced.stderr}`).toBe(0);
+    return (JSON.parse(synced.stdout) as { data: { operations: number } }).data.operations;
+  }
+
+  // The row and the fix line under it, which names each gap.
+  function surfaceRow(project: string): string {
+    const doctor = runDoctor(project);
+    const lines = `${doctor.stdout}${doctor.stderr}`.split("\n");
+    const at = lines.findIndex((line) => line.includes("Composed plugin surface"));
+    expect(at).toBeGreaterThanOrEqual(0);
+    return lines.slice(at, lines[at + 1]?.trim().startsWith("fix:") ? at + 2 : at + 1).join("\n");
+  }
+
+  const PRESENT = "Composed plugin surface: all enabled plugin stages and recorded contributions are present";
+
+  // Composed and synced, so sync's own records say current: one more sync does nothing.
+  function composedProject(name: string): string {
+    const project = join(tmp, name);
+    composePluginFixture({ plugin: PLUGIN, harness: "claude", projectDir: project, pluginBuilt });
+    syncPlugin(project);
+    expect(syncPlugin(project)).toBe(0);
+    expect(surfaceRow(project)).toContain(PRESENT);
+    return project;
+  }
+
+  test("sync composes again a plugin whose additions an upgrade wrote over", () => {
+    const project = composedProject("upgrade-overwrote");
+    const stage = stagePath(project, "construction", "build-and-test");
+    const composed = readFileSync(stage, "utf-8");
+    cpSync(join(REPO_ROOT, "dist", "claude", ".claude", "aidlc-common", "stages", "construction", "build-and-test.md"), stage);
+    expect(surfaceRow(project)).toContain("test-pro: stage build-and-test");
+
+    expect(syncPlugin(project)).toBeGreaterThan(0);
+    expect(surfaceRow(project)).toContain(PRESENT);
+    expect(readFileSync(stage, "utf-8")).toBe(composed);
+    expect(syncPlugin(project)).toBe(0);
+  });
+
+  test("sync composes again a plugin whose fragments an earlier refresh nested", () => {
+    const project = composedProject("upgrade-nested");
+    const stage = stagePath(project, "construction", "build-and-test");
+    const composed = readFileSync(stage, "utf-8");
+    const opens = [...composed.matchAll(/<!-- plugin:test-pro:after-step:8:(\d+):([0-9a-f]+) -->/g)];
+    expect(opens.length).toBeGreaterThanOrEqual(2);
+    const [first, second] = opens;
+    const close = `<!-- /plugin:test-pro:after-step:8:${second[1]}:${second[2]} -->`;
+    const end = composed.indexOf(close) + close.length;
+    const block = composed.slice(second.index, end);
+    const without = composed.slice(0, second.index) + composed.slice(end);
+    const at = without.indexOf(first[0]) + first[0].length;
+    writeFileSync(stage, `${without.slice(0, at)}\n${block}${without.slice(at)}`);
+    expect(surfaceRow(project)).toContain(`fragments=[after-step:8@${first[1]}:${first[2]}]`);
+
+    expect(syncPlugin(project)).toBeGreaterThan(0);
+    expect(surfaceRow(project)).toContain(PRESENT);
+    const repaired = readFileSync(stage, "utf-8");
+    expect(repaired.indexOf(second[0])).toBeGreaterThan(
+      repaired.indexOf(`<!-- /plugin:test-pro:after-step:8:${first[1]}:${first[2]} -->`),
+    );
+  });
+
+  test("sync leaves a person's edit inside a fragment, and doctor names it", () => {
+    const project = composedProject("edited-fragment");
+    const stage = stagePath(project, "construction", "build-and-test");
+    const composed = readFileSync(stage, "utf-8");
+    const heading = "### Step 8c (test-pro): API positive + negative";
+    expect(composed).toContain(heading);
+    const edited = composed.replace(heading, `${heading} (our team's wording)`);
+    writeFileSync(stage, edited);
+    expect(surfaceRow(project)).toContain("test-pro: stage build-and-test");
+
+    expect(syncPlugin(project)).toBe(0);
+    expect(readFileSync(stage, "utf-8")).toBe(edited);
+    expect(surfaceRow(project)).toContain("test-pro: stage build-and-test");
+  });
+
   test("a stale contribution sidecar fails doctor even when plugin stages remain compiled", () => {
     const project = join(tmp, "stale-sidecar");
     composePluginFixture({

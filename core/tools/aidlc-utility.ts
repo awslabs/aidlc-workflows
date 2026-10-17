@@ -451,10 +451,14 @@ import {
 } from "./aidlc-validity.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import {
+  contributionRecordError,
+  contributionSources,
   copyProjectSurfaces,
   cutPluginFragment,
   personaTwinRels,
   projectDiffPlan,
+  recordedContributionGaps,
+  type StageContribRecord,
   tomlFragmentText,
   withFileLineEndings,
 } from "./aidlc-plugin.ts";
@@ -1064,23 +1068,6 @@ export function regenerateSelectionSurfaces(
 // plugin's contributions stop steering enabled stages; re-enabling restores
 // them on the next session start (the plugin's compose hook re-merges).
 
-interface ConsumeContribRecord {
-  artifact: string;
-  required: boolean;
-  conditional_on?: string;
-}
-
-interface StageContribRecord {
-  produces?: string[];
-  sensors?: string[];
-  consumes?: Array<string | ConsumeContribRecord>;
-  scopes?: string[];
-  requires_stage?: string[];
-  required_sections?: string[];
-  required_sections_created?: boolean;
-  fragments?: Array<{ anchor: string; order: number; hash: string }>;
-}
-
 function pluginContribSidecarPath(plugin: string): string {
   return resolveHarnessPath(
     ["tools", "data", `plugin-contrib-${plugin.replace(/[^\w.-]/g, "_")}.json`],
@@ -1134,169 +1121,6 @@ function removeConsumesEntries(content: string, artifacts: ReadonlySet<string>):
     .map((entry) => entry[0]);
   const replacement = kept.length > 0 ? `consumes:\n${kept.join("")}` : "consumes: []\n";
   return content.replace(blockRe, replacement);
-}
-
-function fragmentProseHash(content: string): string {
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < content.length; i++) {
-    hash ^= content.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
-}
-
-function missingRecordedContributions(
-  parsed: Record<string, unknown>,
-  content: string,
-  plugin: string,
-  record: StageContribRecord,
-  // How a fragment's text reads back from this file (a Codex persona twin
-  // holds it escaped inside a TOML string).
-  fragmentText: (raw: string) => string = (raw) => raw,
-): string[] {
-  const missing: string[] = [];
-  for (const field of ["produces", "sensors", "scopes", "requires_stage", "required_sections"] as const) {
-    const recorded = record[field];
-    if (!Array.isArray(recorded) || recorded.length === 0) continue;
-    const present = new Set(
-      (Array.isArray(parsed[field]) ? parsed[field] : [])
-        .filter((value): value is string => typeof value === "string"),
-    );
-    const absent = recorded.filter((value) => !present.has(value));
-    if (absent.length > 0) missing.push(`${field}=[${absent.join(", ")}]`);
-  }
-
-  if (Array.isArray(record.consumes) && record.consumes.length > 0) {
-    const present = (Array.isArray(parsed.consumes) ? parsed.consumes : [])
-      .flatMap((entry): ConsumeContribRecord[] => {
-        if (
-          !isPlainObject(entry) ||
-          typeof entry.artifact !== "string" ||
-          typeof entry.required !== "boolean"
-        ) {
-          return [];
-        }
-        return [{
-          artifact: entry.artifact,
-          required: entry.required,
-          ...(typeof entry.conditional_on === "string"
-            ? { conditional_on: entry.conditional_on }
-            : {}),
-        }];
-      });
-    const absent = record.consumes.filter((expected) => {
-      if (typeof expected === "string") {
-        return !present.some((entry) => entry.artifact === expected);
-      }
-      return !present.some((entry) =>
-        entry.artifact === expected.artifact &&
-        entry.required === expected.required &&
-        entry.conditional_on === expected.conditional_on
-      );
-    }).map((expected) =>
-      typeof expected === "string"
-        ? expected
-        : `${expected.artifact}(required=${expected.required}${
-          expected.conditional_on ? `, conditional_on=${expected.conditional_on}` : ""
-        })`
-    );
-    if (absent.length > 0) missing.push(`consumes=[${absent.join(", ")}]`);
-  }
-  if (Array.isArray(record.fragments) && record.fragments.length > 0) {
-    const absent = record.fragments.flatMap((fragment) => {
-      const id = `${fragment.anchor}@${fragment.order}:${fragment.hash}`;
-      const open =
-        `<!-- plugin:${plugin}:${fragment.anchor}:${fragment.order}:${fragment.hash} -->`;
-      const close =
-        `<!-- /plugin:${plugin}:${fragment.anchor}:${fragment.order}:${fragment.hash} -->`;
-      const openIdx = content.indexOf(open);
-      if (openIdx === -1) return [id];
-      const bodyStart = openIdx + open.length;
-      const closeIdx = content.indexOf(close, bodyStart);
-      if (closeIdx === -1) return [id];
-      const wrapped = content.slice(bodyStart, closeIdx);
-      if (!wrapped.startsWith("\n") || !wrapped.endsWith("\n")) return [id];
-      return fragmentProseHash(fragmentText(wrapped.slice(1, -1))) === fragment.hash ? [] : [id];
-    });
-    if (absent.length > 0) missing.push(`fragments=[${absent.join(", ")}]`);
-  }
-  return missing;
-}
-
-function contributionRecordError(value: unknown): string | undefined {
-  if (!isPlainObject(value)) return "expected an object";
-  let hasContribution = false;
-  for (const field of ["produces", "sensors", "scopes", "requires_stage", "required_sections"] as const) {
-    if (!(field in value)) continue;
-    if (!Array.isArray(value[field])) return `${field} must be an array`;
-    if (value[field].some((entry) => typeof entry !== "string" || entry.length === 0)) {
-      return `${field} must contain non-empty strings`;
-    }
-    if (value[field].length > 0) hasContribution = true;
-  }
-  if ("consumes" in value) {
-    if (!Array.isArray(value.consumes)) return "consumes must be an array";
-    for (const [index, consume] of value.consumes.entries()) {
-      if (typeof consume === "string") {
-        if (consume.length === 0) return `consumes[${index}] must be a non-empty string`;
-        continue;
-      }
-      if (!isPlainObject(consume)) {
-        return `consumes[${index}] must be a legacy string or an object`;
-      }
-      if (typeof consume.artifact !== "string" || consume.artifact.length === 0) {
-        return `consumes[${index}].artifact must be a non-empty string`;
-      }
-      if (typeof consume.required !== "boolean") {
-        return `consumes[${index}].required must be a boolean`;
-      }
-      if (
-        "conditional_on" in consume &&
-        consume.conditional_on !== undefined &&
-        consume.conditional_on !== "brownfield" &&
-        consume.conditional_on !== "greenfield"
-      ) {
-        return `consumes[${index}].conditional_on must be brownfield or greenfield`;
-      }
-    }
-    if (value.consumes.length > 0) hasContribution = true;
-  }
-  if (
-    "required_sections_created" in value &&
-    typeof value.required_sections_created !== "boolean"
-  ) {
-    return "required_sections_created must be a boolean";
-  }
-  if ("fragments" in value) {
-    if (!Array.isArray(value.fragments)) return "fragments must be an array";
-    const identities = new Set<string>();
-    for (const [index, fragment] of value.fragments.entries()) {
-      if (!isPlainObject(fragment)) return `fragments[${index}] must be an object`;
-      if (
-        typeof fragment.anchor !== "string" ||
-        !/^\S+$/.test(fragment.anchor)
-      ) {
-        return `fragments[${index}].anchor must be a non-empty token`;
-      }
-      if (
-        typeof fragment.order !== "number" ||
-        !Number.isSafeInteger(fragment.order) ||
-        fragment.order < 0
-      ) {
-        return `fragments[${index}].order must be a non-negative integer`;
-      }
-      if (typeof fragment.hash !== "string" || !/^[0-9a-f]{8}$/.test(fragment.hash)) {
-        return `fragments[${index}].hash must be an 8-character lowercase hex hash`;
-      }
-      const identity = `${fragment.anchor}\0${fragment.order}`;
-      if (identities.has(identity)) {
-        return `fragments contains duplicate identity ${fragment.anchor}@${fragment.order}`;
-      }
-      identities.add(identity);
-    }
-    if (value.fragments.length > 0) hasContribution = true;
-  }
-  return hasContribution ? undefined : "record has no contributions";
 }
 
 // Strip every sentinel-marked prose fragment this plugin spliced. The open
@@ -4922,67 +4746,27 @@ export async function collectDoctorReport(
     const graphSlugs = new Set(graphAll.map((s) => s.slug));
     const missingEnabled: string[] = [];
     const missingPluginStages: string[] = [];
-    const stageSources = new Map<
-      string,
-      {
-        path: string;
-        content: string;
-        parsed: Record<string, unknown>;
-        kind: "stage" | "agent";
-        // A twin the harness should have but that is gone or unreadable keeps
-        // its entry with null content, so doctor names it.
-        twins?: Array<{ path: string; rel: string; content: string | null; toml: boolean }>;
-      }
-    >();
     const stagesRoot = resolveHarnessPath(["aidlc-common", "stages"]);
     // Persona contributions (prose fragments into <harness>/agents/*.md) are
     // verified from the same sidecar records, keyed by the agent slug, in the
-    // persona and in each native twin compose keeps in step with it. A
-    // persona has no structural fields, so its parsed view is empty. CRLF
-    // reads as LF, as for stage sources below.
-    const personasRoot = resolveHarnessPath(["agents"]);
-    if (existsSync(personasRoot)) {
-      const harness = runtimeHarnessName(projectDir, harnessDir());
-      for (const f of readdirSync(personasRoot).filter((name) => name.endsWith(".md")).sort()) {
-        const path = join(personasRoot, f);
-        const slug = f.replace(/\.md$/, "");
-        try {
-          const twins = personaTwinRels(harness, harnessDir(), slug).map((rel) => {
-            const twinPath = join(projectDir, rel);
-            let content: string | null = null;
-            try {
-              content = readFileSync(twinPath, "utf-8").replace(/\r\n/g, "\n");
-            } catch {
-              // Gone or unreadable: reported below when a fragment is recorded for it.
-            }
-            return { path: twinPath, rel, content, toml: rel.endsWith(".toml") };
-          });
-          stageSources.set(slug, {
-            path,
-            content: readFileSync(path, "utf-8").replace(/\r\n/g, "\n"),
-            parsed: {},
-            kind: "agent",
-            twins,
-          });
-        } catch {
-          // An unreadable persona surfaces through the agent roster checks.
-        }
-      }
-    }
+    // persona and in each native twin compose keeps in step with it.
+    const stageSources = contributionSources(
+      stagesRoot,
+      resolveHarnessPath(["agents"]),
+      projectDir,
+      runtimeHarnessName(projectDir, harnessDir()),
+      harnessDir(),
+    );
     for (const phase of PHASES) {
       const dir = join(stagesRoot, phase);
       if (!existsSync(dir)) continue;
       for (const f of readdirSync(dir).filter((name) => name.endsWith(".md")).sort()) {
         const path = join(dir, f);
         try {
-          // CRLF read as LF: compose hashes fragment prose over that text, and a
-          // checkout that turns line endings must not read as a missing fragment.
-          const content = readFileSync(path, "utf-8").replace(/\r\n/g, "\n");
-          const parsed = parseStageFrontmatter(content) as Record<string, unknown>;
+          const parsed = parseStageFrontmatter(readFileSync(path, "utf-8").replace(/\r\n/g, "\n"));
           const slug = typeof parsed.slug === "string" ? parsed.slug : f.replace(/\.md$/, "");
           const plugin = typeof parsed.plugin === "string" ? parsed.plugin : undefined;
           const stagePhase = typeof parsed.phase === "string" ? parsed.phase : phase;
-          stageSources.set(slug, { path, content, parsed, kind: "stage" });
           if (
             expectedEnabledBySelection({ plugin, phase: stagePhase }) &&
             !graphSlugs.has(slug)
@@ -5062,7 +4846,7 @@ export async function collectDoctorReport(
             );
             continue;
           }
-          const missing = missingRecordedContributions(
+          const { missing } = recordedContributionGaps(
             source.parsed,
             source.content,
             plugin,
@@ -5080,7 +4864,7 @@ export async function collectDoctorReport(
               );
               continue;
             }
-            const twinMissing = missingRecordedContributions(
+            const { missing: twinMissing } = recordedContributionGaps(
               {},
               twin.content,
               plugin,

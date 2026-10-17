@@ -27,9 +27,11 @@ import {
   collectPluginStatus,
   comparePluginState,
   discoverPluginInventory,
+  fragmentProseHash,
   main as pluginMain,
   normalizeInstalledPlugin,
   pluginSourceHash,
+  recordedContributionGaps,
   renderPluginStatuses,
   syncPlugins,
   type CompositionStamp,
@@ -652,6 +654,43 @@ describe("t242 pure status comparator", () => {
     const table = renderPluginStatuses(rows);
     expect(table).toMatch(/unseen +- +1\.0\.0 +not compared: no host plugin list/);
     expect(table).not.toContain("installed plugin missing");
+  });
+});
+
+// Sync composes a plugin again only when one of its recorded additions is gone.
+// A fragment nested inside its own plugin's fragment is gone; prose that quotes
+// the marker syntax, or names another plugin's marker, is the plugin's text.
+describe("t242 recorded additions", () => {
+  const fragment = (plugin: string, order: number, prose: string): { block: string; hash: string } => {
+    const hash = fragmentProseHash(prose);
+    return {
+      block: `<!-- plugin:${plugin}:after-step:8:${order}:${hash} -->\n${prose}\n<!-- /plugin:${plugin}:after-step:8:${order}:${hash} -->`,
+      hash,
+    };
+  };
+
+  test("prose that quotes another plugin's fragment marker is in place", () => {
+    const prose = "### Step 8a (acme): markers\n\nCompose wraps each block in `<!-- plugin:other:after-step:8:100:0badc0de -->` and `<!-- /plugin:other:after-step:8:100:0badc0de -->`.";
+    const { block, hash } = fragment("acme", 100, prose);
+    const gaps = recordedContributionGaps({}, `### Step 8: Summary\n\n${block}\n`, "acme", {
+      fragments: [{ anchor: "after-step:8", order: 100, hash }],
+    });
+    expect(gaps).toEqual({ missing: [], gone: false });
+  });
+
+  test("a fragment nested inside its own plugin's fragment is gone", () => {
+    const inner = fragment("acme", 110, "### Step 8b (acme): inner");
+    const outer = fragment("acme", 100, "### Step 8a (acme): outer");
+    const [open, ...rest] = outer.block.split("\n");
+    const nested = [open, inner.block, ...rest].join("\n");
+    const gaps = recordedContributionGaps({}, `### Step 8: Summary\n\n${nested}\n`, "acme", {
+      fragments: [
+        { anchor: "after-step:8", order: 100, hash: outer.hash },
+        { anchor: "after-step:8", order: 110, hash: inner.hash },
+      ],
+    });
+    expect(gaps.gone).toBe(true);
+    expect(gaps.missing).toEqual([`fragments=[after-step:8@100:${outer.hash}]`]);
   });
 });
 
