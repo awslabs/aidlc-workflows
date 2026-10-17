@@ -664,14 +664,17 @@ compilation fails, newly copied files and contribution writes are restored
 before the retry marker is written.
 
 The emitted SessionStart command probes for `aidlc` on `PATH` first and runs
-`aidlc engine plugin sync` when it is available. The portable launchers fall back to
-the direct bun `hooks/compose.ts` invocation when the CLI is unavailable.
+`aidlc engine plugin sync` when it is available. Without it, the hooks run the
+project's own `<harness-dir>/tools/aidlc-plugin.ts sync` with Bun, so the copy
+channel keeps the same composition record, and fall back to the direct bun
+`hooks/compose.ts` invocation when that tool is missing (the Cursor and Kiro IDE
+launcher also when it refuses, so an older project still composes).
 
 Cursor's emitted hook uses Cursor's flat camelCase schema
 (`hooks.sessionStart[].command`) and invokes
 `./hooks/aidlc-plugin-compose.ts .cursor`. That Bun launcher uses `Bun.which`
-and `process.execPath` to probe `aidlc` and run the sibling `compose.ts`
-portably, without a `sh -c` dependency on native Windows. On Kiro the whole
+and `process.execPath` to probe `aidlc`, then run the project's own sync tool
+or the sibling `compose.ts` portably, without a `sh -c` dependency on native Windows. On Kiro the whole
 plugin sits in its own folder, `.kiro/aidlc-plugins/<name>/`, so a second plugin
 dropped into the same project never lands on the first; Kiro IDE's `v1`
 SessionStart registration runs that folder's launcher with `.kiro kiro-ide` from
