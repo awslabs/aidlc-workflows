@@ -33,7 +33,7 @@ interface Matrix {
   exclude?: string;
   family?: LiveFamily[];
   runner?: string[] | string;
-  suite?: Array<{ name: string; tier: string; shard?: string; filter?: string; exclude?: string }>;
+  suite?: Array<{ name: string; tier: string; shard?: string; index?: number; partition?: string; filter?: string; exclude?: string }>;
 }
 interface Job {
   name?: string;
@@ -225,9 +225,6 @@ describe("t345 complete nightly coverage", () => {
         "artifact-label": `ci-deterministic-\${{ matrix.suite.name }}`,
       },
     });
-    // Every job but the merge queue's two macOS unit jobs keeps its matrix
-    // shard (the matrix case below evaluates each one).
-    expect(ci.jobs.deterministic.with?.["unit-shard"]).toEndWith("|| matrix.suite.shard || '' }}");
     expect(ci.jobs.deterministic.steps).toBeUndefined();
     expect(ci.jobs.deterministic["runs-on"]).toBeUndefined();
     expect(ci.jobs.deterministic.needs).toBeUndefined();
@@ -261,7 +258,7 @@ describe("t345 complete nightly coverage", () => {
 
   test("shared deterministic setup binds the checkout and prepares each fresh job without credentials", () => {
     expect(Object.keys(deterministic.on).sort()).toEqual(["workflow_call", "workflow_dispatch"]);
-    expect(Object.keys(deterministic.on.workflow_call.inputs).sort()).toEqual(["artifact-label", "evidence-optional", "exclude", "filter", "macos-merge-selection", "ref", "retry-once", "runner", "tier", "unit-shard"]);
+    expect(Object.keys(deterministic.on.workflow_call.inputs).sort()).toEqual(["artifact-label", "evidence-optional", "exclude", "filter", "integration-shard", "macos-merge-selection", "ref", "retry-once", "runner", "tier", "unit-shard"]);
     expect(deterministic.permissions).toEqual({ contents: "read" });
     const job = deterministic.jobs.test;
     expect(job["runs-on"]).toBe(`\${{ inputs.runner }}`);
@@ -291,6 +288,12 @@ describe("t345 complete nightly coverage", () => {
     expect(substrate.run).toContain("command -v tmux");
     expect(substrate.run).toContain("brew install tmux");
     expect(setup.indexOf(substrate)).toBeLessThan(setup.findIndex((step) => step.name === "Run deterministic tier"));
+    const execution = setup.find((step) => step.name === "Run deterministic tier")!;
+    const generated = setup.find((step) => step.name === "Build the harness projections")!;
+    expect(generated.run).toBe("bun scripts/package.ts");
+    expect(generated.if).toBe(execution.if);
+    expect(setup.indexOf(generated)).toBeLessThan(setup.indexOf(execution));
+    expect(execution.env?.AIDLC_TEST_PACKAGE_READY).toBe("1");
     expect(job.env).toMatchObject({ GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "core.autocrlf", GIT_CONFIG_VALUE_0: "false" });
   });
 
@@ -310,7 +313,7 @@ describe("t345 complete nightly coverage", () => {
     expect(callable.secrets).toBeUndefined();
     expect(callable.outputs).toBeUndefined();
     const manual = deterministic.on.workflow_dispatch.inputs;
-    expect(Object.keys(manual).sort()).toEqual(["artifact-label", "diagnostic_backend", "diagnostic_filter", "ref", "runner", "tier", "unit-shard"]);
+    expect(Object.keys(manual).sort()).toEqual(["artifact-label", "diagnostic_backend", "diagnostic_filter", "integration-shard", "ref", "runner", "tier", "unit-shard"]);
     expect(manual.ref).toMatchObject({ type: "string", required: true });
     expect(manual.ref.default).toBeUndefined();
     expect(manual.runner).toMatchObject({
@@ -363,10 +366,15 @@ describe("t345 complete nightly coverage", () => {
     const selection = steps(deterministic.jobs.test).find((step) => step.name === "Validate test selection")!;
     const run = (extra: NodeJS.ProcessEnv) => spawnSync("bash", ["-c", selection.run!], {
       encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
-      env: { ...process.env, TEST_REF: identity.sha, TEST_TIER: "unit", UNIT_SHARD: "2/8", ARTIFACT_LABEL: "ci-unit-2", ...extra },
+      env: { ...process.env, TEST_REF: identity.sha, TEST_TIER: "unit", UNIT_SHARD: "2/8", INTEGRATION_SHARD: "", ARTIFACT_LABEL: "ci-unit-2", ...extra },
     });
     expect(run({}).status).toBe(0);
     expect(run({ UNIT_SHARD: "1/1" }).status).toBe(0);
+    expect(run({ TEST_TIER: "integration", UNIT_SHARD: "", INTEGRATION_SHARD: "2/2" }).status).toBe(0);
+    for (const shard of ["0/2", "3/2", "1/0", "abc"]) {
+      expect(run({ TEST_TIER: "integration", UNIT_SHARD: "", INTEGRATION_SHARD: shard }).status).toBe(2);
+    }
+    expect(run({ INTEGRATION_SHARD: "1/2" }).status).toBe(2);
     const manual = deterministic.on.workflow_dispatch.inputs;
     // GitHub fills the configured default for both omitted and explicitly empty
     // dispatch inputs. A nonempty unit default would make other tiers unusable.
@@ -401,7 +409,8 @@ describe("t345 complete nightly coverage", () => {
     };
     expect(ci.on.workflow_dispatch.inputs.platform_regressions).toMatchObject({ type: "boolean", default: false });
     const matrix = matrixOf(ci.jobs.deterministic);
-    expect(matrix.suite).toEqual(matrixOf(workflow.jobs.deterministic).suite);
+    expect(matrix.suite!.map(({ index, ...suite }) => index ? { ...suite, shard: `${index}/16` } : suite))
+      .toEqual(matrixOf(workflow.jobs.deterministic).suite!);
     for (const [event, enabled, expanded] of [
       ["pull_request", false, false], ["pull_request", true, false],
       ["workflow_call", true, false], ["workflow_dispatch", false, false],
@@ -424,14 +433,17 @@ describe("t345 complete nightly coverage", () => {
       // in the queue; the nightly runs them on every OS.
       const scopeRuns = { name: "scope-runs", tier: "integration", filter: "^t-scope-run-" };
       const scopeHosts = { name: "scope-hosts", tier: "integration", filter: "^t-scope-host-" };
-      const guardMatrix1 = { name: "guard-matrix-1", tier: "integration", filter: "^t-guard-matrix-[a-h]" };
-      const guardMatrix2 = { name: "guard-matrix-2", tier: "integration", filter: "^t-guard-matrix-[^a-h]" };
+      const guardMatrix1 = { name: "guard-matrix-1", tier: "integration", filter: "^t-guard-matrix-", partition: "1/2" };
+      const guardMatrix2 = { name: "guard-matrix-2", tier: "integration", filter: "^t-guard-matrix-", partition: "2/2" };
       // In the queue, macOS runs its selected unit files in two jobs, unit-1 and unit-2.
       const queue = event === "merge_group";
-      const macosUnitsLeftOut = Array.from({ length: 14 }, (_, index) => ({
-        runner: "macos-15", suite: { name: `unit-${index + 3}`, tier: "unit", shard: `${index + 3}/16` },
+      const linuxUnitsLeftOut = Array.from({ length: 4 }, (_, index) => ({
+        runner: "ubuntu-latest", suite: { name: `unit-${index + 13}`, tier: "unit", index: index + 13 },
       }));
-      expect(excluded).toEqual(expanded
+      const macosUnitsLeftOut = Array.from({ length: 14 }, (_, index) => ({
+        runner: "macos-15", suite: { name: `unit-${index + 3}`, tier: "unit", index: index + 3 },
+      }));
+      expect(excluded).toEqual([...linuxUnitsLeftOut, ...(expanded
         ? [
           { runner: "macos-15", suite: scopeRuns }, { runner: "windows-latest", suite: scopeRuns },
           { runner: "macos-15", suite: scopeHosts }, { runner: "windows-latest", suite: scopeHosts },
@@ -439,44 +451,46 @@ describe("t345 complete nightly coverage", () => {
           { runner: "macos-15", suite: guardMatrix2 }, { runner: "windows-latest", suite: guardMatrix2 },
           ...(queue ? macosUnitsLeftOut : []),
         ]
-        : [{ suite: { name: "e2e", tier: "e2e" } }]);
+        : [{ suite: { name: "e2e", tier: "e2e" } }])]);
       const suitesOn = (runner: string) => matrix.suite!.filter((suite) =>
         !excluded.some((row) => (row.runner ?? runner) === runner && row.suite.name === suite.name && row.suite.tier === suite.tier));
       const suites = suitesOn("ubuntu-latest");
       expect(runners).toEqual(expanded ? ["ubuntu-latest", "macos-15", "windows-latest"] : ["ubuntu-latest"]);
-      expect(suites.map((suite) => suite.tier)).toEqual(["smoke", ...Array(16).fill("unit"), ...Array(5).fill("integration"), ...(expanded ? ["e2e"] : [])]);
-      expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.shard)).toEqual(Array.from({ length: 16 }, (_, index) => `${index + 1}/16`));
-      expect(new Set(runners.flatMap((runner) => suitesOn(runner).map((suite) => `${runner}/${suite.name}`))).size).toBe(queue ? 47 : expanded ? 61 : 22);
+      expect(suites.map((suite) => suite.tier)).toEqual(["smoke", ...Array(12).fill("unit"), ...Array(5).fill("integration"), ...(expanded ? ["e2e"] : [])]);
+      expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.index)).toEqual(Array.from({ length: 12 }, (_, index) => index + 1));
+      expect(new Set(runners.flatMap((runner) => suitesOn(runner).map((suite) => `${runner}/${suite.name}`))).size).toBe(queue ? 43 : expanded ? 57 : 18);
       if (expanded) {
-        expect(suites).toEqual(matrixOf(workflow.jobs.deterministic).suite!);
-        expect(suitesOn("windows-latest").map((suite) => suite.name)).toEqual(suitesOn("ubuntu-latest").map((suite) => suite.name).filter((name) => !["scope-runs", "scope-hosts", "guard-matrix-1", "guard-matrix-2"].includes(name)));
+        expect(suitesOn("windows-latest").map((suite) => suite.name)).toEqual(matrixOf(workflow.jobs.deterministic).suite!.map((suite) => suite.name).filter((name) => !["scope-runs", "scope-hosts", "guard-matrix-1", "guard-matrix-2"].includes(name)));
         expect(suitesOn("macos-15").map((suite) => suite.name)).toEqual(queue
           ? ["smoke", "unit-1", "unit-2", "integration", "e2e"]
           : suitesOn("windows-latest").map((suite) => suite.name));
       }
-      // Each job's unit shard: the queue's two macOS unit jobs split the
-      // selection in halves; every other job keeps its matrix shard.
+      // Every platform's active jobs form a complete N/M partition.
       const shardExpression = (ci.jobs.deterministic.with?.["unit-shard"] ?? "").match(/^\$\{\{([\s\S]+)\}\}$/)?.[1];
       expect(shardExpression).toBeDefined();
-      const shardOf = new Function("github", "matrix", `return (${shardExpression});`);
+      const format = (template: string, ...args: unknown[]) => template.replace(/\{(\d+)\}/g, (_, index: string) => String(args[Number(index)]));
+      const shardOf = new Function("github", "matrix", "format", `return (${shardExpression});`);
       for (const runner of runners) {
+        const total = runner === "ubuntu-latest" ? 12 : queue && runner === "macos-15" ? 2 : 16;
+        const selectedShards: string[] = [];
         for (const suite of suitesOn(runner)) {
-          const queueMacos = queue && runner === "macos-15" && suite.tier === "unit";
-          expect(shardOf({ event_name: event }, { runner, suite }), `${event} ${runner} ${suite.name}`)
-            .toBe(queueMacos ? { "unit-1": "1/2", "unit-2": "2/2" }[suite.name as "unit-1" | "unit-2"] : suite.shard ?? "");
+          const shard = shardOf({ event_name: event }, { runner, suite }, format);
+          expect(shard, `${event} ${runner} ${suite.name}`).toBe(suite.tier === "unit" ? `${suite.index}/${total}` : "");
+          if (suite.tier === "unit") selectedShards.push(shard);
         }
+        expect(selectedShards).toEqual(Array.from({ length: total }, (_, index) => `${index + 1}/${total}`));
       }
     }
     // One integration job runs everything but the scope runs, the scope-host
     // runs and the guard matrix; the other four run only those, the guard
-    // matrix in two halves by name.
+    // matrix in two weighted partitions of the same filtered inventory.
     const integration = matrix.suite!.filter((suite) => suite.tier === "integration");
     expect(integration.map(({ name, filter, exclude }) => [name, filter, exclude])).toEqual([
       ["integration", undefined, "^t-(scope-run|scope-host|guard-matrix)-"],
       ["scope-runs", "^t-scope-run-", undefined],
       ["scope-hosts", "^t-scope-host-", undefined],
-      ["guard-matrix-1", "^t-guard-matrix-[a-h]", undefined],
-      ["guard-matrix-2", "^t-guard-matrix-[^a-h]", undefined],
+      ["guard-matrix-1", "^t-guard-matrix-", undefined],
+      ["guard-matrix-2", "^t-guard-matrix-", undefined],
     ]);
     // The runner matches a filter against a file's base name, stem and
     // tier-qualified stem (run-tests.ts matchesE2eFilter): every integration
@@ -486,14 +500,22 @@ describe("t345 complete nightly coverage", () => {
     const left = new RegExp(integration[0].exclude!);
     const scoped = new RegExp(integration[1].filter!);
     const hosted = new RegExp(integration[2].filter!);
-    const halves = [new RegExp(integration[3].filter!), new RegExp(integration[4].filter!)];
+    const halves = integration.slice(3).map((suite) => {
+      const result = spawnSync(process.execPath, [
+        "tests/run-tests.ts", "--integration", "--isolated-files", "--e2e-plan",
+        "--filter", suite.filter!, "--shard", suite.partition!,
+      ], { cwd: REPO_ROOT, env: { ...process.env, BUN_OPTIONS: "" }, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS });
+      expect(result.status, result.stderr).toBe(0);
+      const plan = JSON.parse(result.stdout) as { files: Array<{ file: string }> };
+      return new Set(plan.files.map(({ file }) => basename(file)));
+    });
     const halfFiles: string[][] = [[], []];
     for (const file of files) {
       const jobs = [
         !names(file).some((name) => left.test(name)),
         names(file).some((name) => scoped.test(name)),
         names(file).some((name) => hosted.test(name)),
-        ...halves.map((half) => names(file).some((name) => half.test(name))),
+        ...halves.map((half) => half.has(file)),
       ];
       expect([file, jobs.filter(Boolean).length], file).toEqual([file, 1]);
       expect([file, jobs[1], jobs[2], jobs[3] || jobs[4]], file)
@@ -506,6 +528,8 @@ describe("t345 complete nightly coverage", () => {
     expect(deterministic.on.workflow_call.inputs.filter).toMatchObject({ default: "", type: "string" });
     expect(deterministic.on.workflow_call.inputs.filter.required).toBeUndefined();
     expect(ci.jobs.deterministic.with?.filter).toBe(`\${{ matrix.suite.filter || '' }}`);
+    expect(ci.jobs.deterministic.with?.["integration-shard"]).toBe(`\${{ matrix.suite.partition || '' }}`);
+    expect(workflow.jobs.deterministic.with?.["integration-shard"]).toBe(`\${{ matrix.suite.partition || '' }}`);
     expect(workflow.jobs.deterministic.with?.filter).toBe(`\${{ matrix.suite.filter || '' }}`);
     expect(ci.jobs.deterministic.with?.exclude).toBe(`\${{ matrix.suite.exclude || '' }}`);
     expect(workflow.jobs.deterministic.with?.exclude).toBe(`\${{ matrix.suite.exclude || '' }}`);
@@ -724,10 +748,11 @@ describe("t345 complete nightly coverage", () => {
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  for (const [tier, shard, filter, expected, retry] of [
+  for (const [tier, shard, filter, expected, retry, integrationShard = ""] of [
     ["smoke", "", "", ["--smoke"], "false"],
     ["unit", "3/8", "", ["--unit", "--shard", "3/8"], "false"],
     ["integration", "", "", ["--integration"], "false"],
+    ["integration", "", "^t-guard-matrix-", ["--integration", "--shard", "1/2"], "false", "1/2"],
     ["e2e", "", "", ["--e2e", "--isolated-e2e", "--e2e-file-timeout", "7200"], "false"],
     ["unit", "1/1", "^t-tui-runtime$", ["--unit", "--shard", "1/1"], "false"],
     ["unit", "7/8", '^t-(literal with spaces|"quoted"|$(printf FILTER_INJECTION))$', ["--unit", "--shard", "7/8"], "false"],
@@ -736,6 +761,7 @@ describe("t345 complete nightly coverage", () => {
     ["smoke", "", "", ["--smoke", "--file-retries", "1"], "true"],
     ["unit", "3/12", "", ["--unit", "--shard", "3/12", "--file-retries", "1"], "true"],
     ["integration", "", "", ["--integration", "--file-retries", "1"], "true"],
+    ["integration", "", "^t-guard-matrix-", ["--integration", "--shard", "2/2", "--file-retries", "1"], "true", "2/2"],
     ["e2e", "", "", ["--e2e", "--isolated-e2e", "--e2e-file-timeout", "7200"], "true"],
   ] as const) {
     test(`shared ${tier} execution${filter ? ` filtered by ${filter}` : ""}${retry === "true" ? " in the merge queue" : ""} preserves arguments, captured output and failure status`, () => {
@@ -760,7 +786,7 @@ describe("t345 complete nightly coverage", () => {
           rmSync(join(root, "tests/logs"), { recursive: true, force: true });
           const result = spawnSync("bash", ["-c", step.run!], {
             cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
-            env: stepRunEnv(step, { GITHUB_WORKSPACE: root.replaceAll("\\", "/"), TEST_TIER: tier, UNIT_SHARD: shard, TEST_FILTER: filter, RETRY_ONCE: retry, FIXTURE_EXIT: exit, OMIT_SUMMARY: omit }),
+            env: stepRunEnv(step, { GITHUB_WORKSPACE: root.replaceAll("\\", "/"), TEST_TIER: tier, UNIT_SHARD: shard, INTEGRATION_SHARD: integrationShard, TEST_FILTER: filter, RETRY_ONCE: retry, FIXTURE_EXIT: exit, OMIT_SUMMARY: omit }),
           });
           expect(result.status, result.stdout + result.stderr).toBe(expectedStatus);
           expect(readFileSync(join(root, "argv.bin"), "utf8").split("\0").filter(Boolean))
@@ -1150,27 +1176,87 @@ describe("t345 complete nightly coverage", () => {
     };
     expect(ci.on.merge_group).toEqual({ types: ["checks_requested"] });
     for (const name of ["test_native_terminal", "test_live_isolation"]) expect(ci.jobs[name].if).toBe("github.event_name != 'pull_request'");
-    for (const name of ["check", "deterministic", "test_guards", "coverage_ratchet"]) expect(ci.jobs[name].if).toBeUndefined();
+    for (const name of ["check", "deterministic", "test_guards"]) expect(ci.jobs[name].if).toBeUndefined();
     // A skipped need would skip the summary under the default success() gate.
     expect(ci.jobs.test.if).toBe(`\${{ !cancelled() }}`);
-    expect(ci.jobs.test.needs).toEqual(["deterministic", "test_native_terminal", "test_guards", "test_live_isolation", "coverage_ratchet"]);
+    expect(ci.jobs.test.needs).toEqual(["check", "deterministic", "test_native_terminal", "test_guards", "test_live_isolation"]);
     const summary = steps(ci.jobs.test)[0];
     expect(summary.env?.EVENT_NAME).toBe(`\${{ github.event_name }}`);
+    expect(summary.env?.CONTRACT_RESULT).toBe(`\${{ needs.check.result }}`);
     const status = (event: string, results: Record<string, string>) => spawnSync("bash", ["-e", "-c", summary.run!], {
       encoding: "utf8", timeout: 15_000,
-      env: { ...process.env, EVENT_NAME: event, DETERMINISTIC_RESULT: "success", GUARD_RESULT: "success", COVERAGE_RESULT: "success", ...results },
+      env: { ...process.env, EVENT_NAME: event, CONTRACT_RESULT: "success", DETERMINISTIC_RESULT: "success", GUARD_RESULT: "success", ...results },
     }).status;
     for (const event of ["pull_request", "merge_group", "workflow_dispatch", "workflow_call"]) {
       const expected = event === "pull_request" ? "skipped" : "success";
       const crossOs = { NATIVE_RESULT: expected, ISOLATION_RESULT: expected };
       expect(status(event, crossOs), event).toBe(0);
-      for (const key of ["DETERMINISTIC_RESULT", "GUARD_RESULT", "COVERAGE_RESULT", "NATIVE_RESULT", "ISOLATION_RESULT"]) {
+      for (const key of ["CONTRACT_RESULT", "DETERMINISTIC_RESULT", "GUARD_RESULT", "NATIVE_RESULT", "ISOLATION_RESULT"]) {
         for (const result of ["failure", "cancelled"]) expect(status(event, { ...crossOs, [key]: result }), `${event} ${key}=${result}`).not.toBe(0);
+      }
+      for (const result of ["skipped", ""]) {
+        expect(status(event, { ...crossOs, CONTRACT_RESULT: result }), `${event} contracts=${result}`).not.toBe(0);
       }
       // The merge queue cannot pass on cross-OS jobs that never ran.
       if (event !== "pull_request") {
         for (const key of ["NATIVE_RESULT", "ISOLATION_RESULT"]) expect(status(event, { ...crossOs, [key]: "skipped" }), `${event} ${key}=skipped`).not.toBe(0);
       }
+    }
+  });
+
+  test("consolidated checks keep collecting failures and compare changelog against the frozen PR base", () => {
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
+      jobs: Record<string, Job>;
+    };
+    const job = ci.jobs.check;
+    const all = steps(job);
+    const commands = all.filter((step) => step.run).map((step) => step.name);
+    expect(commands).toEqual([
+      "Install dependencies", "Run contract checks", "ShellCheck installer",
+      "Package the tree the registry reads", "Fail if a unit lost coverage against the first parent",
+      "Guard against deleted CHANGELOG entries",
+    ]);
+    expect(all.every((step) => step["continue-on-error"] === undefined)).toBe(true);
+    expect(ci.jobs.coverage_ratchet).toBeUndefined();
+    expect(ci.jobs["changelog-guard"]).toBeUndefined();
+    expect(ci.jobs.test.needs).toContain("check");
+    const changelog = all.find((step) => step.name === "Guard against deleted CHANGELOG entries")!;
+    expect(changelog.env).toEqual({ CHANGELOG_BASE: `\${{ github.event.pull_request.base.sha }}` });
+    expect(changelog.run).toBe('bun scripts/ci-changelog-guard.ts "$CHANGELOG_BASE"');
+
+    const execute = (event: string, failure?: string, cancelled = false) => {
+      const outcomes: Record<string, { outcome: string }> = {};
+      const executed: Array<string | undefined> = [];
+      let failed = false;
+      for (const step of all) {
+        const condition = step.if?.match(/^\$\{\{([\s\S]+)\}\}$/)?.[1];
+        const enabled = condition
+          ? new Function("github", "steps", "cancelled", `return (${condition});`)(
+            { event_name: event }, outcomes, () => cancelled,
+          )
+          : !failed && !cancelled;
+        const outcome = !enabled ? "skipped" : failure !== undefined && step.name === failure ? "failure" : "success";
+        if (step.id) outcomes[step.id] = { outcome };
+        if (enabled && step.run) executed.push(step.name);
+        if (outcome === "failure") failed = true;
+      }
+      return { executed, failed };
+    };
+    for (const event of ["pull_request", "merge_group", "workflow_dispatch", "workflow_call"]) {
+      const expected = event === "pull_request" ? commands : commands.slice(0, -1);
+      expect(execute(event)).toEqual({ executed: expected, failed: false });
+      for (const name of expected.slice(1)) {
+        const result = execute(event, name);
+        expect(result.failed, `${event}: ${name}`).toBe(true);
+        const remaining = name === "Package the tree the registry reads"
+          ? expected.filter((entry) => entry !== "Fail if a unit lost coverage against the first parent")
+          : expected;
+        expect(result.executed, `${event}: ${name}`).toEqual(remaining);
+      }
+      expect(execute(event, undefined, true).executed).toEqual([]);
+      expect(execute(event, "Install dependencies")).toEqual({
+        executed: ["Install dependencies", "ShellCheck installer"], failed: true,
+      });
     }
   });
 
@@ -1281,7 +1367,7 @@ describe("t345 complete nightly coverage", () => {
       expect(run, testStep).toBeLessThan(all.indexOf(tolerant[0]));
       expect((job as { "continue-on-error"?: unknown })["continue-on-error"], testStep).toBeUndefined();
     }
-    expect(ci.jobs.test.needs).toEqual(["deterministic", "test_native_terminal", "test_guards", "test_live_isolation", "coverage_ratchet"]);
+    expect(ci.jobs.test.needs).toEqual(["check", "deterministic", "test_native_terminal", "test_guards", "test_live_isolation"]);
     // Uploads outside the required chain, and every Full Suite upload, stay fatal.
     const ciTolerant = Object.entries(ci.jobs).flatMap(([name, job]) =>
       steps(job).filter((step) => step["continue-on-error"] !== undefined).map((step) => `${name}: ${step.name}`));
@@ -1932,8 +2018,8 @@ describe("t345 complete nightly coverage", () => {
     expect(matrix.suite as unknown[]).toEqual([
       { name: "scope-runs", filter: "^t-scope-run-" },
       { name: "scope-hosts", filter: "^t-scope-host-" },
-      { name: "guard-matrix-1", filter: "^t-guard-matrix-[a-h]" },
-      { name: "guard-matrix-2", filter: "^t-guard-matrix-[^a-h]" },
+      { name: "guard-matrix-1", filter: "^t-guard-matrix-", partition: "1/2" },
+      { name: "guard-matrix-2", filter: "^t-guard-matrix-", partition: "2/2" },
     ]);
     // The same selections as the PR and full_verification jobs.
     const deterministic = matrixOf(workflow.jobs.deterministic).suite!;
@@ -1942,7 +2028,7 @@ describe("t345 complete nightly coverage", () => {
     }
     expect(job.with).toEqual({
       ref: `\${{ needs.plan.outputs.sha }}`, runner: `\${{ matrix.runner }}`, tier: "integration",
-      filter: `\${{ matrix.suite.filter }}`, "artifact-label": `full-suite-\${{ matrix.suite.name }}`,
+      filter: `\${{ matrix.suite.filter }}`, "integration-shard": `\${{ matrix.suite.partition || '' }}`, "artifact-label": `full-suite-\${{ matrix.suite.name }}`,
     });
     // A release result requires it; the other purposes leave it out.
     expect(FULL_SUITE_JOBS).toContain("scope_runs");
@@ -1952,7 +2038,32 @@ describe("t345 complete nightly coverage", () => {
     expect(workflow.jobs.result.needs).toContain("scope_runs");
   });
 
-  test("nightly unit shards cover every unit file exactly once on each supported OS", () => {
+  test("Full Suite bounds deterministic concurrency and interleaves platforms without dropping matrix jobs", () => {
+    for (const [jobName, concurrency, totalJobs] of [
+      ["deterministic", 12, 69],
+      ["scope_runs", 3, 12],
+    ] as const) {
+      const job = workflow.jobs[jobName];
+      const matrix = matrixOf(job);
+      expect(job.strategy?.["max-parallel"], jobName).toBe(concurrency);
+      expect(job.strategy?.["fail-fast"], jobName).toBe(false);
+      // GitHub creates jobs in matrix-axis order. Keep platforms interleaved
+      // when a concurrency limit queues the rest of the matrix.
+      expect(Object.keys(matrix).filter((key) => key !== "include")).toEqual(["suite", "runner"]);
+      const runners = matrix.runner as string[];
+      const jobs = matrix.suite!.flatMap((suite) => runners.map((runner) => ({ suite: suite.name, runner })));
+      expect(jobs, jobName).toHaveLength(totalJobs);
+      expect(new Set(jobs.map(({ suite, runner }) => `${suite}/${runner}`)).size).toBe(totalJobs);
+      for (let start = 0; start < jobs.length; start += concurrency) {
+        const batch = jobs.slice(start, start + concurrency);
+        for (const runner of ["ubuntu-latest", "macos-15", "windows-latest"]) {
+          expect(batch.filter((entry) => entry.runner === runner), `${jobName} creation batch ${start}`).toHaveLength(batch.length / 3);
+        }
+      }
+    }
+  });
+
+  test("full verification unit shards cover every unit file exactly once on each supported OS", () => {
     const job = workflow.jobs.deterministic;
     const matrix = matrixOf(job);
     expect(matrix.runner).toEqual(["ubuntu-latest", "macos-15", "windows-latest"]);
@@ -1963,8 +2074,8 @@ describe("t345 complete nightly coverage", () => {
       { name: "integration", tier: "integration", exclude: "^t-(scope-run|scope-host|guard-matrix)-" },
       { name: "scope-runs", tier: "integration", filter: "^t-scope-run-" },
       { name: "scope-hosts", tier: "integration", filter: "^t-scope-host-" },
-      { name: "guard-matrix-1", tier: "integration", filter: "^t-guard-matrix-[a-h]" },
-      { name: "guard-matrix-2", tier: "integration", filter: "^t-guard-matrix-[^a-h]" },
+      { name: "guard-matrix-1", tier: "integration", filter: "^t-guard-matrix-", partition: "1/2" },
+      { name: "guard-matrix-2", tier: "integration", filter: "^t-guard-matrix-", partition: "2/2" },
     ]);
     expect(suites.filter((suite) => suite.tier === "e2e")).toEqual([{ name: "e2e", tier: "e2e" }]);
     expect(suites.some((suite) => suite.tier === "deep")).toBe(false);

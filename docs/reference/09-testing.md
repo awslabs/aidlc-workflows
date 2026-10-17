@@ -382,8 +382,14 @@ command it names. Each case checks:
 
 A case the engine blocks today is a `test.todo` named after the block, with the
 real check as its body, so the fix turns it on. CI runs the guard matrix where
-it runs the scope runs, in two jobs of its own split by file name
-(`guard-matrix-1` takes `t-guard-matrix-[a-h]*`, `guard-matrix-2` the rest).
+it runs the scope runs, in two duration-balanced jobs. Both select
+`^t-guard-matrix-`; `--shard 1/2` and `--shard 2/2` partition that inventory
+without overlaps. The longest change matrices separate agent edits from hand
+edits, and unit-by-unit deletion from stage-by-stage deletion, into smaller
+files. Every scenario still starts a fresh project and runs its complete
+workflow with the same person-experience and record checks.
+Each split file starts with half its former file's duration as an estimate;
+the normal weight refresh replaces it with observed timings.
 
 ## Layer 2: Stage (CI push, LLM, minutes)
 
@@ -729,8 +735,9 @@ one entry per unit with its claims and status.
 
 The registry is **never committed**. A committed copy changed in nearly every
 PR, so queued PRs collided on it or had to regenerate it after each rebase. CI
-builds it fresh instead: the **Coverage ratchet** job, part of the required
-`Tests (smoke + unit)` check, runs `--check --base HEAD^1`. That builds the
+builds it fresh instead: the coverage step in the combined **Contract checks**
+job, part of the required `Tests (smoke + unit)` check, runs
+`--check --base HEAD^1`. That builds the
 registry for the commit under test and for its first parent (the PR's base, or
 the queue entry ahead), the parent with its own packager and generator in a
 temp directory, and fails naming each unit the parent covers that the commit
@@ -768,16 +775,21 @@ so a broken enumerator reds the gate.
 | Trigger | Layer | Command | Where |
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
-| Pull request push | Fast deterministic gate | `ci.yml`: contract checks + Linux smoke, sixteen unit shards and deterministic integration (the scope runs, the scope-host runs and the guard matrix in jobs of their own), using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
-| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows (the scope runs, the scope-host runs and the guard matrix on Linux only; on macOS the unit tier runs only the unit files that name macOS and the ones the change touches, in two jobs instead of sixteen shards), adding isolated E2E on each, retrying an assertion-failed smoke, unit or integration file once with a `Flaky test` warning, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
-| Manual deterministic workflow dispatch | Targeted deterministic reproduction | `deterministic-tests.yml` accepts an immutable source SHA, runner, tier, required N/M shard for unit and optional manual-only `diagnostic_filter`; non-unit tiers omit the shard; one runner executes with model gates closed | GitHub Actions |
-| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, sixteen unit shards, integration and isolated E2E as separate jobs in the shared workflow, with the scope runs, the scope-host runs and the guard matrix on Linux | GitHub Actions |
+| Pull request push | Fast deterministic gate | `ci.yml`: contract checks (including coverage and PR changelog preservation) + Linux smoke, twelve unit shards and deterministic integration (the scope runs, the scope-host runs and the guard matrix in jobs of their own), using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
+| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows (twelve Linux unit shards, sixteen Windows unit shards; the scope runs, the scope-host runs and the guard matrix on Linux only; on macOS the unit tier runs only the unit files that name macOS and the ones the change touches, in two jobs instead of sixteen shards), adding isolated E2E on each, retrying an assertion-failed smoke, unit or integration file once with a `Flaky test` warning, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
+| Manual deterministic workflow dispatch | Targeted deterministic reproduction | `deterministic-tests.yml` accepts an immutable source SHA, runner, tier, required N/M shard for unit, optional `integration-shard`, and optional manual-only `diagnostic_filter`; one runner executes with model gates closed | GitHub Actions |
+| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, twelve Linux and sixteen macOS/Windows unit shards, integration and isolated E2E as separate jobs in the shared workflow, with the scope runs, the scope-host runs and the guard matrix on Linux | GitHub Actions |
 | Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running native obligations, release contracts, bounded hosted live shards, and the scope runs, the scope-host runs and the guard matrix on Linux, macOS and Windows | GitHub Actions |
 | Explicit manual Full Suite with `full_verification=true` | Credential-free candidate verification | Runs every job that receives no OIDC or AWS credentials for the selected workflow head, including an unmerged PR; live lanes need `live_verification`; separate evidence is not consumed by stable publication | GitHub Actions |
 | Explicit manual Full Suite with `live_verification=true` | Candidate live verification | Runs live preparation and hosted live/release-contract jobs for the selected workflow head only; separate evidence is not consumed by stable publication | GitHub Actions |
 | Preview promotion | Exact-source release validation | `release.yml` validates the preview parent and allowed metadata/control changes, builds with the stable version and checks native/installer/lifecycle/upgrade behavior; it does not repeat CI or Full Suite | GitHub Actions |
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
+
+The required `Tests (smoke + unit)` status also requires the contract job:
+package determinism, typecheck, lint and installer ShellCheck. Contract checks
+and the test matrix run in parallel; the aggregate waits for both. Its name
+stays the same so the repository's required status check covers them together.
 
 When the merge queue drops a PR only because a GitHub-hosted runner failed,
 `merge-queue-notice.yml` posts one comment on the PR saying so, naming the jobs,
@@ -851,9 +863,15 @@ Windows, PR CI and the nightly Full Suite run every file. `t345` pins this.
 above, while required hosted live tiers run in
 `full-suite.yml`. `preview-release.yml` dispatches it every night as a separate
 run for the preview source SHA. Its failures remain visible in that run and in
-the preview notes, without failing the preview workflow. Stable promotion
-selects a published preview's source and adds only version metadata and pinned
-publication controls. It does not repeat CI or Full Suite. The preview's prior
+the preview notes, without failing the preview workflow. Once contract checks
+pass, preview native smoke, builds and artifact validation run in parallel with
+Full Suite. Publication waits for both the validated artifacts and the completed
+test report, so the release notes retain any Full Suite or upgrade warning.
+An unchanged source still runs contract checks and Full Suite while skipping
+the build and publication.
+
+Stable promotion selects a published preview's source and adds only version
+metadata and pinned publication controls. It does not repeat CI or Full Suite. The preview's prior
 results remain visible, including failures; choosing to promote is the
 maintainer's decision. The newly built stable binaries still pass packaging,
 installer, lifecycle and update checks before publication. See
@@ -867,32 +885,56 @@ called by the preview are never cancelled this way.
 
 `ci.yml` and `full-suite.yml` call the same reusable
 `.github/workflows/deterministic-tests.yml`. Callers select the immutable `ref`,
-runner, tier, unit shard, an optional file `filter` and `exclude` (both empty
+runner, tier, unit or integration shard, an optional file `filter` and `exclude` (both empty
 by default, so the whole tier runs) and artifact label. Both split integration
 in five jobs: the scope runs (`filter`, `t-scope-run-*`), the scope-host runs
-(`filter`, `t-scope-host-*`), the guard matrix in two halves by file name
-(`filter`, `t-guard-matrix-[a-h]*` and the rest of `t-guard-matrix-*`) and
-everything else (`exclude` of all three). PR CI selects Linux smoke, sixteen
+(`filter`, `t-scope-host-*`), the guard matrix in two duration-balanced shards
+(`filter: ^t-guard-matrix-`, `integration-shard: 1/2` or `2/2`) and
+everything else (`exclude` of all three). PR CI selects Linux smoke, twelve
 weighted unit shards, and the five integration jobs; a `full_verification` Full
-Suite selects smoke, the same sixteen shards, the five integration jobs, and
+Suite selects smoke, sixteen unit shards per OS, the five integration jobs, and
 isolated E2E on Linux/macOS/Windows. The nightly Full Suite runs no
 deterministic tier; its `scope_runs` job calls the shared workflow for the scope
 runs, the scope-host runs and the guard matrix on all three. Integration and
 E2E run as independent jobs per OS, each with a fresh Bun runner process.
 Every call owns a fresh checkout, installs frozen dependencies under Bun 1.4.2,
-regenerates projections, and invokes the Bash wrapper with `--debug -P 8
+regenerates projections once, and invokes the Bash wrapper with `--debug -P 8
 --no-llm`. E2E runs retain `--isolated-e2e`; smoke and unit remain serial within
 each checkout. Sharing the workflow shares the commands and setup, not previous
 test results.
+
+CI groups code contracts, installer ShellCheck, the coverage ratchet and PR
+changelog preservation in one job. Each check retains its own step and failure;
+independent checks continue after an earlier check fails. Coverage still compares
+against the first parent, and changelog preservation uses the frozen PR base.
+The required `Tests (smoke + unit)` status requires this combined job to pass.
+PR CI allocates 21 runners; the merge queue allocates 55, with its existing
+platform selections. Live harness and native build matrices are unchanged.
+
+The repository's `default-branch` ruleset limits merge queue build concurrency
+to two groups, down from eight. This setting is managed in GitHub, separately
+from these workflows; it limits concurrent merge-group builds, not the number
+of PRs in a merge batch. The required checks still run on each group's commit.
+
+Full Suite limits its manual deterministic matrix to twelve concurrent jobs
+and its nightly scope/guard matrix to three. All 69 manual deterministic jobs
+and all twelve nightly scope/guard jobs still run. The suite axis comes first,
+so job creation interleaves Linux, macOS and Windows. This order is not a
+per-platform quota: runner availability and job duration determine which jobs
+execute together. Live shards retain their existing limits of four Linux, two
+macOS and three Windows jobs. These are per-matrix limits, not an organization
+quota; concurrent workflows still share hosted capacity. Lower concurrency
+can lengthen a Full Suite run while reducing contention with PRs and the queue.
 
 Deterministic, native-terminal, and production-guard test jobs use a five-hour
 job backstop and a 270-minute execution step. The runner shares a four-hour
 work deadline across the invocation, with a two-hour deadline per file,
 including smoke and isolated deterministic E2E.
 This hierarchy leaves time to retire processes, finish reports, sanitize logs
-and upload evidence after work stops. Unit work remains partitioned into sixteen
-weighted shards per OS without duplication; compiled producer/consumer
-affinity is preserved.
+and upload evidence after work stops. Unit work remains partitioned without duplication: twelve Linux shards in CI,
+sixteen Windows shards, two selected macOS shards in the merge queue, and
+sixteen macOS shards in expanded manual CI. Full Suite full verification uses
+sixteen per OS. Compiled producer/consumer affinity is preserved.
 
 The same hierarchy applies to merge-queue native-terminal checks, Full Suite
 native obligations and production-guard checks. These paths
@@ -914,8 +956,9 @@ gh workflow run deterministic-tests.yml --ref '<candidate-branch>' \
 `diagnostic_filter` is a manual-only filename regex and is not exposed to
 reusable CI callers. The unit tier requires `unit-shard=N/M`; `1/1` selects all
 unit files before filtering. For smoke, integration or e2e, omit `unit-shard`;
-its default is empty. For example, use `-f tier=integration` without a shard
-input. Each reproduction uses one fresh runner with model gates closed and
+its default is empty. Integration may additionally use `integration-shard=N/M`
+to reproduce one partition of its filtered inventory. Each reproduction uses
+one fresh runner with model gates closed and
 the same immutable checkout, bounded runner and sanitized evidence paths.
 The default artifact is
 `ci-deterministic-probe-<OS>`. These targeted diagnostics do not qualify a full
@@ -1111,8 +1154,8 @@ bash tests/run-tests.sh       # POSIX compatibility wrapper
 --file-timeout N  # Independent file ceiling in seconds for every tier; caps isolated E2E too.
                   # Default: 7200 outside isolated E2E.
 --run-timeout N   # Shared work deadline in seconds across setup and all selected files.
---shard N/M     # Run one duration-balanced unit shard.
-                # Requires --unit with no other level or profile flags.
+--shard N/M     # Run one duration-balanced unit or integration shard.
+                # Requires --unit or --integration with no other tier/profile.
 --isolated-e2e  # Run e2e in independent checkouts; -P sets worker count.
 --e2e-plan      # Print selected files/resources without builds or test execution.
                 # Requires --e2e; implies --isolated-e2e, not --e2e.
@@ -1264,7 +1307,7 @@ journeys. Full Suite additionally requires complete coverage for that selection.
 
 All 8 parallel calls observed `cache_read=73789`. This historical help-command probe observed prompt-cache reuse without throttling or corruption; it does not establish capacity for concurrent full workflows.
 
-**What stays serial.** Smoke and unit tiers ignore `--parallel` and run serially within one checkout. Unit CI reduces wall-clock time with isolated shards instead: each shared-workflow call owns a fresh checkout and runs its assigned files serially, so packaging tests can regenerate `dist/` without racing readers. PR CI uses sixteen weighted unit shards on Linux and eight workers for integration, which start the longest integration files first. Manual Full Suite `full_verification` uses the same shard definition on Linux, macOS, and Windows; smoke runs once per OS, and deterministic integration and isolated E2E run in separate jobs with eight workers each. Adding `-P 8` to a combined smoke/unit command alone does not parallelize those tiers. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
+**What stays serial.** Smoke and unit tiers ignore `--parallel` and run serially within one checkout. Unit CI reduces wall-clock time with isolated shards instead: each shared-workflow call owns a fresh checkout and runs its assigned files serially, so packaging tests can regenerate `dist/` without racing readers. PR CI uses twelve weighted unit shards on Linux and eight workers for integration, which start the longest integration files first. Manual Full Suite `full_verification` uses sixteen shards on each of Linux, macOS, and Windows; smoke runs once per OS, and deterministic integration and isolated E2E run in separate jobs with eight workers each. Adding `-P 8` to a combined smoke/unit command alone does not parallelize those tiers. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
 
 **Output under parallelism.** `START` markers stream live; several can appear before the first `DONE`. In normal/verbose mode, the TypeScript coordinator buffers each test's TAP body and writes it as one block when that file finishes. In `--debug` mode, Bun stdout/stderr streams live while still being written to each per-test log; parallel debug output is prefixed by file basename so overlapping workers remain attributable. SDK/TUI/Kiro-ACP driver traces are written beside the logs as `$LOG_DIR/sdk-drive-*.ndjson`, `$LOG_DIR/tui-drive-*.ndjson`, and `$LOG_DIR/kiro-acp-drive-*.ndjson`; isolated E2E places them under the file's artifact directory. The runner prints their paths at startup and at each test start. Kiro-ACP traces include tool calls and updates, output previews, permission answers, process stderr, and result/timeout/end events so a timeout can be investigated from retained evidence.
 
@@ -1952,7 +1995,9 @@ receipt reconciliation still discovers the receipts recursively.
 Shared deterministic artifacts contain `tests/logs/<stamp>/` and
 `tmp/ci-deterministic/` (full stdout/stderr plus the literal stamp path). CI
 artifacts use `ci-deterministic-<suite>-<OS>`, where suite is smoke,
-unit-1 through unit-16, integration, or e2e (expanded manual matrix only).
+unit-1 through unit-12 on Linux, unit-1 through unit-16 on Windows and manual
+macOS, unit-1 through unit-2 on merge-queue macOS, integration, scope-runs,
+scope-hosts, guard-matrix-1, guard-matrix-2, or e2e (expanded matrix only).
 An upload requires both log locations
 to pass sanitization, including after a failed test command.
 
@@ -2203,8 +2248,9 @@ calibration; it does not change this adapter's conservative injection policy.
 
 `--unit --shard N/M` assigns every discovered unit file to exactly one of `M`
 duration-balanced shards. Assignment is deterministic and uses
-`tests/unit-shard-weights.json`, which records each file's duration on its
-slowest CI OS. Unlisted files receive a one-second default weight, so new tests
+`tests/unit-shard-weights.json`, which records each file's duration per OS.
+The current platform's measurements take precedence; files not measured there
+use their slowest-OS fallback. Unlisted files receive a one-second default weight, so new tests
 join the least-loaded shard without changing the command. The runner exits 2 when `M` exceeds the number of
 assignable groups, so no valid shard command can report success after running
 zero files.
@@ -2225,7 +2271,8 @@ Sharded unit execution requires t249 to resolve this handoff; a missing artifact
 fails instead of silently skipping the compiled cases, even when an explicit
 executable or an old repository build exists. Direct, non-sharded t249 runs can
 still opt into `AIDLC_TEST_COMPILED_EXECUTABLE` or a local native build result.
-The smoke runner contract verifies that all sixteen CI shards are non-empty,
+The smoke runner contract verifies that both the twelve- and sixteen-shard
+assignments are non-empty,
 disjoint, cover the complete unit inventory, preserve producer/consumer ordering,
 and fail compiled coverage when the producer is filtered out.
 
@@ -2235,11 +2282,21 @@ a long file never starts last and sets the tier's wall time. Unweighted files
 and ties keep name order; with no readable weights file, files start in name
 order. Serial files and the smoke and unit tiers are unaffected.
 
+`--integration --shard N/M` balances the filtered integration inventory using
+the same integration weights. Filtering happens before partitioning; exclusions
+apply afterward, so excluding a file does not move other files between shards.
+The two guard jobs use this mode with the same filter. The number of hosted
+jobs and the worker limit remain unchanged.
+
 Weights only balance and order files; they never select, skip, or fail one.
 `scripts/ci-test-weights.ts refresh <dir>` rewrites both weight files from
 deterministic CI evidence downloaded with
 `gh run download <run-id> -p 'ci-deterministic-*' -D <dir>` (use several green
-merge-group runs: each file takes its median per OS, then its slowest OS).
+merge-group runs: each file takes its median per OS; the slowest median also
+updates its fallback). Platform measurements not present in a refresh are
+retained. The initial platform weights were collected from successful
+merge-group run `39029896320`; scheduling gains must be checked against
+subsequent runs, not just those training measurements.
 After each unit and integration job, the advisory "Report outdated test
 weights" step runs `scripts/ci-test-weights.ts report`: a file that ran more
 than a minute and more than 1.5 times past its weight gets a warning

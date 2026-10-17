@@ -187,16 +187,17 @@ occupied ids. Leftover `aidlc-staging-*` drafts still require inspection and
 removal before the publisher stages another candidate.
 
 The planner renders notes from changes since the previous preview. Contract
-checks gate the authorized commit before the normal release build chain. Full
-Suite runs first but does not gate it. A failing suite still builds and
-publishes the preview; its notes open with a warning and end with the Full
-Suite failure report. Full Suite runs separately and retains its failed status
+checks gate the authorized commit, then the release build chain and Full Suite
+run in parallel. Publication waits for validated artifacts and the completed
+test report. A failing suite still permits publication; the preview notes open
+with a warning and end with the Full Suite failure report. Full Suite runs
+separately and retains its failed status
 without failing Preview Release. Only the preview's Full Suite dispatch job adds
 `actions: write`, to start and watch that run; the `Release tests` job adds
 `actions: read` to download its evidence and list its jobs. Preview does not repeat the
 PR CI test matrix.
 PR CI and Full Suite use the same `deterministic-tests.yml` workflow definition
-with different matrices: Linux smoke/sixteen unit shards/integration for PRs, and
+with different matrices: Linux smoke/twelve unit shards/integration for PRs, and
 Linux/macOS/Windows smoke/sixteen unit shards/integration/E2E for a manual full
 verification. The nightly (release purpose) Full Suite runs no deterministic
 tier: its scope runs and guard matrix run in a job of their own on every OS,
