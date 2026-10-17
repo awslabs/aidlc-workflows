@@ -146,8 +146,8 @@ bash tests/run-tests.sh --integration -P 8 --filter "^t-(scope-run|scope-host|gu
 bash tests/run-tests.sh --all --parallel 4
 bash tests/run-tests.sh --integration -P 8
 
-# Run one deterministic unit shard. Linux CI uses twelve isolated serial shards.
-bash tests/run-tests.sh --unit --shard 1/12
+# Run one deterministic unit shard. Linux CI uses ten isolated serial shards.
+bash tests/run-tests.sh --unit --shard 1/10
 
 # Inspect isolated e2e selection without running tests or generating dist.
 bash tests/run-tests.sh --debug -P 8 --e2e --e2e-plan
@@ -202,7 +202,10 @@ Use the shared profiles in `tests/harness/test-budget.ts` for native startup
 and multi-worktree cases (one hour). These ceilings tolerate variable
 runner load and do not delay successful operations. Explicit deadline and
 performance calibration tests keep their own bounds.
-PR CI runs Linux smoke, twelve weighted unit shards, and deterministic integration.
+PR CI runs ten weighted Linux unit shards and deterministic integration. Linux
+smoke shares the combined check job with code contracts and production guards,
+using separate runner processes; macOS and Windows keep their own smoke jobs.
+PR CI uses 17 runners, including its required-result job.
 Full Suite full verification runs smoke, sixteen unit shards per OS, integration, and isolated
 E2E on Linux/macOS/Windows. Integration and E2E have independent jobs per OS
 with fresh Bun runner processes. Each call checks out its supplied commit,
@@ -222,7 +225,7 @@ POSIX unit jobs check for tmux and install it with apt/Homebrew when absent;
 Linux unit jobs also require zsh. The merge queue, and manual CI with
 `platform_regressions=true`, expand this same matrix to all three OSes and add the separate E2E jobs,
 without a preceding Linux pass or another broad regression slice. It includes
-all unit regressions in twelve Linux and sixteen Windows shards; manual expanded
+all unit regressions in ten Linux and sixteen Windows shards; manual expanded
 CI uses sixteen macOS shards, while the merge queue keeps its two selected macOS
 shards. Provisioning stays shared. Only the
 merge queue reruns a smoke, unit or integration file whose assertions failed,

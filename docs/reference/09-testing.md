@@ -735,7 +735,7 @@ one entry per unit with its claims and status.
 
 The registry is **never committed**. A committed copy changed in nearly every
 PR, so queued PRs collided on it or had to regenerate it after each rebase. CI
-builds it fresh instead: the coverage step in the combined **Contract checks**
+builds it fresh instead: the coverage step in the combined **Checks**
 job, part of the required `Tests (smoke + unit)` check, runs
 `--check --base HEAD^1`. That builds the
 registry for the commit under test and for its first parent (the PR's base, or
@@ -775,10 +775,10 @@ so a broken enumerator reds the gate.
 | Trigger | Layer | Command | Where |
 |---------|-------|---------|-------|
 | `git commit` | L1 | `bun tests/run-tests.ts` | Local (pre-commit hook) |
-| Pull request push | Fast deterministic gate | `ci.yml`: contract checks (including coverage and PR changelog preservation) + Linux smoke, twelve unit shards and deterministic integration (the scope runs, the scope-host runs and the guard matrix in jobs of their own), using `deterministic-tests.yml`, plus production-guard checks; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
-| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows (twelve Linux unit shards, sixteen Windows unit shards; the scope runs, the scope-host runs and the guard matrix on Linux only; on macOS the unit tier runs only the unit files that name macOS and the ones the change touches, in two jobs instead of sixteen shards), adding isolated E2E on each, retrying an assertion-failed smoke, unit or integration file once with a `Flaky test` warning, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
+| Pull request push | Fast deterministic gate | `ci.yml`: a combined contract/Linux smoke/production-guard job, plus ten weighted Linux unit shards and five deterministic integration jobs using `deterministic-tests.yml`; the cross-OS native-terminal and live OS-isolation jobs are skipped | GitHub Actions |
+| Merge queue (`merge_group`) | Full deterministic gate | `ci.yml` reruns the pull-request gate on the queued merge commit on Linux, macOS and Windows (ten Linux unit shards, sixteen Windows unit shards; the scope runs, the scope-host runs and the guard matrix on Linux only; on macOS the unit tier runs only the unit files that name macOS and the ones the change touches, in two jobs instead of sixteen shards), adding isolated E2E on each, retrying an assertion-failed smoke, unit or integration file once with a `Flaky test` warning, and adds the native-terminal units (Linux arm64, macOS, Windows) and live OS-isolation checks (Linux, macOS, Windows), plus three advisory Windows lanes: the documented `install.ps1` one-liner under Windows PowerShell 5.1 against a release candidate staged from the same commit, the hook contracts with Git Bash removed from `PATH`, and the smoke tier plus a compiled binary installed with the documented `install.sh` inside WSL 1 | GitHub Actions |
 | Manual deterministic workflow dispatch | Targeted deterministic reproduction | `deterministic-tests.yml` accepts an immutable source SHA, runner, tier, required N/M shard for unit, optional `integration-shard`, and optional manual-only `diagnostic_filter`; one runner executes with model gates closed | GitHub Actions |
-| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` selects Linux/macOS/Windows smoke, twelve Linux and sixteen macOS/Windows unit shards, integration and isolated E2E as separate jobs in the shared workflow, with the scope runs, the scope-host runs and the guard matrix on Linux | GitHub Actions |
+| Manual CI dispatch with `platform_regressions=true` | Expanded deterministic matrix | `ci.yml` runs Linux smoke in its combined check job; the shared workflow runs macOS/Windows smoke, ten Linux and sixteen macOS/Windows unit shards, integration and isolated E2E, with the scope runs, the scope-host runs and the guard matrix on Linux | GitHub Actions |
 | Nightly preview / manual preview dispatch | Declared nightly matrix | `preview-release.yml` calls `full-suite.yml` even for an unchanged source, running native obligations, release contracts, bounded hosted live shards, and the scope runs, the scope-host runs and the guard matrix on Linux, macOS and Windows | GitHub Actions |
 | Explicit manual Full Suite with `full_verification=true` | Credential-free candidate verification | Runs every job that receives no OIDC or AWS credentials for the selected workflow head, including an unmerged PR; live lanes need `live_verification`; separate evidence is not consumed by stable publication | GitHub Actions |
 | Explicit manual Full Suite with `live_verification=true` | Candidate live verification | Runs live preparation and hosted live/release-contract jobs for the selected workflow head only; separate evidence is not consumed by stable publication | GitHub Actions |
@@ -786,8 +786,9 @@ so a broken enumerator reds the gate.
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 
-The required `Tests (smoke + unit)` status also requires the contract job:
-package determinism, typecheck, lint and installer ShellCheck. Contract checks
+The required `Tests (smoke + unit)` status also requires the combined check job:
+package determinism, typecheck, lint, installer ShellCheck, Linux smoke and
+production guards. Contract checks
 and the test matrix run in parallel; the aggregate waits for both. Its name
 stays the same so the repository's required status check covers them together.
 
@@ -890,7 +891,7 @@ by default, so the whole tier runs) and artifact label. Both split integration
 in five jobs: the scope runs (`filter`, `t-scope-run-*`), the scope-host runs
 (`filter`, `t-scope-host-*`), the guard matrix in two duration-balanced shards
 (`filter: ^t-guard-matrix-`, `integration-shard: 1/2` or `2/2`) and
-everything else (`exclude` of all three). PR CI selects Linux smoke, twelve
+everything else (`exclude` of all three). PR CI selects Linux smoke, ten
 weighted unit shards, and the five integration jobs; a `full_verification` Full
 Suite selects smoke, sixteen unit shards per OS, the five integration jobs, and
 isolated E2E on Linux/macOS/Windows. The nightly Full Suite runs no
@@ -903,12 +904,16 @@ regenerates projections once, and invokes the Bash wrapper with `--debug -P 8
 each checkout. Sharing the workflow shares the commands and setup, not previous
 test results.
 
-CI groups code contracts, installer ShellCheck, the coverage ratchet and PR
-changelog preservation in one job. Each check retains its own step and failure;
+CI groups code contracts, installer ShellCheck, the coverage ratchet, PR
+changelog preservation, Linux smoke and production-guard checks in one job.
+Smoke and production guards use separate runner processes and log directories,
+sharing only dependency installation and generated projections. macOS and
+Windows keep their own smoke jobs. Linux smoke retains the merge queue
+retry and flaky-test reporting policy. Each check retains its own step and failure;
 independent checks continue after an earlier check fails. Coverage still compares
 against the first parent, and changelog preservation uses the frozen PR base.
 The required `Tests (smoke + unit)` status requires this combined job to pass.
-PR CI allocates 21 runners; the merge queue allocates 55, with its existing
+PR CI allocates 17 runners; the merge queue allocates 51, with its existing
 platform selections. Live harness and native build matrices are unchanged.
 
 The repository's `default-branch` ruleset limits merge queue build concurrency
@@ -931,7 +936,7 @@ job backstop and a 270-minute execution step. The runner shares a four-hour
 work deadline across the invocation, with a two-hour deadline per file,
 including smoke and isolated deterministic E2E.
 This hierarchy leaves time to retire processes, finish reports, sanitize logs
-and upload evidence after work stops. Unit work remains partitioned without duplication: twelve Linux shards in CI,
+and upload evidence after work stops. Unit work remains partitioned without duplication: ten Linux shards in CI,
 sixteen Windows shards, two selected macOS shards in the merge queue, and
 sixteen macOS shards in expanded manual CI. Full Suite full verification uses
 sixteen per OS. Compiled producer/consumer affinity is preserved.
@@ -981,7 +986,7 @@ for 90 days. `ci.yml` passes `evidence-optional: true` because no workflow
 downloads its `ci-deterministic-*` artifacts: a failed upload is reported on
 the job but does not fail it, so an upload timeout cannot drop a PR whose tests
 passed. The test step's own exit code still fails the job. CI's
-`ci-native-*` and `production-guard-evidence` uploads follow the same rule.
+`ci-native-*` and `ci-check-evidence` uploads follow the same rule.
 Full Suite does not pass the input, so the `full-suite-deterministic-*`
 uploads of a manual full verification run stay required: that run exists to
 hand a person its evidence, and no queued PR waits on it.
@@ -1267,8 +1272,9 @@ zeroes after a test changes them. A production-profile label alone is not proof
 that an individual test used production guard evidence. Review the selected
 test's environment overrides and setup as part of that claim.
 
-The PR workflow's `test_guards` job (`Tests (production guards)`) runs the
-deterministic runner and recovery contracts with production guards enabled:
+The PR workflow's combined `check` job (`Checks (contracts + smoke + production
+guards)`) runs the deterministic runner and recovery contracts in their own
+step, with production guards enabled:
 
 ```bash
 bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration \
@@ -1276,9 +1282,10 @@ bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration \
   > "$GITHUB_WORKSPACE/tmp/ci-guard-contract/production-run.log" 2>&1
 ```
 
-The job creates that log directory and always uploads its logs and `tests/logs/`
-as `production-guard-evidence`; a failed upload does not fail the job. The existing `test` aggregate (`Tests (smoke +
-unit)`, retained as the required-check name) requires `test_guards` to succeed
+The job creates that log directory and collects smoke and guard logs plus
+`tests/logs/` as `ci-check-evidence`, after sanitization, even when a test fails;
+a failed upload does not fail the job. The existing `test` aggregate (`Tests
+(smoke + unit)`, retained as the required-check name) requires `check` to succeed
 alongside smoke, every unit shard, and deterministic integration on every
 trigger, plus the native-terminal and live OS-isolation matrices outside PR
 pushes. The production-guard slice runs on every PR push; both cross-OS matrices
@@ -1307,7 +1314,7 @@ journeys. Full Suite additionally requires complete coverage for that selection.
 
 All 8 parallel calls observed `cache_read=73789`. This historical help-command probe observed prompt-cache reuse without throttling or corruption; it does not establish capacity for concurrent full workflows.
 
-**What stays serial.** Smoke and unit tiers ignore `--parallel` and run serially within one checkout. Unit CI reduces wall-clock time with isolated shards instead: each shared-workflow call owns a fresh checkout and runs its assigned files serially, so packaging tests can regenerate `dist/` without racing readers. PR CI uses twelve weighted unit shards on Linux and eight workers for integration, which start the longest integration files first. Manual Full Suite `full_verification` uses sixteen shards on each of Linux, macOS, and Windows; smoke runs once per OS, and deterministic integration and isolated E2E run in separate jobs with eight workers each. Adding `-P 8` to a combined smoke/unit command alone does not parallelize those tiers. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
+**What stays serial.** Smoke and unit tiers ignore `--parallel` and run serially within one checkout. Unit CI reduces wall-clock time with isolated shards instead: each shared-workflow call owns a fresh checkout and runs its assigned files serially, so packaging tests can regenerate `dist/` without racing readers. PR CI uses ten weighted unit shards on Linux and eight workers for integration, which start the longest integration files first. Manual Full Suite `full_verification` uses sixteen shards on each of Linux, macOS, and Windows; smoke runs once per OS, and deterministic integration and isolated E2E run in separate jobs with eight workers each. Adding `-P 8` to a combined smoke/unit command alone does not parallelize those tiers. The preflight gate (`tests/integration/t19.test.ts`) also runs serially because the LLM tiers depend on its exit status.
 
 **Output under parallelism.** `START` markers stream live; several can appear before the first `DONE`. In normal/verbose mode, the TypeScript coordinator buffers each test's TAP body and writes it as one block when that file finishes. In `--debug` mode, Bun stdout/stderr streams live while still being written to each per-test log; parallel debug output is prefixed by file basename so overlapping workers remain attributable. SDK/TUI/Kiro-ACP driver traces are written beside the logs as `$LOG_DIR/sdk-drive-*.ndjson`, `$LOG_DIR/tui-drive-*.ndjson`, and `$LOG_DIR/kiro-acp-drive-*.ndjson`; isolated E2E places them under the file's artifact directory. The runner prints their paths at startup and at each test start. Kiro-ACP traces include tool calls and updates, output previews, permission answers, process stderr, and result/timeout/end events so a timeout can be investigated from retained evidence.
 
@@ -2271,7 +2278,7 @@ Sharded unit execution requires t249 to resolve this handoff; a missing artifact
 fails instead of silently skipping the compiled cases, even when an explicit
 executable or an old repository build exists. Direct, non-sharded t249 runs can
 still opt into `AIDLC_TEST_COMPILED_EXECUTABLE` or a local native build result.
-The smoke runner contract verifies that both the twelve- and sixteen-shard
+The smoke runner contract verifies that both the ten- and sixteen-shard
 assignments are non-empty,
 disjoint, cover the complete unit inventory, preserve producer/consumer ordering,
 and fail compiled coverage when the producer is filtered out.

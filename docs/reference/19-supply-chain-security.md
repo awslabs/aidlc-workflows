@@ -197,9 +197,10 @@ without failing Preview Release. Only the preview's Full Suite dispatch job adds
 `actions: read` to download its evidence and list its jobs. Preview does not repeat the
 PR CI test matrix.
 PR CI and Full Suite use the same `deterministic-tests.yml` workflow definition
-with different matrices: Linux smoke/twelve unit shards/integration for PRs, and
+with different matrices: ten Linux unit shards and integration for PRs, and
 Linux/macOS/Windows smoke/sixteen unit shards/integration/E2E for a manual full
-verification. The nightly (release purpose) Full Suite runs no deterministic
+verification. PR CI runs Linux smoke in its combined contract and production-guard
+check job. The nightly (release purpose) Full Suite runs no deterministic
 tier: its scope runs and guard matrix run in a job of their own on every OS,
 beside the live jobs.
 Integration and isolated E2E run in separate jobs with fresh runner processes. Each call

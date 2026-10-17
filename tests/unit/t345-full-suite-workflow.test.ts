@@ -437,13 +437,13 @@ describe("t345 complete nightly coverage", () => {
       const guardMatrix2 = { name: "guard-matrix-2", tier: "integration", filter: "^t-guard-matrix-", partition: "2/2" };
       // In the queue, macOS runs its selected unit files in two jobs, unit-1 and unit-2.
       const queue = event === "merge_group";
-      const linuxUnitsLeftOut = Array.from({ length: 4 }, (_, index) => ({
-        runner: "ubuntu-latest", suite: { name: `unit-${index + 13}`, tier: "unit", index: index + 13 },
+      const linuxUnitsLeftOut = Array.from({ length: 6 }, (_, index) => ({
+        runner: "ubuntu-latest", suite: { name: `unit-${index + 11}`, tier: "unit", index: index + 11 },
       }));
       const macosUnitsLeftOut = Array.from({ length: 14 }, (_, index) => ({
         runner: "macos-15", suite: { name: `unit-${index + 3}`, tier: "unit", index: index + 3 },
       }));
-      expect(excluded).toEqual([...linuxUnitsLeftOut, ...(expanded
+      expect(excluded).toEqual([{ runner: "ubuntu-latest", suite: { name: "smoke", tier: "smoke" } }, ...linuxUnitsLeftOut, ...(expanded
         ? [
           { runner: "macos-15", suite: scopeRuns }, { runner: "windows-latest", suite: scopeRuns },
           { runner: "macos-15", suite: scopeHosts }, { runner: "windows-latest", suite: scopeHosts },
@@ -456,9 +456,9 @@ describe("t345 complete nightly coverage", () => {
         !excluded.some((row) => (row.runner ?? runner) === runner && row.suite.name === suite.name && row.suite.tier === suite.tier));
       const suites = suitesOn("ubuntu-latest");
       expect(runners).toEqual(expanded ? ["ubuntu-latest", "macos-15", "windows-latest"] : ["ubuntu-latest"]);
-      expect(suites.map((suite) => suite.tier)).toEqual(["smoke", ...Array(12).fill("unit"), ...Array(5).fill("integration"), ...(expanded ? ["e2e"] : [])]);
-      expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.index)).toEqual(Array.from({ length: 12 }, (_, index) => index + 1));
-      expect(new Set(runners.flatMap((runner) => suitesOn(runner).map((suite) => `${runner}/${suite.name}`))).size).toBe(queue ? 43 : expanded ? 57 : 18);
+      expect(suites.map((suite) => suite.tier)).toEqual([...Array(10).fill("unit"), ...Array(5).fill("integration"), ...(expanded ? ["e2e"] : [])]);
+      expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.index)).toEqual(Array.from({ length: 10 }, (_, index) => index + 1));
+      expect(new Set(runners.flatMap((runner) => suitesOn(runner).map((suite) => `${runner}/${suite.name}`))).size).toBe(queue ? 40 : expanded ? 54 : 15);
       if (expanded) {
         expect(suitesOn("windows-latest").map((suite) => suite.name)).toEqual(matrixOf(workflow.jobs.deterministic).suite!.map((suite) => suite.name).filter((name) => !["scope-runs", "scope-hosts", "guard-matrix-1", "guard-matrix-2"].includes(name)));
         expect(suitesOn("macos-15").map((suite) => suite.name)).toEqual(queue
@@ -471,7 +471,7 @@ describe("t345 complete nightly coverage", () => {
       const format = (template: string, ...args: unknown[]) => template.replace(/\{(\d+)\}/g, (_, index: string) => String(args[Number(index)]));
       const shardOf = new Function("github", "matrix", "format", `return (${shardExpression});`);
       for (const runner of runners) {
-        const total = runner === "ubuntu-latest" ? 12 : queue && runner === "macos-15" ? 2 : 16;
+        const total = runner === "ubuntu-latest" ? 10 : queue && runner === "macos-15" ? 2 : 16;
         const selectedShards: string[] = [];
         for (const suite of suitesOn(runner)) {
           const shard = shardOf({ event_name: event }, { runner, suite }, format);
@@ -1176,22 +1176,22 @@ describe("t345 complete nightly coverage", () => {
     };
     expect(ci.on.merge_group).toEqual({ types: ["checks_requested"] });
     for (const name of ["test_native_terminal", "test_live_isolation"]) expect(ci.jobs[name].if).toBe("github.event_name != 'pull_request'");
-    for (const name of ["check", "deterministic", "test_guards"]) expect(ci.jobs[name].if).toBeUndefined();
+    for (const name of ["check", "deterministic"]) expect(ci.jobs[name].if).toBeUndefined();
     // A skipped need would skip the summary under the default success() gate.
     expect(ci.jobs.test.if).toBe(`\${{ !cancelled() }}`);
-    expect(ci.jobs.test.needs).toEqual(["check", "deterministic", "test_native_terminal", "test_guards", "test_live_isolation"]);
+    expect(ci.jobs.test.needs).toEqual(["check", "deterministic", "test_native_terminal", "test_live_isolation"]);
     const summary = steps(ci.jobs.test)[0];
     expect(summary.env?.EVENT_NAME).toBe(`\${{ github.event_name }}`);
     expect(summary.env?.CONTRACT_RESULT).toBe(`\${{ needs.check.result }}`);
     const status = (event: string, results: Record<string, string>) => spawnSync("bash", ["-e", "-c", summary.run!], {
       encoding: "utf8", timeout: 15_000,
-      env: { ...process.env, EVENT_NAME: event, CONTRACT_RESULT: "success", DETERMINISTIC_RESULT: "success", GUARD_RESULT: "success", ...results },
+      env: { ...process.env, EVENT_NAME: event, CONTRACT_RESULT: "success", DETERMINISTIC_RESULT: "success", ...results },
     }).status;
     for (const event of ["pull_request", "merge_group", "workflow_dispatch", "workflow_call"]) {
       const expected = event === "pull_request" ? "skipped" : "success";
       const crossOs = { NATIVE_RESULT: expected, ISOLATION_RESULT: expected };
       expect(status(event, crossOs), event).toBe(0);
-      for (const key of ["CONTRACT_RESULT", "DETERMINISTIC_RESULT", "GUARD_RESULT", "NATIVE_RESULT", "ISOLATION_RESULT"]) {
+      for (const key of ["CONTRACT_RESULT", "DETERMINISTIC_RESULT", "NATIVE_RESULT", "ISOLATION_RESULT"]) {
         for (const result of ["failure", "cancelled"]) expect(status(event, { ...crossOs, [key]: result }), `${event} ${key}=${result}`).not.toBe(0);
       }
       for (const result of ["skipped", ""]) {
@@ -1210,16 +1210,29 @@ describe("t345 complete nightly coverage", () => {
     };
     const job = ci.jobs.check;
     const all = steps(job);
-    const commands = all.filter((step) => step.run).map((step) => step.name);
+    const commands = all.filter((step) => step.run
+      && !["Report smoke tests that passed on retry", "Sanitize check evidence"].includes(step.name!)).map((step) => step.name);
     expect(commands).toEqual([
       "Install dependencies", "Run contract checks", "ShellCheck installer",
-      "Package the tree the registry reads", "Fail if a unit lost coverage against the first parent",
-      "Guard against deleted CHANGELOG entries",
+      "Prepare test and coverage projections", "Fail if a unit lost coverage against the first parent",
+      "Guard against deleted CHANGELOG entries", "Run Linux smoke", "Exercise recovery with production guards",
     ]);
-    expect(all.every((step) => step["continue-on-error"] === undefined)).toBe(true);
+    expect(all.filter((step) => step.run).every((step) => step["continue-on-error"] === undefined)).toBe(true);
+    expect(ci.jobs.test_guards).toBeUndefined();
     expect(ci.jobs.coverage_ratchet).toBeUndefined();
     expect(ci.jobs["changelog-guard"]).toBeUndefined();
     expect(ci.jobs.test.needs).toContain("check");
+    expect(all.find((step) => step.name === "Prepare test and coverage projections")?.run).toBe("bun scripts/package.ts");
+    expect(all.find((step) => step.name === "Run Linux smoke")?.env).toMatchObject({
+      AIDLC_TEST_PACKAGE_READY: "1", RETRY_ONCE: `\${{ github.event_name == 'merge_group' }}`,
+    });
+    const guards = all.find((step) => step.name === "Exercise recovery with production guards")!;
+    expect(guards.env).toEqual({ AIDLC_TEST_PACKAGE_READY: "1" });
+    expect(guards.run).toContain("--production-guards --unit --integration --no-llm");
+    expect(guards.run).toContain("--filter '^(t-runner-production-guards|t-guard-recovery-production)'");
+    const retries = all.find((step) => step.name === "Report smoke tests that passed on retry")!;
+    expect(retries.if).toBe(`\${{ always() && steps.install.outcome == 'success' && github.event_name == 'merge_group' }}`);
+    expect(retries.run).toBe("bun scripts/ci-retry-report.ts tmp/ci-smoke/stamp.txt || true");
     const changelog = all.find((step) => step.name === "Guard against deleted CHANGELOG entries")!;
     expect(changelog.env).toEqual({ CHANGELOG_BASE: `\${{ github.event.pull_request.base.sha }}` });
     expect(changelog.run).toBe('bun scripts/ci-changelog-guard.ts "$CHANGELOG_BASE"');
@@ -1231,25 +1244,27 @@ describe("t345 complete nightly coverage", () => {
       for (const step of all) {
         const condition = step.if?.match(/^\$\{\{([\s\S]+)\}\}$/)?.[1];
         const enabled = condition
-          ? new Function("github", "steps", "cancelled", `return (${condition});`)(
-            { event_name: event }, outcomes, () => cancelled,
+          ? new Function("github", "steps", "cancelled", "always", `return (${condition});`)(
+            { event_name: event }, outcomes, () => cancelled, () => true,
           )
           : !failed && !cancelled;
         const outcome = !enabled ? "skipped" : failure !== undefined && step.name === failure ? "failure" : "success";
         if (step.id) outcomes[step.id] = { outcome };
-        if (enabled && step.run) executed.push(step.name);
+        if (enabled && commands.includes(step.name)) executed.push(step.name);
         if (outcome === "failure") failed = true;
       }
       return { executed, failed };
     };
     for (const event of ["pull_request", "merge_group", "workflow_dispatch", "workflow_call"]) {
-      const expected = event === "pull_request" ? commands : commands.slice(0, -1);
+      const expected = event === "pull_request" ? commands : commands.filter((entry) => entry !== "Guard against deleted CHANGELOG entries");
       expect(execute(event)).toEqual({ executed: expected, failed: false });
       for (const name of expected.slice(1)) {
         const result = execute(event, name);
         expect(result.failed, `${event}: ${name}`).toBe(true);
-        const remaining = name === "Package the tree the registry reads"
-          ? expected.filter((entry) => entry !== "Fail if a unit lost coverage against the first parent")
+        const remaining = name === "Prepare test and coverage projections"
+          ? expected.filter((entry) => ![
+            "Fail if a unit lost coverage against the first parent", "Run Linux smoke", "Exercise recovery with production guards",
+          ].includes(entry!))
           : expected;
         expect(result.executed, `${event}: ${name}`).toEqual(remaining);
       }
@@ -1259,6 +1274,57 @@ describe("t345 complete nightly coverage", () => {
       });
     }
   });
+
+  test("combined smoke and guard steps preserve selection, retry policy, evidence and failure status", () => {
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
+      jobs: Record<string, Job>;
+    };
+    const root = mkdtempSync(join(tmpdir(), "t345-combined-checks-"));
+    try {
+      mkdirSync(join(root, "tests"));
+      writeFileSync(join(root, "tests/run-tests.sh"), [
+        "#!/bin/bash", "set -e",
+        'printf "%s\\0" "$@" > "$GITHUB_WORKSPACE/argv.bin"',
+        'stamp="$GITHUB_WORKSPACE/tests/logs/fixture"',
+        'mkdir -p "$stamp"',
+        'printf "Verbose mode: logging to %s\\nVerbose mode: logging to %s/nested\\n" "$stamp" "$stamp"',
+        'echo "captured check output"',
+        'echo "captured check error" >&2',
+        'if [ "$OMIT_SUMMARY" != 1 ]; then echo "Test files: 1" > "$stamp/summary.txt"; fi',
+        'exit "$FIXTURE_EXIT"',
+      ].join("\n"));
+      for (const [name, capture, retry, expected] of [
+        ["Run Linux smoke", "ci-smoke/run.log", "false", ["--debug", "-P", "8", "--no-llm", "--smoke"]],
+        ["Run Linux smoke", "ci-smoke/run.log", "true", ["--debug", "-P", "8", "--no-llm", "--smoke", "--file-retries", "1"]],
+        ["Exercise recovery with production guards", "ci-guard-contract/production-run.log", "false",
+          ["--debug", "-P", "8", "--production-guards", "--unit", "--integration", "--no-llm"]],
+      ] as const) {
+        const step = steps(ci.jobs.check).find((entry) => entry.name === name)!;
+        for (const [exit, omit] of [["0", "0"], ["7", "0"], ["0", "1"]]) {
+          rmSync(join(root, "tests/logs"), { recursive: true, force: true });
+          const result = spawnSync("bash", ["-e", "-c", step.run!], {
+            cwd: root, encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+            env: stepRunEnv(step, {
+              GITHUB_WORKSPACE: root.replaceAll("\\", "/"), RETRY_ONCE: retry, FIXTURE_EXIT: exit, OMIT_SUMMARY: omit,
+            }),
+          });
+          const smoke = name === "Run Linux smoke";
+          expect(result.status, `${name}\n${result.stdout}\n${result.stderr}`).toBe(smoke && omit === "1" ? 1 : Number(exit));
+          expect(readFileSync(join(root, "argv.bin"), "utf8").split("\0").filter(Boolean)).toEqual([
+            ...expected, "--file-timeout", "7200", "--run-timeout", "14400",
+            ...(smoke ? [] : ["--filter", "^(t-runner-production-guards|t-guard-recovery-production)"]),
+          ]);
+          const log = readFileSync(join(root, "tmp", capture), "utf8");
+          expect(log).toContain("captured check output");
+          expect(log).toContain("captured check error");
+          if (smoke) expect(readFileSync(join(root, "tmp/ci-smoke/stamp.txt"), "utf8").trim())
+            .toBe(`${root.replaceAll("\\", "/")}/tests/logs/fixture`);
+        }
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a newer manual Full Suite dispatch supersedes the same branch and selection; called runs never cancel", () => {
     const { concurrency } = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/full-suite.yml"), "utf8")) as {
@@ -1355,7 +1421,7 @@ describe("t345 complete nightly coverage", () => {
     for (const [job, testStep, tolerance] of [
       [deterministic.jobs.test, "Run deterministic tier", `\${{ inputs.evidence-optional == true }}`],
       [ci.jobs.test_native_terminal, "Run native terminal contracts", true],
-      [ci.jobs.test_guards, "Exercise recovery with production guards", true],
+      [ci.jobs.check, "Exercise recovery with production guards", true],
     ] as const) {
       const all = steps(job);
       const tolerant = all.filter((step) => step["continue-on-error"] !== undefined);
@@ -1367,12 +1433,12 @@ describe("t345 complete nightly coverage", () => {
       expect(run, testStep).toBeLessThan(all.indexOf(tolerant[0]));
       expect((job as { "continue-on-error"?: unknown })["continue-on-error"], testStep).toBeUndefined();
     }
-    expect(ci.jobs.test.needs).toEqual(["check", "deterministic", "test_native_terminal", "test_guards", "test_live_isolation"]);
+    expect(ci.jobs.test.needs).toEqual(["check", "deterministic", "test_native_terminal", "test_live_isolation"]);
     // Uploads outside the required chain, and every Full Suite upload, stay fatal.
     const ciTolerant = Object.entries(ci.jobs).flatMap(([name, job]) =>
       steps(job).filter((step) => step["continue-on-error"] !== undefined).map((step) => `${name}: ${step.name}`));
     expect(ciTolerant.sort()).toEqual([
-      "test_guards: Preserve guard evidence",
+      "check: Preserve check evidence",
       "test_native_terminal: Preserve native terminal evidence",
     ]);
     for (const job of Object.values(workflow.jobs)) {
@@ -1990,7 +2056,7 @@ describe("t345 complete nightly coverage", () => {
       [workflow.jobs.native_terminal, "Run exact native obligations"],
       [workflow.jobs.production_guards, "Require production guard coverage"],
       [ci.jobs.test_native_terminal, "Run native terminal contracts"],
-      [ci.jobs.test_guards, "Exercise recovery with production guards"],
+      [ci.jobs.check, "Exercise recovery with production guards"],
       [deterministic.jobs.test, "Run deterministic tier"],
     ] as const) {
       const execution = steps(job).find((step) => step.name === stepName)!;
