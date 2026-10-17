@@ -1786,7 +1786,10 @@ a file-tool or shell write whose every target is outside the project (the
 path as written and the real path of its deepest existing folder both lie
 outside the project; a link from outside into the project counts as inside,
 and a write into the project spelled another way, such as a Windows 8.3 short
-name or a linked parent folder, is judged as one in the project's own spelling),
+name or a linked parent folder, is judged as one in the project's own spelling;
+a repo `repos.json` or `repos.local.json` maps to a path of its own counts as
+the project wherever it sits, so a build writing into it waits for its plan as
+one writing into a repo inside the workspace does),
 and on the kiro-ide row a call to one of the person's MCP servers (the Kiro
 adapter marks it `aidlc_external_tool: "mcp"`; Kiro's own approval card and the
 person's Kiro settings decide whether it runs).

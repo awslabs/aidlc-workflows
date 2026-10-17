@@ -3010,7 +3010,14 @@ the workspace root (see
 
 ```bash
 aidlc system workspace-sync [--force]
+aidlc system workspace-sync --write-manifest
 ```
+
+`--write-manifest` writes `repos.json` from the repos found here (each child
+repo, or the workspace itself as `"path": "."` when it is the one code repo),
+with the address each one's `origin` points to, read and never changed; it
+writes nothing when `repos.json` already exists. AI-DLC offers to run it once,
+the first time a piece of work records repos or teams are chosen.
 
 It serializes reconciles with a workspace lock whose live owner is never reaped
 for age, then runs a read-only preflight before staging clones and generated
@@ -3022,18 +3029,24 @@ are replaced successfully remain under the ignored
 `.aidlc-workspace-sync-recovery-*` directory for inspection; a staging
 `.aidlc-workspace-sync-txn-*` folder left by a run that was cut off is ignored
 too and can be deleted. The tool clones
-repos declared in `repos.json` but missing on disk, rewrites the managed block
-in the workspace `.gitignore` to one `/{name}/` line per repo (plus its two
-own folder patterns), and writes an
-`aidlc.code-workspace` VSCode multi-root file listing the root plus each child
-repo. In a Copilot project that file also carries VS Code's agent request cap,
+repos declared in `repos.json` but missing on disk into the folder each one's
+`path` gives (yours from `repos.local.json` when you set one; a clone into a
+path outside the workspace is staged beside that folder, so another drive works),
+rewrites the managed block in the workspace `.gitignore` to one `/{path}/` line
+per repo whose checkout sits inside the workspace (never the workspace itself,
+plus its two own folder patterns), and writes an `aidlc.code-workspace` VSCode
+multi-root file listing the root plus each repo's folder. A repo with no `url`
+and no `org` to clone it from is left as it is, with one line on how to add its
+`url` (exit `2`), and a line of `repos.local.json` that is not read is said
+once. In a Copilot project that file also carries VS Code's agent request cap,
 `"settings": { "chat.agent.maxRequests": 200 }`, added once to a file with no
 settings yet; the keys and values already in its settings are kept (the file
 is rewritten, so comments in it are not). A declared
 `branch` is checked out for a new clone. Repos already on disk
 are never re-cloned or switched; a mismatch there remains an advisory.
 
-An orphan checkout (on disk but not in `repos.json`) blocks the run and is
+An orphan checkout (a child folder with its own `.git` that `repos.json` neither
+names nor places by `path`) blocks the run and is
 removed from the active sibling set only when you pass `--force` and the tool
 can prove it has no local-only state. That proof overrides configurable status
 defaults, includes untracked and ignored files and directories (including empty

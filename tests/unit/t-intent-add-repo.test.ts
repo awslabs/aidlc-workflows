@@ -253,7 +253,7 @@ describe("intent add-repo / remove-repo", () => {
     writeFileSync(join(shaped, "config"), "[core]\n\tbare = false\n\tworktree = .\n");
     const r = utility(["intent", "add-repo", "vendor"]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("is not a Git checkout under the workspace folder");
+    expect(r.out).toContain("is not a Git checkout");
     expect(repos()).toEqual(["app-a"]);
   });
 

@@ -164,6 +164,7 @@ import {
   lockFolderHeldGoesOnStep,
 } from "../tools/aidlc-lock-line.ts";
 import { mainCheckoutChangeStep, personTurnStands } from "../tools/aidlc-message-store.ts";
+import { insideProject } from "../tools/aidlc-workspace-repos.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { claimedCheckoutReopens } from "../tools/aidlc-unit-landing.ts";
@@ -1022,29 +1023,12 @@ function expandedRealPath(path: string): string {
   }
 }
 
-// A write outside the project is never the plan's business: the path as
-// written lies outside the project, and so does the real path of its deepest
-// existing ancestor, so a link from outside into the project counts as inside
-// (a dangling link resolves to nothing and counts as inside too).
+// A write outside the project is never the plan's business. The project is
+// the workspace and every repo the person mapped elsewhere (insideProject owns
+// that rule), so a build writing into a mapped repo waits for its plan as a
+// write into a repo inside the workspace does.
 function isOutsideProject(projectDir: string, target: string): boolean {
-  try {
-    const projectLexical = resolve(projectDir);
-    const projectReal = expandedRealPath(projectLexical);
-    const targetAbs = resolve(target);
-    if (isWithinDir(targetAbs, projectLexical) || isWithinDir(targetAbs, projectReal)) return false;
-    const suffix: string[] = [];
-    let cursor = targetAbs;
-    while (lstatSync(cursor, { throwIfNoEntry: false }) === undefined) {
-      const parent = dirname(cursor);
-      if (parent === cursor) return false;
-      suffix.unshift(basename(cursor));
-      cursor = parent;
-    }
-    const real = join(expandedRealPath(cursor), ...suffix);
-    return !isWithinDir(real, projectLexical) && !isWithinDir(real, projectReal);
-  } catch {
-    return false;
-  }
+  return !insideProject(projectDir, target);
 }
 
 // Whether the target's build is finished and `next` hands over its finish

@@ -9646,7 +9646,7 @@ function handleIntentRepos(
       if (verb === "add-repo") {
         if (current.includes(name)) return { kind: "already" as const };
         if (!isGitRepoDir(target)) {
-          die(`intent add-repo refused: "${name}" is not a Git checkout under the workspace folder (no .git entry at ${target}). Clone or create the repo there first.`);
+          die(`intent add-repo refused: "${name}" is not a Git checkout (no .git entry at ${target}). Clone or create the repo there first.`);
         }
       } else {
         if (!current.includes(name)) return { kind: "absent" as const, current };

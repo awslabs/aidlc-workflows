@@ -723,9 +723,11 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
   });
 
   test("fails clearly when a child dir exists but is not a git checkout", () => {
-    // Present dir with NO .git - a broken state sync must not silently accept.
+    // Present dir with files and NO .git - a broken state sync must not
+    // silently accept. (An empty folder is a place to clone into.)
     const ws = freshWorkspace(MANIFEST, []);
     mkdirSync(join(ws, "checkout-api"), { recursive: true });
+    writeFileSync(join(ws, "checkout-api", "notes.txt"), "not a repo\n", "utf-8");
     const r = runSync(ws);
     expect(r.status).not.toBe(0);
     expect(r.out).toContain("not a git checkout");
@@ -1781,9 +1783,10 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
   });
 
   test("per-entry url override is accepted (validated, not derived from org)", () => {
-    // A non-empty "url" is valid and does not trip validation; an empty "url"
-    // is rejected before any git call. The clone path itself is covered with
-    // local bare remotes, so we only assert the validation contract here.
+    // A non-empty "url" is valid and does not trip validation; a blank "url"
+    // counts as not set, so the org default applies. The clone path itself is
+    // covered with local bare remotes, so we only assert the validation
+    // contract here.
     const GOOD = `{
   "org": "acme",
   "repos": [
@@ -1799,11 +1802,9 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
     { "name": "checkout-api", "url": "" }
   ]
 }`;
-    const wsBad = freshWorkspace(BAD, ["checkout-api"]);
-    const r = runSync(wsBad);
-    expect(r.status).toBe(1);
-    expect(r.out).toContain("url");
-    expect(r.out).toContain("checkout-api");
+    const wsBlank = freshWorkspace(BAD, ["checkout-api"]);
+    expect(parseWorkspaceManifest(BAD).repos).toEqual([{ name: "checkout-api" }]);
+    expect(runSync(wsBlank).status).toBe(0);
   });
 });
 

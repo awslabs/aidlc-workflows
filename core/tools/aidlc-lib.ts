@@ -489,6 +489,7 @@ export {
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
 // imports are erased at runtime so they don't create the cycle.
 import { claudeSettingsHookTargets, readRootIntegrations, withoutBom } from "./aidlc-distribution.ts";
+import { readWorkspaceRepos, repoNotThereLine } from "./aidlc-workspace-manifest.ts";
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
 import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
@@ -21122,16 +21123,14 @@ export function legacyParkedRefPrefix(slug: string): string {
   return `refs/aidlc/parked/${slug}/`;
 }
 
-// --- Multi-repo: repos are siblings of the workspace ----------------------------
+// --- Multi-repo: the repos a workspace works on --------------------------------
 //
-// In the workspace model the projectDir is the WORKSPACE roof (`my-workspace/`),
-// which is NOT itself a git repo. Code repos are its immediate children
-// (`my-workspace/repo-a/`, `my-workspace/repo-b/`) — siblings of `aidlc/` and the
-// engine dir (vision §7). An intent records the repos it touches in its
-// intents.json row (`repos`); construction targets a specific one. P7 decouples
-// "the repo to operate on" from "the single projectDir": before P7 the worktree
-// tool ran `git worktree add` in the projectDir's own cwd (assuming projectDir IS
-// the repo); now `--repo <name>` anchors it to the sibling repo dir instead.
+// The projectDir is the WORKSPACE (the AI-DLC install, aidlc/, repos.json). Its
+// code repos are immediate children (`my-workspace/repo-a/`) or wherever
+// repos.json gives them a `path`: beside the workspace, elsewhere on disk, or the
+// workspace folder itself. An intent records the repos it touches in its
+// intents.json row (`repos`); construction targets a specific one with
+// `--repo <name>`.
 //
 // repoDir resolves the on-disk dir for a repo name; it does NOT validate that the
 // dir exists or is a git repo (the caller does, where the git op runs).
@@ -21145,9 +21144,23 @@ export function isValidRepoName(name: string): boolean {
   return repoNameProblem(name) === null;
 }
 
-// The on-disk dir for a sibling repo: an immediate child of the workspace root.
+// Where a repo's checkout lives: the one resolver. The `path` repos.json (or
+// one person's repos.local.json) gives it, against the workspace ("." is the
+// workspace itself); else the immediate child `<workspace>/<name>`.
 export function repoDir(projectDir: string, repoName: string): string {
-  return join(projectDir, repoName);
+  const mapped = readWorkspaceRepos(projectDir).entries.get(repoName)?.path;
+  return mapped === undefined ? join(projectDir, repoName) : normalizeDriveLetter(resolvePath(projectDir, mapped));
+}
+
+// The repo is the workspace folder itself (repos.json gives it `"path": "."`).
+export function repoIsWorkspace(projectDir: string, repoName: string): boolean {
+  return resolvePath(repoDir(projectDir, repoName)) === resolvePath(projectDir);
+}
+
+// The workspace shell (aidlc/, the harness folders) lives only in the workspace
+// folder: the lone root, the roof of several repos, or a repo mapped to ".".
+function rootCarriesWorkspaceShell(projectDir: string, root: string): boolean {
+  return resolvePath(root) === resolvePath(projectDir);
 }
 
 // A folder a person made a Git checkout of: a real .git entry (a folder, or a
@@ -25079,27 +25092,40 @@ function walkWorkspaceSource(
   const legacyLines: string[] = [];
   let legacyDiffers = false;
   const listing: WorkspaceSourceListing = new Map();
-  const roofExcluded = multiRepoRoofExcludedTopLevel(projectDir, repos);
-  if (roofExcluded === null) return null;
-  const roof = filesystemSourceIdentity(projectDir, true, roofExcluded, "follow", true, new Map(), dotnetOutputs);
-  if (roof === null) return null;
-  let dotnetOutputSeen = roof.dotnetOutputSeen;
-  lines.push(`roof=filesystem:${roof.fingerprint}`);
-  legacyLines.push(`roof=filesystem:${roof.legacyFingerprint ?? roof.fingerprint}`);
-  legacyDiffers ||= roof.legacyFingerprint !== undefined;
-  for (const [key, entry] of prefixedSourceListing(roof.listing)) {
-    listing.set(key, entry);
+  let dotnetOutputSeen = false;
+  // A repo mapped to the workspace folder itself is walked in its place: the
+  // roof is that repo, walked once with the shell left out.
+  if (!repos.some((name) => repoIsWorkspace(projectDir, name))) {
+    const roofExcluded = multiRepoRoofExcludedTopLevel(projectDir, repos);
+    if (roofExcluded === null) return null;
+    const roof = filesystemSourceIdentity(projectDir, true, roofExcluded, "follow", true, new Map(), dotnetOutputs);
+    if (roof === null) return null;
+    dotnetOutputSeen = roof.dotnetOutputSeen;
+    lines.push(`roof=filesystem:${roof.fingerprint}`);
+    legacyLines.push(`roof=filesystem:${roof.legacyFingerprint ?? roof.fingerprint}`);
+    legacyDiffers ||= roof.legacyFingerprint !== undefined;
+    for (const [key, entry] of prefixedSourceListing(roof.listing)) {
+      listing.set(key, entry);
+    }
   }
   for (const name of [...repos].sort()) {
-    // A sibling repo is a child of the roof; the shell is its SIBLING, never
-    // nested inside it, so nothing there belongs to the framework.
+    // A repo beside the workspace never holds the shell, so nothing there
+    // belongs to the framework; a repo that is the workspace folder does.
     const dir = repoDir(projectDir, name);
     if (!existsSync(dir)) {
       lines.push(`${name}=missing`);
       legacyLines.push(`${name}=missing`);
       continue;
     }
-    const source = filesystemSourceIdentity(dir, false, new Set(), "follow", true, new Map(), dotnetOutputs);
+    const source = filesystemSourceIdentity(
+      dir,
+      rootCarriesWorkspaceShell(projectDir, dir),
+      new Set(),
+      "follow",
+      true,
+      new Map(),
+      dotnetOutputs,
+    );
     if (source === null) {
       // The walk recorded its own reason; name the member repo it happened in.
       if (lastSourceFailure !== null) lastSourceFailure = { ...lastSourceFailure, repo: name };
@@ -25750,13 +25776,11 @@ export function unclaimableIgnoredSourceKeys(
 ): Set<string> {
   const unclaimable = new Set<string>();
   if (keys.length === 0) return unclaimable;
-  let recordedRepos: string[];
   try {
-    recordedRepos = intentRepos(projectDir);
+    intentRepos(projectDir);
   } catch {
     return unclaimable;
   }
-  const carriesWorkspaceShell = recordedRepos.length === 0;
   const checkouts = readRecordedSourceCheckouts(projectDir);
   const sourceClaimValidation: GitSourceClaimValidationCache = new Map();
   const candidates: { key: string; sourceRepoDir: string; path: string }[] = [];
@@ -25785,7 +25809,7 @@ export function unclaimableIgnoredSourceKeys(
       // A deleted path is checked against HEAD alone.
     }
     const trackedFile = headMode !== undefined && headMode !== "040000" && !currentIsDirectory;
-    if (!ignoredPathClaimable(sourceRepoDir, path, trackedFile, carriesWorkspaceShell)) {
+    if (!ignoredPathClaimable(sourceRepoDir, path, trackedFile, rootCarriesWorkspaceShell(projectDir, sourceRepoDir))) {
       unclaimable.add(key);
     }
   }
@@ -25817,7 +25841,9 @@ function sourceKeyRegistryRoots(
     const parsed = splitSourcePathKey(key);
     if (parsed === null) return null;
     if (parsed.repo !== "") {
-      return { root: repoDir(projectDir, parsed.repo), path: parsed.path, carriesWorkspaceShell: false, shown: parsed.repo };
+      // A repo mapped to "." is the workspace folder, shell and all.
+      const root = repoDir(projectDir, parsed.repo);
+      return { root, path: parsed.path, carriesWorkspaceShell: rootCarriesWorkspaceShell(projectDir, root), shown: parsed.repo };
     }
     const atRoot = { root: projectDir, path: parsed.path, carriesWorkspaceShell: true, shown: "" };
     if (!namesSourceCheckout(parsed.path)) return atRoot;
@@ -26482,8 +26508,10 @@ function validateUnitSourceManifestBytes(
   const recordedRepos = worktreeRelative ? [] : options.recordedRepos ?? intentRepos(projectDir);
   const recordedRepoSet = new Set(recordedRepos);
   const checkouts = worktreeRelative ? [] : readRecordedSourceCheckouts(projectDir);
-  const carriesWorkspaceShell =
-    worktreeContext?.carriesWorkspaceShell ?? recordedRepos.length === 0;
+  // The shell (aidlc/, the harness folders) is part of the root each write is
+  // in only when that root is the workspace folder.
+  const carriesShellAt = (sourceRepoDir: string): boolean =>
+    worktreeContext?.carriesWorkspaceShell ?? rootCarriesWorkspaceShell(projectDir, sourceRepoDir);
   const claims = new Set<string>();
   const prefixes: string[] = [];
   const seen = new Set<string>();
@@ -26566,6 +26594,13 @@ function validateUnitSourceManifestBytes(
 
     const normalized = normalizeManifestSourcePath(write.path);
     if ("reason" in normalized) return { ok: false, reason: `writes[${index}].path: ${normalized.reason}` };
+    const sourceRepoDir =
+      worktreeRelative
+        ? projectDir
+        : canonicalRepo === undefined
+          ? projectDir
+          : repoDir(projectDir, canonicalRepo);
+    const carriesWorkspaceShell = carriesShellAt(sourceRepoDir);
     if (
       sourcePathIsExcluded(
         normalized.path,
@@ -26576,11 +26611,7 @@ function validateUnitSourceManifestBytes(
       return { ok: false, reason: `writes[${index}].path is inside the framework record/shell exclusions` };
     }
     const claim = sourceClaimCheckout(
-      worktreeRelative
-        ? projectDir
-        : canonicalRepo === undefined
-          ? projectDir
-          : repoDir(projectDir, canonicalRepo),
+      sourceRepoDir,
       normalized.path,
       !worktreeRelative && canonicalRepo === undefined,
       checkouts,
@@ -27422,14 +27453,16 @@ const NON_REPO_WORKSPACE_DIRS = new Set([
   "node_modules",
 ]);
 
-/** Unrecorded recovery candidates must be real immediate children, not symlinks or junctions. */
+/** Recovery candidates must be real checkouts, not symlinks or junctions: an
+ * immediate child, or the path repos.json gives the repo. */
 export function isWorkspaceRepoDir(projectDir: string, name: string): boolean {
   if (basename(name) !== name || name === "." || name === "..") return false;
-  const dir = join(projectDir, name);
+  const mapped = readWorkspaceRepos(projectDir).entries.get(name)?.path !== undefined;
+  const dir = repoDir(projectDir, name);
   try {
     const stat = lstatSync(dir);
     return !stat.isSymbolicLink() && stat.isDirectory() &&
-      realpathSync(dir) === join(realpathSync(projectDir), name) && isGitRepoDir(dir);
+      (mapped || realpathSync(dir) === join(realpathSync(projectDir), name)) && isGitRepoDir(dir);
   } catch {
     return false;
   }
@@ -27463,9 +27496,12 @@ export function discoverSiblingRepos(projectDir: string, leftOut = false): strin
 }
 
 // Resolve the repo set for a new intent at creation: an explicit `--repos a,b` set
-// wins (authoritative when the user names them); absent it, sibling auto-discovery
-// supplies the default. Each name is validated. Returns [] when neither yields a
-// repo (→ no repos row → lone-repo inference). Throws on an invalid explicit name.
+// wins (authoritative when the user names them); absent it, the repos repos.json
+// declares that are on disk, wherever their path puts them, plus every other
+// immediate child repo. A workspace whose only repo is the workspace itself
+// (`"path": "."`) records none, as a one-repo workspace always has. Each name is
+// validated. Returns [] when nothing yields a repo (→ no repos row → lone-repo
+// inference). Throws on an invalid explicit name.
 export function resolveIntentRepoSet(
   projectDir: string,
   explicitReposCsv?: string,
@@ -27484,7 +27520,13 @@ export function resolveIntentRepoSet(
     }
     return [...new Set(names)].sort();
   }
-  return discoverSiblingRepos(projectDir);
+  const declared = [...readWorkspaceRepos(projectDir).entries.keys()]
+    .filter((name) => isGitRepoDir(repoDir(projectDir, name)));
+  const declaredDirs = new Set(declared.map((name) => resolvePath(repoDir(projectDir, name))));
+  const found = discoverSiblingRepos(projectDir)
+    .filter((name) => declared.includes(name) || !declaredDirs.has(resolvePath(projectDir, name)));
+  const repos = [...new Set([...declared, ...found])].sort();
+  return repos.length === 1 && repoIsWorkspace(projectDir, repos[0]) ? [] : repos;
 }
 
 // The recorded repo set for an intent (its intents.json row's `repos`), or [] when
@@ -27698,17 +27740,13 @@ export interface RepoResolution {
 //     of the set.
 // Throws (string message) on any disambiguation failure so the tool can surface it.
 //
-// A repo NAME becomes a working DIRECTORY through repoDir (an immediate child of
-// the workspace root). That is right for a multi-repo workspace and wrong whenever
-// the workspace root IS the repository, where no such child exists — so the
-// resolved cwd is verified rather than returned unchecked, and the caller gets a
-// message naming the path instead of a downstream git failure in a missing dir.
+// A repo NAME becomes a working DIRECTORY through repoDir. A checkout missing
+// there is said with the way forward and the path, instead of a downstream git
+// failure in a missing dir.
 function repoCwdOrThrow(projectDir: string, repoName: string): string {
   const cwd = repoDir(projectDir, repoName);
   if (existsSync(cwd)) return cwd;
-  throw new Error(
-    `Repo "${repoName}" resolves to ${cwd}, which does not exist. A recorded repo (or --repo) names a checkout that must be an immediate child of the workspace root. If the workspace root IS the repository, record no repos and pass no --repo.`,
-  );
+  throw new Error(`${repoNotThereLine(projectDir, repoName)} (${cwd})`);
 }
 
 export function resolveConstructionRepo(

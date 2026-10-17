@@ -14,6 +14,7 @@ import {
   usesStageLevelPerUnitArtifacts,
 } from "./aidlc-lib.ts";
 import { aidlcDispatcherInvocation, sensorFireUsage } from "./aidlc-runtime-paths.ts";
+import { workspaceTargetPath } from "./aidlc-workspace-repos.ts";
 
 const VALID_STATUSES = new Set(["OK", "GAP", "ORPHAN", "Deferred", "N/A"]);
 
@@ -739,9 +740,8 @@ function verifyTargets(
   }
 
   if (stage === "code-generation") {
-    const projectRoot = resolve(projectDir);
     for (const entry of okEntries) {
-      const problem = codeTargetProblem(projectRoot, entry.target);
+      const problem = codeTargetProblem(projectDir, entry.target);
       if (problem) invalidTargets.push(`${entry.id}: ${problem}`);
     }
   }
@@ -749,14 +749,15 @@ function verifyTargets(
   return { invalidTargets, derivedOrphans, reasons };
 }
 
-// Why a Code Generation `OK` target is not one existing workspace-relative file.
-function codeTargetProblem(projectRoot: string, rawTarget: string | undefined): string | null {
+// Why a Code Generation `OK` target is not one existing workspace-relative file
+// (in a repo repos.json maps elsewhere, `<repo>/<path>`).
+function codeTargetProblem(projectDir: string, rawTarget: string | undefined): string | null {
   const target = normalizePath(rawTarget?.trim() ?? "");
   if (target === "" || isAbsolute(target) || /^[A-Za-z]:\//.test(target)) {
     return "target must be a workspace-relative file path";
   }
-  const absolute = resolve(projectRoot, target);
-  const rel = relative(projectRoot, absolute);
+  const { root, absolute } = workspaceTargetPath(projectDir, target);
+  const rel = relative(root, absolute);
   if (rel.startsWith("..") || isAbsolute(rel)) return "target escapes the project directory";
   try {
     if (!existsSync(absolute) || !statSync(absolute).isFile()) return `target file does not exist: ${target}`;

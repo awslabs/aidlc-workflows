@@ -1117,7 +1117,7 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "required",
     mutationScope: "project",
     outputModes: ["human", "quiet", "json"],
-    all: ["[--force] [--project-dir <path>]"],
+    all: ["[--force] [--project-dir <path>]", "--write-manifest [--project-dir <path>]"],
   },
   {
     id: "engine-orchestrate",

@@ -750,6 +750,10 @@ export interface RepoFacts {
 // carries on and records it; the other choice goes back to Units Generation.
 export interface UnitsReposAskDirective extends AskDirectiveBase {
   ask_type: "units-repos";
+// The one offer to write repos.json from the repos found here. Each choice is
+// one complete command.
+export interface ReposManifestAskDirective extends AskDirectiveBase {
+  ask_type: "repos-manifest";
   response_route: "command";
   choices: AskChoice[];
 }
@@ -888,6 +892,7 @@ export type AskDirective =
   | UnitsReposAskDirective
   | UnitPlanChangeAskDirective
   | TeamHandoverAskDirective
+  | ReposManifestAskDirective
   | NewWorkRoutingAskDirective
   | UnitClaimAskDirective
   | LegacyPlanApprovalRecoveryAskDirective
@@ -1674,6 +1679,9 @@ export function ceremonyNote(state: "on" | "off", questionsOnly = false): string
 // numbers the options and ends with Other and a reply hint. The engine owns
 // the numbers: a reply of "2" is read against this order, and the agent
 // renders nothing of its own. One builder, so every question has one shape.
+// Engine questions answered by running the picked choice's command.
+const COMMAND_CHOICE_ASKS = new Set(["construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "repos-manifest"]);
+
 export interface AskChoice {
   label: string;
   /** One line after the label, as the person sees it. */
@@ -2078,13 +2086,7 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalString(o, "proposed_scope", kind, errors);
       checkOptionalStringArray(o, "available_intents", kind, errors);
       checkOptionalString(o, "numbered_prose_question", kind, errors);
-      checkChoices(
-        o,
-        kind,
-        errors,
-        o.ask_type === "scope-confirm" || o.ask_type === "construction-staffing" || o.ask_type === "repo-scope" ||
-          o.ask_type === "units-repos" || o.ask_type === "unit-plan-change" || o.ask_type === "team-handover",
-      );
+      checkChoices(o, kind, errors, o.ask_type === "scope-confirm" || o.ask_type === "team-handover" || COMMAND_CHOICE_ASKS.has(String(o.ask_type)));
       checkOptionalString(o, "recovery_choice", kind, errors);
       checkOptionalString(o, "existing_code_command", kind, errors);
       checkOptionalString(o, "new_project_command", kind, errors);
@@ -2101,15 +2103,12 @@ export function validateDirective(obj: unknown): ValidationResult {
           "guard-recovery",
           "plan-approval",
           "project-type",
-          "construction-staffing",
-          "repo-scope",
-          "units-repos",
-          "unit-plan-change",
+          ...COMMAND_CHOICE_ASKS,
           "team-handover",
         ].includes(o.ask_type)
       ) {
         errors.push(
-          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type | construction-staffing | repo-scope | units-repos | unit-plan-change | team-handover, got ${String(o.ask_type)}`,
+          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type | ${[...COMMAND_CHOICE_ASKS, "team-handover"].join(" | ")}, got ${String(o.ask_type)}`,
         );
       }
       if ("plan_approval" in o && o.ask_type !== "plan-approval") {
@@ -2214,21 +2213,6 @@ export function validateDirective(obj: unknown): ValidationResult {
           "project-type",
           { existing_code_command: true, new_project_command: true },
         );
-      } else if (o.ask_type === "construction-staffing") {
-        if (o.response_route !== "command") {
-          errors.push(`${kind}: construction-staffing response_route must be "command"`);
-        }
-        rejectUnexpected("construction-staffing", {});
-      } else if (o.ask_type === "repo-scope") {
-        if (o.response_route !== "command") {
-          errors.push(`${kind}: repo-scope response_route must be "command"`);
-        }
-        rejectUnexpected("repo-scope", {});
-      } else if (o.ask_type === "units-repos") {
-        if (o.response_route !== "command") {
-          errors.push(`${kind}: units-repos response_route must be "command"`);
-        }
-        rejectUnexpected("units-repos", {});
       } else if (o.ask_type === "team-handover") {
         if (o.response_route !== "command") {
           errors.push(`${kind}: team-handover response_route must be "command"`);
@@ -2242,11 +2226,11 @@ export function validateDirective(obj: unknown): ValidationResult {
         }
         checkOptionalString(o, "unit", kind, errors);
         rejectUnexpected("team-handover", { handovers: true, unit: true });
-      } else if (o.ask_type === "unit-plan-change") {
+      } else if (COMMAND_CHOICE_ASKS.has(String(o.ask_type))) {
         if (o.response_route !== "command") {
-          errors.push(`${kind}: unit-plan-change response_route must be "command"`);
+          errors.push(`${kind}: ${o.ask_type} response_route must be "command"`);
         }
-        rejectUnexpected("unit-plan-change", {});
+        rejectUnexpected(String(o.ask_type), {});
       } else if (o.ask_type === "new-work-routing") {
         if (o.response_route !== "next") {
           errors.push(`${kind}: new-work-routing response_route must be "next"`);

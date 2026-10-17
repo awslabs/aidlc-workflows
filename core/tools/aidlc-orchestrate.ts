@@ -296,6 +296,7 @@ import {
   harnessDirectiveLimit,
   installedKiroLayout,
   intentRepos,
+  discoverSiblingRepos,
   codekbStoreIsCurrent,
   inspectContinuationCursor,
   isPerUnitStage,
@@ -651,7 +652,10 @@ import {
   resolveHarnessPath,
   resolveHarnessRoot,
   runtimeHarnessName,
+  workspaceSyncInvocation,
 } from "./aidlc-runtime-paths.ts";
+import { localRepoOverrideLines, REPOS_FILE } from "./aidlc-workspace-manifest.ts";
+import { noteReposManifestOffered, reposManifestOffered } from "./aidlc-workspace-repos.ts";
 import { terminalDispatcherArgv } from "./aidlc.ts";
 import {
   appendAuditEntries,
@@ -5107,6 +5111,31 @@ function projectTypeAskDirective(
 function teamsClone(projectDir: string, stateContent: string): boolean {
   return existsSync(unitParticipantPath(projectDir)) ||
     readApplicableTeamUnitScopeStamp(projectDir, stateContent) !== null;
+}
+
+// The one offer to write repos.json from the repos found here (decision 21):
+// at a stage boundary, the first time work records repos or teams are chosen
+// (open question 7), in a workspace that has none, once per clone. Null when
+// the step goes on.
+function reposManifestAsk(projectDir: string, stateContent: string): AskDirective | null {
+  if (existsSync(join(projectDir, REPOS_FILE)) || reposManifestOffered(projectDir)) return null;
+  if (intentRepos(projectDir).length === 0 && !isTeamUnitOwnership(stateContent)) return null;
+  const found = discoverSiblingRepos(projectDir);
+  const names = found.length > 0 ? found : existsSync(join(projectDir, ".git")) ? [basename(resolve(projectDir))] : [];
+  if (names.length === 0) return null;
+  if (!isReadOnlyEngineProbe()) noteReposManifestOffered(projectDir);
+  const listed = names.length === 1 ? `the repo found here (${names[0]})` : `the ${names.length} repos found here (${names.join(", ")})`;
+  return {
+    kind: "ask",
+    ask_type: "repos-manifest",
+    response_route: "command",
+    question: `Write repos.json from ${listed}? It lists each one's folder and the address its origin points to, ` +
+      "so a teammate's clone knows where they go.",
+    choices: [
+      { label: "Write it", detail: "You can edit or commit it like any file.", command: `${workspaceSyncInvocation()} --write-manifest` },
+      { label: "Not now", detail: "I won't ask again.", command: `${aidlcToolInvocation("orchestrate")} next` },
+    ],
+  };
 }
 
 // Who builds a plan of two or more Units is the person's to say, once, as
@@ -13544,6 +13573,14 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       narration: "That is everything on the plan. Your work is finished and written up.",
     });
     return;
+  }
+  const reposOffer = reposManifestAsk(pd, stateContent);
+  if (reposOffer) {
+    emit(reposOffer);
+    return;
+  }
+  if (intentRepos(pd).length > 0) {
+    for (const line of localRepoOverrideLines(pd)) sayWithStepOnce(pd, line);
   }
   // Same swarm guard on the advance path: an eligible per-unit build stage
   // under autonomy fans out as a batch rather than a single run-stage. Off the
