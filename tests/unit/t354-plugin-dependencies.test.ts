@@ -667,6 +667,10 @@ describe("t354 turning a base off pauses the plugin built on it", () => {
     const back = select(target, "aidlc,alpha,zeta");
     expect(back.status, back.stdout + back.stderr).toBe(0);
     expect(back.stdout).not.toContain("paused");
+    expect(back.stdout).toContain(
+      "zeta is on again, so alpha runs again; anything alpha adds to other stages and agents comes back at the next session start.",
+    );
+    expect(select(target, "aidlc,alpha,zeta").stdout).not.toContain("is on again");
     expect(stageEnabled(target, "alpha-example-stage")).toBe(true);
     const synced = sync(target);
     expect(synced.status, synced.stdout + synced.stderr).toBe(0);
@@ -860,5 +864,65 @@ describe("t354 every line that sends the person to sync names a command that wor
     const refused = sync();
     expect(refused.status).toBe(1);
     expect(refused.stderr).toContain("then run `aidlc engine plugin sync` again; it puts the plugin's own version back.");
+  });
+});
+
+// Kiro CLI and opencode compose only when the person runs sync, so the change
+// that turns a paused plugin's base back on names that sync, once.
+describe("t354 turning a paused plugin's base back on says how the plugin comes back", () => {
+  // A copy of dist/<harness> with zeta and alpha, which builds on zeta and adds
+  // to build-and-test, composed from their folders; HOME is a scratch folder,
+  // so config writes no settings outside the test.
+  function composedPair(harness: "kiro" | "opencode", leaf: string) {
+    const base = fresh(`${harness}-resume`);
+    const dir = join(base, "project");
+    const home = join(base, "home");
+    mkdirSync(home, { recursive: true });
+    cpSync(join(REPO_ROOT, "dist", harness), dir, { recursive: true });
+    const zeta = plugin({ name: "zeta", harness });
+    const team = alpha({ harness });
+    mkdirSync(join(team, "contributions", "construction"), { recursive: true });
+    writeFileSync(join(team, "contributions", "construction", "build-and-test.md"), CONTRIBUTION);
+    const run = (args: string[]): Ran => {
+      const result = spawnSync(process.execPath, [join(dir, leaf, "tools", "aidlc.ts"), ...args], {
+        cwd: dir,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
+        env: cleanEnv({ HOME: home }),
+      });
+      return { status: result.status, stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
+    };
+    for (const root of [zeta, team]) {
+      const synced = run(["engine", "plugin", "sync", "--plugin-root", root]);
+      expect(synced.status, synced.stdout + synced.stderr).toBe(0);
+    }
+    return run;
+  }
+  const backLine = (leaf: string): string =>
+    "zeta is on again, so alpha runs again; anything alpha adds to other stages and agents comes back when you run " +
+    `\`bun ${leaf}/tools/aidlc.ts engine plugin sync --plugin-root <alpha's folder>\`.`;
+
+  test.each([["kiro", ".kiro"], ["opencode", ".aidlc"]] as const)(
+    "on %s, the select that turns zeta back on names the sync once",
+    (harness, leaf) => {
+      const run = composedPair(harness, leaf);
+      const paused = run(["engine", "plugin", "select", "aidlc,alpha"]);
+      expect(paused.status, paused.stdout + paused.stderr).toBe(0);
+      const back = run(["engine", "plugin", "select", "aidlc,alpha,zeta"]);
+      expect(back.status, back.stdout + back.stderr).toBe(0);
+      expect(back.stdout).toContain(backLine(leaf));
+      expect(run(["engine", "plugin", "select", "aidlc,alpha,zeta"]).stdout).not.toContain("is on again");
+    },
+  );
+
+  test("on Kiro CLI, config project --plugins says it too", () => {
+    const run = composedPair("kiro", ".kiro");
+    const recorded = run(["config", "--from", join(REPO_ROOT, "dist", "kiro"), "--force", "--yes"]);
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+    const paused = run(["config", "project", "--plugins", "aidlc,alpha", "--yes"]);
+    expect(paused.status, paused.stdout + paused.stderr).toBe(0);
+    const back = run(["config", "project", "--plugins", "aidlc,alpha,zeta", "--yes"]);
+    expect(back.status, back.stdout + back.stderr).toBe(0);
+    expect(back.stdout).toContain(backLine(".kiro"));
   });
 });
