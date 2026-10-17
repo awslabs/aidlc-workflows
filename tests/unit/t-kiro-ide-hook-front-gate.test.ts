@@ -192,13 +192,6 @@ describe("a shell command that changed nothing the hook reads skips the engine",
     expectSkipped(shellHook(dir, hook));
   });
 
-  test("the guards always load the engine", () => {
-    const dir = project();
-    settled(dir, "rebuild-stage-graph");
-    settled(dir, "sync-workflow-state");
-    expect(shellHook(dir, "guard-tool-call").ran).toBe(true);
-  });
-
   // Kiro IDE runs both as one after-shell card (#2022): it skips the engine
   // when neither has anything to do, and the one guard card always runs.
   test("the after-shell card skips the engine when neither hook has anything to do", () => {

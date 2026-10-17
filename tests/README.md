@@ -13,6 +13,14 @@ coverage drops.
 
 For the full test strategy, levels, fixtures, and assertion guidelines, see [docs/reference/09-testing.md](../docs/reference/09-testing.md).
 
+The level directory selects execution; it does not establish that a test is
+cheap or isolated. The current `unit` directory also contains real CLI,
+installation and workflow tests. Use the
+[test boundaries and ownership guide](../docs/reference/09-testing.md#test-boundaries-and-ownership)
+to distinguish direct unit checks, process/adapter contracts, deterministic
+journeys and live journeys, and extend an existing owner before duplicating a
+scenario.
+
 ## Intent grounding regression checks
 
 [t-intent-grounding-regressions.test.ts](unit/t-intent-grounding-regressions.test.ts)
@@ -107,8 +115,8 @@ If two parallel MRs both pick the same number, the second to merge rebases and r
 ## Quick Reference
 
 ```bash
-# Run L1 (protocol — no LLM, seconds)
-bun tests/run-tests.ts
+# Run deterministic protocol checks, including process and workflow tests
+bun tests/run-tests.ts --no-llm
 
 # Run L1+L2 (protocol + integration — requires claude CLI for live tests)
 bun tests/run-tests.ts --ci
