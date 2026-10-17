@@ -145,6 +145,8 @@ Strictly 2-option: Approve / Request Changes.
 
 Execute the actual deployment: push artifacts through the pipeline, run smoke tests, validate health checks, and execute database migrations.
 
+For an AWS target, the stage first runs `aws sts get-caller-identity` in the agent's own shell, with the deployment's profile and region. If that fails, it asks the person to make the credentials visible to that shell before it asks any deployment question, and it never writes the full account ID into an artifact.
+
 ### Outputs
 
 | Artifact                          | Description                                                  |
