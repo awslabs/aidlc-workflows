@@ -9,6 +9,8 @@
 // This module is standalone (no aidlc-lib import) so aidlc-lib can re-export
 // the primitives below.
 
+import { createHash } from "node:crypto";
+
 // A reply with no words in it is nobody's answer. That is the only non-answer
 // a reply's text can show: no host hands the hook dismissal text (measured
 // 2026-10-12: Claude Code's Esc on AskUserQuestion fires no PostToolUse at all;
@@ -83,6 +85,48 @@ export function exactOptionPick(
 // --- The questions the engine asks -------------------------------------------
 
 export const APPROVAL_GATE_CHOICES = ["Approve", "Request Changes"] as const;
+
+// What a question that needs the person's own reply (a Unit or batch
+// checkpoint, the verification command, a Construction policy change) offers,
+// in the order shown: Approve and Request Changes, or Request Changes alone (a
+// batch whose files changed after its check, under a strict Guard Policy). Its
+// row names them as its Options; its record keeps their digests.
+export type ProtectedChoice = (typeof APPROVAL_GATE_CHOICES)[number];
+const PROTECTED_CHOICE_SETS: readonly (readonly ProtectedChoice[])[] = [APPROVAL_GATE_CHOICES, ["Request Changes"]];
+
+const choiceDigest = (choice: string): string => createHash("sha256").update(choice.toLowerCase(), "utf-8").digest("hex");
+
+/** The offered choices these labels name, in order and in any case; null for any other list. */
+export function protectedChoices(labels: readonly string[]): readonly ProtectedChoice[] | null {
+  const named = labels.map((label) => label.trim().toLowerCase());
+  return PROTECTED_CHOICE_SETS.find((set) => set.length === named.length &&
+    set.every((choice, at) => choice.toLowerCase() === named[at])) ?? null;
+}
+
+/** What a question's record keeps for the choices it offers. */
+export function protectedChoiceDigests(choices: readonly string[] = APPROVAL_GATE_CHOICES): string[] {
+  const offered = protectedChoices(choices);
+  if (offered === null) throw new Error("A protected question offers Approve and Request Changes, or Request Changes alone.");
+  return offered.map(choiceDigest);
+}
+
+/** The choices a question's record says it offered; null when it names no offered set. */
+export function offeredProtectedChoices(digests: unknown): readonly ProtectedChoice[] | null {
+  if (!Array.isArray(digests)) return null;
+  return PROTECTED_CHOICE_SETS.find((set) => set.length === digests.length &&
+    set.every((choice, at) => choiceDigest(choice) === digests[at])) ?? null;
+}
+
+/**
+ * The choice a reply that is exactly one of this question's offered options
+ * picks, by its number or its label ("1", "request changes"). Null for any
+ * other reply, a number it did not offer included: the conductor reads those.
+ */
+export function protectedQuestionPick(question: { options: unknown }, text: string | undefined): ProtectedChoice | null {
+  const offered = offeredProtectedChoices(question.options) ?? [];
+  const pick = exactOptionPick(text, offered);
+  return pick === null ? null : offered[pick];
+}
 
 // A picker asks this question when it offers only its choices, each once, and
 // both its approve and its change choice (the first two; "(Recommended)"

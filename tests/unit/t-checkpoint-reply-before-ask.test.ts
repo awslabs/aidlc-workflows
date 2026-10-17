@@ -1,4 +1,5 @@
 // covers: subcommand:aidlc-bolt:checkpoint, hook:aidlc-record-human-turn, function:gateWordsSinceUnitReview
+// covers: function:protectedQuestionPick
 //
 // The person drives. While a Unit's review runs, they type their answer to the
 // checkpoint question that has not been asked yet: "approve it as it is", or
@@ -28,7 +29,7 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename, auditBlockField, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
-  readAuditShardEvents, reviewArtifactFingerprint,
+  readAuditShardEvents, readProtectedResponse, reviewArtifactFingerprint,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -264,6 +265,20 @@ describe("t-checkpoint-reply-before-ask: the person answers before the Unit's qu
       expect(auditBlockField(unitGates(p, "GATE_APPROVED")[0].block, "Person Reply")).toBe("approve it as it is");
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
+
+  // A number typed while the review runs picks from the choices the Unit's
+  // question offers, Approve and Request Changes, as a reply after it does.
+  test("\"2\" typed while the review runs is kept as Request Changes for alpha", () => {
+    const p = fixture("strict");
+    const file = requestReview(p);
+    says(p, "2");
+    const asked = verifyAndAsk(p, file);
+    expect(asked.earlier_reply).toBe("2");
+    expect(readProtectedResponse(p, SESSION)?.choice).toBe("Request Changes");
+    const refused = checkpoint(p, "approve", ["--user-input", "Approve"]);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain('picked \\"Request Changes\\"');
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A question asked since and not answered yet holds what the person types
   // next: nothing is taken for the Unit while it waits.

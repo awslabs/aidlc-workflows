@@ -122,7 +122,7 @@ import {
   takeRestartRequest,
 } from "./aidlc-question-store.ts";
 import { latestMessage, noReplySince } from "./aidlc-message-store.ts";
-import { aidlcEntryWords, APPROVAL_GATE_CHOICES, pickerOffersChoices } from "./aidlc-reply-reader.ts";
+import { aidlcEntryWords, APPROVAL_GATE_CHOICES, protectedChoices } from "./aidlc-reply-reader.ts";
 import {
   type AskDirective,
   type Directive,
@@ -3514,15 +3514,15 @@ function openQuestionAnswer(stage: string, block: string): string {
       ? [`${aidlcToolInvocation("bolt")} swarm-checkpoint`,
         batch && units ? ` --batch ${shellArg(batch)} --units ${shellArg(units)}` : ""]
       : [null, ""];
-  // A question that needs the person's own reply offers Approve and Request
-  // Changes, numbered as the human-turn hook reads a number typed for them, so
-  // "/aidlc 2" reads in a chat that never saw it asked. A batch whose files
-  // changed after its check (strict) offers Request Changes alone and gets no
-  // number; a row from before rows named their options offered both.
+  // A question that needs the person's own reply names the choices it
+  // offered, numbered as the human-turn hook reads a number typed for them
+  // (protectedQuestionPick), so "/aidlc 2" reads in a chat that never saw it
+  // asked. A row from before rows named their options offered both.
   const options = questionOptions(block);
-  const numbered = options.length === 0 || pickerOffersChoices(options, APPROVAL_GATE_CHOICES)
-    ? `its choices are ${APPROVAL_GATE_CHOICES.map((choice, at) => `${at + 1}. ${choice}`).join(" and ")}; `
-    : "";
+  const offered = options.length === 0 ? APPROVAL_GATE_CHOICES : protectedChoices(options);
+  const numbered = offered === null ? ""
+    : `${offered.length === 1 ? "its one choice is" : "its choices are"} ` +
+      `${offered.map((choice, at) => `${at + 1}. ${choice}`).join(" and ")}; `;
   // The verification command and a Construction policy question name their
   // own flags and the setter an approval runs; the command itself stays in its
   // file, never on a shell line.

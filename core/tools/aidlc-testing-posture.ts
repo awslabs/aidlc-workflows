@@ -153,7 +153,9 @@ import {
 } from "./aidlc-lib.ts";
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
 import { aidlcToolInvocation, entrySkillInvocation, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
-import { APPROVAL_GATE_CHOICES, exactOptionPick, isNonAnswer, isOneOfChoices, pickerOffersChoices } from "./aidlc-reply-reader.ts";
+import {
+  APPROVAL_GATE_CHOICES, exactOptionPick, isNonAnswer, isOneOfChoices, pickerOffersChoices, protectedQuestionPick,
+} from "./aidlc-reply-reader.ts";
 
 export type TestingMethodology = "tdd" | "bdd" | "atdd" | "test-after" | "custom";
 export type TestStrategy = "minimal" | "standard" | "comprehensive";
@@ -3935,16 +3937,14 @@ export function recordProtectedHumanResponse(
     const previous = readProtectedResponse(projectDir, session);
     const earlier = previous?.challengeId === question.challengeId ? previous.words : undefined;
     const words = (earlier ? `${earlier}\n${text}` : text).slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
-    // A reply that is exactly one offered option is the person's pick, kept so
-    // a record of the other choice is refused; any other reply is the
-    // conductor's to read, and the latest reply decides. Every protected
-    // question offers Approve and Request Changes (its stored options are
-    // their digests).
-    const pick = exactOptionPick(text, APPROVAL_GATE_CHOICES);
+    // A reply that is exactly one of the choices this question offered is the
+    // person's pick, kept so a record of the other choice is refused; any
+    // other reply is the conductor's to read, and the latest reply decides.
+    const pick = protectedQuestionPick(question, text);
     markProtectedQuestionReplied(projectDir, question);
     writeProtectedResponse(projectDir, {
       version: 1, session, challengeId: question.challengeId,
-      ...(pick === 0 ? { choice: "Approve" as const } : pick === 1 ? { choice: "Request Changes" as const } : {}),
+      ...(pick === null ? {} : { choice: pick }),
       responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
       words,
     });

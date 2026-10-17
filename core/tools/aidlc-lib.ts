@@ -74,6 +74,9 @@ import {
   exactOptionPick,
   formatReceivedReply,
   isNonAnswer,
+  offeredProtectedChoices,
+  type ProtectedChoice,
+  protectedChoiceDigests,
   stripRecommendedDecorator,
 } from "./aidlc-reply-reader.ts";
 export {
@@ -5084,7 +5087,7 @@ export interface ProtectedQuestion {
   challengeId: string;
   target: Record<string, unknown>;
   targetDigest: string;
-  options: [string, string];
+  options: string[];
   promptDigest?: string;
   /** Set after the first reply read under this question: a plain yes answers only the first. */
   replied?: true;
@@ -5097,7 +5100,7 @@ export interface ProtectedResponse {
   version: 1;
   session: string;
   challengeId: string;
-  /** Older records named a choice the hook read; the conductor's choice decides now. */
+  /** The offered choice the person's latest reply picked exactly, read by the hook; the other is refused. */
   choice?: "Approve" | "Request Changes";
   responseSha256: string;
   /** Every message the person typed under this question, in order, verbatim. */
@@ -5444,24 +5447,24 @@ export function protectedTargetDigest(target: Record<string, unknown>): string {
 /** One session mailbox, exclusive with Plan Approval, replaced under the audit lock. */
 export function mintProtectedQuestion(
   projectDir: string,
-  question: Pick<ProtectedQuestion, "kind" | "session" | "target" | "promptDigest">,
+  question: Pick<ProtectedQuestion, "kind" | "session" | "target" | "promptDigest"> & { choices?: readonly ProtectedChoice[] },
 ): ProtectedQuestion {
   if (!question.session.trim() || question.session !== question.session.trim() || !runtimeSessionSegment(question.session)) {
     throw new Error("Protected question requires a nonblank session ID.");
   }
+  const { choices, ...asked } = question;
+  const options = protectedChoiceDigests(choices);
   return withAuditLock(projectDir, () => {
     ensurePlanApprovalRuntimeDir(projectDir);
     removeRuntimeFile(planApprovalChallengePath(projectDir, question.session));
     removeRuntimeFile(planApprovalResponsePath(projectDir, question.session));
     consumeProtectedQuestion(projectDir, question.session);
     const challenge: ProtectedQuestion = {
-      ...question,
+      ...asked,
       version: 1,
       challengeId: randomBytes(16).toString("hex"),
       targetDigest: protectedTargetDigest(question.target),
-      options: ["approve", "request changes"].map((option) =>
-        createHash("sha256").update(option, "utf-8").digest("hex"),
-      ) as [string, string],
+      options,
     };
     writeFileAtomic(protectedQuestionPath(projectDir, question.session), `${JSON.stringify(challenge, null, 2)}\n`);
     return challenge;
@@ -5477,8 +5480,7 @@ export function readProtectedQuestion(projectDir: string, session: string): Prot
     value.target !== null && typeof value.target === "object" && !Array.isArray(value.target) &&
     typeof value.targetDigest === "string" && value.targetDigest === protectedTargetDigest(value.target) &&
     (value.promptDigest === undefined || (typeof value.promptDigest === "string" && /^[a-f0-9]{64}$/.test(value.promptDigest))) &&
-    Array.isArray(value.options) && value.options.length === 2 &&
-    value.options.every((option, i) => option === createHash("sha256").update(i === 0 ? "approve" : "request changes").digest("hex"))
+    offeredProtectedChoices(value.options) !== null
     ? value : null;
 }
 

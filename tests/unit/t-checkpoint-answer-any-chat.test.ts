@@ -11,8 +11,8 @@
 // words, never a stale answer to an older question. Once the approval was
 // asked, a new chat's checkpoint step skips the learnings question the old
 // chat already asked, and the step for prose names the Unit to approve and
-// the two choices a typed number picks ("/aidlc 2"), none for a batch asked
-// with Request Changes alone. The verification command question, and a
+// the choices a typed number picks ("/aidlc 2"), the one choice of a batch
+// asked with Request Changes alone too. The verification command question, and a
 // Construction policy question a record carries, are answered in any chat
 // the same way, and the step for prose names the flags their answer is
 // recorded with. A bare `/aidlc` in a
@@ -300,12 +300,14 @@ describe("t-checkpoint-answer-any-chat: a batch checkpoint answered in a new cha
   });
 
   // Under a strict Guard Policy a batch whose files changed after its check is
-  // asked with Request Changes alone; a row from before rows named their
-  // options offered both.
+  // asked with Request Changes alone, so its one choice is 1; a row from
+  // before rows named their options offered both.
   for (const [offered, named] of [
-    ["both choices", true], ["Request Changes alone", false], ["no Options field", true],
+    ["both choices", "its choices are 1. Approve and 2. Request Changes"],
+    ["Request Changes alone", "its one choice is 1. Request Changes"],
+    ["no Options field", "its choices are 1. Approve and 2. Request Changes"],
   ] as const) {
-    test(`"2" at a batch question with ${offered}: the step ${named ? "names" : "names no"} numbered choices`, () => {
+    test(`a number at a batch question with ${offered}: the step names ${named}`, () => {
       const p = construction();
       appendAuditEntry("STAGE_STARTED", { Stage: "functional-design" }, p);
       const options: Record<string, string> = offered === "both choices" ? { Options: "Approve,Request Changes" }
@@ -314,14 +316,31 @@ describe("t-checkpoint-answer-any-chat: a batch checkpoint answered in a new cha
         Checkpoint: "Swarm Batch Approval", Stage: "functional-design", "Batch number": "1", Units: "alpha, beta",
         Fingerprint: "sha256:batch", Session: OLD, ...options,
       }, p);
-      const print = next(p, ["2"]);
+      const print = next(p, [offered === "Request Changes alone" ? "1" : "2"]);
       expect(print.kind, JSON.stringify(print)).toBe("print");
       expect(print.message).toContain("swarm-checkpoint --action reject --batch 1 --units 'alpha, beta'`");
-      expect(print.message?.includes("its choices are 1. Approve and 2. Request Changes; answer it through that checkpoint"))
-        .toBe(named);
-      expect(print.message?.includes("1. Approve")).toBe(named);
+      expect(print.message).toContain(`${named}; answer it through that checkpoint`);
+      expect(print.message?.includes("1. Approve")).toBe(offered !== "Request Changes alone");
     });
   }
+
+  // What the step names and what the hook takes a number for are the same
+  // choices: "/aidlc 1" in a new chat at that batch is Request Changes.
+  test("\"/aidlc 1\" in a new chat at a batch offering Request Changes alone is Request Changes", () => {
+    const p = fixture();
+    const target = { kind: "batch", batch: 1, units: ["alpha", "beta"], fingerprint: "sha256:batch", commandSha256s: {} };
+    appendAuditEntry("DECISION_RECORDED", {
+      Checkpoint: "Swarm Batch Approval", Stage: "code-generation", "Batch number": "1", Units: "alpha, beta",
+      Fingerprint: "sha256:batch", Session: OLD, Options: "Request Changes",
+    }, p);
+    mintProtectedQuestion(p, { kind: "checkpoint-approval", session: OLD, target, choices: ["Request Changes"] });
+    person(p, "/aidlc 1", NEW);
+    expect(readProtectedQuestion(p, OLD)).toBeNull();
+    expect(readProtectedResponse(p, NEW)?.choice).toBe("Request Changes");
+    expect(() => requireProtectedResponse(p, NEW, {
+      kind: "checkpoint-approval", targetDigest: protectedTargetDigest(target), choice: "Request Changes",
+    })).not.toThrow();
+  });
 });
 
 // The two other questions whose answer needs the person's own reply to them,
