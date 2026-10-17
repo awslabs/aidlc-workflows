@@ -30,6 +30,7 @@ import {
 } from "./aidlc-plugin-build.ts";
 import {
   buildPluginProjection,
+  PluginBuildLockFolderError,
   type PluginTarget,
   type PluginTargetTable,
   readPluginTargets,
@@ -702,7 +703,9 @@ export function testPluginComposition(
       ".",
       "test-compose",
       error instanceof Error ? error.message : String(error),
-      "Fix the plugin or install candidate inputs and rerun.",
+      error instanceof PluginBuildLockFolderError
+        ? error.fix
+        : "Fix the plugin or install candidate inputs and rerun.",
     );
   } finally {
     const liveAfter = snapshotPaths(
