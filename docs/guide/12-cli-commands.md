@@ -76,7 +76,7 @@ diagnostic and lifecycle routes.
 | `/aidlc plugin select [names]` | Show or set the enabled plugin list for this install |
 | `/aidlc plugin list` | List installed plugins and enabled state |
 | `/aidlc plugin sync` | Compose installed plugin roots into the current install |
-| `/aidlc plugin validate [path]` | Validate an authored plugin (`--json` for structured findings) |
+| `/aidlc plugin validate [path]` | Validate an authored plugin (`--with <base-root>` checks a base plugin's agents; `--json` for structured findings) |
 | `/aidlc plugin build <harness> [outDir]` | Build a host plugin projection (`--plugin-root <path>` selects the source) |
 | `/aidlc --version` | Print the framework version |
 | `/aidlc --help` | Display usage information |
@@ -2802,6 +2802,9 @@ explicit sync.
 authoring tools through the top-level CLI. Validation defaults to the current
 directory. Build also defaults its plugin root to the current directory; pass
 `--plugin-root <path>` when invoking it elsewhere. Both accept `--json`.
+Validation of a plugin built on a base takes `--with <base-root>`, your own
+checkout of that base, so a stage led by the base's agent is checked instead of
+reported as not checked.
 
 ### `aidlc-utility recompose` - in-flight plan flips
 

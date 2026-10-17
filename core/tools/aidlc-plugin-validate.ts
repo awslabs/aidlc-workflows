@@ -52,6 +52,8 @@ export type PluginValidationRule =
   | "agent-filename"
   | "agent-name"
   | "agent-owner"
+  | "base-reference"
+  | "base-root"
   | "duplicate-artifact-producer"
   | "artifact-namespace"
   | "contribution-target"
@@ -100,6 +102,8 @@ export interface PluginValidationOptions {
   composeTemplatePath?: string;
   coreStageSlugs?: Iterable<string>;
   coreAgentSlugs?: Iterable<string>;
+  // The author's own checkout of the base plugin (--with): its agents count.
+  baseRoot?: string;
 }
 
 type MutableFindings = {
@@ -109,6 +113,8 @@ type MutableFindings = {
 
 type ManifestResult = {
   pluginName: string;
+  // undefined when the manifest cannot say (its own finding already does).
+  base?: PluginDependency | null;
 };
 
 const MANIFEST_REL = join(".aidlc-plugin", "plugin.json");
@@ -493,17 +499,68 @@ function pluginAuthoringContext(): PluginAuthoringContext {
   };
 }
 
-function pluginAgentRoster(root: string): string[] {
-  const pluginAgents = scanPluginFiles(join(root, "agents")).files
+function ownAgents(root: string): string[] {
+  return scanPluginFiles(join(root, "agents")).files
     .filter((file) => file.endsWith("-agent.md"))
     .map((file) => basename(file, ".md"));
+}
+
+function pluginAgentRoster(root: string): string[] {
   return [
     ...new Set([
       ...pluginAuthoringContext().agents,
-      ...pluginAgents,
+      ...ownAgents(root),
       "orchestrator",
     ]),
   ].sort();
+}
+
+// The agents of the --with checkout, which must be the base the manifest
+// names: null when it is not (with a finding) or the manifest cannot say.
+function baseRootAgents(
+  baseRoot: string,
+  base: PluginDependency | null | undefined,
+  findings: MutableFindings,
+): string[] | null {
+  if (base === undefined) return null;
+  const at = resolve(baseRoot);
+  let name: unknown;
+  try {
+    name = (JSON.parse(readFileSync(join(at, MANIFEST_REL), "utf-8")) as { name?: unknown }).name;
+  } catch {
+    name = undefined;
+  }
+  const file = MANIFEST_REL.split(sep).join("/");
+  if (base === null) {
+    addError(
+      findings,
+      file,
+      "base-root",
+      `--with names ${at}, but this plugin builds on core alone`,
+      `Add its base to dependencies, such as "${typeof name === "string" && name ? name : "<base>"}@^1.2.0", or leave out --with.`,
+    );
+    return null;
+  }
+  if (name !== base.name) {
+    addError(
+      findings,
+      file,
+      "base-root",
+      `--with names ${at}, which is not ${base.name}, the base this plugin builds on`,
+      `Pass the root of your ${base.name} checkout.`,
+    );
+    return null;
+  }
+  return ownAgents(at);
+}
+
+// The agent fields Rule 9 of validateStageFrontmatter checks.
+function stageAgentReferences(stage: Record<string, unknown>): string[] {
+  return [
+    stage.lead_agent,
+    ...(Array.isArray(stage.support_agents) ? stage.support_agents : []),
+    stage.reviewer,
+  ].filter((agent): agent is string => typeof agent === "string");
 }
 
 function stageBodyAfterFrontmatter(raw: string): string {
@@ -638,9 +695,10 @@ function validateManifest(
       );
     }
   }
-  const base = readPluginBase(manifest.dependencies, declaredName);
-  if ("problem" in base) {
-    const { problem } = base;
+  const read = readPluginBase(manifest.dependencies, declaredName);
+  const base = "problem" in read ? undefined : read.base;
+  if ("problem" in read) {
+    const { problem } = read;
     addError(
       findings,
       displayFile,
@@ -664,7 +722,7 @@ function validateManifest(
       "manifest aidlc must be an object",
       'Add "aidlc": {"contributes": {...}}.',
     );
-    return { pluginName: declaredName };
+    return { pluginName: declaredName, base };
   }
   if (!isPlainRecord(manifest.aidlc.contributes)) {
     addError(
@@ -674,7 +732,7 @@ function validateManifest(
       "manifest aidlc.contributes must be an object",
       "Map each shipped subtree to its plugin-relative directory.",
     );
-    return { pluginName: declaredName };
+    return { pluginName: declaredName, base };
   }
 
   for (const issue of contributionPathIssues(manifest.aidlc.contributes)) {
@@ -687,7 +745,7 @@ function validateManifest(
     );
   }
 
-  return { pluginName: declaredName };
+  return { pluginName: declaredName, base };
 }
 
 function validateStages(
@@ -695,6 +753,7 @@ function validateStages(
   pluginName: string,
   findings: MutableFindings,
   context?: ValidationContext,
+  uncheckedBase?: string,
 ): void {
   const artifactProducers = new Map<
     string,
@@ -718,7 +777,33 @@ function validateStages(
       continue;
     }
 
-    const validation = validateStageFrontmatter(parsed, context);
+    // Without the base's checkout, an agent only the base could supply is
+    // said once and not checked. When one name prefixes the other, the longer
+    // prefix owns the agent: for acme-backend on base acme a typo in its own
+    // agent stays an error, and acme on base acme-platform can still name
+    // acme-platform-review-agent.
+    const ownedHere = (agent: string): boolean =>
+      pluginName.length > (uncheckedBase ?? "").length && agent.startsWith(`${pluginName}-`);
+    const unchecked = uncheckedBase && context?.agents
+      ? [...new Set(stageAgentReferences(parsed))].filter((agent) =>
+          !context.agents?.includes(agent) &&
+          agent.startsWith(`${uncheckedBase}-`) &&
+          !ownedHere(agent)
+        )
+      : [];
+    for (const agent of unchecked) {
+      addWarning(
+        findings,
+        displayFile,
+        "base-reference",
+        `agent "${agent}" is not checked: it would come from ${uncheckedBase}, the base this plugin builds on`,
+        `Run validate again with --with <path to your ${uncheckedBase} checkout> to check it.`,
+      );
+    }
+    const validation = validateStageFrontmatter(
+      parsed,
+      unchecked.length > 0 ? { agents: [...(context?.agents ?? []), ...unchecked] } : context,
+    );
     if (!validation.valid) {
       for (const error of validation.errors) {
         addError(
@@ -1136,13 +1221,18 @@ export function validatePluginRoot(
     };
   }
 
-  const { pluginName } = validateManifest(root, findings);
+  const { pluginName, base } = validateManifest(root, findings);
   validatePluginContentSymlinks(root, findings);
+  const context = options.stageContext ?? { agents: pluginAgentRoster(root) };
+  const baseAgents = options.baseRoot === undefined
+    ? null
+    : baseRootAgents(options.baseRoot, base, findings);
   validateStages(
     root,
     pluginName,
     findings,
-    options.stageContext ?? { agents: pluginAgentRoster(root) },
+    baseAgents ? { agents: [...(context.agents ?? []), ...baseAgents] } : context,
+    baseAgents ? undefined : base?.name,
   );
   validateContributions(root, pluginName, findings, options.coreStageSlugs, options.coreAgentSlugs);
   validateScopes(root, pluginName, findings);
@@ -1204,26 +1294,30 @@ export function formatPluginValidation(
 }
 
 const USAGE =
-  "Usage: bun <tools-dir>/aidlc-plugin-validate.ts <plugin-root> [--json]";
+  "Usage: bun <tools-dir>/aidlc-plugin-validate.ts <plugin-root> [--with <base-root>] [--json]";
 
 export function main(argv: string[]): number {
   if (argv.includes("--help") || argv.includes("-h")) {
     process.stdout.write(`${USAGE}\n`);
     return 0;
   }
-  const jsonArgs = argv.filter((arg) => arg === "--json");
-  const positional = argv.filter((arg) => arg !== "--json");
+  const withAt = argv.indexOf("--with");
+  const baseRoot = withAt < 0 ? undefined : argv[withAt + 1];
+  const rest = withAt < 0 ? argv : argv.filter((_, index) => index !== withAt && index !== withAt + 1);
+  const jsonArgs = rest.filter((arg) => arg === "--json");
+  const positional = rest.filter((arg) => arg !== "--json");
   if (
     positional.length !== 1 ||
     jsonArgs.length > 1 ||
-    argv.some((arg) => arg.startsWith("-") && arg !== "--json")
+    (withAt >= 0 && (!baseRoot || baseRoot.startsWith("-"))) ||
+    rest.some((arg) => arg.startsWith("-") && arg !== "--json")
   ) {
     process.stderr.write(`${USAGE}\n`);
     return 2;
   }
 
   const pluginRoot = positional[0];
-  const result = validatePluginRoot(pluginRoot);
+  const result = validatePluginRoot(pluginRoot, { baseRoot });
   if (jsonArgs.length === 1) {
     process.stdout.write(`${JSON.stringify(pluginValidationJson(result))}\n`);
   } else {

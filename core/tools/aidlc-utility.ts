@@ -751,7 +751,7 @@ Utilities:
   plugin select [names]  Show or set the enabled plugin list
   plugin list       List installed plugins and enabled state (--json for structured output)
   plugin sync       Compose installed plugins into the current install
-  plugin validate [path]  Validate authored plugin content (--json for structured output)
+  plugin validate [path]  Validate authored plugin content (--with <base-root> checks a base plugin's agents; --json for structured output)
   plugin build <harness> [outDir]  Build a host plugin projection (--plugin-root <path>)
   knowledge onboard [path]  Index customer documents into the space DocumentKB
   knowledge sync    Reconcile the catalog with disk; retries extractor_unavailable rows
@@ -1665,11 +1665,16 @@ function pluginAuthorCommandCode(code: number): void {
 function handlePluginValidate(
   positional: string[],
   flags: Record<string, string>,
+  missingValueFlags: ReadonlySet<string>,
 ): void {
   const unknown = Object.keys(flags).filter(
-    (key) => key !== "json" && key !== "help",
+    (key) => key !== "json" && key !== "help" && key !== "with",
   );
-  if (unknown.length > 0 || positional.length > 2) {
+  if (
+    unknown.length > 0 ||
+    positional.length > 2 ||
+    missingValueFlags.has("with")
+  ) {
     pluginAuthorCommandCode(pluginValidateMain([]));
     return;
   }
@@ -1682,6 +1687,7 @@ function handlePluginValidate(
     return;
   }
   const args = [positional[1] ?? process.cwd()];
+  if (flags.with !== undefined) args.push("--with", flags.with);
   if (flags.json === "true") args.push("--json");
   pluginAuthorCommandCode(pluginValidateMain(args));
 }
@@ -13266,7 +13272,7 @@ export async function main(argv: string[]): Promise<void> {
       await handlePluginSync(projectDir);
       break;
     case "plugin-validate":
-      handlePluginValidate(positional, flags);
+      handlePluginValidate(positional, flags, missingValueFlags);
       break;
     case "plugin-build":
       handlePluginBuild(positional, flags, missingValueFlags);

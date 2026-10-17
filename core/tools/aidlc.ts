@@ -982,10 +982,10 @@ export const ROUTES: readonly Route[] = [
       { command: "plugin select [names]", summary: "set enabled plugins" },
       { command: "plugin list [--verbose|--json]", summary: "compare installed and composed plugins" },
       { command: "plugin sync [--prune-missing]", summary: "transactionally compose installed plugins" },
-      { command: "plugin validate [path]", summary: "validate an authored plugin" },
+      { command: "plugin validate [path] [--with <base-root>]", summary: "validate an authored plugin" },
       { command: "plugin build <harness> [outDir]", summary: "build an authored plugin for a harness" },
     ],
-    all: ["select [names]", "sync [--prune-missing] [--yes]", "list [--verbose] [--json]", "validate [path]", "build <harness> [outDir]"],
+    all: ["select [names]", "sync [--prune-missing] [--yes]", "list [--verbose] [--json]", "validate [path] [--with <base-root>]", "build <harness> [outDir]"],
   },
   {
     // The plugin AUTHORING surface (v2): `aidlc plugin validate` / `aidlc plugin
@@ -1007,7 +1007,7 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "none",
     outputModes: ["human", "json"],
-    all: ["validate [path]", "build <harness> [outDir] [--plugin-root <path>]"],
+    all: ["validate [path] [--with <base-root>]", "build <harness> [outDir] [--plugin-root <path>]"],
   },
   {
     // The DocumentKB noun. Unlike `plugin`, the verb IS the subcommand -- these
