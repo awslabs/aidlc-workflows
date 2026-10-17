@@ -1797,7 +1797,7 @@ describe("t299 first-run setup wizard", () => {
       `\n  fix: ${new TransactionFilesystemError("", "", "", null).remediation}\n  Nothing written.\n`,
     );
     expect(conflict.stdout).toMatch(
-      /\n {2}fix: to keep your version, move \S+ somewhere else and run the same command again; .*--force\. `(?:aidlc|bun) \S.* --dry-run --verbose` lists every change first\.\n {2}No setup changes were kept\.\n/,
+      /\n {2}fix: to keep your version, move \S+ somewhere else and run the same command again; .*--force\.\n {2}No setup changes were kept\.\n/,
     );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1809,10 +1809,6 @@ describe("t299 first-run setup wizard", () => {
         expect(narrow[stop].status, `${stop}: ${narrow[stop].stdout}${narrow[stop].stderr}`).toBe(1);
         expectWrappedLike(narrow[stop], wide[stop], width, stop);
       }
-      // The conflict's fix names the dry-run command, checked whole above.
-      expect(commandsIn(sameRun(wide.conflict)).some((command) =>
-        command.endsWith("--dry-run --verbose`")
-      )).toBe(true);
       // The storage fix continues under its own text, after "fix: ".
       const fixLines = screenLines(narrow.lock.stdout);
       const fix = fixLines.findIndex((line) => line.startsWith("  fix: "));
@@ -1962,7 +1958,7 @@ describe("t299 first-run setup wizard", () => {
     expect(output).toContain(".claude/agents/aidlc-developer-agent.md");
     expect(output).toContain("locally modified or unowned");
     expect(output).toMatch(/fix:/i);
-    expect(output).toContain("--dry-run --verbose");
+    expect(output).toContain("run it again with --force.");
     expect(output).not.toContain('"schemaVersion"');
     expect(output).not.toContain('"actions"');
     expect(treeSnapshot(result.project)).toEqual(before);

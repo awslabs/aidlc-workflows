@@ -261,7 +261,10 @@ describe("a copied project's refresh from a newer release runs that release's ow
     }
   });
 
-  test("the newer tool's commands name the project's own tool, not where the runtime was unpacked", () => {
+  // The newer tool runs from where its runtime was unpacked, yet what it says
+  // names the project's own tool. A root run's conflict names no command (its
+  // force step is "run it again with --force"), so the whole output is checked.
+  test("the newer tool's lines name the project's own tool, never where the runtime was unpacked", () => {
     const project = copiedAt2110();
     // A change of the person's own to a file AI-DLC ships: a real conflict.
     const agent = join(project, ".codex", "agents", "aidlc-developer-agent.toml");
@@ -272,11 +275,10 @@ describe("a copied project's refresh from a newer release runs that release's ow
     expect(result.status, result.out).toBe(4);
     expect(existsSync(mark), result.out).toBe(true);
     expect(result.out).toContain(".codex/agents/aidlc-developer-agent.toml");
-    const commands = result.out.split(/\r?\n/).filter((line) => line.includes("aidlc.ts config"));
-    expect(commands.length, result.out).toBeGreaterThan(0);
-    for (const line of commands) {
-      expect(line).toContain("bun .codex/tools/aidlc.ts config");
-      expect(line).not.toContain(basename(dirname(runtime)));
+    expect(result.out).toContain("to take the shipped version over it, run it again with --force.");
+    expect(result.out).not.toContain(basename(dirname(runtime)));
+    for (const line of result.out.split(/\r?\n/).filter((item) => item.includes("aidlc.ts"))) {
+      expect(line).toContain("bun .codex/tools/aidlc.ts");
     }
   });
 
