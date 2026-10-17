@@ -244,7 +244,11 @@ selection less the paused plugins; the base comes from the plugin's composition
 stamp), which every runtime reader and doctor's selection-agreement check
 read; `pluginsSelected()` is the list as typed. `plugin list` shows the plugin
 as `paused: needs zeta, which is off` and doctor lists it as information. Turning
-the base back on brings the plugin back at the next session start. A pause that
+the base back on brings the plugin back at the next session start (on Kiro CLI
+and opencode, when the person runs `aidlc engine plugin sync --plugin-root
+<folder>`); the select or `config project --plugins` that turns it on says
+which, once (`resumedLine()` beside `pausedLine()` in `aidlc-lib.ts`, with the
+words from `nextCompose()`). A pause that
 would strand open work is refused like any turn-off, naming the plugin and the
 base. Through `aidlc config project --plugins`, a plugin turned off or paused
 loses its merged contributions the same way: every config refresh runs the same

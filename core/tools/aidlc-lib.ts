@@ -734,6 +734,13 @@ export function pausedLine(plugin: string, base: string, offCommand: string | nu
       : `To turn ${plugin} off as well: ${offCommand}.`);
 }
 
+/** The one line a selection change says, once, when it turns `plugin`'s base
+ *  back on; `when` is when what the plugin adds comes back (`nextCompose`).
+ *  No record says whether a paused plugin added anything, hence "anything". */
+export function resumedLine(plugin: string, base: string, when: string): string {
+  return `${base} is on again, so ${plugin} runs again; anything ${plugin} adds to other stages and agents comes back ${when}.`;
+}
+
 /** The base a composed plugin builds on, from its stamp in `dataDir`. */
 export function composedPluginBase(dataDir: string, plugin: string): string | null {
   if (!/^[a-z][a-z0-9-]*$/.test(plugin)) return null;
