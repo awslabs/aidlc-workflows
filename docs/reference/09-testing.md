@@ -736,6 +736,11 @@ so a broken enumerator reds the gate.
 
 L1 can be enforced via a git pre-commit hook: `bun tests/run-tests.ts || exit 1`.
 
+The required `Tests (smoke + unit)` status also requires the contract job:
+package determinism, typecheck, lint and installer ShellCheck. Contract checks
+and the test matrix run in parallel; the aggregate waits for both. Its name
+stays the same so the repository's required status check covers them together.
+
 When the merge queue drops a PR only because a GitHub-hosted runner failed,
 `merge-queue-notice.yml` posts one comment on the PR saying so, naming the jobs,
 and noting that a maintainer can add it back. It runs on `workflow_run` after each
@@ -808,9 +813,15 @@ Windows, PR CI and the nightly Full Suite run every file. `t345` pins this.
 above, while required hosted live tiers run in
 `full-suite.yml`. `preview-release.yml` dispatches it every night as a separate
 run for the preview source SHA. Its failures remain visible in that run and in
-the preview notes, without failing the preview workflow. Stable promotion
-selects a published preview's source and adds only version metadata and pinned
-publication controls. It does not repeat CI or Full Suite. The preview's prior
+the preview notes, without failing the preview workflow. Once contract checks
+pass, preview native smoke, builds and artifact validation run in parallel with
+Full Suite. Publication waits for both the validated artifacts and the completed
+test report, so the release notes retain any Full Suite or upgrade warning.
+An unchanged source still runs contract checks and Full Suite while skipping
+the build and publication.
+
+Stable promotion selects a published preview's source and adds only version
+metadata and pinned publication controls. It does not repeat CI or Full Suite. The preview's prior
 results remain visible, including failures; choosing to promote is the
 maintainer's decision. The newly built stable binaries still pass packaging,
 installer, lifecycle and update checks before publication. See

@@ -462,14 +462,14 @@ describe("t332 preview publication pipeline", () => {
     expect(jobs.full_suite.needs).toEqual(["validate", "gate"]);
     expect(jobs.full_suite.if).toBeUndefined();
     expect(jobs.verify).toBeUndefined();
-    expect(jobs["native-smoke"].if).toBe(`\${{ !cancelled() && needs.validate.result == 'success' && needs.gate.result == 'success' && needs.test.result == 'success' && needs.validate.outputs.skip != 'true' }}`);
+    expect(jobs["native-smoke"].if).toBe(`\${{ !cancelled() && needs.validate.result == 'success' && needs.gate.result == 'success' && needs.validate.outputs.skip != 'true' }}`);
     expect(jobs.test.if).toBe(`\${{ !cancelled() && needs.validate.result == 'success' }}`);
     const step = (job: string, name: string): string => jobs[job].steps!.find((entry) => entry.name === name)!.run!;
     const testScript = step("test", "Require a finished Full Suite");
     const publicationScript = step("release-result", "Require publication or an intentional preview skip");
     expect(jobs["release-result"].steps?.some(entry => entry.name === "Require a passing Full Suite")).toBe(false);
     for (const fullSuite of ["success", "failure", "cancelled", "skipped"]) {
-      // Only a suite that never finished blocks the build and its report.
+      // Only a suite that never finished blocks the report and publication.
       const tests = await runWorkflowStep(testScript, REPO_ROOT, { FULL_SUITE_RESULT: fullSuite });
       expect(tests.status).toBe(["success", "failure"].includes(fullSuite) ? 0 : 1);
       for (const [skip, release] of [["true", "skipped"], ["false", "success"]]) {
@@ -523,6 +523,52 @@ describe("t332 preview publication pipeline", () => {
     expect(await stageNotes("failure", body, small, "failure"))
       .toBe(`${warning}${updateWarning}${body}\n${updateLine}\n${small}`);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("preview builds start while Full Suite runs; publication waits for its report", () => {
+    type Job = { needs: string[]; if: string };
+    type Result = { result: string; outputs?: Record<string, string> };
+    const { jobs } = Bun.YAML.parse(readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf8")) as {
+      jobs: Record<string, Job>;
+    };
+    // These two conditions use only JS-compatible operators and cancelled().
+    // Pending jobs have no result, so Actions cannot schedule a dependent job.
+    const ready = (name: string, results: Record<string, Result>, cancelled = false): boolean => {
+      const job = jobs[name];
+      if (job.needs.some((dependency) => !results[dependency])) return false;
+      const expression = job.if.match(/^\$\{\{([\s\S]+)\}\}$/)![1];
+      return new Function("needs", "cancelled", `return (${expression});`)(results, () => cancelled);
+    };
+    const buildReady = {
+      validate: { result: "success", outputs: { skip: "false" } },
+      gate: { result: "success" },
+    };
+    expect(ready("native-smoke", buildReady)).toBe(true);
+    expect(ready("native-smoke", buildReady, true)).toBe(false);
+    expect(ready("native-smoke", { ...buildReady, validate: { result: "success", outputs: { skip: "true" } } })).toBe(false);
+    for (const dependency of ["validate", "gate"]) {
+      for (const result of ["failure", "cancelled", "skipped"]) {
+        expect(ready("native-smoke", { ...buildReady, [dependency]: { result } }), `${dependency}=${result}`).toBe(false);
+      }
+    }
+    for (const fullSuite of ["success", "failure", "cancelled", "skipped"]) {
+      const artifactsReady = {
+        ...buildReady,
+        full_suite: { result: fullSuite },
+        publish: { result: "success" },
+        "update-from-previous": { result: "success" },
+      };
+      expect(ready("release", artifactsReady), `report pending, Full Suite=${fullSuite}`).toBe(false);
+      const reported = { ...artifactsReady, test: { result: "success" } };
+      expect(ready("release", reported), `report complete, Full Suite=${fullSuite}`).toBe(true);
+      expect(ready("release", reported, true)).toBe(false);
+      for (const result of ["failure", "cancelled", "skipped"]) {
+        for (const dependency of ["validate", "test", "publish"]) {
+          expect(ready("release", { ...reported, [dependency]: { result } }), `${dependency}=${result}`).toBe(false);
+        }
+        expect(ready("release", { ...reported, "update-from-previous": { result } }), `advisory upgrade=${result}`).toBe(true);
+      }
+    }
+  });
 
   test("preview tracks the exact dispatched run and tolerates its failure without changing Full Suite", async () => {
     const workflow = Bun.YAML.parse(readFileSync(PREVIEW_RELEASE_WORKFLOW, "utf8")) as {
@@ -1404,8 +1450,8 @@ describe("t332 preview publication pipeline", () => {
     expect(preview.jobs.gate.steps?.some((step) => step.run === "shellcheck scripts/install.sh")).toBe(true);
     expect(previewText).not.toContain("./.github/workflows/ci.yml");
     expect(preview.jobs.verify).toBeUndefined();
-    expect(preview.jobs["native-smoke"].needs).toEqual(["validate", "gate", "test"]);
-    expect(preview.jobs["native-smoke"].if).toBe(`\${{ !cancelled() && needs.validate.result == 'success' && needs.gate.result == 'success' && needs.test.result == 'success' && needs.validate.outputs.skip != 'true' }}`);
+    expect(preview.jobs["native-smoke"].needs).toEqual(["validate", "gate"]);
+    expect(preview.jobs["native-smoke"].if).toBe(`\${{ !cancelled() && needs.validate.result == 'success' && needs.gate.result == 'success' && needs.validate.outputs.skip != 'true' }}`);
     expect(preview.jobs.full_suite).toMatchObject({
       needs: ["validate", "gate"],
       "runs-on": "ubuntu-latest",
@@ -1430,7 +1476,7 @@ describe("t332 preview publication pipeline", () => {
     expect(testStep("Report Full Suite results")?.run).toContain("bun scripts/ci-preview-test-report.ts");
     expect(testStep("Report Full Suite results")?.run).toContain(`>>"$GITHUB_STEP_SUMMARY"`);
     expect(preview.jobs.test.steps?.some((step) => step.with?.name === "preview-test-report")).toBe(true);
-    expect(preview.jobs.release.needs).toEqual(["validate", "full_suite", "publish", "update-from-previous"]);
+    expect(preview.jobs.release.needs).toEqual(["validate", "full_suite", "test", "publish", "update-from-previous"]);
     expect(preview.jobs.release.steps?.some((step) => step.with?.name === "preview-test-report")).toBe(true);
     expect(preview.jobs.release.environment).toBe("preview");
     expect(preview.jobs.release.permissions).toEqual({ contents: "write" });
@@ -1467,9 +1513,12 @@ describe("t332 preview publication pipeline", () => {
     ]) {
       expect(ancestors(name).has("gate"), `${name} must descend from the contract gate`).toBe(true);
     }
-    // Implicit success() also covers ancestors, so a failed Full Suite would skip
-    // any job below Release tests that lacks an explicit check of its direct needs.
-    // The Full Suite and the update from the last release only report.
+    for (const name of ["native-smoke", "build", "musl-smoke", "stage-release", "windows-lifecycle", "unix-lifecycle", "update-from-previous", "publish"]) {
+      expect(ancestors(name).has("full_suite"), `${name} can run while Full Suite is pending`).toBe(false);
+      expect(ancestors(name).has("test"), `${name} does not wait for the test report`).toBe(false);
+    }
+    // Publication waits for the report, but Full Suite and upgrade failures
+    // stay advisory instead of being inherited through implicit success().
     const reportOnly = ["full_suite", "update-from-previous"];
     for (const [name, job] of Object.entries(preview.jobs)) {
       if (name === "release-result" || !ancestors(name).has("test")) continue;

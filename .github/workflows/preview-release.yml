@@ -187,11 +187,11 @@ jobs:
           path: ${{ runner.temp }}/preview-test-report/preview-test-report.md
           if-no-files-found: error
 
-  # A job's implicit success() also covers its ancestors, so a failed Full Suite
-  # would skip the whole build. Each build job checks its direct needs instead.
+  # Build and validate artifacts while Full Suite runs. Publication waits for
+  # the report so the release notes include the completed suite's result.
   native-smoke:
-    needs: [validate, gate, test]
-    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.gate.result == 'success' && needs.test.result == 'success' && needs.validate.outputs.skip != 'true' }}
+    needs: [validate, gate]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.gate.result == 'success' && needs.validate.outputs.skip != 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -765,8 +765,8 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [validate, full_suite, publish, update-from-previous]
-    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.publish.result == 'success' }}
+    needs: [validate, full_suite, test, publish, update-from-previous]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.test.result == 'success' && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     environment: preview
     permissions:

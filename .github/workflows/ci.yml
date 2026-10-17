@@ -582,24 +582,26 @@ jobs:
         run: bun tests/gen-coverage-registry.ts --check --base HEAD^1
 
   # Preserve the existing required-check name while the work runs in isolated
-  # jobs. Any deterministic matrix failure collapses its result to failure.
+  # jobs. Contract checks and every required test must succeed.
   test:
     name: Tests (smoke + unit)
     # Still collect failures, but let a superseded run release its concurrency
     # slot instead of waiting for this summary job to obtain another runner.
     if: ${{ !cancelled() }}
-    needs: [deterministic, test_native_terminal, test_guards, test_live_isolation, coverage_ratchet]
+    needs: [check, deterministic, test_native_terminal, test_guards, test_live_isolation, coverage_ratchet]
     runs-on: ubuntu-latest
     steps:
-      - name: Require smoke, unit shards, integration, production guards, the coverage ratchet, and the cross-OS jobs outside PR pushes
+      - name: Require contract checks, deterministic tests, and the cross-OS jobs outside PR pushes
         env:
           EVENT_NAME: ${{ github.event_name }}
+          CONTRACT_RESULT: ${{ needs.check.result }}
           DETERMINISTIC_RESULT: ${{ needs.deterministic.result }}
           NATIVE_RESULT: ${{ needs.test_native_terminal.result }}
           GUARD_RESULT: ${{ needs.test_guards.result }}
           ISOLATION_RESULT: ${{ needs.test_live_isolation.result }}
           COVERAGE_RESULT: ${{ needs.coverage_ratchet.result }}
         run: |
+          test "$CONTRACT_RESULT" = "success"
           test "$DETERMINISTIC_RESULT" = "success"
           test "$GUARD_RESULT" = "success"
           test "$COVERAGE_RESULT" = "success"

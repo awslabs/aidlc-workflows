@@ -1153,19 +1153,23 @@ describe("t345 complete nightly coverage", () => {
     for (const name of ["check", "deterministic", "test_guards", "coverage_ratchet"]) expect(ci.jobs[name].if).toBeUndefined();
     // A skipped need would skip the summary under the default success() gate.
     expect(ci.jobs.test.if).toBe(`\${{ !cancelled() }}`);
-    expect(ci.jobs.test.needs).toEqual(["deterministic", "test_native_terminal", "test_guards", "test_live_isolation", "coverage_ratchet"]);
+    expect(ci.jobs.test.needs).toEqual(["check", "deterministic", "test_native_terminal", "test_guards", "test_live_isolation", "coverage_ratchet"]);
     const summary = steps(ci.jobs.test)[0];
     expect(summary.env?.EVENT_NAME).toBe(`\${{ github.event_name }}`);
+    expect(summary.env?.CONTRACT_RESULT).toBe(`\${{ needs.check.result }}`);
     const status = (event: string, results: Record<string, string>) => spawnSync("bash", ["-e", "-c", summary.run!], {
       encoding: "utf8", timeout: 15_000,
-      env: { ...process.env, EVENT_NAME: event, DETERMINISTIC_RESULT: "success", GUARD_RESULT: "success", COVERAGE_RESULT: "success", ...results },
+      env: { ...process.env, EVENT_NAME: event, CONTRACT_RESULT: "success", DETERMINISTIC_RESULT: "success", GUARD_RESULT: "success", COVERAGE_RESULT: "success", ...results },
     }).status;
     for (const event of ["pull_request", "merge_group", "workflow_dispatch", "workflow_call"]) {
       const expected = event === "pull_request" ? "skipped" : "success";
       const crossOs = { NATIVE_RESULT: expected, ISOLATION_RESULT: expected };
       expect(status(event, crossOs), event).toBe(0);
-      for (const key of ["DETERMINISTIC_RESULT", "GUARD_RESULT", "COVERAGE_RESULT", "NATIVE_RESULT", "ISOLATION_RESULT"]) {
+      for (const key of ["CONTRACT_RESULT", "DETERMINISTIC_RESULT", "GUARD_RESULT", "COVERAGE_RESULT", "NATIVE_RESULT", "ISOLATION_RESULT"]) {
         for (const result of ["failure", "cancelled"]) expect(status(event, { ...crossOs, [key]: result }), `${event} ${key}=${result}`).not.toBe(0);
+      }
+      for (const result of ["skipped", ""]) {
+        expect(status(event, { ...crossOs, CONTRACT_RESULT: result }), `${event} contracts=${result}`).not.toBe(0);
       }
       // The merge queue cannot pass on cross-OS jobs that never ran.
       if (event !== "pull_request") {
@@ -1281,7 +1285,7 @@ describe("t345 complete nightly coverage", () => {
       expect(run, testStep).toBeLessThan(all.indexOf(tolerant[0]));
       expect((job as { "continue-on-error"?: unknown })["continue-on-error"], testStep).toBeUndefined();
     }
-    expect(ci.jobs.test.needs).toEqual(["deterministic", "test_native_terminal", "test_guards", "test_live_isolation", "coverage_ratchet"]);
+    expect(ci.jobs.test.needs).toEqual(["check", "deterministic", "test_native_terminal", "test_guards", "test_live_isolation", "coverage_ratchet"]);
     // Uploads outside the required chain, and every Full Suite upload, stay fatal.
     const ciTolerant = Object.entries(ci.jobs).flatMap(([name, job]) =>
       steps(job).filter((step) => step["continue-on-error"] !== undefined).map((step) => `${name}: ${step.name}`));
