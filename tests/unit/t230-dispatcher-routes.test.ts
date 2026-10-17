@@ -2889,6 +2889,7 @@ describe("t230 dispatcher route completeness", () => {
       "aidlc-traceability.md",
       "aidlc-type-check.md",
       "aidlc-upstream-coverage.md",
+      "aidlc-xref-links.md",
     ]) {
       const manifest = parseSensorManifest(
         readFileSync(join(REPO_ROOT, "core", "sensors", file), "utf-8"),
