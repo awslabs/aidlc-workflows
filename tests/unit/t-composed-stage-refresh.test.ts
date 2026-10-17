@@ -1,4 +1,4 @@
-// covers: tool:aidlc-init
+// covers: tool:aidlc-init, function:frameworkFilesDoctorCheck
 //
 // A refresh carries a plugin's additions to core stages and personas over when
 // the file, with those additions taken out, is the file the record says AI-DLC
@@ -7,7 +7,9 @@
 // plugin update, or a sync that puts lost additions back) leaves the next
 // `config` going through, whichever writer wrote the file and in whatever
 // order. A plugin's `adds.scopes` are carried like its other additions. A line
-// the person changed outside the additions is still theirs to resolve.
+// the person changed outside the additions is still theirs to resolve. Doctor's
+// AI-DLC files row leaves the composed stages, personas and the personas'
+// per-harness copies to config, as config takes the additions out itself.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -15,6 +17,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { frameworkFilesDoctorCheck } from "../../core/tools/aidlc-config-diagnostics.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -181,6 +184,27 @@ describe("a refresh after a later compose carries the plugin's additions over", 
       expect(readFileSync(join(project.dir, harnessDir, PERSONA), "utf-8")).toContain(PERSONA_LINE[1]);
     });
   }
+
+  for (const harness of Object.keys(HARNESS_DIRS) as Harness[]) {
+    test(`${harness}: after config with the plugin composed, doctor's AI-DLC files row passes`, () => {
+      const project = composed(harness);
+      const refreshed = config(project, "--yes");
+      expect(refreshed.status, refreshed.out).toBe(0);
+      expect(frameworkFilesDoctorCheck(project.dir, HARNESS_DIRS[harness])).toMatchObject({ pass: true });
+    });
+  }
+
+  test("kiro-ide: a persona the plugin did not compose, changed by the person, still shows in doctor's row", () => {
+    const project = composed("kiro-ide");
+    expect(config(project, "--yes").status).toBe(0);
+    const persona = join(project.dir, ".kiro", "agents", "aidlc-developer-agent.md");
+    expect(readFileSync(persona, "utf-8")).not.toContain("<!-- plugin:");
+    writeFileSync(persona, `${readFileSync(persona, "utf-8")}\nOur team's note.\n`);
+    const row = frameworkFilesDoctorCheck(project.dir, ".kiro");
+    expect(row.pass).toBe(false);
+    expect(row.label).toContain(".kiro/agents/aidlc-developer-agent.md");
+    expect(row.label).not.toContain("aidlc-quality-agent");
+  });
 
   // The copy channel's install lines, with the tool opened before the setup
   // line: its session start composes the plugin into files with no record yet.
