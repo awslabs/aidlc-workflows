@@ -437,6 +437,10 @@ const CLI_RESERVED_EVENT_TYPES = new Set([
   // Hook-owned too: it is the person's own reply, so only the hook that saw
   // the question box may write it.
   "QUESTION_REPLIED",
+  // Hook-owned like HUMAN_TURN: it says an agent finished, and a review's
+  // verdict reads its absence as "no reviewer finished" (#2427), so only the
+  // SubagentStop hook that saw the host's completion may write it.
+  "SUBAGENT_COMPLETED",
   "SUMMARY_CONFIRMATION_RECORDED",
   "VERIFICATION_COMMAND_RECORDED",
   "CONSTRUCTION_POLICY_RECORDED",

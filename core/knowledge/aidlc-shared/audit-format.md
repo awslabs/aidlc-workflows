@@ -270,7 +270,7 @@ the active space's shared `codekb/<repo>/` tree.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `SUBAGENT_COMPLETED` | Subagent task finishes | Timestamp, Agent Type, optional Agent ID, optional Message | `hooks/aidlc-log-subagent.ts` (SubagentStop) |
+| `SUBAGENT_COMPLETED` | Subagent task finishes; reserved from the public audit CLI | Timestamp, Agent Type, optional Agent ID, optional Message | `hooks/aidlc-log-subagent.ts` (SubagentStop) |
 | `SUBAGENT_PROMPT_UNMATCHED` | Advisory, never a human turn: a Copilot prompt arrived within seconds of a subagent start in the same chat and matched no recorded subagent brief, so it was not counted | Timestamp, optional Session, Agent, Counted (always `no`), Reason (no brief matched, or the brief record could not be read) | `tools/aidlc-audit.ts appendSubagentPromptUnmatched` (Copilot adapter `record-human-turn`) |
 | `REVIEW_VERDICT_DICTATED` | No longer written. Earlier releases had the plan-approval guard record a reviewer dispatch whose brief carried a rendered `**Verdict:**` line; the reviewer now says so itself in its review file (`**Verdict Dictated:** yes\|no`, recorded on `REVIEW_COMPLETED` as `Review Verdict Dictated`). Kept registered so audits and worktree deltas written before still read and merge | Timestamp, Agent Type (the reviewer), Verdict, Tool, Request Id | reserved (no longer written; historical rows only) |
 
