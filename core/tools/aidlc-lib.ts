@@ -23853,8 +23853,10 @@ function packedGitObjectLocation(
   const packDir = join(objectDir, "pack");
   let indexes: string[];
   try {
+    // Pack writers choose the basename (jj uses loose-*); validate the index
+    // and its matching pack rather than requiring Git's usual pack-* prefix.
     indexes = readdirSync(packDir)
-      .filter((name) => /^pack-[0-9a-f]+\.idx$/.test(name))
+      .filter((name) => name.endsWith(".idx"))
       .sort();
   } catch {
     return null;

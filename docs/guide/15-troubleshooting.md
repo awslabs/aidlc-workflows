@@ -662,6 +662,13 @@ directory in its paths list, or remove a broken symlink), then run `/aidlc`
 (`$aidlc` on Codex). `/aidlc --doctor` has a "Workspace source boundary binds"
 check that names the failing path and says which of these applies to you.
 
+A valid Git checkout kept inside the project can share its object store with
+jj, including through a linked worktree. If an older AI-DLC install reports
+"no resolvable HEAD commit" for a commit that Git can read from a jj-created
+pack, update AI-DLC and refresh the project's install. Repacking the repository
+or changing jj settings is unnecessary. A genuinely missing or unreadable
+HEAD object still needs repair.
+
 If the plan's Testing Contract is refused, the message names one of three
 causes: the block is missing, it is not valid JSON, or it changed after it was
 rendered. The repair is the same for all three: re-run `render` and replace the
