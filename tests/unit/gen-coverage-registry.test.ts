@@ -506,10 +506,10 @@ describe("ratchet anti-regression (a covered unit cannot silently lose its claim
     const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf-8")) as {
       jobs: Record<string, { needs?: string[]; steps?: Array<{ run?: string; with?: Record<string, unknown> }> }>;
     };
-    const job = ci.jobs.coverage_ratchet;
-    expect(job.steps?.[0]?.with?.["fetch-depth"]).toBe(2);
+    const job = ci.jobs.check;
+    expect(job.steps?.[0]?.with?.["fetch-depth"]).toBe(`\${{ github.event_name == 'pull_request' && '0' || '2' }}`);
     expect(job.steps?.map((step) => step.run)).toContain("bun tests/gen-coverage-registry.ts --check --base HEAD^1");
-    expect(ci.jobs.test.needs).toContain("coverage_ratchet");
+    expect(ci.jobs.test.needs).toContain("check");
   });
 });
 

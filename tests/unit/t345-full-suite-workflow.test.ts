@@ -33,7 +33,7 @@ interface Matrix {
   exclude?: string;
   family?: LiveFamily[];
   runner?: string[] | string;
-  suite?: Array<{ name: string; tier: string; shard?: string; partition?: string; filter?: string; exclude?: string }>;
+  suite?: Array<{ name: string; tier: string; shard?: string; index?: number; partition?: string; filter?: string; exclude?: string }>;
 }
 interface Job {
   name?: string;
@@ -225,9 +225,6 @@ describe("t345 complete nightly coverage", () => {
         "artifact-label": `ci-deterministic-\${{ matrix.suite.name }}`,
       },
     });
-    // Every job but the merge queue's two macOS unit jobs keeps its matrix
-    // shard (the matrix case below evaluates each one).
-    expect(ci.jobs.deterministic.with?.["unit-shard"]).toEndWith("|| matrix.suite.shard || '' }}");
     expect(ci.jobs.deterministic.steps).toBeUndefined();
     expect(ci.jobs.deterministic["runs-on"]).toBeUndefined();
     expect(ci.jobs.deterministic.needs).toBeUndefined();
@@ -412,7 +409,8 @@ describe("t345 complete nightly coverage", () => {
     };
     expect(ci.on.workflow_dispatch.inputs.platform_regressions).toMatchObject({ type: "boolean", default: false });
     const matrix = matrixOf(ci.jobs.deterministic);
-    expect(matrix.suite).toEqual(matrixOf(workflow.jobs.deterministic).suite);
+    expect(matrix.suite!.map(({ index, ...suite }) => index ? { ...suite, shard: `${index}/16` } : suite))
+      .toEqual(matrixOf(workflow.jobs.deterministic).suite!);
     for (const [event, enabled, expanded] of [
       ["pull_request", false, false], ["pull_request", true, false],
       ["workflow_call", true, false], ["workflow_dispatch", false, false],
@@ -439,10 +437,13 @@ describe("t345 complete nightly coverage", () => {
       const guardMatrix2 = { name: "guard-matrix-2", tier: "integration", filter: "^t-guard-matrix-", partition: "2/2" };
       // In the queue, macOS runs its selected unit files in two jobs, unit-1 and unit-2.
       const queue = event === "merge_group";
-      const macosUnitsLeftOut = Array.from({ length: 14 }, (_, index) => ({
-        runner: "macos-15", suite: { name: `unit-${index + 3}`, tier: "unit", shard: `${index + 3}/16` },
+      const linuxUnitsLeftOut = Array.from({ length: 4 }, (_, index) => ({
+        runner: "ubuntu-latest", suite: { name: `unit-${index + 13}`, tier: "unit", index: index + 13 },
       }));
-      expect(excluded).toEqual(expanded
+      const macosUnitsLeftOut = Array.from({ length: 14 }, (_, index) => ({
+        runner: "macos-15", suite: { name: `unit-${index + 3}`, tier: "unit", index: index + 3 },
+      }));
+      expect(excluded).toEqual([...linuxUnitsLeftOut, ...(expanded
         ? [
           { runner: "macos-15", suite: scopeRuns }, { runner: "windows-latest", suite: scopeRuns },
           { runner: "macos-15", suite: scopeHosts }, { runner: "windows-latest", suite: scopeHosts },
@@ -450,32 +451,34 @@ describe("t345 complete nightly coverage", () => {
           { runner: "macos-15", suite: guardMatrix2 }, { runner: "windows-latest", suite: guardMatrix2 },
           ...(queue ? macosUnitsLeftOut : []),
         ]
-        : [{ suite: { name: "e2e", tier: "e2e" } }]);
+        : [{ suite: { name: "e2e", tier: "e2e" } }])]);
       const suitesOn = (runner: string) => matrix.suite!.filter((suite) =>
         !excluded.some((row) => (row.runner ?? runner) === runner && row.suite.name === suite.name && row.suite.tier === suite.tier));
       const suites = suitesOn("ubuntu-latest");
       expect(runners).toEqual(expanded ? ["ubuntu-latest", "macos-15", "windows-latest"] : ["ubuntu-latest"]);
-      expect(suites.map((suite) => suite.tier)).toEqual(["smoke", ...Array(16).fill("unit"), ...Array(5).fill("integration"), ...(expanded ? ["e2e"] : [])]);
-      expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.shard)).toEqual(Array.from({ length: 16 }, (_, index) => `${index + 1}/16`));
-      expect(new Set(runners.flatMap((runner) => suitesOn(runner).map((suite) => `${runner}/${suite.name}`))).size).toBe(queue ? 47 : expanded ? 61 : 22);
+      expect(suites.map((suite) => suite.tier)).toEqual(["smoke", ...Array(12).fill("unit"), ...Array(5).fill("integration"), ...(expanded ? ["e2e"] : [])]);
+      expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.index)).toEqual(Array.from({ length: 12 }, (_, index) => index + 1));
+      expect(new Set(runners.flatMap((runner) => suitesOn(runner).map((suite) => `${runner}/${suite.name}`))).size).toBe(queue ? 43 : expanded ? 57 : 18);
       if (expanded) {
-        expect(suites).toEqual(matrixOf(workflow.jobs.deterministic).suite!);
-        expect(suitesOn("windows-latest").map((suite) => suite.name)).toEqual(suitesOn("ubuntu-latest").map((suite) => suite.name).filter((name) => !["scope-runs", "scope-hosts", "guard-matrix-1", "guard-matrix-2"].includes(name)));
+        expect(suitesOn("windows-latest").map((suite) => suite.name)).toEqual(matrixOf(workflow.jobs.deterministic).suite!.map((suite) => suite.name).filter((name) => !["scope-runs", "scope-hosts", "guard-matrix-1", "guard-matrix-2"].includes(name)));
         expect(suitesOn("macos-15").map((suite) => suite.name)).toEqual(queue
           ? ["smoke", "unit-1", "unit-2", "integration", "e2e"]
           : suitesOn("windows-latest").map((suite) => suite.name));
       }
-      // Each job's unit shard: the queue's two macOS unit jobs split the
-      // selection in halves; every other job keeps its matrix shard.
+      // Every platform's active jobs form a complete N/M partition.
       const shardExpression = (ci.jobs.deterministic.with?.["unit-shard"] ?? "").match(/^\$\{\{([\s\S]+)\}\}$/)?.[1];
       expect(shardExpression).toBeDefined();
-      const shardOf = new Function("github", "matrix", `return (${shardExpression});`);
+      const format = (template: string, ...args: unknown[]) => template.replace(/\{(\d+)\}/g, (_, index: string) => String(args[Number(index)]));
+      const shardOf = new Function("github", "matrix", "format", `return (${shardExpression});`);
       for (const runner of runners) {
+        const total = runner === "ubuntu-latest" ? 12 : queue && runner === "macos-15" ? 2 : 16;
+        const selectedShards: string[] = [];
         for (const suite of suitesOn(runner)) {
-          const queueMacos = queue && runner === "macos-15" && suite.tier === "unit";
-          expect(shardOf({ event_name: event }, { runner, suite }), `${event} ${runner} ${suite.name}`)
-            .toBe(queueMacos ? { "unit-1": "1/2", "unit-2": "2/2" }[suite.name as "unit-1" | "unit-2"] : suite.shard ?? "");
+          const shard = shardOf({ event_name: event }, { runner, suite }, format);
+          expect(shard, `${event} ${runner} ${suite.name}`).toBe(suite.tier === "unit" ? `${suite.index}/${total}` : "");
+          if (suite.tier === "unit") selectedShards.push(shard);
         }
+        expect(selectedShards).toEqual(Array.from({ length: total }, (_, index) => `${index + 1}/${total}`));
       }
     }
     // One integration job runs everything but the scope runs, the scope-host
@@ -1173,22 +1176,22 @@ describe("t345 complete nightly coverage", () => {
     };
     expect(ci.on.merge_group).toEqual({ types: ["checks_requested"] });
     for (const name of ["test_native_terminal", "test_live_isolation"]) expect(ci.jobs[name].if).toBe("github.event_name != 'pull_request'");
-    for (const name of ["check", "deterministic", "test_guards", "coverage_ratchet"]) expect(ci.jobs[name].if).toBeUndefined();
+    for (const name of ["check", "deterministic", "test_guards"]) expect(ci.jobs[name].if).toBeUndefined();
     // A skipped need would skip the summary under the default success() gate.
     expect(ci.jobs.test.if).toBe(`\${{ !cancelled() }}`);
-    expect(ci.jobs.test.needs).toEqual(["check", "deterministic", "test_native_terminal", "test_guards", "test_live_isolation", "coverage_ratchet"]);
+    expect(ci.jobs.test.needs).toEqual(["check", "deterministic", "test_native_terminal", "test_guards", "test_live_isolation"]);
     const summary = steps(ci.jobs.test)[0];
     expect(summary.env?.EVENT_NAME).toBe(`\${{ github.event_name }}`);
     expect(summary.env?.CONTRACT_RESULT).toBe(`\${{ needs.check.result }}`);
     const status = (event: string, results: Record<string, string>) => spawnSync("bash", ["-e", "-c", summary.run!], {
       encoding: "utf8", timeout: 15_000,
-      env: { ...process.env, EVENT_NAME: event, CONTRACT_RESULT: "success", DETERMINISTIC_RESULT: "success", GUARD_RESULT: "success", COVERAGE_RESULT: "success", ...results },
+      env: { ...process.env, EVENT_NAME: event, CONTRACT_RESULT: "success", DETERMINISTIC_RESULT: "success", GUARD_RESULT: "success", ...results },
     }).status;
     for (const event of ["pull_request", "merge_group", "workflow_dispatch", "workflow_call"]) {
       const expected = event === "pull_request" ? "skipped" : "success";
       const crossOs = { NATIVE_RESULT: expected, ISOLATION_RESULT: expected };
       expect(status(event, crossOs), event).toBe(0);
-      for (const key of ["CONTRACT_RESULT", "DETERMINISTIC_RESULT", "GUARD_RESULT", "COVERAGE_RESULT", "NATIVE_RESULT", "ISOLATION_RESULT"]) {
+      for (const key of ["CONTRACT_RESULT", "DETERMINISTIC_RESULT", "GUARD_RESULT", "NATIVE_RESULT", "ISOLATION_RESULT"]) {
         for (const result of ["failure", "cancelled"]) expect(status(event, { ...crossOs, [key]: result }), `${event} ${key}=${result}`).not.toBe(0);
       }
       for (const result of ["skipped", ""]) {
@@ -1198,6 +1201,62 @@ describe("t345 complete nightly coverage", () => {
       if (event !== "pull_request") {
         for (const key of ["NATIVE_RESULT", "ISOLATION_RESULT"]) expect(status(event, { ...crossOs, [key]: "skipped" }), `${event} ${key}=skipped`).not.toBe(0);
       }
+    }
+  });
+
+  test("consolidated checks keep collecting failures and compare changelog against the frozen PR base", () => {
+    const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {
+      jobs: Record<string, Job>;
+    };
+    const job = ci.jobs.check;
+    const all = steps(job);
+    const commands = all.filter((step) => step.run).map((step) => step.name);
+    expect(commands).toEqual([
+      "Install dependencies", "Run contract checks", "ShellCheck installer",
+      "Package the tree the registry reads", "Fail if a unit lost coverage against the first parent",
+      "Guard against deleted CHANGELOG entries",
+    ]);
+    expect(all.every((step) => step["continue-on-error"] === undefined)).toBe(true);
+    expect(ci.jobs.coverage_ratchet).toBeUndefined();
+    expect(ci.jobs["changelog-guard"]).toBeUndefined();
+    expect(ci.jobs.test.needs).toContain("check");
+    const changelog = all.find((step) => step.name === "Guard against deleted CHANGELOG entries")!;
+    expect(changelog.env).toEqual({ CHANGELOG_BASE: `\${{ github.event.pull_request.base.sha }}` });
+    expect(changelog.run).toBe('bun scripts/ci-changelog-guard.ts "$CHANGELOG_BASE"');
+
+    const execute = (event: string, failure?: string, cancelled = false) => {
+      const outcomes: Record<string, { outcome: string }> = {};
+      const executed: Array<string | undefined> = [];
+      let failed = false;
+      for (const step of all) {
+        const condition = step.if?.match(/^\$\{\{([\s\S]+)\}\}$/)?.[1];
+        const enabled = condition
+          ? new Function("github", "steps", "cancelled", `return (${condition});`)(
+            { event_name: event }, outcomes, () => cancelled,
+          )
+          : !failed && !cancelled;
+        const outcome = !enabled ? "skipped" : failure !== undefined && step.name === failure ? "failure" : "success";
+        if (step.id) outcomes[step.id] = { outcome };
+        if (enabled && step.run) executed.push(step.name);
+        if (outcome === "failure") failed = true;
+      }
+      return { executed, failed };
+    };
+    for (const event of ["pull_request", "merge_group", "workflow_dispatch", "workflow_call"]) {
+      const expected = event === "pull_request" ? commands : commands.slice(0, -1);
+      expect(execute(event)).toEqual({ executed: expected, failed: false });
+      for (const name of expected.slice(1)) {
+        const result = execute(event, name);
+        expect(result.failed, `${event}: ${name}`).toBe(true);
+        const remaining = name === "Package the tree the registry reads"
+          ? expected.filter((entry) => entry !== "Fail if a unit lost coverage against the first parent")
+          : expected;
+        expect(result.executed, `${event}: ${name}`).toEqual(remaining);
+      }
+      expect(execute(event, undefined, true).executed).toEqual([]);
+      expect(execute(event, "Install dependencies")).toEqual({
+        executed: ["Install dependencies", "ShellCheck installer"], failed: true,
+      });
     }
   });
 
@@ -1308,7 +1367,7 @@ describe("t345 complete nightly coverage", () => {
       expect(run, testStep).toBeLessThan(all.indexOf(tolerant[0]));
       expect((job as { "continue-on-error"?: unknown })["continue-on-error"], testStep).toBeUndefined();
     }
-    expect(ci.jobs.test.needs).toEqual(["check", "deterministic", "test_native_terminal", "test_guards", "test_live_isolation", "coverage_ratchet"]);
+    expect(ci.jobs.test.needs).toEqual(["check", "deterministic", "test_native_terminal", "test_guards", "test_live_isolation"]);
     // Uploads outside the required chain, and every Full Suite upload, stay fatal.
     const ciTolerant = Object.entries(ci.jobs).flatMap(([name, job]) =>
       steps(job).filter((step) => step["continue-on-error"] !== undefined).map((step) => `${name}: ${step.name}`));
