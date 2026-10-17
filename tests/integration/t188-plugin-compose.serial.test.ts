@@ -919,6 +919,73 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(compose.stderr).toContain("AIDLC_PROJECT_DIR");
   });
 
+  // With only Bun (the copy channel) the launcher runs the project's own sync,
+  // so Cursor and Kiro IDE keep the composition record a native install keeps;
+  // where that sync refuses (an older project tool), the plugin's compose.ts
+  // still composes, as before.
+  test("the Bun launcher keeps the composition record on Cursor and Kiro IDE, and composes where the project's sync refuses", () => {
+    const version = (JSON.parse(
+      readFileSync(join(REPO_ROOT, "plugins", PLUGIN, ".aidlc-plugin", "plugin.json"), "utf-8"),
+    ) as { version: string }).version;
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: "" };
+    for (const key of [
+      "AIDLC_HARNESS_DIR", "AIDLC_HARNESS_NAME", "AIDLC_PLUGIN_ROOT", "AIDLC_PROJECT_DIR",
+      "CLAUDE_PLUGIN_ROOT", "CLAUDE_PROJECT_DIR", "CURSOR_PLUGIN_ROOT", "CURSOR_PROJECT_DIR", "PLUGIN_ROOT",
+    ]) delete env[key];
+    const timeout = remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS);
+    const kiroIde = (name: string) => {
+      const project = join(tmp, name);
+      cpSync(join(REPO_ROOT, "dist", "kiro-ide"), project, { recursive: true });
+      cpSync(pluginBuilds.get("kiro-ide")!, project, { recursive: true });
+      return project;
+    };
+    const runKiroIde = (project: string) => spawnSync(
+      BUN, ["./hooks/aidlc-plugin-compose.ts", ".kiro", "kiro-ide"],
+      { cwd: project, encoding: "utf-8", env, timeout },
+    );
+    const cursorProject = join(tmp, "cursor-bun-record");
+    mkdirSync(cursorProject, { recursive: true });
+    const install = spawnSync(BUN, [join(CURSOR_DIST, "install.ts"), cursorProject], {
+      cwd: REPO_ROOT, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+    });
+    expect(install.status, install.stderr).toBe(0);
+    const cursorBuilt = pluginBuilds.get("cursor")!;
+    const kiroProject = kiroIde("kiro-ide-bun-record");
+    for (const { project, leaf, run } of [
+      { project: kiroProject, leaf: ".kiro", run: () => runKiroIde(kiroProject) },
+      {
+        project: cursorProject,
+        leaf: ".cursor",
+        run: () => spawnSync(BUN, [join(cursorBuilt, "hooks", "aidlc-plugin-compose.ts"), ".cursor"], {
+          cwd: cursorBuilt,
+          input: JSON.stringify({ hook_event_name: "sessionStart", workspace_roots: [cursorProject] }),
+          encoding: "utf-8",
+          env: { ...env, CURSOR_PROJECT_DIR: cursorProject },
+          timeout,
+        }),
+      },
+    ]) {
+      const result = run();
+      expect(result.status, result.stderr).toBe(0);
+      const stamp = join(project, leaf, "tools", "data", `plugin-compose-${PLUGIN}.json`);
+      expect(existsSync(stamp), `${leaf}: composition record`).toBe(true);
+      expect((JSON.parse(readFileSync(stamp, "utf-8")) as { version?: string }).version).toBe(version);
+      const list = spawnSync(BUN, [join(project, leaf, "tools", "aidlc.ts"), "engine", "plugin", "list"], {
+        cwd: project, encoding: "utf-8", env, timeout,
+      });
+      expect(list.stdout, list.stderr).toMatch(new RegExp(`^${PLUGIN}\\s+-\\s+${version.replaceAll(".", "\\.")}\\s`, "m"));
+    }
+
+    const staleProject = kiroIde("kiro-ide-bun-stale-tool");
+    writeFileSync(join(staleProject, ".kiro", "tools", "aidlc-plugin.ts"), "process.exit(1);\n");
+    const stale = runKiroIde(staleProject);
+    expect(stale.status, stale.stderr).toBe(0);
+    const staleGraph = JSON.parse(
+      readFileSync(join(staleProject, ".kiro", "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as GraphStage[];
+    expect(staleGraph.some((item) => item.slug === "test-pro-integration")).toBe(true);
+  });
+
   // A project installed with `config`, then composed: a same-release refresh is
   // not a conflict on any harness. Copilot keeps its skills and agents outside
   // the harness folder (.github/), where the composed scope row in tables.md and
