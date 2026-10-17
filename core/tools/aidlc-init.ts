@@ -7192,8 +7192,8 @@ function kiroKeptChangedNote(count: number, harnessDir: string, force: string): 
     `\`${force}\` takes this release's ${one ? "version" : "versions"}.`;
 }
 
-// A run that writes a model or effort value into a Kiro agent file that the
-// project's file does not carry, other than one the run itself says it sets:
+// A run that writes a model or effort value into a Kiro agent file that
+// differs from the project's file, other than one the run itself changes:
 // the person set it for that agent, maybe for another tool, so the line names
 // it and where to see and change it.
 function kiroAgentPinsNote(
