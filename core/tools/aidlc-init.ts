@@ -426,6 +426,8 @@ type PreparedRefreshSource = {
   emptiedSidecars?: Set<string>;
   /** What to record for each composed file it carried over: the file without the plugin's additions. */
   composedRecords?: ReadonlyMap<string, string>;
+  /** Composed files this row no longer ships whose record proves them AI-DLC's. */
+  provenRetired?: ReadonlySet<string>;
   entries?: Baseline["entries"];
   notes: string[];
 };
@@ -7002,6 +7004,7 @@ function prepareRefreshSource(
   // strip a core edge, and doctor would report a refused edge as missing.
   const retiredEdges = new Map<string, Set<string>>();
   const composedRecords = new Map<string, string>();
+  const provenRetired = new Set<string>();
   const requiresEdgeHolds = requiresEdgeOracle(join(root, descriptor.harnessDir));
   // Composed files whose recorded contributions must survive the refresh:
   // every stage source, plus the personas (which carry prose fragments only).
@@ -7024,8 +7027,10 @@ function prepareRefreshSource(
     for (const file of readdirSync(personaRoot).filter((name) => name.endsWith(".md"))) {
       const slug = file.slice(0, -3);
       composedTargets.push({ rel: `${descriptor.harnessDir}/agents/${file}`, slug });
-      // The persona's native twins carry the same fragments.
-      for (const rel of personaTwinRels(descriptor.distribution, descriptor.harnessDir, slug)) {
+      // The persona's native twins carry the same fragments, the previous
+      // row's too when the project switches rows (Kiro IDE to Kiro CLI).
+      const rows = new Set([descriptor.distribution, prior?.distribution ?? descriptor.distribution]);
+      for (const rel of new Set([...rows].flatMap((row) => personaTwinRels(row, descriptor.harnessDir, slug)))) {
         composedTargets.push({ rel, slug });
       }
     }
@@ -7034,7 +7039,7 @@ function prepareRefreshSource(
     const priorHash = prior?.files[rel];
     const currentPath = join(projectDir, rel);
     const stagedPath = join(root, rel);
-    if (!regularFile(currentPath) || !existsSync(stagedPath)) continue;
+    if (!regularFile(currentPath)) continue;
     // Read as AI-DLC wrote it: a CRLF checkout is the same file.
     const current = readFileSync(currentPath, "utf-8").replaceAll("\r\n", "\n");
     const record = records.get(slug) ?? {};
@@ -7048,6 +7053,11 @@ function prepareRefreshSource(
     const currentHash = sha256Bytes(current);
     const strippedHash = sha256Bytes(stripRecordedContributions(current, record));
     if (priorHash && currentHash !== priorHash && strippedHash !== priorHash) continue;
+    // A file this row no longer ships is AI-DLC's to remove.
+    if (!existsSync(stagedPath)) {
+      if (priorHash) provenRetired.add(rel);
+      continue;
+    }
     let fresh = readFileSync(stagedPath, "utf-8");
     // A stage carried over from the project (a plugin stage) is not core's,
     // so its edges are not core-owned, and it already holds the recorded
@@ -7272,6 +7282,7 @@ function prepareRefreshSource(
     unproven,
     emptiedSidecars,
     composedRecords,
+    provenRetired,
     entries,
     notes,
   };
@@ -9628,6 +9639,7 @@ function planManagedFiles(
   projectOverlays: ReadonlySet<string> = new Set(),
   unproven: ReadonlySet<string> = new Set(),
   composedRecords: ReadonlyMap<string, string> = new Map(),
+  provenRetired: ReadonlySet<string> = new Set(),
 ): void {
   const shipped = new Set<string>();
   for (const directory of descriptor.managedDirectories) {
@@ -9813,7 +9825,8 @@ function planManagedFiles(
     ) continue;
     const target = join(projectDir, rel);
     if (!pathPresent(target)) continue;
-    if ((!regularFile(target) || sha256FileMatching(target, [priorHash]) !== priorHash) && !force) {
+    const owned = regularFile(target) && (provenRetired.has(rel) || sha256FileMatching(target, [priorHash]) === priorHash);
+    if (!owned && !force) {
       actions.push({ path: rel, action: "conflict", detail: "removed upstream but locally modified" });
       continue;
     }
@@ -13495,6 +13508,7 @@ export async function main(
       prepared.projectOverlays,
       prepared.unproven,
       prepared.composedRecords,
+      prepared.provenRetired,
     );
     for (const rel of prepared.retiredManagedFiles) {
       const target = join(projectDir, rel);
