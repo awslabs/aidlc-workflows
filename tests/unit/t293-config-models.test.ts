@@ -1766,7 +1766,7 @@ describe("t293 doctor model policy advisory", () => {
     );
   });
 
-  test("config models --check on Cursor counts what doctor counts", () => {
+  test("config models --check on Cursor leaves a shared effort to the session, as doctor does", () => {
     const check = (models: unknown) => {
       const project = temp("aidlc-t293-check-cursor-");
       cpSync(join(DIST, "cursor"), project, { recursive: true });
