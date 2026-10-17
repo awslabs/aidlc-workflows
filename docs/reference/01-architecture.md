@@ -1032,7 +1032,7 @@ tests/
 +-- hooks/
 |   +-- pre-commit            # Git hook: runs the default levels (smoke + unit + integration)
 +-- smoke/                    # Level: structural validation (no LLM, seconds)
-+-- unit/                     # Level: single-component isolation (no LLM)
++-- unit/                     # Unit, process, and workflow contracts (no LLM)
 +-- integration/              # Level: cross-component contracts + live stage/CLI utilities
 +-- e2e/                      # Level: full lifecycle, worktree, rendered terminal journeys
 ```
@@ -1056,7 +1056,7 @@ introduce regressions.
 | Level | Directory | What It Covers |
 |-------|-----------|----------------|
 | **Smoke** (L1) | `tests/smoke/` | File existence, agent/stage/protocol structure, SKILL.md graph consistency, settings.json schema. Fast structural checks that catch missing or misnamed files. No LLM. |
-| **Unit** (L1) | `tests/unit/` | The 17 hooks, CLI tools, stage/agent frontmatter, knowledge inventory, the orchestration-engine handlers, and other single-component contracts. Each test isolates one component. No LLM. |
+| **Unit** (L1) | `tests/unit/` | Hooks, CLI tools, stage/agent frontmatter, knowledge inventory, and orchestration-engine contracts. This execution tier currently includes unit, process/adapter, and deterministic workflow tests; the directory does not imply single-component isolation or low cost. No LLM. |
 | **Integration** (L2) | `tests/integration/` | Cross-component contracts (scope-to-stage mapping, stage-agent cross-checks, protocol compliance, audit/runtime-graph end-to-end) and the live stage/CLI utilities driven through the `claude` CLI or SDK. The live files skip cleanly when `claude` is absent. |
 | **E2E** (L3) | `tests/e2e/` | Full lifecycle and worktree primitives, plus the rendered-terminal (`tui-drive.ts`) journeys that prove answering real AskUserQuestion gates advances disk state. The live journeys require `claude` + Bedrock creds and are gated behind `AIDLC_TUI_LIVE=1`. |
 

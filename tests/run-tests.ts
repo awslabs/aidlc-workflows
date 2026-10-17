@@ -138,7 +138,7 @@ function usage(): string {
 
 LEVEL FLAGS (combinable, each selects exactly its level):
   --smoke         Structural validation (files exist, permissions, settings)
-  --unit          Single-component isolation (hooks, frontmatter, knowledge)
+  --unit          Unit directory, including process and workflow contracts
   --integration   Cross-component contracts and live stage/CLI utilities
   --e2e           Full lifecycle, worktree, and rendered terminal journeys
 
@@ -2041,7 +2041,7 @@ async function main(): Promise<number> {
     return failedFiles;
   }
 
-  if (args.runUnit) await runTier("unit", "Unit Tests (single-component isolation)");
+  if (args.runUnit) await runTier("unit", "Unit Tests (unit, process, and workflow contracts)");
 
   let preflightRan = false;
   if (needsLlm && !args.filter && args.noLlm) {

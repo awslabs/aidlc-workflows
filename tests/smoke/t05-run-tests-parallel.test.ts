@@ -285,7 +285,7 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     const execution = JSON.parse(readFileSync(join(stamp!, file.replace(/\.test\.ts$/, ".execution.json")), "utf8"));
     expect(execution.noLlm).toBe(true);
     expect(r.out).toContain(
-      `## Unit Tests (single-component isolation) (shard=${selected}/8)`,
+      `## Unit Tests (unit, process, and workflow contracts) (shard=${selected}/8)`,
     );
     expect(r.out).toContain(`=== START ${file} ===`);
     expect(r.out).toContain("Test files: 1");

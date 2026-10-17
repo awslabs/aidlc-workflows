@@ -30888,7 +30888,7 @@ export function writeStateFile(projectDir: string, content: string, intent?: str
   const path = stateFilePath(projectDir, intent, space);
   // A read-only aidlc-state.md is a deliberate write barrier the state tool
   // must honour (a corrupt/locked workspace must fail loud, not silently
-  // advance — see the t47/t77/t137 read-only-state failure-injection tests).
+  // advance — see the t47/t77 read-only-state failure-injection tests).
   // writeFileAtomic uses tmp+rename, and POSIX rename overwrites a read-only
   // TARGET (it only needs directory-write permission), so it would bypass that
   // barrier. Preserve the bare-writeFileSync EACCES semantics by refusing up
