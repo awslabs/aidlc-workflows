@@ -101,7 +101,7 @@ export function assignWeightedShards(
 
   if (total > groups.length) {
     throw new Error(
-      `--shard count ${total} exceeds ${groups.length} assignable unit-test groups`,
+      `--shard count ${total} exceeds ${groups.length} assignable test groups`,
     );
   }
 

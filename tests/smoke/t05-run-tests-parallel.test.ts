@@ -205,7 +205,7 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     expect(() =>
       assignWeightedShards(files, invalidCount, UNIT_SHARD_CONFIG)
     ).toThrow(
-      `--shard count ${invalidCount} exceeds ${assignableGroups} assignable unit-test groups`,
+      `--shard count ${invalidCount} exceeds ${assignableGroups} assignable test groups`,
     );
 
     const r = run(
@@ -214,9 +214,20 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     );
     expect(r.status).toBe(2);
     expect(r.out).toContain(
-      `ERROR: --shard count ${invalidCount} exceeds ${assignableGroups} assignable unit-test groups`,
+      `ERROR: --shard count ${invalidCount} exceeds ${assignableGroups} assignable test groups`,
     );
     expect(r.out).not.toContain("RESULT: PASS");
+  }, PER_TEST_TIMEOUT);
+
+  test("oversized integration shards return an argument error before running tests", () => {
+    const r = run([
+      "--integration", "--no-llm", "--filter", "^t-guard-matrix-doc-delete$", "--shard", "2/2",
+    ], { AIDLC_TEST_PACKAGE_READY: "1" });
+    expect(r.status, r.out).toBe(2);
+    expect(r.out).toContain("ERROR: --shard count 2 exceeds 1 assignable test groups");
+    expect(r.out).not.toContain("unit-test groups");
+    expect(r.out).not.toMatch(/^\s+at /m);
+    expect(r.out).not.toContain("=== START");
   }, PER_TEST_TIMEOUT);
 
   test("sixteen weighted unit shards cover every file once and preserve binary affinity", () => {

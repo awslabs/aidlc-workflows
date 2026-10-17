@@ -1320,9 +1320,16 @@ function levelFiles(level: Level, excludes: string[] = []): string[] {
       weights: Object.fromEntries(names.filter((name) => name in order.weights).map((name) => [name, order.weights[name]])),
       affinityGroups: [],
     };
-    const selected = new Set(selectShard(names, args.shard, config));
-    return candidates.filter((file) => selected.has(legacyResultName(file)) && kept(file) &&
-      !excludeSet.has(basename(file)) && !excludeSet.has(legacyResultName(file)));
+    try {
+      const selected = new Set(selectShard(names, args.shard, config));
+      return candidates.filter((file) => selected.has(legacyResultName(file)) && kept(file) &&
+        !excludeSet.has(basename(file)) && !excludeSet.has(legacyResultName(file)));
+    } catch (error) {
+      process.stderr.write(
+        `ERROR: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+      process.exit(2);
+    }
   }
   return files.filter(kept);
 }
