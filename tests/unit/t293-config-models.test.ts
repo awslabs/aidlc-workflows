@@ -1635,7 +1635,7 @@ describe("t293 doctor model policy advisory", () => {
     expect(check.fix).not.toContain("effort policy");
   });
 
-  test("config models --check on kiro-ide counts what doctor counts", () => {
+  test("config models --check on kiro-ide leaves a shared effort to the session, as doctor does", () => {
     const check = (models: unknown) => {
       const project = temp("aidlc-t293-check-kiro-ide-");
       cpSync(join(DIST, "kiro-ide"), project, { recursive: true });

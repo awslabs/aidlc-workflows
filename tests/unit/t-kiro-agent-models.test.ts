@@ -1,4 +1,4 @@
-// covers: file:tools/aidlc-model-policy.ts, function:isModelId, function:modelHarnessHonesty, function:presetsChangeNothing, function:kiroAgentModelsOn, function:kiroAgentModelsOffInPreview, function:installedModelBuild, function:applyModelPolicyToProjection, function:modelPolicySurfaceDrift, function:sessionModelsDetail, function:preparePreviewSection, function:validatePreviewArgs, function:showPreviewFeatures
+// covers: file:tools/aidlc-model-policy.ts, function:isModelId, function:modelHarnessHonesty, function:presetsChangeNothing, function:kiroAgentModelsOn, function:kiroAgentModelsOffInPreview, function:installedModelBuild, function:applyModelPolicyToProjection, function:modelPolicySurfaceDrift, function:sessionModelsDetail, function:preparePreviewSection, function:validatePreviewArgs, function:showPreviewFeatures, function:previewSwitchLine
 //
 // On Kiro (kiro-ide) a delegated agent runs on its own `model` and
 // `effortLevel` (Kiro CLI 2.31.1 on its v3 engine, Kiro IDE 1.3.0). On a
@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
+import { previewSwitchLine } from "../../core/tools/aidlc-init.ts";
 import { renderReviewCopy } from "../../core/tools/aidlc-kiro-review-copy.ts";
 import * as policy from "../../core/tools/aidlc-model-policy.ts";
 import type { ModelPolicyRecord } from "../../core/tools/aidlc-model-policy.ts";
@@ -128,6 +129,28 @@ describe("the agent-models choice", () => {
     expect(modelOnly.unexpressed).toEqual(["effort"]);
     expect(policy.resolveModelPolicy(pinned, REVIEWER, "balanced", "kiro-ide", null, STABLE).unexpressed)
       .toEqual(["model", "effort"]);
+  });
+});
+
+describe("the switch line on a release a pin selects", () => {
+  // The run says it for the release it sets up; before is the installed tree's.
+  const dir = temp("aidlc-kiro-agent-models-line-");
+  const tree = { distribution: "kiro-ide", harnessDir: ".kiro", root: join(dir, ".kiro") } as Parameters<typeof previewSwitchLine>[1];
+  test("on from a stable tree onto a preview pin says it takes effect, with off as its undo", () => {
+    const line = previewSwitchLine(dir, tree, "agent-models", null, false, "on", "2.11.0-preview.20261016.1", "2.11.0-preview.20261016.1");
+    expect(line).toContain("Kiro takes it at each agent's next dispatch.");
+    expect(line).not.toContain("nothing changes on this release");
+    expect(line).toMatch(/To undo: \S.*config preview agent-models off --yes/);
+  });
+  test("off from a preview tree onto a stable pin names the steps back to a preview release", () => {
+    const line = previewSwitchLine(dir, tree, "agent-models", "on", true, "off", "2.11.0", "2.11.0");
+    expect(line).toContain("Kiro takes it at each agent's next dispatch.");
+    expect(line).toMatch(/To undo: .*, then \S.*config preview agent-models on --yes/);
+  });
+  test("on that applied, run again onto another preview pin, offers no way back to it", () => {
+    const line = previewSwitchLine(dir, tree, "agent-models", "on", true, "on", "2.11.0-preview.20261017.1", "2.11.0-preview.20261017.1");
+    expect(line).not.toContain("To have it again");
+    expect(line).not.toContain("To undo");
   });
 });
 
@@ -481,11 +504,18 @@ describe("the agent-models choice through config", () => {
     expect(listed).toContain("agent-models: off (recorded on; this release is not a preview release)");
     expect(listed).toMatch(/config preview <feature> off --yes( --project-dir \S+)? clears one recorded on\./);
     expect(listed).not.toContain("Turn one on or off");
+    // A model line the person adds on the stable release is theirs: off leaves it.
+    const own = join(p.dir, ".kiro", "agents", "aidlc-developer-agent.md");
+    withOwnModelLine(own);
     const off = p.preview("agent-models", "off", "--yes");
     expect(off.status, off.out).toBe(0);
+    expect(readFileSync(own, "utf-8")).toMatch(/^model: claude-sonnet-5\.5$/m);
     expect(off.out).toContain("Preview feature agent-models: on -> off in .kiro/tools/data/harness.json; nothing changes on this release.");
     expect(off.out).not.toContain("To undo");
-    expect(off.out.replace(/\s+/g, " ")).toMatch(/To have it again: on a preview release, \S.*config preview agent-models on --yes/);
+    // The way back is the steps to a preview release, as the refusal of on says.
+    expect(off.out.replace(/\s+/g, " ")).toMatch(
+      /To have it again: install a preview release's copy runtime into this project \(Release Channels in the install guide\), then [^,]*config preview agent-models on --yes/,
+    );
     expect(off.out.replace(/\s+/g, " ")).not.toContain(policy.KIRO_AGENT_MODELS_OFF_NOTE);
     expect(p.choice()).toBe("off");
     expect(p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes").status).toBe(0);
