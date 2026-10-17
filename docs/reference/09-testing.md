@@ -1920,10 +1920,12 @@ Local runs with `AIDLC_KIRO_ACP_LIVE=1`, `AIDLC_KIRO_TUI_LIVE=1` or
 `AIDLC_KIRO_IDE_LIVE=1` remain the coverage path. A follow-up issue tracks the
 hosted lane.
 
-Before each stable release, a maintainer runs the Kiro CLI release journey
+Before selecting a preview for stable promotion, a maintainer reviews its
+recorded Kiro CLI release-journey result for the selected source SHA. If no
+result exists for that SHA, run the journey
 (`tests/e2e/t-tui-kiro-release-journey.serial.test.ts`, the same journey as the
-Copilot lane's, in the interactive `kiro-cli chat` terminal) on the exact commit
-to be tagged, on a machine with a signed-in Kiro CLI:
+Copilot lane's, in the interactive `kiro-cli chat` terminal) on the preview's
+source commit, on a machine with a signed-in Kiro CLI:
 
 ```bash
 bun scripts/package.ts
@@ -1935,9 +1937,12 @@ On Linux it gives Kiro a scratch home and keeps the machine's sign-in, so
 `~/.kiro` is not touched. It takes about five minutes and about eleven Kiro
 credits, and prints one line, for example `Kiro CLI 2.29.0 release journey on
 <commit>: PASS (4.7 min of turns, 10.46 credits, 0 permission prompts)`, that
-is recorded with the selected preview before promotion. Nothing in the workflows
-reads that manual result: the maintainer reviews it when choosing a preview. A
-fix ships in another preview before it is selected for promotion.
+is recorded, including the full source SHA, in the selected preview's GitHub
+release notes before promotion. An existing result for that source is reused;
+the promotion workflow does not rerun the journey on its new metadata commit.
+Nothing in the workflows reads that manual result: the maintainer reviews it
+in step 2 of [Promote a preview to production](../../DEVELOPERS.md#4-promote-a-preview-to-production).
+A fix ships in another preview before it is selected for promotion.
 
 The live jobs use the existing `ai-pr-review` environment and role. Verify these
 prerequisites before running Full Suite:

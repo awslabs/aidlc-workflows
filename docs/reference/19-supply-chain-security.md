@@ -9,18 +9,23 @@ needed. Only the preview's Full Suite uses the live model environment.
 ## Release trigger
 
 Run **Promote preview** on `main`. An empty dispatch lists all published previews
-with their source and warnings. A promotion supplies `preview`, `version` and
+with their source, manifest compatibility and warnings. A promotion supplies `preview`, `version` and
 reviewed release `notes`; [DEVELOPERS.md](../../DEVELOPERS.md#4-promote-a-preview-to-production)
 has the commands. Preview publication may have succeeded despite test failures;
 selection is the maintainer's decision, with those failures still recorded.
 
 `scripts/release-promotion.ts` checks that the selected release is a published
 prerelease, its annotated tag's source trailer agrees with its commit and
-repository, and that commit is on `main`. It prepares one child commit with:
+repository, and that commit is on `main`. Before creating a release commit or
+reserving a tag, it downloads the preview's `version.json` and applies the same
+manifest contract as the final asset verifier, bound to that preview and source.
+An incompatible historical preview stays in the list with its rejection reason;
+the maintainer must select a compatible preview. It prepares one child commit with:
 
 - the chosen stable version in `core/tools/aidlc-version.ts` and README;
 - the new CHANGELOG entry, preserving all previous entries;
-- the complete workflow tree, promotion script and preview tag parser from the
+- the complete workflow tree, promotion script, preview tag parser and shared
+  manifest verifier from the
   immutable main snapshot checked out during preparation;
 - `.github/release-promotion.json`, binding the preview, source, controls,
   version, notes, date and recorded warnings.
@@ -143,7 +148,7 @@ Provenance authenticates them independently. No installer trust rule changes.
 ## Provenance
 
 The `publish` job receives `id-token: write` and `attestations: write` only
-after the build, lifecycle and update-from-the-last-release jobs and the Full Suite gate pass
+after the build, lifecycle and update-from-the-last-release jobs pass
 (a preview's `publish` does not wait for the update job, which only reports there). GitHub generates build provenance for
 the staged assets. The exported provenance bundle is included as
 `aidlc-release.intoto.jsonl`.
@@ -240,9 +245,9 @@ releases need human approval. After approval, the job downloads the attested
 candidate, rechecks the tag and checksums, and creates the GitHub Release:
 
 ```bash
-bun scripts/release-notes.ts \
+bun scripts/release-promotion.ts notes \
+  --repository "$GITHUB_REPOSITORY" \
   --tag "$RELEASE_TAG" \
-  --changelog "$PWD/CHANGELOG.md" \
   --out "$RUNNER_TEMP/release-notes.md"
 gh release create "$RELEASE_TAG" build/release/* \
   --verify-tag \
@@ -250,18 +255,21 @@ gh release create "$RELEASE_TAG" build/release/* \
   --notes-file "$RUNNER_TEMP/release-notes.md"
 ```
 
-The body is this version's `CHANGELOG.md` entry, read after the recheck above so
-it can only come from the authorized commit, and a missing or empty entry fails
-the job before it creates the release. GitHub's own generated notes are not
-used: their "What's Changed" list names every contributing account by handle.
+The body contains the reviewed notes from the verified promotion record, which
+also supplies this version's `CHANGELOG.md` entry, followed by the selected
+preview/source reference and its recorded validation warnings. The helper
+rechecks the promotion before writing the notes. GitHub's own generated notes
+are not used: their "What's Changed" list names every contributing account by handle.
 
 The job then compares the local asset names with the asset names returned by
 the GitHub Release API. A missing or extra upload fails the workflow.
 
-All earlier jobs retain `contents: read`. The called Full Suite's live jobs also
-receive `id-token: write`, only for the `ai-pr-review` role, as in the preview.
-No stored credential receives release write access, and no job receives
-publication permission before the environment gate.
+Stable build and validation jobs retain `contents: read`; no Full Suite is
+called during promotion. The separate preparation job has `contents: write`
+to reserve the tag and `actions: write` to dispatch its build. After publication,
+metadata synchronization has `contents: write` to push the metadata branch.
+These jobs use `GITHUB_TOKEN`; final publication remains in the protected
+`release` environment.
 
 ## Creating a release
 

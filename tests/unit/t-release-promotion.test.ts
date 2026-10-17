@@ -17,6 +17,11 @@ afterAll(() => { for (const root of roots) rmSync(root, { recursive: true, force
 const PREVIEW = "v2.11.1-preview.20261016.1";
 const NOTES = "Compatibility: refresh only\n\nRun aidlc update, then aidlc config in each project.\n\n- Keep the chosen preview's fixes.";
 const REPOSITORY = "owner/repo";
+// Published version.json assets preserve the producer schemas on both sides
+// of root-lifecycle support; identity fields are rebound to the local Git fixture.
+const publishedManifest = (date: string) => JSON.parse(readFileSync(
+  join(REPO_ROOT, `tests/fixtures/release-promotion/preview-${date}.json`), "utf8",
+));
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "aidlc-promotion-test-"));
@@ -66,8 +71,12 @@ function fixture() {
   const stable = { ...release, tag_name: "v2.11.0", prerelease: false };
   let taggedSource = source;
   let annotated = true;
+  let manifest = { ...publishedManifest("20261016"), sourceDigest: source };
+  const commands: string[][] = [];
   const run: Command = (program, args, input, env) => {
+    commands.push([program, ...args]);
     if (program !== "gh") return git(program, args, input, env);
+    if (args[0] === "release" && args[1] === "download") return JSON.stringify(manifest);
     if (args.includes("--paginate")) return JSON.stringify([[stable], [release]]);
     const endpoint = args.at(-1);
     if (endpoint === `repos/${REPOSITORY}/releases/tags/${PREVIEW}`) return JSON.stringify(release);
@@ -79,7 +88,8 @@ function fixture() {
   };
   const prepare = () => preparePromotion({ repository: REPOSITORY, preview: PREVIEW, version: "2.11.1", controls, notes: NOTES, date: "2026-10-17" }, run);
   const tag = (sha: string) => git("git", ["tag", "-f", "v2.11.1", sha]);
-  return { root, run, git, put, commit, source, controls, release, stable, prepare, tag,
+  return { root, run, git, put, commit, source, controls, release, stable, prepare, tag, commands,
+    setManifest: (value: typeof manifest) => { manifest = value; },
     movePreview: () => { taggedSource = controls; }, lightweight: () => { annotated = false; } };
 }
 
@@ -116,6 +126,40 @@ describe("release promotion", () => {
     expect(listPreviews(REPOSITORY, f.run)).toContain("not an approval");
     f.lightweight();
     expect(listPreviews(REPOSITORY, f.run)).toContain("Cannot verify preview source");
+  });
+
+  test("an incompatible historical preview fails before creating a release commit or tag", () => {
+    const f = fixture();
+    f.setManifest({ ...publishedManifest("20261013"), version: PREVIEW.slice(1), sourceDigest: f.source });
+    expect(f.prepare).toThrow(/cannot promote.*version.json.*unexpected fields/i);
+    expect(f.commands.some((args) => args.includes("commit-tree") || args.includes("push"))).toBe(false);
+    const listing = listPreviews(REPOSITORY, f.run);
+    expect(listing).toContain(f.source.slice(0, 12));
+    expect(listing).toContain("Unavailable");
+    expect(listing).toContain("missing: capabilities");
+    expect(listing).toContain("Reported failures");
+  });
+
+  test("the preview manifest must identify the selected tag and source", () => {
+    const f = fixture();
+    f.setManifest({ ...publishedManifest("20261016"), sourceDigest: f.controls });
+    expect(f.prepare).toThrow("authorized source");
+    f.setManifest({ ...publishedManifest("20261016"), version: "2.11.1-preview.20261015.1", sourceDigest: f.source });
+    expect(f.prepare).toThrow("does not match version.json");
+  });
+
+  test("a missing preview manifest cannot reserve a version and is explained in the list", () => {
+    const f = fixture();
+    const missing: Command = (program, args, input, env) => {
+      if (program === "gh" && args[0] === "release") throw new Error("version.json asset not found");
+      return f.run(program, args, input, env);
+    };
+    expect(() => preparePromotion({
+      repository: REPOSITORY, preview: PREVIEW, version: "2.11.1",
+      controls: f.controls, notes: NOTES, date: "2026-10-17",
+    }, missing)).toThrow("version.json asset not found");
+    expect(f.commands.some((args) => args.includes("commit-tree") || args.includes("push"))).toBe(false);
+    expect(listPreviews(REPOSITORY, missing)).toContain("version.json asset not found");
   });
 
   test("rejects draft, stable, lightweight and mismatched preview tags", () => {
@@ -244,6 +288,18 @@ describe("release promotion", () => {
     expect(() => validateNotes(`${NOTES}\n- https://github.com/owner/repo`)).toThrow("repository URLs");
   });
 
+  test("star bullets can be promoted and preserve the same compatibility rules as dash bullets", () => {
+    const f = fixture();
+    const notes = NOTES.replace("\n- ", "\n* ");
+    expect(validateNotes(notes)).toBe(notes);
+    const { promotion } = preparePromotion({
+      repository: REPOSITORY, preview: PREVIEW, version: "2.11.1",
+      controls: f.controls, notes, date: "2026-10-17",
+    }, f.run);
+    expect(promotionNotes(promotion)).toContain("\n* Keep");
+    expect(() => validateNotes(`${notes}\n* Breaking for scripts: removed flag`)).toThrow("matching Compatibility");
+  });
+
   test("metadata keeps every previous changelog entry and rejects duplicate versions", () => {
     const f = fixture();
     const files = {
@@ -266,6 +322,21 @@ describe("release promotion", () => {
 describe("promotion workflow boundaries", () => {
   type Job = { uses?: string; needs?: string[] | string; permissions?: Record<string, string>; steps?: Array<{ run?: string; with?: Record<string, string> }> };
   const release = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/release.yml"), "utf8")) as { on: Record<string, unknown>; jobs: Record<string, Job> };
+  test.each([
+    [{ PREVIEW, VERSION: "", NOTES: "" }, ["version", "notes"]],
+    [{ PREVIEW: "", VERSION: "2.11.1", NOTES }, ["preview"]],
+  ])("partial promotion inputs explain how to recover before doing any work", (inputs, missing) => {
+    const workflow = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/promote-release.yml"), "utf8")) as { jobs: Record<string, Job> };
+    const step = workflow.jobs.prepare.steps?.find((step) => step.run?.includes("release-promotion.ts prepare"));
+    expect(step?.run).toBeDefined();
+    const result = spawnSync("bash", ["-c", step!.run!], {
+      cwd: REPO_ROOT, encoding: "utf8", env: { ...process.env, ...inputs },
+    });
+    expect(result.status).toBe(1);
+    for (const name of missing) expect(result.stderr).toContain(name);
+    expect(result.stderr).toContain("Leave all inputs empty to list previews");
+    expect(result.stderr).not.toContain("unbound variable");
+  });
   test("does not schedule CI or Full Suite; publication still requires lifecycle and upgrade checks", () => {
     expect(release.on).toHaveProperty("workflow_dispatch");
     expect(Object.values(release.jobs).some((job) => job.uses?.endsWith("full-suite.yml"))).toBe(false);

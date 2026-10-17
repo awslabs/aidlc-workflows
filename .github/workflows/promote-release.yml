@@ -49,7 +49,14 @@ jobs:
             bun scripts/release-promotion.ts list --repository "$GITHUB_REPOSITORY"
             exit 0
           fi
-          test -n "$PREVIEW" && test -n "$VERSION" && test -n "$NOTES"
+          missing=()
+          [ -n "$PREVIEW" ] || missing+=(preview)
+          [ -n "$VERSION" ] || missing+=(version)
+          [ -n "$NOTES" ] || missing+=(notes)
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Missing promotion inputs: ${missing[*]}. Supply preview, version and notes to promote. Leave all inputs empty to list previews." >&2
+            exit 1
+          fi
           printf '%s\n' "$NOTES" >"$RUNNER_TEMP/release-notes.md"
           bun scripts/release-promotion.ts prepare \
             --repository "$GITHUB_REPOSITORY" \

@@ -2,8 +2,8 @@
 
 Changes reach users through this sequence:
 
-**Pull request → AI review and PR checks → merge to `main` → optional preview
-validation or stable release.**
+**Pull request → AI review and PR checks → merge to `main` → published preview
+→ stable promotion.**
 
 `main` is the integration branch. A merge makes a change available for the next
 preview; publishing a stable release is a separate maintainer decision. This
@@ -246,8 +246,10 @@ The stable binaries are rebuilt with the final version; preview assets are not
 renamed or reused.
 
 1. **List previews.** Run **Promote preview** on `main` with all inputs empty.
-   Its summary lists every published preview, source commit and recorded
-   warnings. A published preview is not automatically an approved preview.
+   Its summary lists every published preview, source commit, compatibility with
+   the current release tooling and recorded warnings. Incompatible previews stay
+   listed with the reason; preparation rejects them before reserving a version.
+   A published preview is not automatically an approved preview.
    You can also list them locally:
 
    ```bash
@@ -255,7 +257,11 @@ renamed or reused.
    ```
 
 2. **Choose the preview, version and notes.** Review the preview's existing test
-   report and any manual harness validation. Put the stable release notes in a
+   report and the manual Kiro release-journey result for its source commit.
+   Record that result and source SHA in the selected preview's release notes.
+   Reuse an existing result for that SHA; if missing, run the
+   [Kiro journey](docs/reference/09-testing.md#nightly-full-suite-matrix-and-provisioning)
+   on that source before selecting it. Put the stable release notes in a
    file, starting with `Compatibility: refresh only`, `Compatibility: refresh
    plus a step`, or `Compatibility: breaking for scripts`, followed by the
    summary, upgrade instructions and flat bullets. Then dispatch:
@@ -268,8 +274,9 @@ renamed or reused.
 
    The same fields are available in Actions. GitHub's input choices are static,
    so the preview tag is a text field and the empty dispatch provides the live
-   list. The stable version may be a patch, minor or major; it must be newer
-   than the source version and published stable releases.
+   list. Supply all three fields to promote; a partial submission names the
+   missing fields and creates no tag. The stable version may be a patch, minor
+   or major; it must be newer than the source version and published stable releases.
 
 3. **Follow the Release run.** Preparation creates the stable tag and explicitly
    dispatches `release.yml` on it. That preserves the tag and source identity

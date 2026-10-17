@@ -8,12 +8,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compareVersions, parseVersion, PREVIEW_VERSION, STABLE_VERSION } from "../core/tools/aidlc-channel.ts";
 import { parsePreviewTagSource } from "./preview-release.ts";
+import { verifyCandidateManifest } from "./verify-release.ts";
 
 export const PROMOTION_FILE = ".github/release-promotion.json";
 export const RELEASE_CONTROLS = [
   ".github/workflows/release.yml",
   "scripts/release-promotion.ts",
   "scripts/preview-release.ts",
+  "scripts/verify-release.ts",
 ] as const;
 export const RELEASE_METADATA = ["core/tools/aidlc-version.ts", "README.md", "CHANGELOG.md"] as const;
 const COMMIT = /^[a-f0-9]{40}$/;
@@ -83,17 +85,38 @@ export function releaseWarnings(body: string): string[] {
   return body.split(/\r?\n/).filter((line) => line.startsWith("> **Warning:**"));
 }
 
+function verifyPreviewCompatibility(repository: string, preview: string, source: string, run: Command): void {
+  const scratch = mkdtempSync(join(tmpdir(), "aidlc-preview-manifest-"));
+  try {
+    writeFileSync(join(scratch, "version.json"), run("gh", [
+      "release", "download", preview, "--repo", repository, "--pattern", "version.json", "--output", "-",
+    ]));
+    verifyCandidateManifest(scratch, preview, source);
+  } catch (error) {
+    throw new Error(
+      `Cannot promote ${preview} with the current release tooling: ${error instanceof Error ? error.message : String(error)}. ` +
+      "Choose a compatible preview from the list; no new release tag was created.",
+    );
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 export function listPreviews(repository: string, run: Command = command): string {
   const rows = releases(repository, run)
     .filter((release) => release.prerelease && PREVIEW_VERSION.test(release.tag_name.slice(1)));
-  const lines = ["| Preview | Published (UTC) | Source commit | Previous validation |", "| --- | --- | --- | --- |"];
+  const lines = ["| Preview | Published (UTC) | Source commit | Promotion compatibility | Previous validation |", "| --- | --- | --- | --- | --- |"];
   for (const release of rows) {
+    const label = `[${release.tag_name}](https://github.com/${repository}/releases/tag/${release.tag_name})`;
+    const status = releaseWarnings(release.body ?? "").length ? "Reported failures — read the preview" : "Read the preview; not an approval";
+    let source = "";
     try {
-      const { source } = resolvePreview(repository, release.tag_name, run);
-      const status = releaseWarnings(release.body ?? "").length ? "Reported failures — read the preview" : "Read the preview; not an approval";
-      lines.push(`| [${release.tag_name}](https://github.com/${repository}/releases/tag/${release.tag_name}) | ${release.published_at} | \`${source.slice(0, 12)}\` | ${status} |`);
-    } catch {
-      lines.push(`| ${release.tag_name} | ${release.published_at} | Unavailable | Cannot verify preview source |`);
+      source = resolvePreview(repository, release.tag_name, run).source;
+      verifyPreviewCompatibility(repository, release.tag_name, source, run);
+      lines.push(`| ${label} | ${release.published_at} | \`${source.slice(0, 12)}\` | Compatible | ${status} |`);
+    } catch (error) {
+      const reason = (error instanceof Error ? error.message : String(error)).replaceAll("|", "\\|").replaceAll(/\r?\n/g, " ");
+      lines.push(`| ${label} | ${release.published_at} | ${source ? `\`${source.slice(0, 12)}\`` : "Cannot verify preview source"} | Unavailable: ${reason} | ${status} |`);
     }
   }
   return `${lines.join("\n")}\n`;
@@ -103,7 +126,7 @@ export function validateNotes(notes: string): string {
   const body = notes.replaceAll("\r\n", "\n").trim();
   const controlCharacter = [...body].some((char) => char.charCodeAt(0) < 32 && char !== "\n" && char !== "\t");
   if (!/^Compatibility: (refresh only|refresh plus a step|breaking for scripts)\r?\n/.test(body) ||
-    !body.includes("\n- ") || /^#{1,2} /m.test(body) ||
+    !/^[-*] /m.test(body) || /^#{1,2} /m.test(body) ||
     Buffer.byteLength(body) > 40_000 || controlCharacter) {
     throw new Error("notes must start with a Compatibility line, include a summary and bullets, and contain no release headings");
   }
@@ -244,6 +267,7 @@ export function preparePromotion(options: {
     return { sha: run("git", ["rev-parse", `${tag}^{commit}`]).trim(), promotion: p, existing: true, published };
   }
   if (published) throw new Error("version is already published");
+  verifyPreviewCompatibility(repository, preview, selected.source, run);
   const promotion: Promotion = {
     schemaVersion: 1, repository, preview, source: selected.source, controls, version, date, notes,
     warnings: releaseWarnings(selected.release.body ?? ""),
