@@ -7205,9 +7205,12 @@ function kiroAgentPinsNote(
   explained: ReadonlySet<string>,
 ): string | null {
   const written = new Set(
-    actions.filter((item) => item.action === "create" || item.action === "update" || item.action === "merge")
-      .map((item) => item.path),
+    actions.filter((item) =>
+      (item.action === "create" || item.action === "update" || item.action === "merge") &&
+      item.path.startsWith(`${harnessDir}/agents/`)
+    ).map((item) => item.path),
   );
+  if (written.size === 0) return null;
   const runs = kiroAgentPinsAdded(projectDir, stagedRoot, harnessDir).flatMap((item) => {
     if (!written.has(item.path)) return [];
     const values = [
@@ -7222,19 +7225,17 @@ function kiroAgentPinsNote(
   } with config models (an agent's effort is shared with your other tools); \`${configInvocationFor(projectDir)} config models --show --harness kiro-ide${projectTarget(projectDir)}\` shows where each is set.`;
 }
 
-// The settings keys a `config models` run says it sets: those its settings
-// file changes, or, when it only puts back the recorded policy the Kiro agent
-// files lost, every agent's own.
+// The agent values a `config models` run says it sets: its summary reads the
+// policy before and after the run, so a value that differs between the two.
 function modelsRunExplains(context: ModelsMutationContext): Set<string> {
-  if (!context.settings) {
-    return new Set(Object.keys(normalizeModelPolicy(context.next)?.agents ?? {}).flatMap((agent) => [
-      `models.agents.${agent}.model.kiro-ide`,
-      `models.agents.${agent}.effort`,
-    ]));
+  const before = normalizeModelPolicy(context.previous)?.agents ?? {};
+  const after = normalizeModelPolicy(context.next)?.agents ?? {};
+  const explained = new Set<string>();
+  for (const agent of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    if (before[agent]?.model !== after[agent]?.model) explained.add(`models.agents.${agent}.model.kiro-ide`);
+    if (before[agent]?.effort !== after[agent]?.effort) explained.add(`models.agents.${agent}.effort`);
   }
-  const was = settingLeaves(context.settings.previous);
-  const now = settingLeaves(context.settings.next);
-  return new Set([...new Set([...was.keys(), ...now.keys()])].filter((id) => was.get(id)?.value !== now.get(id)?.value));
+  return explained;
 }
 
 // Whether Kiro puts an agent file back into its 3.0 format by itself at its

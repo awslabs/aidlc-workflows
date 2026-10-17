@@ -330,15 +330,22 @@ describe("an agent's model and effort through config", () => {
     expect(said).toMatch(/`[^`]*config models --show --harness kiro-ide( --project-dir \S+)?` shows where each is set\./);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
-  test("the same model again puts back lines the agent file lost, and does not name them as news", () => {
+  test("the same model again puts back lines the agent file lost, and names another agent's value it writes too", () => {
     const p = project();
     expect(p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes").status).toBe(0);
     const path = join(p.dir, ".kiro", "agents", REVIEWER_FILE);
     writeFileSync(path, readFileSync(path, "utf-8").replace(/^model: .*\n/m, ""));
+    // A teammate's effort for the developer, recorded since, that Kiro has not taken yet.
+    const settings = projectSettingsPath(p.dir);
+    const recorded = JSON.parse(readFileSync(settings, "utf-8")) as { models: { agents: Record<string, unknown> } };
+    recorded.models.agents.developer = { effort: "low" };
+    writeFileSync(settings, `${JSON.stringify(recorded, null, 2)}\n`);
     const again = p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes");
     expect(again.status, again.out).toBe(0);
     expect(p.agent(REVIEWER_FILE)).toMatch(/^model: "gpt-5\.6-terra"$/m);
-    expect(again.out).not.toContain("Kiro now runs");
+    expect(again.out.replace(/\s+/g, " ")).toContain(
+      `Kiro now runs ${REVIEWER} on model gpt-5.6-terra, and developer on effort low, as set for those agents`,
+    );
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
   test("config preview is not a section", () => {
