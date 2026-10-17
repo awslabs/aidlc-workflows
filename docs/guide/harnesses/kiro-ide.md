@@ -560,9 +560,10 @@ the others, so change them through `aidlc config models` rather than by hand;
 `aidlc config models --check` reports a `model:` or `effortLevel:` line that
 does not match. An agent file you added yourself is not touched.
 `aidlc config preview agent-models off --yes` takes those lines out of the
-agent files it ships, on any release, and keeps the recorded models and
+agent files it ships, where it was on, and keeps the recorded models and
 efforts, so turning it on again puts them back; the rest of each file, an edit of
-yours included, stays as it is. With it off,
+yours included, stays as it is. On a stable release, where it was not on, off
+takes nothing out, so a line you added there stays. With it off,
 and on a stable release, `aidlc config` neither writes nor checks those lines.
 Moving the project to a stable release replaces the agent files AI-DLC wrote
 with the release's own, without the lines, but the project still records the

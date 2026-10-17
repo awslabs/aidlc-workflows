@@ -452,6 +452,8 @@ type ModelsMutationContext = {
   settings?: SettingsMutation;
   // `config preview <feature> on|off`: the choice this run records.
   preview?: PreviewRequest;
+  // And its switch line and notes, said for the release the run sets up.
+  previewLines?: (version: string) => { summaryLines: string[]; notes: string[] };
 };
 
 type DiagnosticSection = "runtime" | "providers" | "trust";
@@ -6748,8 +6750,10 @@ function prepareRefreshSource(
   // The tree's preview-feature choices (`config preview`): what this run asks,
   // else what is recorded; an entry this engine does not know is kept.
   // agent-models' lines come out only in the run that turns off a choice that
-  // was on, on any release: the model and effort keys AI-DLC owns while it is
-  // on, out of every agent file it ships, the rest of each file as it is.
+  // applied on the installed tree (a preview release, recorded on): the model
+  // and effort keys AI-DLC owns while it is on, out of every agent file it
+  // ships, the rest of each file as it is. A stable tree holds none of them:
+  // the move to it replaced those files, or stopped on an edited one.
   const request = previewRequest.request;
   const recordedPreview = staged[PREVIEW_FEATURES_RECORD];
   const recordedChoices = typeof recordedPreview === "object" && recordedPreview !== null && !Array.isArray(recordedPreview)
@@ -6766,7 +6770,7 @@ function prepareRefreshSource(
     agentModelsChoice = previewFeaturesFrom(staged[PREVIEW_FEATURES_RECORD])[KIRO_AGENT_MODELS_FEATURE] ?? null;
     if (
       request?.feature === KIRO_AGENT_MODELS_FEATURE && request.choice === "off" &&
-      previewFeaturesFrom(recordedChoices)[KIRO_AGENT_MODELS_FEATURE] === "on"
+      treePreviewFeature(currentHarness, KIRO_AGENT_MODELS_FEATURE).on
     ) {
       agentModelsTakeOut = true;
     }
@@ -11318,24 +11322,31 @@ function showPreviewFeatures(
 
 // The line for a change of a preview feature: where it is kept, when the work
 // takes it, and its undo, back to what applied before.
-function previewSwitchLine(
+export function previewSwitchLine(
   projectDir: string,
   tree: ProjectHarness,
   feature: PreviewFeature,
   before: PreviewChoice | null,
+  beforeOn: boolean,
   to: PreviewChoice,
   version: string,
+  pin: string | null,
 ): string {
   const head = before === to
     ? `  Preview feature ${feature}: ${to}, as recorded in ${tree.harnessDir}/tools/data/harness.json`
     : `  Preview feature ${feature}: ${before ?? "not set"} -> ${to} in ${tree.harnessDir}/tools/data/harness.json`;
-  // Back to what applied before; a recorded on that did not apply (a stable
-  // release) comes back only on a preview release.
-  const back = previewFeatureOn(feature, before ? { [feature]: before } : {}, version) ? "on" : "off";
+  // Back to what applied on the installed tree; `version` is the release this
+  // run sets up, where on runs only on a preview release, so elsewhere the way
+  // back is the steps to one.
+  const back = beforeOn ? "on" : "off";
+  const command = (choice: PreviewChoice) => previewCommand(projectDir, tree.distribution, `${feature} ${choice} --yes`);
+  const on = versionChannel(version) === PREVIEW_CHANNEL
+    ? command("on")
+    : previewReleaseSteps(projectDir, command("on"), pin);
   const undo = back !== to
-    ? ` To undo: ${previewCommand(projectDir, tree.distribution, `${feature} ${back} --yes`)}`
-    : before === "on"
-    ? ` To have it again: on a preview release, ${previewCommand(projectDir, tree.distribution, `${feature} on --yes`)}`
+    ? ` To undo: ${back === "on" ? on : command("off")}`
+    : before === "on" && !beforeOn
+    ? ` To have it again: ${on}`
     : "";
   // A switch that changes nothing in effect (on to off on a stable release) says so.
   const takes = back === "on" || previewFeatureOn(feature, { [feature]: to }, version)
@@ -11479,13 +11490,16 @@ function preparePreviewSection(
   // recorded per-agent model or effort.
   const ownSettings = Object.values(normalizeModelPolicy(current)?.agents ?? {})
     .some((agent) => agent.model !== undefined || agent.effort !== undefined);
-  const notes = feature !== KIRO_AGENT_MODELS_FEATURE
-    ? []
-    : choice === "on"
-    ? modelSummaryLines(current, current, tiers, harness, projectDir, { version, agentModels: choice }).notes
-    : ownSettings && state.on
-    ? [KIRO_AGENT_MODELS_OFF_NOTE]
-    : [];
+  const previewLines = (selected: string) => ({
+    summaryLines: [previewSwitchLine(projectDir, tree, feature, recorded, state.on, choice, selected, pin)],
+    notes: feature !== KIRO_AGENT_MODELS_FEATURE
+      ? []
+      : choice === "on"
+      ? modelSummaryLines(current, current, tiers, harness, projectDir, { version: selected, agentModels: choice }).notes
+      : ownSettings && state.on
+      ? [KIRO_AGENT_MODELS_OFF_NOTE]
+      : [],
+  });
   return {
     argv: modelsPipelineArgv(argv),
     context: {
@@ -11495,9 +11509,9 @@ function preparePreviewSection(
       previous: current,
       next: current,
       tiers,
-      summaryLines: [previewSwitchLine(projectDir, tree, feature, recorded, choice, version)],
-      notes,
+      ...previewLines(version),
       preview: { feature, choice },
+      previewLines,
     },
   };
 }
@@ -13348,9 +13362,10 @@ export async function main(
     // A preview feature turned on is checked against the release this run sets
     // up, which a pin can make another one than the installed tree's.
     const onRefusal = modelsContext?.preview?.choice === "on"
-      ? previewOnRefusal(projectDir, stamp.distribution, modelsContext.preview.feature, stamp.frameworkVersion, null)
+      ? previewOnRefusal(projectDir, stamp.distribution, modelsContext.preview.feature, stamp.frameworkVersion, previewPin(projectDir))
       : null;
     if (onRefusal) throw new SwitchRefusal(onRefusal.message, { kind: "text", text: onRefusal.steps });
+    if (modelsContext?.previewLines) Object.assign(modelsContext, modelsContext.previewLines(stamp.frameworkVersion));
     prepared = prepareRefreshSource(
       projectDir,
       selected.root,

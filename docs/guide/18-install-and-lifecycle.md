@@ -999,7 +999,8 @@ The choice is recorded in the project's harness folder
 runs, chats and reviews all read it, and `--local`, `--project` and `--global`
 do not apply. Turning one on needs a preview release
 ([Release Channels](#release-channels)); turning one off works on any release,
-so a project moved back to stable can still clear it. `--download` goes with a
+so a project moved back to stable can still clear it, and then says the steps
+to a preview release that turn it on again. `--download` goes with a
 change, as in the other sections. Both features are Kiro's
 today: [Kiro IDE](harnesses/kiro-ide.md#preview-a-units-reviewer-reads-only-that-unit)
 describes each.
