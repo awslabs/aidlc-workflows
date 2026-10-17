@@ -424,6 +424,8 @@ type PreparedRefreshSource = {
   unproven?: ReadonlySet<string>;
   /** Contribution sidecars the refresh retired: their last record, or their plugin is off. */
   emptiedSidecars?: Set<string>;
+  /** What to record for each composed file it carried over: the file without the plugin's additions. */
+  composedRecords?: ReadonlyMap<string, string>;
   entries?: Baseline["entries"];
   notes: string[];
 };
@@ -4813,6 +4815,7 @@ type StageContribRecord = {
   produces?: string[];
   sensors?: string[];
   consumes?: Array<string | ConsumeContribRecord>;
+  scopes?: string[];
   requires_stage?: string[];
   required_sections?: string[];
   required_sections_created?: boolean;
@@ -4917,6 +4920,7 @@ function stripRecordedContributions(content: string, record: StageContribRecord)
   for (const [field, items] of [
     ["produces", record.produces],
     ["sensors", record.sensors],
+    ["scopes", record.scopes],
     ["requires_stage", record.requires_stage],
     ["required_sections", record.required_sections],
   ] as const) {
@@ -6980,6 +6984,7 @@ function prepareRefreshSource(
           produces: [...new Set([...(priorRecord.produces ?? []), ...(record.produces ?? [])])],
           sensors: [...new Set([...(priorRecord.sensors ?? []), ...(record.sensors ?? [])])],
           consumes: [...new Set([...(priorRecord.consumes ?? []), ...(record.consumes ?? [])])],
+          scopes: [...new Set([...(priorRecord.scopes ?? []), ...(record.scopes ?? [])])],
           requires_stage: [...new Set([...(priorRecord.requires_stage ?? []), ...(record.requires_stage ?? [])])],
           required_sections: [
             ...new Set([...(priorRecord.required_sections ?? []), ...(record.required_sections ?? [])]),
@@ -6996,6 +7001,7 @@ function prepareRefreshSource(
   // owning it, so its sidecar stops recording it. Otherwise a disable would
   // strip a core edge, and doctor would report a refused edge as missing.
   const retiredEdges = new Map<string, Set<string>>();
+  const composedRecords = new Map<string, string>();
   const requiresEdgeHolds = requiresEdgeOracle(join(root, descriptor.harnessDir));
   // Composed files whose recorded contributions must survive the refresh:
   // every stage source, plus the personas (which carry prose fragments only).
@@ -7052,10 +7058,18 @@ function prepareRefreshSource(
     const staleEdges = pluginEdges.filter((dependency) => !replayedEdges.includes(dependency));
     const retired = (record.requires_stage ?? []).filter((dependency) => !replayedEdges.includes(dependency));
     if (retired.length > 0) retiredEdges.set(slug, new Set(retired));
-    fresh = mergeListField(fresh, "produces", record.produces ?? []);
-    fresh = mergeListField(fresh, "sensors", record.sensors ?? []);
+    // In the order the file has them, as compose wrote them, so the refresh
+    // writes the same bytes compose does.
+    const inFileOrder = (field: string, items: readonly string[]): string[] => {
+      const order = listFieldItems(current, field);
+      const rank = (item: string): number => order.includes(item) ? order.indexOf(item) : order.length;
+      return [...items].sort((left, right) => rank(left) - rank(right));
+    };
+    fresh = mergeListField(fresh, "produces", inFileOrder("produces", record.produces ?? []));
+    fresh = mergeListField(fresh, "sensors", inFileOrder("sensors", record.sensors ?? []));
+    fresh = mergeListField(fresh, "scopes", inFileOrder("scopes", record.scopes ?? []));
     fresh = removeListItems(fresh, "requires_stage", staleEdges);
-    fresh = mergeListField(fresh, "requires_stage", replayedEdges);
+    fresh = mergeListField(fresh, "requires_stage", inFileOrder("requires_stage", replayedEdges));
     fresh = mergeConsumes(
       fresh,
       consumeBlocks(
@@ -7063,7 +7077,10 @@ function prepareRefreshSource(
         new Set((record.consumes ?? []).map((entry) => typeof entry === "string" ? entry : entry.artifact)),
       ),
     );
-    fresh = mergeRequiredSections(fresh, record);
+    fresh = mergeRequiredSections(fresh, {
+      ...record,
+      required_sections: inFileOrder("required_sections", record.required_sections ?? []),
+    });
     if (rel.endsWith(".toml")) {
       // A Codex twin: its fragments live inside the developer_instructions string.
       const merged = editTomlInstructions(fresh, (body) => mergePluginFragments(body, fragments));
@@ -7074,6 +7091,10 @@ function prepareRefreshSource(
     }
     writeFileSync(stagedPath, fresh);
     if (prior) regenerated.add(rel);
+    // The record holds the file without the plugin's additions, as config
+    // records it before any compose, so the test above still proves it after
+    // a later compose rewrites them.
+    composedRecords.set(rel, sha256Bytes(stripRecordedContributions(fresh, { ...record, requires_stage: replayedEdges })));
   }
   const emptiedSidecars = new Set<string>();
   if (retiredEdges.size > 0 && pathPresent(dataDir) && lstatSync(dataDir).isDirectory()) {
@@ -7242,7 +7263,18 @@ function prepareRefreshSource(
       }
     }
   }
-  return { root, cleanup, regenerated, retiredManagedFiles, projectOverlays, unproven, emptiedSidecars, entries, notes };
+  return {
+    root,
+    cleanup,
+    regenerated,
+    retiredManagedFiles,
+    projectOverlays,
+    unproven,
+    emptiedSidecars,
+    composedRecords,
+    entries,
+    notes,
+  };
   } catch (error) {
     rmSync(cleanup, { recursive: true, force: true });
     throw error;
@@ -9595,6 +9627,7 @@ function planManagedFiles(
   retainBaseline: boolean,
   projectOverlays: ReadonlySet<string> = new Set(),
   unproven: ReadonlySet<string> = new Set(),
+  composedRecords: ReadonlyMap<string, string> = new Map(),
 ): void {
   const shipped = new Set<string>();
   for (const directory of descriptor.managedDirectories) {
@@ -9647,8 +9680,8 @@ function planManagedFiles(
       if (!projectOwned && !unbaselinedGenerated(descriptor.harnessDir).includes(rel)) {
         // In-place answers can advance ownership only from an unmodified base.
         const nextHash = retainBaseline
-          ? regenerated.has(rel) && targetRegular && currentHash === priorHash ? hash : priorHash
-          : hash;
+          ? regenerated.has(rel) && targetRegular && currentHash === priorHash ? composedRecords.get(rel) ?? hash : priorHash
+          : composedRecords.get(rel) ?? hash;
         if (nextHash !== undefined) nextHashes[rel] = nextHash;
       }
       if (runtimeGenerated(rel, descriptor.harnessDir, regenerated)) {
@@ -13461,6 +13494,7 @@ export async function main(
       retainBaseline,
       prepared.projectOverlays,
       prepared.unproven,
+      prepared.composedRecords,
     );
     for (const rel of prepared.retiredManagedFiles) {
       const target = join(projectDir, rel);
