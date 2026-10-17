@@ -222,6 +222,11 @@ entries with no known order across writers. Free-form notes appear as `NOTE`
 entries with their heading and body text. `--event NOTE` selects notes;
 `--stage` excludes them.
 
+A `Human Turn` entry records that you acted, never your words. To read what you
+sent in each turn, run `aidlc engine audit turns`: it joins each turn to the
+message record this machine keeps for a day, and says when a turn's words are
+not here.
+
 Run `aidlc engine log answers --stage <slug>` (add `--unit <unit>` for a Unit)
 for paired earlier questions and answers. One reply pairs with every question
 logged for the menu it answered. Open questions and the rare ambiguous answer

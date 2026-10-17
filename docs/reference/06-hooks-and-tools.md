@@ -1982,6 +1982,7 @@ purpose and owning commands.
 |----------------|--------|
 | `aidlc engine log answers --stage <slug> [--unit <unit>]` | Paired prior questions in `answered`, unresolved questions in `open`, and answers with candidate questions in `ambiguous` |
 | `aidlc engine audit history [--stage <slug>] [--event <TYPE>]... [--limit <n>]` | Oldest-first `events`, including free-form `NOTE` entries; filters apply before the newest n limit |
+| `aidlc engine audit turns [--limit <n>]` | Oldest-first `turns`: each `HUMAN_TURN` with what the person sent, from this machine's message record |
 
 The dispatcher routes these to `aidlc-log.ts answers` and
 `aidlc-audit.ts history`. Both use lock-free audit readers, require a readable
@@ -2035,6 +2036,19 @@ filters combine; repeated event filters select any of those types.
 `--stage <slug>` excludes notes, and `--event NOTE` selects them.
 `--limit <n>` must be a positive integer and keeps the newest n matching
 entries in oldest-first order. Unordered markers survive filtering and limiting.
+
+`audit turns` is the person's reader for their own turns. The committed audit
+keeps no words of a `HUMAN_TURN`; the row's `Message Id` names the message
+record in the gitignored session folder, and `turns` joins the two on the
+machine that has the record. Each entry has `timestamp`, the row's `fields`,
+and `message`: the record's `at`, `source`, `text`, `words`, and `picker` (and
+`cut` when the hook cut the text), or `null` with `message_unavailable` when
+the row names no record (`no message record`) or its record is not here
+(`not on this machine, or expired`): records stay in the clone that wrote them
+and expire after a day. A record from another chat than the row's `Session`
+is never joined. Like `history` it writes nothing, takes no lock, names no
+storage path, and leads with `data_notice`. Delegated agents are not admitted
+to it, so a persona never reads the person's words this way.
 
 ### Mandatory Events
 
