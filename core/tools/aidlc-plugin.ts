@@ -17,10 +17,12 @@ import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import {
+  acquireAuditLock,
   committedTextBytes,
   errorMessage,
   parseArgs,
   pausedBySelection,
+  releaseAuditLock,
   resolveProjectDir,
 } from "./aidlc-lib.ts";
 import { policyPathWithin } from "./aidlc-install-paths.ts";
@@ -1754,10 +1756,56 @@ export function layerOrder(
   return { ordered: [...bases, ...layered], held, paused };
 }
 
-export async function syncPlugins(
+// A session start runs every installed plugin's sync hook at the same time.
+// Each sync copies the project, composes on the copy, then diffs the copy
+// against the live project; a sync that commits in between makes the next
+// diff undo its work (a lost update) or fail with "source changed after
+// planning". One lock per project, held from the copy to the commit, keeps a
+// sync from planning against a project another sync is about to change.
+// The name sets this lock apart from the workspace and intent locks. It is
+// passed as both intent and space so the lock never reads the active space.
+const SYNC_LOCK_NAME = "plugin-sync";
+
+// The audit lock is per process and not re-entrant, so syncs started from one
+// process wait for each other here before they contend for it across processes.
+const SYNC_QUEUE = new Map<string, Promise<unknown>>();
+
+export function syncPlugins(
   projectDir: string,
   argv: string[],
   harnessDir = runtimeHarnessDir(projectDir),
+): ReturnType<typeof syncPluginsLocked> {
+  const key = resolve(projectDir);
+  const run = (SYNC_QUEUE.get(key) ?? Promise.resolve()).then(() =>
+    syncPluginsExclusive(projectDir, argv, harnessDir)
+  );
+  const tail = run.catch(() => undefined);
+  SYNC_QUEUE.set(key, tail);
+  void tail.then(() => {
+    if (SYNC_QUEUE.get(key) === tail) SYNC_QUEUE.delete(key);
+  });
+  return run;
+}
+
+async function syncPluginsExclusive(
+  projectDir: string,
+  argv: string[],
+  harnessDir: string,
+): ReturnType<typeof syncPluginsLocked> {
+  if (!acquireAuditLock(projectDir, undefined, undefined, SYNC_LOCK_NAME, SYNC_LOCK_NAME)) {
+    throw new Error("plugin sync could not acquire the project plugin-sync lock");
+  }
+  try {
+    return await syncPluginsLocked(projectDir, argv, harnessDir);
+  } finally {
+    releaseAuditLock(projectDir, SYNC_LOCK_NAME, SYNC_LOCK_NAME);
+  }
+}
+
+async function syncPluginsLocked(
+  projectDir: string,
+  argv: string[],
+  harnessDir: string,
   lockRetry = 0,
 ): Promise<{
   synced: string[];
@@ -1954,7 +2002,7 @@ export async function syncPlugins(
         ) {
           await Bun.sleep(50);
         }
-        return syncPlugins(projectDir, argv, harnessDir, lockRetry + 1);
+        return syncPluginsLocked(projectDir, argv, harnessDir, lockRetry + 1);
       }
       const refreshedEvidence = projectEvidence(projectDir, harnessDir);
       if (
@@ -1973,6 +2021,21 @@ export async function syncPlugins(
         };
       }
       throw error;
+    }
+    // A sync that exits 0 must leave its plugins composed; a silent miss would
+    // leave a blocking gate sensor absent with nothing to tell the user.
+    if (pruned.length === 0) {
+      const committed = projectEvidence(projectDir, harnessDir);
+      const uncomposed = plugins
+        .filter((plugin) => !compositionIsCurrent(plugin, committed, projectDir, harnessDir, selection))
+        .map((plugin) => plugin.key);
+      if (uncomposed.length > 0) {
+        throw new Error(
+          `plugin sync finished but ${uncomposed.join(", ")} ${uncomposed.length === 1 ? "is" : "are"} not composed; ` +
+            `run ${aidlcInvocation()} engine plugin sync again. If it refuses because a file ` +
+            "the plugin owns was changed, move that file aside and run it once more",
+        );
+      }
     }
     return {
       synced: plugins.map((plugin) => plugin.key).sort(),
