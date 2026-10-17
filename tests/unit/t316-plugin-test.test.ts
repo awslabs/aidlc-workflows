@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   cpSync,
   mkdirSync,
   mkdtempSync,
@@ -21,8 +22,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pluginBuildLockPath } from "../../dist/claude/.claude/tools/aidlc-plugin-emit.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -46,6 +48,9 @@ const testTool = join(copiedTools, "aidlc-plugin-test.ts");
 // Only the compound compose cases use this backstop. Quiet Windows runs took
 // 5–6s for fixture copying, graph compilation and the idempotence compose pass.
 const COMPOSE_CASE_TIMEOUT_MS = NATIVE_FIXTURE_SETUP_TIMEOUT_MS;
+// A 0500 folder refuses only a process its mode bits bind: Windows ignores
+// them for folders, and root ignores them everywhere.
+const FOLDER_MODES_BIND = process.platform !== "win32" && process.getuid?.() !== 0;
 
 cpSync(SOURCE_TOOLS, copiedTools, { recursive: true });
 
@@ -356,6 +361,35 @@ describe("t316 standalone plugin compose test", () => {
     );
     expect(json.composedFiles).toEqual([]);
     expect(treeDigest(installRoot)).toBe(before);
+  });
+
+  test.skipIf(!FOLDER_MODES_BIND)("a lock folder this user cannot write fails TEST with the folder named and the TMPDIR fix", () => {
+    const { pluginRoot, installRoot } = copyFixture("unwritable-lock-folder");
+    const temp = join(scratch, "unwritable-lock-temp");
+    const lockFolder = join(temp, basename(dirname(pluginBuildLockPath(scratch))));
+    mkdirSync(lockFolder, { recursive: true });
+    chmodSync(lockFolder, 0o500);
+    const before = treeDigest(installRoot);
+    try {
+      const result = run(
+        [pluginRoot, "--install", installRoot, "--json"],
+        { TMPDIR: temp },
+      );
+      expect(result.status).toBe(1);
+      const json = JSON.parse(result.stdout) as {
+        errors: Array<{ rule: string; message: string; fix: string }>;
+      };
+      expect(json.errors).toContainEqual(
+        expect.objectContaining({
+          rule: "test-compose",
+          message: `cannot write the plugin build lock folder "${lockFolder}" (EACCES)`,
+          fix: "Set TMPDIR to a folder you own, then run the command again.",
+        }),
+      );
+      expect(treeDigest(installRoot)).toBe(before);
+    } finally {
+      chmodSync(lockFolder, 0o700);
+    }
   });
 
   test("non-canonical contribution paths refuse TEST without touching the live install", () => {

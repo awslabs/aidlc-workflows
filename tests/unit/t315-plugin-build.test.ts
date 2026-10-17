@@ -10,6 +10,7 @@ import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -61,6 +62,9 @@ const scratch = mkdtempSync(join(tmpdir(), "aidlc-t315-"));
 const copiedTools = join(scratch, "runtime", "tools");
 const buildTool = join(copiedTools, "aidlc-plugin-build.ts");
 const PROJECTION_MARKER = ".aidlc-plugin-projection.json";
+// A 0500 folder refuses only a process its mode bits bind: Windows ignores
+// them for folders, and root ignores them everywhere.
+const FOLDER_MODES_BIND = process.platform !== "win32" && process.getuid?.() !== 0;
 
 cpSync(SOURCE_TOOLS, copiedTools, { recursive: true });
 
@@ -92,6 +96,20 @@ function copyPlugin(label: string): string {
   mkdirSync(dirname(root), { recursive: true });
   cpSync(SOURCE_PLUGIN, root, { recursive: true });
   return root;
+}
+
+function withTmpdir<T>(temp: string, action: () => T): T {
+  const previous = process.env.TMPDIR;
+  process.env.TMPDIR = temp;
+  try {
+    return action();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.TMPDIR;
+    } else {
+      process.env.TMPDIR = previous;
+    }
+  }
 }
 
 function minimalPlugin(name: string, aidlc: Record<string, unknown> = {}): string {
@@ -463,6 +481,104 @@ describe("t315 standalone plugin builder", () => {
         process.env.AIDLC_LOCK_UNSTAMPED_GRACE_MS = previousGrace;
       }
       rmSync(lockDir, { recursive: true, force: true });
+    }
+  });
+
+  test.skipIf(!FOLDER_MODES_BIND)("another user's lock folder in a shared temp folder does not hold up a build", () => {
+    const pluginRoot = copyPlugin("shared-temp-lock-folder");
+    const outDir = join(scratch, "shared-temp-output");
+    const temp = join(scratch, "shared-temp");
+    // The folder all users' builds share in older releases, made first by
+    // another user: this user cannot write it.
+    const sharedFolder = join(temp, "aidlc-plugin-build-locks");
+    mkdirSync(sharedFolder, { recursive: true });
+    chmodSync(sharedFolder, 0o500);
+    const target = readPluginTargets(
+      join(SOURCE_TOOLS, "data", "plugin-targets.json"),
+    ).claude;
+    try {
+      withTmpdir(temp, () =>
+        buildPluginProjection({
+          pluginRoot,
+          target,
+          outDir,
+          templateHooksDir: join(
+            SOURCE_TOOLS,
+            "data",
+            "plugin-hooks-template",
+          ),
+          lockTimeoutMs: 25,
+        })
+      );
+      expect(existsSync(outDir)).toBe(true);
+    } finally {
+      chmodSync(sharedFolder, 0o700);
+    }
+  });
+
+  test.skipIf(!FOLDER_MODES_BIND)("a lock folder this user cannot write stops the build by name, not as a busy lock", () => {
+    const pluginRoot = copyPlugin("unwritable-lock-folder");
+    const outDir = join(scratch, "unwritable-lock-folder-output");
+    const temp = join(scratch, "unwritable-lock-temp");
+    const lockFolder = withTmpdir(temp, () => dirname(pluginBuildLockPath(outDir)));
+    mkdirSync(lockFolder, { recursive: true });
+    chmodSync(lockFolder, 0o500);
+    const target = readPluginTargets(
+      join(SOURCE_TOOLS, "data", "plugin-targets.json"),
+    ).claude;
+    let refusal: unknown;
+    try {
+      withTmpdir(temp, () =>
+        buildPluginProjection({
+          pluginRoot,
+          target,
+          outDir,
+          templateHooksDir: join(
+            SOURCE_TOOLS,
+            "data",
+            "plugin-hooks-template",
+          ),
+          lockTimeoutMs: 25,
+        })
+      );
+    } catch (error) {
+      refusal = error;
+    } finally {
+      chmodSync(lockFolder, 0o700);
+    }
+    expect(refusal).toMatchObject({
+      name: "PluginBuildLockFolderError",
+      message: `cannot write the plugin build lock folder "${lockFolder}" (EACCES)`,
+      fix: "Set TMPDIR to a folder you own, then run the command again.",
+    });
+    expect(existsSync(outDir)).toBe(false);
+  });
+
+  test.skipIf(!FOLDER_MODES_BIND)("plugin build prints the lock folder it cannot write, and the TMPDIR fix as its Fix line", () => {
+    const pluginRoot = copyPlugin("unwritable-lock-folder-cli");
+    const outDir = join(scratch, "unwritable-lock-folder-cli-output");
+    const temp = join(scratch, "unwritable-lock-cli-temp");
+    const lockFolder = withTmpdir(temp, () => dirname(pluginBuildLockPath(outDir)));
+    mkdirSync(lockFolder, { recursive: true });
+    chmodSync(lockFolder, 0o500);
+    try {
+      const result = withTmpdir(temp, () =>
+        run([pluginRoot, "claude", outDir, "--json"])
+      );
+      expect(result.status, result.stderr).toBe(1);
+      const parsed = JSON.parse(result.stdout) as {
+        errors: Array<{ rule: string; message: string; fix: string }>;
+      };
+      expect(parsed.errors).toContainEqual(
+        expect.objectContaining({
+          rule: "build-output",
+          message: `cannot write the plugin build lock folder "${lockFolder}" (EACCES)`,
+          fix: "Set TMPDIR to a folder you own, then run the command again.",
+        }),
+      );
+      expect(existsSync(outDir)).toBe(false);
+    } finally {
+      chmodSync(lockFolder, 0o700);
     }
   });
 
