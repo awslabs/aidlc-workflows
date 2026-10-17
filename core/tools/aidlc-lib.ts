@@ -14197,12 +14197,14 @@ export function summaryScopeForRecordPath(
  * workflow: the guard is on, the ceremony is on, the stage declares one, and it
  * is not initialization or an autonomous Construction stage. The gate and the
  * log commands share this so they never disagree about whether one is owed.
+ * Directive presentation ignores only the guard switch: disabling enforcement
+ * does not switch off the person's summary question.
  */
 export function summaryConfirmationOwed(
   stage: SummaryConfirmationStage,
-  options: { stateContent?: string | null; scope?: string | null } = {},
+  options: { stateContent?: string | null; scope?: string | null; ignoreGuardSwitch?: boolean } = {},
 ): boolean {
-  if (summaryConfirmationGuardDisabled()) return false;
+  if (!options.ignoreGuardSwitch && summaryConfirmationGuardDisabled()) return false;
   if (
     resolveCeremony(
       "summary_confirmation",

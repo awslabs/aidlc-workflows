@@ -745,9 +745,14 @@ prompt; report `awaiting-approval` then `approved` without `--user-input`, then
 per-Unit iteration still writes its Unit receipt and calls `next`. While
 `plan_approval` is on, Plan Approval remains human-required under every
 completion policy (with it off, as poc and express ship, a ready plan goes on
-and records `PLAN_APPROVAL_SKIPPED`); pre-generation summary
-confirmation applies only when
-`directive.ceremony.summary_confirmation === "on"`.
+and records `PLAN_APPROVAL_SKIPPED`). Code Generation declares no summary
+confirmation: Plan Approval is its confirmation. The emitted
+`directive.ceremony.summary_confirmation` says `on` only when the stage owes
+a summary under the shared gate/logger check, including its stage declaration,
+scope or intent setting and Construction autonomy. Disabling the summary
+confirmation check does not disable the question; the step ignores only that
+enforcement switch. Its ceremony
+note, agent brief and summary protocol module follow that effective value.
 
 **Autonomy offer.** `offer_autonomy: true` offers **Continue automatically** /
 **Review each checkpoint**, mapped by `bolt set-autonomy` to `autonomous` /

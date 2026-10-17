@@ -195,6 +195,7 @@ import {
   type CeremonyPolicy,
   ceremonyPolicyValues,
   learningsRitualRuns,
+  summaryConfirmationOwed,
   effectiveSupportAgents,
   effectiveSupportAgentsForProject,
   supportAgentsAtOpenGate,
@@ -7318,6 +7319,9 @@ function buildRunStageDirective(
     ? rulesContentEntries(node, codekbCtx.projectDir, codekbCtx.space)
     : null;
   const ceremony = ceremonyPolicyValues(scope, stateContent);
+  // The stage owes the same confirmation its gate and logger enforce. A scope
+  // setting alone must not tell Code Generation to ask before Plan Approval.
+  ceremony.summary_confirmation = summaryConfirmationOwed(node, { scope, stateContent, ignoreGuardSwitch: true }) ? "on" : "off";
   // Plan approval also answers to a memory-held strict Guard Policy.
   if (codekbCtx && stateContent) {
     ceremony.plan_approval = resolvePlanApprovalSetting(codekbCtx.projectDir, stateContent).value;
