@@ -598,7 +598,7 @@ export async function run(
   // names no shell on Windows), where they are checked as any other argument;
   // the file form, --person-words-file, is always a path.
   const PERSON_WORDS_FLAGS = new Set(["--person-words"]);
-  const TAKES_PERSON_WORDS = new Set(["config set", "intent create", "top-recompose recompose"]);
+  const TAKES_PERSON_WORDS = new Set(["config set", "intent create", "top-recompose recompose", "workspace reclassify"]);
   // A value is the next argument only when it does not start with `--`, as
   // parseArgs and the log reader take it (recompose refuses a value starting
   // with `-`), so no flag after it is hidden.
