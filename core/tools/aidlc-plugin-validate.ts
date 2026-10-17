@@ -2,7 +2,7 @@
 // Offline validator for an authored AIDLC plugin repository.
 //
 // This tool deliberately resolves everything from <plugin-root> plus assets
-// bundled beside the running tool. It does not require an AIDLC project,
+// bundled with the running tool (bundledPluginData). It does not require an AIDLC project,
 // framework checkout, network access, or installed harness.
 
 import {
@@ -30,6 +30,7 @@ import {
   type ValidationContext,
   validateStageFrontmatter,
 } from "./aidlc-stage-schema.ts";
+import { resolveHarnessPath } from "./aidlc-runtime-paths.ts";
 
 export type PluginValidationRule =
   | "plugin-root"
@@ -436,32 +437,25 @@ function validatePluginContentSymlinks(
   }
 }
 
-export function bundledPluginComposeTemplatePath(): string {
-  const candidates = [
-    join(
-      import.meta.dir,
-      "data",
-      "plugin-hooks-template",
-      "compose.ts",
-    ),
-    join(
-      import.meta.dir,
-      "..",
-      "..",
-      "scripts",
-      "plugin-hooks-template",
-      "compose.ts",
-    ),
-  ];
+// Where the plugin authoring tools read their bundled data: the running
+// harness tree's tools/data, which resolveHarnessPath finds beside the tool in
+// a Bun install and in the runtime a compiled aidlc ships beside itself, else
+// the repository checkout's own copy.
+export function bundledPluginData(segments: string[], checkoutCopy?: string): string {
+  const candidates = [resolveHarnessPath(["tools", "data", ...segments])];
+  if (checkoutCopy) candidates.push(checkoutCopy);
   return candidates.find(existsSync) ?? candidates[0];
 }
 
-function pluginAuthoringContext(): PluginAuthoringContext {
-  const bundled = join(
-    import.meta.dir,
-    "data",
-    "plugin-authoring-context.json",
+export function bundledPluginComposeTemplatePath(): string {
+  return bundledPluginData(
+    ["plugin-hooks-template", "compose.ts"],
+    join(import.meta.dir, "..", "..", "scripts", "plugin-hooks-template", "compose.ts"),
   );
+}
+
+function pluginAuthoringContext(): PluginAuthoringContext {
+  const bundled = bundledPluginData(["plugin-authoring-context.json"]);
   try {
     const parsed = JSON.parse(readFileSync(bundled, "utf-8")) as unknown;
     if (

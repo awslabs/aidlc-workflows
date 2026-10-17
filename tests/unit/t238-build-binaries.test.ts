@@ -315,6 +315,7 @@ describe("t238 build-binaries release builder", () => {
       "compiled-kiro-new-work-routing",
       "plugin-select",
       "real-plugin-sync",
+      "plugin-authoring",
       "conductor-persona",
       "workspace-global-flags",
       "bolt-reentry",

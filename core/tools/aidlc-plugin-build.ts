@@ -15,6 +15,7 @@ import {
   readPluginTargets,
 } from "./aidlc-plugin-emit.ts";
 import {
+  bundledPluginData,
   formatPluginValidation,
   type PluginValidationFinding,
   type PluginValidationResult,
@@ -26,29 +27,17 @@ const USAGE =
   "Usage: bun <tools-dir>/aidlc-plugin-build.ts <plugin-root> <harness> [outDir] [--json]";
 
 export function bundledPluginTargetsPath(): string {
-  const candidates = [
-    join(import.meta.dir, "data", "plugin-targets.json"),
-    join(
-      import.meta.dir,
-      "..",
-      "..",
-      "dist",
-      "claude",
-      ".claude",
-      "tools",
-      "data",
-      "plugin-targets.json",
-    ),
-  ];
-  return candidates.find(existsSync) ?? candidates[0];
+  return bundledPluginData(
+    ["plugin-targets.json"],
+    join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools", "data", "plugin-targets.json"),
+  );
 }
 
 export function bundledPluginHookTemplatesDir(): string {
-  const candidates = [
-    join(import.meta.dir, "data", "plugin-hooks-template"),
+  return bundledPluginData(
+    ["plugin-hooks-template"],
     join(import.meta.dir, "..", "..", "scripts", "plugin-hooks-template"),
-  ];
-  return candidates.find(existsSync) ?? candidates[0];
+  );
 }
 
 function withBuildError(
