@@ -539,11 +539,10 @@ no preset there, and the conductor keeps your chat's model.
 AI-DLC owns the model and effort lines (`model:`, `effortLevel:`, and the
 `effort:`, `variant:` and `tier:` keys other tools use) of the agent files it
 ships, as it does on Claude Code: `aidlc config` writes those of the agents
-that have a setting and takes them out of the others, a model line you add by
-hand to one of those files included, so change them through
-`aidlc config models` rather than by hand; `aidlc config models --check`
-reports a `model:` or `effortLevel:` line that does not match. An agent file
-you added yourself is not touched.
+that have a setting, so change them through `aidlc config models` rather than
+by hand; `aidlc config models --check` reports a `model:` or `effortLevel:`
+line that does not match the setting, one you added by hand included. An agent
+file you added yourself is not touched.
 
 An agent's effort is shared by every tool, while its model is recorded per
 tool, so an effort recorded for one agent for another tool applies on Kiro too.

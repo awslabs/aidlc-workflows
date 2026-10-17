@@ -621,8 +621,8 @@ Claude Opus 4.8. Where you set the model and effort depends on the harness:
   nothing AI-DLC records changes that, except on Kiro, where
   `aidlc config models --agent` sets one agent's own model and effort
   ([One agent on its own model and effort](harnesses/kiro-ide.md#one-agent-on-its-own-model-and-effort));
-  a `model:` line added by hand to an agent file AI-DLC ships is taken out at
-  the next `aidlc config`. On Copilot a `model:` pin in an agent's `.md` file
+  set it there rather than with a `model:` line by hand, which
+  `aidlc config models --check` reports as drift. On Copilot a `model:` pin in an agent's `.md` file
   is not portable, because the CLI and VS Code read model names differently.
 - **Claude Code, Codex CLI, and opencode:** the session's model and effort
   drive the conductor and every agent that inherits; `aidlc config models`

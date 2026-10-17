@@ -7192,26 +7192,33 @@ function kiroKeptChangedNote(count: number, harnessDir: string, force: string): 
     `\`${force}\` takes this release's ${one ? "version" : "versions"}.`;
 }
 
-// A run that is not a `config models` change, writing a model or effort into
-// a Kiro agent file for the first time: the person set it for that agent,
-// maybe for another tool, so the line names it and the command that takes it
-// out of the settings layer it came from.
+// A run that writes a model or effort into a Kiro agent file that the
+// project's file does not carry yet, for an agent whose setting the run did
+// not change itself (a `config models` change says those in its own lines):
+// the person set it for that agent, maybe for another tool, so the line names
+// it and the command that takes it out of the settings layer it came from.
 function kiroAgentPinsNote(
   projectDir: string,
   stagedRoot: string,
   harnessDir: string,
   actions: readonly PlannedAction[],
   dryRun: boolean,
+  changedAgents: ReadonlySet<string>,
 ): string | null {
   const written = new Set(
-    actions.filter((item) => item.action === "create" || item.action === "update" || item.action === "merge")
-      .map((item) => item.path),
+    actions.filter((item) =>
+      (item.action === "create" || item.action === "update" || item.action === "merge") &&
+      item.path.startsWith(`${harnessDir}/agents/`)
+    ).map((item) => item.path),
   );
-  const added = kiroAgentPinsAdded(projectDir, stagedRoot, harnessDir).filter((item) => written.has(item.path));
+  if (written.size === 0) return null;
+  const added = kiroAgentPinsAdded(projectDir, stagedRoot, harnessDir)
+    .filter((item) => written.has(item.path) && !changedAgents.has(item.agent));
   if (added.length === 0) return null;
   const resolved = resolveAidlcSettings(projectDir);
-  const layerFlag = (source: string) =>
-    source === "machine" ? " --global" : source === "local" ? " --local" : source === "project" ? " --project" : "";
+  // Named once the project holds another harness beside this Kiro tree, as
+  // it does after a run that adds Kiro to it.
+  const otherHarness = discoverProjectHarnesses(projectDir).some((tree) => tree.harnessDir !== harnessDir);
   const runs = added.map((item) => {
     const values = [
       ...(item.model !== undefined ? [`model ${item.model}`] : []),
@@ -7222,16 +7229,22 @@ function kiroAgentPinsNote(
   // One command per agent and settings layer: `default` takes the agent's own
   // value out of the layer it is recorded in.
   const undo = added.flatMap((item) => {
-    const byLayer = new Map<string, string[]>();
-    const take = (flag: string, key: string) => {
-      const layer = layerFlag(settingsSource(resolved, key));
-      byLayer.set(layer, [...(byLayer.get(layer) ?? []), flag]);
-    };
-    if (item.model !== undefined) take("--model default", `models.agents.${item.agent}.model.kiro-ide`);
-    if (item.effort !== undefined) take("--effort default", `models.agents.${item.agent}.effort`);
-    return [...byLayer].map(([layer, flags]) =>
-      `\`${modelsCommand(projectDir, "kiro-ide", `--agent ${item.agent} ${flags.join(" ")}${layer} --yes`)}\``
-    );
+    const byLayer = new Map<SettingsTarget, string[]>();
+    const keys = [
+      ...(item.model !== undefined ? [`models.agents.${item.agent}.model.kiro-ide`] : []),
+      ...(item.effort !== undefined ? [`models.agents.${item.agent}.effort`] : []),
+    ];
+    for (const key of keys) {
+      const source = settingsSource(resolved, key);
+      const target: SettingsTarget = source === "machine" ? "global" : source === "local" ? "local" : "project";
+      byLayer.set(target, [...(byLayer.get(target) ?? []), ...(agentDefaultArgs(key) ?? []).slice(2)]);
+    }
+    return [...byLayer].map(([target, tail]) => {
+      const args = ["--agent", item.agent, ...tail, ...(otherHarness && !tail.includes("--harness") ? ["--harness", "kiro-ide"] : [])];
+      return `\`${configInvocationFor(projectDir)} config models ${
+        args.map((arg) => quoteCommandArgument(arg)).join(" ")
+      } --${target} --yes${projectTarget(projectDir)}\``;
+    });
   });
   return `Kiro ${dryRun ? "will run" : "now runs"} ${runs.join(", and ")}, as set for ${
     added.length === 1 ? "that agent" : "those agents"
@@ -11429,6 +11442,16 @@ const SHOWN_MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9._:/@[\]+-]{0,199}$/;
  * lives. `args` is empty when no one command sets the value back by itself.
  */
 /** The `--agent <name> --effort default` (or `--model default --harness <h>`) that removes one agent key, from its leaf id. */
+// The agents whose own model or effort a `config models` run changes.
+function changedModelAgents(previous: ModelPolicyRecord | null, next: ModelPolicyRecord | null): Set<string> {
+  const before = normalizeModelPolicy(previous)?.agents ?? {};
+  const after = normalizeModelPolicy(next)?.agents ?? {};
+  return new Set(
+    [...new Set([...Object.keys(before), ...Object.keys(after)])]
+      .filter((name) => canonical(before[name] ?? null) !== canonical(after[name] ?? null)),
+  );
+}
+
 function agentDefaultArgs(id: string): string[] | null {
   const effort = /^models\.agents\.([^.]+)\.effort$/.exec(id);
   if (effort) return ["--agent", effort[1], "--effort", "default"];
@@ -13278,9 +13301,15 @@ export async function main(
     if (kiroUpgraded > 0) prepared.notes.push(kiroUpgradedNote(kiroUpgraded, descriptor.harnessDir, kiroForce));
     const kiroKeptChanged = actions.filter((action) => action.detail === KIRO_KEPT_CHANGED_DETAIL).length;
     if (kiroKeptChanged > 0) prepared.notes.push(kiroKeptChangedNote(kiroKeptChanged, descriptor.harnessDir, kiroForce));
-    // A `config models` change says what it applies in its own summary.
-    const kiroPins = stamp.distribution === "kiro-ide" && !modelsContext
-      ? kiroAgentPinsNote(projectDir, prepared.root, descriptor.harnessDir, actions, argv.includes("--dry-run"))
+    const kiroPins = stamp.distribution === "kiro-ide"
+      ? kiroAgentPinsNote(
+        projectDir,
+        prepared.root,
+        descriptor.harnessDir,
+        actions,
+        argv.includes("--dry-run"),
+        modelsContext ? changedModelAgents(modelsContext.previous, modelsContext.next) : new Set(),
+      )
       : null;
     if (kiroPins) prepared.notes.push(kiroPins);
     // Older releases shipped an effort map in the project's Kiro settings; a

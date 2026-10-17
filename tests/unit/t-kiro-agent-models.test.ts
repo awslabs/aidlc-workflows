@@ -282,6 +282,46 @@ describe("an agent's model and effort through config", () => {
     expect(again.out).not.toContain("Kiro now runs");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
 
+  test("a models change for one agent names another agent's setting it writes for the first time", () => {
+    const p = project();
+    const settings = projectSettingsPath(p.dir);
+    const current = existsSync(settings) ? JSON.parse(readFileSync(settings, "utf-8")) as Record<string, unknown> : {};
+    writeFileSync(settings, `${JSON.stringify({ schemaVersion: 1, ...current, models: { schemaVersion: 1, agents: { developer: { effort: "low" } } } }, null, 2)}\n`);
+    const pin = p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes");
+    expect(pin.status, pin.out).toBe(0);
+    const said = pin.out.replace(/\s+/g, " ");
+    expect(said).toContain("Kiro now runs developer on effort low, as set for that agent with config models");
+    expect(said).not.toContain(`Kiro now runs ${REVIEWER}`);
+    expect(p.agent("aidlc-developer-agent.md")).toMatch(/^effortLevel: low$/m);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
+
+  test("Kiro added beside another harness names itself in the undo", () => {
+    const dir = temp("aidlc-kiro-agent-models-two-");
+    mkdirSync(join(dir, ".git"));
+    const machine = temp("aidlc-kiro-agent-models-m-");
+    const env = {
+      ...process.env,
+      AIDLC_INSTALL_ROOT: join(machine, "share", "aidlc"),
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_RUNTIME_ROOT: join(REPO_ROOT, "dist-release"),
+    };
+    const run = (args: string[]) => {
+      const result = spawnSync(process.execPath, [join(REPO_ROOT, "core", "tools", "aidlc-init.ts"), ...args], {
+        cwd: dir,
+        env,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      return { status: result.status, out: `${result.stdout}${result.stderr}` };
+    };
+    const claude = run(["config", "--project-dir", dir, "--from", join(REPO_ROOT, "dist-release", "claude"), "--harness", "claude", "--mcp", "none", "--yes"]);
+    expect(claude.status, claude.out).toBe(0);
+    writeFileSync(projectSettingsPath(dir), `${JSON.stringify({ schemaVersion: 1, models: { schemaVersion: 1, agents: { developer: { effort: "low" } } } }, null, 2)}\n`);
+    const kiro = run(["config", "--project-dir", dir, "--from", KIRO_IDE_RELEASE, "--harness", "kiro-ide", "--mcp", "none", "--yes"]);
+    expect(kiro.status, kiro.out).toBe(0);
+    expect(kiro.out.replace(/\s+/g, " ")).toMatch(/To take it out: `[^`]*config models --agent developer --effort default --harness kiro-ide --project --yes/);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 2);
+
   test("the same model again puts back lines the agent file lost", () => {
     const p = project();
     expect(p.models("--project", "--agent", REVIEWER, "--model", "gpt-5.6-terra", "--yes").status).toBe(0);
