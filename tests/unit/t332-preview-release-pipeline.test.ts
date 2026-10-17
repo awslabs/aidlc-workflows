@@ -1595,7 +1595,9 @@ describe("t332 preview publication pipeline", () => {
     expect(preview).toEqual({ name: "ShellCheck installer", run: "shellcheck scripts/install.sh" });
     expect(shellcheck(STABLE_RELEASE_WORKFLOW, "verify")).toEqual(preview);
     expect(shellcheck(CI_WORKFLOW, "check")).toEqual({
-      ...preview, if: `\${{ !cancelled() && steps.checkout.outcome == 'success' }}`,
+      ...preview,
+      run: "bash scripts/ci-check-budget.sh shellcheck scripts/install.sh",
+      if: `\${{ !cancelled() && steps.checkout.outcome == 'success' }}`,
     });
   });
 });
