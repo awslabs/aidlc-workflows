@@ -1034,7 +1034,7 @@ and the person's review of what the agent runs are the outer boundary. See the
 | `WORKSPACE_SCAFFOLDED` | `tools/aidlc-utility.ts` | Net-new directory tree created by init |
 | `WORKSPACE_SCANNED` | `tools/aidlc-utility.ts` | Brownfield workspace detection complete |
 | `WORKSPACE_INITIALISED` | `tools/aidlc-utility.ts` | State file materialized; carries `Project Type Source` (`workspace scan`, or `you` when creation had `--project-type`) |
-| `WORKSPACE_RECLASSIFIED` | `tools/aidlc-utility.ts` | `workspace reclassify --project-type <t>`: the person said the work is a new project or existing code. Carries `Old Project Type` and `New Project Type` (each with who set it), optional `Person Words` (the words the type was said in, when `next` was given a request with it), `Scanned As` and the rescanned stack, optional `Repos Recorded`, and `Reverse Engineering` (`back on the plan`, `skipped`, or `plan unchanged`) |
+| `WORKSPACE_RECLASSIFIED` | `tools/aidlc-utility.ts` | `workspace reclassify --project-type <t>`: the person said the work is a new project or existing code. Carries `Old Project Type` and `New Project Type` (each with who set it), optional `Person Words` (the words the type was said in: the request `next` was given with it, or the person's words the agent passed), `Scanned As` and the rescanned stack, optional `Repos Recorded`, and `Reverse Engineering` (`back on the plan`, `skipped`, or `plan unchanged`) |
 
 ### Documents
 

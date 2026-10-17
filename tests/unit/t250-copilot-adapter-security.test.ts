@@ -2060,6 +2060,10 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
           [`aidlc engine config set guard.review-freeze off --person-words '${words}'`, {}],
           [`aidlc engine intent create --scope mvp --sensors off --person-words '${words}'`, {}],
           [`aidlc engine recompose --skip security-review --sensors off --person-words '${words}'`, { T250_HUMAN_ACTED: "1" }],
+          [
+            `aidlc engine workspace reclassify --project-type brownfield --intent 261003-tooltip --space default --person-words '${words}'`,
+            { T250_HUMAN_ACTED: "1" },
+          ],
         ] as const) expect(decision(command, env), command).toBe("allow");
       }
       // In a Windows terminal they are checked as any other argument.

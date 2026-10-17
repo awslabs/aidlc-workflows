@@ -939,10 +939,9 @@ export function modelPolicySurfaceDrift(
   const tiers = readAgentTiers(harnessRoot);
   const cap = resolveTierCap(join(projectDir, "aidlc", "spaces", "default", "memory"));
   const issues: string[] = [];
-  // Doctor's rule, on kiro-ide and Cursor only here: GitHub Copilot still
-  // counts a shared effort in `--check`.
-  const sessionSet = (harness === "kiro-ide" || harness === "cursor") &&
-    presetsChangeNothing(harness, build);
+  // Doctor's rule: where a preset changes nothing, a shared effort is the
+  // session's, not drift.
+  const sessionSet = presetsChangeNothing(harness, build);
   const expectedByAgent = Object.fromEntries(
     Object.entries(tiers).map(([name, tier]) => [
       name,
