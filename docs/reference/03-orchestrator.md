@@ -745,6 +745,18 @@ Units ... You can go back to Units Generation any time"), and clears the mark,
 so a later change is asked about afresh. A ledger that cannot take the row
 refuses the step with that function's own repair step. Under `relaxed` or `off`
 the repo command itself writes the row at the change.
+When choosing teams recorded `Home Location` (the workspace is a Git
+repository: its `origin` address, or `local`), the next step is `ask_type:
+unit-assignment` instead, asked once before any Unit starts: who builds which
+Unit, each named with its likely repos and the Units it waits on. The person
+answers in their own words; the agent runs `assign_command` (`unit assign
+<unit>=<team> ... --person-words`) with the Units they named, or the **Leave
+them all open** choice's command. A `UNITS_ASSIGNED` row after the latest team
+`UNIT_OWNERSHIP_SET` settles it. The home then walks only the Units no team
+holds, skipping a Unit that waits, directly or through another, on one a team
+holds and has not merged; when none is left to it while a held Unit is
+unmerged, the step is the team board as a `notice`. Team work without `Home
+Location` keeps the dispatcher flow.
 
 When skeleton-on applies, the first DAG Unit must be planned as the smallest
 working integrated slice. It completes its applicable per-unit stages before

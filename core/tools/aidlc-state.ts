@@ -294,6 +294,7 @@ import {
 import { swarmSourceChangedSince } from "./aidlc-swarm-source.ts";
 import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts, withStageProgressRow } from "./aidlc-graph.ts";
 import { generateFireId, recordUnfinishedFire, unfinishedFire } from "./aidlc-sensor-record.ts";
+import { HOME_LOCATION_FIELD, homeLocation, workspaceHomeLocation } from "./aidlc-unit-teams.js";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import { markdownBlocks, projectVisibleMarkdownLines } from "./aidlc-markdown.ts";
@@ -1777,8 +1778,14 @@ function handleSetUnitOwnership(given: string[]): void {
       "Unit Ownership",
       value,
     );
+    // The home of team-built work, recorded once as teams are chosen: every copy
+    // of the workspace then knows where its claims are.
+    const home = value === "team" && current !== "team" && homeLocation(content) === null
+      ? workspaceHomeLocation(pd)
+      : null;
+    if (home !== null) content = setOrInsertField(content, "## Runtime State", HOME_LOCATION_FIELD, home);
     if (value === "solo") content = removeUnitProgressSection(content);
-    emitAudit(pd, "UNIT_OWNERSHIP_SET", { Mode: value });
+    emitAudit(pd, "UNIT_OWNERSHIP_SET", { Mode: value, ...(home !== null ? { [HOME_LOCATION_FIELD]: home } : {}) });
     writeStateFile(pd, content);
     if (switches.length > 0) keepPlanQuestionOver(pd, before, content);
     // Each switch's own line, as the two setters print it. The first team step

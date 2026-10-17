@@ -74,6 +74,7 @@ import {
   readStateFile,
   readUnitGateRhythm,
   readUnitScopeStamp,
+  readAnswerTextFile,
   parseReviewRecordBytes,
   pairedReviewRecordForCompletion,
   personsGateReply,
@@ -108,6 +109,7 @@ import {
   writeUnitScopeStamp,
   writeClaimGeneration,
 } from "./aidlc-lib.js";
+import { homeLocation, unitsInPlanOrder } from "./aidlc-unit-teams.js";
 import {
   parseTestingContract,
   recordedApprovalFingerprint,
@@ -202,6 +204,8 @@ export interface UnitClaimPayload {
   audit_shard?: string;
   candidate_tree_oid?: string;
   candidate_head_oid?: string;
+  // Held for this team by the lead at the home, before anyone took it.
+  assigned?: true;
 }
 
 export interface UnitClaimView {
@@ -4732,6 +4736,119 @@ export function publishedAtHead(projectDir: string): boolean {
   }
 }
 
+// Who builds which Unit, in the lead's own words at the home: one claim per
+// Unit they named, held for that team by the claim's compare-and-swap, with no
+// scope stamp, so the lead's checkout stays the home's. A Unit they left out
+// stays open. The walking skeleton, when on, is built here first.
+function assignUnits(args: string[], projectDir?: string): void {
+  const { positional, flags, bareFlags } = parseArgs(args);
+  const pd = resolveProjectDir(projectDir);
+  const state = readStateFile(pd);
+  if (!isTeamUnitOwnership(state) || homeLocation(state) === null) {
+    fail("Units are given to teams once teams are chosen for this work.");
+  }
+  if (readApplicableTeamUnitScopeStamp(pd)) fail("Units are given to teams at the home, not from a checkout scoped to one Unit.");
+  const words = flags["person-words-file"] !== undefined
+    ? readAnswerTextFile(pd, flags["person-words-file"])
+    : flags["person-words"] ?? "";
+  const open = bareFlags.has("open") || flags.open !== undefined;
+  const pairs: Array<{ unit: string; team: string }> = [];
+  for (const token of positional) {
+    const at = token.indexOf("=");
+    const unit = at > 0 ? token.slice(0, at).trim() : "";
+    const team = at > 0 ? token.slice(at + 1).trim() : "";
+    if (!unit || !team) fail(`"${token}" is not <unit>=<team>.`);
+    const unitError = validateUnitName(unit);
+    if (unitError) fail(unitError);
+    if (/[\r\n|]/.test(team)) fail("Team labels cannot contain pipes or newlines.");
+    pairs.push({ unit, team });
+  }
+  if (pairs.length === 0 && !open) fail("Usage: aidlc-unit assign <unit>=<team> [<unit>=<team> ...] | --open");
+  const local = localOpeningStatus(pd);
+  const skeleton = teamSkeletonOn(state) ? local.skeleton : null;
+  const lines: string[] = [];
+  const named = new Map<string, string>();
+  for (const { unit, team } of pairs) {
+    if (!local.units.includes(unit)) fail(`${unit} is not one of this work's Units (${local.units.join(", ")}).`);
+    const already = named.get(unit);
+    if (already !== undefined && already !== team) fail(`${unit} can go to one team; you named ${already} and ${team}.`);
+    named.set(unit, team);
+  }
+  if (skeleton !== null && named.has(skeleton)) {
+    lines.push(`${skeleton} is the walking skeleton, built here before the teams take their Units.`);
+    named.delete(skeleton);
+  }
+  const identity = activeIdentity(pd);
+  const integration = fetchIntegration(pd);
+  const assigned: Array<{ unit: string; team: string }> = [];
+  const held = new Set<string>();
+  for (const [unit, team] of named) {
+    validateClaimRefUnit(identity.intentId8, unit);
+    const ref = claimRef(identity.intentId8, unit);
+    const current = currentClaim(pd, integration.remote, ref);
+    if (current?.status === "claimed") {
+      held.add(unit);
+      if (current.owner === team) assigned.push({ unit, team });
+      else lines.push(`${unit} is held by ${current.owner}, so it stays with them.`);
+      continue;
+    }
+    const payload: UnitClaimPayload = {
+      version: 1,
+      status: "claimed",
+      owner: team,
+      space: identity.space,
+      intent_uuid: identity.intentUuid,
+      intent_id8: identity.intentId8,
+      unit,
+      generation: current?.status === "released" ? current.generation : (current?.generation ?? 0) + 1,
+      nonce: randomUUID(),
+      base_oid: integration.oid,
+      integration_ref: integration.ref,
+      claim_ref: ref,
+      predecessor_oid: current?.oid ?? null,
+      gate_rhythm: readUnitGateRhythm(state),
+      assigned: true,
+    };
+    const commit = createClaimCommit(pd, current?.oid ?? integration.oid, payload);
+    const pushed = updateClaimRef(pd, integration.remote, ref, commit, current?.oid ?? null);
+    if (!pushed.ok) {
+      const winner = currentClaim(pd, integration.remote, ref);
+      if (winner?.status === "claimed") held.add(unit);
+      lines.push(
+        winner?.status === "claimed"
+          ? `${unit} is held by ${winner.owner}, so it stays with them.`
+          : `${unit} could not be held for ${team}: ${pushed.refused ?? "the claim did not take"}. It stays open.`,
+      );
+      continue;
+    }
+    invalidateLiveClaimPayloadCache(pd, unit);
+    held.add(unit);
+    assigned.push({ unit, team });
+  }
+  // Open: no team holds it, whether named now, earlier, or never.
+  const openUnits = unitsInPlanOrder(pd, local.units).filter((unit) =>
+    unit !== skeleton && !held.has(unit) &&
+    (named.has(unit) || currentClaim(pd, integration.remote, claimRef(identity.intentId8, unit))?.status !== "claimed"));
+  appendAuditEntry("UNITS_ASSIGNED", {
+    Assigned: assigned.map((row) => `${row.unit}=${row.team}`).join(", ") || "none",
+    Open: openUnits.join(", ") || "none",
+    ...(words.trim() ? { "Person Words": words.trim() } : {}),
+  }, pd);
+  const sentence = (unit: string): string => unit.charAt(0).toUpperCase() + unit.slice(1);
+  const summary = [
+    ...assigned.map((row) => `${sentence(row.unit)}: ${row.team}.`),
+    ...(openUnits.length > 0 ? [`Open for any team: ${openUnits.join(", ")}.`] : []),
+  ];
+  const rhythm = readUnitGateRhythm(state) === "unit-end"
+    ? "Each team approves its Unit once, at the end."
+    : "Each team approves its Unit after every stage; to approve once at the end of each Unit, say so before the first Unit is built.";
+  console.log(JSON.stringify({
+    assigned,
+    open: openUnits,
+    notice: [...summary, ...lines, rhythm].join(" "),
+  }));
+}
+
 function participate(projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
   writeFileSync(unitParticipantPath(pd), "participant\n", "utf-8");
@@ -4749,7 +4866,8 @@ export function main(argv: string[]): void {
   }
   const command = args.shift();
   try {
-    if (command === "adopt") adoptUnit(args, projectDir);
+    if (command === "assign") assignUnits(args, projectDir);
+    else if (command === "adopt") adoptUnit(args, projectDir);
     else if (command === "claim") claimUnit(args, projectDir);
     else if (command === "release") releaseUnit(args, projectDir);
     else if (command === "participate") participate(projectDir);
@@ -4771,7 +4889,7 @@ export function main(argv: string[]): void {
       console.log(JSON.stringify(unitClaimOverview(resolveProjectDir(projectDir)), null, 2));
     } else {
       fail(
-        "Usage: aidlc-unit <adopt|claim|release|participate|share|publish|pin|gate|land|merge-status|status> ...",
+        "Usage: aidlc-unit <assign|adopt|claim|release|participate|share|publish|pin|gate|land|merge-status|status> ...",
       );
     }
   } catch (error) {

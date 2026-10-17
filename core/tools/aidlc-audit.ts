@@ -276,6 +276,7 @@ const VALID_EVENT_TYPES = new Set([
   "BOLT_FAILED",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
+  "UNITS_ASSIGNED",
   "UNIT_GATE_RHYTHM_SET",
   "CONSTRUCTION_POLICY_SET",
   "UNIT_MERGED",
@@ -602,6 +603,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "MAIN_CHECKOUT_CHANGE_ALLOWED",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
+  "UNITS_ASSIGNED",
   "UNIT_GATE_RHYTHM_SET",
   // The applied Construction policy decides which stage starts are attempt
   // boundaries for Unit receipts, so only its typed setters may record it.
@@ -702,6 +704,7 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "MAIN_CHECKOUT_CHANGE_ALLOWED",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
+  "UNITS_ASSIGNED",
   "UNIT_GATE_RHYTHM_SET",
   "CONSTRUCTION_POLICY_SET",
   // Routing-trusted unit lifecycle receipts.

@@ -158,6 +158,20 @@ the step that would start a Unit here asks first whether to share the plan with
 the teams (see below); without one, the line says to share the work through
 git, and each team then runs `/aidlc` in its own clone to take a Unit.
 
+When the workspace is a Git repository, choosing **Several teams** also records
+where the home of the work is: `Home Location` in the state, the address the
+workspace's `origin` points to (read, never changed), or `local` when it has no
+remote. The next step asks once who builds which Unit, naming each Unit with its
+likely repos and the Units it waits on. Answer in your own words, for example
+"refunds: payments, checkout-ui: web, leave reporting open": each Unit you name
+is held for that team, a Unit you leave out stays open for
+any team, and a Unit a team already holds stays with that team. **Leave them all
+open** holds none. Your checkout stays the home's, never scoped to one Unit. The
+home then builds only the Units no team holds, skipping a Unit that waits on one
+a team still builds, and shows the board while a team still builds a Unit. Team
+work started before `Home Location` existed keeps the claim, publish, pin, gate
+and land flow below.
+
 When the scope records `skeleton: on`, the first DAG Unit is the walking
 skeleton. It runs on unscoped main before claims open and needs no merge-back
 gate; claims open once its Unit Progress row on the pushed main is complete.

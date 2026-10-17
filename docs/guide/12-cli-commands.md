@@ -47,6 +47,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --config [section]` | Configure project policy conversationally, then land exact deterministic config flags |
 | `/aidlc --claim <unit> [--team <label>] [--rhythm <per-stage\|unit-end>]` | Atomically claim an open team-owned Unit and bind this checkout to that attempt |
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
+| `/aidlc unit assign <unit>=<team> ... \| --open` | At the home, hold each named Unit for a team, or leave every Unit open |
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
 | `/aidlc unit share` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one |
@@ -656,6 +657,25 @@ walking skeleton are complete, and a checkout with a live claim routes only its
 stamped Unit. While main is back at Units Generation changing the Unit plan, a
 claim still goes ahead, and its result says once that if the approved plan
 changes that Unit's own entry, pin asks for a rebase onto main.
+
+### `/aidlc unit assign` - Say who builds which Unit
+
+At the home, once teams are chosen and `Home Location` is recorded, hold each
+named Unit for a team. The agent runs it from your own words when the home asks
+who builds which Unit; you can also run it yourself:
+
+```
+/aidlc unit assign refunds=payments checkout-ui=web
+/aidlc unit assign --open
+```
+
+Each `<unit>=<team>` writes a claim held for that team at the home's remote
+(in the home's own repository when it has none), with no scope stamp, so the home's checkout stays unscoped. A Unit you leave out
+stays open for any team; a Unit a team already holds stays with it, and the
+command says so. One Unit named for two teams is refused with both names. The
+walking skeleton, when on, is built at the home first and is never held for a
+team. `--person-words '<their words>'` records the words the answer came from in
+the `UNITS_ASSIGNED` audit row.
 
 ### `/aidlc unit adopt <unit>` — Adopt a teammate's live claim
 
