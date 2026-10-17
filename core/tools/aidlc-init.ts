@@ -157,6 +157,7 @@ import {
   writeFileAtomic,
 } from "./aidlc-lib.ts";
 import { cutPluginFragment, editTomlInstructions, personaTwinRels } from "./aidlc-plugin.ts";
+import { droppedPluginRegistrations } from "./aidlc-plugin-emit.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
 import { KIRO_IDE_STEERING, kiroIdeSteering, refreshActiveMemory } from "./aidlc-includes.ts";
 import {
@@ -13167,10 +13168,14 @@ export async function main(
     // outside the project, so a switch refuses rather than follow one.
     // A hook file the plan removes (the installed row shipped it) is not one
     // Kiro will run, so it is neither named nor expected after the commit.
+    // So is the registration a dropped plugin's own build wrote beside it.
     const accounted: Record<string, string> = {
       ...files,
       ...Object.fromEntries(
         operations.filter((operation) => operation.kind === "remove").map((operation) => [operation.path, "remove"]),
+      ),
+      ...Object.fromEntries(
+        (hookGate ? droppedPluginRegistrations(projectDir, descriptor.harnessDir) : []).map((path) => [path, "plugin"]),
       ),
     };
     const hookScan = hookGate

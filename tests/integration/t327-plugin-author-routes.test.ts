@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { asShippedBuild } from "../harness/plugin-host-names.ts";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const TOOLS = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
@@ -79,11 +80,14 @@ describe("t327 top-level plugin authoring routes", () => {
     );
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout).valid).toBe(true);
-    expect(files(outDir)).toEqual(files(EXPECTED));
-    for (const file of files(EXPECTED)) {
-      expect(readFileSync(join(outDir, file))).toEqual(
-        readFileSync(join(EXPECTED, file)),
-      );
+    // The shipped route builds test-pro under its own names; the packager's
+    // tree is AI-DLC's own, aidlc-test-pro in aidlc-plugins.
+    const expected = asShippedBuild(
+      new Map(files(EXPECTED).map((file) => [file, readFileSync(join(EXPECTED, file))])),
+    );
+    expect(files(outDir)).toEqual([...expected.keys()]);
+    for (const [file, bytes] of expected) {
+      expect(readFileSync(join(outDir, file)).equals(bytes), file).toBe(true);
     }
   });
 });

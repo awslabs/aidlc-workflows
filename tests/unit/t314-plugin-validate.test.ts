@@ -271,6 +271,32 @@ describe("t314 standalone plugin validator", () => {
     ]);
   });
 
+  test("a marketplace takes any name its author chooses outside AI-DLC's own aidlc namespace", () => {
+    const withMarketplace = (marketplace: unknown): Array<{ rule: string; message: string }> => {
+      const root = fixture();
+      const manifestPath = join(root, ".aidlc-plugin", "plugin.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as { aidlc: Record<string, unknown> };
+      manifest.aidlc.marketplace = marketplace;
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+      return validatePluginRoot(root).errors
+        .filter((finding) => finding.rule === "manifest-marketplace")
+        .map(({ rule, message }) => ({ rule, message }));
+    };
+    for (const name of ["acme-aidlc-plugins", "Acme.Plugins_2", "backend"]) {
+      expect(withMarketplace(name), name).toEqual([]);
+    }
+    // Claude Code keeps catalogues apart only up to letter case.
+    for (const name of ["aidlc", "aidlc-plugins", "aidlc-acme", "AIDLC-tools", "Aidlc"]) {
+      expect(withMarketplace(name), name).toEqual([{
+        rule: "manifest-marketplace",
+        message: `marketplace name "${name}" is AI-DLC's own: "aidlc" and names starting "aidlc-" are kept for the plugins AI-DLC ships`,
+      }]);
+    }
+    for (const name of ["", "acme plugins", "../acme", ".acme", "acme/plugins", 7]) {
+      expect(withMarketplace(name).map((finding) => finding.rule), String(name)).toEqual(["manifest-marketplace"]);
+    }
+  });
+
   test("b: stage frontmatter parse and schema failures are reported", () => {
     const root = fixture();
     const stage = join(
