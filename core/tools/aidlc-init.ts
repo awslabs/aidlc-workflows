@@ -152,11 +152,12 @@ import {
   pausedBySelection,
   pausedLine,
   resolveInvokingSessionId,
+  resumedLine,
   sameFileIdentity,
   withAuditLock,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
-import { cutPluginFragment, editTomlInstructions, personaTwinRels } from "./aidlc-plugin.ts";
+import { cutPluginFragment, editTomlInstructions, nextCompose, personaTwinRels } from "./aidlc-plugin.ts";
 import { droppedPluginRegistrations } from "./aidlc-plugin-emit.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
 import { KIRO_IDE_STEERING, kiroIdeSteering, refreshActiveMemory } from "./aidlc-includes.ts";
@@ -12040,16 +12041,18 @@ function projectChangeLines(projectDir: string, context: ChoicesMutationContext)
   return [changed, ...pausedChangeLines(projectDir, context)];
 }
 
-// Said once, at the change that pauses a plugin: its base is left out of the
-// list the person typed, and the plugin stays in it.
+// Said once, at the change that pauses a plugin (its base is left out of the
+// list the person typed, and the plugin stays in it), and once at the change
+// that turns its base back on.
 function pausedChangeLines(projectDir: string, context: ChoicesMutationContext): string[] {
   if (context.nextPlugins === null) return [];
   const dataDir = join(projectDir, context.harnessDir, "tools", "data");
   const baseOf = (plugin: string): string | null => composedPluginBase(dataDir, plugin);
   const before = pausedBySelection(context.previousPlugins === null ? null : new Set(context.previousPlugins), baseOf);
   const after = pausedBySelection(new Set(context.nextPlugins), baseOf);
-  return [...after].filter(([plugin, base]) => before.get(plugin) !== base).map(([plugin, base]) => {
-    const rest = (context.nextPlugins ?? []).filter((name) => name !== plugin);
+  const next = context.nextPlugins;
+  const paused = [...after].filter(([plugin, base]) => before.get(plugin) !== base).map(([plugin, base]) => {
+    const rest = next.filter((name) => name !== plugin);
     return pausedLine(
       plugin,
       base,
@@ -12060,6 +12063,10 @@ function pausedChangeLines(projectDir: string, context: ChoicesMutationContext):
         : null,
     );
   });
+  const resumed = [...before]
+    .filter(([plugin]) => !after.has(plugin) && next.includes(plugin))
+    .map(([plugin, base]) => resumedLine(plugin, base, nextCompose(context.distribution, plugin, null)));
+  return [...paused, ...resumed];
 }
 
 // The machine settings file lives outside the project, so its change runs as

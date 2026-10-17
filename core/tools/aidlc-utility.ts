@@ -369,6 +369,7 @@ import {
   pausedPlugins,
   pausedBySelection,
   pausedLine,
+  resumedLine,
   composedPluginBase,
   projectDescriptionFilePath,
   PROJECT_DESCRIPTION_FILE,
@@ -1453,6 +1454,11 @@ function handleSelectPlugins(projectDir: string, positional: string[]): void {
           base,
           rest.length > 0 ? `${entrySkillInvocation()} plugin select ${rest.join(",")}` : null,
         )}\n`);
+      }
+      // And once at the select that turns a paused plugin's base back on.
+      for (const [plugin, base] of pausedBefore) {
+        if (pausedAfter.has(plugin) || !nameSet.has(plugin)) continue;
+        process.stdout.write(`${resumedLine(plugin, base, nextCompose(harnessName, plugin, null))}\n`);
       }
     } catch (err) {
       resetSelectionSensitiveCaches();
