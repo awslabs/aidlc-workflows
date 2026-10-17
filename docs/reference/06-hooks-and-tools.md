@@ -1108,6 +1108,17 @@ could not be verified; the runner must issue a fresh
 `next --scope <scope> --stage <stage>`, adding `--single` for a single run. Lock
 contention returns a `continue` error that asks for the same command again.
 
+A marker for an isolated run's step (its run-stage, a rule part, or the Plan
+Approval question asked over it) carries `single: true`. While the Code
+Generation step issued last carries it and the run's `single-stage:code-generation`
+attempt is open, `resolveTestingPosture` builds the Testing Contract to the run's
+recorded Test Strategy (`isolatedCodeGenerationTestStrategy`), so every check of
+that contract agrees with the run. Any other step leaves the contract on the
+workflow's own `aidlc-state.md`. The engine itself does not read the marker for
+this: it decides Plan Approval before it publishes its step, so it sets the
+route it is answering (`setTestingPostureRoute`), and a workflow `next` after an
+interrupted isolated run keeps the workflow's contract.
+
 Copilot answers the same way. The adapter claimed the call as `continue`, and
 the engine publishes the `next` answer under that claim, so the attempt settles
 like any other delivery and no recovery `next` is needed. A tracked Copilot

@@ -46,6 +46,7 @@ import {
   clearPlanApprovalLegacyOffer,
   clearEngineAskMark,
   clearPlanApprovalReceipt,
+  isolatedCodeGenerationTestStrategy,
   readActiveDirectiveMarker,
   authorizedVerificationCommand,
   readIssuedDirectiveMarker,
@@ -1224,6 +1225,18 @@ export function resolveTestingPostureFromSections(
   return { ...body, contract_sha256: hashObject(body) };
 }
 
+// The test strategy the engine's own route builds to, set by the engine for
+// the command it is answering: an isolated Code Generation run's recorded one,
+// or null for the workflow's. Unset outside the engine, where the step issued
+// last says whose work is in progress (isolatedCodeGenerationTestStrategy).
+// The engine decides plan approval before it publishes its step, so the
+// previous step's marker cannot speak for its route.
+let routedIsolatedTestStrategy: { value: string | null } | undefined;
+
+export function setTestingPostureRoute(isolatedTestStrategy: string | null): void {
+  routedIsolatedTestStrategy = { value: isolatedTestStrategy };
+}
+
 export function resolveTestingPosture(
   projectDir: string,
 ): TestingPostureContract {
@@ -1243,7 +1256,14 @@ export function resolveTestingPosture(
   }
   return resolveTestingPostureFromSections(sections, {
     scope: (getField(state, "Scope") ?? "feature").trim().toLowerCase(),
-    testStrategy: normalizeStrategy(getField(state, "Test Strategy") ?? "standard"),
+    // An isolated Code Generation run builds to its own test strategy; the
+    // workflow's contract and plan approval keep reading the workflow's.
+    testStrategy: normalizeStrategy(
+      (routedIsolatedTestStrategy !== undefined
+        ? routedIsolatedTestStrategy.value
+        : isolatedCodeGenerationTestStrategy(projectDir)) ??
+        getField(state, "Test Strategy") ?? "standard",
+    ),
     projectType: normalizeProjectType(getField(state, "Project Type") ?? "greenfield"),
   });
 }

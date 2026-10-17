@@ -942,6 +942,10 @@ the plan stays as it is.
 The isolated run still uses the stage's configured agents and reviewer, but it
 does not run workflow learnings or ask for a workflow approval. Its synthetic
 completion is recorded in the audit log, then the command stops.
+A `--depth` or `--test-strategy` typed with it applies to that run only; your
+workflow's settings stay as they are. `--review`, `--guard-policy`, a
+`--guard.<check>` switch and the ceremony switches (such as `--sensors`) are
+refused with `--single`; run the stage without them.
 
 ```
 /aidlc --stage requirements-analysis --single

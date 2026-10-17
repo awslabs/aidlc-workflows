@@ -483,7 +483,7 @@ headings such as `## Plan Approval`, numbered or not, carry no trade.
 
 Stage files list **topic areas and example questions** — they are guidance, not a script. The agent determines what to actually ask based on three factors:
 
-1. **Depth level** (from `aidlc-state.md` → `**Depth**`) — sets the expected question volume
+1. **Depth level** (from `aidlc-state.md` → `**Depth**`, or the run-stage's `depth` when an isolated run carries one) — sets the expected question volume
 2. **Project context** — what's already known from prior stages, codebase analysis, and the user's description
 3. **Phase progression** — Questions naturally decrease as the lifecycle advances:
    - **Ideation**: Most questions. Business/strategic focus ("why?", "for whom?", "what market?")
@@ -931,7 +931,7 @@ The orchestrator determines appropriate depth based on scope selection. Users ca
 
 ### Test Strategy
 
-Test volume scales with the active test strategy. The test strategy defaults to the current depth level unless the scope declares its own override. It can be overridden independently via `--test-strategy`, allowing combinations such as Standard depth with Minimal testing for a time-boxed workshop.
+Test volume scales with the active test strategy. The test strategy defaults to the current depth level unless the scope declares its own override. It can be overridden independently via `--test-strategy`, allowing combinations such as Standard depth with Minimal testing for a time-boxed workshop. An isolated `--single` run typed with `--depth` or `--test-strategy` carries them on its run-stage (`depth`, `test_strategy`); for that run they win over `aidlc-state.md`, which the run never changes.
 
 **Minimal — Nyquist model** (inspired by GSD's Nyquist validation layer):
 
