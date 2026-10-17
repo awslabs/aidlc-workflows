@@ -152,10 +152,10 @@ describe("t87 stage-file compartment headers (migrated from t87-stage-compartmen
   // .sh L10: plan 64. Re-count to pin the plan and guard against a stage being
   // silently dropped from (or added to) the shipped tree without the suite
   // noticing (2 compartments × 32 stages = 64 rows).
-  test("covers EXACTLY 33 stages × 2 compartments = 66 assertions (TAP plan parity)", () => {
+  test("covers EXACTLY 34 stages × 2 compartments = 68 assertions (TAP plan parity)", () => {
     const COMPARTMENTS_PER_STAGE = 2;
-    expect(STAGE_FILES.length).toBe(33);
-    expect(STAGE_FILES.length * COMPARTMENTS_PER_STAGE).toBe(66);
+    expect(STAGE_FILES.length).toBe(34);
+    expect(STAGE_FILES.length * COMPARTMENTS_PER_STAGE).toBe(68);
     // Five phases, each with at least one stage (no empty phase dir slipped in).
     const phases = new Set(STAGE_FILES.map((s) => s.phase));
     expect(phases).toEqual(
