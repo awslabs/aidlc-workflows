@@ -868,6 +868,21 @@ The required `Tests (smoke + unit)` status requires this combined job to pass.
 PR CI allocates 21 runners; the merge queue allocates 55, with its existing
 platform selections. Live harness and native build matrices are unchanged.
 
+The repository's `default-branch` ruleset limits merge queue build concurrency
+to two groups, down from eight. This setting is managed in GitHub, separately
+from these workflows; it limits concurrent merge-group builds, not the number
+of PRs in a merge batch. The required checks still run on each group's commit.
+
+Full Suite limits its manual deterministic matrix to twelve concurrent jobs
+and its nightly scope/guard matrix to three. All 69 manual deterministic jobs
+and all twelve nightly scope/guard jobs still run. The suite axis comes first,
+so job creation interleaves Linux, macOS and Windows. This order is not a
+per-platform quota: runner availability and job duration determine which jobs
+execute together. Live shards retain their existing limits of four Linux, two
+macOS and three Windows jobs. These are per-matrix limits, not an organization
+quota; concurrent workflows still share hosted capacity. Lower concurrency
+can lengthen a Full Suite run while reducing contention with PRs and the queue.
+
 Deterministic, native-terminal, and production-guard test jobs use a five-hour
 job backstop and a 270-minute execution step. The runner shares a four-hour
 work deadline across the invocation, with a two-hour deadline per file,

@@ -2038,7 +2038,32 @@ describe("t345 complete nightly coverage", () => {
     expect(workflow.jobs.result.needs).toContain("scope_runs");
   });
 
-  test("nightly unit shards cover every unit file exactly once on each supported OS", () => {
+  test("Full Suite bounds deterministic concurrency and interleaves platforms without dropping matrix jobs", () => {
+    for (const [jobName, concurrency, totalJobs] of [
+      ["deterministic", 12, 69],
+      ["scope_runs", 3, 12],
+    ] as const) {
+      const job = workflow.jobs[jobName];
+      const matrix = matrixOf(job);
+      expect(job.strategy?.["max-parallel"], jobName).toBe(concurrency);
+      expect(job.strategy?.["fail-fast"], jobName).toBe(false);
+      // GitHub creates jobs in matrix-axis order. Keep platforms interleaved
+      // when a concurrency limit queues the rest of the matrix.
+      expect(Object.keys(matrix).filter((key) => key !== "include")).toEqual(["suite", "runner"]);
+      const runners = matrix.runner as string[];
+      const jobs = matrix.suite!.flatMap((suite) => runners.map((runner) => ({ suite: suite.name, runner })));
+      expect(jobs, jobName).toHaveLength(totalJobs);
+      expect(new Set(jobs.map(({ suite, runner }) => `${suite}/${runner}`)).size).toBe(totalJobs);
+      for (let start = 0; start < jobs.length; start += concurrency) {
+        const batch = jobs.slice(start, start + concurrency);
+        for (const runner of ["ubuntu-latest", "macos-15", "windows-latest"]) {
+          expect(batch.filter((entry) => entry.runner === runner), `${jobName} creation batch ${start}`).toHaveLength(batch.length / 3);
+        }
+      }
+    }
+  });
+
+  test("full verification unit shards cover every unit file exactly once on each supported OS", () => {
     const job = workflow.jobs.deterministic;
     const matrix = matrixOf(job);
     expect(matrix.runner).toEqual(["ubuntu-latest", "macos-15", "windows-latest"]);

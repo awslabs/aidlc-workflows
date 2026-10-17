@@ -314,8 +314,9 @@ jobs:
     if: needs.plan.outputs.purpose == 'full-verification'
     strategy:
       fail-fast: false
+      # Keep manual verification from claiming all hosted runners at once.
+      max-parallel: 12
       matrix:
-        runner: [ubuntu-latest, macos-15, windows-latest]
         # Unit files deliberately stay serial inside a checkout because packaging
         # tests rewrite dist/. Independent weighted shards provide parallelism.
         suite:
@@ -346,6 +347,8 @@ jobs:
           - {name: guard-matrix-1, tier: integration, filter: '^t-guard-matrix-', partition: '1/2'}
           - {name: guard-matrix-2, tier: integration, filter: '^t-guard-matrix-', partition: '2/2'}
           - {name: e2e, tier: e2e}
+        # Suite first interleaves platforms in matrix job creation order.
+        runner: [ubuntu-latest, macos-15, windows-latest]
         # Adds the OS label for the job name to each runner's legs.
         include:
           - {runner: ubuntu-latest, os: Linux}
@@ -370,13 +373,15 @@ jobs:
     if: needs.plan.outputs.purpose == 'release'
     strategy:
       fail-fast: false
+      max-parallel: 3
       matrix:
-        runner: [ubuntu-latest, macos-15, windows-latest]
         suite:
           - {name: scope-runs, filter: '^t-scope-run-'}
           - {name: scope-hosts, filter: '^t-scope-host-'}
           - {name: guard-matrix-1, filter: '^t-guard-matrix-', partition: '1/2'}
           - {name: guard-matrix-2, filter: '^t-guard-matrix-', partition: '2/2'}
+        # Start each suite across platforms before creating the next suite's jobs.
+        runner: [ubuntu-latest, macos-15, windows-latest]
         include:
           - {runner: ubuntu-latest, os: Linux}
           - {runner: macos-15, os: macOS}
