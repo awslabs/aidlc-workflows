@@ -1222,7 +1222,12 @@ describe("t345 complete nightly coverage", () => {
     expect(ci.jobs.coverage_ratchet).toBeUndefined();
     expect(ci.jobs["changelog-guard"]).toBeUndefined();
     expect(ci.jobs.test.needs).toContain("check");
-    expect(all.find((step) => step.name === "Prepare test and coverage projections")?.run).toBe("bun scripts/package.ts");
+    const setupActions = all.filter((step) => step.uses?.startsWith("actions/checkout@") || step.uses?.startsWith("oven-sh/setup-bun@"));
+    expect(setupActions.map((step) => step["timeout-minutes"])).toEqual([15, 15]);
+    for (const step of all.filter((step) => commands.slice(0, -2).includes(step.name))) {
+      expect(step.run, step.name).toStartWith("bash scripts/ci-check-budget.sh ");
+    }
+    expect(all.find((step) => step.name === "Prepare test and coverage projections")?.run).toBe("bash scripts/ci-check-budget.sh bun scripts/package.ts");
     expect(all.find((step) => step.name === "Run Linux smoke")?.env).toMatchObject({
       AIDLC_TEST_PACKAGE_READY: "1", RETRY_ONCE: `\${{ github.event_name == 'merge_group' }}`,
     });
@@ -1235,7 +1240,7 @@ describe("t345 complete nightly coverage", () => {
     expect(retries.run).toBe("bun scripts/ci-retry-report.ts tmp/ci-smoke/stamp.txt || true");
     const changelog = all.find((step) => step.name === "Guard against deleted CHANGELOG entries")!;
     expect(changelog.env).toEqual({ CHANGELOG_BASE: `\${{ github.event.pull_request.base.sha }}` });
-    expect(changelog.run).toBe('bun scripts/ci-changelog-guard.ts "$CHANGELOG_BASE"');
+    expect(changelog.run).toBe('bash scripts/ci-check-budget.sh bun scripts/ci-changelog-guard.ts "$CHANGELOG_BASE"');
 
     const execute = (event: string, failure?: string, cancelled = false) => {
       const outcomes: Record<string, { outcome: string }> = {};
@@ -1253,11 +1258,11 @@ describe("t345 complete nightly coverage", () => {
         if (enabled && commands.includes(step.name)) executed.push(step.name);
         if (outcome === "failure") failed = true;
       }
-      return { executed, failed };
+      return { executed, failed, evidenceEligible: outcomes.sanitize_checks.outcome === "success" };
     };
     for (const event of ["pull_request", "merge_group", "workflow_dispatch", "workflow_call"]) {
       const expected = event === "pull_request" ? commands : commands.filter((entry) => entry !== "Guard against deleted CHANGELOG entries");
-      expect(execute(event)).toEqual({ executed: expected, failed: false });
+      expect(execute(event)).toEqual({ executed: expected, failed: false, evidenceEligible: true });
       for (const name of expected.slice(1)) {
         const result = execute(event, name);
         expect(result.failed, `${event}: ${name}`).toBe(true);
@@ -1267,13 +1272,41 @@ describe("t345 complete nightly coverage", () => {
           ].includes(entry!))
           : expected;
         expect(result.executed, `${event}: ${name}`).toEqual(remaining);
+        expect(result.evidenceEligible, `${event}: evidence after ${name}`).toBe(true);
       }
       expect(execute(event, undefined, true).executed).toEqual([]);
       expect(execute(event, "Install dependencies")).toEqual({
-        executed: ["Install dependencies", "ShellCheck installer"], failed: true,
+        executed: ["Install dependencies", "ShellCheck installer"], failed: true, evidenceEligible: true,
       });
     }
   });
+
+  (process.platform === "linux" ? test : test.skip)("setup and contract subprocesses stop at the shared work cutoff", () => {
+    const root = mkdtempSync(join(tmpdir(), "t345-check-budget-"));
+    const marker = join(root, "completed");
+    const wrapper = join(REPO_ROOT, "scripts/ci-check-budget.sh");
+    const run = (deadline: string, command: string[]) => spawnSync("bash", [
+      "-c", 'date() { printf "1000\\n"; }; export -f date; exec bash "$@"', "check-budget", wrapper, ...command,
+    ], {
+      encoding: "utf8", timeout: NATIVE_STARTUP_TIMEOUT_MS,
+      env: { ...process.env, CHECK_WORK_DEADLINE: deadline, WORK_RESULT: marker },
+    });
+    try {
+      const write = ["bash", "-c", 'printf done > "$WORK_RESULT"'];
+      expect(run("", write).status).toBe(2);
+      expect(run("invalid", write).status).toBe(2);
+      expect(run("999", write).status).toBe(1);
+      expect(existsSync(marker)).toBe(false);
+      expect(run("1010", ["bash", "-c", "exit 7"]).status).toBe(7);
+      expect(run("1010", write).status).toBe(0);
+      rmSync(marker);
+      const expired = run("1001", ["bash", "-c", 'sleep 5; printf late > "$WORK_RESULT"']);
+      expect(expired.status, expired.stderr).toBe(124);
+      expect(existsSync(marker)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("combined smoke and guard steps share a deadline and preserve selection, retries, evidence and failure status", () => {
     const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github/workflows/ci.yml"), "utf8")) as {

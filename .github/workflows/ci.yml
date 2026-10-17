@@ -60,44 +60,47 @@ jobs:
 
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         id: checkout
+        timeout-minutes: 15
         with:
           # The ratchet reads HEAD^1; PR changelog checks need the frozen base.
           fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '2' }}
           persist-credentials: false
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        id: bun
+        timeout-minutes: 15
         with:
           bun-version: '1.4.2'
 
       - name: Install dependencies
         id: install
-        run: bun install --frozen-lockfile
+        run: bash scripts/ci-check-budget.sh bun install --frozen-lockfile
 
       # `bun run check` regenerates the projections, runs the two-build package
       # determinism guard, then typechecks all three tsconfigs and runs Biome.
       - name: Run contract checks
-        run: bun run check
+        run: bash scripts/ci-check-budget.sh bun run check
 
       # Preview and stable gates run the same installer check.
       - name: ShellCheck installer
         if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
-        run: shellcheck scripts/install.sh
+        run: bash scripts/ci-check-budget.sh shellcheck scripts/install.sh
 
       # Keep collecting independent failures after a contract check fails.
       - name: Prepare test and coverage projections
         id: coverage_package
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: bun scripts/package.ts
+        run: bash scripts/ci-check-budget.sh bun scripts/package.ts
 
       - name: Fail if a unit lost coverage against the first parent
         if: ${{ !cancelled() && steps.coverage_package.outcome == 'success' }}
-        run: bun tests/gen-coverage-registry.ts --check --base HEAD^1
+        run: bash scripts/ci-check-budget.sh bun tests/gen-coverage-registry.ts --check --base HEAD^1
 
       - name: Guard against deleted CHANGELOG entries
         if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.install.outcome == 'success' }}
         env:
           CHANGELOG_BASE: ${{ github.event.pull_request.base.sha }}
-        run: bun scripts/ci-changelog-guard.ts "$CHANGELOG_BASE"
+        run: bash scripts/ci-check-budget.sh bun scripts/ci-changelog-guard.ts "$CHANGELOG_BASE"
 
       # Separate runner processes keep the fixture and production profiles
       # independent while sharing dependency installation and projections.
@@ -152,7 +155,7 @@ jobs:
           bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration --no-llm --file-timeout 7200 --run-timeout "$run_budget" --filter '^(t-runner-production-guards|t-guard-recovery-production)' > "$GITHUB_WORKSPACE/tmp/ci-guard-contract/production-run.log" 2>&1
 
       - name: Sanitize check evidence
-        if: ${{ always() && steps.install.outcome == 'success' }}
+        if: ${{ always() && steps.bun.outcome == 'success' }}
         id: sanitize_checks
         run: |
           bun scripts/ci-sanitize-logs.ts tests/logs

@@ -943,8 +943,13 @@ sixteen per OS. Compiled producer/consumer affinity is preserved.
 
 The combined CI check job starts a shared 270-minute work deadline before
 checkout, leaving thirty minutes of its five-hour job ceiling for process
-cleanup and evidence collection. Setup and contract time count against that
-deadline. Smoke receives at most half the remaining work time, reserving the
+cleanup and evidence collection. Checkout and Bun setup each have a fifteen-minute
+ceiling; together they cannot consume the work envelope. Every subsequent
+setup and contract command runs through `scripts/ci-check-budget.sh`, which
+enforces the remaining deadline with a process-group timeout and refuses to
+start after it expires. Independent checks still collect failures, and
+sanitization stays eligible after a failed command whenever Bun is available.
+Smoke receives at most half the remaining work time, reserving the
 other half for production guards; guards receive the actual time left when
 their step starts. Each invocation also retains the four-hour upper bound.
 An exhausted budget fails the step before launching tests. Existing case and
