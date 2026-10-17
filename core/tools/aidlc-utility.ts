@@ -11311,8 +11311,8 @@ function projectTypeWords(type: string): string {
 // write, audited first. Moving the workflow back to run it is `next`'s job.
 function handleReclassify(projectDir: string, flags: Record<string, string>, rawArgs: readonly string[]): void {
   const usage = (message: string): never =>
-    die(`${message}\nUsage: workspace reclassify --project-type <greenfield|brownfield> [--intent <slug>] [--space <name>] [--person-words-file <file>] [--then-rerun] [--project-dir <path>]`);
-  const allowed = new Set(["project-type", "intent", "space", "person-words-file", "then-rerun", "project-dir"]);
+    die(`${message}\nUsage: workspace reclassify --project-type <greenfield|brownfield> [--intent <slug>] [--space <name>] [--person-words <their words> | --person-words-file <file>] [--then-rerun] [--project-dir <path>]`);
+  const allowed = new Set(["project-type", "intent", "space", "person-words", "person-words-file", "then-rerun", "project-dir"]);
   for (const arg of rawArgs) {
     if (!arg.startsWith("--")) continue;
     const name = arg.slice(2).split("=")[0];
@@ -11350,17 +11350,14 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
       : "The person has not said yet whether this folder is existing code. Ask them the question you were given, " +
         "end the turn, and run this command after they answer.");
   }
-  // The words the person said it in, which `next` left in the work's answer
+  // The words the person said it in, given inline or left in the work's answer
   // text file: recorded beside the change. A file that cannot be read leaves
   // them out; the change is recorded either way.
-  let personWords: string | undefined;
-  if (flags["person-words-file"] !== undefined && flags["person-words-file"] !== "true") {
-    try {
-      personWords = readAnswerTextFile(projectDir, flags["person-words-file"]).replace(/\s+/g, " ").trim() || undefined;
-    } catch {
-      personWords = undefined;
-    }
-  }
+  readPersonWordsFile(projectDir, flags, true);
+  const typedWords = flags["person-words"];
+  const personWords = typedWords === undefined || typedWords === "true"
+    ? undefined
+    : typedWords.replace(/\s+/g, " ").trim() || undefined;
 
   // The registry row is workspace state and the plan is the work's own: hold
   // the workspace lock, then the work's lock, across the whole read, audit and
@@ -12598,14 +12595,15 @@ function handleConfigList(projectDir: string, flags: Record<string, string>): vo
 }
 
 // Their words that hold a quote or a $ arrive in a file the agent wrote, as
-// an answer's do (--details-file), so no shell reads them on the way.
-function readPersonWordsFile(projectDir: string, flags: Record<string, string>): void {
+// an answer's do (--details-file), so no shell reads them on the way. With
+// `unreadableIsNone`, a file that cannot be read leaves the words out.
+function readPersonWordsFile(projectDir: string, flags: Record<string, string>, unreadableIsNone = false): void {
   if (flags["person-words-file"] === undefined) return;
   if (flags["person-words"] !== undefined) die("Pass either --person-words or --person-words-file, not both.");
   try {
     flags["person-words"] = readAnswerTextFile(projectDir, flags["person-words-file"]);
   } catch (err) {
-    die(errorMessage(err));
+    if (!unreadableIsNone) die(errorMessage(err));
   }
 }
 

@@ -866,9 +866,10 @@ export function modelPolicySurfaceDrift(
   const tiers = readAgentTiers(harnessRoot);
   const cap = resolveTierCap(join(projectDir, "aidlc", "spaces", "default", "memory"));
   const issues: string[] = [];
-  // Doctor's rule, on kiro-ide only here: Cursor and GitHub Copilot still
-  // count a shared effort in `--check`.
-  const sessionSet = harness === "kiro-ide" && presetsChangeNothing(harness);
+  // Doctor's rule, on kiro-ide and GitHub Copilot only here: Cursor still
+  // counts a shared effort in `--check`.
+  const sessionSet = (harness === "kiro-ide" || harness === "copilot") &&
+    presetsChangeNothing(harness);
   const expectedByAgent = Object.fromEntries(
     Object.entries(tiers).map(([name, tier]) => [
       name,

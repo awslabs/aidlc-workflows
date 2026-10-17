@@ -1744,6 +1744,39 @@ describe("t293 doctor model policy advisory", () => {
     });
   });
 
+  test("config models --check on GitHub Copilot leaves a shared effort to the session, as doctor does", () => {
+    const check = (models: unknown, extra: string[] = []) => {
+      const project = temp("aidlc-t293-check-copilot-");
+      cpSync(join(DIST, "copilot"), project, { recursive: true });
+      writeFileSync(projectSettingsPath(project), `${JSON.stringify({ schemaVersion: 1, models }, null, 2)}\n`);
+      return run(["config", "models", "--project-dir", project, "--check", ...extra], project, runtimeEnv());
+    };
+    const policy = { schemaVersion: 1, preset: "balanced", groups: { reviewing: { effort: "max" } } };
+    // The session sets every agent here, so a clean check names it, as doctor
+    // does, rather than calling the recorded policy reflected.
+    const sessionLine = "every agent uses your GitHub Copilot session's model and effort; " +
+      "the recorded balanced preset does not apply here";
+    const shared = check(policy);
+    expect(shared.status, shared.stdout).toBe(0);
+    expect(shared.stdout).toContain(sessionLine);
+    expect(shared.stdout).not.toContain("reflected");
+    const json = check(policy, ["--json"]);
+    expect(json.status, json.stdout).toBe(0);
+    expect(JSON.parse(json.stdout)).toEqual(expect.objectContaining({
+      ok: true,
+      message: sessionLine,
+      data: { harness: "copilot", drift: [] },
+    }));
+    // A model recorded for Copilot by name is still drift there; its effort is not.
+    const named = check({
+      schemaVersion: 1,
+      agents: { architect: { model: { copilot: "vendor/raw" }, effort: "high" } },
+    });
+    expect(named.status).toBe(1);
+    expect(named.stdout).toContain("architect: model policy is not expressible on copilot");
+    expect(named.stdout).not.toContain("architect: effort");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("the host names messages use match each shipped harness", () => {
     // The names are fixed in the tools so a project file cannot change them;
     // they must still say what each harness calls itself.

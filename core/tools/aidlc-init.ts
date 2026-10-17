@@ -10896,12 +10896,17 @@ function prepareModelsSection(
       harness,
       current,
     );
+    // On GitHub Copilot the session sets every agent's model and effort, so a
+    // clean check names the session, as doctor does, not the recorded policy.
+    const sessionSet = harness === "copilot";
     emitResult(
       drift.length === 0
-        ? success(`model policy is reflected on ${harness}`, {
-            harness,
-            drift: [],
-          })
+        ? success(
+            sessionSet
+              ? sessionModelsDetail(harness, current)
+              : `model policy is reflected on ${harness}`,
+            { harness, drift: [] },
+          )
         : failure(
             `model policy drift: ${drift.join("; ")}`,
             EXIT.failure,

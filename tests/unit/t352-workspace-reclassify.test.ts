@@ -352,12 +352,14 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
     const dir = recordDir(proj).split(/[\\/]/).at(-1) ?? "";
     const d = next(proj, ["--project-type", "brownfield"]);
     expect(d.kind).toBe("print");
-    expect(String(d.message)).toContain(`engine workspace reclassify --project-type brownfield --intent ${dir} --space default\``);
-    expect(String(d.message)).toEndWith("` and act on the directive it returns.");
+    expect(String(d.message)).toContain(
+      `engine workspace reclassify --project-type brownfield --intent ${dir} --space default --person-words '<their words>'\``,
+    );
+    expect(String(d.message)).toEndWith("word for word, and act on the directive it returns.");
     // Typed with a jump, nothing is dropped: the type first, then the jump.
     const jump = ["--project-type", "brownfield", "--stage", "reverse-engineering"];
     const withJump = String(next(proj, jump).message);
-    expect(withJump).toContain(`--space default --then-rerun\` and act on the directive it returns.`);
+    expect(withJump).toContain(`--space default --person-words '<their words>' --then-rerun\`, with <their words>`);
     // That reply is a print naming the same `next` again, with the person's lines.
     const rerun = run(UTIL, proj, ["reclassify", "--project-type", "brownfield", "--then-rerun"]);
     expect(rerun.status).toBe(0);
@@ -394,10 +396,34 @@ describe("t352 next: the flag rides to creation and the preview is honest", () =
     expect(rerun.status, said(rerun)).toBe(0);
     expect(auditText(proj)).toContain(`**Person Words**: ${words}`);
     expect(existsSync(join(recordDir(proj), file))).toBe(false);
-    // Said on its own there are no words to record, and a file that is gone records none.
+    // Said on its own the step names no file, and a file that is gone records none.
     expect(String(next(proj, ["--project-type", "greenfield"]).message)).not.toContain("--person-words-file");
     expect(run(UTIL, proj, ["reclassify", "--project-type", "greenfield", "--person-words-file", file]).status).toBe(0);
     expect(auditText(proj).split("**Person Words**").length).toBe(2);
+  });
+
+  test("said on its own, the step names the person's words for the agent to fill, and the change records them", () => {
+    // The live Codex run on Windows: the agent read "our existing service" in
+    // the request the work was started with and ran the flag on its own.
+    const proj = project();
+    expect(create(proj, "classic").status).toBe(0);
+    const step = String(next(proj, ["--project-type", "brownfield"]).message);
+    expect(step).toEndWith(
+      "--space default --person-words '<their words>'`, with <their words> the person's reply that asked for it, " +
+        "word for word, and act on the directive it returns.",
+    );
+    const words = "it's  our existing service: \"harden\" the $DEPLOY pipeline";
+    const r = run(UTIL, proj, ["reclassify", "--project-type", "brownfield", "--person-words", words]);
+    expect(r.status, said(r)).toBe(0);
+    expect(auditText(proj)).toContain(`**Person Words**: ${words.replace(/\s+/g, " ")}`);
+    // Words inline and in a file at once get the setters' one answer, and the file stays.
+    const file = ".aidlc-engine/answer-text/project-type-words.txt";
+    mkdirSync(join(recordDir(proj), ".aidlc-engine", "answer-text"), { recursive: true });
+    writeFileSync(join(recordDir(proj), file), words);
+    const both = run(UTIL, proj, ["reclassify", "--project-type", "greenfield", "--person-words", words, "--person-words-file", file]);
+    expect(both.status).not.toBe(0);
+    expect(said(both)).toBe("Pass either --person-words or --person-words-file, not both.");
+    expect(existsSync(join(recordDir(proj), file))).toBe(true);
   });
 });
 

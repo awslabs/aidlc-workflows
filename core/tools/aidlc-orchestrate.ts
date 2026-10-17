@@ -4087,17 +4087,20 @@ function reclassifyCommand(projectDir: string, type: "greenfield" | "brownfield"
 // The answer text file the words a project-type change was said in go to.
 const PROJECT_TYPE_WORDS_FILE = `${ANSWER_TEXT_DIR}/project-type-words.txt`;
 
-// ` --person-words-file <file>` once the words are in the work's answer text file;
-// nothing when they cannot be written, and the change is recorded without them.
-function projectTypeWordsArg(projectDir: string, words: string): string {
+// The words a project-type change was said in, on the reclassify step: the
+// words `next` was given, in the work's answer text file so no shell reads them
+// on the way; otherwise the slot the agent fills with the person's words, and
+// the sentence that says so.
+function projectTypeWordsArg(projectDir: string, words: string | undefined): { arg: string; fill: string } {
+  const slot = { arg: ` --person-words '${PERSON_WORDS_SLOT}'`, fill: `${PERSON_WORDS_FILL},` };
   const root = recordDir(projectDir);
-  if (root === null || isReadOnlyEngineProbe()) return "";
+  if (!words?.trim() || root === null || isReadOnlyEngineProbe()) return slot;
   try {
     writeRecordFileNoFollow(root, PROJECT_TYPE_WORDS_FILE, words);
   } catch {
-    return "";
+    return slot;
   }
-  return ` --person-words-file ${PROJECT_TYPE_WORDS_FILE}`;
+  return { arg: ` --person-words-file ${PROJECT_TYPE_WORDS_FILE}`, fill: "" };
 }
 
 // True when `--project-type` is the whole request: nothing else for routing
@@ -9388,11 +9391,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     if (alone || !projectTypeRecordedAsPersons(stateContent, flags.projectType)) {
       // Said with more of a request, the reclassify directive says to run
       // the same `next` again so the rest of the request is carried on. The
-      // words it was said in reach reclassify in a file no shell reads on the
-      // way, and are recorded beside the change.
-      const words = flags.intent?.trim() ? projectTypeWordsArg(pd, flags.intent) : "";
+      // words it was said in are recorded beside the change.
+      const words = projectTypeWordsArg(pd, flags.intent);
       emit(printDirective(
-        `Run \`${reclassifyCommand(pd, flags.projectType)}${words}${alone ? "" : " --then-rerun"}\` ` +
+        `Run \`${reclassifyCommand(pd, flags.projectType)}${words.arg}${alone ? "" : " --then-rerun"}\`${words.fill} ` +
           "and act on the directive it returns.",
       ));
       return;
