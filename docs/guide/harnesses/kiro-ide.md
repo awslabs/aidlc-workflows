@@ -546,12 +546,13 @@ file you added yourself is not touched.
 
 An agent's effort is shared by every tool, while its model is recorded per
 tool, so an effort recorded for one agent for another tool applies on Kiro too.
-The `aidlc config` run that first writes such a line into a Kiro agent file,
-other than a setting that run makes itself, says so in one line and names
-`aidlc config models --show --harness kiro-ide`, which shows where each value
-is set; `--effort default` (or `--model default --harness kiro-ide`) for that
-agent, with `--project`, `--local` or `--global` (machine settings) for the
-file it is in, takes it out.
+An `aidlc config` run that writes a model or effort into a Kiro agent file
+that the file did not carry, other than a value that run changes itself, says
+so in one line and names `aidlc config models --show --harness kiro-ide`, which
+shows where each value is set; `--effort default` (or `--model default`) for
+that agent, with `--project`, `--local` or `--global` (machine settings) for
+the file it is in, and `--harness kiro-ide` when the project has another
+harness, takes it out.
 `effortLevel` is not in Kiro's documentation. Measured on Kiro CLI 2.31.1 on
 its v3 engine and Kiro IDE 1.3.0.
 

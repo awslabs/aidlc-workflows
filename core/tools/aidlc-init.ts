@@ -7225,8 +7225,8 @@ function kiroAgentPinsNote(
   } with config models (an agent's effort is shared with your other tools); \`${configInvocationFor(projectDir)} config models --show --harness kiro-ide${projectTarget(projectDir)}\` shows where each is set.`;
 }
 
-// The agent values a `config models` run says it sets: its summary reads the
-// policy before and after the run, so a value that differs between the two.
+// The agent values a `config models` run changes: those that differ between
+// the policy before and after the run.
 function modelsRunExplains(context: ModelsMutationContext): Set<string> {
   const before = normalizeModelPolicy(context.previous)?.agents ?? {};
   const after = normalizeModelPolicy(context.next)?.agents ?? {};
