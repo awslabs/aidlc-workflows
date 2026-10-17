@@ -1765,6 +1765,26 @@ describe("t293 doctor model policy advisory", () => {
       ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"],
     );
   });
+
+  test("config models --check on Cursor counts what doctor counts", () => {
+    const check = (models: unknown) => {
+      const project = temp("aidlc-t293-check-cursor-");
+      cpSync(join(DIST, "cursor"), project, { recursive: true });
+      writeFileSync(projectSettingsPath(project), `${JSON.stringify({ schemaVersion: 1, models }, null, 2)}\n`);
+      return run(["config", "models", "--project-dir", project, "--check"], project, runtimeEnv());
+    };
+    const shared = check({ schemaVersion: 1, preset: "balanced", groups: { reviewing: { effort: "max" } } });
+    expect(shared.status, shared.stdout).toBe(0);
+    expect(shared.stdout).toContain("model policy is reflected on cursor");
+    // A model recorded for Cursor by name is still drift there; its effort is not.
+    const named = check({
+      schemaVersion: 1,
+      agents: { architect: { model: { cursor: "vendor/raw" }, effort: "high" } },
+    });
+    expect(named.status).toBe(1);
+    expect(named.stdout).toContain("architect: model policy is not expressible on cursor");
+    expect(named.stdout).not.toContain("architect: effort");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 describe("t293 projection application", () => {
