@@ -591,14 +591,51 @@ function addBaseReference(
   );
 }
 
-// The agent fields Rule 9 of validateStageFrontmatter checks.
-function stageAgentReferences(stage: Record<string, unknown>): string[] {
-  return [
-    stage.lead_agent,
-    ...(Array.isArray(stage.support_agents) ? stage.support_agents : []),
-    stage.reviewer,
-  ].filter((agent): agent is string => typeof agent === "string");
+// The agent fields Rule 9 of validateStageFrontmatter checks, as [field, agent].
+function stageAgentReferences(stage: Record<string, unknown>): Array<[string, string]> {
+  const pairs: Array<[string, unknown]> = [
+    ["lead_agent", stage.lead_agent],
+    ...(Array.isArray(stage.support_agents) ? stage.support_agents : []).map(
+      (agent): [string, unknown] => ["support_agents", agent],
+    ),
+    ["reviewer", stage.reviewer],
+  ];
+  return pairs.filter((pair): pair is [string, string] => typeof pair[1] === "string");
 }
+
+// Who can supply a stage or agent this plugin names: core, the plugin itself,
+// or, by its name, its declared base. When the plugin's and the base's names
+// prefix one another, the longer prefix owns the name. The one reading of it,
+// for stage fields and a scope's include_stages.
+function referenceSource(
+  name: string,
+  from: {
+    plugin: string;
+    base: string | null;
+    core: ReadonlySet<string>;
+    own: ReadonlySet<string>;
+  },
+): "core" | "own" | "base" | "undeclared" {
+  if (from.own.has(name)) return "own";
+  if (from.core.has(name)) return "core";
+  if (from.base === null || !name.startsWith(`${from.base}-`)) return "undeclared";
+  return from.plugin.length > from.base.length && name.startsWith(`${from.plugin}-`)
+    ? "undeclared"
+    : "base";
+}
+
+const UNDECLARED_FIX =
+  'If another plugin ships it, add that plugin to dependencies next to "core", as "<base>@^1.2.0", then check it with --with <path to your checkout of it>; otherwise correct the name.';
+
+type StageNames = {
+  // The declared base: null when the plugin builds on core alone, undefined
+  // when its manifest cannot say.
+  base: string | null | undefined;
+  // The base's checkout (--with) is in the agent roster.
+  baseChecked: boolean;
+  coreStages: ReadonlySet<string>;
+  coreAgents: ReadonlySet<string>;
+};
 
 function stageBodyAfterFrontmatter(raw: string): string {
   return raw.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?([\s\S]*)$/)?.[1] ?? "";
@@ -789,13 +826,15 @@ function validateStages(
   root: string,
   pluginName: string,
   findings: MutableFindings,
-  context?: ValidationContext,
-  uncheckedBase?: string,
+  context: ValidationContext | undefined,
+  names: StageNames,
 ): void {
   const artifactProducers = new Map<
     string,
     Array<{ file: string; slug: string }>
   >();
+  const ownStages = new Set(pluginStageSlugs(root));
+  const ownAgentNames = new Set(ownAgents(root));
   for (const file of scanPluginFiles(join(root, "stages")).files.filter((path) =>
     path.endsWith(".md"),
   )) {
@@ -814,24 +853,43 @@ function validateStages(
       continue;
     }
 
-    // Without the base's checkout, an agent only the base could supply is
-    // said once and not checked. When one name prefixes the other, the longer
-    // prefix owns the agent: for acme-backend on base acme a typo in its own
-    // agent stays an error, and acme on base acme-platform can still name
-    // acme-platform-review-agent.
-    const ownedHere = (agent: string): boolean =>
-      pluginName.length > (uncheckedBase ?? "").length && agent.startsWith(`${pluginName}-`);
-    const unchecked = uncheckedBase && context?.agents
-      ? [...new Set(stageAgentReferences(parsed))].filter((agent) =>
-          !context.agents?.includes(agent) &&
-          agent.startsWith(`${uncheckedBase}-`) &&
-          !ownedHere(agent)
-        )
-      : [];
-    for (const agent of unchecked) addBaseReference(findings, displayFile, "agent", agent, uncheckedBase ?? "");
+    // An agent outside the roster: the base's, without its checkout, is said
+    // once and not checked; another plugin's, in a plugin that declares no
+    // base, is one error naming the step. Either one replaces Rule 9's line.
+    const from = { plugin: pluginName, base: names.base ?? null };
+    const accepted: string[] = [];
+    const undeclared = (reference: string, kind: string): void =>
+      addError(
+        findings,
+        displayFile,
+        "base-reference",
+        `${reference} is not a core ${kind} or one of ${pluginName}'s own`,
+        UNDECLARED_FIX,
+      );
+    for (const [field, agent] of stageAgentReferences(parsed)) {
+      if (!context?.agents || context.agents.includes(agent) || accepted.includes(agent)) continue;
+      const source = referenceSource(agent, { ...from, core: names.coreAgents, own: ownAgentNames });
+      if (source === "base" && names.base && !names.baseChecked) {
+        accepted.push(agent);
+        addBaseReference(findings, displayFile, "agent", agent, names.base);
+      } else if (source === "undeclared" && names.base === null) {
+        accepted.push(agent);
+        undeclared(`${field} "${agent}"`, "agent");
+      }
+    }
+    if (names.base === null && Array.isArray(parsed.requires_stage)) {
+      for (const stage of new Set(parsed.requires_stage)) {
+        if (
+          typeof stage === "string" &&
+          referenceSource(stage, { ...from, core: names.coreStages, own: ownStages }) === "undeclared"
+        ) {
+          undeclared(`requires_stage "${stage}"`, "stage");
+        }
+      }
+    }
     const validation = validateStageFrontmatter(
       parsed,
-      unchecked.length > 0 ? { agents: [...(context?.agents ?? []), ...unchecked] } : context,
+      accepted.length > 0 ? { agents: [...(context?.agents ?? []), ...accepted] } : context,
     );
     if (!validation.valid) {
       for (const error of validation.errors) {
@@ -1103,22 +1161,39 @@ function validateScopes(
     for (const slug of includes) {
       const refuse = (message: string, fix: string): void =>
         addError(findings, displayFile, "scope-include", message, fix);
-      if (coreStages.has(slug)) {
+      const source = referenceSource(slug, {
+        plugin: pluginName,
+        base: base?.name ?? null,
+        core: coreStages,
+        own: ownStages,
+      });
+      if (source === "core") {
         refuse(`include_stages names "${slug}", a core stage`, "Put a core stage in this scope with a contribution's adds.scopes.");
-      } else if (ownStages.has(slug)) {
+      } else if (source === "own") {
         refuse(`include_stages names "${slug}", this plugin's own stage`, `List ${name || stem} in that stage's scopes: instead.`);
       } else if (base === null) {
         refuse(
           `include_stages names "${slug}", but this plugin builds on core alone`,
           'include_stages takes the stages of the base plugin you build on: name it in dependencies, such as "<base>@^1.2.0".',
         );
-      } else if (base && checkoutStages === null) {
-        addBaseReference(findings, displayFile, "stage", slug, base.name);
-      } else if (base && !checkoutStages?.has(slug)) {
-        refuse(
-          `include_stages names "${slug}", which your ${base.name} checkout has no stage for`,
-          `Name a stage of ${base.name}, or pass a checkout of the ${base.name} version this plugin is for.`,
-        );
+      } else if (base) {
+        if (source === "undeclared") {
+          // Compose refuses a plugin stage whose slug lacks "<plugin>-", so
+          // no installed stage of the base can have this name.
+          refuse(
+            slug.startsWith(`${base.name}-`)
+              ? `include_stages names "${slug}", which reads as one of ${pluginName}'s own stages: their slugs start with "${pluginName}-"`
+              : `include_stages names "${slug}", which cannot be a stage of ${base.name}: ${base.name}'s stage slugs start with "${base.name}-"`,
+            `Name a stage of ${base.name}.`,
+          );
+        } else if (checkoutStages === null) {
+          addBaseReference(findings, displayFile, "stage", slug, base.name);
+        } else if (!checkoutStages.has(slug)) {
+          refuse(
+            `include_stages names "${slug}", which your ${base.name} checkout has no stage for`,
+            `Name a stage of ${base.name}, or pass a checkout of the ${base.name} version this plugin is for.`,
+          );
+        }
       }
     }
   }
@@ -1300,7 +1375,12 @@ export function validatePluginRoot(
     pluginName,
     findings,
     baseCheckout ? { agents: [...(context.agents ?? []), ...baseCheckout.agents] } : context,
-    baseCheckout ? undefined : base?.name,
+    {
+      base: base === undefined ? undefined : (base?.name ?? null),
+      baseChecked: baseCheckout !== null,
+      coreStages: new Set(options.coreStageSlugs ?? pluginAuthoringContext().stages),
+      coreAgents: new Set(options.coreAgentSlugs ?? pluginAuthoringContext().agents),
+    },
   );
   validateContributions(root, pluginName, findings, options.coreStageSlugs, options.coreAgentSlugs);
   validateScopes(root, pluginName, findings, base, baseCheckout?.stages ?? null, options.coreStageSlugs);
