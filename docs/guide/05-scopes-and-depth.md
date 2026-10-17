@@ -516,7 +516,25 @@ You can change the test strategy at three points:
 | Lightweight requirements-to-deploy run | `express` |
 | AI-DLC workshop or training lab | `workshop` |
 
-When in doubt, start with `feature` for full-lifecycle coverage; choose `classic` for the v1-style Inception and Construction experience without Ideation or Operation.
+When in doubt, pick the plan by the size of the change. For a small,
+well-understood change, start with `express` (or `bugfix` for a known bug) and
+add the one stage you want, rather than starting with `feature`, which runs
+every stage:
+
+```
+/aidlc express --add functional-design <the change>
+/aidlc bugfix --add functional-design <what is broken>
+```
+
+`--add` puts a stage on this piece of work's plan only and keeps the rest of
+the scope as it is, so `express` with Functional Design still runs with no
+reviewers, sensors, learnings question, summary confirmation, or plan approval.
+Add `domain-design` instead when the change first needs its components named.
+On work already under way, `/aidlc --add <stage>` adds a stage that has not
+run yet (see `--skip` / `--add` in [CLI Commands](12-cli-commands.md)).
+Choose `feature` for a production feature that needs the full lifecycle, and
+`classic` for the v1-style Inception and Construction experience without
+Ideation or Operation.
 
 ---
 
