@@ -5233,7 +5233,10 @@ function recordTakeTree(projectDir: string, record: string, repos: string[]): vo
     }
     if (Object.keys(own).length > 0) tree[repo] = own;
   }
-  if (Object.keys(tree).length === 0) return;
+  if (Object.keys(tree).length > 0) writeTakeTree(record, tree);
+}
+
+function writeTakeTree(record: string, tree: TakeTree): void {
   mkdirSync(join(record, ENGINE_DIR), { recursive: true });
   writeFileAtomic(join(record, ENGINE_DIR, TAKE_TREE_FILE), `${JSON.stringify(tree, null, 2)}\n`);
 }
@@ -5249,8 +5252,9 @@ function readTakeTree(record: string): TakeTree {
 // The Unit's commit in one repo: built in an index of its own from HEAD, so
 // nothing the person staged comes along. A file that held their own change at
 // take goes in as HEAD plus the Unit's change since then; where the two cannot
-// be kept apart it is left out, and the working tree is never touched. Returns
-// the paths left out.
+// be kept apart it is left out, and the working tree is never touched. Once
+// committed, such a file's take-time content becomes what was just sent, so a
+// later push carries only the Unit's newer change. Returns the paths left out.
 function commitUnitPaths(dir: string, paths: string[], own: Record<string, string>, unit: string, label: string, name: string): string[] {
   const scratch = mkdtempSync(join(tmpdir(), "aidlc-unit-commit-"));
   const env = { GIT_INDEX_FILE: join(scratch, "index") };
@@ -5263,16 +5267,21 @@ function commitUnitPaths(dir: string, paths: string[], own: Record<string, strin
       const added = git(dir, ["add", "--", ...plain], env);
       if (!added.ok) fail(`${unit}'s changes could not be added in ${name}: ${added.stderr.trim()}`);
     }
+    const sent = new Map<string, string>();
     for (const path of paths.filter((path) => own[path] !== undefined)) {
       const kept = unitOwnChange(dir, path, own[path], scratch);
       if (kept === null) leftOut.push(path);
-      else git(dir, ["update-index", "--cacheinfo", `${kept.mode},${kept.oid},${path}`], env);
+      else {
+        git(dir, ["update-index", "--cacheinfo", `${kept.mode},${kept.oid},${path}`], env);
+        sent.set(path, kept.now);
+      }
     }
     const committed = paths.filter((path) => !leftOut.includes(path));
     if (committed.length > 0 && !git(dir, ["diff", "--cached", "--quiet", "--", ...committed], env).ok) {
       const made = git(dir, ["commit", "-q", "-m", `${unit}: ${label}`], env);
       if (!made.ok) fail(`The commit in ${name} did not go through: ${(made.stderr || made.stdout).trim()}`);
       git(dir, ["reset", "-q", "--", ...committed]);
+      for (const [path, now] of sent) own[path] = now;
     }
   } finally {
     rmSync(scratch, { recursive: true, force: true });
@@ -5282,7 +5291,7 @@ function commitUnitPaths(dir: string, paths: string[], own: Record<string, strin
 
 // HEAD's file plus the Unit's change from the take-time file to now, as a blob;
 // null when that cannot be told apart from the person's own change.
-function unitOwnChange(dir: string, path: string, taken: string, scratch: string): { mode: string; oid: string } | null {
+function unitOwnChange(dir: string, path: string, taken: string, scratch: string): { mode: string; oid: string; now: string } | null {
   const entry = git(dir, ["ls-tree", "HEAD", "--", path]).stdout.trim().split(/\s+/);
   if (taken === "" || taken === "untracked" || entry.length < 3 || !existsSync(join(dir, path))) return null;
   const now = git(dir, ["hash-object", "-w", `--path=${path}`, "--", path]).stdout.trim();
@@ -5298,7 +5307,7 @@ function unitOwnChange(dir: string, path: string, taken: string, scratch: string
   if (merged.status !== 0) return null;
   writeFileSync(join(scratch, "merged"), merged.stdout);
   const oid = git(dir, ["hash-object", "-w", "--no-filters", "--", join(scratch, "merged")]).stdout.trim();
-  return oid ? { mode: entry[0], oid } : null;
+  return oid ? { mode: entry[0], oid, now } : null;
 }
 
 export const APPROVED_INPUTS_FILE = "approved-inputs.md";
@@ -5674,6 +5683,7 @@ function pushUnit(args: string[], projectDir?: string): void {
       switched.push(name);
     }
     for (const path of commitUnitPaths(dir, paths, takeTree[repo] ?? {}, unit, label, name)) leftOut.push(`${path} in ${name}`);
+    if (takeTree[repo] !== undefined) writeTakeTree(activeRecordDir(pd), takeTree);
     const remote = git(dir, ["config", "--get", `branch.${unit}.remote`]).stdout.trim() || repositoryRemote(dir);
     if (remote === null) fail(`${name} has no remote to push ${unit} to.`);
     const pushed = git(dir, ["push", "-u", remote, unit]);
@@ -5742,7 +5752,8 @@ function pushUnit(args: string[], projectDir?: string): void {
       `${RESULT_FILES_ROOT}/${rel}`,
       readFileSync(join(activeRecordDir(pd), ...rel.split("/")), "utf-8"),
     ]));
-    const payload: UnitClaimPayload = { ...claim.payload, predecessor_oid: claim.oid, result, verdicts: undefined };
+    // A push after a turn-down is the team's answer to it.
+    const payload: UnitClaimPayload = { ...claim.payload, predecessor_oid: claim.oid, result, verdicts: undefined, turned_down: undefined };
     const commit = createClaimCommit(pd, claim.oid, payload, undefined, undefined, files);
     const sent = updateClaimRef(pd, home.target, ref, commit, claim.oid);
     if (!sent.ok) lines.push(`The home did not take ${unit}'s result: ${sent.refused ?? "its claim moved meanwhile"}. Say push to send it again.`);
@@ -5829,9 +5840,12 @@ function checkTeamResultsQuietly(
     });
     const done = verdicts.length > 0 && verdicts.every((verdict) => verdict.merged) &&
       (!leadSignOffOn(readStateFile(pd)) || live.payload.signoff !== undefined);
-    const same = JSON.stringify(live.payload.verdicts ?? []) === JSON.stringify(verdicts);
+    // The one thing written back is a merge the home has seen: a look at the
+    // board that sees no new merge leaves the claim as the team sent it.
+    const seenMerge = verdicts.some((verdict) => verdict.merged &&
+      !(live.payload.verdicts ?? []).some((before) => before.repo === verdict.repo && before.merged));
     if (done) recordUnitDone(pd, live, verdicts);
-    if (!same || done) {
+    if (seenMerge || done) {
       const payload: UnitClaimPayload = { ...live.payload, predecessor_oid: live.oid, verdicts, ...(done ? { done: true as const } : {}) };
       const commit = createClaimCommit(pd, live.oid, payload);
       // Unwritten, the verdict stays here and the next step writes it again.
@@ -5867,6 +5881,21 @@ function recordUnitDone(projectDir: string, claim: UnitClaimView, verdicts: NonN
   });
 }
 
+// The home's turn-down of this build's Unit, as the claims git last brought in
+// have it; null when it is not turned down (or the claims are not here).
+export function buildTurnedDown(projectDir: string, stateContent: string): { repo: string } | null {
+  const build = unitBuildOf(stateContent);
+  if (build === null) return null;
+  try {
+    const space = build.homeRecord.slice(0, build.homeRecord.indexOf("/"));
+    const mine = cachedClaimsForIdentity(projectDir, { space, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false)
+      .get(build.unit);
+    return mine?.payload.turned_down && !mine.payload.done ? { repo: mine.payload.turned_down.repo } : null;
+  } catch {
+    return null;
+  }
+}
+
 // What the home said about this build's Unit, read from the claims git last
 // brought in, each said once: a turn-down in the home's words, the home's
 // answer to a proposal, a Unit it started early on that is now done or turned
@@ -5884,7 +5913,9 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     } catch {
       // The home's record is not here: what this workspace has stands.
     }
-    if (home !== null && refreshHomeClaims(projectDir, { home, sessionId }).unreached !== null) {
+    // A pushed build waits on the home's answer: each step of it fetches.
+    const waits = getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed";
+    if (home !== null && refreshHomeClaims(projectDir, { home, sessionId, now: waits }).unreached !== null) {
       lines.push("The home could not be reached just now, so news from it may be behind.");
     }
   }

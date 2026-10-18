@@ -105,6 +105,12 @@ describe("the push", () => {
     expect(readFileSync(join(alice, "billing", "README.md"), "utf-8")).toBe("# billing service\n");
     expect(git(join(alice, "checkout-api"), ["status", "--porcelain"])).toBe("M README.md");
     expect(git(join(alice, "billing"), ["status", "--porcelain"])).toBe("M README.md");
+    // A second push carries the Unit's newer change on top of what it sent, still never their note.
+    writeFileSync(join(alice, "checkout-api", "README.md"), "Refunds API.\n\n# checkout-api\n\nmy secret note\n\nSee docs.\n");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const sent = git(hosts["checkout-api"], ["show", "refunds:README.md"]);
+    expect(sent).toContain("Refunds API.");
+    expect(sent).not.toContain("my secret note");
   });
 
   test("a push a repo's host refuses is said once, in its words, and nothing is retried", () => {
@@ -171,6 +177,25 @@ describe("at the home", () => {
       return argv.includes("fetch") && argv.some((arg) => arg.includes("refs/heads/claim/"));
     });
     expect(claimFetches).toHaveLength(1);
+  });
+
+  test("a look at the board writes nothing back to the claim until the home sees a new merge", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const ref = `refs/heads/claim/${fixtureIntentId8(home.dir)}/refunds`;
+    const pushed = git(home.remote, ["rev-parse", ref]);
+    next(home.dir);
+    next(home.dir);
+    expect(git(home.remote, ["rev-parse", ref])).toBe(pushed);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    next(home.dir);
+    expect(git(home.remote, ["rev-parse", ref])).not.toBe(pushed);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.verdicts).toEqual([
+      expect.objectContaining({ repo: "checkout-api", merged: true }),
+      { repo: "billing", merged: false },
+    ]);
   });
 
   test("the board counts the merges, and the Unit is done once every repo merged; what waits on it opens", () => {
@@ -329,6 +354,31 @@ describe("at the home", () => {
     next(home.dir);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toHaveLength(1);
+  });
+
+  test("a team whose pushed build waits on the home hears a turn-down at its next step in the same chat, and the build never reads as finished", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    const statePath = join(record, "aidlc-state.md");
+    writeFileSync(statePath, readFileSync(statePath, "utf-8")
+      .replace(/^- \[[-? ]\] (functional-design|nfr-requirements|nfr-design|infrastructure-design|code-generation) /gm, "- [x] $1 ")
+      .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation"));
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    expect(next(alice).kind).toBe("done");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "billing needs the ledger entry too"], home.dir).status).toBe(0);
+    const step = next(alice);
+    expect(step.kind, JSON.stringify(step)).toBe("notice");
+    expect(step.message).toBe("refunds is not finished: it was turned down at the home, so it waits for your change and a new push.");
+    expect((step.change_notices ?? []) as string[]).toContain(
+      'refunds was turned down in billing at the home: "billing needs the ledger entry too". ' +
+        "Say go back to Code Generation to change it, then push again.",
+    );
+    // Pushed again, the turn-down is answered: the build is finished once more.
+    writeFileSync(join(alice, "billing", "lib", "refund.ts"), "export const refund = 2;\n");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.turned_down).toBeUndefined();
+    expect(next(alice).kind).toBe("done");
   });
 
   test("a turn-down at the home reaches the team once, in the home's words", () => {

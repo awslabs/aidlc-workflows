@@ -594,6 +594,7 @@ import { resolveSwarmCheckpoint } from "./aidlc-swarm-checkpoints.ts";
 import {
   amendAskName,
   buildClaimNotes,
+  buildTurnedDown,
   leadSignOffOn,
   signOffAskName,
   switchSoloToTeams,
@@ -13909,6 +13910,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const push = unitPushAsk(pd, stateContent);
     if (push) {
       emit(push);
+      return;
+    }
+    // A Unit the home turned down waits for the team's change and a new push.
+    const build = stateContent ? unitBuildOf(stateContent) : null;
+    if (build !== null && buildTurnedDown(pd, stateContent!) !== null) {
+      emit(noticeDirective(`${build.unit} is not finished: it was turned down at the home, so it waits for your change and a new push.`));
       return;
     }
     // No stage left to run — the workflow is complete.
