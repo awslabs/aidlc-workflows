@@ -2776,7 +2776,7 @@ compose on its base (not installed, outside the plugin's version range, built
 on another plugin, or two bases named) is held: sync says why once, in one line
 after the complete line, composes every other plugin and exits 0, and `--json`
 lists it in `data.held`. `aidlc engine plugin list` and doctor keep the line
-until a sync composes it; a held plugin composed before stays as it was. On a
+until a sync composes it; a held plugin composed before stays as it was. A plugin installed twice (its old `aidlc-<name>` copy beside the rebuilt one) composes from the rebuilt one, and sync prints one line naming the old copy's remove command each time it runs, listed in `--json` as `data.superseded`. On a
 host whose session-start hook names only its own plugin, the hook composes that
 plugin's installed base first. An inventory with an
 invalid entry, or a plugin root with no `hooks/compose.ts`, refuses the whole

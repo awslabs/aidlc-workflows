@@ -17,10 +17,12 @@ import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import {
+  acquireAuditLock,
   committedTextBytes,
   errorMessage,
   parseArgs,
   pausedBySelection,
+  releaseAuditLock,
   resolveProjectDir,
 } from "./aidlc-lib.ts";
 import { policyPathWithin } from "./aidlc-install-paths.ts";
@@ -42,6 +44,7 @@ import {
   type TransactionPlan,
 } from "./aidlc-transaction.ts";
 import {
+  hostIdSegment,
   readPluginBase,
   type PluginBaseProblem,
   type PluginDependency,
@@ -73,6 +76,8 @@ export type InstalledPlugin = {
   // manifest cannot say.
   base: PluginDependency | null;
   baseProblem: PluginBaseProblem | { kind: "unreadable"; reason: string } | null;
+  // The host's own id for it (name@marketplace), where the host lists plugins.
+  hostId?: string;
 };
 
 export type InvalidInstalledPlugin = {
@@ -87,6 +92,8 @@ export type PluginInventory = {
   source?: string;
   installed: InstalledPlugin[];
   invalid: InvalidInstalledPlugin[];
+  // Old aidlc-<name> copies of a plugin also installed rebuilt under its own name.
+  superseded?: InstalledPlugin[];
 };
 
 export type CompositionStamp = {
@@ -110,7 +117,8 @@ export type PluginStatusName =
   | "invalid-installed"
   | "inventory-unavailable"
   | "dependency-unmet"
-  | "paused";
+  | "paused"
+  | "installed-twice";
 
 export type PluginStatus = {
   key: string | null;
@@ -228,6 +236,55 @@ function hostManifestDirectory(harness: PluginInventory["harness"]): string {
   return ".opencode-plugin";
 }
 
+// AI-DLC's own name for an installed plugin. A plugin someone else builds shows
+// in the host under its author's name, so the plugin's own manifest, which every
+// build carries beside the host one, says which plugin it is. A build from
+// before that manifest travelled with it named its host package aidlc-<name>.
+function installedPluginKey(root: string, hostName: string, manifestPath: string): string {
+  const own = join(root, ".aidlc-plugin", "plugin.json");
+  if (existsSync(own)) {
+    let name: unknown;
+    try {
+      name = (readJson(own) as { name?: unknown } | null)?.name;
+    } catch {
+      name = undefined;
+    }
+    if (typeof name === "string" && name.trim()) return name.trim();
+    if (!hostName.startsWith("aidlc-")) throw new Error(`${own}: the plugin's own manifest does not name it`);
+  }
+  if (!hostName.startsWith("aidlc-")) {
+    throw new Error(
+      `${manifestPath}: not an AI-DLC plugin: it has no .aidlc-plugin/plugin.json and its name does not start with "aidlc-"`,
+    );
+  }
+  return hostName.slice("aidlc-".length);
+}
+
+// The key an invalid host entry is reported under, when its root still says.
+function installedKeyHint(root: string, hostName: string): string | undefined {
+  try {
+    return installedPluginKey(root, hostName, root);
+  } catch {
+    return hostName.startsWith("aidlc-") ? hostName.slice("aidlc-".length) : undefined;
+  }
+}
+
+// A host lists every vendor's plugins. A plain name is AI-DLC's only through an
+// installed root that carries the plugin's own manifest; every other entry,
+// broken or not, is none of AI-DLC's business.
+function carriesOwnManifest(root: unknown): boolean {
+  return typeof root === "string" && root !== "" &&
+    existsSync(join(root, ".aidlc-plugin", "plugin.json"));
+}
+
+// An old copy of a plugin someone else built is the one its host lists under
+// AI-DLC's name for it, aidlc-<name>: 2.11.0 built it that way without the
+// plugin's own manifest, the 2.11.1 previews with it. A copy rebuilt by its
+// author carries the author's name.
+function hostListsUnderAidlcName(plugin: InstalledPlugin): boolean {
+  return plugin.hostName === `aidlc-${plugin.key}`;
+}
+
 export function normalizeInstalledPlugin(
   root: string,
   harness: PluginInventory["harness"],
@@ -251,10 +308,7 @@ export function normalizeInstalledPlugin(
   const manifest = parsed as Record<string, unknown>;
   const hostName = typeof manifest.name === "string" ? manifest.name.trim() : "";
   const version = typeof manifest.version === "string" ? manifest.version.trim() : "";
-  if (!hostName.startsWith("aidlc-")) {
-    throw new Error(`${manifestPath}: owned plugin name must start with "aidlc-"`);
-  }
-  const key = hostName.slice("aidlc-".length);
+  const key = installedPluginKey(canonicalRoot, hostName, manifestPath);
   if (!SAFE_PLUGIN_KEY.test(key)) {
     throw new Error(`${manifestPath}: plugin key "${key}" is not safe`);
   }
@@ -336,7 +390,7 @@ function invalidFromRoot(
 function deduplicateInventory(
   entries: InstalledPlugin[],
   invalid: InvalidInstalledPlugin[],
-): { installed: InstalledPlugin[]; invalid: InvalidInstalledPlugin[] } {
+): { installed: InstalledPlugin[]; invalid: InvalidInstalledPlugin[]; superseded: InstalledPlugin[] } {
   const byKey = new Map<string, InstalledPlugin[]>();
   for (const entry of entries) {
     const values = byKey.get(entry.key) ?? [];
@@ -344,9 +398,19 @@ function deduplicateInventory(
     byKey.set(entry.key, values);
   }
   const installed: InstalledPlugin[] = [];
+  const superseded: InstalledPlugin[] = [];
   for (const [key, values] of byKey) {
     if (values.length === 1) {
       installed.push(values[0]);
+      continue;
+    }
+    // A plugin rebuilt under its own name beside its old aidlc-<name> copy, as
+    // an update leaves it until the old one is removed: the rebuilt one is used.
+    const old = values.filter(hostListsUnderAidlcName);
+    const rebuilt = values.filter((value) => !hostListsUnderAidlcName(value));
+    if (values.length === 2 && rebuilt.length === 1 && old.length === 1) {
+      installed.push(rebuilt[0]);
+      superseded.push(old[0]);
       continue;
     }
     invalid.push({
@@ -375,7 +439,20 @@ function deduplicateInventory(
   return {
     installed: unique.sort((left, right) => left.key.localeCompare(right.key)),
     invalid: invalid.sort((left, right) => left.message.localeCompare(right.message)),
+    superseded: superseded.sort((left, right) => left.key.localeCompare(right.key)),
   };
+}
+
+// What to tell the person about an old copy of a plugin installed beside its
+// rebuilt one: the host's own command removes it.
+function supersededWords(harness: PluginInventory["harness"], old: InstalledPlugin): string {
+  const id = old.hostId ?? old.hostName;
+  const remove = harness === "codex" ? `codex plugin remove ${id}` : `/plugin uninstall ${id}`;
+  return `installed twice; AI-DLC uses the rebuilt one. Remove the old copy: ${remove}`;
+}
+
+export function supersededLines(inventory: PluginInventory): string[] {
+  return (inventory.superseded ?? []).map((old) => `${old.key} is ${supersededWords(inventory.harness, old)}`);
 }
 
 function currentRootInventory(harness: PluginInventory["harness"]): PluginInventory {
@@ -392,6 +469,7 @@ function currentRootInventory(harness: PluginInventory["harness"]): PluginInvent
     harness,
     installed: normalized.installed,
     invalid: normalized.invalid,
+    superseded: normalized.superseded,
   };
 }
 
@@ -482,15 +560,18 @@ function claudeInventory(projectDir: string): PluginInventory {
   } else {
     for (const [id, rawEntries] of Object.entries(plugins).sort(([a], [b]) => a.localeCompare(b))) {
       const registryName = id.split("@", 1)[0];
-      if (!registryName.startsWith("aidlc-")) continue;
+      const aidlcName = registryName.startsWith("aidlc-");
+      const ownRecord = (raw: unknown): boolean =>
+        aidlcName || carriesOwnManifest((raw as Record<string, unknown> | null)?.installPath);
+      if (!aidlcName && !(Array.isArray(rawEntries) && rawEntries.some(ownRecord))) continue;
       if (!Array.isArray(rawEntries) || rawEntries.length === 0) {
         invalid.push({ paths: [registryPath], message: `Claude plugin "${id}" has no installed records` });
         continue;
       }
       const own = rawEntries.filter((raw) => !elsewhere(raw));
-      const records = own.length > 0 || projectEnabled[id] !== true
+      const records = (own.length > 0 || projectEnabled[id] !== true
         ? own
-        : rawEntries.filter((raw) => (raw as Record<string, unknown>).scope === "project");
+        : rawEntries.filter((raw) => (raw as Record<string, unknown>).scope === "project")).filter(ownRecord);
       for (const rawEntry of records) {
         if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
           invalid.push({ paths: [registryPath], message: `Claude plugin "${id}" has an invalid installed record` });
@@ -504,8 +585,8 @@ function claudeInventory(projectDir: string): PluginInventory {
           continue;
         }
         const normalized = invalidFromRoot(root, "claude", enabledPlugins[id] !== false, version);
-        if ("root" in normalized) installed.push(normalized);
-        else invalid.push({ ...normalized, key: registryName.slice("aidlc-".length) });
+        if ("root" in normalized) installed.push({ ...normalized, hostId: id });
+        else invalid.push({ ...normalized, key: installedKeyHint(root, registryName) });
       }
     }
   }
@@ -516,6 +597,7 @@ function claudeInventory(projectDir: string): PluginInventory {
     source: registryPath,
     installed: normalized.installed,
     invalid: normalized.invalid,
+    superseded: normalized.superseded,
   };
 }
 
@@ -547,20 +629,19 @@ function codexInventory(): PluginInventory {
     const at = id.lastIndexOf("@");
     const pluginName = at > 0 ? id.slice(0, at) : "";
     const marketplace = at > 0 ? id.slice(at + 1) : "";
-    const safeSegment = (value: string): boolean =>
-      /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) && value !== "." && value !== "..";
-    if (!pluginName || !marketplace || !safeSegment(pluginName) ||
-      !safeSegment(marketplace)) {
+    if (!pluginName || !marketplace || !hostIdSegment(pluginName) ||
+      !hostIdSegment(marketplace)) {
       invalid.push({ paths: [configPath], message: `Codex plugin id "${id}" is not name@marketplace` });
       continue;
     }
-    if (!pluginName.startsWith("aidlc-")) continue;
+    const aidlcName = pluginName.startsWith("aidlc-");
     const pluginConfig = rawConfig && typeof rawConfig === "object" && !Array.isArray(rawConfig)
       ? rawConfig as Record<string, unknown>
       : {};
     const enabled = pluginConfig.enabled !== false;
     const cacheRoot = join(codexHome, "plugins", "cache", marketplace, pluginName);
     if (!existsSync(cacheRoot)) {
+      if (!aidlcName) continue;
       invalid.push({
         paths: [cacheRoot],
         message: `Codex plugin "${id}" is configured but its installed cache path is missing`,
@@ -574,6 +655,7 @@ function codexInventory(): PluginInventory {
         lstatSync(path).isDirectory();
     }).sort();
     if (versions.length === 0) {
+      if (!aidlcName) continue;
       invalid.push({ paths: [cacheRoot], message: `Codex plugin "${id}" has no installed tree` });
       continue;
     }
@@ -589,14 +671,15 @@ function codexInventory(): PluginInventory {
         return left < right ? -1 : left > right ? 1 : 0;
       }).at(-1) as string;
     const root = join(cacheRoot, selectedVersion);
+    if (!aidlcName && !carriesOwnManifest(root)) continue;
     const normalized = invalidFromRoot(
       root,
       "codex",
       enabled,
       selectedVersion === "local" ? undefined : selectedVersion,
     );
-    if ("root" in normalized) installed.push(normalized);
-    else invalid.push({ ...normalized, key: pluginName.slice("aidlc-".length) });
+    if ("root" in normalized) installed.push({ ...normalized, hostId: id });
+    else invalid.push({ ...normalized, key: installedKeyHint(root, pluginName) });
   }
   const normalized = deduplicateInventory(installed, invalid);
   return {
@@ -605,6 +688,7 @@ function codexInventory(): PluginInventory {
     source: configPath,
     installed: normalized.installed,
     invalid: normalized.invalid,
+    superseded: normalized.superseded,
   };
 }
 
@@ -790,8 +874,21 @@ export function comparePluginState(
     });
   }
   const installedKeys = new Set<string>();
+  const oldCopies = new Map((inventory.superseded ?? []).map((old) => [old.key, old]));
   for (const plugin of inventory.installed) {
     installedKeys.add(plugin.key);
+    const oldCopy = oldCopies.get(plugin.key);
+    if (oldCopy) {
+      rows.push({
+        key: plugin.key,
+        installedVersion: plugin.version,
+        composedVersion: evidence.stamps.get(plugin.key)?.version ?? null,
+        state: "installed-twice",
+        action: "attention",
+        message: supersededWords(inventory.harness, oldCopy),
+      });
+      continue;
+    }
     const stamp = evidence.stamps.get(plugin.key);
     const enabled = plugin.enabled && (selection === null || selection.has(plugin.key));
     const held = evidence.held.get(plugin.key);
@@ -1754,10 +1851,56 @@ export function layerOrder(
   return { ordered: [...bases, ...layered], held, paused };
 }
 
-export async function syncPlugins(
+// A session start runs every installed plugin's sync hook at the same time.
+// Each sync copies the project, composes on the copy, then diffs the copy
+// against the live project; a sync that commits in between makes the next
+// diff undo its work (a lost update) or fail with "source changed after
+// planning". One lock per project, held from the copy to the commit, keeps a
+// sync from planning against a project another sync is about to change.
+// The name sets this lock apart from the workspace and intent locks. It is
+// passed as both intent and space so the lock never reads the active space.
+const SYNC_LOCK_NAME = "plugin-sync";
+
+// The audit lock is per process and not re-entrant, so syncs started from one
+// process wait for each other here before they contend for it across processes.
+const SYNC_QUEUE = new Map<string, Promise<unknown>>();
+
+export function syncPlugins(
   projectDir: string,
   argv: string[],
   harnessDir = runtimeHarnessDir(projectDir),
+): ReturnType<typeof syncPluginsLocked> {
+  const key = resolve(projectDir);
+  const run = (SYNC_QUEUE.get(key) ?? Promise.resolve()).then(() =>
+    syncPluginsExclusive(projectDir, argv, harnessDir)
+  );
+  const tail = run.catch(() => undefined);
+  SYNC_QUEUE.set(key, tail);
+  void tail.then(() => {
+    if (SYNC_QUEUE.get(key) === tail) SYNC_QUEUE.delete(key);
+  });
+  return run;
+}
+
+async function syncPluginsExclusive(
+  projectDir: string,
+  argv: string[],
+  harnessDir: string,
+): ReturnType<typeof syncPluginsLocked> {
+  if (!acquireAuditLock(projectDir, undefined, undefined, SYNC_LOCK_NAME, SYNC_LOCK_NAME)) {
+    throw new Error("plugin sync could not acquire the project plugin-sync lock");
+  }
+  try {
+    return await syncPluginsLocked(projectDir, argv, harnessDir);
+  } finally {
+    releaseAuditLock(projectDir, SYNC_LOCK_NAME, SYNC_LOCK_NAME);
+  }
+}
+
+async function syncPluginsLocked(
+  projectDir: string,
+  argv: string[],
+  harnessDir: string,
   lockRetry = 0,
 ): Promise<{
   synced: string[];
@@ -1766,6 +1909,7 @@ export async function syncPlugins(
   held: HeldRecord[];
   newlyHeld: HeldRecord[];
   paused: string[];
+  superseded: string[];
 }> {
   const harness = harnessKind(harnessDir);
   const inventory = currentRoots().length > 0
@@ -1777,6 +1921,7 @@ export async function syncPlugins(
   let plugins: InstalledPlugin[];
   let missing: string[] = [];
   let hostList: InstalledPlugin[] | null = null;
+  const superseded = supersededLines(inventory);
   if (inventory.capability === "full-inventory") {
     if (inventory.invalid.length > 0) {
       throw new Error(
@@ -1805,6 +1950,13 @@ export async function syncPlugins(
     plugins = inventory.installed;
     if (plugins.length === 0) {
       throw new Error("host inventory unavailable; run sync through an installed plugin's host hook");
+    }
+    // An old aidlc-<name> copy's own hook leaves the composing to the rebuilt
+    // copy the host also lists, so the two never take turns.
+    if (plugins.some(hostListsUnderAidlcName)) {
+      const host = discoverPluginInventory(harnessDir, projectDir);
+      const rebuilt = new Set((host.superseded ?? []).map((old) => old.key));
+      plugins = plugins.filter((plugin) => !hostListsUnderAidlcName(plugin) || !rebuilt.has(plugin.key));
     }
     // A host hook names only its own plugin. Where the host lists its
     // plugins, the installed base that plugin builds on composes first in the
@@ -1881,6 +2033,7 @@ export async function syncPlugins(
       held,
       newlyHeld,
       paused,
+      superseded,
     };
   }
   const stagingRoot = mkdtempSync(join(tmpdir(), "aidlc-plugin-sync-"));
@@ -1954,7 +2107,7 @@ export async function syncPlugins(
         ) {
           await Bun.sleep(50);
         }
-        return syncPlugins(projectDir, argv, harnessDir, lockRetry + 1);
+        return syncPluginsLocked(projectDir, argv, harnessDir, lockRetry + 1);
       }
       const refreshedEvidence = projectEvidence(projectDir, harnessDir);
       if (
@@ -1970,9 +2123,25 @@ export async function syncPlugins(
           held,
           newlyHeld: [],
           paused,
+          superseded,
         };
       }
       throw error;
+    }
+    // A sync that exits 0 must leave its plugins composed; a silent miss would
+    // leave a blocking gate sensor absent with nothing to tell the user.
+    if (pruned.length === 0) {
+      const committed = projectEvidence(projectDir, harnessDir);
+      const uncomposed = plugins
+        .filter((plugin) => !compositionIsCurrent(plugin, committed, projectDir, harnessDir, selection))
+        .map((plugin) => plugin.key);
+      if (uncomposed.length > 0) {
+        throw new Error(
+          `plugin sync finished but ${uncomposed.join(", ")} ${uncomposed.length === 1 ? "is" : "are"} not composed; ` +
+            `run ${aidlcInvocation()} engine plugin sync again. If it refuses because a file ` +
+            "the plugin owns was changed, move that file aside and run it once more",
+        );
+      }
     }
     return {
       synced: plugins.map((plugin) => plugin.key).sort(),
@@ -1981,6 +2150,7 @@ export async function syncPlugins(
       held,
       newlyHeld,
       paused,
+      superseded,
     };
   } finally {
     rmSync(stagingRoot, { recursive: true, force: true });
@@ -2020,7 +2190,8 @@ export async function main(argv: string[]): Promise<void> {
       const result = await syncPlugins(projectDir, argv);
       const message = `plugin sync complete: ${result.synced.length} plugin(s)` +
         (result.pruned.length > 0 ? `; pruned ${result.pruned.length} missing plugin(s)` : "") +
-        result.newlyHeld.map((record) => `\n${record.reason}`).join("");
+        result.newlyHeld.map((record) => `\n${record.reason}`).join("") +
+        result.superseded.map((line) => `\n${line}`).join("");
       if (flags.json === "true") process.stdout.write(jsonEnvelope(0, message, result));
       else if (flags.quiet !== "true") process.stdout.write(`${message}\n`);
       return;

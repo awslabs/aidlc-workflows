@@ -587,7 +587,7 @@ export function testPluginComposition(
         "Pass an install root containing the selected harness tree.",
       );
     } else {
-      buildPluginProjection({
+      const { pluginRoot: builtRoot } = buildPluginProjection({
         pluginRoot,
         target,
         outDir: projectionRoot,
@@ -600,7 +600,7 @@ export function testPluginComposition(
         harness,
         harnessLeaf: target.harnessLeaf,
         projectDir: candidateRoot,
-        pluginBuilt: projectionRoot,
+        pluginBuilt: builtRoot,
       });
       if (first.status !== 0) {
         addTestError(
@@ -668,7 +668,7 @@ export function testPluginComposition(
         harness,
         harnessLeaf: target.harnessLeaf,
         projectDir: candidateRoot,
-        pluginBuilt: projectionRoot,
+        pluginBuilt: builtRoot,
       });
       const secondDrops = readPluginDropEntries(
         candidateRoot,

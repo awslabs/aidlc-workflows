@@ -175,6 +175,13 @@ function pluginNameFromRoot(): string {
   const supplied = process.env.AIDLC_PLUGIN_KEY?.trim();
   if (supplied && SAFE_PLUGIN_KEY.test(supplied)) return supplied;
   if (!PLUGIN_ROOT) return "plugin";
+  // The plugin's own manifest names it whatever the host calls it; a build
+  // from before it travelled with the plugin named the host package aidlc-<name>.
+  try {
+    const own = JSON.parse(readFileSync(join(PLUGIN_ROOT, ".aidlc-plugin", "plugin.json"), "utf-8"));
+    const name = typeof own?.name === "string" ? own.name.trim() : "";
+    if (SAFE_PLUGIN_KEY.test(name)) return name;
+  } catch { /* fall through to the host manifest */ }
   for (const md of [
     ".claude-plugin",
     ".codex-plugin",

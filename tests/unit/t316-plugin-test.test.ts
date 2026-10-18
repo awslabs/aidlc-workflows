@@ -182,6 +182,35 @@ describe("t316 standalone plugin compose test", () => {
     expect(treeDigest(installRoot)).toBe(before);
   }, COMPOSE_CASE_TIMEOUT_MS);
 
+  // A plugin built outside this repository shows under its author's own name,
+  // so compose keys what it records by the plugin's own manifest, even with no
+  // plugin: field in its content to read the name from.
+  test("a plugin someone else builds composes and records under its own name", () => {
+    const root = join(scratch, "own-name");
+    const pluginRoot = join(root, "acme-standards");
+    const installRoot = join(root, "install");
+    mkdirSync(join(pluginRoot, ".aidlc-plugin"), { recursive: true });
+    writeFileSync(
+      join(pluginRoot, ".aidlc-plugin", "plugin.json"),
+      `${JSON.stringify({
+        name: "acme-standards",
+        version: "1.0.0",
+        description: "Fixture",
+        author: { name: "Fixture" },
+        dependencies: ["core"],
+        aidlc: { contributes: { tools: "tools/" } },
+      }, null, 2)}\n`,
+    );
+    mkdirSync(join(pluginRoot, "tools"), { recursive: true });
+    writeFileSync(join(pluginRoot, "tools", "acme-standards-tool.ts"), 'console.log("fixture");\n');
+    cpSync(CLAUDE_INSTALL, installRoot, { recursive: true });
+    const result = run([pluginRoot, "--install", installRoot, "--json"]);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const json = JSON.parse(result.stdout) as { composedFiles: string[] };
+    expect(json.composedFiles).toContain(".claude/tools/acme-standards-tool.ts");
+    expect(json.composedFiles).toContain(".claude/tools/data/plugin-owned-acme-standards.json");
+  }, COMPOSE_CASE_TIMEOUT_MS);
+
   // Codex keeps its skills in .agents/skills/ with no .codex/skills/; compose
   // must write the plugin's runners there instead of recording an advisory
   // drop that fails every plugin on this harness.
