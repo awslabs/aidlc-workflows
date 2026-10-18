@@ -5724,6 +5724,13 @@ export interface PlanApprovalRuntimeReceipt
    * edited after its approval. An interrupted build picks up only on it.
    */
   startedFingerprint?: string;
+  /**
+   * The attempt (its run floor) this approval was carried into and built in:
+   * the person's change request closed the attempt it was given in, and the
+   * first build start in the next attempt records it, so that attempt clears
+   * the old ticks once and reads its own build as started.
+   */
+  carriedInto?: string;
 }
 
 export interface PlanApprovalWorktreeDelegation {

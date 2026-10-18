@@ -1839,14 +1839,26 @@ export function approvedPlanChangeText(
 function approvedCopyForAttempt(
   projectDir: string,
   authority: CodeGenerationAuthority,
+  target: CodeGenerationTarget,
+  issued?: CodeGenerationIssuance,
 ): { copy: ApprovedPlanCopy; built: boolean } | null {
   const copy = readApprovedPlanCopy(projectDir, authority);
-  if (copy === null) return null;
-  const receipt = readPlanApprovalReceipt(projectDir, {
+  const receipt = copy === null ? null : readPlanApprovalReceipt(projectDir, {
     targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: copy.fingerprint,
   });
-  if (receipt?.choice !== "Approve Plan") return null;
-  return { copy, built: receipt.status === "generation" };
+  if (copy !== null && receipt?.choice === "Approve Plan") return { copy, built: receipt.status === "generation" };
+  // An approval the person's change request carried into this attempt stands
+  // here too, the way the build reads it (earlierPlanApproval): its copy and
+  // receipt are kept under the attempt their rejection closed. Its receipt is
+  // at `generation` from that attempt's build, so this attempt has built from
+  // it only once a start here marked it (`carriedInto`).
+  const earlier = earlierPlanApproval(projectDir, target, issued);
+  if (earlier?.carried !== true) return null;
+  const carried = readApprovedPlanCopy(projectDir, {
+    targetId: authority.targetId, runFloor: earlier.receipt.runFloor,
+  });
+  if (carried === null || carried.fingerprint !== earlier.receipt.fingerprint) return null;
+  return { copy: carried, built: earlier.receipt.carriedInto === authority.runFloor };
 }
 
 /**
@@ -1869,7 +1881,7 @@ export function approvedPlanChangeLine(
 ): string | null {
   try {
     const authority = resolveCodeGenerationAuthority(projectDir, target, issued);
-    const approved = approvedCopyForAttempt(projectDir, authority);
+    const approved = approvedCopyForAttempt(projectDir, authority, target, issued);
     if (approved === null || (approved.built && !afterBuild)) return null;
     return approvedPlanChangeText(
       approved.copy,
@@ -1902,20 +1914,19 @@ export function restoreApprovedPlan(projectDir: string, target: CodeGenerationTa
     ));
   }
   const authority = resolveCodeGenerationAuthority(projectDir, target);
-  const copy = readApprovedPlanCopy(projectDir, authority);
-  const receipt = copy === null ? null : readPlanApprovalReceipt(projectDir, {
-    targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: copy.fingerprint,
-  });
-  if (copy === null || receipt?.choice !== "Approve Plan") {
+  // The plan the change line named: this attempt's approval, or the one the
+  // person's change request carried into it.
+  const approved = approvedCopyForAttempt(projectDir, authority, target);
+  if (approved === null) {
     throw new Error(
       `There is no approved plan to go back to for ${authority.unit === null ? "this code" : authority.unit}. ` +
         "Show the person the plan as it is now.",
     );
   }
+  const { copy, built } = approved;
   // Once the build has started the code on disk came from the plan being
   // replaced, so going back means building that step again. The line says so,
   // and the `next` after this restore issues that build.
-  const built = receipt.status === "generation";
   withActiveDirectiveLock(projectDir, () => {
     for (const [name, content] of [
       ["code-generation-plan.md", copy.plan],
@@ -5671,8 +5682,17 @@ export function beginCodeGenerationBatch(
           // receipt stands at `generation` with that build's ticks on the plan.
           // Those ticks are the previous attempt's progress, not this build's:
           // the revised plan starts its steps fresh, as a new approval does.
-          if ((started.receipt.status !== "generation" || started.continuation?.carried) && pickUp) {
+          // Once: this start runs before every change the build makes, and the
+          // carried receipt stays at `generation`, so the first start in this
+          // attempt marks it (`carriedInto`) and later ones keep the ticks the
+          // build has made since.
+          const carriedFresh = started.continuation?.carried === true &&
+            started.receipt.carriedInto !== started.authority.runFloor;
+          if ((started.receipt.status !== "generation" || carriedFresh) && pickUp) {
             clearPlanFileTicks(projectDir, started.authority.stageDir);
+          }
+          if (carriedFresh) {
+            writePlanApprovalReceipt(projectDir, { ...started.receipt, carriedInto: started.authority.runFloor });
           }
           notices.push(...publishCodeGenerationStart(projectDir, started, options, originals, pickUp));
         }
