@@ -81,6 +81,11 @@ function type(session: string, text: string): void {
 // Kiro's input footer when it waits for the person, and the credits line it
 // prints at the end of every answer (this turn's and the session's credits).
 const IDLE = "ask a question or describe a task";
+// A permission prompt: the conductor's own card ("<tool> requires approval",
+// Allow preselected), or the card Kiro CLI 2.32.0 shows for a delegated agent's
+// tool ("⚠ 1 tool approval pending", "(a) Approve all pending" preselected).
+// Enter takes the preselected answer on both.
+const PROMPT = /requires approval|tool approval pending/;
 function sessionCredits(text: string): number | undefined {
   const all = [...text.matchAll(/Credits: turn [\d.]+ \S+ session ([\d.]+)/g)];
   return all.length ? Number(all[all.length - 1][1]) : undefined;
@@ -140,10 +145,10 @@ describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before e
               // The turn ends when Kiro prints its credits line again and waits for the person.
               let ended = false;
               while (!ended && Date.now() < caseDeadlineMs) {
-                if (!waitFor(session, `${IDLE}|requires approval`, remainingWorkMs(), 1500)) continue;
+                if (!waitFor(session, `${IDLE}|${PROMPT.source}`, remainingWorkMs(), 1500)) continue;
                 const now = screen(session);
                 const bottom = now.split("\n").slice(-14).join("\n");
-                if (bottom.includes("requires approval") && !bottom.includes(IDLE)) {
+                if (PROMPT.test(bottom) && !bottom.includes(IDLE)) {
                   prompts++;
                   drive(["send", "--session", session, "--keys", "Enter", "--no-enter"]);
                   continue;
