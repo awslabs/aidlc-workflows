@@ -70,6 +70,7 @@ const LIB_SIBLINGS = [
   "aidlc-stage-schema.ts",
   "aidlc-version.ts",
   "aidlc-workspace-manifest.ts",
+  "aidlc-unit-teams.ts",
 ] as const;
 
 // Materialize a minimal <root>/<harness>/tools/ tree carrying the real lib

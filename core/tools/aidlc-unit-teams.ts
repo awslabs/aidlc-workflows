@@ -1,18 +1,25 @@
 // Teams building each Unit as a piece of work of their own (#2410): where the
 // home is, what the Unit plan says about each Unit (likely repos, what it waits
-// on), and whether who builds which Unit was answered. Built on aidlc-lib.ts,
-// never imported by it.
+// on), whether who builds which Unit was answered, and a Unit's build. Built on
+// aidlc-lib.ts, which requires it lazily where its own functions need it.
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   type AuditShardEvent,
   auditBlockField,
+  type BoltDagResolution,
   getField,
+  type IntentRegistryEntry,
   intentRepos,
+  intentsDir,
+  isTeamUnitOwnership,
+  listIntentDirs,
   parseBoltDag,
+  readStateFile,
   unitDependencyPath,
+  writeFileAtomic,
 } from "./aidlc-lib.ts";
 
 // Where the home of team-built work is: the address the workspace's own
@@ -81,6 +88,20 @@ export function unitsAssignedSinceTeams(rows: readonly AuditShardEvent[]): boole
   return ordered.slice(teamsAt + 1).some((row) => row.event === "UNITS_ASSIGNED");
 }
 
+// Which team the lead named for each Unit at the home, as its latest
+// UNITS_ASSIGNED row since teams were chosen records it.
+export function unitsAssignedAtHome(rows: readonly AuditShardEvent[]): Map<string, string> {
+  const named = new Map<string, string>();
+  if (!unitsAssignedSinceTeams(rows)) return named;
+  const latest = [...rows].filter((row) => row.event === "UNITS_ASSIGNED")
+    .sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0)).at(-1);
+  for (const pair of (auditBlockField(latest?.block ?? "", "Assigned") ?? "").split(",")) {
+    const [unit, team] = pair.split("=").map((part) => part.trim());
+    if (unit && team) named.set(unit, team);
+  }
+  return named;
+}
+
 // The line for likely repos the work does not record: said once, kept as
 // written. Null when every one names a recorded repo, or the work records none
 // (its likely folders are inside the one repo).
@@ -97,3 +118,91 @@ export function unknownLikelyReposLine(projectDir: string): string | null {
   return `The Unit plan names ${unknown.join(", ")}, which is not one of this work's repos (${recorded.join(", ")}). ` +
     "It stays as written, as a guide.";
 }
+
+// --- A Unit's build -----------------------------------------------------------
+//
+// The piece of work a team builds one Unit of the home's work as, in its own
+// space. Its state names the home's location, the home's work, where its record
+// is, the Unit and the claim attempt it came from.
+export const UNIT_BUILD_FIELD = "Unit Build";
+
+export interface UnitBuild {
+  unit: string;
+  homeLocation: string;
+  homeWork: string;
+  homeRecord: string;
+  attempt: number;
+}
+
+export function unitBuildOf(stateContent: string | null): UnitBuild | null {
+  if (stateContent === null) return null;
+  const unit = getField(stateContent, UNIT_BUILD_FIELD)?.trim();
+  if (!unit) return null;
+  return {
+    unit,
+    homeLocation: getField(stateContent, HOME_LOCATION_FIELD)?.trim() ?? "",
+    homeWork: getField(stateContent, "Home Work")?.trim() ?? "",
+    homeRecord: getField(stateContent, "Home Record")?.trim() ?? "",
+    attempt: Number.parseInt(getField(stateContent, "Home Attempt")?.trim() ?? "1", 10) || 1,
+  };
+}
+
+// The build of a home's Unit in this workspace, in any space: what taking that
+// Unit again here carries on.
+export function findUnitBuild(projectDir: string, homeWork: string, unit: string): { space: string; dirName: string } | null {
+  let spaces: string[];
+  try {
+    spaces = readdirSync(join(projectDir, "aidlc", "spaces"));
+  } catch {
+    return null;
+  }
+  for (const space of spaces) {
+    for (const dirName of listIntentDirs(projectDir, space)) {
+      let state: string;
+      try {
+        state = readStateFile(projectDir, dirName, space);
+      } catch {
+        continue;
+      }
+      const build = unitBuildOf(state);
+      if (build?.unit === unit && build.homeWork === homeWork) return { space, dirName };
+    }
+  }
+  return null;
+}
+
+// A build walks only its own Unit: its copy of the home's plan names every
+// Unit, and the others are the home's or other teams' to build.
+export function onlyTheBuildsUnit(
+  projectDir: string,
+  resolution: BoltDagResolution,
+  intent?: string,
+  space?: string,
+): BoltDagResolution {
+  if (resolution.state !== "ok") return resolution;
+  let unit: string | null = null;
+  try {
+    unit = unitBuildOf(readStateFile(projectDir, intent, space))?.unit ?? null;
+  } catch {
+    // No state yet: the plan as authored.
+  }
+  if (unit === null || !resolution.units.includes(unit)) return resolution;
+  const kind = resolution.unitKinds?.get(unit);
+  return { state: "ok", batches: [[unit]], units: [unit], unitKinds: kind === undefined ? null : new Map([[unit, kind]]) };
+}
+
+// Two spellings of one git address: trailing slash and `.git` aside.
+export function sameGitAddress(a: string, b: string): boolean {
+  const norm = (value: string): string => value.trim().replace(/[\\/]+$/, "").replace(/\.git$/, "");
+  return norm(a) === norm(b);
+}
+
+// The home's work that git copied into a team's own workspace: its recorded
+// home is not this workspace's own origin. It is the home's, read only, never
+// this team's to carry on; nothing in the copy is changed.
+export function isHomesCopiedWork(projectDir: string, state: string): boolean {
+  const home = isTeamUnitOwnership(state) ? homeLocation(state) : null;
+  if (home === null || home === "local") return false;
+  return !sameGitAddress(home, workspaceHomeLocation(projectDir) ?? "");
+}
+

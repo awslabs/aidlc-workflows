@@ -48,6 +48,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --claim <unit> [--team <label>] [--rhythm <per-stage\|unit-end>]` | Atomically claim an open team-owned Unit and bind this checkout to that attempt |
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
 | `/aidlc unit assign <unit>=<team> ... \| --open` | At the home, hold each named Unit for a team, or leave every Unit open |
+| `/aidlc unit take <unit> --home <record>` | Take a Unit of a home's work as your team's own piece of work, or carry its build on |
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
 | `/aidlc unit share` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one |
@@ -676,6 +677,30 @@ command says so. One Unit named for two teams is refused with both names. The
 walking skeleton, when on, is built at the home first and is never held for a
 team. `--person-words '<their words>'` records the words the answer came from in
 the `UNITS_ASSIGNED` audit row.
+
+### `/aidlc unit take <unit> --home <record>` - Take a Unit as your team's own work
+
+In a team member's workspace, take one Unit of the home's work (the record
+named by `--home`, in space `--home-space`, default `default`) and start its
+build as a piece of work of its own in the team's space. AI-DLC offers it when
+you run `/aidlc` with no work of your own selected; you can also run it
+yourself:
+
+```
+/aidlc unit take refunds --home 261018-checkout-revamp
+/aidlc unit take reporting --home 261018-checkout-revamp --team payments
+```
+
+The Unit is held at the home's remote first, by its address when the workspace
+is the team's own, with a compare-and-swap like any claim: a Unit held for your
+team becomes yours, an open Unit is held for `--team` (or your active space, or
+your git name), and a Unit another team holds or a teammate took is refused
+with who holds it. A Unit that waits on another is refused until that Unit is
+done at the home. The build copies what the home approved at its pushed commit,
+records `UNIT_TAKEN_IN`, and is selected for this chat. Taking a Unit whose
+build is already in this workspace carries that build on. A home that takes no
+push from here still gives you a Unit held for your team, and its result goes
+back as a file; an open Unit there needs the lead to hold it for you.
 
 ### `/aidlc unit adopt <unit>` — Adopt a teammate's live claim
 

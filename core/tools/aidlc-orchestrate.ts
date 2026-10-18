@@ -333,7 +333,9 @@ import {
   isArchivedIntent,
   isCompletedIntent,
   listIntents,
+  type IntentInfo,
   listSpaces,
+  DEFAULT_SPACE,
   finishedWork,
   workStanding,
   readUnitScopeStamp,
@@ -589,6 +591,7 @@ import {
   claimsOpenHere,
   landedNotOnRemote,
   localUnitClaimOverviewForIntent,
+  openingStatusFrom,
   publishedAtHead,
   refreshClaimRefs,
   shareBlocker,
@@ -658,7 +661,11 @@ import {
 import { localRepoOverrideLines, REPOS_FILE } from "./aidlc-workspace-manifest.ts";
 import { noteReposManifestOffered, reposManifestOffered } from "./aidlc-workspace-repos.ts";
 import {
+  findUnitBuild,
   homeLocation,
+  unitsAssignedAtHome,
+  isHomesCopiedWork,
+  unitBuildOf,
   unitDependencies,
   unitLikelyRepos,
   unitsAssignedSinceTeams,
@@ -8315,6 +8322,102 @@ function unselectedRecordsDigest(selectable: UnselectedRecords["selectable"]): s
     .digest("hex");
 }
 
+// Teams building each Unit as work of their own: with no work of the person's
+// own here, what they can take or carry on, read from what this workspace
+// already has (each home's plan, the claims git last brought in, the builds
+// here). Taking one checks the home itself. Null when there is nothing to take
+// or carry on, or the person has other work here to pick up.
+function unitTakeAsk(projectDir: string): AskDirective | null {
+  const active = engineSelection(projectDir).space;
+  const team = active === DEFAULT_SPACE ? null : active;
+  const unitTool = aidlcToolInvocation("unit");
+  const sentences: string[] = [];
+  const choices: AskChoice[] = [];
+  const homeHere: IntentInfo[] = [];
+  for (const { name: space } of listSpaces(projectDir)) {
+    for (const intent of listIntents(projectDir, space)) {
+      if (!intent.dirName || !intent.uuid) continue;
+      let state: string;
+      let dependencyBody: string;
+      try {
+        state = readStateFile(projectDir, intent.dirName, space);
+        if (!isTeamUnitOwnership(state) || homeLocation(state) === null) continue;
+        dependencyBody = readFileSync(unitDependencyPath(projectDir, intent.dirName, space), "utf-8");
+      } catch {
+        continue;
+      }
+      let opening: ReturnType<typeof openingStatusFrom>;
+      let overview: UnitClaimOverview;
+      try {
+        opening = openingStatusFrom(state, dependencyBody);
+        overview = localUnitClaimOverviewForIntent(projectDir, { space, intentUuid: intent.uuid, stateContent: state, dependencyBody });
+      } catch {
+        continue;
+      }
+      if (space === active && !isHomesCopiedWork(projectDir, state)) homeHere.push(intent);
+      // Who the lead named, for a Unit whose claim git has not brought here yet.
+      const named = unitsAssignedAtHome(readAuditShardEvents(projectDir, intent.dirName, space));
+      const take = `${unitTool} take %s --home ${shellArg(intent.dirName)}` +
+        (space === DEFAULT_SPACE ? "" : ` --home-space ${shellArg(space)}`);
+      const likely = unitLikelyRepos(projectDir, intent.dirName, space);
+      const ready: string[] = [];
+      const waiting: string[] = [];
+      for (const unit of unitsInPlanOrder(projectDir, opening.units)) {
+        if (opening.completed.has(unit)) continue;
+        const built = findUnitBuild(projectDir, intent.uuid, unit);
+        const claim = overview.claims.get(unit);
+        const holder = claim?.status === "claimed" ? claim.owner : claim === undefined ? named.get(unit) ?? null : null;
+        if (built !== null) {
+          choices.push({ label: `Carry on ${unit}`, detail: `The ${built.space} team's build of it, here.`, command: take.replace("%s", shellArg(unit)) });
+          continue;
+        }
+        if (claim?.payload.taken_by !== undefined) continue;
+        if (team !== null && holder !== null && holder !== team) continue;
+        const blockers = opening.blockers.get(unit) ?? [];
+        if (blockers.length > 0) {
+          waiting.push(`${unit} (on ${blockers.join(", ")})`);
+          continue;
+        }
+        const notes = [holder !== null ? `for ${holder}` : "open", ...(likely.has(unit) ? [`likely ${likely.get(unit)!.join(", ")}`] : [])];
+        ready.push(`${unit} (${notes.join("; ")})`);
+        choices.push({
+          label: `Start ${unit}`,
+          detail: holder !== null ? `For the ${holder} team.` : `Open: for ${team !== null ? `the ${team} team` : "your team"}.`,
+          command: take.replace("%s", shellArg(unit)) + (holder === null && team !== null ? ` --team ${shellArg(team)}` : ""),
+        });
+      }
+      const elsewhere = isHomesCopiedWork(projectDir, state) ? ` (its home is ${homeLocation(state)})` : "";
+      const label = intentDisplayLabel(intent);
+      if (ready.length > 0 || waiting.length > 0) {
+        sentences.push(
+          `${label}${elsewhere} is built by teams, one Unit each.` +
+            (ready.length > 0 ? ` Ready to take: ${ready.join(", ")}.` : "") +
+            (waiting.length > 0 ? ` Waiting: ${waiting.join(", ")}.` : ""),
+        );
+      }
+    }
+  }
+  if (choices.length === 0) return null;
+  // Other work of the person's own here is theirs to pick up first.
+  const ownWork = workToPickUp(projectDir, active, null)?.filter(({ intent, state }) =>
+    !homeHere.some((home) => home.dirName === intent.dirName) && unitBuildOf(state) === null) ?? [];
+  if (ownWork.length > 0) return null;
+  for (const home of homeHere) {
+    choices.push({
+      label: `Carry on ${intentDisplayLabel(home)} here, as its home`,
+      detail: "Where its Units are given out and come back.",
+      command: selectCommands([home.dirName!])[0].command,
+    });
+  }
+  return {
+    kind: "ask",
+    ask_type: "unit-take",
+    response_route: "command",
+    question: `${sentences.join(" ")} Taking a Unit starts it as your team's own piece of work here, from what the home approved.`.trim(),
+    choices,
+  };
+}
+
 // Guard the creation gate against a DUPLICATE intent on a fresh clone of a
 // multi-intent workspace. A no-state creation arm (Branch 7b / 9a) fires purely on
 // `!stateContent`, but stateContent is empty in TWO different worlds: a truly
@@ -13035,6 +13138,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       const kept = `Run \`${configSetCommand(typedBeforeWork, unnamed)}\` to keep these settings for the piece of work the person starts ` +
         `next${unnamed ? messageFill(pd) : ""}, then print its output verbatim and ${thenWait}`;
       emit(pickFollows ? printDirective(kept) : turnEndingPrint(kept));
+      return;
+    }
+    // A Unit to take or carry on, for a team member opening a workspace with no
+    // work of their own here.
+    const take = unitTakeAsk(pd);
+    if (take) {
+      emit(take);
       return;
     }
     // Work in progress here with none selected (a teammate's fresh clone, or a

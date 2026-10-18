@@ -204,6 +204,58 @@ merged.
 
 ---
 
+## Take a Unit as your team's own work
+
+When the home records `Home Location`, each team builds its Unit as a piece of
+work of its own, in its own workspace and under its own rules. A team member
+runs `/aidlc` in their workspace with no work of their own selected there, and
+AI-DLC offers the Units their team can take, from what the workspace already
+has (the home's plan and the claims git last brought in):
+
+- **A clone of the home's own workspace**: the home's work is here too, and its
+  Units are offered beside **Carry on <work> here, as its home**, for the lead
+  on another machine.
+- **A team's own workspace made from the home's** (its `origin` is the team's
+  repository): the home's work that git copied in stays the home's, read only,
+  and is never offered to carry on. Its Units are, and taking one reaches the
+  home by the address `Home Location` records, with your own login and hooks.
+  No remote is added.
+- **A personal copy** works as one of the two, by where its `origin` points.
+
+Your team is your active space (`/aidlc space <team>`). In the default space
+every Unit nobody has taken is offered, with the team it is held for. A Unit
+that waits on another is listed as waiting until that Unit is done at the home.
+
+Picking one runs `aidlc unit take <unit> --home <record>`. It holds the Unit at
+the home for your team: one held for your team becomes yours, and an open one
+is held for your team (under your git name when you take it from the default
+space). Then it starts the Unit's build: a new piece of work in your team's
+space, named after the Unit, running the Unit's planned Construction stages
+from a copy of what the home approved. The copy is the home's Inception outputs
+at the paths those stages read them, listed with their fingerprints in
+`approved-inputs.md`. The home's Inception shows as done there and does not run
+again, and its approvals stay the home's. Your team approves its Unit after
+every stage, or once at its end when the lead asked for that before the first
+Unit was built.
+
+- A Unit another team holds, or that a teammate already took, is not taken
+  again; the line names who holds it.
+- Taking a Unit you took before, from any clone of your workspace, carries its
+  build on (**Carry on <unit>**).
+- A home you can read but not push to: a Unit held for your team is still
+  yours, and its result goes back as a file, said once. An open Unit there
+  cannot be held from your side, and the line names the lead's step:
+  `/aidlc unit assign <unit>=<team>` at the home.
+- A repo the home's work records that your workspace has no checkout of is
+  said once, with where to clone it or how to give its path in
+  `repos.local.json`.
+
+Each build keeps its entry in its own record folder (`aidlc-intent.json`), not in
+the space's `intents.json`, so two people who take two Units in one space share
+no file and their pulls never conflict.
+
+---
+
 ## Claim, build, and publish
 
 ### 1. Claim

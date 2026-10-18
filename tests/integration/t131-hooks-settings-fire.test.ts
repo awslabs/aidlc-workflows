@@ -310,6 +310,7 @@ function makeProject(withState: boolean): string {
     "aidlc-reply-reader.ts",
     "aidlc-audit.ts",
     "aidlc-workspace-manifest.ts",
+    "aidlc-unit-teams.ts",
   ]) {
     copyFileSync(join(SRC_TOOLS, t), join(proj, ".claude", "tools", t));
   }

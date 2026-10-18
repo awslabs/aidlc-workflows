@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  existsSync,
   lstatSync,
   mkdtempSync,
   mkdirSync,
@@ -108,8 +109,29 @@ import {
   writeStateFile,
   writeUnitScopeStamp,
   writeClaimGeneration,
+  intentsDir,
+  loadScopeMapping,
+  parseCheckboxes,
+  readActiveIntentCursor,
+  readIntentRegistry,
+  slugify,
+  DEFAULT_SPACE,
+  isGitRepoDir,
+  repoDir,
+  selectIntentForSession,
+  setActiveSpaceCursor,
 } from "./aidlc-lib.js";
-import { homeLocation, unitsInPlanOrder } from "./aidlc-unit-teams.js";
+import {
+  findUnitBuild,
+  HOME_LOCATION_FIELD,
+  homeLocation,
+  sameGitAddress,
+  UNIT_BUILD_FIELD,
+  unitLikelyRepos,
+  unitsInPlanOrder,
+  workspaceHomeLocation,
+} from "./aidlc-unit-teams.js";
+import { repoNotThereLine } from "./aidlc-workspace-manifest.js";
 import {
   parseTestingContract,
   recordedApprovalFingerprint,
@@ -206,6 +228,8 @@ export interface UnitClaimPayload {
   candidate_head_oid?: string;
   // Held for this team by the lead at the home, before anyone took it.
   assigned?: true;
+  // Who took it: their git user.name.
+  taken_by?: string;
 }
 
 export interface UnitClaimView {
@@ -268,8 +292,8 @@ const INTEGRATION_BRANCH_BEFORE_WORDS = new RegExp(
 // branch is refused with its file, never skipped for a broader layer's choice.
 function affirmedIntegrationBranch(
   projectDir: string,
+  space = activeSpace(projectDir),
 ): { branch: string; source: string } | null {
-  const space = activeSpace(projectDir);
   for (const name of ["project.md", "team.md", "org.md"]) {
     const source = `aidlc/spaces/${space}/memory/${name}`;
     let body: string;
@@ -757,7 +781,7 @@ export function claimsOpenHere(projectDir: string): boolean {
 // board. The walking skeleton is the first DAG Unit, built on main; while it is
 // on, every Unit waits until its Unit Progress row is complete, the same
 // evidence a dependency is read from.
-function openingStatusFrom(state: string, dependencyBody: string): OpeningStatus {
+export function openingStatusFrom(state: string, dependencyBody: string): OpeningStatus {
   if (!isTeamUnitOwnership(state)) fail("Unit claims require Unit Ownership: team.");
   const parsed = parseBoltDag(dependencyBody);
   if (!parsed.ok) fail(`Cannot resolve Unit dependencies: ${parsed.reason}: ${parsed.detail}`);
@@ -922,6 +946,8 @@ function cachedClaimsForIdentity(
     "--format=%(objectname) %(refname)",
     "refs/heads/claim/",
     "refs/remotes/",
+    // Another workspace's copy of a home's claims (aidlc-unit take).
+    `refs/aidlc/home/${identity.intentId8}/`,
   ]);
   if (!refs.ok) return claims;
   for (const line of refs.stdout.split(/\r?\n/).filter(Boolean)) {
@@ -929,6 +955,7 @@ function cachedClaimsForIdentity(
     if (!oid || !ref) continue;
     if (
       !ref.startsWith(`refs/heads/claim/${identity.intentId8}/`) &&
+      !ref.startsWith(`refs/aidlc/home/${identity.intentId8}/claim/`) &&
       !new RegExp(
         `^refs/remotes/[^/]+/claim/${identity.intentId8.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/`,
       ).test(ref)
@@ -4849,6 +4876,424 @@ function assignUnits(args: string[], projectDir?: string): void {
   }));
 }
 
+// --- Taking a Unit: a team builds it as a piece of work of its own -----------
+//
+// The home is the work where Inception ran. Its claims live at its remote:
+// this workspace's own when it is the home's workspace, else the address the
+// home recorded, fetched into AI-DLC's own refs so no remote is added.
+
+interface HomeWork {
+  space: string;
+  dirName: string;
+  state: string;
+  uuid: string;
+  id8: string;
+  label: string;
+  location: string;
+  // A remote name, a git address, or null for this repo's own refs.
+  target: string | null;
+  // Where the home's record is in its repo, with forward slashes.
+  recordPrefix: string;
+  // The repos the home's work records.
+  repos: string[];
+}
+
+function findHomeWork(projectDir: string, dirName: string, space: string): HomeWork {
+  let state: string;
+  try {
+    state = readStateFile(projectDir, dirName, space);
+  } catch {
+    fail(`No work named ${dirName} in space ${space} here.`);
+  }
+  const location = homeLocation(state);
+  if (!isTeamUnitOwnership(state) || location === null) fail(`${dirName} is not work that teams build.`);
+  const row = readIntentRegistry(projectDir, space).find((entry) => entry.dirName === dirName);
+  if (!row?.uuid) fail(`${dirName} has no entry in its space's list of work.`);
+  const own = workspaceHomeLocation(projectDir);
+  const target = location === "local" || (own !== null && sameGitAddress(location, own))
+    ? repositoryRemote(projectDir)
+    : location;
+  return {
+    space,
+    dirName,
+    state,
+    uuid: row.uuid,
+    id8: idSuffix(row.uuid),
+    label: row.slug,
+    location,
+    target,
+    recordPrefix: `aidlc/spaces/${space}/intents/${dirName}`,
+    repos: row.repos ?? [],
+  };
+}
+
+// The home's integration branch, fetched with the person's own login: through
+// this workspace's remote, or by the home's address into AI-DLC's own ref.
+function fetchHomeIntegration(
+  projectDir: string,
+  home: HomeWork,
+  claim: UnitClaimView | null,
+): { ref: string; branch: string; oid: string } {
+  if (home.target === null || !isGitAddress(home.target)) {
+    const remote = home.target;
+    const affirmed = affirmedIntegrationBranch(projectDir, home.space);
+    const branch = affirmed?.branch ?? integrationBranch(projectDir, remote);
+    if (remote) {
+      const fetched = git(projectDir, ["fetch", remote, branch]);
+      if (!fetched.ok) fail(`The home's branch ${branch} could not be fetched from ${remote}: ${fetched.stderr.trim()}`);
+    }
+    const ref = remote ? `refs/remotes/${remote}/${branch}` : `refs/heads/${branch}`;
+    return { ref, branch, oid: gitOutput(projectDir, ["rev-parse", "--verify", ref], `The home's branch ${branch} is not here`) };
+  }
+  const fromClaim = claim?.payload.integration_ref.match(/^refs\/(?:remotes\/[^/]+|heads)\/(.+)$/)?.[1];
+  let branch = fromClaim;
+  if (!branch) {
+    const advertised = git(projectDir, ["ls-remote", "--symref", home.target, "HEAD"]);
+    if (!advertised.ok) fail(`The home at ${home.location} could not be reached: ${advertised.stderr.trim()}`);
+    branch = advertised.stdout.match(/^ref:\s+refs\/heads\/([^\s]+)\s+HEAD$/m)?.[1] ?? "main";
+  }
+  const ref = `refs/aidlc/home/${home.id8}/integration`;
+  const fetched = git(projectDir, ["fetch", "--no-tags", home.target, `+refs/heads/${branch}:${ref}`]);
+  if (!fetched.ok) fail(`The home at ${home.location} could not be fetched: ${fetched.stderr.trim()}`);
+  return { ref, branch, oid: gitOutput(projectDir, ["rev-parse", "--verify", ref], "The home's branch is not here") };
+}
+
+function isGitAddress(target: string): boolean {
+  return /[:/\\]/.test(target);
+}
+
+// What the home's plan says at a commit: its state and Unit plan, read from
+// git, or a line that the lead has not pushed it yet.
+function homePlanAt(projectDir: string, home: HomeWork, oid: string, branch: string): { state: string; dependencies: string } {
+  const read = (rel: string): string => {
+    const shown = git(projectDir, ["show", `${oid}:${home.recordPrefix}/${rel}`, "--"]);
+    if (!shown.ok) {
+      fail(`The home's work is not on its branch ${branch} yet, so there is nothing to take: the lead pushes it first.`);
+    }
+    return shown.stdout;
+  };
+  return { state: read("aidlc-state.md"), dependencies: read("inception/units-generation/unit-of-work-dependency.md") };
+}
+
+// The Inception outputs a Unit's planned stages read: the copy its build starts
+// from, at the paths those stages read them, plus the Unit plan itself.
+function homeInputPaths(stages: string[]): string[] {
+  const graph = loadStageGraphAll();
+  const paths = new Set<string>(["inception/units-generation/unit-of-work-dependency.md"]);
+  for (const slug of stages) {
+    const stage = graph.find((entry) => entry.slug === slug);
+    for (const consume of stage?.consumes ?? []) {
+      const producer = graph.find((entry) =>
+        (entry.phase === "ideation" || entry.phase === "inception") &&
+        [...(entry.produces ?? []), ...(entry.optional_produces ?? [])].includes(consume.artifact)
+      );
+      if (producer && producer.slug !== "reverse-engineering") {
+        paths.add(`${producer.phase}/${producer.slug}/${artifactFilename(consume.artifact)}`);
+      }
+    }
+  }
+  return [...paths].sort();
+}
+
+// The home's approvals of the stages that produced the copy, as data: when
+// each was approved at the home. Never this build's own approval.
+function homeApprovals(projectDir: string, home: HomeWork, oid: string, slugs: Set<string>): string[] {
+  const listed = git(projectDir, ["ls-tree", "--name-only", `${oid}:${home.recordPrefix}/audit`]);
+  if (!listed.ok) return [];
+  const approvals = new Map<string, string>();
+  for (const shard of listed.stdout.split(/\r?\n/).filter((name) => name.endsWith(".md"))) {
+    const text = git(projectDir, ["show", `${oid}:${home.recordPrefix}/audit/${shard}`, "--"]);
+    if (!text.ok) continue;
+    for (const block of text.stdout.replace(/\r\n/g, "\n").split(/\n---\n/)) {
+      if (auditBlockField(block, "Event") !== "GATE_APPROVED") continue;
+      const stage = auditBlockField(block, "Stage");
+      if (stage && slugs.has(stage)) approvals.set(stage, auditBlockField(block, "Timestamp") ?? "");
+    }
+  }
+  return [...approvals].sort(([a], [b]) => a.localeCompare(b)).map(([stage, when]) => `${stage} approved at the home ${when}`.trim());
+}
+
+function sha256(text: string): string {
+  return `sha256:${createHash("sha256").update(committedTextBytes(Buffer.from(text, "utf-8"))).digest("hex")}`;
+}
+
+// Another AI-DLC tool, run as this install runs its tools.
+function runEngineUtility(projectDir: string, args: string[]): GitResult {
+  const command = isCompiledExecutable()
+    ? [process.execPath, "engine", ...args]
+    : [process.execPath, fileURLToPath(new URL("./aidlc-utility.ts", import.meta.url)), ...args];
+  const result = spawnSync(command[0], [...command.slice(1), "--project-dir", projectDir], {
+    encoding: "utf-8",
+    env: process.env,
+  });
+  return { ok: result.status === 0, stdout: result.stdout ?? "", stderr: result.stderr ?? "", code: result.status ?? 1 };
+}
+
+// The Unit's build: a piece of work of its own in the team's space, running the
+// home's planned per-Unit stages from a copy of what the Unit was approved with.
+function createUnitBuild(
+  projectDir: string,
+  home: HomeWork,
+  plan: { state: string },
+  baseOid: string,
+  unit: string,
+  team: string,
+  attempt: number,
+): { space: string; dirName: string } {
+  const space = slugify(team);
+  if (!listSpacesHere(projectDir).includes(space)) {
+    const created = runEngineUtility(projectDir, isCompiledExecutable() ? ["space", "create", space] : ["space-create", space]);
+    if (!created.ok) fail(`The ${team} team's space could not be made: ${(created.stderr || created.stdout).trim()}`);
+  }
+  const scope = getField(plan.state, "Scope") ?? "";
+  const grid = loadScopeMapping()[scope];
+  if (!grid) fail(`The home's plan names a scope this install does not have: ${scope}.`);
+  const stages = unitMajorConstructionStageSlugs(scope, plan.state, true);
+  const wanted = new Set(stages);
+  const graph = loadStageGraphAll();
+  const skip = graph
+    .filter((stage) => stage.phase !== "initialization" && grid.stages[stage.slug] === "EXECUTE" && !wanted.has(stage.slug))
+    .map((stage) => stage.slug);
+  const add = stages.filter((slug) => grid.stages[slug] !== "EXECUTE");
+  const created = runEngineUtility(projectDir, [
+    ...(isCompiledExecutable() ? ["intent", "create"] : ["intent-create"]),
+    "--scope", scope,
+    "--label", unit,
+    "--arguments", `Build ${unit} for ${home.label}, from what the home approved`,
+    "--space", space,
+    ...(skip.length > 0 ? ["--skip", skip.join(",")] : []),
+    ...(add.length > 0 ? ["--add", add.join(",")] : []),
+    "--keep-entry-in-record",
+  ]);
+  if (!created.ok) fail(`${unit}'s build could not be started: ${(created.stderr || created.stdout).trim()}`);
+  const dirName = readActiveIntentCursor(projectDir, space);
+  if (dirName === null) fail(`${unit}'s build was started but could not be found in space ${space}.`);
+  const record = join(intentsDir(projectDir, space), dirName);
+  // The copy, at the paths the Unit's stages read it.
+  const inputs: Array<{ path: string; fingerprint: string }> = [];
+  for (const rel of homeInputPaths(stages)) {
+    const shown = git(projectDir, ["show", `${baseOid}:${home.recordPrefix}/${rel}`, "--"]);
+    if (!shown.ok) continue;
+    mkdirSync(dirname(join(record, ...rel.split("/"))), { recursive: true });
+    writeFileSync(join(record, ...rel.split("/")), shown.stdout, "utf-8");
+    inputs.push({ path: rel, fingerprint: sha256(shown.stdout) });
+  }
+  const produced = new Set(inputs.map((input) => input.path.split("/")[1]));
+  const approvals = homeApprovals(projectDir, home, baseOid, produced);
+  const fingerprint = sha256(inputs.map((input) => `${input.path} ${input.fingerprint}`).join("\n"));
+  writeFileSync(join(record, APPROVED_INPUTS_FILE), approvedInputsText(unit, home, baseOid, inputs, approvals), "utf-8");
+  // Done at the home: the stages before Construction show as done, and are not
+  // this build's plan.
+  const homeBoxes = new Map(parseCheckboxes(plan.state).map((box) => [box.slug, box.state]));
+  withAuditLock(projectDir, () => {
+    let content = readStateFile(projectDir, dirName, space);
+    for (const stage of graph.filter((entry) => entry.phase === "ideation" || entry.phase === "inception")) {
+      if (homeBoxes.get(stage.slug) !== "completed") continue;
+      content = content.replace(new RegExp(`^- \\[[ xSR?-]\\] ${stage.slug}(\\s)`, "m"), `- [x] ${stage.slug}$1`);
+    }
+    const rhythm = readUnitGateRhythm(plan.state);
+    for (const [field, value] of [
+      ["Construction Iteration", rhythm === "unit-end" ? "unit-major" : "stage-major"],
+      ["Construction Execution", "serial"],
+      ["Construction Checkpoints", rhythm === "unit-end" ? "enabled" : "disabled"],
+      ["Skeleton Stance", "off"],
+      [UNIT_BUILD_FIELD, unit],
+      [HOME_LOCATION_FIELD, home.location],
+      ["Home Work", home.uuid],
+      ["Home Record", `${home.space}/${home.dirName}`],
+      ["Home Attempt", String(attempt)],
+    ] as const) {
+      content = setRuntimeField(content, field, value);
+    }
+    writeStateFile(projectDir, content, dirName, space);
+    appendAuditEntry("UNIT_TAKEN_IN", {
+      "Home Location": home.location,
+      "Home Work": home.uuid,
+      "Home Record": `${home.space}/${home.dirName}`,
+      Unit: unit,
+      Team: team,
+      "Home Attempt": String(attempt),
+      "Home Commit": baseOid,
+      "Copy Fingerprint": fingerprint,
+      "Home Approvals": approvals.join("; ") || "none recorded",
+    }, projectDir, dirName, space);
+  });
+  return { space, dirName };
+}
+
+export const APPROVED_INPUTS_FILE = "approved-inputs.md";
+
+function approvedInputsText(
+  unit: string,
+  home: HomeWork,
+  baseOid: string,
+  inputs: Array<{ path: string; fingerprint: string }>,
+  approvals: string[],
+): string {
+  return [
+    "# What this Unit was approved with",
+    "",
+    `${unit} of ${home.label}, from the home at ${home.location} (space ${home.space}), copied from its commit ` +
+      `${baseOid.slice(0, 12)}. These files are the home's: approved there, read here. Change one and AI-DLC ` +
+      "offers your change to the home.",
+    "",
+    "| File | Fingerprint |",
+    "| --- | --- |",
+    ...inputs.map((input) => `| ${input.path} | ${input.fingerprint} |`),
+    "",
+    "## Approved at the home",
+    "",
+    ...(approvals.length > 0 ? approvals.map((line) => `- ${line}`) : ["- none recorded"]),
+    "",
+  ].join("\n");
+}
+
+function setRuntimeField(content: string, field: string, value: string): string {
+  const line = new RegExp(`^- \\*\\*${field}\\*\\*:.*$`, "m");
+  if (line.test(content)) return content.replace(line, `- **${field}**: ${value}`);
+  return content.replace(/^## Runtime State\s*$/m, (heading) => `${heading}\n- **${field}**: ${value}`);
+}
+
+function listSpacesHere(projectDir: string): string[] {
+  try {
+    return readdirSync(join(projectDir, "aidlc", "spaces")).filter((name) =>
+      existsSync(join(projectDir, "aidlc", "spaces", name, "memory"))
+    );
+  } catch {
+    return [];
+  }
+}
+
+// Take a Unit of the home's work: hold it at the home (adopting the lead's
+// claim for this team, or claiming an open Unit), then start its build in the
+// team's space. A Unit held by another team stays theirs; a Unit that waits on
+// another is not taken yet.
+function takeUnit(args: string[], projectDir?: string): void {
+  const { positional, flags } = parseArgs(args);
+  const unit = positional[0];
+  if (!unit) fail("Usage: aidlc-unit take <unit> --home <record> [--home-space <space>] [--team <label>]");
+  const unitError = validateUnitName(unit);
+  if (unitError) fail(unitError);
+  if (!flags.home) fail("take needs --home <record>: the home's work this Unit belongs to.");
+  const pd = resolveProjectDir(projectDir);
+  const home = findHomeWork(pd, flags.home, flags["home-space"] ?? DEFAULT_SPACE);
+  validateClaimRefUnit(home.id8, unit);
+  // Taken here before (this clone or another of this workspace): carry it on.
+  const existing = findUnitBuild(pd, home.uuid, unit);
+  if (existing !== null) {
+    setActiveSpaceCursor(pd, existing.space);
+    selectIntentForSession(pd, existing.dirName, existing.space);
+    console.log(JSON.stringify({
+      taken: true,
+      resumed: true,
+      unit,
+      space: existing.space,
+      record: existing.dirName,
+      notice: `Carrying on ${unit}, the ${existing.space} team's build here.`,
+    }));
+    return;
+  }
+  const ref = claimRef(home.id8, unit);
+  if (home.target !== null) ensureFetchedClaim(pd, home, ref);
+  const current = currentClaim(pd, home.target, ref);
+  const integration = fetchHomeIntegration(pd, home, current);
+  const plan = homePlanAt(pd, home, integration.oid, integration.branch);
+  const opening = openingStatusFrom(plan.state, plan.dependencies);
+  if (!opening.units.includes(unit)) fail(`${unit} is not one of ${home.label}'s Units (${opening.units.join(", ")}).`);
+  const openUnits = opening.units.filter((name) => name !== unit && !opening.completed.has(name));
+  const me = git(pd, ["config", "user.name"]).stdout.trim() || "a teammate";
+  const activeTeam = activeSpace(pd) === DEFAULT_SPACE ? null : activeSpace(pd);
+  if (current?.status === "claimed") {
+    if (current.payload.taken_by !== undefined) {
+      fail(`${unit} is held by the ${current.owner} team (${current.payload.taken_by} took it).`);
+    }
+    if (activeTeam !== null && flags.team === undefined && current.owner !== activeTeam) {
+      fail(`${unit} is held by the ${current.owner} team.${openUnits.length > 0 ? ` Open: ${openUnits.join(", ")}.` : ""}`);
+    }
+  }
+  if (opening.completed.has(unit)) fail(`${unit} is already done at the home.`);
+  const blockers = opening.blockers.get(unit) ?? [];
+  if (blockers.length > 0) {
+    fail(
+      `${unit} waits on ${blockers.join(", ")}, which ${blockers.length === 1 ? "is" : "are"} not done at the home yet. ` +
+        `It opens once ${blockers.length === 1 ? "it is" : "they are"} done.`,
+    );
+  }
+  const team = current?.status === "claimed" ? current.owner : flags.team ?? activeTeam ?? me;
+  if (/[\r\n|]/.test(team)) fail("Team labels cannot contain pipes or newlines.");
+  const generation = current?.status === "claimed"
+    ? current.generation
+    : current?.status === "released" ? current.generation : (current?.generation ?? 0) + 1;
+  const payload: UnitClaimPayload = {
+    ...(current?.status === "claimed" ? current.payload : {
+      version: 1,
+      status: "claimed",
+      owner: team,
+      space: home.space,
+      intent_uuid: home.uuid,
+      intent_id8: home.id8,
+      unit,
+      nonce: randomUUID(),
+      claim_ref: ref,
+      gate_rhythm: readUnitGateRhythm(plan.state),
+    }),
+    generation,
+    base_oid: integration.oid,
+    integration_ref: integration.ref,
+    predecessor_oid: current?.oid ?? null,
+    taken_by: me,
+  } as UnitClaimPayload;
+  const commit = createClaimCommit(pd, current?.oid ?? integration.oid, payload);
+  const pushed = updateClaimRef(pd, home.target, ref, commit, current?.oid ?? null);
+  let resultByFile = false;
+  if (!pushed.ok) {
+    const winner = currentClaim(pd, home.target, ref);
+    if (winner?.status === "claimed" && winner.nonce !== current?.nonce) fail(`${unit} was just taken by the ${winner.owner} team.`);
+    if (winner?.status === "claimed" && winner.payload.taken_by !== undefined) fail(`${unit} was just taken by ${winner.payload.taken_by}.`);
+    if (current?.status !== "claimed") {
+      fail(
+        `${unit} is open at the home, which takes no push from here: ${pushed.refused ?? "the claim did not take"}. ` +
+          `Ask the lead to hold it for your team: at the home they run /aidlc unit assign ${unit}=${team}.`,
+      );
+    }
+    // The lead holds it for this team: it is theirs to take without a push,
+    // and its result goes back as a file.
+    resultByFile = true;
+  }
+  invalidateLiveClaimPayloadCache(pd, unit);
+  const build = createUnitBuild(pd, home, plan, integration.oid, unit, team, generation);
+  setActiveSpaceCursor(pd, build.space);
+  // The likely repos this workspace has no checkout of, said with the way to one.
+  const likely = unitLikelyRepos(pd, home.dirName, home.space).get(unit) ?? [];
+  const missing = [...new Set(likely.map((repo) => repo.split("/")[0]))]
+    .filter((repo) => home.repos.includes(repo) && !isGitRepoDir(repoDir(pd, repo)));
+  if (resultByFile) {
+    withAuditLock(pd, () => {
+      const content = readStateFile(pd, build.dirName, build.space);
+      writeStateFile(pd, setRuntimeField(content, "Home Result", "by file"), build.dirName, build.space);
+    });
+  }
+  console.log(JSON.stringify({
+    taken: true,
+    unit,
+    team,
+    space: build.space,
+    record: build.dirName,
+    notice: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is yours, for the ${team} team. Its build is its own ` +
+      `piece of work here, under your team's rules, from what the home approved.` +
+      (resultByFile
+        ? ` You can read the home but not write to it, so the result of ${unit} goes back as a file when it is built.`
+        : "") +
+      missing.map((repo) => ` ${repoNotThereLine(pd, repo)}`).join(""),
+  }));
+}
+
+// A claim at the home's address: fetched so its payload can be read.
+function ensureFetchedClaim(projectDir: string, home: HomeWork, ref: string): void {
+  if (home.target === null || !isGitAddress(home.target)) return;
+  git(projectDir, ["fetch", "--no-tags", home.target, `+${ref}:refs/aidlc/home/${home.id8}/${ref.slice("refs/heads/".length)}`]);
+}
+
 function participate(projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
   writeFileSync(unitParticipantPath(pd), "participant\n", "utf-8");
@@ -4867,6 +5312,7 @@ export function main(argv: string[]): void {
   const command = args.shift();
   try {
     if (command === "assign") assignUnits(args, projectDir);
+    else if (command === "take") takeUnit(args, projectDir);
     else if (command === "adopt") adoptUnit(args, projectDir);
     else if (command === "claim") claimUnit(args, projectDir);
     else if (command === "release") releaseUnit(args, projectDir);
@@ -4889,7 +5335,7 @@ export function main(argv: string[]): void {
       console.log(JSON.stringify(unitClaimOverview(resolveProjectDir(projectDir)), null, 2));
     } else {
       fail(
-        "Usage: aidlc-unit <assign|adopt|claim|release|participate|share|publish|pin|gate|land|merge-status|status> ...",
+        "Usage: aidlc-unit <assign|take|adopt|claim|release|participate|share|publish|pin|gate|land|merge-status|status> ...",
       );
     }
   } catch (error) {

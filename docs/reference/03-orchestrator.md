@@ -758,6 +758,27 @@ holds and has not merged; when none is left to it while a held Unit is
 unmerged, the step is the team board as a `notice`. Team work without `Home
 Location` keeps the dispatcher flow.
 
+In a team member's workspace, a plain `next` with no work selected returns
+`ask_type: unit-take` when a home with `Home Location` is visible here and the
+person has no other unfinished work in the selected space. It is read from
+what the workspace already has, with no network: each home's Unit plan and
+Unit Progress, the claims git last brought in (or the home's latest
+`UNITS_ASSIGNED` row for a Unit whose claim is not here yet), and the builds
+in this workspace. Its choices are **Start <unit>** for each Unit the person's
+team can take now, **Carry on <unit>** for a build already here (any space),
+and **Carry on <work> here, as its home** when the home's record is in the
+selected space and this workspace is the home's own; each runs one command
+(`unit take`, or `next --pick`). The home's work that git copied into a team's
+own workspace (its `Home Location` is not this workspace's `origin`) is never
+offered to carry on, and `workToPickUp` leaves it out.
+
+A Unit's build is solo work with one Unit: its state records `Unit Build`,
+`Home Location`, `Home Work`, `Home Record` and `Home Attempt`;
+`resolveBoltDag` returns that Unit alone; the home's Inception stages are
+`[x]` with `SKIP`, so per-Unit paths stay per-Unit; `Construction Iteration` is
+`stage-major` for the per-stage team rhythm and `unit-major` with checkpoints
+for `unit-end`; `Skeleton Stance` is `off`.
+
 When skeleton-on applies, the first DAG Unit must be planned as the smallest
 working integrated slice. It completes its applicable per-unit stages before
 later Units even under stage-major. The engine then emits a `run-stage` with

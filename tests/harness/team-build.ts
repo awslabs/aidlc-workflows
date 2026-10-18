@@ -185,11 +185,15 @@ export interface RunResult {
 
 export function run(tool: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = ENV): RunResult {
   const result = spawnSync(process.execPath, [tool, ...args, "--project-dir", cwd], { cwd, encoding: "utf-8", env });
+  // The last JSON line the tool printed: its result, or its refusal.
   let json: Record<string, unknown> | null = null;
-  try {
-    json = JSON.parse((result.stdout ?? "").trim().split("\n").at(-1) ?? "") as Record<string, unknown>;
-  } catch {
-    json = null;
+  for (const stream of [result.stdout, result.stderr]) {
+    try {
+      json = JSON.parse((stream ?? "").trim().split("\n").at(-1) ?? "") as Record<string, unknown>;
+      break;
+    } catch {
+      json = null;
+    }
   }
   return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}`, stdout: result.stdout ?? "", json };
 }

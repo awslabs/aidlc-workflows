@@ -106,7 +106,9 @@ Three things are worth pulling out of that tree, because they are the whole idea
 An **intent** is a single run of the AI-DLC lifecycle, scoped to one task. Every
 intent owns a row in the space's `intents.json` registry — `{uuid, slug, dirName,
 scope, repos, status}` — and a **record dir** holding that run's state, audit
-trail, and artifacts. The `uuid` (a UUIDv7) is the canonical, collision-proof
+trail, and artifacts. A team's build of one Unit keeps that row in its own
+record dir, as `aidlc-intent.json`, so two builds started at once in one space
+share no file ([Take a Unit](workshop-mode.md#take-a-unit-as-your-teams-own-work)). The `uuid` (a UUIDv7) is the canonical, collision-proof
 identity; `dirName` records the human-readable record-dir name verbatim.
 A hand edit that leaves a trailing comma, a comment or a BOM still reads as every
 row. A list nothing can read is never written over: the next new piece of work
