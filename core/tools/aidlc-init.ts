@@ -413,6 +413,8 @@ type PreparedRefreshSource = {
    * ownership check still holds them, as it holds every shipped file.
    */
   modelWritten?: ReadonlyMap<string, string>;
+  /** Every file the model writer filled in, the project's own copy included. */
+  modelStamped?: ReadonlySet<string>;
   entries?: Baseline["entries"];
   notes: string[];
 };
@@ -6765,10 +6767,10 @@ function prepareRefreshSource(
   // A model or effort written into a release's agent file makes it differ from
   // the release, which alone would mark it regenerated and copy it over the
   // person's edit. On a copied project's own files the writer keeps the edit.
+  const modelStamped = new Set(modelWrites.map((path) => relative(root, path).replaceAll("\\", "/")));
   const modelWritten = new Map<string, string>();
   if (!projectProjection) {
-    for (const path of modelWrites) {
-      const rel = relative(root, path).replaceAll("\\", "/");
+    for (const rel of modelStamped) {
       const releaseHash = beforeGeneratedWrites.get(rel);
       if (releaseHash !== undefined) modelWritten.set(rel, releaseHash);
     }
@@ -7250,6 +7252,7 @@ function prepareRefreshSource(
     composedRecords,
     provenRetired,
     modelWritten,
+    modelStamped,
     entries,
     notes,
   };
@@ -9657,6 +9660,7 @@ function planManagedFiles(
   composedRecords: ReadonlyMap<string, string> = new Map(),
   provenRetired: ReadonlySet<string> = new Set(),
   modelWritten: ReadonlyMap<string, string> = new Map(),
+  modelStamped: ReadonlySet<string> = new Set(),
 ): void {
   const shipped = new Set<string>();
   for (const directory of descriptor.managedDirectories) {
@@ -9710,8 +9714,12 @@ function planManagedFiles(
       }
       if (!projectOwned && !unbaselinedGenerated(descriptor.harnessDir).includes(rel)) {
         // In-place answers can advance ownership only from an unmodified base.
+        // A composed agent file is recorded without the plugin's additions, so
+        // the plugin replay, which re-applies them only over that record, is
+        // its proof; a model written into it then reaches the record too.
+        const unmodified = currentHash === priorHash || (modelStamped.has(rel) && composedRecords.has(rel));
         const nextHash = retainBaseline
-          ? regenerated.has(rel) && targetRegular && currentHash === priorHash ? composedRecords.get(rel) ?? hash : priorHash
+          ? regenerated.has(rel) && targetRegular && unmodified ? composedRecords.get(rel) ?? hash : priorHash
           : composedRecords.get(rel) ?? hash;
         if (nextHash !== undefined) nextHashes[rel] = nextHash;
       }
@@ -13169,6 +13177,7 @@ export async function main(
       prepared.composedRecords,
       prepared.provenRetired,
       prepared.modelWritten,
+      prepared.modelStamped,
     );
     for (const rel of prepared.retiredManagedFiles) {
       const target = join(projectDir, rel);

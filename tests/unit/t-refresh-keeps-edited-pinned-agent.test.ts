@@ -5,8 +5,9 @@
 // with the same conflict as any other shipped file, and both ways forward the
 // conflict names go through, so the edit is never written over without a word.
 // Unedited, the refresh writes the release's file with the recorded model and
-// effort and asks nothing. Kiro CLI's settings/cli.json, which the same writer
-// fills with the model's effort, is held the same way.
+// effort and asks nothing, and a plugin's additions to the file stay. Kiro
+// CLI's settings/cli.json, which the same writer fills with the model's
+// effort, is held the same way.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -119,6 +120,42 @@ describe("a refresh over an agent file with a recorded model or effort", () => {
       for (const [rel, text] of written) expect(readFileSync(join(p.dir, rel), "utf-8"), rel).toBe(text);
     });
   }
+
+  // test-pro adds its fragments to the quality agent. An effort set for that
+  // agent afterwards reaches the install record with them, so the refresh
+  // proves the file AI-DLC's and keeps both.
+  test("a plugin's additions to an agent file and the effort set for it stay through a refresh; an edit still stops it", () => {
+    const p = project("composed");
+    const release = join(RELEASES, "claude");
+    const installed = p.run(["config", "--project-dir", p.dir, "--from", release, "--harness", "claude", "--mcp", "none", "--yes"]);
+    expect(installed.status, installed.out).toBe(0);
+    const plugin = join(REPO_ROOT, "dist", "plugins", "test-pro", "claude");
+    const composed = spawnSync(process.execPath, [join(plugin, "hooks", "compose.ts")], {
+      cwd: p.dir,
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: plugin, CLAUDE_PROJECT_DIR: p.dir },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(composed.status, `${composed.stdout}${composed.stderr}`).toBe(0);
+    const agent = join(p.dir, ".claude", "agents", "aidlc-quality-agent.md");
+    expect(readFileSync(agent, "utf-8")).toContain("<!-- plugin:test-pro:");
+    const refresh = ["config", "--project-dir", p.dir, "--yes"];
+    for (const effort of ["high", "low"]) {
+      const pinned = p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", "quality", "--effort", effort, "--yes"]);
+      expect(pinned.status, pinned.out).toBe(0);
+      const written = readFileSync(agent, "utf-8");
+      const refreshed = p.run(refresh);
+      expect(refreshed.status, refreshed.out).toBe(0);
+      expect(readFileSync(agent, "utf-8")).toBe(written);
+      expect(written).toContain("<!-- plugin:test-pro:");
+      expect(written).toMatch(new RegExp(`^effort: ${effort}$`, "m"));
+    }
+    writeFileSync(agent, appendNote(readFileSync(agent, "utf-8")));
+    const refused = p.run(refresh);
+    expect(refused.status, refused.out).toBe(4);
+    expect(refused.out).toContain(".claude/agents/aidlc-quality-agent.md (locally modified or unowned)");
+    expect(readFileSync(agent, "utf-8")).toContain("my own notes");
+  });
 
   // A copied release tree has no install record yet: its agent file is the
   // release's own, so the first config run writes the recorded effort into it.
