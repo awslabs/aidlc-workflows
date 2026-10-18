@@ -786,7 +786,13 @@ state records `Unit Push: pushed`: **Push** runs `unit push`, **Not now** runs
 `unit push --later` (then the end carries one line that it is not pushed yet).
 The push's result rides the Unit's claim (`result`: per repo the branch, base,
 heads, changed blobs and patch-id; the outputs the home's later stages read, as
-files under `.aidlc-unit-result/` in the claim commit's tree). At the home,
+files under `.aidlc-unit-result/` in the claim commit's tree). Each step at a
+home with `Home Location`, and each step of a Unit's build not by file, first
+runs `refreshHomeClaims`: one fetch of `refs/heads/claim/<id8>/*` into the refs
+the person's own fetch uses (or, by the home's address, into
+`refs/aidlc/home/<id8>/`), so nobody has to fetch to see what the other side
+sent; when the home cannot be reached, the last fetch stands (at the home, with
+one line). At the home,
 while a team holds a Unit, each step runs `checkTeamResults`: it fetches each
 repo of every pushed Unit not yet done, runs `unitMergeVerdict` (the last head
 is an ancestor; or a first-parent commit after the base holds every changed

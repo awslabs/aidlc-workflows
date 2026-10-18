@@ -11,13 +11,15 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
   claimPayload,
   cleanupTeamBuild,
+  cloneCode,
+  cloneOf,
   codeGenerated,
   codeHost,
   git,
@@ -28,6 +30,7 @@ import {
   refundsTaken,
   run,
   STATE,
+  tempDir,
   UNIT,
 } from "../harness/team-build.ts";
 
@@ -140,6 +143,44 @@ describe("at the home", () => {
     // reporting waited on refunds and is the home's to build now.
     expect(after.kind, JSON.stringify(after)).toBe("run-stage");
     expect(after.unit).toBe("reporting");
+  });
+
+  test("what a team sent shows at the home's next step, with no fetch by the lead", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    expect(String(next(home.dir).message)).toContain(
+      "- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)",
+    );
+  });
+
+  test("a turn-down reaches the team at its next step, with no fetch by the team, in its own workspace repo too", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    // payments keeps its own workspace repo, made from the home's: its pulls
+    // never bring the home's claims.
+    const seed = cloneOf(home.remote, "seed");
+    const own = tempDir("payments-host");
+    git(own, ["init", "-q", "--bare", "-b", "main"]);
+    git(seed, ["remote", "set-url", "origin", own]);
+    git(seed, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(own, "alice");
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
+    expect(run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice).status).toBe(0);
+    const intents = join(alice, "aidlc", "spaces", "payments", "intents");
+    codeGenerated(alice, join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!));
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "billing needs the ledger entry too"], home.dir).status).toBe(0);
+    expect((next(alice).change_notices ?? []) as string[]).toContain(
+      'refunds was turned down in billing at the home: "billing needs the ledger entry too". ' +
+        "Say go back to Code Generation to change it, then push again.",
+    );
   });
 
   test("a turn-down at the home reaches the team once, in the home's words", () => {

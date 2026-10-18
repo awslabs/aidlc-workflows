@@ -195,9 +195,10 @@ changed file's blob, and the Unit outputs the home's later stages read (Code
 Generation's summary and test instructions). A review fix pushed later goes
 home the same way.
 
-At the home, while teams build, each step checks every pushed Unit's repos
-against their integration branch, with the lead's own login, and shows the
-board:
+At the home, while teams build, each step fetches the work's claims from the
+home's remote and checks every pushed Unit's repos against their integration
+branch, with the lead's own login, and shows the board (when the remote cannot
+be reached, one line says the board is as of your last fetch):
 
 ```text
 Units of checkout-revamp:
@@ -232,8 +233,8 @@ while the home decides. At the home the owner of the shared plan is asked once:
 **Approve it**, **Not now** or **Turn it down**, answered in their own words.
 An approved change is written into the home's record, and the stages there
 that used it stay current, so nothing at the home is asked again. Every team
-building with it gets the new version on its claim at its next fetch and hears
-it once, on every Guard Policy, with the offer to redo a stage that used it:
+building with it gets the new version on its claim at its next step (each step
+of a Unit's build fetches its claim from the home) and hears it once, on every Guard Policy, with the offer to redo a stage that used it:
 "Something Functional Design used changed after it finished. I'm carrying on
 with it as it is. Do you want me to redo Functional Design with the change?"
 A team by file gets a newer hand-off file to take in. A team whose Unit was

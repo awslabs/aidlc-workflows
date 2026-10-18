@@ -605,6 +605,7 @@ import {
   openingStatusFrom,
   publishedAtHead,
   refreshClaimRefs,
+  refreshHomeClaims,
   shareBlocker,
   shareTarget,
   teamHandoverMarkName,
@@ -16346,7 +16347,9 @@ function emitTeamUnitMajorRunStage(
     }
   }
   // Teams build their Units as work of their own: the home walks only the
-  // Units no team holds.
+  // Units no team holds, as the home has them now.
+  const unreached = !scopeStamp && homeLocation(stateContent) !== null && !isReadOnlyEngineProbe() ? refreshHomeClaims(projectDir) : null;
+  if (unreached !== null) sayWithStepOnce(projectDir, `${unreached} could not be reached just now, so what the teams sent is shown as of your last fetch.`);
   const overview = !scopeStamp && homeLocation(stateContent) !== null && hasAnyUnitClaimRefs(projectDir)
     ? cachedUnitClaimOverview(projectDir, { writeCache: !isReadOnlyEngineProbe() })
     : null;

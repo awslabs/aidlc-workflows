@@ -5442,6 +5442,22 @@ function takeUnit(args: string[], projectDir?: string): void {
   }));
 }
 
+// The work's claims as the home has them now, fetched with the person's own
+// login into the refs their own fetch would use (through this workspace's
+// remote, or by the home's address into AI-DLC's own refs), so a step shows
+// what the teams and the home sent without anyone fetching first. Returns the
+// remote or address that could not be reached (what the last fetch brought
+// stands), or null.
+// ponytail: one fetch per step at the home and in each Unit's build; gate it by
+// time if a slow remote makes steps drag.
+export function refreshHomeClaims(projectDir: string, home?: { target: string | null; id8: string }): string | null {
+  const pd = resolveProjectDir(projectDir);
+  const { target, id8 } = home ?? { target: repositoryRemote(pd), id8: activeIdentity(pd).intentId8 };
+  if (target === null) return null;
+  const into = isGitAddress(target) ? `refs/aidlc/home/${id8}/claim/${id8}` : `refs/remotes/${target}/claim/${id8}`;
+  return git(pd, ["fetch", "--no-tags", "--no-filter", "-q", target, `+refs/heads/claim/${id8}/*:${into}/*`]).ok ? null : target;
+}
+
 // A claim at the home's address: fetched so its payload can be read.
 function ensureFetchedClaim(projectDir: string, home: HomeWork, ref: string): void {
   if (home.target === null || !isGitAddress(home.target)) return;
@@ -5686,6 +5702,13 @@ export function buildClaimNotes(projectDir: string, stateContent: string): strin
   const build = unitBuildOf(stateContent);
   if (build === null) return [];
   const space = build.homeRecord.slice(0, build.homeRecord.indexOf("/"));
+  if (!isReadOnlyEngineProbe() && getField(stateContent, "Home Result")?.trim() !== "by file") {
+    try {
+      refreshHomeClaims(projectDir, buildsHome(projectDir, build));
+    } catch {
+      // The home's record is not here: what this workspace has stands.
+    }
+  }
   let claims: Map<string, UnitClaimView>;
   try {
     claims = cachedClaimsForIdentity(projectDir, { space, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false);
