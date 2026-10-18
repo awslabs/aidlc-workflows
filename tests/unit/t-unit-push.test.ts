@@ -11,7 +11,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { fixtureIntentId8 } from "../harness/fixtures.ts";
@@ -181,6 +181,16 @@ describe("at the home", () => {
       'refunds was turned down in billing at the home: "billing needs the ledger entry too". ' +
         "Say go back to Code Generation to change it, then push again.",
     );
+  });
+
+  test("code a team merged into the workspace itself is the work's own: the home never asks whether it is existing code", () => {
+    const home = makeHome();
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    mkdirSync(join(home.dir, "services", "checkout-api", "src"), { recursive: true });
+    writeFileSync(join(home.dir, "services", "checkout-api", "src", "refunds.ts"), "export const refunds = 1;\n");
+    writeFileSync(join(home.dir, "package.json"), '{ "name": "platform" }\n');
+    expect(next(home.dir).ask_type).not.toBe("project-type");
   });
 
   test("a turn-down at the home reaches the team once, in the home's words", () => {

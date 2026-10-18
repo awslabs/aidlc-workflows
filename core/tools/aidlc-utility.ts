@@ -169,6 +169,7 @@ import {
   localUnitClaimOverviewForIntent,
   main as unitMain,
 } from "./aidlc-unit.ts";
+import { homeLocation } from "./aidlc-unit-teams.ts";
 import {
   codeGenerationBuildsWithoutSource,
   PLAN_APPROVAL_REPAIR_SOURCE_BOUNDARY_REMEDY,
@@ -11760,6 +11761,8 @@ export function greenfieldWorkspaceGainedCode(projectDir: string, content: strin
   if (declaredProjectType(getField(content, "Project Type") ?? "") !== "Greenfield") return null;
   const source = getField(content, PROJECT_TYPE_SOURCE_FIELD);
   if (source === PROJECT_TYPE_SOURCE_PERSON || source === PROJECT_TYPE_SOURCE_HOME) return null;
+  // Teams build this work: the code their Units merge is its own.
+  if (homeLocation(content) !== null) return null;
   if (constructionHasStarted(content, recordDir(projectDir))) return null;
   const scan = detectWorkspace(projectDir);
   return scan.projectType === "Brownfield" ? scan : null;
