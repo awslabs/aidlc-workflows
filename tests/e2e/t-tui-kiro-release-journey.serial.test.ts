@@ -85,7 +85,7 @@ const IDLE = "ask a question or describe a task";
 // Allow preselected), or the card Kiro CLI 2.32.0 shows for a delegated agent's
 // tool ("⚠ 1 tool approval pending", "(a) Approve all pending" preselected).
 // Enter takes the preselected answer on both.
-const PROMPT = /requires approval|tool approval pending/;
+const PROMPT = /requires approval|tool approvals? pending/;
 function sessionCredits(text: string): number | undefined {
   const all = [...text.matchAll(/Credits: turn [\d.]+ \S+ session ([\d.]+)/g)];
   return all.length ? Number(all[all.length - 1][1]) : undefined;

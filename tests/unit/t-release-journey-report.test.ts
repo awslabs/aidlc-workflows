@@ -1,10 +1,10 @@
 // covers: file:tests/harness/release-journey.ts
 //
 // The release journey's one line is the record a maintainer pastes into the
-// release-preparation PR. A journey that stops before its checks ran (a Kiro
-// CLI update that changed its status bar, a doctor output that no longer
-// parses) prints FAIL with the step that stopped it, never PASS, and the
-// error still fails the test.
+// selected preview's release notes. A journey that stops before its checks ran
+// (a Kiro CLI update that changed its status bar, a doctor output that no
+// longer parses) prints FAIL with the step that stopped it, never PASS, and
+// the error still fails the test.
 //
 // Mechanism: function - runs the journey runner with a journey that throws.
 
