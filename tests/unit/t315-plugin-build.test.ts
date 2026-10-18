@@ -582,6 +582,35 @@ describe("t315 standalone plugin builder", () => {
     }
   });
 
+  test.skipIf(!FOLDER_MODES_BIND)("plugin build prints the TMPDIR fix when its lock folder cannot be created", () => {
+    const pluginRoot = copyPlugin("uncreatable-lock-folder-cli");
+    const outDir = join(scratch, "uncreatable-lock-folder-cli-output");
+    const temp = join(scratch, "uncreatable-lock-cli-temp");
+    const lockFolder = withTmpdir(temp, () => dirname(pluginBuildLockPath(outDir)));
+    mkdirSync(temp, { recursive: true });
+    chmodSync(temp, 0o500);
+    try {
+      const result = withTmpdir(temp, () =>
+        run([pluginRoot, "claude", outDir, "--json"])
+      );
+      expect(result.status, result.stderr).toBe(1);
+      const parsed = JSON.parse(result.stdout) as {
+        errors: Array<{ rule: string; message: string; fix: string }>;
+      };
+      expect(parsed.errors).toContainEqual(
+        expect.objectContaining({
+          rule: "build-output",
+          message: `cannot write the plugin build lock folder "${lockFolder}" (EACCES)`,
+          fix: "Set TMPDIR to a folder you own, then run the command again.",
+        }),
+      );
+      expect(existsSync(lockFolder)).toBe(false);
+      expect(existsSync(outDir)).toBe(false);
+    } finally {
+      chmodSync(temp, 0o700);
+    }
+  });
+
   test("custom output under a symlinked environmental ancestor remains valid", () => {
     const pluginRoot = copyPlugin("symlinked-environment-custom");
     const realEnvironment = join(scratch, "real-environment");

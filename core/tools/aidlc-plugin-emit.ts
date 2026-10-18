@@ -164,20 +164,21 @@ function withPluginBuildOutputLock<T>(
 ): T {
   const lockDir = pluginBuildLockPath(outDir);
   const lockFolder = dirname(lockDir);
-  mkdirSync(lockFolder, { recursive: true, mode: 0o700 });
   // acquireOwnerStampedLock retries every create that fails, so a folder this
   // user cannot write would wait out the whole budget and then read as a busy
   // lock. On Windows access() does not read the ACLs that guard a folder, so it
   // is not asked there.
-  if (process.platform !== "win32") {
-    try {
+  try {
+    mkdirSync(lockFolder, { recursive: true, mode: 0o700 });
+    if (process.platform !== "win32") {
       accessSync(lockFolder, constants.W_OK | constants.X_OK);
-    } catch (error) {
-      throw new PluginBuildLockFolderError(
-        lockFolder,
-        (error as NodeJS.ErrnoException).code ?? String(error),
-      );
     }
+  } catch (error) {
+    if (process.platform === "win32") throw error;
+    throw new PluginBuildLockFolderError(
+      lockFolder,
+      (error as NodeJS.ErrnoException).code ?? String(error),
+    );
   }
   const result = runWithOwnerStampedLock(
     lockDir,
