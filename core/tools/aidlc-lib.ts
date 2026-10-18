@@ -14240,12 +14240,8 @@ export function summaryScopeForRecordPath(
 // consolidated-summary receipt and that generated artifacts postdate it.
 // `workflow` identifies an isolated run; main-workflow callers omit it.
 /**
- * True when this stage owes a consolidated summary confirmation in the current
- * workflow: the guard is on, the ceremony is on, the stage declares one, and it
- * is not initialization or an autonomous Construction stage. The gate and the
- * log commands share this so they never disagree about whether one is owed.
- * Directive presentation ignores only the guard switch: disabling enforcement
- * does not switch off the person's summary question.
+ * The gate and logger share this stage's summary obligation. Presentation alone
+ * ignores the guard switch: disabling enforcement preserves the question.
  */
 export function summaryConfirmationOwed(
   stage: SummaryConfirmationStage,
