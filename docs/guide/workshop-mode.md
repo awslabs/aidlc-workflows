@@ -1,133 +1,51 @@
 # Multi-Team Construction and Workshop Mode
 
-Team-owned Construction lets several human teams build different Units from one
-approved intent. Workshop mode is one application of the same mechanism; the
-engine contract is scope-agnostic:
+Several teams can build the Units of one approved piece of work. The work's
+home is where Inception ran. Each team builds its Unit as a piece of work of
+its own, in its own workspace and under its own rules, from a copy of what the
+home approved, and merges it into each repo the way that repo always merges.
+The home sees a Unit done when every repo it changed has merged, and runs Build
+and Test once every Unit is in. Workshop mode is one use of this; it works the
+same for any scope whose plan splits the work into Units.
 
-- `Construction Iteration: unit-major`
-- `Unit Ownership: team`
-- a valid Unit dependency DAG
-- a shared git namespace, or sibling worktrees sharing one local ref database
+What it needs:
 
-Teams build work that spans several repos when the workspace is in git:
-choosing teams records the home, and each team builds its Unit as a piece of
-work of its own ([Take a Unit](#take-a-unit-as-your-teams-own-work)). In a
-workspace that is not a git repository, work with a recorded repo set is not
-asked who builds its Units: when Construction starts, AI-DLC says in one line
-that this session builds them and that the workspace needs to be in git for
-teams, and `set-unit-ownership team` refuses with the same line before changing
-state.
-
-The integration lead works from unscoped main. Each delivery team works from a
-checkout stamped to one claimed Unit. A claimed checkout runs that Unit's exact
-Construction chain, stages 3.1 through 3.5, in graph order. Main never reruns
-those stages after merge because the team's keyed receipts arrive with its
-audit shard.
+- a Unit plan with two or more Units, built one Unit at a time
+  (`Construction Iteration: unit-major`), which choosing teams sets;
+- the workspace in git: its `origin` is where the Units are given out
+  (`Home Location`);
+- each team able to reach the home's repository with its own login, or a
+  hand-off file when it cannot.
 
 For the Workshop scope's stage grid and Minimal test floor, see
 [Scopes and Depth](05-scopes-and-depth.md#workshop).
 
 ---
 
-## Roles and topologies
+## The three layouts
 
-| Role | Responsibility |
-|------|----------------|
-| **Integration lead** | Drives Inception and any required walking skeleton on main, monitors claims, pins completed candidates, presents merge gates, and lands approved Units |
-| **Unit team** | Claims one dependency-ready Unit, runs its scoped 3.1-3.5 chain, commits the artifacts/receipts/source, and publishes the candidate |
-| **Review group** | Answers the Unit's selected team gates and the main-side pinned merge gate |
+- **One workspace for everyone.** Each team member clones the home's
+  workspace. The Units are offered there, and each team's build lives in its
+  own space (`aidlc/spaces/<team>/`) of the same repository.
+- **A workspace per team.** A team makes its own workspace repository from the
+  home's. The home's record comes along, read only, and is never offered to
+  carry on; its Units are reached at the home's address.
+- **A personal copy.** One person clones their own copy; it works as one of
+  the two above, by where its `origin` points.
 
-Two topologies use the same commands and evidence:
+A team that cannot reach the home at all works from files instead
+([A team that cannot reach the home](#a-team-that-cannot-reach-the-home)). The
+code repos can live anywhere on disk: `repos.json` gives each one's path, and
+one person's `repos.local.json` their own
+([Declaring the repo set](03-spaces-and-intents.md#declaring-the-repo-set)). In
+a workspace that is not a git repository, work with a recorded repo set is
+built by one session: when Construction starts, AI-DLC says in one line that
+the workspace needs to be in git for teams, and `set-unit-ownership team`
+refuses with the same line before changing state.
 
-Command examples use the harness-neutral public grammar. Run them through the
-installed harness's `/aidlc` command surface or its packaged `aidlc`
-dispatcher; no example assumes a `.claude/`, `.kiro/`, or `.codex/` tool path.
-
-### Clone per team
-
-Each team clones the shared remote. Claim coordination and candidate publication
-use `refs/heads/claim/<intent-id8>/<unit>`.
-
-```bash
-git clone <shared-remote> payments-team
-cd payments-team
-git fetch --all
-aidlc unit claim payments --team "Payments team"
-```
-
-### Sibling worktrees
-
-One repository creates sibling worktrees. Claims use the shared local branch
-namespace through atomic `git update-ref` only when no remote is configured. If
-`origin` exists, sibling worktrees use the same remote-backed claims as separate
-clones. This topology is useful for one machine and deterministic tests; remove
-the remote only when the whole exercise is intentionally local/offline.
-
-Bolt directories and branches use `bolt-<id8>_<slug>`, where `<id8>` is the
-selected intent's registry UUID suffix, also used by Unit claims at
-`refs/heads/claim/<id8>/<unit>`. Parallel intents can therefore use the same Unit
-slug in one checkout or across worktrees of one clone without colliding
-([#1252](https://github.com/awslabs/aidlc-workflows/issues/1252)). See
-[Bolt identity](../../core/knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity)
-for naming and legacy compatibility. Use the path returned by `create`; this
-example assumes intent identity `7c31e9a0`.
-
-```bash
-# From unscoped main:
-# Optional local-only mode: git remote remove origin
-aidlc engine worktree create --slug payments --base main
-cd .aidlc/worktrees/bolt-7c31e9a0_payments
-aidlc unit claim payments --team "Payments team"
-```
-
-Run the same scoped build and `publish` commands below from that worktree. After
-main lands and pushes the candidate, return to main and discard the completed
-local worktree with `aidlc engine worktree discard --slug payments`. On a Bun-based
-copy install, run `bun .claude/tools/aidlc-worktree.ts create` and `discard` with
-the same flags instead, substituting your harness directory for `.claude`.
-Discard sets aside tracked files, non-ignored untracked files, and reviewed
-source refs before removing the checkout and branch. To inspect that work later,
-run `aidlc engine worktree restore --slug payments`; it creates an isolated
-checkout under `.aidlc/restored/` without touching a new live `bolt-7c31e9a0_payments`.
-Add `--parked <stamp>` for one saved attempt or bare `--raw` to bypass checkout
-conversions. Ignored untracked files are not saved, and `eol/text=auto`
-normalization during saving cannot be reversed by restore.
-
-To remove the recovery refs, use `aidlc engine worktree purge --slug payments`,
-optionally with `--parked <stamp>` for one attempt or `--older-than <days>` for
-attempts strictly older than a nonnegative finite number of days. Age uses the
-stamp's UTC timestamp, ignoring its `-N` collision suffix; the two selectors are
-mutually exclusive. Purge refuses while a matching restored checkout exists,
-including one moved elsewhere. Doctor lists saved attempts informationally with
-typed `restore_operation` and `purge_operation` values for the exact slug, stamp,
-and repository, followed by `--intent <record-dir-name> --space <space>` to keep
-the operation bound to its owning intent even after the active intent changes.
-Conductors invoke their `worktree` engine route with each listed
-arg exactly as argv, never joined into a shell command. Optional
-`restore_command` and `purge_command` are safe human display text; rendering
-failures omit the corresponding command and supply `restore_command_error` or
-`purge_command_error` while keeping the operation. If only reviewed source refs
-remained to save, the attempt is `evidence-only` with `parked_commit: "-"`: no
-files can be restored, abort omits `restore_operation`, `restore_hint`,
-`restore_hint_error`, and `parked_excludes`, and doctor offers only the purge
-operation and its command-or-error fields. See [getting the files back](15-troubleshooting.md#a-bolt-attempt-was-set-aside-getting-the-files-back)
-for the recovery walkthrough and [CLI Commands](12-cli-commands.md#aidlc-engine-worktree-purge-remove-recovery-refs)
-for the flags.
-
-Creation refuses an intent without a registry UUID; adopt or re-create that
-intent before Construction. Cleanup also refuses when the Bolt branch is
-checked out at another worktree path and names that owner instead of deleting
-its branch or retained/parked refs. Pre-upgrade legacy `bolt-<slug>` Bolts can
-merge, discard, and purge to completion only with matching intent provenance;
-new Bolts never use that shape. `doctor` reports both shapes.
-
-Normal scoped `next`, lifecycle, review, and gate work is offline-first. Network
-access is confined to explicit claim, share, publish, status, pin, and merge-ref
-verification operations, and to the board on a checkout that holds no Unit
-claim: each `/aidlc` there in team mode fetches the teams' claim refs, and only
-those, from the shared remote (best effort, a few seconds at most, no prompt;
-when the remote does not answer, the board says once that it shows what this
-clone last saw).
+Team work that started before `Home Location` existed keeps the claim,
+publish, pin, gate and land flow, described in
+[Team work started before Home Location](#team-work-started-before-home-location).
 
 ---
 
@@ -383,9 +301,114 @@ read with CRLF too.
 
 ---
 
-## Claim, build, and publish
+## Team work started before Home Location
 
-### 1. Claim
+Work whose teams were chosen before AI-DLC recorded `Home Location` keeps the
+flow it started on. The integration lead works from unscoped main; each
+delivery team works from a checkout stamped to one claimed Unit and runs that
+Unit's exact Construction chain, stages 3.1 through 3.5, in graph order; main
+pins, gates and lands each candidate. Main never reruns those stages after
+merge because the team's keyed receipts arrive with its audit shard.
+
+### Roles and topologies
+
+| Role | Responsibility |
+|------|----------------|
+| **Integration lead** | Drives Inception and any required walking skeleton on main, monitors claims, pins completed candidates, presents merge gates, and lands approved Units |
+| **Unit team** | Claims one dependency-ready Unit, runs its scoped 3.1-3.5 chain, commits the artifacts/receipts/source, and publishes the candidate |
+| **Review group** | Answers the Unit's selected team gates and the main-side pinned merge gate |
+
+Two topologies use the same commands and evidence:
+
+Command examples use the harness-neutral public grammar. Run them through the
+installed harness's `/aidlc` command surface or its packaged `aidlc`
+dispatcher; no example assumes a `.claude/`, `.kiro/`, or `.codex/` tool path.
+
+#### Clone per team
+
+Each team clones the shared remote. Claim coordination and candidate publication
+use `refs/heads/claim/<intent-id8>/<unit>`.
+
+```bash
+git clone <shared-remote> payments-team
+cd payments-team
+git fetch --all
+aidlc unit claim payments --team "Payments team"
+```
+
+#### Sibling worktrees
+
+One repository creates sibling worktrees. Claims use the shared local branch
+namespace through atomic `git update-ref` only when no remote is configured. If
+`origin` exists, sibling worktrees use the same remote-backed claims as separate
+clones. This topology is useful for one machine and deterministic tests; remove
+the remote only when the whole exercise is intentionally local/offline.
+
+Bolt directories and branches use `bolt-<id8>_<slug>`, where `<id8>` is the
+selected intent's registry UUID suffix, also used by Unit claims at
+`refs/heads/claim/<id8>/<unit>`. Parallel intents can therefore use the same Unit
+slug in one checkout or across worktrees of one clone without colliding
+([#1252](https://github.com/awslabs/aidlc-workflows/issues/1252)). See
+[Bolt identity](../../core/knowledge/aidlc-shared/worktree-info-schema.md#bolt-identity)
+for naming and legacy compatibility. Use the path returned by `create`; this
+example assumes intent identity `7c31e9a0`.
+
+```bash
+# From unscoped main:
+# Optional local-only mode: git remote remove origin
+aidlc engine worktree create --slug payments --base main
+cd .aidlc/worktrees/bolt-7c31e9a0_payments
+aidlc unit claim payments --team "Payments team"
+```
+
+Run the same scoped build and `publish` commands below from that worktree. After
+main lands and pushes the candidate, return to main and discard the completed
+local worktree with `aidlc engine worktree discard --slug payments`. On a Bun-based
+copy install, run `bun .claude/tools/aidlc-worktree.ts create` and `discard` with
+the same flags instead, substituting your harness directory for `.claude`.
+Discard sets aside tracked files, non-ignored untracked files, and reviewed
+source refs before removing the checkout and branch. To inspect that work later,
+run `aidlc engine worktree restore --slug payments`; it creates an isolated
+checkout under `.aidlc/restored/` without touching a new live `bolt-7c31e9a0_payments`.
+Add `--parked <stamp>` for one saved attempt or bare `--raw` to bypass checkout
+conversions. Ignored untracked files are not saved, and `eol/text=auto`
+normalization during saving cannot be reversed by restore.
+
+To remove the recovery refs, use `aidlc engine worktree purge --slug payments`,
+optionally with `--parked <stamp>` for one attempt or `--older-than <days>` for
+attempts strictly older than a nonnegative finite number of days. Age uses the
+stamp's UTC timestamp, ignoring its `-N` collision suffix; the two selectors are
+mutually exclusive. Purge refuses while a matching restored checkout exists,
+including one moved elsewhere. Doctor lists saved attempts informationally with
+typed `restore_operation` and `purge_operation` values for the exact slug, stamp,
+and repository, followed by `--intent <record-dir-name> --space <space>` to keep
+the operation bound to its owning intent even after the active intent changes.
+Conductors invoke their `worktree` engine route with each listed
+arg exactly as argv, never joined into a shell command. Optional
+`restore_command` and `purge_command` are safe human display text; rendering
+failures omit the corresponding command and supply `restore_command_error` or
+`purge_command_error` while keeping the operation. If only reviewed source refs
+remained to save, the attempt is `evidence-only` with `parked_commit: "-"`: no
+files can be restored, abort omits `restore_operation`, `restore_hint`,
+`restore_hint_error`, and `parked_excludes`, and doctor offers only the purge
+operation and its command-or-error fields. See [getting the files back](15-troubleshooting.md#a-bolt-attempt-was-set-aside-getting-the-files-back)
+for the recovery walkthrough and [CLI Commands](12-cli-commands.md#aidlc-engine-worktree-purge-remove-recovery-refs)
+for the flags.
+
+Creation refuses an intent without a registry UUID; adopt or re-create that
+intent before Construction. Cleanup also refuses when the Bolt branch is
+checked out at another worktree path and names that owner instead of deleting
+its branch or retained/parked refs. Pre-upgrade legacy `bolt-<slug>` Bolts can
+merge, discard, and purge to completion only with matching intent provenance;
+new Bolts never use that shape. `doctor` reports both shapes.
+
+Normal scoped `next`, lifecycle, review, and gate work is offline-first. Network
+access is confined to explicit claim, publish, status, pin, and merge-ref
+verification operations.
+
+### Claim, build, and publish
+
+#### 1. Claim
 
 In a team's own clone of the shared remote, `/aidlc` offers the Units open to
 take ("2 Units are open for a team to take: payments and refunds. Take one for
@@ -417,7 +440,7 @@ Adoption verifies the checked-out payload against the live ref and keeps the
 claim's bound audit shard, so the teammate can resume and publish without
 creating a successor attempt.
 
-### 2. Build
+#### 2. Build
 
 Run `/aidlc` in the claimed checkout. The engine routes only the stamped Unit:
 
@@ -462,14 +485,13 @@ such as `contract-summary.md`) is published too, but pin will refuse it, so
 publish names the file: take it out of the branch, make the change on main,
 and publish again.
 
----
 
-## Pin, gate, and land
+### Pin, gate, and land
 
 All merge commands run from unscoped main, or from any checkout of the project
 that holds no Unit claim.
 
-### 1. Pin the candidate
+#### 1. Pin the candidate
 
 On such a checkout `/aidlc` reads the teams' claims from the shared remote
 (above), so when a team has published its Unit the next `/aidlc` asks, once for
@@ -522,7 +544,7 @@ and landing commands refuse. Run `pin` again and review the new OID explicitly.
 If the registry cannot be reached, gate and land fail closed because they
 cannot prove the pin was not tombstoned.
 
-### 2. Present the merge gate
+#### 2. Present the merge gate
 
 Pin's output carries the merge gate (`merge_gate`): the question, its strategy
 and target, and the command that records each answer. The agent asks it in the
@@ -548,7 +570,7 @@ further question. A rejection keeps the candidate unmerged. A candidate carrying
 `Merge-Held: true` is refused until the team resolves the HOLD-MERGE sequence,
 publishes again, and main re-pins.
 
-### 3. Land
+#### 3. Land
 
 ```bash
 aidlc unit land payments --target main
@@ -606,9 +628,8 @@ Dependents become claimable from the merged row. After the last row merges,
 the per-Unit block settles and main routes Build and Test (3.6), then CI
 Pipeline (3.7), exactly as solo Construction does.
 
----
 
-## Dispatcher, status, and health checks
+### Dispatcher, status, and health checks
 
 On unscoped main, `/aidlc` is a turn-terminal dispatcher while team fan-out is
 active. It renders one deterministic board verbatim:
@@ -650,9 +671,8 @@ never answers that there is no work.
 
 Doctor never fetches or releases a claim.
 
----
 
-## Release, salvage, and resume
+### Release, salvage, and resume
 
 If a team cannot finish, the integration lead releases the claim from unscoped
 main:
@@ -698,34 +718,31 @@ registry.
 
 ### Day 1
 
-1. The facilitator runs Inception with the group.
-2. If enabled, the facilitator builds and gates the walking skeleton on main,
-   then shares the plan with the teams when asked.
-3. Alice takes `billing`; Bob takes `notifications`, each from the question in
-   their own clone.
-4. Each team runs its scoped 3.1-3.5 chain and team gates.
-5. Each team publishes its Unit when asked.
+1. The facilitator runs Inception with the group in the home's workspace,
+   chooses teams, says who builds which Unit ("billing: payments,
+   notifications: messaging"), and pushes the home.
+2. If enabled, the facilitator builds the walking skeleton at the home first.
+3. Each team member clones the workspace (or the team's own), runs `/aidlc`,
+   and takes their team's Unit. Each team approves its own stages.
 
 ### Day 2
 
-1. The facilitator's board offers Alice's Unit for review; the facilitator
-   reviews its evidence, records the merge gate, and lands it.
-2. Main is pushed when asked; any Unit depending on `billing` becomes claimable.
-3. The facilitator repeats pin/gate/land for Bob's pinned candidate.
-4. When the final row is merged, `/aidlc` on main routes Build and Test, then
-   CI Pipeline.
-5. The group reviews `UNIT_MERGED`, gate, and reviewer rows in the combined
-   audit shards.
-
-The teams never race to push main. Candidate refs can move only through
-claim-bound CAS publication; main serializes the reviewed pinned OIDs.
+1. Each team finishes its Unit, says push, and opens a pull request in each
+   repo; reviewers merge them the way each repo merges.
+2. At the home, `/aidlc` shows the board: how far each Unit merged, which are
+   building, which wait. A Unit that waits on another opens when that one is
+   done, or starts early on its pushed branches.
+3. When every Unit is done, `/aidlc` at the home runs Build and Test, then CI
+   Pipeline.
+4. The group reads `UNIT_TAKEN_IN`, `UNIT_PUSHED` and `UNIT_MERGED` in the
+   audit trail: who took, built and merged what.
 
 ---
 
 ## Related reading
 
 - [Facilitator Guide](facilitator-guide.md) - readiness check, scopes for side tasks, recovery playbook, and how strongly each harness enforces the workflow
-- [CLI Commands](12-cli-commands.md) - claim, publish, pin, gate, and land
+- [CLI Commands](12-cli-commands.md) - assign, take, push, hand-off, take-in, propose, amend, sign-off, and the earlier flow's claim, publish, pin, gate, and land
 - [State and Audit](10-state-and-audit.md) - per-clone shards and merged receipt floors
 - [Construction](../reference/04-stages/construction.md) - Unit-major routing and gate rhythm
 - [Runtime Graph](../reference/13-runtime-graph.md) - the separate solo/swarm Bolt merge path
