@@ -282,13 +282,43 @@ function carriesSeveralPicks(toolInput: unknown, toolResponse: unknown): boolean
   });
 }
 
-// What the agent does after an empty question box (emptyPickerResult).
+// What the agent does after an empty question box (emptyPickerResult) when the
+// box carried no question or options the hook could read back (a payload shape
+// it did not recognize): the generic instruction to re-ask as numbered prose.
 // Codex's own instruction says to "continue with best judgment"; asking in
 // the box again would only run out again.
 const QUESTION_UNANSWERED_NOTICE =
   "The question box closed with no answer, so nothing was answered or recorded. " +
   "Ask the same question again in your reply as numbered options, not in the question box, " +
   "and end the turn; never pick an answer for the person.";
+
+// The same question the empty box carried, rendered as numbered prose so the
+// fallback is the engine's, not the conductor's to reconstruct (#2491): the
+// recorded labels in their recorded order, each on its own line, an Other
+// escape appended (the question file's permanent floor), then the reply line.
+// Null when the box reported no question text or no option labels the hook
+// could read, so the caller falls back to QUESTION_UNANSWERED_NOTICE. The
+// labels are rendered verbatim; nothing is summarized or reordered.
+function unansweredPickerProse(picker: PlanApprovalPickerQuestion | undefined): string | null {
+  const question = picker?.question?.trim();
+  const options = picker?.options;
+  if (!question || options === null || options === undefined || options.length === 0) return null;
+  const lines = [
+    "The question box closed with no answer, so nothing was answered or recorded. " +
+      "Ask this same question again in your reply as numbered options, not in the question box, " +
+      "then end the turn; never pick an answer for the person.",
+    "",
+    question,
+    "",
+    ...options.map((label, index) => `${index + 1}. ${label}`),
+    `${options.length + 1}. Other (please specify)`,
+    "",
+    picker?.severalPicks
+      ? "Reply with the numbers you want (or just tell me)."
+      : "Reply with a number (or just tell me).",
+  ];
+  return lines.join("\n");
+}
 
 // Rows after a review request that say the work went past it: a question was
 // put to the person or answered, a checkpoint verified, a gate opened or
@@ -545,6 +575,10 @@ try {
       message?: unknown;
       tool_response?: unknown;
       toolResponse?: unknown;
+      // The raw picker payload an adapter keeps aside when it normalizes
+      // tool_response to the selected label (the Codex adapter does this): the
+      // emptiness test and QUESTION_REPLIED rows read it first.
+      picker_reply?: unknown;
       tool_input?: unknown;
       toolInput?: unknown;
       origin?: unknown;
@@ -586,16 +620,23 @@ try {
           (value): value is string =>
             typeof value === "string" && value.trim().length > 0,
         ) ?? "";
-    } else if (parsed.tool_response !== undefined || parsed.toolResponse !== undefined) {
-      pickerUnanswered = emptyPickerResult(parsed.tool_response ?? parsed.toolResponse);
+    } else if (
+      parsed.tool_response !== undefined || parsed.toolResponse !== undefined || parsed.picker_reply !== undefined
+    ) {
+      // The box's own result. The Codex adapter keeps the raw picker payload in
+      // `picker_reply` and sets `tool_response` to the selected label (empty on
+      // a dismissed box), so the emptiness test reads `picker_reply` first, the
+      // same order `pickerReplies` uses; a host that puts the whole picker
+      // result in `tool_response` is still read from there. `picked` keeps
+      // reading `tool_response`/`toolResponse` as before (the Picked field's
+      // source is unchanged); it is empty anyway when the box was dismissed.
+      const pickerResult = parsed.picker_reply ?? parsed.tool_response ?? parsed.toolResponse;
+      pickerUnanswered = emptyPickerResult(pickerResult);
       picked = pickerUnanswered ? [] : pickedLabels(parsed.tool_response ?? parsed.toolResponse);
       pickerQuestion = {
         question: questionText,
         options: extractOptionLabels(parsed.tool_input ?? parsed.toolInput),
-        severalPicks: carriesSeveralPicks(
-          parsed.tool_input ?? parsed.toolInput,
-          parsed.tool_response ?? parsed.toolResponse,
-        ),
+        severalPicks: carriesSeveralPicks(parsed.tool_input ?? parsed.toolInput, pickerResult),
       };
     }
     const supplied = suppliedTurnOrigin(parsed.origin);
@@ -768,7 +809,10 @@ try {
         // The question is asked again either way.
       }
       process.stdout.write(`${JSON.stringify({
-        hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: QUESTION_UNANSWERED_NOTICE },
+        hookSpecificOutput: {
+          hookEventName: "PostToolUse",
+          additionalContext: unansweredPickerProse(pickerQuestion) ?? QUESTION_UNANSWERED_NOTICE,
+        },
       })}\n`);
       return 0;
     }

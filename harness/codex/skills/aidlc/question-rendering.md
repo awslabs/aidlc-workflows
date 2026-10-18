@@ -78,10 +78,14 @@ Map the spec fields 1:1:
   option set as the authoritative record.
 - **Answer capture**: the selection returns as the exact option label; record
   it verbatim (protocol: never summarize User Input).
-- **No answer**: the box runs out after about two minutes and returns no
-  answers. Nothing was answered: ask the same question again in your reply as
-  numbered prose, not in the box, and end the turn; never pick an answer for
-  the person.
+- **No answer**: the box runs out after about two minutes, or the person
+  dismisses or closes it, and it returns no answers. Nothing was answered: ask
+  the same question again in your reply as numbered prose, not in the box, and
+  end the turn; never pick an answer for the person. The engine does not leave
+  this to memory — the record-human-turn hook records `QUESTION_UNANSWERED`
+  (which spends any earlier turn, so no answer or gate decision sticks) and
+  hands back the same question already rendered as numbered prose, its labels
+  and their order unchanged; present that and end the turn.
 
 ### Track 2 — numbered prose (the floor)
 
