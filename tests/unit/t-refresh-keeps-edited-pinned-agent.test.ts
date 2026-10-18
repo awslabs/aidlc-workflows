@@ -150,11 +150,39 @@ describe("a refresh over an agent file with a recorded model or effort", () => {
       expect(written).toContain("<!-- plugin:test-pro:");
       expect(written).toMatch(new RegExp(`^effort: ${effort}$`, "m"));
     }
+    // A newer release that changes the agent file brings its text in around both.
+    const newer = temp("aidlc-pinned-agent-newer-");
+    cpSync(release, newer, { recursive: true });
+    const newerAgent = join(newer, ".claude", "agents", "aidlc-quality-agent.md");
+    writeFileSync(newerAgent, `${readFileSync(newerAgent, "utf-8")}\nUpstream refresh marker.\n`);
+    const upgraded = p.run(["config", "--project-dir", p.dir, "--from", newer, "--yes"]);
+    expect(upgraded.status, upgraded.out).toBe(0);
+    const upgradedText = readFileSync(agent, "utf-8");
+    expect(upgradedText).toContain("Upstream refresh marker.");
+    expect(upgradedText).toContain("<!-- plugin:test-pro:");
+    expect(upgradedText).toMatch(/^effort: low$/m);
     writeFileSync(agent, appendNote(readFileSync(agent, "utf-8")));
-    const refused = p.run(refresh);
+    const refused = p.run(["config", "--project-dir", p.dir, "--from", newer, "--yes"]);
     expect(refused.status, refused.out).toBe(4);
     expect(refused.out).toContain(".claude/agents/aidlc-quality-agent.md (locally modified or unowned)");
     expect(readFileSync(agent, "utf-8")).toContain("my own notes");
+  });
+
+  // The release's own file is AI-DLC's before the model writer fills it in,
+  // as it is after: putting it back is no edit to keep.
+  test("an agent file put back to the release's own copy takes the recorded model with no conflict", () => {
+    const p = project("release-copy");
+    const release = join(RELEASES, "kiro");
+    const installed = p.run(["config", "--project-dir", p.dir, "--from", release, "--harness", "kiro", "--mcp", "none", "--yes"]);
+    expect(installed.status, installed.out).toBe(0);
+    const pinned = p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", "architect", "--model", "claude-sonnet-5-5", "--yes"]);
+    expect(pinned.status, pinned.out).toBe(0);
+    const rel = join(".kiro", "agents", "aidlc-architect-agent.json");
+    const written = readFileSync(join(p.dir, rel), "utf-8");
+    cpSync(join(release, rel), join(p.dir, rel));
+    const refreshed = p.run(["config", "--project-dir", p.dir, "--yes"]);
+    expect(refreshed.status, refreshed.out).toBe(0);
+    expect(readFileSync(join(p.dir, rel), "utf-8")).toBe(written);
   });
 
   // A copied release tree has no install record yet: its agent file is the

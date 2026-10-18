@@ -6898,10 +6898,7 @@ function prepareRefreshSource(
       if (entries) entries[rel] = owned;
     }
     if (!projectProjection) {
-      for (const rel of grantKiroMcpServers(projectDir, sourceRoot, root, descriptor.harnessDir)) {
-        regenerated.add(rel);
-        modelWritten.delete(rel);
-      }
+      for (const rel of grantKiroMcpServers(projectDir, sourceRoot, root, descriptor.harnessDir)) regenerated.add(rel);
     }
   }
 
@@ -9676,21 +9673,22 @@ function planManagedFiles(
       const targetRegular = targetExists && lstatSync(target).isFile();
       const hash = sha256File(source);
       const priorHash = prior?.files[rel];
-      // With no install record, a copied release's own file is AI-DLC's before
-      // the model writer fills it in.
-      const adoptable = [
-        ...(descriptor.legacyManagedFileHashes?.[rel] ?? []),
-        ...(prior === null && modelWritten.has(rel) ? [modelWritten.get(rel)!] : []),
-      ];
+      // The release's own file, before the model writer filled it in, is
+      // AI-DLC's as much as the filled-in one.
+      const releaseHash = modelWritten.get(rel);
       // A copy Git checked out with other line endings is the file it was, and
       // so is an include a space switch pointed at another space.
       const owned = targetRegular
-        ? ownedFileHash(target, [hash, priorHash, ...adoptable])
+        ? ownedFileHash(target, [hash, priorHash, releaseHash, ...(descriptor.legacyManagedFileHashes?.[rel] ?? [])])
         : undefined;
       const currentHash = owned?.hash;
       const adoptedManagedFile = prior === null &&
         currentHash !== undefined &&
-        adoptable.includes(currentHash);
+        (
+          descriptor.legacyManagedFileHashes?.[rel]?.includes(
+            currentHash,
+          ) ?? false
+        );
       if (workspaceSeed(rel)) {
         if (targetExists) {
           actions.push({ path: rel, action: "preserve", detail: "project-owned seed" });
@@ -9819,7 +9817,7 @@ function planManagedFiles(
         (
           !targetRegular ||
           unproven.has(rel) ||
-          (!adoptedManagedFile && (!priorHash || currentHash !== priorHash))
+          (!adoptedManagedFile && currentHash !== releaseHash && (!priorHash || currentHash !== priorHash))
         ) &&
         !force
       ) {
