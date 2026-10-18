@@ -298,7 +298,7 @@ once no unit owes it.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `UNIT_OWNERSHIP_SET` | Unit-major ownership mode is set before unit activity starts | Timestamp, Mode | `tools/aidlc-state.ts set-unit-ownership` |
+| `UNIT_OWNERSHIP_SET` | Unit-major ownership mode is set before unit activity starts, or solo work switches to teams because a teammate took a Unit from another machine | Timestamp, Mode; optional Home Location, Reason | `tools/aidlc-state.ts set-unit-ownership`, `tools/aidlc-unit.ts` (the switch) |
 | `UNIT_GATE_RHYTHM_SET` | Team-owned gate rhythm is set before the first team Unit gate | Timestamp, Rhythm | `tools/aidlc-state.ts set-unit-gate-rhythm` |
 | `UNITS_ASSIGNED` | The lead named, at the home, which team builds which Unit and which stay open for any team | Timestamp, Assigned, Open; optional Person Words; By File for a hand-off (no Open) | `tools/aidlc-unit.ts assign`, `hand-off` |
 | `UNIT_TAKEN_IN` | A team took one Unit of a home's work in, as a build of its own in its space | Timestamp, Unit, Team, Home Location, Home Work, Home Record, Home Attempt, Home Commit, Copy Fingerprint, Home Approvals | `tools/aidlc-unit.ts take` |

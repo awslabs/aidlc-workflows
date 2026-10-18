@@ -531,3 +531,39 @@ export function artifactAt(rel: string): { producer: string; artifact: string } 
   const artifact = [...(stage?.produces ?? []), ...(stage?.optional_produces ?? [])].find((name) => artifactFilename(name) === file);
   return stage && artifact ? { producer, artifact } : null;
 }
+
+// --- Solo work driven from another machine -----------------------------------------
+
+// Solo work built one Unit at a time whose active Unit last moved in another
+// clone's audit shard: it is being built from another machine. That Unit and
+// the stage it was on; null otherwise.
+export function builtFromAnotherMachine(
+  stateContent: string,
+  rows: readonly AuditShardEvent[],
+  ownShard: string,
+): { unit: string; stage: string } | null {
+  if (isTeamUnitOwnership(stateContent) || getField(stateContent, "Construction Iteration")?.trim() !== "unit-major") return null;
+  const moves = rows
+    .filter((row) => row.event.startsWith("UNIT_") && auditBlockField(row.block, "Unit") && auditBlockField(row.block, "Stage"))
+    .sort((a, b) => (a.timestamp !== b.timestamp ? (a.timestamp < b.timestamp ? -1 : 1) : a.pos - b.pos));
+  const last = moves.at(-1);
+  if (last === undefined || last.shard === ownShard) return null;
+  return { unit: auditBlockField(last.block, "Unit")!, stage: auditBlockField(last.block, "Stage")! };
+}
+
+// A solo walk's Units: started when any per-Unit stage started for it, done
+// when its last per-Unit stage completed.
+export function soloUnitsProgress(
+  rows: readonly AuditShardEvent[],
+  finalStage: string,
+): { started: Set<string>; done: Set<string> } {
+  const started = new Set<string>();
+  const done = new Set<string>();
+  for (const row of rows) {
+    const unit = auditBlockField(row.block, "Unit");
+    if (!unit) continue;
+    if (row.event === "UNIT_STARTED") started.add(unit);
+    if (row.event === "UNIT_COMPLETED" && auditBlockField(row.block, "Stage") === finalStage) done.add(unit);
+  }
+  return { started, done };
+}

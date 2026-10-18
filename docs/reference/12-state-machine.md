@@ -927,7 +927,7 @@ column.
 | `PLUGIN_SELECTION_CHANGED` | `tools/aidlc-utility.ts` | `select-plugins` set-mode; fields: `Previous Selection`, `New Selection` |
 | `DEPTH_CHANGED` | `tools/aidlc-guard-switch.ts` | `config set depth <value>` / `config-change --depth` |
 | `TEST_STRATEGY_CHANGED` | `tools/aidlc-guard-switch.ts` | `config set test-strategy <value>` / `config-change --test-strategy` |
-| `UNIT_OWNERSHIP_SET` | `tools/aidlc-state.ts` | `set-unit-ownership team|solo`; team switches a stage-major plan to unit-major first (`CONSTRUCTION_POLICY_SET`) |
+| `UNIT_OWNERSHIP_SET` | `tools/aidlc-state.ts`, `tools/aidlc-unit.ts` | `set-unit-ownership team|solo`; `aidlc-unit.ts` records the switch to teams of solo work a teammate took a Unit of from another machine, with `Home Location` and a `Reason`; team switches a stage-major plan to unit-major first (`CONSTRUCTION_POLICY_SET`) |
 | `UNIT_GATE_RHYTHM_SET` | `tools/aidlc-state.ts` | `set-unit-gate-rhythm per-stage|unit-end`; team mode only |
 | `UNITS_ASSIGNED` | `tools/aidlc-unit.ts` | `assign <unit>=<team>... [--open]` at the home: which Unit each team was named for and which stay open, with the lead's words as `Person Words`; fields `Assigned`, `Open`; `hand-off <unit> --team <team>` records the same row with `By File` (the hand-off file) |
 | `UNIT_TAKEN_IN` | `tools/aidlc-unit.ts` | `take <unit> --home <record>`: a team's build of one Unit of a home's work, started in the team's space; fields `Unit`, `Team`, `Home Location`, `Home Work`, `Home Record`, `Home Attempt`, `Home Commit`, `Copy Fingerprint`, `Home Approvals` (the home's approvals as data, never this build's) |

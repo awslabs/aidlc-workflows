@@ -809,6 +809,14 @@ export interface UnitAmendAskDirective extends AskDirectiveBase {
   amend_command: string;
 }
 
+// The lead's sign-off of a team's result, in their own words.
+export interface UnitSignoffAskDirective extends AskDirectiveBase {
+  ask_type: "unit-signoff";
+  response_route: "command";
+  choices: AskChoice[];
+  signoff_command: string;
+}
+
 // A hand-off file the person pointed at: start its Unit, or not now.
 export interface UnitHandoffAskDirective extends AskDirectiveBase {
   ask_type: "unit-handoff";
@@ -938,6 +946,7 @@ export type AskDirective =
   | UnitPushAskDirective
   | UnitHandoffAskDirective
   | UnitAmendAskDirective
+  | UnitSignoffAskDirective
   | NewWorkRoutingAskDirective
   | UnitClaimAskDirective
   | LegacyPlanApprovalRecoveryAskDirective
@@ -1220,6 +1229,7 @@ const ASK_FIELDS = [
   "confirm_command",
   "assign_command",
   "amend_command",
+  "signoff_command",
   "compose_command",
   "scope_commands",
   "select_commands",
@@ -1740,7 +1750,7 @@ export function ceremonyNote(state: "on" | "off", questionsOnly = false): string
 // the numbers: a reply of "2" is read against this order, and the agent
 // renders nothing of its own. One builder, so every question has one shape.
 // Engine questions answered by running the picked choice's command.
-const COMMAND_CHOICE_ASKS = new Set(["construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "repos-manifest", "unit-assignment", "unit-take", "unit-push", "unit-handoff", "unit-amend"]);
+const COMMAND_CHOICE_ASKS = new Set(["construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "repos-manifest", "unit-assignment", "unit-take", "unit-push", "unit-handoff", "unit-amend", "unit-signoff"]);
 
 export interface AskChoice {
   label: string;
@@ -1910,6 +1920,8 @@ export function withAgentNotes<T extends object>(
       ? unitAssignmentQuestionNote(invocation)
       : d.ask_type === "unit-amend"
       ? unitAmendQuestionNote(invocation)
+      : d.ask_type === "unit-signoff"
+      ? questionNote(invocation, choices?.length === 1) + " Their words sign it off: when they do, run signoff_command with their words, single-quoted, as --person-words; anything else leaves it waiting."
       : questionNote(invocation, choices?.length === 1);
     if (typeof d.numbered_prose_question !== "string") {
       // A question with no options (a guard that has no way on) is said as it is.
@@ -2206,6 +2218,7 @@ export function validateDirective(obj: unknown): ValidationResult {
         "handovers",
         "assign_command",
         "amend_command",
+        "signoff_command",
       ] as const;
       const rejectUnexpected = (
         askType: string,
@@ -2296,7 +2309,10 @@ export function validateDirective(obj: unknown): ValidationResult {
         if (o.response_route !== "command") {
           errors.push(`${kind}: ${o.ask_type} response_route must be "command"`);
         }
-        const commandField = o.ask_type === "unit-assignment" ? "assign_command" : o.ask_type === "unit-amend" ? "amend_command" : null;
+        const commandField = o.ask_type === "unit-assignment" ? "assign_command"
+          : o.ask_type === "unit-amend" ? "amend_command"
+          : o.ask_type === "unit-signoff" ? "signoff_command"
+          : null;
         if (commandField !== null) checkString(o, commandField, kind, errors);
         rejectUnexpected(String(o.ask_type), commandField !== null ? { [commandField]: true } : {});
       } else if (o.ask_type === "new-work-routing") {

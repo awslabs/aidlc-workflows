@@ -820,6 +820,21 @@ the line (`staleStageLine`, or the follow-up offer for a done Unit) comes from
 the amendment alone. `completionReceiptsFromAudit` reads `SHARED_INPUT_AMENDED`
 as it reads `STAGE_DEFINITION_CHANGED`.
 
+Solo work built unit-major whose last per-Unit row is in another clone's audit
+shard (`builtFromAnotherMachine`) is offered, at a plain `next` with no work
+selected, as `ask_type: unit-take` with **Take <unit>** for each Unit not
+started and not waiting, **Carry on** (`next --pick`) and **Follow along**
+(`status` for that record). `unit take` on such work claims the Unit at the
+workspace's `origin` and builds it in the home's space; it writes nothing of
+the home's state. At the start of every `next`, `switchSoloToTeams` switches
+solo unit-major work whose claim refs (brought by git) show a taken Unit:
+`Unit Ownership: team`, `Home Location` (its origin), `Unit Gate Rhythm:
+unit-end`, `UNIT_OWNERSHIP_SET` with a `Reason`, and `UNIT_MERGED` (`Merged In:
+built here before teams`) for each Unit its own walk finished; the step carries
+one line. With `Lead Sign-off: on`, a claim with a result and no `signoff`
+makes the home's step `ask_type: unit-signoff` once (with `signoff_command`),
+and `checkTeamResults` records done only after the sign-off.
+
 When skeleton-on applies, the first DAG Unit must be planned as the smallest
 working integrated slice. It completes its applicable per-unit stages before
 later Units even under stage-major. The engine then emits a `run-stage` with

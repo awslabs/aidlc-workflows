@@ -336,6 +336,7 @@ import {
   listIntents,
   type IntentInfo,
   listSpaces,
+  auditShardName,
   engineAskMark,
   noteEngineAskMark,
   personRepliedAfter,
@@ -593,6 +594,9 @@ import { resolveSwarmCheckpoint } from "./aidlc-swarm-checkpoints.ts";
 import {
   amendAskName,
   buildClaimNotes,
+  leadSignOffOn,
+  signOffAskName,
+  switchSoloToTeams,
   cachedUnitClaimOverview,
   checkTeamResults,
   claimsOpenHere,
@@ -668,9 +672,11 @@ import {
 import { localRepoOverrideLines, REPOS_FILE } from "./aidlc-workspace-manifest.ts";
 import { noteReposManifestOffered, reposManifestOffered } from "./aidlc-workspace-repos.ts";
 import {
+  builtFromAnotherMachine,
   findUnitBuild,
   homeLocation,
   inputName,
+  soloUnitsProgress,
   parseHandFile,
   unitLikelyReposFrom,
   workspaceHomeLocation,
@@ -8510,6 +8516,48 @@ function workLabel(projectDir: string): string {
   return intent ? intentDisplayLabel(intent) : selection.intent ?? "this work";
 }
 
+// Solo work being built from another machine, opened in a teammate's clone:
+// take an open Unit as their own, carry the whole work on here (the other
+// person stopped), or follow along. Null for any other work.
+function soloElsewhereAsk(projectDir: string): AskDirective | null {
+  const space = engineSelection(projectDir).space;
+  const location = workspaceHomeLocation(projectDir);
+  if (location === null || location === "local") return null;
+  const own = auditShardName(projectDir);
+  for (const { intent, state } of workToPickUp(projectDir, space, null) ?? []) {
+    if (!intent.dirName) continue;
+    const rows = readAuditShardEvents(projectDir, intent.dirName, space);
+    const at = builtFromAnotherMachine(state, rows, own);
+    if (at === null) continue;
+    const finalStage = unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true).at(-1) ?? "code-generation";
+    const progress = soloUnitsProgress(rows, finalStage);
+    const dependencies = unitDependencies(projectDir, intent.dirName, space);
+    const open = [...dependencies.keys()].filter((unit) =>
+      !progress.started.has(unit) && !progress.done.has(unit) && (dependencies.get(unit) ?? []).every((dep) => progress.done.has(dep))
+    );
+    const take = `${aidlcToolInvocation("unit")} take %s --home ${shellArg(intent.dirName)}` +
+      (space === DEFAULT_SPACE ? "" : ` --home-space ${shellArg(space)}`);
+    const label = intentDisplayLabel(intent);
+    return {
+      kind: "ask",
+      ask_type: "unit-take",
+      response_route: "command",
+      question: `${label} is being built from another machine, on ${at.unit} (${stageLabel(nodeForSlug(at.stage), at.stage) ?? at.stage}). ` +
+        "Take an open Unit as your own, carry on the whole work here, or follow along?",
+      choices: [
+        ...open.map((unit) => ({
+          label: `Take ${unit}`,
+          detail: "It moves to you as a piece of work of its own here; everything done so far is kept.",
+          command: take.replace("%s", shellArg(unit)),
+        })),
+        { label: `Carry on ${label} here`, detail: "For when the other person has stopped.", command: selectCommands([intent.dirName])[0].command },
+        { label: "Follow along", detail: "See where it stands, without changing anything.", command: `${aidlcToolInvocation("utility")} status --space ${shellArg(space)} --intent ${shellArg(intent.dirName)}` },
+      ],
+    };
+  }
+  return null;
+}
+
 // Guard the creation gate against a DUPLICATE intent on a fresh clone of a
 // multi-intent workspace. A no-state creation arm (Branch 7b / 9a) fires purely on
 // `!stateContent`, but stateContent is empty in TWO different worlds: a truly
@@ -12174,7 +12222,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     intent: engineSelection(pd).intent ?? undefined, space: engineSelection(pd).space,
   });
   if (settledPolicy?.line) settledNotices.push(settledPolicy.line);
+  // Solo work a teammate took a Unit of from another machine switches to teams
+  // here, at this home's step, before anything routes.
+  const switchedToTeams = switchSoloToTeams(pd);
   const stateContent = loadStateFileIfPresent(pd);
+  if (switchedToTeams !== null) sayWithStepOnce(pd, switchedToTeams);
   activeRetiredGuardPolicyNotice = stateContent === null ? null : retiredGuardPolicyNotice(pd, stateContent);
   // Runtime state-version guard (see staleStateVersionError): refuse a state
   // this build cannot read (newer, unparseable, or older than any step brings
@@ -13243,7 +13295,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     }
     // A Unit to take or carry on, for a team member opening a workspace with no
     // work of their own here.
-    const take = unitTakeAsk(pd);
+    const take = unitTakeAsk(pd) ?? soloElsewhereAsk(pd);
     if (take) {
       emit(take);
       return;
@@ -16510,6 +16562,31 @@ function emitTeamUnitMajorRunStage(
     }
     sayWithStepOnce(projectDir, `The change ${proposal.claim.owner} proposed to the ${name} waits for your answer: approve it or turn it down when you are ready.`);
   }
+  // The lead's sign-off, when it is on: asked once as a team's result arrives.
+  const toSignOff = leadSignOffOn(stateContent)
+    ? [...(overview?.claims.values() ?? [])].find((claim) => claim.status === "claimed" && claim.payload.result && !claim.payload.signoff)
+    : undefined;
+  if (toSignOff && !isReadOnlyEngineProbe()) {
+    const askName = signOffAskName(toSignOff.unit);
+    const mark = engineAskMark(projectDir, askName);
+    if (mark === null || !personRepliedAfter(projectDir, mark)) {
+      noteEngineAskMark(projectDir, askName);
+      const verdicts = results.get(toSignOff.unit)?.verdicts ?? toSignOff.payload.verdicts ??
+        toSignOff.payload.result!.repos.map((repo) => ({ repo: repo.repo, merged: false }));
+      emit({
+        kind: "ask",
+        ask_type: "unit-signoff",
+        response_route: "command",
+        question: `${toSignOff.unit} came back from ${toSignOff.owner}: ${mergedStatus(verdicts)}. Sign it off?`,
+        choices: [
+          { label: "Sign it off", detail: "It counts as done once every repo it changed has merged." },
+          { label: "Not now", detail: "It waits for your sign-off." },
+        ],
+        signoff_command: `${aidlcToolInvocation("unit")} sign-off ${shellArg(toSignOff.unit)} --person-words '<their words>'`,
+      });
+      return;
+    }
+  }
   if ([...heldElsewhere].some((unit) => !model?.mergedUnits.has(unit))) {
     const rows = unitsInPlanOrder(projectDir, resolution.batches.flat()).map((unit): UnitBoardRow => {
       const claim = overview?.claims.get(unit);
@@ -16524,7 +16601,8 @@ function emitTeamUnitMajorRunStage(
       if (payload.result) {
         const verdicts = results.get(unit)?.verdicts ?? payload.verdicts ??
           payload.result.repos.map((repo) => ({ repo: repo.repo, merged: false }));
-        return { unit, team, status: mergedStatus(verdicts) };
+        const waiting = leadSignOffOn(stateContent) && !payload.signoff ? ", waiting for your sign-off" : "";
+        return { unit, team, status: `${mergedStatus(verdicts)}${waiting}` };
       }
       if (payload.by_file) {
         return { unit, team, status: payload.progress?.stage ? `handed off by file, at ${payload.progress.stage}` : "handed off by file" };

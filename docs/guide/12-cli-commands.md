@@ -55,6 +55,8 @@ diagnostic and lifecycle routes.
 | `/aidlc unit take-in <file>` | At the home, take a team's result or progress file in |
 | `/aidlc unit propose --input <file>` | In a Unit's build, send the home a change to an input the Unit was approved with |
 | `/aidlc unit amend <unit> --input <file> --answer <approve\|reject>` | At the home, answer a team's proposed change, in your own words |
+| `/aidlc unit lead-sign-off on\|off` | At the home, make each team's result wait for your sign-off, or not (off by default) |
+| `/aidlc unit sign-off <unit>` | At the home, sign a team's result off, in your own words |
 | `/aidlc unit turned-down <unit> --repo <repo>` | At the home, send one repo of a team's Unit back to the team, with your words |
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
@@ -767,6 +769,15 @@ words>'` from their reply: their own words after the question was shown, not
 empty and not the agent's. An approved change is written into the home's
 record with `SHARED_INPUT_AMENDED` for each stage there that used it, and goes
 onto every team's claim; a team by file gets a newer hand-off file.
+
+### `/aidlc unit lead-sign-off` and `/aidlc unit sign-off <unit>` - The lead's sign-off
+
+`lead-sign-off on|off` records `Lead Sign-off` in the work's state at the home;
+it is off by default. While it is on, a Unit counts as done only once the lead
+signed its team's result off and every repo it changed merged. The home asks
+once as a result arrives; the agent runs `sign-off <unit> --person-words
+'<their words>'` from their reply, under the same rules as any answer of
+theirs (their own words, after the question was shown, not the agent's).
 
 ### `/aidlc unit turned-down <unit> --repo <repo>` - Send a repo back
 

@@ -324,6 +324,31 @@ with an offer to start follow-up work; the done Unit is never reopened. A
 change turned down reaches the team that proposed it once, with the owner's
 words.
 
+## A second person on solo work, and the lead's sign-off
+
+Solo work built one Unit at a time on one machine can still take a teammate.
+When they open it in their own clone, AI-DLC says it is being built from
+another machine, on which Unit and stage, and offers three things: **Take** an
+open Unit as their own (never the one the other machine is on), **Carry on**
+the whole work here (for when the other person has stopped; today's pickup),
+or **Follow along** (where it stands, read only). Taking one holds it on its
+claim at the workspace's `origin` and starts its build in the same space, in a
+folder of its own; the teammate's clone never writes the work's own state. At
+its next step, the home's session switches to teams by itself: the workspace's
+`origin` becomes the home, each Unit keeps one approval at its end as it had,
+the Units it already built count as merged there, and it says in one line who
+took which Unit. Nothing is asked again. The board names each teammate by
+their own git name.
+
+The lead's sign-off is off by default. With `aidlc unit lead-sign-off on` at
+the home, a team's result waits for the lead's own word: the home asks once
+as the result arrives ("refunds came back from payments: ... Sign it off?"),
+and the Unit counts as done only once it is signed off and every repo it
+changed has merged; the board says "waiting for your sign-off" meanwhile.
+
+Team work that started before `Home Location` existed keeps the claim,
+publish, pin, gate and land flow described above, unchanged.
+
 ## A team that cannot reach the home
 
 A partner team in another company, or behind a locked network, works from
