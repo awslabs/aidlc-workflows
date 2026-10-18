@@ -14877,8 +14877,8 @@ export function auditBlockField(block: string, fieldName: string): string | null
 // Whether a `GATE_REJECTED` row is a fresh attempt rather than the person's
 // change request. `aidlc-jump.ts reopen` marks its rows `Reopen: jump` (a
 // `/aidlc --stage` reopen) or `Reopen: redo` (redo on re-entry): the person
-// asked to do the step again, not to change it, so its plan comes back for
-// approval as it stands. `Reopen: change` and a row with no `Reopen` (a gate's
+// asked for a fresh attempt, so the earlier plan approval cannot carry over.
+// `Reopen: change` and a row with no `Reopen` (a gate's
 // Request Changes) are the person's change request. Told apart by that field's
 // value alone, never by the row's feedback text.
 export function rejectionIsFreshAttempt(block: string): boolean {
@@ -36065,6 +36065,22 @@ function gateRejectionMatchesAttempt(
   return unit !== undefined && eventUnit === unit;
 }
 
+// The attempt's ordinal distinguishes rejections recorded in the same second.
+// Use the same stage/Unit filter and ordering that assigned that ordinal.
+export function rejectionAtRunFloor(
+  rows: readonly AuditShardEvent[],
+  slug: string,
+  unit: string | undefined,
+  floor: string,
+): AuditShardEvent | undefined {
+  const rejected = /^GATE_REJECTED:(.+)#([1-9][0-9]*)$/.exec(floor);
+  if (rejected === null) return undefined;
+  const matching = sortAttemptEvents(rows.filter((row) =>
+    row.event === "GATE_REJECTED" && gateRejectionMatchesAttempt(row.block, slug, unit)));
+  const row = matching[Number(rejected[2]) - 1];
+  return row?.timestamp === rejected[1] ? row : undefined;
+}
+
 export function unitGateStatus(
   projectDir: string,
   stage: string,
@@ -36819,20 +36835,13 @@ export function currentSwarmSourceOpeningFingerprint(
   }
   const rejected = /^GATE_REJECTED:(.+)#([1-9][0-9]*)$/.exec(floor);
   if (rejected !== null) {
-    const ordinal = Number(rejected[2]);
-    const rows = (auditRows ?? readAuditShardEvents(projectDir, intent, space))
-      .filter(
-        (row) =>
-          row.event === "GATE_REJECTED" &&
-          gateRejectionMatchesAttempt(row.block, slug, undefined),
-      )
-      .sort((a, b) => {
-        if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
-        if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
-        return a.pos - b.pos;
-      });
-    const row = rows[ordinal - 1];
-    if (!row || row.timestamp !== rejected[1]) {
+    const row = rejectionAtRunFloor(
+      auditRows ?? readAuditShardEvents(projectDir, intent, space),
+      slug,
+      undefined,
+      floor,
+    );
+    if (!row) {
       return {
         state: "invalid",
         reason: "current rejection boundary cannot be correlated to its audit row",

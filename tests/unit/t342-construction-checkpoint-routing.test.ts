@@ -2270,6 +2270,11 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       `## Steps\n\n${steps.map((step) => `- [ ] ${step}`).join("\n")}\n\n${renderTestingContract(resolveTestingPosture(p))}`);
     writeFileSync(join(dir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test src/parts.test.ts`.\n");
     expect(next(p)).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit });
+    approveCurrentPlan(p);
+    return planFile;
+  }
+
+  function approveCurrentPlan(p: string) {
     hookCall(p, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
       hook_event_name: "UserPromptSubmit", prompt: "approve",
     });
@@ -2280,7 +2285,6 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     ], env);
     expect(recorded.status, recorded.out).toBe(0);
     expect(next(p).plan_approval).toEqual({ status: "approved" });
-    return planFile;
   }
 
   // beta's Code Generation as #1586 resumes it: beta started the step, the
@@ -2379,7 +2383,22 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     // alpha redoes its step and its checkpoint first, then beta starts its own over.
     cover(p, "alpha", ["code-generation"]);
     approve(p, "alpha");
-    redoneFromStart(p, "every unit");
+    const planFile = join(codeGenerationRecordDir(p, "beta"), "code-generation-plan.md");
+    const original = readFileSync(planFile, "utf-8");
+    expect(original).toContain("- [x] Step 1:");
+    expect(next(p)).toMatchObject({ kind: "ask", ask_type: "plan-approval", unit: "beta" });
+    expect(readFileSync(planFile, "utf-8")).toBe(original);
+    approveCurrentPlan(p);
+    const brief = tool(p, "testing-posture", ["brief", "--unit", "beta"]);
+    expect(brief.status, brief.out).toBe(0);
+    hookCall(p, [join(AIDLC_SRC, "hooks/aidlc-plan-approval-guard.ts")], {
+      hook_event_name: "PreToolUse", tool_name: "Task",
+      tool_input: { subagent_type: "aidlc-developer-agent", prompt: brief.stdout },
+    });
+    const restarted = readFileSync(planFile, "utf-8");
+    expect(restarted).not.toContain("- [x]");
+    expect(restarted.match(/^- \[ \] Step /gm)).toHaveLength(4);
+    expect(next(p).narration ?? "").not.toContain("Picking up");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("unit-major Redo before any Unit has finished work keeps the stage redo", () => {

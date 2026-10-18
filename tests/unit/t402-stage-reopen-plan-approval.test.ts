@@ -7,7 +7,7 @@
 // comes back for the person's approval. Nothing in the plan needs changing,
 // so `next` must ask the Plan Approval question, not hand the agent a
 // `revise` whose only "feedback" is the reopen notice; with an unchanged plan
-// that `revise` never clears (BUGFIX-unit-gate-stuck-revising.md).
+// that `revise` never clears.
 //
 // Everything below drives the real tools: `next` (plan-approval ask and the
 // `--stage` reopen print), the human-turn hook, `aidlc-jump.ts reopen` exactly
@@ -286,7 +286,7 @@ describe("a --stage reopen of a Unit's approved Code Generation", () => {
 
   // The loop itself: an agent that does as `revise` says, with nothing to
   // change, writes the same plan again, and `next` says `revise` again.
-  test("rewriting the unchanged plan after the reopen never clears revise (the stuck state)", () => {
+  test("an unchanged plan stays available for approval across repeated next calls", () => {
     const p = fixture();
     builtAndVerified(p);
     expect(reopenFromStage(p)).toBeNull();

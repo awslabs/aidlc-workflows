@@ -76,6 +76,7 @@ import {
   recordAcceptedChanges,
   recordGuardStoodAside,
   recordHookDrop,
+  rejectionAtRunFloor,
   rejectionIsFreshAttempt,
   renderChangedPaths,
   renderSourcePathKeys,
@@ -2908,9 +2909,9 @@ function approvalFromTheirChangeRequest(
 ): PlanApprovalRuntimeReceipt | null {
   const floor = /^GATE_REJECTED:(.+)#\d+$/.exec(authority.runFloor);
   if (floor === null) return null;
-  const rejection = readAuditShardEvents(projectDir).find((row) =>
-    row.event === "GATE_REJECTED" && row.timestamp === floor[1] &&
-    [null, authority.unit].includes(auditBlockField(row.block, "Unit")));
+  const rejection = rejectionAtRunFloor(
+    readAuditShardEvents(projectDir), "code-generation", authority.unit ?? undefined, authority.runFloor,
+  );
   if (rejection === undefined) return null;
   if (rejectionIsFreshAttempt(rejection.block)) return null;
   const plan = readFileSync(join(authority.stageDir, "code-generation-plan.md"), "utf-8");

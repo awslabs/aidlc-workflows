@@ -50,7 +50,7 @@ import {
   readProtectedQuestion,
   readWorkspaceSourceSnapshot,
   recordedSourceListingUnderCurrentBoundary,
-  rejectionIsFreshAttempt,
+  rejectionAtRunFloor,
   removePlanApprovalRuntimeRecord,
   renderChangedPaths,
   sourceChangedOutsideAidlc,
@@ -724,11 +724,10 @@ export function isPlanApprovalBeat(directive: Directive): directive is RunStageD
  * person's rejection is the change to make: the plan is revised first, and the
  * engine asks about the revised plan, never about the one they just sent back.
  *
- * A reopen or a Redo (`Reopen: jump` or `Reopen: redo`) also starts a new
- * attempt, but the person asked for no change: it is a fresh attempt, so the
- * plan as it stands comes back for approval. Sending it back for revision
- * would hand the agent the reopen notice as if it were their words, and an
- * unchanged plan would be sent back on every round.
+ * A stage jump (`Reopen: jump`) keeps the plan available for approval as it
+ * stands. Its reopen notice is not a change request, and an unchanged plan
+ * would otherwise be sent back on every round. Redo (`Reopen: redo`) instead
+ * starts planning again before the new plan comes back for approval.
  */
 function rejectionRevision(projectDir: string, unit: string | null, intentId: string): { feedback?: string } | null {
   // Read from the audit trail, not the active directive: `next` routes before
@@ -749,10 +748,10 @@ function rejectionRevision(projectDir: string, unit: string | null, intentId: st
   }
   const floor = /^GATE_REJECTED:(.+)#\d+$/.exec(runFloor);
   if (floor === null) return null;
-  const rejection = readAuditShardEvents(projectDir).find((row) =>
-    row.event === "GATE_REJECTED" && row.timestamp === floor[1] &&
-    [null, unit].includes(auditBlockField(row.block, "Unit")));
-  if (rejection !== undefined && rejectionIsFreshAttempt(rejection.block)) return null;
+  const rejection = rejectionAtRunFloor(
+    readAuditShardEvents(projectDir), STAGE, unit ?? undefined, runFloor,
+  );
+  if (rejection !== undefined && auditBlockField(rejection.block, "Reopen") === "jump") return null;
   const dir = codeGenerationRecordDir(projectDir, unit);
   const plan = readText(join(dir, PLAN_FILE));
   const instructions = readText(join(dir, INSTRUCTIONS_FILE));
