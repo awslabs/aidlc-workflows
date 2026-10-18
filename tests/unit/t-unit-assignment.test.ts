@@ -23,6 +23,7 @@ import {
   run,
   STATE,
   stateOf,
+  tellsWhatToType,
   UNIT,
 } from "../harness/team-build.ts";
 
@@ -76,8 +77,14 @@ describe("who builds which Unit is asked once, at the home", () => {
     expect(assigned.status, assigned.out).toBe(0);
     expect(assigned.json?.notice).toBe(
       "Refunds: payments. Checkout-ui: web. Open for any team: reporting. Each team approves its Unit after every " +
-        "stage; to approve once at the end of each Unit, say so before the first Unit is built.",
+        "stage, which I'd keep, so each design is checked before the next one is built. Do you want them to approve " +
+        "once, at the end of each Unit, instead?",
     );
+    expect(tellsWhatToType(assigned.json?.notice)).toBe(false);
+    // The offer reaches the agent as choices, each with what it runs.
+    const offer = assigned.json?.offer as { choices: Array<{ label: string; command?: string }> };
+    expect(offer.choices.map((choice) => choice.label)).toEqual(["Keep approvals after every stage", "Approve once at the end of each Unit"]);
+    expect(offer.choices[1].command).toEndWith("aidlc-state.ts set-unit-gate-rhythm unit-end");
     const id8 = fixtureIntentId8(home.dir);
     expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ status: "claimed", owner: "payments", assigned: true });
     expect(claimPayload(home.remote, id8, "checkout-ui")).toMatchObject({ status: "claimed", owner: "web", assigned: true });

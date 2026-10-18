@@ -427,7 +427,7 @@ describe("scenario 6: when things go wrong", () => {
     expect(boardAt(home)).toContain("- refunds, payments: turned down in billing, back with payments");
     git(alice, ["fetch", "-q", "origin"]);
     expect(notices(kiro.next(alice))).toContain(
-      'refunds was turned down in billing at the home: "they want the retry logic in the client". Say go back to Code Generation to change it, then push again.',
+      'refunds was turned down in billing at the home: "they want the retry logic in the client".',
     );
     // The team changes billing and pushes again; checkout-api stays merged.
     code("-with-retry");

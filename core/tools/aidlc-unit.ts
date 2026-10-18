@@ -131,6 +131,7 @@ import {
   writeFileAtomic,
   ENGINE_DIR,
   intentRepos,
+  setField,
 } from "./aidlc-lib.js";
 import {
   type Amendment,
@@ -4930,13 +4931,27 @@ function assignUnits(args: string[], projectDir?: string): void {
     ...assigned.map((row) => `${sentence(row.unit)}: ${row.team}.`),
     ...(openUnits.length > 0 ? [`Open for any team: ${openUnits.join(", ")}.`] : []),
   ];
-  const rhythm = readUnitGateRhythm(state) === "unit-end"
-    ? "Each team approves its Unit once, at the end."
-    : "Each team approves its Unit after every stage; to approve once at the end of each Unit, say so before the first Unit is built.";
+  // The rhythm is the lead's to change: the offer says what is set, what to do
+  // and why, and gives the agent the command for the other choice.
+  const perStage = readUnitGateRhythm(state) !== "unit-end";
+  const rhythm = perStage
+    ? "Each team approves its Unit after every stage, which I'd keep, so each design is checked before the next one is " +
+      "built. Do you want them to approve once, at the end of each Unit, instead?"
+    : "Each team approves its Unit once, at the end.";
   console.log(JSON.stringify({
     assigned,
     open: openUnits,
     notice: [...summary, ...lines, rhythm].join(" "),
+    ...(perStage
+      ? {
+        offer: {
+          choices: [
+            { label: "Keep approvals after every stage", recommended: true },
+            { label: "Approve once at the end of each Unit", command: `${aidlcToolInvocation("state")} set-unit-gate-rhythm unit-end` },
+          ],
+        },
+      }
+      : {}),
   }));
 }
 
@@ -5484,7 +5499,7 @@ function takeUnit(args: string[], projectDir?: string): void {
     if (current?.status !== "claimed") {
       fail(
         `${unit} is open at the home, which takes no push from here: ${pushed.refused ?? "the claim did not take"}. ` +
-          `Ask the lead to hold it for your team: at the home they run /aidlc unit assign ${unit}=${team}.`,
+          "Ask the lead to hold it for your team at the home.",
       );
     }
     // The lead holds it for this team: it is theirs to take without a push,
@@ -5654,7 +5669,7 @@ function pushUnit(args: string[], projectDir?: string): void {
   const unit = build.unit;
   if (bareFlags.has("later") || flags.later !== undefined) {
     withAuditLock(pd, () => writeStateFile(pd, setRuntimeField(readStateFile(pd), UNIT_PUSH_FIELD, "later")));
-    console.log(JSON.stringify({ pushed: false, notice: `Nothing is pushed. Say push when ${unit} is ready to go home.` }));
+    console.log(JSON.stringify({ pushed: false, notice: `Nothing is pushed. I'll push ${unit} when you want it to go home.` }));
     return;
   }
   const manifest = readUnitSourceManifest(pd, "code-generation", unit);
@@ -5733,7 +5748,7 @@ function pushUnit(args: string[], projectDir?: string): void {
     writeHandFile(pd, rel, renderHandFile(
       "result",
       `Result: ${unit} of ${label}`,
-      "Take it in at the home with `/aidlc <this file>`.",
+      "Point AI-DLC at this file at the home and it takes it in.",
       {
         "Home Work": build.homeWork,
         "Home Label": label,
@@ -5756,7 +5771,7 @@ function pushUnit(args: string[], projectDir?: string): void {
     const payload: UnitClaimPayload = { ...claim.payload, predecessor_oid: claim.oid, result, verdicts: undefined, turned_down: undefined };
     const commit = createClaimCommit(pd, claim.oid, payload, undefined, undefined, files);
     const sent = updateClaimRef(pd, home.target, ref, commit, claim.oid);
-    if (!sent.ok) lines.push(`The home did not take ${unit}'s result: ${sent.refused ?? "its claim moved meanwhile"}. Say push to send it again.`);
+    if (!sent.ok) lines.push(`The home did not take ${unit}'s result: ${sent.refused ?? "its claim moved meanwhile"}. Do you want me to send it again?`);
     else invalidateLiveClaimPayloadCache(pd, unit);
   }
   withAuditLock(pd, () => {
@@ -5882,15 +5897,21 @@ function recordUnitDone(projectDir: string, claim: UnitClaimView, verdicts: NonN
 }
 
 // The home's turn-down of this build's Unit, as the claims git last brought in
-// have it; null when it is not turned down (or the claims are not here).
-export function buildTurnedDown(projectDir: string, stateContent: string): { repo: string } | null {
+// have it; null when it is not turned down (or the claims are not here). A
+// turned-down build is not finished: its record reads as work under way again,
+// so the person's turns in it count and their way back runs.
+export function reopenTurnedDownBuild(projectDir: string, stateContent: string): { repo: string } | null {
   const build = unitBuildOf(stateContent);
   if (build === null) return null;
   try {
     const space = build.homeRecord.slice(0, build.homeRecord.indexOf("/"));
     const mine = cachedClaimsForIdentity(projectDir, { space, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false)
       .get(build.unit);
-    return mine?.payload.turned_down && !mine.payload.done ? { repo: mine.payload.turned_down.repo } : null;
+    if (!mine?.payload.turned_down || mine.payload.done) return null;
+    if (getField(stateContent, "Status") === "Completed" && !isReadOnlyEngineProbe()) {
+      withAuditLock(projectDir, () => writeStateFile(projectDir, setField(readStateFile(projectDir), "Status", "Running")));
+    }
+    return { repo: mine.payload.turned_down.repo };
   } catch {
     return null;
   }
@@ -5930,8 +5951,7 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
   const unit = build.unit;
   const down = mine.payload.turned_down;
   if (down) {
-    lines.push(`${unit} was turned down in ${down.repo} at the home${down.words ? `: "${down.words}"` : ""}. ` +
-      "Say go back to Code Generation to change it, then push again.");
+    lines.push(`${unit} was turned down in ${down.repo} at the home${down.words ? `: "${down.words}"` : ""}.`);
   }
   for (const proposal of mine.payload.proposals ?? []) {
     if (proposal.answer === "approved") lines.push(`The home approved your change to the ${inputName(proposal.input)}.`);
@@ -6258,8 +6278,8 @@ function handOff(args: string[], projectDir?: string): void {
     unit,
     team,
     file: rel,
-    notice: `The hand-off file for ${unit} is ${rel}: send it to the ${team} team. They take it in with ` +
-      `/aidlc <the file> in their own workspace, and send its result back to you as a file.`,
+    notice: `The hand-off file for ${unit} is ${rel}: send it to the ${team} team. They take it in by ` +
+      "pointing AI-DLC at it in their own workspace, and send its result back to you as a file.",
   }));
 }
 
@@ -6283,8 +6303,8 @@ function writeHandOffFile(pd: string, unit: string, team: string, attempt: numbe
   writeHandFile(pd, rel, renderHandFile(
     "handoff",
     `Hand-off: ${unit} of ${label}`,
-    `This file hands ${unit} to the ${team} team. Take it in with \`/aidlc <this file>\` in your own ` +
-      "workspace; AI-DLC starts it as a piece of work of its own. It is not signed: it is bound by the work's id, the " +
+    `This file hands ${unit} to the ${team} team. Point AI-DLC at this file in your own workspace and it offers ` +
+      "to start it as a piece of work of its own. It is not signed: it is bound by the work's id, the " +
       "Unit, the attempt and the fingerprints below.",
     {
       "Home Work": identity.intentUuid,
@@ -6373,7 +6393,7 @@ function progressFile(projectDir?: string): void {
   writeHandFile(pd, rel, renderHandFile(
     "progress",
     `Progress: ${build.unit}`,
-    "Take it in at the home with `/aidlc <this file>`.",
+    "Point AI-DLC at this file at the home and it takes it in.",
     { "Home Work": build.homeWork, "Home Label": label, Unit: build.unit, Attempt: String(build.attempt), Stage: stage, Written: isoTimestamp() },
     new Map(),
   ));

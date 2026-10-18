@@ -594,7 +594,7 @@ import { resolveSwarmCheckpoint } from "./aidlc-swarm-checkpoints.ts";
 import {
   amendAskName,
   buildClaimNotes,
-  buildTurnedDown,
+  reopenTurnedDownBuild,
   leadSignOffOn,
   signOffAskName,
   switchSoloToTeams,
@@ -5656,7 +5656,7 @@ function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirecti
     choices: [
       {
         label: "Name the teams",
-        detail: "Say it your way, for example \"refunds: payments, checkout-ui: web, leave reporting open\".",
+        detail: "Which team builds which Unit, in your own words; a Unit you leave out stays open for any team.",
       },
       { label: "Leave them all open", detail: "Any team takes a Unit when it is ready.", command: `${unitTool} assign --open` },
     ],
@@ -8445,7 +8445,7 @@ function unitTakeAsk(projectDir: string): AskDirective | NoticeDirective | null 
     !homeHere.some((home) => home.dirName === intent.dirName) && unitBuildOf(state) === null) ?? [];
   if (ownWork.length > 0) return null;
   if (choices.length === 0) {
-    return noticeDirective(`${sentences.join(" ")} Nothing is ready to take yet: type ${entrySkillInvocation()} again once it is.`);
+    return noticeDirective(`${sentences.join(" ")} Nothing is ready to take yet.`);
   }
   for (const home of homeHere) {
     choices.push({
@@ -8502,6 +8502,35 @@ function handFileStep(projectDir: string, words: string): AskDirective | PrintDi
   };
 }
 
+// A Unit the home turned down, at the end of its build: the way back to Code
+// Generation asked once, with why; after that, where it stands, with the same
+// offer for the agent.
+function turnedDownStep(projectDir: string, unit: string, repo: string): AskDirective | NoticeDirective {
+  const back = {
+    label: `Take ${unit} back to Code Generation`,
+    detail: "Its code stays as it is; you change what the home asked for, then push it again.",
+    command: `${aidlcToolInvocation("orchestrate")} report --result resumed --choice redo --target code-generation`,
+  };
+  const askName = `unit-turned-down-${unit}`;
+  if (engineAskMark(projectDir, askName) !== null) {
+    const question = `${unit} is not finished: it was turned down at the home and waits for your change and a new push. ` +
+      "Do you want me to take it back to Code Generation?";
+    return { ...noticeDirective(question), offers: [{ question, choices: [back, { label: "Not now" }] }] };
+  }
+  noteEngineAskMark(projectDir, askName);
+  return {
+    kind: "ask",
+    ask_type: "unit-turned-down",
+    response_route: "command",
+    question: `Do you want me to take ${unit} back to Code Generation so you can change it and push it again? ` +
+      `That is what I'd do: ${repo} needs the change before ${unit} can merge.`,
+    choices: [
+      back,
+      { label: "Not now", detail: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} stays turned down until you come back to it.` },
+    ],
+  };
+}
+
 // The end of a Unit's build: the offer to push it home, until the person asked
 // for the push or said not now (then the end says it once). Null for other work.
 function unitPushAsk(projectDir: string, stateContent: string | null): AskDirective | null {
@@ -8511,7 +8540,7 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   if (push === "pushed") return null;
   const unit = build.unit;
   if (push === "later") {
-    sayWithStepOnce(projectDir, `${unit} is built and approved, and not pushed yet: say push when it is ready to go home.`);
+    sayWithStepOnce(projectDir, `${unit} is built and approved, and not pushed yet. Do you want me to push it now?`);
     return null;
   }
   const manifest = readUnitSourceManifest(projectDir, "code-generation", unit);
@@ -8527,7 +8556,7 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
       `branch ${unit} in ${names.length > 1 ? "each" : "it"} and push ${names.length > 1 ? "them" : "it"}?`,
     choices: [
       { label: "Push", detail: "Only the files its Code Generation wrote; nothing else of yours is committed.", command: `${unitTool} push` },
-      { label: "Not now", detail: "Nothing is pushed; say push when you are ready.", command: `${unitTool} push --later` },
+      { label: "Not now", detail: "Nothing is pushed until you want it to be.", command: `${unitTool} push --later` },
     ],
   };
 }
@@ -13912,10 +13941,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       emit(push);
       return;
     }
-    // A Unit the home turned down waits for the team's change and a new push.
+    // A Unit the home turned down is not finished: the team is asked once
+    // whether to take it back to Code Generation, and after that hears where
+    // it stands.
     const build = stateContent ? unitBuildOf(stateContent) : null;
-    if (build !== null && buildTurnedDown(pd, stateContent!) !== null) {
-      emit(noticeDirective(`${build.unit} is not finished: it was turned down at the home, so it waits for your change and a new push.`));
+    const down = build !== null ? reopenTurnedDownBuild(pd, stateContent!) : null;
+    if (build !== null && down !== null) {
+      emit(turnedDownStep(pd, build.unit, down.repo));
       return;
     }
     // No stage left to run — the workflow is complete.
@@ -16676,17 +16708,19 @@ function emitTeamUnitMajorRunStage(
       return { unit, team, status: `held for ${team}, not taken yet` };
     });
     // A team the home holds a Unit for may not reach this workspace: the lead
-    // hears once that the Unit can go to them as a file.
-    if (heldNotTaken.length > 0) {
-      const [first] = heldNotTaken;
-      sayWithStepOnce(projectDir, heldNotTaken.length === 1
-        ? `If ${first.team} cannot reach this workspace, say "hand off ${first.unit} by file" and send them the file it writes.`
-        : `If a team cannot reach this workspace, say "hand off" and its Unit, for example "hand off ${first.unit} by file", ` +
-          "and send them the file it writes.");
-    }
+    // is offered once to hand the Unit to them as a file.
     const unitTool = aidlcToolInvocation("unit");
+    const offers = heldNotTaken.map(({ unit, team }) => ({
+      question: `If ${team} cannot reach this workspace, I can hand ${unit} to them as a file they build it from. Do you want me to?`,
+      choices: [
+        { label: `Hand ${unit} to ${team} as a file`, command: `${unitTool} hand-off ${unit} --team ${shellArg(team)} --person-words '<their words>'` },
+        { label: `Keep ${unit} for ${team} here`, recommended: true },
+      ],
+    }));
+    for (const offer of offers) sayWithStepOnce(projectDir, offer.question);
     emit({
       ...noticeDirective(renderUnitBoard(workLabel(projectDir), rows)),
+      ...(offers.length > 0 ? { offers } : {}),
       board_note: "Show the board as it is. When the person says a repo turned a Unit down, run " +
         `\`${unitTool} turned-down <unit> --repo <repo> --person-words '<their words>'\`; when they say a repo merged it ` +
         `where the board does not see it, run \`${unitTool} merged <unit> --repo <repo> --person-words '<their words>'\`. ` +

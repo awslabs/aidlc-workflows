@@ -11,11 +11,12 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, cpSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
-import { fixtureIntentId8 } from "../harness/fixtures.ts";
+import { AIDLC_SRC, fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
   claimPayload,
   cleanupTeamBuild,
@@ -30,14 +31,47 @@ import {
   makeHome,
   mergeOnHost,
   next,
+  ORCH,
   refundsTaken,
   run,
+  tellsWhatToType,
   STATE,
   tempDir,
   UNIT,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
+
+// Every planned stage of the build done and approved, and the build finished.
+function finishBuild(record: string): void {
+  const statePath = join(record, "aidlc-state.md");
+  writeFileSync(statePath, readFileSync(statePath, "utf-8")
+    .replace(/^- \[[-? ]\] (functional-design|nfr-requirements|nfr-design|infrastructure-design|code-generation) /gm, "- [x] $1 ")
+    .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation")
+    .replace(/^- \*\*Status\*\*: .*$/m, "- **Status**: Completed"));
+}
+
+// The person's own chat: the presence guard on, as in a real run.
+function personsChat(session: string): NodeJS.ProcessEnv {
+  const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: session };
+  delete chat.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+  return chat;
+}
+
+// The person types /aidlc in their chat: the prompt's hook runs, then the step.
+function personsNext(dir: string, chat: NodeJS.ProcessEnv, session: string): Record<string, unknown> {
+  expect(hook(dir, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "/aidlc" }).status).toBe(0);
+  return next(dir, chat);
+}
+
+// One of Claude Code's hooks, as the host calls it in the person's project.
+function hook(dir: string, env: NodeJS.ProcessEnv, payload: Record<string, unknown>): { status: number; out: string } {
+  const r = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook",
+    payload.hook_event_name === "UserPromptSubmit" ? "record-human-turn" : "guard-tool-call"], {
+    cwd: dir, encoding: "utf-8", env: { ...env, CLAUDE_PROJECT_DIR: dir, AIDLC_PROJECT_DIR: dir }, input: JSON.stringify({ cwd: dir, ...payload }),
+  });
+  return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
+}
 afterEach(cleanupTeamBuild);
 
 describe("teams build Units across repos when the workspace is in git", () => {
@@ -146,11 +180,12 @@ describe("the push", () => {
     expect(choices[1].command).toEndWith("aidlc-unit.ts push --later");
     const later = run(UNIT, ["push", "--later"], alice);
     expect(later.status, later.out).toBe(0);
-    expect(later.json?.notice).toBe("Nothing is pushed. Say push when refunds is ready to go home.");
+    expect(later.json?.notice).toBe("Nothing is pushed. I'll push refunds when you want it to go home.");
+    expect(tellsWhatToType(ask.question, ask.choices, later.json?.notice)).toBe(false);
     const end = next(alice);
     expect(end.kind, JSON.stringify(end)).toBe("done");
     expect((end.change_notices ?? []) as string[]).toContain(
-      "refunds is built and approved, and not pushed yet: say push when it is ready to go home.",
+      "refunds is built and approved, and not pushed yet. Do you want me to push it now?",
     );
     expect(String(end.done_note)).toEndWith("aidlc-unit.ts push` and say its notice line.");
   });
@@ -250,7 +285,7 @@ describe("at the home", () => {
     expect(String(step.message)).toContain("- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
     expect((step.change_notices ?? []) as string[]).toEqual([
       "origin could not be reached just now, so the board may be behind: it shows what your last fetch brought.",
-      'If web cannot reach this workspace, say "hand off checkout-ui by file" and send them the file it writes.',
+      "If web cannot reach this workspace, I can hand checkout-ui to them as a file they build it from. Do you want me to?",
     ]);
   });
 
@@ -278,8 +313,7 @@ describe("at the home", () => {
     git(home.dir, ["fetch", "-q", "origin"]);
     expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "billing needs the ledger entry too"], home.dir).status).toBe(0);
     expect((next(alice).change_notices ?? []) as string[]).toContain(
-      'refunds was turned down in billing at the home: "billing needs the ledger entry too". ' +
-        "Say go back to Code Generation to change it, then push again.",
+      'refunds was turned down in billing at the home: "billing needs the ledger entry too".',
     );
   });
 
@@ -359,26 +393,75 @@ describe("at the home", () => {
   test("a team whose pushed build waits on the home hears a turn-down at its next step in the same chat, and the build never reads as finished", () => {
     const { home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
-    const statePath = join(record, "aidlc-state.md");
-    writeFileSync(statePath, readFileSync(statePath, "utf-8")
-      .replace(/^- \[[-? ]\] (functional-design|nfr-requirements|nfr-design|infrastructure-design|code-generation) /gm, "- [x] $1 ")
-      .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation"));
+    // The person's chat ran the build: its prompt hook has run in this record.
+    const chat = personsChat("t-unit-push-waits");
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: "t-unit-push-waits", prompt: "build refunds" }).status).toBe(0);
+    finishBuild(record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
-    expect(next(alice).kind).toBe("done");
+    const first = personsNext(alice, chat, "t-unit-push-waits");
+    expect(first.kind, JSON.stringify(first)).toBe("done");
     git(home.dir, ["fetch", "-q", "origin"]);
     expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "billing needs the ledger entry too"], home.dir).status).toBe(0);
-    const step = next(alice);
-    expect(step.kind, JSON.stringify(step)).toBe("notice");
-    expect(step.message).toBe("refunds is not finished: it was turned down at the home, so it waits for your change and a new push.");
+    const step = personsNext(alice, chat, "t-unit-push-waits");
     expect((step.change_notices ?? []) as string[]).toContain(
-      'refunds was turned down in billing at the home: "billing needs the ledger entry too". ' +
-        "Say go back to Code Generation to change it, then push again.",
+      'refunds was turned down in billing at the home: "billing needs the ledger entry too".',
     );
+    expect(step.ask_type, JSON.stringify(step)).toBe("unit-turned-down");
+    // Not now: it reads as not finished, and the question is not put again; the agent keeps the offer.
+    const later = personsNext(alice, chat, "t-unit-push-waits");
+    expect(later.kind, JSON.stringify(later)).toBe("notice");
+    expect(later.message).toBe(
+      "refunds is not finished: it was turned down at the home and waits for your change and a new push. " +
+        "Do you want me to take it back to Code Generation?",
+    );
+    const offers = later.offers as Array<{ choices: Array<{ label: string; command?: string }> }>;
+    expect(offers[0].choices[0].command).toEndWith("report --result resumed --choice redo --target code-generation");
     // Pushed again, the turn-down is answered: the build is finished once more.
     writeFileSync(join(alice, "billing", "lib", "refund.ts"), "export const refund = 2;\n");
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.turned_down).toBeUndefined();
-    expect(next(alice).kind).toBe("done");
+    expect(personsNext(alice, chat, "t-unit-push-waits").kind).toBe("done");
+  });
+
+  test("after a turn-down the build asks whether to go back to Code Generation, and the person's yes takes it there", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    // The person's chat ran the build: its prompt hook has run in this record.
+    const chat = personsChat("t-unit-push-turned-down");
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: "t-unit-push-turned-down", prompt: "build refunds" }).status).toBe(0);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    expect(personsNext(alice, chat, "t-unit-push-turned-down").kind).toBe("done");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "billing needs the ledger entry too"], home.dir).status).toBe(0);
+    const ask = personsNext(alice, chat, "t-unit-push-turned-down");
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-turned-down");
+    expect(ask.question).toBe(
+      "Do you want me to take refunds back to Code Generation so you can change it and push it again? " +
+        "That is what I'd do: billing needs the change before refunds can merge.",
+    );
+    const choices = ask.choices as Array<{ label: string; command?: string }>;
+    expect(choices.map((choice) => choice.label)).toEqual(["Take refunds back to Code Generation", "Not now"]);
+    expect(tellsWhatToType(ask.question, ask.choices, ask.change_notices)).toBe(false);
+    expect(choices[0].command).toEndWith("report --result resumed --choice redo --target code-generation");
+    expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).not.toContain("- **Status**: Completed");
+    // The person says yes in their chat; the choice, the way back it prints, and the guard that lets it run.
+    const said = hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: "t-unit-push-turned-down", prompt: "yes, take it back" });
+    expect(said.status, said.out).toBe(0);
+    const back = run(ORCH, ["report", "--result", "resumed", "--choice", "redo", "--target", "code-generation"], alice, chat);
+    const jump = /`(bun \S+aidlc-jump\.ts execute [^`]+)`/.exec(String(back.json?.message))?.[1];
+    expect(jump, back.out).toBeDefined();
+    // The jump as the agent runs it, from the project's own tool tree.
+    cpSync(AIDLC_SRC, join(alice, ".claude"), { recursive: true });
+    const guard = hook(alice, chat, {
+      hook_event_name: "PreToolUse", session_id: "t-unit-push-turned-down", tool_name: "Bash", tool_input: { command: jump },
+    });
+    expect(guard.status, guard.out).toBe(0);
+    const ran = spawnSync("bash", ["-c", jump!.replace(/^bun /, `${process.execPath} `)], { cwd: alice, encoding: "utf-8", env: chat });
+    expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
+    const step = next(alice, chat);
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    expect(step.stage).toBe("code-generation");
   });
 
   test("a turn-down at the home reaches the team once, in the home's words", () => {
@@ -389,8 +472,7 @@ describe("at the home", () => {
     const down = run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "billing needs the ledger entry too"], home.dir);
     expect(down.status, down.out).toBe(0);
     git(alice, ["fetch", "-q", "origin"]);
-    const line = 'refunds was turned down in billing at the home: "billing needs the ledger entry too". ' +
-      "Say go back to Code Generation to change it, then push again.";
+    const line = 'refunds was turned down in billing at the home: "billing needs the ledger entry too".';
     expect((next(alice).change_notices ?? []) as string[]).toContain(line);
   });
 });

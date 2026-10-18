@@ -116,7 +116,7 @@ describe("a team member's clone of the home's workspace", () => {
     expect(step.message).toBe(
       "fixture is built by teams, one Unit each. The walking skeleton, orders, is built at the home first. " +
         "Waiting: refunds (for payments; on orders), checkout-ui (for web; on orders), reporting (on orders, refunds). " +
-        "Nothing is ready to take yet: type /aidlc again once it is.",
+        "Nothing is ready to take yet.",
     );
     expect(git(alice, ["status", "--porcelain"])).toBe("");
   });
@@ -279,7 +279,7 @@ describe("a team's own workspace, made from the home's", () => {
     const openUnit = take(pay, "reporting", ["--team", "payments"]);
     expect(openUnit.status).not.toBe(0);
     expect(String(openUnit.json?.error)).toEndWith(
-      "Ask the lead to hold it for your team: at the home they run /aidlc unit assign reporting=payments.",
+      "Ask the lead to hold it for your team at the home.",
     );
   });
 });

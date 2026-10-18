@@ -25,6 +25,7 @@ import {
   next,
   run,
   STATE,
+  tellsWhatToType,
   tempDir,
   UNIT,
 } from "../harness/team-build.ts";
@@ -71,12 +72,12 @@ describe("the lead hands a Unit off by file", () => {
   test("the Unit is held for the team, one readable file is written, and the board says so", () => {
     const { home, handed } = handedOff();
     expect(handed.json?.notice).toBe(
-      `The hand-off file for reporting is ${FILE}: send it to the data team. They take it in with ` +
-        "/aidlc <the file> in their own workspace, and send its result back to you as a file.",
+      `The hand-off file for reporting is ${FILE}: send it to the data team. They take it in by ` +
+        "pointing AI-DLC at it in their own workspace, and send its result back to you as a file.",
     );
     const text = readFileSync(join(home.dir, ...FILE.split("/")), "utf-8");
     expect(text).toStartWith("# Hand-off: reporting of fixture\n");
-    expect(text).toContain("Take it in with `/aidlc <this file>` in your own ");
+    expect(text).toContain("Point AI-DLC at this file in your own workspace");
     expect(text).toContain("## File: inception/requirements-analysis/requirements.md");
     expect(text).not.toContain("\r");
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting")).toMatchObject({ owner: "data", by_file: true });
@@ -91,8 +92,12 @@ describe("the lead hands a Unit off by file", () => {
     expect(String(board.message)).toContain("- refunds, payments: held for payments, not taken yet");
     // reporting went by file already, so only refunds is offered.
     expect((board.change_notices ?? []) as string[]).toContain(
-      'If payments cannot reach this workspace, say "hand off refunds by file" and send them the file it writes.',
+      "If payments cannot reach this workspace, I can hand refunds to them as a file they build it from. Do you want me to?",
     );
+    expect(tellsWhatToType(board.message, board.change_notices)).toBe(false);
+    const offers = board.offers as Array<{ choices: Array<{ label: string; command?: string }> }>;
+    expect(offers[0].choices.map((choice) => choice.label)).toEqual(["Hand refunds to payments as a file", "Keep refunds for payments here"]);
+    expect(offers[0].choices[0].command).toEndWith("aidlc-unit.ts hand-off refunds --team payments --person-words '<their words>'");
     expect(String(board.board_note)).toContain("aidlc-unit.ts hand-off <unit> --team <team> --person-words '<their words>'");
     expect(String(board.board_note)).toContain("aidlc-unit.ts take-in <file>");
   });
@@ -139,7 +144,7 @@ describe("progress and the result come back as files", () => {
     expect(progress.status, progress.out).toBe(0);
     expect(progress.json?.notice).toBe("The progress file is aidlc/handoff/fixture-reporting-progress.md; send it to the lead if you like.");
     const progressFile = deliver(partner.dir, "aidlc/handoff/fixture-reporting-progress.md");
-    expect(readFileSync(progressFile, "utf-8")).toContain("Take it in at the home with `/aidlc <this file>`.");
+    expect(readFileSync(progressFile, "utf-8")).toContain("Point AI-DLC at this file at the home and it takes it in.");
     // Its path given to the home's /aidlc is the step that takes it in.
     const step = next(home.dir, undefined, [progressFile]);
     expect(step.kind, JSON.stringify(step)).toBe("print");

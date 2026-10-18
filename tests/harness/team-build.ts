@@ -251,6 +251,12 @@ export function next(cwd: string, env: NodeJS.ProcessEnv = ENV, args: string[] =
   throw new Error("rules never finished arriving");
 }
 
+// A line for the person that tells them what to type, in place of an offer the
+// agent puts to them: none of the build-out's lines may.
+export function tellsWhatToType(...lines: unknown[]): boolean {
+  return lines.some((line) => /\b[Ss]ay (?:["']|push\b|go back|so\b|it your way)|\btype \/aidlc/.test(JSON.stringify(line ?? "")));
+}
+
 export function claimPayload(remote: string, intentId8: string, unit: string): Record<string, unknown> | null {
   const ref = `refs/heads/claim/${intentId8}/${unit}`;
   const tip = spawnSync("git", ["rev-parse", "--verify", ref], { cwd: remote, encoding: "utf-8", env: GIT_ENV });
