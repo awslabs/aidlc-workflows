@@ -23,6 +23,7 @@ import { cleanupTestProject, createOrchestrationTestProject, REPO_ROOT } from ".
 import { appendAuditEntry } from "../../core/tools/aidlc-audit.ts";
 import { sha256Bytes } from "../../core/tools/aidlc-distribution.ts";
 import { hooksHealthReadDir } from "../../core/tools/aidlc-lib.ts";
+import { EARLIER_KIRO_IDE_DROPS } from "../harness/earlier-kiro-plugin-drops.ts";
 import { doctorCommandLines, vscodeVisibleOutput } from "../harness/vscode-output-trim.ts";
 import {
   applyConfigDiagnosticRecords,
@@ -1748,6 +1749,45 @@ describe("t294 trust diagnostics", () => {
     }
   });
 
+  // Doctor's one native trust row for a Kiro project, as the installed aidlc
+  // command reads it. The environment is set for the read alone, so a config
+  // run between two reads gets the test's own.
+  async function kiroNativeTrust(project: string, harness: "kiro-ide" | "kiro") {
+    const machine = temp(`aidlc-t294-trust-kiro-${harness}-machine-`);
+    const overrides = {
+      AIDLC_HARNESS_DIR: ".kiro",
+      AIDLC_HARNESS_NAME: harness,
+      AIDLC_RUNTIME_HARNESS_ROOT: join(project, ".kiro"),
+      AIDLC_RUNTIME_ROOT: DIST_RELEASE,
+      AIDLC_INSTALL_ROOT: machine,
+      AIDLC_BIN_DIR: join(machine, "bin"),
+      AIDLC_OFFLINE: "1",
+      ...hookPathEnv(),
+    };
+    const previous = new Map(Object.keys(overrides).map((key) => [key, process.env[key]]));
+    const compiled = spyOn(runtimePaths, "isCompiledExecutable").mockReturnValue(true);
+    try {
+      Object.assign(process.env, overrides);
+      const report = await collectDoctorReport(project);
+      const rows = report.checks.filter((check) => check.label.startsWith("Native command trust"));
+      expect(rows).toHaveLength(1);
+      return rows[0];
+    } finally {
+      compiled.mockRestore();
+      for (const [key, value] of previous) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  }
+  const KIRO_TRUST_INCOMPLETE =
+    "Native command trust is incomplete: 1 Bun-shaped entry, native hooks present, native permission/trust present";
+  // An AI-DLC hook left from before the native install. It is written as text:
+  // its "then" key is the hook's action.
+  const LEFT_OVER_KIRO_HOOK =
+    '{"enabled":true,"name":"aidlc-left-over","when":{"type":"promptSubmit"},' +
+    '"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-human-turn.ts"}}';
+
   for (const harness of ["kiro-ide", "kiro"] as const) {
     test(`${harness}: Kiro native trust passes with a dropped plugin's compose hook, and still counts a leftover Bun entry`, async () => {
       const project = temp(`aidlc-t294-trust-kiro-plugin-${harness}-`);
@@ -1755,50 +1795,42 @@ describe("t294 trust diagnostics", () => {
       // test-pro dropped as its Kiro IDE build writes it: the plugin's folder
       // and its session-start registration, which a switch to Kiro CLI keeps.
       cpSync(join(DIST, "plugins", "test-pro", "kiro-ide"), project, { recursive: true });
-      const harnessRoot = join(project, ".kiro");
-      const registration = join(harnessRoot, "hooks", "aidlc-test-pro-compose.json");
+      const registration = join(project, ".kiro", "hooks", "aidlc-test-pro-compose.json");
       expect(readFileSync(registration, "utf-8")).toContain("bun ./.kiro/aidlc-plugins/aidlc-test-pro/hooks/aidlc-plugin-compose.ts");
-      const machine = temp(`aidlc-t294-trust-kiro-plugin-${harness}-machine-`);
-      const overrides = {
-        AIDLC_HARNESS_DIR: ".kiro",
-        AIDLC_HARNESS_NAME: harness,
-        AIDLC_RUNTIME_HARNESS_ROOT: harnessRoot,
-        AIDLC_RUNTIME_ROOT: DIST_RELEASE,
-        AIDLC_INSTALL_ROOT: machine,
-        AIDLC_BIN_DIR: join(machine, "bin"),
-        AIDLC_OFFLINE: "1",
-        ...hookPathEnv(),
-      };
-      const previous = new Map(Object.keys(overrides).map((key) => [key, process.env[key]]));
-      const compiled = spyOn(runtimePaths, "isCompiledExecutable").mockReturnValue(true);
-      const nativeTrust = async () => {
-        const report = await collectDoctorReport(project);
-        const rows = report.checks.filter((check) => check.label.startsWith("Native command trust"));
-        expect(rows).toHaveLength(1);
-        return rows[0];
-      };
-      try {
-        Object.assign(process.env, overrides);
-        const dropped = await nativeTrust();
-        expect(dropped.pass, dropped.label).toBe(true);
-        // An AI-DLC hook left from before the native install still counts. It
-        // is written as text: its "then" key is the hook's action.
-        writeFileSync(join(harnessRoot, "hooks", "aidlc-left-over.kiro.hook"),
-          '{"enabled":true,"name":"aidlc-left-over","when":{"type":"promptSubmit"},' +
-            '"then":{"type":"runCommand","command":"bun .kiro/hooks/aidlc-human-turn.ts"}}');
-        const leftover = await nativeTrust();
-        expect(leftover.pass, leftover.label).toBe(false);
-        expect(leftover.label).toBe(
-          "Native command trust is incomplete: 1 Bun-shaped entry, native hooks present, native permission/trust present",
-        );
-      } finally {
-        compiled.mockRestore();
-        for (const [key, value] of previous) {
-          if (value === undefined) delete process.env[key];
-          else process.env[key] = value;
-        }
-      }
+      const dropped = await kiroNativeTrust(project, harness);
+      expect(dropped.pass, dropped.label).toBe(true);
+      writeFileSync(join(project, ".kiro", "hooks", "aidlc-left-over.kiro.hook"), LEFT_OVER_KIRO_HOOK);
+      const leftover = await kiroNativeTrust(project, harness);
+      expect(leftover.pass, leftover.label).toBe(false);
+      expect(leftover.label).toBe(KIRO_TRUST_INCOMPLETE);
     });
+
+    for (const earlier of EARLIER_KIRO_IDE_DROPS) {
+      test(`${harness}: Kiro native trust passes with a plugin dropped from ${earlier.build}, a refresh keeps it so, and an edited registration or a leftover Bun entry still fails it`, async () => {
+        const project = install(harness);
+        const files = earlier.drop(project);
+        const [registration] = files;
+        const written = files.map((file) => readFileSync(file));
+        const dropped = await kiroNativeTrust(project, harness);
+        expect(dropped.pass, dropped.label).toBe(true);
+        const refreshed = run([
+          "config", "--project-dir", project, "--from", join(DIST_RELEASE, harness), "--harness", harness,
+          "--mcp", "defaults", "--yes",
+        ], project);
+        expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+        expect(files.map((file) => readFileSync(file))).toEqual(written);
+        const kept = await kiroNativeTrust(project, harness);
+        expect(kept.pass, kept.label).toBe(true);
+        // Edited, it is no longer the registration the plugin's build wrote.
+        writeFileSync(registration, written[0].toString("utf-8").replace("SessionStart", "PreToolUse"));
+        const edited = await kiroNativeTrust(project, harness);
+        expect(edited.label).toBe(KIRO_TRUST_INCOMPLETE);
+        writeFileSync(registration, written[0]);
+        writeFileSync(join(project, ".kiro", "hooks", "aidlc-left-over.kiro.hook"), LEFT_OVER_KIRO_HOOK);
+        const leftover = await kiroNativeTrust(project, harness);
+        expect(leftover.label).toBe(KIRO_TRUST_INCOMPLETE);
+      });
+    }
   }
 
   test("Codex detects complete and missing user trust without changing the seed", () => {
