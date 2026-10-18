@@ -9,7 +9,9 @@
 // order. A plugin's `adds.scopes` are carried like its other additions. A line
 // the person changed outside the additions is still theirs to resolve. Doctor's
 // AI-DLC files row leaves the composed stages, personas and the personas'
-// per-harness copies to config, as config takes the additions out itself.
+// per-harness copies to config, as config takes the additions out itself. A
+// switch between Kiro CLI and Kiro IDE removes the persona copy only Kiro IDE
+// ships, or writes it with the persona's fragments in it.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -206,6 +208,26 @@ describe("a refresh after a later compose carries the plugin's additions over", 
     expect(switched.status, switched.out).toBe(0);
     expect(existsSync(twin)).toBe(false);
     expect(readFileSync(join(project.dir, ".kiro", PERSONA), "utf-8")).toContain(PERSONA_LINE[0]);
+  });
+
+  test("kiro: config, then the switch to Kiro IDE: no conflict, the persona copy Kiro IDE adds holds the fragment, doctor's composed row passes", () => {
+    const project = composed("kiro");
+    expect(config(project, "--yes").status).toBe(0);
+    const twin = join(project.dir, ".kiro", "aidlc-common", "personas", "aidlc-quality-agent.md");
+    expect(existsSync(twin)).toBe(false);
+    const ide: Project = { ...project, harness: "kiro-ide" };
+
+    expect(conflicts(ide)).toEqual([]);
+    const switched = config(ide, "--yes");
+    expect(switched.status, switched.out).toBe(0);
+    expect(readFileSync(twin, "utf-8")).toContain(PERSONA_LINE[0]);
+    const doctor = run([join(project.dir, ".kiro", "tools", "aidlc.ts"), "doctor", "--verbose"], project.dir, {
+      ...project.env,
+      AIDLC_HARNESS_DIR: ".kiro",
+      AIDLC_PROJECT_DIR: project.dir,
+    });
+    expect(doctor.out).toContain("Composed plugin surface: all enabled plugin stages and recorded contributions are present");
+    expect(conflicts(ide)).toEqual([]);
   });
 
   test("kiro-ide: a persona the plugin did not compose, changed by the person, still shows in doctor's row", () => {
