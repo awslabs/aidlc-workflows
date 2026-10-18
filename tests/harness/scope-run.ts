@@ -658,6 +658,12 @@ export interface StandInOptions {
   afterApproval?: (stage: string, agent: AgentStandIn) => Directive | undefined;
   /** Extra writes during a Unit's code generation; returns the paths to claim in its manifest. */
   onCode?: (unit: string, agent: AgentStandIn) => string[];
+  /**
+   * The code repos a Unit's code goes in: each repo's name in repos.json and
+   * its folder relative to the project (the name, unless mapped elsewhere).
+   * Unset writes the code in the workspace.
+   */
+  codeRepo?: (unit: string) => Array<{ repo: string; folder?: string }> | undefined;
   /** After the person approves a Unit's checkpoint. */
   afterCheckpoint?: (unit: string, kind: string, agent: AgentStandIn) => void;
   /** After a stage's review verdict is recorded, before its completion. */
@@ -713,7 +719,7 @@ export class AgentStandIn {
   readonly units: string[];
   answers: PersonAnswers;
   readonly afterApproval?: StandInOptions["afterApproval"];
-  readonly hooks: Pick<StandInOptions, "onCode" | "afterCheckpoint" | "afterReview" | "beforePlanAnswer" | "atGate" | "artifactText">;
+  readonly hooks: Pick<StandInOptions, "onCode" | "codeRepo" | "afterCheckpoint" | "afterReview" | "beforePlanAnswer" | "atGate" | "artifactText">;
   /** Each time an engine step sent the agent to repair the units block: where, and how many questions came before. */
   readonly unitsBlockRepairs: { where: string; asked: number }[] = [];
   // Each time the stage's checks handed the agent their findings first.
@@ -739,7 +745,7 @@ export class AgentStandIn {
     this.units = options.units ?? ["core"];
     this.afterApproval = options.afterApproval;
     this.hooks = {
-      onCode: options.onCode, afterCheckpoint: options.afterCheckpoint,
+      onCode: options.onCode, codeRepo: options.codeRepo, afterCheckpoint: options.afterCheckpoint,
       afterReview: options.afterReview, beforePlanAnswer: options.beforePlanAnswer, atGate: options.atGate,
       artifactText: options.artifactText,
     };
@@ -1263,7 +1269,10 @@ export class AgentStandIn {
       // What this entry wrote, for the matrix's changes: an entry reads as the Unit's own body.
       this.worked.push({ ...d, unit, produces, wave: undefined });
       if (entry.build_required === true) {
-        const questions = produces.find((p) => p.endsWith(`${stage}-questions.md`));
+        // As for a stage run alone: a stage that requires summary confirmation
+        // interviews the person even when produces does not list the file.
+        const questions = produces.find((p) => p.endsWith(`${stage}-questions.md`)) ??
+          (sourceStage(stage)?.summaryConfirmation === true && produces[0] ? `${dirname(produces[0])}/${stage}-questions.md` : undefined);
         if (questions) this.askQuestions({ ...d, unit, wave: undefined }, questions);
         for (const p of produces) {
           if (p === questions || existsSync(join(this.host.proj, p))) continue;
@@ -1623,13 +1632,16 @@ export class AgentStandIn {
     const produces = (d.produces as string[] | undefined) ?? [];
     const unit = typeof d.unit === "string" ? d.unit : null;
     const name = unit ?? "scope-run";
+    const repos = (unit ? this.hooks.codeRepo?.(unit) : undefined) ?? [];
     const source = `src/${name}.ts`;
     const test = `test/${name}.test.ts`;
-    this.host.write(source, `export const ${camel(name)} = (): number => 42;\n`);
-    this.host.write(
-      test,
-      `import { expect, test } from "bun:test";\nimport { ${camel(name)} } from "../${source}";\n\ntest("${name}", () => expect(${camel(name)}()).toBe(42));\n`,
-    );
+    for (const at of repos.length > 0 ? repos.map((entry) => `${entry.folder ?? entry.repo}/`) : [""]) {
+      this.host.write(`${at}${source}`, `export const ${camel(name)} = (): number => 42;\n`);
+      this.host.write(
+        `${at}${test}`,
+        `import { expect, test } from "bun:test";\nimport { ${camel(name)} } from "../${source}";\n\ntest("${name}", () => expect(${camel(name)}()).toBe(42));\n`,
+      );
+    }
     const summary = produces.find((p) => p.endsWith("code-summary.md"));
     const trace = produces.find((p) => p.endsWith("traceability.json"));
     if (summary) this.host.write(summary, `# Code Summary\n\n## Files\n\n- ${source} (created)\n- ${test} (created)\n`);
@@ -1643,7 +1655,8 @@ export class AgentStandIn {
     if (unit) {
       const extra = this.hooks.onCode?.(unit, this) ?? [];
       const { intent, space } = activeRecord(this.host.proj);
-      const writes = [source, test, ...extra].map((path) => ({ path }));
+      const paths = [source, test, ...extra];
+      const writes = repos.length > 0 ? repos.flatMap(({ repo }) => paths.map((path) => ({ repo, path }))) : paths.map((path) => ({ path }));
       this.host.write(
         `aidlc/spaces/${space}/intents/${intent}/construction/${unit}/code-generation/source-manifest.json`,
         `${JSON.stringify({ stage: "code-generation", unit, version: 1, writes }, null, 2)}\n`,

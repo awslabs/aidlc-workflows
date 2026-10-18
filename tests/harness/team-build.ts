@@ -239,14 +239,14 @@ export function run(tool: string, args: string[], cwd: string, env: NodeJS.Proce
   return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}`, stdout: result.stdout ?? "", json };
 }
 
-/** `next`, with rules delivered in parts taken as the agent takes them. */
-export function next(cwd: string, env: NodeJS.ProcessEnv = ENV, args: string[] = []): Record<string, unknown> {
-  let result = run(ORCH, ["next", ...args], cwd, env);
+/** `next`, with rules delivered in parts taken as the agent takes them; `orch` is another tree's engine. */
+export function next(cwd: string, env: NodeJS.ProcessEnv = ENV, args: string[] = [], orch = ORCH): Record<string, unknown> {
+  let result = run(orch, ["next", ...args], cwd, env);
   for (let parts = 0; parts < 50; parts++) {
     expect(result.status, result.out).toBe(0);
     const directive = JSON.parse(result.stdout) as Record<string, unknown>;
     if (directive.kind !== "load-steering" || typeof directive.receipt !== "string") return directive;
-    result = run(ORCH, ["continue", directive.receipt], cwd, env);
+    result = run(orch, ["continue", directive.receipt], cwd, env);
   }
   throw new Error("rules never finished arriving");
 }
@@ -301,8 +301,10 @@ export function codeGenerated(alice: string, record: string): void {
   writeFileSync(join(stage, "code-summary.md"), "# Code summary\n\nRefunds.\n");
 }
 
-// Merge a Unit's branch on a code host the way a team would, from a clone.
-export function mergeOnHost(host: string, branch: string, how: "squash" | "merge"): void {
+// Merge a Unit's branch on a code host the way a team would, from a clone. A
+// rebase merge replays the branch onto a main that moved meanwhile, as a host's
+// "rebase and merge" does, so every commit gets a new id.
+export function mergeOnHost(host: string, branch: string, how: "squash" | "merge" | "rebase"): void {
   const dir = join(tempDir("merger"), "repo");
   git(tempDir("merger-parent"), ["clone", "-q", host, dir]);
   git(dir, ["config", "user.name", "reviewer"]);
@@ -311,6 +313,14 @@ export function mergeOnHost(host: string, branch: string, how: "squash" | "merge
   if (how === "squash") {
     git(dir, ["merge", "-q", "--squash", `origin/${branch}`]);
     git(dir, ["commit", "-q", "-m", `${branch} (squashed)`]);
+  } else if (how === "rebase") {
+    writeFileSync(join(dir, `before-${branch}.md`), "Merged first.\n");
+    git(dir, ["add", "-A"]);
+    git(dir, ["commit", "-q", "-m", `before ${branch}`]);
+    git(dir, ["switch", "-q", "-c", `rebased-${branch}`, `origin/${branch}`]);
+    git(dir, ["rebase", "-q", "main"]);
+    git(dir, ["switch", "-q", "main"]);
+    git(dir, ["merge", "-q", "--ff-only", `rebased-${branch}`]);
   } else {
     git(dir, ["merge", "-q", "--no-ff", "-m", `merge ${branch}`, `origin/${branch}`]);
   }
