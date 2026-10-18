@@ -275,6 +275,14 @@ function carriesOwnManifest(root: unknown): boolean {
     existsSync(join(root, ".aidlc-plugin", "plugin.json"));
 }
 
+// An old copy of a plugin someone else built is the one its host lists under
+// AI-DLC's name for it, aidlc-<name>: 2.11.0 built it that way without the
+// plugin's own manifest, the 2.11.1 previews with it. A copy rebuilt by its
+// author carries the author's name.
+function hostListsUnderAidlcName(plugin: InstalledPlugin): boolean {
+  return plugin.hostName === `aidlc-${plugin.key}`;
+}
+
 export function normalizeInstalledPlugin(
   root: string,
   harness: PluginInventory["harness"],
@@ -396,8 +404,8 @@ function deduplicateInventory(
     }
     // A plugin rebuilt under its own name beside its old aidlc-<name> copy, as
     // an update leaves it until the old one is removed: the rebuilt one is used.
-    const rebuilt = values.filter((value) => carriesOwnManifest(value.root));
-    const old = values.filter((value) => !carriesOwnManifest(value.root) && value.hostName.startsWith("aidlc-"));
+    const old = values.filter(hostListsUnderAidlcName);
+    const rebuilt = values.filter((value) => !hostListsUnderAidlcName(value));
     if (values.length === 2 && rebuilt.length === 1 && old.length === 1) {
       installed.push(rebuilt[0]);
       superseded.push(old[0]);
@@ -1897,10 +1905,10 @@ export async function syncPlugins(
     }
     // An old aidlc-<name> copy's own hook leaves the composing to the rebuilt
     // copy the host also lists, so the two never take turns.
-    if (plugins.some((plugin) => !carriesOwnManifest(plugin.root))) {
+    if (plugins.some(hostListsUnderAidlcName)) {
       const host = discoverPluginInventory(harnessDir, projectDir);
       const rebuilt = new Set((host.superseded ?? []).map((old) => old.key));
-      plugins = plugins.filter((plugin) => carriesOwnManifest(plugin.root) || !rebuilt.has(plugin.key));
+      plugins = plugins.filter((plugin) => !hostListsUnderAidlcName(plugin) || !rebuilt.has(plugin.key));
     }
     // A host hook names only its own plugin. Where the host lists its
     // plugins, the installed base that plugin builds on composes first in the

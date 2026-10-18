@@ -1551,11 +1551,13 @@ describe("t242 a rebuilt plugin installed beside its old copy", () => {
     return project;
   }
 
-  // As a release built it before the plugin's own manifest travelled with it.
-  function oldCopy(harness: "claude" | "codex"): string {
+  // The old aidlc-<name> copy, as 2.11.0 built it (before the plugin's own
+  // manifest travelled with it) or as the 2.11.1 previews built it (with it).
+  function oldCopy(harness: "claude" | "codex", withOwnManifest: boolean): string {
     const root = temp("aidlc-plugin-old-copy-");
     cpSync(join(REPO_ROOT, "dist", "plugins", "test-pro", harness), root, { recursive: true });
-    rmSync(join(root, ".aidlc-plugin"), { recursive: true, force: true });
+    if (!withOwnManifest) rmSync(join(root, ".aidlc-plugin"), { recursive: true, force: true });
+    expect(existsSync(join(root, ".aidlc-plugin", "plugin.json"))).toBe(withOwnManifest);
     return root;
   }
 
@@ -1581,58 +1583,63 @@ describe("t242 a rebuilt plugin installed beside its old copy", () => {
     process.env.AIDLC_HARNESS_DIR = ".claude";
   }
 
-  test("Claude Code: sync composes the rebuilt copy and names the old one to remove", async () => {
-    const project = claudeProject();
-    const rebuilt = rebuiltCopy("claude");
-    claudeRegistry({ "aidlc-test-pro@aidlc-plugins": oldCopy("claude"), "test-pro@test-pro": rebuilt });
-    const result = await syncPlugins(project, [], ".claude");
-    expect(result.synced).toEqual(["test-pro"]);
-    expect(result.superseded).toEqual([
-      "test-pro is installed twice; AI-DLC uses the rebuilt one. Remove the old copy: /plugin uninstall aidlc-test-pro@aidlc-plugins",
-    ]);
-    const stamp = JSON.parse(readFileSync(join(project, ".claude", "tools", "data", "plugin-compose-test-pro.json"), "utf-8"));
-    expect(stamp.sourceHash).toBe(pluginSourceHash(rebuilt));
-    expect(collectPluginStatus(project, ".claude").statuses).toEqual([
-      expect.objectContaining({
-        key: "test-pro",
-        action: "attention",
-        message: "installed twice; AI-DLC uses the rebuilt one. Remove the old copy: /plugin uninstall aidlc-test-pro@aidlc-plugins",
-      }),
-    ]);
-  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  for (const { shape, withOwnManifest } of [
+    { shape: "", withOwnManifest: false },
+    { shape: " (an old copy a 2.11.1 preview built, with its own manifest)", withOwnManifest: true },
+  ]) {
+    test(`Claude Code: sync composes the rebuilt copy and names the old one to remove${shape}`, async () => {
+      const project = claudeProject();
+      const rebuilt = rebuiltCopy("claude");
+      claudeRegistry({ "aidlc-test-pro@aidlc-plugins": oldCopy("claude", withOwnManifest), "test-pro@test-pro": rebuilt });
+      const result = await syncPlugins(project, [], ".claude");
+      expect(result.synced).toEqual(["test-pro"]);
+      expect(result.superseded).toEqual([
+        "test-pro is installed twice; AI-DLC uses the rebuilt one. Remove the old copy: /plugin uninstall aidlc-test-pro@aidlc-plugins",
+      ]);
+      const stamp = JSON.parse(readFileSync(join(project, ".claude", "tools", "data", "plugin-compose-test-pro.json"), "utf-8"));
+      expect(stamp.sourceHash).toBe(pluginSourceHash(rebuilt));
+      expect(collectPluginStatus(project, ".claude").statuses).toEqual([
+        expect.objectContaining({
+          key: "test-pro",
+          action: "attention",
+          message: "installed twice; AI-DLC uses the rebuilt one. Remove the old copy: /plugin uninstall aidlc-test-pro@aidlc-plugins",
+        }),
+      ]);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("Codex: the host list keeps the rebuilt copy and names the old one to remove", () => {
-    const codexHome = temp("aidlc-codex-twice-");
-    const cache = (marketplace: string, plugin: string, source: string): void => {
-      const installed = join(codexHome, "plugins", "cache", marketplace, plugin, "0.1.0");
-      mkdirSync(join(installed, ".."), { recursive: true });
-      cpSync(source, installed, { recursive: true });
-    };
-    cache("aidlc-plugins", "aidlc-test-pro", oldCopy("codex"));
-    cache("test-pro", "test-pro", rebuiltCopy("codex"));
-    writeFileSync(join(codexHome, "config.toml"), [
-      '[plugins."aidlc-test-pro@aidlc-plugins"]', "enabled = true",
-      '[plugins."test-pro@test-pro"]', "enabled = true", "",
-    ].join("\n"));
-    process.env.AIDLC_CODEX_HOME = codexHome;
-    process.env.AIDLC_HARNESS_DIR = ".codex";
-    const inventory = discoverPluginInventory(".codex");
-    expect(inventory.invalid).toEqual([]);
-    expect(inventory.installed.map((plugin) => [plugin.key, plugin.hostName])).toEqual([["test-pro", "test-pro"]]);
-    expect(supersededLines(inventory)).toEqual([
-      "test-pro is installed twice; AI-DLC uses the rebuilt one. Remove the old copy: codex plugin remove aidlc-test-pro@aidlc-plugins",
-    ]);
-  });
+    test(`Codex: the host list keeps the rebuilt copy and names the old one to remove${shape}`, () => {
+      const codexHome = temp("aidlc-codex-twice-");
+      const cache = (marketplace: string, plugin: string, source: string): void => {
+        const installed = join(codexHome, "plugins", "cache", marketplace, plugin, "0.1.0");
+        mkdirSync(join(installed, ".."), { recursive: true });
+        cpSync(source, installed, { recursive: true });
+      };
+      cache("aidlc-plugins", "aidlc-test-pro", oldCopy("codex", withOwnManifest));
+      cache("test-pro", "test-pro", rebuiltCopy("codex"));
+      writeFileSync(join(codexHome, "config.toml"), [
+        '[plugins."aidlc-test-pro@aidlc-plugins"]', "enabled = true",
+        '[plugins."test-pro@test-pro"]', "enabled = true", "",
+      ].join("\n"));
+      process.env.AIDLC_CODEX_HOME = codexHome;
+      process.env.AIDLC_HARNESS_DIR = ".codex";
+      const inventory = discoverPluginInventory(".codex");
+      expect(inventory.invalid).toEqual([]);
+      expect(inventory.installed.map((plugin) => [plugin.key, plugin.hostName])).toEqual([["test-pro", "test-pro"]]);
+      expect(supersededLines(inventory)).toEqual([
+        "test-pro is installed twice; AI-DLC uses the rebuilt one. Remove the old copy: codex plugin remove aidlc-test-pro@aidlc-plugins",
+      ]);
+    });
 
-  test("the old copy's own session-start hook leaves the composing to the rebuilt one", async () => {
-    const project = claudeProject();
-    const old = oldCopy("claude");
-    claudeRegistry({ "aidlc-test-pro@aidlc-plugins": old, "test-pro@test-pro": rebuiltCopy("claude") });
-    process.env.CLAUDE_PLUGIN_ROOT = old;
-    const result = await syncPlugins(project, [], ".claude");
-    expect(result.synced).toEqual([]);
-    expect(existsSync(join(project, ".claude", "tools", "data", "plugin-compose-test-pro.json"))).toBe(false);
-  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+    test(`the old copy's own session-start hook leaves the composing to the rebuilt one${shape}`, async () => {
+      const project = claudeProject();
+      const old = oldCopy("claude", withOwnManifest);
+      claudeRegistry({ "aidlc-test-pro@aidlc-plugins": old, "test-pro@test-pro": rebuiltCopy("claude") });
+      process.env.CLAUDE_PLUGIN_ROOT = old;
+      const result = await syncPlugins(project, [], ".claude");
+      expect(result.synced).toEqual([]);
+      expect(existsSync(join(project, ".claude", "tools", "data", "plugin-compose-test-pro.json"))).toBe(false);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 
   test("two rebuilt copies of one plugin are still ambiguous, as before", () => {
     claudeRegistry({ "test-pro@one": rebuiltCopy("claude"), "test-pro@two": rebuiltCopy("claude") });
