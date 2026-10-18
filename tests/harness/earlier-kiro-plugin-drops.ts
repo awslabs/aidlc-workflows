@@ -1,9 +1,10 @@
 // test-pro dropped into a Kiro project as earlier Kiro IDE builds wrote it, for
 // the checks that tell a dropped plugin's own session-start registration from a
-// hook file a person added (doctor's trust row, the Kiro switch). The bytes are
-// the builds' own, from each release's copy runtime (plugins/test-pro/kiro-ide),
-// written out here so a change to today's template cannot change what these
-// drops hold.
+// hook file a person added (doctor's trust row, the Kiro switch). The
+// registrations and 2.11.0's marker are each release's own bytes, from its copy
+// runtime (plugins/test-pro/kiro-ide), written out here so a change to today's
+// template cannot change them; the preview's plugin folder is copied from
+// today's dist.
 
 import { cpSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";

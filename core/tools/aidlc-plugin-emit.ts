@@ -483,6 +483,12 @@ function nativePluginSync(target: PluginTarget): string {
   return `aidlc ${TRUSTED_ROUTE_NAMESPACE} plugin sync --harness-dir ${target.harnessLeaf}`;
 }
 
+// The Bun launcher a Kiro IDE registration runs, from the plugin's folder in
+// the workspace ("" for the workspace root).
+function kiroIdeLauncher(target: PluginTarget, pluginDir: string): string {
+  return `bun ./${pluginDir}hooks/aidlc-plugin-compose.ts ${target.harnessLeaf} ${target.harnessName}`;
+}
+
 function composeCommand(target: PluginTarget, hostName: string): string {
   const rootExpr =
     target.harnessName === "claude"
@@ -495,10 +501,8 @@ function composeCommand(target: PluginTarget, hostName: string): string {
     // One entry, as Kiro IDE shows a card for each hook; || reads the same in
     // /bin/sh and cmd.exe. Kiro gives a hook no plugin root, but runs it in the
     // workspace the plugin was dropped into, where the plugin has its own folder.
-    return (
-      `${nativePluginSync(target)} --plugin-root ./${droppedPluginFolder(target.harnessLeaf, hostName)} || ` +
-      `bun ./${droppedPluginFolder(target.harnessLeaf, hostName)}/hooks/aidlc-plugin-compose.ts ${target.harnessLeaf} ${target.harnessName}`
-    );
+    const folder = droppedPluginFolder(target.harnessLeaf, hostName);
+    return `${nativePluginSync(target)} --plugin-root ./${folder} || ${kiroIdeLauncher(target, `${folder}/`)}`;
   }
   const composePath = `${rootExpr}/hooks/compose.ts`;
   // Probe aidlc on PATH first, then bun on PATH / ~/.bun/bin. If neither is
@@ -531,6 +535,14 @@ export function kiroIdeComposeRegistration(
   pluginName: string,
   hostName: string,
 ): { path: string; text: string } {
+  return composeRegistration(target, pluginName, composeCommand(target, hostName));
+}
+
+function composeRegistration(
+  target: PluginTarget,
+  pluginName: string,
+  command: string,
+): { path: string; text: string } {
   return {
     path: `${target.harnessLeaf}/hooks/aidlc-${pluginName}-compose.json`,
     text: `${JSON.stringify(
@@ -541,7 +553,7 @@ export function kiroIdeComposeRegistration(
             name: `aidlc-${pluginName}-compose`,
             trigger: "SessionStart",
             description: `Composes the ${pluginName} AIDLC plugin at session start.`,
-            action: { type: "command", command: composeCommand(target, hostName) },
+            action: { type: "command", command },
           },
         ],
       },
@@ -549,6 +561,20 @@ export function kiroIdeComposeRegistration(
       2,
     )}\n`,
   };
+}
+
+// The session-start commands Kiro IDE builds have written into a plugin's
+// registration, so a drop from an earlier build still reads as the plugin's.
+// For a plugin in its own folder: this build's, then the launcher alone, which
+// 2.11.1-preview.20261018.1 wrote. With no folder (null): the launcher from the
+// workspace root, which 2.11.0 and the 2.11.1 previews before that one wrote,
+// as their projection was dropped whole into the workspace.
+function writtenComposeCommands(target: PluginTarget, hostName: string | null): string[] {
+  if (hostName === null) return [kiroIdeLauncher(target, "")];
+  return [
+    composeCommand(target, hostName),
+    kiroIdeLauncher(target, `${droppedPluginFolder(target.harnessLeaf, hostName)}/`),
+  ];
 }
 
 // The hook files in a project that are exactly the registrations the builds of
@@ -559,8 +585,6 @@ export function droppedPluginRegistrations(
   projectDir: string,
   harnessLeaf: string,
 ): string[] {
-  const folder = join(projectDir, harnessLeaf, DROPPED_PLUGINS_FOLDER);
-  if (!existsSync(folder)) return [];
   const target: PluginTarget = {
     harnessName: "kiro-ide",
     manifestDir: "",
@@ -571,7 +595,23 @@ export function droppedPluginRegistrations(
     installRoots: [],
   };
   const owned: string[] = [];
-  for (const hostName of readdirSync(folder).sort()) {
+  const ownIfWritten = (pluginName: unknown, hostName: string | null): void => {
+    if (typeof pluginName !== "string" || !/^[a-z][a-z0-9-]*$/.test(pluginName)) return;
+    const written = writtenComposeCommands(target, hostName)
+      .map((command) => composeRegistration(target, pluginName, command));
+    let onDisk: Buffer;
+    try {
+      onDisk = committedTextBytes(readFileSync(join(projectDir, written[0].path)));
+    } catch {
+      // No registration: a Kiro CLI projection writes none.
+      return;
+    }
+    if (written.some(({ text }) => onDisk.equals(Buffer.from(text, "utf-8")))) {
+      owned.push(written[0].path);
+    }
+  };
+  const folder = join(projectDir, harnessLeaf, DROPPED_PLUGINS_FOLDER);
+  for (const hostName of existsSync(folder) ? readdirSync(folder).sort() : []) {
     let pluginName: unknown;
     try {
       pluginName = (JSON.parse(
@@ -580,19 +620,10 @@ export function droppedPluginRegistrations(
     } catch {
       continue;
     }
-    if (typeof pluginName !== "string" || !/^[a-z][a-z0-9-]*$/.test(pluginName)) continue;
-    const registration = kiroIdeComposeRegistration(target, pluginName, hostName);
-    try {
-      if (
-        committedTextBytes(readFileSync(join(projectDir, registration.path)))
-          .equals(Buffer.from(registration.text, "utf-8"))
-      ) {
-        owned.push(registration.path);
-      }
-    } catch {
-      // No registration: the plugin was dropped from a Kiro CLI projection.
-    }
+    ownIfWritten(pluginName, hostName);
   }
+  const marker = readProjectionMarker(projectDir);
+  if (marker?.harness === target.harnessName) ownIfWritten(marker.plugin, null);
   return owned;
 }
 
@@ -747,6 +778,26 @@ function assertBuildPathHasNoSymlinks(
   );
 }
 
+// The marker a build writes at the root of its output, naming the plugin and
+// the harness it was built for; null when the folder holds none.
+function readProjectionMarker(dir: string): { plugin: string; harness: string } | null {
+  try {
+    const marker = JSON.parse(readFileSync(join(dir, PLUGIN_PROJECTION_MARKER), "utf-8")) as unknown;
+    if (
+      isPlainRecord(marker) &&
+      marker.schema === PLUGIN_PROJECTION_MARKER_SCHEMA &&
+      marker.producer === PLUGIN_PROJECTION_PRODUCER &&
+      typeof marker.plugin === "string" &&
+      typeof marker.harness === "string"
+    ) {
+      return { plugin: marker.plugin, harness: marker.harness };
+    }
+  } catch {
+    // No marker, or not JSON.
+  }
+  return null;
+}
+
 export function assertPluginBuildOutput(
   outDir: string,
   target: PluginTarget,
@@ -769,21 +820,8 @@ export function assertPluginBuildOutput(
     );
   }
   if (readdirSync(resolvedOut).length === 0) return;
-  const markerPath = join(resolvedOut, PLUGIN_PROJECTION_MARKER);
-  let marker: Record<string, unknown> | null = null;
-  try {
-    const parsed = JSON.parse(readFileSync(markerPath, "utf-8")) as unknown;
-    marker = isPlainRecord(parsed) ? parsed : null;
-  } catch {
-    marker = null;
-  }
-  if (
-    !marker ||
-    marker.schema !== PLUGIN_PROJECTION_MARKER_SCHEMA ||
-    marker.producer !== PLUGIN_PROJECTION_PRODUCER ||
-    typeof marker.plugin !== "string" ||
-    typeof marker.harness !== "string"
-  ) {
+  const marker = readProjectionMarker(resolvedOut);
+  if (!marker) {
     throw new Error(
       `refusing to build into non-empty "${outDir}" - it has no valid ${PLUGIN_PROJECTION_MARKER} ownership marker. ` +
         "Point at a fresh/empty directory.",
