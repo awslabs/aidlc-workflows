@@ -165,6 +165,8 @@ function copyCore(root: string, relativePath: string): void {
       // aidlc-lib.ts reads a plugin command leading a line with this.
       "aidlc-plugin-commands.ts",
       "aidlc-color.ts",
+      "aidlc-workspace-manifest.ts",
+      "aidlc-unit-teams.ts",
     ]) {
       copyFileSync(
         join(REPO_ROOT, "core", "tools", dependency),
