@@ -11,82 +11,28 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
   claimPayload,
   cleanupTeamBuild,
-  cloneCode,
-  cloneOf,
+  codeGenerated,
   codeHost,
   git,
+  HOME_RECORD,
   makeHome,
+  mergeOnHost,
   next,
+  refundsTaken,
   run,
   STATE,
-  tempDir,
   UNIT,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTeamBuild);
-
-const HOME = "fixture-8000000000000001";
-
-// The home of work across checkout-api and billing, refunds held for payments,
-// pushed; a payments member's clone with both repos and refunds taken.
-function refundsTaken() {
-  const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
-  const home = makeHome({ repos: hosts });
-  const teams = run(STATE, ["set-unit-ownership", "team"], home.dir);
-  expect(teams.status, teams.out).toBe(0);
-  expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
-  git(home.dir, ["add", "-A"]);
-  git(home.dir, ["commit", "-q", "-m", "teams"]);
-  git(home.dir, ["push", "-q", "origin", "main"]);
-  const alice = cloneOf(home.remote, "alice");
-  for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
-  const took = run(UNIT, ["take", "refunds", "--home", HOME], alice);
-  expect(took.status, took.out).toBe(0);
-  const intents = join(alice, "aidlc", "spaces", "payments", "intents");
-  const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
-  return { hosts, home, alice, record };
-}
-
-// What Code Generation leaves: the files, and the manifest of what it wrote.
-function codeGenerated(alice: string, record: string): void {
-  mkdirSync(join(alice, "checkout-api", "src"), { recursive: true });
-  writeFileSync(join(alice, "checkout-api", "src", "refunds.ts"), "export const refunds = 1;\n");
-  mkdirSync(join(alice, "billing", "lib"), { recursive: true });
-  writeFileSync(join(alice, "billing", "lib", "refund.ts"), "export const refund = 1;\n");
-  const stage = join(record, "construction", "refunds", "code-generation");
-  mkdirSync(stage, { recursive: true });
-  writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
-    stage: "code-generation",
-    unit: "refunds",
-    version: 1,
-    writes: [{ repo: "checkout-api", path: "src/refunds.ts" }, { repo: "billing", path: "lib/refund.ts" }],
-  }, null, 2)}\n`);
-  writeFileSync(join(stage, "code-summary.md"), "# Code summary\n\nRefunds.\n");
-}
-
-// Merge a Unit's branch on a code host the way a team would, from a clone.
-function mergeOnHost(host: string, branch: string, how: "squash" | "merge"): void {
-  const dir = join(tempDir("merger"), "repo");
-  git(tempDir("merger-parent"), ["clone", "-q", host, dir]);
-  git(dir, ["config", "user.name", "reviewer"]);
-  git(dir, ["config", "user.email", "reviewer@example.test"]);
-  git(dir, ["fetch", "-q", "origin", branch]);
-  if (how === "squash") {
-    git(dir, ["merge", "-q", "--squash", `origin/${branch}`]);
-    git(dir, ["commit", "-q", "-m", `${branch} (squashed)`]);
-  } else {
-    git(dir, ["merge", "-q", "--no-ff", "-m", `merge ${branch}`, `origin/${branch}`]);
-  }
-  git(dir, ["push", "-q", "origin", "main"]);
-}
 
 describe("teams build Units across repos when the workspace is in git", () => {
   test("choosing teams on work across repos goes through, and the home asks who builds which Unit", () => {
@@ -189,7 +135,7 @@ describe("at the home", () => {
     expect(merged).toHaveLength(1);
     expect(merged[0].block).toContain("**Built By**: alice");
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
-    expect(readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME, "construction", "refunds", "code-generation", "code-summary.md"), "utf-8"))
+    expect(readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "construction", "refunds", "code-generation", "code-summary.md"), "utf-8"))
       .toBe("# Code summary\n\nRefunds.\n");
     // reporting waited on refunds and is the home's to build now.
     expect(after.kind, JSON.stringify(after)).toBe("run-stage");

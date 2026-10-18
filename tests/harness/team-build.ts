@@ -6,7 +6,7 @@
 
 import { expect } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -150,6 +150,8 @@ export function makeHome(options: { state?: string; dependencies?: string; repos
     registry[0].repos = repos;
     writeFileSync(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
     for (const [name, host] of Object.entries(options.repos ?? {})) cloneCode(host, dir, name);
+    // Committed, as a team keeps it, so every clone knows where its repos go.
+    writeFileSync(join(dir, "repos.json"), `${JSON.stringify({ repos: Object.entries(options.repos ?? {}).map(([name, url]) => ({ name, url })) }, null, 2)}\n`);
   }
   writeFileSync(
     join(dir, ".gitignore"),
@@ -258,4 +260,59 @@ export function claimPayload(remote: string, intentId8: string, unit: string): R
 
 export function stateOf(dir: string): string {
   return readFileSync(seededStateFile(dir), "utf-8");
+}
+
+export const HOME_RECORD = "fixture-8000000000000001";
+
+// The home of work across checkout-api and billing, refunds held for payments,
+// pushed; a payments member's clone with both repos and refunds taken.
+export function refundsTaken(assign: string[] = ["refunds=payments", "checkout-ui=web"]) {
+  const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+  const home = makeHome({ repos: hosts });
+  const teams = run(STATE, ["set-unit-ownership", "team"], home.dir);
+  expect(teams.status, teams.out).toBe(0);
+  expect(run(UNIT, ["assign", ...assign], home.dir).status).toBe(0);
+  git(home.dir, ["add", "-A"]);
+  git(home.dir, ["commit", "-q", "-m", "teams"]);
+  git(home.dir, ["push", "-q", "origin", "main"]);
+  const alice = cloneOf(home.remote, "alice");
+  for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
+  const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice);
+  expect(took.status, took.out).toBe(0);
+  const intents = join(alice, "aidlc", "spaces", "payments", "intents");
+  const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-refunds"))!);
+  return { hosts, home, alice, record };
+}
+
+// What Code Generation leaves: the files, and the manifest of what it wrote.
+export function codeGenerated(alice: string, record: string): void {
+  mkdirSync(join(alice, "checkout-api", "src"), { recursive: true });
+  writeFileSync(join(alice, "checkout-api", "src", "refunds.ts"), "export const refunds = 1;\n");
+  mkdirSync(join(alice, "billing", "lib"), { recursive: true });
+  writeFileSync(join(alice, "billing", "lib", "refund.ts"), "export const refund = 1;\n");
+  const stage = join(record, "construction", "refunds", "code-generation");
+  mkdirSync(stage, { recursive: true });
+  writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({
+    stage: "code-generation",
+    unit: "refunds",
+    version: 1,
+    writes: [{ repo: "checkout-api", path: "src/refunds.ts" }, { repo: "billing", path: "lib/refund.ts" }],
+  }, null, 2)}\n`);
+  writeFileSync(join(stage, "code-summary.md"), "# Code summary\n\nRefunds.\n");
+}
+
+// Merge a Unit's branch on a code host the way a team would, from a clone.
+export function mergeOnHost(host: string, branch: string, how: "squash" | "merge"): void {
+  const dir = join(tempDir("merger"), "repo");
+  git(tempDir("merger-parent"), ["clone", "-q", host, dir]);
+  git(dir, ["config", "user.name", "reviewer"]);
+  git(dir, ["config", "user.email", "reviewer@example.test"]);
+  git(dir, ["fetch", "-q", "origin", branch]);
+  if (how === "squash") {
+    git(dir, ["merge", "-q", "--squash", `origin/${branch}`]);
+    git(dir, ["commit", "-q", "-m", `${branch} (squashed)`]);
+  } else {
+    git(dir, ["merge", "-q", "--no-ff", "-m", `merge ${branch}`, `origin/${branch}`]);
+  }
+  git(dir, ["push", "-q", "origin", "main"]);
 }

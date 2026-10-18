@@ -88,6 +88,7 @@ const VALID_EVENT_TYPES = new Set([
   // looked, and what it did: the agent's first report refused, the approval
   // question put to the person, or Guard Policy off standing aside.
   "SOURCE_WORK_NOT_FOUND",
+  "SHARED_INPUT_AMENDED",
   // Phase lifecycle
   "PHASE_STARTED",
   "PHASE_COMPLETED",
@@ -353,6 +354,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   STAGE_DEFINITION_CHANGED: "Stage Definition Changed",
   STAGE_OUTPUT_AMENDED: "Stage Output Amended",
   SOURCE_WORK_NOT_FOUND: "Source Work Not Found",
+  SHARED_INPUT_AMENDED: "Shared Input Amended",
   STAGE_JUMPED: "Stage Jump",
   STAGE_SKIPPED: "Stage Skip",
   PHASE_STARTED: "Phase Start",
@@ -443,6 +445,9 @@ const EVENT_HEADINGS: Record<string, string> = {
   BOLT_FAILED: "Bolt Failed",
   AUTONOMY_MODE_SET: "Autonomy Mode Set",
   UNIT_OWNERSHIP_SET: "Unit Ownership Set",
+  UNITS_ASSIGNED: "Units Assigned",
+  UNIT_TAKEN_IN: "Unit Taken In",
+  UNIT_PUSHED: "Unit Pushed",
   UNIT_GATE_RHYTHM_SET: "Unit Gate Rhythm Set",
   CONSTRUCTION_POLICY_SET: "Construction Policy Set",
   UNIT_MERGED: "Unit Merged",
@@ -579,6 +584,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   // The check's own record of a first refusal opens the gate on the next
   // report; a forged one would skip the agent's refusal.
   "SOURCE_WORK_NOT_FOUND",
+  "SHARED_INPUT_AMENDED",
   "HUMAN_TURN",
   "HOST_TURN",
   "QUESTION_UNANSWERED",

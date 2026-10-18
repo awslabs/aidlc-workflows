@@ -7341,6 +7341,8 @@ const SUBMODULE_INIT_REMEDY = "git submodule update --init --recursive";
 export const PROJECT_TYPE_SOURCE_FIELD = "Project Type Source";
 export const PROJECT_TYPE_SOURCE_SCAN = "workspace scan";
 export const PROJECT_TYPE_SOURCE_PERSON = "you";
+// A team's build of one Unit takes the type its home's work settled.
+export const PROJECT_TYPE_SOURCE_HOME = "the home";
 
 export { declaredProjectType };
 
@@ -11756,7 +11758,8 @@ export function projectTypeRecordedAsPersons(content: string, type: string): boo
 // that scan so the question can say what was found; null otherwise.
 export function greenfieldWorkspaceGainedCode(projectDir: string, content: string): ScanResult | null {
   if (declaredProjectType(getField(content, "Project Type") ?? "") !== "Greenfield") return null;
-  if (getField(content, PROJECT_TYPE_SOURCE_FIELD) === PROJECT_TYPE_SOURCE_PERSON) return null;
+  const source = getField(content, PROJECT_TYPE_SOURCE_FIELD);
+  if (source === PROJECT_TYPE_SOURCE_PERSON || source === PROJECT_TYPE_SOURCE_HOME) return null;
   if (constructionHasStarted(content, recordDir(projectDir))) return null;
   const scan = detectWorkspace(projectDir);
   return scan.projectType === "Brownfield" ? scan : null;

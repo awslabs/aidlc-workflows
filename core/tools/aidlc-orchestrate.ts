@@ -336,6 +336,9 @@ import {
   listIntents,
   type IntentInfo,
   listSpaces,
+  engineAskMark,
+  noteEngineAskMark,
+  personRepliedAfter,
   DEFAULT_SPACE,
   finishedWork,
   workStanding,
@@ -588,7 +591,8 @@ import {
 import { broughtFileNames, broughtFilesNote, unheardBroughtFilesLine } from "./aidlc-brought-files.ts";
 import { resolveSwarmCheckpoint } from "./aidlc-swarm-checkpoints.ts";
 import {
-  buildClaimNote,
+  amendAskName,
+  buildClaimNotes,
   cachedUnitClaimOverview,
   checkTeamResults,
   claimsOpenHere,
@@ -666,6 +670,7 @@ import { noteReposManifestOffered, reposManifestOffered } from "./aidlc-workspac
 import {
   findUnitBuild,
   homeLocation,
+  inputName,
   parseHandFile,
   unitLikelyReposFrom,
   workspaceHomeLocation,
@@ -8387,6 +8392,14 @@ function unitTakeAsk(projectDir: string): AskDirective | null {
         const blockers = (opening.blockers.get(unit) ?? []).filter((dep) => overview.claims.get(dep)?.payload.done !== true);
         if (blockers.length > 0) {
           waiting.push(`${unit} (on ${blockers.join(", ")})`);
+          // Every Unit it waits on is pushed: it can start early on their branches.
+          if (blockers.every((dep) => overview.claims.get(dep)?.payload.result !== undefined)) {
+            choices.push({
+              label: `Start ${unit} early`,
+              detail: `On the pushed branches of ${blockers.join(" and ")}; ${blockers.length === 1 ? "it" : "they"} may still change before merging.`,
+              command: take.replace("%s", shellArg(unit)) + " --early" + (holder === null && team !== null ? ` --team ${shellArg(team)}` : ""),
+            });
+          }
           continue;
         }
         const notes = [holder !== null ? `for ${holder}` : "open", ...(likely.has(unit) ? [`likely ${likely.get(unit)!.join(", ")}`] : [])];
@@ -12305,8 +12318,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     return;
   }
   // What the home said about a Unit's build reaches its team once, on any step.
-  const homeNote = stateContent ? buildClaimNote(pd, stateContent) : null;
-  if (homeNote !== null) sayWithStepOnce(pd, homeNote);
+  for (const line of stateContent ? buildClaimNotes(pd, stateContent) : []) sayWithStepOnce(pd, line);
   // Archived is terminal for routing, including scoped Unit checkouts. Keep
   // this before Unit jump/park handling so every next shape returns the same
   // archived result instead of reviving or locally parking retired work.
@@ -16469,6 +16481,35 @@ function emitTeamUnitMajorRunStage(
   }
   // Every Unit left to the home is built: while a team still builds one, the
   // board is the step.
+  // A team proposed a change to a shared input: the owner of the plan is asked
+  // once; after they spoke without answering, the step says it waits.
+  const proposal = [...(overview?.claims.values() ?? [])].flatMap((claim) =>
+    claim.status === "claimed" ? (claim.payload.proposals ?? []).filter((entry) => entry.answer === undefined).map((entry) => ({ claim, entry })) : []
+  )[0];
+  if (proposal && !isReadOnlyEngineProbe()) {
+    const askName = amendAskName(proposal.claim.unit, proposal.entry.input);
+    const mark = engineAskMark(projectDir, askName);
+    const name = inputName(proposal.entry.input);
+    if (mark === null || !personRepliedAfter(projectDir, mark)) {
+      noteEngineAskMark(projectDir, askName);
+      emit({
+        kind: "ask",
+        ask_type: "unit-amend",
+        response_route: "command",
+        question: `${proposal.claim.owner} proposes a change to the ${name} for ${proposal.claim.unit}` +
+          `${proposal.entry.words ? ` ("${proposal.entry.words}")` : ""}. Approve it for every Unit that uses it, or turn it down?`,
+        choices: [
+          { label: "Approve it", detail: "The home's copy changes; each team building with it hears it once and carries on." },
+          { label: "Not now", detail: "It waits for your answer." },
+          { label: "Turn it down", detail: `${proposal.claim.owner} carries on with the approved one, and hears your words.` },
+        ],
+        amend_command: `${aidlcToolInvocation("unit")} amend ${shellArg(proposal.claim.unit)} --input ${shellArg(proposal.entry.input)} ` +
+          "--answer <approve|reject> --person-words '<their words>'",
+      });
+      return;
+    }
+    sayWithStepOnce(projectDir, `The change ${proposal.claim.owner} proposed to the ${name} waits for your answer: approve it or turn it down when you are ready.`);
+  }
   if ([...heldElsewhere].some((unit) => !model?.mergedUnits.has(unit))) {
     const rows = unitsInPlanOrder(projectDir, resolution.batches.flat()).map((unit): UnitBoardRow => {
       const claim = overview?.claims.get(unit);

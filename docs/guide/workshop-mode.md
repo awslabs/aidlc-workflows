@@ -297,6 +297,33 @@ AI-DLC runs `aidlc unit turned-down <unit> --repo <repo>` with their words; the
 team hears them once at its next step, with the way back to Code Generation.
 What already merged stays merged.
 
+## Start early, and change a shared input
+
+A Unit opens once the Units it waits on are done. When a Unit it waits on has
+pushed its branches, the offer also has **Start reporting early**: the build
+starts on that pushed branch in each repo it changed (checked out where you
+have no uncommitted work there; otherwise the branch is made and the line says
+to switch when you are ready), and the line says it may still change before it
+merges. You hear once when that Unit is done, to rebase when you are ready, or
+when it is turned down; nothing else changes, and AI-DLC never rebases for you.
+
+A team that needs a change to something its Unit was approved with (a contract
+summary, the requirements) edits its copy or writes the new text, then says
+so; AI-DLC runs `aidlc unit propose --input <file>` and the team carries on
+while the home decides. At the home the owner of the shared plan is asked once:
+**Approve it**, **Not now** or **Turn it down**, answered in their own words.
+An approved change is written into the home's record, and the stages there
+that used it stay current, so nothing at the home is asked again. Every team
+building with it gets the new version on its claim at its next fetch and hears
+it once, on every Guard Policy, with the offer to redo a stage that used it:
+"Something Functional Design used changed after it finished. I'm carrying on
+with it as it is. Do you want me to redo Functional Design with the change?"
+A team by file gets a newer hand-off file to take in. A team whose Unit was
+already done and merged hears once that the input changed after it was done,
+with an offer to start follow-up work; the done Unit is never reopened. A
+change turned down reaches the team that proposed it once, with the owner's
+words.
+
 ## A team that cannot reach the home
 
 A partner team in another company, or behind a locked network, works from

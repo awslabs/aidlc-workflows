@@ -75,6 +75,10 @@ import {
   readStateFile,
   readUnitSourceManifest,
   recordDir,
+  readAllAuditShards,
+  staleStageLine,
+  engineAskMark,
+  personRepliedAfter,
   readUnitGateRhythm,
   readUnitScopeStamp,
   readAnswerTextFile,
@@ -124,14 +128,19 @@ import {
   setActiveSpaceCursor,
 } from "./aidlc-lib.js";
 import {
+  type Amendment,
+  approvedInputsOf,
+  artifactAt,
   blobsAt,
   findUnitBuild,
   HANDOFF_DIR,
   type HandFile,
   HOME_LOCATION_FIELD,
   homeLocation,
+  inputName,
   parseHandFile,
   patchIdOf,
+  type Proposal,
   renderHandFile,
   RESULT_FILES_ROOT,
   type RepoResult,
@@ -150,6 +159,13 @@ import {
   writesByRepo,
 } from "./aidlc-unit-teams.js";
 import { repoNotThereLine } from "./aidlc-workspace-manifest.js";
+import { loadGraph } from "./aidlc-graph.ts";
+import {
+  captureStageValidationBasis,
+  latestCompletionBasesFromAudit,
+  sharedInputAmendedFields,
+  stageLabel,
+} from "./aidlc-validity.ts";
 import {
   parseTestingContract,
   recordedApprovalFingerprint,
@@ -257,6 +273,11 @@ export interface UnitClaimPayload {
   // Handed off by file; the team's progress file, when it sent one.
   by_file?: true;
   progress?: { stage: string; at: string };
+  // Started early on these Units' pushed heads.
+  early_on?: Array<{ unit: string; repos: Array<{ repo: string; branch: string; head: string }> }>;
+  // Changes the team proposed to an input, and the home's approved ones.
+  proposals?: Proposal[];
+  amendments?: Amendment[];
 }
 
 export interface UnitClaimView {
@@ -5144,6 +5165,12 @@ function createUnitBuild(
     ] as const) {
       content = setRuntimeField(content, field, value);
     }
+    // The type the home settled; a later scan here does not ask about it again.
+    const homeType = getField(plan.state, "Project Type")?.trim();
+    if (homeType) {
+      content = content.replace(/^- \*\*Project Type Source\*\*:.*\n/m, "")
+        .replace(/^(- \*\*Project Type\*\*:).*$/m, `$1 ${homeType}\n- **Project Type Source**: the home`);
+    }
     writeStateFile(projectDir, content, dirName, space);
     appendAuditEntry("UNIT_TAKEN_IN", {
       "Home Location": home.location,
@@ -5208,7 +5235,7 @@ function listSpacesHere(projectDir: string): string[] {
 // team's space. A Unit held by another team stays theirs; a Unit that waits on
 // another is not taken yet.
 function takeUnit(args: string[], projectDir?: string): void {
-  const { positional, flags } = parseArgs(args);
+  const { positional, flags, bareFlags } = parseArgs(args);
   if (flags.file !== undefined) {
     takeFromFile(resolveProjectDir(projectDir), flags.file);
     return;
@@ -5256,18 +5283,34 @@ function takeUnit(args: string[], projectDir?: string): void {
   }
   if (opening.completed.has(unit)) fail(`${unit} is already done at the home.`);
   // A Unit the home marked done on its claim counts as done, pushed state or not.
+  const depClaims = new Map<string, UnitClaimView | null>();
   const blockers = (opening.blockers.get(unit) ?? []).filter((dep) => {
     if (dep === "walking-skeleton") return true;
     const depRef = claimRef(home.id8, dep);
     if (home.target !== null) ensureFetchedClaim(pd, home, depRef);
-    return currentClaim(pd, home.target, depRef)?.payload.done !== true;
+    depClaims.set(dep, currentClaim(pd, home.target, depRef));
+    return depClaims.get(dep)?.payload.done !== true;
   });
-  if (blockers.length > 0) {
+  // Starting early, on the branches its dependencies pushed (the person asked).
+  const pushedDeps = blockers.every((dep) => depClaims.get(dep)?.payload.result !== undefined);
+  const early = (bareFlags.has("early") || flags.early !== undefined) && blockers.length > 0 && pushedDeps;
+  if (blockers.length > 0 && !early) {
     fail(
       `${unit} waits on ${blockers.join(", ")}, which ${blockers.length === 1 ? "is" : "are"} not done at the home yet. ` +
-        `It opens once ${blockers.length === 1 ? "it is" : "they are"} done.`,
+        `It opens once ${blockers.length === 1 ? "it is" : "they are"} done` +
+        (pushedDeps ? `, or starts early on ${blockers.length === 1 ? "its" : "their"} pushed branches if you ask.` : "."),
     );
   }
+  const earlyOn = early
+    ? blockers.map((dep) => ({
+      unit: dep,
+      repos: (depClaims.get(dep)?.payload.result?.repos ?? []).map((repo) => ({
+        repo: repo.repo,
+        branch: repo.branch,
+        head: repo.heads.at(-1) ?? "",
+      })),
+    }))
+    : undefined;
   const team = current?.status === "claimed" ? current.owner : flags.team ?? activeTeam ?? me;
   if (/[\r\n|]/.test(team)) fail("Team labels cannot contain pipes or newlines.");
   const generation = current?.status === "claimed"
@@ -5291,6 +5334,7 @@ function takeUnit(args: string[], projectDir?: string): void {
     integration_ref: integration.ref,
     predecessor_oid: current?.oid ?? null,
     taken_by: me,
+    ...(earlyOn ? { early_on: earlyOn } : {}),
   } as UnitClaimPayload;
   const commit = createClaimCommit(pd, current?.oid ?? integration.oid, payload);
   const pushed = updateClaimRef(pd, home.target, ref, commit, current?.oid ?? null);
@@ -5318,6 +5362,31 @@ function takeUnit(args: string[], projectDir?: string): void {
     approvals: (produced) => homeApprovals(pd, home, integration.oid, produced),
   });
   setActiveSpaceCursor(pd, build.space);
+  // Early: the Unit's branch starts at each dependency's pushed head, checked
+  // out where nothing of the person's is uncommitted.
+  const earlyLines: string[] = [];
+  for (const dep of earlyOn ?? []) {
+    for (const repo of dep.repos) {
+      const dir = repo.repo === "." ? pd : repoDir(pd, repo.repo);
+      const remote = isGitRepoDir(dir) ? repositoryRemote(dir) : null;
+      if (remote === null || git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${unit}`]).ok) continue;
+      git(dir, ["fetch", "-q", remote, `+refs/heads/${repo.branch}:refs/remotes/${remote}/${repo.branch}`]);
+      const start = `${remote}/${repo.branch}`;
+      const name = repo.repo === "." ? "the repo" : repo.repo;
+      const clean = git(dir, ["status", "--porcelain"]).stdout.trim() === "";
+      if (clean && git(dir, ["switch", "-q", "-c", unit, start]).ok) earlyLines.push(`You are on branch ${unit} in ${name} now.`);
+      else if (git(dir, ["branch", unit, start]).ok) {
+        earlyLines.push(`Branch ${unit} in ${name} starts there; your uncommitted changes kept you on your branch, so switch when you are ready.`);
+      }
+    }
+  }
+  if (earlyOn) {
+    const names = [...new Set(earlyOn.flatMap((dep) => dep.repos.map((repo) => (repo.repo === "." ? "the repo" : repo.repo))))];
+    earlyLines.unshift(
+      `It starts early on the pushed branch of ${joinNames(earlyOn.map((dep) => dep.unit))} in ${joinNames(names)}. ` +
+        "It may still change before it merges.",
+    );
+  }
   // The likely repos this workspace has no checkout of, said with the way to one.
   const likely = unitLikelyRepos(pd, home.dirName, home.space).get(unit) ?? [];
   const missing = [...new Set(likely.map((repo) => repo.split("/")[0]))]
@@ -5339,6 +5408,7 @@ function takeUnit(args: string[], projectDir?: string): void {
       (resultByFile
         ? ` You can read the home but not write to it, so the result of ${unit} goes back as a file when it is built.`
         : "") +
+      earlyLines.map((line) => ` ${line}`).join("") +
       missing.map((repo) => ` ${repoNotThereLine(pd, repo)}`).join(""),
   }));
 }
@@ -5577,23 +5647,223 @@ function recordUnitDone(projectDir: string, claim: UnitClaimView, verdicts: NonN
   });
 }
 
-// What the home said about this build's Unit, read from the claim git last
-// brought in: a turn-down, in the home's person's own words. Null for none.
-export function buildClaimNote(projectDir: string, stateContent: string): string | null {
+// What the home said about this build's Unit, read from the claims git last
+// brought in, each said once: a turn-down in the home's words, the home's
+// answer to a proposal, a Unit it started early on that is now done or turned
+// down, and an input the home amended (the copy here takes the new version,
+// and the stages that used it read as current, on every Guard Policy).
+export function buildClaimNotes(projectDir: string, stateContent: string): string[] {
   const build = unitBuildOf(stateContent);
-  if (build === null) return null;
+  if (build === null) return [];
   const space = build.homeRecord.slice(0, build.homeRecord.indexOf("/"));
-  let claim: UnitClaimView | undefined;
+  let claims: Map<string, UnitClaimView>;
   try {
-    claim = cachedClaimsForIdentity(projectDir, { space, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false)
-      .get(build.unit);
+    claims = cachedClaimsForIdentity(projectDir, { space, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false);
   } catch {
-    return null;
+    return [];
   }
-  const down = claim?.payload.turned_down;
-  if (!down) return null;
-  return `${build.unit} was turned down in ${down.repo} at the home${down.words ? `: "${down.words}"` : ""}. ` +
-    "Say go back to Code Generation to change it, then push again.";
+  const mine = claims.get(build.unit);
+  if (mine === undefined) return [];
+  const unit = build.unit;
+  const lines: string[] = [];
+  const down = mine.payload.turned_down;
+  if (down) {
+    lines.push(`${unit} was turned down in ${down.repo} at the home${down.words ? `: "${down.words}"` : ""}. ` +
+      "Say go back to Code Generation to change it, then push again.");
+  }
+  for (const proposal of mine.payload.proposals ?? []) {
+    if (proposal.answer === "approved") lines.push(`The home approved your change to the ${inputName(proposal.input)}.`);
+    if (proposal.answer === "turned down") {
+      lines.push(`The home turned down your change to the ${inputName(proposal.input)}` +
+        `${proposal.answer_words ? `: "${proposal.answer_words}"` : ""}. I'm carrying on with the approved one.`);
+    }
+  }
+  for (const dep of mine.payload.early_on ?? []) {
+    const theirs = claims.get(dep.unit)?.payload;
+    if (theirs?.done) lines.push(`${dep.unit} is done at the home. ${unit} started early on its branch: rebase on it when you are ready.`);
+    else if (theirs?.turned_down) {
+      lines.push(`${dep.unit} was turned down at the home; ${unit} started on its branch. Nothing else changes: wait for it, ` +
+        "or rebase when you are ready.");
+    }
+  }
+  if (isReadOnlyEngineProbe()) return lines;
+  const record = recordDir(projectDir);
+  for (const amendment of mine.payload.amendments ?? []) {
+    if (record === null) break;
+    const shown = git(projectDir, ["show", `${mine.oid}:${RESULT_FILES_ROOT}/amendments/${amendment.input}`, "--"]);
+    const path = join(record, ...amendment.input.split("/"));
+    if (!shown.ok || (existsSync(path) && textFingerprint(readFileSync(path, "utf-8")) === textFingerprint(shown.stdout))) continue;
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, shown.stdout, "utf-8");
+    const renewed = renewForAmendedInput(projectDir, amendment.input, { Unit: unit, "Amended At Home": amendment.at });
+    const name = inputName(amendment.input);
+    if (mine.payload.done) {
+      lines.push(`The ${name} changed at the home after ${unit} was done. Do you want me to start follow-up work for it?`);
+    } else if (renewed.length > 0) {
+      lines.push(staleStageLine(stageLabel(loadGraph().find((stage) => stage.slug === renewed[0]), renewed[0]) ?? renewed[0]));
+    } else {
+      lines.push(`The ${name} changed at the home; ${unit} uses the new one from here.`);
+    }
+  }
+  return lines;
+}
+
+// The finished stages of this work that used an amended input read as current:
+// the person who owns it approved the change, so nothing is stale and nothing
+// resets. Returns the stages renewed, in the work's order.
+function renewForAmendedInput(projectDir: string, rel: string, extra: Record<string, string>): string[] {
+  const at = artifactAt(rel);
+  if (at === null) return [];
+  const state = readStateFile(projectDir);
+  const graph = loadGraph();
+  const receipts = latestCompletionBasesFromAudit(readAllAuditShards(projectDir));
+  const renewed: string[] = [];
+  withAuditLock(projectDir, () => {
+    for (const [stage, basis] of receipts) {
+      if (![...basis.inputs, ...basis.outputs].some((entry) => entry.artifact === at.artifact && entry.producer === at.producer)) continue;
+      const node = graph.find((entry) => entry.slug === stage);
+      if (node === undefined) continue;
+      appendAuditEntryUnlocked("SHARED_INPUT_AMENDED", {
+        ...sharedInputAmendedFields(stage, captureStageValidationBasis(projectDir, node, state, graph), rel),
+        ...extra,
+      }, projectDir);
+      renewed.push(stage);
+    }
+  });
+  return renewed;
+}
+
+// A build proposes a change to one input it was approved with: from the
+// person's own file, or their edited copy. The build carries on meanwhile.
+function proposeChange(args: string[], projectDir?: string): void {
+  const { flags } = parseArgs(args);
+  if (!flags.input) fail("Usage: aidlc-unit propose --input <file it was approved with> [--file <changed text>] [--person-words '<their words>']");
+  const pd = resolveProjectDir(projectDir);
+  const state = readStateFile(pd);
+  const build = unitBuildOf(state);
+  if (build === null) fail("A change is proposed from a Unit's build; this work is not one.");
+  const record = activeRecordDir(pd);
+  const approved = approvedInputsOf(record).filter((entry) => !entry.path.endsWith("unit-of-work-dependency.md"));
+  const match = approved.find((entry) =>
+    entry.path === flags.input || entry.path.endsWith(`/${flags.input}`) || entry.path.endsWith(`/${artifactFilename(flags.input!)}`)
+  );
+  if (match === undefined) {
+    fail(`${flags.input} is not one of the files ${build.unit} was approved with (${approved.map((entry) => entry.path.split("/").at(-1)).join(", ")}).`);
+  }
+  const name = inputName(match.path);
+  const text = flags.file !== undefined ? readFileSync(resolve(pd, flags.file), "utf-8") : readFileSync(join(record, ...match.path.split("/")), "utf-8");
+  if (textFingerprint(text) === match.fingerprint) {
+    console.log(JSON.stringify({ proposed: false, notice: `The ${name} is as the home approved it, so there is no change to send.` }));
+    return;
+  }
+  if (getField(state, "Home Result")?.trim() === "by file") {
+    fail(`The home takes no push from here: send your change to the ${name} to the lead with your result file.`);
+  }
+  const home = buildsHome(pd, build);
+  const ref = claimRef(home.id8, build.unit);
+  if (home.target !== null) ensureFetchedClaim(pd, home, ref);
+  const live = currentClaim(pd, home.target, ref);
+  if (!live || live.status !== "claimed") fail(`${build.unit} is not held at the home, so there is no claim to send the change on.`);
+  const proposal: Proposal = {
+    input: match.path,
+    by: git(pd, ["config", "user.name"]).stdout.trim() || "a teammate",
+    words: flags["person-words"]?.trim() ?? "",
+    at: isoTimestamp(),
+  };
+  const payload: UnitClaimPayload = {
+    ...live.payload,
+    predecessor_oid: live.oid,
+    proposals: [...(live.payload.proposals ?? []).filter((entry) => entry.input !== match.path || entry.answer !== undefined), proposal],
+  };
+  const sent = updateClaimRef(pd, home.target, ref, createClaimCommit(pd, live.oid, payload, undefined, undefined, {
+    [`${RESULT_FILES_ROOT}/proposals/${match.path}`]: text,
+  }), live.oid);
+  if (!sent.ok) fail(`The home did not take the change: ${sent.refused ?? "its claim moved meanwhile"}. Try again.`);
+  invalidateLiveClaimPayloadCache(pd, build.unit);
+  console.log(JSON.stringify({
+    proposed: true,
+    notice: `Sent to the home: your change to the ${name}. I'm carrying on with ` +
+      `${flags.file !== undefined ? `the approved ${name}` : "your version here"} until the home decides.`,
+  }));
+}
+
+export function amendAskName(unit: string, input: string): string {
+  return `amend-${unit}-${input.replace(/[^A-Za-z0-9.-]+/g, "_")}.json`;
+}
+
+// At the home: the owner of the shared plan answers a team's proposal, in their
+// own words, under the rules for a person's answer (their reply after it was
+// shown, not empty, not a cancellation, not the agent's). An approved change
+// is written into the home's record, the home's stages that used it read as
+// current, and every team building with it gets it on its claim (a team by
+// file, a newer hand-off file).
+function amendInput(args: string[], projectDir?: string): void {
+  const { positional, flags } = parseArgs(args);
+  const unit = positional[0];
+  const answer = flags.answer;
+  const words = flags["person-words"]?.trim() ?? "";
+  if (!unit || !flags.input || (answer !== "approve" && answer !== "reject")) {
+    fail("Usage: aidlc-unit amend <unit> --input <file> --answer <approve|reject> --person-words '<their words>'");
+  }
+  const pd = resolveProjectDir(projectDir);
+  const identity = activeIdentity(pd);
+  const remote = repositoryRemote(pd);
+  const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
+  const proposal = live?.payload.proposals?.find((entry) => entry.input === flags.input && entry.answer === undefined);
+  if (!live || proposal === undefined) fail(`${unit} has no change to ${flags.input} waiting for an answer.`);
+  if (!humanPresenceGuardDisabled()) {
+    if (!words || isNonAnswer(words)) fail("The answer is the person's own words about the change; ask them, then run this with them.");
+    const authorship = selfAttributedDecisionMarker(words, "approval");
+    if (authorship) fail(`The answer reads as the agent's, not the person's (${authorship.category}): "${authorship.phrase}". Ask them.`);
+    const mark = engineAskMark(pd, amendAskName(unit, proposal.input));
+    if (mark !== null && !personRepliedAfter(pd, mark)) fail("The answer comes from the person's reply to the question about the change; ask them first.");
+  }
+  const name = inputName(proposal.input);
+  const answered: Proposal = { ...proposal, answer: answer === "approve" ? "approved" : "turned down", ...(words ? { answer_words: words } : {}) };
+  const lines: string[] = [];
+  if (answer === "approve") {
+    const shown = git(pd, ["show", `${live.oid}:${RESULT_FILES_ROOT}/proposals/${proposal.input}`, "--"]);
+    if (!shown.ok) fail(`The proposed ${name} is not on ${unit}'s claim; ask the team to send it again.`);
+    const path = join(activeRecordDir(pd), ...proposal.input.split("/"));
+    writeFileSync(path, shown.stdout, "utf-8");
+    renewForAmendedInput(pd, proposal.input, { "Proposed By": `${proposal.by} (${live.owner})`, "Person Words": words });
+    const amendment: Amendment = { input: proposal.input, at: isoTimestamp(), words };
+    for (const [other, claim] of cachedClaims(pd)) {
+      if (claim.status !== "claimed") continue;
+      const current = currentClaim(pd, remote, claim.ref);
+      if (!current || current.status !== "claimed") continue;
+      const payload: UnitClaimPayload = {
+        ...current.payload,
+        predecessor_oid: current.oid,
+        amendments: [...(current.payload.amendments ?? []).filter((entry) => entry.input !== proposal.input), amendment],
+        ...(other === unit ? { proposals: (current.payload.proposals ?? []).map((entry) => (entry === proposal || (entry.input === proposal.input && entry.answer === undefined) ? answered : entry)) } : {}),
+      };
+      updateClaimRef(pd, remote, current.ref, createClaimCommit(pd, current.oid, payload, undefined, undefined, {
+        [`${RESULT_FILES_ROOT}/amendments/${proposal.input}`]: shown.stdout,
+      }), current.oid);
+      invalidateLiveClaimPayloadCache(pd, other);
+      if (current.payload.by_file && !current.payload.taken_by) {
+        lines.push(`A newer hand-off file for ${other} is at ${writeHandOffFile(pd, other, current.owner, current.generation)}: send it to ${current.owner}.`);
+      }
+    }
+    lines.unshift(`The ${name} is changed at the home. The teams building with it hear it once and carry on; nobody approves anything again.`);
+  } else {
+    const payload: UnitClaimPayload = {
+      ...live.payload,
+      predecessor_oid: live.oid,
+      proposals: (live.payload.proposals ?? []).map((entry) => (entry.input === proposal.input && entry.answer === undefined ? answered : entry)),
+    };
+    const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
+    if (!sent.ok) fail(`${unit}'s claim moved meanwhile: ${sent.refused ?? "try again"}.`);
+    invalidateLiveClaimPayloadCache(pd, unit);
+    lines.push(`Turned down ${live.owner}'s change to the ${name}; they hear it once, with your words.`);
+  }
+  appendAuditEntry("QUESTION_ANSWERED", {
+    Question: `${live.owner} proposes a change to the ${name} for ${unit}`,
+    Answer: answer === "approve" ? "Approve it" : "Turn it down",
+    "Person Reply": words,
+  }, pd);
+  console.log(JSON.stringify({ answered: answered.answer, unit, notice: lines.join(" ") }));
 }
 
 // The home's person turned a Unit's repo down: their words go on the claim,
@@ -5686,6 +5956,28 @@ function handOff(args: string[], projectDir?: string): void {
   const held = updateClaimRef(pd, integration.remote, ref, createClaimCommit(pd, current?.oid ?? integration.oid, payload), current?.oid ?? null);
   if (!held.ok) fail(`${unit} could not be held for ${team}: ${held.refused ?? "its claim moved meanwhile"}. Try again.`);
   invalidateLiveClaimPayloadCache(pd, unit);
+  const rel = writeHandOffFile(pd, unit, team, payload.generation);
+  const words = flags["person-words"]?.trim() ?? "";
+  appendAuditEntry("UNITS_ASSIGNED", {
+    Assigned: `${unit}=${team}`,
+    "By File": rel,
+    ...(words ? { "Person Words": words } : {}),
+  }, pd);
+  console.log(JSON.stringify({
+    unit,
+    team,
+    file: rel,
+    notice: `The hand-off file for ${unit} is ${rel}: send it to the ${team} team. They take it in with ` +
+      `/aidlc unit take --file <the file> in their own workspace, and send its result back to you as a file.`,
+  }));
+}
+
+// The hand-off file for a Unit held for a team by file, from the home's record
+// as it is now. Returns its workspace-relative path.
+function writeHandOffFile(pd: string, unit: string, team: string, attempt: number): string {
+  const state = readStateFile(pd);
+  const identity = activeIdentity(pd);
+  const integration = fetchIntegration(pd);
   const record = activeRecordDir(pd);
   const files = new Map<string, string>([["aidlc-state.md", state]]);
   for (const rel of homeInputPaths(unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true))) {
@@ -5705,12 +5997,12 @@ function handOff(args: string[], projectDir?: string): void {
       "Unit, the attempt and the fingerprints below.",
     {
       "Home Work": identity.intentUuid,
-      "Home Location": location,
+      "Home Location": homeLocation(state) ?? "",
       "Home Record": `${identity.space}/${row?.dirName ?? ""}`,
       "Home Label": label,
       Unit: unit,
       Team: team,
-      Attempt: String(payload.generation),
+      Attempt: String(attempt),
       "Home Commit": integration.oid,
       "Handed Off": isoTimestamp(),
       "Home Approvals": approvals.join("; ") || "none recorded",
@@ -5718,19 +6010,7 @@ function handOff(args: string[], projectDir?: string): void {
     },
     files,
   ));
-  const words = flags["person-words"]?.trim() ?? "";
-  appendAuditEntry("UNITS_ASSIGNED", {
-    Assigned: `${unit}=${team}`,
-    "By File": rel,
-    ...(words ? { "Person Words": words } : {}),
-  }, pd);
-  console.log(JSON.stringify({
-    unit,
-    team,
-    file: rel,
-    notice: `The hand-off file for ${unit} is ${rel}: send it to the ${team} team. They take it in with ` +
-      `/aidlc unit take --file <the file> in their own workspace, and send its result back to you as a file.`,
-  }));
+  return rel;
 }
 
 function takeFromFile(pd: string, path: string): void {
@@ -5869,6 +6149,8 @@ export function main(argv: string[]): void {
     else if (command === "hand-off") handOff(args, projectDir);
     else if (command === "progress") progressFile(projectDir);
     else if (command === "take-in") takeIn(args, projectDir);
+    else if (command === "propose") proposeChange(args, projectDir);
+    else if (command === "amend") amendInput(args, projectDir);
     else if (command === "turned-down") turnedDown(args, projectDir);
     else if (command === "adopt") adoptUnit(args, projectDir);
     else if (command === "claim") claimUnit(args, projectDir);
@@ -5892,7 +6174,7 @@ export function main(argv: string[]): void {
       console.log(JSON.stringify(unitClaimOverview(resolveProjectDir(projectDir)), null, 2));
     } else {
       fail(
-        "Usage: aidlc-unit <assign|take|push|hand-off|progress|take-in|turned-down|adopt|claim|release|participate|share|publish|pin|gate|land|merge-status|status> ...",
+        "Usage: aidlc-unit <assign|take|push|hand-off|progress|take-in|propose|amend|turned-down|adopt|claim|release|participate|share|publish|pin|gate|land|merge-status|status> ...",
       );
     }
   } catch (error) {

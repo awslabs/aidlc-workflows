@@ -693,11 +693,15 @@ function completionReceiptsFromAudit(audit: string): CompletionReceipts {
       approvedWith.delete(stage);
       continue;
     }
-    if (event.event === "STAGE_DEFINITION_CHANGED" || event.event === "STAGE_OUTPUT_AMENDED") {
+    if (
+      event.event === "STAGE_DEFINITION_CHANGED" || event.event === "STAGE_OUTPUT_AMENDED" ||
+      event.event === "SHARED_INPUT_AMENDED"
+    ) {
       // The stage itself changed after it finished, or its own documents did
-      // before the person's next message after its approval: this receipt
-      // stands in for the one it finished with. Only a change to the stage
-      // itself is AI-DLC's, the one status names.
+      // before the person's next message after its approval, or an input it
+      // used was amended by the person who owns it: this receipt stands in for
+      // the one it finished with. Only a change to the stage itself is
+      // AI-DLC's, the one status names.
       const basis = parseStageValidationBasis(auditBlockField(event.block, VALIDATION_BASIS_FIELD));
       if (basis && latestKnown.has(stage)) {
         latestKnown.set(stage, basis);
@@ -1009,6 +1013,9 @@ export function stageOutputAmendedFields(
     "Message Id": message,
     Details: `changed before the person's next message after ${message}; receipt renewed`,
   };
+/** The record of a stage's receipt renewed for an amended shared input. */
+export function sharedInputAmendedFields(stage: string, basis: StageValidationBasis, input: string): Record<string, string> {
+  return { Stage: stage, [VALIDATION_BASIS_FIELD]: canonicalJson(basis), Input: input };
 }
 
 export function codeArrivedStageLine(name: string): string {

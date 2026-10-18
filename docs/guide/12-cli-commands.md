@@ -53,6 +53,8 @@ diagnostic and lifecycle routes.
 | `/aidlc unit hand-off <unit> --team <team>` | At the home, hold a Unit for a team that cannot reach it and write its hand-off file |
 | `/aidlc unit progress` | In a Unit's build by file, write a progress file for the lead |
 | `/aidlc unit take-in <file>` | At the home, take a team's result or progress file in |
+| `/aidlc unit propose --input <file>` | In a Unit's build, send the home a change to an input the Unit was approved with |
+| `/aidlc unit amend <unit> --input <file> --answer <approve\|reject>` | At the home, answer a team's proposed change, in your own words |
 | `/aidlc unit turned-down <unit> --repo <repo>` | At the home, send one repo of a team's Unit back to the team, with your words |
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
@@ -706,6 +708,9 @@ records `UNIT_TAKEN_IN`, and is selected for this chat. Taking a Unit whose
 build is already in this workspace carries that build on. A home that takes no
 push from here still gives you a Unit held for your team, and its result goes
 back as a file; an open Unit there needs the lead to hold it for you.
+`--early` starts a Unit that waits on others once each of them has pushed: its
+branch starts at their pushed heads in each repo, and the line says it may
+still change before it merges.
 
 ### `/aidlc unit push` - Send a Unit's build home
 
@@ -750,6 +755,18 @@ At the home, `take-in <file>` puts either onto the Unit's claim; the next step
 checks a result like a pushed one. A file for other work changes nothing, an
 older one is taken in with a line, and a changed one is taken in as it is and
 marked so.
+
+### `/aidlc unit propose` and `/aidlc unit amend` - Change a shared input
+
+In a Unit's build, `propose --input <file> [--file <changed text>]` sends the
+home your change to one of the files the Unit was approved with (your edited
+copy, or the text in `--file`), with `--person-words`; the build carries on.
+At the home, the owner of the shared plan is asked once, and the agent runs
+`amend <unit> --input <file> --answer <approve|reject> --person-words '<their
+words>'` from their reply: their own words after the question was shown, not
+empty and not the agent's. An approved change is written into the home's
+record with `SHARED_INPUT_AMENDED` for each stage there that used it, and goes
+onto every team's claim; a team by file gets a newer hand-off file.
 
 ### `/aidlc unit turned-down <unit> --repo <repo>` - Send a repo back
 

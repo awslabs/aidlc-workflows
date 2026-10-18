@@ -800,6 +800,15 @@ export interface UnitTakeAskDirective extends AskDirectiveBase {
   choices: AskChoice[];
 }
 
+// A team's proposed change to a shared input, at the home: the person's own
+// words answer it; the agent fills amend_command with the answer and them.
+export interface UnitAmendAskDirective extends AskDirectiveBase {
+  ask_type: "unit-amend";
+  response_route: "command";
+  choices: AskChoice[];
+  amend_command: string;
+}
+
 // A hand-off file the person pointed at: start its Unit, or not now.
 export interface UnitHandoffAskDirective extends AskDirectiveBase {
   ask_type: "unit-handoff";
@@ -928,6 +937,7 @@ export type AskDirective =
   | UnitTakeAskDirective
   | UnitPushAskDirective
   | UnitHandoffAskDirective
+  | UnitAmendAskDirective
   | NewWorkRoutingAskDirective
   | UnitClaimAskDirective
   | LegacyPlanApprovalRecoveryAskDirective
@@ -1209,6 +1219,7 @@ const ASK_FIELDS = [
   "response_route",
   "confirm_command",
   "assign_command",
+  "amend_command",
   "compose_command",
   "scope_commands",
   "select_commands",
@@ -1360,6 +1371,12 @@ export function repoEstimateNote(facts: RepoFacts, withQuestion: boolean): strin
     (withQuestion
       ? "Say this to the person with the question, in your own words, and what a narrower set they name would take."
       : "Tell the person once, in your own words, before the analysis starts.");
+}
+
+// A proposed change to a shared input: the person's own words answer it.
+export function unitAmendQuestionNote(invocation: string): string {
+  return questionNote(invocation) + " Their words answer it: when they approve or turn it down, run amend_command " +
+    "with --answer approve or --answer reject and their words, single-quoted, as --person-words; anything else leaves it waiting.";
 }
 
 // Who builds which Unit: the person's own words name a team per Unit.
@@ -1723,7 +1740,7 @@ export function ceremonyNote(state: "on" | "off", questionsOnly = false): string
 // the numbers: a reply of "2" is read against this order, and the agent
 // renders nothing of its own. One builder, so every question has one shape.
 // Engine questions answered by running the picked choice's command.
-const COMMAND_CHOICE_ASKS = new Set(["construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "repos-manifest", "unit-assignment", "unit-take", "unit-push", "unit-handoff"]);
+const COMMAND_CHOICE_ASKS = new Set(["construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "repos-manifest", "unit-assignment", "unit-take", "unit-push", "unit-handoff", "unit-amend"]);
 
 export interface AskChoice {
   label: string;
@@ -1891,6 +1908,8 @@ export function withAgentNotes<T extends object>(
       ? repoScopeQuestionNote(invocation)
       : d.ask_type === "unit-assignment"
       ? unitAssignmentQuestionNote(invocation)
+      : d.ask_type === "unit-amend"
+      ? unitAmendQuestionNote(invocation)
       : questionNote(invocation, choices?.length === 1);
     if (typeof d.numbered_prose_question !== "string") {
       // A question with no options (a guard that has no way on) is said as it is.
@@ -2186,6 +2205,7 @@ export function validateDirective(obj: unknown): ValidationResult {
         "new_project_command",
         "handovers",
         "assign_command",
+        "amend_command",
       ] as const;
       const rejectUnexpected = (
         askType: string,
@@ -2276,8 +2296,9 @@ export function validateDirective(obj: unknown): ValidationResult {
         if (o.response_route !== "command") {
           errors.push(`${kind}: ${o.ask_type} response_route must be "command"`);
         }
-        if (o.ask_type === "unit-assignment") checkString(o, "assign_command", kind, errors);
-        rejectUnexpected(String(o.ask_type), o.ask_type === "unit-assignment" ? { assign_command: true } : {});
+        const commandField = o.ask_type === "unit-assignment" ? "assign_command" : o.ask_type === "unit-amend" ? "amend_command" : null;
+        if (commandField !== null) checkString(o, commandField, kind, errors);
+        rejectUnexpected(String(o.ask_type), commandField !== null ? { [commandField]: true } : {});
       } else if (o.ask_type === "new-work-routing") {
         if (o.response_route !== "next") {
           errors.push(`${kind}: new-work-routing response_route must be "next"`);

@@ -806,6 +806,20 @@ the claim, and `unit take-in` at the home puts a result or progress file onto
 the claim (`result`, `progress`). A claim held by `unit hand-off` carries
 `by_file`, and the board says "handed off by file".
 
+The take offer adds **Start <unit> early** for a waiting Unit once every Unit
+it waits on has a result on its claim (`unit take --early`, recorded as
+`early_on`). At the home, a claim with a proposal nobody answered makes the
+step `ask_type: unit-amend` (noted with an engine ask mark; after the person
+spoke without answering, the step carries one line instead), with
+`amend_command` for the person's words. `buildClaimNotes` says each note on a
+build's own claim once, on any step: a turn-down, the home's answer to a
+proposal, an `early_on` Unit done or turned down, and an amendment, which also
+writes the new version into the build's copy and appends `SHARED_INPUT_AMENDED`
+for the build's stages that used it, so its own validity check stays quiet and
+the line (`staleStageLine`, or the follow-up offer for a done Unit) comes from
+the amendment alone. `completionReceiptsFromAudit` reads `SHARED_INPUT_AMENDED`
+as it reads `STAGE_DEFINITION_CHANGED`.
+
 When skeleton-on applies, the first DAG Unit must be planned as the smallest
 working integrated slice. It completes its applicable per-unit stages before
 later Units even under stage-major. The engine then emits a `run-stage` with

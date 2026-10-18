@@ -484,3 +484,50 @@ export function parseHandFile(raw: string): HandFile | null {
     [...files].some(([path, text]) => listed.get(path) !== textFingerprint(text));
   return { kind, fields, files, ...(result ? { result } : {}), edited };
 }
+
+// --- A shared input a team proposes to change -------------------------------------
+//
+// A team proposes a change to one of the inputs its Unit was approved with; the
+// person who owns the shared plan answers at the home; an approved change
+// reaches every team building with it, once, as an amendment on its claim.
+
+export interface Proposal {
+  // Record-relative path of the input, as approved-inputs.md lists it.
+  input: string;
+  by: string;
+  words: string;
+  at: string;
+  answer?: "approved" | "turned down";
+  answer_words?: string;
+}
+
+export interface Amendment {
+  input: string;
+  at: string;
+  words: string;
+}
+
+// The files a build was approved with, as its approved-inputs.md lists them.
+export function approvedInputsOf(recordDir: string): Array<{ path: string; fingerprint: string }> {
+  let text: string;
+  try {
+    text = readFileSync(join(recordDir, "approved-inputs.md"), "utf-8");
+  } catch {
+    return [];
+  }
+  return [...text.matchAll(/^\| (\S+) \| (sha256:[0-9a-f]+) \|$/gm)].map((match) => ({ path: match[1], fingerprint: match[2] }));
+}
+
+// An input's name for the person: "contract summary" for
+// inception/contract-design/contract-summary.md.
+export function inputName(rel: string): string {
+  return (rel.split("/").at(-1) ?? rel).replace(/\.md$/, "").replaceAll("-", " ");
+}
+
+// Which stage produced a record-relative Inception output, and as which artifact.
+export function artifactAt(rel: string): { producer: string; artifact: string } | null {
+  const [, producer, file] = rel.split("/");
+  const stage = loadStageGraphAll().find((entry) => entry.slug === producer);
+  const artifact = [...(stage?.produces ?? []), ...(stage?.optional_produces ?? [])].find((name) => artifactFilename(name) === file);
+  return stage && artifact ? { producer, artifact } : null;
+}
