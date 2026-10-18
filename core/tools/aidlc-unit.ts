@@ -1,10 +1,12 @@
 // aidlc-unit.ts - atomic Unit claim registry and checkout-local scope binding.
 
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  closeSync,
   mkdtempSync,
   mkdirSync,
+  openSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -96,18 +98,56 @@ interface GitResult {
   code: number;
 }
 
+interface GitBytesResult {
+  ok: boolean;
+  stdout: Buffer;
+  stderr: string;
+  code: number;
+}
+
+// Git writes its output to files, never to a pipe: a pipe read stops at the
+// runtime's buffer (1 MiB under Bun) and hands back what it had, and a Unit's
+// audit shard outgrows that in one long attempt. The file holds everything git
+// wrote, read once it has exited. A run that could not start, was killed or
+// overflowed is a failed run, whatever its exit status.
+function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitBytesResult {
+  const scratch = mkdtempSync(join(tmpdir(), "aidlc-unit-git-"));
+  try {
+    const outPath = join(scratch, "stdout");
+    const errPath = join(scratch, "stderr");
+    const out = openSync(outPath, "w");
+    const err = openSync(errPath, "w");
+    let result: SpawnSyncReturns<Buffer>;
+    try {
+      result = spawnSync("git", args, {
+        cwd: projectDir,
+        env: { ...process.env, ...env },
+        stdio: ["ignore", out, err],
+      });
+    } finally {
+      closeSync(out);
+      closeSync(err);
+    }
+    const stderr = readFileSync(errPath, "utf-8");
+    const failure = result.error
+      ? `${result.error.message}\n`
+      : result.signal
+        ? `git stopped by ${result.signal}\n`
+        : "";
+    return {
+      ok: result.status === 0 && !result.error && !result.signal,
+      stdout: readFileSync(outPath),
+      stderr: failure + stderr,
+      code: result.status ?? 1,
+    };
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
 function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitResult {
-  const result = spawnSync("git", args, {
-    cwd: projectDir,
-    encoding: "utf-8",
-    env: { ...process.env, ...env },
-  });
-  return {
-    ok: result.status === 0,
-    stdout: result.stdout ?? "",
-    stderr: result.stderr ?? "",
-    code: result.status ?? 1,
-  };
+  const result = gitBytes(projectDir, args, env);
+  return { ...result, stdout: result.stdout.toString("utf-8") };
 }
 
 function localGit(
@@ -940,16 +980,27 @@ function gitPathExistsAt(
   return git(projectDir, ["cat-file", "-e", `${oid}:${path}`]).ok;
 }
 
-function gitTextAt(
+export function gitTextAt(
   projectDir: string,
   oid: string,
   path: string,
 ): string {
-  // This is an object, never a worktree path. Without the separator Git also
-  // stats the composite oid:path, which can exceed Windows' path limit.
-  const shown = git(projectDir, ["show", `${oid}:${path}`, "--"]);
-  if (!shown.ok) fail(`Pinned candidate is missing ${path}.`);
-  return shown.stdout;
+  // `cat-file` takes oid:path as an object name only, never a worktree path,
+  // so Git does not stat it (which could exceed Windows' path limit). The
+  // blob's recorded size is checked against the bytes read: a short read
+  // never stands in for the file.
+  const object = `${oid}:${path}`;
+  const size = git(projectDir, ["cat-file", "-s", object]);
+  if (!size.ok) fail(`Pinned candidate is missing ${path}.`);
+  const expected = Number(size.stdout.trim());
+  const shown = gitBytes(projectDir, ["cat-file", "blob", object]);
+  if (!shown.ok || shown.stdout.length !== expected) {
+    fail(
+      `Could not read all of ${path} from the pinned candidate: ` +
+        `${shown.stdout.length} of ${expected} bytes${shown.ok ? "" : ` (${shown.stderr.trim()})`}.`,
+    );
+  }
+  return shown.stdout.toString("utf-8");
 }
 
 type CandidateAuditEvent = AuditShardEvent;
