@@ -168,6 +168,35 @@ describe("a refresh over an agent file with a recorded model or effort", () => {
     expect(readFileSync(agent, "utf-8")).toContain("my own notes");
   });
 
+  // With no record of the composed file, setting its effort proves nothing about
+  // it, so the person's edit is not recorded as AI-DLC's.
+  test("an effort set on a composed agent file the install never recorded does not record an edit to it", () => {
+    const p = project("composed-unrecorded");
+    const release = join(RELEASES, "claude");
+    const installed = p.run(["config", "--project-dir", p.dir, "--from", release, "--harness", "claude", "--mcp", "none", "--yes"]);
+    expect(installed.status, installed.out).toBe(0);
+    const plugin = join(REPO_ROOT, "dist", "plugins", "test-pro", "claude");
+    const composed = spawnSync(process.execPath, [join(plugin, "hooks", "compose.ts")], {
+      cwd: p.dir,
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: plugin, CLAUDE_PROJECT_DIR: p.dir },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(composed.status, `${composed.stdout}${composed.stderr}`).toBe(0);
+    const rel = ".claude/agents/aidlc-quality-agent.md";
+    const manifestPath = join(p.dir, ".claude", "tools", "data", "aidlc-manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as { files: Record<string, string> };
+    delete manifest.files[rel];
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const agent = join(p.dir, rel);
+    writeFileSync(agent, appendNote(readFileSync(agent, "utf-8")));
+    const pinned = p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", "quality", "--effort", "high", "--yes"]);
+    expect(pinned.status, pinned.out).toBe(0);
+    const recorded = JSON.parse(readFileSync(manifestPath, "utf-8")) as { files: Record<string, string> };
+    expect(recorded.files[rel]).toBeUndefined();
+    expect(readFileSync(agent, "utf-8")).toContain("my own notes");
+  });
+
   // The release's own file is AI-DLC's before the model writer fills it in,
   // as it is after: putting it back is no edit to keep.
   test("an agent file put back to the release's own copy takes the recorded model with no conflict", () => {

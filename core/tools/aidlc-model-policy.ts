@@ -710,8 +710,8 @@ export function applyModelPolicyToProjection(
   const agentsDir = modelPolicyAgentsDir(harness, harnessDir);
   const agentsRoot = agentsDir === null ? harnessRoot : join(projectionRoot, agentsDir);
   const write = (path: string, text: string): void => {
+    if (text !== readFileSync(path, "utf-8")) written?.push(path);
     writeFileSync(path, text);
-    written?.push(path);
   };
 
   if (harness === "claude") {

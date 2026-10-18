@@ -9715,7 +9715,8 @@ function planManagedFiles(
         // A composed agent file is recorded without the plugin's additions, so
         // the plugin replay, which re-applies them only over that record, is
         // its proof; a model written into it then reaches the record too.
-        const unmodified = currentHash === priorHash || (modelStamped.has(rel) && composedRecords.has(rel));
+        const unmodified = currentHash === priorHash ||
+          (priorHash !== undefined && modelStamped.has(rel) && composedRecords.has(rel));
         const nextHash = retainBaseline
           ? regenerated.has(rel) && targetRegular && unmodified ? composedRecords.get(rel) ?? hash : priorHash
           : composedRecords.get(rel) ?? hash;
