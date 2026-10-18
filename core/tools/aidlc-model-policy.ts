@@ -696,6 +696,7 @@ export function applyModelPolicyToProjection(
   harness: ModelHarness,
   policyValue?: ModelPolicyRecord | null,
   capValue?: Tier | null,
+  written?: string[],
 ): EffectiveModelPolicy[] {
   const harnessRoot = join(projectionRoot, harnessDir);
   const policy = policyValue ?? null;
@@ -708,24 +709,28 @@ export function applyModelPolicyToProjection(
   ).map(([name, tier]) => resolveModelPolicy(policy, name, tier, harness, cap));
   const agentsDir = modelPolicyAgentsDir(harness, harnessDir);
   const agentsRoot = agentsDir === null ? harnessRoot : join(projectionRoot, agentsDir);
+  const write = (path: string, text: string): void => {
+    writeFileSync(path, text);
+    written?.push(path);
+  };
 
   if (harness === "claude") {
     for (const item of effective) {
       const path = join(agentsRoot, `${modelAgentStem(item.agent)}.md`);
       if (!existsSync(path)) throw new Error(`${path}: missing agent surface`);
-      writeFileSync(path, writeMarkdownAgentSurface(readFileSync(path, "utf-8"), item));
+      write(path, writeMarkdownAgentSurface(readFileSync(path, "utf-8"), item));
     }
   } else if (harness === "codex") {
     for (const item of effective) {
       const path = join(agentsRoot, `${modelAgentStem(item.agent)}.toml`);
       if (!existsSync(path)) throw new Error(`${path}: missing agent surface`);
-      writeFileSync(path, writeCodexAgentSurface(readFileSync(path, "utf-8"), item));
+      write(path, writeCodexAgentSurface(readFileSync(path, "utf-8"), item));
     }
   } else if (harness === "opencode") {
     for (const item of effective) {
       const path = join(agentsRoot, `${modelAgentStem(item.agent)}.md`);
       if (!existsSync(path)) throw new Error(`${path}: missing agent surface`);
-      writeFileSync(
+      write(
         path,
         writeMarkdownAgentSurface(readFileSync(path, "utf-8"), item, {
           effortKey: "variant",
@@ -739,7 +744,7 @@ export function applyModelPolicyToProjection(
     for (const item of effective) {
       const path = join(agentsRoot, `${modelAgentStem(item.agent)}.md`);
       if (!existsSync(path)) throw new Error(`${path}: missing agent surface`);
-      writeFileSync(
+      write(
         path,
         writeMarkdownAgentSurface(readFileSync(path, "utf-8"), item, { effortKey: "effortLevel", quoteModel: true }),
       );
@@ -749,14 +754,14 @@ export function applyModelPolicyToProjection(
     for (const item of effective) {
       const path = join(agentsRoot, `${modelAgentStem(item.agent)}.json`);
       if (!existsSync(path)) throw new Error(`${path}: missing agent surface`);
-      writeFileSync(path, writeKiroAgentSurface(readFileSync(path, "utf-8"), item));
+      write(path, writeKiroAgentSurface(readFileSync(path, "utf-8"), item));
       if (item.model && item.effort) {
         modelEfforts.push({ model: item.model, effort: item.effort });
       }
     }
     const path = join(harnessRoot, "settings", "cli.json");
     if (!existsSync(path)) throw new Error(`${path}: missing Kiro CLI settings`);
-    writeFileSync(
+    write(
       path,
       writeKiroCliSurface(readFileSync(path, "utf-8"), modelEfforts, cap),
     );

@@ -408,6 +408,11 @@ type PreparedRefreshSource = {
   composedRecords?: ReadonlyMap<string, string>;
   /** Composed files this row no longer ships whose record proves them AI-DLC's. */
   provenRetired?: ReadonlySet<string>;
+  /**
+   * Release files the model writer filled in, with the release's own hash: the
+   * ownership check still holds them, as it holds every shipped file.
+   */
+  modelWritten?: ReadonlyMap<string, string>;
   entries?: Baseline["entries"];
   notes: string[];
 };
@@ -6748,12 +6753,26 @@ function prepareRefreshSource(
     writeFileSync(stagedHarnessData, `${JSON.stringify(staged, null, 2)}\n`);
     regenerated.add(`${descriptor.harnessDir}/tools/data/harness.json`);
   }
+  const modelWrites: string[] = [];
   applyModelPolicyToProjection(
     root,
     descriptor.harnessDir,
     modelHarness(distribution),
     modelPolicy,
+    undefined,
+    modelWrites,
   );
+  // A model or effort written into a release's agent file makes it differ from
+  // the release, which alone would mark it regenerated and copy it over the
+  // person's edit. On a copied project's own files the writer keeps the edit.
+  const modelWritten = new Map<string, string>();
+  if (!projectProjection) {
+    for (const path of modelWrites) {
+      const rel = relative(root, path).replaceAll("\\", "/");
+      const releaseHash = beforeGeneratedWrites.get(rel);
+      if (releaseHash !== undefined) modelWritten.set(rel, releaseHash);
+    }
+  }
   applyProjectFlagsToProjection(
     root,
     descriptor.harnessDir,
@@ -6877,7 +6896,10 @@ function prepareRefreshSource(
       if (entries) entries[rel] = owned;
     }
     if (!projectProjection) {
-      for (const rel of grantKiroMcpServers(projectDir, sourceRoot, root, descriptor.harnessDir)) regenerated.add(rel);
+      for (const rel of grantKiroMcpServers(projectDir, sourceRoot, root, descriptor.harnessDir)) {
+        regenerated.add(rel);
+        modelWritten.delete(rel);
+      }
     }
   }
 
@@ -6988,6 +7010,7 @@ function prepareRefreshSource(
     const currentHash = sha256Bytes(current);
     const strippedHash = sha256Bytes(stripRecordedContributions(current, record));
     if (priorHash && currentHash !== priorHash && strippedHash !== priorHash) continue;
+    modelWritten.delete(rel);
     // A file this row no longer ships is AI-DLC's to remove.
     if (!existsSync(stagedPath)) {
       if (priorHash) provenRetired.add(rel);
@@ -7226,6 +7249,7 @@ function prepareRefreshSource(
     emptiedSidecars,
     composedRecords,
     provenRetired,
+    modelWritten,
     entries,
     notes,
   };
@@ -9632,6 +9656,7 @@ function planManagedFiles(
   unproven: ReadonlySet<string> = new Set(),
   composedRecords: ReadonlyMap<string, string> = new Map(),
   provenRetired: ReadonlySet<string> = new Set(),
+  modelWritten: ReadonlyMap<string, string> = new Map(),
 ): void {
   const shipped = new Set<string>();
   for (const directory of descriptor.managedDirectories) {
@@ -9647,19 +9672,21 @@ function planManagedFiles(
       const targetRegular = targetExists && lstatSync(target).isFile();
       const hash = sha256File(source);
       const priorHash = prior?.files[rel];
+      // With no install record, a copied release's own file is AI-DLC's before
+      // the model writer fills it in.
+      const adoptable = [
+        ...(descriptor.legacyManagedFileHashes?.[rel] ?? []),
+        ...(prior === null && modelWritten.has(rel) ? [modelWritten.get(rel)!] : []),
+      ];
       // A copy Git checked out with other line endings is the file it was, and
       // so is an include a space switch pointed at another space.
       const owned = targetRegular
-        ? ownedFileHash(target, [hash, priorHash, ...(descriptor.legacyManagedFileHashes?.[rel] ?? [])])
+        ? ownedFileHash(target, [hash, priorHash, ...adoptable])
         : undefined;
       const currentHash = owned?.hash;
       const adoptedManagedFile = prior === null &&
         currentHash !== undefined &&
-        (
-          descriptor.legacyManagedFileHashes?.[rel]?.includes(
-            currentHash,
-          ) ?? false
-        );
+        adoptable.includes(currentHash);
       if (workspaceSeed(rel)) {
         if (targetExists) {
           actions.push({ path: rel, action: "preserve", detail: "project-owned seed" });
@@ -9688,7 +9715,7 @@ function planManagedFiles(
           : composedRecords.get(rel) ?? hash;
         if (nextHash !== undefined) nextHashes[rel] = nextHash;
       }
-      if (runtimeGenerated(rel, descriptor.harnessDir, regenerated)) {
+      if (runtimeGenerated(rel, descriptor.harnessDir, regenerated) && !modelWritten.has(rel)) {
         if (targetRegular && currentHash === hash) {
           actions.push({ path: rel, action: "preserve", detail: "runtime-generated" });
           continue;
@@ -13141,6 +13168,7 @@ export async function main(
       prepared.unproven,
       prepared.composedRecords,
       prepared.provenRetired,
+      prepared.modelWritten,
     );
     for (const rel of prepared.retiredManagedFiles) {
       const target = join(projectDir, rel);
