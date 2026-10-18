@@ -12,7 +12,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { fixtureIntentId8 } from "../harness/fixtures.ts";
@@ -72,7 +72,7 @@ describe("the push", () => {
       .toEqual([["checkout-api", "refunds"], ["billing", "refunds"]]);
     expect(Object.keys(claim.result.repos[0].paths)).toEqual(["src/refunds.ts"]);
     expect(claim.result.outputs).toContain("construction/refunds/code-generation/code-summary.md");
-    const rows = readAuditShardEvents(alice, record.split("/").at(-1), "payments").filter((row) => row.event === "UNIT_PUSHED");
+    const rows = readAuditShardEvents(alice, basename(record), "payments").filter((row) => row.event === "UNIT_PUSHED");
     expect(rows).toHaveLength(1);
   });
 

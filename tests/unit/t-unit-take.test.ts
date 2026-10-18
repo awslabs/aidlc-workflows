@@ -15,7 +15,7 @@ import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { readAuditShardEvents, readIntentRegistry } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
@@ -134,7 +134,7 @@ describe("taking a Unit starts its build in the team's space", () => {
     const approved = readFileSync(join(record, "approved-inputs.md"), "utf-8");
     expect(approved).toContain("| inception/units-generation/unit-of-work-dependency.md | sha256:");
     // The home's approvals stay the home's: the build's audit holds none of them.
-    const rows = readAuditShardEvents(alice, record.split("/").at(-1), "payments");
+    const rows = readAuditShardEvents(alice, basename(record), "payments");
     expect(rows.filter((row) => row.event === "UNIT_TAKEN_IN")).toHaveLength(1);
     expect(rows.some((row) => row.event === "GATE_APPROVED" || row.event === "HUMAN_TURN")).toBe(false);
     // Its registry row is in its own folder, and listed with the space's.
