@@ -348,7 +348,12 @@ describe("scenario 4: a team that cannot reach the home", () => {
     git(join(partner, "ledger"), ["push", "-q", "origin", "main"]);
     const again = run(copilot.unit, ["push"], partner);
     expect(again.status, again.out).toBe(0);
-    const taken = run(UNIT, ["take-in", deliver(partner, "aidlc/handoff/fixture-reporting-result.md")], home.dir);
+    // The lead gives the result file's path to /aidlc: that step takes it in.
+    const result = deliver(partner, "aidlc/handoff/fixture-reporting-result.md");
+    const step = next(home.dir, undefined, [result]);
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(String(step.message)).toContain(`aidlc-unit.ts take-in '${result}'`);
+    const taken = run(UNIT, ["take-in", result], home.dir);
     expect(taken.json?.notice).toBe("Took in reporting's result from data.");
     next(home.dir);
     expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED").map((row) => row.block).join("\n")).toContain("reported by data");

@@ -5626,7 +5626,7 @@ function pushUnit(args: string[], projectDir?: string): void {
     writeHandFile(pd, rel, renderHandFile(
       "result",
       `Result: ${unit} of ${label}`,
-      "Take it in at the home with `/aidlc unit take-in <this file>`.",
+      "Take it in at the home with `/aidlc <this file>`.",
       {
         "Home Work": build.homeWork,
         "Home Label": label,
@@ -6131,7 +6131,7 @@ function handOff(args: string[], projectDir?: string): void {
     team,
     file: rel,
     notice: `The hand-off file for ${unit} is ${rel}: send it to the ${team} team. They take it in with ` +
-      `/aidlc unit take --file <the file> in their own workspace, and send its result back to you as a file.`,
+      `/aidlc <the file> in their own workspace, and send its result back to you as a file.`,
   }));
 }
 
@@ -6155,7 +6155,7 @@ function writeHandOffFile(pd: string, unit: string, team: string, attempt: numbe
   writeHandFile(pd, rel, renderHandFile(
     "handoff",
     `Hand-off: ${unit} of ${label}`,
-    `This file hands ${unit} to the ${team} team. Take it in with \`/aidlc unit take --file <this file>\` in your own ` +
+    `This file hands ${unit} to the ${team} team. Take it in with \`/aidlc <this file>\` in your own ` +
       "workspace; AI-DLC starts it as a piece of work of its own. It is not signed: it is bound by the work's id, the " +
       "Unit, the attempt and the fingerprints below.",
     {
@@ -6245,7 +6245,7 @@ function progressFile(projectDir?: string): void {
   writeHandFile(pd, rel, renderHandFile(
     "progress",
     `Progress: ${build.unit}`,
-    "Take it in at the home with `/aidlc unit take-in <this file>`.",
+    "Take it in at the home with `/aidlc <this file>`.",
     { "Home Work": build.homeWork, "Home Label": label, Unit: build.unit, Attempt: String(build.attempt), Stage: stage, Written: isoTimestamp() },
     new Map(),
   ));

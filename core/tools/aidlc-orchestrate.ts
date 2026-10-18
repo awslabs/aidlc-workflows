@@ -8452,8 +8452,9 @@ function unitTakeAsk(projectDir: string): AskDirective | null {
 }
 
 // The person's words are just the path of a hand-off file: the offer to start
-// the Unit in it. Null for any other words.
-function handOffAsk(projectDir: string, words: string): AskDirective | null {
+// the Unit in it. The path of a team's result or progress file is taken in, at
+// the home it was sent to. Null for any other words.
+function handFileStep(projectDir: string, words: string): AskDirective | PrintDirective | null {
   // The whole of their words, as one path: it may hold spaces.
   const path = words.replace(/^["']|["']$/g, "");
   if (path === "") return null;
@@ -8463,7 +8464,14 @@ function handOffAsk(projectDir: string, words: string): AskDirective | null {
   } catch {
     return null;
   }
-  if (file === null || file.kind !== "handoff") return null;
+  if (file === null) return null;
+  if (file.kind !== "handoff") {
+    return {
+      kind: "print",
+      message: `Run \`${aidlcToolInvocation("unit")} take-in ${shellArg(path)}\`, then tell the person its notice line in one ` +
+        "line and re-run `next` to continue.",
+    };
+  }
   const unit = file.fields.Unit ?? "";
   const likely = unitLikelyReposFrom(file.files.get("inception/units-generation/unit-of-work-dependency.md") ?? "").get(unit) ?? [];
   const here = likely.filter((repo) => existsSync(join(repoDir(projectDir, repo.split("/")[0]), ".git")));
@@ -12367,11 +12375,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       return;
     }
   }
-  // A hand-off file the person pointed at, by its path alone: the Unit in it to
-  // start as their own piece of work.
-  const handOff = handOffAsk(pd, flags.intent?.trim() ?? "");
-  if (handOff) {
-    emit(handOff);
+  // A file the person pointed at, by its path alone: a hand-off file's Unit to
+  // start as their own piece of work, or a team's result or progress file to take in.
+  const handFile = handFileStep(pd, flags.intent?.trim() ?? "");
+  if (handFile) {
+    emit(handFile);
     return;
   }
   // What the home said about a Unit's build reaches its team once, on any step.
@@ -16620,6 +16628,7 @@ function emitTeamUnitMajorRunStage(
     }
   }
   if ([...heldElsewhere].some((unit) => !mergedHere.has(unit))) {
+    const heldNotTaken: Array<{ unit: string; team: string }> = [];
     const rows = unitsInPlanOrder(projectDir, resolution.batches.flat()).map((unit): UnitBoardRow => {
       const claim = overview?.claims.get(unit);
       const team = claim?.status === "claimed" ? claim.owner : null;
@@ -16640,14 +16649,28 @@ function emitTeamUnitMajorRunStage(
         const at = payload.progress?.stage ? stageLabel(findStageBySlug(payload.progress.stage), payload.progress.stage) : null;
         return { unit, team, status: at ? `handed off by file, at ${at}` : "handed off by file" };
       }
-      return { unit, team, status: payload.taken_by ? `building, taken by ${payload.taken_by}` : `held for ${team}, not taken yet` };
+      if (payload.taken_by) return { unit, team, status: `building, taken by ${payload.taken_by}` };
+      heldNotTaken.push({ unit, team });
+      return { unit, team, status: `held for ${team}, not taken yet` };
     });
+    // A team the home holds a Unit for may not reach this workspace: the lead
+    // hears once that the Unit can go to them as a file.
+    if (heldNotTaken.length > 0) {
+      const [first] = heldNotTaken;
+      sayWithStepOnce(projectDir, heldNotTaken.length === 1
+        ? `If ${first.team} cannot reach this workspace, say "hand off ${first.unit} by file" and send them the file it writes.`
+        : `If a team cannot reach this workspace, say "hand off" and its Unit, for example "hand off ${first.unit} by file", ` +
+          "and send them the file it writes.");
+    }
     const unitTool = aidlcToolInvocation("unit");
     emit({
       ...noticeDirective(renderUnitBoard(workLabel(projectDir), rows)),
       board_note: "Show the board as it is. When the person says a repo turned a Unit down, run " +
         `\`${unitTool} turned-down <unit> --repo <repo> --person-words '<their words>'\`; when they say a repo merged it ` +
-        `where the board does not see it, run \`${unitTool} merged <unit> --repo <repo> --person-words '<their words>'\`.`,
+        `where the board does not see it, run \`${unitTool} merged <unit> --repo <repo> --person-words '<their words>'\`. ` +
+        `When they ask to hand a Unit off by file, run \`${unitTool} hand-off <unit> --team <team> --person-words '<their words>'\`; ` +
+        `when they ask to take in a team's result or progress file, run \`${unitTool} take-in <file>\`. Say the notice line ` +
+        "each prints.",
     });
     return;
   }

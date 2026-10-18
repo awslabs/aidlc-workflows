@@ -277,8 +277,11 @@ publish, pin, gate and land flow described above, unchanged.
 ## A team that cannot reach the home
 
 A partner team in another company, or behind a locked network, works from
-files instead of git. The lead says to hand the Unit off ("hand off reporting
-to the data team"); AI-DLC runs `aidlc unit hand-off reporting --team data`,
+files instead of git. While a Unit is held for a team and not taken yet, the
+board says once that it can go as a file: if that team cannot reach this
+workspace, say "hand off reporting by file" and send them the file it writes.
+The lead says to hand the Unit off ("hand off reporting to the data team");
+AI-DLC runs `aidlc unit hand-off reporting --team data`,
 holds the Unit for that team, and writes one readable Markdown file,
 `aidlc/handoff/<work>-<unit>.md`: the work's id, the Unit, the attempt, the
 fingerprints of what it holds at the top, then each document the Unit was
@@ -299,7 +302,8 @@ result file instead of the claim: "The result file is
 aidlc/handoff/<work>-<unit>-result.md; send it to the lead." For each repo the
 lead cannot fetch, the file carries the partner's own check of whether it
 merged; push again after merging to send an updated one. The lead takes either
-file in with `aidlc unit take-in <file>`: a result is checked like a pushed
+file in by giving its path to `/aidlc` (`/aidlc <path>`, or
+`aidlc unit take-in <file>`): a result is checked like a pushed
 one, a repo the home cannot fetch counts as merged on the partner's word,
 recorded as theirs, until the home can check it itself. A file from an earlier
 attempt is taken in with a line saying so; a file for other work changes

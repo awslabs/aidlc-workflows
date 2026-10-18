@@ -1,13 +1,13 @@
-// covers: subcommand:aidlc-unit:hand-off, subcommand:aidlc-unit:take-in, subcommand:aidlc-unit:progress, function:renderHandFile, function:parseHandFile
+// covers: subcommand:aidlc-unit:hand-off, subcommand:aidlc-unit:take-in, subcommand:aidlc-unit:progress, function:renderHandFile, function:parseHandFile, function:handFileStep
 //
 // Hand-off by file (#2410, item 6), for a team that cannot reach the home's
 // repository. The lead holds the Unit for the team and writes one readable
 // file; the team starts the Unit's build from it in its own workspace, however
 // it points at the file; its progress and its result go back as files the lead
-// takes in. A repo the home cannot fetch keeps the team's own word on whether
-// it merged. Files are LF when written and read with CRLF too; a changed file
-// is taken in as it is, an older one with a line, one for other work changes
-// nothing.
+// takes in by pointing at them, and the home's board offers the hand-off. A
+// repo the home cannot fetch keeps the team's own word on whether it merged.
+// Files are LF when written and read with CRLF too; a changed file is taken in
+// as it is, an older one with a line, one for other work changes nothing.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -72,16 +72,29 @@ describe("the lead hands a Unit off by file", () => {
     const { home, handed } = handedOff();
     expect(handed.json?.notice).toBe(
       `The hand-off file for reporting is ${FILE}: send it to the data team. They take it in with ` +
-        "/aidlc unit take --file <the file> in their own workspace, and send its result back to you as a file.",
+        "/aidlc <the file> in their own workspace, and send its result back to you as a file.",
     );
     const text = readFileSync(join(home.dir, ...FILE.split("/")), "utf-8");
     expect(text).toStartWith("# Hand-off: reporting of fixture\n");
+    expect(text).toContain("Take it in with `/aidlc <this file>` in your own ");
     expect(text).toContain("## File: inception/requirements-analysis/requirements.md");
     expect(text).not.toContain("\r");
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting")).toMatchObject({ owner: "data", by_file: true });
     const row = readAuditShardEvents(home.dir).filter((entry) => entry.event === "UNITS_ASSIGNED").at(-1);
     expect(row?.block).toContain(`**By File**: ${FILE}`);
     expect(row?.block).toContain("**Person Words**: hand off reporting to the data team");
+  });
+
+  test("the board offers the hand-off once for a Unit held for a team and not taken, and gives the agent the commands", () => {
+    const { home } = handedOff();
+    const board = next(home.dir);
+    expect(String(board.message)).toContain("- refunds, payments: held for payments, not taken yet");
+    // reporting went by file already, so only refunds is offered.
+    expect((board.change_notices ?? []) as string[]).toContain(
+      'If payments cannot reach this workspace, say "hand off refunds by file" and send them the file it writes.',
+    );
+    expect(String(board.board_note)).toContain("aidlc-unit.ts hand-off <unit> --team <team> --person-words '<their words>'");
+    expect(String(board.board_note)).toContain("aidlc-unit.ts take-in <file>");
   });
 });
 
@@ -125,7 +138,16 @@ describe("progress and the result come back as files", () => {
     const progress = run(UNIT, ["progress"], partner.dir);
     expect(progress.status, progress.out).toBe(0);
     expect(progress.json?.notice).toBe("The progress file is aidlc/handoff/fixture-reporting-progress.md; send it to the lead if you like.");
-    const progressIn = run(UNIT, ["take-in", deliver(partner.dir, "aidlc/handoff/fixture-reporting-progress.md")], home.dir);
+    const progressFile = deliver(partner.dir, "aidlc/handoff/fixture-reporting-progress.md");
+    expect(readFileSync(progressFile, "utf-8")).toContain("Take it in at the home with `/aidlc <this file>`.");
+    // Its path given to the home's /aidlc is the step that takes it in.
+    const step = next(home.dir, undefined, [progressFile]);
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(String(step.message)).toBe(
+      `Run \`bun .claude/tools/aidlc-unit.ts take-in '${progressFile}'\`, then tell the person its notice line in one line ` +
+        "and re-run `next` to continue.",
+    );
+    const progressIn = run(UNIT, ["take-in", progressFile], home.dir);
     expect(progressIn.status, progressIn.out).toBe(0);
     expect(progressIn.json?.notice).toBe("Took in reporting's progress from data: Functional Design.");
     expect(String(next(home.dir).message)).toContain("- reporting, data: handed off by file, at Functional Design");
@@ -146,7 +168,9 @@ describe("progress and the result come back as files", () => {
     const again = run(UNIT, ["push"], partner.dir);
     expect(again.status, again.out).toBe(0);
     expect(String(again.json?.notice)).toContain("The result file is aidlc/handoff/fixture-reporting-result.md; send it to the lead.");
-    const resultIn = run(UNIT, ["take-in", deliver(partner.dir, "aidlc/handoff/fixture-reporting-result.md")], home.dir);
+    const resultFile = deliver(partner.dir, "aidlc/handoff/fixture-reporting-result.md");
+    expect(String(next(home.dir, undefined, [resultFile]).message)).toContain(`take-in '${resultFile}'`);
+    const resultIn = run(UNIT, ["take-in", resultFile], home.dir);
     expect(resultIn.status, resultIn.out).toBe(0);
     expect(resultIn.json?.notice).toBe("Took in reporting's result from data.");
     next(home.dir);

@@ -822,7 +822,9 @@ behind, and the next step writes it again.
 
 When the person's words are the path of a file carrying the `aidlc-handoff`
 mark, `next` returns `ask_type: unit-handoff` (**Start <unit>** runs
-`unit take --file <path>`; **Not now** runs nothing). A build started from a
+`unit take --file <path>`; **Not now** runs nothing); the path of a file
+carrying the `aidlc-result` or `aidlc-progress` mark returns a run-then-continue
+`print` that runs `unit take-in <path>`. A build started from a
 file records `Home Result: by file`; its push writes a result file in place of
 the claim, and `unit take-in` at the home puts a result or progress file onto
 the claim (`result`, `progress`). A claim held by `unit hand-off` carries

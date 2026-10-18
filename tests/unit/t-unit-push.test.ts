@@ -172,6 +172,7 @@ describe("at the home", () => {
     expect(String(step.message)).toContain("- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
     expect((step.change_notices ?? []) as string[]).toEqual([
       "origin could not be reached just now, so the board may be behind: it shows what your last fetch brought.",
+      'If web cannot reach this workspace, say "hand off checkout-ui by file" and send them the file it writes.',
     ]);
   });
 

@@ -744,8 +744,9 @@ runs it from your words with `--person-words '<your words>'`. The Unit is held
 for that team, and `aidlc/handoff/<work>-<unit>.md` is written: one readable
 Markdown file with the work's id, the Unit, the attempt and fingerprints at the
 top, and each document the Unit was approved with in its own block. Send it to
-the team; they run `/aidlc unit take --file <path>` (or `/aidlc <path>`) in
-their own workspace, which starts the Unit's build from it. A Unit another
+the team; they run `/aidlc <path>` (or `/aidlc unit take --file <path>`) in
+their own workspace, which starts the Unit's build from it. While a Unit is
+held for a team and not taken, the home's board offers this once. A Unit another
 team holds or took is not handed off.
 
 ### `/aidlc unit progress` and `/aidlc unit take-in <file>` - Files back to the home
@@ -754,7 +755,8 @@ In a Unit's build by file, `progress` writes
 `aidlc/handoff/<work>-<unit>-progress.md` with the stage it is at, and `push`
 writes `aidlc/handoff/<work>-<unit>-result.md` with the result, the Unit
 outputs the home's later stages read, and the team's own check of each repo.
-At the home, `take-in <file>` puts either onto the Unit's claim; the next step
+At the home, `take-in <file>` puts either onto the Unit's claim (giving the
+file's path to `/aidlc` does the same); the next step
 checks a result like a pushed one. A file for other work changes nothing, an
 older one is taken in with a line, and a changed one is taken in as it is and
 marked so.
