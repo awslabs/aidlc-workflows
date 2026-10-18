@@ -651,8 +651,13 @@ function referenceSource(
     : "base";
 }
 
-const UNDECLARED_FIX =
-  'If another plugin ships it, add that plugin to dependencies next to "core", as "<base>@^1.2.0", then check it with --with <path to your checkout of it>; otherwise correct the name.';
+// --with checks a base's agents, not its stages, so only the agent line offers it.
+const UNDECLARED_FIX = {
+  agent:
+    'If another plugin ships it, add that plugin to dependencies next to "core", as "<base>@^1.2.0", then check it with --with <path to your checkout of it>; otherwise correct the name.',
+  stage:
+    'If another plugin ships it, add that plugin to dependencies next to "core", as "<base>@^1.2.0"; otherwise correct the name.',
+};
 
 type StageNames = {
   // The declared base: null when the plugin builds on core alone, undefined
@@ -890,13 +895,13 @@ function validateStages(
     // base, is one error naming the step. Either one replaces Rule 9's line.
     const from = { plugin: pluginName, base: names.base ?? null };
     const accepted: string[] = [];
-    const undeclared = (reference: string, kind: string): void =>
+    const undeclared = (reference: string, kind: "agent" | "stage"): void =>
       addError(
         findings,
         displayFile,
         "base-reference",
         `${reference} is not a core ${kind} or one of ${pluginName}'s own`,
-        UNDECLARED_FIX,
+        UNDECLARED_FIX[kind],
       );
     for (const [field, agent] of stageAgentReferences(parsed)) {
       if (!context?.agents || context.agents.includes(agent) || accepted.includes(agent)) continue;
@@ -1209,13 +1214,13 @@ function validateScopes(
           'include_stages takes the stages of the base plugin you build on: name it in dependencies, such as "<base>@^1.2.0".',
         );
       } else if (base) {
-        if (source === "undeclared") {
-          // Compose refuses a plugin stage whose slug lacks "<plugin>-", so
-          // no installed stage of the base can have this name.
+        if (!slug.startsWith(`${base.name}-`)) {
+          // Compose refuses a plugin stage whose slug lacks "<plugin>-", so no
+          // installed stage of the base has this name. Any other name is the
+          // checkout's to decide (the base may ship one with this plugin's
+          // longer prefix).
           refuse(
-            slug.startsWith(`${base.name}-`)
-              ? `include_stages names "${slug}", which reads as one of ${pluginName}'s own stages: their slugs start with "${pluginName}-"`
-              : `include_stages names "${slug}", which cannot be a stage of ${base.name}: ${base.name}'s stage slugs start with "${base.name}-"`,
+            `include_stages names "${slug}", which cannot be a stage of ${base.name}: ${base.name}'s stage slugs start with "${base.name}-"`,
             `Name a stage of ${base.name}.`,
           );
         } else if (checkoutStages === null) {

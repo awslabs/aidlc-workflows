@@ -373,6 +373,9 @@ describe("t314 standalone plugin validator", () => {
   test("a plugin that declares no base and names another plugin's stage or agent stops with the one step", () => {
     const fix =
       'If another plugin ships it, add that plugin to dependencies next to "core", as "<base>@^1.2.0", then check it with --with <path to your checkout of it>; otherwise correct the name.';
+    // --with checks a base's agents, not its stages, so the stage line does not offer it.
+    const stageFix =
+      'If another plugin ships it, add that plugin to dependencies next to "core", as "<base>@^1.2.0"; otherwise correct the name.';
     const file = "stages/construction/fixture-plugin-stage.md";
     const withStage = (edit: (stage: string) => string): string => {
       const root = fixture();
@@ -380,10 +383,10 @@ describe("t314 standalone plugin validator", () => {
       writeFileSync(stage, edit(readFileSync(stage, "utf-8")), "utf-8");
       return root;
     };
-    const finding = (message: string) => ({ file, rule: "base-reference" as const, message, fix });
+    const finding = (message: string, lineFix = fix) => ({ file, rule: "base-reference" as const, message, fix: lineFix });
 
     expect(validatePluginRoot(withStage((s) => s.replace("requires_stage: []", "requires_stage:\n  - acme-intent-stage"))).errors)
-      .toEqual([finding('requires_stage "acme-intent-stage" is not a core stage or one of fixture-plugin\'s own')]);
+      .toEqual([finding('requires_stage "acme-intent-stage" is not a core stage or one of fixture-plugin\'s own', stageFix)]);
     expect(validatePluginRoot(withStage((s) => s.replace("lead_agent: aidlc-quality-agent", "lead_agent: acme-lead-agent"))).errors)
       .toEqual([finding('lead_agent "acme-lead-agent" is not a core agent or one of fixture-plugin\'s own')]);
     expect(validatePluginRoot(withStage((s) => s.replace("support_agents: []", "support_agents:\n  - acme-helper-agent"))).errors)
@@ -394,7 +397,7 @@ describe("t314 standalone plugin validator", () => {
     ))).errors).toEqual([finding('reviewer "acme-review-agent" is not a core agent or one of fixture-plugin\'s own')]);
     // A typo in its own stage gets the same line; the fix ends with correcting the name.
     expect(validatePluginRoot(withStage((s) => s.replace("requires_stage: []", "requires_stage:\n  - fixture-plugin-typo-stage"))).errors)
-      .toEqual([finding('requires_stage "fixture-plugin-typo-stage" is not a core stage or one of fixture-plugin\'s own')]);
+      .toEqual([finding('requires_stage "fixture-plugin-typo-stage" is not a core stage or one of fixture-plugin\'s own', stageFix)]);
 
     // A core stage and the plugin's own stage are fine.
     const own = withStage((s) => s.replace("requires_stage: []", "requires_stage:\n  - build-and-test\n  - fixture-plugin-other-stage"));
@@ -559,12 +562,23 @@ describe("t314 standalone plugin validator", () => {
       'stage "fixture-plugin-platform-intake" is not checked: it would come from fixture-plugin-platform, the base this plugin builds on',
     );
 
-    // fixture-plugin on base fixture: a fixture-plugin- name reads as its own.
+    // fixture-plugin on base fixture: fixture can ship fixture-plugin-intake (compose
+    // needs only "fixture-"), so the base's checkout decides, not the longer prefix.
     const longerPlugin = layered("aidlc-quality-agent", "fixture");
     includes(longerPlugin.root, "[fixture-plugin-intake]");
-    expect(validatePluginRoot(longerPlugin.root).errors.map((finding) => finding.message)).toEqual([
-      'include_stages names "fixture-plugin-intake", which reads as one of fixture-plugin\'s own stages: their slugs start with "fixture-plugin-"',
-    ]);
+    expect(validatePluginRoot(longerPlugin.root).errors).toEqual([]);
+    expect(validatePluginRoot(longerPlugin.root).warnings.map((finding) => finding.message)).toContain(
+      'stage "fixture-plugin-intake" is not checked: it would come from fixture, the base this plugin builds on',
+    );
+    expect(validatePluginRoot(longerPlugin.root, { baseRoot: longerPlugin.baseRoot }).errors.map((finding) => finding.message))
+      .toEqual(['include_stages names "fixture-plugin-intake", which your fixture checkout has no stage for']);
+    write(
+      join(longerPlugin.baseRoot, "stages", "inception", "fixture-plugin-intake.md"),
+      "---\nslug: fixture-plugin-intake\nplugin: fixture\n---\n\n# Intake\n",
+    );
+    const checked = validatePluginRoot(longerPlugin.root, { baseRoot: longerPlugin.baseRoot });
+    expect(checked.errors).toEqual([]);
+    expect(checked.warnings.map((finding) => finding.rule)).not.toContain("base-reference");
   });
 
   test("b: stage frontmatter parse and schema failures are reported", () => {
