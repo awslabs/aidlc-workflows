@@ -218,10 +218,11 @@ describe("a refresh over an agent file with a recorded model or effort", () => {
 
   // Kiro CLI's upgrade for its 3.0 engine rewrites the agent file in its own
   // format and keeps AI-DLC's beside it as .json.bak; a refresh keeps Kiro's
-  // copy and its record whether the model was recorded before the upgrade or
-  // after, and --force takes the release's file with the model.
+  // copy, its backup and its record whether the model was recorded before the
+  // upgrade or after (config models writes the model into Kiro's copy itself),
+  // and --force takes the release's file with the model.
   for (const order of ["model before the upgrade", "model after the upgrade"] as const) {
-    test(`kiro: an agent file Kiro upgraded stays as Kiro left it, ${order}, and --force writes the model`, () => {
+    test(`kiro: a refresh keeps an agent file Kiro upgraded, ${order}, and --force writes the release's file with the model`, () => {
       const p = project("kiro-upgraded");
       const release = join(RELEASES, "kiro");
       const installed = p.run(["config", "--project-dir", p.dir, "--from", release, "--harness", "kiro", "--mcp", "none", "--yes"]);
@@ -237,26 +238,32 @@ describe("a refresh over an agent file with a recorded model or effort", () => {
         cpSync(file, `${file}.bak`);
         writeFileSync(file, `${JSON.stringify({ ...JSON.parse(shipped), model: undefined, permissions: { rules: [] } }, null, 2)}\n`);
       };
+      let stamped: string | undefined;
       if (order === "model before the upgrade") {
         pin();
+        stamped = readFileSync(file, "utf-8");
         kiroUpgrade();
       } else {
         kiroUpgrade();
         pin();
       }
       const upgraded = readFileSync(file, "utf-8");
+      const backup = readFileSync(`${file}.bak`, "utf-8");
       const manifestPath = join(p.dir, ".kiro", "tools", "data", "aidlc-manifest.json");
       const record = () => (JSON.parse(readFileSync(manifestPath, "utf-8")) as { files: Record<string, string> }).files[rel];
       const recorded = record();
+      expect(recorded).toBeDefined();
       const refresh = ["config", "--project-dir", p.dir, "--yes"];
       const kept = p.run(refresh);
       expect(kept.status, kept.out).toBe(0);
       expect(readFileSync(file, "utf-8")).toBe(upgraded);
       expect(record()).toBe(recorded);
+      expect(readFileSync(`${file}.bak`, "utf-8")).toBe(backup);
       const forced = p.run([...refresh, "--force"]);
       expect(forced.status, forced.out).toBe(0);
-      expect(JSON.parse(readFileSync(file, "utf-8")).model).toBe("claude-sonnet-5-5");
-      expect(JSON.parse(readFileSync(file, "utf-8")).permissions).toBeUndefined();
+      const taken = readFileSync(file, "utf-8");
+      if (stamped !== undefined) expect(taken).toBe(stamped);
+      expect(JSON.parse(taken)).toEqual({ ...JSON.parse(readFileSync(join(release, rel), "utf-8")), model: "claude-sonnet-5-5" });
     });
   }
 
