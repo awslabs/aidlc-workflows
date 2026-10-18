@@ -16382,7 +16382,11 @@ function emitTeamUnitMajorRunStage(
   let overview = readOverview();
   const unreached: string[] = [];
   if (teamHome && !isReadOnlyEngineProbe()) {
-    const now = overview !== null && (overview.claimable.length === 0 || [...overview.claims.values()].some((claim) =>
+    // No Unit left to take is the board, except while the home builds the
+    // walking skeleton, which every other Unit waits on.
+    const board = overview !== null && overview.claimable.length === 0 &&
+      !overview.waiting.some((row) => row.blockedBy.includes("walking-skeleton"));
+    const now = overview !== null && (board || [...overview.claims.values()].some((claim) =>
       claim.status === "claimed" && !claim.payload.done &&
       (claim.payload.result !== undefined || (claim.payload.proposals ?? []).some((entry) => entry.answer === undefined))
     ));

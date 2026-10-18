@@ -26,6 +26,7 @@ import {
   ENV,
   git,
   HOME_RECORD,
+  homeState,
   makeHome,
   mergeOnHost,
   next,
@@ -120,6 +121,28 @@ describe("the push", () => {
 });
 
 describe("at the home", () => {
+  test("while the home builds the walking skeleton, the claims are fetched once in a chat, not at every step", () => {
+    const dependencies = "# Unit dependencies\n\n```yaml\nunits:\n  - name: orders\n    depends_on: []\n" +
+      "  - name: refunds\n    depends_on: [orders]\n  - name: checkout-ui\n    depends_on: [orders]\n```\n";
+    const home = makeHome({ dependencies, state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const trace = join(tempDir("trace"), "trace2.json");
+    for (let step = 0; step < 3; step++) {
+      const directive = next(home.dir, { ...ENV, GIT_TRACE2_EVENT: trace });
+      expect(directive.unit, JSON.stringify(directive)).toBe("orders");
+    }
+    const claimFetches = readFileSync(trace, "utf-8").split("\n").filter((line) => {
+      if (!line.includes('"event":"start"')) return false;
+      const argv = (JSON.parse(line) as { argv: string[] }).argv;
+      return argv.includes("fetch") && argv.some((arg) => arg.includes("refs/heads/claim/"));
+    });
+    expect(claimFetches).toHaveLength(1);
+  });
+
   test("the board counts the merges, and the Unit is done once every repo merged; what waits on it opens", () => {
     const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
