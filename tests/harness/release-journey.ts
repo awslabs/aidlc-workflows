@@ -1,6 +1,7 @@
 // release-journey.ts - what a person does on day one with a tool, run live
 // before each release (#1345): the Copilot lane in the Full Suite and the
-// Kiro CLI pass on a signed-in machine drive the same journey.
+// Kiro CLI pass on a signed-in machine (once on each Kiro tree) drive the same
+// journey.
 //
 // The person's own small project (a greeter with a bug, committed), AI-DLC
 // copied in from the copy runtime and set up with `config --from`, doctor,
@@ -22,7 +23,7 @@ import { REPO_ROOT } from "./fixtures.ts";
 import { expectPersonFirst } from "./person-turns.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
-export type ReleaseJourneyHarness = "copilot" | "kiro";
+export type ReleaseJourneyHarness = "copilot" | "kiro" | "kiro-ide";
 
 /** The lines the person types, in order. */
 export const RELEASE_JOURNEY_TURNS = [
@@ -35,7 +36,9 @@ export const RELEASE_JOURNEY_REQUEST = RELEASE_JOURNEY_TURNS[0].replace(/^\/aidl
 /** The stage the person approves. */
 export const RELEASE_JOURNEY_STAGE = "reverse-engineering";
 
-const TOOL_DIRS: Record<ReleaseJourneyHarness, string> = { copilot: ".aidlc", kiro: ".kiro" };
+const TOOL_DIRS: Record<ReleaseJourneyHarness, string> = { copilot: ".aidlc", kiro: ".kiro", "kiro-ide": ".kiro" };
+// Both Kiro trees run in Kiro CLI; the tree in brackets tells the two lines apart.
+const TOOL_NAMES: Record<ReleaseJourneyHarness, string> = { copilot: "Copilot CLI", kiro: "Kiro CLI", "kiro-ide": "Kiro CLI" };
 
 export interface ReleaseJourneyProject {
   harness: ReleaseJourneyHarness;
@@ -235,7 +238,8 @@ export interface ReleaseJourneyReport {
 export function writeReleaseJourneyReport(report: ReleaseJourneyReport): string {
   const minutes = (report.turns.reduce((sum, turn) => sum + turn.seconds, 0) / 60).toFixed(1);
   const commit = sourceCommit();
-  const line = `${report.harness === "kiro" ? "Kiro CLI" : "Copilot CLI"} ${report.toolVersion} release journey${commit ? ` on ${commit}` : ""}: ` +
+  const tree = report.harness === "copilot" ? "" : ` (${report.harness})`;
+  const line = `${TOOL_NAMES[report.harness]} ${report.toolVersion}${tree} release journey${commit ? ` on ${commit}` : ""}: ` +
     `${report.problems.length ? "FAIL" : "PASS"} (${minutes} min of turns${
       Object.entries(report.extra).filter(([, value]) => typeof value === "number").map(([key, value]) => `, ${value} ${key}`).join("")})`;
   const dir = process.env.AIDLC_TEST_LOG_DIR;
