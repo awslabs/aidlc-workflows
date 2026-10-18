@@ -278,6 +278,22 @@ export function settingTheirs(
   selection: { intent?: string; space?: string } = {},
 ): { words: string | null } | null {
   if (commandAtPersonsTerminal()) return { words: null };
+  return saidInChat(projectDir, sessionId, key, value, personWords, selection);
+}
+
+/**
+ * The chat half of settingTheirs: their typed line or their whole reply in this
+ * chat, never their own terminal. What the folder is (`project-type`) is read
+ * this way too: the line keeps it as the route's project type, not a setting.
+ */
+export function saidInChat(
+  projectDir: string,
+  sessionId: string | null,
+  key: string,
+  value: string | undefined,
+  personWords?: string,
+  selection: { intent?: string; space?: string } = {},
+): { words: string | null } | null {
   let rows: AuditShardEvent[] = [];
   try {
     rows = readAuditShardEvents(projectDir, selection.intent, selection.space);
@@ -307,6 +323,7 @@ export function settingTheirs(
     if (latest !== null && !lines.some((message) => message.id === latest.id)) lines.push(latest);
     const names = key === "plan-approval" || key === "guard.plan-approval" ? ["plan-approval", "guard.plan-approval"] : [key];
     if (lines.some((message) => message.settings.some((setting) => names.includes(setting.key) && setting.value === value) ||
+      (key === "project-type" && message.route.projectType === value) ||
       names.some((name) => setterCommandNames(message.text, name, value)))) {
       return { words: null };
     }

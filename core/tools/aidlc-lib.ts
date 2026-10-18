@@ -12389,11 +12389,33 @@ export function clearProjectTypeAsked(projectDir: string): void {
   clearEngineAskMark(projectDir, PROJECT_TYPE_ASK);
 }
 
-// What the folder is, is the person's word: their own words since the last
-// decision, or, once the engine has asked, anything they typed after the
-// question (an answer, or `/aidlc --project-type ...`). A command typed before
-// the question (a bare `/aidlc` that led to it) is no answer to it.
-export function personSaidProjectType(projectDir: string): boolean {
+// What the folder is, is the person's word. On the record: their own words
+// since the last decision, or, once the engine has asked, anything they typed
+// after the question (an answer, or `/aidlc --project-type ...`); a bare
+// `/aidlc` typed before the question (the one that led to it) is no answer to
+// it. With `said`, a message of theirs in that chat counts as well, asked or
+// not, by the setters' rule (saidInChat): the type typed on their line, or
+// `words` that are a whole reply of theirs since the last decision. That is
+// where the message that started the work is: the hook writes a turn only once
+// the work exists, but keeps the message from the first prompt on.
+export function personSaidProjectType(
+  projectDir: string,
+  said?: { chat: string | null; type: "greenfield" | "brownfield"; words?: string; intent?: string; space?: string },
+): boolean {
+  if (projectTypeTurnOnRecord(projectDir)) return true;
+  if (said === undefined) return false;
+  // Typed by hand: any type import of the setter module from here takes the
+  // tests' typecheck past its heap.
+  const { saidInChat } = require("./aidlc-guard-switch.ts") as {
+    saidInChat(
+      projectDir: string, sessionId: string | null, key: string, value: string | undefined, personWords?: string,
+      selection?: { intent?: string; space?: string },
+    ): { words: string | null } | null;
+  };
+  return saidInChat(projectDir, said.chat, "project-type", said.type, said.words, { intent: said.intent, space: said.space }) !== null;
+}
+
+function projectTypeTurnOnRecord(projectDir: string): boolean {
   const asked = engineAskMark(projectDir, PROJECT_TYPE_ASK);
   if (asked === null || projectRelativePath(projectDir, auditFilePath(projectDir)) !== asked.shard) {
     return personSpokeSinceGate(projectDir, { requests: true });

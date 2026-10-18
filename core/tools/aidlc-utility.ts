@@ -11135,25 +11135,34 @@ function handleReclassify(projectDir: string, flags: Record<string, string>, raw
         `to the request that starts it (${entrySkillInvocation()} --project-type ${declared.toLowerCase()} "<what to build>").`,
     );
   }
-  // What the folder is, is the person's word: it is recorded as theirs only
-  // once they have said something since the last decision (an answer to the
-  // question, or the command they typed), after the question when it was asked.
-  // At the person's own terminal no chat answer can arrive: the step that
-  // works there is named instead.
-  if (!humanPresenceGuardDisabled() && !personSaidProjectType(projectDir)) {
-    die(personAtOwnTerminal(projectDir)
-      ? OWN_TERMINAL_PRESENCE_STEP
-      : "The person has not said yet whether this folder is existing code. Ask them the question you were given, " +
-        "end the turn, and run this command after they answer.");
-  }
   // The words the person said it in, given inline or left in the work's answer
-  // text file: recorded beside the change. A file that cannot be read leaves
-  // them out; the change is recorded either way.
+  // text file: recorded beside the change, and read by the check below. A file
+  // that cannot be read leaves them out; the change is recorded either way.
   readPersonWordsFile(projectDir, flags, true);
   const typedWords = flags["person-words"];
   const personWords = typedWords === undefined || typedWords === "true"
     ? undefined
     : typedWords.replace(/\s+/g, " ").trim() || undefined;
+  // What the folder is, is the person's word: it is recorded as theirs only
+  // once they have said something since the last decision (an answer to the
+  // question, or the command they typed), after the question when it was asked,
+  // or when the words are a whole message of theirs in this chat (the message
+  // that started the work leaves no turn). The chat is the one running this
+  // command, else the chat most recently active here. At the person's own
+  // terminal no chat answer can arrive: the step that works there is named
+  // instead.
+  if (!humanPresenceGuardDisabled() && !personSaidProjectType(projectDir, {
+    chat: selection.sessionId ?? readCurrentSessionId(projectDir),
+    type: declared === "Brownfield" ? "brownfield" : "greenfield",
+    words: personWords,
+    intent,
+    space,
+  })) {
+    die(personAtOwnTerminal(projectDir)
+      ? OWN_TERMINAL_PRESENCE_STEP
+      : "The person has not said yet whether this folder is existing code. Ask them the question you were given, " +
+        "end the turn, and run this command after they answer.");
+  }
 
   // The registry row is workspace state and the plan is the work's own: hold
   // the workspace lock, then the work's lock, across the whole read, audit and
