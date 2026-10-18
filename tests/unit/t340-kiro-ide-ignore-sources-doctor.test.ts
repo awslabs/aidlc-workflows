@@ -654,10 +654,10 @@ describe("t340 Kiro IDE ignore sources doctor", () => {
       env: composeEnv,
     });
     expect(compose.status, compose.stderr).toBe(0);
-    // With no aidlc on PATH the launcher ran the compose hook itself, not
-    // `plugin sync`: compose records the files it installed, but only sync
-    // writes the composition stamp.
-    expect(existsSync(join(project, ".kiro", "tools", "data", "plugin-compose-test-pro.json"))).toBe(false);
+    // With no aidlc on PATH the launcher ran the project's own `plugin sync`
+    // with Bun: it records the files it installed and writes the composition
+    // stamp, as a native install does.
+    expect(existsSync(join(project, ".kiro", "tools", "data", "plugin-compose-test-pro.json"))).toBe(true);
     expect(existsSync(join(project, ".kiro", "tools", "data", "plugin-owned-test-pro.json"))).toBe(true);
 
     const cases: [rule: string, folder: string][] = [
