@@ -103,7 +103,7 @@ const PRODUCTION_GUARDS = process.env.AIDLC_TEST_GUARD_PROFILE === "production";
 
 type KiroTree = "kiro" | "kiro-ide";
 
-function skipReason(tree: KiroTree): string | null {
+function sharedSkipReason(): string | null {
   if (process.env.AIDLC_KIRO_TUI_LIVE !== "1") return "set AIDLC_KIRO_TUI_LIVE=1 to run the Kiro CLI release journey (uses Kiro credits)";
   if (!PRODUCTION_GUARDS) return "run with --production-guards: the journey is the person's own guard profile";
   const runtimeReason = tuiUnavailableReason();
@@ -111,8 +111,12 @@ function skipReason(tree: KiroTree): string | null {
   if (!kiroVersion()) return "kiro-cli not found";
   const whoami = spawnSync("kiro-cli", ["whoami"], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
   if (whoami.status !== 0) return "kiro-cli not signed in (run `kiro-cli login`)";
-  if (!existsSync(join(REPO_ROOT, "dist", tree))) return `dist/${tree} is missing: run bun scripts/package.ts`;
   return null;
+}
+const SHARED_SKIP_REASON = sharedSkipReason();
+function skipReason(tree: KiroTree): string | null {
+  if (SHARED_SKIP_REASON) return SHARED_SKIP_REASON;
+  return existsSync(join(REPO_ROOT, "dist", tree)) ? null : `dist/${tree} is missing: run bun scripts/package.ts`;
 }
 
 describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before each release", () => {
