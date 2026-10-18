@@ -896,6 +896,42 @@ describe("t295 flags section", () => {
     expect(other.stdout + other.stderr).toContain("requires exactly one of --local, --project, or --global");
   });
 
+  test("a clear aimed at a file that does not record the switch writes nothing and names the file that does", () => {
+    const project = install();
+    const flags = (...args: string[]) => run(
+      ["config", "flags", "--project-dir", project, ...args],
+      project,
+      runtimeEnv(),
+    );
+    const local = join(project, "aidlc.settings.local.json");
+    const shared = join(project, "aidlc.settings.json");
+    expect(flags("--bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes").status).toBe(0);
+    const recorded = readFileSync(local, "utf-8");
+    expect(existsSync(shared)).toBe(false);
+    // "Back on for this project" read as the shared file, which never had it.
+    const aimed = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--project", "--yes");
+    expect(aimed.status, aimed.stdout + aimed.stderr).toBe(0);
+    const said = aimed.stdout.trim().split("\n");
+    expect(said, aimed.stdout).toHaveLength(1);
+    expect(said[0]).toStartWith(
+      "AIDLC_DISABLE_REVIEW_FREEZE_HOOK is still recorded in aidlc.settings.local.json, so it stays on. To clear it there: " +
+        "bun .claude/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --local --yes",
+    );
+    expect(existsSync(shared)).toBe(false);
+    expect(readFileSync(local, "utf-8")).toBe(recorded);
+    const json = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--global", "--yes", "--json");
+    expect(json.status, json.stdout + json.stderr).toBe(0);
+    const data = (JSON.parse(json.stdout) as { data: { changed: boolean; notes: string[] } }).data;
+    expect(data.changed).toBe(false);
+    expect(data.notes).toEqual([expect.stringContaining("still recorded in aidlc.settings.local.json")]);
+    // The command the line names turns the check back on.
+    const there = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes");
+    expect(there.status, there.stdout + there.stderr).toBe(0);
+    expect(there.stdout).toContain("Cleared AIDLC_DISABLE_REVIEW_FREEZE_HOOK from aidlc.settings.local.json.");
+    expect(resolvedFlags(project)?.bypasses).toBeUndefined();
+    expect(existsSync(shared)).toBe(false);
+  });
+
   test("a clear that reaches the machine file says which files changed when that file cannot be written", () => {
     // A read-only folder is the way to make the machine step fail here.
     if (process.platform === "win32" || process.getuid?.() === 0) return;

@@ -11639,6 +11639,38 @@ function settingLeaves(file: AidlcSettingsFile | null): Map<string, SettingLeaf>
   return leaves;
 }
 
+function settingsFileShown(projectDir: string, target: SettingsTarget): string {
+  const path = settingsPathForTarget(projectDir, target);
+  return target === "global" ? path : relative(projectDir, path);
+}
+
+// `target` null: the no-layer form, which --clear-bypass reads at the
+// person's own terminal as "every file that records the switch"; it is the
+// one way back every other line names. From a chat it clears only their own
+// file, so the undo of a record in the shared or machine file names that file.
+// An undo that already names its harness (one agent's model) is not given it twice.
+function settingsCommand(
+  projectDir: string,
+  section: "flags" | "models",
+  args: string[],
+  target: SettingsTarget | null,
+  harness?: string,
+): string {
+  return `${configInvocationFor(projectDir)} config ${section} ${
+    args.map((arg) => quoteCommandArgument(arg)).join(" ")
+  }${target === null ? "" : ` --${target}`} --yes${args.includes("--harness") ? "" : namedHarness(projectDir, harness)}${projectTarget(projectDir)}`;
+}
+
+// Where a switch is still recorded after a clear aimed at another file, with
+// the command that clears it there.
+function stillRecordedLines(projectDir: string, name: string, harness?: string): string[] {
+  return layersRecordingBypass(projectDir, name).map((layer) =>
+    `${name} is still recorded in ${settingsFileShown(projectDir, layer)}, so it stays on. To clear it there: ${
+      settingsCommand(projectDir, "flags", ["--clear-bypass", name], layer, harness)
+    }`
+  );
+}
+
 // What a settings change did, one line each, with the command that undoes it.
 // A setting that was not there before has no flag that removes it, so its undo
 // is the section's --reset, offered only when that resets nothing else the
@@ -11648,19 +11680,9 @@ function settingsChangeLines(
   mutations: readonly SettingsMutation[],
   harness?: string,
 ): string[] {
-  const fileOf = (target: SettingsTarget): string => {
-    const path = settingsPathForTarget(projectDir, target);
-    return target === "global" ? path : relative(projectDir, path);
-  };
-  // `target` null: the no-layer form, which --clear-bypass reads at the
-  // person's own terminal as "every file that records the switch"; it is the
-  // one way back every other line names. From a chat it clears only their own
-  // file, so the undo of a record in the shared or machine file names that file.
-  // An undo that already names its harness (one agent's model) is not given it twice.
+  const fileOf = (target: SettingsTarget): string => settingsFileShown(projectDir, target);
   const command = (section: "flags" | "models", args: string[], target: SettingsTarget | null): string =>
-    `${configInvocationFor(projectDir)} config ${section} ${
-      args.map((arg) => quoteCommandArgument(arg)).join(" ")
-    }${target === null ? "" : ` --${target}`} --yes${args.includes("--harness") ? "" : namedHarness(projectDir, harness)}${projectTarget(projectDir)}`;
+    settingsCommand(projectDir, section, args, target, harness);
   const lines: string[] = [];
   for (const change of mutations) {
     const file = fileOf(change.target);
@@ -11727,21 +11749,12 @@ function settingsChangeLines(
       }
     }
   }
-  // A clear aimed at one layer leaves the switch on where another records it:
-  // say so, with the command that clears it there.
+  // A clear aimed at one layer leaves the switch on where another records it.
   const cleared = mutations.flatMap((change) => {
     const after = new Set(change.next?.flags?.bypasses ?? []);
     return (change.previous?.flags?.bypasses ?? []).filter((name) => !after.has(name));
   });
-  for (const name of new Set(cleared)) {
-    for (const layer of layersRecordingBypass(projectDir, name)) {
-      lines.push(
-        `${name} is still recorded in ${fileOf(layer)}, so it stays on. To clear it there: ${
-          command("flags", ["--clear-bypass", name], layer)
-        }`,
-      );
-    }
-  }
+  for (const name of new Set(cleared)) lines.push(...stillRecordedLines(projectDir, name, harness));
   return lines;
 }
 
@@ -12073,15 +12086,15 @@ function afterProjectSettings(
 }
 
 // The switches a command that is ONLY `--clear-bypass` pairs names (plus
-// --yes, a layer, --project-dir and the output mode), and whether it named a
-// layer. Null for anything else, or a name that is not a switch, so the normal
-// path keeps its error and makes a change riding beside the clear.
+// --yes, a layer, --project-dir and the output mode), and the layers it named.
+// Null for anything else, or a name that is not a switch, so the normal path
+// keeps its error and makes a change riding beside the clear.
 function clearOnlySwitches(
   argv: readonly string[],
   projectDir: string,
-): { names: RecordableProjectBypass[]; layered: boolean } | null {
+): { names: RecordableProjectBypass[]; layers: SettingsTarget[] } | null {
   const clears: string[] = [];
-  let layered = false;
+  const layers: SettingsTarget[] = [];
   for (let index = 0; index < argv.length; index++) {
     const token = argv[index];
     if (token === "--clear-bypass" || token === "--project-dir") {
@@ -12091,8 +12104,8 @@ function clearOnlySwitches(
       index++;
       continue;
     }
-    if (["--local", "--project", "--global"].includes(token)) {
-      layered = true;
+    if (token === "--local" || token === "--project" || token === "--global") {
+      layers.push(token.slice(2) as SettingsTarget);
       continue;
     }
     if (["--yes", "--json", "--quiet", "--no-color"].includes(token)) continue;
@@ -12100,19 +12113,31 @@ function clearOnlySwitches(
   }
   if (clears.length === 0 || !settingsProjectAvailable(projectDir)) return null;
   if (!clears.every((name) => (RECORDABLE_PROJECT_BYPASSES as readonly string[]).includes(name))) return null;
-  return { names: clears as RecordableProjectBypass[], layered };
+  return { names: clears as RecordableProjectBypass[], layers };
 }
 
 /**
- * A `--clear-bypass` of switches that no settings file records would change
- * nothing, yet the flags path would still create a file and say how open work
- * picks the change up. When the command is ONLY such clears, say what is true
- * in one line per switch and write nothing.
+ * A `--clear-bypass` that changes nothing, because no settings file records
+ * the switches or the file it names records none of them, would still create
+ * that file and say how open work picks the change up. When the command is
+ * ONLY such clears, write nothing and say what is true for each switch: that
+ * nothing records it, or which file keeps it on, with the command that clears
+ * it there.
  */
 function unrecordedClearLines(argv: readonly string[], projectDir: string): string[] | null {
   const clears = clearOnlySwitches(argv, projectDir);
-  if (clears === null || !clears.names.every((name) => layersRecordingBypass(projectDir, name).length === 0)) return null;
-  return clears.names.map((name) => unrecordedSwitchLine(projectDir, name));
+  if (clears === null) return null;
+  const recording = clears.names.map((name) => layersRecordingBypass(projectDir, name));
+  if (recording.every((layers) => layers.length === 0)) {
+    return clears.names.map((name) => unrecordedSwitchLine(projectDir, name));
+  }
+  if (clears.layers.length === 0 || recording.some((layers) => layers.some((layer) => clears.layers.includes(layer)))) {
+    return null;
+  }
+  return [...new Set(clears.names)].flatMap((name) => {
+    const still = stillRecordedLines(projectDir, name);
+    return still.length > 0 ? still : [unrecordedSwitchLine(projectDir, name)];
+  });
 }
 
 // A clear naming no file, run from a chat, turns the check back on the way the
@@ -12120,7 +12145,7 @@ function unrecordedClearLines(argv: readonly string[], projectDir: string): stri
 // machine's. Null hands it to the normal path, which clears as typed.
 function chatBackOnLines(argv: readonly string[], projectDir: string): string[] | null {
   const clears = clearOnlySwitches(argv, projectDir);
-  return clears === null || clears.layered ? null : backOnFromChatLines(projectDir, clears.names);
+  return clears === null || clears.layers.length > 0 ? null : backOnFromChatLines(projectDir, clears.names);
 }
 
 function recordBypassesOnly(
