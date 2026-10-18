@@ -37,7 +37,7 @@ The delivery vehicle is the **host's own plugin system**, not a bespoke AIDLC in
 - **Trust is host-native.** Org restrictions use the host's managed allowlist (Claude `strictKnownMarketplaces`, unoverridable by users; Codex hash-pinned trust). AIDLC builds no trust layer.
 - **The composer runs on install, triggered by a host hook.** No pre-built per-combination tree; the SessionStart hook composes the chosen set locally.
 
-> **Security note - Kiro's folder-drop has no install-time trust gate.** Claude and Codex mediate a plugin through their own trust prompts (managed marketplace / hash-pinned approval) *before* its hooks can run. Kiro has no plugin store, so the folder-drop path copies executable plugin files with **no equivalent gate**: dropping the tree *is* the trust decision. The Kiro IDE projection includes a `v1` SessionStart registration that runs the cross-platform Bun launcher at `hooks/aidlc-plugin-compose.ts`; the Kiro CLI projection leaves composition to the command you run explicitly. Treat either Kiro plugin drop like `git clone && run`: only install plugins from a source you would run code from, review the diff the drop introduces, and pin the plugin repo to a reviewed tag rather than tracking a moving branch. The composer itself is additive and never edits `core/`, but it executes with the user's process privileges.
+> **Security note - Kiro's folder-drop has no install-time trust gate.** Claude and Codex mediate a plugin through their own trust prompts (managed marketplace / hash-pinned approval) *before* its hooks can run. Kiro has no plugin store, so the folder-drop path copies executable plugin files with **no equivalent gate**: dropping the tree *is* the trust decision. The Kiro IDE projection includes a `v1` SessionStart registration that runs `aidlc engine plugin sync`, or the Bun launcher at `hooks/aidlc-plugin-compose.ts` where `aidlc` is not installed; the Kiro CLI projection leaves composition to the command you run explicitly. Treat either Kiro plugin drop like `git clone && run`: only install plugins from a source you would run code from, review the diff the drop introduces, and pin the plugin repo to a reviewed tag rather than tracking a moving branch. The composer itself is additive and never edits `core/`, but it executes with the user's process privileges.
 
 The contribution seam (§6) is why this matters: it is structurally VS Code's `contributes` + Cargo's additive feature-union — the best-composing model in the field — and it is available to *every* plugin, first- and third-party alike, with no gatekeeping.
 
@@ -693,15 +693,22 @@ channel keeps the same composition record, and fall back to the direct bun
 `hooks/compose.ts` invocation when that tool is missing (the Cursor and Kiro IDE
 launcher also when it refuses, so an older project still composes).
 
-Cursor's emitted hook uses Cursor's flat camelCase schema
-(`hooks.sessionStart[].command`) and invokes
-`./hooks/aidlc-plugin-compose.ts .cursor`. That Bun launcher uses `Bun.which`
-and `process.execPath` to probe `aidlc`, then run the project's own sync tool
-or the sibling `compose.ts` portably, without a `sh -c` dependency on native Windows. On Kiro the whole
-plugin sits in its own folder, `.kiro/aidlc-plugins/<name>/`, so a second plugin
-dropped into the same project never lands on the first; Kiro IDE's `v1`
-SessionStart registration runs that folder's launcher with `.kiro kiro-ide` from
-the workspace root.
+Cursor and Kiro run a plugin hook in the platform's shell (Cursor: the
+person's shell, or PowerShell on Windows; Kiro: `/bin/sh`, or cmd.exe on
+Windows), so their hooks carry no `sh -c`. Cursor's emitted hook uses Cursor's
+flat camelCase schema (`hooks.sessionStart[].command`) with two entries:
+`aidlc engine plugin sync --harness-dir .cursor`, which reads the plugin root and
+workspace Cursor puts in the hook's environment, and `bun ./hooks/aidlc-plugin-compose.ts .cursor`
+for an install without `aidlc`. Cursor starts each entry on its own, so the one
+whose runtime is absent fails without stopping the other. That Bun launcher uses
+`Bun.which` and `process.execPath` to probe `aidlc`, then run the project's own
+sync tool or the sibling `compose.ts`. On Kiro the whole plugin sits in its own folder,
+`.kiro/aidlc-plugins/<name>/`, so a second plugin dropped into the same project
+never lands on the first. Kiro IDE's `v1` SessionStart registration is one
+command that reads the same in `/bin/sh` and cmd.exe:
+`aidlc engine plugin sync --harness-dir .kiro --plugin-root ./.kiro/aidlc-plugins/<name> || bun ./.kiro/aidlc-plugins/<name>/hooks/aidlc-plugin-compose.ts .kiro kiro-ide`.
+Kiro gives a hook no plugin root, but runs it in the workspace root. Both name their harness, so a project with Claude Code installed
+beside Cursor or Kiro IDE composes into the right one.
 
 **Install, per host:**
 

@@ -2561,6 +2561,17 @@ export async function main(argv: string[]): Promise<void> {
       return;
     }
     if (command === "sync") {
+      // Kiro IDE's folder-dropped hook names its root here: /bin/sh and
+      // cmd.exe, the shells Kiro runs hooks in, set a variable differently.
+      if (flags["plugin-root"]) process.env.AIDLC_PLUGIN_ROOT = resolve(flags["plugin-root"]);
+      // A plugin hook names its harness too: a compiled aidlc has already
+      // pinned the first one installed here, which in a project with Claude
+      // Code beside it is .claude.
+      if (flags["harness-dir"]) {
+        process.env.AIDLC_HARNESS_DIR = flags["harness-dir"];
+        delete process.env.AIDLC_HARNESS_NAME;
+        process.env.AIDLC_HARNESS_NAME = runtimeHarnessName(projectDir, flags["harness-dir"]);
+      }
       const result = await syncPlugins(projectDir, argv);
       const message = `plugin sync complete: ${result.synced.length} plugin(s)` +
         (result.pruned.length > 0 ? `; pruned ${result.pruned.length} missing plugin(s)` : "") +
