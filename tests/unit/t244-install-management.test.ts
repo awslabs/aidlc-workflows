@@ -3857,7 +3857,7 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(publish).toContain('--source-digest "$AUTHORIZED_SHA"');
     expect(publish).toContain("name: attested-release");
     expect(publish).toContain(
-      "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
+      "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
     );
     expect(publish).not.toContain("gh release create");
     expect(publish).not.toContain("--draft");
