@@ -208,7 +208,9 @@ Units of checkout-revamp:
 - reporting, here: waits on refunds
 ```
 
-A Unit is done when every repo it changed has merged, however it merged: the
+A Unit is done when every repo it changed has merged, however it merged (when a
+repo merged it in a way the board cannot see, say so at the home and AI-DLC runs
+`aidlc unit merged <unit> --repo <repo>` with your words): the
 home records `UNIT_MERGED`, writes the Unit's outputs into its record where
 Build and Test reads them, and marks the claim done, so the Units waiting on it
 open for the home and for every team. A repo the home has no checkout of stays

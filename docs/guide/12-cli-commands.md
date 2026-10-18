@@ -58,6 +58,7 @@ diagnostic and lifecycle routes.
 | `/aidlc unit lead-sign-off on\|off` | At the home, make each team's result wait for your sign-off, or not (off by default) |
 | `/aidlc unit sign-off <unit>` | At the home, sign a team's result off, in your own words |
 | `/aidlc unit turned-down <unit> --repo <repo>` | At the home, send one repo of a team's Unit back to the team, with your words |
+| `/aidlc unit merged <unit> --repo <repo>` | At the home, count one repo of a team's Unit as merged where the board does not see it, in your words |
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
 | `/aidlc unit share` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one |
@@ -785,6 +786,14 @@ At the home, when a team's pull request in one repo is turned down. The agent
 runs it from your words with `--person-words '<your words>'`. Your words go onto
 the Unit's claim, and the team hears them once at its next step, with the way
 back to Code Generation. A repo that already merged stays merged.
+
+### `/aidlc unit merged <unit> --repo <repo>` - Count a repo merged
+
+At the home, when a repo merged a team's Unit in a way the board does not see (the
+change made again by hand, or merged through another branch). The agent runs it
+from your words with `--person-words '<your words>'`. Your words go onto the
+Unit's claim, the repo counts as merged at the home's next step, and the Unit's
+done record keeps them ("by your word").
 
 ### `/aidlc unit adopt <unit>` — Adopt a teammate's live claim
 

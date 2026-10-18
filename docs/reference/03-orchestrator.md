@@ -807,7 +807,12 @@ patch-id), puts the verdicts on the claim, and once every repo merged records
 the home's record and marks the claim `done`. The home's Unit Progress shows a
 Unit merged that way with every stage done. While a team still holds a Unit and
 none is left to the home, the step is the board (`renderUnitBoard`). A
-`turned_down` note on the claim reaches the build once, on any step.
+`turned_down` note on the claim reaches the build once, on any step. The lead's
+word that a repo merged where the check cannot see it (`unit merged <unit> --repo
+<repo> --person-words`) goes on the claim as `said_merged`, and that repo's
+verdict reads merged "by your word" from then on. The board carries
+`board_note`, the commands for both; a Unit's build left unpushed ends with
+`done_note`, the push command.
 
 When the person's words are the path of a file carrying the `aidlc-handoff`
 mark, `next` returns `ask_type: unit-handoff` (**Start <unit>** runs

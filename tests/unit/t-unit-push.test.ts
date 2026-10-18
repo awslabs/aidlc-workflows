@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:push, subcommand:aidlc-unit:turned-down, audit:UNIT_PUSHED, audit:UNIT_MERGED, function:checkTeamResults, function:renderUnitBoard, function:teamsAcrossReposLine
+// covers: subcommand:aidlc-unit:push, subcommand:aidlc-unit:turned-down, subcommand:aidlc-unit:merged, audit:UNIT_PUSHED, audit:UNIT_MERGED, function:checkTeamResults, function:renderUnitBoard, function:teamsAcrossReposLine
 //
 // A Unit's build goes home (#2410, item 5). Teams build Units across repos when
 // the workspace is in git. At the build's end the person is offered the push;
@@ -113,6 +113,7 @@ describe("the push", () => {
     expect((end.change_notices ?? []) as string[]).toContain(
       "refunds is built and approved, and not pushed yet: say push when it is ready to go home.",
     );
+    expect(String(end.done_note)).toEndWith("aidlc-unit.ts push` and say its notice line.");
   });
 });
 
@@ -207,6 +208,31 @@ describe("at the home", () => {
     writeFileSync(join(home.dir, "services", "checkout-api", "src", "refunds.ts"), "export const refunds = 1;\n");
     writeFileSync(join(home.dir, "package.json"), '{ "name": "platform" }\n');
     expect(next(home.dir).ask_type).not.toBe("project-type");
+  });
+
+  test("the board names the agent's commands for the lead's words: a repo turned it down, or merged it where the check cannot see", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const board = next(home.dir);
+    expect(board.kind).toBe("notice");
+    expect(String(board.board_note)).toContain("aidlc-unit.ts turned-down <unit> --repo <repo> --person-words '<their words>'");
+    expect(String(board.board_note)).toContain("aidlc-unit.ts merged <unit> --repo <repo> --person-words '<their words>'");
+  });
+
+  test("the lead's word that a repo merged where the check cannot see: kept in their words, and the Unit is done", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    expect(String(next(home.dir).message)).toContain("checkout-api merged, billing not merged yet (1 of 2 merged)");
+    const said = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "billing merged it by hand last night"], home.dir);
+    expect(said.status, said.out).toBe(0);
+    expect(said.json?.notice).toBe("billing counts as merged for refunds, in your words.");
+    next(home.dir);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    const merged = readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED");
+    expect(merged[0]?.block).toContain('billing (by your word: "billing merged it by hand last night")');
   });
 
   test("a turn-down at the home reaches the team once, in the home's words", () => {

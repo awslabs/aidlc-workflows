@@ -286,6 +286,8 @@ export interface UnitClaimPayload {
   amendments?: Amendment[];
   // The lead's sign-off of the result, when Lead Sign-off is on.
   signoff?: { words: string; at: string };
+  // The lead's word that a repo merged the Unit where the check cannot see it.
+  said_merged?: Array<{ repo: string; words: string; at: string }>;
 }
 
 export interface UnitClaimView {
@@ -5681,6 +5683,8 @@ export function checkTeamResults(projectDir: string, unreached?: string[]): Map<
     const result = live?.payload.result;
     if (live?.status !== "claimed" || !result) continue;
     const verdicts = result.repos.map((repo) => {
+      const said = live.payload.said_merged?.find((entry) => entry.repo === repo.repo);
+      if (said) return { repo: repo.repo, merged: true, how: `by your word: "${said.words}"` };
       const dir = repo.repo === "." ? pd : repoDir(pd, repo.repo);
       if (!isGitRepoDir(dir)) {
         // The team's own word, kept as theirs until the home can check the repo.
@@ -5725,7 +5729,7 @@ function recordUnitDone(projectDir: string, claim: UnitClaimView, verdicts: NonN
       Unit: claim.unit,
       Owner: claim.owner,
       "Built By": claim.payload.result?.by ?? claim.payload.taken_by ?? claim.owner,
-      "Merged In": verdicts.map((verdict) => `${verdict.repo}@${verdict.commit} (${verdict.how})`).join(", "),
+      "Merged In": verdicts.map((verdict) => `${verdict.repo}${verdict.commit ? `@${verdict.commit}` : ""} (${verdict.how})`).join(", "),
       "Attempt Generation": String(claim.generation),
     }, projectDir);
   });
@@ -5984,6 +5988,38 @@ function turnedDown(args: string[], projectDir?: string): void {
   if (!sent.ok) fail(`The note could not be put on ${unit}'s claim: ${sent.refused ?? "it moved meanwhile"}. Try again.`);
   invalidateLiveClaimPayloadCache(pd, unit);
   console.log(JSON.stringify({ unit, notice: `The ${live.owner} team hears that ${flags.repo} was turned down, with your words, at its next step.` }));
+}
+
+// The lead says a repo merged the Unit where the merge check cannot see it (a
+// change made again by hand, a branch merged elsewhere): their words go on the
+// claim, and the home counts that repo merged at its next step.
+function saidMerged(args: string[], projectDir?: string): void {
+  const { positional, flags } = parseArgs(args);
+  const unit = positional[0];
+  if (!unit || !flags.repo) fail("Usage: aidlc-unit merged <unit> --repo <repo> --person-words '<their words>'");
+  const pd = resolveProjectDir(projectDir);
+  const words = (flags["person-words-file"] !== undefined ? readAnswerTextFile(pd, flags["person-words-file"]) : flags["person-words"] ?? "").trim();
+  if (!humanPresenceGuardDisabled()) {
+    if (!words || isNonAnswer(words)) fail("That it merged is the person's own word; ask them, then run this with their words.");
+    const authorship = selfAttributedDecisionMarker(words, "approval");
+    if (authorship) fail(`That reads as the agent's word, not the person's (${authorship.category}): "${authorship.phrase}". Ask them.`);
+  }
+  const identity = activeIdentity(pd);
+  const remote = repositoryRemote(pd);
+  const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
+  if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to count merged.`);
+  if (!live.payload.result.repos.some((repo) => repo.repo === flags.repo)) {
+    fail(`${unit} changed ${joinNames(live.payload.result.repos.map((repo) => repo.repo))}, not ${flags.repo}.`);
+  }
+  const payload: UnitClaimPayload = {
+    ...live.payload,
+    predecessor_oid: live.oid,
+    said_merged: [...(live.payload.said_merged ?? []).filter((entry) => entry.repo !== flags.repo), { repo: flags.repo, words, at: isoTimestamp() }],
+  };
+  const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
+  if (!sent.ok) fail(`${unit}'s claim moved meanwhile: ${sent.refused ?? "try again"}.`);
+  invalidateLiveClaimPayloadCache(pd, unit);
+  console.log(JSON.stringify({ unit, notice: `${flags.repo} counts as merged for ${unit}, in your words.` }));
 }
 
 // --- Hand-off by file ------------------------------------------------------------
@@ -6348,6 +6384,7 @@ export function main(argv: string[]): void {
     else if (command === "lead-sign-off") leadSignOffSetting(args, projectDir);
     else if (command === "sign-off") signOff(args, projectDir);
     else if (command === "turned-down") turnedDown(args, projectDir);
+    else if (command === "merged") saidMerged(args, projectDir);
     else if (command === "adopt") adoptUnit(args, projectDir);
     else if (command === "claim") claimUnit(args, projectDir);
     else if (command === "release") releaseUnit(args, projectDir);
@@ -6370,7 +6407,7 @@ export function main(argv: string[]): void {
       console.log(JSON.stringify(unitClaimOverview(resolveProjectDir(projectDir)), null, 2));
     } else {
       fail(
-        "Usage: aidlc-unit <assign|take|push|hand-off|progress|take-in|propose|amend|lead-sign-off|sign-off|turned-down|adopt|claim|release|participate|share|publish|pin|gate|land|merge-status|status> ...",
+        "Usage: aidlc-unit <assign|take|push|hand-off|progress|take-in|propose|amend|lead-sign-off|sign-off|turned-down|merged|adopt|claim|release|participate|share|publish|pin|gate|land|merge-status|status> ...",
       );
     }
   } catch (error) {

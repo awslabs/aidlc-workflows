@@ -106,6 +106,8 @@ The conductor skills' rows under "Acting on a step" say only what the agent does
 | `gate_note` | `gate: "unresolved"` | read what the team's `## Walking Skeleton` says it does (on if it always runs one, off if it says it does not, scope-dependent if neither), report it with `report --skeleton-stance`, then `next` |
 | `gate_note` | a Unit's `run-stage` with `gate: false` (no checkpoint, wave or settle) | do not report it or ask for approval; run `next` when its work is done |
 | `gate_note` | `gate_only: true` | the stage's work and review are done: show its approval question again and end the turn; do not run the stage again or change what it produced |
+| `board_note` | the home's board (`notice`) while teams build | show the board as it is; when the person says a repo turned a Unit down, or merged it where the board does not see it, run `unit turned-down` or `unit merged` with their words |
+| `done_note` | the `done` of a Unit's build the person has not pushed yet | when they say push, run `unit push` and say its notice line |
 
 The body runs here on an ordinary stage step and on an isolated run; it does not on a gate shown again (`gate_only`), a settled swarm, a Unit or batch checkpoint, a team gate (`unit_gate`), a completion-only beat, or a wave (whose builders run it), and those steps carry none of the notes about it.
 
