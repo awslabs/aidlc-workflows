@@ -226,11 +226,8 @@ describe("a mapped repo counts as the project", () => {
   test("a traceability target in a mapped repo is spelled <repo>/<path> and resolves there", () => {
     const { root, ws } = layout();
     writeFileSync(join(ws, "repos.json"), JSON.stringify({ repos: [{ name: "billing", path: "../../billing" }] }));
-    expect(workspaceTargetPath(ws, "billing/src/refund.ts")).toEqual({
-      root: join(root, "billing"),
-      absolute: join(root, "billing", "src", "refund.ts"),
-    });
-    expect(workspaceTargetPath(ws, "src/x.ts")).toEqual({ root: resolve(ws), absolute: join(ws, "src", "x.ts") });
+    expect(workspaceTargetPath(ws, "billing/src/refund.ts")).toBe(join(root, "billing", "src", "refund.ts"));
+    expect(workspaceTargetPath(ws, "src/x.ts")).toBe(join(ws, "src", "x.ts"));
   });
 
   test("a build writing into a mapped repo still waits for Plan Approval", async () => {

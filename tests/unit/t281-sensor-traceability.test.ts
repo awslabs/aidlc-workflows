@@ -7,8 +7,9 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative, sep } from "node:path";
 import {
   artifactFilename,
   parseStageFrontmatter,
@@ -689,6 +690,31 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     const out = run(proj, "code-generation", file);
     expect(out.result.pass).toBe(false);
     expect(out.result.invalid_targets).toContain("AC1.1.2: target file does not exist: src/missing.ts");
+  });
+
+  test("code-generation reaches a repo repos.json maps beside the workspace, by either spelling; a target elsewhere still escapes", () => {
+    const proj = project();
+    seedUserStories(proj);
+    seedUnits(proj);
+    const repo = mkdtempSync(join(tmpdir(), "aidlc-t281-payments-api-"));
+    try {
+      mkdirSync(join(repo, "src"), { recursive: true });
+      writeFileSync(join(repo, "src", "refund.ts"), "export const refund = 1;\n");
+      const path = relative(proj, repo).split(sep).join("/");
+      writeFileSync(join(proj, "repos.json"), JSON.stringify({ repos: [{ name: "payments-api", path }] }));
+      const targets = (second: string) => trace(proj, "construction/u1-auth/code-generation/traceability.json", {
+        upstream_ids: ["AC1.1.1", "AC1.1.2"],
+        coverage: [
+          { id: "AC1.1.1", status: "OK", target: "payments-api/src/refund.ts" },
+          { id: "AC1.1.2", status: "OK", target: second },
+        ],
+      });
+      expect(run(proj, "code-generation", targets(`${path}/src/refund.ts`)).result.invalid_targets).toEqual([]);
+      expect(run(proj, "code-generation", targets("../not-a-mapped-repo/src/refund.ts")).result.invalid_targets)
+        .toEqual(["AC1.1.2: target escapes the project directory"]);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 
   // A zero-Unit directive (no Unit DAG: poc, bugfix, refactor, security-patch,

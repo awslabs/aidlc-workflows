@@ -55,16 +55,15 @@ export function insideProject(projectDir: string, target: string): boolean {
 }
 
 // Where a workspace-relative target is: `<repo>/<path>` in a repo repos.json
-// maps elsewhere, as a child repo's target is spelled; anything else under the
-// workspace. `root` is the folder the target must stay inside.
-export function workspaceTargetPath(projectDir: string, target: string): { root: string; absolute: string } {
+// maps elsewhere, as a child repo's target is spelled; anything else from the
+// workspace (`../payments-api/...` reaches a repo mapped beside it). Whether it
+// stays inside is insideProject's to say.
+export function workspaceTargetPath(projectDir: string, target: string): string {
   const [first, ...rest] = target.split("/");
   if (rest.length > 0 && readWorkspaceRepos(projectDir).entries.get(first)?.path !== undefined) {
-    const root = repoDir(projectDir, first);
-    return { root, absolute: resolvePath(root, rest.join("/")) };
+    return resolvePath(repoDir(projectDir, first), rest.join("/"));
   }
-  const root = resolvePath(projectDir);
-  return { root, absolute: resolvePath(root, target) };
+  return resolvePath(projectDir, target);
 }
 
 // The offer to write repos.json is made once per clone (decision 21).
