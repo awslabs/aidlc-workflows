@@ -6397,6 +6397,14 @@ function participate(projectDir?: string): void {
 
 let projectDir: string | undefined;
 
+// Every verb main runs. The dispatcher routes the same list (aidlc.ts, the unit
+// routes), and t-unit-native-commands holds the two together.
+export const UNIT_VERBS = [
+  "assign", "take", "push", "hand-off", "progress", "take-in", "propose", "amend", "lead-sign-off", "sign-off",
+  "turned-down", "merged", "adopt", "claim", "release", "participate", "share", "publish", "pin", "gate", "land",
+  "merge-status", "status",
+] as const;
+
 export function main(argv: string[]): void {
   const args = [...argv];
   const projectIdx = args.indexOf("--project-dir");
@@ -6440,7 +6448,7 @@ export function main(argv: string[]): void {
       console.log(JSON.stringify(unitClaimOverview(resolveProjectDir(projectDir)), null, 2));
     } else {
       fail(
-        "Usage: aidlc-unit <assign|take|push|hand-off|progress|take-in|propose|amend|lead-sign-off|sign-off|turned-down|merged|adopt|claim|release|participate|share|publish|pin|gate|land|merge-status|status> ...",
+        `Usage: aidlc-unit <${UNIT_VERBS.join("|")}> ...`,
       );
     }
   } catch (error) {
