@@ -49,7 +49,7 @@ export function asShippedBuild(harness: string): (firstParty: Map<string, Buffer
           ? Buffer.from(
             bytes.toString("utf-8")
               .replaceAll('"aidlc-test-pro"', '"test-pro"')
-              .replaceAll("aidlc-plugins/aidlc-test-pro/", "aidlc-plugins/test-pro/"),
+              .replaceAll(/aidlc-plugins\/aidlc-test-pro\b/g, "aidlc-plugins/test-pro"),
             "utf-8",
           )
           : bytes,
