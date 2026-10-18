@@ -72,6 +72,7 @@ import {
 } from "./aidlc-guard-switch.ts";
 import { compareVersions, VERSION_ID } from "./aidlc-channel.ts";
 import { main as pluginBuildMain } from "./aidlc-plugin-build.ts";
+import { droppedPluginRegistrations } from "./aidlc-plugin-emit.ts";
 import { main as pluginValidateMain } from "./aidlc-plugin-validate.ts";
 import {
   ARCHIVED_FROM_FIELD,
@@ -3906,8 +3907,13 @@ export async function collectDoctorReport(
       }
       const hooksDir = join(harnessRoot, "hooks");
       if (existsSync(hooksDir)) {
+        // A dropped plugin's session-start registration, exactly as its build
+        // wrote it, is the plugin's own: its Bun fallback is not an AI-DLC
+        // entry left from before the native install.
+        const pluginOwned = new Set(droppedPluginRegistrations(projectDir, currentHarnessDir));
         trustFiles.push(...readdirSync(hooksDir)
           .filter((name) => name.endsWith(".kiro.hook") || name.endsWith(".json"))
+          .filter((name) => !pluginOwned.has(`${currentHarnessDir}/hooks/${name}`))
           .map((name) => join(hooksDir, name)));
       }
       for (const path of trustFiles) {
