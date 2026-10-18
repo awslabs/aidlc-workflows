@@ -129,6 +129,8 @@ import {
   sessionsDir,
   setActiveSpaceCursor,
   writeFileAtomic,
+  ENGINE_DIR,
+  intentRepos,
 } from "./aidlc-lib.js";
 import {
   type Amendment,
@@ -5203,7 +5205,100 @@ function createUnitBuild(
       "Home Approvals": approvals.join("; ") || "none recorded",
     }, projectDir, dirName, space);
   });
+  recordTakeTree(projectDir, record, intentRepos(projectDir, dirName, space));
   return { space, dirName };
+}
+
+// What of the person's own was uncommitted in each of the work's repos when the
+// Unit was taken, so its push never commits it: for each changed file, the
+// blob of its content then (stored in that repo, never pushed), "" for one they
+// had deleted, "untracked" for one git did not track. Object ids only, in the
+// build's engine folder, which is never committed.
+const TAKE_TREE_FILE = "take-tree.json";
+type TakeTree = Record<string, Record<string, string>>;
+
+function recordTakeTree(projectDir: string, record: string, repos: string[]): void {
+  const tree: TakeTree = {};
+  for (const repo of repos.length > 0 ? repos : ["."]) {
+    const dir = repo === "." ? projectDir : repoDir(projectDir, repo);
+    if (!isGitRepoDir(dir)) continue;
+    const status = git(dir, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames"]);
+    if (!status.ok) continue;
+    const own: Record<string, string> = {};
+    for (const entry of status.stdout.split("\0").filter(Boolean)) {
+      const path = entry.slice(3);
+      if (entry.startsWith("??")) own[path] = "untracked";
+      else if (!existsSync(join(dir, path))) own[path] = "";
+      else own[path] = git(dir, ["hash-object", "-w", `--path=${path}`, "--", path]).stdout.trim();
+    }
+    if (Object.keys(own).length > 0) tree[repo] = own;
+  }
+  if (Object.keys(tree).length === 0) return;
+  mkdirSync(join(record, ENGINE_DIR), { recursive: true });
+  writeFileAtomic(join(record, ENGINE_DIR, TAKE_TREE_FILE), `${JSON.stringify(tree, null, 2)}\n`);
+}
+
+function readTakeTree(record: string): TakeTree {
+  try {
+    return JSON.parse(readFileSync(join(record, ENGINE_DIR, TAKE_TREE_FILE), "utf-8")) as TakeTree;
+  } catch {
+    return {};
+  }
+}
+
+// The Unit's commit in one repo: built in an index of its own from HEAD, so
+// nothing the person staged comes along. A file that held their own change at
+// take goes in as HEAD plus the Unit's change since then; where the two cannot
+// be kept apart it is left out, and the working tree is never touched. Returns
+// the paths left out.
+function commitUnitPaths(dir: string, paths: string[], own: Record<string, string>, unit: string, label: string, name: string): string[] {
+  const scratch = mkdtempSync(join(tmpdir(), "aidlc-unit-commit-"));
+  const env = { GIT_INDEX_FILE: join(scratch, "index") };
+  const leftOut: string[] = [];
+  try {
+    const head = git(dir, ["rev-parse", "--verify", "--quiet", "HEAD"]).ok;
+    git(dir, head ? ["read-tree", "HEAD"] : ["read-tree", "--empty"], env);
+    const plain = paths.filter((path) => own[path] === undefined);
+    if (plain.length > 0) {
+      const added = git(dir, ["add", "--", ...plain], env);
+      if (!added.ok) fail(`${unit}'s changes could not be added in ${name}: ${added.stderr.trim()}`);
+    }
+    for (const path of paths.filter((path) => own[path] !== undefined)) {
+      const kept = unitOwnChange(dir, path, own[path], scratch);
+      if (kept === null) leftOut.push(path);
+      else git(dir, ["update-index", "--cacheinfo", `${kept.mode},${kept.oid},${path}`], env);
+    }
+    const committed = paths.filter((path) => !leftOut.includes(path));
+    if (committed.length > 0 && !git(dir, ["diff", "--cached", "--quiet", "--", ...committed], env).ok) {
+      const made = git(dir, ["commit", "-q", "-m", `${unit}: ${label}`], env);
+      if (!made.ok) fail(`The commit in ${name} did not go through: ${(made.stderr || made.stdout).trim()}`);
+      git(dir, ["reset", "-q", "--", ...committed]);
+    }
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+  return leftOut;
+}
+
+// HEAD's file plus the Unit's change from the take-time file to now, as a blob;
+// null when that cannot be told apart from the person's own change.
+function unitOwnChange(dir: string, path: string, taken: string, scratch: string): { mode: string; oid: string } | null {
+  const entry = git(dir, ["ls-tree", "HEAD", "--", path]).stdout.trim().split(/\s+/);
+  if (taken === "" || taken === "untracked" || entry.length < 3 || !existsSync(join(dir, path))) return null;
+  const now = git(dir, ["hash-object", "-w", `--path=${path}`, "--", path]).stdout.trim();
+  const files = [entry[2], taken, now].map((oid, i) => {
+    const blob = spawnSync("git", ["cat-file", "blob", oid], { cwd: dir });
+    if (blob.status !== 0) return null;
+    const file = join(scratch, `merge-${i}`);
+    writeFileSync(file, blob.stdout);
+    return file;
+  });
+  if (files.some((file) => file === null)) return null;
+  const merged = spawnSync("git", ["merge-file", "-p", ...(files as string[])], { cwd: dir });
+  if (merged.status !== 0) return null;
+  writeFileSync(join(scratch, "merged"), merged.stdout);
+  const oid = git(dir, ["hash-object", "-w", "--no-filters", "--", join(scratch, "merged")]).stdout.trim();
+  return oid ? { mode: entry[0], oid } : null;
 }
 
 export const APPROVED_INPUTS_FILE = "approved-inputs.md";
@@ -5566,6 +5661,8 @@ function pushUnit(args: string[], projectDir?: string): void {
   const earlier = new Map((claim?.payload.result?.repos ?? []).map((repo) => [repo.repo, repo]));
   const results: RepoResult[] = [];
   const switched: string[] = [];
+  const takeTree = readTakeTree(activeRecordDir(pd));
+  const leftOut: string[] = [];
   for (const [repo, paths] of byRepo) {
     const dir = repo === "." ? pd : repoDir(pd, repo);
     if (!isGitRepoDir(dir)) fail(repoNotThereLine(pd, repo));
@@ -5576,12 +5673,7 @@ function pushUnit(args: string[], projectDir?: string): void {
       if (!moved.ok) fail(`Branch ${unit} could not be checked out in ${name}: ${moved.stderr.trim()}`);
       switched.push(name);
     }
-    const added = git(dir, ["add", "--", ...paths]);
-    if (!added.ok) fail(`${unit}'s changes could not be added in ${name}: ${added.stderr.trim()}`);
-    if (!git(dir, ["diff", "--cached", "--quiet", "--", ...paths]).ok) {
-      const committed = git(dir, ["commit", "-q", "-m", `${unit}: ${label}`, "--", ...paths]);
-      if (!committed.ok) fail(`The commit in ${name} did not go through: ${(committed.stderr || committed.stdout).trim()}`);
-    }
+    for (const path of commitUnitPaths(dir, paths, takeTree[repo] ?? {}, unit, label, name)) leftOut.push(`${path} in ${name}`);
     const remote = git(dir, ["config", "--get", `branch.${unit}.remote`]).stdout.trim() || repositoryRemote(dir);
     if (remote === null) fail(`${name} has no remote to push ${unit} to.`);
     const pushed = git(dir, ["push", "-u", remote, unit]);
@@ -5616,6 +5708,11 @@ function pushUnit(args: string[], projectDir?: string): void {
   const names = results.map((repo) => (repo.repo === "." ? "the repo" : repo.repo));
   const lines = [`Pushed branch ${unit} in ${joinNames(names)}. Open a PR in ${names.length === 1 ? "it" : "each"} your usual way.`];
   if (switched.length > 0) lines.push(`You are on branch ${unit} in ${joinNames(switched)} now.`);
+  if (leftOut.length > 0) {
+    lines.push(`${joinNames(leftOut)} ${leftOut.length === 1 ? "is" : "are"} not in the commit: ${leftOut.length === 1 ? "it" : "each"} ` +
+      `already had a change of yours when ${unit} was taken, and ${unit}'s own change could not be kept apart from it. ` +
+      `Both are still in the file, uncommitted.`);
+  }
   // The result goes home on the claim, with the Unit outputs the home's later
   // stages read; a home that takes no push from here gets it as a file.
   const outputs = unitOutputsHomeReads(unit, getField(state, "Scope") ?? "")

@@ -77,6 +77,36 @@ describe("the push", () => {
     expect(rows).toHaveLength(1);
   });
 
+  test("a file that held their own uncommitted change when the Unit was taken: only the Unit's change goes, theirs stays theirs", () => {
+    const { hosts, alice, record } = refundsTaken(undefined, (dir) => {
+      writeFileSync(join(dir, "checkout-api", "README.md"), "# checkout-api\n\nmy secret note\n");
+      writeFileSync(join(dir, "billing", "README.md"), "# billing (my note)\n");
+    });
+    codeGenerated(alice, record);
+    // Code Generation also writes both READMEs: in checkout-api apart from their
+    // note, in billing on the very line their note changed.
+    writeFileSync(join(alice, "checkout-api", "README.md"), "Refunds API.\n\n# checkout-api\n\nmy secret note\n");
+    writeFileSync(join(alice, "billing", "README.md"), "# billing service\n");
+    const manifest = join(record, "construction", "refunds", "code-generation", "source-manifest.json");
+    const written = JSON.parse(readFileSync(manifest, "utf-8")) as { writes: Array<{ repo: string; path: string }> };
+    written.writes.push({ repo: "checkout-api", path: "README.md" }, { repo: "billing", path: "README.md" });
+    writeFileSync(manifest, `${JSON.stringify(written, null, 2)}\n`);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(hosts["checkout-api"], ["show", "refunds:README.md"])).toBe("Refunds API.\n\n# checkout-api");
+    expect(git(hosts.billing, ["show", "refunds:README.md"])).toBe("# billing");
+    expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 1;");
+    expect(String(pushed.json?.notice)).toContain(
+      "README.md in billing is not in the commit: it already had a change of yours when refunds was taken, and " +
+        "refunds's own change could not be kept apart from it. Both are still in the file, uncommitted.",
+    );
+    // Nothing of theirs in the working tree changed; their note is theirs, uncommitted.
+    expect(readFileSync(join(alice, "checkout-api", "README.md"), "utf-8")).toBe("Refunds API.\n\n# checkout-api\n\nmy secret note\n");
+    expect(readFileSync(join(alice, "billing", "README.md"), "utf-8")).toBe("# billing service\n");
+    expect(git(join(alice, "checkout-api"), ["status", "--porcelain"])).toBe("M README.md");
+    expect(git(join(alice, "billing"), ["status", "--porcelain"])).toBe("M README.md");
+  });
+
   test("a push a repo's host refuses is said once, in its words, and nothing is retried", () => {
     const { hosts, alice, record } = refundsTaken();
     codeGenerated(alice, record);

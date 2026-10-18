@@ -266,7 +266,7 @@ export const HOME_RECORD = "fixture-8000000000000001";
 
 // The home of work across checkout-api and billing, refunds held for payments,
 // pushed; a payments member's clone with both repos and refunds taken.
-export function refundsTaken(assign: string[] = ["refunds=payments", "checkout-ui=web"]) {
+export function refundsTaken(assign: string[] = ["refunds=payments", "checkout-ui=web"], beforeTake?: (alice: string) => void) {
   const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
   const home = makeHome({ repos: hosts });
   const teams = run(STATE, ["set-unit-ownership", "team"], home.dir);
@@ -277,6 +277,7 @@ export function refundsTaken(assign: string[] = ["refunds=payments", "checkout-u
   git(home.dir, ["push", "-q", "origin", "main"]);
   const alice = cloneOf(home.remote, "alice");
   for (const [name, host] of Object.entries(hosts)) cloneCode(host, alice, name, "alice");
+  beforeTake?.(alice);
   const took = run(UNIT, ["take", "refunds", "--home", HOME_RECORD], alice);
   expect(took.status, took.out).toBe(0);
   const intents = join(alice, "aidlc", "spaces", "payments", "intents");
