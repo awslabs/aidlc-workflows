@@ -940,7 +940,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       return project;
     };
     const runKiroIde = (project: string) => spawnSync(
-      BUN, ["./hooks/aidlc-plugin-compose.ts", ".kiro", "kiro-ide"],
+      BUN, [`./.kiro/aidlc-plugins/aidlc-${PLUGIN}/hooks/aidlc-plugin-compose.ts`, ".kiro", "kiro-ide"],
       { cwd: project, encoding: "utf-8", env, timeout },
     );
     const cursorProject = join(tmp, "cursor-bun-record");
