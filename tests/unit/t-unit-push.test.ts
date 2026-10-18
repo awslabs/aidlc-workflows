@@ -62,7 +62,9 @@ describe("the push", () => {
     expect(git(hosts["checkout-api"], ["ls-tree", "-r", "--name-only", "refunds"]).split("\n")).toEqual(["README.md", "src/refunds.ts"]);
     expect(git(join(alice, "checkout-api"), ["status", "--porcelain"])).toBe("M README.md");
     expect(git(join(alice, "checkout-api"), ["show", "-s", "--format=%an", "refunds"])).toBe("alice");
-    const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as Record<string, any>;
+    const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as {
+      result: { by: string; repos: Array<{ repo: string; branch: string; paths: Record<string, string> }>; outputs: string[] };
+    };
     expect(claim.result.by).toBe("alice");
     expect(claim.result.repos.map((repo: { repo: string; branch: string }) => [repo.repo, repo.branch]))
       .toEqual([["checkout-api", "refunds"], ["billing", "refunds"]]);

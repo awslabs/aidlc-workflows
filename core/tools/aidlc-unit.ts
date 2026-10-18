@@ -5679,7 +5679,7 @@ export function checkTeamResults(projectDir: string, unreached?: string[]): Map<
     }
     const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
     const result = live?.payload.result;
-    if (!live || live.status !== "claimed" || !result) continue;
+    if (live?.status !== "claimed" || !result) continue;
     const verdicts = result.repos.map((repo) => {
       const dir = repo.repo === "." ? pd : repoDir(pd, repo.repo);
       if (!isGitRepoDir(dir)) {
@@ -5858,7 +5858,7 @@ function proposeChange(args: string[], projectDir?: string): void {
   const ref = claimRef(home.id8, build.unit);
   if (home.target !== null) ensureFetchedClaim(pd, home, ref);
   const live = currentClaim(pd, home.target, ref);
-  if (!live || live.status !== "claimed") fail(`${build.unit} is not held at the home, so there is no claim to send the change on.`);
+  if (live?.status !== "claimed") fail(`${build.unit} is not held at the home, so there is no claim to send the change on.`);
   const proposal: Proposal = {
     input: match.path,
     by: git(pd, ["config", "user.name"]).stdout.trim() || "a teammate",
@@ -5926,7 +5926,7 @@ function amendInput(args: string[], projectDir?: string): void {
     for (const [other, claim] of cachedClaims(pd)) {
       if (claim.status !== "claimed") continue;
       const current = currentClaim(pd, remote, claim.ref);
-      if (!current || current.status !== "claimed") continue;
+      if (current?.status !== "claimed") continue;
       const payload: UnitClaimPayload = {
         ...current.payload,
         predecessor_oid: current.oid,
@@ -5974,7 +5974,7 @@ function turnedDown(args: string[], projectDir?: string): void {
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
-  if (!live || live.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to turn down.`);
+  if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to turn down.`);
   const payload: UnitClaimPayload = {
     ...live.payload,
     predecessor_oid: live.oid,
@@ -6199,7 +6199,7 @@ function takeIn(args: string[], projectDir?: string): void {
   }
   const remote = repositoryRemote(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
-  if (!live || live.status !== "claimed") fail(`${unit} is not held for a team here, so this file has nothing to go into.`);
+  if (live?.status !== "claimed") fail(`${unit} is not held for a team here, so this file has nothing to go into.`);
   const lines: string[] = [];
   if ((Number(file.fields.Attempt) || 0) < live.generation) lines.push(`This file is from an earlier attempt of ${unit}; it is taken in as the team's latest word.`);
   if (file.edited) lines.push("This file was changed after the team wrote it: it is taken in as it is, and the result says so.");
@@ -6304,7 +6304,7 @@ function signOff(args: string[], projectDir?: string): void {
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
-  if (!live || live.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to sign off.`);
+  if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to sign off.`);
   if (!humanPresenceGuardDisabled()) {
     if (!words || isNonAnswer(words)) fail("The sign-off is the person's own words; ask them, then run this with them.");
     const authorship = selfAttributedDecisionMarker(words, "approval");
