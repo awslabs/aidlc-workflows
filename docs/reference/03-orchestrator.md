@@ -798,6 +798,14 @@ Unit merged that way with every stage done. While a team still holds a Unit and
 none is left to the home, the step is the board (`renderUnitBoard`). A
 `turned_down` note on the claim reaches the build once, on any step.
 
+When the person's words are the path of a file carrying the `aidlc-handoff`
+mark, `next` returns `ask_type: unit-handoff` (**Start <unit>** runs
+`unit take --file <path>`; **Not now** runs nothing). A build started from a
+file records `Home Result: by file`; its push writes a result file in place of
+the claim, and `unit take-in` at the home puts a result or progress file onto
+the claim (`result`, `progress`). A claim held by `unit hand-off` carries
+`by_file`, and the board says "handed off by file".
+
 When skeleton-on applies, the first DAG Unit must be planned as the smallest
 working integrated slice. It completes its applicable per-unit stages before
 later Units even under stage-major. The engine then emits a `run-stage` with

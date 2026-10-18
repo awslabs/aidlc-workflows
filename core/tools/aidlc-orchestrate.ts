@@ -296,6 +296,7 @@ import {
   harnessDirectiveLimit,
   installedKiroLayout,
   intentRepos,
+  repoDir,
   discoverSiblingRepos,
   teamSkeletonOn,
   codekbStoreIsCurrent,
@@ -665,6 +666,8 @@ import { noteReposManifestOffered, reposManifestOffered } from "./aidlc-workspac
 import {
   findUnitBuild,
   homeLocation,
+  parseHandFile,
+  unitLikelyReposFrom,
   workspaceHomeLocation,
   writesByRepo,
   mergedStatus,
@@ -8426,6 +8429,37 @@ function unitTakeAsk(projectDir: string): AskDirective | null {
   };
 }
 
+// The person's words are just the path of a hand-off file: the offer to start
+// the Unit in it. Null for any other words.
+function handOffAsk(projectDir: string, words: string): AskDirective | null {
+  // The whole of their words, as one path: it may hold spaces.
+  const path = words.replace(/^["']|["']$/g, "");
+  if (path === "") return null;
+  let file: ReturnType<typeof parseHandFile>;
+  try {
+    file = parseHandFile(readFileSync(resolve(projectDir, path), "utf-8"));
+  } catch {
+    return null;
+  }
+  if (file === null || file.kind !== "handoff") return null;
+  const unit = file.fields.Unit ?? "";
+  const likely = unitLikelyReposFrom(file.files.get("inception/units-generation/unit-of-work-dependency.md") ?? "").get(unit) ?? [];
+  const here = likely.filter((repo) => existsSync(join(repoDir(projectDir, repo.split("/")[0]), ".git")));
+  const repos = likely.length === 0 ? "" : ` It likely changes ${likely.join(", ")}` +
+    (here.length === likely.length ? ", already here." : `; ${likely.filter((repo) => !here.includes(repo)).join(", ")} not here yet.`);
+  return {
+    kind: "ask",
+    ask_type: "unit-handoff",
+    response_route: "command",
+    question: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is yours, handed off from ${file.fields["Home Label"] ?? "its home"} by its ` +
+      `lead on ${(file.fields["Handed Off"] ?? "").slice(0, 10)}.${repos}`,
+    choices: [
+      { label: `Start ${unit}`, detail: "As a piece of work of its own here, from what the home approved.", command: `${aidlcToolInvocation("unit")} take --file ${shellArg(path)}` },
+      { label: "Not now", detail: "Nothing is started." },
+    ],
+  };
+}
+
 // The end of a Unit's build: the offer to push it home, until the person asked
 // for the push or said not now (then the end says it once). Null for other work.
 function unitPushAsk(projectDir: string, stateContent: string | null): AskDirective | null {
@@ -12262,6 +12296,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       emit(errorDirective(stale));
       return;
     }
+  }
+  // A hand-off file the person pointed at, by its path alone: the Unit in it to
+  // start as their own piece of work.
+  const handOff = handOffAsk(pd, flags.intent?.trim() ?? "");
+  if (handOff) {
+    emit(handOff);
+    return;
   }
   // What the home said about a Unit's build reaches its team once, on any step.
   const homeNote = stateContent ? buildClaimNote(pd, stateContent) : null;
@@ -16443,6 +16484,9 @@ function emitTeamUnitMajorRunStage(
         const verdicts = results.get(unit)?.verdicts ?? payload.verdicts ??
           payload.result.repos.map((repo) => ({ repo: repo.repo, merged: false }));
         return { unit, team, status: mergedStatus(verdicts) };
+      }
+      if (payload.by_file) {
+        return { unit, team, status: payload.progress?.stage ? `handed off by file, at ${payload.progress.stage}` : "handed off by file" };
       }
       return { unit, team, status: payload.taken_by ? `building, taken by ${payload.taken_by}` : `held for ${team}, not taken yet` };
     });

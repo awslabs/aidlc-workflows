@@ -126,12 +126,17 @@ import {
 import {
   blobsAt,
   findUnitBuild,
+  HANDOFF_DIR,
+  type HandFile,
   HOME_LOCATION_FIELD,
   homeLocation,
+  parseHandFile,
   patchIdOf,
+  renderHandFile,
   RESULT_FILES_ROOT,
   type RepoResult,
   sameGitAddress,
+  textFingerprint,
   UNIT_BUILD_FIELD,
   UNIT_PUSH_FIELD,
   type UnitBuild,
@@ -249,6 +254,9 @@ export interface UnitClaimPayload {
   verdicts?: Array<{ repo: string; merged: boolean; commit?: string; how?: string }>;
   done?: true;
   turned_down?: { repo: string; words: string; at: string };
+  // Handed off by file; the team's progress file, when it sent one.
+  by_file?: true;
+  progress?: { stage: string; at: string };
 }
 
 export interface UnitClaimView {
@@ -5036,10 +5044,6 @@ function homeApprovals(projectDir: string, home: HomeWork, oid: string, slugs: S
   return [...approvals].sort(([a], [b]) => a.localeCompare(b)).map(([stage, when]) => `${stage} approved at the home ${when}`.trim());
 }
 
-function sha256(text: string): string {
-  return `sha256:${createHash("sha256").update(committedTextBytes(Buffer.from(text, "utf-8"))).digest("hex")}`;
-}
-
 // Another AI-DLC tool, run as this install runs its tools.
 function runEngineUtility(projectDir: string, args: string[]): GitResult {
   const command = isCompiledExecutable()
@@ -5054,14 +5058,25 @@ function runEngineUtility(projectDir: string, args: string[]): GitResult {
 
 // The Unit's build: a piece of work of its own in the team's space, running the
 // home's planned per-Unit stages from a copy of what the Unit was approved with.
+// What a build needs to know of its home, whether it read the home by git or
+// from a hand-off file.
+type HomeRef = Pick<HomeWork, "location" | "uuid" | "space" | "dirName" | "label">;
+
+// Where a build's copy comes from: the home's commit, or a hand-off file.
+interface BuildSource {
+  read: (rel: string) => string | null;
+  approvals: (produced: Set<string>) => string[];
+}
+
 function createUnitBuild(
   projectDir: string,
-  home: HomeWork,
+  home: HomeRef,
   plan: { state: string },
   baseOid: string,
   unit: string,
   team: string,
   attempt: number,
+  source: BuildSource,
 ): { space: string; dirName: string } {
   const space = slugify(team);
   if (!listSpacesHere(projectDir).includes(space)) {
@@ -5095,15 +5110,15 @@ function createUnitBuild(
   // The copy, at the paths the Unit's stages read it.
   const inputs: Array<{ path: string; fingerprint: string }> = [];
   for (const rel of homeInputPaths(stages)) {
-    const shown = git(projectDir, ["show", `${baseOid}:${home.recordPrefix}/${rel}`, "--"]);
-    if (!shown.ok) continue;
+    const text = source.read(rel);
+    if (text === null) continue;
     mkdirSync(dirname(join(record, ...rel.split("/"))), { recursive: true });
-    writeFileSync(join(record, ...rel.split("/")), shown.stdout, "utf-8");
-    inputs.push({ path: rel, fingerprint: sha256(shown.stdout) });
+    writeFileSync(join(record, ...rel.split("/")), text, "utf-8");
+    inputs.push({ path: rel, fingerprint: textFingerprint(text) });
   }
   const produced = new Set(inputs.map((input) => input.path.split("/")[1]));
-  const approvals = homeApprovals(projectDir, home, baseOid, produced);
-  const fingerprint = sha256(inputs.map((input) => `${input.path} ${input.fingerprint}`).join("\n"));
+  const approvals = source.approvals(produced);
+  const fingerprint = textFingerprint(inputs.map((input) => `${input.path} ${input.fingerprint}`).join("\n"));
   writeFileSync(join(record, APPROVED_INPUTS_FILE), approvedInputsText(unit, home, baseOid, inputs, approvals), "utf-8");
   // Done at the home: the stages before Construction show as done, and are not
   // this build's plan.
@@ -5124,6 +5139,7 @@ function createUnitBuild(
       [HOME_LOCATION_FIELD, home.location],
       ["Home Work", home.uuid],
       ["Home Record", `${home.space}/${home.dirName}`],
+      ["Home Label", home.label],
       ["Home Attempt", String(attempt)],
     ] as const) {
       content = setRuntimeField(content, field, value);
@@ -5148,7 +5164,7 @@ export const APPROVED_INPUTS_FILE = "approved-inputs.md";
 
 function approvedInputsText(
   unit: string,
-  home: HomeWork,
+  home: HomeRef,
   baseOid: string,
   inputs: Array<{ path: string; fingerprint: string }>,
   approvals: string[],
@@ -5193,6 +5209,10 @@ function listSpacesHere(projectDir: string): string[] {
 // another is not taken yet.
 function takeUnit(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
+  if (flags.file !== undefined) {
+    takeFromFile(resolveProjectDir(projectDir), flags.file);
+    return;
+  }
   const unit = positional[0];
   if (!unit) fail("Usage: aidlc-unit take <unit> --home <record> [--home-space <space>] [--team <label>]");
   const unitError = validateUnitName(unit);
@@ -5290,7 +5310,13 @@ function takeUnit(args: string[], projectDir?: string): void {
     resultByFile = true;
   }
   invalidateLiveClaimPayloadCache(pd, unit);
-  const build = createUnitBuild(pd, home, plan, integration.oid, unit, team, generation);
+  const build = createUnitBuild(pd, home, plan, integration.oid, unit, team, generation, {
+    read: (rel) => {
+      const shown = git(pd, ["show", `${integration.oid}:${home.recordPrefix}/${rel}`, "--"]);
+      return shown.ok ? shown.stdout : null;
+    },
+    approvals: (produced) => homeApprovals(pd, home, integration.oid, produced),
+  });
   setActiveSpaceCursor(pd, build.space);
   // The likely repos this workspace has no checkout of, said with the way to one.
   const likely = unitLikelyRepos(pd, home.dirName, home.space).get(unit) ?? [];
@@ -5363,10 +5389,13 @@ function pushUnit(args: string[], projectDir?: string): void {
   const manifest = readUnitSourceManifest(pd, "code-generation", unit);
   if (!manifest.ok) fail(`${unit} has no record of what its Code Generation wrote yet (${manifest.reason}).`);
   const byRepo = writesByRepo(pd, manifest.manifest.writes);
-  const home = buildsHome(pd, build);
-  const ref = claimRef(home.id8, unit);
-  if (home.target !== null) ensureFetchedClaim(pd, home, ref);
-  const claim = currentClaim(pd, home.target, ref);
+  // A build by file has no home to reach; its result goes back as a file.
+  const byFile = getField(state, "Home Result")?.trim() === "by file";
+  const home = byFile ? null : buildsHome(pd, build);
+  const ref = home === null ? null : claimRef(home.id8, unit);
+  if (home !== null && ref !== null && home.target !== null) ensureFetchedClaim(pd, home, ref);
+  const claim = home === null || ref === null ? null : currentClaim(pd, home.target, ref);
+  const label = getField(state, "Home Label")?.trim() || build.homeRecord;
   const earlier = new Map((claim?.payload.result?.repos ?? []).map((repo) => [repo.repo, repo]));
   const results: RepoResult[] = [];
   const switched: string[] = [];
@@ -5383,7 +5412,7 @@ function pushUnit(args: string[], projectDir?: string): void {
     const added = git(dir, ["add", "--", ...paths]);
     if (!added.ok) fail(`${unit}'s changes could not be added in ${name}: ${added.stderr.trim()}`);
     if (!git(dir, ["diff", "--cached", "--quiet", "--", ...paths]).ok) {
-      const committed = git(dir, ["commit", "-q", "-m", `${unit}: ${home.label}`, "--", ...paths]);
+      const committed = git(dir, ["commit", "-q", "-m", `${unit}: ${label}`, "--", ...paths]);
       if (!committed.ok) fail(`The commit in ${name} did not go through: ${(committed.stderr || committed.stdout).trim()}`);
     }
     const remote = git(dir, ["config", "--get", `branch.${unit}.remote`]).stdout.trim() || repositoryRemote(dir);
@@ -5396,7 +5425,7 @@ function pushUnit(args: string[], projectDir?: string): void {
     const changed = git(dir, ["diff", "--name-only", "--no-renames", base, head, "--", ...paths]).stdout.split(/\r?\n/).filter(Boolean);
     const blobs = blobsAt(dir, head, changed);
     const url = git(dir, ["remote", "get-url", remote]).stdout.trim();
-    results.push({
+    const entry: RepoResult = {
       repo,
       ...(url ? { url } : {}),
       branch: unit,
@@ -5407,7 +5436,15 @@ function pushUnit(args: string[], projectDir?: string): void {
         const id = patchIdOf(dir, base, head, changed);
         return id ? { patch_id: id } : {};
       })(),
-    });
+    };
+    // For a home that cannot fetch this repo, the team's own check goes with
+    // the result file, recorded at the home as the team's word.
+    if (byFile) {
+      git(dir, ["fetch", "-q", remote]);
+      const verdict = unitMergeVerdict(dir, repoIntegration(dir, remote), entry);
+      entry.reported = verdict.merged ? { merged: true, commit: verdict.commit } : { merged: false };
+    }
+    results.push(entry);
   }
   const names = results.map((repo) => (repo.repo === "." ? "the repo" : repo.repo));
   const lines = [`Pushed branch ${unit} in ${joinNames(names)}. Open a PR in ${names.length === 1 ? "it" : "each"} your usual way.`];
@@ -5417,8 +5454,24 @@ function pushUnit(args: string[], projectDir?: string): void {
   const outputs = unitOutputsHomeReads(unit, getField(state, "Scope") ?? "")
     .filter((rel) => existsSync(join(activeRecordDir(pd), ...rel.split("/"))));
   const result: UnitResult = { by: git(pd, ["config", "user.name"]).stdout.trim() || "a teammate", repos: results, outputs };
-  if (getField(state, "Home Result")?.trim() === "by file" || claim === null) {
-    lines.push(`The home takes no push from here, so ${unit}'s result goes back as a file.`);
+  if (claim === null || ref === null || home === null) {
+    const rel = handFilePath(label, unit, "-result");
+    writeHandFile(pd, rel, renderHandFile(
+      "result",
+      `Result: ${unit} of ${label}`,
+      "Take it in at the home with `/aidlc unit take-in <this file>`.",
+      {
+        "Home Work": build.homeWork,
+        Unit: unit,
+        Attempt: String(build.attempt),
+        Team: activeSpace(pd),
+        "Built By": result.by,
+        Written: isoTimestamp(),
+      },
+      new Map(outputs.map((rel) => [rel, readFileSync(join(activeRecordDir(pd), ...rel.split("/")), "utf-8")])),
+      result,
+    ));
+    lines.push(`The result file is ${rel}; send it to the lead.`);
   } else {
     const files = Object.fromEntries(outputs.map((rel) => [
       `${RESULT_FILES_ROOT}/${rel}`,
@@ -5476,7 +5529,12 @@ export function checkTeamResults(projectDir: string): Map<string, { team: string
     if (!live || live.status !== "claimed" || !result) continue;
     const verdicts = result.repos.map((repo) => {
       const dir = repo.repo === "." ? pd : repoDir(pd, repo.repo);
-      if (!isGitRepoDir(dir)) return { repo: repo.repo, merged: false };
+      if (!isGitRepoDir(dir)) {
+        // The team's own word, kept as theirs until the home can check the repo.
+        return repo.reported?.merged
+          ? { repo: repo.repo, merged: true, commit: repo.reported.commit, how: `reported by ${live.owner}` }
+          : { repo: repo.repo, merged: false };
+      }
       const repoRemote = repositoryRemote(dir);
       if (repoRemote !== null) git(dir, ["fetch", "-q", repoRemote]);
       const verdict = unitMergeVerdict(dir, repoRemote === null ? "HEAD" : repoIntegration(dir, repoRemote), repo);
@@ -5563,6 +5621,231 @@ function turnedDown(args: string[], projectDir?: string): void {
   console.log(JSON.stringify({ unit, notice: `The ${live.owner} team hears that ${flags.repo} was turned down, with your words, at its next step.` }));
 }
 
+// --- Hand-off by file ------------------------------------------------------------
+//
+// For a team that cannot reach the home's repository: the lead holds the Unit
+// for the team and writes one readable file with what it was approved with; the
+// team starts its build from it and sends progress and its result back as
+// files the lead takes in.
+
+function handFilePath(label: string, unit: string, suffix = ""): string {
+  return `${HANDOFF_DIR}/${slugify(label) || "work"}-${unit}${suffix}.md`;
+}
+
+function writeHandFile(projectDir: string, rel: string, text: string): void {
+  mkdirSync(dirname(join(projectDir, ...rel.split("/"))), { recursive: true });
+  writeFileSync(join(projectDir, ...rel.split("/")), text, "utf-8");
+}
+
+function readHandFile(projectDir: string, path: string): HandFile | null {
+  try {
+    return parseHandFile(readFileSync(resolve(projectDir, path), "utf-8"));
+  } catch {
+    fail(`${path} could not be read.`);
+  }
+}
+
+function handOff(args: string[], projectDir?: string): void {
+  const { positional, flags } = parseArgs(args);
+  const unit = positional[0];
+  const team = flags.team?.trim();
+  if (!unit || !team) fail("Usage: aidlc-unit hand-off <unit> --team <team> [--person-words '<their words>']");
+  if (/[\r\n|]/.test(team)) fail("Team labels cannot contain pipes or newlines.");
+  const pd = resolveProjectDir(projectDir);
+  const state = readStateFile(pd);
+  const location = homeLocation(state);
+  if (!isTeamUnitOwnership(state) || location === null) fail("Units are handed off once teams are chosen for this work.");
+  const local = localOpeningStatus(pd);
+  if (!local.units.includes(unit)) fail(`${unit} is not one of this work's Units (${local.units.join(", ")}).`);
+  const identity = activeIdentity(pd);
+  const integration = fetchIntegration(pd);
+  const ref = claimRef(identity.intentId8, unit);
+  const current = currentClaim(pd, integration.remote, ref);
+  if (current?.status === "claimed" && current.owner !== team) fail(`${unit} is held by ${current.owner}, so it stays with them.`);
+  if (current?.payload.taken_by !== undefined) fail(`${unit} is already taken by ${current.payload.taken_by} of ${current.owner}.`);
+  const payload: UnitClaimPayload = current?.status === "claimed"
+    ? { ...current.payload, predecessor_oid: current.oid, by_file: true }
+    : {
+      version: 1,
+      status: "claimed",
+      owner: team,
+      space: identity.space,
+      intent_uuid: identity.intentUuid,
+      intent_id8: identity.intentId8,
+      unit,
+      generation: current?.status === "released" ? current.generation : (current?.generation ?? 0) + 1,
+      nonce: randomUUID(),
+      base_oid: integration.oid,
+      integration_ref: integration.ref,
+      claim_ref: ref,
+      predecessor_oid: current?.oid ?? null,
+      gate_rhythm: readUnitGateRhythm(state),
+      assigned: true,
+      by_file: true,
+    };
+  const held = updateClaimRef(pd, integration.remote, ref, createClaimCommit(pd, current?.oid ?? integration.oid, payload), current?.oid ?? null);
+  if (!held.ok) fail(`${unit} could not be held for ${team}: ${held.refused ?? "its claim moved meanwhile"}. Try again.`);
+  invalidateLiveClaimPayloadCache(pd, unit);
+  const record = activeRecordDir(pd);
+  const files = new Map<string, string>([["aidlc-state.md", state]]);
+  for (const rel of homeInputPaths(unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true))) {
+    if (existsSync(join(record, ...rel.split("/")))) files.set(rel, readFileSync(join(record, ...rel.split("/")), "utf-8"));
+  }
+  const produced = new Set([...files.keys()].map((rel) => rel.split("/")[1]));
+  const approvals = readAuditShardEvents(pd).filter((row) => row.event === "GATE_APPROVED" && produced.has(auditBlockField(row.block, "Stage") ?? ""))
+    .map((row) => `${auditBlockField(row.block, "Stage")} approved at the home ${auditBlockField(row.block, "Timestamp") ?? ""}`.trim());
+  const row = readIntentRegistry(pd, identity.space).find((entry) => entry.uuid === identity.intentUuid);
+  const label = row?.slug ?? unit;
+  const rel = handFilePath(label, unit);
+  writeHandFile(pd, rel, renderHandFile(
+    "handoff",
+    `Hand-off: ${unit} of ${label}`,
+    `This file hands ${unit} to the ${team} team. Take it in with \`/aidlc unit take --file <this file>\` in your own ` +
+      "workspace; AI-DLC starts it as a piece of work of its own. It is not signed: it is bound by the work's id, the " +
+      "Unit, the attempt and the fingerprints below.",
+    {
+      "Home Work": identity.intentUuid,
+      "Home Location": location,
+      "Home Record": `${identity.space}/${row?.dirName ?? ""}`,
+      "Home Label": label,
+      Unit: unit,
+      Team: team,
+      Attempt: String(payload.generation),
+      "Home Commit": integration.oid,
+      "Handed Off": isoTimestamp(),
+      "Home Approvals": approvals.join("; ") || "none recorded",
+      Repos: (row?.repos ?? []).join(", "),
+    },
+    files,
+  ));
+  const words = flags["person-words"]?.trim() ?? "";
+  appendAuditEntry("UNITS_ASSIGNED", {
+    Assigned: `${unit}=${team}`,
+    "By File": rel,
+    ...(words ? { "Person Words": words } : {}),
+  }, pd);
+  console.log(JSON.stringify({
+    unit,
+    team,
+    file: rel,
+    notice: `The hand-off file for ${unit} is ${rel}: send it to the ${team} team. They take it in with ` +
+      `/aidlc unit take --file <the file> in their own workspace, and send its result back to you as a file.`,
+  }));
+}
+
+function takeFromFile(pd: string, path: string): void {
+  const file = readHandFile(pd, path);
+  if (file === null || file.kind !== "handoff") fail(`${path} is not a hand-off file.`);
+  const fields = file.fields;
+  const unit = fields.Unit ?? "";
+  const unitError = validateUnitName(unit);
+  if (unitError) fail(`${path}: ${unitError}`);
+  const at = (fields["Home Record"] ?? "").indexOf("/");
+  const home: HomeRef = {
+    location: fields["Home Location"] ?? "",
+    uuid: fields["Home Work"] ?? "",
+    space: fields["Home Record"]?.slice(0, at) ?? DEFAULT_SPACE,
+    dirName: fields["Home Record"]?.slice(at + 1) ?? "",
+    label: fields["Home Label"] ?? unit,
+  };
+  const existing = findUnitBuild(pd, home.uuid, unit);
+  if (existing !== null) {
+    setActiveSpaceCursor(pd, existing.space);
+    selectIntentForSession(pd, existing.dirName, existing.space);
+    console.log(JSON.stringify({ taken: true, resumed: true, unit, space: existing.space, record: existing.dirName,
+      notice: `Carrying on ${unit}, the ${existing.space} team's build here.` }));
+    return;
+  }
+  const state = file.files.get("aidlc-state.md");
+  if (state === undefined) fail(`${path} holds no plan for ${unit}.`);
+  const team = fields.Team || "a team";
+  const approvals = (fields["Home Approvals"] ?? "").split("; ").filter((line) => line && line !== "none recorded");
+  const build = createUnitBuild(pd, home, { state }, fields["Home Commit"] ?? "", unit, team, Number(fields.Attempt) || 1, {
+    read: (rel) => file.files.get(rel) ?? null,
+    approvals: () => approvals,
+  });
+  withAuditLock(pd, () => {
+    writeStateFile(pd, setRuntimeField(readStateFile(pd, build.dirName, build.space), "Home Result", "by file"), build.dirName, build.space);
+  });
+  setActiveSpaceCursor(pd, build.space);
+  const repos = (fields.Repos ?? "").split(",").map((repo) => repo.trim()).filter(Boolean);
+  const likely = unitLikelyRepos(pd, build.dirName, build.space).get(unit) ?? [];
+  const missing = [...new Set(likely.map((repo) => repo.split("/")[0]))]
+    .filter((repo) => repos.includes(repo) && !isGitRepoDir(repoDir(pd, repo)));
+  console.log(JSON.stringify({
+    taken: true,
+    unit,
+    team,
+    space: build.space,
+    record: build.dirName,
+    notice: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is yours, handed off from ${home.label} by its lead on ` +
+      `${(fields["Handed Off"] ?? "").slice(0, 10)}. Its build is its own piece of work here, under your team's rules, ` +
+      "from what the home approved; its result goes back as a file when it is built." +
+      (file.edited ? " This file was changed after the lead wrote it: it is taken in as it is." : "") +
+      missing.map((repo) => ` ${repoNotThereLine(pd, repo)}`).join(""),
+  }));
+}
+
+// A build by file sends its progress whenever the person likes; nobody has to.
+function progressFile(projectDir?: string): void {
+  const pd = resolveProjectDir(projectDir);
+  const state = readStateFile(pd);
+  const build = unitBuildOf(state);
+  if (build === null) fail("A progress file is for a Unit's build; this work is not one.");
+  if (getField(state, "Home Result")?.trim() !== "by file") {
+    console.log(JSON.stringify({ notice: `${build.unit}'s progress reaches the home with your pushes; no file is needed.` }));
+    return;
+  }
+  const rel = handFilePath(getField(state, "Home Label") ?? build.unit, build.unit, "-progress");
+  const stage = getField(state, "Current Stage")?.trim() ?? "";
+  writeHandFile(pd, rel, renderHandFile(
+    "progress",
+    `Progress: ${build.unit}`,
+    "Take it in at the home with `/aidlc unit take-in <this file>`.",
+    { "Home Work": build.homeWork, Unit: build.unit, Attempt: String(build.attempt), Stage: stage, Written: isoTimestamp() },
+    new Map(),
+  ));
+  console.log(JSON.stringify({ file: rel, notice: `The progress file is ${rel}; send it to the lead if you like.` }));
+}
+
+// At the home: a team's result or progress file, onto the Unit's claim.
+function takeIn(args: string[], projectDir?: string): void {
+  const { positional } = parseArgs(args);
+  const path = positional[0];
+  if (!path) fail("Usage: aidlc-unit take-in <file>");
+  const pd = resolveProjectDir(projectDir);
+  const file = readHandFile(pd, path);
+  if (file === null || file.kind === "handoff") fail(`${path} is not a result or progress file.`);
+  const identity = activeIdentity(pd);
+  const unit = file.fields.Unit ?? "";
+  if (file.fields["Home Work"] !== identity.intentUuid) {
+    console.log(JSON.stringify({ taken_in: false, notice: `${path} is for other work (${file.fields["Home Work"]}), not this one, so nothing changed.` }));
+    return;
+  }
+  const remote = repositoryRemote(pd);
+  const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
+  if (!live || live.status !== "claimed") fail(`${unit} is not held for a team here, so this file has nothing to go into.`);
+  const lines: string[] = [];
+  if ((Number(file.fields.Attempt) || 0) < live.generation) lines.push(`This file is from an earlier attempt of ${unit}; it is taken in as the team's latest word.`);
+  if (file.edited) lines.push("This file was changed after the team wrote it: it is taken in as it is, and the result says so.");
+  const payload: UnitClaimPayload = { ...live.payload, predecessor_oid: live.oid };
+  const files: Record<string, string> = {};
+  if (file.kind === "progress") {
+    payload.progress = { stage: file.fields.Stage ?? "", at: file.fields.Written ?? "" };
+    lines.unshift(`Took in ${unit}'s progress from ${live.owner}: ${file.fields.Stage || "under way"}.`);
+  } else {
+    if (!file.result) fail(`${path} holds no result.`);
+    payload.result = { ...file.result, ...(file.edited ? { edited: true as const } : {}) };
+    payload.verdicts = undefined;
+    for (const [rel, text] of file.files) files[`${RESULT_FILES_ROOT}/${rel}`] = text;
+    lines.unshift(`Took in ${unit}'s result from ${live.owner}.`);
+  }
+  const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload, undefined, undefined, files), live.oid);
+  if (!sent.ok) fail(`${unit}'s claim moved while the file was taken in: ${sent.refused ?? "try again"}.`);
+  invalidateLiveClaimPayloadCache(pd, unit);
+  console.log(JSON.stringify({ taken_in: true, unit, kind: file.kind, notice: lines.join(" ") }));
+}
+
 function participate(projectDir?: string): void {
   const pd = resolveProjectDir(projectDir);
   writeFileSync(unitParticipantPath(pd), "participant\n", "utf-8");
@@ -5583,6 +5866,9 @@ export function main(argv: string[]): void {
     if (command === "assign") assignUnits(args, projectDir);
     else if (command === "take") takeUnit(args, projectDir);
     else if (command === "push") pushUnit(args, projectDir);
+    else if (command === "hand-off") handOff(args, projectDir);
+    else if (command === "progress") progressFile(projectDir);
+    else if (command === "take-in") takeIn(args, projectDir);
     else if (command === "turned-down") turnedDown(args, projectDir);
     else if (command === "adopt") adoptUnit(args, projectDir);
     else if (command === "claim") claimUnit(args, projectDir);
@@ -5606,7 +5892,7 @@ export function main(argv: string[]): void {
       console.log(JSON.stringify(unitClaimOverview(resolveProjectDir(projectDir)), null, 2));
     } else {
       fail(
-        "Usage: aidlc-unit <assign|take|push|turned-down|adopt|claim|release|participate|share|publish|pin|gate|land|merge-status|status> ...",
+        "Usage: aidlc-unit <assign|take|push|hand-off|progress|take-in|turned-down|adopt|claim|release|participate|share|publish|pin|gate|land|merge-status|status> ...",
       );
     }
   } catch (error) {

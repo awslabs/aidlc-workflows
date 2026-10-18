@@ -47,6 +47,8 @@ For full documentation, see `docs/guide/` (User Guide), `docs/harness-engineerin
 
 On startup, resolve the active intent (the `aidlc/spaces/<active-space>/intents/active-intent` cursor) and check for its `<record>/aidlc-state.md`. If found, load prior context and wait for the person: when they invoke AI-DLC, the work carries on from the last checkpoint with no resume menu, and they can ask to redo, jump to a stage, or start fresh. (A brand-new project has no work recorded yet; the first AI-DLC run creates that record for you.)
 
+A hand-off file a lead sent for one Unit (its text carries an `aidlc-handoff` mark) is started through AI-DLC however the person points at it, with or without invoking AI-DLC: invoke AI-DLC with the file's exact path as their words, and it offers to start that Unit as a piece of work of its own.
+
 ## Git Integration
 
 Commit the `aidlc/` workspace tree — the record (state, the per-clone audit shards under `<record>/audit/`, `intents.json`), memory, codekb, and knowledge are all version-controlled. The shipped `.gitignore` excludes the per-user cursors and machine-local runtime (these may be per-clone or contain sensitive data):

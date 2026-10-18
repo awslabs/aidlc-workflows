@@ -297,6 +297,38 @@ AI-DLC runs `aidlc unit turned-down <unit> --repo <repo>` with their words; the
 team hears them once at its next step, with the way back to Code Generation.
 What already merged stays merged.
 
+## A team that cannot reach the home
+
+A partner team in another company, or behind a locked network, works from
+files instead of git. The lead says to hand the Unit off ("hand off reporting
+to the data team"); AI-DLC runs `aidlc unit hand-off reporting --team data`,
+holds the Unit for that team, and writes one readable Markdown file,
+`aidlc/handoff/<work>-<unit>.md`: the work's id, the Unit, the attempt, the
+fingerprints of what it holds at the top, then each document the Unit was
+approved with in its own block. It is not signed; send it the way your teams
+send files, and anyone can read it before taking it in. The board says
+"handed off by file".
+
+The partner takes it in from their own workspace (AI-DLC installed there
+first), however they point at it: "take the Unit in this file", `/aidlc
+<path>`, or `aidlc unit take --file <path>`. AI-DLC offers to start it, then
+creates the Unit's build exactly as for a Unit taken by git, under the
+partner's own rules; Ideation and Inception do not run again. A file changed
+after the lead wrote it is taken in as it is, and the line says so.
+
+While they build, the partner may send a progress file whenever they like
+(`aidlc unit progress`); nobody has to. When they push, the result goes into a
+result file instead of the claim: "The result file is
+aidlc/handoff/<work>-<unit>-result.md; send it to the lead." For each repo the
+lead cannot fetch, the file carries the partner's own check of whether it
+merged; push again after merging to send an updated one. The lead takes either
+file in with `aidlc unit take-in <file>`: a result is checked like a pushed
+one, a repo the home cannot fetch counts as merged on the partner's word,
+recorded as theirs, until the home can check it itself. A file from an earlier
+attempt is taken in with a line saying so; a file for other work changes
+nothing, and the line says which work it is for. Files are written with LF and
+read with CRLF too.
+
 ---
 
 ## Claim, build, and publish

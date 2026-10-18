@@ -50,6 +50,9 @@ diagnostic and lifecycle routes.
 | `/aidlc unit assign <unit>=<team> ... \| --open` | At the home, hold each named Unit for a team, or leave every Unit open |
 | `/aidlc unit take <unit> --home <record>` | Take a Unit of a home's work as your team's own piece of work, or carry its build on |
 | `/aidlc unit push [--later]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result home |
+| `/aidlc unit hand-off <unit> --team <team>` | At the home, hold a Unit for a team that cannot reach it and write its hand-off file |
+| `/aidlc unit progress` | In a Unit's build by file, write a progress file for the lead |
+| `/aidlc unit take-in <file>` | At the home, take a team's result or progress file in |
 | `/aidlc unit turned-down <unit> --repo <repo>` | At the home, send one repo of a team's Unit back to the team, with your words |
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
@@ -725,6 +728,28 @@ repo's branch, base, every head pushed, each changed file's blob and patch-id,
 and the Unit outputs the home's later stages read) goes onto the Unit's claim
 at the home, and `UNIT_PUSHED` is recorded. `--later` pushes nothing and only
 records that you said not now.
+
+### `/aidlc unit hand-off <unit> --team <team>` - Hand a Unit off by file
+
+At the home, for a team that cannot reach the home's repository. The agent
+runs it from your words with `--person-words '<your words>'`. The Unit is held
+for that team, and `aidlc/handoff/<work>-<unit>.md` is written: one readable
+Markdown file with the work's id, the Unit, the attempt and fingerprints at the
+top, and each document the Unit was approved with in its own block. Send it to
+the team; they run `/aidlc unit take --file <path>` (or `/aidlc <path>`) in
+their own workspace, which starts the Unit's build from it. A Unit another
+team holds or took is not handed off.
+
+### `/aidlc unit progress` and `/aidlc unit take-in <file>` - Files back to the home
+
+In a Unit's build by file, `progress` writes
+`aidlc/handoff/<work>-<unit>-progress.md` with the stage it is at, and `push`
+writes `aidlc/handoff/<work>-<unit>-result.md` with the result, the Unit
+outputs the home's later stages read, and the team's own check of each repo.
+At the home, `take-in <file>` puts either onto the Unit's claim; the next step
+checks a result like a pushed one. A file for other work changes nothing, an
+older one is taken in with a line, and a changed one is taken in as it is and
+marked so.
 
 ### `/aidlc unit turned-down <unit> --repo <repo>` - Send a repo back
 

@@ -219,7 +219,11 @@ export interface RunResult {
 }
 
 export function run(tool: string, args: string[], cwd: string, env: NodeJS.ProcessEnv = ENV): RunResult {
-  const result = spawnSync(process.execPath, [tool, ...args, "--project-dir", cwd], { cwd, encoding: "utf-8", env });
+  // `next` reads every token after its flags as the person's words.
+  const argv = args[0] === "next" && args.length > 1
+    ? [args[0], "--project-dir", cwd, ...args.slice(1)]
+    : [...args, "--project-dir", cwd];
+  const result = spawnSync(process.execPath, [tool, ...argv], { cwd, encoding: "utf-8", env });
   // The last JSON line the tool printed: its result, or its refusal.
   let json: Record<string, unknown> | null = null;
   for (const stream of [result.stdout, result.stderr]) {
@@ -234,8 +238,8 @@ export function run(tool: string, args: string[], cwd: string, env: NodeJS.Proce
 }
 
 /** `next`, with rules delivered in parts taken as the agent takes them. */
-export function next(cwd: string, env: NodeJS.ProcessEnv = ENV): Record<string, unknown> {
-  let result = run(ORCH, ["next"], cwd, env);
+export function next(cwd: string, env: NodeJS.ProcessEnv = ENV, args: string[] = []): Record<string, unknown> {
+  let result = run(ORCH, ["next", ...args], cwd, env);
   for (let parts = 0; parts < 50; parts++) {
     expect(result.status, result.out).toBe(0);
     const directive = JSON.parse(result.stdout) as Record<string, unknown>;

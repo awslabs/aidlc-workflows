@@ -4,6 +4,7 @@
 // aidlc-lib.ts, which requires it lazily where its own functions need it.
 
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { artifactFilename } from "./aidlc-artifact-vocabulary.ts";
@@ -11,6 +12,7 @@ import {
   type AuditShardEvent,
   auditBlockField,
   type BoltDagResolution,
+  committedTextBytes,
   getField,
   type IntentRegistryEntry,
   intentRepos,
@@ -51,15 +53,21 @@ export function workspaceHomeLocation(projectDir: string): string | null {
 // read from the authored units block. Empty when the block names none or
 // cannot be read.
 export function unitLikelyRepos(projectDir: string, intent?: string, space?: string): Map<string, string[]> {
-  const likely = new Map<string, string[]>();
   try {
-    const parsed = parseBoltDag(readFileSync(unitDependencyPath(projectDir, intent, space), "utf-8"));
-    if (!parsed.ok) return likely;
-    for (const unit of parsed.units) {
-      if (unit.repos !== undefined && unit.repos.length > 0) likely.set(unit.name, unit.repos);
-    }
+    return unitLikelyReposFrom(readFileSync(unitDependencyPath(projectDir, intent, space), "utf-8"));
   } catch {
     // No units block yet.
+    return new Map();
+  }
+}
+
+// The same, from a Unit plan's own text.
+export function unitLikelyReposFrom(dependencyBody: string): Map<string, string[]> {
+  const likely = new Map<string, string[]>();
+  const parsed = parseBoltDag(dependencyBody);
+  if (!parsed.ok) return likely;
+  for (const unit of parsed.units) {
+    if (unit.repos !== undefined && unit.repos.length > 0) likely.set(unit.name, unit.repos);
   }
   return likely;
 }
@@ -92,16 +100,20 @@ export function unitsAssignedSinceTeams(rows: readonly AuditShardEvent[]): boole
   return ordered.slice(teamsAt + 1).some((row) => row.event === "UNITS_ASSIGNED");
 }
 
-// Which team the lead named for each Unit at the home, as its latest
-// UNITS_ASSIGNED row since teams were chosen records it.
+// Which team the lead named for each Unit at the home, as the UNITS_ASSIGNED
+// rows since teams were chosen record it (a later row wins for its Units).
 export function unitsAssignedAtHome(rows: readonly AuditShardEvent[]): Map<string, string> {
   const named = new Map<string, string>();
-  if (!unitsAssignedSinceTeams(rows)) return named;
-  const latest = [...rows].filter((row) => row.event === "UNITS_ASSIGNED")
-    .sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0)).at(-1);
-  for (const pair of (auditBlockField(latest?.block ?? "", "Assigned") ?? "").split(",")) {
-    const [unit, team] = pair.split("=").map((part) => part.trim());
-    if (unit && team) named.set(unit, team);
+  const ordered = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
+  let teamsAt = -1;
+  ordered.forEach((row, at) => {
+    if (row.event === "UNIT_OWNERSHIP_SET" && auditBlockField(row.block, "Mode") === "team") teamsAt = at;
+  });
+  for (const row of ordered.slice(teamsAt + 1).filter((entry) => entry.event === "UNITS_ASSIGNED")) {
+    for (const pair of (auditBlockField(row.block, "Assigned") ?? "").split(",")) {
+      const [unit, team] = pair.split("=").map((part) => part.trim());
+      if (unit && team) named.set(unit, team);
+    }
   }
   return named;
 }
@@ -228,6 +240,8 @@ export interface RepoResult {
   heads: string[];
   paths: Record<string, string | null>;
   patch_id?: string;
+  // The team's own check, for a home that cannot fetch the repo itself.
+  reported?: { merged: boolean; commit?: string };
 }
 
 export interface UnitResult {
@@ -236,6 +250,8 @@ export interface UnitResult {
   // Record-relative paths of the Unit outputs the home's later stages read,
   // carried as files in the claim commit's tree under RESULT_FILES_ROOT.
   outputs: string[];
+  // Taken in from a file changed after the team wrote it.
+  edited?: true;
 }
 
 export const RESULT_FILES_ROOT = ".aidlc-unit-result";
@@ -353,4 +369,118 @@ export function mergedStatus(verdicts: ReadonlyArray<{ repo: string; merged: boo
   const merged = verdicts.filter((verdict) => verdict.merged).length;
   const parts = verdicts.map((verdict) => `${verdict.repo === "." ? "the repo" : verdict.repo} ${verdict.merged ? "merged" : "not merged yet"}`);
   return verdicts.length === 1 ? parts[0] : `${parts.join(", ")} (${merged} of ${verdicts.length} merged)`;
+}
+
+// --- Files for a team that cannot reach the home ------------------------------
+//
+// One readable Markdown text each: the hand-off a lead writes for a Unit, and
+// the progress and result files the team sends back. Bound by the home's work
+// id, the Unit, the attempt and fingerprints; never signed. Written with LF,
+// read with CRLF too; paths with forward slashes.
+
+export type HandFileKind = "handoff" | "progress" | "result";
+
+export interface HandFile {
+  kind: HandFileKind;
+  fields: Record<string, string>;
+  files: Map<string, string>;
+  result?: UnitResult;
+  // A file whose fingerprints no longer match what it says it holds.
+  edited: boolean;
+}
+
+export const HANDOFF_DIR = "aidlc/handoff";
+
+// A text's fingerprint, the same for its LF and CRLF spellings.
+export function textFingerprint(text: string): string {
+  return `sha256:${createHash("sha256").update(committedTextBytes(Buffer.from(text, "utf-8"))).digest("hex")}`;
+}
+
+function filesFingerprint(files: ReadonlyMap<string, string>, result?: UnitResult): string {
+  return textFingerprint([
+    ...[...files].map(([path, text]) => `${path} ${textFingerprint(text)}`),
+    ...(result ? [JSON.stringify(result)] : []),
+  ].join("\n"));
+}
+
+// A fence longer than any run of tildes in the text it holds.
+function fenceFor(text: string): string {
+  const longest = Math.max(0, ...(text.match(/~+/g) ?? []).map((run) => run.length));
+  return "~".repeat(Math.max(4, longest + 1));
+}
+
+export function renderHandFile(
+  kind: HandFileKind,
+  title: string,
+  intro: string,
+  fields: Record<string, string>,
+  files: ReadonlyMap<string, string>,
+  result?: UnitResult,
+): string {
+  const lines = [`# ${title}`, "", intro, "", `<!-- aidlc-${kind} 1 -->`];
+  for (const [name, value] of Object.entries({ ...fields, Fingerprint: filesFingerprint(files, result) })) {
+    lines.push(`- **${name}**: ${value}`);
+  }
+  lines.push("");
+  if (files.size > 0) {
+    lines.push("## Files", "", "| File | Fingerprint |", "| --- | --- |");
+    for (const [path, text] of files) lines.push(`| ${path} | ${textFingerprint(text)} |`);
+    lines.push("");
+  }
+  if (result) {
+    const json = JSON.stringify(result, null, 2);
+    const fence = fenceFor(json);
+    lines.push("## Result", "", `${fence}json`, json, fence, "");
+  }
+  for (const [path, text] of files) {
+    const normalized = text.replace(/\r\n?/g, "\n");
+    const fence = fenceFor(normalized);
+    const ends = normalized.endsWith("\n");
+    lines.push(`## File: ${path}`, "", ends ? fence : `${fence} noeol`, ends ? normalized.slice(0, -1) : normalized, fence, "");
+  }
+  return lines.join("\n");
+}
+
+// Read a hand-off, progress or result file; null for any other text.
+export function parseHandFile(raw: string): HandFile | null {
+  const lines = raw.replace(/\r\n?/g, "\n").split("\n");
+  const markerAt = lines.findIndex((line) => /^<!-- aidlc-(handoff|progress|result) 1 -->$/.test(line));
+  if (markerAt < 0) return null;
+  const kind = /aidlc-(\w+)/.exec(lines[markerAt])![1] as HandFileKind;
+  const fields: Record<string, string> = {};
+  let at = markerAt + 1;
+  for (; at < lines.length && lines[at] !== ""; at++) {
+    const field = /^- \*\*(.+?)\*\*: (.*)$/.exec(lines[at]);
+    if (field) fields[field[1]] = field[2];
+  }
+  const files = new Map<string, string>();
+  let result: UnitResult | undefined;
+  const listed = new Map<string, string>();
+  for (; at < lines.length; at++) {
+    const row = /^\| (.+?) \| (sha256:[0-9a-f]+) \|$/.exec(lines[at]);
+    if (row) listed.set(row[1], row[2]);
+    const file = /^## File: (.+)$/.exec(lines[at]);
+    const isResult = lines[at] === "## Result";
+    if (!file && !isResult) continue;
+    let open = at + 1;
+    while (open < lines.length && lines[open] === "") open++;
+    const fence = /^(~{4,})( noeol|json)?$/.exec(lines[open] ?? "");
+    if (!fence) continue;
+    const close = lines.indexOf(fence[1], open + 1);
+    if (close < 0) break;
+    const body = lines.slice(open + 1, close).join("\n");
+    if (isResult) {
+      try {
+        result = JSON.parse(body) as UnitResult;
+      } catch {
+        result = undefined;
+      }
+    } else {
+      files.set(file![1], fence[2] === " noeol" ? body : `${body}\n`);
+    }
+    at = close;
+  }
+  const edited = fields.Fingerprint !== filesFingerprint(files, result) ||
+    [...files].some(([path, text]) => listed.get(path) !== textFingerprint(text));
+  return { kind, fields, files, ...(result ? { result } : {}), edited };
 }
