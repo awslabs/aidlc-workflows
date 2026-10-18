@@ -19,8 +19,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import { renderCompletion, type Shell } from "../../core/tools/aidlc-completions.ts";
-import { preservedUninstallPaths, untrustedPathList, windowsPosixShim } from "../../core/tools/aidlc-lifecycle.ts";
-import { buildUninstallPlan } from "../../core/tools/aidlc-uninstall-plan.ts";
+import { preservedUninstallPaths, windowsPosixShim } from "../../core/tools/aidlc-lifecycle.ts";
+import { buildUninstallPlan, untrustedPathList } from "../../core/tools/aidlc-uninstall-plan.ts";
 
 const VERSION = "1.2.3";
 const BINARY = process.platform === "win32" ? "aidlc.exe" : "aidlc";

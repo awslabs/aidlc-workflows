@@ -490,10 +490,16 @@ import {
   inspectInstalledVersion,
   gitBashLauncherRecovery,
   installRoot,
+  pluginCatalogueRoot,
   readActiveExecutable,
   rollbackVersionPath,
   versionRoot as installedVersionRoot,
 } from "./aidlc-install-paths.ts";
+import {
+  pluginCatalogueOwnership,
+  readPluginCatalogueRecord,
+  untrustedPathList,
+} from "./aidlc-uninstall-plan.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -3760,6 +3766,42 @@ export function harnessTreeVersionsCheck(projectDir: string): DoctorCheck | null
   };
 }
 
+// The path a person adds to Claude Code or Codex once, named so it can be
+// copied. It warns when the folder lists another release's plugins, or holds
+// files AI-DLC did not write, which keep updates from refreshing it.
+function pluginCatalogueDoctorCheck(active: string | null): DoctorCheck | null {
+  if (!active || !existsSync(join(installedVersionRoot(active), "plugins"))) return null;
+  const path = pluginCatalogueRoot();
+  const retry = `aidlc use ${active}`;
+  if (!existsSync(path)) {
+    return { pass: true, label: `Plugin marketplace: not created yet; run \`${retry}\` to create it at ${path}` };
+  }
+  const unowned = pluginCatalogueOwnership().preserved;
+  if (unowned.length > 0) {
+    return {
+      pass: false,
+      severity: "warn",
+      label: `Plugin marketplace: ${path} holds files AI-DLC did not write, so updates do not refresh it: ${
+        untrustedPathList(unowned).join(", ")
+      }`,
+      fix: `move them out, then run \`${retry}\``,
+    };
+  }
+  const record = readPluginCatalogueRecord();
+  if (record?.version !== active) {
+    // Only Windows keeps a folder from moving while a tool holds a file in it.
+    return {
+      pass: false,
+      severity: "warn",
+      label: `Plugin marketplace: ${path} lists the plugins of AI-DLC ${record?.version ?? "an earlier release"}, not ${active}`,
+      fix: process.platform === "win32"
+        ? `close Claude Code and Codex, then run \`${retry}\``
+        : `run \`${retry}\`; it names anything that stops the refresh`,
+    };
+  }
+  return { pass: true, label: `Plugin marketplace: ${path}` };
+}
+
 export async function collectDoctorReport(
   projectDir: string,
   extraChecks: readonly DoctorCheck[] = [],
@@ -3790,6 +3832,8 @@ export async function collectDoctorReport(
         ? `run \`${aidlcInvocation()} config --harness <name>\``
         : `run \`${aidlcInvocation()} config --harness <name>\``,
     });
+    const catalogue = pluginCatalogueDoctorCheck(installedVersion);
+    if (catalogue) results.push(catalogue);
     const command = commandPath();
     const expectedExecutable = installedVersion
       ? join(installedVersionRoot(installedVersion), process.platform === "win32" ? "aidlc.exe" : "aidlc")

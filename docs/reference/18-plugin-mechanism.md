@@ -709,13 +709,14 @@ the workspace root.
 # First materialize the ignored local plugin projections:
 bun scripts/package.ts
 
-# Claude Code (dist/plugins is the one aidlc-plugins catalogue; the release
-# runtime's plugins/ folder is the same)
-/plugin marketplace add <repo-or-path>/dist/plugins
+# Claude Code (dist/plugins is the one aidlc-plugins catalogue; the copy
+# runtime's plugins/ folder is the same. A native install keeps it at
+# <install root>/plugins, refreshed on install, update, use and rollback.)
+/plugin marketplace add <repo-or-path>/dist/plugins   # native: <install root>/plugins
 /plugin install aidlc-<name>@aidlc-plugins        # SessionStart hook composes on next session
 
 # Codex CLI (in a git repo)
-codex plugin marketplace add <repo-or-path>/dist/plugins
+codex plugin marketplace add <repo-or-path>/dist/plugins   # native: <install root>/plugins
 codex plugin add aidlc-<name>@aidlc-plugins       # approve the one-time hook trust
 
 # Kiro (no store — folder-drop, then run the composer explicitly).

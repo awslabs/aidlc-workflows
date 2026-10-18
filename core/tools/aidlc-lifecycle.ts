@@ -3,6 +3,7 @@ import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -69,6 +70,8 @@ import {
   lexicalInstallRoot,
   machineTransactionRoot,
   packageManagerForExecutable,
+  PLUGIN_CATALOGUE_RECORD,
+  pluginCatalogueRoot,
   projectPinTargetPath,
   projectDirFrom,
   readActiveExecutable,
@@ -110,6 +113,8 @@ import {
 import {
   assertSafeUninstallRoot,
   buildUninstallPlan,
+  pluginCatalogueOwnership,
+  untrustedPathList,
 } from "./aidlc-uninstall-plan.ts";
 import { channelWays, refreshUpdateState, type UpdateState } from "./aidlc-update.ts";
 import {
@@ -1212,10 +1217,119 @@ function activateReserved(version: string, options: { failAfter?: number } = {})
   });
 }
 
+export type PluginCatalogueRefresh = {
+  path: string;
+  refreshed: boolean;
+  warning?: string;
+  error?: string;
+};
+
+function pluginCatalogueLine(refresh: PluginCatalogueRefresh): string {
+  return refresh.warning ??
+    `Plugin marketplace for Claude Code and Codex: ${refresh.path} (add it once; updates keep it current)`;
+}
+
+// The one line a failed refresh says: what happened, why, and the way out.
+// Closing the tools helps only where one of them may hold a file open, which
+// on Windows stops a folder from moving; any other cause needs its own fix.
+export function pluginCatalogueWarning(failure: {
+  path: string;
+  version: string;
+  before: string | null;
+  after: string | null;
+  error: unknown;
+  platform?: NodeJS.Platform;
+}): string {
+  const code = (failure.error as NodeJS.ErrnoException | null)?.code;
+  const held = (failure.platform ?? process.platform) === "win32" &&
+    ["EBUSY", "EPERM", "EACCES"].includes(code ?? "");
+  const reason = held
+    ? "a program may have a file in it open"
+    : code === "EACCES" || code === "EPERM"
+    ? "permission denied"
+    : code === "ENOSPC"
+    ? "the disk is full"
+    : code === "EROFS"
+    ? "the disk is read-only"
+    : (failure.error instanceof Error ? failure.error.message : String(failure.error)).split("\n")[0].slice(0, 200);
+  const next = `${held ? "close Claude Code and Codex" : "fix that"}, then run aidlc use ${failure.version}.`;
+  const at = `Warning: the plugin marketplace at ${failure.path}`;
+  return failure.before === null || failure.after !== failure.before
+    ? `${at} was not refreshed (${reason}) and may be incomplete; ${next}`
+    : failure.before === "absent"
+    ? `${at} was not created (${reason}); ${next}`
+    : `${at} was not refreshed (${reason}), so it still lists the earlier plugins; ${next}`;
+}
+
+// The release's plugins/ folder, copied whole into the catalogue's one path
+// and swapped in by a single transaction, so a host reads either the old or
+// the new catalogue, never half of one. Anything it cannot do is one warning:
+// the command it runs inside has already done its own work.
+function refreshPluginCatalogue(version: string): PluginCatalogueRefresh | null {
+  const source = join(versionRoot(version), "plugins");
+  if (!existsSync(source) || !lstatSync(source).isDirectory()) return null;
+  const path = pluginCatalogueRoot();
+  const retry = `aidlc use ${version}`;
+  let before: string | "absent" | null = null;
+  let temporary: string | null = null;
+  try {
+    before = transactionState(path);
+    temporary = mkdtempSync(join(tmpdir(), "aidlc-plugin-catalogue-"));
+    const candidate = join(temporary, "plugins");
+    cpSync(source, candidate, { recursive: true });
+    writeFileSync(
+      join(candidate, PLUGIN_CATALOGUE_RECORD),
+      `${JSON.stringify(createRuntimeIntegrity(version, candidate), null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    const sourceHash = transactionSourceHash(candidate);
+    if (before === `tree:${sourceHash}`) return { path, refreshed: true };
+    const unowned = pluginCatalogueOwnership().preserved;
+    if (unowned.length > 0) {
+      return {
+        path,
+        refreshed: false,
+        warning: `Warning: the plugin marketplace at ${path} holds files AI-DLC did not write, so it was not refreshed: ${
+          untrustedPathList(unowned).join(", ")
+        }; move them out, then run ${retry}.`,
+      };
+    }
+    const root = machineTransactionRoot();
+    executePlan({
+      schemaVersion: 1,
+      root,
+      operations: [{ kind: "tree", path: relative(root, path), source: candidate, sourceHash, expected: before }],
+    }, {
+      // Test-only fault injection, where a held folder fails on Windows.
+      failAt: process.env.AIDLC_TEST_PLUGIN_CATALOGUE_FAIL_AT || undefined,
+    });
+    return { path, refreshed: true };
+  } catch (error) {
+    let after: string | "absent" | null = null;
+    try {
+      after = transactionState(path);
+    } catch {
+      after = null;
+    }
+    return {
+      path,
+      refreshed: false,
+      error: error instanceof Error ? error.message : String(error),
+      warning: pluginCatalogueWarning({ path, version, before, after, error }),
+    };
+  } finally {
+    try {
+      if (temporary) rmSync(temporary, { recursive: true, force: true });
+    } catch {
+      // A scratch copy in the temp folder; leaving it never fails the command.
+    }
+  }
+}
+
 export function activate(
   version: string,
   options: { failAfter?: number; replaceLauncher?: LauncherReplacement } = {},
-): void {
+): PluginCatalogueRefresh | null {
   const rootWarning = rootActivationWarning(version, currentUid(), retainedReleaseSupportsRootLifecycle);
   if (rootWarning) process.stderr.write(`WARN ${rootWarning}\n`);
   const releaseReservation = reserveVersion(version);
@@ -1233,6 +1347,7 @@ export function activate(
     if (replace && moved !== null) {
       replace.out.write(`Replaced ${moved} with AI-DLC's launcher; your file is now ${replace.backup}.\n`);
     }
+    return refreshPluginCatalogue(version);
   } finally {
     releaseReservation();
   }
@@ -1692,7 +1807,7 @@ async function installVersion(options: {
   apiUrl?: string;
   replaceLauncher?: LauncherReplacement;
   notOlderThan?: string;
-}): Promise<{ version: string; distributions: string[] }> {
+}): Promise<{ version: string; distributions: string[]; pluginCatalogue?: PluginCatalogueRefresh }> {
   // An explicit version or local directory bypasses discovery. Otherwise the
   // stable channel is the `latest/download` redirect and the preview channel is
   // the newest published preview, installed through the explicit-version path.
@@ -1829,7 +1944,10 @@ async function installVersion(options: {
           }],
         });
       }
-      if (options.activate) activate(version, { replaceLauncher: options.replaceLauncher });
+      const pluginCatalogue = options.activate
+        ? activate(version, { replaceLauncher: options.replaceLauncher })
+        : null;
+      if (pluginCatalogue) return { version, distributions, pluginCatalogue };
     }
     return { version, distributions };
   } finally {
@@ -1985,20 +2103,6 @@ function removeEmptyInstallerDirectory(path: string): void {
 }
 
 type UninstallPlan = ReturnType<typeof buildUninstallPlan>;
-
-// Unowned paths are named by whoever wrote them, and an agent may read this
-// output. Show each JSON-escaped and bounded, as doctor does for repository
-// names, so a name carrying newlines or instruction-shaped text stays data.
-const LISTED_UNOWNED_PATHS = 20;
-const UNOWNED_PATH_CHARS = 240;
-
-export function untrustedPathList(paths: readonly string[]): string[] {
-  const shown = paths.slice(0, LISTED_UNOWNED_PATHS).map((path) =>
-    JSON.stringify(path.length > UNOWNED_PATH_CHARS ? `${path.slice(0, UNOWNED_PATH_CHARS)}...` : path)
-  );
-  const more = paths.length - shown.length;
-  return more > 0 ? [...shown, `(and ${more} more)`] : shown;
-}
 
 export function preservedUninstallPaths(paths: readonly string[]): string {
   return paths.length > 0
@@ -2463,12 +2567,14 @@ function rollbackCommand(argv: string[]): ReturnType<typeof success> {
         "to roll back anyway, without them, run it again with --allow-harness-loss",
     );
   }
-  activate(target, { replaceLauncher: windowsPosixLauncherReplacement(argv) });
+  const pluginCatalogue = activate(target, { replaceLauncher: windowsPosixLauncherReplacement(argv) });
   return success(
-    !typed && active && active !== target
-      ? `rolled back to ${target}, the version you used before ${active}`
-      : `rolled back to ${target}`,
-    { version: target },
+    `${
+      !typed && active && active !== target
+        ? `rolled back to ${target}, the version you used before ${active}`
+        : `rolled back to ${target}`
+    }${pluginCatalogue?.warning ? `\n${pluginCatalogue.warning}` : ""}`,
+    { version: target, ...(pluginCatalogue ? { pluginCatalogue } : {}) },
   );
 }
 
@@ -2669,8 +2775,11 @@ async function useCommand(argv: string[]): Promise<CommandResult> {
       caBundle: valueAfter(argv, "--ca-bundle"),
     });
   }
-  activate(version, { replaceLauncher });
-  return success(`active AI-DLC version set to ${version}`, { version });
+  const pluginCatalogue = activate(version, { replaceLauncher });
+  return success(`active AI-DLC version set to ${version}`, {
+    version,
+    ...(pluginCatalogue ? { pluginCatalogue } : {}),
+  });
 }
 
 function installProfileCommand(argv: string[]): CommandResult {
@@ -2765,6 +2874,26 @@ function installProfileCommand(argv: string[]): CommandResult {
   return success(`updated ${profile} with an owned AI-DLC PATH block`, { profile, bin });
 }
 
+// The installers print what follows the first line of this message.
+async function installApplyCommand(argv: string[]): Promise<CommandResult> {
+  const installed = await installVersion({
+    version: valueAfter(argv, "--version"),
+    from: valueAfter(argv, "--from"),
+    offline: true,
+    activate: true,
+    dryRun: false,
+    baseUrl: valueAfter(argv, "--release-base-url"),
+    caBundle: valueAfter(argv, "--ca-bundle"),
+    replaceLauncher: windowsPosixLauncherReplacement(argv),
+  });
+  return success(
+    `installed ${installed.version}${
+      installed.pluginCatalogue ? `\n${pluginCatalogueLine(installed.pluginCatalogue)}` : ""
+    }`,
+    installed,
+  );
+}
+
 export function humanLifecycleNarration(
   command: string | undefined,
   argv: readonly string[],
@@ -2782,6 +2911,7 @@ export function humanLifecycleNarration(
       newerThan?: { channel: ReleaseChannel; version: string };
       pruned?: string[];
       pruneWarning?: string;
+      pluginCatalogue?: PluginCatalogueRefresh;
     } | undefined;
     const target = data?.version;
     if (!target) return null;
@@ -2817,11 +2947,12 @@ export function humanLifecycleNarration(
           process.stdout,
         );
     }
+    const catalogueWarning = data?.pluginCatalogue?.warning;
     if (before === target) {
       return `${successText(
         `You're on the latest ${channelWord}version of aidlc (${target}).`,
         process.stdout,
-      )}${pruneLine}`;
+      )}${pruneLine}${catalogueWarning ? `\n${catalogueWarning}` : ""}`;
     }
     return [
       `Checking for ${channelWord}releases ... ${before ?? "not installed"} -> ${target}`,
@@ -2834,6 +2965,7 @@ export function humanLifecycleNarration(
       ...(data?.pruneWarning
         ? [`Warning: old-release cleanup was skipped: ${data.pruneWarning}`]
         : []),
+      ...(catalogueWarning ? [catalogueWarning] : []),
       "",
       successText(
         `Updated aidlc from ${before ?? "not installed"} to ${target}.`,
@@ -2843,16 +2975,17 @@ export function humanLifecycleNarration(
     ].join("\n");
   }
   if (command === "use") {
-    const target = (result.data as { version?: string } | undefined)?.version ?? argv[1];
+    const data = result.data as { version?: string; pluginCatalogue?: PluginCatalogueRefresh } | undefined;
+    const target = data?.version ?? argv[1];
     if (!target) return null;
-    return successText(
+    return `${successText(
       before === target
         ? `Already using aidlc ${target}.`
         : `Now using aidlc ${target} (was ${
             before ?? "not installed"
           }; retained locally, no project changes).`,
       process.stdout,
-    );
+    )}${data?.pluginCatalogue?.warning ? `\n${data.pluginCatalogue.warning}` : ""}`;
   }
   if (command === "uninstall") {
     const data = result.data as {
@@ -2914,18 +3047,7 @@ export async function main(input: string[]): Promise<void> {
       : command === "install-profile"
       ? installProfileCommand(argv)
       : command === "install-apply"
-      ? success(
-          `installed ${(await installVersion({
-            version: valueAfter(argv, "--version"),
-            from: valueAfter(argv, "--from"),
-            offline: true,
-            activate: true,
-            dryRun: false,
-            baseUrl: valueAfter(argv, "--release-base-url"),
-            caBundle: valueAfter(argv, "--ca-bundle"),
-            replaceLauncher: windowsPosixLauncherReplacement(argv),
-          })).version}`,
-        )
+      ? await installApplyCommand(argv)
       : usage("unknown lifecycle command");
     const narration = options.mode === "human"
       ? humanLifecycleNarration(command, argv, before, result)

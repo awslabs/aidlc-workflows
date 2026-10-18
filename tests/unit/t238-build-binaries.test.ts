@@ -939,7 +939,7 @@ describe("t238 build-binaries release builder", () => {
       const catalogue = join(realpathSync(installRoot), "plugins");
       expect(humanInstall.stdout ?? "").toContain(
         `PASS installed AI-DLC ${AIDLC_VERSION} with all harness runtimes\n` +
-          `Plugin catalogue for Claude Code and Codex: ${catalogue} (add it once; updates keep it current)\n`,
+          `Plugin marketplace for Claude Code and Codex: ${catalogue} (add it once; updates keep it current)\n`,
       );
       expect(existsSync(join(catalogue, ".claude-plugin", "marketplace.json"))).toBe(true);
       expect(`${humanInstall.stdout ?? ""}${humanInstall.stderr ?? ""}`).not.toContain("\u001b[");

@@ -57,6 +57,7 @@ PATH:
 
 ```text
 PASS installed AI-DLC X.Y.Z with all harness runtimes
+Plugin marketplace for Claude Code and Codex: /home/you/.local/share/aidlc/plugins (add it once; updates keep it current)
 Next: aidlc config
 ```
 
@@ -64,6 +65,7 @@ and like this when it is not:
 
 ```text
 PASS installed AI-DLC X.Y.Z with all harness runtimes
+Plugin marketplace for Claude Code and Codex: /home/you/.local/share/aidlc/plugins (add it once; updates keep it current)
 Add AI-DLC to PATH for this shell:
   export PATH="/home/you/.local/bin:$PATH"
 Then run: aidlc config
@@ -84,6 +86,9 @@ The SHA-256 checks always run; the GitHub CLI adds the signed-provenance check
 ([Release Authentication](18-install-and-lifecycle.md#release-authentication)).
 On Windows the installer's own result starts with `Installed AI-DLC X.Y.Z`, and
 the paths in later screens use Windows separators, such as `.claude\`.
+The plugin marketplace line is for AI-DLC's own plugins: add that path once in
+Claude Code or Codex ([Plugins](18-install-and-lifecycle.md#plugins)), or skip
+it if you do not use them.
 
 Prefer to manage the project files yourself, or cannot install a native
 executable? The manual-copy path is the one place Bun is needed: install

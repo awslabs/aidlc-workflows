@@ -93,7 +93,9 @@ attestation flags.
 It installs
 versions under `${XDG_DATA_HOME:-$HOME/.local/share}/aidlc/versions/` and
 writes `$HOME/.local/bin/aidlc`, a small launcher that runs the active version,
-by default.
+by default. AI-DLC's own plugin catalogue sits beside the versions, at
+`${XDG_DATA_HOME:-$HOME/.local/share}/aidlc/plugins/`; the installer prints its
+full path (see [Plugins](#plugins)).
 
 The installer does not edit a shell startup file unless
 `--profile <absolute-path-under-$HOME>` is explicit. That option writes or
@@ -116,7 +118,8 @@ Remove-Item -Recurse -Force $download
 ```
 
 Windows installs versions under `%LOCALAPPDATA%\aidlc\versions\` and keeps a
-stable `%LOCALAPPDATA%\aidlc\bin\aidlc.cmd` shim. After successful verification
+stable `%LOCALAPPDATA%\aidlc\bin\aidlc.cmd` shim, with AI-DLC's own plugin
+catalogue in `%LOCALAPPDATA%\aidlc\plugins\`. After successful verification
 and installation, the installer registers that bin directory in the current
 account's persistent User PATH, preserving existing entries and avoiding
 duplicates on reruns. It also updates the current PowerShell process and
@@ -1680,6 +1683,32 @@ verifies the signed provenance and rejects a failed verification.
 
 ## Plugins
 
+AI-DLC's own plugins (test-pro and those that follow) share one `aidlc-plugins`
+catalogue, which a native install keeps at one path across releases:
+`${XDG_DATA_HOME:-$HOME/.local/share}/aidlc/plugins/` on Linux and macOS,
+`%LOCALAPPDATA%\aidlc\plugins\` on Windows. The installer prints the full path
+after it installs, and `aidlc doctor --verbose` names it under Machine. Add it
+once to your tool:
+
+```bash
+/plugin marketplace add <path>          # Claude Code
+codex plugin marketplace add <path>     # Codex CLI
+```
+
+Install, `aidlc update`, `aidlc use <version>` and `aidlc rollback` refresh the
+catalogue from the release they make active, writing it whole and then swapping
+it in, so the tool never reads half of one. After an update, the tool's own
+marketplace update (`/plugin marketplace update aidlc-plugins` in Claude Code)
+reads the new plugin versions from the same path. If the folder cannot be
+replaced, the command still succeeds, the folder keeps the earlier catalogue,
+and one line says why and what to do: on Windows, when a program may hold a
+file in it, close Claude Code and Codex and run `aidlc use <version>`; for any
+other cause, such as a full disk, fix that and run it. A file you put in the
+folder yourself is never replaced; the line names it instead. A machine that updated to this release
+with an earlier release's `aidlc update` gets the folder at its next `aidlc
+use <version>` or update. The source checkout's `dist/plugins/` and the copy
+runtime's `plugins/` are the same catalogue for the copy channel.
+
 `aidlc doctor` reports installed-versus-composed plugin state. Plugin changes
 are project configuration and converge through `aidlc config`; there is no
 separate public plugin command.
@@ -1927,7 +1956,9 @@ New installations record a full per-version `installed-files.json` inventory,
 whose hash is stored in `version.json`. Older installations use their verified
 runtime inventory where available, plus the plugin folders their release
 unpacked beside it, which carry the marker the release build wrote; other files
-without ownership evidence are kept. A shell completion counts as AI-DLC's when
+without ownership evidence are kept. The plugin catalogue's own record lists
+the files its last refresh wrote: those go, and anything else you put in that
+folder is kept. A shell completion counts as AI-DLC's when
 it is exactly what an AI-DLC release renders, so the completions an earlier
 release wrote while it updated to this one are removed, and an edited one is
 kept.

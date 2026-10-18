@@ -552,6 +552,8 @@ elif [ "$MODE" = "quiet" ]; then
   fi
 else
   printf 'PASS installed AI-DLC %s with all harness runtimes\n' "$VERSION"
+  # What the installed release says after its first line: where its plugin catalogue is.
+  sed '1d' "$TMP/apply.out"
   [ -z "$profile_message" ] || printf '%s\n' "$profile_message"
   if [ -n "$path_command" ]; then
     printf 'Add AI-DLC to PATH for this shell:\n  %s\nThen run: aidlc config\n' "$path_command"

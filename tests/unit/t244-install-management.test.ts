@@ -5,12 +5,12 @@ import { afterAll, afterEach, beforeAll, describe, expect, setDefaultTimeout, sp
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
-  chmodSync,
   cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -1927,7 +1927,7 @@ describe("t244 AI-DLC's plugin catalogue keeps one path across updates", () => {
     expect(installed.status, installed.stdout + installed.stderr).toBe(0);
     expect(installed.stdout.trim().split("\n")).toEqual([
       `installed ${AIDLC_VERSION}`,
-      `Plugin catalogue for Claude Code and Codex: ${catalogue} (add it once; updates keep it current)`,
+      `Plugin marketplace for Claude Code and Codex: ${catalogue} (add it once; updates keep it current)`,
     ]);
     expectCatalogueOf(machine, AIDLC_VERSION);
     expect(existsSync(join(catalogue, ".claude-plugin", "marketplace.json"))).toBe(true);
@@ -1937,7 +1937,7 @@ describe("t244 AI-DLC's plugin catalogue keeps one path across updates", () => {
       const updated = run(LIFECYCLE, ["update", "--version", version, "--from", release], project, env);
       expect(updated.status, updated.stdout + updated.stderr).toBe(0);
       // A refresh that works says nothing.
-      expect(updated.stdout.toLowerCase()).not.toContain("plugin catalogue");
+      expect(updated.stdout.toLowerCase()).not.toContain("plugin marketplace");
     }
     expect(existsSync(join(machine, "versions", AIDLC_VERSION))).toBe(false);
     expectCatalogueOf(machine, LIVE_PIN_VERSION);
@@ -1945,13 +1945,13 @@ describe("t244 AI-DLC's plugin catalogue keeps one path across updates", () => {
 
     const rolledBack = run(LIFECYCLE, ["use", NEXT_VERSION], project, env);
     expect(rolledBack.status, rolledBack.stdout + rolledBack.stderr).toBe(0);
-    expect(rolledBack.stdout.toLowerCase()).not.toContain("plugin catalogue");
+    expect(rolledBack.stdout.toLowerCase()).not.toContain("plugin marketplace");
     expectCatalogueOf(machine, NEXT_VERSION);
     expect(listedTestPro(machine)).toBe("0.1.0");
 
     const doctor = run(DISPATCHER, ["doctor", "--json", "--project-dir", project], project, env);
     const checks = (JSON.parse(doctor.stdout) as { data: { checks: Array<{ pass: boolean; label: string }> } }).data.checks;
-    expect(checks).toContainEqual(expect.objectContaining({ pass: true, label: `Plugin catalogue: ${catalogue}` }));
+    expect(checks).toContainEqual(expect.objectContaining({ pass: true, label: `Plugin marketplace: ${catalogue}` }));
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a catalogue the update cannot replace stays whole, and the update still succeeds", async () => {
@@ -1962,41 +1962,87 @@ describe("t244 AI-DLC's plugin catalogue keeps one path across updates", () => {
     const catalogue = join(machine, "plugins");
     install(machine, project);
     const before = transactionState(catalogue);
-    const mode = statSync(catalogue).mode & 0o777;
-    // Linux cannot move a directory it may not write; on Windows a program whose
-    // current directory is inside the folder holds it, as a host can.
+    // On Windows a program whose current directory is the folder holds it, as a
+    // host can. Elsewhere nothing holds a folder, so the swap fails where that
+    // hold makes it fail: at the rename.
     const holder = process.platform === "win32"
       ? Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { cwd: catalogue, stdout: "ignore", stderr: "ignore" })
       : null;
-    if (!holder) chmodSync(catalogue, 0o500);
     let updated: ReturnType<typeof run>;
     try {
-      updated = run(LIFECYCLE, ["update", "--version", NEXT_VERSION, "--from", releaseB], project, env);
+      updated = run(LIFECYCLE, ["update", "--version", NEXT_VERSION, "--from", releaseB], project, {
+        ...env,
+        ...(holder ? {} : { AIDLC_TEST_PLUGIN_CATALOGUE_FAIL_AT: "before-commit:1:tree" }),
+      });
     } finally {
       if (holder) {
         holder.kill();
         await holder.exited;
-      } else {
-        chmodSync(catalogue, mode);
       }
     }
     expect(updated.status, updated.stdout + updated.stderr).toBe(0);
     expect(updated.stdout).toContain(`Updated aidlc from ${AIDLC_VERSION} to ${NEXT_VERSION}.`);
     const kept = transactionState(catalogue) === before;
-    const warning = `Warning: the plugin catalogue at ${catalogue} was not refreshed, so it still lists the earlier plugins; ` +
-      `close Claude Code and Codex, then run aidlc use ${NEXT_VERSION}.`;
-    if (process.platform === "linux" && process.getuid?.() !== 0) expect(kept).toBe(true);
+    // Windows names the hold and its way out; elsewhere the line names the injected failure.
+    const warning = holder
+      ? `Warning: the plugin marketplace at ${catalogue} was not refreshed (a program may have a file in it open), ` +
+        `so it still lists the earlier plugins; close Claude Code and Codex, then run aidlc use ${NEXT_VERSION}.`
+      : `Warning: the plugin marketplace at ${catalogue} was not refreshed (injected transaction failure at before-commit:1:tree), ` +
+        `so it still lists the earlier plugins; fix that, then run aidlc use ${NEXT_VERSION}.`;
+    if (!holder) expect(kept).toBe(true);
     if (kept) {
       expect(updated.stdout).toContain(warning);
       expectCatalogueOf(machine, AIDLC_VERSION);
     } else {
-      expect(updated.stdout).not.toContain(warning);
+      expect(updated.stdout.toLowerCase()).not.toContain("plugin marketplace");
       expectCatalogueOf(machine, NEXT_VERSION);
     }
     const retried = run(LIFECYCLE, ["use", NEXT_VERSION], project, env);
     expect(retried.status, retried.stdout + retried.stderr).toBe(0);
     expectCatalogueOf(machine, NEXT_VERSION);
+    // Nothing of the failed swap is left behind for doctor to report.
+    expect(readdirSync(machine).filter((name) => name.startsWith(".aidlc-"))).toEqual([]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Closing the tools frees a file one of them holds open on Windows; any other
+  // failure (permissions, a full disk) needs its own fix, which the line names.
+  test("a refresh that fails says why, and asks to close the tools only when one may hold a file on Windows", async () => {
+    const { pluginCatalogueWarning } = await import(LIFECYCLE) as {
+      pluginCatalogueWarning?: (failure: {
+        path: string;
+        version: string;
+        before: string | null;
+        after: string | null;
+        error: unknown;
+        platform: NodeJS.Platform;
+      }) => string;
+    };
+    expect(typeof pluginCatalogueWarning).toBe("function");
+    const failed = (code: string) => Object.assign(new Error(`${code}: failed, rename 'a' -> 'b'`), { code });
+    const warn = (error: unknown, platform: NodeJS.Platform, before: string | null = "tree:a", after: string | null = before) =>
+      pluginCatalogueWarning!({ path: "/m/plugins", version: "2.0.0", before, after, error, platform });
+    const refreshed = "Warning: the plugin marketplace at /m/plugins was not refreshed";
+    expect(warn(failed("EPERM"), "win32")).toBe(
+      `${refreshed} (a program may have a file in it open), so it still lists the earlier plugins; close Claude Code and Codex, then run aidlc use 2.0.0.`,
+    );
+    expect(warn(failed("EBUSY"), "win32", "tree:a", "tree:b")).toBe(
+      `${refreshed} (a program may have a file in it open) and may be incomplete; close Claude Code and Codex, then run aidlc use 2.0.0.`,
+    );
+    for (const platform of ["linux", "darwin"] as const) {
+      expect(warn(failed("EACCES"), platform)).toBe(
+        `${refreshed} (permission denied), so it still lists the earlier plugins; fix that, then run aidlc use 2.0.0.`,
+      );
+    }
+    expect(warn(failed("ENOSPC"), "win32")).toBe(
+      `${refreshed} (the disk is full), so it still lists the earlier plugins; fix that, then run aidlc use 2.0.0.`,
+    );
+    expect(warn(failed("ENOSPC"), "linux", "absent")).toBe(
+      "Warning: the plugin marketplace at /m/plugins was not created (the disk is full); fix that, then run aidlc use 2.0.0.",
+    );
+    expect(warn(new Error("checksum mismatch\nsecond line"), "linux", null, null)).toBe(
+      `${refreshed} (checksum mismatch) and may be incomplete; fix that, then run aidlc use 2.0.0.`,
+    );
+  });
 
   test("a file AI-DLC did not write keeps the catalogue as it is, and the update names it", () => {
     const machine = temp("aidlc-t244-catalogue-unowned-");
@@ -2010,12 +2056,22 @@ describe("t244 AI-DLC's plugin catalogue keeps one path across updates", () => {
     const updated = run(LIFECYCLE, ["update", "--version", NEXT_VERSION, "--from", releaseB], project, env);
     expect(updated.status, updated.stdout + updated.stderr).toBe(0);
     expect(updated.stdout).toContain(
-      `Warning: the plugin catalogue at ${catalogue} holds files AI-DLC did not write, so it was not refreshed: ` +
+      `Warning: the plugin marketplace at ${catalogue} holds files AI-DLC did not write, so it was not refreshed: ` +
         `${JSON.stringify(notes)}; move them out, then run aidlc use ${NEXT_VERSION}.`,
     );
     expect(readFileSync(notes, "utf-8")).toBe("mine\n");
-    expectCatalogueOf(machine, AIDLC_VERSION);
+    const doctor = run(DISPATCHER, ["doctor", "--json", "--project-dir", project], project, env);
+    const checks = (JSON.parse(doctor.stdout) as {
+      data: { checks: Array<{ pass: boolean; severity?: string; label: string; fix?: string }> };
+    }).data.checks;
+    expect(checks).toContainEqual({
+      pass: false,
+      severity: "warn",
+      label: `Plugin marketplace: ${catalogue} holds files AI-DLC did not write, so updates do not refresh it: ${JSON.stringify(notes)}`,
+      fix: `move them out, then run \`aidlc use ${NEXT_VERSION}\``,
+    });
     unlinkSync(notes);
+    expectCatalogueOf(machine, AIDLC_VERSION);
     expect(run(LIFECYCLE, ["use", NEXT_VERSION], project, env).status).toBe(0);
     expectCatalogueOf(machine, NEXT_VERSION);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

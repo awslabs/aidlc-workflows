@@ -793,11 +793,14 @@ try {
     $message += "; command: $command; $pathMessage"
     if (-not $data.ready -or $NoModifyPath) { $message += "; $($data.nextSteps[0])" }
   } else {
+    # What the installed release says after its first line: where its plugin catalogue is.
+    $applyLines = @(([string]$applyResult.message) -split '\r?\n' | Select-Object -Skip 1)
     $lines = @(
       $message,
       "Account: $installAccount",
       "Command: $command",
-      $pathMessage,
+      $pathMessage
+    ) + $applyLines + @(
       '',
       "Next: $($data.nextSteps[0])"
     )
