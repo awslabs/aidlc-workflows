@@ -40935,7 +40935,8 @@ export const NEXT_FLAGS: ReadonlyMap<string, NextFlagShape> = new Map<string, Ne
   ["--phase", { value: "free", needsFollowing: true, valueMayLookLikeFlag: true }],
   ["--report", { value: "free", needsFollowing: true, valueMayLookLikeFlag: true }],
   // Valued: a missing or `--`-prefixed value is this engine's own refusal, with
-  // the flag named, not a token it does not take.
+  // the flag named, not a token it does not take. --skip and --add take a
+  // missing or empty list as no change.
   ["--request", { value: "free" }],
   ["--record", { value: "free" }],
   ["--unit", { value: "free" }],

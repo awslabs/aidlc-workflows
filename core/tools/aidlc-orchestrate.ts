@@ -5094,17 +5094,14 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       }
     } else if (a === "--skip" || a === "--add") {
       // Stage slugs echoed into the creation command: each must name a stage.
-      if (value === undefined) {
-        flags.parseError = `${a} requires <stage,...>.`;
-      } else {
-        const slugs = splitSlugList(value);
-        const unknown = slugs.find((slug) => nodeForSlug(slug) === undefined);
-        if (slugs.length === 0 || unknown !== undefined) {
-          flags.parseError = `${a} requires stage slugs; "${unknown ?? value}" is not a stage.`;
-        } else {
-          flags.planChanges ??= { skip: [], add: [] };
-          flags.planChanges[a === "--skip" ? "skip" : "add"].push(...slugs);
-        }
+      // An empty list (`--skip ''`, or no value) changes nothing.
+      const slugs = splitSlugList(value);
+      const unknown = slugs.find((slug) => nodeForSlug(slug) === undefined);
+      if (unknown !== undefined) {
+        flags.parseError = `${a} requires stage slugs; "${unknown}" is not a stage.`;
+      } else if (slugs.length > 0) {
+        flags.planChanges ??= { skip: [], add: [] };
+        flags.planChanges[a === "--skip" ? "skip" : "add"].push(...slugs);
       }
     } else if (a === "--plan-name") {
       // Echoed into the creation command, so only a plain kebab name passes.

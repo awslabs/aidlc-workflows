@@ -483,6 +483,23 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     expect(previewed).toBe(executed.filter((n) => !n.startsWith("0.")).length);
   });
 
+  test("an empty --skip or --add list changes nothing, and the plan is still created", () => {
+    const proj = installedProject();
+    const forms: Array<[string[], string]> = [
+      [["--skip", "", "--add", "intent-capture"], "--add intent-capture"],
+      [["--skip", "--add", "intent-capture"], "--add intent-capture"],
+      [["--skip", "deployment-pipeline", "--add", ""], "--skip deployment-pipeline"],
+      [["--skip", "deployment-pipeline", "--add"], "--skip deployment-pipeline"],
+    ];
+    for (const [lists, carried] of forms) {
+      const d = nextDirective(proj, ["--scope", "express", ...lists, "--", "fix the parser"]);
+      expect(d.kind, lists.join(" ")).toBe("print");
+      const creation = [...d.message.matchAll(/`([^`]*)`/g)].map((m) => m[1]).find((span) => span.includes("--scope express"));
+      expect(creation, d.message).toContain(carried);
+      expect(creation, d.message).not.toContain(carried.startsWith("--add") ? "--skip" : "--add");
+    }
+  });
+
   test("hostile depth, test-strategy, and stage values never reach a command", () => {
     const proj = createTestProject();
     tempDirs.push(proj);
