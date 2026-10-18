@@ -344,9 +344,12 @@ Neither list, doctor, nor sync checks a remote plugin registry. The host remains
 responsible for published-version discovery.
 
 For source-tree installs, the `plugin-sync` utility verb (the compose hooks'
-fallback front) runs discovered plugin roots' `hooks/compose.ts` files and
-exits cleanly with
-`no installed plugins; nothing to sync` when no plugin roots are configured. If
+fallback front) runs discovered plugin roots' `hooks/compose.ts` files, from
+the environment or `--plugin-root <dir>`, and exits cleanly when no plugin
+roots are configured: with `no installed plugins; nothing to sync` on Claude
+Code and Codex, and elsewhere with the line `plugin sync` prints there, which
+names the command for each composed plugin (`noPluginListLine()` and
+`syncCommand()` in `aidlc-plugin.ts`). If
 roots are configured but none carries `hooks/compose.ts`, it exits 1 and names
 each root and reason; with a mixed set it warns for each skipped root, composes
 the valid roots, and exits 0.

@@ -456,11 +456,14 @@ import {
   contributionSources,
   copyProjectSurfaces,
   cutPluginFragment,
+  hostListsPlugins,
   nextCompose,
+  noPluginListLine,
   personaTwinRels,
   projectDiffPlan,
   recordedContributionGaps,
   type StageContribRecord,
+  syncCommand,
   tomlFragmentText,
   withFileLineEndings,
 } from "./aidlc-plugin.ts";
@@ -1564,6 +1567,17 @@ function handlePluginBuild(
   pluginAuthorCommandCode(pluginBuildMain(args));
 }
 
+// The sync doctor names for these plugins: where the host lists its plugins,
+// the chat command or the engine's with the root set; elsewhere one command
+// per plugin, with its folder.
+function doctorSyncHint(projectDir: string, keys: Iterable<string>): string {
+  const harnessName = runtimeHarnessName(projectDir, harnessDir());
+  if (hostListsPlugins(harnessName)) {
+    return `\`${entrySkillInvocation()} plugin sync\` (or \`${aidlcDispatcherInvocation("plugin sync")}\` with the plugin root environment set)`;
+  }
+  return [...new Set(keys)].sort().map((key) => `\`${syncCommand(harnessName, key, null)}\``).join(", ");
+}
+
 function pluginRootCandidatesFromEnv(): string[] {
   const roots = [
     process.env.CLAUDE_PLUGIN_ROOT,
@@ -1575,10 +1589,10 @@ function pluginRootCandidatesFromEnv(): string[] {
   return [...new Set(roots)];
 }
 
-async function handlePluginSync(projectDir: string): Promise<void> {
-  const roots = pluginRootCandidatesFromEnv();
+async function handlePluginSync(projectDir: string, pluginRoot: string | undefined): Promise<void> {
+  const roots = [...new Set([...pluginRootCandidatesFromEnv(), ...(pluginRoot ? [resolve(pluginRoot)] : [])])];
   if (roots.length === 0) {
-    process.stdout.write("no installed plugins; nothing to sync\n");
+    process.stdout.write(`${noPluginListLine(projectDir, harnessDir()) ?? "no installed plugins; nothing to sync"}\n`);
     return;
   }
 
@@ -4945,7 +4959,9 @@ export async function collectDoctorReport(
         ? "Composed plugin surface: all enabled plugin stages and recorded contributions are present"
         : `Composed plugin surface: ${missingComposition.length} missing composition item(s)`,
       fix: missingComposition.length > 0
-        ? `${missingComposition.join("; ")} - correct any sidecar or target issue named above, then re-run \`${entrySkillInvocation()} plugin sync\` (or \`${aidlcDispatcherInvocation("plugin sync")}\` with the plugin root environment set). Hook-carrying hosts retry sync on the next session start.`
+        ? `${missingComposition.join("; ")} - correct any sidecar or target issue named above, then re-run ${
+          doctorSyncHint(projectDir, missingComposition.map((item) => item.slice(0, item.indexOf(":"))))
+        }. Hook-carrying hosts retry sync on the next session start.`
         : undefined,
     });
 
@@ -6468,6 +6484,7 @@ export async function collectDoctorReport(
     // the label so the operator can act on it, mirroring the MERGE_DISPATCH /
     // rule-drift advisory rows that carry their detail inline.
     const uncompiledPluginStages: string[] = [];
+    const uncompiledPlugins = new Set<string>();
     if (uncompiledStages.length > 0) {
       const uncompiled = new Set(uncompiledStages);
       const stagesRoot = resolveHarnessPath(["aidlc-common", "stages"]);
@@ -6481,7 +6498,10 @@ export async function collectDoctorReport(
             const parsed = parseStageFrontmatter(readFileSync(join(dir, file), "utf-8"));
             const slug = typeof parsed.slug === "string" ? parsed.slug : fallbackSlug;
             const plugin = typeof parsed.plugin === "string" ? parsed.plugin : undefined;
-            if (plugin) uncompiledPluginStages.push(`${slug} (${plugin})`);
+            if (plugin) {
+              uncompiledPluginStages.push(`${slug} (${plugin})`);
+              uncompiledPlugins.add(plugin);
+            }
           } catch {
             // Schema validation below owns malformed frontmatter.
           }
@@ -6489,7 +6509,7 @@ export async function collectDoctorReport(
       }
     }
     const uncompiledHint = uncompiledPluginStages.length > 0
-      ? ` - plugin-owned files ${uncompiledPluginStages.join(", ")} require \`${entrySkillInvocation()} plugin sync\` (or \`${aidlcDispatcherInvocation("plugin sync")}\` with the plugin root environment set); run \`${aidlcToolInvocation("graph")} compile\` for other authored stages`
+      ? ` - plugin-owned files ${uncompiledPluginStages.join(", ")} require ${doctorSyncHint(projectDir, uncompiledPlugins)}; run \`${aidlcToolInvocation("graph")} compile\` for other authored stages`
       : ` - run \`${aidlcToolInvocation("graph")} compile\` to include them`;
     results.push({
       pass: true,
@@ -13115,7 +13135,7 @@ export async function main(argv: string[]): Promise<void> {
       handlePluginList(flags);
       break;
     case "plugin-sync":
-      await handlePluginSync(projectDir);
+      await handlePluginSync(projectDir, flags["plugin-root"]);
       break;
     case "plugin-validate":
       handlePluginValidate(positional, flags, missingValueFlags);

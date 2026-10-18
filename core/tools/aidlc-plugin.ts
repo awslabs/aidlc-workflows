@@ -33,6 +33,7 @@ import { policyPathWithin } from "./aidlc-install-paths.ts";
 import {
   aidlcInvocation,
   compiledExecutable,
+  discoverProjectHarnesses,
   LinkedFolderError,
   quoteCommandArgument,
   refuseLinkOnTheWay,
@@ -40,6 +41,7 @@ import {
   resolveSkillsPath,
   runtimeHarnessDir,
   runtimeHarnessName,
+  runtimeProjectDir,
 } from "./aidlc-runtime-paths.ts";
 import {
   executePlan,
@@ -1820,6 +1822,7 @@ function replaceOwnedPluginPrimitives(
   harnessDir: string,
   key: string,
   ownership: OwnershipRecord | undefined,
+  syncAgain: string,
 ): Set<string> {
   const ownedPaths = new Set<string>();
   if (!ownership) return ownedPaths;
@@ -1830,8 +1833,7 @@ function replaceOwnedPluginPrimitives(
     if (!lstatSync(target).isFile() || !recordedDigestMatches(target, file.sha256)) {
       throw new Error(
         `cannot sync ${key}: owned path changed since composition: ${file.path}. To keep your ` +
-          `change, move that file somewhere else, then run \`${aidlcInvocation()} engine plugin sync\` ` +
-          `again; it puts the plugin's own version back.`,
+          `change, move that file somewhere else, then run \`${syncAgain}\` again; it puts the plugin's own version back.`,
       );
     }
   }
@@ -2080,15 +2082,41 @@ export type HeldPlugin = { plugin: InstalledPlugin; reason: string };
 // this is, for when a waiting plugin composes.
 export type HeldWords = { hostName: string; harnessName: string };
 
+// Claude Code and Codex list the plugins installed in them; no other host does.
+export function hostListsPlugins(harnessName: string): boolean {
+  return harnessName === "claude" || harnessName === "codex";
+}
+
+// The command that composes `key` again, for every line that sends the
+// person to sync. A host that lists its plugins (Claude Code, Codex) finds
+// them itself; elsewhere sync needs the plugin's folder (`root`, when the
+// tool knows it). The native aidlc picks the first harness installed here, so
+// where that is another one it is told which, as the plugin hooks do.
+export function syncCommand(harnessName: string, key: string, root: string | null): string {
+  const invocation = aidlcInvocation();
+  const first = discoverProjectHarnesses(runtimeProjectDir())[0]?.harnessDir;
+  const named = invocation === "aidlc" && first !== undefined && first !== runtimeHarnessDir();
+  const sync = `${invocation} engine plugin sync${named ? ` --harness-dir ${runtimeHarnessDir()}` : ""}`;
+  if (hostListsPlugins(harnessName)) return sync;
+  return `${sync} --plugin-root ${root === null ? `<${key}'s folder>` : quoteCommandArgument(root)}`;
+}
+
+// The line for a sync with no plugin folder on a host with no plugin list:
+// one command for each plugin composed here. Null where the host lists them.
+export function noPluginListLine(projectDir: string, harnessDir: string): string | null {
+  const harnessName = runtimeHarnessName(projectDir, harnessDir);
+  if (hostListsPlugins(harnessName)) return null;
+  const keys = [...projectEvidence(projectDir, harnessDir).stamps.keys()].sort();
+  const commands = (keys.length > 0 ? keys : ["plugin"]).map((key) => `\`${syncCommand(harnessName, key, null)}\``);
+  return `Nothing synced: this tool keeps no list of your plugins, so name each one's folder: ${commands.join(", ")}.`;
+}
+
 // When a plugin composes next, for every line that says so. Kiro CLI and
 // opencode run no compose hook (opencode reads no hooks.json), so there it is
-// when the person runs sync with the plugin's folder (`root`, when the tool
-// knows it), after `base` when the plugin waits for one.
+// when the person runs sync, after `base` when the plugin waits for one.
 export function nextCompose(harnessName: string, key: string, root: string | null, base?: string): string {
   if (harnessName !== "kiro" && harnessName !== "opencode") return "at the next session start";
-  const folder = root === null ? `<${key}'s folder>` : quoteCommandArgument(root);
-  return `when you run \`${aidlcInvocation()} engine plugin sync --plugin-root ${folder}\`` +
-    (base === undefined ? "" : ` after ${base} composes`);
+  return `when you run \`${syncCommand(harnessName, key, root)}\`` + (base === undefined ? "" : ` after ${base} composes`);
 }
 
 type HeldProblem =
@@ -2331,7 +2359,9 @@ async function syncPluginsLocked(
     }
     plugins = inventory.installed;
     if (plugins.length === 0) {
-      throw new Error("host inventory unavailable; run sync through an installed plugin's host hook");
+      throw new Error(
+        noPluginListLine(projectDir, harnessDir) ?? "host inventory unavailable; run sync through an installed plugin's host hook",
+      );
     }
     // An old aidlc-<name> copy's own hook leaves the composing to the rebuilt
     // copy the host also lists, so the two never take turns.
@@ -2437,6 +2467,7 @@ async function syncPluginsLocked(
           harnessDir,
           plugin.key,
           evidence.ownership.get(plugin.key),
+          syncCommand(harnessName, plugin.key, plugin.root),
         ),
       );
       // The staged copy carries the previous record. A current compose hook
@@ -2521,13 +2552,12 @@ async function syncPluginsLocked(
     if (pruned.length === 0) {
       const committed = projectEvidence(projectDir, harnessDir);
       const uncomposed = plugins
-        .filter((plugin) => !compositionIsCurrent(plugin, committed, projectDir, harnessDir, selection))
-        .map((plugin) => plugin.key);
+        .filter((plugin) => !compositionIsCurrent(plugin, committed, projectDir, harnessDir, selection));
       if (uncomposed.length > 0) {
+        const again = [...new Set(uncomposed.map((plugin) => syncCommand(harnessName, plugin.key, plugin.root)))];
         throw new Error(
-          `plugin sync finished but ${uncomposed.join(", ")} ${uncomposed.length === 1 ? "is" : "are"} not composed; ` +
-            `run ${aidlcInvocation()} engine plugin sync again. If it refuses because a file ` +
-            "the plugin owns was changed, move that file aside and run it once more",
+          `plugin sync finished but ${uncomposed.map((plugin) => plugin.key).join(", ")} ` +
+            `${uncomposed.length === 1 ? "is" : "are"} not composed; run ${again.join(", then ")} again`,
         );
       }
     }

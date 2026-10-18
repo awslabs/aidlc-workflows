@@ -2785,15 +2785,26 @@ names the installed plugin to compose, as `AIDLC_PLUGIN_ROOT` does; Kiro IDE's
 folder-dropped hook passes the plugin's own folder, `./.kiro/aidlc-plugins/<name>`.
 `--harness-dir <dir>`
 names the harness folder to compose into, as `AIDLC_HARNESS_DIR` does, for a
-project with more than one harness installed. Where the host keeps
-no plugin inventory to read, it says so and stops; in a native Claude Code
-project before Claude Code has a plugin registry
-(`~/.claude/plugins/installed_plugins.json`):
+project with more than one harness installed. Kiro CLI, Kiro IDE, Cursor,
+Copilot and opencode keep no list of the plugins installed, so a sync there
+with no plugin folder composes nothing and names the command for each plugin
+composed in the project:
 
 ```text
 $ aidlc engine plugin sync
-aidlc engine plugin: host inventory unavailable; run sync through an installed plugin's host hook
+aidlc engine plugin: Nothing synced: this tool keeps no list of your plugins, so name each one's folder: `aidlc engine plugin sync --plugin-root <test-pro's folder>`.
 ```
+
+Where another harness comes first in the project (a `.claude` folder beside
+`.kiro`, say), the native `aidlc` would compose into that one, so the command
+also names the harness: `aidlc engine plugin sync --harness-dir .kiro --plugin-root <test-pro's folder>`.
+
+Every line that sends you to sync there (this one, a sync refused over a file
+you changed, and doctor's composed-surface and uncompiled-stage fixes) names
+the same command, with the plugin's real folder when the line knows it. In a
+native Claude Code project before Claude Code has a plugin registry
+(`~/.claude/plugins/installed_plugins.json`) it says
+`host inventory unavailable; run sync through an installed plugin's host hook`.
 Re-run it after every engine reinstall or upgrade: copying a fresh
 `dist/<harness>/` restores the shipped graph and core stage sources, so
 previously composed plugin graph entries and contribution merges must be
