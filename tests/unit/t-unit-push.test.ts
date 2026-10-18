@@ -154,6 +154,20 @@ describe("at the home", () => {
     );
   });
 
+  test("a home remote that cannot be reached: the board is the last fetch's, with one line that it may be behind", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    git(home.dir, ["remote", "set-url", "origin", join(home.remote, "gone")]);
+    const step = next(home.dir);
+    expect(step.kind, JSON.stringify(step)).toBe("notice");
+    expect(String(step.message)).toContain("- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
+    expect((step.change_notices ?? []) as string[]).toEqual([
+      "origin could not be reached just now, so the board may be behind: it shows what your last fetch brought.",
+    ]);
+  });
+
   test("a turn-down reaches the team at its next step, with no fetch by the team, in its own workspace repo too", () => {
     const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
     const home = makeHome({ repos: hosts });

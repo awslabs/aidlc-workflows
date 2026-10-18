@@ -127,7 +127,9 @@ import {
   isGitRepoDir,
   repoDir,
   selectIntentForSession,
+  sessionsDir,
   setActiveSpaceCursor,
+  writeFileAtomic,
 } from "./aidlc-lib.js";
 import {
   type Amendment,
@@ -206,11 +208,12 @@ interface GitBytesResult {
 // Unit's audit shard outgrows that in one long attempt, so the cap is lifted
 // the way the other git readers lift it. A run that could not start, was killed
 // or overflowed is a failed run, whatever its exit status.
-function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitBytesResult {
+function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv, timeoutMs?: number): GitBytesResult {
   const result = spawnSync("git", args, {
     cwd: projectDir,
     env: { ...process.env, ...env },
     maxBuffer: 512 * 1024 * 1024,
+    ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
   });
   const failure = result.error
     ? `${result.error.message}\n`
@@ -225,8 +228,8 @@ function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): 
   };
 }
 
-function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitResult {
-  const result = gitBytes(projectDir, args, env);
+function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv, timeoutMs?: number): GitResult {
+  const result = gitBytes(projectDir, args, env, timeoutMs);
   return { ...result, stdout: result.stdout.toString("utf-8") };
 }
 
@@ -5442,20 +5445,55 @@ function takeUnit(args: string[], projectDir?: string): void {
   }));
 }
 
-// The work's claims as the home has them now, fetched with the person's own
-// login into the refs their own fetch would use (through this workspace's
-// remote, or by the home's address into AI-DLC's own refs), so a step shows
-// what the teams and the home sent without anyone fetching first. Returns the
-// remote or address that could not be reached (what the last fetch brought
-// stands), or null.
-// ponytail: one fetch per step at the home and in each Unit's build; gate it by
-// time if a slow remote makes steps drag.
-export function refreshHomeClaims(projectDir: string, home?: { target: string | null; id8: string }): string | null {
+// A fetch nobody typed: it never asks for a password, a passphrase or a
+// sign-in (git, Git Credential Manager and ssh are each told not to, for this
+// call only; the person's config is left as it is) and gives up after a short
+// while, so a step never hangs on it.
+const QUIET_FETCH_TIMEOUT_MS = 15_000;
+
+function quietFetch(dir: string, args: string[]): GitResult {
+  const ssh = process.env.GIT_SSH_COMMAND || git(dir, ["config", "--get", "core.sshCommand"]).stdout.trim() || "ssh";
+  return git(dir, ["fetch", ...args], {
+    GIT_TERMINAL_PROMPT: "0",
+    GCM_INTERACTIVE: "never",
+    // GIT_SSH alone names the person's own ssh program (plink, say): left as it is.
+    ...(process.env.GIT_SSH && !process.env.GIT_SSH_COMMAND ? {} : { GIT_SSH_COMMAND: `${ssh} -o BatchMode=yes` }),
+  }, QUIET_FETCH_TIMEOUT_MS);
+}
+
+// The work's claims as the home has them now, fetched into the refs the
+// person's own fetch uses (through this workspace's remote, or by the home's
+// address into AI-DLC's own refs), so nobody has to fetch to see what the other
+// side sent. Once per chat, and at every step that shows or acts on the
+// claims (`now`). `unreached` is the remote or address that could not be
+// reached: the last fetch stands.
+const CLAIMS_FETCHED_FILE = "claims-fetched.json";
+
+export function refreshHomeClaims(
+  projectDir: string,
+  options: { home?: { target: string | null; id8: string }; sessionId?: string; now?: boolean } = {},
+): { fetched: boolean; unreached: string | null } {
   const pd = resolveProjectDir(projectDir);
-  const { target, id8 } = home ?? { target: repositoryRemote(pd), id8: activeIdentity(pd).intentId8 };
-  if (target === null) return null;
+  const { target, id8 } = options.home ?? { target: repositoryRemote(pd), id8: activeIdentity(pd).intentId8 };
+  if (target === null) return { fetched: false, unreached: null };
+  const mark = join(sessionsDir(pd), CLAIMS_FETCHED_FILE);
+  let chats: Record<string, string> = {};
+  try {
+    chats = JSON.parse(readFileSync(mark, "utf-8")) as Record<string, string>;
+  } catch {
+    // No fetch noted yet.
+  }
+  const chat = options.sessionId ?? "no chat";
+  if (!options.now && chats[id8] === chat) return { fetched: false, unreached: null };
   const into = isGitAddress(target) ? `refs/aidlc/home/${id8}/claim/${id8}` : `refs/remotes/${target}/claim/${id8}`;
-  return git(pd, ["fetch", "--no-tags", "--no-filter", "-q", target, `+refs/heads/claim/${id8}/*:${into}/*`]).ok ? null : target;
+  const ok = quietFetch(pd, ["--no-tags", "--no-filter", "-q", target, `+refs/heads/claim/${id8}/*:${into}/*`]).ok;
+  try {
+    mkdirSync(dirname(mark), { recursive: true });
+    writeFileAtomic(mark, `${JSON.stringify({ ...chats, [id8]: chat })}\n`);
+  } catch {
+    // Unnoted, the next step fetches again.
+  }
+  return { fetched: ok, unreached: ok ? null : target };
 }
 
 // A claim at the home's address: fetched so its payload can be read.
@@ -5628,7 +5666,7 @@ function joinNames(names: string[]): string {
 // the Unit outputs the home's later stages read into its record, and mark the
 // claim done so the Units waiting on it open everywhere. A repo the home has
 // no checkout of keeps the team's result as theirs until the home can check it.
-export function checkTeamResults(projectDir: string): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
+export function checkTeamResults(projectDir: string, unreached?: string[]): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
   const pd = resolveProjectDir(projectDir);
   const found = new Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }>();
   const identity = activeIdentity(pd);
@@ -5651,7 +5689,7 @@ export function checkTeamResults(projectDir: string): Map<string, { team: string
           : { repo: repo.repo, merged: false };
       }
       const repoRemote = repositoryRemote(dir);
-      if (repoRemote !== null) git(dir, ["fetch", "-q", repoRemote]);
+      if (repoRemote !== null && !quietFetch(dir, ["-q", repoRemote]).ok) unreached?.push(repo.repo === "." ? repoRemote : repo.repo);
       const verdict = unitMergeVerdict(dir, repoRemote === null ? "HEAD" : repoIntegration(dir, repoRemote), repo);
       return verdict.merged ? { repo: repo.repo, merged: true, commit: verdict.commit, how: verdict.how } : { repo: repo.repo, merged: false };
     });
@@ -5698,27 +5736,31 @@ function recordUnitDone(projectDir: string, claim: UnitClaimView, verdicts: NonN
 // answer to a proposal, a Unit it started early on that is now done or turned
 // down, and an input the home amended (the copy here takes the new version,
 // and the stages that used it read as current, on every Guard Policy).
-export function buildClaimNotes(projectDir: string, stateContent: string): string[] {
+export function buildClaimNotes(projectDir: string, stateContent: string, sessionId?: string): string[] {
   const build = unitBuildOf(stateContent);
   if (build === null) return [];
   const space = build.homeRecord.slice(0, build.homeRecord.indexOf("/"));
+  const lines: string[] = [];
   if (!isReadOnlyEngineProbe() && getField(stateContent, "Home Result")?.trim() !== "by file") {
+    let home: HomeWork | null = null;
     try {
-      refreshHomeClaims(projectDir, buildsHome(projectDir, build));
+      home = buildsHome(projectDir, build);
     } catch {
       // The home's record is not here: what this workspace has stands.
+    }
+    if (home !== null && refreshHomeClaims(projectDir, { home, sessionId }).unreached !== null) {
+      lines.push("The home could not be reached just now, so news from it may be behind.");
     }
   }
   let claims: Map<string, UnitClaimView>;
   try {
     claims = cachedClaimsForIdentity(projectDir, { space, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false);
   } catch {
-    return [];
+    return lines;
   }
   const mine = claims.get(build.unit);
-  if (mine === undefined) return [];
+  if (mine === undefined) return lines;
   const unit = build.unit;
-  const lines: string[] = [];
   const down = mine.payload.turned_down;
   if (down) {
     lines.push(`${unit} was turned down in ${down.repo} at the home${down.words ? `: "${down.words}"` : ""}. ` +

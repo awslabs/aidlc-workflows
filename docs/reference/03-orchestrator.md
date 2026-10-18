@@ -786,13 +786,18 @@ state records `Unit Push: pushed`: **Push** runs `unit push`, **Not now** runs
 `unit push --later` (then the end carries one line that it is not pushed yet).
 The push's result rides the Unit's claim (`result`: per repo the branch, base,
 heads, changed blobs and patch-id; the outputs the home's later stages read, as
-files under `.aidlc-unit-result/` in the claim commit's tree). Each step at a
-home with `Home Location`, and each step of a Unit's build not by file, first
-runs `refreshHomeClaims`: one fetch of `refs/heads/claim/<id8>/*` into the refs
-the person's own fetch uses (or, by the home's address, into
-`refs/aidlc/home/<id8>/`), so nobody has to fetch to see what the other side
-sent; when the home cannot be reached, the last fetch stands (at the home, with
-one line). At the home,
+files under `.aidlc-unit-result/` in the claim commit's tree). A home with
+`Home Location`, and a Unit's build not by file, run `refreshHomeClaims`: one
+fetch of `refs/heads/claim/<id8>/*` into the refs the person's own fetch uses
+(or, by the home's address, into `refs/aidlc/home/<id8>/`), once per chat
+(noted in `aidlc/.aidlc-sessions/claims-fetched.json`) and, at the home, again
+at each step that shows or acts on the claims (nothing left for the home to
+build now, a result to check, a proposal to answer). That fetch and the merge
+check's fetches go through `quietFetch`: `GIT_TERMINAL_PROMPT=0`,
+`GCM_INTERACTIVE=never` and ssh `BatchMode=yes` for that call only (a `GIT_SSH`
+program is left as it is), and a 15-second timeout. When a remote cannot be
+reached the last fetch stands, with one line that the board, or the build's news
+from the home, may be behind. At the home,
 while a team holds a Unit, each step runs `checkTeamResults`: it fetches each
 repo of every pushed Unit not yet done, runs `unitMergeVerdict` (the last head
 is an ancestor; or a first-parent commit after the base holds every changed

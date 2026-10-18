@@ -12371,7 +12371,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     return;
   }
   // What the home said about a Unit's build reaches its team once, on any step.
-  for (const line of stateContent ? buildClaimNotes(pd, stateContent) : []) sayWithStepOnce(pd, line);
+  for (const line of stateContent ? buildClaimNotes(pd, stateContent, engineSessionId) : []) sayWithStepOnce(pd, line);
   // Archived is terminal for routing, including scoped Unit checkouts. Keep
   // this before Unit jump/park handling so every next shape returns the same
   // archived result instead of reviving or locally parking retired work.
@@ -16347,21 +16347,37 @@ function emitTeamUnitMajorRunStage(
     }
   }
   // Teams build their Units as work of their own: the home walks only the
-  // Units no team holds, as the home has them now.
-  const unreached = !scopeStamp && homeLocation(stateContent) !== null && !isReadOnlyEngineProbe() ? refreshHomeClaims(projectDir) : null;
-  if (unreached !== null) sayWithStepOnce(projectDir, `${unreached} could not be reached just now, so what the teams sent is shown as of your last fetch.`);
-  const overview = !scopeStamp && homeLocation(stateContent) !== null && hasAnyUnitClaimRefs(projectDir)
+  // Units no team holds, as the home has them now. The claims are fetched once
+  // per chat, and at each step that shows or acts on them: the board (nothing
+  // left for the home to build now), a result to check, a change to answer.
+  const teamHome = !scopeStamp && homeLocation(stateContent) !== null;
+  const readOverview = () => teamHome && hasAnyUnitClaimRefs(projectDir)
     ? cachedUnitClaimOverview(projectDir, { writeCache: !isReadOnlyEngineProbe() })
     : null;
+  let overview = readOverview();
+  const unreached: string[] = [];
+  if (teamHome && !isReadOnlyEngineProbe()) {
+    const now = overview !== null && (overview.claimable.length === 0 || [...overview.claims.values()].some((claim) =>
+      claim.status === "claimed" && !claim.payload.done &&
+      (claim.payload.result !== undefined || (claim.payload.proposals ?? []).some((entry) => entry.answer === undefined))
+    ));
+    const refreshed = refreshHomeClaims(projectDir, { sessionId: engineSessionId, now });
+    if (refreshed.unreached !== null) unreached.push(refreshed.unreached);
+    if (refreshed.fetched) overview = readOverview();
+  }
   const heldElsewhere = new Set(overview?.claimed.map((row) => row.unit) ?? []);
-  // What came back from the teams, checked against each repo once per step.
+  // What came back from the teams, checked against each repo once per step
+  // (with the home unreached, the board is the last fetch's).
   let results: ReturnType<typeof checkTeamResults> = new Map();
-  if (heldElsewhere.size > 0 && !isReadOnlyEngineProbe()) {
+  if (heldElsewhere.size > 0 && !isReadOnlyEngineProbe() && unreached.length === 0) {
     try {
-      results = checkTeamResults(projectDir);
+      results = checkTeamResults(projectDir, unreached);
     } catch (e) {
       sayWithStepOnce(projectDir, `The teams' results could not be checked just now: ${errorMessage(e)}`);
     }
+  }
+  if (unreached.length > 0) {
+    sayWithStepOnce(projectDir, `${[...new Set(unreached)].join(", ")} could not be reached just now, so the board may be behind: it shows what your last fetch brought.`);
   }
   const units = scopeStamp ? [scopeStamp.unit] : resolution.batches.flat().filter((unit) => !heldElsewhere.has(unit));
   const kinds = resolution.unitKinds;
