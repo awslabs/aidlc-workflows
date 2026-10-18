@@ -6965,7 +6965,7 @@ function prepareRefreshSource(
   const requiresEdgeHolds = requiresEdgeOracle(join(root, descriptor.harnessDir));
   // Composed files whose recorded contributions must survive the refresh:
   // every stage source, plus the personas (which carry prose fragments only).
-  const composedTargets: Array<{ rel: string; slug: string }> = [];
+  const composedTargets: Array<{ rel: string; slug: string; persona?: string }> = [];
   const stageRoot = join(currentHarness, "aidlc-common", "stages");
   if (pathPresent(stageRoot) && lstatSync(stageRoot).isDirectory()) {
     for (const phase of readdirSync(stageRoot)) {
@@ -6983,19 +6983,26 @@ function prepareRefreshSource(
   if (pathPresent(personaRoot) && lstatSync(personaRoot).isDirectory()) {
     for (const file of readdirSync(personaRoot).filter((name) => name.endsWith(".md"))) {
       const slug = file.slice(0, -3);
-      composedTargets.push({ rel: `${descriptor.harnessDir}/agents/${file}`, slug });
+      const persona = `${descriptor.harnessDir}/agents/${file}`;
+      composedTargets.push({ rel: persona, slug });
       // The persona's native twins carry the same fragments, the previous
       // row's too when the project switches rows (Kiro IDE to Kiro CLI).
       const rows = new Set([descriptor.distribution, prior?.distribution ?? descriptor.distribution]);
       for (const rel of new Set([...rows].flatMap((row) => personaTwinRels(row, descriptor.harnessDir, slug)))) {
-        composedTargets.push({ rel, slug });
+        composedTargets.push({ rel, slug, persona });
       }
     }
   }
-  for (const { rel, slug } of composedTargets) {
-    const priorHash = prior?.files[rel];
-    const currentPath = join(projectDir, rel);
+  for (const { rel, slug, persona } of composedTargets) {
     const stagedPath = join(root, rel);
+    // A twin the new row adds when the project switches rows (Kiro CLI to
+    // Kiro IDE) takes the fragments that landed in its persona, as compose
+    // writes them, when the persona's record proves them.
+    const added = persona !== undefined && prior !== null && prior.distribution !== descriptor.distribution &&
+      !pathPresent(join(projectDir, rel)) && existsSync(stagedPath);
+    const from = added ? persona : rel;
+    const priorHash = prior?.files[from];
+    const currentPath = join(projectDir, from);
     if (!regularFile(currentPath)) continue;
     // Read as AI-DLC wrote it: a CRLF checkout is the same file.
     const current = readFileSync(currentPath, "utf-8").replaceAll("\r\n", "\n");
