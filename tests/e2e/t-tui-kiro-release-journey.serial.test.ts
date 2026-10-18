@@ -83,9 +83,10 @@ function type(session: string, text: string): void {
 const IDLE = "ask a question or describe a task";
 // A permission prompt: the conductor's own card ("<tool> requires approval",
 // Allow preselected), or the card Kiro CLI 2.32.0 shows for a delegated agent's
-// tool ("⚠ 1 tool approval pending", "(a) Approve all pending" preselected).
+// tool ("⚠ 1 tool approval pending" over "(a) Approve all pending",
+// preselected). The option line is matched, not the count line above it.
 // Enter takes the preselected answer on both.
-const PROMPT = /requires approval|tool approvals? pending/;
+const PROMPT = /requires approval|Approve all pending/;
 function sessionCredits(text: string): number | undefined {
   const all = [...text.matchAll(/Credits: turn [\d.]+ \S+ session ([\d.]+)/g)];
   return all.length ? Number(all[all.length - 1][1]) : undefined;
