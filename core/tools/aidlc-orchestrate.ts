@@ -8350,9 +8350,11 @@ function unselectedRecordsDigest(selectable: UnselectedRecords["selectable"]): s
 // Teams building each Unit as work of their own: with no work of the person's
 // own here, what they can take or carry on, read from what this workspace
 // already has (each home's plan, the claims git last brought in, the builds
-// here). Taking one checks the home itself. Null when there is nothing to take
-// or carry on, or the person has other work here to pick up.
-function unitTakeAsk(projectDir: string): AskDirective | null {
+// here). Taking one checks the home itself. When every Unit only waits, the
+// line says so and offers nothing, so no step of the home's own work runs in
+// this clone. Null when there is nothing to take, carry on or wait for, or the
+// person has other work here to pick up.
+function unitTakeAsk(projectDir: string): AskDirective | NoticeDirective | null {
   const active = engineSelection(projectDir).space;
   const team = active === DEFAULT_SPACE ? null : active;
   const unitTool = aidlcToolInvocation("unit");
@@ -8385,10 +8387,13 @@ function unitTakeAsk(projectDir: string): AskDirective | null {
       const take = `${unitTool} take %s --home ${shellArg(intent.dirName)}` +
         (space === DEFAULT_SPACE ? "" : ` --home-space ${shellArg(space)}`);
       const likely = unitLikelyRepos(projectDir, intent.dirName, space);
+      // The walking skeleton, while the home builds it, is the home's: every
+      // other Unit waits on it.
+      const skeleton = teamSkeletonOn(state) && !opening.completed.has(opening.skeleton) ? opening.skeleton : null;
       const ready: string[] = [];
       const waiting: string[] = [];
       for (const unit of unitsInPlanOrder(projectDir, opening.units)) {
-        if (opening.completed.has(unit)) continue;
+        if (opening.completed.has(unit) || unit === skeleton) continue;
         const built = findUnitBuild(projectDir, intent.uuid, unit);
         const claim = overview.claims.get(unit);
         const holder = claim?.status === "claimed" ? claim.owner : claim === undefined ? named.get(unit) ?? null : null;
@@ -8398,9 +8403,11 @@ function unitTakeAsk(projectDir: string): AskDirective | null {
         }
         if (claim?.payload.taken_by !== undefined) continue;
         if (team !== null && holder !== null && holder !== team) continue;
-        const blockers = (opening.blockers.get(unit) ?? []).filter((dep) => overview.claims.get(dep)?.payload.done !== true);
+        const blockers = [...new Set((opening.blockers.get(unit) ?? [])
+          .map((dep) => (dep === "walking-skeleton" ? skeleton ?? dep : dep))
+          .filter((dep) => overview.claims.get(dep)?.payload.done !== true))];
         if (blockers.length > 0) {
-          waiting.push(`${unit} (on ${blockers.join(", ")})`);
+          waiting.push(`${unit} (${holder !== null ? `for ${holder}; ` : ""}on ${blockers.join(", ")})`);
           // Every Unit it waits on is pushed: it can start early on their branches.
           if (blockers.every((dep) => overview.claims.get(dep)?.payload.result !== undefined)) {
             choices.push({
@@ -8424,17 +8431,21 @@ function unitTakeAsk(projectDir: string): AskDirective | null {
       if (ready.length > 0 || waiting.length > 0) {
         sentences.push(
           `${label}${elsewhere} is built by teams, one Unit each.` +
+            (skeleton !== null ? ` The walking skeleton, ${skeleton}, is built at the home first.` : "") +
             (ready.length > 0 ? ` Ready to take: ${ready.join(", ")}.` : "") +
             (waiting.length > 0 ? ` Waiting: ${waiting.join(", ")}.` : ""),
         );
       }
     }
   }
-  if (choices.length === 0) return null;
+  if (choices.length === 0 && sentences.length === 0) return null;
   // Other work of the person's own here is theirs to pick up first.
   const ownWork = workToPickUp(projectDir, active, null)?.filter(({ intent, state }) =>
     !homeHere.some((home) => home.dirName === intent.dirName) && unitBuildOf(state) === null) ?? [];
   if (ownWork.length > 0) return null;
+  if (choices.length === 0) {
+    return noticeDirective(`${sentences.join(" ")} Nothing is ready to take yet: type ${entrySkillInvocation()} again once it is.`);
+  }
   for (const home of homeHere) {
     choices.push({
       label: `Carry on ${intentDisplayLabel(home)} here, as its home`,

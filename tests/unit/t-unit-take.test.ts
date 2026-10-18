@@ -24,6 +24,7 @@ import {
   cloneOf,
   GIT_ENV,
   git,
+  homeState,
   makeHome,
   next,
   ORCH,
@@ -98,6 +99,26 @@ describe("a team member's clone of the home's workspace", () => {
     ]);
     expect(choices[0].command).toEndWith(`aidlc-unit.ts take refunds --home ${HOME}`);
     expect(choices[2].command).toEndWith(`next --pick ${HOME}`);
+  });
+
+  test("while the home builds the walking skeleton, hears that every Unit waits on it, and nothing of the home's work runs", () => {
+    const dependencies = "# Unit dependencies\n\n```yaml\nunits:\n  - name: orders\n    depends_on: []\n" +
+      "  - name: refunds\n    depends_on: [orders]\n  - name: checkout-ui\n    depends_on: [orders]\n" +
+      "  - name: reporting\n    depends_on: [refunds]\n```\n";
+    const home = makeHome({ dependencies, state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    const step = next(alice);
+    expect(step.kind, JSON.stringify(step)).toBe("notice");
+    expect(step.message).toBe(
+      "fixture is built by teams, one Unit each. The walking skeleton, orders, is built at the home first. " +
+        "Waiting: refunds (for payments; on orders), checkout-ui (for web; on orders), reporting (on orders, refunds). " +
+        "Nothing is ready to take yet: type /aidlc again once it is.",
+    );
+    expect(git(alice, ["status", "--porcelain"])).toBe("");
   });
 });
 
