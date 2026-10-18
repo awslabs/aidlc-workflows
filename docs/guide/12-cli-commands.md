@@ -49,6 +49,8 @@ diagnostic and lifecycle routes.
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
 | `/aidlc unit assign <unit>=<team> ... \| --open` | At the home, hold each named Unit for a team, or leave every Unit open |
 | `/aidlc unit take <unit> --home <record>` | Take a Unit of a home's work as your team's own piece of work, or carry its build on |
+| `/aidlc unit push [--later]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result home |
+| `/aidlc unit turned-down <unit> --repo <repo>` | At the home, send one repo of a team's Unit back to the team, with your words |
 | `/aidlc unit adopt <unit>` | Adopt the checked-out live claim branch in a fresh clone |
 | `/aidlc unit participate` | Mark this clone for the guided Unit-claim picker |
 | `/aidlc unit share` | Commit the work here and push the integration branch so the teams can take Units, or see a landed one |
@@ -701,6 +703,35 @@ records `UNIT_TAKEN_IN`, and is selected for this chat. Taking a Unit whose
 build is already in this workspace carries that build on. A home that takes no
 push from here still gives you a Unit held for your team, and its result goes
 back as a file; an open Unit there needs the lead to hold it for you.
+
+### `/aidlc unit push` - Send a Unit's build home
+
+In a Unit's build, once its stages are approved. AI-DLC offers it at the end of
+the build; you can also run it yourself, for example after a review fix:
+
+```
+/aidlc unit push
+/aidlc unit push --later
+```
+
+In each repo the Unit's Code Generation recorded writing to (its
+`source-manifest.json`), it commits exactly those files on a branch named after
+the Unit, with your git identity, signing and hooks, and runs
+`git push -u <remote> <unit>`: no force, no `--no-verify`. Your other
+uncommitted work is not committed; when you were on another branch, you are
+switched to the Unit's branch and the line says so. A refused push is said
+once, in the host's or hook's own words, and nothing retries. The result (each
+repo's branch, base, every head pushed, each changed file's blob and patch-id,
+and the Unit outputs the home's later stages read) goes onto the Unit's claim
+at the home, and `UNIT_PUSHED` is recorded. `--later` pushes nothing and only
+records that you said not now.
+
+### `/aidlc unit turned-down <unit> --repo <repo>` - Send a repo back
+
+At the home, when a team's pull request in one repo is turned down. The agent
+runs it from your words with `--person-words '<your words>'`. Your words go onto
+the Unit's claim, and the team hears them once at its next step, with the way
+back to Code Generation. A repo that already merged stays merged.
 
 ### `/aidlc unit adopt <unit>` — Adopt a teammate's live claim
 

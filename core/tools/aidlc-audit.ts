@@ -278,6 +278,7 @@ const VALID_EVENT_TYPES = new Set([
   "UNIT_OWNERSHIP_SET",
   "UNITS_ASSIGNED",
   "UNIT_TAKEN_IN",
+  "UNIT_PUSHED",
   "UNIT_GATE_RHYTHM_SET",
   "CONSTRUCTION_POLICY_SET",
   "UNIT_MERGED",
@@ -606,6 +607,7 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "UNIT_OWNERSHIP_SET",
   "UNITS_ASSIGNED",
   "UNIT_TAKEN_IN",
+  "UNIT_PUSHED",
   "UNIT_GATE_RHYTHM_SET",
   // The applied Construction policy decides which stage starts are attempt
   // boundaries for Unit receipts, so only its typed setters may record it.

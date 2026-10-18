@@ -679,9 +679,11 @@ a line waits past the step that settles the walking skeleton's stance, which
 the agent passes through without speaking. Showing the question notes an engine ask mark; once a
 human turn is on record after it with no answer recorded, the question is not
 put again and the first step carries one line that this session builds the
-Units and how to ask for teams. Work with recorded repos is never asked: the
-first step carries `teamsAcrossReposLine` instead, the line the setter's
-refusal also says.
+Units and how to ask for teams. Work with recorded repos in a workspace that
+is not a git repository is never asked: the first step carries
+`teamsAcrossReposLine` instead, the line the setter's refusal also says. In a
+workspace in git, it is asked like any work, and choosing teams records the
+home.
 
 With `Unit Ownership: team`, each hand-over between people is an engine ask
 when it is due, `ask_type: team-handover` (response route `command`), its
@@ -778,6 +780,23 @@ A Unit's build is solo work with one Unit: its state records `Unit Build`,
 `[x]` with `SKIP`, so per-Unit paths stay per-Unit; `Construction Iteration` is
 `stage-major` for the per-stage team rhythm and `unit-major` with checkpoints
 for `unit-end`; `Skeleton Stance` is `off`.
+
+When a build has no stage left, `next` returns `ask_type: unit-push` until its
+state records `Unit Push: pushed`: **Push** runs `unit push`, **Not now** runs
+`unit push --later` (then the end carries one line that it is not pushed yet).
+The push's result rides the Unit's claim (`result`: per repo the branch, base,
+heads, changed blobs and patch-id; the outputs the home's later stages read, as
+files under `.aidlc-unit-result/` in the claim commit's tree). At the home,
+while a team holds a Unit, each step runs `checkTeamResults`: it fetches each
+repo of every pushed Unit not yet done, runs `unitMergeVerdict` (the last head
+is an ancestor; or a first-parent commit after the base holds every changed
+blob and none of the deleted paths; or one first-parent commit has the same
+patch-id), puts the verdicts on the claim, and once every repo merged records
+`UNIT_MERGED` with `Built By` under the per-intent lock, writes the outputs into
+the home's record and marks the claim `done`. The home's Unit Progress shows a
+Unit merged that way with every stage done. While a team still holds a Unit and
+none is left to the home, the step is the board (`renderUnitBoard`). A
+`turned_down` note on the claim reaches the build once, on any step.
 
 When skeleton-on applies, the first DAG Unit must be planned as the smallest
 working integrated slice. It completes its applicable per-unit stages before

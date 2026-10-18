@@ -129,7 +129,7 @@ export interface Home {
 }
 
 /** The home workspace, committed and pushed to its own bare host. */
-export function makeHome(options: { state?: string; dependencies?: string } = {}): Home {
+export function makeHome(options: { state?: string; dependencies?: string; repos?: Record<string, string> } = {}): Home {
   const dir = createTestProject();
   projects.push(dir);
   seedAidlcMemory(dir);
@@ -141,11 +141,21 @@ export function makeHome(options: { state?: string; dependencies?: string } = {}
   const requirements = join(seededRecordDir(dir), "inception", "requirements-analysis");
   mkdirSync(requirements, { recursive: true });
   writeFileSync(join(requirements, "requirements.md"), "# Requirements\n\nFR1 refunds.\n");
+  // The work's code repos, by name and host: recorded for the work, cloned as
+  // the workspace's children, and left out of the workspace's own repo.
+  const repos = Object.keys(options.repos ?? {});
+  if (repos.length > 0) {
+    const registryPath = join(dir, "aidlc", "spaces", "default", "intents", "intents.json");
+    const registry = JSON.parse(readFileSync(registryPath, "utf-8")) as Array<Record<string, unknown>>;
+    registry[0].repos = repos;
+    writeFileSync(registryPath, `${JSON.stringify(registry, null, 2)}\n`);
+    for (const [name, host] of Object.entries(options.repos ?? {})) cloneCode(host, dir, name);
+  }
   writeFileSync(
     join(dir, ".gitignore"),
     "aidlc/.aidlc-clone-id\naidlc/.aidlc-sessions/\naidlc/active-space\naidlc/spaces/*/intents/active-intent\n" +
       "aidlc/.aidlc-unit-scope.json\naidlc/.aidlc-claim-generations.json\naidlc/.aidlc-claim-registry.json\n" +
-      "**/aidlc/spaces/*/intents/**/.aidlc-engine/\n",
+      "**/aidlc/spaces/*/intents/**/.aidlc-engine/\n" + repos.map((name) => `/${name}/\n`).join(""),
   );
   git(dir, ["init", "-q", "-b", "main"]);
   git(dir, ["config", "user.name", "lead"]);
@@ -157,6 +167,31 @@ export function makeHome(options: { state?: string; dependencies?: string } = {}
   git(dir, ["remote", "add", "origin", remote]);
   git(dir, ["push", "-q", "-u", "origin", "main"]);
   return { dir, remote };
+}
+
+/** A code repo's bare host with one commit on main. */
+export function codeHost(label: string): string {
+  const seed = tempDir(`${label}-seed`);
+  git(seed, ["init", "-q", "-b", "main"]);
+  git(seed, ["config", "user.name", "lead"]);
+  git(seed, ["config", "user.email", "lead@example.test"]);
+  writeFileSync(join(seed, "README.md"), `# ${label}\n`);
+  git(seed, ["add", "-A"]);
+  git(seed, ["commit", "-q", "-m", "start"]);
+  const host = tempDir(`${label}-host`);
+  git(host, ["init", "-q", "--bare", "-b", "main"]);
+  git(seed, ["remote", "add", "origin", host]);
+  git(seed, ["push", "-q", "-u", "origin", "main"]);
+  return host;
+}
+
+/** A clone of a code host as a workspace's child repo. */
+export function cloneCode(host: string, workspace: string, name: string, user = "lead"): string {
+  const dir = join(workspace, name);
+  git(workspace, ["clone", "-q", host, dir]);
+  git(dir, ["config", "user.name", user]);
+  git(dir, ["config", "user.email", `${user}@example.test`]);
+  return dir;
 }
 
 /** A teammate's clone of a workspace host. */

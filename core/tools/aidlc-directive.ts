@@ -800,6 +800,13 @@ export interface UnitTakeAskDirective extends AskDirectiveBase {
   choices: AskChoice[];
 }
 
+// The end of a Unit's build: push it home, or not now.
+export interface UnitPushAskDirective extends AskDirectiveBase {
+  ask_type: "unit-push";
+  response_route: "command";
+  choices: AskChoice[];
+}
+
 export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   ask_type: "new-work-routing";
   response_route: "next";
@@ -912,6 +919,7 @@ export type AskDirective =
   | ReposManifestAskDirective
   | UnitAssignmentAskDirective
   | UnitTakeAskDirective
+  | UnitPushAskDirective
   | NewWorkRoutingAskDirective
   | UnitClaimAskDirective
   | LegacyPlanApprovalRecoveryAskDirective
@@ -1707,7 +1715,7 @@ export function ceremonyNote(state: "on" | "off", questionsOnly = false): string
 // the numbers: a reply of "2" is read against this order, and the agent
 // renders nothing of its own. One builder, so every question has one shape.
 // Engine questions answered by running the picked choice's command.
-const COMMAND_CHOICE_ASKS = new Set(["construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "repos-manifest", "unit-assignment", "unit-take"]);
+const COMMAND_CHOICE_ASKS = new Set(["construction-staffing", "repo-scope", "units-repos", "unit-plan-change", "repos-manifest", "unit-assignment", "unit-take", "unit-push"]);
 
 export interface AskChoice {
   label: string;

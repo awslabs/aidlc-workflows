@@ -9,12 +9,14 @@ engine contract is scope-agnostic:
 - a valid Unit dependency DAG
 - a shared git namespace, or sibling worktrees sharing one local ref database
 
-Team ownership currently requires the workspace root itself to be the source Git
-repository. Work with a recorded sibling-repo set is not asked who builds its
-Units: when Construction starts, AI-DLC says in one line that this session
-builds them, because teams each owning a Unit is not available yet for work
-across repos, and `set-unit-ownership team` refuses with the same line before
-changing state.
+Teams build work that spans several repos when the workspace is in git:
+choosing teams records the home, and each team builds its Unit as a piece of
+work of its own ([Take a Unit](#take-a-unit-as-your-teams-own-work)). In a
+workspace that is not a git repository, work with a recorded repo set is not
+asked who builds its Units: when Construction starts, AI-DLC says in one line
+that this session builds them and that the workspace needs to be in git for
+teams, and `set-unit-ownership team` refuses with the same line before changing
+state.
 
 The integration lead works from unscoped main. Each delivery team works from a
 checkout stamped to one claimed Unit. A claimed checkout runs that Unit's exact
@@ -253,6 +255,47 @@ Unit was built.
 Each build keeps its entry in its own record folder (`aidlc-intent.json`), not in
 the space's `intents.json`, so two people who take two Units in one space share
 no file and their pulls never conflict.
+
+## Push your Unit, and merge it your way
+
+When your Unit's last stage is approved, AI-DLC offers the push: "Refunds is
+built and you approved it. It changed checkout-api and billing. Commit its
+changes on branch refunds in each and push them?" **Push** runs
+`aidlc unit push`: in each repo, a commit of exactly the files the Unit's Code
+Generation recorded writing (its `source-manifest.json`), on a branch named
+after the Unit, pushed to that repo's own remote with your own login,
+identity, signing and hooks. Your other uncommitted work is never committed. If
+you were on another branch, you are switched to the Unit's branch with your
+work as it was, and the line says so. A push a hook or the host refuses is said
+once, in its own words, and nothing retries. **Not now** pushes nothing; the
+end of the build says once that the Unit is not pushed yet.
+
+Open a pull request in each repo your usual way and merge it the way that repo
+merges: a merge commit, a squash or a rebase. The push also sends the result
+home on the Unit's claim: in each repo the branch, every head pushed and each
+changed file's blob, and the Unit outputs the home's later stages read (Code
+Generation's summary and test instructions). A review fix pushed later goes
+home the same way.
+
+At the home, while teams build, each step checks every pushed Unit's repos
+against their integration branch, with the lead's own login, and shows the
+board:
+
+```text
+Units of checkout-revamp:
+- refunds, payments: checkout-api merged, billing not merged yet (1 of 2 merged)
+- checkout-ui, web: building, taken by sam
+- reporting, here: waits on refunds
+```
+
+A Unit is done when every repo it changed has merged, however it merged: the
+home records `UNIT_MERGED`, writes the Unit's outputs into its record where
+Build and Test reads them, and marks the claim done, so the Units waiting on it
+open for the home and for every team. A repo the home has no checkout of stays
+"not merged yet" there. To send a repo back, the lead says so at the home and
+AI-DLC runs `aidlc unit turned-down <unit> --repo <repo>` with their words; the
+team hears them once at its next step, with the way back to Code Generation.
+What already merged stays merged.
 
 ---
 

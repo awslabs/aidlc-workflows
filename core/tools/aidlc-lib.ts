@@ -27669,14 +27669,15 @@ export function clearUnitsReposAsked(projectDir: string): void {
   clearEngineAskMark(projectDir, UNITS_REPOS_ASK);
 }
 
-// Teams each owning a Unit need the code in this project's own repo, so work
-// with recorded repos is built by one session for now. What the person hears,
-// from the engine as Construction starts and from the ownership setter alike.
+// Teams build Units across repos when the workspace is in git (its origin is
+// where the Units are given out); work with recorded repos in a workspace that
+// is not is built by one session. What the person hears, from the engine as
+// Construction starts and from the ownership setter alike.
 export function teamsAcrossReposLine(repoCount: number, unitCount?: number): string {
   const where = repoCount === 1 ? "This work's code is in a repo of its own" : `This work spans ${repoCount} repos`;
   const units = unitCount === undefined ? "its Units" : `its ${unitCount} Units`;
-  return `${where}, so this session builds ${units}: teams each owning a Unit is not available yet for ` +
-    "work across repos.";
+  return `${where} and this workspace is not a git repository, so this session builds ${units}: for teams to ` +
+    "each own a Unit, put the workspace in git first.";
 }
 
 /** Recovery operates exactly where the framework recorded parking this slug;
