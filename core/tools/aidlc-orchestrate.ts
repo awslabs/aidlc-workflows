@@ -4956,6 +4956,7 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
   // only the tokens in front of the `--` mark, so neither the mark nor a word
   // behind it is ever a flag's value.
   const read = readNextTokens(args);
+  let emptyList: string | undefined;
   for (const { role, token: a, value } of read.tokens) {
     if (role === "word") {
       // Among the person's own words a flag-shaped token is one of their words,
@@ -5094,7 +5095,8 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       }
     } else if (a === "--skip" || a === "--add") {
       // Stage slugs echoed into the creation command: each must name a stage.
-      // An empty list (`--skip ''`, or no value) changes nothing.
+      // An empty list (`--skip ''`, or no value) changes nothing beside a list
+      // that names a stage, and is refused alone (after this loop).
       const slugs = splitSlugList(value);
       const unknown = slugs.find((slug) => nodeForSlug(slug) === undefined);
       if (unknown !== undefined) {
@@ -5102,6 +5104,10 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       } else if (slugs.length > 0) {
         flags.planChanges ??= { skip: [], add: [] };
         flags.planChanges[a === "--skip" ? "skip" : "add"].push(...slugs);
+      } else {
+        emptyList ??= value === undefined
+          ? `${a} requires <stage,...>.`
+          : `${a} requires stage slugs; "${value}" is not a stage.`;
       }
     } else if (a === "--plan-name") {
       // Echoed into the creation command, so only a plain kebab name passes.
@@ -5206,6 +5212,9 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
       wordTokens.push(a);
     }
   }
+  // With no list naming a stage, the line would run as bare `next` and start
+  // the stage they may have asked to skip.
+  if (emptyList !== undefined && flags.planChanges === undefined) flags.parseError ??= emptyList;
   const literalIntent = read.literal !== null;
   if (read.literal !== null) {
     intentWords.push(...read.literal);

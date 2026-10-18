@@ -488,6 +488,7 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
     const forms: Array<[string[], string]> = [
       [["--skip", "", "--add", "intent-capture"], "--add intent-capture"],
       [["--skip", "--add", "intent-capture"], "--add intent-capture"],
+      [["--add", "intent-capture", "--skip"], "--add intent-capture"],
       [["--skip", "deployment-pipeline", "--add", ""], "--skip deployment-pipeline"],
       [["--skip", "deployment-pipeline", "--add"], "--skip deployment-pipeline"],
     ];
@@ -497,6 +498,22 @@ describe("t351 (4) next carries the plan's typed changes and checks every echoed
       const creation = [...d.message.matchAll(/`([^`]*)`/g)].map((m) => m[1]).find((span) => span.includes("--scope express"));
       expect(creation, d.message).toContain(carried);
       expect(creation, d.message).not.toContain(carried.startsWith("--add") ? "--skip" : "--add");
+    }
+  });
+
+  test("a --skip or --add naming no stage, with no other list naming one, is refused as before and starts nothing", () => {
+    const proj = installedProject();
+    expect(runTool(proj, "aidlc-utility.ts", ["intent-create", "--scope", "bugfix"]).status).toBe(0);
+    const forms: Array<[string[], string]> = [
+      [["--skip"], "--skip requires <stage,...>."],
+      [["--skip", ""], `--skip requires stage slugs; "" is not a stage.`],
+      [["--add"], "--add requires <stage,...>."],
+      [["--skip", "", "--add", ""], `--skip requires stage slugs; "" is not a stage.`],
+    ];
+    for (const [lists, message] of forms) {
+      const d = nextDirective(proj, lists);
+      expect(d.kind, lists.join(" ")).toBe("error");
+      expect(d.message).toBe(message);
     }
   });
 
