@@ -45,6 +45,8 @@ function project(name: string) {
     AIDLC_BIN_DIR: join(machine, "bin"),
     // A refresh reads the release files from here.
     AIDLC_RUNTIME_ROOT: RELEASES,
+    // The person's Kiro home, so the host's ~/.kiro is never read.
+    KIRO_HOME: join(machine, "kiro-home"),
   };
   const run = (args: string[]) => {
     const result = spawnSync(process.execPath, [INIT, ...args], {
@@ -212,6 +214,31 @@ describe("a refresh over an agent file with a recorded model or effort", () => {
     const refreshed = p.run(["config", "--project-dir", p.dir, "--yes"]);
     expect(refreshed.status, refreshed.out).toBe(0);
     expect(readFileSync(join(p.dir, rel), "utf-8")).toBe(written);
+  });
+
+  // Kiro CLI's upgrade for its 3.0 engine rewrites the agent file in its own
+  // format and keeps AI-DLC's beside it as .json.bak; a refresh keeps Kiro's
+  // copy whatever model is recorded for that agent, and --force takes the
+  // release's file with the model.
+  test("kiro: an agent file Kiro upgraded stays as Kiro left it with a model recorded, and --force writes the model", () => {
+    const p = project("kiro-upgraded");
+    const release = join(RELEASES, "kiro");
+    const installed = p.run(["config", "--project-dir", p.dir, "--from", release, "--harness", "kiro", "--mcp", "none", "--yes"]);
+    expect(installed.status, installed.out).toBe(0);
+    const pinned = p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", "architect", "--model", "claude-sonnet-5-5", "--yes"]);
+    expect(pinned.status, pinned.out).toBe(0);
+    const file = join(p.dir, ".kiro", "agents", "aidlc-architect-agent.json");
+    const written = readFileSync(file, "utf-8");
+    cpSync(file, `${file}.bak`);
+    const upgraded = `${JSON.stringify({ ...JSON.parse(written), model: undefined, permissions: { rules: [] } }, null, 2)}\n`;
+    writeFileSync(file, upgraded);
+    const refresh = ["config", "--project-dir", p.dir, "--yes"];
+    const kept = p.run(refresh);
+    expect(kept.status, kept.out).toBe(0);
+    expect(readFileSync(file, "utf-8")).toBe(upgraded);
+    const forced = p.run([...refresh, "--force"]);
+    expect(forced.status, forced.out).toBe(0);
+    expect(readFileSync(file, "utf-8")).toBe(written);
   });
 
   // A copied release tree has no install record yet: its agent file is the
