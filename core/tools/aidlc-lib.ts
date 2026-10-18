@@ -14568,6 +14568,13 @@ function assumptionExclusionStart(lines: string[], headingLine: number): number 
   return headingLine;
 }
 
+// The one shape a later round of questions takes in a file whose summary was
+// already confirmed (a revision, or a reopened step): the refusals name it, so
+// a round is never written as a section of its own or a second summary.
+const SUMMARY_LATER_ROUND =
+  ' A later round of questions (a revision, or a reopened step) goes in "## Q<n>" sections after the summary, numbered on from the last question; ' +
+  `then rewrite the bullets of the one "${SUMMARY_CONFIRMATION_CHECKPOINT}" section to cover every answer, blank its "[Answer]:" line, and confirm it again.`;
+
 function summaryBoundarySpelling(line: string): boolean {
 	const atx = /^ {0,3}##[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/.exec(line);
 	return atx !== null && (atx[1] === "Requested Changes Feedback" || visibleQuestionId(atx[1]) !== null);
@@ -14607,7 +14614,8 @@ export function summaryConfirmationContentHash(content: string): string {
     if (title === SUMMARY_CONFIRMATION_CHECKPOINT && atxH2) {
       if (sawSummary) {
         throw new Error(
-          `duplicate H2 section "${SUMMARY_CONFIRMATION_CHECKPOINT}"`,
+          `duplicate H2 section "${SUMMARY_CONFIRMATION_CHECKPOINT}".` +
+            SUMMARY_LATER_ROUND,
         );
       }
       sawSummary = true;
@@ -14667,7 +14675,7 @@ export function summaryConfirmationContentHash(content: string): string {
           : `H${heading.level}`;
       throw new Error(
         `unsupported ${headingKind} heading "${title}" ` +
-          boundary,
+          boundary + "." + SUMMARY_LATER_ROUND,
       );
     }
   }
