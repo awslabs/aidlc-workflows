@@ -216,6 +216,8 @@ import {
   unitGateStatus,
   unitMajorConstructionStageSlugs,
   unitParkedPath,
+  unitPlainName,
+  type AuditShardEvent,
   type UnitGateScope,
   updateIntentStatus,
   usesStageLevelPerUnitArtifacts,
@@ -1496,7 +1498,11 @@ function currentUnitProgressSection(content: string): string {
   return content.slice(range.start, range.end).trimEnd();
 }
 
-function hasCurrentTeamUnitActivity(pd: string, content: string): boolean {
+function hasCurrentTeamUnitActivity(
+  pd: string,
+  content: string,
+  counts?: (row: AuditShardEvent) => boolean,
+): boolean {
   if (!isTeamUnitOwnership(content)) return false;
   const rows = readAuditShardEvents(pd).sort((a, b) => {
     if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
@@ -1538,6 +1544,7 @@ function hasCurrentTeamUnitActivity(pd: string, content: string): boolean {
       ",",
     ),
   );
+  const counted = counts ?? ((row: AuditShardEvent) => activityEvents.has(row.event));
   for (let i = Math.max(floor, latestOwnership) + 1; i < rows.length; i++) {
     const row = rows[i];
     if (row.event === "UNIT_OWNERSHIP_SET") {
@@ -1546,7 +1553,7 @@ function hasCurrentTeamUnitActivity(pd: string, content: string): boolean {
     }
     if (
       teamMode &&
-      activityEvents.has(row.event) &&
+      counted(row) &&
       auditBlockField(row.block, "Unit") !== null
     ) {
       return true;
@@ -1632,9 +1639,9 @@ function handleSetUnitOwnership(args: string[]): void {
     emitAudit(pd, "UNIT_OWNERSHIP_SET", { Mode: value });
     writeStateFile(pd, content);
     if (switches.length > 0) keepPlanQuestionOver(pd, before, content);
-    // Each switch's own line, as the two setters print it. How team approvals
-    // go is said by the first team step the agent speaks from; the command
-    // that changes it is here for the agent.
+    // Each switch's own line, as the two setters print it. The first team step
+    // the agent speaks from offers approving once at the end of each Unit; the
+    // command that takes the offer is here for the agent.
     const notice = switches
       .map((change) => constructionPolicyNotice(change.from, change.to, change.field).notice)
       .filter((line): line is string => typeof line === "string")
@@ -1669,10 +1676,15 @@ function handleSetUnitGateRhythm(args: string[]): void {
       );
     }
     const current = readUnitGateRhythm(content);
-    if (value !== current && hasCurrentTeamUnitActivity(pd, content)) {
-      error(
-        `Unit gate rhythm is frozen after team Unit activity in the current workflow attempt (current: ${current}).`,
-      );
+    // Each team gate is recorded under the rhythm it was asked in (its Gate
+    // Scope), and a rhythm reads only its own; a Unit started or built so far
+    // routes the same under either. So the change holds until a Unit's first
+    // approval question opens.
+    if (
+      value !== current &&
+      hasCurrentTeamUnitActivity(pd, content, (row) => values.includes(auditBlockField(row.block, "Gate Scope") ?? ""))
+    ) {
+      error(unitGateRhythmStaysLine(pd, content, current));
     }
     content = setOrInsertField(
       content,
@@ -1684,6 +1696,24 @@ function handleSetUnitGateRhythm(args: string[]): void {
     writeStateFile(pd, content);
     console.log(JSON.stringify({ updated: true, unit_gate_rhythm: value }));
   });
+}
+
+// The rhythm the Units' approvals began under stays for the work. A Unit
+// approved to its end would be asked for again under the other rhythm, and
+// the line names it.
+function unitGateRhythmStaysLine(pd: string, content: string, current: UnitGateScope): string {
+  const last = unitMajorConstructionStageSlugs(getField(content, "Scope") ?? "", content, true).at(-1);
+  const dag = resolveBoltDag(pd);
+  const approved = last === undefined || dag.state !== "ok"
+    ? undefined
+    : dag.units.find((unit) => unitGateStatus(pd, last, unit, current) === "approved");
+  const how = current === "unit-end" ? "once at the end of each Unit" : "after every stage";
+  const why = approved === undefined
+    ? ""
+    : `: that would ask you again for the ${unitPlainName(approved)} Unit, which you approved ` +
+      (current === "unit-end" ? "once at its end" : "after every stage");
+  return `The Units are already being approved ${how}, so that stays for this work${why}. ` +
+    `Carry on with \`${entrySkillInvocation()}\`.`;
 }
 
 interface UnitProgressRefreshPayload {

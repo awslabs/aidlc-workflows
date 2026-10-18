@@ -4022,8 +4022,8 @@ function constructionStaffingAsk(
     ) {
       sayWithStepOnce(
         projectDir,
-        "Each team builds its Unit start to finish and approves it after every stage. To approve once at the " +
-          "end of each Unit instead, say so before the first Unit is built.",
+        "Each team will approve its Unit after every stage. Do you want them to approve once at the end of each " +
+          "Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.",
       );
     }
     return null;

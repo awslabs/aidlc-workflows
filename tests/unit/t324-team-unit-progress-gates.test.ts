@@ -116,6 +116,12 @@ const BLOCK = [
   "code-generation",
 ];
 
+// What the lead reads with the first team step, and when the rhythm holds.
+const APPROVALS_LINE = "Each team will approve its Unit after every stage. Do you want them to approve once at the " +
+  "end of each Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.";
+const RHYTHM_STAYS_PER_STAGE = "The Units are already being approved after every stage, so that stays for this " +
+  "work. Carry on with `/aidlc`.";
+
 const tempDirs: string[] = [];
 afterEach(() => {
   while (tempDirs.length) cleanupTestProject(tempDirs.pop());
@@ -135,6 +141,7 @@ interface Directive {
 function constructionState(opts: {
   ownership?: string;
   rhythm?: "per-stage" | "unit-end";
+  scope?: string;
 } = {}): string {
   const ownership = opts.ownership
     ? `- **Unit Ownership**: ${opts.ownership}\n`
@@ -147,7 +154,7 @@ function constructionState(opts: {
 ## Project Information
 - **Project**: team unit progress test
 - **Project Type**: Greenfield
-- **Scope**: feature
+- **Scope**: ${opts.scope ?? "feature"}
 - **State Version**: 8
 - **Skeleton Stance**: on
 
@@ -183,6 +190,7 @@ ${ownership}${rhythm}
 function seedProject(opts: {
   ownership?: string;
   rhythm?: "per-stage" | "unit-end";
+  scope?: string;
 } = {}, units = ["alpha", "beta"]): string {
   const proj = createTestProject();
   tempDirs.push(proj);
@@ -1301,14 +1309,25 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(frozenOwnership.out).toContain(
       "frozen after team Unit activity in the current workflow attempt",
     );
+    // A started Unit routes the same under either rhythm; its first gate
+    // fixes the rhythm.
+    expect(runState(proj, ["set-unit-gate-rhythm", "per-stage"]).rc).toBe(0);
+    appendAuditEntry(
+      "STAGE_AWAITING_APPROVAL",
+      {
+        Stage: "functional-design",
+        Unit: "alpha",
+        "Gate Scope": "per-stage",
+        "Gate Stages": "functional-design",
+      },
+      proj,
+    );
     const frozenRhythm = runState(
       proj,
-      ["set-unit-gate-rhythm", "per-stage"],
+      ["set-unit-gate-rhythm", "unit-end"],
     );
     expect(frozenRhythm.rc).not.toBe(0);
-    expect(frozenRhythm.out).toContain(
-      "frozen after team Unit activity in the current workflow attempt",
-    );
+    expect(frozenRhythm.out).toContain(RHYTHM_STAYS_PER_STAGE);
 
     appendAuditEntry(
       "STAGE_JUMPED",
@@ -1318,7 +1337,7 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
       },
       proj,
     );
-    expect(runState(proj, ["set-unit-gate-rhythm", "per-stage"]).rc).toBe(0);
+    expect(runState(proj, ["set-unit-gate-rhythm", "unit-end"]).rc).toBe(0);
     expect(runState(proj, ["set-unit-ownership", "solo"]).rc).toBe(0);
 
     expect(runState(proj, ["set-unit-ownership", "bogus"]).rc).not.toBe(0);
@@ -1387,8 +1406,8 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     mkdirSync(seededAuditDir(proj), { recursive: true });
     writeFileSync(
       join(seededAuditDir(proj), "zzzz-activity.md"),
-      `## UNIT_STARTED\n**Timestamp**: ${ts}\n**Event**: UNIT_STARTED\n` +
-        "**Stage**: functional-design\n**Unit**: alpha\n**Run floor**: unstarted#0\n\n---\n",
+      `## STAGE_AWAITING_APPROVAL\n**Timestamp**: ${ts}\n**Event**: STAGE_AWAITING_APPROVAL\n` +
+        "**Stage**: code-generation\n**Unit**: alpha\n**Gate Scope**: unit-end\n\n---\n",
     );
     writeFileSync(
       join(seededAuditDir(proj), "aaaa-jump.md"),
@@ -1397,6 +1416,123 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     );
     expect(runState(proj, ["set-unit-gate-rhythm", "per-stage"]).rc).toBe(0);
   });
+
+  test("a switch after a Unit started and before its first gate takes effect at once, both ways", () => {
+    const toEnd = seedProject({ ownership: "team" });
+    settleBody(toEnd, runNext(toEnd));
+    const switched = runState(toEnd, ["set-unit-gate-rhythm", "unit-end"]);
+    expect(switched.rc, switched.out).toBe(0);
+    for (const stage of BLOCK.slice(1)) {
+      const body = runNext(toEnd);
+      expect(body).toMatchObject({ stage, unit: "alpha", gate: false });
+      settleBody(toEnd, body);
+    }
+    expect(runNext(toEnd)).toMatchObject({
+      stage: "code-generation",
+      unit: "alpha",
+      gate: true,
+      unit_gate: "unit-end",
+    });
+
+    const toEach = seedProject({ ownership: "team", rhythm: "unit-end" });
+    settleBody(toEach, runNext(toEach));
+    expect(runNext(toEach)).toMatchObject({ stage: "nfr-requirements", unit: "alpha", gate: false });
+    expect(runState(toEach, ["set-unit-gate-rhythm", "per-stage"]).rc).toBe(0);
+    expect(runNext(toEach)).toMatchObject({
+      stage: "functional-design",
+      unit: "alpha",
+      gate: true,
+      unit_gate: "per-stage",
+    });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Live on Claude Code: the line came with the first Unit's step, whose first
+  // move started the Unit, and the lead's answer on the next turn was refused.
+  // The stage's own questions end that turn, so the answer comes before the
+  // first approval; that question opens with its report, before the person
+  // sees it, so an answer given at it is too late.
+  for (const scope of ["feature", "workshop"]) {
+    test(`the lead's yes to one approval per Unit, given in the first stage's question turn, is taken (${scope})`, () => {
+      const proj = seedProject({ ownership: "team", scope });
+      const session = "01995000-7a11-7000-8000-0000000324ab";
+      const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: session, AIDLC_SESSION_OVERRIDE_SOURCE: "payload" };
+      const step = runNextWithEnv(proj, chat);
+      expect(step).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "alpha", gate: false });
+      expect(step.change_notices, JSON.stringify(step)).toContain(APPROVALS_LINE);
+      expect(runState(proj, ["unit", "start", "--stage", "functional-design", "--unit", "alpha"]).rc).toBe(0);
+      const question = spawnSync(BUN, [
+        LOG, "decision", "--stage", "functional-design", "--unit", "alpha",
+        "--decision", "Which entities does alpha own?", "--options", "A,B,X", "--project-dir", proj,
+      ], { env: ENV, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+      expect(question.status, `${question.stdout}${question.stderr}`).toBe(0);
+      const said: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: session, AIDLC_UNATTENDED: "0" };
+      delete said.AIDLC_SESSION_OVERRIDE_SOURCE;
+      const reply = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+        cwd: proj,
+        input: JSON.stringify({
+          hook_event_name: "UserPromptSubmit",
+          session_id: session,
+          prompt: "A is right. And once per Unit is fine",
+        }),
+        env: { ...said, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(reply.status, reply.stderr).toBe(0);
+
+      const once = runState(proj, ["set-unit-gate-rhythm", "unit-end"]);
+      expect(once.rc, once.out).toBe(0);
+      expect(readUnitGateRhythm(state(proj))).toBe("unit-end");
+      coverUnit(proj, "alpha", "functional-design");
+      expect(runState(proj, ["unit", "complete", "--stage", "functional-design", "--unit", "alpha"]).rc).toBe(0);
+      if (step.reviewer) logReviewReady(proj, "functional-design", "alpha", step.reviewer);
+      for (const stage of BLOCK.slice(1)) {
+        const body = runNext(proj);
+        expect(body).toMatchObject({ stage, unit: "alpha", gate: false });
+        settleBody(proj, body);
+      }
+      expect(runNext(proj)).toMatchObject({ stage: "code-generation", unit: "alpha", gate: true, unit_gate: "unit-end" });
+      expect(
+        runReport(proj, ["--stage", "code-generation", "--unit", "alpha", "--result", "awaiting-approval"]).kind,
+      ).toBe("print");
+      const before = state(proj);
+      const recorded = readAuditShardEvents(proj).filter((row) => row.event === "UNIT_GATE_RHYTHM_SET").length;
+      const late = runState(proj, ["set-unit-gate-rhythm", "per-stage"]);
+      expect(late.rc).not.toBe(0);
+      expect(late.out).toContain(
+        "The Units are already being approved once at the end of each Unit, so that stays for this work. " +
+          "Carry on with `/aidlc`.",
+      );
+      expect(state(proj)).toBe(before);
+      expect(readAuditShardEvents(proj).filter((row) => row.event === "UNIT_GATE_RHYTHM_SET").length).toBe(recorded);
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  for (const rhythm of ["per-stage", "unit-end"] as const) {
+    test(`after a Unit is approved to its end under ${rhythm}, the switch says it would ask for that Unit again`, () => {
+      const proj = seedProject({ ownership: "team", rhythm });
+      for (const _stage of BLOCK) {
+        const body = runNext(proj);
+        settleBody(proj, body);
+        if (rhythm === "per-stage") approveGate(proj, runNext(proj));
+      }
+      if (rhythm === "unit-end") approveGate(proj, runNext(proj));
+      expect(runNext(proj)).toMatchObject({ stage: "functional-design", unit: "beta", gate: false });
+      const before = state(proj);
+      const other = rhythm === "unit-end" ? "per-stage" : "unit-end";
+      const refused = runState(proj, ["set-unit-gate-rhythm", other]);
+      expect(refused.rc).not.toBe(0);
+      expect(refused.out).toContain(
+        rhythm === "unit-end"
+          ? "The Units are already being approved once at the end of each Unit, so that stays for this work: " +
+            "that would ask you again for the alpha Unit, which you approved once at its end. Carry on with `/aidlc`."
+          : "The Units are already being approved after every stage, so that stays for this work: " +
+            "that would ask you again for the alpha Unit, which you approved after every stage. Carry on with `/aidlc`.",
+      );
+      expect(state(proj)).toBe(before);
+      expect(runNext(proj)).toMatchObject({ stage: "functional-design", unit: "beta", gate: false });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
 });
 
 describe("t324 doctor stage drift against the engine (#1190)", () => {
