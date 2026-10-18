@@ -6,7 +6,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { artifactFilename } from "./aidlc-artifact-vocabulary.ts";
 import {
   type AuditShardEvent,
@@ -541,14 +541,25 @@ export function builtFromAnotherMachine(
   stateContent: string,
   rows: readonly AuditShardEvent[],
   ownShard: string,
-): { unit: string; stage: string } | null {
+): { unit: string; stage: string; shard: string } | null {
   if (isTeamUnitOwnership(stateContent) || getField(stateContent, "Construction Iteration")?.trim() !== "unit-major") return null;
   const moves = rows
     .filter((row) => row.event.startsWith("UNIT_") && auditBlockField(row.block, "Unit") && auditBlockField(row.block, "Stage"))
     .sort((a, b) => (a.timestamp !== b.timestamp ? (a.timestamp < b.timestamp ? -1 : 1) : a.pos - b.pos));
   const last = moves.at(-1);
-  if (last === undefined || last.shard === ownShard) return null;
-  return { unit: auditBlockField(last.block, "Unit")!, stage: auditBlockField(last.block, "Stage")! };
+  // A row's shard is the shard file's path; ownShard is this clone's shard name.
+  if (last === undefined || basename(last.shard) === ownShard) return null;
+  return { unit: auditBlockField(last.block, "Unit")!, stage: auditBlockField(last.block, "Stage")!, shard: last.shard };
+}
+
+// Whether the person who last committed a file is this clone's git identity
+// (user.email, else user.name): one person's work on two machines.
+export function lastCommittedByThisPerson(projectDir: string, path: string): boolean {
+  const run = (args: string[]) => (spawnSync("git", args, { cwd: projectDir, encoding: "utf-8" }).stdout ?? "").trim();
+  const [email = "", name = ""] = run(["log", "-1", "--format=%ae%n%an", "--", path]).split("\n");
+  const mine = run(["config", "user.email"]);
+  if (email && mine) return email.toLowerCase() === mine.toLowerCase();
+  return name !== "" && name === run(["config", "user.name"]);
 }
 
 // A solo walk's Units: started when any per-Unit stage started for it, done

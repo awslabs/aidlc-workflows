@@ -622,8 +622,8 @@ is spelled `<repo>/<path>`. When a repo is not where the files say, AI-DLC says
 where it looked and the way forward: "billing is not at ../billing, where
 repos.json puts it. Clone it there, or give its path in repos.local.json."
 
-**Writing it from what is here.** The first time a piece of work records repos,
-or teams are chosen, in a workspace with no `repos.json`, AI-DLC offers once to
+**Writing it from what is here.** When work built by teams records repos, in a
+workspace with no `repos.json`, AI-DLC offers once, at a stage boundary, to
 write it from the repos it finds: each one's folder, and the address its own
 `origin` points to (read, never changed), blank when it has none. Your answer
 is kept; it does not ask again in this clone.

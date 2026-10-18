@@ -10,7 +10,8 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { fixtureIntentId8, seededStateFile } from "../harness/fixtures.ts";
@@ -19,6 +20,7 @@ import {
   cleanupTeamBuild,
   cloneOf,
   codeGenerated,
+  ENV,
   git,
   HOME_RECORD,
   makeHome,
@@ -52,18 +54,28 @@ function soloAtA(refundsDone = false) {
 }
 
 describe("a teammate opens solo work built from another machine", () => {
-  test("is offered an open Unit to take, the whole work to carry on, or to follow along", () => {
+  test("is offered the whole work to carry on, an open Unit to take, or to follow along", () => {
     const home = soloAtA();
     const ask = next(cloneOf(home.remote, "bob"));
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
     expect(ask.question).toBe(
-      "fixture is being built from another machine, on refunds (Functional Design). Take an open Unit as your own, " +
-        "carry on the whole work here, or follow along?",
+      "fixture is being built from another machine, on refunds (Functional Design). Carry on the whole work here, " +
+        "take an open Unit as your own, or follow along?",
     );
     const choices = ask.choices as Array<{ label: string; command: string }>;
-    expect(choices.map((choice) => choice.label)).toEqual(["Take checkout-ui", "Carry on fixture here", "Follow along"]);
-    expect(choices[0].command).toEndWith(`take checkout-ui --home ${HOME_RECORD}`);
+    expect(choices.map((choice) => choice.label)).toEqual(["Carry on fixture here", "Take checkout-ui", "Follow along"]);
+    expect(choices[1].command).toEndWith(`take checkout-ui --home ${HOME_RECORD}`);
     expect(choices[2].command).toContain(`status --space default --intent ${HOME_RECORD}`);
+  });
+
+  test("the same person on their own second machine is not asked: their work carries on as before", () => {
+    const home = soloAtA();
+    // The lead's laptop: the same git identity as the one who committed the work.
+    const laptop = cloneOf(home.remote, "lead");
+    expect(next(laptop).ask_type).not.toBe("unit-take");
+    // The machine the work is built on, in a chat with no work selected yet.
+    rmSync(join(home.dir, "aidlc", "spaces", "default", "intents", "active-intent"));
+    expect(next(home.dir).ask_type).not.toBe("unit-take");
   });
 
   test("taking it writes nothing of the home's: the take is on the claim, the build in a folder of its own", () => {
@@ -128,6 +140,9 @@ describe("the lead's sign-off", () => {
     );
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
+    const guarded: NodeJS.ProcessEnv = { ...ENV, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "" };
+    const unasked = run(UNIT, ["sign-off", "refunds", "--person-words", "sign it off"], home.dir, guarded);
+    expect(String(unasked.json?.error)).toBe("The sign-off is the person's own word: ask them first, then run this with their words.");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "let me look at the PRs first" }, home.dir);
     const board = next(home.dir);
     expect(String(board.message)).toContain("- refunds, payments: checkout-api merged, billing merged (2 of 2 merged), waiting for your sign-off");

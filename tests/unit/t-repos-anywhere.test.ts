@@ -316,8 +316,9 @@ describe("workspace-sync clones to the path, by path", () => {
 });
 
 // A feature plan between two stages: Requirements Analysis done and approved,
-// User Stories next.
-function boundaryState(): string {
+// User Stories next; with `home`, work built by teams (a Unit's build records
+// where its home is).
+function boundaryState(home = false): string {
   return `# AI-DLC State Tracking
 
 ## Project Information
@@ -325,7 +326,7 @@ function boundaryState(): string {
 - **Project Type**: Brownfield
 - **Scope**: feature
 - **State Version**: 8
-
+${home ? "\n## Runtime State\n- **Home Location**: git@github.com:your-org/workspace.git\n" : ""}
 ## Scope Configuration
 - **Depth**: Standard
 - **Test Strategy**: Standard
@@ -343,11 +344,11 @@ function boundaryState(): string {
 `;
 }
 
-function boundaryProject(repos: string[]): string {
+function boundaryProject(repos: string[], home = true): string {
   const proj = createTestProject();
   projects.push(proj);
   seedAidlcMemory(proj);
-  writeFileSync(seededStateFile(proj), boundaryState());
+  writeFileSync(seededStateFile(proj), boundaryState(home));
   for (const name of repos) repoAt(join(proj, name));
   if (repos.length > 0) {
     const registryPath = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
@@ -372,7 +373,7 @@ function next(proj: string): Record<string, unknown> {
 }
 
 describe("the one offer to write repos.json", () => {
-  test("work that records repos, in a workspace with none, is offered once at a stage boundary", () => {
+  test("work built by teams that records repos, in a workspace with none, is offered once at a stage boundary", () => {
     const proj = boundaryProject(["checkout-api", "checkout-web"]);
     const ask = next(proj);
     expect(ask.kind, JSON.stringify(ask)).toBe("ask");
@@ -393,6 +394,13 @@ describe("the one offer to write repos.json", () => {
     const proj = boundaryProject([]);
     const step = next(proj);
     expect(step.ask_type, JSON.stringify(step)).not.toBe("repos-manifest");
+  });
+
+  test("work one person builds, and team work with no home recorded, are never offered it", () => {
+    expect(next(boundaryProject(["checkout-api", "checkout-web"], false)).ask_type).not.toBe("repos-manifest");
+    const today = boundaryProject(["checkout-api", "checkout-web"], false);
+    writeFileSync(seededStateFile(today), boundaryState().replace("## Scope Configuration", "## Runtime State\n- **Unit Ownership**: team\n\n## Scope Configuration"));
+    expect(next(today).ask_type).not.toBe("repos-manifest");
   });
 
   test("a workspace that already has repos.json is never offered it", () => {

@@ -250,10 +250,13 @@ words.
 
 Solo work built one Unit at a time on one machine can still take a teammate.
 When they open it in their own clone, AI-DLC says it is being built from
-another machine, on which Unit and stage, and offers three things: **Take** an
-open Unit as their own (never the one the other machine is on), **Carry on**
+another machine, on which Unit and stage, and offers three things: **Carry on**
 the whole work here (for when the other person has stopped; today's pickup),
-or **Follow along** (where it stands, read only). Taking one holds it on its
+**Take** an open Unit as their own (never the one the other machine is on), or
+**Follow along** (where it stands, read only). The same person opening their
+own work on a second machine (the same git `user.email`, else `user.name`, as
+the one who committed the other machine's audit) is not asked: the work carries
+on there as before. Taking one holds it on its
 claim at the workspace's `origin` and starts its build in the same space, in a
 folder of its own; the teammate's clone never writes the work's own state. At
 its next step, the home's session switches to teams by itself: the workspace's

@@ -163,17 +163,14 @@ describe("a change to a shared input", () => {
     );
   });
 
-  test("the answer is the person's: never the agent's words, and only after the question was shown", () => {
+  test("the answer is the person's: only with a turn of theirs behind it", () => {
     const { home } = proposed();
     const guarded: NodeJS.ProcessEnv = { ...ENV, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "" };
     next(home.dir);
     const early = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir, guarded);
     expect(early.status).not.toBe(0);
-    expect(early.out).toContain("ask them first");
+    expect(String(early.json?.error)).toBe("The answer to a proposed change is the person's own word: ask them first, then run this with their words.");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "yes, partial refunds" }, home.dir);
-    const own = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "not a human approval"], home.dir, guarded);
-    expect(own.status).not.toBe(0);
-    expect(own.out).toContain("reads as the agent's, not the person's");
     const theirs = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, partial refunds"], home.dir, guarded);
     expect(theirs.status, theirs.out).toBe(0);
   });

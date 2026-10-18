@@ -812,7 +812,13 @@ word that a repo merged where the check cannot see it (`unit merged <unit> --rep
 <repo> --person-words`) goes on the claim as `said_merged`, and that repo's
 verdict reads merged "by your word" from then on. The board carries
 `board_note`, the commands for both; a Unit's build left unpushed ends with
-`done_note`, the push command.
+`done_note`, the push command. `unit turned-down`, `unit merged`, `unit amend`
+and `unit sign-off` record the lead's word only with a turn of theirs behind it
+(`personAskedSinceGate`, unless the human-presence guard is off). The merge
+check's claim reads and its write of the verdicts and `done` (a
+`--force-with-lease` push of the claim ref) run under the same quiet git as the
+claims fetch; an unwritten verdict stays local, the board line says it may be
+behind, and the next step writes it again.
 
 When the person's words are the path of a file carrying the `aidlc-handoff`
 mark, `next` returns `ask_type: unit-handoff` (**Start <unit>** runs
@@ -837,10 +843,12 @@ the amendment alone. `completionReceiptsFromAudit` reads `SHARED_INPUT_AMENDED`
 as it reads `STAGE_DEFINITION_CHANGED`.
 
 Solo work built unit-major whose last per-Unit row is in another clone's audit
-shard (`builtFromAnotherMachine`) is offered, at a plain `next` with no work
-selected, as `ask_type: unit-take` with **Take <unit>** for each Unit not
-started and not waiting, **Carry on** (`next --pick`) and **Follow along**
-(`status` for that record). `unit take` on such work claims the Unit at the
+shard (`builtFromAnotherMachine`), committed by another git identity
+(`lastCommittedByThisPerson`: `user.email`, else `user.name`), is offered, at a
+plain `next` with no work selected, as `ask_type: unit-take` with **Carry on**
+(`next --pick`), **Take <unit>** for each Unit not started and not waiting, and
+**Follow along** (`status` for that record); the same person's second machine
+gets today's pickup. `unit take` on such work claims the Unit at the
 workspace's `origin` and builds it in the home's space; it writes nothing of
 the home's state. At the start of every `next`, `switchSoloToTeams` switches
 solo unit-major work whose claim refs (brought by git) show a taken Unit:

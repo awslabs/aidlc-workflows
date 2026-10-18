@@ -13,6 +13,7 @@ import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
@@ -22,6 +23,7 @@ import {
   cloneOf,
   codeGenerated,
   codeHost,
+  ENV,
   git,
   HOME_RECORD,
   makeHome,
@@ -235,6 +237,44 @@ describe("at the home", () => {
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
     const merged = readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED");
     expect(merged[0]?.block).toContain('billing (by your word: "billing merged it by hand last night")');
+  });
+
+  test("the lead's word that a repo turned a Unit down or merged it counts only with a turn of theirs behind it", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const guarded: NodeJS.ProcessEnv = { ...ENV, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "" };
+    const down = run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger"], home.dir, guarded);
+    expect(down.status).not.toBe(0);
+    expect(String(down.json?.error)).toBe("A turn-down is the person's own word: ask them first, then run this with their words.");
+    const merged = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "merged by hand"], home.dir, guarded);
+    expect(merged.status).not.toBe(0);
+    expect(String(merged.json?.error)).toBe("That it merged is the person's own word: ask them first, then run this with their words.");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "billing merged it by hand" }, home.dir);
+    const said = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "billing merged it by hand"], home.dir, guarded);
+    expect(said.status, said.out).toBe(0);
+  });
+
+  test("a verdict the home's remote does not take stays here, said once, and goes at the next step", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    next(home.dir);
+    const hook = join(home.remote, "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/claim/*) echo 'claims are read-only today' >&2; exit 1;; esac; done\n");
+    chmodSync(hook, 0o755);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "squash");
+    const step = next(home.dir);
+    expect((step.change_notices ?? []) as string[]).toContain(
+      "What the board shows here could not be sent to origin just now; the teams may not see it yet, and the next step sends it again.",
+    );
+    expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toHaveLength(1);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.done).toBeUndefined();
+    writeFileSync(hook, "#!/bin/sh\nexit 0\n");
+    next(home.dir);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    expect(readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED")).toHaveLength(1);
   });
 
   test("a turn-down at the home reaches the team once, in the home's words", () => {

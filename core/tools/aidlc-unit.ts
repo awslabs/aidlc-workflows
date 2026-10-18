@@ -79,12 +79,11 @@ import {
   UNIT_GATE_RHYTHM_FIELD,
   readAllAuditShards,
   staleStageLine,
-  engineAskMark,
-  personRepliedAfter,
   readUnitGateRhythm,
   readUnitScopeStamp,
   readAnswerTextFile,
   parseReviewRecordBytes,
+  personAskedSinceGate,
   pairedReviewRecordForCompletion,
   personsGateReply,
   relativeRecordDir,
@@ -207,13 +206,14 @@ interface GitBytesResult {
 // Bun's spawnSync stops a pipe read at 1 MiB and hands back what it had, and a
 // Unit's audit shard outgrows that in one long attempt, so the cap is lifted
 // the way the other git readers lift it. A run that could not start, was killed
-// or overflowed is a failed run, whatever its exit status.
-function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv, timeoutMs?: number): GitBytesResult {
+// or overflowed is a failed run, whatever its exit status. Inside `quietly`,
+// git never prompts and gives up after QUIET_GIT_TIMEOUT_MS.
+function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitBytesResult {
   const result = spawnSync("git", args, {
     cwd: projectDir,
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...quietGit, ...env },
     maxBuffer: 512 * 1024 * 1024,
-    ...(timeoutMs === undefined ? {} : { timeout: timeoutMs }),
+    ...(quietGit === null ? {} : { timeout: QUIET_GIT_TIMEOUT_MS }),
   });
   const failure = result.error
     ? `${result.error.message}\n`
@@ -228,8 +228,8 @@ function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv, t
   };
 }
 
-function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv, timeoutMs?: number): GitResult {
-  const result = gitBytes(projectDir, args, env, timeoutMs);
+function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitResult {
+  const result = gitBytes(projectDir, args, env);
   return { ...result, stdout: result.stdout.toString("utf-8") };
 }
 
@@ -5447,20 +5447,32 @@ function takeUnit(args: string[], projectDir?: string): void {
   }));
 }
 
-// A fetch nobody typed: it never asks for a password, a passphrase or a
-// sign-in (git, Git Credential Manager and ssh are each told not to, for this
-// call only; the person's config is left as it is) and gives up after a short
-// while, so a step never hangs on it.
-const QUIET_FETCH_TIMEOUT_MS = 15_000;
+// Git that talks to a remote nobody typed a command for (the claims fetch, the
+// merge check's reads and its write of the verdict): it never asks for a
+// password, a passphrase or a sign-in (git, Git Credential Manager and ssh are
+// each told not to, for these calls only; the person's config is left as it
+// is) and gives up after a short while, so a step never hangs on it.
+const QUIET_GIT_TIMEOUT_MS = 15_000;
+let quietGit: NodeJS.ProcessEnv | null = null;
 
-function quietFetch(dir: string, args: string[]): GitResult {
+function quietly<T>(dir: string, work: () => T): T {
+  if (quietGit !== null) return work();
   const ssh = process.env.GIT_SSH_COMMAND || git(dir, ["config", "--get", "core.sshCommand"]).stdout.trim() || "ssh";
-  return git(dir, ["fetch", ...args], {
+  quietGit = {
     GIT_TERMINAL_PROMPT: "0",
     GCM_INTERACTIVE: "never",
     // GIT_SSH alone names the person's own ssh program (plink, say): left as it is.
     ...(process.env.GIT_SSH && !process.env.GIT_SSH_COMMAND ? {} : { GIT_SSH_COMMAND: `${ssh} -o BatchMode=yes` }),
-  }, QUIET_FETCH_TIMEOUT_MS);
+  };
+  try {
+    return work();
+  } finally {
+    quietGit = null;
+  }
+}
+
+function quietFetch(dir: string, args: string[]): GitResult {
+  return quietly(dir, () => git(dir, ["fetch", ...args]));
 }
 
 // The work's claims as the home has them now, fetched into the refs the
@@ -5617,6 +5629,7 @@ function pushUnit(args: string[], projectDir?: string): void {
       "Take it in at the home with `/aidlc unit take-in <this file>`.",
       {
         "Home Work": build.homeWork,
+        "Home Label": label,
         Unit: unit,
         Attempt: String(build.attempt),
         Team: activeSpace(pd),
@@ -5668,8 +5681,22 @@ function joinNames(names: string[]): string {
 // the Unit outputs the home's later stages read into its record, and mark the
 // claim done so the Units waiting on it open everywhere. A repo the home has
 // no checkout of keeps the team's result as theirs until the home can check it.
-export function checkTeamResults(projectDir: string, unreached?: string[]): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
+// `unreached` collects the remotes that could not be read, `unsent` the ones
+// that did not take a verdict.
+export function checkTeamResults(
+  projectDir: string,
+  unreached?: string[],
+  unsent?: string[],
+): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
   const pd = resolveProjectDir(projectDir);
+  return quietly(pd, () => checkTeamResultsQuietly(pd, unreached, unsent));
+}
+
+function checkTeamResultsQuietly(
+  pd: string,
+  unreached?: string[],
+  unsent?: string[],
+): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
   const found = new Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }>();
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
@@ -5679,7 +5706,13 @@ export function checkTeamResults(projectDir: string, unreached?: string[]): Map<
       found.set(unit, { team: claim.owner, verdicts: claim.payload.verdicts ?? [], done: true });
       continue;
     }
-    const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
+    let live: UnitClaimView | null;
+    try {
+      live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
+    } catch {
+      unreached?.push(remote ?? "the home");
+      continue;
+    }
     const result = live?.payload.result;
     if (live?.status !== "claimed" || !result) continue;
     const verdicts = result.repos.map((repo) => {
@@ -5704,7 +5737,9 @@ export function checkTeamResults(projectDir: string, unreached?: string[]): Map<
     if (!same || done) {
       const payload: UnitClaimPayload = { ...live.payload, predecessor_oid: live.oid, verdicts, ...(done ? { done: true as const } : {}) };
       const commit = createClaimCommit(pd, live.oid, payload);
+      // Unwritten, the verdict stays here and the next step writes it again.
       if (updateClaimRef(pd, remote, live.ref, commit, live.oid).ok) invalidateLiveClaimPayloadCache(pd, unit);
+      else unsent?.push(remote ?? "the home");
     }
     found.set(unit, { team: live.owner, verdicts, done });
   }
@@ -5910,12 +5945,8 @@ function amendInput(args: string[], projectDir?: string): void {
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
   const proposal = live?.payload.proposals?.find((entry) => entry.input === flags.input && entry.answer === undefined);
   if (!live || proposal === undefined) fail(`${unit} has no change to ${flags.input} waiting for an answer.`);
-  if (!humanPresenceGuardDisabled()) {
-    if (!words || isNonAnswer(words)) fail("The answer is the person's own words about the change; ask them, then run this with them.");
-    const authorship = selfAttributedDecisionMarker(words, "approval");
-    if (authorship) fail(`The answer reads as the agent's, not the person's (${authorship.category}): "${authorship.phrase}". Ask them.`);
-    const mark = engineAskMark(pd, amendAskName(unit, proposal.input));
-    if (mark !== null && !personRepliedAfter(pd, mark)) fail("The answer comes from the person's reply to the question about the change; ask them first.");
+  if (!humanPresenceGuardDisabled() && !personAskedSinceGate(pd)) {
+    fail("The answer to a proposed change is the person's own word: ask them first, then run this with their words.");
   }
   const name = inputName(proposal.input);
   const answered: Proposal = { ...proposal, answer: answer === "approve" ? "approved" : "turned down", ...(words ? { answer_words: words } : {}) };
@@ -5975,6 +6006,9 @@ function turnedDown(args: string[], projectDir?: string): void {
   const words = flags["person-words-file"] !== undefined
     ? readAnswerTextFile(pd, flags["person-words-file"])
     : flags["person-words"] ?? "";
+  if (!humanPresenceGuardDisabled() && !personAskedSinceGate(pd)) {
+    fail("A turn-down is the person's own word: ask them first, then run this with their words.");
+  }
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
@@ -5999,10 +6033,8 @@ function saidMerged(args: string[], projectDir?: string): void {
   if (!unit || !flags.repo) fail("Usage: aidlc-unit merged <unit> --repo <repo> --person-words '<their words>'");
   const pd = resolveProjectDir(projectDir);
   const words = (flags["person-words-file"] !== undefined ? readAnswerTextFile(pd, flags["person-words-file"]) : flags["person-words"] ?? "").trim();
-  if (!humanPresenceGuardDisabled()) {
-    if (!words || isNonAnswer(words)) fail("That it merged is the person's own word; ask them, then run this with their words.");
-    const authorship = selfAttributedDecisionMarker(words, "approval");
-    if (authorship) fail(`That reads as the agent's word, not the person's (${authorship.category}): "${authorship.phrase}". Ask them.`);
+  if (!humanPresenceGuardDisabled() && !personAskedSinceGate(pd)) {
+    fail("That it merged is the person's own word: ask them first, then run this with their words.");
   }
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
@@ -6207,13 +6239,14 @@ function progressFile(projectDir?: string): void {
     console.log(JSON.stringify({ notice: `${build.unit}'s progress reaches the home with your pushes; no file is needed.` }));
     return;
   }
-  const rel = handFilePath(getField(state, "Home Label") ?? build.unit, build.unit, "-progress");
+  const label = getField(state, "Home Label")?.trim() || build.unit;
+  const rel = handFilePath(label, build.unit, "-progress");
   const stage = getField(state, "Current Stage")?.trim() ?? "";
   writeHandFile(pd, rel, renderHandFile(
     "progress",
     `Progress: ${build.unit}`,
     "Take it in at the home with `/aidlc unit take-in <this file>`.",
-    { "Home Work": build.homeWork, Unit: build.unit, Attempt: String(build.attempt), Stage: stage, Written: isoTimestamp() },
+    { "Home Work": build.homeWork, "Home Label": label, Unit: build.unit, Attempt: String(build.attempt), Stage: stage, Written: isoTimestamp() },
     new Map(),
   ));
   console.log(JSON.stringify({ file: rel, notice: `The progress file is ${rel}; send it to the lead if you like.` }));
@@ -6230,7 +6263,10 @@ function takeIn(args: string[], projectDir?: string): void {
   const identity = activeIdentity(pd);
   const unit = file.fields.Unit ?? "";
   if (file.fields["Home Work"] !== identity.intentUuid) {
-    console.log(JSON.stringify({ taken_in: false, notice: `${path} is for other work (${file.fields["Home Work"]}), not this one, so nothing changed.` }));
+    const other = file.fields["Home Label"]?.trim();
+    const here = readIntentRegistry(pd, identity.space).find((entry) => entry.uuid === identity.intentUuid)?.slug;
+    const named = other && other !== here ? ` (${other})` : "";
+    console.log(JSON.stringify({ taken_in: false, notice: `${path} is for other work${named}, not this one, so nothing changed.` }));
     return;
   }
   const remote = repositoryRemote(pd);
@@ -6243,7 +6279,8 @@ function takeIn(args: string[], projectDir?: string): void {
   const files: Record<string, string> = {};
   if (file.kind === "progress") {
     payload.progress = { stage: file.fields.Stage ?? "", at: file.fields.Written ?? "" };
-    lines.unshift(`Took in ${unit}'s progress from ${live.owner}: ${file.fields.Stage || "under way"}.`);
+    const stage = file.fields.Stage ? stageLabel(loadGraph().find((entry) => entry.slug === file.fields.Stage), file.fields.Stage) : null;
+    lines.unshift(`Took in ${unit}'s progress from ${live.owner}: ${stage ?? "under way"}.`);
   } else {
     if (!file.result) fail(`${path} holds no result.`);
     payload.result = { ...file.result, ...(file.edited ? { edited: true as const } : {}) };
@@ -6341,12 +6378,8 @@ function signOff(args: string[], projectDir?: string): void {
   const remote = repositoryRemote(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
   if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to sign off.`);
-  if (!humanPresenceGuardDisabled()) {
-    if (!words || isNonAnswer(words)) fail("The sign-off is the person's own words; ask them, then run this with them.");
-    const authorship = selfAttributedDecisionMarker(words, "approval");
-    if (authorship) fail(`The sign-off reads as the agent's, not the person's (${authorship.category}): "${authorship.phrase}". Ask them.`);
-    const mark = engineAskMark(pd, signOffAskName(unit));
-    if (mark !== null && !personRepliedAfter(pd, mark)) fail("The sign-off comes from the person's reply to the question about it; ask them first.");
+  if (!humanPresenceGuardDisabled() && !personAskedSinceGate(pd)) {
+    fail("The sign-off is the person's own word: ask them first, then run this with their words.");
   }
   const payload: UnitClaimPayload = { ...live.payload, predecessor_oid: live.oid, signoff: { words, at: isoTimestamp() } };
   const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);

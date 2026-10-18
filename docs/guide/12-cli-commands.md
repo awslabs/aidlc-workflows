@@ -3154,8 +3154,8 @@ aidlc system workspace-sync --write-manifest
 `--write-manifest` writes `repos.json` from the repos found here (each child
 repo, or the workspace itself as `"path": "."` when it is the one code repo),
 with the address each one's `origin` points to, read and never changed; it
-writes nothing when `repos.json` already exists. AI-DLC offers to run it once,
-the first time a piece of work records repos or teams are chosen.
+writes nothing when `repos.json` already exists. AI-DLC offers to run it once
+per clone, at a stage boundary of work built by teams that records repos.
 
 It serializes reconciles with a workspace lock whose live owner is never reaped
 for age, then runs a read-only preflight before staging clones and generated

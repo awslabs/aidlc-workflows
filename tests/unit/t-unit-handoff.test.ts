@@ -127,7 +127,8 @@ describe("progress and the result come back as files", () => {
     expect(progress.json?.notice).toBe("The progress file is aidlc/handoff/fixture-reporting-progress.md; send it to the lead if you like.");
     const progressIn = run(UNIT, ["take-in", deliver(partner.dir, "aidlc/handoff/fixture-reporting-progress.md")], home.dir);
     expect(progressIn.status, progressIn.out).toBe(0);
-    expect(String(next(home.dir).message)).toContain("- reporting, data: handed off by file, at functional-design");
+    expect(progressIn.json?.notice).toBe("Took in reporting's progress from data: Functional Design.");
+    expect(String(next(home.dir).message)).toContain("- reporting, data: handed off by file, at Functional Design");
     // Code Generation wrote one file in ledger; the team pushes, then merges.
     const intents = join(partner.dir, "aidlc", "spaces", "data", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
@@ -160,10 +161,11 @@ describe("progress and the result come back as files", () => {
     expect(run(UNIT, ["take", "--file", deliver(home.dir, FILE)], partner.dir).status).toBe(0);
     expect(run(UNIT, ["progress"], partner.dir).status).toBe(0);
     const foreign = deliver(partner.dir, "aidlc/handoff/fixture-reporting-progress.md", (text) =>
-      text.replace(/^- \*\*Home Work\*\*: .*$/m, "- **Home Work**: 00000000-0000-7000-8000-00000000beef"));
+      text.replace(/^- \*\*Home Work\*\*: .*$/m, "- **Home Work**: 00000000-0000-7000-8000-00000000beef")
+        .replace(/^- \*\*Home Label\*\*: .*$/m, "- **Home Label**: payroll"));
     const ignored = run(UNIT, ["take-in", foreign], home.dir);
     expect(ignored.status, ignored.out).toBe(0);
-    expect(String(ignored.json?.notice)).toEndWith("is for other work (00000000-0000-7000-8000-00000000beef), not this one, so nothing changed.");
+    expect(String(ignored.json?.notice)).toEndWith("is for other work (payroll), not this one, so nothing changed.");
     const older = deliver(partner.dir, "aidlc/handoff/fixture-reporting-progress.md", (text) =>
       text.replace(/^- \*\*Attempt\*\*: .*$/m, "- **Attempt**: 0"));
     const late = run(UNIT, ["take-in", older], home.dir);

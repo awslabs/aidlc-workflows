@@ -674,6 +674,7 @@ import { localRepoOverrideLines, REPOS_FILE } from "./aidlc-workspace-manifest.t
 import { noteReposManifestOffered, reposManifestOffered } from "./aidlc-workspace-repos.ts";
 import {
   builtFromAnotherMachine,
+  lastCommittedByThisPerson,
   findUnitBuild,
   homeLocation,
   inputName,
@@ -5153,12 +5154,13 @@ function teamsClone(projectDir: string, stateContent: string): boolean {
 }
 
 // The one offer to write repos.json from the repos found here (decision 21):
-// at a stage boundary, the first time work records repos or teams are chosen
+// at a stage boundary of work built by teams (Home Location) that records repos
 // (open question 7), in a workspace that has none, once per clone. Null when
 // the step goes on.
 function reposManifestAsk(projectDir: string, stateContent: string): AskDirective | null {
   if (existsSync(join(projectDir, REPOS_FILE)) || reposManifestOffered(projectDir)) return null;
-  if (intentRepos(projectDir).length === 0 && !isTeamUnitOwnership(stateContent)) return null;
+  // Work built by teams that records repos: a teammate's clone needs to know where they go.
+  if (homeLocation(stateContent) === null || intentRepos(projectDir).length === 0) return null;
   const found = discoverSiblingRepos(projectDir);
   const names = found.length > 0 ? found : existsSync(join(projectDir, ".git")) ? [basename(resolve(projectDir))] : [];
   if (names.length === 0) return null;
@@ -8530,6 +8532,8 @@ function soloElsewhereAsk(projectDir: string): AskDirective | null {
     const rows = readAuditShardEvents(projectDir, intent.dirName, space);
     const at = builtFromAnotherMachine(state, rows, own);
     if (at === null) continue;
+    // The same person on another of their machines carries on as before.
+    if (lastCommittedByThisPerson(projectDir, at.shard)) continue;
     const finalStage = unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true).at(-1) ?? "code-generation";
     const progress = soloUnitsProgress(rows, finalStage);
     const dependencies = unitDependencies(projectDir, intent.dirName, space);
@@ -8544,14 +8548,14 @@ function soloElsewhereAsk(projectDir: string): AskDirective | null {
       ask_type: "unit-take",
       response_route: "command",
       question: `${label} is being built from another machine, on ${at.unit} (${stageLabel(nodeForSlug(at.stage), at.stage) ?? at.stage}). ` +
-        "Take an open Unit as your own, carry on the whole work here, or follow along?",
+        "Carry on the whole work here, take an open Unit as your own, or follow along?",
       choices: [
+        { label: `Carry on ${label} here`, detail: "For when the other person has stopped.", command: selectCommands([intent.dirName])[0].command },
         ...open.map((unit) => ({
           label: `Take ${unit}`,
           detail: "It moves to you as a piece of work of its own here; everything done so far is kept.",
           command: take.replace("%s", shellArg(unit)),
         })),
-        { label: `Carry on ${label} here`, detail: "For when the other person has stopped.", command: selectCommands([intent.dirName])[0].command },
         { label: "Follow along", detail: "See where it stands, without changing anything.", command: `${aidlcToolInvocation("utility")} status --space ${shellArg(space)} --intent ${shellArg(intent.dirName)}` },
       ],
     };
@@ -16371,12 +16375,16 @@ function emitTeamUnitMajorRunStage(
   // What came back from the teams, checked against each repo once per step
   // (with the home unreached, the board is the last fetch's).
   let results: ReturnType<typeof checkTeamResults> = new Map();
+  const unsent: string[] = [];
   if (heldElsewhere.size > 0 && !isReadOnlyEngineProbe() && unreached.length === 0) {
     try {
-      results = checkTeamResults(projectDir, unreached);
+      results = checkTeamResults(projectDir, unreached, unsent);
     } catch (e) {
       sayWithStepOnce(projectDir, `The teams' results could not be checked just now: ${errorMessage(e)}`);
     }
+  }
+  if (unsent.length > 0) {
+    sayWithStepOnce(projectDir, `What the board shows here could not be sent to ${unsent[0]} just now; the teams may not see it yet, and the next step sends it again.`);
   }
   if (unreached.length > 0) {
     sayWithStepOnce(projectDir, `${[...new Set(unreached)].join(", ")} could not be reached just now, so the board may be behind: it shows what your last fetch brought.`);
@@ -16629,7 +16637,8 @@ function emitTeamUnitMajorRunStage(
         return { unit, team, status: `${mergedStatus(verdicts)}${waiting}` };
       }
       if (payload.by_file) {
-        return { unit, team, status: payload.progress?.stage ? `handed off by file, at ${payload.progress.stage}` : "handed off by file" };
+        const at = payload.progress?.stage ? stageLabel(findStageBySlug(payload.progress.stage), payload.progress.stage) : null;
+        return { unit, team, status: at ? `handed off by file, at ${at}` : "handed off by file" };
       }
       return { unit, team, status: payload.taken_by ? `building, taken by ${payload.taken_by}` : `held for ${team}, not taken yet` };
     });

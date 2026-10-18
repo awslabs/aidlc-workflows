@@ -339,7 +339,7 @@ describe("scenario 4: a team that cannot reach the home", () => {
     expect(run(copilot.unit, ["take", "--file", deliver(home.dir, file)], partner).status).toBe(0);
     expect(run(copilot.unit, ["progress"], partner).status).toBe(0);
     expect(run(UNIT, ["take-in", deliver(partner, "aidlc/handoff/fixture-reporting-progress.md")], home.dir).status).toBe(0);
-    expect(String(next(home.dir).message)).toContain("- reporting, data: handed off by file, at functional-design");
+    expect(String(next(home.dir).message)).toContain("- reporting, data: handed off by file, at Functional Design");
     const record = buildRecord(partner, "data", "reporting");
     built(record, "reporting", [{ folder: join(partner, "ledger"), path: "src/report.ts" }]);
     expect(run(copilot.unit, ["push"], partner).status).toBe(0);
@@ -372,7 +372,7 @@ describe("scenario 5: solo work, then a second person joins", () => {
     cloneCode(hosts["checkout-web"], bob, "checkout-web", "bob");
     const ask = opencode.next(bob);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
-    expect((ask.choices as Array<{ label: string }>).map((c) => c.label)).toEqual(["Take checkout-ui", "Carry on fixture here", "Follow along"]);
+    expect((ask.choices as Array<{ label: string }>).map((c) => c.label)).toEqual(["Carry on fixture here", "Take checkout-ui", "Follow along"]);
     const before = readFileSync(seededStateFile(bob), "utf-8");
     expect(run(opencode.unit, ["take", "checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
     expect(readFileSync(seededStateFile(bob), "utf-8")).toBe(before);
