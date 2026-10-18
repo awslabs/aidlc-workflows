@@ -2,8 +2,9 @@
 //
 // t-tui-kiro-release-journey.serial.test.ts - a person's first day with AI-DLC
 // on Kiro CLI, live in the `kiro-cli chat` terminal the person runs, once on
-// each Kiro tree: `kiro` (Kiro CLI V2) and `kiro-ide` (Kiro, which pins Kiro
-// CLI to its v3 engine in .kiro/settings/cli.json). This is the Kiro CLI
+// each Kiro tree: `kiro`, which setup lists as "Kiro CLI (V2)", and `kiro-ide`,
+// which setup lists as "Kiro" and whose .kiro/settings/cli.json pins Kiro CLI
+// to its v3 engine. Neither drives Kiro IDE. This is the Kiro CLI
 // release pass (#1345): a maintainer runs it on the selected preview's source
 // commit, on a machine with a signed-in Kiro CLI, and records its two lines in
 // that preview's release notes (docs/reference/09-testing.md).
@@ -103,6 +104,15 @@ function kiroVersion(): string | null {
 const PRODUCTION_GUARDS = process.env.AIDLC_TEST_GUARD_PROFILE === "production";
 
 type KiroTree = "kiro" | "kiro-ide";
+const KIRO_TREES: readonly KiroTree[] = ["kiro", "kiro-ide"];
+// AIDLC_KIRO_RELEASE_TREE=<tree> registers only that tree's journey, to rerun
+// the one whose result is missing or failed; --require-coverage then covers
+// that tree alone.
+const ONLY_TREE = process.env.AIDLC_KIRO_RELEASE_TREE;
+if (ONLY_TREE && !KIRO_TREES.includes(ONLY_TREE as KiroTree)) {
+  throw new Error(`AIDLC_KIRO_RELEASE_TREE must be one of ${KIRO_TREES.join(", ")}, not "${ONLY_TREE}"`);
+}
+const TREES = ONLY_TREE ? [ONLY_TREE as KiroTree] : KIRO_TREES;
 
 function sharedSkipReason(): string | null {
   if (process.env.AIDLC_KIRO_TUI_LIVE !== "1") return "set AIDLC_KIRO_TUI_LIVE=1 to run the Kiro CLI release journey (uses Kiro credits)";
@@ -121,7 +131,7 @@ function skipReason(tree: KiroTree): string | null {
 }
 
 describe("t-tui-kiro-release-journey: a person's first day on Kiro CLI, before each release", () => {
-  for (const tree of ["kiro", "kiro-ide"] as const) {
+  for (const tree of TREES) {
     const skip = skipReason(tree);
     test.skipIf(skip !== null)(
       `${tree}: every line recorded, the plan question asked, Reverse Engineering approved${skip ? ` [SKIP: ${skip}]` : ""}`,

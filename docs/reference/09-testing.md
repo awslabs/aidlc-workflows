@@ -2033,8 +2033,10 @@ hosted lane.
 
 Before selecting a preview for stable promotion, a maintainer reviews its
 recorded Kiro CLI release-journey results for the selected source SHA, one for
-each Kiro tree: `kiro` (Kiro CLI V2) and `kiro-ide` (Kiro, which runs Kiro CLI
-on its v3 engine). If no result exists for that SHA, run the journey
+each Kiro tree: `kiro`, which setup lists as "Kiro CLI (V2)", and `kiro-ide`,
+which setup lists as "Kiro" and whose `.kiro/settings/cli.json` pins Kiro CLI
+to its v3 engine. Both run in Kiro CLI; neither drives Kiro IDE. If no result
+exists for that SHA, run the journey
 (`tests/e2e/t-tui-kiro-release-journey.serial.test.ts`, the same journey as the
 Copilot lane's, in the interactive `kiro-cli chat` terminal, once per tree) on
 the preview's source commit, on a machine with a signed-in Kiro CLI:
@@ -2045,7 +2047,11 @@ AIDLC_KIRO_TUI_LIVE=1 AIDLC_TUI_LIVE=1 bun tests/run-tests.ts --e2e --production
   --require-coverage --filter t-tui-kiro-release-journey
 ```
 
-`--require-coverage` fails the run when either tree's journey was skipped. On
+`--require-coverage` fails the run when either tree's journey was skipped. When
+one tree already has a result for that SHA and the other is missing or failed,
+put `AIDLC_KIRO_RELEASE_TREE=kiro` or `AIDLC_KIRO_RELEASE_TREE=kiro-ide` in
+front of the command: only that tree's journey runs, and `--require-coverage`
+then covers that tree alone. On
 Linux it gives Kiro a scratch home and keeps the machine's sign-in, so
 `~/.kiro` is not touched. Each journey takes about five minutes; the credits
 follow the model Kiro CLI uses (about 33 each on `claude-opus-5.5` with Kiro

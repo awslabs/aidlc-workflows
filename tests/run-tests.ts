@@ -1144,7 +1144,7 @@ async function runBunTestFile(
     // Persist only coverage controls, never the full environment or credentials.
     const coverageKeys = [
       ...LIVE_MODEL_GATES, "AIDLC_RELEASE_CONTRACT_LIVE", "AIDLC_NO_LLM",
-      "AIDLC_KIRO_IDE_CASE", "AIDLC_REQUIRE_COMPILED_COVERAGE",
+      "AIDLC_KIRO_IDE_CASE", "AIDLC_KIRO_RELEASE_TREE", "AIDLC_REQUIRE_COMPILED_COVERAGE",
       "AIDLC_TEST_PACKAGE_READY", "AIDLC_TUI_BACKEND",
     ];
     writeFileSync(join(logDir, `${name}.execution.json`), `${JSON.stringify({
