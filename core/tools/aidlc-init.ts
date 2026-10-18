@@ -7061,8 +7061,11 @@ function prepareRefreshSource(
     if (prior) regenerated.add(rel);
     // The record holds the file without the plugin's additions, as config
     // records it before any compose, so the test above still proves it after
-    // a later compose rewrites them.
-    composedRecords.set(rel, sha256Bytes(stripRecordedContributions(fresh, { ...record, requires_stage: replayedEdges })));
+    // a later compose rewrites them. It reads the file with LF, as that test
+    // does, so a CRLF copy (and one the model writer gave LF frontmatter) is
+    // still the same file.
+    const asRead = fresh.replaceAll("\r\n", "\n");
+    composedRecords.set(rel, sha256Bytes(stripRecordedContributions(asRead, { ...record, requires_stage: replayedEdges })));
   }
   const emptiedSidecars = new Set<string>();
   if (retiredEdges.size > 0 && pathPresent(dataDir) && lstatSync(dataDir).isDirectory()) {

@@ -267,6 +267,37 @@ describe("a refresh over an agent file with a recorded model or effort", () => {
     });
   }
 
+  // Git for Windows checks files out with CRLF; the model writer rewrites the
+  // frontmatter with LF, so the composed file it records holds both. Its record
+  // is read the way the next refresh reads the file, so the plugin's additions
+  // stay through that refresh.
+  test("a CRLF checkout of a composed agent keeps the plugin's additions through a refresh after its effort is set", () => {
+    const p = project("composed-crlf");
+    const release = join(RELEASES, "claude");
+    const installed = p.run(["config", "--project-dir", p.dir, "--from", release, "--harness", "claude", "--mcp", "none", "--yes"]);
+    expect(installed.status, installed.out).toBe(0);
+    const plugin = join(REPO_ROOT, "dist", "plugins", "test-pro", "claude");
+    const composed = spawnSync(process.execPath, [join(plugin, "hooks", "compose.ts")], {
+      cwd: p.dir,
+      env: { ...process.env, CLAUDE_PLUGIN_ROOT: plugin, CLAUDE_PROJECT_DIR: p.dir },
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(composed.status, `${composed.stdout}${composed.stderr}`).toBe(0);
+    const agent = join(p.dir, ".claude", "agents", "aidlc-quality-agent.md");
+    writeFileSync(agent, readFileSync(agent, "utf-8").replaceAll("\r\n", "\n").replaceAll("\n", "\r\n"));
+    const pinned = p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", "quality", "--effort", "high", "--yes"]);
+    expect(pinned.status, pinned.out).toBe(0);
+    // The record this refresh writes proves the file to the one after it.
+    for (const round of ["first", "second"]) {
+      const refreshed = p.run(["config", "--project-dir", p.dir, "--yes"]);
+      expect(refreshed.status, `${round}: ${refreshed.out}`).toBe(0);
+      const text = readFileSync(agent, "utf-8");
+      expect(text, round).toContain("<!-- plugin:test-pro:");
+      expect(text, round).toMatch(/^effort: high\r?$/m);
+    }
+  });
+
   // A copied release tree has no install record yet: its agent file is the
   // release's own, so the first config run writes the recorded effort into it.
   test("a copied release tree with an effort already recorded sets up without a conflict", () => {
