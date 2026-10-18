@@ -257,9 +257,10 @@ renamed or reused.
    ```
 
 2. **Choose the preview, version and notes.** Review the preview's existing test
-   report and the manual Kiro release-journey result for its source commit.
-   Record that result and source SHA in the selected preview's release notes.
-   Reuse an existing result for that SHA; if missing, run the
+   report and the manual Kiro release-journey results for its source commit,
+   one for `kiro` and one for `kiro-ide`. Record both and the source SHA in the
+   selected preview's release notes. Reuse existing results for that SHA; if
+   missing, run the
    [Kiro journey](docs/reference/09-testing.md#nightly-full-suite-matrix-and-provisioning)
    on that source before selecting it. Put the stable release notes in a
    file, starting with `Compatibility: refresh only`, `Compatibility: refresh

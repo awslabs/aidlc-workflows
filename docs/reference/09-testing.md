@@ -2032,26 +2032,30 @@ Local runs with `AIDLC_KIRO_ACP_LIVE=1`, `AIDLC_KIRO_TUI_LIVE=1` or
 hosted lane.
 
 Before selecting a preview for stable promotion, a maintainer reviews its
-recorded Kiro CLI release-journey result for the selected source SHA. If no
-result exists for that SHA, run the journey
+recorded Kiro CLI release-journey results for the selected source SHA, one for
+each Kiro tree: `kiro` (Kiro CLI V2) and `kiro-ide` (Kiro, which runs Kiro CLI
+on its v3 engine). If no result exists for that SHA, run the journey
 (`tests/e2e/t-tui-kiro-release-journey.serial.test.ts`, the same journey as the
-Copilot lane's, in the interactive `kiro-cli chat` terminal) on the preview's
-source commit, on a machine with a signed-in Kiro CLI:
+Copilot lane's, in the interactive `kiro-cli chat` terminal, once per tree) on
+the preview's source commit, on a machine with a signed-in Kiro CLI:
 
 ```bash
 bun scripts/package.ts
 AIDLC_KIRO_TUI_LIVE=1 AIDLC_TUI_LIVE=1 bun tests/run-tests.ts --e2e --production-guards \
-  --filter t-tui-kiro-release-journey
+  --require-coverage --filter t-tui-kiro-release-journey
 ```
 
-On Linux it gives Kiro a scratch home and keeps the machine's sign-in, so
-`~/.kiro` is not touched. It takes about five minutes and about eleven Kiro
-credits, and prints one line, for example `Kiro CLI 2.29.0 release journey on
-<commit>: PASS (4.7 min of turns, 10.46 credits, 0 permission prompts)`, that
-is recorded, including the full source SHA, in the selected preview's GitHub
-release notes before promotion. An existing result for that source is reused;
+`--require-coverage` fails the run when either tree's journey was skipped. On
+Linux it gives Kiro a scratch home and keeps the machine's sign-in, so
+`~/.kiro` is not touched. Each journey takes about five minutes; the credits
+follow the model Kiro CLI uses (about 33 each on `claude-opus-5.5` with Kiro
+CLI 2.32.0). It prints one line per tree, for example
+`Kiro CLI 2.32.0 (kiro-ide) release journey on <commit>: PASS (5.1 min of
+turns, 33.23 credits, 3 permission prompts)`, and both lines are recorded,
+including the full source SHA, in the selected preview's GitHub release notes
+before promotion. Existing results for that source are reused;
 the promotion workflow does not rerun the journey on its new metadata commit.
-Nothing in the workflows reads that manual result: the maintainer reviews it
+Nothing in the workflows reads those manual results: the maintainer reviews them
 in step 2 of [Promote a preview to production](../../DEVELOPERS.md#4-promote-a-preview-to-production).
 A fix ships in another preview before it is selected for promotion.
 
