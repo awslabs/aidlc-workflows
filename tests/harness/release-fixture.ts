@@ -166,6 +166,8 @@ export type ReleaseFixtureOptions = {
   distributions?: readonly string[];
   target?: string;
   hostileRoot?: string;
+  /** The plugins tree the release carries; `<repoRoot>/dist/plugins` by default. */
+  pluginsRoot?: string;
 };
 
 export type ReleaseFixture = {
@@ -255,7 +257,7 @@ export function writeReleaseFixture(options: ReleaseFixtureOptions): ReleaseFixt
     }
     distributionRows.push({ name: distribution, productName });
   }
-  const pluginsRoot = join(repoRoot, "dist", "plugins");
+  const pluginsRoot = options.pluginsRoot ?? join(repoRoot, "dist", "plugins");
   if (existsSync(pluginsRoot)) {
     for (const plugin of readdirSync(pluginsRoot).sort()) {
       const pluginRoot = join(pluginsRoot, plugin);

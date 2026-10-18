@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, setDefaultTimeout, sp
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   lstatSync,
@@ -319,7 +320,7 @@ async function waitForPresent(paths: readonly string[]): Promise<void> {
 
 function fixture(
   version = AIDLC_VERSION,
-  options: Pick<ReleaseFixtureOptions, "binary" | "distributions"> = {},
+  options: Pick<ReleaseFixtureOptions, "binary" | "distributions" | "pluginsRoot"> = {},
 ): string {
   const root = temp("aidlc-t241-release-");
   writeReleaseFixture({
@@ -1548,6 +1549,8 @@ describe("t244 management lifecycle", () => {
       "update", "--version", AIDLC_VERSION, "--from", release,
     ], project, env);
     expect(installed.status, `${installed.stdout}\n${installed.stderr}`).toBe(0);
+    const catalogue = join(machine, "plugins");
+    expect(existsSync(join(catalogue, ".claude-plugin", "marketplace.json"))).toBe(true);
     const command = join(
       machine,
       "bin",
@@ -1597,13 +1600,14 @@ describe("t244 management lifecycle", () => {
     // Windows restores retained files before retiring the mutation fence.
     // Wait for that final marker too; visible files alone do not mean reinstall
     // can begin, or that fixture cleanup may safely remove this machine root.
-    await waitForAbsent([join(machine, "versions"), command, ...completionPaths]);
+    await waitForAbsent([join(machine, "versions"), catalogue, command, ...completionPaths]);
     await waitForPresent([
       join(machine, "aidlc.settings.json"),
       join(machine, "update-check.json"),
       join(machine, "pins.json"),
     ]);
     expect(existsSync(join(machine, "versions"))).toBe(false);
+    expect(existsSync(catalogue)).toBe(false);
     expect(existsSync(command)).toBe(false);
     expect(existsSync(join(machine, "aidlc.settings.json"))).toBe(true);
     expect(existsSync(join(machine, "update-check.json"))).toBe(true);
@@ -1623,6 +1627,7 @@ describe("t244 management lifecycle", () => {
     );
     await waitForAbsent([
       join(machine, "versions"),
+      catalogue,
       command,
       ...completionPaths,
       join(machine, "aidlc.settings.json"),
@@ -1662,12 +1667,16 @@ describe("t244 management lifecycle", () => {
       const installedRoot = join(machine, "versions", AIDLC_VERSION);
       const pluginRoot = join(installedRoot, "plugins", "test-pro", "claude");
       const changedPlugin = join(pluginRoot, walkFiles(pluginRoot)[0]);
+      const catalogue = join(machine, "plugins");
+      const changedCatalogue = join(catalogue, "test-pro", "claude", walkFiles(pluginRoot)[0]);
       const preserved = [
         join(machine, "keep.txt"),
         join(machine, "completions", "keep.txt"),
         join(machine, "completions", "aidlc.fish"),
         join(installedRoot, "keep.txt"),
         changedPlugin,
+        join(catalogue, "keep.txt"),
+        changedCatalogue,
         // A name an attacker could choose; Windows forbids newlines in names.
         ...(process.platform === "win32" ? [] : [join(machine, HOSTILE_NAME)]),
       ];
@@ -1700,6 +1709,7 @@ describe("t244 management lifecycle", () => {
         join(installedRoot, process.platform === "win32" ? "aidlc.exe" : "aidlc"),
         join(machine, "completions", "aidlc.bash"),
         join(installedRoot, "runtime"),
+        join(catalogue, ".claude-plugin", "marketplace.json"),
       ];
       for (const path of removed) expect(existsSync(path), path).toBe(true);
       const uninstalled = run(LIFECYCLE, [
@@ -1726,6 +1736,7 @@ describe("t244 management lifecycle", () => {
       }
       for (const path of links) expect(lstatSync(path).isSymbolicLink(), path).toBe(true);
       expect(existsSync(installedRoot)).toBe(true);
+      expect(existsSync(catalogue)).toBe(true);
       expect(existsSync(join(machine, "completions"))).toBe(true);
       expect(existsSync(machine)).toBe(true);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -1849,6 +1860,165 @@ describe("t244 management lifecycle", () => {
       expect(transactionState(workspace), root).toBe(before);
     }
   });
+});
+
+// A person adds AI-DLC's own plugin catalogue to Claude Code or Codex once.
+// Claude Code reads an installed plugin in place from it, so it must outlive
+// the version folders an update prunes, and always hold the active release's.
+describe("t244 AI-DLC's plugin catalogue keeps one path across updates", () => {
+  const RECORD = ".aidlc-catalogue.json";
+  const LATER_TEST_PRO = "0.1.9";
+  let releaseA: string;
+  let releaseB: string;
+  let releaseC: string;
+  beforeAll(() => {
+    // Release C carries a later test-pro, so the catalogue's bytes say which
+    // release they came from.
+    const laterPlugins = join(temp("aidlc-t244-later-plugins-"), "plugins");
+    cpSync(join(REPO_ROOT, "dist", "plugins"), laterPlugins, { recursive: true });
+    for (const file of walkFiles(laterPlugins).filter((path) => path.endsWith(".json"))) {
+      const path = join(laterPlugins, file);
+      writeFileSync(path, readFileSync(path, "utf-8").replaceAll('"version": "0.1.0"', `"version": "${LATER_TEST_PRO}"`));
+    }
+    releaseA = fixture(AIDLC_VERSION, { binary: "executable" });
+    releaseB = fixture(NEXT_VERSION, { binary: "executable" });
+    releaseC = fixture(LIVE_PIN_VERSION, { binary: "executable", pluginsRoot: laterPlugins });
+    for (const root of [dirname(laterPlugins), releaseA, releaseB, releaseC]) suiteTemporary.add(root);
+  });
+
+  function catalogueFiles(root: string): Record<string, string> {
+    return Object.fromEntries(
+      walkFiles(root)
+        .map((path) => path.replaceAll("\\", "/"))
+        .filter((path) => path !== RECORD)
+        .map((path) => [path, sha256File(join(root, path))]),
+    );
+  }
+
+  function expectCatalogueOf(machine: string, version: string): void {
+    const catalogue = join(machine, "plugins");
+    expect(lstatSync(catalogue).isDirectory() && !lstatSync(catalogue).isSymbolicLink()).toBe(true);
+    expect(catalogueFiles(catalogue)).toEqual(catalogueFiles(join(machine, "versions", version, "plugins")));
+    expect((JSON.parse(readFileSync(join(catalogue, RECORD), "utf-8")) as { version: string }).version).toBe(version);
+  }
+
+  function listedTestPro(machine: string): string {
+    const catalogue = JSON.parse(
+      readFileSync(join(machine, "plugins", ".claude-plugin", "marketplace.json"), "utf-8"),
+    ) as { plugins: Array<{ name: string; version: string }> };
+    return catalogue.plugins.find((entry) => entry.name === "aidlc-test-pro")?.version ?? "";
+  }
+
+  function install(machine: string, project: string): void {
+    const installed = run(LIFECYCLE, ["update", "--version", AIDLC_VERSION, "--from", releaseA], project, envFor(machine));
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+  }
+
+  test("the catalogue stays at one path across two updates, and a rollback brings that release's catalogue", () => {
+    const machine = temp("aidlc-t244-catalogue-");
+    const project = temp("aidlc-t244-catalogue-project-");
+    mkdirSync(join(project, ".git"));
+    const env = envFor(machine);
+    const catalogue = join(machine, "plugins");
+    // The installer prints what install-apply says after its first line.
+    const installed = run(LIFECYCLE, [
+      "install-apply", "--from", releaseA, "--version", AIDLC_VERSION, "--quiet",
+    ], project, env);
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    expect(installed.stdout.trim().split("\n")).toEqual([
+      `installed ${AIDLC_VERSION}`,
+      `Plugin catalogue for Claude Code and Codex: ${catalogue} (add it once; updates keep it current)`,
+    ]);
+    expectCatalogueOf(machine, AIDLC_VERSION);
+    expect(existsSync(join(catalogue, ".claude-plugin", "marketplace.json"))).toBe(true);
+    expect(existsSync(join(catalogue, ".agents", "plugins", "marketplace.json"))).toBe(true);
+
+    for (const [version, release] of [[NEXT_VERSION, releaseB], [LIVE_PIN_VERSION, releaseC]]) {
+      const updated = run(LIFECYCLE, ["update", "--version", version, "--from", release], project, env);
+      expect(updated.status, updated.stdout + updated.stderr).toBe(0);
+      // A refresh that works says nothing.
+      expect(updated.stdout.toLowerCase()).not.toContain("plugin catalogue");
+    }
+    expect(existsSync(join(machine, "versions", AIDLC_VERSION))).toBe(false);
+    expectCatalogueOf(machine, LIVE_PIN_VERSION);
+    expect(listedTestPro(machine)).toBe(LATER_TEST_PRO);
+
+    const rolledBack = run(LIFECYCLE, ["use", NEXT_VERSION], project, env);
+    expect(rolledBack.status, rolledBack.stdout + rolledBack.stderr).toBe(0);
+    expect(rolledBack.stdout.toLowerCase()).not.toContain("plugin catalogue");
+    expectCatalogueOf(machine, NEXT_VERSION);
+    expect(listedTestPro(machine)).toBe("0.1.0");
+
+    const doctor = run(DISPATCHER, ["doctor", "--json", "--project-dir", project], project, env);
+    const checks = (JSON.parse(doctor.stdout) as { data: { checks: Array<{ pass: boolean; label: string }> } }).data.checks;
+    expect(checks).toContainEqual(expect.objectContaining({ pass: true, label: `Plugin catalogue: ${catalogue}` }));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a catalogue the update cannot replace stays whole, and the update still succeeds", async () => {
+    const machine = temp("aidlc-t244-catalogue-held-");
+    const project = temp("aidlc-t244-catalogue-held-project-");
+    mkdirSync(join(project, ".git"));
+    const env = envFor(machine);
+    const catalogue = join(machine, "plugins");
+    install(machine, project);
+    const before = transactionState(catalogue);
+    const mode = statSync(catalogue).mode & 0o777;
+    // Linux cannot move a directory it may not write; on Windows a program whose
+    // current directory is inside the folder holds it, as a host can.
+    const holder = process.platform === "win32"
+      ? Bun.spawn([process.execPath, "-e", "setInterval(() => {}, 1000)"], { cwd: catalogue, stdout: "ignore", stderr: "ignore" })
+      : null;
+    if (!holder) chmodSync(catalogue, 0o500);
+    let updated: ReturnType<typeof run>;
+    try {
+      updated = run(LIFECYCLE, ["update", "--version", NEXT_VERSION, "--from", releaseB], project, env);
+    } finally {
+      if (holder) {
+        holder.kill();
+        await holder.exited;
+      } else {
+        chmodSync(catalogue, mode);
+      }
+    }
+    expect(updated.status, updated.stdout + updated.stderr).toBe(0);
+    expect(updated.stdout).toContain(`Updated aidlc from ${AIDLC_VERSION} to ${NEXT_VERSION}.`);
+    const kept = transactionState(catalogue) === before;
+    const warning = `Warning: the plugin catalogue at ${catalogue} was not refreshed, so it still lists the earlier plugins; ` +
+      `close Claude Code and Codex, then run aidlc use ${NEXT_VERSION}.`;
+    if (process.platform === "linux" && process.getuid?.() !== 0) expect(kept).toBe(true);
+    if (kept) {
+      expect(updated.stdout).toContain(warning);
+      expectCatalogueOf(machine, AIDLC_VERSION);
+    } else {
+      expect(updated.stdout).not.toContain(warning);
+      expectCatalogueOf(machine, NEXT_VERSION);
+    }
+    const retried = run(LIFECYCLE, ["use", NEXT_VERSION], project, env);
+    expect(retried.status, retried.stdout + retried.stderr).toBe(0);
+    expectCatalogueOf(machine, NEXT_VERSION);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a file AI-DLC did not write keeps the catalogue as it is, and the update names it", () => {
+    const machine = temp("aidlc-t244-catalogue-unowned-");
+    const project = temp("aidlc-t244-catalogue-unowned-project-");
+    mkdirSync(join(project, ".git"));
+    const env = envFor(machine);
+    const catalogue = join(machine, "plugins");
+    install(machine, project);
+    const notes = join(catalogue, "notes.txt");
+    writeFileSync(notes, "mine\n");
+    const updated = run(LIFECYCLE, ["update", "--version", NEXT_VERSION, "--from", releaseB], project, env);
+    expect(updated.status, updated.stdout + updated.stderr).toBe(0);
+    expect(updated.stdout).toContain(
+      `Warning: the plugin catalogue at ${catalogue} holds files AI-DLC did not write, so it was not refreshed: ` +
+        `${JSON.stringify(notes)}; move them out, then run aidlc use ${NEXT_VERSION}.`,
+    );
+    expect(readFileSync(notes, "utf-8")).toBe("mine\n");
+    expectCatalogueOf(machine, AIDLC_VERSION);
+    unlinkSync(notes);
+    expect(run(LIFECYCLE, ["use", NEXT_VERSION], project, env).status).toBe(0);
+    expectCatalogueOf(machine, NEXT_VERSION);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // The person typed the command, so at a terminal it says what it removes and

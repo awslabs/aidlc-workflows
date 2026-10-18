@@ -26,6 +26,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -934,8 +935,13 @@ describe("t238 build-binaries release builder", () => {
         humanInstall.status,
         `${humanInstall.stdout ?? ""}${humanInstall.stderr ?? ""}`,
       ).toBe(0);
-      expect(humanInstall.stdout ?? "")
-        .toContain(`PASS installed AI-DLC ${AIDLC_VERSION} with all harness runtimes`);
+      // The one catalogue path a person adds to Claude Code or Codex, printed to copy.
+      const catalogue = join(realpathSync(installRoot), "plugins");
+      expect(humanInstall.stdout ?? "").toContain(
+        `PASS installed AI-DLC ${AIDLC_VERSION} with all harness runtimes\n` +
+          `Plugin catalogue for Claude Code and Codex: ${catalogue} (add it once; updates keep it current)\n`,
+      );
+      expect(existsSync(join(catalogue, ".claude-plugin", "marketplace.json"))).toBe(true);
       expect(`${humanInstall.stdout ?? ""}${humanInstall.stderr ?? ""}`).not.toContain("\u001b[");
 
       const profileText = readFileSync(profile, "utf-8");
