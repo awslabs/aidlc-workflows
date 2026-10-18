@@ -709,34 +709,36 @@ export function applyModelPolicyToProjection(
   ).map(([name, tier]) => resolveModelPolicy(policy, name, tier, harness, cap));
   const agentsDir = modelPolicyAgentsDir(harness, harnessDir);
   const agentsRoot = agentsDir === null ? harnessRoot : join(projectionRoot, agentsDir);
-  const write = (path: string, text: string): void => {
-    if (text !== readFileSync(path, "utf-8")) written?.push(path);
-    writeFileSync(path, text);
+  // Changes the file only where the recorded policy changes it, and says which.
+  const write = (path: string, update: (text: string) => string): void => {
+    const text = readFileSync(path, "utf-8");
+    const next = update(text);
+    if (next === text) return;
+    writeFileSync(path, next);
+    written?.push(path);
   };
 
   if (harness === "claude") {
     for (const item of effective) {
       const path = join(agentsRoot, `${modelAgentStem(item.agent)}.md`);
       if (!existsSync(path)) throw new Error(`${path}: missing agent surface`);
-      write(path, writeMarkdownAgentSurface(readFileSync(path, "utf-8"), item));
+      write(path, (text) => writeMarkdownAgentSurface(text, item));
     }
   } else if (harness === "codex") {
     for (const item of effective) {
       const path = join(agentsRoot, `${modelAgentStem(item.agent)}.toml`);
       if (!existsSync(path)) throw new Error(`${path}: missing agent surface`);
-      write(path, writeCodexAgentSurface(readFileSync(path, "utf-8"), item));
+      write(path, (text) => writeCodexAgentSurface(text, item));
     }
   } else if (harness === "opencode") {
     for (const item of effective) {
       const path = join(agentsRoot, `${modelAgentStem(item.agent)}.md`);
       if (!existsSync(path)) throw new Error(`${path}: missing agent surface`);
-      write(
-        path,
-        writeMarkdownAgentSurface(readFileSync(path, "utf-8"), item, {
+      write(path, (text) =>
+        writeMarkdownAgentSurface(text, item, {
           effortKey: "variant",
           insertBeforeKeys: ["mode"],
-        }),
-      );
+        }));
     }
   } else if (harness === "kiro-ide") {
     // Kiro reads `model` and `effortLevel` from the agent at each dispatch; the
@@ -744,27 +746,21 @@ export function applyModelPolicyToProjection(
     for (const item of effective) {
       const path = join(agentsRoot, `${modelAgentStem(item.agent)}.md`);
       if (!existsSync(path)) throw new Error(`${path}: missing agent surface`);
-      write(
-        path,
-        writeMarkdownAgentSurface(readFileSync(path, "utf-8"), item, { effortKey: "effortLevel", quoteModel: true }),
-      );
+      write(path, (text) => writeMarkdownAgentSurface(text, item, { effortKey: "effortLevel", quoteModel: true }));
     }
   } else if (harness === "kiro") {
     const modelEfforts: Array<{ model: string; effort: KiroEffort }> = [];
     for (const item of effective) {
       const path = join(agentsRoot, `${modelAgentStem(item.agent)}.json`);
       if (!existsSync(path)) throw new Error(`${path}: missing agent surface`);
-      write(path, writeKiroAgentSurface(readFileSync(path, "utf-8"), item));
+      write(path, (text) => writeKiroAgentSurface(text, item));
       if (item.model && item.effort) {
         modelEfforts.push({ model: item.model, effort: item.effort });
       }
     }
     const path = join(harnessRoot, "settings", "cli.json");
     if (!existsSync(path)) throw new Error(`${path}: missing Kiro CLI settings`);
-    write(
-      path,
-      writeKiroCliSurface(readFileSync(path, "utf-8"), modelEfforts, cap),
-    );
+    write(path, (text) => writeKiroCliSurface(text, modelEfforts, cap));
   }
   return effective;
 }

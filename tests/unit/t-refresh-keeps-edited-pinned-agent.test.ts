@@ -218,28 +218,47 @@ describe("a refresh over an agent file with a recorded model or effort", () => {
 
   // Kiro CLI's upgrade for its 3.0 engine rewrites the agent file in its own
   // format and keeps AI-DLC's beside it as .json.bak; a refresh keeps Kiro's
-  // copy whatever model is recorded for that agent, and --force takes the
-  // release's file with the model.
-  test("kiro: an agent file Kiro upgraded stays as Kiro left it with a model recorded, and --force writes the model", () => {
-    const p = project("kiro-upgraded");
-    const release = join(RELEASES, "kiro");
-    const installed = p.run(["config", "--project-dir", p.dir, "--from", release, "--harness", "kiro", "--mcp", "none", "--yes"]);
-    expect(installed.status, installed.out).toBe(0);
-    const pinned = p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", "architect", "--model", "claude-sonnet-5-5", "--yes"]);
-    expect(pinned.status, pinned.out).toBe(0);
-    const file = join(p.dir, ".kiro", "agents", "aidlc-architect-agent.json");
-    const written = readFileSync(file, "utf-8");
-    cpSync(file, `${file}.bak`);
-    const upgraded = `${JSON.stringify({ ...JSON.parse(written), model: undefined, permissions: { rules: [] } }, null, 2)}\n`;
-    writeFileSync(file, upgraded);
-    const refresh = ["config", "--project-dir", p.dir, "--yes"];
-    const kept = p.run(refresh);
-    expect(kept.status, kept.out).toBe(0);
-    expect(readFileSync(file, "utf-8")).toBe(upgraded);
-    const forced = p.run([...refresh, "--force"]);
-    expect(forced.status, forced.out).toBe(0);
-    expect(readFileSync(file, "utf-8")).toBe(written);
-  });
+  // copy and its record whether the model was recorded before the upgrade or
+  // after, and --force takes the release's file with the model.
+  for (const order of ["model before the upgrade", "model after the upgrade"] as const) {
+    test(`kiro: an agent file Kiro upgraded stays as Kiro left it, ${order}, and --force writes the model`, () => {
+      const p = project("kiro-upgraded");
+      const release = join(RELEASES, "kiro");
+      const installed = p.run(["config", "--project-dir", p.dir, "--from", release, "--harness", "kiro", "--mcp", "none", "--yes"]);
+      expect(installed.status, installed.out).toBe(0);
+      const rel = ".kiro/agents/aidlc-architect-agent.json";
+      const file = join(p.dir, rel);
+      const pin = () => {
+        const pinned = p.run(["config", "models", "--project-dir", p.dir, "--project", "--agent", "architect", "--model", "claude-sonnet-5-5", "--yes"]);
+        expect(pinned.status, pinned.out).toBe(0);
+      };
+      const kiroUpgrade = () => {
+        const shipped = readFileSync(file, "utf-8");
+        cpSync(file, `${file}.bak`);
+        writeFileSync(file, `${JSON.stringify({ ...JSON.parse(shipped), model: undefined, permissions: { rules: [] } }, null, 2)}\n`);
+      };
+      if (order === "model before the upgrade") {
+        pin();
+        kiroUpgrade();
+      } else {
+        kiroUpgrade();
+        pin();
+      }
+      const upgraded = readFileSync(file, "utf-8");
+      const manifestPath = join(p.dir, ".kiro", "tools", "data", "aidlc-manifest.json");
+      const record = () => (JSON.parse(readFileSync(manifestPath, "utf-8")) as { files: Record<string, string> }).files[rel];
+      const recorded = record();
+      const refresh = ["config", "--project-dir", p.dir, "--yes"];
+      const kept = p.run(refresh);
+      expect(kept.status, kept.out).toBe(0);
+      expect(readFileSync(file, "utf-8")).toBe(upgraded);
+      expect(record()).toBe(recorded);
+      const forced = p.run([...refresh, "--force"]);
+      expect(forced.status, forced.out).toBe(0);
+      expect(JSON.parse(readFileSync(file, "utf-8")).model).toBe("claude-sonnet-5-5");
+      expect(JSON.parse(readFileSync(file, "utf-8")).permissions).toBeUndefined();
+    });
+  }
 
   // A copied release tree has no install record yet: its agent file is the
   // release's own, so the first config run writes the recorded effort into it.

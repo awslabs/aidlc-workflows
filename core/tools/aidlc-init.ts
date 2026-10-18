@@ -413,7 +413,7 @@ type PreparedRefreshSource = {
    * ownership check still holds them, as it holds every shipped file.
    */
   modelWritten?: ReadonlyMap<string, string>;
-  /** Every file the model writer filled in, the project's own copy included. */
+  /** Every file whose content the model writer changed, the project's own copy included. */
   modelStamped?: ReadonlySet<string>;
   entries?: Baseline["entries"];
   notes: string[];
