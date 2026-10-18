@@ -149,9 +149,24 @@ describe("scenario 1: one shared workspace repo, the repos side by side", () => 
     git(home.dir, ["fetch", "-q", "origin"]);
     const step = next(home.dir);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
-    // reporting waited on refunds and is the home's own to build now.
+    // reporting waited on refunds and is the home's own to build now: the
+    // lead's chat builds it through every stage, and the board shows it done.
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
     expect(step.unit).toBe("reporting");
+    cpSync(join(REPO_ROOT, "dist", "claude"), home.dir, { recursive: true, force: false, errorOnExist: false });
+    const host = hostFor("claude", home.dir, GIT_ENV);
+    const person = new PersonScript(host);
+    const agent = new AgentStandIn(host, person, {
+      units: ["refunds", "checkout-ui", "reporting"],
+      codeRepo: (unit) => (unit === "reporting" ? [{ repo: "billing" }] : undefined),
+      until: (d: Directive) => d.kind === "notice" || d.kind === "done" || (d.kind === "run-stage" && d.stage === "build-and-test"),
+    });
+    host.sessionStart("startup");
+    person.say("/aidlc");
+    const end = agent.drive(agent.next());
+    expect(agent.worked.filter((d) => d.unit === "reporting").map((d) => d.stage)).toContain("code-generation");
+    expect(end.kind, JSON.stringify(end)).toBe("notice");
+    expect(String(end.message)).toContain("- reporting, here: done");
   });
 });
 

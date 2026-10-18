@@ -1157,7 +1157,10 @@ export class AgentStandIn {
     const unit = typeof d.unit === "string" ? d.unit : null;
     if (!this.started.includes(stage)) this.started.push(stage);
     const policy = d.construction_policy as Record<string, unknown> | undefined;
-    if (d.unit_gate) this.fail("a team-owned Unit gate is outside what the scope run drives", d);
+    if (d.unit_gate) {
+      this.unitGate(d);
+      return;
+    }
     if (d.swarm_checkpoint) this.fail("a swarm checkpoint is outside what the scope run drives", d);
     if (d.construction_checkpoint) {
       this.checkpoint(d);
@@ -1570,6 +1573,22 @@ export class AgentStandIn {
     if (stage === "practices-discovery") this.promotePractices(d);
     this.report(stage, "--result", "approved", "--user-input", choice);
     this.pending = this.afterApproval?.(stage, this);
+  }
+
+  /**
+   * A team-owned Unit gate (`unit_gate`), as stage-protocol-construction.md
+   * says: the body and its review are settled, so learnings when listed, then
+   * the approval, each report naming the Unit.
+   */
+  unitGate(d: Directive): void {
+    const stage = String(d.stage);
+    const unit = String(d.unit);
+    if ((d.protocol_modules as string[] | undefined)?.includes("learnings")) this.learnings(d);
+    this.report(stage, "--result", "awaiting-approval", "--unit", unit);
+    const choice = this.askPerson("approval", stage, `${stage} for ${unit} is ready for your review. How would you like to proceed?`,
+      ["Approve", "Request Changes"], this.answers.approve(stage, unit));
+    if (choice !== "Approve") this.fail(`the person chose ${choice} at ${stage} for ${unit}; the scope run only approves`, d);
+    this.report(stage, "--result", "approved", "--user-input", choice, "--unit", unit);
   }
 
   /**

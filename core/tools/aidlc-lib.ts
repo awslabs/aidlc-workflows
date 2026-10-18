@@ -30363,7 +30363,9 @@ export function validateLiveUnitScope(
   if (!isTeamUnitOwnership(state)) return null;
   const stamp = applicableTeamUnitScopeStamp(pd, state);
   if (!stamp) {
-    if (cachedClaimFanoutActive(pd)) {
+    // The home of teams that build their Units as work of their own works the
+    // Units no team holds itself.
+    if (cachedClaimFanoutActive(pd) && unitTeams().homeLocation(state) === null) {
       throw new Error(
         "This checkout holds no Unit claim, so no Unit's work runs here; a Unit is worked here once it is " +
           `claimed with \`${entrySkillInvocation()} --claim <unit> --team <label>\`.`,

@@ -143,9 +143,11 @@ describe("at the home", () => {
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
     expect(readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "construction", "refunds", "code-generation", "code-summary.md"), "utf-8"))
       .toBe("# Code summary\n\nRefunds.\n");
-    // reporting waited on refunds and is the home's to build now.
+    // reporting waited on refunds and is the home's to build now, as the home's own work.
     expect(after.kind, JSON.stringify(after)).toBe("run-stage");
     expect(after.unit).toBe("reporting");
+    const started = run(STATE, ["unit", "start", "--stage", "functional-design", "--unit", "reporting"], home.dir);
+    expect(started.status, started.out).toBe(0);
   });
 
   test("what a team sent shows at the home's next step, with no fetch by the lead", () => {

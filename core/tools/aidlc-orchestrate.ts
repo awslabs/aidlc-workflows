@@ -16431,19 +16431,22 @@ function emitTeamUnitMajorRunStage(
     return true;
   };
   const finalStage = block[block.length - 1];
+  // The Units merged here, read from the audit too when this run derives no
+  // progress model (a read-only probe, the route check of `unit start`).
+  const mergedHere = model?.mergedUnits ?? unitMergedReceipts(projectDir, auditRows);
   // A Unit of the home's that waits, directly or through another, on a Unit a
   // team still builds is not started here yet.
   const dependencies = heldElsewhere.size > 0 ? unitDependencies(projectDir) : new Map<string, string[]>();
   const waitsOnTeam = (unit: string, seen = new Set<string>()): boolean =>
     (dependencies.get(unit) ?? []).some((dep) => {
-      if (heldElsewhere.has(dep) && !model?.mergedUnits.has(dep)) return true;
+      if (heldElsewhere.has(dep) && !mergedHere.has(dep)) return true;
       if (seen.has(dep)) return false;
       seen.add(dep);
       return waitsOnTeam(dep, seen);
     });
   const step = teamUnitMajorWalkStep(
     projectDir, refreshedState, block, units.filter((unit) => !waitsOnTeam(unit)), kinds, ledgers,
-    model?.mergedUnits ?? new Set<string>(),
+    mergedHere,
     rhythm, auditRows, recordPrefix, codekbCtx,
   );
   if (step.kind === "paused") {
@@ -16608,13 +16611,13 @@ function emitTeamUnitMajorRunStage(
       return;
     }
   }
-  if ([...heldElsewhere].some((unit) => !model?.mergedUnits.has(unit))) {
+  if ([...heldElsewhere].some((unit) => !mergedHere.has(unit))) {
     const rows = unitsInPlanOrder(projectDir, resolution.batches.flat()).map((unit): UnitBoardRow => {
       const claim = overview?.claims.get(unit);
       const team = claim?.status === "claimed" ? claim.owner : null;
-      if (model?.mergedUnits.has(unit)) return { unit, team, status: "done" };
+      if (mergedHere.has(unit)) return { unit, team: team ?? "here", status: "done" };
       if (team === null) {
-        const waits = (dependencies.get(unit) ?? []).filter((dep) => !model?.mergedUnits.has(dep));
+        const waits = (dependencies.get(unit) ?? []).filter((dep) => !mergedHere.has(dep));
         return { unit, team: "here", status: waits.length > 0 ? `waits on ${waits.join(", ")}` : "built here" };
       }
       const payload = claim!.payload;
