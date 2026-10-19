@@ -8,7 +8,8 @@
 // lead assigns and the board offers a hand-off; a team takes, pushes, is turned
 // down and goes back to Code Generation; a team by file starts from the file,
 // sends progress (taken in by its path) and its result (by the command); the
-// home answers two proposals. Then each step that waits on an answer the person
+// home answers two proposals; no step met tells the person what to type
+// (tellsWhatToType). Then each step that waits on an answer the person
 // did not give yet, and each way on from a push or a take that could not go as
 // it was: none hands them the same thing again.
 
@@ -38,6 +39,7 @@ import {
   refundsTaken,
   run,
   STATE,
+  tellsWhatToType,
   tempDir,
   UNIT,
   UTILITY,
@@ -83,7 +85,13 @@ function printed(step: Step): string {
 
 // Run the step's command, then the next step: never the same step again. A
 // refusal names a way on (a command in backticks), and that leads elsewhere.
+// What the person reads of a step: none of it tells them what to type.
+function readsAsOffers(step: Step): void {
+  expect(tellsWhatToType(step.question, step.message, step.choices, step.offers, step.change_notices), JSON.stringify(step)).toBe(false);
+}
+
 function movesOn(dir: string, env: NodeJS.ProcessEnv, step: Step, command: string, words: string[] = []): Step {
+  readsAsOffers(step);
   const ran = runPrinted(dir, env, command);
   if (ran.status !== 0) {
     const way = /`(bun [^`]+)`/.exec(ran.out)?.[1];
@@ -93,6 +101,7 @@ function movesOn(dir: string, env: NodeJS.ProcessEnv, step: Step, command: strin
   }
   const after = next(dir, env, words);
   expect(key(after), `the same step came back after ${command}: ${JSON.stringify(after)}`).not.toBe(key(step));
+  readsAsOffers(after);
   return after;
 }
 
