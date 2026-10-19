@@ -3241,12 +3241,19 @@ function artifactGuardDisabled(pd: string): boolean {
   return resolveProjectFlag("AIDLC_SKIP_ARTIFACT_GUARD", process.env, pd) === "1";
 }
 
+// Whether a pending recovery request (the one pass a change after a review
+// gets) is still owed. Under a Guard Policy that accepts changes the change
+// was recorded and said once instead, so nothing is owed: `unit complete` and
+// the stage's gate read this one rule, and a team-locked strict resolves strict.
+function recoveryReviewOwed(pd: string, content: string, pending: { recovery: boolean } | undefined): boolean {
+  return pending?.recovery === true && !guardPolicyAcceptsChanges(pd, content);
+}
+
 // The Unit's review request that is open with no verdict in this attempt, or
 // null. A request whose outputs changed since it was made is requested again
 // at its own pass (requestAgain); a current one takes its verdict or a retry.
 // A verdict the record could not verify is a verdict (the gate's retry owns
-// it), and a recovery request is the stale-receipt machinery, which a Guard
-// Policy that accepts changes turns off.
+// it), and a recovery request is owed only as recoveryReviewOwed says.
 function openUnitReview(
   pd: string,
   content: string,
@@ -3266,7 +3273,7 @@ function openUnitReview(
     pending === undefined ||
     receipts.awaitingVerdict?.has(unit) !== true ||
     pending.verificationFailed === true ||
-    (pending.recovery && guardPolicyAcceptsChanges(pd, content))
+    (pending.recovery && !recoveryReviewOwed(pd, content, pending))
   ) {
     return null;
   }
@@ -4692,7 +4699,8 @@ function verifyReviewerPrecondition(
   // A Unit the person approved at its checkpoint as it was owes this stage no
   // recovery review either.
   const pendingRecoveryUnits = Array.from(receipts.unitPending)
-    .filter(([unit, pending]) => pending.recovery && !approvedOverUnfinishedReview(pd, content, stage.slug, unit))
+    .filter(([unit, pending]) =>
+      recoveryReviewOwed(pd, content, pending) && !approvedOverUnfinishedReview(pd, content, stage.slug, unit))
     .map(([unit]) => unit);
   const verificationFailedUnits = Array.from(receipts.unitPending)
     .filter(([, pending]) => pending.verificationFailed === true)
@@ -4731,7 +4739,7 @@ function verifyReviewerPrecondition(
   const heldRecoveryUnits = pendingRecoveryUnits.filter(
     (unit) => !approvableUnfinishedReview(pd, content, receipts, personCall, unit),
   );
-  const stageRecoveryHeld = receipts.stagePending?.recovery === true &&
+  const stageRecoveryHeld = recoveryReviewOwed(pd, content, receipts.stagePending) &&
     !approvableUnfinishedReview(pd, content, receipts, personCall);
   if (stageRecoveryHeld || heldRecoveryUnits.length > 0) {
     const scope =

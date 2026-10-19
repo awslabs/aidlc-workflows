@@ -11,6 +11,10 @@
 // question, the same check every approval has), the review must have been
 // asked for (skipping it is not the agent's call), and a team that locks Guard
 // Policy strict keeps every review required.
+//
+// Under Guard Policy relaxed or off a recovery review (the one pass a change
+// after a review gets) is not owed at all, at `unit complete` and at the gate
+// alike, so it never holds the gate.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
@@ -23,11 +27,12 @@ import {
   createTestProject,
   resetAidlcEnv,
   seedAidlcMemory,
+  seedBoltDag,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
-import { auditBlockField, getField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { artifactFilename, auditBlockField, findStageBySlug, getField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -380,5 +385,207 @@ describe("Code Generation: the person's approval goes over a review of changed s
     expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
     const retry = cgReview(2, ["--retry-pending"]);
     expect(retry.rc, retry.out).toBe(0);
+  });
+});
+
+// Under Guard Policy relaxed or off a changed input is said once and carries
+// on, so a Unit's recovery review that never finished is not owed: `unit
+// complete` already goes past it, and the stage's gate reads the same rule
+// (recoveryReviewOwed), so it opens instead of sending the reviewer round
+// again. Strict and a team-locked strict still hold it at both, and their way
+// on (the review asked again, then its verdict) opens the gate.
+describe("a Unit's recovery review that never finished, at unit complete and at the gate", () => {
+  const FD = "functional-design";
+  const FD_REVIEWER = "aidlc-architecture-reviewer-agent";
+  const DASH = "\u2014"; // the state file's stage-line separator
+  type Policy = "strict" | "relaxed" | "off-scope" | "off-memory" | "locked-strict";
+  const LINES: Record<Policy, string> = {
+    strict: "strict (set by you)",
+    relaxed: "relaxed (set by you)",
+    "off-scope": "off (from scope feature)",
+    "off-memory": "strict (from scope feature)",
+    "locked-strict": "off (from scope feature)",
+  };
+  let proj: string;
+  afterEach(() => cleanupTestProject(proj));
+
+  function unitProject(policy: Policy): void {
+    resetAidlcEnv();
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    writeFileSync(seededStateFile(proj), `# AI-DLC State Tracking
+
+## Project Information
+- **Project**: Unit recovery reviews
+- **Project Type**: Greenfield
+- **Scope**: feature
+- **State Version**: 8
+- **Unit Ownership**: solo
+- **Skeleton Stance**: on
+- **Construction Iteration**: unit-major
+
+## Runtime State
+- **Revision Count**: 0
+- **Guard Policy**: ${LINES[policy]}
+
+## Scope Configuration
+- **Stages to Execute**: all
+- **Stages to Skip**: none
+- **Depth**: Standard
+- **Test Strategy**: Standard
+
+## Stage Progress
+
+### CONSTRUCTION PHASE
+- [-] functional-design ${DASH} EXECUTE
+- [S] nfr-requirements ${DASH} EXECUTE
+- [S] nfr-design ${DASH} EXECUTE
+- [S] infrastructure-design ${DASH} EXECUTE
+- [S] code-generation ${DASH} EXECUTE
+
+## Current Status
+- **Lifecycle Phase**: CONSTRUCTION
+- **Current Stage**: functional-design
+- **Status**: Running
+- **Last Updated**: 2026-07-30T00:00:00Z
+`, "utf-8");
+    const memory = join(proj, "aidlc", "spaces", "default", "memory");
+    const under = (file: string, line: string) => {
+      const text = readFileSync(join(memory, file), "utf-8");
+      expect(text).toContain("## Guard Policy\n");
+      writeFileSync(join(memory, file), text.replace("## Guard Policy\n", `## Guard Policy\n\n${line}\n`), "utf-8");
+    };
+    if (policy === "off-memory") under("project.md", "- Mode: off");
+    if (policy === "locked-strict") under("team.md", "- Mode: strict");
+    seedBoltDag(proj, ["unit-a", "unit-b"]);
+  }
+
+  const unitDir = (unit: string) => join(seededRecordDir(proj), "construction", unit, FD);
+  function unitArtifacts(unit: string): string[] {
+    const names = (findStageBySlug(FD)?.produces ?? []).map((name) => artifactFilename(name));
+    expect(names.length).toBeGreaterThan(1);
+    mkdirSync(unitDir(unit), { recursive: true });
+    for (const name of names) writeFileSync(join(unitDir(unit), name), name.endsWith(".json") ? "{}\n" : `# ${name}\nstub\n`);
+    return names;
+  }
+  const unitVerb = (action: string, unit: string) => state(proj, ["unit", action, "--stage", FD, "--unit", unit]);
+  function unitReview(unit: string, iteration: number, verdict?: string, extra: string[] = []): void {
+    const args = ["review", "--stage", FD, "--reviewer", FD_REVIEWER, "--unit", unit, "--iteration", String(iteration)];
+    const asked = run(LOG, [...args, ...extra, "--project-dir", proj]);
+    expect(asked.rc, asked.out).toBe(0);
+    if (verdict === undefined) return;
+    const file = (JSON.parse(asked.out.split("\n").find((line) => line.startsWith("{")) as string) as { reviewFile: string })
+      .reviewFile;
+    writeFileSync(
+      join(proj, file),
+      `## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** ${FD_REVIEWER}\n**Iteration:** ${iteration}\n\n### Findings\n\nNo blocking findings.\n`,
+    );
+    const recorded = run(LOG, [...args, "--verdict", verdict, "--project-dir", proj]);
+    expect(recorded.rc, recorded.out).toBe(0);
+  }
+
+  // unit-a reviewed READY, then its rules changed and its review was asked for
+  // again: the one recovery pass, with no verdict. `asked`: the person asked for
+  // it (under strict their word since then lets `unit complete` record).
+  function recoveryLeftUnfinished(asked = true): void {
+    expect(unitVerb("start", "unit-a").rc).toBe(0);
+    const names = unitArtifacts("unit-a");
+    unitReview("unit-a", 1, "READY");
+    writeFileSync(join(unitDir("unit-a"), names[1]), "# rules\n\n- A title cannot be blank.\n");
+    if (asked) says(proj, "review unit-a again");
+    unitReview("unit-a", 2);
+    const request = events(proj, "REVIEW_REQUESTED").at(-1);
+    expect(auditBlockField(request?.block ?? "", "Recovery"), request?.block).toBe("stale-receipt");
+    expect(auditBlockField(request?.block ?? "", "Unit")).toBe("unit-a");
+  }
+
+  function unitBDone(): void {
+    expect(unitVerb("start", "unit-b").rc).toBe(0);
+    unitArtifacts("unit-b");
+    unitReview("unit-b", 1, "READY");
+    const done = unitVerb("complete", "unit-b");
+    expect(done.rc, done.out).toBe(0);
+  }
+
+  test.each(["relaxed", "off-scope", "off-memory"] as const)("%s: unit complete goes past it, and so does the gate", (policy) => {
+    unitProject(policy);
+    recoveryLeftUnfinished();
+    const done = unitVerb("complete", "unit-a");
+    expect(done.rc, done.out).toBe(0);
+    unitBDone();
+    const opened = report(proj, ["--stage", FD, "--result", "completed"]);
+    expect(JSON.stringify(opened)).not.toContain("REVIEW_RECOVERY_PENDING");
+    expect(opened.ask_type, JSON.stringify(opened)).not.toBe("guard-recovery");
+    expect(events(proj, "STAGE_AWAITING_APPROVAL"), JSON.stringify(opened)).toHaveLength(1);
+    // The reviewer is not sent round again: no request after the unfinished one.
+    expect(events(proj, "REVIEW_REQUESTED").filter((row) => auditBlockField(row.block, "Unit") === "unit-a")).toHaveLength(2);
+    says(proj, "approve it");
+    const approved = report(proj, ["--stage", FD, "--result", "approved", "--user-input", "approve it"]);
+    expect(approved.kind, JSON.stringify(approved)).toBe("done");
+    expect(events(proj, "GATE_APPROVED")).toHaveLength(1);
+    expect(events(proj, "GATE_REJECTED")).toHaveLength(0);
+  });
+
+  test.each(["strict", "locked-strict"] as const)("%s: unit complete and the gate both hold it, and the review's retry opens the gate", (policy) => {
+    unitProject(policy);
+    recoveryLeftUnfinished(false);
+    const refused = unitVerb("complete", "unit-a");
+    expect(refused.rc).not.toBe(0);
+    expect(refused.out).toContain("--retry-pending");
+    unitReview("unit-a", 2, "READY", ["--retry-pending"]);
+    const done = unitVerb("complete", "unit-a");
+    expect(done.rc, done.out).toBe(0);
+    unitBDone();
+    const opened = report(proj, ["--stage", FD, "--result", "completed"]);
+    expect(JSON.stringify(opened)).not.toContain("REVIEW_RECOVERY_PENDING");
+    expect(events(proj, "STAGE_AWAITING_APPROVAL"), JSON.stringify(opened)).toHaveLength(1);
+  });
+
+  test("strict: the gate holds a recovery review unit complete never saw, and its retry opens the gate", () => {
+    unitProject("strict");
+    expect(unitVerb("start", "unit-a").rc).toBe(0);
+    unitArtifacts("unit-a");
+    unitReview("unit-a", 1, "READY");
+    expect(unitVerb("complete", "unit-a").rc).toBe(0);
+    unitBDone();
+    const names = (findStageBySlug(FD)?.produces ?? []).map((name) => artifactFilename(name));
+    writeFileSync(join(unitDir("unit-a"), names[1]), "# rules\n\n- A title cannot be blank.\n");
+    says(proj, "review unit-a again");
+    unitReview("unit-a", 2);
+    const held = report(proj, ["--stage", FD, "--result", "completed"]);
+    expect(JSON.stringify(held)).toContain("REVIEW_RECOVERY_PENDING");
+    expect(events(proj, "STAGE_AWAITING_APPROVAL")).toHaveLength(0);
+    unitReview("unit-a", 2, "READY", ["--retry-pending"]);
+    const opened = report(proj, ["--stage", FD, "--result", "completed"]);
+    expect(JSON.stringify(opened)).not.toContain("REVIEW_RECOVERY_PENDING");
+    expect(events(proj, "STAGE_AWAITING_APPROVAL"), JSON.stringify(opened)).toHaveLength(1);
+  });
+});
+
+describe("a stage's recovery review that never finished, after the person turns Guard Policy off", () => {
+  let proj: string;
+  beforeEach(() => {
+    resetAidlcEnv();
+    proj = createTestProject();
+    seedAidlcMemory(proj);
+    seedStateFile(proj, "state-mid-inception.md");
+  });
+  afterEach(() => cleanupTestProject(proj));
+
+  test("the gate opens on the earlier READY review", () => {
+    recoveryAskedNeverFinished(proj);
+    says(proj, "turn guard policy off");
+    const set = run(join(AIDLC_SRC, "tools", "aidlc-utility.ts"), [
+      "config-change", "--guard-policy", "off", "--person-words", "turn guard policy off", "--project-dir", proj,
+    ]);
+    expect(set.rc, set.out).toBe(0);
+    expect(getField(readFileSync(seededStateFile(proj), "utf-8"), "Guard Policy")).toBe("off (set by you)");
+    const opened = report(proj, ["--stage", SLUG, "--result", "completed"]);
+    expect(JSON.stringify(opened)).not.toContain("REVIEW_RECOVERY_PENDING");
+    expect(events(proj, "STAGE_AWAITING_APPROVAL"), JSON.stringify(opened)).toHaveLength(1);
+    says(proj, "approve it");
+    const done = report(proj, ["--stage", SLUG, "--result", "approved", "--user-input", "approve it"]);
+    expect(done.kind, JSON.stringify(done)).toBe("done");
+    expect(events(proj, "GATE_APPROVED")).toHaveLength(1);
   });
 });
