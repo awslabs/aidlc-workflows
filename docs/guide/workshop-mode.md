@@ -197,7 +197,11 @@ before the first push, so a hook that stops one pushes nothing. Each repo's push
 goes to the remote git would push it to; with several remotes and none set, the
 offer names each. The line says where you are and the way back ("You're on
 refunds now in checkout-api and billing. Switch back to main any time."). A
-push the host refuses is said once, in its own words, and nothing retries.
+later push from the branch you went back to takes the Unit's files Code
+Generation changed there onto its branch as they are; when changes of your own
+are in the way, it stops with git's words, nothing moves, and the push is
+offered again once they are committed or put aside. A push the host refuses is
+said once, in its own words, and nothing retries.
 **Not now** pushes nothing; the end of the build says once that the Unit is not
 pushed yet. A repo the Unit changed that the home's plan did not list is added
 to the build's repos and goes with the push, said once. When the code went but
@@ -237,7 +241,8 @@ AI-DLC runs `aidlc unit turned-down <unit> --repo <repo>` with their words; the
 team hears them once at its next step, and its build, finished until then, is
 open again: AI-DLC asks once whether to take the Unit back to Code Generation so
 the team can change it and push it again, which it recommends, and runs the way
-back when they say yes. What already merged stays merged.
+back when they say yes. Once the redo's Code Generation is approved, the end of
+the build offers the push again. What already merged stays merged.
 
 ## Start early, and change a shared input
 

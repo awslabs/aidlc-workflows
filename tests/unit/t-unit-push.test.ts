@@ -23,6 +23,7 @@ import {
   cloneCode,
   cloneOf,
   codeGenerated,
+  codeGeneratedAgain,
   codeHost,
   ENV,
   git,
@@ -258,6 +259,87 @@ describe("the push", () => {
       "The push of refunds in billing was refused: branch protection: refunds needs a ticket (pre-receive hook declined). " +
         "Nothing was retried. You're on refunds now in checkout-api and billing. Switch back to main any time.",
     );
+  });
+
+  test("back on main after a push, with the Unit's files changed again: the next push carries them onto its branch, and nothing of theirs moves", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    // The way back the push's line offered, then Code Generation again on main.
+    for (const repo of Object.keys(hosts)) git(join(alice, repo), ["switch", "-q", "main"]);
+    const billing = join(alice, "billing");
+    writeFileSync(join(billing, "NOTES.md"), "mine\n");
+    codeGeneratedAgain(alice);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 2;");
+    expect(git(hosts["checkout-api"], ["show", "refunds:src/refunds.ts"])).toBe("export const refunds = 2;");
+    expect(git(billing, ["branch", "--show-current"])).toBe("refunds");
+    expect(git(billing, ["status", "--porcelain"])).toBe("?? NOTES.md");
+    expect(readFileSync(join(billing, "NOTES.md"), "utf-8")).toBe("mine\n");
+  });
+
+  test("their own change in the way of the Unit's branch: the push says git's words and the way on, touches nothing, and the next step does not offer it again", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const billing = join(alice, "billing");
+    for (const repo of Object.keys(hosts)) git(join(alice, repo), ["switch", "-q", "main"]);
+    // Their main moves on, and they are editing that file again.
+    writeFileSync(join(billing, "README.md"), "# billing\n\nnew\n");
+    git(billing, ["commit", "-q", "-am", "readme"]);
+    writeFileSync(join(billing, "README.md"), "# billing\n\nnew, still editing\n");
+    codeGeneratedAgain(alice);
+    appendAuditEntry("GATE_APPROVED", { Stage: "code-generation", Unit: "refunds" }, alice, basename(record), "payments");
+    const refused = run(UNIT, ["push"], alice);
+    expect(refused.status).not.toBe(0);
+    const error = String(refused.json?.error);
+    expect(error).toStartWith('Branch refunds could not be checked out in billing, so nothing was pushed. Git says: "');
+    expect(error).toContain("README.md");
+    expect(error).toEndWith('". Your own changes there stay as they are; once they are committed or put aside, I can push refunds. ' +
+      "You're on refunds now in checkout-api. Switch back to main any time.");
+    expect(tellsWhatToType(error)).toBe(false);
+    expect(git(billing, ["branch", "--show-current"])).toBe("main");
+    expect(git(billing, ["diff", "--cached", "--name-only"])).toBe("");
+    expect(git(billing, ["diff", "--name-only"])).toBe("README.md");
+    expect(git(billing, ["ls-files", "--others", "--exclude-standard"])).toBe("lib/refund.ts");
+    expect(readFileSync(join(billing, "README.md"), "utf-8")).toBe("# billing\n\nnew, still editing\n");
+    expect(readFileSync(join(billing, "lib", "refund.ts"), "utf-8")).toBe("export const refund = 2;\n");
+    // The next step says where it stands once, and offers no push that fails the same way.
+    const end = next(alice);
+    expect(end.ask_type, JSON.stringify(end)).not.toBe("unit-push");
+    expect((end.change_notices ?? []) as string[]).toContain(
+      "refunds is built and approved, and not pushed: changes of yours in billing are in the way of its branch there. " +
+        "Once they are committed or put aside, do you want me to push it?",
+    );
+    // Once they committed theirs, the push is offered and goes.
+    git(billing, ["commit", "-q", "-am", "readme, done"]);
+    const ask = next(alice);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-push");
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 2;");
+  });
+
+  test("after a turn-down, once the redo's Code Generation is approved, the build's end offers the push again and never the redo", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger entry"], home.dir).status).toBe(0);
+    expect(next(alice).ask_type).toBe("unit-turned-down");
+    codeGeneratedAgain(alice);
+    appendAuditEntry("GATE_APPROVED", { Stage: "code-generation", Unit: "refunds" }, alice, basename(record), "payments");
+    const push = next(alice);
+    expect(push.ask_type, JSON.stringify(push)).toBe("unit-push");
+    // Not now: the end says it is not pushed, and the redo is not offered again.
+    expect(run(UNIT, ["push", "--later"], alice).status).toBe(0);
+    const end = next(alice);
+    expect(end.kind, JSON.stringify(end)).toBe("done");
+    expect(JSON.stringify(end)).not.toContain("back to Code Generation");
+    expect(String(end.done_note)).toEndWith("aidlc-unit.ts push` and say its notice line.");
   });
 
   test("the build's end offers the push; not now pushes nothing, and the end says so once", () => {

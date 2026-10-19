@@ -618,6 +618,7 @@ import {
   shareTarget,
   teamHandoverMarkName,
   teamSharedHere,
+  unitBranchInTheWay,
   unitsTaken,
   type UnitClaimOverview,
   type UnitClaimView,
@@ -8666,8 +8667,8 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   const build = unitBuildOf(stateContent);
   if (build === null || stateContent === null) return null;
   const push = getField(stateContent, UNIT_PUSH_FIELD)?.trim();
-  if (push === "pushed") return null;
   const unit = build.unit;
+  if (push === "pushed" && !redoneSincePush(projectDir, unit)) return null;
   if (push === "later") {
     sayWithStepOnce(projectDir, `${unit} is built and approved, and not pushed yet. Do you want me to push it now?`);
     return null;
@@ -8687,7 +8688,16 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
     };
   }
   const manifest = readUnitSourceManifest(projectDir, "code-generation", unit);
-  const repos = manifest.ok ? [...writesByRepo(projectDir, manifest.manifest.writes).keys()] : [];
+  const byRepo = manifest.ok ? writesByRepo(projectDir, manifest.manifest.writes) : new Map<string, string[]>();
+  const repos = [...byRepo.keys()];
+  // Their own changes in the way of the Unit's branch: the push would be
+  // refused the same way, so it is offered once they are out of the way.
+  const inTheWay = unitBranchInTheWay(projectDir, unit, byRepo);
+  if (inTheWay.length > 0) {
+    sayWithStepOnce(projectDir, `${unit} is built and approved, and not pushed: changes of yours in ${joinRepoNames(inTheWay)} are in the way ` +
+      "of its branch there. Once they are committed or put aside, do you want me to push it?");
+    return null;
+  }
   const names = repos.map((repo) => (repo === "." ? "the repo" : repo));
   const changed = names.length === 0 ? "" : ` It changed ${names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`}.`;
   // A repo with several remotes and none set for pushing: which one is theirs to say.
@@ -8712,6 +8722,15 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
       { label: "Not now", detail: "Nothing is pushed until you want it to be.", command: `${unitTool} push --later` },
     ],
   };
+}
+
+// Code Generation approved again since the build's last push (the redo after
+// a turn-down): there is new work to push, and the turn-down is answered.
+function redoneSincePush(projectDir: string, unit: string): boolean {
+  const rows = sortAttemptEvents(readAuditShardEvents(projectDir));
+  const pushed = rows.findLastIndex((row) => row.event === "UNIT_PUSHED");
+  return pushed >= 0 && rows.slice(pushed + 1).some((row) => row.event === "GATE_APPROVED" &&
+    auditBlockField(row.block, "Stage") === "code-generation" && auditBlockField(row.block, "Unit") === unit);
 }
 
 function joinRepoNames(repos: string[]): string {
@@ -14119,13 +14138,15 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // whether to take it back to Code Generation, and after that hears where
     // it stands.
     const build = stateContent ? unitBuildOf(stateContent) : null;
-    const down = build !== null ? reopenTurnedDownBuild(pd, stateContent!) : null;
+    // Once the redo's Code Generation is approved the push answers it, never the redo again.
+    const redone = build !== null && redoneSincePush(pd, build.unit);
+    const down = build !== null && !redone ? reopenTurnedDownBuild(pd, stateContent!) : null;
     if (build !== null && down !== null) {
       emit(turnedDownStep(pd, build.unit, down.repo));
       return;
     }
     // No stage left to run — the workflow is complete.
-    const notPushed = unitBuildOf(stateContent) !== null && getField(stateContent ?? "", UNIT_PUSH_FIELD)?.trim() === "later";
+    const notPushed = build !== null && (getField(stateContent ?? "", UNIT_PUSH_FIELD)?.trim() !== "pushed" || redone);
     emit({
       kind: "done",
       reason: `Workflow complete - no in-scope stage remains after ${currentSlug} (scope: ${scope}).${NEW_WORK_HINT}`,

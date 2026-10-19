@@ -308,6 +308,15 @@ export function codeGenerated(alice: string, record: string): void {
   writeFileSync(join(stage, "code-summary.md"), "# Code summary\n\nRefunds.\n");
 }
 
+// Code Generation run again after a turn-down: the same files with the home's
+// change, written on whatever branch each repo is on.
+export function codeGeneratedAgain(alice: string): void {
+  mkdirSync(join(alice, "checkout-api", "src"), { recursive: true });
+  writeFileSync(join(alice, "checkout-api", "src", "refunds.ts"), "export const refunds = 2;\n");
+  mkdirSync(join(alice, "billing", "lib"), { recursive: true });
+  writeFileSync(join(alice, "billing", "lib", "refund.ts"), "export const refund = 2;\n");
+}
+
 // Merge a Unit's branch on a code host the way a team would, from a clone. A
 // rebase merge replays the branch onto a main that moved meanwhile, as a host's
 // "rebase and merge" does, so every commit gets a new id.

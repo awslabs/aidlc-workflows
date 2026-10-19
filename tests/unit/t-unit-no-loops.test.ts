@@ -5,13 +5,15 @@
 // with the person's words filled in) and then asks for the next step, and the
 // next step is never the same step for the same thing. A command that is
 // refused names a way on, and following it leads somewhere else. Walks: the
-// lead assigns and the board offers a hand-off; a team takes, pushes, is turned
-// down and goes back to Code Generation; a team by file starts from the file,
+// lead assigns and the board offers a hand-off; a team takes, pushes, goes back
+// to main, is turned down, goes back to Code Generation and pushes again from
+// main; a team by file starts from the file,
 // sends progress (taken in by its path) and its result (by the command); the
 // home answers two proposals; no step met tells the person what to type
 // (tellsWhatToType). Then each step that waits on an answer the person
 // did not give yet, and each way on from a push or a take that could not go as
-// it was: none hands them the same thing again.
+// it was (a push their own change is in the way of waits for it to be out of
+// the way): none hands them the same thing again.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -25,6 +27,7 @@ import {
   cloneCode,
   cloneOf,
   codeGenerated,
+  codeGeneratedAgain,
   codeHost,
   ENV,
   finishBuild,
@@ -142,6 +145,8 @@ describe("no step of the build-out comes back after its own command ran", () => 
     const push = next(alice, ENV);
     expect(push.ask_type, JSON.stringify(push)).toBe("unit-push");
     movesOn(alice, ENV, push, choice(push, "Push"));
+    // The way back to main the push's line offered.
+    for (const repo of Object.keys(hosts)) git(join(alice, repo), ["switch", "-q", "main"]);
     // The lead turns refunds down; the team's way back runs and is not offered again.
     git(home.dir, ["fetch", "-q", "origin"]);
     const down = run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "billing needs the ledger entry"], home.dir);
@@ -160,6 +165,15 @@ describe("no step of the build-out comes back after its own command ran", () => 
     const back = movesOn(alice, chat, ask, jump!);
     expect(back.kind, JSON.stringify(back)).toBe("run-stage");
     expect(back.stage).toBe("code-generation");
+    // Code Generation again, on main, approved: the end offers the push, not the redo, and the push goes.
+    codeGeneratedAgain(alice);
+    finishBuild(record);
+    appendAuditEntry("GATE_APPROVED", { Stage: "code-generation", Unit: "refunds" }, alice, basename(record), "payments");
+    const again = next(alice, ENV);
+    expect(again.ask_type, JSON.stringify(again)).toBe("unit-push");
+    const sent = movesOn(alice, ENV, again, choice(again, "Push"));
+    expect(JSON.stringify(sent)).not.toContain("back to Code Generation");
+    expect(git(hosts.billing, ["show", "refunds:lib/refund.ts"])).toBe("export const refund = 2;");
   });
 
   test("a team by file starts from the file once, and its progress and result are taken in once, by path and by command", () => {
@@ -309,6 +323,36 @@ describe("a step that waits on the person, and every way on the round added, nev
     expect(unsent.ask_type, JSON.stringify(unsent)).toBe("unit-push");
     writeFileSync(hostHook, "#!/bin/sh\nexit 0\n");
     movesOn(alice, ENV, unsent, choice(unsent, "Send it again"));
+  });
+
+  test("the push again with their own change in the way of the Unit's branch: refused in git's words, not offered again until it is out of the way, then it goes", () => {
+    const { hosts, alice, record } = refundsTaken();
+    withTools(alice);
+    codeGenerated(alice, record);
+    finishBuild(record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const billing = join(alice, "billing");
+    for (const repo of Object.keys(hosts)) git(join(alice, repo), ["switch", "-q", "main"]);
+    writeFileSync(join(billing, "README.md"), "# billing\n\nnew\n");
+    git(billing, ["commit", "-q", "-am", "readme"]);
+    codeGeneratedAgain(alice);
+    appendAuditEntry("GATE_APPROVED", { Stage: "code-generation", Unit: "refunds" }, alice, basename(record), "payments");
+    const push = next(alice, ENV);
+    expect(push.ask_type, JSON.stringify(push)).toBe("unit-push");
+    readsAsOffers(push);
+    // They edit that file again while the question is up, then say yes.
+    writeFileSync(join(billing, "README.md"), "# billing\n\nnew, still editing\n");
+    const refused = runPrinted(alice, ENV, choice(push, "Push"));
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("README.md");
+    expect(refused.out).toContain("once they are committed or put aside, I can push refunds.");
+    const waits = next(alice, ENV);
+    expect(key(waits), JSON.stringify(waits)).not.toBe(key(push));
+    readsAsOffers(waits);
+    git(billing, ["commit", "-q", "-am", "readme, done"]);
+    const ready = next(alice, ENV);
+    expect(ready.ask_type, JSON.stringify(ready)).toBe("unit-push");
+    movesOn(alice, ENV, ready, choice(ready, "Push"));
   });
 
   test("a take: a Unit the home started is refused with a way on that does not offer it; an open Unit starts for a team the lead named", () => {

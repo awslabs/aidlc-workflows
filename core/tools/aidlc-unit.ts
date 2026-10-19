@@ -3,6 +3,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  copyFileSync,
   existsSync,
   lstatSync,
   mkdtempSync,
@@ -5377,6 +5378,74 @@ function unitOwnChange(dir: string, path: string, taken: string, scratch: string
   return oid ? { mode: entry[0], oid, now } : null;
 }
 
+// Onto the Unit's existing branch the way git's own switch allows. A file of
+// the Unit's changed here since the branch was written (Code Generation run
+// again on the branch the person went back to) gets the branch's copy in the
+// index first, and git keeps the newer file as it is, as it keeps a change to
+// any file the switch does not touch. Only a file whose index holds nothing its
+// working copy lacks. Anything else in the way stays theirs: git refuses, the
+// index is put back, and git's words come back. A dry run does it in a copy of
+// their index and moves nothing.
+function switchOntoUnitBranch(dir: string, unit: string, paths: string[], dryRun = false): { ok: boolean; said: string } {
+  const branch = `refs/heads/${unit}`;
+  const scratch = dryRun ? mkdtempSync(join(tmpdir(), "aidlc-unit-switch-")) : null;
+  try {
+    const env = scratch === null ? undefined : { GIT_INDEX_FILE: join(scratch, "index") };
+    const index = resolve(dir, git(dir, ["rev-parse", "--git-path", "index"]).stdout.trim());
+    if (env !== undefined && existsSync(index)) copyFileSync(index, env.GIT_INDEX_FILE);
+    // An empty pathspec would be every file: with no path of the Unit's, nothing is carried.
+    const listed = (args: string[]): Set<string> => new Set(paths.length === 0 ? [] :
+      git(dir, [args[0], "-z", ...args.slice(1), "--", ...paths], env).stdout.split("\0").filter(Boolean));
+    const differs = listed(["diff", "--name-only", "--no-renames", "HEAD", branch]);
+    const staged = listed(["diff", "--cached", "--name-only", "--no-renames", "HEAD"]);
+    const unstaged = listed(["diff", "--name-only", "--no-renames"]);
+    const carried = [...listed(["diff", "--name-only", "--no-renames", "HEAD"]), ...listed(["ls-files", "--others", "--exclude-standard"])]
+      .filter((path) => differs.has(path) && !(staged.has(path) && unstaged.has(path)));
+    const entries = (args: string[], mode: number, oid: number): Map<string, string> => new Map(carried.length === 0 ? [] :
+      git(dir, [args[0], "-z", ...args.slice(1), "--", ...carried], env).stdout.split("\0").filter(Boolean).map((line) => {
+        const [meta, path] = [line.slice(0, line.indexOf("\t")), line.slice(line.indexOf("\t") + 1)];
+        const fields = meta.split(" ");
+        return [path, `${fields[mode]},${fields[oid]}`];
+      }));
+    const onBranch = entries(["ls-tree", branch], 0, 2);
+    const before = entries(["ls-files", "--stage"], 0, 1);
+    const put = (side: Map<string, string>): void => {
+      for (const path of carried) {
+        const at = side.get(path);
+        git(dir, at ? ["update-index", "--add", "--cacheinfo", `${at},${path}`] : ["update-index", "--force-remove", "--", path], env);
+      }
+    };
+    put(onBranch);
+    const tried = dryRun ? git(dir, ["read-tree", "-n", "-m", "-u", "HEAD", branch], env) : git(dir, ["switch", "-q", unit]);
+    if (!tried.ok && !dryRun) put(before);
+    return { ok: tried.ok, said: tried.stderr };
+  } finally {
+    if (scratch !== null) rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+// The repos where the person's own changes would stop the push's switch onto
+// the Unit's branch just now: the same switch, as a dry run.
+export function unitBranchInTheWay(projectDir: string, unit: string, byRepo: Map<string, string[]>): string[] {
+  return [...byRepo].filter(([repo, paths]) => {
+    const dir = repo === "." ? projectDir : repoDir(projectDir, repo);
+    return isGitRepoDir(dir) && git(dir, ["branch", "--show-current"]).stdout.trim() !== unit &&
+      git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${unit}`]).ok && !switchOntoUnitBranch(dir, unit, paths, true).ok;
+  }).map(([repo]) => repo);
+}
+
+// git's own words for a refusal: its first line, with the files it lists.
+function gitSaid(stderr: string): string {
+  const lines = stderr.split(/\r?\n/);
+  const files: string[] = [];
+  for (const line of lines.slice(1)) {
+    if (!line.startsWith("\t")) break;
+    files.push(line.trim());
+  }
+  const first = (lines[0] ?? "").replace(/^(?:error|fatal): /, "").trim().replace(/:$/, "");
+  return files.length > 0 ? `${first}: ${files.join(", ")}` : first;
+}
+
 export const APPROVED_INPUTS_FILE = "approved-inputs.md";
 
 function approvedInputsText(
@@ -5893,8 +5962,10 @@ function pushUnit(args: string[], projectDir?: string): void {
     const from = git(dir, ["branch", "--show-current"]).stdout.trim();
     if (from !== unit) {
       const exists = git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${unit}`]).ok;
-      let switched = exists && git(dir, ["switch", "-q", unit]).ok;
-      if (!exists) {
+      let switched = false;
+      let said = "";
+      if (exists) ({ ok: switched, said } = switchOntoUnitBranch(dir, unit, paths));
+      else {
         // From the shared integration branch, fetched, when their working tree
         // allows; the workspace itself, which holds AI-DLC's record of this
         // build, and a tree that does not allow it start where they are.
@@ -5904,7 +5975,9 @@ function pushUnit(args: string[], projectDir?: string): void {
           switched = git(dir, ["switch", "-q", "-c", unit, integration]).ok;
         }
         if (!switched) {
-          switched = git(dir, ["switch", "-q", "-c", unit]).ok;
+          const tried = git(dir, ["switch", "-q", "-c", unit]);
+          switched = tried.ok;
+          said = tried.stderr;
           const subjects = git(dir, ["log", "--format=%s", `${integration}..HEAD`]).stdout.split(/\r?\n/).filter(Boolean);
           if (switched && subjects.length > 0) {
             along.push(`Branch ${unit} in ${name} starts from where you were, so your ${subjects.length === 1 ? "commit" : `${subjects.length} commits`} ` +
@@ -5913,7 +5986,10 @@ function pushUnit(args: string[], projectDir?: string): void {
           }
         }
       }
-      if (!switched) fail(`Branch ${unit} could not be checked out in ${name}. Nothing was pushed.${whereNow()}`);
+      if (!switched) {
+        fail(`Branch ${unit} could not be checked out in ${name}, so nothing was pushed.${said.trim() ? ` Git says: "${gitSaid(said)}".` : ""}` +
+          `${exists ? ` Your own changes there stay as they are; once they are committed or put aside, I can push ${unit}.` : ""}${whereNow()}`);
+      }
       moved.push({ name, from: from || "the commit you were on" });
     }
     try {
