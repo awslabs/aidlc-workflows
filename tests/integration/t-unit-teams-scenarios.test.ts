@@ -134,7 +134,7 @@ describe("scenario 1: one shared workspace repo, the repos side by side", () => 
     const pushed = run(cursor.unit, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
     expect(pushed.json?.notice).toBe(
-      "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way. Your checkouts are as they were: refunds's changes are on its branch, and still in your files.",
+      "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way. You're on refunds now in checkout-api and billing. Switch back to main any time.",
     );
 
     expect(boardAt(home)).toBe([
@@ -203,7 +203,7 @@ describe("scenario 2: one big code repo", () => {
     ]);
     const pushed = run(codex.unit, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
-    expect(pushed.json?.notice).toBe("Pushed branch refunds in platform. Open a PR in it your usual way. Your checkout is as it was: refunds's changes are on its branch, and still in your files.");
+    expect(pushed.json?.notice).toBe("Pushed branch refunds in platform. Open a PR in it your usual way. You're on refunds now in platform. Switch back to main any time.");
     expect(git(platform, ["ls-tree", "-r", "--name-only", "refunds"]).split("\n").sort())
       .toEqual(["README.md", "services/billing/lib/refund.ts", "services/checkout-api/src/refunds.ts"]);
     expect(boardAt(home)).toContain("- refunds, payments: platform not merged yet");
@@ -230,7 +230,8 @@ describe("scenario 2: one big code repo", () => {
     ]);
     const pushed = run(opencode.unit, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
-    expect(pushed.json?.notice).toBe("Pushed branch refunds in the repo. Open a PR in it your usual way. Your checkout is as it was: refunds's changes are on its branch, and still in your files.");
+    expect(pushed.json?.notice).toBe("Pushed branch refunds in the repo. Open a PR in it your usual way. You're on refunds now in the repo; your other " +
+      "changes are still yours, uncommitted. Switch back to main any time.");
     // The commit on refunds is the code alone; the team's record stays theirs to commit.
     expect(git(alice, ["show", "--name-only", "--format=", "refunds"]).split("\n").sort())
       .toEqual(["services/billing/lib/refund.ts", "services/checkout-api/src/refunds.ts"]);
@@ -343,8 +344,7 @@ describe("scenario 4: a team that cannot reach the home", () => {
     const record = buildRecord(partner, "data", "reporting");
     built(record, "reporting", [{ folder: join(partner, "ledger"), path: "src/report.ts" }]);
     expect(run(copilot.unit, ["push"], partner).status).toBe(0);
-    // Their checkout is as it was: the Unit's file is still in it, on main.
-    git(join(partner, "ledger"), ["clean", "-q", "-f", "--", "src/report.ts"]);
+    git(join(partner, "ledger"), ["switch", "-q", "main"]);
     git(join(partner, "ledger"), ["merge", "-q", "--ff-only", "reporting"]);
     git(join(partner, "ledger"), ["push", "-q", "origin", "main"]);
     const again = run(copilot.unit, ["push"], partner);
@@ -449,7 +449,7 @@ describe("scenario 6: when things go wrong", () => {
     const pushed = run(kiro.unit, ["push"], alice);
     expect(pushed.status).not.toBe(0);
     expect(String(pushed.json?.error)).toBe(
-      "The push of refunds in billing was refused: branch protection: refunds needs a ticket (pre-receive hook declined). Nothing was retried.",
+      "The push of refunds in billing was refused: branch protection: refunds needs a ticket (pre-receive hook declined). Nothing was retried. You're on refunds now in checkout-api and billing. Switch back to main any time.",
     );
   });
 

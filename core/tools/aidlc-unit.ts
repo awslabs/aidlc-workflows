@@ -5316,42 +5316,27 @@ function readTakeTree(record: string): TakeTree {
   }
 }
 
-// The Unit's commit in one repo, made without moving anything of the person's:
-// an index of its own from the Unit's branch (else HEAD), so nothing they
-// staged comes along; their pre-commit and commit-msg hooks run on it as git's
-// own commit runs them (from their tree, with that index); signed when their
-// git signs. A file that held their own change at take goes in as the parent's
-// file plus the Unit's change since then; where the two cannot be kept apart
-// it is left out. Nothing is written to a branch here: `sha` is the commit
-// (the parent itself when nothing changed), `old` the branch's tip before.
-interface UnitCommit {
-  sha: string;
-  old: string | null;
-  parent: string | null;
-  committed: string[];
-  leftOut: string[];
-  // Each own-change file's content now, its take-time content once the branch moves.
-  sent: Map<string, string>;
-  // False on a git with no `git hook run` (before 2.36): their commit hooks did not run.
-  hooksRan: boolean;
-}
-
-function unitCommit(dir: string, paths: string[], own: Record<string, string>, unit: string, label: string, name: string): UnitCommit {
+// The Unit's commit in one repo: built in an index of its own from HEAD, so
+// nothing the person staged comes along. A file that held their own change at
+// take goes in as HEAD plus the Unit's change since then; where the two cannot
+// be kept apart it is left out, and the working tree is never touched. Once
+// committed, such a file's take-time content becomes what was just sent, so a
+// later push carries only the Unit's newer change. Returns the paths left out.
+function commitUnitPaths(dir: string, paths: string[], own: Record<string, string>, unit: string, label: string, name: string): string[] {
   const scratch = mkdtempSync(join(tmpdir(), "aidlc-unit-commit-"));
   const env = { GIT_INDEX_FILE: join(scratch, "index") };
   const leftOut: string[] = [];
-  const sent = new Map<string, string>();
   try {
-    const old = git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${unit}`]).stdout.trim() || null;
-    const parent = old ?? (git(dir, ["rev-parse", "--verify", "--quiet", "HEAD"]).stdout.trim() || null);
-    git(dir, parent ? ["read-tree", parent] : ["read-tree", "--empty"], env);
+    const head = git(dir, ["rev-parse", "--verify", "--quiet", "HEAD"]).ok;
+    git(dir, head ? ["read-tree", "HEAD"] : ["read-tree", "--empty"], env);
     const plain = paths.filter((path) => own[path] === undefined);
     if (plain.length > 0) {
       const added = git(dir, ["add", "--", ...plain], env);
       if (!added.ok) fail(`${unit}'s changes could not be added in ${name}: ${added.stderr.trim()}`);
     }
+    const sent = new Map<string, string>();
     for (const path of paths.filter((path) => own[path] !== undefined)) {
-      const kept = unitOwnChange(dir, path, own[path], scratch, parent);
+      const kept = unitOwnChange(dir, path, own[path], scratch);
       if (kept === null) leftOut.push(path);
       else {
         git(dir, ["update-index", "--cacheinfo", `${kept.mode},${kept.oid},${path}`], env);
@@ -5359,41 +5344,22 @@ function unitCommit(dir: string, paths: string[], own: Record<string, string>, u
       }
     }
     const committed = paths.filter((path) => !leftOut.includes(path));
-    const unchanged = { sha: parent ?? "", old, parent, committed, leftOut, sent: new Map<string, string>(), hooksRan: true };
-    if (committed.length === 0 || (parent !== null && git(dir, ["diff", "--cached", "--quiet", parent, "--", ...committed], env).ok)) {
-      return unchanged;
+    if (committed.length > 0 && !git(dir, ["diff", "--cached", "--quiet", "--", ...committed], env).ok) {
+      const made = git(dir, ["commit", "-q", "-m", `${unit}: ${label}`], env);
+      if (!made.ok) fail(`The commit in ${name} did not go through: ${(made.stderr || made.stdout).trim()}`);
+      git(dir, ["reset", "-q", "--", ...committed]);
+      for (const [path, now] of sent) own[path] = now;
     }
-    const message = join(scratch, "COMMIT_EDITMSG");
-    writeFileSync(message, `${unit}: ${label}\n`, "utf-8");
-    let hooksRan = true;
-    for (const [hook, hookArgs] of [["pre-commit", []], ["commit-msg", ["--", message]]] as const) {
-      const ran = git(dir, ["hook", "run", "--ignore-missing", hook, ...hookArgs], env);
-      if (!ran.ok && /is not a git command/i.test(ran.stderr)) {
-        hooksRan = false;
-        break;
-      }
-      if (!ran.ok) fail(`The commit in ${name} did not go through: ${(ran.stderr || ran.stdout).trim() || `its ${hook} hook stopped it`}`);
-    }
-    const tree = git(dir, ["write-tree"], env).stdout.trim();
-    const signs = git(dir, ["config", "--type=bool", "--get", "commit.gpgSign"]).stdout.trim() === "true";
-    const made = git(dir, ["commit-tree", tree, ...(parent ? ["-p", parent] : []), ...(signs ? ["-S"] : []), "-F", message]);
-    if (!made.ok) fail(`The commit in ${name} did not go through: ${(made.stderr || made.stdout).trim()}`);
-    return { sha: made.stdout.trim(), old, parent, committed, leftOut, sent, hooksRan };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
+  return leftOut;
 }
 
-// The parent's file plus the Unit's change from the take-time file to now, as
-// a blob; null when that cannot be told apart from the person's own change.
-function unitOwnChange(
-  dir: string,
-  path: string,
-  taken: string,
-  scratch: string,
-  parent: string | null,
-): { mode: string; oid: string; now: string } | null {
-  const entry = parent === null ? [] : git(dir, ["ls-tree", parent, "--", path]).stdout.trim().split(/\s+/);
+// HEAD's file plus the Unit's change from the take-time file to now, as a blob;
+// null when that cannot be told apart from the person's own change.
+function unitOwnChange(dir: string, path: string, taken: string, scratch: string): { mode: string; oid: string; now: string } | null {
+  const entry = git(dir, ["ls-tree", "HEAD", "--", path]).stdout.trim().split(/\s+/);
   if (taken === "" || taken === "untracked" || entry.length < 3 || !existsSync(join(dir, path))) return null;
   const now = git(dir, ["hash-object", "-w", `--path=${path}`, "--", path]).stdout.trim();
   const files = [entry[2], taken, now].map((oid, i) => {
@@ -5781,8 +5747,9 @@ function ensureFetchedClaim(projectDir: string, home: HomeWork, ref: string): vo
 // exactly the paths its Code Generation recorded writing, on the Unit's branch,
 // pushed to that repo's own remote with their login, identity, signing and
 // hooks (no force, no --no-verify); then the result on the claim at the home.
-// Their other uncommitted work is never committed or touched, and their
-// checkout stays on the branch it is on.
+// Their other uncommitted work is never committed or lost: it comes along
+// uncommitted onto the Unit's branch, as git does on a switch, and the line
+// says where they are and the way back.
 
 // A build taken by file because the home took no push then (its record is
 // here, the claim held for this team, not taken): the claim taken now, or null
@@ -5805,6 +5772,11 @@ function takeClaimNow(projectDir: string, build: UnitBuild): UnitClaimView | nul
   } catch {
     return null;
   }
+}
+
+// Whether a repo of the push holds changes of the person's beyond the Unit's.
+function ownChanges(planned: ReadonlyArray<{ dir: string }>): boolean {
+  return planned.some(({ dir }) => git(dir, ["status", "--porcelain"]).stdout.trim() !== "");
 }
 
 function buildsHome(projectDir: string, build: UnitBuild): HomeWork {
@@ -5888,11 +5860,8 @@ function pushUnit(args: string[], projectDir?: string): void {
   const results: RepoResult[] = [];
   const takeTree = readTakeTree(activeRecordDir(pd));
   const leftOut: string[] = [];
-  const along: string[] = [];
-  let hooksSkipped = false;
-  // Every repo first: there, a remote to push to, and the Unit's commit made
-  // with their hooks, so nothing is pushed when one of them cannot be.
-  const planned: Array<{ repo: string; dir: string; name: string; remote: string; paths: string[]; made: UnitCommit }> = [];
+  // Every repo first: there, and a remote to push to.
+  const planned: Array<{ repo: string; dir: string; name: string; remote: string; paths: string[] }> = [];
   for (const [repo, paths] of byRepo) {
     const dir = repo === "." ? pd : repoDir(pd, repo);
     if (!isGitRepoDir(dir)) fail(repoNotThereLine(pd, repo));
@@ -5902,35 +5871,60 @@ function pushUnit(args: string[], projectDir?: string): void {
     if (typeof remote === "object") {
       fail(`${name} has the remotes ${joinNames(remote.remotes)} and none is set for pushing: ask the person which one ${unit} goes to.`);
     }
-    const made = unitCommit(dir, paths, takeTree[repo] ?? {}, unit, label, name);
-    if (made.sha === "") fail(`${unit} has nothing to commit in ${name}.`);
-    planned.push({ repo, dir, name, remote, paths, made });
+    planned.push({ repo, dir, name, remote, paths });
   }
-  for (const { repo, dir, name, remote, paths, made } of planned) {
-    for (const path of made.leftOut) leftOut.push(`${path} in ${name}`);
-    if (!made.hooksRan) hooksSkipped = true;
-    if (made.sha !== made.old) {
-      const moved = git(dir, ["update-ref", `refs/heads/${unit}`, made.sha, made.old ?? ZERO_OID]);
-      if (!moved.ok) fail(`Branch ${unit} in ${name} moved meanwhile, so it was left as it is: push again.`);
-      // On the Unit's own branch, its files read as committed.
-      if (git(dir, ["branch", "--show-current"]).stdout.trim() === unit && made.committed.length > 0) {
-        git(dir, ["reset", "-q", "--", ...made.committed]);
+  // Then in each, onto the Unit's branch as their own hands would and its
+  // commit made with their git (hooks, signing, identity), before anything is
+  // pushed: a hook that stops one pushes nothing.
+  const moved: Array<{ name: string; from: string }> = [];
+  const along: string[] = [];
+  const whereNow = (done = false): string => {
+    if (moved.length === 0) return "";
+    const back = [...new Set(moved.map((entry) => entry.from))];
+    return ` You're on ${unit} now in ${joinNames(moved.map((entry) => entry.name))}` +
+      `${done && ownChanges(planned) ? "; your other changes are still yours, uncommitted" : ""}. ` +
+      `Switch back to ${back.length === 1 ? back[0] : joinNames(moved.map((entry) => `${entry.from} in ${entry.name}`))} any time.`;
+  };
+  for (const { repo, dir, name, remote, paths } of planned) {
+    const from = git(dir, ["branch", "--show-current"]).stdout.trim();
+    if (from !== unit) {
+      const exists = git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${unit}`]).ok;
+      let switched = exists && git(dir, ["switch", "-q", unit]).ok;
+      if (!exists) {
+        // From the shared integration branch, fetched, when their working tree
+        // allows; the workspace itself, which holds AI-DLC's record of this
+        // build, and a tree that does not allow it start where they are.
+        const integration = repoIntegration(dir, remote);
+        if (repo !== ".") {
+          git(dir, ["fetch", "-q", remote, integration.slice(remote.length + 1)]);
+          switched = git(dir, ["switch", "-q", "-c", unit, integration]).ok;
+        }
+        if (!switched) {
+          switched = git(dir, ["switch", "-q", "-c", unit]).ok;
+          const subjects = git(dir, ["log", "--format=%s", `${integration}..HEAD`]).stdout.split(/\r?\n/).filter(Boolean);
+          if (switched && subjects.length > 0) {
+            along.push(`Branch ${unit} in ${name} starts from where you were, so your ${subjects.length === 1 ? "commit" : `${subjects.length} commits`} ` +
+              `not yet on ${integration} come${subjects.length === 1 ? "s" : ""} along: ` +
+              `${subjects.slice(0, 3).map((subject) => `"${subject}"`).join(", ")}${subjects.length > 3 ? " and more" : ""}.`);
+          }
+        }
       }
-      if (takeTree[repo] !== undefined) {
-        for (const [path, now] of made.sent) takeTree[repo][path] = now;
-        writeTakeTree(activeRecordDir(pd), takeTree);
-      }
+      if (!switched) fail(`Branch ${unit} could not be checked out in ${name}. Nothing was pushed.${whereNow()}`);
+      moved.push({ name, from: from || "the commit you were on" });
     }
-    // A first commit on the person's own branch carries its commits not yet on the integration branch.
-    if (made.old === null && made.parent !== null) {
-      const subjects = git(dir, ["log", "--format=%s", `${repoIntegration(dir, remote)}..${made.parent}`]).stdout.split(/\r?\n/).filter(Boolean);
-      if (subjects.length > 0) along.push(`${subjects.length} in ${name} (${subjects.slice(0, 3).map((subject) => `"${subject}"`).join(", ")}${subjects.length > 3 ? ", ..." : ""})`);
+    try {
+      for (const path of commitUnitPaths(dir, paths, takeTree[repo] ?? {}, unit, label, name)) leftOut.push(`${path} in ${name}`);
+    } catch (error) {
+      fail(`${errorMessage(error).replace(/([^.!?])$/, "$1.")} Nothing was pushed.${whereNow()}`);
     }
-    const pushed = git(dir, ["push", remote, `${made.sha}:refs/heads/${unit}`]);
-    if (!pushed.ok) fail(`The push of ${unit} in ${name} was refused: ${pushRefusal(pushed.stderr)}. Nothing was retried.`);
-    const head = made.sha;
+    if (takeTree[repo] !== undefined) writeTakeTree(activeRecordDir(pd), takeTree);
+  }
+  for (const { repo, dir, name, remote, paths } of planned) {
+    const pushed = git(dir, ["push", "-u", remote, unit]);
+    if (!pushed.ok) fail(`The push of ${unit} in ${name} was refused: ${pushRefusal(pushed.stderr)}. Nothing was retried.${whereNow()}`);
+    const head = git(dir, ["rev-parse", "HEAD"]).stdout.trim();
     const base = earlier.get(repo)?.base ??
-      (git(dir, ["merge-base", head, repoIntegration(dir, remote)]).stdout.trim() || head);
+      (git(dir, ["merge-base", "HEAD", repoIntegration(dir, remote)]).stdout.trim() || head);
     const changed = git(dir, ["diff", "--name-only", "--no-renames", base, head, "--", ...paths]).stdout.split(/\r?\n/).filter(Boolean);
     const blobs = blobsAt(dir, head, changed);
     const entry: RepoResult = {
@@ -5954,15 +5948,8 @@ function pushUnit(args: string[], projectDir?: string): void {
     results.push(entry);
   }
   const names = results.map((repo) => (repo.repo === "." ? "the repo" : repo.repo));
-  const lines = [
-    `Pushed branch ${unit} in ${joinNames(names)}. Open a PR in ${names.length === 1 ? "it" : "each"} your usual way. ` +
-      `Your checkout${names.length === 1 ? " is" : "s are"} as ${names.length === 1 ? "it was" : "they were"}: ${unit}'s changes are on its branch, ` +
-      "and still in your files.",
-  ];
-  if (along.length > 0) {
-    lines.push(`It is built on your branch, so your commits not yet on the integration branch come along: ${joinNames(along)}.`);
-  }
-  if (hooksSkipped) lines.push("This git cannot run your commit hooks for a commit made aside, so they did not run on it.");
+  const lines = [`Pushed branch ${unit} in ${joinNames(names)}. Open a PR in ${names.length === 1 ? "it" : "each"} your usual way.${whereNow(true)}`];
+  lines.push(...along);
   if (leftOut.length > 0) {
     lines.push(`${joinNames(leftOut)} ${leftOut.length === 1 ? "is" : "are"} not in the commit: ${leftOut.length === 1 ? "it" : "each"} ` +
       `already had a change of yours when ${unit} was taken, and ${unit}'s own change could not be kept apart from it. ` +

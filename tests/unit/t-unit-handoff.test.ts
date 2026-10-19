@@ -175,9 +175,7 @@ describe("progress and the result come back as files", () => {
       stage: "code-generation", unit: "reporting", version: 1, writes: [{ path: "src/report.ts" }],
     })}\n`);
     expect(run(UNIT, ["push"], partner.dir).status).toBe(0);
-    // The push left their checkout as it was: the Unit's file is still in it, on main.
-    expect(git(join(partner.dir, "ledger"), ["branch", "--show-current"])).toBe("main");
-    git(join(partner.dir, "ledger"), ["clean", "-q", "-f", "--", "src/report.ts"]);
+    git(join(partner.dir, "ledger"), ["switch", "-q", "main"]);
     git(join(partner.dir, "ledger"), ["merge", "-q", "--ff-only", "reporting"]);
     git(join(partner.dir, "ledger"), ["push", "-q", "origin", "main"]);
     const again = run(UNIT, ["push"], partner.dir);

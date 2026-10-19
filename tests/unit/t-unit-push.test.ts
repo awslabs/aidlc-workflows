@@ -67,17 +67,13 @@ describe("the push", () => {
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
     expect(pushed.json?.notice).toBe(
-      "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way. " +
-        "Your checkouts are as they were: refunds's changes are on its branch, and still in your files.",
+      "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way. You're on refunds now in " +
+        "checkout-api and billing; your other changes are still yours, uncommitted. Switch back to main any time.",
     );
     expect(git(hosts["checkout-api"], ["ls-tree", "-r", "--name-only", "refunds"]).split("\n")).toEqual(["README.md", "src/refunds.ts"]);
-    // Nothing of theirs moved: the branch they are on, their index, their files.
-    for (const repo of ["checkout-api", "billing"]) {
-      expect(git(join(alice, repo), ["branch", "--show-current"])).toBe("main");
-      expect(git(join(alice, repo), ["diff", "--cached", "--name-only"])).toBe("");
-    }
-    expect(git(join(alice, "checkout-api"), ["status", "--porcelain"]).split("\n")).toEqual(["M README.md", "?? src/"]);
-    expect(git(join(alice, "checkout-api"), ["rev-parse", "refunds"])).toBe(git(hosts["checkout-api"], ["rev-parse", "refunds"]));
+    // On the Unit's branch, as their own hands would put them; their note came along, uncommitted.
+    expect(git(join(alice, "checkout-api"), ["branch", "--show-current"])).toBe("refunds");
+    expect(git(join(alice, "checkout-api"), ["status", "--porcelain"])).toBe("M README.md");
     expect(git(join(alice, "checkout-api"), ["show", "-s", "--format=%an", "refunds"])).toBe("alice");
     const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as {
       result: { by: string; repos: Array<{ repo: string; branch: string; paths: Record<string, string> }>; outputs: string[] };
@@ -135,16 +131,46 @@ describe("the push", () => {
     chmodSync(join(hooks, "pre-commit"), 0o755);
     const stopped = run(UNIT, ["push"], alice);
     expect(stopped.status).not.toBe(0);
-    expect(String(stopped.json?.error)).toBe("The commit in billing did not go through: lint: lib/refund.ts needs a header");
-    // checkout-api came first and was not pushed either; no branch moved.
+    expect(String(stopped.json?.error)).toStartWith("The commit in billing did not go through: lint: lib/refund.ts needs a header. ");
+    // checkout-api came first and was not pushed either; the line says where they are.
     expect(spawnSync("git", ["rev-parse", "--verify", "refs/heads/refunds"], { cwd: hosts["checkout-api"] }).status).not.toBe(0);
-    expect(spawnSync("git", ["rev-parse", "--verify", "refs/heads/refunds"], { cwd: join(alice, "checkout-api") }).status).not.toBe(0);
+    expect(String(stopped.json?.error)).toEndWith("Nothing was pushed. You're on refunds now in checkout-api and billing. Switch back to main any time.");
     // Their commit-msg hook shapes the message, as it would for their own commit.
     writeFileSync(join(hooks, "pre-commit"), "#!/bin/sh\nexit 0\n");
     writeFileSync(join(hooks, "commit-msg"), "#!/bin/sh\nprintf 'REF-1 %s' \"$(cat \"$1\")\" > \"$1\"\n");
     chmodSync(join(hooks, "commit-msg"), 0o755);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     expect(git(hosts.billing, ["log", "-1", "--format=%s", "refunds"])).toStartWith("REF-1 refunds: ");
+  });
+
+  test("the Unit's branch starts from the shared integration branch, so their own unpushed commits stay on their branch", () => {
+    const { hosts, alice, record } = refundsTaken();
+    const billing = join(alice, "billing");
+    writeFileSync(join(billing, "NOTES.md"), "mine\n");
+    git(billing, ["add", "NOTES.md"]);
+    git(billing, ["commit", "-q", "-m", "my local notes"]);
+    codeGenerated(alice, record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(hosts.billing, ["log", "--format=%s", "main..refunds"])).toBe("refunds: fixture");
+    expect(String(pushed.json?.notice)).not.toContain("come along");
+  });
+
+  test("a working tree that does not allow it: the branch starts where they are, and the line names their commits that come along", () => {
+    const { hosts, alice, record } = refundsTaken();
+    const billing = join(alice, "billing");
+    writeFileSync(join(billing, "README.md"), "# billing\n\nlocal\n");
+    git(billing, ["commit", "-q", "-am", "local readme"]);
+    // Their uncommitted edit on top of it keeps git from moving them to origin/main.
+    writeFileSync(join(billing, "README.md"), "# billing\n\nlocal, still editing\n");
+    codeGenerated(alice, record);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain(
+      'Branch refunds in billing starts from where you were, so your commit not yet on origin/main comes along: "local readme".',
+    );
+    expect(git(hosts.billing, ["log", "--format=%s", "main..refunds"]).split("\n")).toEqual(["refunds: fixture", "local readme"]);
+    expect(readFileSync(join(billing, "README.md"), "utf-8")).toBe("# billing\n\nlocal, still editing\n");
   });
 
   test("a repo whose git signs its commits gets a signed Unit commit", () => {
@@ -204,7 +230,7 @@ describe("the push", () => {
     expect(pushed.status).not.toBe(0);
     expect(String(pushed.json?.error)).toBe(
       "The push of refunds in billing was refused: branch protection: refunds needs a ticket (pre-receive hook declined). " +
-        "Nothing was retried.",
+        "Nothing was retried. You're on refunds now in checkout-api and billing. Switch back to main any time.",
     );
   });
 
