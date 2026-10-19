@@ -6130,7 +6130,8 @@ function recordUnitDone(projectDir: string, claim: UnitClaimView, verdicts: NonN
   );
   if (recorded()) return;
   const record = activeRecordDir(projectDir);
-  for (const rel of claim.payload.result?.outputs ?? []) {
+  const reads = new Set(unitOutputsHomeReads(claim.unit, getField(readStateFile(projectDir), "Scope") ?? ""));
+  for (const rel of (claim.payload.result?.outputs ?? []).filter((output) => reads.has(output))) {
     const shown = git(projectDir, ["show", `${claim.oid}:${RESULT_FILES_ROOT}/${rel}`, "--"]);
     if (!shown.ok) continue;
     mkdirSync(dirname(join(record, ...rel.split("/"))), { recursive: true });
@@ -6708,10 +6709,17 @@ function takeIn(args: string[], projectDir?: string): void {
     lines.unshift(`Took in ${unit}'s progress from ${live.owner}: ${stage ?? "under way"}.`);
   } else {
     if (!file.result) fail(`${path} holds no result.`);
-    payload.result = { ...file.result, ...(file.edited ? { edited: true as const } : {}) };
+    // A result brings home only the Unit outputs the home's later stages read.
+    const reads = new Set(unitOutputsHomeReads(unit, getField(readStateFile(pd), "Scope") ?? ""));
+    const kept = [...file.files.keys()].filter((rel) => reads.has(rel));
+    const other = [...file.files.keys(), ...(file.result.outputs ?? [])].filter((rel, i, all) => !reads.has(rel) && all.indexOf(rel) === i);
+    payload.result = { ...file.result, outputs: (file.result.outputs ?? []).filter((rel) => reads.has(rel)), ...(file.edited ? { edited: true as const } : {}) };
     payload.verdicts = undefined;
-    for (const [rel, text] of file.files) files[`${RESULT_FILES_ROOT}/${rel}`] = text;
+    for (const rel of kept) files[`${RESULT_FILES_ROOT}/${rel}`] = file.files.get(rel)!;
     lines.unshift(`Took in ${unit}'s result from ${live.owner}.`);
+    if (other.length > 0) {
+      lines.push(`${joinNames(other)} ${other.length === 1 ? "is" : "are"} not ${other.length === 1 ? "an output" : "outputs"} the home reads of ${unit}, so ${other.length === 1 ? "it was" : "they were"} left out.`);
+    }
   }
   const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload, undefined, undefined, files), live.oid);
   if (!sent.ok) fail(`${unit}'s claim moved while the file was taken in: ${sent.refused ?? "try again"}.`);

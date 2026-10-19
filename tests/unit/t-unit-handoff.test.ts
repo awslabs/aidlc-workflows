@@ -129,6 +129,39 @@ describe("the team takes the file in", () => {
     expect(again.unit).toBe("reporting");
   });
 
+  test("the agent hands the file's exact path: the offer to start it; a path that is no such file is said", () => {
+    const { home } = handedOff();
+    const partner = partnerWorkspace();
+    const path = deliver(home.dir, FILE);
+    const ask = next(partner.dir, undefined, ["--hand-file", path]);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-handoff");
+    const notes = join(tempDir("notes"), "notes.md");
+    writeFileSync(notes, "# my notes\n");
+    const wrong = next(partner.dir, undefined, ["--hand-file", notes]);
+    expect(wrong.kind, JSON.stringify(wrong)).toBe("error");
+    expect(String(wrong.message)).toBe(`${notes} is not a file AI-DLC wrote for a hand-off, its progress or its result.`);
+  });
+
+  test("a file an editor reformatted (a padded table, fences in backticks) reads the same and is not taken as changed", () => {
+    const { home } = handedOff();
+    const partner = partnerWorkspace();
+    const path = deliver(home.dir, FILE, (text) => text
+      .replace(/^~{4,}( noeol)?$/gm, (_fence, noeol: string | undefined) => `\`\`\`\`${noeol ? " noeol" : ""}`)
+      .replace(/^\| (.+?) \| (sha256:[0-9a-f]+) \|$/gm, "|   $1   |   $2   |"));
+    const took = run(UNIT, ["take", "--file", path], partner.dir);
+    expect(took.status, took.out).toBe(0);
+    expect(String(took.json?.notice)).not.toContain("changed after");
+    const intents = join(partner.dir, "aidlc", "spaces", "data", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
+    expect(readFileSync(join(record, "inception", "requirements-analysis", "requirements.md"), "utf-8")).toBe("# Requirements\n\nFR1 refunds.\n");
+    // The build's own list of what it was approved with, padded the same way, still lists them.
+    const inputs = join(record, "approved-inputs.md");
+    writeFileSync(inputs, readFileSync(inputs, "utf-8").replace(/^\| (\S+) \| (sha256:[0-9a-f]+) \|$/gm, "| $1   |   $2 |"));
+    writeFileSync(join(record, "inception", "requirements-analysis", "requirements.md"), "# Requirements\n\nFR1 refunds, faster.\n");
+    const proposed = run(UNIT, ["propose", "--input", "requirements.md"], partner.dir);
+    expect(String(proposed.out)).not.toContain("is not one of the files");
+  });
+
   test("a file changed after the lead wrote it is taken in as it is, with one line", () => {
     const { home } = handedOff();
     const partner = partnerWorkspace();
@@ -190,6 +223,29 @@ describe("progress and the result come back as files", () => {
     const merged = readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED");
     expect(merged.map((row) => row.block).join("\n")).toContain("reported by data");
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "reporting")).toMatchObject({ done: true });
+  });
+
+  test("a result brings home only the Unit outputs the home reads: a file naming the home's state is left out, with a line", () => {
+    const { home } = handedOff();
+    const partner = partnerWorkspace();
+    expect(run(UNIT, ["take", "--file", deliver(home.dir, FILE)], partner.dir).status).toBe(0);
+    const intents = join(partner.dir, "aidlc", "spaces", "data", "intents");
+    const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
+    mkdirSync(join(partner.dir, "ledger", "src"), { recursive: true });
+    writeFileSync(join(partner.dir, "ledger", "src", "report.ts"), "export const report = 1;\n");
+    const stage = join(record, "construction", "reporting", "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"), `${JSON.stringify({ stage: "code-generation", unit: "reporting", version: 1, writes: [{ path: "src/report.ts" }] })}\n`);
+    expect(run(UNIT, ["push"], partner.dir).status).toBe(0);
+    const homeState = readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", "fixture-8000000000000001", "aidlc-state.md"), "utf-8");
+    const result = deliver(partner.dir, "aidlc/handoff/fixture-reporting-result.md", (text) =>
+      `${text}\n## File: aidlc-state.md\n\n~~~~\n# not the home's state\n~~~~\n`);
+    const taken = run(UNIT, ["take-in", result], home.dir);
+    expect(taken.status, taken.out).toBe(0);
+    expect(String(taken.json?.notice)).toContain("aidlc-state.md is not an output the home reads of reporting, so it was left out.");
+    const tip = git(home.remote, ["rev-parse", `refs/heads/claim/${fixtureIntentId8(home.dir)}/reporting`]);
+    expect(git(home.remote, ["ls-tree", "-r", "--name-only", tip]).split("\n")).not.toContain(".aidlc-unit-result/aidlc-state.md");
+    expect(readFileSync(join(home.dir, "aidlc", "spaces", "default", "intents", "fixture-8000000000000001", "aidlc-state.md"), "utf-8")).toBe(homeState);
   });
 
   test("a file for other work changes nothing; an older one is taken in with a line", () => {

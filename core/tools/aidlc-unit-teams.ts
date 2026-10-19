@@ -22,6 +22,7 @@ import {
   listIntentDirs,
   loadScopeMapping,
   loadStageGraphAll,
+  markdownBlocks,
   parseBoltDag,
   readStateFile,
   slugify,
@@ -451,33 +452,49 @@ export function renderHandFile(
   return lines.join("\n");
 }
 
-// Read a hand-off, progress or result file; null for any other text.
+// A table's rows as cells, from markdownBlocks: the one reading of Markdown structure.
+function tableRows(lines: readonly string[], blocks: ReturnType<typeof markdownBlocks>["lines"]): string[][] {
+  return lines.flatMap((line, at) => blocks[at]?.kind === "table" && blocks[at].containers.length === 0
+    ? [line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim())]
+    : []);
+}
+
+// Read a hand-off, progress or result file; null for any other text. Its
+// marker, field list, headings, fences and table are located by
+// markdownBlocks, so an editor that pads the table or rewrites the fences in
+// backticks changes nothing.
 export function parseHandFile(raw: string): HandFile | null {
-  const lines = raw.replace(/\r\n?/g, "\n").split("\n");
-  const markerAt = lines.findIndex((line) => /^<!-- aidlc-(handoff|progress|result) 1 -->$/.test(line));
+  const text = raw.replace(/\r\n?/g, "\n");
+  const lines = text.split("\n");
+  const blocks = markdownBlocks(text).lines;
+  if (blocks.length !== lines.length) return null;
+  const top = (at: number): boolean => blocks[at].containers.length === 0;
+  const markerAt = lines.findIndex((line, at) =>
+    blocks[at].kind === "htmlFlow" && top(at) && /^<!-- aidlc-(handoff|progress|result) 1 -->$/.test(line.trim()));
   if (markerAt < 0) return null;
   const kind = /aidlc-(\w+)/.exec(lines[markerAt])![1] as HandFileKind;
   const fields: Record<string, string> = {};
   let at = markerAt + 1;
-  for (; at < lines.length && lines[at] !== ""; at++) {
-    const field = /^- \*\*(.+?)\*\*: (.*)$/.exec(lines[at]);
-    if (field) fields[field[1]] = field[2];
+  for (; at < lines.length && blocks[at].kind !== "blank" && blocks[at].kind !== "heading"; at++) {
+    const field = /^\s*[-*] \*\*(.+?)\*\*: ?(.*)$/.exec(lines[at]);
+    if (field) fields[field[1]] = field[2].trim();
   }
+  const listed = new Map(tableRows(lines, blocks).filter((cells) => /^sha256:[0-9a-f]+$/.test(cells[1] ?? "")).map((cells) => [cells[0], cells[1]]));
   const files = new Map<string, string>();
   let result: UnitResult | undefined;
-  const listed = new Map<string, string>();
   for (; at < lines.length; at++) {
-    const row = /^\| (.+?) \| (sha256:[0-9a-f]+) \|$/.exec(lines[at]);
-    if (row) listed.set(row[1], row[2]);
-    const file = /^## File: (.+)$/.exec(lines[at]);
-    const isResult = lines[at] === "## Result";
+    if (blocks[at].kind !== "heading" || !top(at)) continue;
+    const file = /^## File: (.+)$/.exec(lines[at].trim());
+    const isResult = lines[at].trim() === "## Result";
     if (!file && !isResult) continue;
     let open = at + 1;
-    while (open < lines.length && lines[open] === "") open++;
-    const fence = /^(~{4,})( noeol|json)?$/.exec(lines[open] ?? "");
-    if (!fence) continue;
-    const close = lines.indexOf(fence[1], open + 1);
-    if (close < 0) break;
+    while (open < lines.length && blocks[open].kind === "blank") open++;
+    if (blocks[open]?.kind !== "codeFenced") continue;
+    const block = blocks[open].block;
+    let close = open;
+    while (close + 1 < lines.length && blocks[close + 1].block === block && blocks[close + 1].kind === "codeFenced") close++;
+    const fence = /^\s*(~{3,}|`{3,})\s*(\S*)/.exec(lines[open]);
+    if (!fence || close === open || !lines[close].trim().startsWith(fence[1])) break;
     const body = lines.slice(open + 1, close).join("\n");
     if (isResult) {
       try {
@@ -486,7 +503,7 @@ export function parseHandFile(raw: string): HandFile | null {
         result = undefined;
       }
     } else {
-      files.set(file![1], fence[2] === " noeol" ? body : `${body}\n`);
+      files.set(file![1], /noeol/.test(lines[open]) ? body : `${body}\n`);
     }
     at = close;
   }
@@ -525,7 +542,10 @@ export function approvedInputsOf(recordDir: string): Array<{ path: string; finge
   } catch {
     return [];
   }
-  return [...text.matchAll(/^\| (\S+) \| (sha256:[0-9a-f]+) \|$/gm)].map((match) => ({ path: match[1], fingerprint: match[2] }));
+  const normalized = text.replace(/\r\n?/g, "\n");
+  return tableRows(normalized.split("\n"), markdownBlocks(normalized).lines)
+    .filter((cells) => /^sha256:[0-9a-f]+$/.test(cells[1] ?? ""))
+    .map((cells) => ({ path: cells[0], fingerprint: cells[1] }));
 }
 
 // An input's name for the person: "contract summary" for

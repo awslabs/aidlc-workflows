@@ -6573,6 +6573,7 @@ export interface ParsedFlags {
   propose?: string;
   continue?: boolean; // --continue: a routing question's "part of that work" answer
   record?: string; // --record <selector>: the listed record a routing question's reshape answer chose
+  handFile?: string; // --hand-file <path>: a hand-off, progress or result file the person pointed at
   workspaceCommand?: WorkspaceCommand; // leading workspace command (space/space-create/intent)
   carryOn?: boolean; // the pick question's answer: select the record, then carry on in the same turn
   pickedUp?: string; // --resume picking up the only work here: the person's one line for it
@@ -6865,6 +6866,12 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
         flags.parseError = "--record requires <record selector>.";
       } else {
         flags.record = value;
+      }
+    } else if (a === "--hand-file") {
+      if (value === undefined) {
+        flags.parseError = "--hand-file requires the file's path.";
+      } else {
+        flags.handFile = value;
       }
     } else if (a === "--scope" && value !== undefined) {
       flags.scope = value;
@@ -12522,12 +12529,17 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       return;
     }
   }
-  // A file the person pointed at, by its path alone: a hand-off file's Unit to
-  // start as their own piece of work, or a team's result or progress file to take in.
-  const handFile = handFileStep(pd, flags.intent?.trim() ?? "");
+  // A file the person pointed at (the exact path the agent hands as
+  // --hand-file, or their words when they are just its path): a hand-off
+  // file's Unit to start as their own piece of work, or a team's result or
+  // progress file to take in.
+  const handFile = handFileStep(pd, flags.handFile ?? flags.intent?.trim() ?? "");
   if (handFile === "done") flags.intent = undefined;
   else if (handFile) {
     emit(handFile);
+    return;
+  } else if (flags.handFile !== undefined) {
+    emit(errorDirective(`${flags.handFile} is not a file AI-DLC wrote for a hand-off, its progress or its result.`));
     return;
   }
   // What the home said about a Unit's build reaches its team once, on any step.

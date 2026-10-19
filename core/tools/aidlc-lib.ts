@@ -39771,6 +39771,8 @@ export const NEXT_FLAGS: ReadonlyMap<string, NextFlagShape> = new Map<string, Ne
   // missing or empty list as no change when the other one names a stage.
   ["--request", { value: "free" }],
   ["--record", { value: "free" }],
+  // The exact path of a file AI-DLC wrote to hand a Unit between teams, as the agent read it from the person's words.
+  ["--hand-file", { value: "free" }],
   ["--unit", { value: "free" }],
   ["--plan-name", { value: "free" }],
   ["--save-as", { value: "free" }],
