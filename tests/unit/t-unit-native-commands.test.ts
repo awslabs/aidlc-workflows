@@ -13,7 +13,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveAction, TOOLS } from "../../core/tools/aidlc.ts";
 import { aidlcDispatcherInvocation, aidlcInvocation } from "../../core/tools/aidlc-runtime-paths.ts";
-import { UNIT_VERBS } from "../../core/tools/aidlc-unit.ts";
+import { UNIT_VERBS } from "../../core/tools/aidlc-command.ts";
 
 const TOOLS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "core", "tools");
 
@@ -45,7 +45,7 @@ describe("unit commands on a native install", () => {
   });
 
   test("the public unit route runs every verb the unit tool runs", () => {
-    for (const verb of UNIT_VERBS) {
+    for (const verb of UNIT_VERBS.keys()) {
       expect(resolveAction(["unit", verb], true), verb).toEqual({ type: "delegate", tool: TOOLS.unit, args: [verb] });
     }
   });

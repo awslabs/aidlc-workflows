@@ -225,10 +225,9 @@ export const SYSTEM_NAMESPACE_HELP: NamespaceHelpOptions = {
   header: "Operations on this user's aidlc installation; never system-wide (root only with --allow-root):",
 };
 
-// The unit tool's verbs (UNIT_VERBS, aidlc-command.ts), routed at both doors:
-// `aidlc unit`, which people and scripts type, and `aidlc engine unit`, the form
-// aidlcToolInvocation prints for the agent on a native install.
-
+// The unit tool's verbs (UNIT_VERBS, aidlc-command.ts) are routed at both
+// doors: `aidlc unit`, which people and scripts type, and `aidlc engine unit`,
+// the form aidlcToolInvocation prints for the agent on a native install.
 const UNIT_FORMS = [
   "unit adopt <unit>",
   "unit amend <unit> --input <file> --answer <approve|reject> --person-words <text>",
