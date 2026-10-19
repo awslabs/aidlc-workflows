@@ -1390,9 +1390,10 @@ the message), rewrites the `Guard Policy` line in `aidlc-state.md` as
 `<value> (set by you)` (or `(set by a command)` when nothing on record shows the
 person asked) and add a `GUARD_POLICY_SET` row to the audit batch.
 Any write of the policy line removes the retired `Change Control` line, retaining only `Guard Policy`.
-If both lines exist with different policy words, strict applies and status shows
-`strict (from conflicting state lines)` unless memory holds strict; `next` carries
-the [conflict notice](13-customization.md#where-the-value-lives) until you choose.
+If both lines exist with different policy words, status shows
+`strict (from conflicting state lines)` until the next `next` keeps one of them
+(see [where the value lives](13-customization.md#where-the-value-lives)), unless
+memory holds strict.
 If both agree, the `Guard Policy` line is used and the next policy write removes
 the retired one. A record carrying only a retired relaxed or off line is
 renamed at your next message: the value is kept and written as `Guard Policy`,

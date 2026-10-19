@@ -71,13 +71,17 @@ Here is part of one, from a Claude Code run on the `mvp` plan just after Intent 
 ```
 
 If `Guard Policy` and the retired `Change Control` both appear with different
-policy words, strict applies and status shows `strict (from conflicting state lines)`;
-memory-held strict still takes precedence. If both agree, the `Guard Policy`
-line is used. Any write of the policy line removes the retired line, leaving one
-setting. Until a conflict is resolved, `next` carries this notice, without
-changing the state file:
+policy words, status shows `strict (from conflicting state lines)` until the next
+`next`, which keeps one and writes it as the only line: the one the audit trail
+shows was set last, else the one you set, else the scope's own, else the stricter
+(a `GUARD_POLICY_SET` row with `Source: command` and a `Settled` field records it).
+It says nothing when it kept your own last choice, and once otherwise, for example:
 
-> This work has two settings for how closely AI-DLC checks changes, and they disagree, so AI-DLC checks everything for now. Do you want it to keep checking everything, carry on with a note when something you approved changes, or also skip some of its own checks? I'll ask again until you choose.
+> This work had two settings for how closely AI-DLC checks changes, and they disagreed. The record does not say which was set last, so AI-DLC keeps the stricter one: it checks everything. You can change it any time.
+
+Memory-held strict still takes precedence and leaves both lines as they are. If
+both agree, the `Guard Policy` line is used. Any write of the policy line removes
+the retired line, leaving one setting.
 
 `Construction Verification Command` records the project check reused at every
 Unit/batch checkpoint. A matching current-workflow human approval receipt is

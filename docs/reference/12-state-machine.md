@@ -962,11 +962,21 @@ policy words, `resolveGuardPolicy` returns `value: "strict"` and
 `conflict: { guardPolicy: <raw>, changeControl: <raw> }` holding both raw values.
 Status renders `strict (from conflicting state lines)`; memory-held strict still
 wins as before. If both words agree, the `Guard Policy` line is used and the next
-policy write removes the retired line. Until a conflict is resolved, `next`
-includes this notice in `change_notices`, substituting the raw values for `<a>`
-and `<b>` without changing the state file:
+policy write removes the retired line. `next` settles a conflict before it reads
+the state (`settleGuardPolicyConflict` in aidlc-guard-switch.ts, skipped on a
+read-only probe and under memory-held strict): it keeps the line whose value and
+source match the newest `GUARD_POLICY_SET` or `CHANGE_CONTROL_SET` row, else the
+one line labelled `set by you`, else the one equal to the scope's shipped default,
+else the stricter; writes it with `setGuardPolicyLine`; appends one
+`GUARD_POLICY_SET` row (`Old Value: strict`, `Source: command`, `Settled`: both raw
+lines, `Kept By`: `set last`, `set by you`, `scope default`, `stricter` or
+`readable`); and keeps the active directive as a setting write does. The first two
+say nothing; the others add one line to the step's `change_notices`, for example:
 
-> This work has two settings for how closely AI-DLC checks changes, and they disagree, so AI-DLC checks everything for now. Do you want it to keep checking everything, carry on with a note when something you approved changes, or also skip some of its own checks? I'll ask again until you choose.
+> This work had two settings for how closely AI-DLC checks changes, and they disagreed. The record does not say which was set last, so AI-DLC keeps the stricter one: it checks everything. You can change it any time.
+
+If the row cannot be recorded, nothing is written and `next` says the conflict as
+a statement ("..., so AI-DLC checks everything for now.").
 
 Typing `guard policy relaxed|off` applies the choice through the human-turn
 hook immediately; `guard policy strict` runs the strict setter through the

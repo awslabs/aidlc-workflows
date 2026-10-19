@@ -561,6 +561,7 @@ import {
   planApprovalMemoryLockRefusal,
   settingsKeptSince,
   settingTheirs,
+  settleGuardPolicyConflict,
   switchKeptForNextWork,
   resolvePlanApprovalSetting,
 } from "./aidlc-guard-switch.ts";
@@ -9229,6 +9230,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   }
 
   const pd = resolveProjectDir(projectDir);
+  // Two policy lines that disagree are settled before the state is read, so
+  // this step and every check after it read the one kept. Its line, when there
+  // is one, rides with the step as a settled gate's does (a step in parts too).
+  const settledPolicy = isReadOnlyEngineProbe() ? null : settleGuardPolicyConflict(pd, {
+    intent: engineSelection(pd).intent ?? undefined, space: engineSelection(pd).space,
+  });
+  if (settledPolicy?.line) settledNotices.push(settledPolicy.line);
   const stateContent = loadStateFileIfPresent(pd);
   activeRetiredGuardPolicyNotice = stateContent === null ? null : retiredGuardPolicyNotice(pd, stateContent);
   // Runtime state-version guard (see staleStateVersionError): refuse to advance
@@ -15173,7 +15181,9 @@ function addReviewCheckOffer(
 // notice speaks about the EFFECTIVE policy: a memory layer holding strict wins
 // over the retired line, lowers nothing, and would refuse the relaxed setting
 // the notice recommends, so in that case there is nothing to announce. An
-// unreadable policy is the strictest policy and announces nothing either.
+// unreadable policy is the strictest policy and announces nothing either. Two
+// lines that disagree reach here only when settleGuardPolicyConflict could not
+// record its settling: said as what is in force, with nothing asked.
 function retiredGuardPolicyNotice(projectDir: string, stateContent: string): string | null {
   let value: GuardPolicy;
   try {
@@ -15181,8 +15191,7 @@ function retiredGuardPolicyNotice(projectDir: string, stateContent: string): str
     if (resolution.memoryStrict !== null) return null;
     if (resolution.conflict !== undefined) {
       return "This work has two settings for how closely AI-DLC checks changes, and they disagree, so AI-DLC " +
-        "checks everything for now. Do you want it to keep checking everything, carry on with a note when " +
-        "something you approved changes, or also skip some of its own checks? I'll ask again until you choose.";
+        "checks everything for now.";
     }
     if (guardPolicyStateField(stateContent) !== CHANGE_CONTROL_FIELD) return null;
     value = resolution.value;
