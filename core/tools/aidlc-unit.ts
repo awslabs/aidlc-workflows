@@ -5993,13 +5993,8 @@ function pushUnit(args: string[], projectDir?: string): void {
   // pushed: a hook that stops one pushes nothing.
   const moved: Array<{ name: string; from: string }> = [];
   const along: string[] = [];
-  const whereNow = (done = false): string => {
-    if (moved.length === 0) return "";
-    const back = [...new Set(moved.map((entry) => entry.from))];
-    return ` You're on ${unit} now in ${joinNames(moved.map((entry) => entry.name))}` +
-      `${done && ownChanges(planned) ? "; your other changes are still yours, uncommitted" : ""}. ` +
-      `Switch back to ${back.length === 1 ? back[0] : joinNames(moved.map((entry) => `${entry.from} in ${entry.name}`))} any time.`;
-  };
+  const whereNow = (done = false): string =>
+    whereNowLine(unit, moved, done && ownChanges(planned) ? "; your other changes are still yours, uncommitted" : "");
   for (const { repo, dir, name, remote, paths } of planned) {
     const from = git(dir, ["branch", "--show-current"]).stdout.trim();
     if (from !== unit) {
@@ -6424,6 +6419,15 @@ export function earlyBaseMerged(projectDir: string, stateContent: string, skip: 
   });
 }
 
+// Where a command that switched the person onto the Unit's branch left them,
+// and the way back, in one wording for the push and the move.
+function whereNowLine(unit: string, moved: Array<{ name: string; from: string }>, also = ""): string {
+  if (moved.length === 0) return "";
+  const back = [...new Set(moved.map((entry) => entry.from))];
+  return ` You're on ${unit} now in ${joinNames(moved.map((entry) => entry.name))}${also}. ` +
+    `Switch back to ${back.length === 1 ? back[0] : joinNames(moved.map((entry) => `${entry.from} in ${entry.name}`))} any time.`;
+}
+
 // The person's yes to moving the build onto the integration branch: in each
 // repo, the integration branch fetched, then the rebase with their own git. A
 // rebase git stops (a conflict, their uncommitted changes) is said in git's
@@ -6436,25 +6440,32 @@ function rebaseUnit(args: string[], projectDir?: string): void {
   if (build === null) fail("rebase moves a Unit's build onto the integration branch; this work is not one.");
   const moved: string[] = [];
   const onto = new Set<string>();
+  // A rebase names the Unit's branch, so git switches to it first.
+  const switched: Array<{ name: string; from: string }> = [];
+  let replayed = false;
   for (const dep of earlyBaseMerged(pd, state)) {
     for (const repo of dep.repos) {
       const branch = repo.onto.slice(repo.remote.length + 1);
       git(repo.dir, ["fetch", "-q", repo.remote, branch]);
+      const from = git(repo.dir, ["branch", "--show-current"]).stdout.trim();
       const ran = git(repo.dir, repo.rebase);
       if (!ran.ok) {
         const stopped = existsSync(resolve(repo.dir, git(repo.dir, ["rev-parse", "--git-path", "rebase-merge"]).stdout.trim())) ||
           existsSync(resolve(repo.dir, git(repo.dir, ["rev-parse", "--git-path", "rebase-apply"]).stdout.trim()));
         fail(`${build.unit} could not be moved onto ${branch} in ${repo.name}. Git says: "${gitSaid(ran.stderr || ran.stdout)}".` +
           (stopped ? ` To go back to where ${build.unit} was there, run git rebase --abort in ${repo.name}.` : "") +
-          (moved.length > 0 ? ` In ${joinNames(moved)} it is on ${joinNames([...onto])} now.` : ""));
+          (moved.length > 0 ? ` In ${joinNames(moved)} it is on ${joinNames([...onto])} now.${whereNowLine(build.unit, switched)}` : ""));
       }
       moved.push(repo.name);
       onto.add(branch);
+      if (repo.rebase[0] === "rebase") replayed = true;
+      if (from !== build.unit) switched.push({ name: repo.name, from: from || "the commit you were on" });
     }
   }
   const notice = moved.length === 0
     ? `${build.unit} is on the integration branch already; nothing moved.`
-    : `${build.unit} is on ${joinNames([...onto])} now in ${joinNames(moved)}, with its own commits on top. Nothing is pushed.`;
+    : `${build.unit} is on ${joinNames([...onto])} now in ${joinNames(moved)}${replayed ? ", with its own commits on top" : ""}. ` +
+      `Nothing is pushed.${whereNowLine(build.unit, switched)}`;
   console.log(JSON.stringify({ moved: moved.length > 0, unit: build.unit, repos: moved, notice }));
 }
 

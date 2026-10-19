@@ -665,6 +665,20 @@ describe("a Unit started early whose dependency merged: the move onto main is of
     });
   }
 
+  test("a move from the branch the push line sent them back to says where they are now and the way back, in the push's words", () => {
+    const { dana } = earlyThenMerged("squash", true);
+    for (const repo of ["billing", "checkout-api"]) git(join(dana, repo), ["switch", "-q", "main"]);
+    const ask = next(dana, ENV);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-move-onto");
+    const moved = runPrinted(dana, ENV, choice(ask, "Move reporting onto main"));
+    expect(moved.status, moved.out).toBe(0);
+    expect(String((JSON.parse(moved.out) as { notice?: string }).notice)).toBe(
+      "reporting is on main now in checkout-api and billing, with its own commits on top. Nothing is pushed. " +
+        "You're on reporting now in checkout-api and billing. Switch back to main any time.",
+    );
+    expect(git(join(dana, "billing"), ["branch", "--show-current"])).toBe("reporting");
+  });
+
   test("a move git stops on a conflict: git's words and the way back, and the repo before it stays moved", () => {
     const { dana, hosts } = earlyThenMerged("squash", true);
     // A teammate's report.ts lands on main in billing meanwhile.
