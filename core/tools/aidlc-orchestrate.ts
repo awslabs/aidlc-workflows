@@ -8827,12 +8827,13 @@ function unitPushToOffer(projectDir: string, stateContent: string): boolean {
 }
 
 // Code Generation approved again since the build's last push (the redo after
-// a turn-down): there is new work to push, and the turn-down is answered.
+// a turn-down): there is new work to push, and the turn-down is answered. A
+// Unit's build is solo work with one Unit, so its approval names no Unit.
 function redoneSincePush(projectDir: string, unit: string): boolean {
   const rows = sortAttemptEvents(readAuditShardEvents(projectDir));
   const pushed = rows.findLastIndex((row) => row.event === "UNIT_PUSHED");
   return pushed >= 0 && rows.slice(pushed + 1).some((row) => row.event === "GATE_APPROVED" &&
-    auditBlockField(row.block, "Stage") === "code-generation" && auditBlockField(row.block, "Unit") === unit);
+    auditBlockField(row.block, "Stage") === "code-generation" && (auditBlockField(row.block, "Unit") ?? unit) === unit);
 }
 
 function joinRepoNames(repos: string[]): string {

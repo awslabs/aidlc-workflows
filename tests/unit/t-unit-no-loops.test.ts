@@ -163,7 +163,7 @@ describe("no step of the build-out comes back after its own command ran", () => 
     codeGenerated(alice, record);
     finishBuild(record);
     // The person approved the last stage: their earlier turns are spent.
-    appendAuditEntry("GATE_APPROVED", { Stage: "code-generation", Unit: "refunds" }, alice, basename(record), "payments");
+    appendAuditEntry("GATE_APPROVED", { Stage: "code-generation" }, alice, basename(record), "payments");
     const push = next(alice, ENV);
     expect(push.ask_type, JSON.stringify(push)).toBe("unit-push");
     movesOn(alice, ENV, push, choice(push, "Push"));
@@ -197,7 +197,7 @@ describe("no step of the build-out comes back after its own command ran", () => 
     // Code Generation again, on main, approved: the end offers the push, not the redo, and the push goes.
     codeGeneratedAgain(alice);
     finishBuild(record);
-    appendAuditEntry("GATE_APPROVED", { Stage: "code-generation", Unit: "refunds" }, alice, basename(record), "payments");
+    appendAuditEntry("GATE_APPROVED", { Stage: "code-generation" }, alice, basename(record), "payments");
     const again = next(alice, ENV);
     expect(again.ask_type, JSON.stringify(again)).toBe("unit-push");
     const sent = movesOn(alice, ENV, again, choice(again, "Push"));
@@ -382,6 +382,39 @@ describe("a step that waits on the person, and every way on the round added, nev
     readsAsOffers(end);
   });
 
+  test("after a turn-down, the redo's Code Generation approved through the real report: the push is offered, never the redo again", () => {
+    const { home, alice } = refundsTaken();
+    cpSync(join(REPO_ROOT, "dist", "claude"), alice, { recursive: true, force: false, errorOnExist: false });
+    const host = hostFor("claude", alice, GIT_ENV);
+    const person = new PersonScript(host);
+    const agent = new AgentStandIn(host, person, {
+      units: ["refunds"],
+      codeRepo: () => [{ repo: "billing" }],
+      until: (d: Directive) => (d.kind === "ask" && (d.ask_type === "unit-push" || d.ask_type === "unit-turned-down")) ||
+        (d.kind === "print" && JSON.stringify(d.offers ?? []).includes("back to Code Generation")),
+    });
+    // The person picks a choice; the agent runs its command.
+    const take = (d: Directive, label: string): Directive => {
+      const choices = d.choices as Array<{ label: string; command?: string }>;
+      person.pick(String(d.question), choices.map((entry) => entry.label), label);
+      const ran = host.bash(choices.find((entry) => entry.label === label)!.command!);
+      expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+      return JSON.parse(ran.stdout.trim().split("\n").at(-1) ?? "{}") as Directive;
+    };
+    host.sessionStart("startup");
+    person.say("/aidlc");
+    const built = agent.drive(agent.next());
+    expect(built.ask_type, JSON.stringify(built)).toBe("unit-push");
+    take(built, "Push");
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "billing needs the ledger entry"], home.dir).status).toBe(0);
+    person.say("/aidlc");
+    const down = agent.next();
+    expect(down.ask_type, JSON.stringify(down)).toBe("unit-turned-down");
+    const end = agent.drive(take(down, "Take refunds back to Code Generation"));
+    expect(end.ask_type, JSON.stringify(end)).toBe("unit-push");
+  });
+
   test("the push again with their own change in the way of the Unit's branch: refused in git's words, not offered again until it is out of the way, then it goes", () => {
     const { hosts, alice, record } = refundsTaken();
     withTools(alice);
@@ -393,7 +426,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     writeFileSync(join(billing, "README.md"), "# billing\n\nnew\n");
     git(billing, ["commit", "-q", "-am", "readme"]);
     codeGeneratedAgain(alice);
-    appendAuditEntry("GATE_APPROVED", { Stage: "code-generation", Unit: "refunds" }, alice, basename(record), "payments");
+    appendAuditEntry("GATE_APPROVED", { Stage: "code-generation" }, alice, basename(record), "payments");
     const push = next(alice, ENV);
     expect(push.ask_type, JSON.stringify(push)).toBe("unit-push");
     readsAsOffers(push);

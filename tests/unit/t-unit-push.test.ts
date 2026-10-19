@@ -291,7 +291,7 @@ describe("the push", () => {
     git(billing, ["commit", "-q", "-am", "readme"]);
     writeFileSync(join(billing, "README.md"), "# billing\n\nnew, still editing\n");
     codeGeneratedAgain(alice);
-    appendAuditEntry("GATE_APPROVED", { Stage: "code-generation", Unit: "refunds" }, alice, basename(record), "payments");
+    appendAuditEntry("GATE_APPROVED", { Stage: "code-generation" }, alice, basename(record), "payments");
     const refused = run(UNIT, ["push"], alice);
     expect(refused.status).not.toBe(0);
     const error = String(refused.json?.error);
@@ -331,7 +331,7 @@ describe("the push", () => {
     expect(run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger entry"], home.dir).status).toBe(0);
     expect(next(alice).ask_type).toBe("unit-turned-down");
     codeGeneratedAgain(alice);
-    appendAuditEntry("GATE_APPROVED", { Stage: "code-generation", Unit: "refunds" }, alice, basename(record), "payments");
+    appendAuditEntry("GATE_APPROVED", { Stage: "code-generation" }, alice, basename(record), "payments");
     const push = next(alice);
     expect(push.ask_type, JSON.stringify(push)).toBe("unit-push");
     // Not now: the end says it is not pushed, and the redo is not offered again.
@@ -683,7 +683,7 @@ describe("at the home", () => {
     expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: "t-unit-push-turned-down", prompt: "build refunds" }).status).toBe(0);
     finishBuild(record);
     // The person approved the last stage: their earlier turns are spent.
-    appendAuditEntry("GATE_APPROVED", { Stage: "code-generation", Unit: "refunds" }, alice, basename(record), "payments");
+    appendAuditEntry("GATE_APPROVED", { Stage: "code-generation" }, alice, basename(record), "payments");
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     expect(personsNext(alice, chat, "t-unit-push-turned-down").kind).toBe("done");
     git(home.dir, ["fetch", "-q", "origin"]);
