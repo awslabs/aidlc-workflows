@@ -41,7 +41,7 @@ import {
 import { waitForBarrierLine } from "../harness/barrier-file.ts";
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   auditBlockField,
@@ -2930,6 +2930,48 @@ describe("t333 (10) retired policy confirmation", () => {
     expect(again.directive?.change_notices).toBeUndefined();
     expect(policyLines(readFileSync(state, "utf-8"))).toEqual(["- **Guard Policy**: off (set by you)"]);
     expect(settledRows(proj)).toHaveLength(2);
+    quietNexts(proj, state);
+  });
+
+  // A teammate's clone keeps its own shard, and shards are read in filename
+  // order, which is not the order the rows were written in.
+  function teammateRow(proj: string, event: string, fields: Record<string, string>, timestamp: string): void {
+    const ours = rowsOf(proj, "GUARD_POLICY_SET").at(-1);
+    expect(ours).toBeDefined();
+    const shard = isAbsolute(ours!.shard) ? ours!.shard : join(proj, ours!.shard);
+    // "0" sorts before any host name, so the teammate's shard is read first.
+    const body = Object.entries(fields).map(([key, value]) => `**${key}**: ${value}\n`).join("");
+    writeFileSync(join(dirname(shard), "0-teammate-0000000000000000.md"),
+      `\n## Setting Changed\n**Timestamp**: ${timestamp}\n**Event**: ${event}\n${body}\n---\n`);
+  }
+
+  test("conflicting policy lines: a teammate's newer setting in a shard read first is the one set last", () => {
+    const { proj, state } = conflict("classic", "off (set by you)", "strict (set by you)");
+    appendAuditEntry("GUARD_POLICY_SET", { "Old Value": "strict", "New Value": "off", Source: "you" }, proj);
+    nextSecond();
+    teammateRow(proj, "CHANGE_CONTROL_SET", { "Old Value": "off", "New Value": "strict", Source: "you" },
+      new Date().toISOString().replace(/\.\d{3}Z$/, "Z"));
+    const next = runOrchestrateNext(ORCHESTRATE, proj);
+    expect(next.status, next.stderr).toBe(0);
+    expect(next.directive?.change_notices).toBeUndefined();
+    expect(policyLines(readFileSync(state, "utf-8"))).toEqual(["- **Guard Policy**: strict (set by you)"]);
+    expect(auditBlockField(settledRows(proj)[0].block, "Kept By")).toBe("set last");
+    quietNexts(proj, state);
+  });
+
+  test("conflicting policy lines set in the same second in two shards: the record cannot tell, so the stricter is kept and said once", () => {
+    const { proj, state } = conflict("classic", "relaxed (set by you)", "strict (set by you)");
+    appendAuditEntry("GUARD_POLICY_SET", { "Old Value": "strict", "New Value": "relaxed", Source: "you" }, proj);
+    teammateRow(proj, "CHANGE_CONTROL_SET", { "Old Value": "relaxed", "New Value": "strict", Source: "you" },
+      rowsOf(proj, "GUARD_POLICY_SET").at(-1)!.timestamp);
+    const next = runOrchestrateNext(ORCHESTRATE, proj);
+    expect(next.status, next.stderr).toBe(0);
+    expect(next.directive?.change_notices).toEqual([
+      "This work had two settings for how closely AI-DLC checks changes, and they disagreed. The record does not say " +
+        "which was set last, so AI-DLC keeps the stricter one: it checks everything. You can change it any time.",
+    ]);
+    expect(policyLines(readFileSync(state, "utf-8"))).toEqual(["- **Guard Policy**: strict (set by you)"]);
+    expect(auditBlockField(settledRows(proj)[0].block, "Kept By")).toBe("stricter");
     quietNexts(proj, state);
   });
 

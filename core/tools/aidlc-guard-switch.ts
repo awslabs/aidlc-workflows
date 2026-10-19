@@ -7,6 +7,7 @@ import {
   type GuardPolicy,
   guardPolicyAtLeast,
   keepActiveDirectiveOverSettingWrite,
+  maximalAttemptEvents,
   personSpokeSinceGate,
   scopeGuardPolicyDefault,
   readAuditShardEvents,
@@ -185,16 +186,19 @@ function keptPolicyLine(
   if (readable.length === 1) return keep(readable[0], "readable");
   // The newer line: the newest setting row naming one line's value and source.
   // A row a governed check wrote meanwhile names the conflict as its source, so
-  // it matches neither line.
-  let newest: (typeof lines)[number] | null = null;
+  // it matches neither line. Shards are read in filename order, so "newest" is
+  // the shared causal order (maximalAttemptEvents); rows for both lines it
+  // cannot order tell nothing.
+  const lineOf = new Map<AuditShardEvent, (typeof lines)[number]>();
   for (const row of rows) {
     if (row.event !== "GUARD_POLICY_SET" && row.event !== "CHANGE_CONTROL_SET") continue;
     const value = parseGuardPolicy(auditBlockField(row.block, "New Value"));
     const source = auditBlockField(row.block, "Source");
     const matched = readable.filter((line) => line.parsed!.value === value && line.parsed!.source === source);
-    if (matched.length === 1) newest = matched[0];
+    if (matched.length === 1) lineOf.set(row, matched[0]);
   }
-  if (newest !== null) return keep(newest, "set last");
+  const newest = new Set(maximalAttemptEvents([...lineOf.keys()]).map((row) => lineOf.get(row)!));
+  if (newest.size === 1) return keep([...newest][0], "set last");
   const theirs = readable.filter((line) => line.parsed!.source === "you");
   if (theirs.length === 1) return keep(theirs[0], "set by you");
   const scopeDefault = scopeGuardPolicyDefault(getField(content, "Scope"));
