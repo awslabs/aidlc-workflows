@@ -1010,21 +1010,24 @@ describe("t354 every line that sends the person to sync names a command that wor
 // Kiro CLI and opencode compose only when the person runs sync, so the change
 // that turns a paused plugin's base back on names that sync, once.
 describe("t354 turning a paused plugin's base back on says how the plugin comes back", () => {
-  // A copy of dist/<harness> with zeta and alpha, which builds on zeta and adds
-  // to build-and-test, composed from their folders; HOME is a scratch folder,
-  // so config writes no settings outside the test.
-  function composedPair(harness: "kiro" | "opencode", leaf: string) {
+  // A copy of dist/<harness> (with dist/claude beside it when `withClaude`)
+  // with zeta and alpha, which builds on zeta and adds to build-and-test,
+  // composed from their folders; HOME is a scratch folder, so config writes no
+  // settings outside the test. `run` calls the tools of `via`, the harness's
+  // own by default.
+  function composedPair(harness: "kiro" | "opencode", leaf: string, withClaude = false) {
     const base = fresh(`${harness}-resume`);
     const dir = join(base, "project");
     const home = join(base, "home");
     mkdirSync(home, { recursive: true });
+    if (withClaude) cpSync(join(REPO_ROOT, "dist", "claude"), dir, { recursive: true });
     cpSync(join(REPO_ROOT, "dist", harness), dir, { recursive: true });
     const zeta = plugin({ name: "zeta", harness });
     const team = alpha({ harness });
     mkdirSync(join(team, "contributions", "construction"), { recursive: true });
     writeFileSync(join(team, "contributions", "construction", "build-and-test.md"), CONTRIBUTION);
-    const run = (args: string[]): Ran => {
-      const result = spawnSync(process.execPath, [join(dir, leaf, "tools", "aidlc.ts"), ...args], {
+    const run = (args: string[], via = leaf): Ran => {
+      const result = spawnSync(process.execPath, [join(dir, via, "tools", "aidlc.ts"), ...args], {
         cwd: dir,
         encoding: "utf-8",
         timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
@@ -1064,5 +1067,35 @@ describe("t354 turning a paused plugin's base back on says how the plugin comes 
     const back = run(["config", "project", "--plugins", "aidlc,alpha,zeta", "--yes"]);
     expect(back.status, back.stdout + back.stderr).toBe(0);
     expect(back.stdout).toContain(backLine(".kiro"));
+  });
+
+  // "all" is the undo the tool prints after a pause from an all-on selection.
+  test.each([[["--plugins", "all"]], [["--reset"]]] as const)(
+    "on Kiro CLI, config project %p turns zeta back on and says it too",
+    (form) => {
+      const run = composedPair("kiro", ".kiro");
+      const recorded = run(["config", "--from", join(REPO_ROOT, "dist", "kiro"), "--force", "--yes"]);
+      expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
+      const paused = run(["config", "project", "--plugins", "aidlc,alpha", "--yes"]);
+      expect(paused.status, paused.stdout + paused.stderr).toBe(0);
+      const back = run(["config", "project", ...form, "--yes"]);
+      expect(back.status, back.stdout + back.stderr).toBe(0);
+      expect(back.stdout).toContain(backLine(".kiro"));
+    },
+  );
+
+  test("with .claude beside .kiro, config run from Claude Code's tool for Kiro CLI names Kiro CLI's folder", () => {
+    const run = composedPair("kiro", ".kiro", true);
+    const kiro = run(["config", "--from", join(REPO_ROOT, "dist", "kiro"), "--harness", "kiro", "--force", "--yes"]);
+    expect(kiro.status, kiro.stdout + kiro.stderr).toBe(0);
+    const claude = run(["config", "--from", join(REPO_ROOT, "dist", "claude"), "--harness", "claude", "--force", "--yes"], ".claude");
+    expect(claude.status, claude.stdout + claude.stderr).toBe(0);
+    const paused = run(["config", "project", "--plugins", "aidlc,alpha", "--harness", "kiro", "--yes"], ".claude");
+    expect(paused.status, paused.stdout + paused.stderr).toBe(0);
+    const back = run(["config", "project", "--plugins", "aidlc,alpha,zeta", "--harness", "kiro", "--yes"], ".claude");
+    expect(back.status, back.stdout + back.stderr).toBe(0);
+    expect(back.stdout).toContain(
+      "comes back when you run `bun .claude/tools/aidlc.ts engine plugin sync --harness-dir .kiro --plugin-root <alpha's folder>`.",
+    );
   });
 });
