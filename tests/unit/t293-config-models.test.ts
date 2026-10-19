@@ -1417,7 +1417,7 @@ describe("t293 config models CLI", () => {
     )).toEqual([]);
     // The shipped project file stays free of a model map.
     expect(JSON.parse(readFileSync(join(project, ".kiro", "settings", "cli.json"), "utf-8")))
-      .toEqual({ "chat.defaultAgent": "aidlc", "api.subagentTimeout": 900 });
+      .toEqual({ "chat.defaultAgent": "aidlc" });
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a Kiro CLI plan token names the session it starts from, and a write Kiro refuses needs action", () => {
