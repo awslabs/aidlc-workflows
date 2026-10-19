@@ -16,11 +16,14 @@
 //   2. The plan tool is update_plan ({plan:[{step,status}]}), not
 //      TaskUpdate — the shim maps the in_progress step to the
 //      {status, activeForm} shape the statusline-sync hook keys on.
-//   3. Every event is delivered TWICE (×2 duplication observed across the
-//      whole corpus). The shim is idempotent by REPLAY: the first delivery
+//   3. An event can be delivered TWICE (×2 duplication observed across the
+//      original corpus; a probe on 0.162.1 saw one delivery per registration).
+//      The shim is idempotent by REPLAY: the first delivery
 //      runs the core hook and caches {stdout, exit}; the duplicate replays
 //      the identical response (never swallowed — we must answer duplicates
 //      exactly like originals because Codex's combine rule is unspecified).
+//      A typed prompt or a Stop whose cached response is more than a few
+//      seconds old runs again instead (the replay cache block says why).
 //   4. There is no SessionEnd event (D-4): the session-start target
 //      reconciles — when the heartbeat file names a DIFFERENT prior
 //      session, it pipes an inferred-provenance reason into the core
@@ -63,6 +66,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -75,6 +79,7 @@ import {
   isNonAnswer,
   noteHelperSession,
   runHookHere,
+  runWithOwnerStampedLock,
   sessionsDir,
   stateFilePath,
   validSessionId,
@@ -253,10 +258,23 @@ const projectEnv = { ...process.env, ...projectPins };
 // --- Duplicate-delivery replay cache ---------------------------------------
 //
 // Key = sha256(target + raw stdin): identical deliveries (same turn, same
-// tool_use_id, same content) collide; legitimate re-fires differ (turn_id /
-// stop_hook_active / tool_use_id change). First delivery takes the slot via
-// atomic mkdir (the audit-lock idiom), runs, and persists its response;
-// the duplicate waits briefly for that response and replays it byte-for-byte.
+// tool_use_id, same content) collide; most legitimate re-fires differ
+// (turn_id / stop_hook_active / tool_use_id change). First delivery takes the
+// slot via atomic mkdir (the audit-lock idiom), runs, and persists its
+// response; the duplicate waits briefly for that response and replays it
+// byte-for-byte.
+//
+// Two re-fires do NOT differ: a person who types the same words again while
+// the turn is still closing (`1` to two numbered questions in a row) lands in
+// the same Codex turn, so the second UserPromptSubmit, and the Stop after it,
+// carry byte-identical stdin (measured on Codex 0.162.1: the payload has no
+// per-submission field). Codex's own duplicate comes with the original, while
+// the person's second reply comes after the agent has answered the first, so
+// on those two seams a slot whose response landed more than
+// REDELIVERY_WINDOW_MS ago is a new delivery: its response is retired and the
+// hook runs again, under the lock beside the cache (codex-dedupe.lock). Same
+// stdin carries nothing else to tell them apart, so a duplicate Codex held back
+// past that window would run twice; on 0.162.1 each registration fired once.
 // The cache lives in the project's own gitignored scratch folder
 // (aidlc/.aidlc-sessions/codex-dedupe), never in the OS temp folder, and every
 // delivery prunes it: a slot is kept for 5 minutes at most (the duplicate waits
@@ -277,6 +295,10 @@ const slotDir = join(DEDUPE_ROOT, dedupeKey);
 const responseFile = join(slotDir, "response.json");
 const SLOT_MAX_AGE_MS = 5 * 60 * 1000;
 const SLOT_MAX_COUNT = 64;
+const REDELIVERY_WINDOW_MS = 5_000;
+const repeatableDelivery =
+  (target === "record-human-turn" && codex.hook_event_name === "UserPromptSubmit") ||
+  (target === "continue-workflow" && codex.hook_event_name === "Stop");
 
 function pruneStale(): void {
   try {
@@ -335,11 +357,55 @@ function persistResponse(stdout: string, code: number, stderr?: string): void {
   }
 }
 
+// False while the slot has no response yet (the first delivery still running)
+// and for a response dated in the future (a clock stepped back).
+function responseIsOld(): boolean {
+  try {
+    return Date.now() - statSync(responseFile).mtimeMs > REDELIVERY_WINDOW_MS;
+  } catch {
+    return false;
+  }
+}
+
+// Under the lock, so two deliveries that both find the response old cannot
+// both take the slot: the second finds it gone and replays. The response is
+// moved aside rather than the slot folder removed and made again, which
+// Windows can refuse while the folder is still being deleted.
+function retireOldResponse(): boolean {
+  if (!responseIsOld()) return false;
+  const retired = `${responseFile}.${randomUUID()}`;
+  try {
+    renameSync(responseFile, retired);
+  } catch {
+    // pruneStale took the slot meanwhile: claim it fresh, or replay if another did
+    try {
+      mkdirSync(slotDir);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  try {
+    rmSync(retired, { force: true });
+  } catch {
+    // left for pruneStale, which removes the whole slot
+  }
+  return true;
+}
+
 if (!bypassReplay) {
   try {
     mkdirSync(DEDUPE_ROOT, { recursive: true });
     pruneStale();
-    mkdirSync(slotDir); // atomic claim — throws EEXIST for the duplicate
+    try {
+      mkdirSync(slotDir); // atomic claim — throws EEXIST for the duplicate
+    } catch (taken) {
+      if (!repeatableDelivery || (taken as NodeJS.ErrnoException).code !== "EEXIST" || !responseIsOld()) {
+        throw taken;
+      }
+      const reclaim = runWithOwnerStampedLock(`${DEDUPE_ROOT}.lock`, 200, 10, retireOldResponse);
+      if (!reclaim.acquired || !reclaim.value) throw taken;
+    }
   } catch {
     const replay = replayResponse();
     if (replay.stdout) process.stdout.write(replay.stdout);
