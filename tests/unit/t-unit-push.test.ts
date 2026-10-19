@@ -387,12 +387,13 @@ describe("at the home", () => {
       const directive = next(home.dir, { ...ENV, GIT_TRACE2_EVENT: trace });
       expect(directive.unit, JSON.stringify(directive)).toBe("orders");
     }
-    const claimFetches = readFileSync(trace, "utf-8").split("\n").filter((line) => {
+    // One look at the claims in the chat (an ls-remote, and a fetch only when the home has something new).
+    const claimLooks = readFileSync(trace, "utf-8").split("\n").filter((line) => {
       if (!line.includes('"event":"start"')) return false;
       const argv = (JSON.parse(line) as { argv: string[] }).argv;
-      return argv.includes("fetch") && argv.some((arg) => arg.includes("refs/heads/claim/"));
+      return argv.includes("ls-remote") && argv.some((arg) => arg.includes("refs/heads/claim/"));
     });
-    expect(claimFetches).toHaveLength(1);
+    expect(claimLooks).toHaveLength(1);
   });
 
   test("a look at the board writes nothing back to the claim until the home sees a new merge", () => {

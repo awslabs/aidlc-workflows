@@ -5,7 +5,7 @@
 // URL are never recorded or printed; two clones that spell the home's address
 // differently are one home; the git AI-DLC runs on a step nobody typed never
 // opens a sign-in window, and uses each code repo's own ssh setup; the merge
-// check fetches only the branch a Unit merges into; a push goes to the remote
+// check looks at and fetches only the branch a Unit merges into; a push goes to the remote
 // git would push to, and only the person names one when git cannot.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
@@ -148,11 +148,12 @@ describe("the person's own git, on steps nobody typed", () => {
     const calls = readFileSync(log, "utf-8").trim().split("\n");
     expect(calls.length).toBeGreaterThan(0);
     expect(calls.every((line) => line.startsWith("billing -o BatchMode=yes -o ConnectTimeout=15 "))).toBe(true);
-    const fetches = readFileSync(trace, "utf-8").split("\n").filter((line) => line.includes('"event":"start"'))
+    // Each look at a code repo (an ls-remote, and a fetch only when it moved) names only that branch.
+    const looks = readFileSync(trace, "utf-8").split("\n").filter((line) => line.includes('"event":"start"'))
       .map((line) => (JSON.parse(line) as { argv: string[] }).argv)
-      .filter((argv) => argv.includes("fetch") && argv.includes("origin") && !argv.some((arg) => arg.includes("claim")));
-    expect(fetches.length).toBeGreaterThan(0);
-    for (const argv of fetches) expect(argv.at(-1)).toBe("main");
+      .filter((argv) => (argv.includes("fetch") || argv.includes("ls-remote")) && argv.includes("origin") && !argv.some((arg) => arg.includes("claim")));
+    expect(looks.length).toBeGreaterThan(0);
+    for (const argv of looks) expect(argv.at(-1)).toBe("main");
   });
 });
 

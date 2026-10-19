@@ -10,7 +10,8 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readFileSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -23,6 +24,7 @@ import {
   ENV,
   git,
   HOME_RECORD,
+  homeState,
   hook,
   makeHome,
   mergeOnHost,
@@ -30,6 +32,7 @@ import {
   refundsTaken,
   run,
   stateOf,
+  tempDir,
   UNIT,
 } from "../harness/team-build.ts";
 
@@ -158,6 +161,66 @@ describe("the lead's own chat hears a teammate's take that comes after it looked
       `Your teammate bob took ${unit}; this session carries on with the rest, one Unit at a time.`,
     );
     expect(step.unit ?? null, JSON.stringify(step)).not.toBe(unit);
+  });
+});
+
+describe("a solo home looks for a teammate's take only once its Unit walk has begun", () => {
+  const servers: Array<() => void> = [];
+  afterEach(() => {
+    while (servers.length > 0) servers.pop()!();
+  });
+  // The looks at the work's claims a step ran, from git's own trace.
+  const looks = (trace: string): number => existsSync(trace)
+    ? readFileSync(trace, "utf-8").split("\n").filter((line) => line.includes('"event":"start"'))
+      .map((line) => (JSON.parse(line) as { argv: string[] }).argv)
+      .filter((argv) => (argv.includes("ls-remote") || argv.includes("fetch")) && argv.some((arg) => arg.includes("claim/"))).length
+    : 0;
+  const traced = (): { trace: string; env: NodeJS.ProcessEnv } => {
+    const trace = join(tempDir("trace"), "trace2.json");
+    return { trace, env: { ...ENV, GIT_TRACE2_EVENT: trace, AIDLC_SESSION_OVERRIDE: "solo-chat" } };
+  };
+  const betweenUnits = () => {
+    const home = makeHome();
+    appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: "refunds", "Run floor": "0" }, home.dir);
+    appendAuditEntry("UNIT_COMPLETED", { Stage: "code-generation", Unit: "refunds", "Run floor": "0" }, home.dir);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "refunds built here"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    return home;
+  };
+
+  test("at an Inception stage: two steps, no look", () => {
+    const home = makeHome({
+      state: homeState().replace("- [x] delivery-planning", "- [-] delivery-planning").replace("- [-] functional-design", "- [ ] functional-design")
+        .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: delivery-planning"),
+    });
+    const { trace, env } = traced();
+    expect(next(home.dir, env).stage).toBe("delivery-planning");
+    next(home.dir, env);
+    expect(looks(trace)).toBe(0);
+  });
+
+  test("between Units: one look before the next Unit starts", () => {
+    const home = betweenUnits();
+    const { trace, env } = traced();
+    next(home.dir, env);
+    expect(looks(trace)).toBe(1);
+  });
+
+  test("a remote that does not answer holds the step a few seconds at most, and nothing is said", async () => {
+    const home = betweenUnits();
+    const child = spawn(process.execPath, ["-e", `
+      const server = Bun.serve({ port: 0, fetch: () => new Promise(() => {}) });
+      console.log(server.port);
+    `], { stdio: ["ignore", "pipe", "inherit"] });
+    servers.push(() => child.kill());
+    const port = await new Promise<string>((resolve) => child.stdout!.once("data", (chunk: Buffer) => resolve(chunk.toString().trim())));
+    git(home.dir, ["remote", "set-url", "origin", `http://127.0.0.1:${port}/org/ws.git`]);
+    const { env } = traced();
+    const started = Date.now();
+    const step = next(home.dir, env);
+    expect(Date.now() - started, JSON.stringify(step)).toBeLessThan(8000);
+    expect(JSON.stringify(step.change_notices ?? [])).not.toContain("could not be reached");
   });
 });
 

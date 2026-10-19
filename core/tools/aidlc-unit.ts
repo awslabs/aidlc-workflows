@@ -5702,7 +5702,10 @@ function takeUnit(args: string[], projectDir?: string): void {
 // an includeIf) is the one used. A stalled transfer ends by git's own low-speed
 // limit; a read gives up after a short while, and a fetch or push, which writes
 // in the person's repo, only at a ceiling that keeps a step from never ending.
-const QUIET_READ_TIMEOUT_MS = 15_000;
+// The read limit: a hosted remote answers an ls-remote in well under a second
+// (0.1 to 0.9 s to GitHub, GitLab and Bitbucket over https, measured), so five
+// seconds sees a slow link and holds an offline step no longer than that.
+const QUIET_READ_TIMEOUT_MS = 5_000;
 const QUIET_WRITE_CEILING_MS = 120_000;
 let quiet = false;
 
@@ -5737,8 +5740,38 @@ function quietly<T>(work: () => T): T {
   }
 }
 
+// A fetch on a step nobody typed looks first, with an ls-remote that writes
+// nothing and so may stop at the read limit, and fetches only when the remote
+// has something these refs do not; the fetch then runs to the write ceiling.
 function quietFetch(dir: string, args: string[]): GitResult {
-  return quietly(() => git(dir, ["fetch", ...args]));
+  return quietly(() => {
+    const [remote, ...specs] = args.filter((arg) => !arg.startsWith("-"));
+    if (remote === undefined || specs.length === 0) return git(dir, ["fetch", ...args]);
+    const sources = specs.map((spec) => spec.replace(/^\+/, "").split(":")[0]);
+    const listed = git(dir, ["ls-remote", remote, ...sources]);
+    if (!listed.ok) return listed;
+    // Where each listed ref lands here: the refspec's own target, or the
+    // remote-tracking branch a named remote's branch fetch updates.
+    const landsAt = (ref: string): string | null => {
+      for (const spec of specs) {
+        const [src, dst] = spec.replace(/^\+/, "").split(":");
+        if (dst === undefined) {
+          if (!isGitAddress(remote) && (ref === src || ref === `refs/heads/${src}`)) return `refs/remotes/${remote}/${ref.slice("refs/heads/".length)}`;
+        } else if (src.endsWith("*")) {
+          if (ref.startsWith(src.slice(0, -1))) return `${dst.slice(0, -1)}${ref.slice(src.length - 1)}`;
+        } else if (ref === src) return dst;
+      }
+      return null;
+    };
+    // A branch fetched by an address lands in FETCH_HEAD only: nothing here to compare.
+    const unmapped = isGitAddress(remote) && specs.some((spec) => !spec.includes(":"));
+    const behind = unmapped || listed.stdout.split(/\r?\n/).filter(Boolean).some((line) => {
+      const [oid, ref] = line.split("\t");
+      const at = landsAt(ref ?? "");
+      return at !== null && git(dir, ["rev-parse", "--verify", "--quiet", at]).stdout.trim() !== oid;
+    });
+    return behind ? git(dir, ["fetch", ...args]) : { ok: true, stdout: "", stderr: "", code: 0 };
+  });
 }
 
 // The work's claims as the home has them now, fetched into the refs the
@@ -6985,16 +7018,18 @@ export function switchSoloToTeams(projectDir: string, sessionId?: string): strin
   }
   if (isTeamUnitOwnership(state) || homeLocation(state) !== null || isReadOnlyEngineProbe()) return null;
   if (getField(state, "Construction Iteration")?.trim() !== "unit-major") return null;
-  // A teammate's take changes what this session does next: the claims are
-  // looked at after each message of the person's, and before a Unit starts.
+  // A teammate's take changes what this session does next once its Unit walk
+  // has begun (or its first Unit is next): the claims are looked at once in a
+  // chat, before each next Unit starts, and after each message of the
+  // person's; never at an Inception step.
   const remote = repositoryRemote(projectDir);
-  if (remote !== null) {
-    const finalStage = unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true).at(-1) ?? "code-generation";
-    const progress = soloUnitsProgress(readAuditShardEvents(projectDir), finalStage);
+  const stages = unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true);
+  const progress = soloUnitsProgress(readAuditShardEvents(projectDir), stages.at(-1) ?? "code-generation");
+  if (remote !== null && (progress.started.size > 0 || stages.includes(getField(state, "Current Stage")?.trim() ?? ""))) {
     refreshHomeClaims(projectDir, {
       home: { target: remote, id8: activeIdentity(projectDir).intentId8 },
       sessionId,
-      now: [...progress.started].every((unit) => progress.done.has(unit)),
+      now: progress.started.size > 0 && [...progress.started].every((unit) => progress.done.has(unit)),
       sincePerson: true,
     });
   }
