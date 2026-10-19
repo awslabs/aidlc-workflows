@@ -162,9 +162,10 @@ describe("t353 parallel plugin sync", () => {
     };
     const registry = join(scratch, "installed_plugins.json");
     const settings = join(scratch, "settings.json");
+    // Each record carries the version its copy's own manifest says, as Claude Code's does.
     const plugins = Object.fromEntries(Object.entries(installed).map(([name, root]) => [
       `aidlc-${name}@aidlc-plugins`,
-      [{ scope: "user", installPath: root, version: "0.1.0" }],
+      [{ scope: "user", installPath: root, version: (JSON.parse(readFileSync(join(root, ".claude-plugin", "plugin.json"), "utf-8")) as { version: string }).version }],
     ]));
     writeFileSync(registry, `${JSON.stringify({ version: 2, plugins }, null, 2)}\n`);
     writeFileSync(settings, "{}\n");

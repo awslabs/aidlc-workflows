@@ -48,6 +48,8 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 const REPO_ROOT = resolve(import.meta.dir, "../..");
 const FIXTURES = join(REPO_ROOT, "tests", "fixtures", "plugin-inventory");
 const TEST_PRO = join(REPO_ROOT, "dist", "plugins", "test-pro", "claude");
+// The shipped test-pro's version, from its own manifest, so a version bump needs no edit here.
+const TEST_PRO_VERSION = (JSON.parse(readFileSync(join(REPO_ROOT, "plugins", "test-pro", ".aidlc-plugin", "plugin.json"), "utf-8")) as { version: string }).version;
 const ORIGINAL_ENV = { ...process.env };
 const TEMP: string[] = [];
 
@@ -147,7 +149,11 @@ function inventory(
   };
 }
 
-function withClaudeFixture(root: string, version = "0.1.0"): void {
+// The host's record carries the version the installed copy's own manifest says, as Claude Code's does.
+function withClaudeFixture(
+  root: string,
+  version = (JSON.parse(readFileSync(join(root, ".claude-plugin", "plugin.json"), "utf-8")) as { version: string }).version,
+): void {
   const fixtureDir = temp("aidlc-claude-inventory-");
   const registry = readFileSync(join(FIXTURES, "claude-installed-plugins.json"), "utf-8")
     .replace("{{PLUGIN_ROOT}}", root.replaceAll("\\", "\\\\"))
@@ -712,7 +718,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(JSON.parse(readFileSync(stampPath, "utf-8"))).toEqual({
       schemaVersion: 1,
       name: "test-pro",
-      version: "0.1.0",
+      version: TEST_PRO_VERSION,
       sourceHash: pluginSourceHash(TEST_PRO),
     });
     expect(collectPluginStatus(project, ".claude").statuses).toEqual([
@@ -821,7 +827,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(pluginRows()).toEqual([
       expect.objectContaining({
         pass: true,
-        label: "Plugins: test-pro 0.1.0 in this project (no host plugin list to compare versions with)",
+        label: `Plugins: test-pro ${TEST_PRO_VERSION} in this project (no host plugin list to compare versions with)`,
       }),
     ]);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -955,7 +961,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     writeFileSync(
       process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string,
       readFileSync(process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string, "utf-8")
-        .replaceAll('"version": "0.1.0"', '"version": "0.2.0"'),
+        .replaceAll(`"version": "${TEST_PRO_VERSION}"`, '"version": "0.2.0"'),
     );
 
     await syncPlugins(project, [], ".claude");
@@ -1016,7 +1022,7 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     writeFileSync(
       process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string,
       readFileSync(process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string, "utf-8")
-        .replaceAll('"version": "0.1.0"', '"version": "0.2.0"'),
+        .replaceAll(`"version": "${TEST_PRO_VERSION}"`, '"version": "0.2.0"'),
     );
     await syncPlugins(project, [], ".claude");
     const target = join(project, ".claude", "aidlc-common", "stages", "construction", "test-pro-integration.md");
@@ -1614,7 +1620,7 @@ describe("t242 a rebuilt plugin installed beside its old copy", () => {
     const fixtureDir = temp("aidlc-claude-twice-");
     writeFileSync(join(fixtureDir, "installed.json"), JSON.stringify({
       version: 2,
-      plugins: Object.fromEntries(Object.entries(entries).map(([id, root]) => [id, [{ scope: "user", installPath: root, version: "0.1.0" }]])),
+      plugins: Object.fromEntries(Object.entries(entries).map(([id, root]) => [id, [{ scope: "user", installPath: root, version: TEST_PRO_VERSION }]])),
     }));
     writeFileSync(join(fixtureDir, "settings.json"), "{}\n");
     process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY = join(fixtureDir, "installed.json");
@@ -1649,7 +1655,7 @@ describe("t242 a rebuilt plugin installed beside its old copy", () => {
     test(`Codex: the host list keeps the rebuilt copy and names the old one to remove${shape}`, () => {
       const codexHome = temp("aidlc-codex-twice-");
       const cache = (marketplace: string, plugin: string, source: string): void => {
-        const installed = join(codexHome, "plugins", "cache", marketplace, plugin, "0.1.0");
+        const installed = join(codexHome, "plugins", "cache", marketplace, plugin, TEST_PRO_VERSION);
         mkdirSync(join(installed, ".."), { recursive: true });
         cpSync(source, installed, { recursive: true });
       };
