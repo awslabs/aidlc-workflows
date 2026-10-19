@@ -22,7 +22,7 @@
 //   log-subagent      → SUBAGENT_COMPLETED in the audit.
 //   duplicate delivery → the second identical stdin replays the first
 //                       response (the ×2 idempotency contract) — the audit
-//                       gains NO second row.
+//                       gains NO second row; the Stop check runs again (9d, 9e).
 //   malformed stdin   → fail-open exit 0 (advisory contract).
 //   record-human-turn -> a subagent's prompt (it carries agent_id) is not the
 //                       person's turn: no HUMAN_TURN, no kept words (#1411).
@@ -1435,8 +1435,9 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
   // A person who types the same words again while the turn is still closing
   // lands in the same Codex turn: Codex 0.162.1 sends that UserPromptSubmit,
   // and the Stop after it, with stdin byte-identical to the first. The agent
-  // has spoken in between; a Codex duplicate that comes with its original finds
-  // no new assistant message in the rollout. The rollout carries what 0.162.1
+  // has spoken in between; a Codex duplicate of the UserPromptSubmit that comes
+  // with its original finds no new assistant message in the rollout. The Stop
+  // check runs on every delivery, so the rollout changes nothing for it (9d). The rollout carries what 0.162.1
   // writes around each message: the user's line and the agent_message event
   // that repeats the assistant's words.
   const REPEAT_SESSION = "019eb8c2-aa02-72e1-9ab4-53e67fca5d63";
@@ -1482,7 +1483,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  test("9d: a Stop identical to an earlier one runs the stop check again once the agent has spoken, and replays before", () => {
+  test("9d: a Stop identical to an earlier one runs the stop check again, whether or not the agent has spoken", () => {
     const dir = scratchProject(true);
     try {
       const capture = join(dir, "repeat-runs.ndjson");
@@ -1494,11 +1495,36 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       const stop = withCwd({ ...FIXTURES.stop, session_id: REPEAT_SESSION, transcript_path: rolloutWith(dir, ["1"]) }, dir);
       runAdapter(dir, "continue-workflow", stop);
       runAdapter(dir, "continue-workflow", stop);
-      expect(recordedRuns(capture)).toHaveLength(1);
+      expect(recordedRuns(capture)).toHaveLength(2);
       rolloutWith(dir, ["1", "1"]);
       runAdapter(dir, "continue-workflow", stop);
       runAdapter(dir, "continue-workflow", stop);
-      expect(recordedRuns(capture)).toHaveLength(2);
+      expect(recordedRuns(capture)).toHaveLength(4);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // After a block, Codex sends the same Stop input again while the agent only
+  // runs tools or says nothing. Each of those Stops reaches the core hook, so
+  // its no-progress count climbs to the cap and the stuck loop lets go.
+  test("9e: identical Stops after a block reach the no-progress cap and let go", () => {
+    const dir = scratchProject(true);
+    try {
+      const guard = join(seededRecordDir(dir), ".aidlc-engine", "stop-hook", "block-count.json");
+      const env = { CLAUDE_CODE_STOP_HOOK_BLOCK_CAP: "4" };
+      const first = withCwd(FIXTURES.stop, dir);
+      const again = withCwd({ ...FIXTURES.stop, stop_hook_active: true }, dir);
+      const outcomes: string[] = [];
+      const counts: number[] = [];
+      for (const stop of [first, again, again, again, again]) {
+        const r = runAdapter(dir, "continue-workflow", stop, env);
+        expect(r.code).toBe(0);
+        outcomes.push(r.stdout.includes('"decision":"block"') ? "block" : "allow");
+        counts.push((JSON.parse(readFileSync(guard, "utf-8")) as { count: number }).count);
+      }
+      expect(counts).toEqual([1, 2, 3, 4, 5]);
+      expect(outcomes).toEqual(["block", "block", "block", "allow", "allow"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
