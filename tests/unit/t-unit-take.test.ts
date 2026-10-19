@@ -21,6 +21,7 @@ import { fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
   claimPayload,
   cleanupTeamBuild,
+  cloneCode,
   cloneOf,
   codeGenerated,
   codeHost,
@@ -374,6 +375,31 @@ describe("a team's own workspace, made from the home's", () => {
     expect(git(web, ["for-each-ref", "--format=%(refname)", "refs/aidlc/home/"])).toContain("integration");
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "checkout-ui")).toMatchObject({ owner: "web", taken_by: "web" });
     expect(next(web).unit).toBe("checkout-ui");
+  });
+
+  test("a team that could only read the home when it took its Unit sends the result by git once the home takes its pushes", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const hook = join(home.remote, "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\necho 'this host takes no push from here' >&2\nexit 1\n");
+    chmodSync(hook, 0o755);
+    const pay = teamWorkspace(home.remote, "pay");
+    for (const [name, host] of Object.entries(hosts)) cloneCode(host, pay, name, "pay");
+    expect(take(pay, "refunds").status).toBe(0);
+    const record = buildDir(pay, "payments", "refunds");
+    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Home Result")).toBe("by file");
+    writeFileSync(hook, "#!/bin/sh\nexit 0\n");
+    codeGenerated(pay, record);
+    const pushed = run(UNIT, ["push"], pay);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain("The home takes pushes from here now, so refunds's result goes home by git.");
+    expect(field(readFileSync(join(record, "aidlc-state.md"), "utf-8"), "Home Result")).toBeUndefined();
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ taken_by: "pay" });
+    expect((claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as { result?: unknown }).result).toBeDefined();
   });
 
   test("a home that takes no push from here: a held Unit is taken and goes back by file; an open one names the lead's step", () => {

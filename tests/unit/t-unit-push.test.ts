@@ -68,10 +68,16 @@ describe("the push", () => {
     expect(pushed.status, pushed.out).toBe(0);
     expect(pushed.json?.notice).toBe(
       "Pushed branch refunds in checkout-api and billing. Open a PR in each your usual way. " +
-        "You are on branch refunds in checkout-api and billing now.",
+        "Your checkouts are as they were: refunds's changes are on its branch, and still in your files.",
     );
     expect(git(hosts["checkout-api"], ["ls-tree", "-r", "--name-only", "refunds"]).split("\n")).toEqual(["README.md", "src/refunds.ts"]);
-    expect(git(join(alice, "checkout-api"), ["status", "--porcelain"])).toBe("M README.md");
+    // Nothing of theirs moved: the branch they are on, their index, their files.
+    for (const repo of ["checkout-api", "billing"]) {
+      expect(git(join(alice, repo), ["branch", "--show-current"])).toBe("main");
+      expect(git(join(alice, repo), ["diff", "--cached", "--name-only"])).toBe("");
+    }
+    expect(git(join(alice, "checkout-api"), ["status", "--porcelain"]).split("\n")).toEqual(["M README.md", "?? src/"]);
+    expect(git(join(alice, "checkout-api"), ["rev-parse", "refunds"])).toBe(git(hosts["checkout-api"], ["rev-parse", "refunds"]));
     expect(git(join(alice, "checkout-api"), ["show", "-s", "--format=%an", "refunds"])).toBe("alice");
     const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as {
       result: { by: string; repos: Array<{ repo: string; branch: string; paths: Record<string, string> }>; outputs: string[] };
@@ -111,14 +117,81 @@ describe("the push", () => {
     // Nothing of theirs in the working tree changed; their note is theirs, uncommitted.
     expect(readFileSync(join(alice, "checkout-api", "README.md"), "utf-8")).toBe("Refunds API.\n\n# checkout-api\n\nmy secret note\n");
     expect(readFileSync(join(alice, "billing", "README.md"), "utf-8")).toBe("# billing service\n");
-    expect(git(join(alice, "checkout-api"), ["status", "--porcelain"])).toBe("M README.md");
-    expect(git(join(alice, "billing"), ["status", "--porcelain"])).toBe("M README.md");
+    expect(git(join(alice, "checkout-api"), ["status", "--porcelain"]).split("\n")).toContain("M README.md");
+    expect(git(join(alice, "billing"), ["status", "--porcelain"]).split("\n")).toContain("M README.md");
     // A second push carries the Unit's newer change on top of what it sent, still never their note.
     writeFileSync(join(alice, "checkout-api", "README.md"), "Refunds API.\n\n# checkout-api\n\nmy secret note\n\nSee docs.\n");
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     const sent = git(hosts["checkout-api"], ["show", "refunds:README.md"]);
     expect(sent).toContain("Refunds API.");
     expect(sent).not.toContain("my secret note");
+  });
+
+  test("their commit hooks run on the Unit's commit before anything is pushed: a hook that stops it is said in its words, and nothing went", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    const hooks = join(alice, "billing", ".git", "hooks");
+    writeFileSync(join(hooks, "pre-commit"), "#!/bin/sh\necho 'lint: lib/refund.ts needs a header' >&2\nexit 1\n");
+    chmodSync(join(hooks, "pre-commit"), 0o755);
+    const stopped = run(UNIT, ["push"], alice);
+    expect(stopped.status).not.toBe(0);
+    expect(String(stopped.json?.error)).toBe("The commit in billing did not go through: lint: lib/refund.ts needs a header");
+    // checkout-api came first and was not pushed either; no branch moved.
+    expect(spawnSync("git", ["rev-parse", "--verify", "refs/heads/refunds"], { cwd: hosts["checkout-api"] }).status).not.toBe(0);
+    expect(spawnSync("git", ["rev-parse", "--verify", "refs/heads/refunds"], { cwd: join(alice, "checkout-api") }).status).not.toBe(0);
+    // Their commit-msg hook shapes the message, as it would for their own commit.
+    writeFileSync(join(hooks, "pre-commit"), "#!/bin/sh\nexit 0\n");
+    writeFileSync(join(hooks, "commit-msg"), "#!/bin/sh\nprintf 'REF-1 %s' \"$(cat \"$1\")\" > \"$1\"\n");
+    chmodSync(join(hooks, "commit-msg"), 0o755);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    expect(git(hosts.billing, ["log", "-1", "--format=%s", "refunds"])).toStartWith("REF-1 refunds: ");
+  });
+
+  test("a repo whose git signs its commits gets a signed Unit commit", () => {
+    const { hosts, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    const signer = join(tempDir("gpg"), "gpg.sh");
+    writeFileSync(signer, "#!/bin/sh\ncat > /dev/null\necho '[GNUPG:] SIG_CREATED D 1 8 00 0 0' >&2\n" +
+      "printf -- '-----BEGIN PGP SIGNATURE-----\\nfake\\n-----END PGP SIGNATURE-----\\n'\n");
+    chmodSync(signer, 0o755);
+    git(join(alice, "billing"), ["config", "commit.gpgSign", "true"]);
+    git(join(alice, "billing"), ["config", "gpg.program", signer]);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(git(hosts.billing, ["cat-file", "commit", "refunds"])).toContain("gpgsig -----BEGIN PGP SIGNATURE-----");
+    expect(git(hosts["checkout-api"], ["cat-file", "commit", "refunds"])).not.toContain("gpgsig");
+  });
+
+  test("a result the home did not take: the push is not counted as gone, and the next step offers it again", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    finishBuild(record);
+    const hook = join(home.remote, "hooks", "pre-receive");
+    writeFileSync(hook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/claim/*) echo 'claims are closed today' >&2; exit 1;; esac; done\n");
+    chmodSync(hook, 0o755);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain("The home did not take refunds's result:");
+    expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).not.toContain("**Unit Push**");
+    const again = next(alice);
+    expect(again.ask_type, JSON.stringify(again)).toBe("unit-push");
+  });
+
+  test("a push after a turn-down keeps the lead's word that a repo merged only where that repo's head did not change", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "billing merged it by hand"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["turned-down", "refunds", "--repo", "checkout-api", "--person-words", "needs the ledger entry"], home.dir).status).toBe(0);
+    git(alice, ["fetch", "-q", "origin"]);
+    // The team changes billing too: the lead's word was about the old billing change.
+    writeFileSync(join(alice, "checkout-api", "src", "refunds.ts"), "export const refunds = 2;\n");
+    writeFileSync(join(alice, "billing", "lib", "refund.ts"), "export const refund = 2;\n");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as Record<string, unknown>;
+    expect(claim.said_merged).toBeUndefined();
+    expect(claim.turned_down).toBeUndefined();
   });
 
   test("a push a repo's host refuses is said once, in its words, and nothing is retried", () => {
