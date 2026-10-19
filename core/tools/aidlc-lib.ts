@@ -23358,7 +23358,7 @@ function noteSourceFailure<T extends null | false>(
 // that checkout out again.
 export function sourceBoundaryRepairStep(): string {
   const repo = lastSourceFailure?.repo;
-  return repo !== undefined && repo.endsWith("@checkout")
+  return repo?.endsWith("@checkout")
     ? "Repair .aidlc-source-paths.json or the workspace source boundary, or, if the checkout recorded as " +
       `${repo} does not hold this work's code, take it out with ` +
       `\`${aidlcDispatcherInvocation("intent remove-checkout <its path>")}\``
