@@ -33,6 +33,14 @@ export function sandboxEnvironment(family: LiveFamily, home: string, path: strin
       }
       env.AIDLC_CODEX_BIN = managed;
     }
+    // The folder of the runner's pwsh, handed only when it is there
+    // (prepare-live-runtime.ps1, Get-SafeEnvironment): Copilot CLI needs
+    // PowerShell 6 or later on Windows, as a person's machine with it has.
+    if (family === "copilot" && source.AIDLC_LIVE_PWSH_DIR !== undefined) {
+      const folder = source.AIDLC_LIVE_PWSH_DIR;
+      if (!/^[A-Za-z]:\\[^;]*$/.test(folder)) throw new Error("Expected an absolute PowerShell 7 folder");
+      env.PATH = `${path};${folder}`;
+    }
   } else {
     Object.assign(env, { TMPDIR: join(home, "tmp"), BUN_INSTALL: join(home, ".bun"), XDG_CACHE_HOME: join(home, ".cache") });
   }

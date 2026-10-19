@@ -1797,14 +1797,17 @@ describe("t345 complete nightly coverage", () => {
         : {});
       expect(env).toMatchObject(FAMILIES[family].env);
       const windows = sandboxEnvironment(family, "C:\\aidlc-live\\home", "C:\\aidlc-live\\tools", {
-        ...inherited, PATHEXT: ".UNTRUSTED",
+        ...inherited, PATHEXT: ".UNTRUSTED", AIDLC_LIVE_PWSH_DIR: "C:\\Program Files\\PowerShell\\7",
       });
       // The hook phase trace is on for the Windows live legs only.
       expect(windows.AIDLC_TEST_HOOK_TRACE).toBe("1");
       expect(env.AIDLC_TEST_HOOK_TRACE).toBeUndefined();
       // Native `where claude` needs the executable suffix list after scrubbing.
       expect(windows.PATHEXT).toBe(".COM;.EXE;.BAT;.CMD");
-      expect(windows.PATH).toBe("C:\\aidlc-live\\tools");
+      // Copilot CLI needs PowerShell 6 or later on Windows, as a person's machine
+      // with it has; the other families keep the live PATH as it is.
+      expect(windows.PATH).toBe(family === "copilot" ? "C:\\aidlc-live\\tools;C:\\Program Files\\PowerShell\\7" : "C:\\aidlc-live\\tools");
+      expect(windows.AIDLC_LIVE_PWSH_DIR).toBeUndefined();
       if (family === "codex") expect(windows.AIDLC_CODEX_AWS_PROFILE).toBe("codex");
       else expect(windows.AIDLC_CODEX_AWS_PROFILE).toBeUndefined();
       expect(Object.keys(windows).filter((key) => /^(ACTIONS_|AWS_|GITHUB_TOKEN|GH_TOKEN)/.test(key)))
@@ -1818,6 +1821,24 @@ describe("t345 complete nightly coverage", () => {
     expect(() => sandboxEnvironment("codex", "C:\\aidlc-live\\home", "C:\\aidlc-live\\tools", {
       ...inherited, AIDLC_CODEX_BIN: "C:\\runner\\untrusted.cmd",
     })).toThrow("sealed native Codex launcher");
+    // A runner with no PowerShell 7 hands no folder, and the PATH gets no dead entry.
+    expect(sandboxEnvironment("copilot", "C:\\aidlc-live\\home", "C:\\aidlc-live\\tools", inherited).PATH).toBe("C:\\aidlc-live\\tools");
+    for (const folder of ["PowerShell\\7", "C:\\Program Files\\PowerShell\\7;C:\\runner\\bin"]) {
+      expect(() => sandboxEnvironment("copilot", "C:\\aidlc-live\\home", "C:\\aidlc-live\\tools", {
+        ...inherited, AIDLC_LIVE_PWSH_DIR: folder,
+      })).toThrow("PowerShell 7 folder");
+    }
+  });
+
+  test("the Windows runtime hands Copilot the folder of the pwsh the live job runs, only when it is there", () => {
+    const source = readFileSync(join(REPO_ROOT, ".github/scripts/prepare-live-runtime.ps1"), "utf8");
+    // One resolution of the runner's pwsh: Codex's readiness shell and Copilot's PATH folder.
+    expect(source).toContain("$pwsh = Join-Path $env:ProgramFiles 'PowerShell\\7\\pwsh.exe'");
+    expect(source).toContain("$body = $body.Replace('__COMMAND_SHELL__', (ConvertTo-PSLiteral $pwsh))");
+    const safe = source.match(/^function Get-SafeEnvironment \{[\s\S]*?^\}/m)?.[0] ?? "";
+    expect(safe).toContain("if ($Family -eq 'copilot' -and [IO.File]::Exists($pwsh)) {");
+    expect(safe).toContain("$environment.AIDLC_LIVE_PWSH_DIR = [IO.Path]::GetDirectoryName($pwsh)");
+    expect(source.match(/AIDLC_LIVE_PWSH_DIR/g) ?? []).toHaveLength(1);
   });
 
   test("the Windows wait loop snapshots stalled hooks for live runs only, from process metadata", () => {
