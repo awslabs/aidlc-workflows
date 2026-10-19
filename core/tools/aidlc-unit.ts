@@ -230,8 +230,12 @@ function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): 
     cwd: projectDir,
     env: { ...process.env, ...(quiet ? quietEnv(projectDir) : {}), ...env },
     maxBuffer: 512 * 1024 * 1024,
-    ...(quiet ? { timeout: args[0] === "ls-remote" ? QUIET_READ_TIMEOUT_MS : QUIET_WRITE_CEILING_MS } : {}),
+    // A quiet call is a process group of its own, so its time limit ends git's transport (ssh, the http helper) too.
+    ...(quiet
+      ? { timeout: args[0] === "ls-remote" ? QUIET_READ_TIMEOUT_MS : QUIET_WRITE_CEILING_MS, detached: process.platform !== "win32" }
+      : {}),
   });
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") endLeftBehind(result.pid);
   const failure = result.error
     ? `${result.error.message}\n`
     : result.signal
@@ -248,6 +252,28 @@ function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): 
 function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitResult {
   const result = gitBytes(projectDir, args, env);
   return { ...result, stdout: result.stdout.toString("utf-8") };
+}
+
+// What a git stopped at its time limit started and left running: its process
+// group; on Windows, which has none of git's own, each process it started, by
+// parent, unless its id already names another process.
+function endLeftBehind(pid: number): void {
+  if (process.platform !== "win32") {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // Nothing of it is left.
+    }
+    return;
+  }
+  spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+    `if (-not (Get-Process -Id ${pid} -ErrorAction SilentlyContinue)) { function End($p) { ` +
+    `Get-CimInstance Win32_Process -Filter "ParentProcessId=$p" | ForEach-Object { End $_.ProcessId; ` +
+    `Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } }; End ${pid} }`], {
+    stdio: "ignore",
+    windowsHide: true,
+    timeout: QUIET_READ_TIMEOUT_MS * 3,
+  });
 }
 
 function localGit(

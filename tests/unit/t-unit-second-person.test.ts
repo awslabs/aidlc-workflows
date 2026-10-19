@@ -10,7 +10,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -207,7 +207,16 @@ describe("a solo home looks for a teammate's take only once its Unit walk has be
     expect(looks(trace)).toBe(1);
   });
 
-  test("a remote that does not answer holds the step a few seconds at most, and nothing is said", async () => {
+  // The command lines still running that name a host stand-in's port.
+  const runningFor = (port: string): string[] => {
+    const listed = process.platform === "win32"
+      ? spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+        "Get-CimInstance Win32_Process | ForEach-Object { $_.CommandLine }"], { encoding: "utf-8" })
+      : spawnSync("ps", ["-eo", "args"], { encoding: "utf-8" });
+    return (listed.stdout ?? "").split(/\r?\n/).filter((line) => line.includes(`127.0.0.1:${port}`));
+  };
+
+  test("a remote that does not answer holds the step a few seconds at most, nothing is said, and nothing of the look keeps running", async () => {
     const home = betweenUnits();
     const child = spawn(process.execPath, ["-e", `
       const server = Bun.serve({ port: 0, fetch: () => new Promise(() => {}) });
@@ -221,6 +230,7 @@ describe("a solo home looks for a teammate's take only once its Unit walk has be
     const step = next(home.dir, env);
     expect(Date.now() - started, JSON.stringify(step)).toBeLessThan(8000);
     expect(JSON.stringify(step.change_notices ?? [])).not.toContain("could not be reached");
+    expect(runningFor(port)).toEqual([]);
   });
 });
 
