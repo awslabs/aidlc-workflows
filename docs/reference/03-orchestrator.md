@@ -757,8 +757,14 @@ them all open** choice's command. A `UNITS_ASSIGNED` row after the latest team
 `UNIT_OWNERSHIP_SET` settles it. The home then walks only the Units no team
 holds, skipping a Unit that waits, directly or through another, on one a team
 holds and has not merged; when none is left to it while a held Unit is
-unmerged, the step is the team board as a `notice`. Team work without `Home
-Location` keeps the dispatcher flow.
+unmerged, the step is the team board. Each step of teams building Units that
+says where things stand and waits for the person (the board, who builds which
+Unit after the person spoke without naming teams or while the home could not be
+reached, a turn-down asked again, a clone where nothing is ready to take) is a
+`print` that ends the turn (`lineEndingTurn`): what the person reads rides as
+`narration`, the engine's own instruction is the `message`, and any `offers`
+ride with it, so every harness's skill acts on it from a fresh chat. Team work
+without `Home Location` keeps the dispatcher flow.
 
 In a team member's workspace, a plain `next` with no work selected returns
 `ask_type: unit-take` when a home with `Home Location` is visible here and the
@@ -770,7 +776,8 @@ in this workspace. Its choices are **Start <unit>** for each Unit the person's
 team can take now, **Carry on <unit>** for a build already here (any space),
 and **Carry on <work> here, as its home** when the home's record is in the
 selected space and this workspace is the home's own; each runs one command
-(`unit take`, or `next --pick`). The home's work that git copied into a team's
+(`unit take`, or `next --pick`). When nothing is ready to take, the step is the
+line that says where each Unit stands, and nothing is offered. The home's work that git copied into a team's
 own workspace (its `Home Location` is not this workspace's `origin`) is never
 offered to carry on, and `workToPickUp` leaves it out.
 
@@ -874,15 +881,17 @@ as it reads `STAGE_DEFINITION_CHANGED`. A build whose claim was turned down (and
 work under way again (`reopenTurnedDownBuild` sets `Status: Running`, so the
 person's turns in it are recorded and their way back passes the plan-approval
 guard), and its end step is `ask_type: unit-turned-down` once (the choice runs
-`report --result resumed --choice redo --target code-generation`), then a notice
-carrying the same choice in `offers`. The board's notice carries `offers`
-(each a question and its choices, with the command each runs): a sign-off or
-a proposal asked once and not answered, and the hand-off by file for a Unit
-held for a team and not taken. Who builds which Unit (`ask_type:
+`report --result resumed --choice redo --target code-generation`), then a print
+carrying the same choice in `offers`; once Code Generation is approved again
+after the last push (`redoneSincePush`), the end offers the push instead, never
+the redo. The board carries `offers` (each a question and its choices, with the
+command each runs), each put once in a chat: a sign-off or a proposal asked once
+and not answered, and the hand-off by file for a Unit held for a team and not
+taken. Who builds which Unit (`ask_type:
 unit-assignment`) is asked once; after the person spoke without naming teams the
-step is a notice with the same choice in `offers`, and an answer kept while the
+step is a print with the same choice in `offers`, and an answer kept while the
 home could not be reached (`UNITS_ASSIGNED` with `Held: not yet`) makes the step
-a notice offering to try again. A team's result carries the
+a print offering to try again. A team's result carries the
 outputs the home's later stages consume and the files the cross-Unit coverage
 check at Build and Test reads of the Unit (`crossUnitCoverageReads`).
 

@@ -21,7 +21,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { AIDLC_SRC, createTestProject, seedAidlcMemory } from "../harness/fixtures.ts";
+import { AIDLC_SRC, cleanupTestProject, createTestProject, removeWorkspaceRecord, seedAidlcMemory } from "../harness/fixtures.ts";
 import {
   cleanupTeamBuild,
   cloneCode,
@@ -34,6 +34,7 @@ import {
   git,
   HOME_RECORD,
   hook,
+  homeState,
   makeHome,
   mergeOnHost,
   next,
@@ -42,6 +43,7 @@ import {
   refundsTaken,
   run,
   STATE,
+  kindsEverySkillHandles,
   tellsWhatToType,
   tempDir,
   UNIT,
@@ -56,8 +58,8 @@ type Step = Record<string, unknown>;
 // What a step is about: two steps with the same key hand the person the same thing.
 function key(step: Step): string {
   return JSON.stringify([step.kind, step.ask_type ?? null, step.stage ?? null, step.unit ?? null,
-    step.kind === "print" || step.kind === "notice" ? step.message : null, step.kind === "ask" ? step.question : null,
-    step.kind === "notice" ? ((step.offers ?? []) as Array<{ question: string }>).map((offer) => offer.question) : null]);
+    step.kind === "print" || step.kind === "notice" ? step.message : null, step.kind === "print" ? step.narration ?? null : null,
+    step.kind === "ask" ? step.question : null, ((step.offers ?? []) as Array<{ question: string }>).map((offer) => offer.question)]);
 }
 
 // The project's own tool tree, so a command runs exactly as the engine printed it.
@@ -88,9 +90,14 @@ function printed(step: Step): string {
 
 // Run the step's command, then the next step: never the same step again. A
 // refusal names a way on (a command in backticks), and that leads elsewhere.
-// What the person reads of a step: none of it tells them what to type.
+// What the person reads of a step: none of it tells them what to type. And
+// its kind is one every harness's skill acts on in a fresh chat.
+let handled: Set<string> | undefined;
 function readsAsOffers(step: Step): void {
-  expect(tellsWhatToType(step.question, step.message, step.choices, step.offers, step.change_notices), JSON.stringify(step)).toBe(false);
+  handled ??= kindsEverySkillHandles();
+  expect(tellsWhatToType(step.question, step.message, step.narration, step.choices, step.offers, step.change_notices), JSON.stringify(step))
+    .toBe(false);
+  expect(handled.has(String(step.kind)), `no skill's step table knows ${String(step.kind)}: ${JSON.stringify(step)}`).toBe(true);
 }
 
 function movesOn(dir: string, env: NodeJS.ProcessEnv, step: Step, command: string, words: string[] = []): Step {
@@ -151,10 +158,17 @@ describe("no step of the build-out comes back after its own command ran", () => 
     git(home.dir, ["fetch", "-q", "origin"]);
     const down = run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "billing needs the ledger entry"], home.dir);
     expect(down.status, down.out).toBe(0);
+    const asked = personsNext(alice, chat, "t-unit-no-loops-team");
+    expect(asked.ask_type, JSON.stringify(asked)).toBe("unit-turned-down");
+    readsAsOffers(asked);
+    // Not now; at the next /aidlc it is offered again, as a step every skill acts on, and the offer takes it back.
+    expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: "t-unit-no-loops-team", prompt: "not now" }).status).toBe(0);
     const ask = personsNext(alice, chat, "t-unit-no-loops-team");
-    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-turned-down");
+    expect(ask.kind, JSON.stringify(ask)).toBe("print");
+    expect(key(ask)).not.toBe(key(asked));
+    readsAsOffers(ask);
     expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: "t-unit-no-loops-team", prompt: "yes, take it back" }).status).toBe(0);
-    const redo = runPrinted(alice, chat, choice(ask, "Take refunds back to Code Generation"));
+    const redo = runPrinted(alice, chat, offered(ask, "Take refunds back to Code Generation"));
     expect(redo.status, redo.out).toBe(0);
     const jump = /`(bun \S+aidlc-jump\.ts execute [^`]+)`/.exec(redo.out)?.[1];
     expect(jump, redo.out).toBeDefined();
@@ -205,7 +219,7 @@ describe("no step of the build-out comes back after its own command ran", () => 
     const takeIn = next(home.dir, ENV, [progress]);
     expect(takeIn.kind, JSON.stringify(takeIn)).toBe("print");
     const after = movesOn(home.dir, ENV, takeIn, printed(takeIn), [progress]);
-    expect(String(after.message)).toContain("handed off by file, at");
+    expect(String(after.narration)).toContain("handed off by file, at");
     // The result, taken in by the command: the next step offers no take-in of it.
     const intents = join(partner, "aidlc", "spaces", "data", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
@@ -218,7 +232,7 @@ describe("no step of the build-out comes back after its own command ran", () => 
     const result = deliver(partner, "aidlc/handoff/fixture-reporting-result.md");
     expect(run(UNIT, ["take-in", result], home.dir).status).toBe(0);
     const later = next(home.dir, ENV, [result]);
-    expect(later.kind, JSON.stringify(later)).not.toBe("print");
+    expect(String(later.message), JSON.stringify(later)).not.toContain("take-in");
   });
 
   test("the home answers a proposal once, approved or turned down, and is not asked it again", () => {
@@ -258,14 +272,14 @@ describe("a step that waits on the person, and every way on the round added, nev
     expect(next(home.dir).ask_type).toBe("unit-assignment");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "not yet" }, home.dir);
     const waits = next(home.dir);
-    expect(waits.kind, JSON.stringify(waits)).toBe("notice");
+    expect(waits.kind, JSON.stringify(waits)).toBe("print");
     movesOn(home.dir, ENV, waits, offered(waits, "Leave them all open"));
     // The home unreachable: the answer is kept, and trying again holds the Units.
     const other = teamsHome();
     git(other.dir, ["remote", "set-url", "origin", join(other.remote, "gone")]);
     expect(run(UNIT, ["assign", "refunds=payments", "--person-words", "payments takes refunds"], other.dir).status).toBe(0);
     const kept = next(other.dir);
-    expect(kept.kind, JSON.stringify(kept)).toBe("notice");
+    expect(kept.kind, JSON.stringify(kept)).toBe("print");
     git(other.dir, ["remote", "set-url", "origin", other.remote]);
     movesOn(other.dir, ENV, kept, offered(kept, "Try again"));
   });
@@ -280,7 +294,7 @@ describe("a step that waits on the person, and every way on the round added, nev
     expect(next(home.dir).ask_type).toBe("unit-signoff");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "not now" }, home.dir);
     const board = next(home.dir);
-    expect(board.kind, JSON.stringify(board)).toBe("notice");
+    expect(board.kind, JSON.stringify(board)).toBe("print");
     movesOn(home.dir, ENV, board, offered(board, "Sign it off"));
     // A team's proposal, not answered at once: the board's offer answers it.
     const taken = refundsTaken();
@@ -385,13 +399,31 @@ describe("a step that waits on the person, and every way on the round added, nev
     movesOn(dana, ENV, offer, choice(offer, "Start checkout-ui for payments"));
   });
 
+  test("a fresh clone while the home builds the walking skeleton: the waiting step is one every harness's skill acts on, and ends the turn", () => {
+    const dependencies = "# Unit dependencies\n\n```yaml\nunits:\n  - name: orders\n    depends_on: []\n" +
+      "  - name: refunds\n    depends_on: [orders]\n  - name: checkout-ui\n    depends_on: [orders]\n```\n";
+    const home = makeHome({ dependencies, state: homeState().replace("- **Skeleton Stance**: off", "- **Skeleton Stance**: on") });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = withTools(cloneOf(home.remote, "alice"));
+    const waiting = next(alice);
+    expect(waiting.kind, JSON.stringify(waiting)).toBe("print");
+    expect(waiting.message).toBe("Say the line above, then end the turn.");
+    expect(String(waiting.narration)).toContain("The walking skeleton, orders, is built at the home first.");
+    readsAsOffers(waiting);
+  });
+
   test("a clone where nothing is ready: words for new work start it, and the take opens once the home moves", () => {
     const { hosts, home, alice, record } = refundsTaken(["refunds=payments", "checkout-ui=web", "reporting=data"]);
     const dana = withTools(cloneOf(home.remote, "dana"));
     expect(run(UTILITY, ["space-create", "data"], dana).status).toBe(0);
     expect(run(UTILITY, ["space", "data"], dana).status).toBe(0);
     const waiting = next(dana);
-    expect(waiting.kind, JSON.stringify(waiting)).toBe("notice");
+    expect(waiting.kind, JSON.stringify(waiting)).toBe("print");
+    readsAsOffers(waiting);
     const erin = withTools(cloneOf(home.remote, "erin"));
     expect(run(UTILITY, ["space-create", "data"], erin).status).toBe(0);
     expect(run(UTILITY, ["space", "data"], erin).status).toBe(0);
@@ -405,5 +437,28 @@ describe("a step that waits on the person, and every way on the round added, nev
     const ready = next(dana);
     expect(ready.ask_type, JSON.stringify(ready)).toBe("unit-take");
     movesOn(dana, ENV, ready, choice(ready, "Start reporting"));
+  });
+});
+
+describe("a print with no offers reads as it did before the teams' steps became prints", () => {
+  test("a plan named alone on a fresh workspace: the same fields and the same words", () => {
+    const proj = createTestProject();
+    try {
+      removeWorkspaceRecord(proj);
+      const ran = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts"), "next", "--project-dir", proj, "--scope", "bugfix"],
+        { cwd: proj, encoding: "utf-8", env: ENV });
+      const step = JSON.parse(ran.stdout.trim()) as Step;
+      const orchestrate = /run `(\S+ \S+aidlc-orchestrate\.ts) next/.exec(String(step.message))?.[1];
+      expect(orchestrate, JSON.stringify(step)).toBeDefined();
+      expect(JSON.stringify(step).replaceAll(orchestrate!, "<orchestrate>")).toBe(JSON.stringify({
+        narration: "I'll use the bugfix plan. What should I work on? Tell me in your own words and I'll start it.",
+        message: "The person picked the `bugfix` plan and has not said what the work is for, so nothing is created yet. " +
+          "Say the line above, then wait: when they say what to work on, run `<orchestrate> next --scope bugfix -- <their words>` " +
+          "with their words as one shell-safe argument, and follow what it returns: it starts the work.",
+        kind: "print",
+      }));
+    } finally {
+      cleanupTestProject(proj);
+    }
   });
 });

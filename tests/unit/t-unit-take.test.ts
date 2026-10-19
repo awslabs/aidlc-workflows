@@ -117,8 +117,9 @@ describe("a team member's clone of the home's workspace", () => {
     git(home.dir, ["push", "-q", "origin", "main"]);
     const alice = cloneOf(home.remote, "alice");
     const step = next(alice);
-    expect(step.kind, JSON.stringify(step)).toBe("notice");
-    expect(step.message).toBe(
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(step.message).toBe("Say the line above, then end the turn.");
+    expect(step.narration).toBe(
       "fixture is built by teams, one Unit each. The walking skeleton, orders, is built at the home first. " +
         "Waiting: refunds (for payments; on orders), checkout-ui (for web; on orders), reporting (on orders, refunds). " +
         "Nothing is ready to take yet.",
@@ -133,8 +134,8 @@ describe("a team member's clone of the home's workspace", () => {
     expect(run(UTILITY, ["space-create", "data"], dana).status).toBe(0);
     expect(run(UTILITY, ["space", "data"], dana).status).toBe(0);
     const waiting = next(dana);
-    expect(waiting.kind, JSON.stringify(waiting)).toBe("notice");
-    expect(waiting.message).toBe(
+    expect(waiting.kind, JSON.stringify(waiting)).toBe("print");
+    expect(waiting.narration).toBe(
       "fixture is built by teams, one Unit each. Waiting: reporting (for data; on refunds). Being built: refunds " +
         "(by alice for payments). Held for other teams: checkout-ui (for web). Nothing is ready to take yet.",
     );
@@ -283,8 +284,8 @@ describe("who takes what", () => {
     expect(run(UTILITY, ["space-create", "data"], dana).status).toBe(0);
     expect(run(UTILITY, ["space", "data"], dana).status).toBe(0);
     const step = next(dana);
-    expect(step.kind, JSON.stringify(step)).toBe("notice");
-    expect(step.message).toBe(
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(step.narration).toBe(
       "fixture is built by teams, one Unit each. Being built: refunds (by alice for payments). " +
         "Held for other teams: checkout-ui (for web). Nothing is ready to take yet.",
     );

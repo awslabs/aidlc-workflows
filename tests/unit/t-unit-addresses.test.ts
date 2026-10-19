@@ -121,7 +121,7 @@ describe("the person's own git, on steps nobody typed", () => {
     writeFileSync(askpass, `#!/bin/sh\necho asked >> '${marker}'\necho nobody\n`);
     chmodSync(askpass, 0o755);
     const step = next(home.dir, { ...ENV, GIT_ASKPASS: askpass, SSH_ASKPASS: askpass });
-    expect(step.kind, JSON.stringify(step)).toBe("notice");
+    expect(step.kind, JSON.stringify(step)).toBe("print");
     expect(existsSync(marker)).toBe(false);
     expect(((step.change_notices ?? []) as string[]).filter((line) => line.includes("could not be reached"))).toHaveLength(1);
   });

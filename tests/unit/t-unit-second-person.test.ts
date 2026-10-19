@@ -152,7 +152,7 @@ describe("the lead's sign-off", () => {
     expect(String(unasked.json?.error)).toStartWith("The sign-off is the person's own word: ask them first, then run this with their words.");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "let me look at the PRs first" }, home.dir);
     const board = next(home.dir);
-    expect(String(board.message)).toContain("- refunds, payments: checkout-api merged, billing merged (2 of 2 merged), waiting for your sign-off");
+    expect(String(board.narration)).toContain("- refunds, payments: checkout-api merged, billing merged (2 of 2 merged), waiting for your sign-off");
     // Not asked again; the board keeps the sign-off theirs to give, and names the lead's other moves.
     const signOff = (board.offers as Array<{ question: string; choices: Array<{ label: string; command?: string }> }>)
       .find((offer) => offer.question === "refunds came back from payments. Sign it off?");

@@ -190,9 +190,9 @@ describe("one piece of work, a team on every tool", () => {
     const lead = homeStandIn(home);
     lead.person.say("/aidlc");
     const board = lead.agent.next();
-    expect(board.kind, JSON.stringify(board)).toBe("notice");
-    expect(String(board.message)).toContain("- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
-    expect(String(board.message)).toContain("- reporting, data: held for data, not taken yet");
+    expect(board.kind, JSON.stringify(board)).toBe("print");
+    expect(String(board.narration)).toContain("- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
+    expect(String(board.narration)).toContain("- reporting, data: held for data, not taken yet");
 
     // Each repo merges its own way.
     for (const plan of PLAN.filter((p) => p.dependsOn === undefined)) {
@@ -204,7 +204,7 @@ describe("one piece of work, a team on every tool", () => {
     for (const plan of PLAN.filter((p) => p.dependsOn === undefined)) {
       expect(claimPayload(home.remote, id8, plan.unit), plan.unit).toMatchObject({ done: true });
     }
-    expect(String(seen.message)).toContain("- refunds, payments: done");
+    expect(String(seen.narration)).toContain("- refunds, payments: done");
 
     // refunds is done, so reporting opens for data, who builds it on Cursor.
     const data = teamClone(home, hosts, PLAN.find((p) => p.unit === "reporting")!);

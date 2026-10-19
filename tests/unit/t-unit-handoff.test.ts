@@ -20,6 +20,7 @@ import {
   cleanupTeamBuild,
   cloneCode,
   codeHost,
+  ENV,
   git,
   makeHome,
   next,
@@ -88,18 +89,24 @@ describe("the lead hands a Unit off by file", () => {
 
   test("the board offers the hand-off once for a Unit held for a team and not taken, and gives the agent the commands", () => {
     const { home } = handedOff();
-    const board = next(home.dir);
-    expect(String(board.message)).toContain("- refunds, payments: held for payments, not taken yet");
+    const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "t-unit-handoff-board" };
+    const board = next(home.dir, chat);
+    expect(board.kind, JSON.stringify(board)).toBe("print");
+    expect(String(board.narration)).toContain("- refunds, payments: held for payments, not taken yet");
     // reporting went by file already, so only refunds is offered.
-    expect((board.change_notices ?? []) as string[]).toContain(
+    const offers = board.offers as Array<{ question: string; choices: Array<{ label: string; command?: string }> }>;
+    expect(offers.map((offer) => offer.question)).toEqual([
       "If payments cannot reach this workspace, I can hand refunds to them as a file they build it from. Do you want me to?",
-    );
-    expect(tellsWhatToType(board.message, board.change_notices)).toBe(false);
-    const offers = board.offers as Array<{ choices: Array<{ label: string; command?: string }> }>;
+    ]);
+    expect(tellsWhatToType(board.narration, board.offers, board.change_notices)).toBe(false);
     expect(offers[0].choices.map((choice) => choice.label)).toEqual(["Hand refunds to payments as a file", "Keep refunds for payments here"]);
     expect(offers[0].choices[0].command).toEndWith("aidlc-unit.ts hand-off refunds --team payments --person-words '<their words>'");
     expect(String(board.board_note)).toContain("aidlc-unit.ts hand-off <unit> --team <team> --person-words '<their words>'");
     expect(String(board.board_note)).toContain("aidlc-unit.ts take-in <file>");
+    // Put once in a chat: the next look keeps only the board's note of the command.
+    const again = next(home.dir, chat);
+    expect(again.offers, JSON.stringify(again)).toBeUndefined();
+    expect(String(again.board_note)).toContain("aidlc-unit.ts hand-off <unit>");
   });
 });
 
@@ -194,9 +201,9 @@ describe("progress and the result come back as files", () => {
     expect(progressIn.json?.notice).toBe("Took in reporting's progress from data: Functional Design.");
     // The turn's words still name the file: taken in, it is not offered again; the step is the work's own.
     const pointedAgain = next(home.dir, undefined, [progressFile]);
-    expect(pointedAgain.kind, JSON.stringify(pointedAgain)).toBe("notice");
-    expect(String(pointedAgain.message)).toContain("- reporting, data: handed off by file, at Functional Design");
-    expect(String(next(home.dir).message)).toContain("- reporting, data: handed off by file, at Functional Design");
+    expect(pointedAgain.kind, JSON.stringify(pointedAgain)).toBe("print");
+    expect(String(pointedAgain.narration)).toContain("- reporting, data: handed off by file, at Functional Design");
+    expect(String(next(home.dir).narration)).toContain("- reporting, data: handed off by file, at Functional Design");
     // Code Generation wrote one file in ledger; the team pushes, then merges.
     const intents = join(partner.dir, "aidlc", "spaces", "data", "intents");
     const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);

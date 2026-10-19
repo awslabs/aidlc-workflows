@@ -5123,6 +5123,24 @@ function lockFolderHeldStep(projectDir: string | null | undefined, line: string)
 // What the running `next` read from a request file, put back for the held step.
 let restoreSpentRequestFile: (() => void) | null = null;
 
+type StepOffer = NonNullable<PrintDirective["offers"]>[number];
+
+// A step of teams building Units that says where things stand and ends the
+// turn, with what the person may answer: a print, which every orchestrator
+// skill's step table handles from a fresh chat. The person's line rides as
+// narration, as data; the message is the engine's own.
+function lineEndingTurn(line: string | null, offers: StepOffer[] = [], boardNote?: string): PrintDirective {
+  const step = turnEndingPrint(offers.length === 0
+    ? "Say the line above, then end the turn."
+    : `${line === null ? "Put" : "Say the line above, then put"} each offer below to the person as a plain question in ` +
+      "its own words, with its choices as given and the one marked recommended first, and end the turn. When they " +
+      "answer one, run the command of the choice they picked, filling in their words; a choice with no command runs nothing.");
+  if (line !== null) step.narration = line;
+  if (offers.length > 0) step.offers = offers;
+  if (boardNote !== undefined) step.board_note = boardNote;
+  return step;
+}
+
 // The question for a folder set up as a new project that now holds code.
 // Null when the type was the person's word, Construction has started, or the
 // folder still scans as a new project.
@@ -5205,7 +5223,7 @@ function constructionStaffingAsk(
   stateContent: string | null,
   slug: string,
   scope: string,
-): AskDirective | NoticeDirective | null {
+): AskDirective | PrintDirective | null {
   const node = nodeForSlug(slug);
   if (stateContent === null || !node || node.phase !== "construction" || !isPerUnit(node)) return null;
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return null;
@@ -5637,7 +5655,7 @@ function unitsReposAsk(projectDir: string, stateContent: string | null): AskDire
 // records them as one claim per named Unit; a Unit left out stays open for any
 // team to take later. The walking skeleton, when on, is built here first and
 // is not asked about. Null when the step goes on.
-function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirective | NoticeDirective | null {
+function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirective | PrintDirective | null {
   if (readApplicableTeamUnitScopeStamp(projectDir, stateContent) !== null) return null;
   const evidence = routingEvidenceFor(projectDir, stateContent);
   const rows = evidence?.allRows ?? readAuditShardEvents(projectDir);
@@ -5647,10 +5665,7 @@ function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirecti
   if (kept !== null) {
     const question = "Who builds which Unit is kept, but nothing is held for the teams yet: the home could not be reached. " +
       "Do you want me to try again?";
-    return {
-      ...noticeDirective(question),
-      offers: [{ question, choices: [{ label: "Try again", command: assignRetryCommand(kept.pairs, kept.open) }, { label: "Not now" }] }],
-    };
+    return lineEndingTurn(null, [{ question, choices: [{ label: "Try again", command: assignRetryCommand(kept.pairs, kept.open) }, { label: "Not now" }] }]);
   }
   if (unitsAssignedSinceTeams(rows)) return null;
   const dag = resolveBoltBatches(projectDir, evidence);
@@ -5678,7 +5693,7 @@ function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirecti
   if (mark !== null && personRepliedAfter(projectDir, mark)) {
     const waits = "Who builds which Unit is still yours to say, so nothing is built yet: name a team for each Unit, or " +
       "leave them all open for any team.";
-    return { ...noticeDirective(waits), offers: [{ question: waits, choices: [{ label: "Name the teams", command: assignCommand }, open] }] };
+    return lineEndingTurn(null, [{ question: waits, choices: [{ label: "Name the teams", command: assignCommand }, open] }]);
   }
   if (!isReadOnlyEngineProbe()) noteEngineAskMark(projectDir, UNIT_ASSIGNMENT_ASK);
   return {
@@ -8397,7 +8412,7 @@ function unselectedRecordsDigest(selectable: UnselectedRecords["selectable"]): s
 // line says so and offers nothing, so no step of the home's own work runs in
 // this clone. Null when there is nothing to take, carry on or wait for, or the
 // person has other work here to pick up.
-function unitTakeAsk(projectDir: string): AskDirective | NoticeDirective | null {
+function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
   // Each home's claims once per chat; while nothing is ready the person waits,
   // so each look fetches them again.
   let looked = unitTakeLook(projectDir, false);
@@ -8410,7 +8425,7 @@ function unitTakeAsk(projectDir: string): AskDirective | NoticeDirective | null 
     !homeHere.some((home) => home.dirName === intent.dirName) && unitBuildOf(state) === null) ?? [];
   if (ownWork.length > 0) return null;
   if (choices.length === 0) {
-    return noticeDirective(`${sentences.join(" ")} Nothing is ready to take yet.`);
+    return lineEndingTurn(`${sentences.join(" ")} Nothing is ready to take yet.`);
   }
   for (const home of homeHere) {
     choices.push({
@@ -8601,7 +8616,7 @@ function handFileStep(projectDir: string, words: string): AskDirective | PrintDi
 // A Unit the home turned down, at the end of its build: the way back to Code
 // Generation asked once, with why; after that, where it stands, with the same
 // offer for the agent.
-function turnedDownStep(projectDir: string, unit: string, repo: string): AskDirective | NoticeDirective {
+function turnedDownStep(projectDir: string, unit: string, repo: string): AskDirective | PrintDirective {
   const back = {
     label: `Take ${unit} back to Code Generation`,
     detail: "Its code stays as it is; you change what the home asked for, then push it again.",
@@ -8611,7 +8626,7 @@ function turnedDownStep(projectDir: string, unit: string, repo: string): AskDire
   if (engineAskMark(projectDir, askName) !== null) {
     const question = `${unit} is not finished: it was turned down at the home and waits for your change and a new push. ` +
       "Do you want me to take it back to Code Generation?";
-    return { ...noticeDirective(question), offers: [{ question, choices: [back, { label: "Not now" }] }] };
+    return lineEndingTurn(null, [{ question, choices: [back, { label: "Not now" }] }]);
   }
   noteEngineAskMark(projectDir, askName);
   return {
@@ -16919,7 +16934,6 @@ function emitTeamUnitMajorRunStage(
         { label: `Keep ${unit} for ${team} here`, recommended: true as const },
       ],
     }));
-    for (const offer of offers) sayWithStepOnce(projectDir, offer.question);
     // A sign-off or a proposal the lead was asked about once stays theirs to answer, from the board.
     const answers = [...(overview?.claims.values() ?? [])].filter((claim) => claim.status === "claimed").flatMap((claim) => [
       ...(claim.payload.proposals ?? []).filter((entry) => entry.answer === undefined).map((entry) => {
@@ -16943,11 +16957,13 @@ function emitTeamUnitMajorRunStage(
         }]
         : []),
     ]);
-    const allOffers = [...answers, ...offers];
-    emit({
-      ...noticeDirective(renderUnitBoard(workLabel(projectDir), rows)),
-      ...(allOffers.length > 0 ? { offers: allOffers } : {}),
-      board_note: "Show the board as it is. When the person says a repo turned a Unit down, run " +
+    // Each offer is put once in a chat; its command stays in the board's note.
+    const allOffers = [...answers, ...offers].filter((offer) => !(engineSessionId && personLineHeard(projectDir, engineSessionId, offer.question)));
+    if (engineSessionId && !isReadOnlyEngineProbe()) markPersonLinesHeard(projectDir, engineSessionId, allOffers.map((offer) => offer.question));
+    emit(lineEndingTurn(
+      renderUnitBoard(workLabel(projectDir), rows),
+      allOffers,
+      "Show the board as it is. When the person says a repo turned a Unit down, run " +
         `\`${unitTool} turned-down <unit> --repo <repo> --person-words '<their words>'\`; when they say a repo merged it ` +
         `where the board does not see it, run \`${unitTool} merged <unit> --repo <repo> --person-words '<their words>'\`. ` +
         `When they sign a team's result off, run \`${unitTool} sign-off <unit> --person-words '<their words>'\`; when they ` +
@@ -16958,7 +16974,7 @@ function emitTeamUnitMajorRunStage(
         `When they ask to hand a Unit off by file, run \`${unitTool} hand-off <unit> --team <team> --person-words '<their words>'\`; ` +
         `when they ask to take in a team's result or progress file, run \`${unitTool} take-in <file>\`. Say the notice line ` +
         "each prints.",
-    });
+    ));
     return;
   }
   if (scopeStamp) {

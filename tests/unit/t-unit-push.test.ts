@@ -452,15 +452,15 @@ describe("at the home", () => {
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
     const first = next(home.dir);
-    expect(first.kind, JSON.stringify(first)).toBe("notice");
-    expect(String(first.message)).toBe([
+    expect(first.kind, JSON.stringify(first)).toBe("print");
+    expect(String(first.narration)).toBe([
       "Units of fixture:",
       "- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)",
       "- checkout-ui, web: held for web, not taken yet",
       "- reporting, here: waits on refunds",
     ].join("\n"));
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
-    expect(String(next(home.dir).message)).toContain(
+    expect(String(next(home.dir).narration)).toContain(
       "- refunds, payments: checkout-api merged, billing not merged yet (1 of 2 merged)",
     );
     mergeOnHost(hosts.billing, "refunds", "merge");
@@ -503,7 +503,7 @@ describe("at the home", () => {
     const { home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
-    expect(String(next(home.dir).message)).toContain(
+    expect(String(next(home.dir).narration)).toContain(
       "- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)",
     );
   });
@@ -515,11 +515,10 @@ describe("at the home", () => {
     git(home.dir, ["fetch", "-q", "origin"]);
     git(home.dir, ["remote", "set-url", "origin", join(home.remote, "gone")]);
     const step = next(home.dir);
-    expect(step.kind, JSON.stringify(step)).toBe("notice");
-    expect(String(step.message)).toContain("- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(String(step.narration)).toContain("- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
     expect((step.change_notices ?? []) as string[]).toEqual([
       "origin could not be reached just now, so the board may be behind: it shows what your last fetch brought.",
-      "If web cannot reach this workspace, I can hand checkout-ui to them as a file they build it from. Do you want me to?",
     ]);
   });
 
@@ -566,7 +565,7 @@ describe("at the home", () => {
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     const board = next(home.dir);
-    expect(board.kind).toBe("notice");
+    expect(board.kind).toBe("print");
     expect(String(board.board_note)).toContain("aidlc-unit.ts turned-down <unit> --repo <repo> --person-words '<their words>'");
     expect(String(board.board_note)).toContain("aidlc-unit.ts merged <unit> --repo <repo> --person-words '<their words>'");
   });
@@ -576,7 +575,7 @@ describe("at the home", () => {
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
-    expect(String(next(home.dir).message)).toContain("checkout-api merged, billing not merged yet (1 of 2 merged)");
+    expect(String(next(home.dir).narration)).toContain("checkout-api merged, billing not merged yet (1 of 2 merged)");
     const said = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "billing merged it by hand last night"], home.dir);
     expect(said.status, said.out).toBe(0);
     expect(said.json?.notice).toBe("billing counts as merged for refunds, in your words.");
@@ -662,12 +661,12 @@ describe("at the home", () => {
     expect(step.ask_type, JSON.stringify(step)).toBe("unit-turned-down");
     // Not now: it reads as not finished, and the question is not put again; the agent keeps the offer.
     const later = personsNext(alice, chat, "t-unit-push-waits");
-    expect(later.kind, JSON.stringify(later)).toBe("notice");
-    expect(later.message).toBe(
+    expect(later.kind, JSON.stringify(later)).toBe("print");
+    const offers = later.offers as Array<{ question: string; choices: Array<{ label: string; command?: string }> }>;
+    expect(offers[0].question).toBe(
       "refunds is not finished: it was turned down at the home and waits for your change and a new push. " +
         "Do you want me to take it back to Code Generation?",
     );
-    const offers = later.offers as Array<{ choices: Array<{ label: string; command?: string }> }>;
     expect(offers[0].choices[0].command).toEndWith("report --result resumed --choice redo --target code-generation");
     // Pushed again, the turn-down is answered: the build is finished once more.
     writeFileSync(join(alice, "billing", "lib", "refund.ts"), "export const refund = 2;\n");

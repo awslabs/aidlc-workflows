@@ -96,7 +96,7 @@ function teamsChosen(home: Home, assign: string[]): void {
 function boardAt(home: Home): string {
   git(home.dir, ["fetch", "-q", "origin"]);
   const step = next(home.dir);
-  return String(step.message ?? JSON.stringify(step));
+  return String(step.narration ?? step.message ?? JSON.stringify(step));
 }
 
 describe("scenario 1: one shared workspace repo, the repos side by side", () => {
@@ -159,14 +159,15 @@ describe("scenario 1: one shared workspace repo, the repos side by side", () => 
     const agent = new AgentStandIn(host, person, {
       units: ["refunds", "checkout-ui", "reporting"],
       codeRepo: (unit) => (unit === "reporting" ? [{ repo: "billing" }] : undefined),
-      until: (d: Directive) => d.kind === "notice" || d.kind === "done" || (d.kind === "run-stage" && d.stage === "build-and-test"),
+      until: (d: Directive) => (d.kind === "print" && d.board_note !== undefined) || d.kind === "done" ||
+        (d.kind === "run-stage" && d.stage === "build-and-test"),
     });
     host.sessionStart("startup");
     person.say("/aidlc");
     const end = agent.drive(agent.next());
     expect(agent.worked.filter((d) => d.unit === "reporting").map((d) => d.stage)).toContain("code-generation");
-    expect(end.kind, JSON.stringify(end)).toBe("notice");
-    expect(String(end.message)).toContain("- reporting, here: done");
+    expect(end.kind, JSON.stringify(end)).toBe("print");
+    expect(String(end.narration)).toContain("- reporting, here: done");
   });
 });
 
@@ -340,7 +341,7 @@ describe("scenario 4: a team that cannot reach the home", () => {
     expect(run(copilot.unit, ["take", "--file", deliver(home.dir, file)], partner).status).toBe(0);
     expect(run(copilot.unit, ["progress"], partner).status).toBe(0);
     expect(run(UNIT, ["take-in", deliver(partner, "aidlc/handoff/fixture-reporting-progress.md")], home.dir).status).toBe(0);
-    expect(String(next(home.dir).message)).toContain("- reporting, data: handed off by file, at Functional Design");
+    expect(String(next(home.dir).narration)).toContain("- reporting, data: handed off by file, at Functional Design");
     const record = buildRecord(partner, "data", "reporting");
     built(record, "reporting", [{ folder: join(partner, "ledger"), path: "src/report.ts" }]);
     expect(run(copilot.unit, ["push"], partner).status).toBe(0);

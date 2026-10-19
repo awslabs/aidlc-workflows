@@ -6,12 +6,13 @@
 
 import { expect } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
+  REPO_ROOT,
   createTestProject,
   seedAidlcMemory,
   seededRecordDir,
@@ -253,6 +254,17 @@ export function next(cwd: string, env: NodeJS.ProcessEnv = ENV, args: string[] =
 
 // A line for the person that tells them what to type, in place of an offer the
 // agent puts to them: none of the build-out's lines may.
+// The step kinds every harness's orchestrator skill has a row for in its step
+// table: what a fresh chat, with no other module read yet, acts on.
+export function kindsEverySkillHandles(): Set<string> {
+  const skills = readdirSync(join(REPO_ROOT, "harness")).map((name) => join(REPO_ROOT, "harness", name, "skills", "aidlc", "SKILL.md"))
+    .filter((path) => existsSync(path));
+  expect(skills).toHaveLength(7);
+  const tables = skills.map((path) =>
+    new Set([...readFileSync(path, "utf-8").matchAll(/^\| `([a-z-]+)` \|/gm)].map((row) => row[1]).filter((kind) => kind !== "kind")));
+  return new Set([...tables[0]].filter((kind) => tables.every((table) => table.has(kind))));
+}
+
 export function tellsWhatToType(...lines: unknown[]): boolean {
   return lines.some((line) => /\b[Ss]ay (?:["']|push\b|go back|so\b|it your way)|\btype \/aidlc/.test(JSON.stringify(line ?? "")));
 }

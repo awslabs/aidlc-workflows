@@ -71,7 +71,7 @@ describe("starting early", () => {
     expect(git(join(dana, "billing"), ["branch", "--show-current"])).toBe("reporting");
     expect(git(join(dana, "billing"), ["rev-parse", "HEAD"])).toBe(git(hosts.billing, ["rev-parse", "refunds"]));
     // The home's board shows it started early.
-    expect(String(next(home.dir).message)).toContain("- reporting, data: building early on refunds, taken by dana");
+    expect(String(next(home.dir).narration)).toContain("- reporting, data: building early on refunds, taken by dana");
   });
 
   test("without the dependency pushed, the Unit waits, and the line says when it opens", () => {

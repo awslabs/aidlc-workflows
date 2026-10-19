@@ -141,15 +141,15 @@ describe("the lead's answer is never asked for twice", () => {
     expect(next(home.dir).ask_type).toBe("unit-assignment");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "not yet, I need to talk to the teams" }, home.dir);
     const step = next(home.dir);
-    expect(step.kind, JSON.stringify(step)).toBe("notice");
-    expect(step.message).toBe(
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    const offer = (step.offers as Array<{ question: string; choices: Array<{ label: string; command?: string }> }>)[0];
+    expect(offer.question).toBe(
       "Who builds which Unit is still yours to say, so nothing is built yet: name a team for each Unit, or leave them " +
         "all open for any team.",
     );
-    const offer = (step.offers as Array<{ choices: Array<{ label: string; command?: string }> }>)[0];
     expect(offer.choices.map((choice) => choice.label)).toEqual(["Name the teams", "Leave them all open"]);
     expect(String(offer.choices[0].command)).toContain("assign <unit>=<team>");
-    expect(next(home.dir).kind).toBe("notice");
+    expect(next(home.dir).kind).toBe("print");
     expect(readAuditShardEvents(home.dir).some((row) => row.event === "UNIT_STARTED")).toBe(false);
     expect(tellsWhatToType(step.message, step.offers)).toBe(false);
   });
@@ -163,11 +163,12 @@ describe("the lead's answer is never asked for twice", () => {
     expect(kept.status, kept.out).toBe(0);
     expect(String(kept.json?.notice)).toStartWith("Nothing is held for the teams yet: the home could not be reached (");
     const step = next(home.dir);
-    expect(step.ask_type, JSON.stringify(step)).toBeUndefined();
-    expect(step.message).toBe(
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    const offer = (step.offers as Array<{ question: string; choices: Array<{ label: string; command?: string }> }>)[0];
+    expect(offer.question).toBe(
       "Who builds which Unit is kept, but nothing is held for the teams yet: the home could not be reached. Do you want me to try again?",
     );
-    const retry = String((step.offers as Array<{ choices: Array<{ label: string; command?: string }> }>)[0].choices[0].command);
+    const retry = String(offer.choices[0].command);
     expect(retry).toEndWith("aidlc-unit.ts assign refunds=payments checkout-ui=web --person-words '<their words>'");
     git(home.dir, ["remote", "set-url", "origin", home.remote]);
     expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web", "--person-words", "yes, try again"], home.dir).status).toBe(0);
@@ -191,7 +192,8 @@ describe("the home walks only the Units no team holds", () => {
     chooseTeams(home.dir);
     expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web"], home.dir).status).toBe(0);
     const step = next(home.dir);
-    expect(step.kind, JSON.stringify(step)).toBe("notice");
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(String(step.narration)).toStartWith("Units of fixture:");
   });
 
   test("an open Unit with nothing to wait on is the home's to build", () => {
