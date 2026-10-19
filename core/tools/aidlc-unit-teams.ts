@@ -40,6 +40,11 @@ import { gitAddressKey, recordableGitAddress } from "./aidlc-workspace-repos.ts"
 // and land flow it started on.
 export const HOME_LOCATION_FIELD = "Home Location";
 
+// Who settled a piece of work's project type (aidlc-utility.ts reads it); a
+// Unit's build takes the type its home settled.
+export const PROJECT_TYPE_SOURCE_FIELD = "Project Type Source";
+export const PROJECT_TYPE_SOURCE_HOME = "the home";
+
 export function homeLocation(stateContent: string | null): string | null {
   const value = stateContent === null ? null : getField(stateContent, HOME_LOCATION_FIELD)?.trim();
   return value ? value : null;
@@ -170,7 +175,8 @@ export function teamSpaceOf(label: string): string {
 // space. Its state names the home's location, the home's work, where its record
 // is, the Unit and the claim attempt it came from.
 export const UNIT_BUILD_FIELD = "Unit Build";
-// "later" while the person has not asked for the push yet, "pushed" once it went.
+// "later" while the person has not asked for the push yet, "unsent" when the
+// code went but the home did not take the result, "pushed" once it reached home.
 export const UNIT_PUSH_FIELD = "Unit Push";
 
 export interface UnitBuild {

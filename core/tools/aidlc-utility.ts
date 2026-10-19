@@ -169,7 +169,7 @@ import {
   localUnitClaimOverviewForIntent,
   main as unitMain,
 } from "./aidlc-unit.ts";
-import { homeLocation } from "./aidlc-unit-teams.ts";
+import { homeLocation, PROJECT_TYPE_SOURCE_FIELD, PROJECT_TYPE_SOURCE_HOME, unitBuildOf } from "./aidlc-unit-teams.ts";
 import {
   codeGenerationBuildsWithoutSource,
   PLAN_APPROVAL_REPAIR_SOURCE_BOUNDARY_REMEDY,
@@ -7339,11 +7339,9 @@ const SUBMODULE_INIT_REMEDY = "git submodule update --init --recursive";
 // mid-workflow). State keeps the bare word every reader compares; who decided
 // it sits beside it, so a type the person chose is never second-guessed by a
 // later scan. A state file without the field took its type from the scan.
-export const PROJECT_TYPE_SOURCE_FIELD = "Project Type Source";
+export { PROJECT_TYPE_SOURCE_FIELD, PROJECT_TYPE_SOURCE_HOME };
 export const PROJECT_TYPE_SOURCE_SCAN = "workspace scan";
 export const PROJECT_TYPE_SOURCE_PERSON = "you";
-// A team's build of one Unit takes the type its home's work settled.
-export const PROJECT_TYPE_SOURCE_HOME = "the home";
 
 export { declaredProjectType };
 
@@ -9648,6 +9646,9 @@ function handleIntentRepos(
       }
       const state = readStateFile(projectDir, dirName, space);
       const boxes = new Map(parseCheckboxes(state).map((box) => [box.slug, box.state]));
+      // A Unit's build: the home decided its Units, so a repo it changes is
+      // added without asking about them again (decision 5).
+      const build = unitBuildOf(state);
       if (verb === "add-repo") {
         if (current.includes(name)) return { kind: "already" as const };
         if (!isGitRepoDir(target)) {
@@ -9684,7 +9685,8 @@ function handleIntentRepos(
         kind: "changed" as const,
         reState: boxes.get("reverse-engineering"),
         reAction,
-        units: unitsRepoChangeAtChange(projectDir, state, stage, dirName, space),
+        units: build === null ? unitsRepoChangeAtChange(projectDir, state, stage, dirName, space) : null,
+        unit: build?.unit,
       };
     }, dirName, space);
   });
@@ -9702,6 +9704,8 @@ function handleIntentRepos(
         if (staged !== null && clone !== null) {
           lines.push(`Cloned ${name} from ${maskUserinfo(clone.repo.url ?? `git@github.com:${clone.org}/${name}.git`)} and added it to this piece of work's repos.`);
           if (clone.note !== null) lines.push(clone.note);
+        } else if (outcome.unit !== undefined) {
+          lines.push(`Added ${name} to ${outcome.unit}'s repos: the home's plan did not list it, and ${outcome.unit}'s change there goes home with its push.`);
         } else {
           lines.push(`Added ${name} to this piece of work's repos.`);
         }

@@ -21155,9 +21155,10 @@ export function isValidRepoName(name: string): boolean {
 // Where a repo's checkout lives: the one resolver. The `path` repos.json (or
 // one person's repos.local.json) gives it, against the workspace ("." is the
 // workspace itself); else the immediate child `<workspace>/<name>`.
+// A path written on Windows ("..\\billing") reads the same on every platform.
 export function repoDir(projectDir: string, repoName: string): string {
   const mapped = readWorkspaceRepos(projectDir).entries.get(repoName)?.path;
-  return mapped === undefined ? join(projectDir, repoName) : normalizeDriveLetter(resolvePath(projectDir, mapped));
+  return mapped === undefined ? join(projectDir, repoName) : normalizeDriveLetter(resolvePath(projectDir, mapped.replace(/\\/g, "/")));
 }
 
 // The repo is the workspace folder itself (repos.json gives it `"path": "."`).

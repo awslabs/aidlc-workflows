@@ -145,6 +145,12 @@ describe("repoDir is the one resolver", () => {
     expect(repoDir(ws, "unlisted")).toBe(join(ws, "unlisted"));
   });
 
+  test("a path written on Windows reads the same on every platform", () => {
+    const { root, ws } = layout();
+    writeFileSync(join(ws, "repos.json"), JSON.stringify({ repos: [{ name: "checkout-api", path: "..\\..\\checkout-api" }] }));
+    expect(repoDir(ws, "checkout-api")).toBe(join(root, "checkout-api"));
+  });
+
   test("one person's repos.local.json overrides path for a listed repo; an unlisted name is one line and ignored", () => {
     const { root, ws } = layout();
     writeFileSync(join(ws, "repos.json"), JSON.stringify({ repos: [{ name: "billing", path: "../billing" }] }));
@@ -393,11 +399,11 @@ describe("the one offer to write repos.json", () => {
     expect(step.ask_type, JSON.stringify(step)).not.toBe("repos-manifest");
   });
 
-  test("work one person builds, and team work with no home recorded, are never offered it", () => {
-    expect(next(boundaryProject(["checkout-api", "checkout-web"], false)).ask_type).not.toBe("repos-manifest");
+  test("work that records repos is offered it too when one person builds it, or teams build it with no home recorded", () => {
+    expect(next(boundaryProject(["checkout-api", "checkout-web"], false)).ask_type).toBe("repos-manifest");
     const today = boundaryProject(["checkout-api", "checkout-web"], false);
     writeFileSync(seededStateFile(today), boundaryState().replace("## Scope Configuration", "## Runtime State\n- **Unit Ownership**: team\n\n## Scope Configuration"));
-    expect(next(today).ask_type).not.toBe("repos-manifest");
+    expect(next(today).ask_type).toBe("repos-manifest");
   });
 
   test("a workspace that already has repos.json is never offered it", () => {

@@ -89,8 +89,8 @@ describe("who builds which Unit is asked once, at the home", () => {
     expect(offer.choices.map((choice) => choice.label)).toEqual(["Keep approvals after every stage", "Approve once at the end of each Unit"]);
     expect(offer.choices[1].command).toEndWith("aidlc-state.ts set-unit-gate-rhythm unit-end");
     const id8 = fixtureIntentId8(home.dir);
-    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ status: "claimed", owner: "payments", assigned: true });
-    expect(claimPayload(home.remote, id8, "checkout-ui")).toMatchObject({ status: "claimed", owner: "web", assigned: true });
+    expect(claimPayload(home.remote, id8, "refunds")).toMatchObject({ status: "claimed", owner: "payments" });
+    expect(claimPayload(home.remote, id8, "checkout-ui")).toMatchObject({ status: "claimed", owner: "web" });
     expect(claimPayload(home.remote, id8, "reporting")).toBeNull();
     expect(existsSync(join(home.dir, "aidlc", ".aidlc-unit-scope.json"))).toBe(false);
     const rows = readAuditShardEvents(home.dir).filter((row) => row.event === "UNITS_ASSIGNED");

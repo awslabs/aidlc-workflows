@@ -82,6 +82,8 @@ import {
   readUnitScopeStamp,
   readAnswerTextFile,
   resolveBoltDag,
+  setCheckbox,
+  setOrInsertField,
   removeField,
   shellArg,
   unattendedHumanPresenceHint,
@@ -155,6 +157,8 @@ import {
   RESULT_FILES_ROOT,
   type RepoResult,
   sameGitAddress,
+  PROJECT_TYPE_SOURCE_FIELD,
+  PROJECT_TYPE_SOURCE_HOME,
   soloUnitsProgress,
   teamSpaceOf,
   teamUnitStageApplies,
@@ -277,7 +281,6 @@ export interface UnitClaimPayload {
   candidate_tree_oid?: string;
   candidate_head_oid?: string;
   // Held for this team by the lead at the home, before anyone took it.
-  assigned?: true;
   // Who took it: their git user.name.
   taken_by?: string;
   // What the team pushed, what the home found merged, and done: a Unit whose
@@ -4941,7 +4944,6 @@ function assignUnits(args: string[], projectDir?: string): void {
       claim_ref: ref,
       predecessor_oid: current?.oid ?? null,
       gate_rhythm: readUnitGateRhythm(state),
-      assigned: true,
     };
     const commit = createClaimCommit(pd, current?.oid ?? integration.oid, payload);
     const pushed = updateClaimRef(pd, integration.remote, ref, commit, current?.oid ?? null);
@@ -5012,7 +5014,6 @@ export function assignRetryCommand(pairs: string[], open: boolean): string {
 interface HomeWork {
   space: string;
   dirName: string;
-  state: string;
   uuid: string;
   id8: string;
   label: string;
@@ -5049,7 +5050,6 @@ function findHomeWork(projectDir: string, dirName: string, space: string): HomeW
   return {
     space,
     dirName,
-    state,
     uuid: row.uuid,
     id8: idSuffix(row.uuid),
     label: row.slug,
@@ -5237,8 +5237,7 @@ function createUnitBuild(
   withAuditLock(projectDir, () => {
     let content = readStateFile(projectDir, dirName, space);
     for (const stage of graph.filter((entry) => entry.phase === "ideation" || entry.phase === "inception")) {
-      if (homeBoxes.get(stage.slug) !== "completed") continue;
-      content = content.replace(new RegExp(`^- \\[[ xSR?-]\\] ${stage.slug}(\\s)`, "m"), `- [x] ${stage.slug}$1`);
+      if (homeBoxes.get(stage.slug) === "completed") content = setCheckbox(content, stage.slug, "completed");
     }
     const rhythm = readUnitGateRhythm(plan.state);
     for (const [field, value] of [
@@ -5253,13 +5252,12 @@ function createUnitBuild(
       ["Home Label", home.label],
       ["Home Attempt", String(attempt)],
     ] as const) {
-      content = setRuntimeField(content, field, value);
+      content = setOrInsertField(content, "## Runtime State", field, value);
     }
     // The type the home settled; a later scan here does not ask about it again.
     const homeType = getField(plan.state, "Project Type")?.trim();
     if (homeType) {
-      content = content.replace(/^- \*\*Project Type Source\*\*:.*\n/m, "")
-        .replace(/^(- \*\*Project Type\*\*:).*$/m, `$1 ${homeType}\n- **Project Type Source**: the home`);
+      content = setOrInsertField(setField(content, "Project Type", homeType), "## Project Information", PROJECT_TYPE_SOURCE_FIELD, PROJECT_TYPE_SOURCE_HOME);
     }
     writeStateFile(projectDir, content, dirName, space);
     appendAuditEntry("UNIT_TAKEN_IN", {
@@ -5404,12 +5402,6 @@ function approvedInputsText(
     ...(approvals.length > 0 ? approvals.map((line) => `- ${line}`) : ["- none recorded"]),
     "",
   ].join("\n");
-}
-
-function setRuntimeField(content: string, field: string, value: string): string {
-  const line = new RegExp(`^- \\*\\*${field}\\*\\*:.*$`, "m");
-  if (line.test(content)) return content.replace(line, `- **${field}**: ${value}`);
-  return content.replace(/^## Runtime State\s*$/m, (heading) => `${heading}\n- **${field}**: ${value}`);
 }
 
 function listSpacesHere(projectDir: string): string[] {
@@ -5610,7 +5602,7 @@ function takeUnit(args: string[], projectDir?: string): void {
   if (resultByFile) {
     withAuditLock(pd, () => {
       const content = readStateFile(pd, build.dirName, build.space);
-      writeStateFile(pd, setRuntimeField(content, "Home Result", "by file"), build.dirName, build.space);
+      writeStateFile(pd, setOrInsertField(content, "## Runtime State", "Home Result", "by file"), build.dirName, build.space);
     });
   }
   console.log(JSON.stringify({
@@ -5831,11 +5823,21 @@ function pushUnit(args: string[], projectDir?: string): void {
   if (build === null) fail("push sends a Unit's build home; this work is not one.");
   const unit = build.unit;
   if (bareFlags.has("later") || flags.later !== undefined) {
-    withAuditLock(pd, () => writeStateFile(pd, setRuntimeField(readStateFile(pd), UNIT_PUSH_FIELD, "later")));
+    withAuditLock(pd, () => writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", UNIT_PUSH_FIELD, "later")));
     console.log(JSON.stringify({ pushed: false, notice: `Nothing is pushed. I'll push ${unit} when you want it to go home.` }));
     return;
   }
-  const manifest = readUnitSourceManifest(pd, "code-generation", unit);
+  // A repo the Unit changed that the home's plan did not list is fine
+  // (decision 5): it is added to the build's repos, said once, and pushed.
+  let manifest = readUnitSourceManifest(pd, "code-generation", unit);
+  const addedRepos: string[] = [];
+  while (!manifest.ok && manifest.unrecordedRepo !== undefined && !addedRepos.includes(manifest.unrecordedRepo)) {
+    const repo = manifest.unrecordedRepo;
+    const added = runEngineUtility(pd, ["intent", "add-repo", repo]);
+    if (!added.ok) fail(`${unit} changed ${repo}, which the home's plan did not list, and it could not be added: ${(added.stderr || added.stdout).trim()}`);
+    addedRepos.push(repo);
+    manifest = readUnitSourceManifest(pd, "code-generation", unit);
+  }
   if (!manifest.ok) fail(`${unit} has no record of what its Code Generation wrote yet (${manifest.reason}).`);
   const byRepo = writesByRepo(pd, manifest.manifest.writes);
   // The person's pick of a push remote, per repo: `--remote <repo>=<name>[,...]`.
@@ -5951,6 +5953,10 @@ function pushUnit(args: string[], projectDir?: string): void {
   }
   const names = results.map((repo) => (repo.repo === "." ? "the repo" : repo.repo));
   const lines = [`Pushed branch ${unit} in ${joinNames(names)}. Open a PR in ${names.length === 1 ? "it" : "each"} your usual way.${whereNow(true)}`];
+  if (addedRepos.length > 0) {
+    lines.push(`${joinNames(addedRepos)} ${addedRepos.length === 1 ? "was" : "were"} not in the home's plan; ${unit} changed ` +
+      `${addedRepos.length === 1 ? "it" : "them"}, so ${addedRepos.length === 1 ? "it is" : "they are"} now among ${unit}'s repos and went with the push.`);
+  }
   lines.push(...along);
   if (leftOut.length > 0) {
     lines.push(`${joinNames(leftOut)} ${leftOut.length === 1 ? "is" : "are"} not in the commit: ${leftOut.length === 1 ? "it" : "each"} ` +
@@ -6007,9 +6013,9 @@ function pushUnit(args: string[], projectDir?: string): void {
     homeHasIt = sent.ok;
   }
   withAuditLock(pd, () => {
-    // Pushed once the result reached the home (or its file is written); until then the push is offered again.
-    const content = readStateFile(pd);
-    writeStateFile(pd, homeHasIt ? setRuntimeField(content, UNIT_PUSH_FIELD, "pushed") : removeField(content, UNIT_PUSH_FIELD));
+    // Pushed once the result reached the home (or its file is written); until
+    // then the build offers to send the result again.
+    writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", UNIT_PUSH_FIELD, homeHasIt ? "pushed" : "unsent"));
     appendAuditEntryUnlocked("UNIT_PUSHED", {
       Unit: unit,
       Branch: unit,
@@ -6584,7 +6590,6 @@ function handOff(args: string[], projectDir?: string): void {
       claim_ref: ref,
       predecessor_oid: current?.oid ?? null,
       gate_rhythm: readUnitGateRhythm(state),
-      assigned: true,
       by_file: true,
     };
   const held = updateClaimRef(pd, integration.remote, ref, createClaimCommit(pd, current?.oid ?? integration.oid, payload), current?.oid ?? null);
@@ -6680,7 +6685,7 @@ function takeFromFile(pd: string, path: string): void {
     approvals: () => approvals,
   });
   withAuditLock(pd, () => {
-    writeStateFile(pd, setRuntimeField(readStateFile(pd, build.dirName, build.space), "Home Result", "by file"), build.dirName, build.space);
+    writeStateFile(pd, setOrInsertField(readStateFile(pd, build.dirName, build.space), "## Runtime State", "Home Result", "by file"), build.dirName, build.space);
   });
   setActiveSpaceCursor(pd, build.space);
   const likely = unitLikelyRepos(pd, build.dirName, build.space).get(unit) ?? [];
@@ -6879,7 +6884,7 @@ function leadSignOffSetting(args: string[], projectDir?: string): void {
   if (value !== "on" && value !== "off") fail("Usage: aidlc-unit lead-sign-off on|off");
   const pd = resolveProjectDir(projectDir);
   if (!isTeamUnitOwnership(readStateFile(pd))) fail("The lead's sign-off is for work that teams build.");
-  withAuditLock(pd, () => writeStateFile(pd, setRuntimeField(readStateFile(pd), LEAD_SIGNOFF_FIELD, value)));
+  withAuditLock(pd, () => writeStateFile(pd, setOrInsertField(readStateFile(pd), "## Runtime State", LEAD_SIGNOFF_FIELD, value)));
   console.log(JSON.stringify({
     lead_sign_off: value,
     notice: value === "on"

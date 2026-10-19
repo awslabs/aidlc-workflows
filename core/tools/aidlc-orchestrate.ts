@@ -5166,13 +5166,12 @@ function teamsClone(projectDir: string, stateContent: string): boolean {
 }
 
 // The one offer to write repos.json from the repos found here (decision 21):
-// at a stage boundary of work built by teams (Home Location) that records repos
-// (open question 7), in a workspace that has none, once per clone. Null when
-// the step goes on.
+// at a stage boundary, the first time the work records repos or teams are
+// chosen (open question 7), in a workspace that has none, once per clone. One
+// person's work on one repo is never offered it. Null when the step goes on.
 function reposManifestAsk(projectDir: string, stateContent: string): AskDirective | null {
   if (existsSync(join(projectDir, REPOS_FILE)) || reposManifestOffered(projectDir)) return null;
-  // Work built by teams that records repos: a teammate's clone needs to know where they go.
-  if (homeLocation(stateContent) === null || intentRepos(projectDir).length === 0) return null;
+  if (homeLocation(stateContent) === null && intentRepos(projectDir).length === 0) return null;
   const found = discoverSiblingRepos(projectDir);
   const names = found.length > 0 ? found : existsSync(join(projectDir, ".git")) ? [basename(resolve(projectDir))] : [];
   if (names.length === 0) return null;
@@ -8673,11 +8672,24 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
     sayWithStepOnce(projectDir, `${unit} is built and approved, and not pushed yet. Do you want me to push it now?`);
     return null;
   }
+  const unitTool = aidlcToolInvocation("unit");
+  if (push === "unsent") {
+    return {
+      kind: "ask",
+      ask_type: "unit-push",
+      response_route: "command",
+      question: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is pushed, but the home did not take its result just now. ` +
+        "Do you want me to send it again?",
+      choices: [
+        { label: "Send it again", detail: "Nothing new is committed; the result goes to the home.", command: `${unitTool} push` },
+        { label: "Not now", detail: "The home sees it once you send it.", command: `${unitTool} push --later` },
+      ],
+    };
+  }
   const manifest = readUnitSourceManifest(projectDir, "code-generation", unit);
   const repos = manifest.ok ? [...writesByRepo(projectDir, manifest.manifest.writes).keys()] : [];
   const names = repos.map((repo) => (repo === "." ? "the repo" : repo));
   const changed = names.length === 0 ? "" : ` It changed ${names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`}.`;
-  const unitTool = aidlcToolInvocation("unit");
   // A repo with several remotes and none set for pushing: which one is theirs to say.
   const pick = pushRemotesToPick(projectDir, unit, repos);
   const detail = "Only the files its Code Generation wrote; nothing else of yours is committed.";

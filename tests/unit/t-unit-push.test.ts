@@ -42,6 +42,7 @@ import {
   STATE,
   tempDir,
   UNIT,
+  UTILITY,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -198,9 +199,13 @@ describe("the push", () => {
     const pushed = run(UNIT, ["push"], alice);
     expect(pushed.status, pushed.out).toBe(0);
     expect(String(pushed.json?.notice)).toContain("The home did not take refunds's result:");
-    expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).not.toContain("**Unit Push**");
+    expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: unsent");
     const again = next(alice);
     expect(again.ask_type, JSON.stringify(again)).toBe("unit-push");
+    expect(again.question).toBe("Refunds is pushed, but the home did not take its result just now. Do you want me to send it again?");
+    writeFileSync(hook, "#!/bin/sh\nexit 0\n");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    expect(readFileSync(join(record, "aidlc-state.md"), "utf-8")).toContain("- **Unit Push**: pushed");
   });
 
   test("a push after a turn-down keeps the lead's word that a repo merged only where that repo's head did not change", () => {
@@ -218,6 +223,27 @@ describe("the push", () => {
     const claim = claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds") as Record<string, unknown>;
     expect(claim.said_merged).toBeUndefined();
     expect(claim.turned_down).toBeUndefined();
+  });
+
+  test("a Unit that changed a repo the home's plan did not list: it is added once, said once, and goes home with the push", () => {
+    const { alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    const ledger = codeHost("ledger");
+    cloneCode(ledger, alice, "ledger", "alice");
+    writeFileSync(join(alice, "ledger", "entries.ts"), "export const entry = 1;\n");
+    const manifest = join(record, "construction", "refunds", "code-generation", "source-manifest.json");
+    const written = JSON.parse(readFileSync(manifest, "utf-8")) as { writes: Array<{ repo: string; path: string }> };
+    written.writes.push({ repo: "ledger", path: "entries.ts" });
+    writeFileSync(manifest, `${JSON.stringify(written, null, 2)}\n`);
+    const pushed = run(UNIT, ["push"], alice);
+    expect(pushed.status, pushed.out).toBe(0);
+    expect(String(pushed.json?.notice)).toContain(
+      "ledger was not in the home's plan; refunds changed it, so it is now among refunds's repos and went with the push.",
+    );
+    expect(git(ledger, ["ls-tree", "-r", "--name-only", "refunds"]).split("\n")).toContain("entries.ts");
+    // Added by hand at review time, it is the same one line.
+    const again = run(UTILITY, ["intent", "add-repo", "ledger"], alice);
+    expect(again.out).toContain("ledger is already one of this piece of work's repos");
   });
 
   test("a push a repo's host refuses is said once, in its words, and nothing is retried", () => {
