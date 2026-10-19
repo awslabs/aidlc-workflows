@@ -16,14 +16,12 @@
 //   2. The plan tool is update_plan ({plan:[{step,status}]}), not
 //      TaskUpdate — the shim maps the in_progress step to the
 //      {status, activeForm} shape the statusline-sync hook keys on.
-//   3. An event can be delivered TWICE (×2 duplication observed across the
-//      original corpus; a probe on 0.162.1 saw one delivery per registration).
+//   3. An event can be delivered TWICE (×2 duplication seen across the
+//      payload corpus; one delivery per registration on 0.162.1).
 //      The shim is idempotent by REPLAY: the first delivery
 //      runs the core hook and caches {stdout, exit}; the duplicate replays
 //      the identical response (never swallowed — we must answer duplicates
 //      exactly like originals because Codex's combine rule is unspecified).
-//      A typed prompt or a Stop that comes after the first delivery has
-//      answered runs again instead (the replay cache block says why).
 //   4. There is no SessionEnd event (D-4): the session-start target
 //      reconciles — when the heartbeat file names a DIFFERENT prior
 //      session, it pipes an inferred-provenance reason into the core
@@ -66,7 +64,6 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
-  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -79,7 +76,6 @@ import {
   isNonAnswer,
   noteHelperSession,
   runHookHere,
-  runWithOwnerStampedLock,
   sessionsDir,
   stateFilePath,
   validSessionId,
@@ -268,14 +264,9 @@ const projectEnv = { ...process.env, ...projectPins };
 // the turn is still closing (`1` to two numbered questions in a row) lands in
 // the same Codex turn, so the second UserPromptSubmit, and the Stop after it,
 // carry byte-identical stdin (measured on Codex 0.162.1: the payload has no
-// per-submission field). Codex's own duplicate comes with the original, while
-// the first delivery is still running, and the person's second reply comes
-// after the agent has answered the first, so on those two seams a slot whose
-// response has landed is a new delivery: its response is retired and the hook
-// runs again, under the lock beside the cache (codex-dedupe.lock). Same stdin
-// carries nothing else to tell them apart, so a duplicate Codex sent after the
-// first delivery had answered would run twice; on 0.162.1 each registration
-// fired once.
+// per-submission field). What tells them from Codex's duplicate of one
+// delivery is that the agent has spoken in between, so on those two seams the
+// key also carries the number of assistant messages in the Codex rollout.
 // The cache lives in the project's own gitignored scratch folder
 // (aidlc/.aidlc-sessions/codex-dedupe), never in the OS temp folder, and every
 // delivery prunes it: a slot is kept for 5 minutes at most (the duplicate waits
@@ -290,15 +281,53 @@ const projectEnv = { ...process.env, ...projectPins };
 // re-running a true duplicate is harmless while replaying a stale one is not.
 const bypassReplay = target === "session-start" && codex.source === "compact";
 
+// Measured on 0.162.1: an assistant message is in the rollout before the next
+// UserPromptSubmit and before the Stop that follows it, and a duplicate that
+// comes with its original reads the same count. Only the lines that name the
+// assistant are parsed, and a last line still being written is not counted.
+// Without a readable rollout the key is target and stdin alone.
+const ASSISTANT_ROLE = Buffer.from('"role":"assistant"');
+function assistantMessagesInRollout(transcriptPath: unknown): string {
+  if (typeof transcriptPath !== "string" || rolloutThread(transcriptPath) === null) return "";
+  try {
+    const rollout = readFileSync(transcriptPath);
+    let count = 0;
+    for (let at = rollout.indexOf(ASSISTANT_ROLE); at !== -1; at = rollout.indexOf(ASSISTANT_ROLE, at + 1)) {
+      const end = rollout.indexOf(10, at);
+      if (end === -1) break;
+      try {
+        const line = rollout.subarray(rollout.lastIndexOf(10, at) + 1, end).toString("utf-8");
+        const entry = JSON.parse(line) as { type?: unknown; payload?: { type?: unknown; role?: unknown } };
+        if (entry.type === "response_item" && entry.payload?.type === "message" && entry.payload.role === "assistant") {
+          count++;
+        }
+      } catch {
+        // not a JSON line
+      }
+      at = end;
+    }
+    return `\n${count}`;
+  } catch {
+    return "";
+  }
+}
+// A subagent's prompt (agent_id) or an internal reviewer's (its own rollout)
+// is not the person's turn: record-human-turn records nothing for it, so it
+// keeps the plain key and costs no read.
+const otherAgentInput =
+  (typeof codex.agent_id === "string" && codex.agent_id.trim().length > 0) ||
+  otherThreadInput(codex.transcript_path, codex.session_id);
+const repeatableDelivery =
+  (target === "record-human-turn" && codex.hook_event_name === "UserPromptSubmit" && !otherAgentInput) ||
+  (target === "continue-workflow" && codex.hook_event_name === "Stop");
+const progress = repeatableDelivery ? assistantMessagesInRollout(codex.transcript_path) : "";
+
 const DEDUPE_ROOT = join(sessionsDir(projectDir), "codex-dedupe");
-const dedupeKey = createHash("sha256").update(`${target}\n${rawInput}`).digest("hex").slice(0, 32);
+const dedupeKey = createHash("sha256").update(`${target}\n${rawInput}${progress}`).digest("hex").slice(0, 32);
 const slotDir = join(DEDUPE_ROOT, dedupeKey);
 const responseFile = join(slotDir, "response.json");
 const SLOT_MAX_AGE_MS = 5 * 60 * 1000;
 const SLOT_MAX_COUNT = 64;
-const repeatableDelivery =
-  (target === "record-human-turn" && codex.hook_event_name === "UserPromptSubmit") ||
-  (target === "continue-workflow" && codex.hook_event_name === "Stop");
 
 function pruneStale(): void {
   try {
@@ -357,60 +386,11 @@ function persistResponse(stdout: string, code: number, stderr?: string): void {
   }
 }
 
-// The response a delivery found, by file identity: each run writes a new file
-// (the one before it was moved aside), so a different identity under the lock
-// means another delivery has already retired the response and run.
-function responseIdentity(): string | null {
-  try {
-    const stat = statSync(responseFile, { bigint: true });
-    return `${stat.ino}:${stat.mtimeNs}`;
-  } catch {
-    return null;
-  }
-}
-
-// Under the lock, so two deliveries that found the same response cannot both
-// retire it: the second finds another one, or none while the first is running,
-// and replays. The response is moved aside rather than the slot folder removed
-// and made again, which Windows can refuse while the folder is being deleted.
-// A response that cannot be moved aside (a Windows file held open, a slot
-// pruneStale took) still lets this delivery run: a person's reply is not
-// dropped over the cache's own bookkeeping.
-function retireAnsweredResponse(found: string): "retired" | "taken" {
-  if (responseIdentity() !== found) return "taken";
-  const retired = `${responseFile}.${randomUUID()}`;
-  try {
-    renameSync(responseFile, retired);
-  } catch {
-    try {
-      mkdirSync(slotDir);
-    } catch {
-      // the slot is still there; this run's response overwrites the old one
-    }
-    return "retired";
-  }
-  try {
-    rmSync(retired, { force: true });
-  } catch {
-    // left for pruneStale, which removes the whole slot
-  }
-  return "retired";
-}
-
 if (!bypassReplay) {
   try {
     mkdirSync(DEDUPE_ROOT, { recursive: true });
     pruneStale();
-    try {
-      mkdirSync(slotDir); // atomic claim — throws EEXIST for the duplicate
-    } catch (taken) {
-      if (!repeatableDelivery || (taken as NodeJS.ErrnoException).code !== "EEXIST") throw taken;
-      const found = responseIdentity();
-      if (found === null) throw taken; // the first delivery is still running
-      const reclaim = runWithOwnerStampedLock(`${DEDUPE_ROOT}.lock`, 200, 10, () => retireAnsweredResponse(found));
-      // Without the lock the reply still runs, for the same reason.
-      if (reclaim.acquired && reclaim.value === "taken") throw taken;
-    }
+    mkdirSync(slotDir); // atomic claim — throws EEXIST for the duplicate
   } catch {
     const replay = replayResponse();
     if (replay.stdout) process.stdout.write(replay.stdout);
@@ -981,8 +961,7 @@ switch (target) {
     // the main chat. A path in any other form decides nothing.
     if (
       codex.tool_name !== "request_user_input" &&
-      ((typeof codex.agent_id === "string" && codex.agent_id.trim().length > 0) ||
-        otherThreadInput(codex.transcript_path, codex.session_id))
+      otherAgentInput
     ) {
       persistResponse("", 0);
       return 0;
