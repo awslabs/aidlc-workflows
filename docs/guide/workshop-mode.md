@@ -80,8 +80,10 @@ git, and each team then runs `/aidlc` in its own clone to take a Unit.
 
 When the workspace is a Git repository, choosing **Several teams** also records
 where the home of the work is: `Home Location` in the state, the address the
-workspace's `origin` points to (read, never changed), or `local` when it has no
-remote. The next step asks once who builds which Unit, naming each Unit with its
+workspace's own remote points to (read, never changed; a user or token in the
+address is left out), or `local` when it has no remote. The next step asks once
+who builds which Unit (after you speak without naming teams, it offers the same
+choice and builds nothing meanwhile), naming each Unit with its
 likely repos and the Units it waits on. Answer in your own words, for example
 "refunds: payments, checkout-ui: web, leave reporting open": each Unit you name
 is held for that team, a Unit you leave out stays open for
@@ -142,30 +144,34 @@ has (the home's plan and the claims git last brought in):
   No remote is added.
 - **A personal copy** works as one of the two, by where its `origin` points.
 
-Your team is your active space (`/aidlc space <team>`). In the default space
-every Unit nobody has taken is offered, with the team it is held for. A Unit
-that waits on another is listed as waiting until that Unit is done at the home.
+Your team is your active space (`/aidlc space switch <team>`). In the default
+space every Unit nobody has taken is offered, with the team it is held for; an
+open one is offered for each team the lead named, or for another team you name.
+A Unit that waits on another is listed as waiting until that Unit is done at the
+home, and a Unit already being built (by a teammate, or at the home) or held for
+another team is listed with where it is. AI-DLC reads the home's claims as the
+home has them now, once per chat and at each look while nothing is ready, so
+nobody has to fetch.
 
 Picking one runs `aidlc unit take <unit> --home <record>`. It holds the Unit at
 the home for your team: one held for your team becomes yours, and an open one
-is held for your team (under your git name when you take it from the default
-space). Then it starts the Unit's build: a new piece of work in your team's
+is held for the team you named. Then it starts the Unit's build: a new piece of work in your team's
 space, named after the Unit, running the Unit's planned Construction stages
 from a copy of what the home approved. The copy is the home's Inception outputs
 at the paths those stages read them, listed with their fingerprints in
-`approved-inputs.md`. The home's Inception shows as done there and does not run
-again, and its approvals stay the home's. Your team approves its Unit after
-every stage, or once at its end when the lead asked for that before the first
-Unit was built.
+`approved-inputs.md`. The build records the home's repos, cloned here or not
+yet. The home's Inception shows as done there and does not run again, and its
+approvals stay the home's. Your team approves its Unit the way the home's
+work does: after every stage, or once at its end.
 
 - A Unit another team holds, or that a teammate already took, is not taken
   again; the line names who holds it.
 - Taking a Unit you took before, from any clone of your workspace, carries its
   build on (**Carry on <unit>**).
 - A home you can read but not push to: a Unit held for your team is still
-  yours, and its result goes back as a file, said once. An open Unit there
-  cannot be held from your side, and the line names the lead's step:
-  `/aidlc unit assign <unit>=<team>` at the home.
+  yours, and its result goes back as a file, said once; once the home takes
+  your pushes, the push sends it by git instead. An open Unit there cannot be
+  held from your side: the lead holds it for your team at the home.
 - A repo the home's work records that your workspace has no checkout of is
   said once, with where to clone it or how to give its path in
   `repos.local.json`.
@@ -179,14 +185,23 @@ no file and their pulls never conflict.
 When your Unit's last stage is approved, AI-DLC offers the push: "Refunds is
 built and you approved it. It changed checkout-api and billing. Commit its
 changes on branch refunds in each and push them?" **Push** runs
-`aidlc unit push`: in each repo, a commit of exactly the files the Unit's Code
-Generation recorded writing (its `source-manifest.json`), on a branch named
-after the Unit, pushed to that repo's own remote with your own login,
-identity, signing and hooks. Your other uncommitted work is never committed. If
-you were on another branch, you are switched to the Unit's branch with your
-work as it was, and the line says so. A push a hook or the host refuses is said
-once, in its own words, and nothing retries. **Not now** pushes nothing; the
-end of the build says once that the Unit is not pushed yet.
+`aidlc unit push`. In each repo it puts you on a branch named after the Unit,
+as your own hands would: started from the shared integration branch, fetched,
+when your working tree allows, else from where you are (and the line names any
+of your unpushed commits that come along). Then it commits exactly the files the
+Unit's Code Generation recorded writing (its `source-manifest.json`) with your
+own git, so your hooks, signing and identity run as usual; in a file you had
+changed yourself, only the Unit's change is committed. Your other uncommitted
+work comes along uncommitted and is never committed. Every repo is committed
+before the first push, so a hook that stops one pushes nothing. Each repo's push
+goes to the remote git would push it to; with several remotes and none set, the
+offer names each. The line says where you are and the way back ("You're on
+refunds now in checkout-api and billing. Switch back to main any time."). A
+push the host refuses is said once, in its own words, and nothing retries.
+**Not now** pushes nothing; the end of the build says once that the Unit is not
+pushed yet. A repo the Unit changed that the home's plan did not list is added
+to the build's repos and goes with the push, said once. When the code went but
+the home did not take the result, the next step offers to send it again.
 
 Open a pull request in each repo your usual way and merge it the way that repo
 merges: a merge commit, a squash or a rebase. The push also sends the result
@@ -213,7 +228,10 @@ repo merged it in a way the board cannot see, tell the lead's chat at the home a
 AI-DLC runs `aidlc unit merged <unit> --repo <repo>` with your words): the
 home records `UNIT_MERGED`, writes the Unit's outputs into its record where
 Build and Test reads them, and marks the claim done, so the Units waiting on it
-open for the home and for every team. A repo the home has no checkout of stays
+open for the home and for every team. A merge the home sees is the one thing it
+writes for the teams, and the board says it once: "I've told the teams refunds
+is merged." Another clone or machine of the home reads a Unit done on its claim
+as done too. A repo the home has no checkout of stays
 "not merged yet" there. To send a repo back, the lead says so at the home and
 AI-DLC runs `aidlc unit turned-down <unit> --repo <repo>` with their words; the
 team hears them once at its next step, and its build, finished until then, is
@@ -232,14 +250,19 @@ merges. You hear once when that Unit is done, to rebase when you are ready, or
 when it is turned down; nothing else changes, and AI-DLC never rebases for you.
 
 A team that needs a change to something its Unit was approved with (a contract
-summary, the requirements) edits its copy or writes the new text, then says
-so; AI-DLC runs `aidlc unit propose --input <file>` and the team carries on
-while the home decides. At the home the owner of the shared plan is asked once:
-**Approve it**, **Not now** or **Turn it down**, answered in their own words.
+summary, the requirements) edits its copy or writes the new text. When its copy
+changed, its build asks once whether to send the change to the home for its
+owner to approve; AI-DLC runs `aidlc unit propose --input <file>` and the team
+carries on while the home decides. At the home the owner of the shared plan is
+asked once, with the path of the team's version to read: **Approve it**,
+**Not now** or **Turn it down**, answered in their own words; after **Not now**
+the board keeps the same choice.
 An approved change is written into the home's record, and the stages there
 that used it stay current, so nothing at the home is asked again. Every team
-building with it gets the new version on its claim (a Unit's build fetches its
-claim from the home once per chat, and when it takes or pushes) and hears it once, on every Guard Policy, with the offer to redo a stage that used it:
+whose Unit's stages read it gets the new version on its claim (a Unit's build
+fetches its claim from the home once per chat, and when it takes or pushes) and
+hears it once, on every Guard Policy; a team that pushed already hears it as a
+fact, and the others hear the offer to redo a stage that used it:
 "Something Functional Design used changed after it finished. I'm carrying on
 with it as it is. Do you want me to redo Functional Design with the change?"
 A team by file gets a newer hand-off file to take in. A team whose Unit was
@@ -262,16 +285,19 @@ on there as before. Taking one holds it on its
 claim at the workspace's `origin` and starts its build in the same space, in a
 folder of its own; the teammate's clone never writes the work's own state. At
 its next step, the home's session switches to teams by itself: the workspace's
-`origin` becomes the home, each Unit keeps one approval at its end as it had,
-the Units it already built count as merged there, and it says in one line who
-took which Unit. Nothing is asked again. The board names each teammate by
-their own git name.
+`origin` becomes the home, the approvals stay as they were (once per Unit at
+its checkpoint, or after every stage), and the teammate's build approves the
+same way; the Units it already built stay done there, and it says in one line
+who took which Unit. Nothing is asked again. The home looks for a teammate's
+take once per chat, so the lead never fetches for it. The board names each
+teammate by their own git name.
 
 The lead's sign-off is off by default. With `aidlc unit lead-sign-off on` at
 the home, a team's result waits for the lead's own word: the home asks once
 as the result arrives ("refunds came back from payments: ... Sign it off?"),
 and the Unit counts as done only once it is signed off and every repo it
-changed has merged; the board says "waiting for your sign-off" meanwhile.
+changed has merged; the board says "waiting for your sign-off" meanwhile, and
+keeps **Sign it off** there after a **Not now**.
 
 Team work that started before `Home Location` existed keeps the claim,
 publish, pin, gate and land flow described above, unchanged.
@@ -293,10 +319,11 @@ send files, and anyone can read it before taking it in. The board says
 
 The partner takes it in from their own workspace (AI-DLC installed there
 first), however they point at it: "take the Unit in this file", `/aidlc
-<path>`, or `aidlc unit take --file <path>`. AI-DLC offers to start it, then
-creates the Unit's build exactly as for a Unit taken by git, under the
-partner's own rules; Ideation and Inception do not run again. A file changed
-after the lead wrote it is taken in as it is, and the line says so.
+<path>`, or `aidlc unit take --file <path>`; the agent hands AI-DLC the file's
+exact path. AI-DLC offers to start it, then creates the Unit's build exactly as
+for a Unit taken by git, under the partner's own rules; Ideation and Inception
+do not run again. A file changed after the lead wrote it is taken in as it is,
+and the line says so; an editor that only reformatted it changes nothing.
 
 While they build, the partner may send a progress file whenever they like
 (`aidlc unit progress`); nobody has to. When they push, the result goes into a
@@ -306,7 +333,8 @@ lead cannot fetch, the file carries the partner's own check of whether it
 merged; push again after merging to send an updated one. The lead takes either
 file in by giving its path to `/aidlc` (`/aidlc <path>`, or
 `aidlc unit take-in <file>`): a result is checked like a pushed
-one, a repo the home cannot fetch counts as merged on the partner's word,
+one and brings home only the Unit outputs the home's later stages read (anything
+else in it is left out, with a line), a repo the home cannot fetch counts as merged on the partner's word,
 recorded as theirs, until the home can check it itself. A file from an earlier
 attempt is taken in with a line saying so; a file for other work changes
 nothing, and the line says which work it is for. Files are written with LF and

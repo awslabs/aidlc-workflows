@@ -49,7 +49,7 @@ diagnostic and lifecycle routes.
 | `/aidlc --release <unit>` | Release a live Unit claim from unscoped main by publishing a tombstone |
 | `/aidlc unit assign <unit>=<team> ... \| --open` | At the home, hold each named Unit for a team, or leave every Unit open |
 | `/aidlc unit take <unit> --home <record>` | Take a Unit of a home's work as your team's own piece of work, or carry its build on |
-| `/aidlc unit push [--later]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result home |
+| `/aidlc unit push [--later] [--remote <repo>=<name>]` | In a Unit's build, commit and push exactly its files on its branch in each repo, and send the result home |
 | `/aidlc unit hand-off <unit> --team <team>` | At the home, hold a Unit for a team that cannot reach it and write its hand-off file |
 | `/aidlc unit progress` | In a Unit's build by file, write a progress file for the lead |
 | `/aidlc unit take-in <file>` | At the home, take a team's result or progress file in |
@@ -685,8 +685,10 @@ Each `<unit>=<team>` writes a claim held for that team at the home's remote
 stays open for any team; a Unit a team already holds stays with it, and the
 command says so. One Unit named for two teams is refused with both names. The
 walking skeleton, when on, is built at the home first and is never held for a
-team. `--person-words '<their words>'` records the words the answer came from in
-the `UNITS_ASSIGNED` audit row.
+team. `--person-words '<their words>'` (or `--person-words-file <path>`) records
+the words the answer came from in the `UNITS_ASSIGNED` audit row, when a turn of
+yours stands behind them. When the home cannot be reached, the answer is kept
+(`Held: not yet`) and the next step offers to try again.
 
 ### `/aidlc unit take <unit> --home <record>` - Take a Unit as your team's own work
 
@@ -703,14 +705,16 @@ yourself:
 
 The Unit is held at the home's remote first, by its address when the workspace
 is the team's own, with a compare-and-swap like any claim: a Unit held for your
-team becomes yours, an open Unit is held for `--team` (or your active space, or
-your git name), and a Unit another team holds or a teammate took is refused
-with who holds it. A Unit that waits on another is refused until that Unit is
-done at the home. The build copies what the home approved at its pushed commit,
+team becomes yours, an open Unit is held for `--team` (or your active space; from
+the default space the team is asked for), and a Unit another team holds, a
+teammate took, or the home started is refused with who holds it. A Unit that
+waits on another is refused until that Unit is done at the home. The build
+records the home's repos. The build copies what the home approved at its pushed commit,
 records `UNIT_TAKEN_IN`, and is selected for this chat. Taking a Unit whose
 build is already in this workspace carries that build on. A home that takes no
 push from here still gives you a Unit held for your team, and its result goes
-back as a file; an open Unit there needs the lead to hold it for you.
+back as a file until the home takes your pushes; an open Unit there needs the
+lead to hold it for you.
 `--early` starts a Unit that waits on others once each of them has pushed: its
 branch starts at their pushed heads in each repo, and the line says it may
 still change before it merges.
@@ -723,19 +727,29 @@ the build; you can also run it yourself, for example after a review fix:
 ```
 /aidlc unit push
 /aidlc unit push --later
+/aidlc unit push --remote billing=team
 ```
 
 In each repo the Unit's Code Generation recorded writing to (its
-`source-manifest.json`), it commits exactly those files on a branch named after
-the Unit, with your git identity, signing and hooks, and runs
-`git push -u <remote> <unit>`: no force, no `--no-verify`. Your other
-uncommitted work is not committed; when you were on another branch, you are
-switched to the Unit's branch and the line says so. A refused push is said
-once, in the host's or hook's own words, and nothing retries. The result (each
-repo's branch, base, every head pushed, each changed file's blob and patch-id,
-and the Unit outputs the home's later stages read) goes onto the Unit's claim
-at the home, and `UNIT_PUSHED` is recorded. `--later` pushes nothing and only
-records that you said not now.
+`source-manifest.json`), it switches to a branch named after the Unit (new
+ones start from the fetched integration branch when your working tree allows,
+else from where you are, and the line names your unpushed commits that come
+along), commits exactly those files with `git commit` (your identity, signing,
+pre-commit and commit-msg hooks; in a file you had changed too, only the Unit's
+change), and once every repo is committed runs `git push -u <remote> <unit>`:
+no force, no `--no-verify`. The remote is the one git would push to
+(`branch.<unit>.pushRemote`, `remote.pushDefault`, the branch's remote, then
+`origin` or the one remote); with several and none set, `--remote
+<repo>=<name>[,...]` names it, and the push offer lists each. Your other
+uncommitted work comes along uncommitted and is never committed; the line says
+where you are and the way back. A refused push is said once, in the host's or
+hook's own words, and nothing retries. The result (each repo's branch, base,
+every head pushed, each changed file's blob and patch-id, and the Unit outputs
+the home's later stages read) goes onto the Unit's claim at the home, and
+`UNIT_PUSHED` is recorded; until the home takes it (`Unit Push: unsent`), the
+next step offers to send it again. A repo the Unit changed that the home's plan
+did not list is added to the build's repos first (`intent add-repo`), said once.
+`--later` pushes nothing and only records that you said not now.
 
 ### `/aidlc unit hand-off <unit> --team <team>` - Hand a Unit off by file
 
@@ -744,8 +758,9 @@ runs it from your words with `--person-words '<your words>'`. The Unit is held
 for that team, and `aidlc/handoff/<work>-<unit>.md` is written: one readable
 Markdown file with the work's id, the Unit, the attempt and fingerprints at the
 top, and each document the Unit was approved with in its own block. Send it to
-the team; they run `/aidlc <path>` (or `/aidlc unit take --file <path>`) in
-their own workspace, which starts the Unit's build from it. While a Unit is
+the team; they point AI-DLC at it in their own workspace (the agent runs `next
+--hand-file <path>`, or `/aidlc unit take --file <path>`), which starts the
+Unit's build from it. While a Unit is
 held for a team and not taken, the home's board offers this once. A Unit another
 team holds or took is not handed off.
 
@@ -756,8 +771,8 @@ In a Unit's build by file, `progress` writes
 writes `aidlc/handoff/<work>-<unit>-result.md` with the result, the Unit
 outputs the home's later stages read, and the team's own check of each repo.
 At the home, `take-in <file>` puts either onto the Unit's claim (giving the
-file's path to `/aidlc` does the same); the next step
-checks a result like a pushed one. A file for other work changes nothing, an
+file's path to `/aidlc` does the same); a result keeps only the Unit outputs the
+home's later stages read, and the next step checks it like a pushed one. A file for other work changes nothing, an
 older one is taken in with a line, and a changed one is taken in as it is and
 marked so.
 
@@ -765,20 +780,24 @@ marked so.
 
 In a Unit's build, `propose --input <file> [--file <changed text>]` sends the
 home your change to one of the files the Unit was approved with (your edited
-copy, or the text in `--file`), with `--person-words`; the build carries on.
-At the home, the owner of the shared plan is asked once, and the agent runs
+copy, or the text in `--file`), with `--person-words`; the build carries on, and
+offers it once when your copy changed. At the home, the owner of the shared
+plan is asked once, with the path of the team's version (the board keeps the
+choice after a "Not now"), and the agent runs
 `amend <unit> --input <file> --answer <approve|reject> --person-words '<their
 words>'` from their reply: their own words after the question was shown, not
 empty and not the agent's. An approved change is written into the home's
 record with `SHARED_INPUT_AMENDED` for each stage there that used it, and goes
-onto every team's claim; a team by file gets a newer hand-off file.
+onto the claim of every Unit whose stages read it; a team it did not reach is
+named, and a team by file gets a newer hand-off file.
 
 ### `/aidlc unit lead-sign-off` and `/aidlc unit sign-off <unit>` - The lead's sign-off
 
 `lead-sign-off on|off` records `Lead Sign-off` in the work's state at the home;
 it is off by default. While it is on, a Unit counts as done only once the lead
 signed its team's result off and every repo it changed merged. The home asks
-once as a result arrives; the agent runs `sign-off <unit> --person-words
+once as a result arrives, and the board keeps the choice after a "Not now"; the
+agent runs `sign-off <unit> --person-words
 '<their words>'` from their reply, under the same rules as any answer of
 theirs (their own words, after the question was shown, not the agent's).
 
@@ -3157,8 +3176,10 @@ aidlc system workspace-sync --write-manifest
 `--write-manifest` writes `repos.json` from the repos found here (each child
 repo, or the workspace itself as `"path": "."` when it is the one code repo),
 with the address each one's `origin` points to, read and never changed; it
-writes nothing when `repos.json` already exists. AI-DLC offers to run it once
-per clone, at a stage boundary of work built by teams that records repos.
+writes nothing when `repos.json` already exists, and leaves a user or token in
+an origin address out. AI-DLC offers to run it once per clone, at a stage
+boundary, the first time the work records repos or teams are chosen; one
+person's work on one repo is never offered it.
 
 It serializes reconciles with a workspace lock whose live owner is never reaped
 for age, then runs a read-only preflight before staging clones and generated
