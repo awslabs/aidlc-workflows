@@ -594,6 +594,7 @@ import { resolveSwarmCheckpoint } from "./aidlc-swarm-checkpoints.ts";
 import {
   amendAskName,
   buildClaimNotes,
+  handFileActedOn,
   reopenTurnedDownBuild,
   leadSignOffOn,
   signOffAskName,
@@ -8465,8 +8466,10 @@ function unitTakeAsk(projectDir: string): AskDirective | NoticeDirective | null 
 
 // The person's words are just the path of a hand-off file: the offer to start
 // the Unit in it. The path of a team's result or progress file is taken in, at
-// the home it was sent to. Null for any other words.
-function handFileStep(projectDir: string, words: string): AskDirective | PrintDirective | null {
+// the home it was sent to. A file already acted on here is "done": the words
+// asked for nothing more (the turn keeps them for every `next` in it). Null for
+// any other words.
+function handFileStep(projectDir: string, words: string): AskDirective | PrintDirective | "done" | null {
   // The whole of their words, as one path: it may hold spaces.
   const path = words.replace(/^["']|["']$/g, "");
   if (path === "") return null;
@@ -8477,6 +8480,7 @@ function handFileStep(projectDir: string, words: string): AskDirective | PrintDi
     return null;
   }
   if (file === null) return null;
+  if (handFileActedOn(projectDir, file)) return "done";
   if (file.kind !== "handoff") {
     return {
       kind: "print",
@@ -12419,7 +12423,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // A file the person pointed at, by its path alone: a hand-off file's Unit to
   // start as their own piece of work, or a team's result or progress file to take in.
   const handFile = handFileStep(pd, flags.intent?.trim() ?? "");
-  if (handFile) {
+  if (handFile === "done") flags.intent = undefined;
+  else if (handFile) {
     emit(handFile);
     return;
   }

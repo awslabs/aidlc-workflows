@@ -123,6 +123,10 @@ describe("the team takes the file in", () => {
     const step = next(partner.dir);
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
     expect(step.unit).toBe("reporting");
+    // Pointed at again, the file whose Unit is already being built here starts nothing new.
+    const again = next(partner.dir, undefined, [path]);
+    expect(again.kind, JSON.stringify(again)).toBe("run-stage");
+    expect(again.unit).toBe("reporting");
   });
 
   test("a file changed after the lead wrote it is taken in as it is, with one line", () => {
@@ -155,6 +159,10 @@ describe("progress and the result come back as files", () => {
     const progressIn = run(UNIT, ["take-in", progressFile], home.dir);
     expect(progressIn.status, progressIn.out).toBe(0);
     expect(progressIn.json?.notice).toBe("Took in reporting's progress from data: Functional Design.");
+    // The turn's words still name the file: taken in, it is not offered again; the step is the work's own.
+    const pointedAgain = next(home.dir, undefined, [progressFile]);
+    expect(pointedAgain.kind, JSON.stringify(pointedAgain)).toBe("notice");
+    expect(String(pointedAgain.message)).toContain("- reporting, data: handed off by file, at Functional Design");
     expect(String(next(home.dir).message)).toContain("- reporting, data: handed off by file, at Functional Design");
     // Code Generation wrote one file in ledger; the team pushes, then merges.
     const intents = join(partner.dir, "aidlc", "spaces", "data", "intents");

@@ -6400,6 +6400,26 @@ function progressFile(projectDir?: string): void {
   console.log(JSON.stringify({ file: rel, notice: `The progress file is ${rel}; send it to the lead if you like.` }));
 }
 
+// A hand file already acted on here, so pointing at it again starts nothing: a
+// hand-off file whose Unit's build is here, or a result or progress file whose
+// content the Unit's claim carries already.
+export function handFileActedOn(projectDir: string, file: HandFile): boolean {
+  const unit = file.fields.Unit ?? "";
+  const work = file.fields["Home Work"] ?? "";
+  try {
+    if (file.kind === "handoff") return findUnitBuild(projectDir, work, unit) !== null;
+    const identity = activeIdentity(projectDir);
+    if (work !== identity.intentUuid) return false;
+    const live = currentClaim(projectDir, repositoryRemote(projectDir), claimRef(identity.intentId8, unit));
+    if (live?.status !== "claimed") return false;
+    if (file.kind === "progress") return live.payload.progress?.at === (file.fields.Written ?? "");
+    const heads = (result: UnitResult | undefined) => JSON.stringify(result?.repos.map((repo) => repo.heads) ?? null);
+    return file.result !== undefined && heads(live.payload.result) === heads(file.result);
+  } catch {
+    return false;
+  }
+}
+
 // At the home: a team's result or progress file, onto the Unit's claim.
 function takeIn(args: string[], projectDir?: string): void {
   const { positional } = parseArgs(args);
