@@ -609,10 +609,12 @@ import {
   pushRemotesToPick,
   refreshClaimRefs,
   refreshHomeClaims,
+  refreshListedHome,
   shareBlocker,
   shareTarget,
   teamHandoverMarkName,
   teamSharedHere,
+  unitsTaken,
   type UnitClaimOverview,
   type UnitClaimView,
   workToCommit,
@@ -8352,18 +8354,54 @@ function unselectedRecordsDigest(selectable: UnselectedRecords["selectable"]): s
 
 // Teams building each Unit as work of their own: with no work of the person's
 // own here, what they can take or carry on, read from what this workspace
-// already has (each home's plan, the claims git last brought in, the builds
+// has (each home's plan, its claims as the home has them now, the builds
 // here). Taking one checks the home itself. When every Unit only waits, the
 // line says so and offers nothing, so no step of the home's own work runs in
 // this clone. Null when there is nothing to take, carry on or wait for, or the
 // person has other work here to pick up.
 function unitTakeAsk(projectDir: string): AskDirective | NoticeDirective | null {
+  // Each home's claims once per chat; while nothing is ready the person waits,
+  // so each look fetches them again.
+  let looked = unitTakeLook(projectDir, false);
+  if (looked.choices.length === 0 && looked.sentences.length > 0 && looked.stale) looked = unitTakeLook(projectDir, true);
+  const { sentences, choices, homeHere } = looked;
+  const active = engineSelection(projectDir).space;
+  if (choices.length === 0 && sentences.length === 0) return null;
+  // Other work of the person's own here is theirs to pick up first.
+  const ownWork = workToPickUp(projectDir, active, null)?.filter(({ intent, state }) =>
+    !homeHere.some((home) => home.dirName === intent.dirName) && unitBuildOf(state) === null) ?? [];
+  if (ownWork.length > 0) return null;
+  if (choices.length === 0) {
+    return noticeDirective(`${sentences.join(" ")} Nothing is ready to take yet.`);
+  }
+  for (const home of homeHere) {
+    choices.push({
+      label: `Carry on ${intentDisplayLabel(home)} here, as its home`,
+      detail: "Where its Units are given out and come back.",
+      command: selectCommands([home.dirName!])[0].command,
+    });
+  }
+  return {
+    kind: "ask",
+    ask_type: "unit-take",
+    response_route: "command",
+    question: `${sentences.join(" ")} Taking a Unit starts it as your team's own piece of work here, from what the home approved.`.trim(),
+    choices,
+  };
+}
+
+function unitTakeLook(
+  projectDir: string,
+  now: boolean,
+): { sentences: string[]; choices: AskChoice[]; homeHere: IntentInfo[]; stale: boolean } {
   const active = engineSelection(projectDir).space;
   const team = active === DEFAULT_SPACE ? null : active;
   const unitTool = aidlcToolInvocation("unit");
   const sentences: string[] = [];
   const choices: AskChoice[] = [];
   const homeHere: IntentInfo[] = [];
+  // A home whose claims this look did not fetch (fetched earlier in the chat).
+  let stale = false;
   for (const { name: space } of listSpaces(projectDir)) {
     for (const intent of listIntents(projectDir, space)) {
       if (!intent.dirName || !intent.uuid) continue;
@@ -8375,6 +8413,13 @@ function unitTakeAsk(projectDir: string): AskDirective | NoticeDirective | null 
         dependencyBody = readFileSync(unitDependencyPath(projectDir, intent.dirName, space), "utf-8");
       } catch {
         continue;
+      }
+      if (!isReadOnlyEngineProbe()) {
+        const refreshed = refreshListedHome(projectDir, intent.dirName, space, { sessionId: engineSessionId, now });
+        if (!refreshed.fetched && refreshed.unreached === null) stale = true;
+        if (refreshed.unreached !== null) {
+          sayWithStepOnce(projectDir, `${intentDisplayLabel(intent)}'s home could not be reached just now, so what is ready to take may be behind.`);
+        }
       }
       let opening: ReturnType<typeof openingStatusFrom>;
       let overview: UnitClaimOverview;
@@ -8441,28 +8486,7 @@ function unitTakeAsk(projectDir: string): AskDirective | NoticeDirective | null 
       }
     }
   }
-  if (choices.length === 0 && sentences.length === 0) return null;
-  // Other work of the person's own here is theirs to pick up first.
-  const ownWork = workToPickUp(projectDir, active, null)?.filter(({ intent, state }) =>
-    !homeHere.some((home) => home.dirName === intent.dirName) && unitBuildOf(state) === null) ?? [];
-  if (ownWork.length > 0) return null;
-  if (choices.length === 0) {
-    return noticeDirective(`${sentences.join(" ")} Nothing is ready to take yet.`);
-  }
-  for (const home of homeHere) {
-    choices.push({
-      label: `Carry on ${intentDisplayLabel(home)} here, as its home`,
-      detail: "Where its Units are given out and come back.",
-      command: selectCommands([home.dirName!])[0].command,
-    });
-  }
-  return {
-    kind: "ask",
-    ask_type: "unit-take",
-    response_route: "command",
-    question: `${sentences.join(" ")} Taking a Unit starts it as your team's own piece of work here, from what the home approved.`.trim(),
-    choices,
-  };
+  return { sentences, choices, homeHere, stale };
 }
 
 // The person's words are just the path of a hand-off file: the offer to start
@@ -8602,8 +8626,12 @@ function soloElsewhereAsk(projectDir: string): AskDirective | null {
     const finalStage = unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true).at(-1) ?? "code-generation";
     const progress = soloUnitsProgress(rows, finalStage);
     const dependencies = unitDependencies(projectDir, intent.dirName, space);
+    // A Unit another teammate took is theirs: its claims as the home has them now.
+    if (!isReadOnlyEngineProbe()) refreshListedHome(projectDir, intent.dirName, space, { sessionId: engineSessionId });
+    const taken = intent.uuid ? unitsTaken(projectDir, space, intent.uuid) : new Set<string>();
     const open = [...dependencies.keys()].filter((unit) =>
-      !progress.started.has(unit) && !progress.done.has(unit) && (dependencies.get(unit) ?? []).every((dep) => progress.done.has(dep))
+      !progress.started.has(unit) && !progress.done.has(unit) && !taken.has(unit) &&
+      (dependencies.get(unit) ?? []).every((dep) => progress.done.has(dep))
     );
     const take = `${aidlcToolInvocation("unit")} take %s --home ${shellArg(intent.dirName)}` +
       (space === DEFAULT_SPACE ? "" : ` --home-space ${shellArg(space)}`);

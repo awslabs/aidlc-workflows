@@ -5649,6 +5649,31 @@ export function refreshHomeClaims(
   return { fetched: ok, unreached: ok ? null : target };
 }
 
+// The claims of a home's work listed in this workspace, fetched as
+// refreshHomeClaims decides; nothing for work no team builds.
+export function refreshListedHome(
+  projectDir: string,
+  dirName: string,
+  space: string,
+  options: { sessionId?: string; now?: boolean },
+): { fetched: boolean; unreached: string | null } {
+  try {
+    return refreshHomeClaims(projectDir, { home: findHomeWork(projectDir, dirName, space), ...options });
+  } catch {
+    return { fetched: false, unreached: null };
+  }
+}
+
+// The Units of a piece of work a teammate took, as the claims git last brought in have them.
+export function unitsTaken(projectDir: string, space: string, intentUuid: string): Set<string> {
+  try {
+    return new Set([...cachedClaimsForIdentity(projectDir, { space, intentUuid, intentId8: idSuffix(intentUuid) }, false).values()]
+      .filter((claim) => claim.status === "claimed" && claim.payload.taken_by !== undefined).map((claim) => claim.unit));
+  } catch {
+    return new Set();
+  }
+}
+
 // A claim at the home's address: fetched so its payload can be read.
 function ensureFetchedClaim(projectDir: string, home: HomeWork, ref: string): void {
   if (home.target === null || !isGitAddress(home.target)) return;
@@ -5876,7 +5901,10 @@ function checkTeamResultsQuietly(
   const remote = repositoryRemote(pd);
   for (const [unit, claim] of cachedClaims(pd)) {
     if (claim.status !== "claimed" || claim.payload.result === undefined) continue;
+    // Done on its claim is the home's own word, wherever it was recorded: a
+    // fresh clone or another machine of the home records it here too.
     if (claim.payload.done) {
+      recordUnitDone(pd, claim, claim.payload.verdicts ?? []);
       found.set(unit, { team: claim.owner, verdicts: claim.payload.verdicts ?? [], done: true });
       continue;
     }
@@ -5927,7 +5955,13 @@ function checkTeamResultsQuietly(
   return found;
 }
 
+// Once per Unit and attempt: its outputs written into the home's record, then UNIT_MERGED.
 function recordUnitDone(projectDir: string, claim: UnitClaimView, verdicts: NonNullable<UnitClaimPayload["verdicts"]>): void {
+  const recorded = (): boolean => readAuditShardEvents(projectDir).some((row) =>
+    row.event === "UNIT_MERGED" && auditBlockField(row.block, "Unit") === claim.unit &&
+    auditBlockField(row.block, "Attempt Generation") === String(claim.generation)
+  );
+  if (recorded()) return;
   const record = activeRecordDir(projectDir);
   for (const rel of claim.payload.result?.outputs ?? []) {
     const shown = git(projectDir, ["show", `${claim.oid}:${RESULT_FILES_ROOT}/${rel}`, "--"]);
@@ -5936,11 +5970,7 @@ function recordUnitDone(projectDir: string, claim: UnitClaimView, verdicts: NonN
     writeFileSync(join(record, ...rel.split("/")), shown.stdout, "utf-8");
   }
   withAuditLock(projectDir, () => {
-    const already = readAuditShardEvents(projectDir).some((row) =>
-      row.event === "UNIT_MERGED" && auditBlockField(row.block, "Unit") === claim.unit &&
-      auditBlockField(row.block, "Attempt Generation") === String(claim.generation)
-    );
-    if (already) return;
+    if (recorded()) return;
     appendAuditEntryUnlocked("UNIT_MERGED", {
       Unit: claim.unit,
       Owner: claim.owner,

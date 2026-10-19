@@ -265,6 +265,27 @@ describe("at the home", () => {
     expect(started.status, started.out).toBe(0);
   });
 
+  test("another machine or a fresh clone of the home reads a Unit done on its claim as done, and what waits on it opens", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "merge");
+    next(home.dir);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    // The lead's laptop: the home's work as last pushed, without this machine's record of the merge.
+    const laptop = cloneOf(home.remote, "lead-laptop");
+    const picked = run(join(AIDLC_SRC, "tools", "aidlc.ts"), ["engine", "intent", "switch", HOME_RECORD], laptop);
+    expect(picked.status, picked.out).toBe(0);
+    const step = next(laptop);
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    expect(step.unit).toBe("reporting");
+    expect(readAuditShardEvents(laptop).filter((row) => row.event === "UNIT_MERGED")).toHaveLength(1);
+    expect(readFileSync(join(laptop, "aidlc", "spaces", "default", "intents", HOME_RECORD, "construction", "refunds", "code-generation", "code-summary.md"), "utf-8"))
+      .toBe("# Code summary\n\nRefunds.\n");
+  });
+
   test("what a team sent shows at the home's next step, with no fetch by the lead", () => {
     const { home, alice, record } = refundsTaken();
     codeGenerated(alice, record);

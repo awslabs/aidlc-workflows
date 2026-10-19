@@ -22,12 +22,15 @@ import {
   claimPayload,
   cleanupTeamBuild,
   cloneOf,
+  codeGenerated,
   GIT_ENV,
   git,
   homeState,
   makeHome,
+  mergeOnHost,
   next,
   ORCH,
+  refundsTaken,
   run,
   STATE,
   tempDir,
@@ -119,6 +122,28 @@ describe("a team member's clone of the home's workspace", () => {
         "Nothing is ready to take yet.",
     );
     expect(git(alice, ["status", "--porcelain"])).toBe("");
+  });
+
+  test("a clone a day old hears the claims as the home has them now: a Unit whose dependency merged since opens, with no fetch by hand", () => {
+    const { hosts, home, alice, record } = refundsTaken(["refunds=payments", "checkout-ui=web", "reporting=data"]);
+    // dana of data cloned before refunds was done, and looks while it waits.
+    const dana = cloneOf(home.remote, "dana");
+    expect(run(UTILITY, ["space-create", "data"], dana).status).toBe(0);
+    expect(run(UTILITY, ["space", "data"], dana).status).toBe(0);
+    const waiting = next(dana);
+    expect(waiting.kind, JSON.stringify(waiting)).toBe("notice");
+    expect(String(waiting.message)).toContain("Waiting: reporting (for data; on refunds). Nothing is ready to take yet.");
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "merge");
+    next(home.dir);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    const ready = next(dana);
+    expect(ready.ask_type, JSON.stringify(ready)).toBe("unit-take");
+    expect((ready.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start reporting");
+    expect(ready.change_notices ?? []).toEqual([]);
   });
 });
 
