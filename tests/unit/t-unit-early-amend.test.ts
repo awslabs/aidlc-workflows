@@ -12,7 +12,7 @@
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { latestCompletionBasesFromAudit } from "../../dist/claude/.claude/tools/aidlc-validity.ts";
@@ -156,6 +156,55 @@ describe("a change to a shared input", () => {
     // The team that proposed it hears the answer.
     git(alice, ["fetch", "-q", "origin"]);
     expect(notices(next(alice))).toContain("The home approved your change to the requirements.");
+  });
+
+  test("a team that changed its copy is asked once whether to send it home, and the send is not asked again", () => {
+    const { alice, record, home } = refundsTaken();
+    writeFileSync(join(record, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, in two steps.\n");
+    const ask = next(alice);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-propose");
+    expect(ask.question).toBe(
+      "You changed the requirements here. Do you want me to send your change to the home for its owner to approve? " +
+        "I'd send it, so every team builds from the same version.",
+    );
+    const choices = ask.choices as Array<{ label: string; command?: string }>;
+    expect(choices.map((choice) => choice.label)).toEqual(["Send it to the home", "Keep it here only"]);
+    expect(String(choices[0].command)).toEndWith(`aidlc-unit.ts propose --input ${REQUIREMENTS} --person-words '<their words>'`);
+    expect(run(UNIT, ["propose", "--input", REQUIREMENTS, "--person-words", "send it"], alice).status).toBe(0);
+    expect(next(alice).ask_type).not.toBe("unit-propose");
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.proposals).toEqual([expect.objectContaining({ input: REQUIREMENTS })]);
+  });
+
+  test("a pushed build hears an approved change as a fact, with nothing reopened or asked", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    // web proposes a change to the input refunds was built with too; the home approves it.
+    const bob = cloneOf(home.remote, "bob");
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    const intents = join(bob, "aidlc", "spaces", "web", "intents");
+    const bobRecord = join(intents, readdirSync(intents).find((name) => name.endsWith("-checkout-ui"))!);
+    writeFileSync(join(bobRecord, ...REQUIREMENTS.split("/")), "# Requirements\n\nFR1 refunds, shown in the UI.\n");
+    expect(run(UNIT, ["propose", "--input", REQUIREMENTS, "--person-words", "the UI shows refunds"], bob).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(run(UNIT, ["amend", "checkout-ui", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir).status).toBe(0);
+    git(alice, ["fetch", "-q", "origin"]);
+    const step = next(alice);
+    expect(notices(step)).toContain("The requirements changed at the home after refunds was pushed; refunds stays as you pushed it.");
+    expect(JSON.stringify(step)).not.toContain("Do you want me to redo");
+  });
+
+  test("an approved change that does not reach a team just now names that team", () => {
+    const { home } = proposed();
+    const bob = cloneOf(home.remote, "bob");
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const hook = join(home.remote, "hooks", "pre-receive");
+    writeFileSync(hook, `#!/bin/sh\nwhile read old new ref; do case "$ref" in */checkout-ui) echo 'busy' >&2; exit 1;; esac; done\n`);
+    chmodSync(hook, 0o755);
+    const amended = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir);
+    expect(amended.status, amended.out).toBe(0);
+    expect(String(amended.json?.notice)).toContain("It did not reach web just now (its claim moved meanwhile), so that team does not have it yet.");
   });
 
   test("turned down: the team hears the owner's words and carries on with the approved one", () => {

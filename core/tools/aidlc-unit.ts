@@ -82,6 +82,7 @@ import {
   readUnitGateRhythm,
   readUnitScopeStamp,
   readAnswerTextFile,
+  resolveBoltDag,
   removeField,
   shellArg,
   unattendedHumanPresenceHint,
@@ -157,6 +158,7 @@ import {
   sameGitAddress,
   soloUnitsProgress,
   teamSpaceOf,
+  teamUnitStageApplies,
   textFingerprint,
   UNIT_BUILD_FIELD,
   UNIT_PUSH_FIELD,
@@ -6234,6 +6236,9 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     const name = inputName(amendment.input);
     if (mine.payload.done) {
       lines.push(`The ${name} changed at the home after ${unit} was done. Do you want me to start follow-up work for it?`);
+    } else if (getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed") {
+      // Pushed and waiting on the home: it hears the change and nothing of it is reopened.
+      lines.push(`The ${name} changed at the home after ${unit} was pushed; ${unit} stays as you pushed it.`);
     } else if (renewed.length > 0) {
       lines.push(staleStageLine(stageLabel(loadGraph().find((stage) => stage.slug === renewed[0]), renewed[0]) ?? renewed[0]));
     } else {
@@ -6335,6 +6340,52 @@ export function writeProposedText(projectDir: string, claim: UnitClaimView, inpu
   return relative(projectDir, path).split(sep).join("/");
 }
 
+// The Units of this work whose applicable stages read an input, by each Unit's kind.
+function unitsReading(projectDir: string, input: string): Set<string> {
+  const state = readStateFile(projectDir);
+  const dag = resolveBoltDag(projectDir);
+  if (dag.state !== "ok") return new Set();
+  const graph = loadStageGraphAll();
+  const stages = unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true);
+  return new Set(dag.units.filter((unit) => homeInputPaths(stages.filter((slug) => {
+    const stage = graph.find((entry) => entry.slug === slug);
+    return stage !== undefined && teamUnitStageApplies(stage, dag.unitKinds?.get(unit) ?? null);
+  })).includes(input)));
+}
+
+// The inputs this build was approved with whose copy here now differs, for a
+// text the home was neither sent nor answered: what the build offers to send
+// home for its owner to approve (decision 10, the team's side).
+export function changedInputs(projectDir: string, stateContent: string): Array<{ path: string; name: string; fingerprint: string }> {
+  const build = unitBuildOf(stateContent);
+  const record = recordDir(projectDir);
+  if (build === null || record === null) return [];
+  let mine: UnitClaimView | undefined;
+  try {
+    const space = build.homeRecord.slice(0, build.homeRecord.indexOf("/"));
+    mine = cachedClaimsForIdentity(projectDir, { space, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false).get(build.unit);
+  } catch {
+    // No claims here (a build by file): its own copy is the record.
+  }
+  const sentOrAnswered = (input: string, fingerprint: string): boolean => mine !== undefined &&
+    (mine.payload.proposals?.some((entry) => entry.input === input && entry.answer === undefined) ||
+      ["proposals", "amendments"].some((kind) => {
+        const shown = git(projectDir, ["show", `${mine!.oid}:${RESULT_FILES_ROOT}/${kind}/${input}`, "--"]);
+        return shown.ok && textFingerprint(shown.stdout) === fingerprint;
+      }));
+  return approvedInputsOf(record).filter((entry) => !entry.path.endsWith("unit-of-work-dependency.md")).flatMap((entry) => {
+    let text: string;
+    try {
+      text = readFileSync(join(record, ...entry.path.split("/")), "utf-8");
+    } catch {
+      return [];
+    }
+    const fingerprint = textFingerprint(text);
+    if (fingerprint === entry.fingerprint || sentOrAnswered(entry.path, fingerprint)) return [];
+    return [{ path: entry.path, name: inputName(entry.path), fingerprint }];
+  });
+}
+
 export function amendAskName(unit: string, input: string): string {
   return `amend-${unit}-${input.replace(/[^A-Za-z0-9.-]+/g, "_")}.json`;
 }
@@ -6370,25 +6421,39 @@ function amendInput(args: string[], projectDir?: string): void {
     writeFileSync(path, shown.stdout, "utf-8");
     renewForAmendedInput(pd, proposal.input, { "Proposed By": `${proposal.by} (${live.owner})`, "Person Words": words });
     const amendment: Amendment = { input: proposal.input, at: isoTimestamp(), words };
+    const readers = unitsReading(pd, proposal.input);
+    const missed: string[] = [];
     for (const [other, claim] of cachedClaims(pd)) {
-      if (claim.status !== "claimed") continue;
-      const current = currentClaim(pd, remote, claim.ref);
-      if (current?.status !== "claimed") continue;
-      const payload: UnitClaimPayload = {
+      // Only the Units whose stages read it hear it; the proposing team always hears its answer.
+      if (claim.status !== "claimed" || (other !== unit && !readers.has(other))) continue;
+      const amended = (current: UnitClaimView): ReturnType<typeof updateClaimRef> => updateClaimRef(pd, remote, current.ref, createClaimCommit(pd, current.oid, {
         ...current.payload,
         predecessor_oid: current.oid,
         amendments: [...(current.payload.amendments ?? []).filter((entry) => entry.input !== proposal.input), amendment],
-        ...(other === unit ? { proposals: (current.payload.proposals ?? []).map((entry) => (entry === proposal || (entry.input === proposal.input && entry.answer === undefined) ? answered : entry)) } : {}),
-      };
-      updateClaimRef(pd, remote, current.ref, createClaimCommit(pd, current.oid, payload, undefined, undefined, {
+        ...(other === unit ? { proposals: (current.payload.proposals ?? []).map((entry) => (entry.input === proposal.input && entry.answer === undefined ? answered : entry)) } : {}),
+      }, undefined, undefined, {
         [`${RESULT_FILES_ROOT}/amendments/${proposal.input}`]: shown.stdout,
       }), current.oid);
+      let current = currentClaim(pd, remote, claim.ref);
+      if (current?.status !== "claimed") continue;
+      // A claim that moved meanwhile is read again and written once more.
+      if (!amended(current).ok) {
+        current = currentClaim(pd, remote, claim.ref);
+        if (current?.status !== "claimed" || !amended(current).ok) {
+          missed.push(claim.owner);
+          continue;
+        }
+      }
       invalidateLiveClaimPayloadCache(pd, other);
       if (current.payload.by_file && !current.payload.taken_by) {
         lines.push(`A newer hand-off file for ${other} is at ${writeHandOffFile(pd, other, current.owner, current.generation)}: send it to ${current.owner}.`);
       }
     }
     lines.unshift(`The ${name} is changed at the home. The teams building with it hear it once and carry on; nobody approves anything again.`);
+    if (missed.length > 0) {
+      const teams = [...new Set(missed)];
+      lines.push(`It did not reach ${joinNames(teams)} just now (${teams.length === 1 ? "its claim" : "their claims"} moved meanwhile), so ${teams.length === 1 ? "that team does" : "those teams do"} not have it yet.`);
+    }
   } else {
     const payload: UnitClaimPayload = {
       ...live.payload,

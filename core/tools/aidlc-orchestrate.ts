@@ -608,6 +608,7 @@ import {
   publishedAtHead,
   pushRemotesToPick,
   assignRetryCommand,
+  changedInputs,
   refreshClaimRefs,
   type ToldMerge,
   writeProposedText,
@@ -688,6 +689,7 @@ import {
   inputName,
   soloUnitsProgress,
   teamSpaceOf,
+  teamUnitStageApplies,
   parseHandFile,
   unitLikelyReposFrom,
   workspaceHomeLocation,
@@ -8624,6 +8626,40 @@ function turnedDownStep(projectDir: string, unit: string, repo: string): AskDire
   };
 }
 
+// An input of a Unit's build whose copy the team changed here: asked once per
+// its text whether to send it home for the shared plan's owner to approve.
+// Null when nothing changed, or each change was asked about already.
+function unitProposeAsk(projectDir: string, stateContent: string): AskDirective | null {
+  const build = unitBuildOf(stateContent);
+  if (build === null) return null;
+  const byFile = getField(stateContent, "Home Result")?.trim() === "by file";
+  for (const changed of changedInputs(projectDir, stateContent)) {
+    const askName = `unit-propose-${changed.path.replace(/[^A-Za-z0-9.-]+/g, "_")}-${changed.fingerprint.slice("sha256:".length, 19)}.json`;
+    if (engineAskMark(projectDir, askName) !== null) continue;
+    noteEngineAskMark(projectDir, askName);
+    if (byFile) {
+      sayWithStepOnce(projectDir, `You changed the ${changed.name} here. The home takes no push from here, so send your change to the lead with your result file.`);
+      continue;
+    }
+    return {
+      kind: "ask",
+      ask_type: "unit-propose",
+      response_route: "command",
+      question: `You changed the ${changed.name} here. Do you want me to send your change to the home for its owner to approve? ` +
+        "I'd send it, so every team builds from the same version.",
+      choices: [
+        {
+          label: "Send it to the home",
+          detail: `${build.unit} carries on with your version meanwhile.`,
+          command: `${aidlcToolInvocation("unit")} propose --input ${shellArg(changed.path)} --person-words '<their words>'`,
+        },
+        { label: "Keep it here only", detail: `${build.unit} is built with your version; the home's stays as it is.` },
+      ],
+    };
+  }
+  return null;
+}
+
 // The end of a Unit's build: the offer to push it home, until the person asked
 // for the push or said not now (then the end says it once). Null for other work.
 function unitPushAsk(projectDir: string, stateContent: string | null): AskDirective | null {
@@ -12544,6 +12580,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   }
   // What the home said about a Unit's build reaches its team once, on any step.
   for (const line of stateContent ? buildClaimNotes(pd, stateContent, engineSessionId) : []) sayWithStepOnce(pd, line);
+  // A copy the team changed is theirs to send home, offered once per its text.
+  const propose = stateContent !== null && !isReadOnlyEngineProbe() ? unitProposeAsk(pd, stateContent) : null;
+  if (propose) {
+    emit(propose);
+    return;
+  }
   // Archived is terminal for routing, including scoped Unit checkouts. Keep
   // this before Unit jump/park handling so every next shape returns the same
   // archived result instead of reviving or locally parking retired work.
@@ -16081,15 +16123,6 @@ export interface TeamUnitProgressModel {
   stageStates: Record<string, CheckboxState>;
   ledgers: Map<string, UnitLedger>;
   mergedUnits: Set<string>;
-}
-
-function teamUnitStageApplies(
-  stage: GraphStage,
-  unitKind: string | null,
-): boolean {
-  const names = stage.produces ?? [];
-  return names.length > 0 &&
-    applicableProduceNames(stage, unitKind, false).length > 0;
 }
 
 function unitProgressOwners(stateContent: string): Map<string, string> {

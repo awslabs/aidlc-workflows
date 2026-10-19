@@ -13,6 +13,7 @@ import {
   auditBlockField,
   type BoltDagResolution,
   committedTextBytes,
+  filterProducesByKind,
   getField,
   type IntentRegistryEntry,
   intentRepos,
@@ -135,6 +136,16 @@ export function unknownLikelyReposLine(projectDir: string): string | null {
   if (unknown.length === 0) return null;
   return `The Unit plan names ${unknown.join(", ")}, which is not one of this work's repos (${recorded.join(", ")}). ` +
     "It stays as written, as a guide.";
+}
+
+// A per-Unit stage runs for a Unit of this kind when it produces something
+// for that kind (filterProducesByKind, its required produces only).
+export function teamUnitStageApplies(
+  stage: { produces?: string[]; produces_kinds?: Record<string, string[]> },
+  unitKind: string | null,
+): boolean {
+  const names = stage.produces ?? [];
+  return names.length > 0 && filterProducesByKind(stage.produces_kinds, names, unitKind).length > 0;
 }
 
 // The space a team's label names: "Payments" and "payments" are one team.
