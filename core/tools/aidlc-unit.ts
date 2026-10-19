@@ -236,7 +236,16 @@ function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): 
       ? { timeout: args[0] === "ls-remote" ? QUIET_READ_TIMEOUT_MS : QUIET_WRITE_CEILING_MS, detached: process.platform !== "win32" }
       : {}),
   });
-  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") endLeftBehind(result.pid);
+  // At its time limit the whole group goes. Windows gives git no group of its own, and a pid there names no one
+  // process (a freed pid is handed out again, and a process keeps its dead parent's), so what a stopped look started
+  // there ends at its own limits: AI-DLC never ends a process it cannot show it started.
+  if (process.platform !== "win32" && (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+    try {
+      process.kill(-result.pid, "SIGKILL");
+    } catch {
+      // Nothing of it is left.
+    }
+  }
   const failure = result.error
     ? `${result.error.message}\n`
     : result.signal
@@ -254,29 +263,6 @@ function git(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitRe
   const result = gitBytes(projectDir, args, env);
   return { ...result, stdout: result.stdout.toString("utf-8") };
 }
-
-// What a git stopped at its time limit started and left running: its process
-// group; on Windows, which has none of git's own, each process it started, by
-// parent, unless its id already names another process.
-function endLeftBehind(pid: number): void {
-  if (process.platform !== "win32") {
-    try {
-      process.kill(-pid, "SIGKILL");
-    } catch {
-      // Nothing of it is left.
-    }
-    return;
-  }
-  spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
-    `if (-not (Get-Process -Id ${pid} -ErrorAction SilentlyContinue)) { function End($p) { ` +
-    `Get-CimInstance Win32_Process -Filter "ParentProcessId=$p" | ForEach-Object { End $_.ProcessId; ` +
-    `Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } }; End ${pid} }`], {
-    stdio: "ignore",
-    windowsHide: true,
-    timeout: QUIET_READ_TIMEOUT_MS * 3,
-  });
-}
-
 function localGit(
   projectDir: string,
   args: string[],
