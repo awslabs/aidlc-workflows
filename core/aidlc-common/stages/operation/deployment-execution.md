@@ -77,6 +77,8 @@ person's terminal can be signed in while the shell your harness runs commands
 in cannot see those credentials, and finding that out only when the deploy
 starts costs the time of every answer before it.
 
+- If the `aws` command itself is not installed, skip this check and go on: CDK
+  and SAM can deploy without the AWS CLI.
 - If it succeeds, go on. Never write the account ID or the full ARN into an
   artifact, a questions file, or the audit: when you note the identity, keep
   only the last four digits of the account (`********1234`) and the role or
