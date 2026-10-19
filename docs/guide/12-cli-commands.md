@@ -802,8 +802,10 @@ your own git (a plain rebase where the repo merged the other Unit with its
 commits kept, a rebase from the head the build started on after a squash or a
 host's rebase; a build with no commits of its own yet moves and keeps your
 uncommitted work). Nothing is pushed; a build you had pushed then needs your
-own force push. A conflict stops with git's words, and `git rebase --abort` in
-that repo goes back.
+own force push. The line says where you are now and the way back to your
+branch. A conflict stops with git's words, and `git rebase --abort` in that repo
+goes back; a move your own changes kept git from making is offered again once
+they are out of the way.
 
 ### `/aidlc unit lead-sign-off` and `/aidlc unit sign-off <unit>` - The lead's sign-off
 

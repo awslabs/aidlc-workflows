@@ -778,8 +778,9 @@ and **Carry on <work> here, as its home** when the home's record is in the
 selected space and this workspace is the home's own; each runs one command
 (`unit take`, or `next --pick`). When nothing is ready to take, the step is the
 line that says where each Unit stands, with the offer to carry the work on here
-as its home when this workspace is the home's own (recommended to whoever wrote
-the home's record last, by git identity; otherwise **Not now** is). The home's work that git copied into a team's
+as its home, once in a chat (`offersOnce`), to whoever wrote the home's record
+last by git identity when this workspace is the home's own; a teammate is
+offered nothing. The home's work that git copied into a team's
 own workspace (its `Home Location` is not this workspace's `origin`) is never
 offered to carry on, and `workToPickUp` leaves it out.
 
@@ -808,17 +809,22 @@ fetch of `refs/heads/claim/<id8>/*` into the refs the person's own fetch uses
 at each step that shows or acts on the claims (nothing left for the home to
 build now, a result to check, a proposal to answer); the take offer in a clone
 runs it for each home it lists, and again at each look while nothing is ready;
-solo work built one Unit at a time (`switchSoloToTeams`) runs it before each
-Unit starts and, with `sincePerson`, after each message of the person's once
-the last fetch reached the remote, so a teammate's take is heard and its Unit
-is never started there too.
+solo work built one Unit at a time (`switchSoloToTeams`) runs it once its Unit
+walk has begun (a Unit started, or the step is a per-Unit Construction stage),
+never at an Inception step: once in a chat, before each next Unit starts, and,
+with `sincePerson`, after each message of the person's once the last fetch
+reached the remote, so a teammate's take is heard and its Unit is never started
+there too. Each of these fetches on a step nobody typed (`quietFetch`) looks
+first with an `ls-remote` of the refs it names and fetches only what the remote
+has that is not here yet.
 That fetch and the merge check's git go through `quietly`, whose env is built
 per call from the repo it runs in (`quietEnv`): `GIT_TERMINAL_PROMPT=0`,
 `GCM_INTERACTIVE=never`, `GIT_ASKPASS` set empty, `SSH_ASKPASS_REQUIRE=never`,
 git's low-speed limits, and that repo's own `core.sshCommand` plus `BatchMode`
 and `ConnectTimeout` when it is OpenSSH (any other program, and a `GIT_SSH`
-program, is left as it is). An `ls-remote` gives up after 15 seconds; a fetch
-or push, which writes in the person's repo, only at a 120-second ceiling.
+program, is left as it is). An `ls-remote` gives up after 5 seconds (a hosted
+remote answers in well under one); a fetch or push, which writes in the
+person's repo, only at a 120-second ceiling.
 Addresses are compared by `gitAddressKey` and recorded by
 `recordableGitAddress` (no user or token). When a remote cannot be reached the
 last fetch stands, with one line that the board, or the build's news from the

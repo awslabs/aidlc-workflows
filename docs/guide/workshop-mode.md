@@ -137,7 +137,8 @@ has (the home's plan and the claims git last brought in):
 - **A clone of the home's own workspace**: the home's work is here too, and its
   Units are offered beside **Carry on <work> here, as its home**, for the lead
   on another machine; with nothing ready to take, carrying it on is still
-  offered, recommended to whoever wrote the home's work last.
+  offered, once in a chat, to whoever wrote the home's work last (a teammate
+  hears where things stand).
 - **A team's own workspace made from the home's** (its `origin` is the team's
   repository): the home's work that git copied in stays the home's, read only,
   and is never offered to carry on. Its Units are, and taking one reaches the
@@ -255,7 +256,9 @@ to switch when you are ready), and the line says it may still change before it
 merges. Once that Unit is merged, AI-DLC asks once whether to move your build
 onto the branch it merged into (only your build's own commits move, with your
 own git; a build you already pushed then needs a force push of your own, which
-AI-DLC never does), and a conflict stops with git's words and the way back. You
+AI-DLC never does). The line says where you are afterwards and the way back to
+your branch; a conflict stops with git's words and the way back, and a move your
+own changes kept git from making is offered again once they are out of the way. You
 hear once when that Unit is turned down, and nothing else changes.
 
 A team that needs a change to something its Unit was approved with (a contract
@@ -298,9 +301,10 @@ its next step, the home's session switches to teams by itself: the workspace's
 its checkpoint, or after every stage), and the teammate's build approves the
 same way; the Units it already built stay done there, and it says in one line
 who took which Unit. Nothing is asked again. The home looks for a teammate's
-take once per chat, again after each of the lead's messages, and before it
-starts its next Unit, so the lead never fetches for it and never starts a Unit
-a teammate took. The board names each
+take once its Units are being built: once per chat, again after each of the
+lead's messages, and before it starts its next Unit, so the lead never fetches
+for it and never starts a Unit a teammate took. Each look takes a few seconds at
+most, and nothing is said when the remote cannot be reached. The board names each
 teammate by their own git name.
 
 The lead's sign-off is off by default. With `aidlc unit lead-sign-off on` at
