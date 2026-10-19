@@ -27,10 +27,11 @@ import {
   unitDependencyPath,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
+import { gitAddressKey, recordableGitAddress } from "./aidlc-workspace-repos.ts";
 
 // Where the home of team-built work is: the address the workspace's own
-// origin points to (read, never set), or "local" for a workspace with no
-// remote. Recorded once, when teams are chosen; every copy of the workspace
+// remote points to (origin, else its one remote; read, never set, with any user
+// and token left out), or "local" for a workspace with no remote. Recorded once, when teams are chosen; every copy of the workspace
 // reads it. Its presence puts the work on teams building each Unit as a piece of
 // work of their own; team work without it keeps the claim, publish, pin, gate
 // and land flow it started on.
@@ -45,8 +46,11 @@ export function homeLocation(stateContent: string | null): string | null {
 // a git repo (teams then keep today's flow in one checkout).
 export function workspaceHomeLocation(projectDir: string): string | null {
   if (!existsSync(join(projectDir, ".git"))) return null;
-  const origin = spawnSync("git", ["remote", "get-url", "origin"], { cwd: projectDir, encoding: "utf-8" });
-  return origin.status === 0 && origin.stdout.trim() ? origin.stdout.trim() : "local";
+  const read = (args: string[]): string => spawnSync("git", args, { cwd: projectDir, encoding: "utf-8" }).stdout?.trim() ?? "";
+  const remotes = read(["remote"]).split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
+  const remote = remotes.includes("origin") ? "origin" : remotes.length === 1 ? remotes[0] : null;
+  const address = remote === null ? "" : read(["remote", "get-url", remote]);
+  return address ? recordableGitAddress(address) : "local";
 }
 
 // Each Unit's likely repos, as Units Generation proposed them (a guide only),
@@ -209,10 +213,9 @@ export function onlyTheBuildsUnit(
   return { state: "ok", batches: [[unit]], units: [unit], unitKinds: kind === undefined ? null : new Map([[unit, kind]]) };
 }
 
-// Two spellings of one git address: trailing slash and `.git` aside.
+// Two spellings of one git address (gitAddressKey).
 export function sameGitAddress(a: string, b: string): boolean {
-  const norm = (value: string): string => value.trim().replace(/[\\/]+$/, "").replace(/\.git$/, "");
-  return norm(a) === norm(b);
+  return gitAddressKey(a) === gitAddressKey(b);
 }
 
 // The home's work that git copied into a team's own workspace: its recorded
@@ -234,7 +237,6 @@ export function isHomesCopiedWork(projectDir: string, state: string): boolean {
 export interface RepoResult {
   // A repo name, or "." for the workspace's own repo.
   repo: string;
-  url?: string;
   branch: string;
   base: string;
   heads: string[];

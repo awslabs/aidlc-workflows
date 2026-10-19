@@ -606,6 +606,7 @@ import {
   localUnitClaimOverviewForIntent,
   openingStatusFrom,
   publishedAtHead,
+  pushRemotesToPick,
   refreshClaimRefs,
   refreshHomeClaims,
   shareBlocker,
@@ -8552,14 +8553,25 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   const names = repos.map((repo) => (repo === "." ? "the repo" : repo));
   const changed = names.length === 0 ? "" : ` It changed ${names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`}.`;
   const unitTool = aidlcToolInvocation("unit");
+  // A repo with several remotes and none set for pushing: which one is theirs to say.
+  const pick = pushRemotesToPick(projectDir, unit, repos);
+  const detail = "Only the files its Code Generation wrote; nothing else of yours is committed.";
+  const pushes = pick.length === 0
+    ? [{ label: "Push", detail, command: `${unitTool} push` }]
+    : pick[0].remotes.map((remote) => {
+      const pairs = pick.filter((entry) => entry.remotes.includes(remote)).map((entry) => `${entry.repo}=${remote}`);
+      return { label: `Push to ${remote}`, detail, command: `${unitTool} push --remote ${shellArg(pairs.join(","))}` };
+    });
+  const several = pick.length === 0 ? "" : ` ${pick.map((entry) => (entry.repo === "." ? "The repo" : entry.repo)).join(" and ")} ` +
+    `${pick.length === 1 ? "has" : "have"} several remotes and none is set for pushing.`;
   return {
     kind: "ask",
     ask_type: "unit-push",
     response_route: "command",
-    question: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is built and you approved it.${changed} Commit its changes on ` +
+    question: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is built and you approved it.${changed}${several} Commit its changes on ` +
       `branch ${unit} in ${names.length > 1 ? "each" : "it"} and push ${names.length > 1 ? "them" : "it"}?`,
     choices: [
-      { label: "Push", detail: "Only the files its Code Generation wrote; nothing else of yours is committed.", command: `${unitTool} push` },
+      ...pushes,
       { label: "Not now", detail: "Nothing is pushed until you want it to be.", command: `${unitTool} push --later` },
     ],
   };

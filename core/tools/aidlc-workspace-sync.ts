@@ -56,6 +56,7 @@ import {
   WORKSPACE_GITIGNORE_GATE_END as GATE_END,
   workspaceGitignoreEntries,
 } from "./aidlc-workspace-manifest.ts";
+import { recordableGitAddress } from "./aidlc-workspace-repos.ts";
 
 const COLOR =
   !!process.stdout.isTTY && !process.env.NO_COLOR && process.env.TERM !== "dumb";
@@ -1453,7 +1454,8 @@ function reconcile(root: string, force: boolean): number {
 
 // repos.json written from the repos found here: each child repo, or the
 // workspace itself (`"path": "."`) when it is the one code repo, with the
-// address its own origin points to (read, never changed), blank when it has none.
+// address its own origin points to (read, never changed; any user and token
+// left out), blank when it has none.
 function writeManifest(root: string): number {
   const manifestPath = join(root, "repos.json");
   if (pathEntryExists(manifestPath)) {
@@ -1462,7 +1464,7 @@ function writeManifest(root: string): number {
   }
   const origin = (dir: string): string => {
     const result = git(dir, ["remote", "get-url", "origin"]);
-    return result.status === 0 ? result.stdout.trim() : "";
+    return result.status === 0 ? recordableGitAddress(result.stdout) : "";
   };
   const children = discoverSiblingRepos(root);
   const repos = children.length > 0

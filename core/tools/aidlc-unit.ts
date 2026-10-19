@@ -210,13 +210,13 @@ interface GitBytesResult {
 // Unit's audit shard outgrows that in one long attempt, so the cap is lifted
 // the way the other git readers lift it. A run that could not start, was killed
 // or overflowed is a failed run, whatever its exit status. Inside `quietly`,
-// git never prompts and gives up after QUIET_GIT_TIMEOUT_MS.
+// git never prompts and gives up after its quiet time limit.
 function gitBytes(projectDir: string, args: string[], env?: NodeJS.ProcessEnv): GitBytesResult {
   const result = spawnSync("git", args, {
     cwd: projectDir,
-    env: { ...process.env, ...quietGit, ...env },
+    env: { ...process.env, ...(quiet ? quietEnv(projectDir) : {}), ...env },
     maxBuffer: 512 * 1024 * 1024,
-    ...(quietGit === null ? {} : { timeout: QUIET_GIT_TIMEOUT_MS }),
+    ...(quiet ? { timeout: args[0] === "ls-remote" ? QUIET_READ_TIMEOUT_MS : QUIET_WRITE_CEILING_MS } : {}),
   });
   const failure = result.error
     ? `${result.error.message}\n`
@@ -5568,30 +5568,50 @@ function takeUnit(args: string[], projectDir?: string): void {
 
 // Git that talks to a remote nobody typed a command for (the claims fetch, the
 // merge check's reads and its write of the verdict): it never asks for a
-// password, a passphrase or a sign-in (git, Git Credential Manager and ssh are
-// each told not to, for these calls only; the person's config is left as it
-// is) and gives up after a short while, so a step never hangs on it.
-const QUIET_GIT_TIMEOUT_MS = 15_000;
-let quietGit: NodeJS.ProcessEnv | null = null;
+// password, a passphrase or a sign-in (git, an askpass program, Git Credential
+// Manager and ssh are each told not to, for these calls only; the person's
+// config is left as it is), so a step never waits on a window or a prompt. Each
+// call reads the repo it runs in, so a code repo's own ssh setup (a deploy key,
+// an includeIf) is the one used. A stalled transfer ends by git's own low-speed
+// limit; a read gives up after a short while, and a fetch or push, which writes
+// in the person's repo, only at a ceiling that keeps a step from never ending.
+const QUIET_READ_TIMEOUT_MS = 15_000;
+const QUIET_WRITE_CEILING_MS = 120_000;
+let quiet = false;
 
-function quietly<T>(dir: string, work: () => T): T {
-  if (quietGit !== null) return work();
-  const ssh = process.env.GIT_SSH_COMMAND || git(dir, ["config", "--get", "core.sshCommand"]).stdout.trim() || "ssh";
-  quietGit = {
+function quietEnv(dir: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
     GIT_TERMINAL_PROMPT: "0",
     GCM_INTERACTIVE: "never",
-    // GIT_SSH alone names the person's own ssh program (plink, say): left as it is.
-    ...(process.env.GIT_SSH && !process.env.GIT_SSH_COMMAND ? {} : { GIT_SSH_COMMAND: `${ssh} -o BatchMode=yes` }),
+    // Set and empty: git then runs no askpass program (an editor's sign-in window).
+    GIT_ASKPASS: "",
+    SSH_ASKPASS_REQUIRE: "never",
+    GIT_HTTP_LOW_SPEED_LIMIT: "1000",
+    GIT_HTTP_LOW_SPEED_TIME: "30",
   };
+  // GIT_SSH alone names the person's own ssh program (plink, say): left as it is.
+  if (process.env.GIT_SSH && !process.env.GIT_SSH_COMMAND) return env;
+  const ssh = process.env.GIT_SSH_COMMAND ||
+    spawnSync("git", ["config", "--get", "core.sshCommand"], { cwd: dir, encoding: "utf-8" }).stdout?.trim() || "ssh";
+  // Only OpenSSH takes these options; another program is left as it is.
+  const program = /^\s*(?:"([^"]+)"|'([^']+)'|(\S+))/.exec(ssh);
+  const name = (program?.[1] ?? program?.[2] ?? program?.[3] ?? "").split(/[\\/]/).at(-1)?.toLowerCase();
+  if (name === "ssh" || name === "ssh.exe") env.GIT_SSH_COMMAND = `${ssh} -o BatchMode=yes -o ConnectTimeout=15`;
+  return env;
+}
+
+function quietly<T>(work: () => T): T {
+  if (quiet) return work();
+  quiet = true;
   try {
     return work();
   } finally {
-    quietGit = null;
+    quiet = false;
   }
 }
 
 function quietFetch(dir: string, args: string[]): GitResult {
-  return quietly(dir, () => git(dir, ["fetch", ...args]));
+  return quietly(() => git(dir, ["fetch", ...args]));
 }
 
 // The work's claims as the home has them now, fetched into the refs the
@@ -5632,7 +5652,7 @@ export function refreshHomeClaims(
 // A claim at the home's address: fetched so its payload can be read.
 function ensureFetchedClaim(projectDir: string, home: HomeWork, ref: string): void {
   if (home.target === null || !isGitAddress(home.target)) return;
-  git(projectDir, ["fetch", "--no-tags", home.target, `+${ref}:refs/aidlc/home/${home.id8}/${ref.slice("refs/heads/".length)}`]);
+  quietFetch(projectDir, ["--no-tags", home.target, `+${ref}:refs/aidlc/home/${home.id8}/${ref.slice("refs/heads/".length)}`]);
 }
 
 // --- Sending a Unit's build home ----------------------------------------------
@@ -5648,6 +5668,33 @@ function ensureFetchedClaim(projectDir: string, home: HomeWork, ref: string): vo
 function buildsHome(projectDir: string, build: UnitBuild): HomeWork {
   const at = build.homeRecord.indexOf("/");
   return findHomeWork(projectDir, build.homeRecord.slice(at + 1), build.homeRecord.slice(0, at));
+}
+
+// The remote a push of the Unit's branch goes to, in git's own order: the
+// branch's pushRemote, remote.pushDefault, the branch's remote, then origin or
+// the one remote. Several remotes and none of these set: the person's pick, or
+// the remotes to put to them.
+function pushRemoteOf(dir: string, branch: string, picked?: string): string | { remotes: string[] } | null {
+  for (const key of [`branch.${branch}.pushRemote`, "remote.pushDefault", `branch.${branch}.remote`]) {
+    const set = git(dir, ["config", "--get", key]).stdout.trim();
+    if (set) return set;
+  }
+  const remotes = git(dir, ["remote"]).stdout.split(/\r?\n/).map((name) => name.trim()).filter(Boolean);
+  if (picked !== undefined && remotes.includes(picked)) return picked;
+  if (remotes.includes("origin")) return "origin";
+  if (remotes.length <= 1) return remotes[0] ?? null;
+  return { remotes };
+}
+
+// The Unit's repos whose push remote only the person can name, with each one's remotes.
+export function pushRemotesToPick(projectDir: string, unit: string, repos: string[]): Array<{ repo: string; remotes: string[] }> {
+  const open: Array<{ repo: string; remotes: string[] }> = [];
+  for (const repo of repos) {
+    const dir = repo === "." ? projectDir : repoDir(projectDir, repo);
+    const found = isGitRepoDir(dir) ? pushRemoteOf(dir, unit) : null;
+    if (found !== null && typeof found === "object") open.push({ repo, remotes: found.remotes });
+  }
+  return open;
 }
 
 // A code repo's integration branch: where its remote's HEAD points.
@@ -5675,6 +5722,9 @@ function pushUnit(args: string[], projectDir?: string): void {
   const manifest = readUnitSourceManifest(pd, "code-generation", unit);
   if (!manifest.ok) fail(`${unit} has no record of what its Code Generation wrote yet (${manifest.reason}).`);
   const byRepo = writesByRepo(pd, manifest.manifest.writes);
+  // The person's pick of a push remote, per repo: `--remote <repo>=<name>[,...]`.
+  const picked = new Map((flags.remote ?? "").split(",").map((pair) => pair.split("=").map((part) => part.trim()))
+    .filter((pair): pair is [string, string] => pair.length === 2 && pair[0] !== "" && pair[1] !== ""));
   // A build by file has no home to reach; its result goes back as a file.
   const byFile = getField(state, "Home Result")?.trim() === "by file";
   const home = byFile ? null : buildsHome(pd, build);
@@ -5699,8 +5749,11 @@ function pushUnit(args: string[], projectDir?: string): void {
     }
     for (const path of commitUnitPaths(dir, paths, takeTree[repo] ?? {}, unit, label, name)) leftOut.push(`${path} in ${name}`);
     if (takeTree[repo] !== undefined) writeTakeTree(activeRecordDir(pd), takeTree);
-    const remote = git(dir, ["config", "--get", `branch.${unit}.remote`]).stdout.trim() || repositoryRemote(dir);
+    const remote = pushRemoteOf(dir, unit, picked.get(repo));
     if (remote === null) fail(`${name} has no remote to push ${unit} to.`);
+    if (typeof remote === "object") {
+      fail(`${name} has the remotes ${joinNames(remote.remotes)} and none is set for pushing: ask the person which one ${unit} goes to.`);
+    }
     const pushed = git(dir, ["push", "-u", remote, unit]);
     if (!pushed.ok) fail(`The push of ${unit} in ${name} was refused: ${pushRefusal(pushed.stderr)}. Nothing was retried.`);
     const head = git(dir, ["rev-parse", "HEAD"]).stdout.trim();
@@ -5708,10 +5761,8 @@ function pushUnit(args: string[], projectDir?: string): void {
       (git(dir, ["merge-base", "HEAD", repoIntegration(dir, remote)]).stdout.trim() || head);
     const changed = git(dir, ["diff", "--name-only", "--no-renames", base, head, "--", ...paths]).stdout.split(/\r?\n/).filter(Boolean);
     const blobs = blobsAt(dir, head, changed);
-    const url = git(dir, ["remote", "get-url", remote]).stdout.trim();
     const entry: RepoResult = {
       repo,
-      ...(url ? { url } : {}),
       branch: unit,
       base,
       heads: [...new Set([...(earlier.get(repo)?.heads ?? []), head])],
@@ -5812,7 +5863,7 @@ export function checkTeamResults(
   unsent?: string[],
 ): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
   const pd = resolveProjectDir(projectDir);
-  return quietly(pd, () => checkTeamResultsQuietly(pd, unreached, unsent));
+  return quietly(() => checkTeamResultsQuietly(pd, unreached, unsent));
 }
 
 function checkTeamResultsQuietly(
@@ -5849,8 +5900,12 @@ function checkTeamResultsQuietly(
           : { repo: repo.repo, merged: false };
       }
       const repoRemote = repositoryRemote(dir);
-      if (repoRemote !== null && !quietFetch(dir, ["-q", repoRemote]).ok) unreached?.push(repo.repo === "." ? repoRemote : repo.repo);
-      const verdict = unitMergeVerdict(dir, repoRemote === null ? "HEAD" : repoIntegration(dir, repoRemote), repo);
+      const integration = repoRemote === null ? "HEAD" : repoIntegration(dir, repoRemote);
+      // Only the branch the Unit merges into.
+      if (repoRemote !== null && !quietFetch(dir, ["-q", repoRemote, integration.slice(repoRemote.length + 1)]).ok) {
+        unreached?.push(repo.repo === "." ? repoRemote : repo.repo);
+      }
+      const verdict = unitMergeVerdict(dir, integration, repo);
       return verdict.merged ? { repo: repo.repo, merged: true, commit: verdict.commit, how: verdict.how } : { repo: repo.repo, merged: false };
     });
     const done = verdicts.length > 0 && verdicts.every((verdict) => verdict.merged) &&

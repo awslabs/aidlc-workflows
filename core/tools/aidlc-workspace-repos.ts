@@ -66,6 +66,38 @@ export function workspaceTargetPath(projectDir: string, target: string): string 
   return resolvePath(projectDir, target);
 }
 
+// A git address as AI-DLC records or prints it: a URL's user and token (some
+// hosts and CI checkouts keep them in origin) stay in the person's own git
+// config. An scp-style address keeps its user, which is no secret.
+export function recordableGitAddress(address: string): string {
+  return address.trim().replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, "$1");
+}
+
+// One repo however a clone spells its address: scheme, user, token, the
+// default port, host case, a trailing slash and `.git` aside, so `git@host:o/r`,
+// `ssh://git@host/o/r` and `https://host/o/r.git` are one. A local path or
+// file:// URL is its absolute path.
+export function gitAddressKey(address: string): string {
+  const value = address.trim().replace(/[\\/]+$/, "").replace(/\.git$/i, "");
+  if (!/^file:\/\//i.test(value)) {
+    const url = /^([a-z][a-z0-9+.-]*):\/\/(?:[^/@]*@)?([^/:]+)(?::(\d+))?(\/.*)?$/i.exec(value);
+    if (url) {
+      const scheme = url[1].toLowerCase();
+      const port = url[3] && !(url[3] === "22" && scheme.includes("ssh")) && !(url[3] === "443" && scheme === "https") &&
+          !(url[3] === "80" && scheme === "http")
+        ? `:${url[3]}`
+        : "";
+      return `${url[2].toLowerCase()}${port}${url[4] ?? ""}`;
+    }
+    // scp-style host:path; a one-letter "host" is a Windows drive.
+    const scp = /^(?:[^@/\\]+@)?([^/\\:]{2,}):(?!\/\/)(.+)$/.exec(value);
+    if (scp) return `${scp[1].toLowerCase()}/${scp[2].replace(/^\/+/, "")}`;
+  }
+  const path = /^file:\/\//i.test(value) ? decodeURIComponent(value.slice("file://".length)).replace(/^\/([a-z]:)/i, "$1") : value;
+  const absolute = resolvePath(path).replace(/\\/g, "/");
+  return process.platform === "win32" ? absolute.toLowerCase() : absolute;
+}
+
 // The offer to write repos.json is made once per clone (decision 21).
 const REPOS_OFFER_FILE = "repos-offer.json";
 
