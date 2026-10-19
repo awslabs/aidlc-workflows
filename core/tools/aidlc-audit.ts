@@ -69,6 +69,10 @@ const VALID_EVENT_TYPES = new Set([
   // A finished stage AI-DLC itself now does differently: the row carries its
   // receipt for the new definition (aidlc-validity.ts).
   "STAGE_DEFINITION_CHANGED",
+  // A code-producing stage's source-work check found no new code where it
+  // looked, and what it did: the agent's first report refused, the approval
+  // question put to the person, or Guard Policy off standing aside.
+  "SOURCE_WORK_NOT_FOUND",
   // Phase lifecycle
   "PHASE_STARTED",
   "PHASE_COMPLETED",
@@ -299,6 +303,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   STAGE_REVISING: "Stage Revising",
   STAGE_COMPLETED: "Stage Completion",
   STAGE_DEFINITION_CHANGED: "Stage Definition Changed",
+  SOURCE_WORK_NOT_FOUND: "Source Work Not Found",
   STAGE_JUMPED: "Stage Jump",
   STAGE_SKIPPED: "Stage Skip",
   PHASE_STARTED: "Phase Start",
@@ -501,6 +506,9 @@ export interface AuditEntryInput {
 export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "STAGE_COMPLETED",
   "STAGE_DEFINITION_CHANGED",
+  // The check's own record of a first refusal opens the gate on the next
+  // report; a forged one would skip the agent's refusal.
+  "SOURCE_WORK_NOT_FOUND",
   "HUMAN_TURN",
   "HOST_TURN",
   "QUESTION_UNANSWERED",
@@ -613,6 +621,8 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "PLAN_APPROVAL_RECORDED",
   "PLAN_APPROVAL_OVERRIDDEN",
   "PLAN_APPROVAL_SKIPPED",
+  // The source-work check's own record opens the main checkout's gate.
+  "SOURCE_WORK_NOT_FOUND",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
   "UNIT_GATE_RHYTHM_SET",

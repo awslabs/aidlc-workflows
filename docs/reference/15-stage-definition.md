@@ -214,14 +214,38 @@ How "source work" is detected depends on the workspace:
 - **Non-git workspace** (or any git error) - the guard falls back to a shell-free
   filesystem-existence check: at least one file must exist outside the `aidlc/`
   workspace tree and the harness dirs.
-- **Multi-repo workspace** - the code may live in one of the intent's recorded
-  repos (the `repos` of its registry row) rather than the workspace repo, for
-  example a gitignored child repo with or without AI-DLC in it. The guard asks
-  each recorded repo the same question it asks the workspace, so a brownfield
-  child repo with no new code does not pass either. Git is asked only in a
-  folder with a real `.git` entry (a clone, submodule or init the person made);
-  a committed folder merely shaped like a repo gets the filesystem check, so
-  its committed git config never runs.
+- **Code kept outside the workspace's own git** - the code may live in one of
+  the intent's recorded repos (the `repos` of its registry row), in a child
+  repo, clone or worktree made after the work started, in a linked worktree of
+  any of those (nested, in a harness folder such as Claude Code's
+  `.claude/worktrees/`, outside the project or on another drive, as
+  `git worktree list` names them), or in a checkout the workspace's git does
+  not track, such as a worktree of a repo kept outside the project and placed
+  in a gitignored folder inside it (found up to three levels below each
+  untracked or ignored folder, without following links). The guard asks each of
+  them the same question it asks the workspace, so a brownfield checkout with no
+  new code does not pass either. Git is asked only in a folder with a real
+  `.git` entry (a clone, submodule, init or worktree the person made); a
+  committed folder merely shaped like a repo gets the filesystem check, so its
+  committed git config never runs, and a checkout outside the project is asked
+  with `--no-optional-locks`, so nothing is written there. AI-DLC's own Bolt
+  worktrees under `.aidlc/` are left to the swarm's own evidence.
+- **Code committed, then the records** - a records-only last commit hides code
+  committed earlier in the stage, so the guard also compares the source with
+  the stage attempt's `Source Baseline`: a change outside AI-DLC's own files
+  since the stage began is source work.
+
+When the guard finds no source work anywhere it looked, Guard Policy off lets
+the work carry on, and the person hears once "AI-DLC found no source changes
+under <where it looked>". Under strict or relaxed the agent's own first report is
+refused, naming the way on that always works: report again, and the approval
+question goes to the person with that line ("If your code is somewhere else,
+approve as usual; if it is missing, ask for changes."). Their approval records
+it as `Source Work` beside their words. Where no approval would be the person's
+reply after the gate (an autonomous Construction gate, the human-presence
+check switched off, an unattended run) and for the agent's own `advance`,
+`finalize` and `complete-workflow`, the refusal stays. Each outcome is
+recorded once per stage attempt as a `SOURCE_WORK_NOT_FOUND` row.
 
 Today only `code-generation` declares it. Its per-unit reviews additionally
 require `<record>/construction/<unit>/code-generation/source-manifest.json`:
@@ -231,6 +255,10 @@ receipt, compares every fresh unit against a content-addressed stage-entry
 baseline, and refuses changed paths outside the fresh claims union. Directory
 claims cover later additions; in a main multi-repo workspace every entry names
 its recorded repo, while a Bolt's manifest is relative to its one selected repo.
+In a workspace that records no repos, an entry inside a checkout nested in the
+project (a worktree or clone its git does not track) is judged by that
+checkout's own git, so the workspace's `.gitignore` for that folder does not
+refuse it.
 Missing pre-upgrade fields fail open only as documented migration evidence;
 present-but-unbindable or destroyed modern evidence fails closed under Guard
 Policy strict; under relaxed or off it is recorded once and the work continues. A team that

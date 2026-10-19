@@ -21984,7 +21984,7 @@ const SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES = [
   "node_modules",
   "venv",
 ] as const;
-const SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS = new Set<string>(
+export const SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS: ReadonlySet<string> = new Set<string>(
   SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES,
 );
 
@@ -26258,6 +26258,40 @@ export function registryExcludedSourceKeys(
   return excluded;
 }
 
+// The checkout that judges a source claim, and the claim's path within it. A
+// claim with no repo field whose path lies inside a checkout nested under the
+// project (a worktree or clone the project's git does not track) is judged by
+// that checkout's own git: the outer repository's .gitignore only says the
+// outer repository does not track that folder. The innermost folder on the
+// path with a real .git entry wins; lstat only, so a link or a junction on the
+// way is never followed.
+function sourceClaimCheckout(
+  repoRoot: string,
+  path: string,
+  nestedAllowed: boolean,
+): { dir: string; path: string } {
+  let claim = { dir: repoRoot, path };
+  if (!nestedAllowed) return claim;
+  const trailing = path.endsWith("/") ? "/" : "";
+  const parts = path.replace(/\/+$/, "").split("/");
+  let dir = repoRoot;
+  for (let at = 0; at < parts.length - 1; at++) {
+    dir = join(dir, parts[at]);
+    try {
+      if (!lstatSync(dir).isDirectory()) return claim;
+    } catch {
+      return claim;
+    }
+    try {
+      const git = lstatSync(join(dir, ".git"));
+      if (git.isDirectory() || git.isFile()) claim = { dir, path: `${parts.slice(at + 1).join("/")}${trailing}` };
+    } catch {
+      // No .git entry here: the folder belongs to the checkout above it.
+    }
+  }
+  return claim;
+}
+
 function ignoredSourceClaimReason(
   sourceRepoDir: string,
   path: string,
@@ -26684,15 +26718,18 @@ function validateUnitSourceManifestBytes(
     }
     const normalized = normalizeManifestSourcePath(candidate.path);
     if ("reason" in normalized) continue;
-    const sourceRepoDir =
+    const claim = sourceClaimCheckout(
       worktreeRelative
         ? projectDir
         : canonicalRepo === undefined
           ? projectDir
-          : repoDir(projectDir, canonicalRepo);
-    seedGitSourceClaimIgnorePath(
-      sourceRepoDir,
+          : repoDir(projectDir, canonicalRepo),
       normalized.path,
+      !worktreeRelative && canonicalRepo === undefined,
+    );
+    seedGitSourceClaimIgnorePath(
+      claim.dir,
+      claim.path,
       sourceClaimValidation,
     );
   }
@@ -26735,15 +26772,18 @@ function validateUnitSourceManifestBytes(
     ) {
       return { ok: false, reason: `writes[${index}].path is inside the framework record/shell exclusions` };
     }
-    const sourceRepoDir =
+    const claim = sourceClaimCheckout(
       worktreeRelative
         ? projectDir
         : canonicalRepo === undefined
           ? projectDir
-          : repoDir(projectDir, canonicalRepo);
-    const ignoredReason = ignoredSourceClaimReason(
-      sourceRepoDir,
+          : repoDir(projectDir, canonicalRepo),
       normalized.path,
+      !worktreeRelative && canonicalRepo === undefined,
+    );
+    const ignoredReason = ignoredSourceClaimReason(
+      claim.dir,
+      claim.path,
       normalized.prefix,
       pathModeIndexes,
       sourceClaimValidation,
@@ -26753,8 +26793,8 @@ function validateUnitSourceManifestBytes(
       return { ok: false, reason: `writes[${index}].path: ${ignoredReason}` };
     }
     const symlinkReason = symlinkClaimTargetReason(
-      sourceRepoDir,
-      normalized.path,
+      claim.dir,
+      claim.path,
       normalized.prefix,
       carriesWorkspaceShell,
       pathModeIndexes,

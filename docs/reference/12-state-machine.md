@@ -275,9 +275,15 @@ marked complete without evidence of work on disk. A stage that declares
 intent's record dir or its per-unit Construction directories. A codekb stage
 is stricter: every registered repository directory must contain the full
 declared `produces[]` set; single/unrecorded intents use the one resolved
-codekb directory. `workspace_requires: true` also requires source-work evidence
-outside `aidlc/` and the harness dir, in the workspace or in one of the
-intent's recorded repos. A failure writes nothing. Optional outputs
+codekb directory. `workspace_requires: true` also looks for source-work evidence
+outside `aidlc/` and the harness dir: in the workspace, in the intent's recorded
+repos, in child repos and worktrees found when the check runs, in the linked
+worktrees of each of those, in checkouts the workspace's git does not track,
+and in the source changed since the stage attempt began. When it finds none,
+Guard Policy off lets the work carry on with one recorded line; otherwise the
+agent's own first report is refused and its second puts the approval question
+to the person with that line (`SOURCE_WORK_NOT_FOUND`), unless no approval
+would be the person's reply after the gate. A failure writes nothing else. Optional outputs
 do not participate. For `produces_kinds`, units whose kind prunes the required
 set to zero owe no artifact; any applicable unit remains strict. Bypass with
 `AIDLC_SKIP_ARTIFACT_GUARD=1`. The same switch also bypasses the review logger's
@@ -687,7 +693,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 ## Audit event taxonomy
 
-**119 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 119 into 25 - the grouping is presentational, the event set is the invariant). Each event's permitted tool or hook emitters are listed below. `GUARD_POLICY_SET` has distinct mutation and effective-memory-observation paths; neither duplicates the other's emission. Events pre-registered for an upcoming release have an Emitter cell reading `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)`, and a retired event name that is still read but never written reads `Reserved (retired name)`; both are skipped by the drift test's forward check. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
+**120 events**, grouped below into 20 categories (the canonical `audit-format.md` registry splits the same 120 into 25 - the grouping is presentational, the event set is the invariant). Each event's permitted tool or hook emitters are listed below. `GUARD_POLICY_SET` has distinct mutation and effective-memory-observation paths; neither duplicates the other's emission. Events pre-registered for an upcoming release have an Emitter cell reading `Reserved (v0.4.0 PR N)`, `Reserved (v0.5.0 PR N)`, or `Reserved (v0.6.0 PR N)`, and a retired event name that is still read but never written reads `Reserved (retired name)`; both are skipped by the drift test's forward check. The drift test `tests/integration/t48-audit-event-emitters.test.ts` enforces forward/reverse/tertiary/pairing/MD-MD consistency between this chapter's tables and the code.
 
 ### Workflow lifecycle
 
@@ -721,6 +727,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `STAGE_SKIPPED` | `tools/aidlc-state.ts`, `tools/aidlc-jump.ts`, `tools/aidlc-utility.ts` | Exactly one per `[S]` transition; the main-workflow report path routes onward atomically. A scope change that skips the current stage before it started, or a stage waiting for approval, writes `[S]` with `Skip Kind: scope-change`; the next `next` routes past a current one through `report --result skipped`, which adds no second row |
 | `STAGE_JUMPED` | `tools/aidlc-jump.ts` | Records the destination slug on `--stage`/`--phase` jump. Backward jumps also bind the concrete changed upstream artifact paths and the downstream artifact/review paths invalidated by the reset. It starts a new attempt (run floor, review and summary attempts, Unit checkpoint approvals, source baseline) for its `Target` and every stage after it in the stage graph, the stages it resets; a stage before the `Target` keeps its attempt, so a jump back to Code Generation keeps each Unit's Functional Design (`stageJumpReaches`). A row with no `Target` the graph knows reaches every stage. |
 | `STAGE_DEFINITION_CHANGED` | `tools/aidlc-orchestrate.ts` | A finished stage AI-DLC itself now does differently (an update, a plugin turned on, the team's own stage edit) while nothing of the person's work changed. Written once the next step was said (never by a rules part or a read-only probe); that step carries a `change_notices` line only when the stage now needs an input it did not need when it ran. `Validation Basis` is the stage's receipt for its new definition and stands in for its completion receipt from then on; `Details` is the line said, or that nothing was. |
+| `SOURCE_WORK_NOT_FOUND` | `tools/aidlc-state.ts` | Code Generation's source-work check (`workspace_requires`) found no new code where it looked; the row names where (`Looked In`) and what the check did (`Outcome`): `told the agent` (the agent's first report in this attempt refused), `put to the person` (the approval question went to them with the note) or `stood aside` (Guard Policy off). One row per outcome per attempt (`Run floor`); never written by the engine's own preflight. |
 
 ### Gate decisions
 
@@ -1506,7 +1513,8 @@ first, then `next` shows the gate again; when the refused step was the person's
 approval, the same approval runs again, so they are not asked twice); a stage
 reported before its outputs or its code exist (`REQUIRED_ARTIFACTS_MISSING`,
 `REQUIRED_SOURCE_WORK_MISSING`) offers `produce-stage-output`, the refusal's own
-sentence, which ends with the same report again; the source changed after its
+sentence, which ends with the same report again (for missing code, the second
+report puts the approval question to the person with where AI-DLC looked); the source changed after its
 review (`SOURCE_REVIEW_STALE`, the source still readable) offers the one
 `start-recovery-review`, as a changed output does, and that remedy names its
 exact request; and a review pass the cap refuses with nobody having asked for it

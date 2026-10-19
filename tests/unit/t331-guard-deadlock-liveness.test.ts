@@ -10,7 +10,7 @@
 // function:humanAuthorityState,
 // function:normalizeGuardRecoveryText, function:consumeSharedDirectiveAsk,
 // function:guardRecoveryFeedbackStatus, function:guardPreflight,
-// directive:guard-recovery
+// function:sourceWorkNotFound, directive:guard-recovery
 
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
@@ -20,6 +20,7 @@ import {
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -86,10 +87,26 @@ import {
   seedAuditFile,
   seedAidlcMemory,
   seedBoltDag,
+  seededAuditShard,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import {
+  buildLayout,
+  cleanupLayouts,
+  codeOutOfSight,
+  type EngineStep,
+  isGuardAsk,
+  LAYOUTS,
+  PERSON,
+  personSays,
+  report,
+  review,
+  setGuardPolicy,
+  stageBox,
+  writeCode,
+} from "../harness/source-work-layouts.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -3184,4 +3201,89 @@ describe("the gate a spent review budget offers is a step the walk accepts", () 
     expect(again.remedies.map((remedy) => remedy.label))
       .toEqual(["Finish with the review it has", "Do this step again for the Unit", "Request Changes"]);
   });
+});
+
+// Code Generation's "no source work" check, wherever the code is kept and
+// under each Guard Policy: every refusal at its gate has a way on that leads
+// elsewhere. The agent's own reports reach the approval question within two
+// (one under off), none ends in the terminal "nothing I can safely do", and
+// after the person's Request Changes the redone stage reaches it again the
+// same way. A lost record of the first refusal sends the way on to the
+// person, never back into a loop.
+describe("the source-work check never stops the person", () => {
+  afterEach(() => cleanupLayouts());
+
+  // The agent reports until the approval question is open; how many reports
+  // that took, and every answer it got on the way.
+  function reportUntilGate(proj: string, result: string): { reports: number; steps: EngineStep[] } {
+    const steps: EngineStep[] = [];
+    for (let reports = 1; reports <= 3; reports++) {
+      const step = report(proj, result, PERSON);
+      steps.push(step);
+      if (stageBox(proj) === "?") return { reports, steps };
+    }
+    return { reports: Number.POSITIVE_INFINITY, steps };
+  }
+
+  const policies = ["strict", "relaxed", "off"] as const;
+  for (const layout of LAYOUTS) {
+    for (const policy of policies) {
+      test.skipIf(layout.skip !== undefined && layout.skip !== false)(`${layout.name}, Guard Policy ${policy}`, () => {
+        const { proj } = buildLayout(layout, false);
+        setGuardPolicy(proj, policy, "set by you");
+        const opened = reportUntilGate(proj, "awaiting-approval");
+        expect(opened.reports, opened.steps.map((step) => step.out).join("\n")).toBeLessThanOrEqual(policy === "off" ? 1 : 2);
+        for (const step of opened.steps) expect(step.out).not.toContain("nothing I can safely do");
+      });
+    }
+  }
+
+  for (const policy of policies) {
+    test(`the code out of sight, Guard Policy ${policy}: report 2 opens the gate, and after Request Changes reports 1 and 2 do again`, () => {
+      const { proj } = codeOutOfSight();
+      setGuardPolicy(proj, policy, "set by you");
+      const opened = reportUntilGate(proj, "awaiting-approval");
+      expect(opened.reports, opened.steps.map((step) => step.out).join("\n")).toBe(policy === "off" ? 1 : 2);
+      if (policy !== "off") expect(isGuardAsk(opened.steps[0])).toBe(true);
+      for (const step of opened.steps) expect(step.out).not.toContain("nothing I can safely do");
+      personSays(proj);
+      const rejected = report(proj, "rejected", PERSON, ["--user-input", "Request Changes", "--reason", "write the code here"]);
+      expect(stageBox(proj), rejected.out).toBe("R");
+      writeCode(proj, "export const login = 2;\n");
+      expect(review(proj, false, [], 1).rc).toBe(0);
+      const again = reportUntilGate(proj, "revised");
+      expect(again.reports, again.steps.map((step) => step.out).join("\n")).toBeLessThanOrEqual(2);
+      for (const step of again.steps) expect(step.out).not.toContain("nothing I can safely do");
+    });
+  }
+
+  // The first refusal is recorded in the audit trail itself, not in the
+  // guard-refusals runtime record: losing that record changes nothing.
+  test("the guard-refusals record replaced by a file: the second report still opens the gate", () => {
+    const { proj } = codeOutOfSight();
+    const record = join(seededRecordDir(proj), ".aidlc-engine", "guard-refusals");
+    rmSync(record, { recursive: true, force: true });
+    mkdirSync(dirname(record), { recursive: true });
+    writeFileSync(record, "not a folder\n");
+    const opened = reportUntilGate(proj, "awaiting-approval");
+    expect(opened.reports, opened.steps.map((step) => step.out).join("\n")).toBeLessThanOrEqual(2);
+  });
+
+  // An audit shard this run cannot read could hold the first refusal: the
+  // check reads that as already said, and the question goes to the person.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "an audit shard that cannot be read: the gate opens on the first report",
+    () => {
+      const { proj } = codeOutOfSight();
+      const shard = join(dirname(seededAuditShard(proj)), "other-clone.md");
+      writeFileSync(shard, "## Human Turn\n**Timestamp**: 2026-01-01T00:00:00Z\n**Event**: HUMAN_TURN\n\n---\n");
+      chmodSync(shard, 0o000);
+      try {
+        const opened = reportUntilGate(proj, "awaiting-approval");
+        expect(opened.reports, opened.steps.map((step) => step.out).join("\n")).toBe(1);
+      } finally {
+        chmodSync(shard, 0o644);
+      }
+    },
+  );
 });
