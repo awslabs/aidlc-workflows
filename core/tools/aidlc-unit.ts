@@ -6481,9 +6481,11 @@ function rebaseUnit(args: string[], projectDir?: string): void {
         const stopped = rebaseUnderWay(repo.dir);
         // Refused for their own changes: offered again once they are out of the way.
         if (!stopped) noteEngineAskMark(pd, moveRefusedMark(dep.unit));
+        // A stopped rebase switched to the Unit's branch first, and its abort leaves them there.
+        if (stopped && from !== build.unit) switched.push({ name: repo.name, from: from || "the commit you were on" });
         fail(`${build.unit} could not be moved onto ${branch} in ${repo.name}. Git says: "${gitSaid(ran.stderr || ran.stdout)}".` +
           (stopped ? ` To go back to where ${build.unit} was there, run git rebase --abort in ${repo.name}.` : "") +
-          (moved.length > 0 ? ` In ${joinNames(moved)} it is on ${joinNames([...onto])} now.${whereNowLine(build.unit, switched)}` : ""));
+          (moved.length > 0 ? ` In ${joinNames(moved)} it is on ${joinNames([...onto])} now.` : "") + whereNowLine(build.unit, switched));
       }
       moved.push(repo.name);
       onto.add(branch);

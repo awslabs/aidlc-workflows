@@ -724,28 +724,32 @@ describe("a Unit started early whose dependency merged: the move onto main is of
     expect(git(billing, ["merge-base", "--is-ancestor", "origin/main", "reporting"]) === "").toBe(true);
   });
 
-  test("a move git stops on a conflict: git's words and the way back, and the repo before it stays moved", () => {
-    const { dana, hosts } = earlyThenMerged("squash", true);
-    // A teammate's report.ts lands on main in billing meanwhile.
-    const parent = tempDir("teammate");
-    const other = join(parent, "billing");
-    git(parent, ["clone", "-q", hosts.billing, other]);
-    git(other, ["config", "user.name", "sam"]);
-    git(other, ["config", "user.email", "sam@example.test"]);
-    writeFileSync(join(other, "report.ts"), "export const report = 2;\n");
-    git(other, ["add", "report.ts"]);
-    git(other, ["commit", "-q", "-m", "sam's report"]);
-    git(other, ["push", "-q", "origin", "main"]);
-    const ask = next(dana, ENV);
-    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-move-onto");
-    const moved = runPrinted(dana, ENV, choice(ask, "Move reporting onto main"));
-    expect(moved.status).not.toBe(0);
-    const error = String((JSON.parse(moved.out) as { error?: string }).error);
-    expect(error).toStartWith('reporting could not be moved onto main in billing. Git says: "could not apply ');
-    expect(error).toEndWith('". To go back to where reporting was there, run git rebase --abort in billing. In checkout-api it is on main now.');
-    git(join(dana, "billing"), ["rebase", "--abort"]);
-    expect(git(join(dana, "billing"), ["branch", "--show-current"])).toBe("reporting");
-  });
+  for (const from of ["reporting", "main"] as const) {
+    test(`a move git stops on a conflict, from ${from}: git's words and the way back, and the repo before it stays moved`, () => {
+      const { dana, hosts } = earlyThenMerged("squash", true);
+      for (const repo of ["billing", "checkout-api"]) git(join(dana, repo), ["switch", "-q", from]);
+      // A teammate's report.ts lands on main in billing meanwhile.
+      const parent = tempDir("teammate");
+      const other = join(parent, "billing");
+      git(parent, ["clone", "-q", hosts.billing, other]);
+      git(other, ["config", "user.name", "sam"]);
+      git(other, ["config", "user.email", "sam@example.test"]);
+      writeFileSync(join(other, "report.ts"), "export const report = 2;\n");
+      git(other, ["add", "report.ts"]);
+      git(other, ["commit", "-q", "-m", "sam's report"]);
+      git(other, ["push", "-q", "origin", "main"]);
+      const ask = next(dana, ENV);
+      expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-move-onto");
+      const moved = runPrinted(dana, ENV, choice(ask, "Move reporting onto main"));
+      expect(moved.status).not.toBe(0);
+      const error = String((JSON.parse(moved.out) as { error?: string }).error);
+      expect(error).toStartWith('reporting could not be moved onto main in billing. Git says: "could not apply ');
+      expect(error).toEndWith('". To go back to where reporting was there, run git rebase --abort in billing. In checkout-api it is on main now.' +
+        (from === "main" ? " You're on reporting now in checkout-api and billing. Switch back to main any time." : ""));
+      git(join(dana, "billing"), ["rebase", "--abort"]);
+      expect(git(join(dana, "billing"), ["branch", "--show-current"])).toBe("reporting");
+    });
+  }
 });
 
 describe("a print with no offers reads as it did before the teams' steps became prints", () => {
