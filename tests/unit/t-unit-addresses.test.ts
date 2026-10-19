@@ -57,6 +57,9 @@ describe("addresses", () => {
     expect(gitAddressKey("/srv/git/ws.git")).toBe(gitAddressKey("file:///srv/git/ws"));
     expect(recordableGitAddress(`https://lead:${TOKEN}@example.test/org/ws.git`)).toBe("https://example.test/org/ws.git");
     expect(recordableGitAddress("git@example.test:org/ws.git")).toBe("git@example.test:org/ws.git");
+    // Over ssh the user is part of the address, not a secret.
+    expect(recordableGitAddress("ssh://git@example.test/org/ws.git")).toBe("ssh://git@example.test/org/ws.git");
+    expect(recordableGitAddress(`http://lead:${TOKEN}@example.test/org/ws.git`)).toBe("http://example.test/org/ws.git");
   });
 
   test("an origin with a token in it: teams are chosen and repos.json is written, and neither the record nor the file holds the token", () => {

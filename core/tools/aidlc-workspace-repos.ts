@@ -66,11 +66,12 @@ export function workspaceTargetPath(projectDir: string, target: string): string 
   return resolvePath(projectDir, target);
 }
 
-// A git address as AI-DLC records or prints it: a URL's user and token (some
-// hosts and CI checkouts keep them in origin) stay in the person's own git
-// config. An scp-style address keeps its user, which is no secret.
+// A git address as AI-DLC records or prints it: an http(s) URL's user and
+// token (some hosts and CI checkouts keep them in origin) stay in the person's
+// own git config. Over ssh, in a URL or the scp form, the user is part of the
+// address and no secret.
 export function recordableGitAddress(address: string): string {
-  return address.trim().replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, "$1");
+  return address.trim().replace(/^(https?:\/\/)[^/@]*@/i, "$1");
 }
 
 // One repo however a clone spells its address: scheme, user, token, the
