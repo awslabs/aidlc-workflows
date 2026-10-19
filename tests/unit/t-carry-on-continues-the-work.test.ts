@@ -385,7 +385,8 @@ describe("t-carry-on-continues-the-work: work here but none selected in this cha
 
     // A fresh clone of parked work: `/aidlc --resume` asks which work to carry
     // on with, and the pick carries the parked work on in the same turn, never
-    // back to "Run /aidlc --resume" for the person to type again.
+    // back to the parked step that sends the person to type `/aidlc --resume`
+    // again.
     test(`${harness}: parked work, none selected: the pick after --resume carries it on through the unpark step`, () => {
       proj = cloneWithWork(tools, ["auth"]);
       const intents = join(proj, "aidlc", "spaces", "default", "intents");

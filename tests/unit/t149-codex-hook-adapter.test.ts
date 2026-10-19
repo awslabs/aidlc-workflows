@@ -953,12 +953,17 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
   });
 
   // The step a tool that hides the note gets after the line (Kiro CLI,
-  // opencode, Kiro IDE); the matcher knows that form too.
-  const AGENT_STEP =
+  // opencode, Kiro IDE), in its wording now (it names the install's park) and
+  // the one before; the matcher knows both by their opening and close.
+  const OLD_AGENT_STEP =
     "If you had just asked the person a question, record it with `log decision` and end your turn saying nothing. " +
     "Otherwise, if you carry on with the work, first say that line to the person once, on its own line; " +
     "it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it. " +
     "Say nothing else about this note.";
+  const AGENT_STEP = OLD_AGENT_STEP.replace(
+    "Otherwise,",
+    "If the person asked you to stop or pause, run `bun .kiro/tools/aidlc-orchestrate.ts park --person-asked` and end your turn. Otherwise,",
+  );
 
   // A turn whose person engaged the work, then a user-role message, then an
   // answer with no engine call: blocks when that message is the hook's own
@@ -985,6 +990,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       "AI-DLC is carrying on with Code Generation for alpha.",
       "AI-DLC is carrying on.",
       `AI-DLC is carrying on with Code Generation for alpha.\n${AGENT_STEP}`,
+      `AI-DLC is carrying on with Code Generation for alpha.\n${OLD_AGENT_STEP}`,
       "Requirements Analysis is not finished yet. Next: `bun .codex/tools/aidlc-orchestrate.ts next`.",
       "Code Generation for alpha is not finished yet. Next: finish its steps, then `aidlc engine orchestrate report --stage code-generation --result <outcome>`.",
     ]) {

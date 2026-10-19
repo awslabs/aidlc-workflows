@@ -111,11 +111,18 @@ describe("t-stop-carries-on-line: the agent's steps for the one-line Stop note",
   // case first, then the line, and the line is AI-DLC's, never the person's
   // answer (a Kiro IDE agent recorded "user implicitly confirmed by hook
   // trigger" as a decision right after saying it).
-  test("(b2) the hook's step puts the question case first and says the line confirms nothing", () => {
+  // A person who asked to stop or pause is parked by the step itself, with the
+  // install's exact command: on Kiro CLI no tool sees what they typed while the
+  // agent worked, and the agent explained the note to them in engine words.
+  test("(b2) the hook's step puts the question case first, parks a person who asked to stop, and says the line confirms nothing", () => {
     const stop = readFileSync(join(REPO_ROOT, "core/hooks/aidlc-continue-workflow.ts"), "utf-8");
-    const step = stop.slice(stop.indexOf("const SAY_THE_LINE ="), stop.indexOf("const STOP_NOTE ="));
-    expect(step.indexOf("If you had just asked the person a question")).toBeGreaterThan(0);
-    expect(step.indexOf("If you had just asked the person a question")).toBeLessThan(step.indexOf("first say that line"));
+    const step = stop.slice(stop.indexOf("const AGENT_STEP_OPENING ="), stop.indexOf("const STOP_NOTE ="));
+    const question = step.indexOf('const AGENT_STEP_OPENING = "If you had just asked the person a question"');
+    const park = step.indexOf("If the person asked you to stop or pause, run ");
+    expect(step).toContain('aidlcToolInvocation("orchestrate")} park --person-asked\\` and end your turn.');
+    expect(question).toBe(0);
+    expect(park).toBeGreaterThan(question);
+    expect(park).toBeLessThan(step.indexOf("first say that line"));
     expect(step).toContain("it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it");
   });
 

@@ -1018,6 +1018,11 @@ describe("t114 parked branch (#367)", () => {
     const out = runNext(proj, []).out;
     expect(out).toContain('"kind":"parked"');
     expect(out).toContain('"stage":"feasibility"');
+    // The person hears where the work stands and the way back: their own words
+    // in this chat, the entry with --resume in a new one.
+    expect(JSON.parse(out).narration).toBe(
+      "Paused at Feasibility & Constraints with everything saved. Pick it back up any time here, or with /aidlc --resume in a new chat.",
+    );
   });
 
   test("--resume on a parked workflow self-disables (names unpark, not parked)", () => {

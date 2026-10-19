@@ -105,7 +105,8 @@
 //      the stop when the most recent genuine human prompt was answered with zero
 //      engine calls (isConversationalStop below). ONE predicate, THREE
 //      evidence sources: the harness TRANSCRIPT where the Stop payload delivers
-//      `transcript_path` (Claude, Codex), the `.aidlc-engine/human-turn` vs
+//      `transcript_path` (Claude, Codex; on Claude a message typed while the
+//      agent worked is a queued attachment, read too), the `.aidlc-engine/human-turn` vs
 //      `.aidlc-engine/engine-touch` MARKER mtimes where it does not (Kiro IDE, Kiro CLI,
 //      opencode - these expose no turn history to a hook at all, so the framework
 //      writes the two facts itself on the mint and engine seams), and on
@@ -181,6 +182,7 @@ import {
   ActiveDirectiveLockContendedError,
   clearSessionIntentHandoff,
   boundDirectiveMessage,
+  claudeQueuedMessageOrigin,
   composeMarkerPath,
   consumeCopilotConversation,
   copilotStopEvidence,
@@ -240,7 +242,7 @@ import {
   writeEngineFileNoFollow,
 } from "../tools/aidlc-lib.ts";
 import { compareVersions } from "../tools/aidlc-channel.ts";
-import { aidlcEngineCommand, hidesStopNote, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcEngineCommand, aidlcToolInvocation, hidesStopNote, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import {
   foldTranscriptIntoLedger,
   writeCurrentTranscriptPath,
@@ -1072,12 +1074,17 @@ const SAY_NOTHING = "tell the person nothing about this note";
 // What follows the line, on its own line, where the tool hides the note from
 // the person. It reaches the agent even when the aidlc skill is not in its
 // context (a plain prompt, no /aidlc), and the line stays first so logs and the
-// matcher read it the same way on every tool.
-const SAY_THE_LINE =
-  "If you had just asked the person a question, record it with `log decision` and end your turn saying nothing. " +
-  "Otherwise, if you carry on with the work, first say that line to the person once, on its own line; " +
-  "it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it. " +
-  "Say nothing else about this note.";
+// matcher read it the same way on every tool. A person who asked to stop or
+// pause gets the park, named as this install runs it: there no tool sees what
+// they typed while the agent worked (Kiro CLI runs no prompt hook for it).
+const AGENT_STEP_OPENING = "If you had just asked the person a question";
+const AGENT_STEP_CLOSING = "Say nothing else about this note.";
+function sayTheLine(): string {
+  return `${AGENT_STEP_OPENING}, record it with \`log decision\` and end your turn saying nothing. ` +
+    `If the person asked you to stop or pause, run \`${aidlcToolInvocation("orchestrate")} park --person-asked\` and end your turn. ` +
+    "Otherwise, if you carry on with the work, first say that line to the person once, on its own line; " +
+    `it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it. ${AGENT_STEP_CLOSING}`;
+}
 // The one-line note the hook wrote before: "<step> is not finished yet. Next:
 // `<command>`." (or "Next: finish its steps, then `<command>`."). The command
 // in backticks is part of the shape, so a person's own sentence that happens
@@ -1106,8 +1113,15 @@ function isCarryingOnLine(text: string): boolean {
   );
 }
 
+// The line alone, when the agent's step follows it as one line, in this
+// wording or an earlier one with the same opening and close (the command in it
+// is the install's). Words of the person's own around it keep it theirs.
 function withoutAgentStep(text: string): string {
-  return text.endsWith(`\n${SAY_THE_LINE}`) ? text.slice(0, -(SAY_THE_LINE.length + 1)) : text;
+  const end = text.indexOf("\n");
+  const step = end === -1 ? "" : text.slice(end + 1);
+  return step.startsWith(AGENT_STEP_OPENING) && step.endsWith(AGENT_STEP_CLOSING) && !step.includes("\n")
+    ? text.slice(0, end)
+    : text;
 }
 
 // True when a user-role transcript entry's text is actually the hook's OWN
@@ -1224,6 +1238,12 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
     if (format === "claude") {
       // Claude JSONL: {type:"user"|"assistant", message:{role, content}}.
       const type = entry.type;
+      // What the person typed while the agent worked has no user row of its
+      // own: Claude Code keeps it as a queued attachment.
+      if (claudeQueuedMessageOrigin(entry) === "person") {
+        turns.push({ role: "user", engineCall: false, humanPrompt: true });
+        continue;
+      }
       const message = entry.message as Record<string, unknown> | undefined;
       if (!message) continue;
       const role = message.role;
@@ -1740,7 +1760,7 @@ function reasonForTheTool(line: string, projectDir: string): string {
   } catch {
     // An unreadable install keeps the plain line.
   }
-  return hides ? `${line}\n${SAY_THE_LINE}` : line;
+  return hides ? `${line}\n${sayTheLine()}` : line;
 }
 
 // --- Main ---------------------------------------------------------------------

@@ -466,9 +466,13 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
   // Kiro CLI shows the person nothing of a Stop block (live, 2.23.1), so the
   // reason carries the agent's step after the line: the agent says the line
   // itself, on its own line, even when the aidlc skill is not in its context.
+  // Kiro CLI runs no prompt hook for what the person types while the agent
+  // works (live, 2.29.0), so a person who asked to stop or pause is parked by
+  // the step, with the command this install runs.
   const KIRO_LINE = "AI-DLC is carrying on with Requirements Analysis.";
   const KIRO_AGENT_STEP =
     "If you had just asked the person a question, record it with `log decision` and end your turn saying nothing. " +
+    "If the person asked you to stop or pause, run `bun .kiro/tools/aidlc-orchestrate.ts park --person-asked` and end your turn. " +
     "Otherwise, if you carry on with the work, first say that line to the person once, on its own line; " +
     "it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it. " +
     "Say nothing else about this note.";
@@ -479,6 +483,49 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       const out = JSON.parse(r.stdout) as { decision?: string; reason?: string };
       expect(out.decision).toBe("block");
       expect(out.reason).toBe(`${KIRO_LINE}\n${KIRO_AGENT_STEP}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // The no-loop walk where only the step can park: the step's own command
+  // parks the work and the turn ends; in a new chat the person's words and the
+  // commands the engine names carry it on, with nothing asked again.
+  test("1b2: the step's park ends the turn, and the person's words in a new chat carry the work on", () => {
+    const dir = scratchProject(true);
+    const shell = (command: string) => {
+      const [bin, ...args] = command.split(" ");
+      const r = spawnSync(bin === "bun" ? process.execPath : bin, args, {
+        cwd: dir, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        env: { ...process.env, AIDLC_UNATTENDED: undefined, CLAUDE_PROJECT_DIR: dir } as NodeJS.ProcessEnv,
+      });
+      expect(r.status, `${command}: ${r.stderr}`).toBe(0);
+      return r.stdout.trim();
+    };
+    try {
+      const nudged = JSON.parse(runAdapter(dir, "continue-workflow", FIXTURES.stop).stdout) as { reason?: string };
+      const park = /run `([^`]+ park --person-asked)`/.exec(nudged.reason ?? "")?.[1];
+      expect(park, nudged.reason).toBe("bun .kiro/tools/aidlc-orchestrate.ts park --person-asked");
+      const parked = JSON.parse(shell(park as string)) as { kind: string; narration?: string };
+      expect(parked.kind).toBe("parked");
+      expect(parked.narration).toBe(
+        "Paused at Requirements Analysis with everything saved. Pick it back up any time here, or with /aidlc --resume in a new chat.",
+      );
+      expect(runAdapter(dir, "continue-workflow", FIXTURES.stop).stdout.trim()).toBe("");
+      expect(runAdapter(dir, "verb-intercept", {
+        ...(FIXTURES.userPromptSubmit as Record<string, unknown>),
+        cwd: dir,
+        session_id: "kiro-next-day",
+        prompt: "carry on",
+      }).code).toBe(0);
+      const back = runEngine(dir, ["next"]).directive as { kind: string; message?: string };
+      expect(back.kind, JSON.stringify(back)).toBe("print");
+      const unpark = /`([^`]+ unpark)`/.exec(back.message ?? "")?.[1];
+      expect(unpark, back.message).toBeDefined();
+      shell(unpark as string);
+      const moved = runEngine(dir, ["next"]).directive as { kind: string; stage?: string };
+      expect(moved.kind, JSON.stringify(moved)).not.toBe("parked");
+      expect(moved.stage).toBe("requirements-analysis");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

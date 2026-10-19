@@ -2230,6 +2230,24 @@ export function claudeTranscriptOrigin(transcriptPath: unknown, promptId: unknow
   return { kind: "person", source: "record" };
 }
 
+// Who wrote a message Claude Code fed into a running turn. The transcript keeps
+// it as an attachment entry, not a user row: {type: "attachment", attachment:
+// {type: "queued_command", origin: {kind}}} (measured 2.1.296: `human` for what
+// the person typed while the agent worked; a background task's notice, a
+// coordinator or peer agent and an auto-continuation carry their own kind).
+// Null for any other entry and for one with no origin (older builds).
+const CLAUDE_QUEUED_HOST_ORIGINS = new Set(["task-notification", "coordinator", "peer", "auto-continuation"]);
+export function claudeQueuedMessageOrigin(entry: Record<string, unknown>): "person" | "host" | null {
+  const attachment = entry.type === "attachment" ? entry.attachment : undefined;
+  if (attachment === null || typeof attachment !== "object") return null;
+  const queued = attachment as Record<string, unknown>;
+  const origin = queued.type === "queued_command" && queued.origin !== null && typeof queued.origin === "object"
+    ? (queued.origin as Record<string, unknown>).kind
+    : undefined;
+  if (origin === "human") return "person";
+  return typeof origin === "string" && CLAUDE_QUEUED_HOST_ORIGINS.has(origin) ? "host" : null;
+}
+
 // Kiro's plain-text hook channel must carry UTF-8 without terminal protocol
 // bytes. Keep this transform narrowly scoped to adapter output that is
 // explicitly plain text: structured hook JSON and refusal payloads must retain

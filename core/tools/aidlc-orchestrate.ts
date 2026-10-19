@@ -4503,7 +4503,7 @@ function staleStateVersionError(stateContent: string): string | null {
 function parkedDirective(
   reason: string,
   stage: string,
-  narration = `Pausing here with everything saved. Run \`${entrySkillInvocation()} --resume\` when you want to pick it back up.`,
+  narration = pausedLine(stagePlace(stage)),
 ): ParkedDirective {
   return {
     kind: "parked",
@@ -4515,24 +4515,57 @@ function parkedDirective(
   };
 }
 
+// What the person hears when the work stops: where it stands (no place when
+// none is known), that it is saved, and the way back. In this chat their own
+// words pick it up; a new chat may not have AI-DLC loaded yet, so there the
+// entry word with --resume does.
+function pausedLine(place: string, lead = "Paused"): string {
+  return `${lead}${place ? ` at ${place}` : ""} with everything saved. Pick it back up any time here, or with ${entrySkillInvocation()} --resume in a new chat.`;
+}
+
+// A stage, and the Unit it is for, as the person knows them.
+function stagePlace(stage: string, unit?: string): string {
+  const name = stageLabel(nodeForSlug(stage), stage);
+  return name === null ? "" : `${name}${unit && validateUnitName(unit) === null ? ` for ${unit}` : ""}`;
+}
+
+// Where a Unit-by-Unit walk stands: the Unit's stage, the summary confirmation
+// after one, or the Unit's checkpoint. A paused walk and a block whose Units
+// are all covered name no place.
+function walkStepPlace(step: UnitMajorWalkStep): string {
+  return step.kind === "work"
+    ? `${step.stage.name} for ${step.unit}`
+    : step.kind === "summary"
+      ? `the summary confirmation of ${step.stage.name} for ${step.unit}`
+      : step.kind === "checkpoint"
+        ? `the Unit checkpoint for ${step.unit}`
+        : "";
+}
+
 // The `parked` a workflow answers with, naming where it resumes. Under the
 // unit-major walk Current Stage stays on the block's first stage, so name the
-// live (stage, Unit) beat instead (#1411).
+// live (stage, Unit) beat instead (#1411), and say the walk's own step: a
+// Unit's summary or checkpoint is no work beat.
 function workflowParkedDirective(
   pd: string,
   stateContent: string,
   parkedAt: string,
+  lead?: string,
 ): ParkedDirective {
   const scope = getField(stateContent, "Scope")?.trim() ?? "";
-  const beat = scope ? unitMajorWorkBeat(pd, scope, stateContent, parkedAt) : null;
+  const walk = scope ? unitMajorWalkBeat(pd, scope, stateContent, parkedAt) : null;
+  const narration = pausedLine(walk === null ? stagePlace(parkedAt) : walkStepPlace(walk.step), lead);
+  const beat = walk?.step.kind === "work" ? walk.step : null;
   return beat
     ? parkedDirective(
         `Workflow parked at "${beat.stage.slug}" for unit "${beat.unit}". Resume with ${entrySkillInvocation()} --resume.`,
         beat.stage.slug,
+        narration,
       )
     : parkedDirective(
         `Workflow parked at "${parkedAt}". Resume with ${entrySkillInvocation()} --resume.`,
         parkedAt,
+        narration,
       );
 }
 
@@ -4567,15 +4600,7 @@ function withWorkPicksUpLine<T extends Directive>(
   const current = (getField(stateContent, "Current Stage") ?? "").trim();
   const walk = scope ? unitMajorWalkBeat(pd, scope, stateContent, current) : null;
   if (onlyOnWalk && walk === null) return directive;
-  const at = walk === null
-    ? nodeForSlug(current)?.name ?? ""
-    : walk.step.kind === "work"
-      ? `${walk.step.stage.name} for ${walk.step.unit}`
-      : walk.step.kind === "summary"
-        ? `the summary confirmation of ${walk.step.stage.name} for ${walk.step.unit}`
-        : walk.step.kind === "checkpoint"
-          ? `the Unit checkpoint for ${walk.step.unit}`
-          : "";
+  const at = walk === null ? nodeForSlug(current)?.name ?? "" : walkStepPlace(walk.step);
   if (at) (directive as { narration?: string }).narration = `The work picks up at ${at}.`;
   return directive;
 }
@@ -4622,7 +4647,7 @@ function resumeOnYes(): string {
 
 // The `parked` a successful park answers with. A team Unit checkout parks
 // only its Unit, locally, so it names the Unit.
-function parkedAfterPark(pd: string, parkStdout: string): ParkedDirective {
+function parkedAfterPark(pd: string, parkStdout: string, lead?: string): ParkedDirective {
   const stateContent = loadStateFileIfPresent(pd);
   let parkedUnit: string | undefined;
   try {
@@ -4630,15 +4655,17 @@ function parkedAfterPark(pd: string, parkStdout: string): ParkedDirective {
     if (result.checkout_local === true && typeof result.unit === "string") parkedUnit = result.unit;
   } catch { /* the workflow park result carries no Unit */ }
   if (parkedUnit !== undefined) {
+    const stage = (stateContent ? getField(stateContent, "Current Stage") : null) ?? "functional-design";
     return parkedDirective(
       `Unit "${parkedUnit}" is parked in this checkout. Resume with ${entrySkillInvocation()} --resume.`,
-      (stateContent ? getField(stateContent, "Current Stage") : null) ?? "functional-design",
+      stage,
+      pausedLine(stagePlace(stage, parkedUnit), lead),
     );
   }
   const parkedAt = stateContent ? (getField(stateContent, "Parked At Stage") ?? "").trim() : "";
   return stateContent
-    ? workflowParkedDirective(pd, stateContent, parkedAt)
-    : parkedDirective(`Workflow parked at "${parkedAt}". Resume with ${entrySkillInvocation()} --resume.`, parkedAt);
+    ? workflowParkedDirective(pd, stateContent, parkedAt, lead)
+    : parkedDirective(`Workflow parked at "${parkedAt}". Resume with ${entrySkillInvocation()} --resume.`, parkedAt, pausedLine(stagePlace(parkedAt), lead));
 }
 
 // "Approve, but let's stop there for today": the approval is recorded, then
@@ -4655,11 +4682,11 @@ function parkAfterApproval(pd: string, slug: string, attended: boolean, unit?: s
   } catch {
     return null;
   }
-  const parked = parkedAfterPark(pd, result);
+  const parked = parkedAfterPark(pd, result, "Approved, and paused");
   return parkedDirective(
     `Approved "${slug}"${unit ? ` for unit "${unit}"` : ""}. ${parked.reason}`,
     parked.stage,
-    `Approved, and paused here with everything saved. Run \`${entrySkillInvocation()} --resume\` when you want to pick it back up.`,
+    parked.narration,
   );
 }
 
@@ -9438,9 +9465,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     !flags.phase &&
     existsSync(unitParkedPath(pd))
   ) {
+    const stage = getField(stateContent!, "Current Stage") ?? "functional-design";
     emit(parkedDirective(
       `Unit "${unitScope.unit}" is parked in this checkout. Resume with ${entrySkillInvocation()} --resume.`,
-      getField(stateContent!, "Current Stage") ?? "functional-design",
+      stage,
+      pausedLine(stagePlace(stage, unitScope.unit)),
     ));
     return;
   }

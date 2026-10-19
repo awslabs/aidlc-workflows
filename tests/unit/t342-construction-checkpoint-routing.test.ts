@@ -3313,4 +3313,30 @@ describe("t342 status names the Unit's step and a typed switch says where the wo
     expect(directive.kind).toBe("print");
     expect(directive.narration).toBe("The work picks up at the Unit checkpoint for beta.");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  function parkedLine(p: string): string {
+    const result = spawnSync(process.execPath, [ORCH, "park", "--project-dir", p], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8",
+    });
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    const parked = JSON.parse(result.stdout.trim()) as { kind: string; narration?: string };
+    expect(parked.kind).toBe("parked");
+    return parked.narration ?? "";
+  }
+
+  // The park line says where the work stands the way the walk does: Current
+  // Stage stays on the block's first stage, so it is never what is named.
+  test("a park names the Unit's stage on a work step and the Unit's checkpoint at its checkpoint", () => {
+    expect(parkedLine(betaAtCodeGeneration())).toBe(
+      "Paused at Code Generation for beta with everything saved. Pick it back up any time here, or with /aidlc --resume in a new chat.",
+    );
+    const p = fixture();
+    cover(p, "alpha");
+    approve(p, "alpha");
+    cover(p, "beta");
+    expect(next(p).construction_checkpoint?.unit).toBe("beta");
+    expect(parkedLine(p)).toBe(
+      "Paused at the Unit checkpoint for beta with everything saved. Pick it back up any time here, or with /aidlc --resume in a new chat.",
+    );
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

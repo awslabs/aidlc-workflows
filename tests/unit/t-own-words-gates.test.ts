@@ -381,6 +381,9 @@ describe("the stage gate records the choice the agent read, with the person's wo
     says(proj, "approve, rename the handler, and let's stop for today");
     const parked = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve", "--park"]);
     expect(parked.kind, JSON.stringify(parked)).toBe("parked");
+    expect((parked as { narration?: string }).narration).toMatch(
+      /^Approved, and paused at [^\n]+ with everything saved\. Pick it back up any time here, or with \/aidlc --resume in a new chat\.$/,
+    );
     expect(events(proj, "GATE_APPROVED")).toHaveLength(1);
     expect(events(proj, "WORKFLOW_PARKED")).toHaveLength(1);
   });
