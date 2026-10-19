@@ -10,8 +10,8 @@
 // worktrees in the harness folder are never walked.
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { seededRecordDir } from "../harness/fixtures.ts";
 import {
@@ -32,6 +32,7 @@ import {
   reasonCodes,
   report,
   review,
+  setGuardPolicy,
   shellWorkspace,
   sourceWorkRows,
   stageBox,
@@ -217,6 +218,41 @@ describe("a Unit's claim records the checkout it lies in", () => {
     expect(isGuardAsk(gate), gate.out).toBe(false);
     expect(stageBox(proj)).toBe("?");
   });
+
+  // Work that records repos: a claim by a checkout's listing name is the walk's,
+  // never one of the repos', so it binds the checkout's code like any claim.
+  for (const repos of [["repo-a"], ["repo-a", "repo-b"]]) {
+    test(`in work that records ${repos.length === 1 ? "one repo" : "two repos"}, a claim by the checkout's name binds it`, () => {
+      const proj = shellWorkspace(repos.map((repo) => `${repo}/\n`).join(""));
+      setGuardPolicy(proj, "strict", "set by you");
+      for (const repo of repos) {
+        mkdirSync(join(proj, repo), { recursive: true });
+        git(join(proj, repo), ["init", "-q"]);
+      }
+      const registry = join(dirname(seededRecordDir(proj)), "intents.json");
+      const rows = JSON.parse(readFileSync(registry, "utf-8")) as Array<Record<string, unknown>>;
+      writeFileSync(registry, `${JSON.stringify(rows.map((row) => ({ ...row, repos })), null, 2)}\n`);
+      startCodeGeneration(proj, true);
+      commitRecords(proj);
+      const outside = worktreeOf(outsideRepo(), join(tempDir("t-add-checkout-repos-"), "feature"));
+      writeCode(outside);
+      const unrecorded = review(proj, true, [{ path: "feature@checkout/src/" }]);
+      expect(unrecorded.rc).not.toBe(0);
+      expect(unrecorded.out).toContain("names a checkout this piece of work has not recorded.");
+      expect(checkoutCommand(proj, "add-checkout", outside).rc).toBe(0);
+      const claim = [{ path: "feature@checkout/src/" }];
+      const reviewed = review(proj, true, claim);
+      expect(reviewed.rc, reviewed.out).toBe(0);
+      writeCode(outside, "export const login = 2;\n");
+      const stale = report(proj, "awaiting-approval");
+      expect(isGuardAsk(stale), stale.out).toBe(true);
+      expect(reasonCodes(stale)).toContain("SOURCE_REVIEW_STALE");
+      expect(review(proj, true, claim, 2).rc).toBe(0);
+      const gate = report(proj, "awaiting-approval");
+      expect(isGuardAsk(gate), gate.out).toBe(false);
+      expect(stageBox(proj)).toBe("?");
+    });
+  }
 
   test("a claim by a checkout name nobody recorded is refused with the step", () => {
     const proj = shellWorkspace("");

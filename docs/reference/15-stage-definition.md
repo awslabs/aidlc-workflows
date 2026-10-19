@@ -270,8 +270,9 @@ project (`wt-link/src/`, or `wt-link/` for all of it), and it covers what the
 source walk lists through that link. An entry inside one of the work's
 recorded checkouts is judged by that checkout's git too and keyed by its
 listing name; a checkout outside the project is named that way
-(`<label>@checkout/src/`), and a listing name the work has not recorded is
-refused with the step to record it.
+(`<label>@checkout/src/`), with no `repo` even in work that records repos,
+and a listing name the work has not recorded is refused with the step to
+record it.
 Missing pre-upgrade fields fail open only as documented migration evidence;
 present-but-unbindable or destroyed modern evidence fails closed under Guard
 Policy strict; under relaxed or off it is recorded once and the work continues. A team that

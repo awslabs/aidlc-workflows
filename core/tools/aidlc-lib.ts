@@ -21930,6 +21930,14 @@ export function sourceCheckoutListingRel(label: string): string {
   return `${label}@checkout`;
 }
 
+// Whether a manifest path is spelled with a checkout's listing name as its
+// first folder (`<label>@checkout/...`): the walk's own name, so such a claim is
+// never a recorded repo's.
+export function namesSourceCheckout(path: string): boolean {
+  const head = path.replace(/^(?:\.\/)+/, "").split("/")[0];
+  return head.length > sourceCheckoutListingRel("").length && head.endsWith(sourceCheckoutListingRel(""));
+}
+
 // The recorded checkout a listing path (a key's path part, repo "") lies in,
 // and the path within it. The walk, a Unit's claims and the coverage check all
 // read a recorded checkout's files through this one name.
@@ -26591,7 +26599,7 @@ function sourceClaimCheckout(
   const parts = path.replace(/\/+$/, "").split("/");
   const named = recordedCheckoutOfListingPath(path, checkouts);
   if (named !== null) return { dir: named.checkout.real, path: named.rest, listingPath: path };
-  if (parts[0].endsWith("@checkout") && !existsSync(join(repoRoot, parts[0]))) {
+  if (namesSourceCheckout(path) && !existsSync(join(repoRoot, parts[0]))) {
     return {
       ...claim,
       reason: `${JSON.stringify(path)} names a checkout this piece of work has not recorded. Record it first with ` +
@@ -27105,6 +27113,8 @@ function validateUnitSourceManifestBytes(
       ) {
         continue;
       }
+    } else if (!worktreeRelative && namesSourceCheckout(candidate.path)) {
+      // Keyed as the walk lists a recorded checkout, whatever repos are recorded.
     } else if (recordedRepos.length > 1) {
       continue;
     } else if (recordedRepos.length === 1) {
@@ -27151,6 +27161,8 @@ function validateUnitSourceManifestBytes(
       if (!recordedRepoSet.has(canonicalRepo)) {
         return { ok: false, reason: `writes[${index}].repo ${JSON.stringify(canonicalRepo)} is not recorded for this intent`, unrecordedRepo: canonicalRepo };
       }
+    } else if (!worktreeRelative && namesSourceCheckout(write.path)) {
+      // Keyed as the walk lists a recorded checkout, whatever repos are recorded.
     } else if (recordedRepos.length > 1) {
       return { ok: false, reason: `writes[${index}].repo is required for a multi-repo intent` };
     } else if (recordedRepos.length === 1) {
@@ -27179,13 +27191,15 @@ function validateUnitSourceManifestBytes(
       checkouts,
     );
     if (claim.reason !== undefined) return { ok: false, reason: `writes[${index}].path: ${claim.reason}` };
+    // A recorded checkout is walked with the shell rule on, so its claims are read that way too.
+    const claimCarriesShell = recordedCheckoutOfListingPath(claim.listingPath, checkouts) !== null || carriesWorkspaceShell;
     const ignoredReason = ignoredSourceClaimReason(
       claim.dir,
       claim.path,
       normalized.prefix,
       pathModeIndexes,
       sourceClaimValidation,
-      carriesWorkspaceShell,
+      claimCarriesShell,
     );
     if (ignoredReason !== null) {
       return { ok: false, reason: `writes[${index}].path: ${ignoredReason}` };
@@ -27194,7 +27208,7 @@ function validateUnitSourceManifestBytes(
       claim.dir,
       claim.path,
       normalized.prefix,
-      carriesWorkspaceShell,
+      claimCarriesShell,
       pathModeIndexes,
       sourceClaimValidation,
     );
