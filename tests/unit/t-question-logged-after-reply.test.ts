@@ -9,10 +9,11 @@
 // answer again, told their answer was lost.
 //
 // The refusal stays: the record cannot tie that reply to a question logged
-// after it. What changes is what it says. The agent is told the question was
-// logged after the reply, and what to do; the person is told their answer was
-// lost only on the branch where it could have been (the agent showed the
-// question after that reply and the hooks missed the next one).
+// after it. What changes is what it says when the person's message is on
+// record: the agent is pointed at that message, and the steps for a reply the
+// hooks missed (a lost answer when the prompt hook's beat is old, "end your
+// turn" when it is fresh) are said only if no message of theirs answers it, so
+// the person is neither told their answer was lost nor asked again.
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -41,11 +42,9 @@ setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 const BUN = process.execPath;
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const KIRO_CLI_LOG = join(REPO_ROOT, "dist", "kiro", ".kiro", "tools", "aidlc-log.ts");
-const LOGGED_AFTER = "This question was logged after the person's latest reply";
-const SHOWN_AFTER = "If you showed it only after that reply:";
 const NO_MESSAGE_ANSWERS = "If no message of theirs answers it:";
-// What the person must not hear for a reply that arrived.
-const LOST = ["didn't reach", "not recorded"];
+// What the person must not hear, or be asked again for, after a reply that arrived.
+const LOST = ["didn't reach", "not recorded", "has not answered yet"];
 
 function run(tool: string, proj: string, args: string[]) {
   const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_SKIP_ARTIFACT_GUARD: "1" };
@@ -116,36 +115,21 @@ describe("t-question-logged-after-reply: a question logged after the reply is sa
   afterEach(() => cleanupTestProject(proj));
 
   for (const label of ["stale", "fresh"] as const) {
-    test(`with no message on record (${label} heartbeat), the agent hears the question came after the reply and the person is not told it was lost`, () => {
+    test(`with the reply on record (Kiro CLI, ${label} heartbeat), the agent is pointed at that message and the missed-reply steps hold only if it does not answer`, () => {
       promptHookBeat(proj, label === "fresh" ? Date.now() : Date.now() - 10 * 60 * 1000);
-      secondQuestionLoggedAfterTheReply(LOG, proj);
-      const refused = run(LOG, proj, ["answer", "--stage", slugOf(proj), "--details", "Accept failure"]);
+      const id = secondQuestionLoggedAfterTheReply(KIRO_CLI_LOG, proj, "done")!;
+      const refused = run(KIRO_CLI_LOG, proj, ["answer", "--stage", slugOf(proj), "--details", "Accept failure"]);
       expect(refused.rc).not.toBe(0);
-      // The guard keeps its refusal and its first line.
-      expect(refused.out).toContain("Cannot record this answer because no new human reply has arrived for the question.");
-      expect(refused.out).toContain(LOGGED_AFTER);
-      expect(refused.out).toContain("Log every question before you show it.");
-      expect(refused.out).toContain("AI-DLC got your reply. Please answer this one question once more.");
-      const unconditional = before(refused.out, SHOWN_AFTER);
+      expect(refused.out).toContain("the question was logged after the person's reply");
+      expect(refused.out).toContain(`--message ${id}; do not ask them again.`);
+      const unconditional = before(refused.out, NO_MESSAGE_ANSWERS);
       for (const words of LOST) expect(unconditional).not.toContain(words);
-      expect(answers(proj)).toBe(1);
+      // Named, the reply records the answer: the person is not asked again.
+      const named = run(KIRO_CLI_LOG, proj, ["answer", "--stage", slugOf(proj), "--details", "Accept failure", "--message", id]);
+      expect(named.rc, named.out).toBe(0);
+      expect(answers(proj)).toBe(2);
     });
   }
-
-  test("with the reply on record (Kiro CLI), the agent is pointed at that message and the lost-answer line holds only if it does not answer", () => {
-    promptHookBeat(proj, Date.now() - 10 * 60 * 1000);
-    const id = secondQuestionLoggedAfterTheReply(KIRO_CLI_LOG, proj, "done")!;
-    const refused = run(KIRO_CLI_LOG, proj, ["answer", "--stage", slugOf(proj), "--details", "Accept failure"]);
-    expect(refused.rc).not.toBe(0);
-    expect(refused.out).toContain("the question was logged after the person's reply");
-    expect(refused.out).toContain(`--message ${id}; do not ask them again.`);
-    const unconditional = before(refused.out, NO_MESSAGE_ANSWERS);
-    for (const words of LOST) expect(unconditional).not.toContain(words);
-    // Named, the reply records the answer: the person is not asked again.
-    const named = run(KIRO_CLI_LOG, proj, ["answer", "--stage", slugOf(proj), "--details", "Accept failure", "--message", id]);
-    expect(named.rc, named.out).toBe(0);
-    expect(answers(proj)).toBe(2);
-  });
 
   // A reply the person gave after the question was logged is its answer, as before.
   test("a reply after the late question still records its answer", () => {
@@ -156,7 +140,7 @@ describe("t-question-logged-after-reply: a question logged after the reply is sa
     expect(answers(proj)).toBe(2);
   });
 
-  // An approval used the reply, not answers: the late-question words do not apply.
+  // An approval used the reply, not answers: the plain refusal, as before.
   test("a reply an approval used keeps the plain refusal", () => {
     const slug = slugOf(proj);
     appendAuditEntry("HUMAN_TURN", {}, proj);
@@ -165,6 +149,5 @@ describe("t-question-logged-after-reply: a question logged after the reply is sa
     const r = run(LOG, proj, ["answer", "--stage", slug, "--details", "A"]);
     expect(r.rc).not.toBe(0);
     expect(r.out).toContain("no new human reply has arrived for the question");
-    expect(r.out).not.toContain(LOGGED_AFTER);
   });
 });

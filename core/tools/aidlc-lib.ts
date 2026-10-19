@@ -12241,9 +12241,7 @@ export const BLOCKING_SENSOR_OVERRIDE_OPTIONS = [
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
 ] as const;
 
-// The records that use the person's reply up: an answer, an approval, or one of
-// the engine's own recorded choices.
-export const GATE_RESOLUTION_EVENTS: ReadonlySet<string> = new Set([
+const GATE_RESOLUTION_EVENTS = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
   "QUESTION_ANSWERED",
