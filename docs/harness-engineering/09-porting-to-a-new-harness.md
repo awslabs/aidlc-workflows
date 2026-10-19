@@ -137,8 +137,8 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   stop event runs the `log-subagent` hook (its `SUBAGENT_COMPLETED` row) before
   the agent that dispatched a helper sees the helper's result, for every
   dispatch. `env` names the variables the host sets in its agent's shell. On
-  such a host a review verdict recorded with no agent finished since its
-  request is marked as recorded before any reviewer finished, and the person
+  such a host a review verdict recorded with no completion row of its
+  reviewer since its request is marked as recorded before any reviewer finished, and the person
   hears it in one line. Declare it only after a live check shows the row lands
   first: on a host that writes it later or not at all, the person would be told
   no reviewer finished a review one did. Only Claude Code declares it

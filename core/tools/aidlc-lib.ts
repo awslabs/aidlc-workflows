@@ -18754,8 +18754,9 @@ export function dictatedReviewNotice(stageName: string, unit?: string | null): s
 }
 
 /** The REVIEW_COMPLETED field the logger writes, as `no`, when the verdict was
- *  recorded before any agent had finished since its review was requested, on
- *  a host where that absence is evidence (noAgentFinishedSinceReview). True
+ *  recorded before the request's reviewer had finished since its review was
+ *  requested, on a host where that absence is evidence
+ *  (noReviewerFinishedSinceReview). True
  *  when written, even if an agent finishes later; distinct from
  *  REVIEW_FINISHED_FIELD, the NOT-READY fallback with no review at all. */
 export const REVIEWER_FINISHED_FIELD = "Reviewer Finished Before Verdict";
@@ -18785,28 +18786,37 @@ export function hostRecordsAgentFinishes(): boolean {
 }
 
 /**
- * Whether the record shows that no agent finished after `request`, on a host
- * where a missing completion row means that. Every doubt reads as false, so a
- * lost or late row can never put a wrong line in front of the person: another
- * host, a delegated worktree (its reviewers' rows land in the parent's ledger),
- * a chat whose hooks do not write into this record (the check log-subagent
- * makes), a background agent sent or finished since the request (the in-flight
- * ledger written since, or an entry still fresh), a completion hook that ran
- * since (its heartbeat), or any SUBAGENT_COMPLETED row, of any agent, not
- * definitely before the request. The caller holds the audit lock, so neither
- * the rows nor the ledger move while this reads.
+ * Whether the record shows that the reviewer `request` named has not finished
+ * its review since the request, on a host where a missing completion row means
+ * that. The reviewer finished only when a SUBAGENT_COMPLETED row definitely
+ * after the request names it as Agent Type and carries a Review File Digest for
+ * the request's review file: the log-subagent hook writes that digest for every
+ * review still open for the reviewer that finished, so a row naming any other
+ * agent, or naming the reviewer without the digest, is not the reviewer
+ * finishing this review (#943: dispatching an unrelated agent after the request
+ * no longer reads as the reviewer having finished). Every doubt reads as false,
+ * so a lost or late row can never put a wrong line in front of the person:
+ * another host, a delegated worktree (its reviewers' rows land in the parent's
+ * ledger), a chat whose hooks do not write into this record (the check
+ * log-subagent makes), a background agent sent or finished since the request
+ * (the in-flight ledger written since, or an entry still fresh: the ledger
+ * names no agent), a completion row that names no agent (`unknown`, a host
+ * that sent no agent type), a completion hook that ran since and left no row
+ * (its heartbeat newer than every completion row since), or a failure that
+ * hook recorded since (its drops file). The caller holds the audit lock, so
+ * neither the rows nor the ledger move while this reads.
  */
-export function noAgentFinishedSinceReview(
+export function noReviewerFinishedSinceReview(
   projectDir: string,
   events: ReadonlyArray<AuditShardEvent>,
-  request: AuditShardEvent,
+  request: Pick<OpenReviewRequest, "reviewer" | "reviewFile" | "row">,
   selection: WorkflowSelection,
 ): boolean {
   try {
     if (!hostRecordsAgentFinishes()) return false;
     if (delegatedWorktreeIntent(projectDir) !== null) return false;
     if (selection.intent === null || workflowParticipation(projectDir, selection) !== "participant") return false;
-    const requested = Date.parse(request.timestamp);
+    const requested = Date.parse(request.row.timestamp);
     if (!Number.isFinite(requested)) return false;
     const ledger = subagentInflightMarkerPath(projectDir);
     if (existsSync(ledger)) {
@@ -18814,12 +18824,31 @@ export function noAgentFinishedSinceReview(
       const inflight = inspectSubagentInflight(projectDir);
       if (inflight.malformed || inflight.freshCount > 0) return false;
     }
-    const heartbeat = join(hooksHealthReadDir(projectDir, selection.intent, selection.space), "log-subagent.last");
+    const since = events.filter((row) =>
+      row.event === "SUBAGENT_COMPLETED" && !attemptEventDefinitelyBefore(row, request.row));
+    for (const row of since) {
+      const agent = auditBlockField(row.block, "Agent Type");
+      if (agent === null || agent === "" || agent === "unknown") return false;
+      if (agent === request.reviewer && recordedReviewFileDigest(row.block, request.reviewFile) !== null) return false;
+    }
+    const health = hooksHealthReadDir(projectDir, selection.intent, selection.space);
+    const heartbeat = join(health, "log-subagent.last");
     if (existsSync(heartbeat)) {
       const beat = Date.parse(readFileSync(heartbeat, "utf-8").trim());
-      if (!Number.isFinite(beat) || beat >= requested) return false;
+      if (!Number.isFinite(beat)) return false;
+      // The hook beats, then appends its row in the same run: a beat since the
+      // request with no completion row at or after it is a run that left none.
+      if (beat >= requested && !since.some((row) => Date.parse(row.timestamp) >= beat)) return false;
     }
-    return !events.some((row) => row.event === "SUBAGENT_COMPLETED" && !attemptEventDefinitelyBefore(row, request));
+    const drops = join(health, "log-subagent.drops");
+    if (existsSync(drops)) {
+      for (const line of readFileSync(drops, "utf-8").split("\n")) {
+        if (line.trim() === "") continue;
+        const at = Date.parse(line.split("\t", 1)[0]);
+        if (!Number.isFinite(at) || at >= requested) return false;
+      }
+    }
+    return true;
   } catch {
     return false;
   }
