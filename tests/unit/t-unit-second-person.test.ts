@@ -23,6 +23,7 @@ import {
   ENV,
   git,
   HOME_RECORD,
+  hook,
   makeHome,
   mergeOnHost,
   next,
@@ -118,6 +119,45 @@ describe("a teammate opens solo work built from another machine", () => {
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
     expect(step.unit).toBe("reporting");
     expect(next(home.dir).ask_type).toBeUndefined();
+  });
+});
+
+describe("the lead's own chat hears a teammate's take that comes after it looked", () => {
+  const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-chat" };
+  const typed = (dir: string) =>
+    expect(hook(dir, chat, { hook_event_name: "UserPromptSubmit", session_id: "lead-chat", prompt: "/aidlc" }).status).toBe(0);
+
+  test("at the lead's next /aidlc in the same chat", () => {
+    const home = soloAtA(true);
+    typed(home.dir);
+    next(home.dir, chat);
+    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], cloneOf(home.remote, "bob")).status).toBe(0);
+    typed(home.dir);
+    const step = next(home.dir, chat);
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(
+      "Your teammate bob took checkout-ui; this session carries on with the rest, one Unit at a time.",
+    );
+    expect(field(stateOf(home.dir), "Unit Ownership")).toBe("team");
+  });
+
+  test("before the session starts its next Unit: a Unit a teammate took meanwhile is never started here", () => {
+    const home = makeHome();
+    appendAuditEntry("UNIT_STARTED", { Stage: "functional-design", Unit: "refunds", "Run floor": "0" }, home.dir);
+    appendAuditEntry("UNIT_COMPLETED", { Stage: "code-generation", Unit: "refunds", "Run floor": "0" }, home.dir);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "refunds built here"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    typed(home.dir);
+    const first = next(home.dir, chat);
+    const unit = String(first.unit);
+    expect(["checkout-ui", "reporting"], JSON.stringify(first)).toContain(unit);
+    expect(run(UNIT, ["take", unit, "--home", HOME_RECORD], cloneOf(home.remote, "bob")).status).toBe(0);
+    // The agent's own next step in the same turn, the person silent.
+    const step = next(home.dir, chat);
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(
+      `Your teammate bob took ${unit}; this session carries on with the rest, one Unit at a time.`,
+    );
+    expect(step.unit ?? null, JSON.stringify(step)).not.toBe(unit);
   });
 });
 

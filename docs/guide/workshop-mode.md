@@ -297,7 +297,9 @@ its next step, the home's session switches to teams by itself: the workspace's
 its checkpoint, or after every stage), and the teammate's build approves the
 same way; the Units it already built stay done there, and it says in one line
 who took which Unit. Nothing is asked again. The home looks for a teammate's
-take once per chat, so the lead never fetches for it. The board names each
+take once per chat, again after each of the lead's messages, and before it
+starts its next Unit, so the lead never fetches for it and never starts a Unit
+a teammate took. The board names each
 teammate by their own git name.
 
 The lead's sign-off is off by default. With `aidlc unit lead-sign-off on` at

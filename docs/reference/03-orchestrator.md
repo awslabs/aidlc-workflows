@@ -805,7 +805,11 @@ fetch of `refs/heads/claim/<id8>/*` into the refs the person's own fetch uses
 (noted in `aidlc/.aidlc-sessions/claims-fetched.json`) and, at the home, again
 at each step that shows or acts on the claims (nothing left for the home to
 build now, a result to check, a proposal to answer); the take offer in a clone
-runs it for each home it lists, and again at each look while nothing is ready.
+runs it for each home it lists, and again at each look while nothing is ready;
+solo work built one Unit at a time (`switchSoloToTeams`) runs it before each
+Unit starts and, with `sincePerson`, after each message of the person's once
+the last fetch reached the remote, so a teammate's take is heard and its Unit
+is never started there too.
 That fetch and the merge check's git go through `quietly`, whose env is built
 per call from the repo it runs in (`quietEnv`): `GIT_TERMINAL_PROMPT=0`,
 `GCM_INTERACTIVE=never`, `GIT_ASKPASS` set empty, `SSH_ASKPASS_REQUIRE=never`,

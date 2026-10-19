@@ -60,6 +60,7 @@ import {
   isReadOnlyEngineProbe,
   isTeamUnitOwnership,
   isoTimestamp,
+  isRequestTurn,
   loadStageGraphAll,
   engineAskMark,
   noteEngineAskMark,
@@ -5743,32 +5744,38 @@ function quietFetch(dir: string, args: string[]): GitResult {
 // The work's claims as the home has them now, fetched into the refs the
 // person's own fetch uses (through this workspace's remote, or by the home's
 // address into AI-DLC's own refs), so nobody has to fetch to see what the other
-// side sent. Once per chat, and at every step that shows or acts on the
-// claims (`now`). `unreached` is the remote or address that could not be
-// reached: the last fetch stands.
+// side sent. Once per chat, at every step that shows or acts on the claims
+// (`now`), and with `sincePerson` again after each message of the person's
+// once the last fetch reached the home. `unreached` is the remote or address
+// that could not be reached: the last fetch stands.
 const CLAIMS_FETCHED_FILE = "claims-fetched.json";
 
 export function refreshHomeClaims(
   projectDir: string,
-  options: { home?: { target: string | null; id8: string }; sessionId?: string; now?: boolean } = {},
+  options: { home?: { target: string | null; id8: string }; sessionId?: string; now?: boolean; sincePerson?: boolean } = {},
 ): { fetched: boolean; unreached: string | null } {
   const pd = resolveProjectDir(projectDir);
   const { target, id8 } = options.home ?? { target: repositoryRemote(pd), id8: activeIdentity(pd).intentId8 };
   if (target === null) return { fetched: false, unreached: null };
   const mark = join(sessionsDir(pd), CLAIMS_FETCHED_FILE);
-  let chats: Record<string, string> = {};
+  let chats: Record<string, string | { chat: string; at: string; reached: boolean }> = {};
   try {
-    chats = JSON.parse(readFileSync(mark, "utf-8")) as Record<string, string>;
+    chats = JSON.parse(readFileSync(mark, "utf-8")) as typeof chats;
   } catch {
     // No fetch noted yet.
   }
   const chat = options.sessionId ?? "no chat";
-  if (!options.now && chats[id8] === chat) return { fetched: false, unreached: null };
+  const noted = chats[id8];
+  const last = typeof noted === "string" ? { chat: noted, at: "", reached: false } : noted;
+  const spoke = options.sincePerson === true && last?.chat === chat && last.reached &&
+    readAuditShardEvents(pd).some((row) => isRequestTurn(row) && row.timestamp > last.at);
+  if (!options.now && !spoke && last?.chat === chat) return { fetched: false, unreached: null };
   const into = isGitAddress(target) ? `refs/aidlc/home/${id8}/claim/${id8}` : `refs/remotes/${target}/claim/${id8}`;
+  const at = isoTimestamp();
   const ok = quietFetch(pd, ["--no-tags", "--no-filter", "-q", target, `+refs/heads/claim/${id8}/*:${into}/*`]).ok;
   try {
     mkdirSync(dirname(mark), { recursive: true });
-    writeFileAtomic(mark, `${JSON.stringify({ ...chats, [id8]: chat })}\n`);
+    writeFileAtomic(mark, `${JSON.stringify({ ...chats, [id8]: { chat, at, reached: ok } })}\n`);
   } catch {
     // Unnoted, the next step fetches again.
   }
@@ -6975,7 +6982,19 @@ export function switchSoloToTeams(projectDir: string, sessionId?: string): strin
   }
   if (isTeamUnitOwnership(state) || homeLocation(state) !== null || isReadOnlyEngineProbe()) return null;
   if (getField(state, "Construction Iteration")?.trim() !== "unit-major") return null;
-  lookForTakes(projectDir, sessionId);
+  // A teammate's take changes what this session does next: the claims are
+  // looked at after each message of the person's, and before a Unit starts.
+  const remote = repositoryRemote(projectDir);
+  if (remote !== null) {
+    const finalStage = unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true).at(-1) ?? "code-generation";
+    const progress = soloUnitsProgress(readAuditShardEvents(projectDir), finalStage);
+    refreshHomeClaims(projectDir, {
+      home: { target: remote, id8: activeIdentity(projectDir).intentId8 },
+      sessionId,
+      now: [...progress.started].every((unit) => progress.done.has(unit)),
+      sincePerson: true,
+    });
+  }
   if (!hasAnyUnitClaimRefs(projectDir)) return null;
   let taken: UnitClaimView[];
   try {
@@ -7000,34 +7019,6 @@ export function switchSoloToTeams(projectDir: string, sessionId?: string): strin
     if (set.status !== 0) return null;
   }
   return `Your teammate ${who} took ${units}; this session carries on with the rest, one Unit at a time.`;
-}
-
-// Solo work built one Unit at a time looks once per chat for a teammate's take
-// at its remote: a quick listing of the work's claims, fetched only when there
-// are any. Nothing is said when nothing is there or the remote is not reached.
-const TAKES_LOOKED_FILE = "takes-looked.json";
-
-function lookForTakes(projectDir: string, sessionId?: string): void {
-  try {
-    const remote = repositoryRemote(projectDir);
-    if (remote === null) return;
-    const id8 = activeIdentity(projectDir).intentId8;
-    const mark = join(sessionsDir(projectDir), TAKES_LOOKED_FILE);
-    let chats: Record<string, string> = {};
-    try {
-      chats = JSON.parse(readFileSync(mark, "utf-8")) as Record<string, string>;
-    } catch {
-      // Not looked yet.
-    }
-    const chat = sessionId ?? "no chat";
-    if (chats[id8] === chat) return;
-    mkdirSync(dirname(mark), { recursive: true });
-    writeFileAtomic(mark, `${JSON.stringify({ ...chats, [id8]: chat })}\n`);
-    const listed = quietly(() => git(projectDir, ["ls-remote", remote, `refs/heads/claim/${id8}/*`]));
-    if (listed.ok && listed.stdout.trim() !== "") refreshHomeClaims(projectDir, { home: { target: remote, id8 }, sessionId, now: true });
-  } catch {
-    // A step never waits on this look.
-  }
 }
 
 // --- The lead's sign-off ------------------------------------------------------------
