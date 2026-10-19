@@ -118,7 +118,10 @@ describe("a team member's clone of the home's workspace", () => {
     const alice = cloneOf(home.remote, "alice");
     const step = next(alice);
     expect(step.kind, JSON.stringify(step)).toBe("print");
-    expect(step.message).toBe("Say the line above, then end the turn.");
+    // Nothing of the home's work runs here unless the person carries it on, which is not recommended to a teammate.
+    expect((step.offers as Array<{ question: string }>).map((offer) => offer.question)).toEqual([
+      "Do you want me to carry on fixture here, as its home? I'd leave it with whoever leads it, unless that is you.",
+    ]);
     expect(step.narration).toBe(
       "fixture is built by teams, one Unit each. The walking skeleton, orders, is built at the home first. " +
         "Waiting: refunds (for payments; on orders), checkout-ui (for web; on orders), reporting (on orders, refunds). " +

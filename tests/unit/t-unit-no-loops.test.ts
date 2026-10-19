@@ -453,9 +453,38 @@ describe("a step that waits on the person, and every way on the round added, nev
     const alice = withTools(cloneOf(home.remote, "alice"));
     const waiting = next(alice);
     expect(waiting.kind, JSON.stringify(waiting)).toBe("print");
-    expect(waiting.message).toBe("Say the line above, then end the turn.");
     expect(String(waiting.narration)).toContain("The walking skeleton, orders, is built at the home first.");
+    // A clone of the home's own workspace may carry it on; for a teammate, not now is the recommendation.
+    const offer = (waiting.offers as Offer[])[0];
+    expect(offer.choices.find((entry) => (entry as { recommended?: true }).recommended)?.label).toBe("Not now");
     readsAsOffers(waiting);
+  });
+
+  test("the lead's second clone with nothing to take: carrying the work on here is offered, recommended, and taking it moves on", () => {
+    const { home } = refundsTaken();
+    const took = run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD, "--team", "web"], cloneOf(home.remote, "carol"));
+    expect(took.status, took.out).toBe(0);
+    // The same git identity as the one who wrote the home's work.
+    const laptop = withTools(cloneOf(home.remote, "lead"));
+    const step = next(laptop, ENV);
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(String(step.narration)).toEndWith("Nothing is ready to take yet.");
+    const offer = (step.offers as Offer[] | undefined)?.[0];
+    expect(offer?.question, JSON.stringify(step)).toBe("Do you want me to carry on fixture here, as its home? I'd carry it on here, since you led it so far.");
+    expect(offer!.choices.find((entry) => (entry as { recommended?: true }).recommended)?.label).toBe("Carry on fixture here, as its home");
+    readsAsOffers(step);
+    // The pick's own print names the switch to run, then the next step: the home's.
+    const pick = runPrinted(laptop, ENV, offered(step, "Carry on fixture here, as its home"));
+    expect(pick.status, pick.out).toBe(0);
+    expect(runPrinted(laptop, ENV, printed(JSON.parse(pick.out) as Step)).status).toBe(0);
+    const after = next(laptop, ENV);
+    expect(key(after), JSON.stringify(after)).not.toBe(key(step));
+    readsAsOffers(after);
+    // A teammate's clone of the same workspace: the same offer, with not now recommended.
+    const bob = withTools(cloneOf(home.remote, "bob"));
+    const theirs = (next(bob, ENV).offers as Offer[] | undefined)?.[0];
+    expect(theirs?.question).toBe("Do you want me to carry on fixture here, as its home? I'd leave it with whoever leads it, unless that is you.");
+    expect(theirs!.choices.find((entry) => (entry as { recommended?: true }).recommended)?.label).toBe("Not now");
   });
 
   test("a clone where nothing is ready: words for new work start it, and the take opens once the home moves", () => {

@@ -8426,7 +8426,20 @@ function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
     !homeHere.some((home) => home.dirName === intent.dirName) && unitBuildOf(state) === null) ?? [];
   if (ownWork.length > 0) return null;
   if (choices.length === 0) {
-    return lineEndingTurn(`${sentences.join(" ")} Nothing is ready to take yet.`);
+    // This workspace can still carry the work on as its home: recommended to
+    // whoever wrote the home's record last, by their own git name.
+    return lineEndingTurn(`${sentences.join(" ")} Nothing is ready to take yet.`, homeHere.map((home) => {
+      const label = intentDisplayLabel(home);
+      const theirs = lastCommittedByThisPerson(projectDir, join("aidlc", "spaces", active, "intents", home.dirName!));
+      return {
+        question: `Do you want me to carry on ${label} here, as its home? ` +
+          (theirs ? "I'd carry it on here, since you led it so far." : "I'd leave it with whoever leads it, unless that is you."),
+        choices: [
+          { label: `Carry on ${label} here, as its home`, command: selectCommands([home.dirName!])[0].command, ...(theirs ? { recommended: true as const } : {}) },
+          { label: "Not now", ...(theirs ? {} : { recommended: true as const }) },
+        ],
+      };
+    }));
   }
   for (const home of homeHere) {
     choices.push({

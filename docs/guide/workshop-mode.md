@@ -136,7 +136,8 @@ has (the home's plan and the claims git last brought in):
 
 - **A clone of the home's own workspace**: the home's work is here too, and its
   Units are offered beside **Carry on <work> here, as its home**, for the lead
-  on another machine.
+  on another machine; with nothing ready to take, carrying it on is still
+  offered, recommended to whoever wrote the home's work last.
 - **A team's own workspace made from the home's** (its `origin` is the team's
   repository): the home's work that git copied in stays the home's, read only,
   and is never offered to carry on. Its Units are, and taking one reaches the
