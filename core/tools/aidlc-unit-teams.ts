@@ -332,6 +332,12 @@ export function unitOutputsHomeReads(unit: string, scope: string): string[] {
       );
       if (producer) outputs.add(`construction/${unit}/${producer.slug}/${artifactFilename(consume.artifact)}`);
     }
+    // What the stage's own checks read of each Unit, beside what it consumes.
+    // Loaded here only: this module also runs beside the library in hooks.
+    const coverage = require("./aidlc-sensor-traceability.ts") as typeof import("./aidlc-sensor-traceability.ts");
+    if (stage.slug === coverage.CROSS_UNIT_COVERAGE_STAGE) {
+      for (const rel of coverage.crossUnitCoverageReads()) outputs.add(`construction/${unit}/${rel}`);
+    }
   }
   return [...outputs].sort();
 }

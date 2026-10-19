@@ -233,6 +233,32 @@ describe("at the home", () => {
     ]);
   });
 
+  test("a team's result brings home what Build and Test reads of the Unit, so its coverage check passes for team-built Units", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    // What the team's Code Generation and NFR Requirements recorded for refunds.
+    const table = { stage: "code-generation", upstream_ids: ["FR1"], coverage: [{ id: "FR1", status: "OK", target: "checkout-api/src/refunds.ts" }] };
+    writeFileSync(join(record, "construction", "refunds", "code-generation", "traceability.json"), `${JSON.stringify(table, null, 2)}\n`);
+    mkdirSync(join(record, "construction", "refunds", "nfr-requirements"), { recursive: true });
+    writeFileSync(join(record, "construction", "refunds", "nfr-requirements", "performance-requirements.md"), "# Performance\n\nNFR1.1 fast refunds.\n");
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "merge");
+    next(home.dir);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
+    const homeUnit = join(home.dir, "aidlc", "spaces", "default", "intents", HOME_RECORD, "construction", "refunds");
+    expect(JSON.parse(readFileSync(join(homeUnit, "code-generation", "traceability.json"), "utf-8"))).toEqual(table);
+    expect(readFileSync(join(homeUnit, "nfr-requirements", "performance-requirements.md"), "utf-8")).toContain("NFR1.1");
+    // The home has the merged code: Build and Test's cross-Unit coverage finds FR1 built.
+    git(join(home.dir, "checkout-api"), ["pull", "-q", "origin", "main"]);
+    const coverage = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc-sensor-traceability.ts"), "--stage", "build-and-test"], {
+      cwd: home.dir, encoding: "utf-8", env: { ...ENV, AIDLC_PROJECT_DIR: home.dir },
+    });
+    const result = JSON.parse(coverage.stdout) as { uncovered: string[] };
+    expect(result.uncovered, coverage.stdout).not.toContain("FR1");
+  });
+
   test("the board counts the merges, and the Unit is done once every repo merged; what waits on it opens", () => {
     const { hosts, home, alice, record } = refundsTaken();
     codeGenerated(alice, record);
