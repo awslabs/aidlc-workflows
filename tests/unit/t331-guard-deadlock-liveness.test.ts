@@ -10,7 +10,7 @@
 // function:humanAuthorityState,
 // function:normalizeGuardRecoveryText, function:consumeSharedDirectiveAsk,
 // function:guardRecoveryFeedbackStatus, function:guardPreflight,
-// function:sourceWorkNotFound, directive:guard-recovery
+// function:sourceWorkNotFound, function:handleIntentCheckouts, directive:guard-recovery
 
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
@@ -94,17 +94,23 @@ import {
 } from "../harness/fixtures.ts";
 import {
   buildLayout,
+  checkoutCommand,
   cleanupLayouts,
   codeOutOfSight,
+  commitRecords,
   type EngineStep,
   isGuardAsk,
   LAYOUTS,
   PERSON,
   personSays,
+  reasonCodes,
   report,
   review,
   setGuardPolicy,
+  shellWorkspace,
   stageBox,
+  startCodeGeneration,
+  worktreeOf,
   writeCode,
 } from "../harness/source-work-layouts.ts";
 
@@ -3286,4 +3292,95 @@ describe("the source-work check never stops the person", () => {
       }
     },
   );
+});
+
+// A checkout recorded for the review (`intent add-checkout`) after or while the
+// stage's review stands: the record moves the reviewed source, so under strict
+// the one recovery review rebinds it; under relaxed or off the change is kept.
+// A recorded checkout that vanishes, or one taken out again after the recovery
+// review, still leaves a way on, and never a loop.
+describe("a recorded checkout never stops the person", () => {
+  afterEach(() => cleanupLayouts());
+
+  function harnessCodeReviewed(policy: string): { proj: string; worktree: string } {
+    const proj = shellWorkspace(".claude/worktrees/\n");
+    setGuardPolicy(proj, policy, "set by you");
+    startCodeGeneration(proj, false);
+    commitRecords(proj);
+    const worktree = worktreeOf(proj, join(proj, ".claude", "worktrees", "feature"));
+    writeCode(worktree);
+    expect(review(proj, false, []).rc).toBe(0);
+    return { proj, worktree };
+  }
+
+  // Reports as the conductor makes them, recording the recovery review when a
+  // stale review is refused; how many reports reached the gate, and the codes.
+  function reportsToGate(proj: string, recoveries: number[]): { reports: number; codes: string[]; outs: string[] } {
+    const codes: string[] = [];
+    const outs: string[] = [];
+    for (let reports = 1; reports <= 4; reports++) {
+      const step = report(proj, "awaiting-approval", PERSON);
+      codes.push(...reasonCodes(step));
+      outs.push(step.out);
+      if (stageBox(proj) === "?") return { reports, codes, outs };
+      if (reasonCodes(step).includes("SOURCE_REVIEW_STALE")) {
+        const iteration = 2 + recoveries.length;
+        recoveries.push(iteration);
+        expect(review(proj, false, [], iteration).rc).toBe(0);
+      }
+    }
+    return { reports: Number.POSITIVE_INFINITY, codes, outs };
+  }
+
+  for (const policy of ["strict", "relaxed", "off"] as const) {
+    test(`add-checkout after the review, Guard Policy ${policy}: ${policy === "strict" ? "one recovery review, then the gate" : "the gate, with no refusal"}`, () => {
+      const { proj, worktree } = harnessCodeReviewed(policy);
+      expect(checkoutCommand(proj, "add-checkout", worktree).rc).toBe(0);
+      const recoveries: number[] = [];
+      const opened = reportsToGate(proj, recoveries);
+      expect(opened.reports, opened.outs.join("\n")).toBeLessThanOrEqual(policy === "strict" ? 2 : 1);
+      expect(recoveries).toHaveLength(policy === "strict" ? 1 : 0);
+      for (const out of opened.outs) expect(out).not.toContain("nothing I can safely do");
+    });
+  }
+
+  test("a recorded checkout that vanishes after the review leaves a bounded way to the gate", () => {
+    const proj = shellWorkspace(".claude/worktrees/\n");
+    setGuardPolicy(proj, "strict", "set by you");
+    startCodeGeneration(proj, false);
+    commitRecords(proj);
+    const worktree = worktreeOf(proj, join(proj, ".claude", "worktrees", "feature"));
+    writeCode(worktree);
+    expect(checkoutCommand(proj, "add-checkout", worktree).rc).toBe(0);
+    expect(review(proj, false, []).rc).toBe(0);
+    rmSync(worktree, { recursive: true, force: true });
+    const recoveries: number[] = [];
+    const opened = reportsToGate(proj, recoveries);
+    expect(opened.reports, opened.outs.join("\n")).toBeLessThanOrEqual(4);
+    expect(opened.codes).not.toContain("SOURCE_BOUNDARY_UNBINDABLE");
+    for (const out of opened.outs) expect(out).not.toContain("nothing I can safely do");
+  });
+
+  test("taken out again after the recovery review: the spent recovery is the person's Request Changes to reset", () => {
+    const { proj, worktree } = harnessCodeReviewed("strict");
+    expect(checkoutCommand(proj, "add-checkout", worktree).rc).toBe(0);
+    const recoveries: number[] = [];
+    expect(reportsToGate(proj, recoveries).reports).toBeLessThanOrEqual(2);
+    expect(checkoutCommand(proj, "remove-checkout", worktree).rc).toBe(0);
+    const steps: EngineStep[] = [];
+    for (let reports = 1; reports <= 3 && !steps.some((step) => reasonCodes(step).includes("SOURCE_RECOVERY_SPENT")); reports++) {
+      steps.push(report(proj, "awaiting-approval", PERSON));
+    }
+    const spent = steps.at(-1) as EngineStep;
+    expect(reasonCodes(spent), steps.map((step) => step.out).join("\n")).toContain("SOURCE_RECOVERY_SPENT");
+    expect(JSON.stringify(spent.directive?.choices ?? [])).toContain("Request Changes");
+    personSays(proj);
+    const rejected = report(proj, "rejected", PERSON, ["--user-input", "Request Changes", "--reason", "review it again"]);
+    expect(stageBox(proj), rejected.out).toBe("R");
+    expect(checkoutCommand(proj, "add-checkout", worktree).rc).toBe(0);
+    expect(review(proj, false, [], 1).rc).toBe(0);
+    const again: EngineStep[] = [];
+    for (let reports = 1; reports <= 2 && stageBox(proj) !== "?"; reports++) again.push(report(proj, "revised", PERSON));
+    expect(stageBox(proj), again.map((step) => step.out).join("\n")).toBe("?");
+  });
 });

@@ -453,6 +453,20 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "intent add-checkout maps through workspace parser with its path",
+      routerArgs: ["engine", "intent", "add-checkout", "no-such-checkout"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["intent", "add-checkout", "no-such-checkout"],
+      fixture: true,
+    },
+    {
+      name: "intent remove-checkout maps through workspace parser with its path",
+      routerArgs: ["engine", "intent", "remove-checkout", "no-such-checkout"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["intent", "remove-checkout", "no-such-checkout"],
+      fixture: true,
+    },
+    {
       name: "intent remove-repo maps through workspace parser with its name",
       routerArgs: ["engine", "intent", "remove-repo", "no-such-repo"],
       tool: "aidlc-utility.ts",

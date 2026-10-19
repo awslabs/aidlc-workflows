@@ -248,12 +248,15 @@ import {
   sourceChangedOutsideAidlc,
   SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS,
   isReadOnlyEngineProbe,
-  splitSourcePathKey,
   type WorkspaceSourceState,
+  hasRealGitEntry,
+  readRecordedSourceCheckouts,
+  sourceBoundaryRepairStep,
+  sourceWalkReach,
 } from "./aidlc-lib.js";
 import { memoryDirFor, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
-import { aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
   stageValidationAuditFields,
   VALIDATION_WARNING_FIELD,
@@ -4373,19 +4376,21 @@ interface SourceWorkLook {
 
 // The workspace_requires signal. The code may live outside the project root's
 // own git: in one of the intent's recorded repos (the set the review source
-// binding and the unit manifest follow), in a child repo, clone or worktree
-// made after the intent recorded its repos, in a linked worktree of any of
-// those, or in a checkout the root's git ignores (a worktree of a repo kept
-// outside the project, placed inside it). Each is asked the root's own
+// binding and the unit manifest follow), in a checkout the work recorded
+// (`intent add-checkout`, or a Unit's claim inside it), in a child repo, clone
+// or worktree made after the intent recorded its repos, in a linked worktree of
+// any of those, or in a checkout the root's git ignores (a worktree of a repo
+// kept outside the project, placed inside it). Each is asked the root's own
 // question, and a source change since this stage attempt began counts too:
 // committing the code and then the records leaves the last commit docs only.
 //
 // A checkout found when the check runs is asked only where the review can see
-// it change: the source walk lists a file below it that is not one of AI-DLC's
-// own (aidlcOwnedSourceKey). Code kept where it cannot (a harness folder such as
-// Claude Code's .claude/worktrees/, outside the project or on another drive) is
-// not counted, so it goes the person's way with the note, and no record says
-// AI-DLC found code its review does not cover.
+// it change (sourceWalkReach). Code kept where it cannot (a harness folder such
+// as Claude Code's .claude/worktrees/, outside the project or on another drive)
+// and not recorded is not counted, so it goes the person's way with the note,
+// and no record says AI-DLC found code its review does not cover. A recorded
+// checkout is walked by the review, so it is asked; one no longer on disk is
+// left out of where AI-DLC looked.
 //
 // A recorded name is text in the committed intents.json, and a folder shaped
 // like a repo (HEAD, objects/, refs/, config) can be committed by anyone whose
@@ -4412,21 +4417,11 @@ function workspaceHasWork(pd: string, content: string | null, slug: string): Sou
     }
     return source;
   };
-  let walked: string[] | null = null;
+  const checkouts = readRecordedSourceCheckouts(pd);
+  let reaches: ((dir: string) => boolean) | null = null;
   const reviewReaches = (dir: string): boolean => {
-    const real = realPathOr(dir);
-    if (!withinDir(root, real)) return false;
-    if (walked === null) {
-      walked = [];
-      const owned = aidlcOwnedSourceKey(pd);
-      for (const key of currentSource()?.listing.keys() ?? []) {
-        if (owned(key)) continue;
-        const parsed = splitSourcePathKey(key);
-        if (parsed !== null) walked.push(parsed.repo === "" ? parsed.path : `${parsed.repo}/${parsed.path}`);
-      }
-    }
-    const below = `${relative(root, real).split(sep).join("/")}/`;
-    return walked.some((path) => path.startsWith(below));
+    reaches ??= sourceWalkReach(pd, currentSource()?.listing ?? null, checkouts);
+    return reaches(dir);
   };
   const ask = (dir: string, viaGit: boolean): boolean => {
     const real = realPathOr(dir);
@@ -4449,6 +4444,14 @@ function workspaceHasWork(pd: string, content: string | null, slug: string): Sou
     if (!isValidRepoName(repo)) continue;
     const dir = repoDir(pd, repo);
     if (ask(dir, isGitRepoDir(dir))) return at(dir);
+  }
+  for (const checkout of checkouts) {
+    try {
+      if (!statSync(checkout.real).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    if (ask(checkout.real, hasRealGitEntry(checkout.real))) return at(checkout.real);
   }
   for (const repo of discoverSiblingRepos(pd)) {
     if (!isValidRepoName(repo)) continue;
@@ -4546,7 +4549,7 @@ function nestedCheckouts(root: string): string[] {
   const found: string[] = [];
   let budget = NESTED_CHECKOUT_ENTRY_BUDGET;
   const visit = (dir: string, depth: number): void => {
-    if (hasOwnGitEntry(dir)) {
+    if (hasRealGitEntry(dir)) {
       found.push(dir);
       return;
     }
@@ -4583,15 +4586,6 @@ function nestedCheckouts(root: string): string[] {
     visit(dir, 0);
   }
   return found;
-}
-
-function hasOwnGitEntry(dir: string): boolean {
-  try {
-    const entry = lstatSync(join(dir, ".git"));
-    return entry.isDirectory() || entry.isFile();
-  } catch {
-    return false;
-  }
 }
 
 // Whether any source outside AI-DLC's own files changed since this stage
@@ -4756,6 +4750,9 @@ function sourceWorkNotFound(
     }
   }
   const lift = personReplies && action === "present-approval-gate";
+  const recordCheckoutStep =
+    `record it with \`${aidlcDispatcherInvocation("intent add-checkout <its path>")}\`, have the review ` +
+    "recorded again and report again";
   const message =
     `${reviewerPreconditionPrefix(stage.slug, action)}: it is a code-producing stage ` +
       `(workspace_requires) but no source work is evident under ${where}, outside the aidlc/ ` +
@@ -4764,10 +4761,12 @@ function sourceWorkNotFound(
       `Planning docs alone do not satisfy ${stage.name} - ` +
       (lift
         ? `write the code if it is not written yet (a source change not committed yet counts, as does ` +
-          `code in the last commit). If the code is somewhere AI-DLC does not look, run the same report ` +
-          `again: the approval question then goes to the person with this note.`
+          `code in the last commit). If it is in a checkout AI-DLC does not walk (a worktree in a harness ` +
+          `folder or outside the project), ${recordCheckoutStep}. If the code is somewhere else AI-DLC ` +
+          `does not look, run the same report again: the approval question then goes to the person with this note.`
         : `write the code to the workspace (a source change not committed yet counts, as does code in ` +
-          `the last commit), then run the same report again.`);
+          `the last commit), then run the same report again; if it is in a checkout AI-DLC does not walk ` +
+          `(a worktree in a harness folder or outside the project), ${recordCheckoutStep}.`);
   refuseStateGuard(pd, content, stage, {
     code: "REQUIRED_SOURCE_WORK_MISSING",
     blockedAction: action,
@@ -5586,7 +5585,7 @@ function staleSourcePreconditionError(
     const message =
       `Refusing to complete "${slug}": the reviewed source boundary could not be ` +
         "fingerprinted, so this is not evidence that application source changed. " +
-        "Repair .aidlc-source-paths.json or the workspace source boundary, then " +
+        `${sourceBoundaryRepairStep()}, then ` +
         `record a fresh review by ${reviewer}. ${recoveryGuidance(pd, content, slug)}` +
         (recoverySpent && requestChangesResetIsExecutable(content, slug)
           ? " Only a human Request Changes decision resets the review attempt; do not " +

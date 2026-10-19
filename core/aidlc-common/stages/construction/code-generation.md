@@ -490,6 +490,12 @@ to record the unit review without this manifest. Under Guard Policy strict,
 unclaimed changed paths block stage completion; under relaxed or off they are
 kept, and the person is told once which files changed outside the units.
 
+When you keep the code in a checkout the review does not otherwise see (a
+worktree in the harness folder, or one outside the project), record it before
+the review with `{{INVOKE}} engine intent add-checkout <its path>`; a Unit names
+a checkout outside the project in its manifest by the name that command prints
+(`<label>@checkout/<path>`).
+
 A zero-Unit directive (`directive.unit` absent) writes no
 `source-manifest.json` and creates no Unit directory for one: the engine reads
 the manifest only for a Unit, and a zero-Unit review binds the whole workspace

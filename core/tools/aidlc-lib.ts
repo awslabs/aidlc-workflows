@@ -9,6 +9,7 @@ import { TextDecoder } from "node:util";
 import { inflateSync } from "node:zlib";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
+  aidlcDispatcherInvocation,
   aidlcInvocation,
   aidlcToolInvocation,
   entrySkillInvocation,
@@ -1327,6 +1328,8 @@ export const INTENT_VERBS: ReadonlySet<string> = new Set([
   "unarchive",
   "add-repo",
   "remove-repo",
+  "add-checkout",
+  "remove-checkout",
 ]);
 
 export const SPACE_VERBS: ReadonlySet<string> = new Set([
@@ -1340,9 +1343,10 @@ export const SPACE_VERBS: ReadonlySet<string> = new Set([
 // `archived` status, `unarchive` brings it back to the status it had.
 export type IntentLifecycleVerb = "archive" | "unarchive";
 
-// The two repo verbs that change which sibling repos a piece of work touches,
-// by the person's word: `add-repo` records one more, `remove-repo` drops one.
-export type IntentRepoVerb = "add-repo" | "remove-repo";
+// The verbs that change where a piece of work's code is, by name: `add-repo`
+// and `remove-repo` its sibling repos, `add-checkout` and `remove-checkout` a
+// checkout outside the review's reach (they take a path).
+export type IntentRepoVerb = "add-repo" | "remove-repo" | "add-checkout" | "remove-checkout";
 
 export type WorkspaceCommand =
   // `all` is only ever set (true) for `intent list --all`; a plain list omits
@@ -1374,7 +1378,7 @@ function missingWorkspaceName(
 ): WorkspaceCommand {
   const usage = verb === "space-create"
     ? "space-create <name>"
-    : `${noun} ${verb} <name>`;
+    : `${noun} ${verb} ${verb === "add-checkout" || verb === "remove-checkout" ? "<path>" : "<name>"}`;
   return {
     kind: "error",
     noun,
@@ -1409,7 +1413,7 @@ function isIntentLifecycleVerb(token: string | undefined): token is IntentLifecy
 }
 
 function isIntentRepoVerb(token: string | undefined): token is IntentRepoVerb {
-  return token === "add-repo" || token === "remove-repo";
+  return token === "add-repo" || token === "remove-repo" || token === "add-checkout" || token === "remove-checkout";
 }
 
 // `intent list [--json] [--all]` / `space list [--json]`. The flags may appear
@@ -1519,6 +1523,8 @@ export function workspaceCommandUtilityArgv(
     case "unarchive":
     case "add-repo":
     case "remove-repo":
+    case "add-checkout":
+    case "remove-checkout":
       // The lifecycle and repo verbs forward verbatim, trailing flags included:
       // `intent archive <name> --reason <text>`.
       return [command.noun, command.kind, command.name, ...command.rest];
@@ -21839,6 +21845,166 @@ export function repoDir(projectDir: string, repoName: string): string {
   return join(projectDir, repoName);
 }
 
+// A folder a person made a Git checkout of: a real .git entry (a folder, or a
+// worktree's or submodule's file), by lstat, so no link is followed. A commit
+// can never carry a .git entry, so a committed folder merely shaped like a repo
+// never passes and git never runs on its config.
+export function hasRealGitEntry(dir: string): boolean {
+  try {
+    const entry = lstatSync(join(dir, ".git"));
+    return entry.isDirectory() || entry.isFile();
+  } catch {
+    return false;
+  }
+}
+
+// The checkouts a piece of work keeps its code in where the source walk does
+// not reach: a worktree in a harness folder (Claude Code's .claude/worktrees/)
+// or one outside the project. The agent or the person names one (`intent
+// add-checkout <path>`, or a Unit's source claim inside it); the record is kept
+// per clone in the intent's .aidlc-engine/ folder, and the one source identity
+// walks each as an extra root, its files listed as `<label>@checkout/<path>`.
+// Nothing rebuilds it from the audit trail or any committed text, so a
+// teammate's clone has no record and walks as before.
+export interface RecordedSourceCheckout {
+  // Stable and path-free (a repo-name-shaped folder name), so a Unit's reviewed
+  // listing, which is committed, never carries a local path.
+  label: string;
+  path: string;
+  real: string;
+}
+
+const SOURCE_CHECKOUTS_RECORD = "source-checkouts.json";
+
+export function readRecordedSourceCheckouts(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): RecordedSourceCheckout[] {
+  const dir = recordDir(projectDir, intent, space);
+  if (dir === null) return [];
+  const file = join(engineDirFor(dir), SOURCE_CHECKOUTS_RECORD);
+  try {
+    if (!lstatSync(file).isFile()) return [];
+    const parsed = JSON.parse(readFileSync(file, "utf-8")) as { version?: unknown; checkouts?: unknown };
+    if (parsed.version !== 1 || !Array.isArray(parsed.checkouts)) return [];
+    const checkouts: RecordedSourceCheckout[] = [];
+    for (const entry of parsed.checkouts as Array<Record<string, unknown>>) {
+      if (
+        entry === null || typeof entry !== "object" ||
+        typeof entry.label !== "string" || !isValidRepoName(entry.label) ||
+        typeof entry.path !== "string" || typeof entry.real !== "string" || !isAbsolute(entry.real) ||
+        checkouts.some((known) => known.label === entry.label)
+      ) {
+        continue;
+      }
+      checkouts.push({ label: entry.label, path: entry.path, real: entry.real });
+    }
+    return checkouts;
+  } catch {
+    return [];
+  }
+}
+
+// The record's only writer. The source boundary changed, so a memo of the
+// walk taken before it no longer holds.
+export function writeRecordedSourceCheckouts(
+  projectDir: string,
+  checkouts: readonly RecordedSourceCheckout[],
+  intent?: string,
+  space?: string,
+): void {
+  refuseEngineObserverWrite("writeRecordedSourceCheckouts");
+  writeEngineFileNoFollow(
+    projectDir,
+    SOURCE_CHECKOUTS_RECORD,
+    `${JSON.stringify({ version: 1, checkouts }, null, 2)}\n`,
+    intent,
+    space,
+  );
+  workspaceSourceStateCache?.clear();
+}
+
+// How the source listing names a recorded checkout's files: `<label>@checkout`.
+export function sourceCheckoutListingRel(label: string): string {
+  return `${label}@checkout`;
+}
+
+// The recorded checkout a listing path (a key's path part, repo "") lies in,
+// and the path within it. The walk, a Unit's claims and the coverage check all
+// read a recorded checkout's files through this one name.
+export function recordedCheckoutOfListingPath(
+  path: string,
+  checkouts: readonly RecordedSourceCheckout[],
+): { checkout: RecordedSourceCheckout; rest: string } | null {
+  const slash = path.indexOf("/");
+  const head = slash === -1 ? path : path.slice(0, slash);
+  const checkout = checkouts.find((entry) => sourceCheckoutListingRel(entry.label) === head);
+  return checkout === undefined ? null : { checkout, rest: slash === -1 ? "" : path.slice(slash + 1) };
+}
+
+function comparablePath(path: string): string {
+  let real: string;
+  try {
+    real = realpathSync(path);
+  } catch {
+    real = resolvePath(path);
+  }
+  return process.platform === "win32" ? real.toLowerCase() : real;
+}
+
+// The recorded checkout at `dir`, compared by real path (case-folded on Windows).
+export function recordedCheckoutAt(
+  dir: string,
+  checkouts: readonly RecordedSourceCheckout[],
+): RecordedSourceCheckout | null {
+  const at = comparablePath(dir);
+  return checkouts.find((entry) => comparablePath(entry.real) === at) ?? null;
+}
+
+// A label for a newly recorded checkout: its folder's name made repo-name
+// shaped, with a number added when another recorded checkout has it.
+export function sourceCheckoutLabelFor(real: string, checkouts: readonly RecordedSourceCheckout[]): string {
+  const base = basename(real).replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "") || "checkout";
+  const taken = new Set(checkouts.map((entry) => entry.label));
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
+}
+
+// Whether the review's source binding reaches `dir`: the source walk lists a
+// file below it that is not one of AI-DLC's own (aidlcOwnedSourceKey), under
+// its project-relative path or, for a recorded checkout, under its
+// `<label>@checkout` name. The source-work look, `intent add-checkout` and the
+// review request's claim recording all ask this one test.
+export function sourceWalkReach(
+  projectDir: string,
+  listing: ReadonlyMap<string, string> | null,
+  checkouts: readonly RecordedSourceCheckout[],
+): (dir: string) => boolean {
+  const root = comparablePath(projectDir);
+  const owned = aidlcOwnedSourceKey(projectDir);
+  const fold = (path: string): string => (process.platform === "win32" ? path.toLowerCase() : path);
+  const walked: string[] = [];
+  for (const key of listing?.keys() ?? []) {
+    if (owned(key)) continue;
+    const parsed = splitSourcePathKey(key);
+    if (parsed !== null) walked.push(fold(parsed.repo === "" ? parsed.path : `${parsed.repo}/${parsed.path}`));
+  }
+  return (dir: string): boolean => {
+    const checkout = recordedCheckoutAt(dir, checkouts);
+    let below: string;
+    if (checkout !== null) {
+      below = `${sourceCheckoutListingRel(checkout.label)}/`;
+    } else {
+      const rel = relative(root, comparablePath(dir));
+      if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false;
+      below = `${rel.split(sep).join("/")}/`;
+    }
+    const prefix = fold(below);
+    return walked.some((path) => path.startsWith(prefix));
+  };
+}
+
 // --- Workspace source fingerprint (#629) -----------------------------------
 //
 // A reviewer receipt for a `workspace_requires` stage (code-generation) must be
@@ -22112,14 +22278,17 @@ const legacyWorkspaceSourceAliases = new Map<string, string>();
 // their files. That earlier walk is redone only when a comparison would
 // otherwise fail, once per value, and yields what it recorded both before and
 // after the name exclusions above.
-const earlierBoundarySources = new Map<string, { projectDir: string; repos: readonly string[]; values?: string[] }>();
+const earlierBoundarySources = new Map<
+  string,
+  { projectDir: string; repos: readonly string[]; checkouts: readonly RecordedSourceCheckout[]; values?: string[] }
+>();
 function earlierBoundaryWorkspaceSources(current: string): readonly string[] {
   const entry = earlierBoundarySources.get(current);
   if (entry === undefined) return [];
   if (entry.values === undefined) {
     const failure = lastSourceFailure;
     try {
-      const walked = walkWorkspaceSource(entry.projectDir, entry.repos, false);
+      const walked = walkWorkspaceSource(entry.projectDir, entry.repos, false, entry.checkouts);
       entry.values = walked === null ? [] : [walked.state.fingerprint, ...(walked.legacy === null ? [] : [walked.legacy])];
     } finally {
       lastSourceFailure = failure;
@@ -23182,6 +23351,18 @@ function noteSourceFailure<T extends null | false>(
 ): T {
   lastSourceFailure = { code, detail, ...(path !== undefined ? { path } : {}) };
   return result;
+}
+
+// The way to repair a source boundary the walk could not finish: the source
+// registry, or, when the walk stopped in a checkout the work recorded, taking
+// that checkout out again.
+export function sourceBoundaryRepairStep(): string {
+  const repo = lastSourceFailure?.repo;
+  return repo !== undefined && repo.endsWith("@checkout")
+    ? "Repair .aidlc-source-paths.json or the workspace source boundary, or, if the checkout recorded as " +
+      `${repo} does not hold this work's code, take it out with ` +
+      `\`${aidlcDispatcherInvocation("intent remove-checkout <its path>")}\``
+    : "Repair .aidlc-source-paths.json or the workspace source boundary";
 }
 
 export function lastWorkspaceSourceFailure(): WorkspaceSourceFailure | null {
@@ -25481,12 +25662,13 @@ function workspaceSourceStateUncached(
 ): WorkspaceSourceState | null {
   clearSourceFailure();
   const repos = knownRepos ?? intentRepos(projectDir, intent, space);
-  const walked = walkWorkspaceSource(projectDir, repos, true);
+  const checkouts = readRecordedSourceCheckouts(projectDir, intent, space);
+  const walked = walkWorkspaceSource(projectDir, repos, true, checkouts);
   if (walked === null) return null;
   const { fingerprint } = walked.state;
   if (walked.legacy === null) legacyWorkspaceSourceAliases.delete(fingerprint);
   else legacyWorkspaceSourceAliases.set(fingerprint, walked.legacy);
-  if (walked.dotnetOutputSeen) earlierBoundarySources.set(fingerprint, { projectDir, repos: [...repos] });
+  if (walked.dotnetOutputSeen) earlierBoundarySources.set(fingerprint, { projectDir, repos: [...repos], checkouts: [...checkouts] });
   else earlierBoundarySources.delete(fingerprint);
   return walked.state;
 }
@@ -25497,10 +25679,70 @@ interface WorkspaceSourceWalk {
   dotnetOutputSeen: boolean;
 }
 
+// Each recorded checkout, walked as a root of its own with the shell rule on (a
+// same-repo worktree carries the project's aidlc/ records and harness folder,
+// which are AI-DLC's own there as at the root): one fingerprint line and its
+// files listed as `<label>@checkout/<path>`. A checkout no longer on disk is
+// one `missing` line.
+interface SourceCheckoutWalk {
+  lines: string[];
+  legacyLines: string[];
+  legacyDiffers: boolean;
+  listing: WorkspaceSourceListing;
+  dotnetOutputSeen: boolean;
+}
+
+function walkSourceCheckouts(
+  checkouts: readonly RecordedSourceCheckout[],
+  dotnetOutputs: boolean,
+): SourceCheckoutWalk | null {
+  const walk: SourceCheckoutWalk = { lines: [], legacyLines: [], legacyDiffers: false, listing: new Map(), dotnetOutputSeen: false };
+  for (const checkout of [...checkouts].sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0))) {
+    const name = sourceCheckoutListingRel(checkout.label);
+    let present = false;
+    try {
+      present = statSync(checkout.real).isDirectory();
+    } catch {
+      present = false;
+    }
+    if (!present) {
+      walk.lines.push(`checkout:${checkout.label}=missing`);
+      walk.legacyLines.push(`checkout:${checkout.label}=missing`);
+      continue;
+    }
+    const source = filesystemSourceIdentity(checkout.real, true, new Set(), "follow", true, new Map(), dotnetOutputs);
+    if (source === null) {
+      if (lastSourceFailure !== null) lastSourceFailure = { ...lastSourceFailure, repo: name };
+      return null;
+    }
+    walk.dotnetOutputSeen ||= source.dotnetOutputSeen;
+    walk.lines.push(`checkout:${checkout.label}=filesystem:${source.fingerprint}`);
+    walk.legacyLines.push(`checkout:${checkout.label}=filesystem:${source.legacyFingerprint ?? source.fingerprint}`);
+    walk.legacyDiffers ||= source.legacyFingerprint !== undefined;
+    for (const [path, entry] of source.listing) walk.listing.set(`\0${name}/${path}`, entry);
+  }
+  return walk;
+}
+
+// The digest of a walk's lines, and the raw-line-ending form it had before line
+// endings were read as LF, remembered when that differs.
+function workspaceSourceDigest(lines: readonly string[]): string {
+  const digest = (parts: readonly string[]): string =>
+    createHash("sha256").update(["aidlc-workspace-source-v2", ...parts].join("\n")).digest("hex");
+  const rawParts = lines.map((line) => line.replace(/^filesystem=([0-9a-f]{64})$|=filesystem:([0-9a-f]{64})$/, (whole, lone?: string, member?: string) => {
+    const raw = rawFingerprintForm(lone ?? member ?? "");
+    if (raw === null) return whole;
+    return lone !== undefined ? `filesystem=${raw}` : `=filesystem:${raw}`;
+  }));
+  if (rawParts.some((line, at) => line !== lines[at])) rememberRawFingerprint(digest(rawParts), digest(lines));
+  return digest(lines);
+}
+
 function walkWorkspaceSource(
   projectDir: string,
   repos: readonly string[],
   dotnetOutputs: boolean,
+  checkouts: readonly RecordedSourceCheckout[] = [],
 ): WorkspaceSourceWalk | null {
   if (repos.length === 0) {
     const hasWorktreeContext = existsSync(
@@ -25527,6 +25769,22 @@ function walkWorkspaceSource(
       dotnetOutputs,
     );
     if (source === null) return null;
+    if (checkouts.length > 0 && worktreeContext === null) {
+      const extra = walkSourceCheckouts(checkouts, dotnetOutputs);
+      if (extra === null) return null;
+      const lines = [`filesystem=${source.fingerprint}`, ...extra.lines];
+      const legacyDiffers = source.legacyFingerprint !== undefined || extra.legacyDiffers;
+      return {
+        state: {
+          fingerprint: workspaceSourceDigest(lines),
+          listing: new Map([...prefixedSourceListing(source.listing), ...extra.listing]),
+        },
+        legacy: legacyDiffers
+          ? workspaceSourceDigest([`filesystem=${source.legacyFingerprint ?? source.fingerprint}`, ...extra.legacyLines])
+          : null,
+        dotnetOutputSeen: source.dotnetOutputSeen || extra.dotnetOutputSeen,
+      };
+    }
     const workspaceDigest = (filesystem: string): string =>
       createHash("sha256")
         .update(["aidlc-workspace-source-v2", `filesystem=${filesystem}`].join("\n"))
@@ -25579,6 +25837,15 @@ function walkWorkspaceSource(
     for (const [key, entry] of prefixedSourceListing(source.listing, name)) {
       listing.set(key, entry);
     }
+  }
+  if (checkouts.length > 0) {
+    const extra = walkSourceCheckouts(checkouts, dotnetOutputs);
+    if (extra === null) return null;
+    dotnetOutputSeen ||= extra.dotnetOutputSeen;
+    lines.push(...extra.lines);
+    legacyLines.push(...extra.legacyLines);
+    legacyDiffers ||= extra.legacyDiffers;
+    for (const [key, entry] of extra.listing) listing.set(key, entry);
   }
   const digest = (parts: readonly string[]): string =>
     createHash("sha256").update(["aidlc-workspace-source-v2", ...parts].join("\n")).digest("hex");
@@ -26195,7 +26462,10 @@ function ignoredPathClaimable(
  * The source keys (`<repo>\0<path>`) among `keys` that no Unit can claim
  * because Git ignores them: the paths a source manifest refuses as review
  * evidence (`ignoredSourceClaimReason`). A path whose ignore rule or HEAD
- * membership cannot be read is not returned.
+ * membership cannot be read is not returned. A file in one of the work's
+ * recorded checkouts is returned too, as a gitignored nested worktree's is: a
+ * checkout recorded after the stage began never asks a Unit to claim files it
+ * did not write.
  */
 export function unclaimableIgnoredSourceKeys(
   projectDir: string,
@@ -26210,11 +26480,16 @@ export function unclaimableIgnoredSourceKeys(
     return unclaimable;
   }
   const carriesWorkspaceShell = recordedRepos.length === 0;
+  const checkouts = readRecordedSourceCheckouts(projectDir);
   const sourceClaimValidation: GitSourceClaimValidationCache = new Map();
   const candidates: { key: string; sourceRepoDir: string; path: string }[] = [];
   for (const key of keys) {
     const parsed = splitSourcePathKey(key);
     if (parsed === null) continue;
+    if (parsed.repo === "" && recordedCheckoutOfListingPath(parsed.path, checkouts) !== null) {
+      unclaimable.add(key);
+      continue;
+    }
     const sourceRepoDir = parsed.repo === "" ? projectDir : repoDir(projectDir, parsed.repo);
     if (!isGitRepoDir(sourceRepoDir)) continue;
     seedGitSourceClaimIgnorePath(sourceRepoDir, parsed.path, sourceClaimValidation);
@@ -26293,12 +26568,17 @@ export function registryExcludedSourceKeys(
 // that leads to a checkout outside the project (a junction to a clone kept
 // elsewhere): its own git judges the claim, and the claim is keyed as the walk
 // lists what the link leads to (linkTargetListingRel). A claim through any
-// other link keeps the link rules below.
+// other link keeps the link rules below. A claim inside one of the work's
+// recorded checkouts, by its path in the project or by its listing name
+// (`<label>@checkout/<path>`, the only spelling a checkout outside the project
+// has), is judged by that checkout's git and keyed by that listing name; a
+// listing name no recorded checkout has is refused with the step.
 function sourceClaimCheckout(
   repoRoot: string,
   path: string,
   nestedAllowed: boolean,
-): { dir: string; path: string; listingPath: string } {
+  checkouts: readonly RecordedSourceCheckout[] = [],
+): { dir: string; path: string; listingPath: string; reason?: string } {
   let claim = { dir: repoRoot, path, listingPath: path };
   if (!nestedAllowed) return claim;
   let rootReal: string;
@@ -26309,6 +26589,15 @@ function sourceClaimCheckout(
   }
   const trailing = path.endsWith("/") ? "/" : "";
   const parts = path.replace(/\/+$/, "").split("/");
+  const named = recordedCheckoutOfListingPath(path, checkouts);
+  if (named !== null) return { dir: named.checkout.real, path: named.rest, listingPath: path };
+  if (parts[0].endsWith("@checkout") && !existsSync(join(repoRoot, parts[0]))) {
+    return {
+      ...claim,
+      reason: `${JSON.stringify(path)} names a checkout this piece of work has not recorded. Record it first with ` +
+        `\`${aidlcDispatcherInvocation("intent add-checkout <its path>")}\`, then dispatch the review again`,
+    };
+  }
   // A folder claim may name the link itself; a file claim names a file below.
   const folders = trailing ? parts.length : parts.length - 1;
   let dir = repoRoot;
@@ -26322,13 +26611,15 @@ function sourceClaimCheckout(
     }
     const rest = parts.slice(at + 1).join("/");
     const restPath = rest === "" ? "" : `${rest}${trailing}`;
+    const recorded = entry.isDirectory() ? recordedCheckoutAt(dir, checkouts) : null;
+    if (recorded !== null) {
+      return { dir: recorded.real, path: restPath, listingPath: `${sourceCheckoutListingRel(recorded.label)}/${restPath}` };
+    }
     if (entry.isSymbolicLink()) {
       const target = resolveSourceSymlinkTarget(rootReal, dir)?.target ?? null;
       if (target === null || pathIsWithinRoot(rootReal, target)) return claim;
       try {
-        if (!statSync(target).isDirectory()) return claim;
-        const git = lstatSync(join(target, ".git"));
-        if (!git.isDirectory() && !git.isFile()) return claim;
+        if (!statSync(target).isDirectory() || !hasRealGitEntry(target)) return claim;
       } catch {
         return claim;
       }
@@ -26336,12 +26627,8 @@ function sourceClaimCheckout(
       return { dir: target, path: restPath, listingPath: `${linked}/${restPath}` };
     }
     if (!entry.isDirectory() || at + 1 >= parts.length) return claim;
-    try {
-      const git = lstatSync(join(dir, ".git"));
-      if (git.isDirectory() || git.isFile()) claim = { dir, path: restPath, listingPath: path };
-    } catch {
-      // No .git entry here: the folder belongs to the checkout above it.
-    }
+    // A folder with no .git entry belongs to the checkout above it.
+    if (hasRealGitEntry(dir)) claim = { dir, path: restPath, listingPath: path };
   }
   return claim;
 }
@@ -26670,6 +26957,58 @@ function symlinkClaimTargetReason(
   return null;
 }
 
+// The review request's own write: a claim of the Unit's source manifest that
+// lies in a checkout the source walk does not reach (a worktree in a harness
+// folder) records that checkout, so the review that follows binds it. Returns
+// the checkouts it recorded. Only the review request calls this; reading or
+// checking a manifest never writes.
+export function recordUnitClaimCheckouts(
+  projectDir: string,
+  stageSlug: string,
+  unit: string,
+): RecordedSourceCheckout[] {
+  if (existsSync(join(projectDir, ".aidlc", "worktree-meta.json")) || intentRepos(projectDir).length > 0) return [];
+  const record = recordDir(projectDir);
+  if (record === null || validateUnitName(unit) !== null || !/^[a-z][a-z0-9-]*$/.test(stageSlug)) return [];
+  let writes: unknown;
+  try {
+    writes = (JSON.parse(readFileSync(join(record, "construction", unit, stageSlug, "source-manifest.json"), "utf-8")) as {
+      writes?: unknown;
+    }).writes;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(writes)) return [];
+  const checkouts = readRecordedSourceCheckouts(projectDir);
+  let reaches: ((dir: string) => boolean) | null = null;
+  const added: RecordedSourceCheckout[] = [];
+  for (const write of writes) {
+    if (!isPlainObject(write) || typeof write.path !== "string" || "repo" in write) continue;
+    const normalized = normalizeManifestSourcePath(write.path);
+    if ("reason" in normalized) continue;
+    const claim = sourceClaimCheckout(projectDir, normalized.path, true, [...checkouts, ...added]);
+    // Only a nested checkout found on the claim's own path, not a link's target
+    // or one already recorded.
+    if (claim.reason !== undefined || claim.dir === projectDir || claim.listingPath !== normalized.path) continue;
+    reaches ??= sourceWalkReach(projectDir, workspaceSourceState(projectDir)?.listing ?? null, checkouts);
+    if (reaches(claim.dir)) continue;
+    let real: string;
+    try {
+      real = realpathSync(claim.dir);
+    } catch {
+      continue;
+    }
+    if (recordedCheckoutAt(real, [...checkouts, ...added]) !== null) continue;
+    added.push({
+      label: sourceCheckoutLabelFor(real, [...checkouts, ...added]),
+      path: relative(projectDir, claim.dir).split(sep).join("/"),
+      real,
+    });
+  }
+  if (added.length > 0) writeRecordedSourceCheckouts(projectDir, [...checkouts, ...added]);
+  return added;
+}
+
 /** Strictly read and validate a unit's engine-required source-manifest.json. */
 export function readUnitSourceManifest(
   projectDir: string,
@@ -26739,6 +27078,7 @@ function validateUnitSourceManifestBytes(
   const worktreeRelative = worktreeContext !== null;
   const recordedRepos = worktreeRelative ? [] : intentRepos(projectDir);
   const recordedRepoSet = new Set(recordedRepos);
+  const checkouts = worktreeRelative ? [] : readRecordedSourceCheckouts(projectDir);
   const carriesWorkspaceShell =
     worktreeContext?.carriesWorkspaceShell ?? recordedRepos.length === 0;
   const claims = new Set<string>();
@@ -26780,7 +27120,9 @@ function validateUnitSourceManifestBytes(
           : repoDir(projectDir, canonicalRepo),
       normalized.path,
       !worktreeRelative && canonicalRepo === undefined,
+      checkouts,
     );
+    if (claim.reason !== undefined) continue;
     seedGitSourceClaimIgnorePath(
       claim.dir,
       claim.path,
@@ -26834,7 +27176,9 @@ function validateUnitSourceManifestBytes(
           : repoDir(projectDir, canonicalRepo),
       normalized.path,
       !worktreeRelative && canonicalRepo === undefined,
+      checkouts,
     );
+    if (claim.reason !== undefined) return { ok: false, reason: `writes[${index}].path: ${claim.reason}` };
     const ignoredReason = ignoredSourceClaimReason(
       claim.dir,
       claim.path,
@@ -32484,7 +32828,7 @@ export function evaluateGuardRefusal(
       remedies.push({
         op: "repair-source-boundary",
         action:
-          "Repair .aidlc-source-paths.json or the workspace source boundary so " +
+          `${sourceBoundaryRepairStep()} so ` +
           "the application source can be checked, then request a fresh review.",
         requiresHuman: false,
         executableNow: state !== "completed",

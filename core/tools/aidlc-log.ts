@@ -144,6 +144,7 @@ import {
   readRegularFileNoFollowOrThrow,
   readStateFile,
   readUnitSourceManifest,
+  recordUnitClaimCheckouts,
   recordDir,
   recordedReviewFileDigest,
   editedReviewNotice,
@@ -3382,10 +3383,25 @@ function handleReview(args: string[]): void {
     };
   };
 
+  // `recordCheckouts`: a fresh request records a checkout one of the Unit's
+  // claims lies in where the source walk does not reach, before the binding,
+  // so this review binds it; a retried request keeps the boundary it had.
   const stampRequestedSourceBinding = (
     node: ReturnType<typeof loadStageGraphAll>[number],
+    recordCheckouts = false,
   ): void => {
     if (!node.workspace_requires) return;
+    if (
+      recordCheckouts &&
+      flags.unit !== undefined &&
+      node.for_each === "unit-of-work" &&
+      flags.single !== "true"
+    ) {
+      const recorded = recordUnitClaimCheckouts(pd, flags.stage as string, flags.unit as string);
+      if (recorded.length > 0) {
+        fields["Checkouts Recorded"] = recorded.map((checkout) => `${checkout.label} (${checkout.path})`).join(", ");
+      }
+    }
     const sourceState = workspaceSourceState(pd, intent, space);
     fields["Source Fingerprint"] =
       sourceState?.fingerprint ?? UNBINDABLE_FINGERPRINT;
@@ -3949,7 +3965,7 @@ function handleReview(args: string[]): void {
             fields["Recovery Cause"] = replaced.recoveryCause;
             recovery = "stale-receipt";
           }
-          stampRequestedSourceBinding(node);
+          stampRequestedSourceBinding(node, true);
           openReviewDraftSlot(attempt.floor);
           emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
           return;
@@ -4088,7 +4104,7 @@ function handleReview(args: string[]): void {
           const words = latestPersonTurn(pd)?.words;
           if (words && !isNonAnswer(words)) fields["Person Reply"] = words;
         }
-        stampRequestedSourceBinding(node);
+        stampRequestedSourceBinding(node, true);
         openReviewDraftSlot(attempt.floor);
         emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
       }, intent, space);

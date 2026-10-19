@@ -847,13 +847,13 @@ export const ROUTES: readonly Route[] = [
     group: "intent",
     kind: "custom",
     classification: "translation",
-    verbs: ["list", "switch", "<name>", "create", "archive", "unarchive", "add-repo", "remove-repo"],
+    verbs: ["list", "switch", "<name>", "create", "archive", "unarchive", "add-repo", "remove-repo", "add-checkout", "remove-checkout"],
     custom: "workspace",
     ...PUBLIC_ENGINE,
     human: [
       {
-        command: "intent [list|switch|create|archive|unarchive|add-repo|remove-repo]",
-        summary: "list, switch, create, archive, or unarchive intent context; add or remove one of its sibling repos",
+        command: "intent [list|switch|create|archive|unarchive|add-repo|remove-repo|add-checkout|remove-checkout]",
+        summary: "list, switch, create, archive, or unarchive intent context; add or remove one of its sibling repos or recorded checkouts",
       },
     ],
     all: [
@@ -865,6 +865,8 @@ export const ROUTES: readonly Route[] = [
       "unarchive <name>",
       "add-repo <name>",
       "remove-repo <name>",
+      "add-checkout <path>",
+      "remove-checkout <path>",
     ],
   },
   {

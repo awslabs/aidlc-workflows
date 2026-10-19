@@ -197,11 +197,13 @@ const DISPATCHER_INTENT_VERBS = new Set([
   "unarchive",
   "add-repo",
   "remove-repo",
+  "add-checkout",
+  "remove-checkout",
 ]);
 const DISPATCHER_SPACE_VERBS = new Set(["list", "switch", "create"]);
 
 type DispatcherIntentLifecycleVerb = "archive" | "unarchive";
-type DispatcherIntentRepoVerb = "add-repo" | "remove-repo";
+type DispatcherIntentRepoVerb = "add-repo" | "remove-repo" | "add-checkout" | "remove-checkout";
 
 export type DispatcherWorkspaceCommand =
   | { kind: "list"; noun: DispatcherWorkspaceNoun; json: boolean; all?: true }
@@ -233,7 +235,7 @@ function missingDispatcherWorkspaceName(
 ): DispatcherWorkspaceCommand {
   const usage = verb === "space-create"
     ? "space-create <name>"
-    : `${noun} ${verb} <name>`;
+    : `${noun} ${verb} ${verb === "add-checkout" || verb === "remove-checkout" ? "<path>" : "<name>"}`;
   return {
     kind: "error",
     noun,
@@ -256,7 +258,7 @@ function isDispatcherIntentLifecycleVerb(
 function isDispatcherIntentRepoVerb(
   token: string | undefined,
 ): token is DispatcherIntentRepoVerb {
-  return token === "add-repo" || token === "remove-repo";
+  return token === "add-repo" || token === "remove-repo" || token === "add-checkout" || token === "remove-checkout";
 }
 
 // `intent list [--json] [--all]` / `space list [--json]`: the flags may appear
@@ -357,6 +359,8 @@ export function dispatcherWorkspaceUtilityArgv(
     case "unarchive":
     case "add-repo":
     case "remove-repo":
+    case "add-checkout":
+    case "remove-checkout":
       // Lifecycle and repo verbs forward verbatim, trailing flags included:
       // `intent archive <name> --reason <text>`.
       return [command.noun, command.kind, command.name, ...command.rest];

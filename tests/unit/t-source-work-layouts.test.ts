@@ -86,6 +86,7 @@ describe("Code Generation finds the code where the person keeps it", () => {
         expect(sourceWorkRows(proj)).toEqual([]);
         const approved = report(proj, "approved", {}, ["--user-input", "Approve"]);
         expect(stageBox(proj), approved.out).toBe("x");
+        if (layout.records) expect(approvalNote(proj)).toStartWith("found in ");
       });
     }
   }
@@ -101,6 +102,24 @@ describe("Code Generation finds the code where the person keeps it", () => {
     expectPersonDecides(proj);
     expect(sourceWorkRows(proj).map((row) => row.lookedIn).join(" ")).not.toContain(".claude");
   });
+
+  // A recorded checkout is bound by the review like any folder in the project:
+  // an edit after the review is caught.
+  for (const layout of LAYOUTS.filter((entry) => entry.records !== undefined)) {
+    for (const perUnit of [false, true]) {
+      test.skipIf(layout.skip !== undefined && layout.skip !== false)(
+        `${layout.name}, ${perUnit ? "one Unit" : "the whole stage"}: an edit after the review is caught`,
+        () => {
+          const { proj, codeDir } = buildLayout(layout, perUnit);
+          writeCode(codeDir, "export const login = 2;\n");
+          const gate = report(proj, "awaiting-approval");
+          expect(isGuardAsk(gate), gate.out).toBe(true);
+          expect(reasonCodes(gate), gate.out).toContain("SOURCE_REVIEW_STALE");
+          expect(stageBox(proj)).toBe("-");
+        },
+      );
+    }
+  }
 
   // The agent's own completion verbs see the same places.
   test("advance, finalize and complete-workflow find the code in a nested worktree", () => {

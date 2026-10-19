@@ -86,6 +86,7 @@ const VALID_EVENT_TYPES = new Set([
   "WORKFLOW_ARCHIVED",
   "WORKFLOW_UNARCHIVED",
   "INTENT_REPOS_CHANGED",
+  "INTENT_CHECKOUTS_CHANGED",
   // Session events (hook-owned)
   "SESSION_STARTED",
   "SESSION_RESUMED",
@@ -317,6 +318,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   WORKFLOW_ARCHIVED: "Workflow Archived",
   WORKFLOW_UNARCHIVED: "Workflow Unarchived",
   INTENT_REPOS_CHANGED: "Intent Repos Changed",
+  INTENT_CHECKOUTS_CHANGED: "Intent Checkouts Changed",
   SESSION_STARTED: "Session Start",
   SESSION_RESUMED: "Session Resume",
   SESSION_COMPACTED: "Session Compacted",
