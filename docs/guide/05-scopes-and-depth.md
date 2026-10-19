@@ -103,8 +103,6 @@ with the request, so the new work is created with them off:
 /aidlc workshop --learnings off --summary-confirmation off <the work>
 ```
 
-The plan question then says "no learnings ritual or summary confirmation".
-
 | Switch | What it removes at each stage | What you lose |
 |--------|-------------------------------|---------------|
 | `--learnings off` | The "Anything to add for next time?" question before the approval gate, and the stage diary (`memory.md`) | Nothing from this work is written to `memory/project.md` or `memory/team.md`, so the next run does not pick up what this one taught. Practices already in memory still load |
@@ -112,9 +110,9 @@ The plan question then says "no learnings ritual or summary confirmation".
 
 Neither switch removes a stage's questions or its approval gate. `bugfix` and
 `express` already start with both off, and `classic` with summary confirmation
-off. On work already under way, type `/aidlc --learnings off` or
-`/aidlc --summary-confirmation off` yourself: turning summary confirmation off
-is your call, so the agent cannot do it for you.
+off. On work already under way, ask for either one in your own words, or type
+`/aidlc --learnings off` or `/aidlc --summary-confirmation off`; summary
+confirmation goes off only when you ask for it.
 
 #### Upgrading an in-flight classic intent
 
