@@ -12,11 +12,14 @@ import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
   claimPayload,
   cleanupTeamBuild,
+  ENV,
+  git,
   homeState,
   makeHome,
   next,
@@ -128,6 +131,57 @@ describe("who builds which Unit is asked once, at the home", () => {
     expect(open.json?.open).toEqual(["refunds", "checkout-ui", "reporting"]);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toBeNull();
     expect(next(home.dir).ask_type).not.toBe("unit-assignment");
+  });
+});
+
+describe("the lead's answer is never asked for twice", () => {
+  test("not yet: the question is not put again, the step offers it, and nothing is built at the home meanwhile", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    expect(next(home.dir).ask_type).toBe("unit-assignment");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "not yet, I need to talk to the teams" }, home.dir);
+    const step = next(home.dir);
+    expect(step.kind, JSON.stringify(step)).toBe("notice");
+    expect(step.message).toBe(
+      "Who builds which Unit is still yours to say, so nothing is built yet: name a team for each Unit, or leave them " +
+        "all open for any team.",
+    );
+    const offer = (step.offers as Array<{ choices: Array<{ label: string; command?: string }> }>)[0];
+    expect(offer.choices.map((choice) => choice.label)).toEqual(["Name the teams", "Leave them all open"]);
+    expect(String(offer.choices[0].command)).toContain("assign <unit>=<team>");
+    expect(next(home.dir).kind).toBe("notice");
+    expect(readAuditShardEvents(home.dir).some((row) => row.event === "UNIT_STARTED")).toBe(false);
+    expect(tellsWhatToType(step.message, step.offers)).toBe(false);
+  });
+
+  test("a home that cannot be reached keeps the answer: the step offers to try again, and trying holds the Units", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    expect(next(home.dir).ask_type).toBe("unit-assignment");
+    git(home.dir, ["remote", "set-url", "origin", join(home.remote, "gone")]);
+    const kept = run(UNIT, ["assign", "refunds=payments", "checkout-ui=web", "--person-words", "payments takes refunds, web the UI"], home.dir);
+    expect(kept.status, kept.out).toBe(0);
+    expect(String(kept.json?.notice)).toStartWith("Nothing is held for the teams yet: the home could not be reached (");
+    const step = next(home.dir);
+    expect(step.ask_type, JSON.stringify(step)).toBeUndefined();
+    expect(step.message).toBe(
+      "Who builds which Unit is kept, but nothing is held for the teams yet: the home could not be reached. Do you want me to try again?",
+    );
+    const retry = String((step.offers as Array<{ choices: Array<{ label: string; command?: string }> }>)[0].choices[0].command);
+    expect(retry).toEndWith("aidlc-unit.ts assign refunds=payments checkout-ui=web --person-words '<their words>'");
+    git(home.dir, ["remote", "set-url", "origin", home.remote]);
+    expect(run(UNIT, ["assign", "refunds=payments", "checkout-ui=web", "--person-words", "yes, try again"], home.dir).status).toBe(0);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.owner).toBe("payments");
+    expect(next(home.dir).kind).not.toBe("ask");
+  });
+
+  test("words with no turn of the lead's behind them are not recorded as the lead's", () => {
+    const home = makeHome();
+    chooseTeams(home.dir);
+    const guarded: NodeJS.ProcessEnv = { ...ENV, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "" };
+    expect(run(UNIT, ["assign", "refunds=payments", "--person-words", "the agent's guess"], home.dir, guarded).status).toBe(0);
+    const row = readAuditShardEvents(home.dir).filter((entry) => entry.event === "UNITS_ASSIGNED").at(-1);
+    expect(row?.block).not.toContain("Person Words");
   });
 });
 

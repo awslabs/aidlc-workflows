@@ -14,7 +14,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked, startClaimLocalRecord, takeHandedOverAuditRows } from "./aidlc-audit.ts";
@@ -83,6 +83,8 @@ import {
   readUnitScopeStamp,
   readAnswerTextFile,
   removeField,
+  shellArg,
+  unattendedHumanPresenceHint,
   parseAuditShardEvents,
   parseReviewRecordBytes,
   personAskedSinceGate,
@@ -4831,6 +4833,24 @@ export function publishedAtHead(projectDir: string): boolean {
   }
 }
 
+// The person's words as the agent hands them: a file (`--person-words-file`) or inline.
+function personWordsOf(pd: string, flags: Record<string, string | undefined>): string {
+  return (flags["person-words-file"] !== undefined ? readAnswerTextFile(pd, flags["person-words-file"]) : flags["person-words"] ?? "").trim();
+}
+
+// The lead's words at the home are theirs only with a turn of theirs behind
+// them (personAskedSinceGate). The four that settle a team's Unit (an answer
+// to a proposal, a turn-down, a merge by word, a sign-off) are refused without
+// one, with the step for a reply the hooks may have missed; assign and hand-off
+// go on, and record no words as the lead's.
+function leadSpoke(pd: string): boolean {
+  return humanPresenceGuardDisabled() || personAskedSinceGate(pd);
+}
+
+function requireLeadsWord(pd: string, what: string): void {
+  if (!leadSpoke(pd)) fail(`${what} is the person's own word: ask them first, then run this with their words.${unattendedHumanPresenceHint(pd)}`);
+}
+
 // Who builds which Unit, in the lead's own words at the home: one claim per
 // Unit they named, held for that team by the claim's compare-and-swap, with no
 // scope stamp, so the lead's checkout stays the home's. A Unit they left out
@@ -4843,9 +4863,7 @@ function assignUnits(args: string[], projectDir?: string): void {
     fail("Units are given to teams once teams are chosen for this work.");
   }
   if (readApplicableTeamUnitScopeStamp(pd)) fail("Units are given to teams at the home, not from a checkout scoped to one Unit.");
-  const words = flags["person-words-file"] !== undefined
-    ? readAnswerTextFile(pd, flags["person-words-file"])
-    : flags["person-words"] ?? "";
+  const words = leadSpoke(pd) ? personWordsOf(pd, flags) : "";
   const open = bareFlags.has("open") || flags.open !== undefined;
   const pairs: Array<{ unit: string; team: string }> = [];
   for (const token of positional) {
@@ -4874,7 +4892,26 @@ function assignUnits(args: string[], projectDir?: string): void {
     named.delete(skeleton);
   }
   const identity = activeIdentity(pd);
-  const integration = fetchIntegration(pd);
+  let integration: ReturnType<typeof fetchIntegration>;
+  try {
+    integration = fetchIntegration(pd);
+  } catch (error) {
+    // The home cannot be reached: the answer is kept, and the next step offers to hold it again.
+    const kept = [...named].map(([unit, team]) => `${unit}=${team}`);
+    appendAuditEntry("UNITS_ASSIGNED", {
+      Assigned: kept.join(", ") || "none",
+      ...(open ? { Open: "all" } : {}),
+      Held: "not yet",
+      ...(words ? { "Person Words": words } : {}),
+    }, pd);
+    console.log(JSON.stringify({
+      assigned: [],
+      notice: `Nothing is held for the teams yet: the home could not be reached (${errorMessage(error)}). I've kept who builds which ` +
+        "Unit. Do you want me to try again?",
+      offer: { choices: [{ label: "Try again", command: assignRetryCommand(kept, open) }, { label: "Not now" }] },
+    }));
+    return;
+  }
   const assigned: Array<{ unit: string; team: string }> = [];
   const held = new Set<string>();
   for (const [unit, team] of named) {
@@ -4956,6 +4993,12 @@ function assignUnits(args: string[], projectDir?: string): void {
       }
       : {}),
   }));
+}
+
+// The assignment the lead gave, run again.
+export function assignRetryCommand(pairs: string[], open: boolean): string {
+  return `${aidlcToolInvocation("unit")} assign ${pairs.length > 0 ? pairs.map(shellArg).join(" ") : ""}${open ? " --open" : ""} ` +
+    "--person-words '<their words>'";
 }
 
 // --- Taking a Unit: a team builds it as a piece of work of its own -----------
@@ -6007,20 +6050,29 @@ function joinNames(names: string[]): string {
 // claim done so the Units waiting on it open everywhere. A repo the home has
 // no checkout of keeps the team's result as theirs until the home can check it.
 // `unreached` collects the remotes that could not be read, `unsent` the ones
-// that did not take a verdict.
+// that did not take a verdict, `told` each Unit whose newly seen merge the
+// teams now have on its claim (the repos it merged in, and whether it is done).
+export interface ToldMerge {
+  unit: string;
+  repos: string[];
+  done: boolean;
+}
+
 export function checkTeamResults(
   projectDir: string,
   unreached?: string[],
   unsent?: string[],
+  told?: ToldMerge[],
 ): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
   const pd = resolveProjectDir(projectDir);
-  return quietly(() => checkTeamResultsQuietly(pd, unreached, unsent));
+  return quietly(() => checkTeamResultsQuietly(pd, unreached, unsent, told));
 }
 
 function checkTeamResultsQuietly(
   pd: string,
   unreached?: string[],
   unsent?: string[],
+  told?: ToldMerge[],
 ): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
   const found = new Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }>();
   const identity = activeIdentity(pd);
@@ -6066,15 +6118,17 @@ function checkTeamResultsQuietly(
       (!leadSignOffOn(readStateFile(pd)) || live.payload.signoff !== undefined);
     // The one thing written back is a merge the home has seen: a look at the
     // board that sees no new merge leaves the claim as the team sent it.
-    const seenMerge = verdicts.some((verdict) => verdict.merged &&
-      !(live.payload.verdicts ?? []).some((before) => before.repo === verdict.repo && before.merged));
+    const newlyMerged = verdicts.filter((verdict) => verdict.merged &&
+      !(live.payload.verdicts ?? []).some((before) => before.repo === verdict.repo && before.merged)).map((verdict) => verdict.repo);
     if (done) recordUnitDone(pd, live, verdicts);
-    if (seenMerge || done) {
+    if (newlyMerged.length > 0 || done) {
       const payload: UnitClaimPayload = { ...live.payload, predecessor_oid: live.oid, verdicts, ...(done ? { done: true as const } : {}) };
       const commit = createClaimCommit(pd, live.oid, payload);
       // Unwritten, the verdict stays here and the next step writes it again.
-      if (updateClaimRef(pd, remote, live.ref, commit, live.oid).ok) invalidateLiveClaimPayloadCache(pd, unit);
-      else unsent?.push(remote ?? "the home");
+      if (updateClaimRef(pd, remote, live.ref, commit, live.oid).ok) {
+        invalidateLiveClaimPayloadCache(pd, unit);
+        told?.push({ unit, repos: newlyMerged, done });
+      } else unsent?.push(remote ?? "the home");
     }
     found.set(unit, { team: live.owner, verdicts, done });
   }
@@ -6260,7 +6314,7 @@ function proposeChange(args: string[], projectDir?: string): void {
   const proposal: Proposal = {
     input: match.path,
     by: git(pd, ["config", "user.name"]).stdout.trim() || "a teammate",
-    words: flags["person-words"]?.trim() ?? "",
+    words: personWordsOf(pd, flags),
     at: isoTimestamp(),
   };
   const payload: UnitClaimPayload = {
@@ -6280,6 +6334,19 @@ function proposeChange(args: string[], projectDir?: string): void {
   }));
 }
 
+// The text a team proposes for an input, written beside the home's record
+// (never committed) so its owner can read it before deciding: the path, or
+// null when the claim does not carry it.
+export function writeProposedText(projectDir: string, claim: UnitClaimView, input: string): string | null {
+  const shown = git(projectDir, ["show", `${claim.oid}:${RESULT_FILES_ROOT}/proposals/${input}`, "--"]);
+  const record = recordDir(projectDir);
+  if (!shown.ok || record === null) return null;
+  const path = join(record, ENGINE_DIR, "proposed", claim.unit, ...input.split("/"));
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, shown.stdout, "utf-8");
+  return relative(projectDir, path).split(sep).join("/");
+}
+
 export function amendAskName(unit: string, input: string): string {
   return `amend-${unit}-${input.replace(/[^A-Za-z0-9.-]+/g, "_")}.json`;
 }
@@ -6294,19 +6361,17 @@ function amendInput(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
   const answer = flags.answer;
-  const words = flags["person-words"]?.trim() ?? "";
   if (!unit || !flags.input || (answer !== "approve" && answer !== "reject")) {
     fail("Usage: aidlc-unit amend <unit> --input <file> --answer <approve|reject> --person-words '<their words>'");
   }
   const pd = resolveProjectDir(projectDir);
+  const words = personWordsOf(pd, flags);
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
   const proposal = live?.payload.proposals?.find((entry) => entry.input === flags.input && entry.answer === undefined);
   if (!live || proposal === undefined) fail(`${unit} has no change to ${flags.input} waiting for an answer.`);
-  if (!humanPresenceGuardDisabled() && !personAskedSinceGate(pd)) {
-    fail("The answer to a proposed change is the person's own word: ask them first, then run this with their words.");
-  }
+  requireLeadsWord(pd, "The answer to a proposed change");
   const name = inputName(proposal.input);
   const answered: Proposal = { ...proposal, answer: answer === "approve" ? "approved" : "turned down", ...(words ? { answer_words: words } : {}) };
   const lines: string[] = [];
@@ -6362,12 +6427,8 @@ function turnedDown(args: string[], projectDir?: string): void {
   const unit = positional[0];
   if (!unit || !flags.repo) fail("Usage: aidlc-unit turned-down <unit> --repo <repo> --person-words '<their words>'");
   const pd = resolveProjectDir(projectDir);
-  const words = flags["person-words-file"] !== undefined
-    ? readAnswerTextFile(pd, flags["person-words-file"])
-    : flags["person-words"] ?? "";
-  if (!humanPresenceGuardDisabled() && !personAskedSinceGate(pd)) {
-    fail("A turn-down is the person's own word: ask them first, then run this with their words.");
-  }
+  const words = personWordsOf(pd, flags);
+  requireLeadsWord(pd, "A turn-down");
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
@@ -6391,10 +6452,8 @@ function saidMerged(args: string[], projectDir?: string): void {
   const unit = positional[0];
   if (!unit || !flags.repo) fail("Usage: aidlc-unit merged <unit> --repo <repo> --person-words '<their words>'");
   const pd = resolveProjectDir(projectDir);
-  const words = (flags["person-words-file"] !== undefined ? readAnswerTextFile(pd, flags["person-words-file"]) : flags["person-words"] ?? "").trim();
-  if (!humanPresenceGuardDisabled() && !personAskedSinceGate(pd)) {
-    fail("That it merged is the person's own word: ask them first, then run this with their words.");
-  }
+  const words = personWordsOf(pd, flags);
+  requireLeadsWord(pd, "That it merged");
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
@@ -6479,7 +6538,7 @@ function handOff(args: string[], projectDir?: string): void {
   if (!held.ok) fail(`${unit} could not be held for ${team}: ${held.refused ?? "its claim moved meanwhile"}. Try again.`);
   invalidateLiveClaimPayloadCache(pd, unit);
   const rel = writeHandOffFile(pd, unit, team, payload.generation);
-  const words = flags["person-words"]?.trim() ?? "";
+  const words = leadSpoke(pd) ? personWordsOf(pd, flags) : "";
   appendAuditEntry("UNITS_ASSIGNED", {
     Assigned: `${unit}=${team}`,
     "By File": rel,
@@ -6750,16 +6809,14 @@ export function signOffAskName(unit: string): string {
 function signOff(args: string[], projectDir?: string): void {
   const { positional, flags } = parseArgs(args);
   const unit = positional[0];
-  const words = flags["person-words"]?.trim() ?? "";
   if (!unit) fail("Usage: aidlc-unit sign-off <unit> --person-words '<their words>'");
   const pd = resolveProjectDir(projectDir);
+  const words = personWordsOf(pd, flags);
   const identity = activeIdentity(pd);
   const remote = repositoryRemote(pd);
   const live = currentClaim(pd, remote, claimRef(identity.intentId8, unit));
   if (live?.status !== "claimed" || !live.payload.result) fail(`${unit} has no result from its team to sign off.`);
-  if (!humanPresenceGuardDisabled() && !personAskedSinceGate(pd)) {
-    fail("The sign-off is the person's own word: ask them first, then run this with their words.");
-  }
+  requireLeadsWord(pd, "The sign-off");
   const payload: UnitClaimPayload = { ...live.payload, predecessor_oid: live.oid, signoff: { words, at: isoTimestamp() } };
   const sent = updateClaimRef(pd, remote, live.ref, createClaimCommit(pd, live.oid, payload), live.oid);
   if (!sent.ok) fail(`${unit}'s claim moved meanwhile: ${sent.refused ?? "try again"}.`);

@@ -607,7 +607,10 @@ import {
   openingStatusFrom,
   publishedAtHead,
   pushRemotesToPick,
+  assignRetryCommand,
   refreshClaimRefs,
+  type ToldMerge,
+  writeProposedText,
   refreshHomeClaims,
   refreshListedHome,
   shareBlocker,
@@ -698,6 +701,7 @@ import {
   unitDependencies,
   unitLikelyRepos,
   unitsAssignedSinceTeams,
+  assignmentNotHeld,
   unitsInPlanOrder,
   unknownLikelyReposLine,
 } from "./aidlc-unit-teams.ts";
@@ -5198,7 +5202,7 @@ function constructionStaffingAsk(
   stateContent: string | null,
   slug: string,
   scope: string,
-): AskDirective | null {
+): AskDirective | NoticeDirective | null {
   const node = nodeForSlug(slug);
   if (stateContent === null || !node || node.phase !== "construction" || !isPerUnit(node)) return null;
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return null;
@@ -5630,11 +5634,21 @@ function unitsReposAsk(projectDir: string, stateContent: string | null): AskDire
 // records them as one claim per named Unit; a Unit left out stays open for any
 // team to take later. The walking skeleton, when on, is built here first and
 // is not asked about. Null when the step goes on.
-function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirective | null {
+function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirective | NoticeDirective | null {
   if (readApplicableTeamUnitScopeStamp(projectDir, stateContent) !== null) return null;
   const evidence = routingEvidenceFor(projectDir, stateContent);
   const rows = evidence?.allRows ?? readAuditShardEvents(projectDir);
   if (rows.some((row) => row.event === "UNIT_STARTED")) return null;
+  // The lead's answer, kept while the home could not be reached: holding it again is offered.
+  const kept = assignmentNotHeld(rows);
+  if (kept !== null) {
+    const question = "Who builds which Unit is kept, but nothing is held for the teams yet: the home could not be reached. " +
+      "Do you want me to try again?";
+    return {
+      ...noticeDirective(question),
+      offers: [{ question, choices: [{ label: "Try again", command: assignRetryCommand(kept.pairs, kept.open) }, { label: "Not now" }] }],
+    };
+  }
   if (unitsAssignedSinceTeams(rows)) return null;
   const dag = resolveBoltBatches(projectDir, evidence);
   if (dag.state !== "ok" || dag.units.length < 2) return null;
@@ -5650,23 +5664,37 @@ function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirecti
     return notes.length > 0 ? `${unit} (${notes.join("; ")})` : unit;
   });
   const unitTool = aidlcToolInvocation("unit");
+  const question = `${skeleton !== null ? `${skeleton} is the walking skeleton, built here first. ` : ""}` +
+    `Who builds which Unit? ${described.join(", ")}. Name a team for each, or leave a Unit open for any team ` +
+    "to take later.";
+  const assignCommand = `${unitTool} assign <unit>=<team> [<unit>=<team> ...] --person-words '<their words>'`;
+  const open = { label: "Leave them all open", detail: "Any team takes a Unit when it is ready.", command: `${unitTool} assign --open` };
+  // Asked once: after the lead spoke without naming teams, the step is where
+  // it stands, with the same choice, and nothing is built here meanwhile.
+  const mark = engineAskMark(projectDir, UNIT_ASSIGNMENT_ASK);
+  if (mark !== null && personRepliedAfter(projectDir, mark)) {
+    const waits = "Who builds which Unit is still yours to say, so nothing is built yet: name a team for each Unit, or " +
+      "leave them all open for any team.";
+    return { ...noticeDirective(waits), offers: [{ question: waits, choices: [{ label: "Name the teams", command: assignCommand }, open] }] };
+  }
+  if (!isReadOnlyEngineProbe()) noteEngineAskMark(projectDir, UNIT_ASSIGNMENT_ASK);
   return {
     kind: "ask",
     ask_type: "unit-assignment",
     response_route: "command",
-    question: `${skeleton !== null ? `${skeleton} is the walking skeleton, built here first. ` : ""}` +
-      `Who builds which Unit? ${described.join(", ")}. Name a team for each, or leave a Unit open for any team ` +
-      "to take later.",
+    question,
     choices: [
       {
         label: "Name the teams",
         detail: "Which team builds which Unit, in your own words; a Unit you leave out stays open for any team.",
       },
-      { label: "Leave them all open", detail: "Any team takes a Unit when it is ready.", command: `${unitTool} assign --open` },
+      open,
     ],
-    assign_command: `${unitTool} assign <unit>=<team> [<unit>=<team> ...] --person-words '<their words>'`,
+    assign_command: assignCommand,
   };
 }
+
+const UNIT_ASSIGNMENT_ASK = "unit-assignment.json";
 
 // A line for the person said with the step this `next` emits, once per chat.
 function sayWithStepOnce(projectDir: string, line: string): void {
@@ -8628,6 +8656,11 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
       { label: "Not now", detail: "Nothing is pushed until you want it to be.", command: `${unitTool} push --later` },
     ],
   };
+}
+
+function joinRepoNames(repos: string[]): string {
+  const names = repos.map((repo) => (repo === "." ? "the repo" : repo));
+  return names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
 }
 
 // The selected work's own name, for the lines the person reads.
@@ -16512,12 +16545,19 @@ function emitTeamUnitMajorRunStage(
   // (with the home unreached, the board is the last fetch's).
   let results: ReturnType<typeof checkTeamResults> = new Map();
   const unsent: string[] = [];
+  const told: ToldMerge[] = [];
   if (heldElsewhere.size > 0 && !isReadOnlyEngineProbe() && unreached.length === 0) {
     try {
-      results = checkTeamResults(projectDir, unreached, unsent);
+      results = checkTeamResults(projectDir, unreached, unsent, told);
     } catch (e) {
       sayWithStepOnce(projectDir, `The teams' results could not be checked just now: ${errorMessage(e)}`);
     }
+  }
+  // A merge the home saw is the one thing it writes for the teams: said once, in plain words.
+  for (const merge of told) {
+    sayWithStepOnce(projectDir, merge.done
+      ? `I've told the teams ${merge.unit} is merged.`
+      : `I've told the teams ${joinRepoNames(merge.repos)} merged ${merge.unit}.`);
   }
   if (unsent.length > 0) {
     sayWithStepOnce(projectDir, `What the board shows here could not be sent to ${unsent[0]} just now; the teams may not see it yet, and the next step sends it again.`);
@@ -16712,12 +16752,14 @@ function emitTeamUnitMajorRunStage(
     const name = inputName(proposal.entry.input);
     if (mark === null || !personRepliedAfter(projectDir, mark)) {
       noteEngineAskMark(projectDir, askName);
+      const at = writeProposedText(projectDir, proposal.claim, proposal.entry.input);
       emit({
         kind: "ask",
         ask_type: "unit-amend",
         response_route: "command",
         question: `${proposal.claim.owner} proposes a change to the ${name} for ${proposal.claim.unit}` +
-          `${proposal.entry.words ? ` ("${proposal.entry.words}")` : ""}. Approve it for every Unit that uses it, or turn it down?`,
+          `${proposal.entry.words ? ` ("${proposal.entry.words}")` : ""}.${at !== null ? ` Their version is at ${at}.` : ""} ` +
+          "Approve it for every Unit that uses it, or turn it down?",
         choices: [
           { label: "Approve it", detail: "The home's copy changes; each team building with it hears it once and carries on." },
           { label: "Not now", detail: "It waits for your answer." },
@@ -16777,7 +16819,10 @@ function emitTeamUnitMajorRunStage(
         const at = payload.progress?.stage ? stageLabel(findStageBySlug(payload.progress.stage), payload.progress.stage) : null;
         return { unit, team, status: at ? `handed off by file, at ${at}` : "handed off by file" };
       }
-      if (payload.taken_by) return { unit, team, status: `building, taken by ${payload.taken_by}` };
+      if (payload.taken_by) {
+        const early = (payload.early_on ?? []).map((dep) => dep.unit);
+        return { unit, team, status: `building${early.length > 0 ? ` early on ${early.join(", ")}` : ""}, taken by ${payload.taken_by}` };
+      }
       heldNotTaken.push({ unit, team });
       return { unit, team, status: `held for ${team}, not taken yet` };
     });
@@ -16792,12 +16837,41 @@ function emitTeamUnitMajorRunStage(
       ],
     }));
     for (const offer of offers) sayWithStepOnce(projectDir, offer.question);
+    // A sign-off or a proposal the lead was asked about once stays theirs to answer, from the board.
+    const answers = [...(overview?.claims.values() ?? [])].filter((claim) => claim.status === "claimed").flatMap((claim) => [
+      ...(claim.payload.proposals ?? []).filter((entry) => entry.answer === undefined).map((entry) => {
+        const amend = `${unitTool} amend ${shellArg(claim.unit)} --input ${shellArg(entry.input)} --answer`;
+        return {
+          question: `${claim.owner} proposes a change to the ${inputName(entry.input)} for ${claim.unit}. Approve it for every Unit that uses it, or turn it down?`,
+          choices: [
+            { label: "Approve it", command: `${amend} approve --person-words '<their words>'` },
+            { label: "Turn it down", command: `${amend} reject --person-words '<their words>'` },
+            { label: "Not now" },
+          ],
+        };
+      }),
+      ...(leadSignOffOn(stateContent) && claim.payload.result && !claim.payload.signoff
+        ? [{
+          question: `${claim.unit} came back from ${claim.owner}. Sign it off?`,
+          choices: [
+            { label: "Sign it off", command: `${unitTool} sign-off ${shellArg(claim.unit)} --person-words '<their words>'` },
+            { label: "Not now" },
+          ],
+        }]
+        : []),
+    ]);
+    const allOffers = [...answers, ...offers];
     emit({
       ...noticeDirective(renderUnitBoard(workLabel(projectDir), rows)),
-      ...(offers.length > 0 ? { offers } : {}),
+      ...(allOffers.length > 0 ? { offers: allOffers } : {}),
       board_note: "Show the board as it is. When the person says a repo turned a Unit down, run " +
         `\`${unitTool} turned-down <unit> --repo <repo> --person-words '<their words>'\`; when they say a repo merged it ` +
         `where the board does not see it, run \`${unitTool} merged <unit> --repo <repo> --person-words '<their words>'\`. ` +
+        `When they sign a team's result off, run \`${unitTool} sign-off <unit> --person-words '<their words>'\`; when they ` +
+        `answer a team's proposed change, run \`${unitTool} amend <unit> --input <file> --answer <approve|reject> ` +
+        "--person-words '<their words>'`. " +
+        `When they ask for their sign-off on every team's result, run \`${unitTool} lead-sign-off on\` (\`off\` to stop); ` +
+        `when they ask to free a Unit a team holds, run \`${unitTool} release <unit>\`. ` +
         `When they ask to hand a Unit off by file, run \`${unitTool} hand-off <unit> --team <team> --person-words '<their words>'\`; ` +
         `when they ask to take in a team's result or progress file, run \`${unitTool} take-in <file>\`. Say the notice line ` +
         "each prints.",

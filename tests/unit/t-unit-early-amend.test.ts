@@ -57,7 +57,7 @@ function notices(step: Record<string, unknown>): string[] {
 
 describe("starting early", () => {
   test("a waiting Unit whose dependency pushed is offered early, and starts on its branch", () => {
-    const { dana, hosts } = refundsPushed();
+    const { dana, hosts, home } = refundsPushed();
     const ask = next(dana);
     const labels = (ask.choices as Array<{ label: string; command: string }>).map((choice) => choice.label);
     // reporting is open: started early for a team the lead named, or another.
@@ -70,6 +70,8 @@ describe("starting early", () => {
     );
     expect(git(join(dana, "billing"), ["branch", "--show-current"])).toBe("reporting");
     expect(git(join(dana, "billing"), ["rev-parse", "HEAD"])).toBe(git(hosts.billing, ["rev-parse", "refunds"]));
+    // The home's board shows it started early.
+    expect(String(next(home.dir).message)).toContain("- reporting, data: building early on refunds, taken by dana");
   });
 
   test("without the dependency pushed, the Unit waits, and the line says when it opens", () => {
@@ -128,10 +130,12 @@ describe("a change to a shared input", () => {
     expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
     const ask = next(home.dir);
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-amend");
+    const proposedAt = `aidlc/spaces/default/intents/${HOME_RECORD}/.aidlc-engine/proposed/refunds/${REQUIREMENTS}`;
     expect(ask.question).toBe(
-      'payments proposes a change to the requirements for refunds ("refunds need partial amounts"). Approve it for every ' +
-        "Unit that uses it, or turn it down?",
+      `payments proposes a change to the requirements for refunds ("refunds need partial amounts"). Their version is at ${proposedAt}. ` +
+        "Approve it for every Unit that uses it, or turn it down?",
     );
+    expect(readFileSync(join(home.dir, ...proposedAt.split("/")), "utf-8")).toBe("# Requirements\n\nFR1 refunds, partial amounts too.\n");
     expect(String(ask.amend_command)).toContain(`amend refunds --input ${REQUIREMENTS} --answer <approve|reject>`);
     const amended = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, partial refunds"], home.dir);
     expect(amended.status, amended.out).toBe(0);
@@ -171,7 +175,7 @@ describe("a change to a shared input", () => {
     next(home.dir);
     const early = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes"], home.dir, guarded);
     expect(early.status).not.toBe(0);
-    expect(String(early.json?.error)).toBe("The answer to a proposed change is the person's own word: ask them first, then run this with their words.");
+    expect(String(early.json?.error)).toStartWith("The answer to a proposed change is the person's own word: ask them first, then run this with their words.");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "yes, partial refunds" }, home.dir);
     const theirs = run(UNIT, ["amend", "refunds", "--input", REQUIREMENTS, "--answer", "approve", "--person-words", "yes, partial refunds"], home.dir, guarded);
     expect(theirs.status, theirs.out).toBe(0);

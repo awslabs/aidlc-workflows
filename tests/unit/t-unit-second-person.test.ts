@@ -142,10 +142,18 @@ describe("the lead's sign-off", () => {
     mergeOnHost(hosts.billing, "refunds", "squash");
     const guarded: NodeJS.ProcessEnv = { ...ENV, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "" };
     const unasked = run(UNIT, ["sign-off", "refunds", "--person-words", "sign it off"], home.dir, guarded);
-    expect(String(unasked.json?.error)).toBe("The sign-off is the person's own word: ask them first, then run this with their words.");
+    expect(String(unasked.json?.error)).toStartWith("The sign-off is the person's own word: ask them first, then run this with their words.");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "let me look at the PRs first" }, home.dir);
     const board = next(home.dir);
     expect(String(board.message)).toContain("- refunds, payments: checkout-api merged, billing merged (2 of 2 merged), waiting for your sign-off");
+    // Not asked again; the board keeps the sign-off theirs to give, and names the lead's other moves.
+    const signOff = (board.offers as Array<{ question: string; choices: Array<{ label: string; command?: string }> }>)
+      .find((offer) => offer.question === "refunds came back from payments. Sign it off?");
+    expect(signOff?.choices.map((choice) => choice.label)).toEqual(["Sign it off", "Not now"]);
+    expect(String(signOff?.choices[0].command)).toEndWith("aidlc-unit.ts sign-off refunds --person-words '<their words>'");
+    for (const command of ["sign-off <unit>", "amend <unit> --input <file>", "lead-sign-off on", "release <unit>"]) {
+      expect(String(board.board_note)).toContain(command);
+    }
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.done).toBeUndefined();
     expect(run(UNIT, ["sign-off", "refunds", "--person-words", "looks right, sign it off"], home.dir).status).toBe(0);
     next(home.dir);

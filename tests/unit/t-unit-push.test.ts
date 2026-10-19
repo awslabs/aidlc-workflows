@@ -15,7 +15,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { hooksHealthReadDir, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { AIDLC_SRC, fixtureIntentId8 } from "../harness/fixtures.ts";
 import {
   claimPayload,
@@ -272,12 +272,18 @@ describe("at the home", () => {
     next(home.dir);
     expect(git(home.remote, ["rev-parse", ref])).toBe(pushed);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
-    next(home.dir);
+    const seen = next(home.dir);
     expect(git(home.remote, ["rev-parse", ref])).not.toBe(pushed);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.verdicts).toEqual([
       expect.objectContaining({ repo: "checkout-api", merged: true }),
       { repo: "billing", merged: false },
     ]);
+    // The one write the home makes for the teams, said once in plain words.
+    expect((seen.change_notices ?? []) as string[]).toContain("I've told the teams checkout-api merged refunds.");
+    const written = git(home.remote, ["rev-parse", ref]);
+    const after = next(home.dir);
+    expect(git(home.remote, ["rev-parse", ref])).toBe(written);
+    expect(JSON.stringify(after.change_notices ?? [])).not.toContain("I've told the teams");
   });
 
   test("a team's result brings home what Build and Test reads of the Unit, so its coverage check passes for team-built Units", () => {
@@ -453,13 +459,32 @@ describe("at the home", () => {
     const guarded: NodeJS.ProcessEnv = { ...ENV, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "" };
     const down = run(UNIT, ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger"], home.dir, guarded);
     expect(down.status).not.toBe(0);
-    expect(String(down.json?.error)).toBe("A turn-down is the person's own word: ask them first, then run this with their words.");
+    expect(String(down.json?.error)).toStartWith("A turn-down is the person's own word: ask them first, then run this with their words.");
     const merged = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "merged by hand"], home.dir, guarded);
     expect(merged.status).not.toBe(0);
-    expect(String(merged.json?.error)).toBe("That it merged is the person's own word: ask them first, then run this with their words.");
+    expect(String(merged.json?.error)).toStartWith("That it merged is the person's own word: ask them first, then run this with their words.");
     appendAuditEntry("HUMAN_TURN", { "Person Reply": "billing merged it by hand" }, home.dir);
     const said = run(UNIT, ["merged", "refunds", "--repo", "billing", "--person-words", "billing merged it by hand"], home.dir, guarded);
     expect(said.status, said.out).toBe(0);
+  });
+
+  test("a lead's word the hooks may have missed: no heartbeat names what happened to a reply, a fresh one ends the turn", () => {
+    const { home, alice, record } = refundsTaken();
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    const chat = personsChat("t-unit-push-lead");
+    const words = ["turned-down", "refunds", "--repo", "billing", "--person-words", "needs the ledger"];
+    const missed = run(UNIT, words, home.dir, chat);
+    expect(missed.status).not.toBe(0);
+    expect(String(missed.json?.error)).toStartWith("A turn-down is the person's own word: ask them first, then run this with their words. ");
+    expect(String(missed.json?.error)).not.toContain("end your turn");
+    // The prompt hook beat just now and no turn of theirs stands: the person has not answered this yet.
+    const health = hooksHealthReadDir(home.dir);
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "record-human-turn.last"), new Date().toISOString());
+    const waiting = run(UNIT, words, home.dir, chat);
+    expect(String(waiting.json?.error)).toEndWith("The person has not answered yet: end your turn; their next reply answers it.");
   });
 
   test("a verdict the home's remote does not take stays here, said once, and goes at the next step", () => {

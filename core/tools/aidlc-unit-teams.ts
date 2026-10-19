@@ -105,6 +105,20 @@ export function unitsAssignedSinceTeams(rows: readonly AuditShardEvent[]): boole
   return ordered.slice(teamsAt + 1).some((row) => row.event === "UNITS_ASSIGNED");
 }
 
+// The lead's answer to who builds which Unit, kept while the home could not
+// be reached (the newest UNITS_ASSIGNED since teams says `Held: not yet`).
+export function assignmentNotHeld(rows: readonly AuditShardEvent[]): { pairs: string[]; open: boolean } | null {
+  const ordered = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
+  let teamsAt = -1;
+  ordered.forEach((row, at) => {
+    if (row.event === "UNIT_OWNERSHIP_SET" && auditBlockField(row.block, "Mode") === "team") teamsAt = at;
+  });
+  const last = ordered.slice(teamsAt + 1).filter((row) => row.event === "UNITS_ASSIGNED").at(-1);
+  if (last === undefined || auditBlockField(last.block, "Held") !== "not yet") return null;
+  const pairs = (auditBlockField(last.block, "Assigned") ?? "").split(",").map((pair) => pair.trim()).filter((pair) => pair.includes("="));
+  return { pairs, open: auditBlockField(last.block, "Open") === "all" };
+}
+
 // The line for likely repos the work does not record: said once, kept as
 // written. Null when every one names a recorded repo, or the work records none
 // (its likely folders are inside the one repo).
