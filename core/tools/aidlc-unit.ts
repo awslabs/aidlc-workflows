@@ -76,7 +76,6 @@ import {
   readUnitSourceManifest,
   recordDir,
   hasAnyUnitClaimRefs,
-  UNIT_GATE_RHYTHM_FIELD,
   readAllAuditShards,
   staleStageLine,
   readUnitGateRhythm,
@@ -6796,10 +6795,11 @@ function takeIn(args: string[], projectDir?: string): void {
 //
 // Solo work a teammate took a Unit of from another machine: this home's session
 // records the switch to teams at its next step (the teammate's clone never
-// writes it): its origin as the home, one approval at the end of each Unit as
-// it had, and the Units it already built here merged here. Nothing is asked
+// writes it), through the ownership and rhythm setters: its remote as the home,
+// and the approvals it had (once per Unit at its checkpoint, or after every
+// stage). The Units it already built here stay done here. Nothing is asked
 // again. The line for the person, or null when nothing switched.
-export function switchSoloToTeams(projectDir: string): string | null {
+export function switchSoloToTeams(projectDir: string, sessionId?: string): string | null {
   let state: string;
   try {
     state = readStateFile(projectDir);
@@ -6807,7 +6807,9 @@ export function switchSoloToTeams(projectDir: string): string | null {
     return null;
   }
   if (isTeamUnitOwnership(state) || homeLocation(state) !== null || isReadOnlyEngineProbe()) return null;
-  if (getField(state, "Construction Iteration")?.trim() !== "unit-major" || !hasAnyUnitClaimRefs(projectDir)) return null;
+  if (getField(state, "Construction Iteration")?.trim() !== "unit-major") return null;
+  lookForTakes(projectDir, sessionId);
+  if (!hasAnyUnitClaimRefs(projectDir)) return null;
   let taken: UnitClaimView[];
   try {
     taken = [...cachedClaimsForIdentity(projectDir, activeIdentity(projectDir), false).values()]
@@ -6817,23 +6819,48 @@ export function switchSoloToTeams(projectDir: string): string | null {
   }
   const location = workspaceHomeLocation(projectDir);
   if (taken.length === 0 || location === null || location === "local") return null;
-  const finalStage = unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true).at(-1) ?? "code-generation";
-  const builtHere = soloUnitsProgress(readAuditShardEvents(projectDir), finalStage).done;
-  const me = git(projectDir, ["config", "user.name"]).stdout.trim() || "this session";
   const who = joinNames([...new Set(taken.map((claim) => claim.payload.taken_by!))]);
   const units = joinNames(taken.map((claim) => claim.unit));
-  withAuditLock(projectDir, () => {
-    let content = readStateFile(projectDir);
-    content = setRuntimeField(content, "Unit Ownership", "team");
-    content = setRuntimeField(content, HOME_LOCATION_FIELD, location);
-    content = setRuntimeField(content, UNIT_GATE_RHYTHM_FIELD, "unit-end");
-    writeStateFile(projectDir, content);
-    appendAuditEntryUnlocked("UNIT_OWNERSHIP_SET", { Mode: "team", [HOME_LOCATION_FIELD]: location, Reason: `${who} took ${units} from another machine` }, projectDir);
-    for (const unit of builtHere) {
-      appendAuditEntryUnlocked("UNIT_MERGED", { Unit: unit, Owner: "here", "Built By": me, "Merged In": "built here before teams" }, projectDir);
-    }
-  });
+  const rhythm = readUnitGateRhythm(state);
+  for (const setter of [["set-unit-ownership", "team"], ...(rhythm === "unit-end" ? [["set-unit-gate-rhythm", "unit-end"]] : [])]) {
+    const [command, ...args] = aidlcEngineCommand(
+      "state",
+      [...setter, "--project-dir", projectDir],
+      join(dirname(fileURLToPath(import.meta.url)), "aidlc-state.ts"),
+      isCompiledExecutable() ? process.execPath : null,
+    );
+    const set = spawnSync(command, args, { cwd: projectDir, encoding: "utf-8", env: process.env });
+    if (set.status !== 0) return null;
+  }
   return `Your teammate ${who} took ${units}; this session carries on with the rest, one Unit at a time.`;
+}
+
+// Solo work built one Unit at a time looks once per chat for a teammate's take
+// at its remote: a quick listing of the work's claims, fetched only when there
+// are any. Nothing is said when nothing is there or the remote is not reached.
+const TAKES_LOOKED_FILE = "takes-looked.json";
+
+function lookForTakes(projectDir: string, sessionId?: string): void {
+  try {
+    const remote = repositoryRemote(projectDir);
+    if (remote === null) return;
+    const id8 = activeIdentity(projectDir).intentId8;
+    const mark = join(sessionsDir(projectDir), TAKES_LOOKED_FILE);
+    let chats: Record<string, string> = {};
+    try {
+      chats = JSON.parse(readFileSync(mark, "utf-8")) as Record<string, string>;
+    } catch {
+      // Not looked yet.
+    }
+    const chat = sessionId ?? "no chat";
+    if (chats[id8] === chat) return;
+    mkdirSync(dirname(mark), { recursive: true });
+    writeFileAtomic(mark, `${JSON.stringify({ ...chats, [id8]: chat })}\n`);
+    const listed = quietly(() => git(projectDir, ["ls-remote", remote, `refs/heads/claim/${id8}/*`]));
+    if (listed.ok && listed.stdout.trim() !== "") refreshHomeClaims(projectDir, { home: { target: remote, id8 }, sessionId, now: true });
+  } catch {
+    // A step never waits on this look.
+  }
 }
 
 // --- The lead's sign-off ------------------------------------------------------------

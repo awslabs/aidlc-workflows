@@ -148,6 +148,17 @@ export function teamUnitStageApplies(
   return names.length > 0 && filterProducesByKind(stage.produces_kinds, names, unitKind).length > 0;
 }
 
+// The Units built here, one at a time, before the work switched to teams:
+// done at the home as they were, never recorded as merged.
+export function unitsBuiltBeforeTeams(rows: readonly AuditShardEvent[], finalStage: string): Set<string> {
+  const ordered = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
+  let teamsAt = -1;
+  ordered.forEach((row, at) => {
+    if (row.event === "UNIT_OWNERSHIP_SET" && auditBlockField(row.block, "Mode") === "team") teamsAt = at;
+  });
+  return teamsAt < 0 ? new Set() : soloUnitsProgress(ordered.slice(0, teamsAt), finalStage).done;
+}
+
 // The space a team's label names: "Payments" and "payments" are one team.
 export function teamSpaceOf(label: string): string {
   return slugify(label);

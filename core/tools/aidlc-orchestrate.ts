@@ -690,6 +690,7 @@ import {
   soloUnitsProgress,
   teamSpaceOf,
   teamUnitStageApplies,
+  unitsBuiltBeforeTeams,
   parseHandFile,
   unitLikelyReposFrom,
   workspaceHomeLocation,
@@ -12427,7 +12428,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   if (settledPolicy?.line) settledNotices.push(settledPolicy.line);
   // Solo work a teammate took a Unit of from another machine switches to teams
   // here, at this home's step, before anything routes.
-  const switchedToTeams = switchSoloToTeams(pd);
+  const switchedToTeams = switchSoloToTeams(pd, engineSessionId);
   const stateContent = loadStateFileIfPresent(pd);
   if (switchedToTeams !== null) sayWithStepOnce(pd, switchedToTeams);
   activeRetiredGuardPolicyNotice = stateContent === null ? null : retiredGuardPolicyNotice(pd, stateContent);
@@ -16429,6 +16430,9 @@ export function deriveTeamUnitProgressModel(
     },
   );
   const mergedReceipts = unitMergedReceipts(projectDir, orderedAuditRows);
+  // Units built here one at a time before teams joined are done here.
+  const builtBefore = unitsBuiltBeforeTeams(orderedAuditRows, block[block.length - 1].slug);
+  if (builtBefore.size > 0) mergedUnitOverrides = new Set([...(mergedUnitOverrides ?? []), ...builtBefore]);
   const transactions = unitMergeTransactions(projectDir);
   const mergeTracking =
     transactions.length > 0 ||
@@ -16662,7 +16666,8 @@ function emitTeamUnitMajorRunStage(
   const finalStage = block[block.length - 1];
   // The Units merged here, read from the audit too when this run derives no
   // progress model (a read-only probe, the route check of `unit start`).
-  const mergedHere = model?.mergedUnits ?? unitMergedReceipts(projectDir, auditRows);
+  const mergedHere = model?.mergedUnits ??
+    new Set([...unitMergedReceipts(projectDir, auditRows), ...unitsBuiltBeforeTeams(auditRows, finalStage?.slug ?? "")]);
   // A Unit of the home's that waits, directly or through another, on a Unit a
   // team still builds is not started here yet.
   const dependencies = heldElsewhere.size > 0 ? unitDependencies(projectDir) : new Map<string, string[]>();

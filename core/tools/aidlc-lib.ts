@@ -31355,7 +31355,15 @@ export function isAutonomousMode(stateContent: string | null): boolean {
 }
 
 export function readUnitGateRhythm(stateContent: string | null): UnitGateRhythm {
-  if (!isTeamUnitOwnership(stateContent)) return "per-stage";
+  if (stateContent === null) return "per-stage";
+  // Solo work built one Unit at a time with verified checkpoints approves each
+  // Unit once, at its checkpoint: that rhythm is kept when teams join it.
+  if (!isTeamUnitOwnership(stateContent)) {
+    return getField(stateContent, "Construction Iteration")?.trim() === "unit-major" &&
+        getField(stateContent, "Construction Checkpoints")?.trim() === "enabled"
+      ? "unit-end"
+      : "per-stage";
+  }
   return getField(stateContent!, UNIT_GATE_RHYTHM_FIELD)?.trim() === "unit-end"
     ? "unit-end"
     : "per-stage";

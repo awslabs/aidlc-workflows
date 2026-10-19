@@ -92,11 +92,16 @@ describe("a teammate opens solo work built from another machine", () => {
     expect(other.out).toContain("refunds is being built on the other machine; take another Unit, or follow along.");
   });
 
-  test("the home's own session switches to teams at its next step, keeps its work, and asks nothing again", () => {
+  test("the home's own session switches to teams at its next step, keeps its work and its approvals, and asks nothing again", () => {
     const home = soloAtA(true);
     const bob = cloneOf(home.remote, "bob");
-    expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob).status).toBe(0);
-    git(home.dir, ["fetch", "-q", "origin"]);
+    const took = run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], bob);
+    expect(took.status, took.out).toBe(0);
+    // The teammate's build approves the way the home does: once per Unit, at its checkpoint.
+    const bobState = readFileSync(join(bob, "aidlc", "spaces", "default", "intents", String(took.json?.record), "aidlc-state.md"), "utf-8");
+    expect(field(bobState, "Construction Iteration")).toBe("unit-major");
+    expect(field(bobState, "Construction Checkpoints")).toBe("enabled");
+    // The lead fetches nothing by hand: the home looks for a teammate's take itself.
     const step = next(home.dir);
     expect((step.change_notices ?? []) as string[]).toContain(
       "Your teammate bob took checkout-ui; this session carries on with the rest, one Unit at a time.",
@@ -105,8 +110,10 @@ describe("a teammate opens solo work built from another machine", () => {
     expect(field(state, "Unit Ownership")).toBe("team");
     expect(field(state, "Home Location")).toBe(home.remote);
     expect(field(state, "Unit Gate Rhythm")).toBe("unit-end");
-    const merged = readAuditShardEvents(home.dir).filter((row) => row.event === "UNIT_MERGED");
-    expect(merged.map((row) => row.block).join("\n")).toContain("**Merged In**: built here before teams");
+    const rows = readAuditShardEvents(home.dir);
+    expect(rows.filter((row) => row.event === "UNIT_GATE_RHYTHM_SET")).toHaveLength(1);
+    // refunds was built here, never merged anywhere: the record says nothing it did not do.
+    expect(rows.filter((row) => row.event === "UNIT_MERGED")).toEqual([]);
     // The work goes on with reporting, under way here; nothing is asked again.
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
     expect(step.unit).toBe("reporting");
