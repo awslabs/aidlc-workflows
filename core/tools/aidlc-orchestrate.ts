@@ -537,6 +537,7 @@ import {
   withTypedSpacing,
   writeActiveDirectiveMarker,
   writeEngineFileNoFollow,
+  ANSWER_TEXT_DIR,
   type PlanApprovalLegacyOfferCandidate,
   workspaceCommandUtilityArgv,
   workspaceRecordExists,
@@ -5153,6 +5154,38 @@ function teamCommandsNote(): string {
     "each prints.";
 }
 
+// The offers a step has not put to the person in this chat yet; each is put
+// once. A step with no work selected (a clone's take step) keeps the chat's
+// note in the workspace's sessions folder, where the person's heard lines,
+// which belong to a piece of work, cannot go.
+const OFFERS_PUT_FILE = "offers-put.json";
+function offersOnce(projectDir: string, offers: StepOffer[]): StepOffer[] {
+  const chat = engineSessionId;
+  if (!chat) return offers;
+  if (engineSelection(projectDir).intent) {
+    const fresh = offers.filter((offer) => !personLineHeard(projectDir, chat, offer.question));
+    if (!isReadOnlyEngineProbe()) markPersonLinesHeard(projectDir, chat, fresh.map((offer) => offer.question));
+    return fresh;
+  }
+  const path = join(sessionsDir(projectDir), OFFERS_PUT_FILE);
+  let put: Record<string, string[]> = {};
+  try {
+    put = JSON.parse(readFileSync(path, "utf-8")) as Record<string, string[]>;
+  } catch {
+    // Nothing put yet.
+  }
+  const fresh = offers.filter((offer) => !(put[chat] ?? []).includes(offer.question));
+  if (fresh.length > 0 && !isReadOnlyEngineProbe()) {
+    try {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileAtomic(path, `${JSON.stringify({ [chat]: [...(put[chat] ?? []), ...fresh.map((offer) => offer.question)] })}\n`);
+    } catch {
+      // Unnoted, the offer comes once more.
+    }
+  }
+  return fresh;
+}
+
 // The work selected here is the home of Units teams build (not a team's build).
 function atTeamHome(projectDir: string): boolean {
   const state = loadStateFileIfPresent(projectDir);
@@ -8459,20 +8492,20 @@ function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
     !homeHere.some((home) => home.dirName === intent.dirName) && unitBuildOf(state) === null) ?? [];
   if (ownWork.length > 0) return null;
   if (choices.length === 0) {
-    // This workspace can still carry the work on as its home: recommended to
-    // whoever wrote the home's record last, by their own git name.
-    return lineEndingTurn(`${sentences.join(" ")} Nothing is ready to take yet.`, homeHere.map((home) => {
-      const label = intentDisplayLabel(home);
-      const theirs = lastCommittedByThisPerson(projectDir, join("aidlc", "spaces", active, "intents", home.dirName!));
-      return {
-        question: `Do you want me to carry on ${label} here, as its home? ` +
-          (theirs ? "I'd carry it on here, since you led it so far." : "I'd leave it with whoever leads it, unless that is you."),
-        choices: [
-          { label: `Carry on ${label} here, as its home`, command: selectCommands([home.dirName!])[0].command, ...(theirs ? { recommended: true as const } : {}) },
-          { label: "Not now", ...(theirs ? {} : { recommended: true as const }) },
-        ],
-      };
-    }));
+    // Whoever led the work (by their own git identity) can still carry it on
+    // here as its home: offered to them once in a chat, and to nobody else.
+    return lineEndingTurn(`${sentences.join(" ")} Nothing is ready to take yet.`, offersOnce(projectDir, homeHere
+      .filter((home) => lastCommittedByThisPerson(projectDir, join("aidlc", "spaces", active, "intents", home.dirName!)))
+      .map((home) => {
+        const label = intentDisplayLabel(home);
+        return {
+          question: `Do you want me to carry on ${label} here, as its home? I'd carry it on here, since you led it so far.`,
+          choices: [
+            { label: `Carry on ${label} here, as its home`, command: selectCommands([home.dirName!])[0].command, recommended: true as const },
+            { label: "Not now" },
+          ],
+        };
+      })));
   }
   for (const home of homeHere) {
     choices.push({
@@ -17115,8 +17148,7 @@ function emitTeamUnitMajorRunStage(
         : []),
     ]);
     // Each offer is put once in a chat; its command stays in the board's note.
-    const allOffers = [...answers, ...offers].filter((offer) => !(engineSessionId && personLineHeard(projectDir, engineSessionId, offer.question)));
-    if (engineSessionId && !isReadOnlyEngineProbe()) markPersonLinesHeard(projectDir, engineSessionId, allOffers.map((offer) => offer.question));
+    const allOffers = offersOnce(projectDir, [...answers, ...offers]);
     emit(lineEndingTurn(
       renderUnitBoard(workLabel(projectDir), rows),
       allOffers,

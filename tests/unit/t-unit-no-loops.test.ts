@@ -488,9 +488,9 @@ describe("a step that waits on the person, and every way on the round added, nev
     const waiting = next(alice);
     expect(waiting.kind, JSON.stringify(waiting)).toBe("print");
     expect(String(waiting.narration)).toContain("The walking skeleton, orders, is built at the home first.");
-    // A clone of the home's own workspace may carry it on; for a teammate, not now is the recommendation.
-    const offer = (waiting.offers as Offer[])[0];
-    expect(offer.choices.find((entry) => (entry as { recommended?: true }).recommended)?.label).toBe("Not now");
+    // Carrying the home's work on is offered only to whoever led it, never to a teammate.
+    expect(waiting.offers, JSON.stringify(waiting)).toBeUndefined();
+    expect(waiting.message).toBe("Say the line above, then end the turn.");
     readsAsOffers(waiting);
   });
 
@@ -564,11 +564,14 @@ describe("a step that waits on the person, and every way on the round added, nev
     const after = next(laptop, ENV);
     expect(key(after), JSON.stringify(after)).not.toBe(key(step));
     readsAsOffers(after);
-    // A teammate's clone of the same workspace: the same offer, with not now recommended.
+    // Once in a chat: the next look in the same chat says where things stand, and offers it no more.
+    const chat = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-laptop" };
+    const desk = withTools(cloneOf(home.remote, "lead"));
+    expect((next(desk, chat).offers as Offer[] | undefined)?.length).toBe(1);
+    expect(next(desk, chat).offers).toBeUndefined();
+    // A teammate's clone of the same workspace hears where things stand, and is offered nothing it should not take.
     const bob = withTools(cloneOf(home.remote, "bob"));
-    const theirs = (next(bob, ENV).offers as Offer[] | undefined)?.[0];
-    expect(theirs?.question).toBe("Do you want me to carry on fixture here, as its home? I'd leave it with whoever leads it, unless that is you.");
-    expect(theirs!.choices.find((entry) => (entry as { recommended?: true }).recommended)?.label).toBe("Not now");
+    expect(next(bob, ENV).offers).toBeUndefined();
   });
 
   test("a clone where nothing is ready: words for new work start it, and the take opens once the home moves", () => {
