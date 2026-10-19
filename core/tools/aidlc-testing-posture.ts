@@ -3121,12 +3121,16 @@ export function setAsideBuildUnderOff(
  * A plan built on under Guard Policy off whose Testing Contract is no longer
  * the current one (memory, scope, test strategy, project type, or the rules an
  * AI-DLC update ships changed after the approval): one CHANGE_ACCEPTED row
- * records it, once per contract pair. Nothing is said, since the cause may be
- * an update and not the person. A ledger that cannot take the row never stops
- * the build.
+ * records it, once per contract pair. Only while the plan, its instructions and
+ * its contract are still what was approved: an edited plan is the lowered
+ * fence's own account (its stand-aside row). Nothing is said, since the cause
+ * may be an update and not the person. A ledger that cannot take the row never
+ * stops the build.
  */
 function recordContinuedStaleContract(projectDir: string, continuation: CodeGenerationContinuation): void {
-  if (continuation.fence.policy !== "off" || continuation.artifacts.contractValid) return;
+  const { artifacts, receipt } = continuation;
+  if (continuation.fence.policy !== "off" || artifacts.contractValid || artifacts.contractHash === null) return;
+  if (approvalFingerprint(artifacts.plan, artifacts.instructions, artifacts.contractHash, receipt) !== receipt.fingerprint) return;
   try {
     const current = resolveTestingPosture(continuation.contractProject).contract_sha256;
     recordAcceptedChanges(projectDir, [{
@@ -3134,7 +3138,7 @@ function recordContinuedStaleContract(projectDir: string, continuation: CodeGene
       stage: CODE_GENERATION_STAGE,
       unit: continuation.authority.unit,
       changed: null,
-      recorded: continuation.artifacts.contractHash ?? "(none)",
+      recorded: artifacts.contractHash,
       current,
       notice: "The Testing Contract changed after the plan was approved; the build follows the plan as approved.",
     }]);
