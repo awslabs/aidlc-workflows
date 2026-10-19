@@ -6380,9 +6380,15 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
 // started on. A branch the person is on with no commits of its own yet (its
 // code is committed at the push) moves with `reset --keep`, which keeps their
 // uncommitted work, where a rebase would refuse it. `skip` leaves out a Unit
-// before anything is fetched for it.
-export function earlyBaseMerged(projectDir: string, stateContent: string, skip: (unit: string) => boolean = () => false):
-  Array<{ unit: string; repos: Array<{ repo: string; name: string; dir: string; remote: string; onto: string; rebase: string[] }> }> {
+// before anything is fetched for it; for a Unit whose move git `refused` for
+// the person's own changes, nothing is fetched while those are in the way (as
+// the last look saw the integration branch), nor for a repo it moved in.
+export function earlyBaseMerged(
+  projectDir: string,
+  stateContent: string,
+  skip: (unit: string) => boolean = () => false,
+  refused: (unit: string) => boolean = () => false,
+): Array<{ unit: string; repos: Array<{ repo: string; name: string; dir: string; remote: string; onto: string; rebase: string[] }> }> {
   const build = unitBuildOf(stateContent);
   if (build === null) return [];
   const space = build.homeRecord.slice(0, build.homeRecord.indexOf("/"));
@@ -6395,13 +6401,13 @@ export function earlyBaseMerged(projectDir: string, stateContent: string, skip: 
   return (claims.get(build.unit)?.payload.early_on ?? []).flatMap((dep) => {
     const theirs = claims.get(dep.unit)?.payload;
     if (!theirs?.done || skip(dep.unit)) return [];
-    const repos = dep.repos.flatMap(({ repo, head }) => {
+    const moves = (from: typeof dep.repos, look: boolean) => from.flatMap(({ repo, head }) => {
       const dir = repo === "." ? projectDir : repoDir(projectDir, repo);
       const remote = isGitRepoDir(dir) ? repositoryRemote(dir) : null;
       if (remote === null || !git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${build.unit}`]).ok) return [];
       const onto = repoIntegration(dir, remote);
       // The integration branch as its remote has it now, with the merge.
-      quietFetch(dir, ["-q", remote, onto.slice(remote.length + 1)]);
+      if (look) quietFetch(dir, ["-q", remote, onto.slice(remote.length + 1)]);
       if (git(dir, ["merge-base", "--is-ancestor", onto, `refs/heads/${build.unit}`]).ok) return [];
       const kept = theirs.verdicts?.find((verdict) => verdict.repo === repo)?.how === "ancestry";
       const own = head === "" || git(dir, ["rev-parse", `refs/heads/${build.unit}`]).stdout.trim() !== head;
@@ -6416,6 +6422,9 @@ export function earlyBaseMerged(projectDir: string, stateContent: string, skip: 
           : kept || head === "" ? ["rebase", onto, build.unit] : ["rebase", "--onto", onto, head, build.unit],
       }];
     });
+    const waiting = refused(dep.unit) ? moves(dep.repos, false) : null;
+    if (waiting?.some((repo) => moveInTheWay(repo))) return [];
+    const repos = moves(waiting === null ? dep.repos : dep.repos.filter(({ repo }) => waiting.some((left) => left.repo === repo)), true);
     return repos.length > 0 ? [{ unit: dep.unit, repos }] : [];
   });
 }
@@ -6428,7 +6437,7 @@ function rebaseUnderWay(dir: string): boolean {
 // Whether something of the person's would stop the move in a repo now: a
 // rebase under way, a change to a tracked file (a rebase refuses any), or a
 // change to a file `reset --keep` would replace.
-export function moveInTheWay(repo: { dir: string; onto: string; rebase: string[] }): boolean {
+function moveInTheWay(repo: { dir: string; onto: string; rebase: string[] }): boolean {
   if (rebaseUnderWay(repo.dir)) return true;
   const changed = git(repo.dir, ["diff", "-z", "--name-only", "HEAD"]).stdout.split("\0").filter(Boolean);
   if (repo.rebase[0] === "rebase") return changed.length > 0;

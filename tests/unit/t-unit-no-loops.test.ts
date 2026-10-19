@@ -20,7 +20,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, cpSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -634,6 +634,20 @@ function earlyThenMerged(how: "squash" | "merge" | "rebase", pushedFirst: boolea
   return { ...taken, dana, record };
 }
 
+// The looks at a code repo's main a step ran (an ls-remote, and a fetch when it moved), from git's own trace.
+function mainLooks(trace: string): number {
+  return existsSync(trace)
+    ? readFileSync(trace, "utf-8").split("\n").filter((line) => line.includes('"event":"start"'))
+      .map((line) => (JSON.parse(line) as { argv: string[] }).argv)
+      .filter((argv) => (argv.includes("ls-remote") || argv.includes("fetch")) && argv.at(-1) === "main").length
+    : 0;
+}
+
+function traced(): { trace: string; env: NodeJS.ProcessEnv } {
+  const trace = join(tempDir("trace"), "trace2.json");
+  return { trace, env: { ...ENV, GIT_TRACE2_EVENT: trace } };
+}
+
 const MOVE = "refunds is merged into main. Do you want me to move reporting onto main now?";
 const WHY = " I'd move it now, so reporting is built on what is merged instead of refunds's branch.";
 
@@ -695,11 +709,17 @@ describe("a Unit started early whose dependency merged: the move onto main is of
     expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-move-onto");
     const refused = runPrinted(dana, ENV, choice(ask, "Move reporting onto main"));
     expect(refused.status).not.toBe(0);
-    // While their change is in the way the move is not offered; once it is not, it is, once.
-    expect(next(dana, ENV).ask_type ?? null).not.toBe("unit-move-onto");
+    // While their change is in the way the move is not offered, and no step looks at main for it; once it is not,
+    // it is, once, looking only in the repo that has not moved yet.
+    const dirty = traced();
+    expect(next(dana, dirty.env).ask_type ?? null).not.toBe("unit-move-onto");
+    expect(next(dana, dirty.env).ask_type ?? null).not.toBe("unit-move-onto");
+    expect(mainLooks(dirty.trace)).toBe(0);
     git(billing, ["checkout", "--", "README.md"]);
-    const again = next(dana, ENV);
+    const clean = traced();
+    const again = next(dana, clean.env);
     expect(again.ask_type, JSON.stringify(again)).toBe("unit-move-onto");
+    expect(mainLooks(clean.trace)).toBe(1);
     movesOn(dana, ENV, again, choice(again, "Move reporting onto main"));
     expect(git(billing, ["merge-base", "--is-ancestor", "origin/main", "reporting"]) === "").toBe(true);
   });
