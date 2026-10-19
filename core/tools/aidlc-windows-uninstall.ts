@@ -70,6 +70,10 @@ export const WINDOWS_UNINSTALL_AUTOMATIC_ATTEMPTS = 3;
 // removes files. Within this ten-minute window it is presumed alive and is not
 // launched a second time.
 export const WINDOWS_UNINSTALL_RUNNING_GRACE_MS = 10 * 60_000;
+// The worker's time grows with its planned files: on Windows Server with
+// Defender on, about 1 s plus 8 ms a file (23 s for one version, 45 s for two).
+// The line that says when to retry rounds that up.
+const WINDOWS_UNINSTALL_MS_PER_FILE = 10;
 
 // The installer's token query, run in a child PowerShell and emitted in
 // memory. 1 is a full token without a UAC split (the built-in Administrator,
@@ -142,6 +146,27 @@ export function windowsUninstallContinuationState(
   if (journal.status === "failed") return "failed";
   if ((journal.attempts ?? 0) >= WINDOWS_UNINSTALL_AUTOMATIC_ATTEMPTS) return "failed";
   return "resume";
+}
+
+export function windowsUninstallFinishesAt(journal: WindowsUninstallJournal): number {
+  return Date.parse(journal.launchedAt ?? "") + 1_000 +
+    (journal.files?.length ?? 0) * WINDOWS_UNINSTALL_MS_PER_FILE;
+}
+
+// What a command meets while the worker runs. Once it is done aidlc is gone,
+// so only the installer is told to run again.
+export function windowsUninstallStillFinishingLine(
+  finishesAt: number | undefined,
+  now: number,
+  command: "install" | "uninstall" | "other",
+): string {
+  const left = finishesAt !== undefined && Number.isFinite(finishesAt) ? finishesAt - now : 0;
+  const minutes = Math.max(1, Math.ceil(left / 60_000));
+  const wait = minutes === 1 ? "a minute" : `${minutes} minutes`;
+  const finishing = "the last AI-DLC uninstall is still finishing";
+  if (command === "install") return `${finishing}. Nothing was changed; run the installer again in ${wait}.`;
+  if (command === "uninstall") return `${finishing}; it needs nothing more and is done in ${wait}.`;
+  return `${finishing}, so this command was not run.`;
 }
 
 export type WindowsPathRegistration = {
@@ -1152,6 +1177,8 @@ export type WindowsUninstallRecovery = {
   resumed: number;
   // Launched within the grace window; relaunching would race the live worker.
   running: number;
+  // When the last of those should be done, for the line that says when to retry.
+  finishesAt?: number;
   // Stopped with a recorded failure, or out of automatic attempts.
   failed: Array<{ path: string; journal: WindowsUninstallJournal }>;
   // Failed before removing anything, so retired for a fresh plan.
@@ -1263,6 +1290,7 @@ export function recoverWindowsUninstallContinuations(
   for (const item of classified) {
     if (item.state === "running") {
       recovery.running++;
+      recovery.finishesAt = Math.max(recovery.finishesAt ?? 0, windowsUninstallFinishesAt(item.journal));
     } else if (relaunches(item)) {
       // launch() clears the failure; keep it so the caller can say why.
       if (item.journal.failure) recovery.retriedFailures.push(item.journal.failure);

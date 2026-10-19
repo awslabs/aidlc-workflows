@@ -3802,9 +3802,11 @@ export async function main(rawArgv: string[]): Promise<void> {
     !["doctor", "--doctor", "uninstall"].includes(argv[0] ?? "")
   ) {
     try {
-      const { describeWindowsUninstallFailure, recoverWindowsUninstallContinuations } = await import(
-        "./aidlc-windows-uninstall.ts"
-      );
+      const {
+        describeWindowsUninstallFailure,
+        recoverWindowsUninstallContinuations,
+        windowsUninstallStillFinishingLine,
+      } = await import("./aidlc-windows-uninstall.ts");
       // A failed continuation does not block other commands: the fence still
       // stops machine mutation, and `aidlc uninstall` retries it explicitly.
       // A reinstall retries it too, since the failed cleanup may have removed
@@ -3822,7 +3824,7 @@ export async function main(rawArgv: string[]): Promise<void> {
                 ? ` (last attempt ${recovery.retriedFailures.map(describeWindowsUninstallFailure).join("; ")})`
                 : ""
             }`
-            : "a Windows uninstall cleanup is still running; this command was not run",
+            : windowsUninstallStillFinishingLine(recovery.finishesAt, Date.now(), reinstalling ? "install" : "other"),
         );
         return;
       }

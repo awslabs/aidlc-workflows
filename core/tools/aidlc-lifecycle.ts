@@ -123,6 +123,7 @@ import {
   elevatedUninstallWarning,
   recoverWindowsUninstallContinuations,
   scheduleWindowsUninstall as scheduleWindowsUninstallContinuation,
+  windowsUninstallStillFinishingLine,
 } from "./aidlc-windows-uninstall.ts";
 import {
   compiledExecutable,
@@ -2244,11 +2245,7 @@ function uninstallCommand(argv: string[]): CommandResult {
       );
     }
     if (recovery.running > 0) {
-      return failure(
-        "a Windows uninstall cleanup is still running",
-        EXIT.failure,
-        "wait for it to finish, then run doctor",
-      );
+      return failure(windowsUninstallStillFinishingLine(recovery.finishesAt, Date.now(), "uninstall"), EXIT.failure);
     }
   }
   const version = activeVersion();
