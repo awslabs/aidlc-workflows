@@ -2,8 +2,8 @@
 //
 // Starting early and changing a shared input (#2410, item 7). A Unit that waits
 // on another can start early on the branches that one pushed, said to change
-// before it merges; its team hears once when that Unit is done or turned down,
-// and AI-DLC never rebases for it. A team proposes a change to an input it was
+// before it merges; its team hears once when that Unit is done, with the offer
+// to move onto what merged, or turned down. A team proposes a change to an input it was
 // approved with; the owner of the shared plan answers once at the home, in
 // their own words; an approved change reaches every team building with it as
 // a fact on its claim, on every Guard Policy, and the stages that used it read
@@ -82,7 +82,7 @@ describe("starting early", () => {
     expect(early.out).toContain("reporting waits on refunds, which is not done at the home yet. It opens once it is done.");
   });
 
-  test("the early team hears once when its dependency is done, and keeps its work", () => {
+  test("the early team hears once when its dependency is done, with the offer to move onto what merged, and keeps its work", () => {
     const { home, hosts, dana } = refundsPushed();
     expect(run(UNIT, ["take", "reporting", "--home", HOME_RECORD, "--early", "--team", "data"], dana).status).toBe(0);
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
@@ -90,10 +90,11 @@ describe("starting early", () => {
     next(home.dir);
     expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")).toMatchObject({ done: true });
     git(dana, ["fetch", "-q", "origin"]);
-    const line = "refunds is done at the home. reporting started early on its branch: rebase on it when you are ready.";
     const step = next(dana);
-    expect(notices(step), JSON.stringify(step)).toContain(line);
-    expect(step.kind).toBe("run-stage");
+    expect(step.ask_type, JSON.stringify(step)).toBe("unit-move-onto");
+    expect(step.question).toBe("refunds is merged into main. Do you want me to move reporting onto main now? I'd move it now, so " +
+      "reporting is built on what is merged instead of refunds's branch.");
+    expect(next(dana).kind).toBe("run-stage");
     expect(git(join(dana, "billing"), ["branch", "--show-current"])).toBe("reporting");
   });
 

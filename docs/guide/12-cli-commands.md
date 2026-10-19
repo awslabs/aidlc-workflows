@@ -54,6 +54,7 @@ diagnostic and lifecycle routes.
 | `/aidlc unit progress` | In a Unit's build by file, write a progress file for the lead |
 | `/aidlc unit take-in <file>` | At the home, take a team's result or progress file in |
 | `/aidlc unit propose --input <file>` | In a Unit's build, send the home a change to an input the Unit was approved with |
+| `/aidlc unit rebase` | In a Unit's build started early, move it onto the branch the Unit it waited on merged into |
 | `/aidlc unit amend <unit> --input <file> --answer <approve\|reject>` | At the home, answer a team's proposed change, in your own words |
 | `/aidlc unit lead-sign-off on\|off` | At the home, make each team's result wait for your sign-off, or not (off by default) |
 | `/aidlc unit sign-off <unit>` | At the home, sign a team's result off, in your own words |
@@ -790,6 +791,19 @@ empty and not the agent's. An approved change is written into the home's
 record with `SHARED_INPUT_AMENDED` for each stage there that used it, and goes
 onto the claim of every Unit whose stages read it; a team it did not reach is
 named, and a team by file gets a newer hand-off file.
+
+### `/aidlc unit rebase` - Move an early build onto what merged
+
+In a Unit's build that started early on another Unit's pushed branch, once
+that Unit is done at the home the build asks once whether to move onto the
+branch it merged into. `rebase` does it in each repo the build started early
+in: it fetches that branch and moves only the build's own commits onto it, with
+your own git (a plain rebase where the repo merged the other Unit with its
+commits kept, a rebase from the head the build started on after a squash or a
+host's rebase; a build with no commits of its own yet moves and keeps your
+uncommitted work). Nothing is pushed; a build you had pushed then needs your
+own force push. A conflict stops with git's words, and `git rebase --abort` in
+that repo goes back.
 
 ### `/aidlc unit lead-sign-off` and `/aidlc unit sign-off <unit>` - The lead's sign-off
 

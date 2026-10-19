@@ -614,6 +614,7 @@ import {
   writeProposedText,
   refreshHomeClaims,
   refreshListedHome,
+  earlyBaseMerged,
   shareBlocker,
   shareTarget,
   teamHandoverMarkName,
@@ -8676,6 +8677,41 @@ function unitProposeAsk(projectDir: string, stateContent: string): AskDirective 
   return null;
 }
 
+// A Unit this build started early on, now merged at the home: the offer to move
+// the build onto the integration branch, once per Unit, and once more when the
+// build was pushed since (its next push then needs their own force push).
+function unitMoveOntoAsk(projectDir: string, stateContent: string): AskDirective | null {
+  const build = unitBuildOf(stateContent);
+  if (build === null) return null;
+  const unit = build.unit;
+  const pushed = getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed";
+  const askName = (dep: string): string => `unit-move-onto-${dep}${pushed ? "-pushed" : ""}`;
+  for (const dep of earlyBaseMerged(projectDir, stateContent, (dep) => engineAskMark(projectDir, askName(dep)) !== null)) {
+    noteEngineAskMark(projectDir, askName(dep.unit));
+    const into = joinRepoNames([...new Set(dep.repos.map((repo) => repo.onto.slice(repo.remote.length + 1)))]);
+    return {
+      kind: "ask",
+      ask_type: "unit-move-onto",
+      response_route: "command",
+      question: `${dep.unit} is merged into ${into}. Do you want me to move ${unit} onto ${into} now?` +
+        (pushed
+          ? ` ${unit} is pushed already, so after the move its branch differs from what was pushed, and its next push needs ` +
+            "a force push of your own; AI-DLC never forces a push."
+          : "") +
+        ` I'd move it now, so ${unit} is built on what is merged instead of ${dep.unit}'s branch.`,
+      choices: [
+        {
+          label: `Move ${unit} onto ${into}`,
+          detail: "Only its own commits move, with your own git; nothing is pushed.",
+          command: `${aidlcToolInvocation("unit")} rebase`,
+        },
+        { label: "Not now", detail: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} stays on ${dep.unit}'s branch.` },
+      ],
+    };
+  }
+  return null;
+}
+
 // The end of a Unit's build: the offer to push it home, until the person asked
 // for the push or said not now (then the end says it once). Null for other work.
 function unitPushAsk(projectDir: string, stateContent: string | null): AskDirective | null {
@@ -12639,6 +12675,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   const propose = stateContent !== null && !isReadOnlyEngineProbe() ? unitProposeAsk(pd, stateContent) : null;
   if (propose) {
     emit(propose);
+    return;
+  }
+  // A Unit it started early on, merged at the home: moving onto what merged is offered once.
+  const moveOnto = stateContent !== null && !isReadOnlyEngineProbe() ? unitMoveOntoAsk(pd, stateContent) : null;
+  if (moveOnto) {
+    emit(moveOnto);
     return;
   }
   // Archived is terminal for routing, including scoped Unit checkouts. Keep

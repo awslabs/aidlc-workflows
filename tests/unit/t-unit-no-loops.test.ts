@@ -23,8 +23,17 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { AIDLC_SRC, cleanupTestProject, createTestProject, REPO_ROOT, removeWorkspaceRecord, seedAidlcMemory } from "../harness/fixtures.ts";
 import {
+  AIDLC_SRC,
+  cleanupTestProject,
+  createTestProject,
+  fixtureIntentId8,
+  REPO_ROOT,
+  removeWorkspaceRecord,
+  seedAidlcMemory,
+} from "../harness/fixtures.ts";
+import {
+  claimPayload,
   cleanupTeamBuild,
   cloneCode,
   cloneOf,
@@ -470,6 +479,100 @@ describe("a step that waits on the person, and every way on the round added, nev
     const ready = next(dana);
     expect(ready.ask_type, JSON.stringify(ready)).toBe("unit-take");
     movesOn(dana, ENV, ready, choice(ready, "Start reporting"));
+  });
+});
+
+// refunds pushed; dana of data takes reporting early on its branch (and, when
+// pushedFirst, pushes it); refunds then merges into main the given way in both
+// repos and the home records it done.
+function earlyThenMerged(how: "squash" | "merge" | "rebase", pushedFirst: boolean) {
+  const taken = refundsTaken();
+  codeGenerated(taken.alice, taken.record);
+  expect(run(UNIT, ["push"], taken.alice).status).toBe(0);
+  git(taken.home.dir, ["fetch", "-q", "origin"]);
+  const dana = withTools(cloneOf(taken.home.remote, "dana"));
+  for (const [name, host] of Object.entries(taken.hosts)) cloneCode(host, dana, name, "dana");
+  const took = run(UNIT, ["take", "reporting", "--home", HOME_RECORD, "--early", "--team", "data"], dana);
+  expect(took.status, took.out).toBe(0);
+  const intents = join(dana, "aidlc", "spaces", "data", "intents");
+  const record = join(intents, readdirSync(intents).find((name) => name.endsWith("-reporting"))!);
+  writeFileSync(join(dana, "billing", "report.ts"), "export const report = 1;\n");
+  if (pushedFirst) {
+    const stage = join(record, "construction", "reporting", "code-generation");
+    mkdirSync(stage, { recursive: true });
+    writeFileSync(join(stage, "source-manifest.json"),
+      `${JSON.stringify({ stage: "code-generation", unit: "reporting", version: 1, writes: [{ repo: "billing", path: "report.ts" }] })}\n`);
+    finishBuild(record);
+    const pushed = run(UNIT, ["push"], dana);
+    expect(pushed.status, pushed.out).toBe(0);
+  }
+  for (const host of Object.values(taken.hosts)) mergeOnHost(host, "refunds", how);
+  next(taken.home.dir);
+  expect(claimPayload(taken.home.remote, fixtureIntentId8(taken.home.dir), "refunds")).toMatchObject({ done: true });
+  git(dana, ["fetch", "-q", "origin"]);
+  return { ...taken, dana, record };
+}
+
+const MOVE = "refunds is merged into main. Do you want me to move reporting onto main now?";
+const WHY = " I'd move it now, so reporting is built on what is merged instead of refunds's branch.";
+
+describe("a Unit started early whose dependency merged: the move onto main is offered once, in each merge style", () => {
+  for (const how of ["squash", "merge", "rebase"] as const) {
+    test(`not pushed yet, ${how}: taken, reporting is on main with its work kept, and the next step is the build's own`, () => {
+      const { dana } = earlyThenMerged(how, false);
+      const ask = next(dana, ENV);
+      expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-move-onto");
+      expect(ask.question).toBe(`${MOVE}${WHY}`);
+      const after = movesOn(dana, ENV, ask, choice(ask, "Move reporting onto main"));
+      expect(after.ask_type ?? null, JSON.stringify(after)).not.toBe("unit-move-onto");
+      for (const repo of ["billing", "checkout-api"]) {
+        expect(git(join(dana, repo), ["rev-parse", "reporting"]), repo).toBe(git(join(dana, repo), ["rev-parse", "origin/main"]));
+      }
+      expect(readFileSync(join(dana, "billing", "report.ts"), "utf-8")).toBe("export const report = 1;\n");
+    });
+
+    test(`pushed already, ${how}: the question says the next push needs their force push; not now moves on, and the move moves only reporting's own commits`, () => {
+      const { dana } = earlyThenMerged(how, true);
+      const ask = next(dana, ENV);
+      expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-move-onto");
+      expect(ask.question).toBe(`${MOVE} reporting is pushed already, so after the move its branch differs from what was pushed, and ` +
+        `its next push needs a force push of your own; AI-DLC never forces a push.${WHY}`);
+      readsAsOffers(ask);
+      const after = next(dana, ENV);
+      expect(key(after), JSON.stringify(after)).not.toBe(key(ask));
+      readsAsOffers(after);
+      const moved = runPrinted(dana, ENV, choice(ask, "Move reporting onto main"));
+      expect(moved.status, moved.out).toBe(0);
+      const billing = join(dana, "billing");
+      expect(git(billing, ["merge-base", "--is-ancestor", "origin/main", "reporting"]) === "").toBe(true);
+      const own = git(billing, ["log", "--format=%s", "origin/main..reporting"]).split("\n");
+      expect(own).toHaveLength(1);
+      expect(own[0]).toStartWith("reporting: ");
+      expect(next(dana, ENV).ask_type ?? null).not.toBe("unit-move-onto");
+    });
+  }
+
+  test("a move git stops on a conflict: git's words and the way back, and the repo before it stays moved", () => {
+    const { dana, hosts } = earlyThenMerged("squash", true);
+    // A teammate's report.ts lands on main in billing meanwhile.
+    const parent = tempDir("teammate");
+    const other = join(parent, "billing");
+    git(parent, ["clone", "-q", hosts.billing, other]);
+    git(other, ["config", "user.name", "sam"]);
+    git(other, ["config", "user.email", "sam@example.test"]);
+    writeFileSync(join(other, "report.ts"), "export const report = 2;\n");
+    git(other, ["add", "report.ts"]);
+    git(other, ["commit", "-q", "-m", "sam's report"]);
+    git(other, ["push", "-q", "origin", "main"]);
+    const ask = next(dana, ENV);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-move-onto");
+    const moved = runPrinted(dana, ENV, choice(ask, "Move reporting onto main"));
+    expect(moved.status).not.toBe(0);
+    const error = String((JSON.parse(moved.out) as { error?: string }).error);
+    expect(error).toStartWith('reporting could not be moved onto main in billing. Git says: "could not apply ');
+    expect(error).toEndWith('". To go back to where reporting was there, run git rebase --abort in billing. In checkout-api it is on main now.');
+    git(join(dana, "billing"), ["rebase", "--abort"]);
+    expect(git(join(dana, "billing"), ["branch", "--show-current"])).toBe("reporting");
   });
 });
 

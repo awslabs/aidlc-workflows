@@ -221,6 +221,7 @@ export const UNIT_VERBS: ReadonlyMap<string, boolean> = new Map([
   ["propose", false],
   ["publish", true],
   ["push", false],
+  ["rebase", false],
   ["release", true],
   ["share", false],
   ["sign-off", true],

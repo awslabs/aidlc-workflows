@@ -5434,15 +5434,17 @@ export function unitBranchInTheWay(projectDir: string, unit: string, byRepo: Map
   }).map(([repo]) => repo);
 }
 
-// git's own words for a refusal: its first line, with the files it lists.
+// git's own words for a refusal: its first error line (past any progress
+// line), with the files it lists.
 function gitSaid(stderr: string): string {
-  const lines = stderr.split(/\r?\n/);
+  const lines = stderr.split(/\r\n|\r|\n/);
+  const at = Math.max(0, lines.findIndex((line) => /^(?:error|fatal): /.test(line)));
   const files: string[] = [];
-  for (const line of lines.slice(1)) {
+  for (const line of lines.slice(at + 1)) {
     if (!line.startsWith("\t")) break;
     files.push(line.trim());
   }
-  const first = (lines[0] ?? "").replace(/^(?:error|fatal): /, "").trim().replace(/:$/, "");
+  const first = (lines[at] ?? "").replace(/^(?:error|fatal): /, "").trim().replace(/:$/, "");
   return files.length > 0 ? `${first}: ${files.join(", ")}` : first;
 }
 
@@ -6297,10 +6299,11 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
         `${proposal.answer_words ? `: "${proposal.answer_words}"` : ""}. I'm carrying on with the approved one.`);
     }
   }
+  // A Unit it started early on that is now done is offered as the move onto
+  // the integration branch (earlyBaseMerged), not as a line.
   for (const dep of mine.payload.early_on ?? []) {
     const theirs = claims.get(dep.unit)?.payload;
-    if (theirs?.done) lines.push(`${dep.unit} is done at the home. ${unit} started early on its branch: rebase on it when you are ready.`);
-    else if (theirs?.turned_down) {
+    if (!theirs?.done && theirs?.turned_down) {
       lines.push(`${dep.unit} was turned down at the home; ${unit} started on its branch. Nothing else changes: wait for it, ` +
         "or rebase when you are ready.");
     }
@@ -6328,6 +6331,88 @@ export function buildClaimNotes(projectDir: string, stateContent: string, sessio
     }
   }
   return lines;
+}
+
+// The Units this build started early on that are now done at the home, and
+// in each repo it started early in and is not on the integration branch yet,
+// the git that moves it there for the way that repo merged the Unit: after a
+// merge that kept its commits, a plain rebase; after a squash or a host's
+// rebase (new commits), only the build's own commits, from the head it
+// started on. A branch the person is on with no commits of its own yet (its
+// code is committed at the push) moves with `reset --keep`, which keeps their
+// uncommitted work, where a rebase would refuse it. `skip` leaves out a Unit
+// before anything is fetched for it.
+export function earlyBaseMerged(projectDir: string, stateContent: string, skip: (unit: string) => boolean = () => false):
+  Array<{ unit: string; repos: Array<{ repo: string; name: string; dir: string; remote: string; onto: string; rebase: string[] }> }> {
+  const build = unitBuildOf(stateContent);
+  if (build === null) return [];
+  const space = build.homeRecord.slice(0, build.homeRecord.indexOf("/"));
+  let claims: Map<string, UnitClaimView>;
+  try {
+    claims = cachedClaimsForIdentity(projectDir, { space, intentUuid: build.homeWork, intentId8: idSuffix(build.homeWork) }, false);
+  } catch {
+    return [];
+  }
+  return (claims.get(build.unit)?.payload.early_on ?? []).flatMap((dep) => {
+    const theirs = claims.get(dep.unit)?.payload;
+    if (!theirs?.done || skip(dep.unit)) return [];
+    const repos = dep.repos.flatMap(({ repo, head }) => {
+      const dir = repo === "." ? projectDir : repoDir(projectDir, repo);
+      const remote = isGitRepoDir(dir) ? repositoryRemote(dir) : null;
+      if (remote === null || !git(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/${build.unit}`]).ok) return [];
+      const onto = repoIntegration(dir, remote);
+      // The integration branch as its remote has it now, with the merge.
+      quietFetch(dir, ["-q", remote, onto.slice(remote.length + 1)]);
+      if (git(dir, ["merge-base", "--is-ancestor", onto, `refs/heads/${build.unit}`]).ok) return [];
+      const kept = theirs.verdicts?.find((verdict) => verdict.repo === repo)?.how === "ancestry";
+      const own = head === "" || git(dir, ["rev-parse", `refs/heads/${build.unit}`]).stdout.trim() !== head;
+      const on = git(dir, ["branch", "--show-current"]).stdout.trim() === build.unit;
+      return [{
+        repo,
+        name: repo === "." ? "the repo" : repo,
+        dir,
+        remote,
+        onto,
+        rebase: on && !own ? ["reset", "-q", "--keep", onto]
+          : kept || head === "" ? ["rebase", onto, build.unit] : ["rebase", "--onto", onto, head, build.unit],
+      }];
+    });
+    return repos.length > 0 ? [{ unit: dep.unit, repos }] : [];
+  });
+}
+
+// The person's yes to moving the build onto the integration branch: in each
+// repo, the integration branch fetched, then the rebase with their own git. A
+// rebase git stops (a conflict, their uncommitted changes) is said in git's
+// words with the way back; the repos before it stay moved.
+function rebaseUnit(args: string[], projectDir?: string): void {
+  parseArgs(args);
+  const pd = resolveProjectDir(projectDir);
+  const state = readStateFile(pd);
+  const build = unitBuildOf(state);
+  if (build === null) fail("rebase moves a Unit's build onto the integration branch; this work is not one.");
+  const moved: string[] = [];
+  const onto = new Set<string>();
+  for (const dep of earlyBaseMerged(pd, state)) {
+    for (const repo of dep.repos) {
+      const branch = repo.onto.slice(repo.remote.length + 1);
+      git(repo.dir, ["fetch", "-q", repo.remote, branch]);
+      const ran = git(repo.dir, repo.rebase);
+      if (!ran.ok) {
+        const stopped = existsSync(resolve(repo.dir, git(repo.dir, ["rev-parse", "--git-path", "rebase-merge"]).stdout.trim())) ||
+          existsSync(resolve(repo.dir, git(repo.dir, ["rev-parse", "--git-path", "rebase-apply"]).stdout.trim()));
+        fail(`${build.unit} could not be moved onto ${branch} in ${repo.name}. Git says: "${gitSaid(ran.stderr || ran.stdout)}".` +
+          (stopped ? ` To go back to where ${build.unit} was there, run git rebase --abort in ${repo.name}.` : "") +
+          (moved.length > 0 ? ` In ${joinNames(moved)} it is on ${joinNames([...onto])} now.` : ""));
+      }
+      moved.push(repo.name);
+      onto.add(branch);
+    }
+  }
+  const notice = moved.length === 0
+    ? `${build.unit} is on the integration branch already; nothing moved.`
+    : `${build.unit} is on ${joinNames([...onto])} now in ${joinNames(moved)}, with its own commits on top. Nothing is pushed.`;
+  console.log(JSON.stringify({ moved: moved.length > 0, unit: build.unit, repos: moved, notice }));
 }
 
 // The finished stages of this work that used an amended input read as current:
@@ -7018,6 +7103,7 @@ export function main(argv: string[]): void {
     else if (command === "progress") progressFile(projectDir);
     else if (command === "take-in") takeIn(args, projectDir);
     else if (command === "propose") proposeChange(args, projectDir);
+    else if (command === "rebase") rebaseUnit(args, projectDir);
     else if (command === "amend") amendInput(args, projectDir);
     else if (command === "lead-sign-off") leadSignOffSetting(args, projectDir);
     else if (command === "sign-off") signOff(args, projectDir);

@@ -861,7 +861,15 @@ the claim (`result`, `progress`). A claim held by `unit hand-off` carries
 
 The take offer adds **Start <unit> early** for a waiting Unit once every Unit
 it waits on has a result on its claim (`unit take --early`, recorded as
-`early_on`). At the home, a claim with a proposal nobody answered makes the
+`early_on`). Once such a Unit is done, the build's step is `ask_type:
+unit-move-onto` once (and once more if the build was pushed since), naming the
+integration branch it merged into; its choice runs `unit rebase`, which in each
+repo the build started early in fetches that branch and moves the build onto it
+with the person's own git (`earlyBaseMerged`): a plain rebase where the repo
+merged with its commits kept (`ancestry`), `rebase --onto <remote>/<branch>
+<head it started on>` after a squash or a host's rebase, and `reset --keep` for
+a branch the person is on that has no commits of its own yet. A rebase git stops
+is said in its words, with `git rebase --abort` as the way back. At the home, a claim with a proposal nobody answered makes the
 step `ask_type: unit-amend` (noted with an engine ask mark; after the person
 spoke without answering, the step carries one line instead and the board's
 `offers` carry the answer), with `amend_command` for the person's words and the
@@ -871,7 +879,7 @@ from `approved-inputs.md` and was neither sent nor answered (`changedInputs`)
 makes the step `ask_type: unit-propose` once per its text. An amendment goes to
 the Units whose stages read the input (`teamUnitStageApplies` by Unit kind). `buildClaimNotes` says each note on a
 build's own claim once, on any step: a turn-down, the home's answer to a
-proposal, an `early_on` Unit done or turned down, and an amendment, which also
+proposal, an `early_on` Unit turned down, and an amendment, which also
 writes the new version into the build's copy and appends `SHARED_INPUT_AMENDED`
 for the build's stages that used it, so its own validity check stays quiet and
 the line (`staleStageLine`, or the follow-up offer for a done Unit) comes from

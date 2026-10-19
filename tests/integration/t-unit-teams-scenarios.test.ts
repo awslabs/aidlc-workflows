@@ -496,13 +496,15 @@ describe("scenario 6: when things go wrong", () => {
       "Something Functional Design used changed after it finished. I'm carrying on with it as it is. Do you want me to redo Functional Design with the change?",
     );
 
-    // refunds merges and is done: the early team hears it once and keeps its work.
+    // refunds merges and is done: the early team is offered once to move onto main, and keeps its work.
     mergeOnHost(hosts["checkout-api"], "refunds", "squash");
     mergeOnHost(hosts.billing, "refunds", "squash");
     git(home.dir, ["fetch", "-q", "origin"]);
     next(home.dir);
     git(dana, ["fetch", "-q", "origin"]);
-    expect(notices(agent.next())).toContain("refunds is done at the home. reporting started early on its branch: rebase on it when you are ready.");
+    const move = agent.next();
+    expect(move.ask_type, JSON.stringify(move)).toBe("unit-move-onto");
+    expect(String(move.question)).toStartWith("refunds is merged into main. Do you want me to move reporting onto main now?");
     expect(git(join(dana, "billing"), ["branch", "--show-current"])).toBe("reporting");
     expect(existsSync(join(buildRecord(dana, "data", "reporting"), "construction", "reporting", "functional-design"))).toBe(true);
   });

@@ -251,8 +251,11 @@ pushed its branches, the offer also has **Start reporting early**: the build
 starts on that pushed branch in each repo it changed (checked out where you
 have no uncommitted work there; otherwise the branch is made and the line says
 to switch when you are ready), and the line says it may still change before it
-merges. You hear once when that Unit is done, to rebase when you are ready, or
-when it is turned down; nothing else changes, and AI-DLC never rebases for you.
+merges. Once that Unit is merged, AI-DLC asks once whether to move your build
+onto the branch it merged into (only your build's own commits move, with your
+own git; a build you already pushed then needs a force push of your own, which
+AI-DLC never does), and a conflict stops with git's words and the way back. You
+hear once when that Unit is turned down, and nothing else changes.
 
 A team that needs a change to something its Unit was approved with (a contract
 summary, the requirements) edits its copy or writes the new text. When its copy
