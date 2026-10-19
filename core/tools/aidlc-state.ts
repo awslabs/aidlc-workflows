@@ -248,6 +248,8 @@ import {
   sourceChangedOutsideAidlc,
   SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS,
   isReadOnlyEngineProbe,
+  splitSourcePathKey,
+  type WorkspaceSourceState,
 } from "./aidlc-lib.js";
 import { memoryDirFor, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
@@ -4366,12 +4368,17 @@ interface SourceWorkLook {
 // own git: in one of the intent's recorded repos (the set the review source
 // binding and the unit manifest follow), in a child repo, clone or worktree
 // made after the intent recorded its repos, in a linked worktree of any of
-// those (nested, in a harness folder such as Claude Code's .claude/worktrees/,
-// outside the project or on another drive), or in a checkout the root's git
-// ignores (a worktree of a repo kept outside the project, placed inside it).
-// Each is asked the root's own question, and a source change since this stage
-// attempt began counts too: committing the code and then the records leaves the
-// last commit docs only.
+// those, or in a checkout the root's git ignores (a worktree of a repo kept
+// outside the project, placed inside it). Each is asked the root's own
+// question, and a source change since this stage attempt began counts too:
+// committing the code and then the records leaves the last commit docs only.
+//
+// A checkout found when the check runs is asked only where the review can see
+// it change: the source walk lists a file below it that is not one of AI-DLC's
+// own (aidlcOwnedSourceKey). Code kept where it cannot (a harness folder such as
+// Claude Code's .claude/worktrees/, outside the project or on another drive) is
+// not counted, so it goes the person's way with the note, and no record says
+// AI-DLC found code its review does not cover.
 //
 // A recorded name is text in the committed intents.json, and a folder shaped
 // like a repo (HEAD, objects/, refs/, config) can be committed by anyone whose
@@ -4387,6 +4394,33 @@ function workspaceHasWork(pd: string, content: string | null, slug: string): Sou
   const asked = new Set<string>();
   const lookedIn: string[] = [];
   const gitCheckouts: string[] = [];
+  let source: WorkspaceSourceState | null | undefined;
+  const currentSource = (): WorkspaceSourceState | null => {
+    if (source === undefined) {
+      try {
+        source = workspaceSourceState(pd);
+      } catch {
+        source = null;
+      }
+    }
+    return source;
+  };
+  let walked: string[] | null = null;
+  const reviewReaches = (dir: string): boolean => {
+    const real = realPathOr(dir);
+    if (!withinDir(root, real)) return false;
+    if (walked === null) {
+      walked = [];
+      const owned = aidlcOwnedSourceKey(pd);
+      for (const key of currentSource()?.listing.keys() ?? []) {
+        if (owned(key)) continue;
+        const parsed = splitSourcePathKey(key);
+        if (parsed !== null) walked.push(parsed.repo === "" ? parsed.path : `${parsed.repo}/${parsed.path}`);
+      }
+    }
+    const below = `${relative(root, real).split(sep).join("/")}/`;
+    return walked.some((path) => path.startsWith(below));
+  };
   const ask = (dir: string, viaGit: boolean): boolean => {
     const real = realPathOr(dir);
     const key = process.platform === "win32" ? real.toLowerCase() : real;
@@ -4412,19 +4446,19 @@ function workspaceHasWork(pd: string, content: string | null, slug: string): Sou
   for (const repo of discoverSiblingRepos(pd)) {
     if (!isValidRepoName(repo)) continue;
     const dir = repoDir(pd, repo);
-    if (ask(dir, true)) return at(dir);
+    if (reviewReaches(dir) && ask(dir, true)) return at(dir);
   }
   const own = join(root, ".aidlc");
   for (const checkout of [...gitCheckouts]) {
     for (const worktree of linkedWorktrees(checkout, !withinDir(root, checkout))) {
       if (withinDir(own, realPathOr(worktree)) || !isGitRepoDir(worktree)) continue;
-      if (ask(worktree, true)) return at(worktree);
+      if (reviewReaches(worktree) && ask(worktree, true)) return at(worktree);
     }
   }
   for (const checkout of nestedCheckouts(root)) {
-    if (ask(checkout, true)) return at(checkout);
+    if (reviewReaches(checkout) && ask(checkout, true)) return at(checkout);
   }
-  if (content !== null && sourceChangedSinceStageStarted(pd, content, slug)) {
+  if (content !== null && sourceChangedSinceStageStarted(pd, content, slug, currentSource())) {
     return { found: true, lookedIn, foundIn: "a source change since the stage started" };
   }
   return { found: false, lookedIn, foundIn: null };
@@ -4558,11 +4592,15 @@ function hasOwnGitEntry(dir: string): boolean {
 // Code committed and then followed by a records-only commit shows here; a
 // brownfield tree with nothing new since the stage began does not. Anything
 // unreadable proves nothing.
-function sourceChangedSinceStageStarted(pd: string, content: string, slug: string): boolean {
+function sourceChangedSinceStageStarted(
+  pd: string,
+  content: string,
+  slug: string,
+  current: WorkspaceSourceState | null,
+): boolean {
   try {
     const baseline = currentStageSourceBaseline(pd, slug, unitMajorStageFloors(content));
     if (baseline.state !== "ready") return false;
-    const current = workspaceSourceState(pd);
     if (current === null) return false;
     return sourceChangedOutsideAidlc(
       pd,

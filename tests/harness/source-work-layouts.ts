@@ -320,6 +320,9 @@ export interface Layout {
   claim: (proj: string, recorded: string[]) => Record<string, string>;
   // The code is committed, then the records: the last commit is records only.
   commitsCode?: boolean;
+  // The source walk (what the review binds) does not reach the code here, so
+  // the check does not count it: the person decides with the note.
+  outOfReview?: boolean;
   project?: () => string;
   skip?: string | false;
 }
@@ -368,6 +371,7 @@ export const LAYOUTS: Layout[] = [
   },
   {
     name: "a worktree in the harness folder",
+    outOfReview: true,
     ignore: ".claude/worktrees/\n",
     made: "after",
     make: (proj) => worktreeOf(proj, join(proj, ".claude", "worktrees", "feature")),
@@ -389,6 +393,7 @@ export const LAYOUTS: Layout[] = [
   },
   {
     name: "an outside repo's worktree in the harness folder",
+    outOfReview: true,
     ignore: ".claude/worktrees/\n",
     made: "after",
     make: (proj) => worktreeOf(outsideRepo(), join(proj, ".claude", "worktrees", "app")),
@@ -436,6 +441,7 @@ export const LAYOUTS: Layout[] = [
   },
   {
     name: "a worktree on another drive",
+    outOfReview: true,
     ignore: "",
     made: "after",
     skip: process.platform !== "win32" ? "Windows only" : otherDrive() === null ? "one drive on this machine" : false,

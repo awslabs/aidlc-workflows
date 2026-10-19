@@ -25654,7 +25654,7 @@ function sourceListingFieldDecode(value: string): string | null {
   return decoded;
 }
 
-function splitSourcePathKey(key: string): { repo: string; path: string } | null {
+export function splitSourcePathKey(key: string): { repo: string; path: string } | null {
   const separator = key.indexOf("\0");
   if (separator === -1 || key.indexOf("\0", separator + 1) !== -1) return null;
   const repo = key.slice(0, separator);

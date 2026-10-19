@@ -217,19 +217,21 @@ How "source work" is detected depends on the workspace:
 - **Code kept outside the workspace's own git** - the code may live in one of
   the intent's recorded repos (the `repos` of its registry row), in a child
   repo, clone or worktree made after the work started, in a linked worktree of
-  any of those (nested, in a harness folder such as Claude Code's
-  `.claude/worktrees/`, outside the project or on another drive, as
-  `git worktree list` names them), or in a checkout the workspace's git does
-  not track, such as a worktree of a repo kept outside the project and placed
-  in a gitignored folder inside it (found up to three levels below each
-  untracked or ignored folder, without following links). The guard asks each of
-  them the same question it asks the workspace, so a brownfield checkout with no
-  new code does not pass either. Git is asked only in a folder with a real
-  `.git` entry (a clone, submodule, init or worktree the person made); a
-  committed folder merely shaped like a repo gets the filesystem check, so its
-  committed git config never runs, and a checkout outside the project is asked
-  with `--no-optional-locks`, so nothing is written there. AI-DLC's own Bolt
-  worktrees under `.aidlc/` are left to the swarm's own evidence.
+  any of those (as `git worktree list` names them), or in a checkout the
+  workspace's git does not track, such as a worktree of a repo kept outside the
+  project and placed in a gitignored folder inside it (found up to three levels
+  below each untracked or ignored folder, without following links). The guard
+  asks each of them the same question it asks the workspace, so a brownfield
+  checkout with no new code does not pass either. A checkout found when the
+  check runs counts only where the review can see its code change, that is
+  where the source walk lists files below it outside AI-DLC's own: code kept in
+  a harness folder such as Claude Code's `.claude/worktrees/`, outside the
+  project or on another drive is not counted, so it goes to the person with the
+  line below. Git is asked only in a folder with a real `.git` entry (a clone,
+  submodule, init or worktree the person made); a committed folder merely
+  shaped like a repo gets the filesystem check, so its committed git config
+  never runs. AI-DLC's own Bolt worktrees under `.aidlc/` are left to the
+  swarm's own evidence.
 - **Code committed, then the records** - a records-only last commit hides code
   committed earlier in the stage, so the guard also compares the source with
   the stage attempt's `Source Baseline`: a change outside AI-DLC's own files

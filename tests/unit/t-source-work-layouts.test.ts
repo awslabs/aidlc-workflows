@@ -9,8 +9,10 @@
 // worktree on another drive), and Code Generation driven through the engine as
 // the conductor drives it, for the whole stage and for one Unit whose source
 // manifest names the code where it is: the agent's report opens the approval
-// question and the person's approval completes the stage. Runs on Linux, macOS
-// (darwin) and Windows.
+// question and the person's approval completes the stage. Code kept where the
+// review cannot see it change (a harness folder, another drive) is not counted:
+// the agent is told once and the person decides with the note. Runs on Linux,
+// macOS (darwin) and Windows.
 //
 // When the check cannot see the code, Guard Policy decides: off (from the
 // scope default, a memory layer or the person's switch) stands aside for the
@@ -52,12 +54,32 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 afterEach(() => cleanupLayouts());
 
+// Code the review cannot see change (a harness folder, outside the project):
+// the agent is told once, the person decides with the note, and the approval
+// records that AI-DLC did not find the code.
+function expectPersonDecides(proj: string): void {
+  const first = report(proj, "awaiting-approval", PERSON);
+  expect(isGuardAsk(first), first.out).toBe(true);
+  expect(reasonCodes(first)).toContain("REQUIRED_SOURCE_WORK_MISSING");
+  const second = report(proj, "awaiting-approval", PERSON);
+  expect(stageBox(proj), second.out).toBe("?");
+  expect(notices(second).join("\n"), second.out).toContain("AI-DLC found no source changes under");
+  personSays(proj);
+  const approved = report(proj, "approved", PERSON, ["--user-input", "Approve"]);
+  expect(stageBox(proj), approved.out).toBe("x");
+  expect(approvalNote(proj)).toStartWith("not found under ");
+}
+
 describe("Code Generation finds the code where the person keeps it", () => {
   for (const layout of LAYOUTS) {
     for (const perUnit of [false, true]) {
       const name = `${layout.name}, ${perUnit ? "one Unit" : "the whole stage"}`;
       test.skipIf(layout.skip !== undefined && layout.skip !== false)(name, () => {
         const { proj } = buildLayout(layout, perUnit);
+        if (layout.outOfReview) {
+          expectPersonDecides(proj);
+          return;
+        }
         const gate = report(proj, "awaiting-approval");
         expect(isGuardAsk(gate), gate.out).toBe(false);
         expect(stageBox(proj), gate.out).toBe("?");
@@ -67,6 +89,18 @@ describe("Code Generation finds the code where the person keeps it", () => {
       });
     }
   }
+
+  // The review binds only what the source walk lists, so code in a harness
+  // folder is never recorded as found: an edit after the review there goes to
+  // the person with the note, not through as reviewed code.
+  test("code in a harness-folder worktree edited after the review goes to the person, not through as reviewed", () => {
+    const layout = LAYOUTS.find((entry) => entry.name === "a worktree in the harness folder");
+    if (layout === undefined) throw new Error("layout missing");
+    const { proj, codeDir } = buildLayout(layout, false);
+    writeCode(codeDir, "export const login = 2;\n");
+    expectPersonDecides(proj);
+    expect(sourceWorkRows(proj).map((row) => row.lookedIn).join(" ")).not.toContain(".claude");
+  });
 
   // The agent's own completion verbs see the same places.
   test("advance, finalize and complete-workflow find the code in a nested worktree", () => {
