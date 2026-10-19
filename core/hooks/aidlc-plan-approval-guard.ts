@@ -31,7 +31,8 @@
 // receipt) waits while the plan does (the person's answer at the held gate and
 // the recovery remedy they picked excepted); a jump waits for the person's
 // move: the restart they picked at the recovery question, or one they asked
-// for while the last step is current. While the person is editing the plan
+// for, unless the engine's last step was superseded or is its Code Generation
+// recovery question. While the person is editing the plan
 // files themselves, those files are theirs (personIsEditingPlanFile). Three
 // kinds of files pass too: the composer's grid proposal, a person's answer text
 // and a person's request file, which the engine reads and nothing else.
@@ -112,6 +113,7 @@ import {
   personAskedSinceGate,
   personSpokeSinceGate,
   readActiveDirectiveMarker,
+  readIssuedDirectiveMarker,
   spacesRoot,
   activeDirectiveOutOfDateReason,
   recordHookDrop,
@@ -1473,17 +1475,21 @@ interface EngineCommandContext {
 
 const NO_ENGINE_CONTEXT: EngineCommandContext = { gateHeld: false, marker: null, jumpAdmitted: () => false };
 
-// The engine's last step is current and was delivered as issued, and it is not
-// its recovery question, whose own picked restart is the one jump it carries out
-// (isSelectedGuardRestartContinuation). A step gone stale or superseded since
-// names nothing the person's earlier words still ask for: `next` names the step
-// now. Parked work's last step is the park, which no issued step outlives.
+// The engine's last step was delivered as issued, and it is not its Code
+// Generation recovery question, whose own picked restart is the one jump it
+// carries out (isSelectedGuardRestartContinuation), bound to the state it was
+// picked at. The report that opens the gate moves the state and writes no step,
+// so the step the person answers there is the one the engine issued last
+// (readIssuedDirectiveMarker); whether their words still stand is
+// personSpokeSinceGate's. With no step on record there is nothing to wait for.
+// Parked work's last step is the park, which no issued step outlives.
 function lastStepAdmitsPersonsMoves(projectDir: string): boolean {
   try {
     const state = readFileSync(stateFilePath(projectDir), "utf-8");
     if ((getField(state, "Parked") ?? "").trim().length > 0) return true;
-    const marker = readActiveDirectiveMarker(projectDir, state);
-    return marker !== null && marker.delivery !== "superseded" &&
+    const marker = readActiveDirectiveMarker(projectDir, state) ?? readIssuedDirectiveMarker(projectDir);
+    if (marker === null) return true;
+    return marker.delivery !== "superseded" &&
       !(marker.kind === "ask" && marker.ask_type === GUARD_RECOVERY_ASK_TYPE);
   } catch {
     return false;
@@ -1491,8 +1497,9 @@ function lastStepAdmitsPersonsMoves(projectDir: string): boolean {
 }
 
 // A jump is the person's move: the restart they picked at the engine's recovery
-// question, or one they asked for since the last decision while the last step
-// is current. The jump tool checks neither.
+// question, or one they asked for since the last decision, unless the engine's
+// last step was superseded or is its Code Generation recovery question. The jump
+// tool checks neither.
 function jumpIsPersonsMove(
   projectDir: string,
   cwd: string,

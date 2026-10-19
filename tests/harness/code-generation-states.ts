@@ -246,7 +246,7 @@ export interface StateBuilder {
 }
 
 /** The review a reviewer leaves for a stage, the shape the engine reads (tests/harness/scope-run.ts reviewText). */
-function reviewText(reviewer: string): string {
+export function reviewText(reviewer: string): string {
   return `## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Date:** 2026-01-01T00:00:00Z\n**Iteration:** 1\n\n### Findings\n\n**Prior findings**\n\n| ID | Now | Severity | Note |\n|---|---|---|---|\n\n**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n\n### Summary\n\nReady.\n`;
 }
 
@@ -263,6 +263,56 @@ function askOpen(proj: string): Step {
     throw new Error(`expected the plan question, got ${JSON.stringify(step)}`);
   }
   return step;
+}
+
+/**
+ * The open Code Generation gate (S11a): the plan approved (asked, or built
+ * without asking where plan approval is off), the build's outputs and the
+ * stage's review written, and `report --result awaiting-approval` run. The
+ * report moves the state and writes no step, so no step is current: a door is
+ * refused naming `next` (the pin test below the sweep).
+ */
+export function openCodeGenerationGate(
+  policy: "strict" | "relaxed" | "off" = "relaxed",
+  planApproval: "on" | "off" = "on",
+): string {
+  const proj = createCodeGenerationProject(policy, planApproval);
+  // What a poc run has here: this stage in progress (the previous stage's
+  // approval marks it [-], aidlc-state.ts) and Units Generation skipped
+  // (core/scopes/aidlc-poc.md), so the stage's records are stage-level.
+  const stateFile = seededStateFile(proj);
+  writeFileSync(stateFile, readFileSync(stateFile, "utf-8")
+    .replace("- [ ] code-generation", "- [-] code-generation")
+    .replace(/^(- \[.\] units-generation) \u2014 EXECUTE$/m, "$1 \u2014 SKIP"), "utf-8");
+  next(proj);
+  if (planApproval === "on") {
+    askOpen(proj);
+    approve(proj);
+    next(proj);
+  } else {
+    writePlan(proj);
+    const step = next(proj);
+    if (step.kind !== "run-stage" || step.plan_approval?.status !== "approved") {
+      throw new Error(`expected the build without asking, got ${JSON.stringify(step)}`);
+    }
+  }
+  // The build's outputs, the stage's review, then the gate.
+  writeFileSync(join(stageDir(proj), "traceability.json"), "{}\n", "utf-8");
+  writeFileSync(join(proj, "src", "slugify.ts"), "export const slugify = (s: string) => s;\n", "utf-8");
+  const reviewer = "aidlc-architecture-reviewer-agent";
+  const review = ["engine", "log", "review", "--stage", "code-generation", "--reviewer", reviewer, "--iteration", "1"];
+  const requested = run(proj, [DISPATCHER, ...review]);
+  const reviewFile = (JSON.parse(requested.stdout || "{}") as { reviewFile?: string }).reviewFile;
+  if (requested.status !== 0 || !reviewFile) throw new Error(`no review file named:\n${requested.stdout}${requested.stderr}`);
+  mkdirSync(dirname(join(proj, reviewFile)), { recursive: true });
+  writeFileSync(join(proj, reviewFile), reviewText(reviewer), "utf-8");
+  const recorded = run(proj, [DISPATCHER, ...review, "--verdict", "READY"]);
+  if (recorded.status !== 0) throw new Error(`the review was not recorded:\n${recorded.stdout}${recorded.stderr}`);
+  const opened = run(proj, [DISPATCHER, "engine", "orchestrate", "report", "--stage", "code-generation",
+    "--result", "awaiting-approval"]);
+  const gate = JSON.parse(opened.stdout || "{}") as { kind?: string };
+  if (opened.status !== 0 || gate.kind !== "print") throw new Error(`the gate did not open:\n${opened.stdout}${opened.stderr}`);
+  return proj;
 }
 
 export const STATES: StateBuilder[] = [
@@ -460,43 +510,11 @@ export const STATES: StateBuilder[] = [
   },
   {
     id: "S11a", name: "no current step: the gate opened and retired it",
-    build: () => {
-      const proj = createCodeGenerationProject();
-      // What a poc run has here: this stage in progress (the previous stage's
-      // approval marks it [-], aidlc-state.ts) and Units Generation skipped
-      // (core/scopes/aidlc-poc.md), so the stage's records are stage-level.
-      const stateFile = seededStateFile(proj);
-      writeFileSync(stateFile, readFileSync(stateFile, "utf-8")
-        .replace("- [ ] code-generation", "- [-] code-generation")
-        .replace(/^(- \[.\] units-generation) \u2014 EXECUTE$/m, "$1 \u2014 SKIP"), "utf-8");
-      next(proj);
-      askOpen(proj);
-      approve(proj);
-      next(proj);
-      // The build's outputs, the stage's review, then the gate.
-      writeFileSync(join(stageDir(proj), "traceability.json"), "{}\n", "utf-8");
-      writeFileSync(join(proj, "src", "slugify.ts"), "export const slugify = (s: string) => s;\n", "utf-8");
-      const reviewer = "aidlc-architecture-reviewer-agent";
-      const review = ["engine", "log", "review", "--stage", "code-generation", "--reviewer", reviewer, "--iteration", "1"];
-      const requested = run(proj, [DISPATCHER, ...review]);
-      const reviewFile = (JSON.parse(requested.stdout || "{}") as { reviewFile?: string }).reviewFile;
-      if (requested.status !== 0 || !reviewFile) throw new Error(`no review file named:\n${requested.stdout}${requested.stderr}`);
-      mkdirSync(dirname(join(proj, reviewFile)), { recursive: true });
-      writeFileSync(join(proj, reviewFile), reviewText(reviewer), "utf-8");
-      const recorded = run(proj, [DISPATCHER, ...review, "--verdict", "READY"]);
-      if (recorded.status !== 0) throw new Error(`the review was not recorded:\n${recorded.stdout}${recorded.stderr}`);
-      const opened = run(proj, [DISPATCHER, "engine", "orchestrate", "report", "--stage", "code-generation",
-        "--result", "awaiting-approval"]);
-      const gate = JSON.parse(opened.stdout || "{}") as { kind?: string };
-      if (opened.status !== 0 || gate.kind !== "print") throw new Error(`the gate did not open:\n${opened.stdout}${opened.stderr}`);
-      // No current step now: a door is refused naming `next` (the pin test
-      // below the sweep). The sweep's own `next` makes the step current again,
-      // and the approved plan opens the build's doors.
-      return {
-        proj, session: SESSION, approved: true,
-        how: "approved, built, reviewed; report awaiting-approval opened the gate and retired the step; next re-issues it",
-      };
-    },
+    build: () => ({
+      proj: openCodeGenerationGate(),
+      session: SESSION, approved: true,
+      how: "approved, built, reviewed; report awaiting-approval opened the gate and retired the step; next re-issues it",
+    }),
   },
   {
     id: "S11b", name: "no current step: the chat compacted",
