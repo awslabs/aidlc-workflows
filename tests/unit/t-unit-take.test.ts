@@ -25,6 +25,7 @@ import {
   cloneOf,
   codeGenerated,
   codeHost,
+  ENV,
   GIT_ENV,
   git,
   homeState,
@@ -340,20 +341,22 @@ describe("builds in one workspace", () => {
     expect(readIntentRegistry(bob, "payments").map((row) => row.slug).sort()).toEqual(["checkout-ui", "refunds"]);
   });
 
-  test("the next day, another clone of the workspace carries the build on", () => {
+  test("the next day, another clone of the workspace carries the build on, in the chat open on it", () => {
     const home = homeWithTeams(["refunds=payments"]);
     const alice = cloneOf(home.remote, "alice");
     expect(take(alice, "refunds").status).toBe(0);
     commitAll(alice, "refunds build");
     git(alice, ["push", "-q", "origin", "main"]);
     const laptop = cloneOf(home.remote, "alice-laptop");
-    const ask = next(laptop);
+    // The chat Claude Code names in the agent's shell; no session start ran in this clone.
+    const chat: NodeJS.ProcessEnv = { ...ENV, CLAUDE_CODE_SESSION_ID: "5b6f0c1e-1d2a-4c3b-9e4f-0a1b2c3d4e5f", CLAUDE_PID: String(process.pid) };
+    const ask = next(laptop, chat);
     const choices = ask.choices as Array<{ label: string; command: string }>;
     expect(choices.map((choice) => choice.label)).toContain("Carry on refunds");
-    const resumed = take(laptop, "refunds");
+    const resumed = run(UNIT, ["take", "refunds", "--home", HOME], laptop, chat);
     expect(resumed.status, resumed.out).toBe(0);
     expect(resumed.json).toMatchObject({ resumed: true, notice: "Carrying on refunds, the payments team's build here." });
-    const step = next(laptop);
+    const step = next(laptop, chat);
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
     expect(step.unit).toBe("refunds");
   });
