@@ -32,6 +32,10 @@ import {
   mergeOnHost,
   next,
   ORCH,
+  finishBuild,
+  hook,
+  personsChat,
+  personsNext,
   refundsTaken,
   run,
   tellsWhatToType,
@@ -42,36 +46,6 @@ import {
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
-// Every planned stage of the build done and approved, and the build finished.
-function finishBuild(record: string): void {
-  const statePath = join(record, "aidlc-state.md");
-  writeFileSync(statePath, readFileSync(statePath, "utf-8")
-    .replace(/^- \[[-? ]\] (functional-design|nfr-requirements|nfr-design|infrastructure-design|code-generation) /gm, "- [x] $1 ")
-    .replace(/^- \*\*Current Stage\*\*: .*$/m, "- **Current Stage**: code-generation")
-    .replace(/^- \*\*Status\*\*: .*$/m, "- **Status**: Completed"));
-}
-
-// The person's own chat: the presence guard on, as in a real run.
-function personsChat(session: string): NodeJS.ProcessEnv {
-  const chat: NodeJS.ProcessEnv = { ...ENV, AIDLC_SESSION_OVERRIDE: session };
-  delete chat.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
-  return chat;
-}
-
-// The person types /aidlc in their chat: the prompt's hook runs, then the step.
-function personsNext(dir: string, chat: NodeJS.ProcessEnv, session: string): Record<string, unknown> {
-  expect(hook(dir, chat, { hook_event_name: "UserPromptSubmit", session_id: session, prompt: "/aidlc" }).status).toBe(0);
-  return next(dir, chat);
-}
-
-// One of Claude Code's hooks, as the host calls it in the person's project.
-function hook(dir: string, env: NodeJS.ProcessEnv, payload: Record<string, unknown>): { status: number; out: string } {
-  const r = spawnSync(process.execPath, [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook",
-    payload.hook_event_name === "UserPromptSubmit" ? "record-human-turn" : "guard-tool-call"], {
-    cwd: dir, encoding: "utf-8", env: { ...env, CLAUDE_PROJECT_DIR: dir, AIDLC_PROJECT_DIR: dir }, input: JSON.stringify({ cwd: dir, ...payload }),
-  });
-  return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
-}
 afterEach(cleanupTeamBuild);
 
 describe("teams build Units across repos when the workspace is in git", () => {
@@ -456,6 +430,8 @@ describe("at the home", () => {
     const chat = personsChat("t-unit-push-turned-down");
     expect(hook(alice, chat, { hook_event_name: "UserPromptSubmit", session_id: "t-unit-push-turned-down", prompt: "build refunds" }).status).toBe(0);
     finishBuild(record);
+    // The person approved the last stage: their earlier turns are spent.
+    appendAuditEntry("GATE_APPROVED", { Stage: "code-generation", Unit: "refunds" }, alice, basename(record), "payments");
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     expect(personsNext(alice, chat, "t-unit-push-turned-down").kind).toBe("done");
     git(home.dir, ["fetch", "-q", "origin"]);
