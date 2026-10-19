@@ -23,6 +23,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -458,6 +459,56 @@ describe("a step that waits on the person, and every way on the round added, nev
     const offer = (waiting.offers as Offer[])[0];
     expect(offer.choices.find((entry) => (entry as { recommended?: true }).recommended)?.label).toBe("Not now");
     readsAsOffers(waiting);
+  });
+
+  test("mid-stage at the home, the lead says a team's Unit was turned down: the step carries the command, the board reads fresh, and the team hears it", () => {
+    const { home, alice, record } = refundsTaken(["refunds=payments"]);
+    withTools(home.dir);
+    // The lead builds checkout-ui here.
+    const own = next(home.dir, ENV);
+    expect(own.unit, JSON.stringify(own)).toBe("checkout-ui");
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    // Where every Unit stands, as the lead asks: read as the home has it now.
+    const board = runPrinted(home.dir, ENV, "bun .claude/tools/aidlc-orchestrate.ts team-board");
+    expect(board.status, board.out).toBe(0);
+    expect(board.out).toContain("- refunds, payments: checkout-api not merged yet, billing not merged yet (0 of 2 merged)");
+    const step = next(home.dir, ENV);
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    const command = /`([^`]*turned-down <unit> --repo <repo>[^`]*)`/.exec(String(step.board_note ?? ""))?.[1];
+    expect(command, JSON.stringify(step).slice(0, 400)).toBeDefined();
+    const down = runPrinted(home.dir, ENV, command!.replace("<unit>", "refunds").replace("<repo>", "billing"));
+    expect(down.status, down.out).toBe(0);
+    expect(claimPayload(home.remote, fixtureIntentId8(home.dir), "refunds")?.turned_down).toBeDefined();
+    // The team, mid-build, hears it at its next step.
+    const heard = next(alice, ENV);
+    expect((heard.change_notices ?? []) as string[], JSON.stringify(heard)).toContain(
+      'refunds was turned down in billing at the home: "yes, go ahead".',
+    );
+  });
+
+  test("team-board at a team home is the home's own board: the same text as its step's board for the same state", () => {
+    const { hosts, home, alice, record } = refundsTaken();
+    withTools(home.dir);
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    const step = next(home.dir, ENV);
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    const board = runPrinted(home.dir, ENV, "bun .claude/tools/aidlc-orchestrate.ts team-board");
+    expect(board.status, board.out).toBe(0);
+    expect(board.out.trim()).toBe(String(step.narration));
+    // A query: after a merge it shows it and writes nothing; the step then shows the same and records it.
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    const claimRef = `refs/heads/claim/${fixtureIntentId8(home.dir)}/refunds`;
+    const claimBefore = git(home.remote, ["rev-parse", claimRef]);
+    const rowsBefore = readAuditShardEvents(home.dir).length;
+    const merged = runPrinted(home.dir, ENV, "bun .claude/tools/aidlc-orchestrate.ts team-board");
+    expect(merged.out).toContain("- refunds, payments: checkout-api merged, billing not merged yet (1 of 2 merged)");
+    expect(git(home.remote, ["rev-parse", claimRef])).toBe(claimBefore);
+    expect(readAuditShardEvents(home.dir)).toHaveLength(rowsBefore);
+    const after = next(home.dir, ENV);
+    expect(merged.out.trim()).toBe(String(after.narration));
+    expect(git(home.remote, ["rev-parse", claimRef])).not.toBe(claimBefore);
   });
 
   test("the lead's second clone with nothing to take: carrying the work on here is offered, recommended, and taking it moves on", () => {

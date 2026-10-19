@@ -1296,7 +1296,7 @@ const ASK_FIELDS = [
   "handovers",
 ] as const;
 const PRINT_FIELDS = [
-  "kind", "message", "next_stage", "document_note", "revision_cycle", "accept_as_is", "question_id", "board_note", "offers",
+  "kind", "message", "next_stage", "document_note", "revision_cycle", "accept_as_is", "question_id", "offers",
 ] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason", "workflow_continues", "done_note"] as const;
@@ -1313,13 +1313,15 @@ const STAGE_VALIDITY_FIELD = "stage_validity" as const;
 const CHANGE_NOTICES_FIELD = "change_notices" as const;
 const STAGE_VALIDITY_NOTE_FIELD = "stage_validity_note" as const;
 const CHANGE_NOTICES_NOTE_FIELD = "change_notices_note" as const;
+// At a team home, every step's commands for the lead's words about the teams' Units.
+const BOARD_NOTE_FIELD = "board_note" as const;
 
 // Every kind's set gains `narration`, so the per-kind literals above stay the
 // record of what is kind-SPECIFIC and this one helper adds what is universal.
 function withNarration(fields: readonly string[]): readonly string[] {
   return [
     ...fields, NARRATION_FIELD, STAGE_VALIDITY_FIELD, CHANGE_NOTICES_FIELD,
-    STAGE_VALIDITY_NOTE_FIELD, CHANGE_NOTICES_NOTE_FIELD,
+    STAGE_VALIDITY_NOTE_FIELD, CHANGE_NOTICES_NOTE_FIELD, BOARD_NOTE_FIELD,
   ];
 }
 

@@ -840,9 +840,15 @@ none is left to the home, the step is the board (`renderUnitBoard`). A
 word that a repo merged where the check cannot see it (`unit merged <unit> --repo
 <repo> --person-words`) goes on the claim as `said_merged`, and that repo's
 verdict reads merged "by your word" from then on (a push after a turn-down
-keeps it only for a repo whose head did not change). The board carries
-`board_note`, the commands for those two, sign-off, amend, `lead-sign-off
-on|off`, `release`, hand-off and take-in; a Unit's build left unpushed ends with
+keeps it only for a repo whose head did not change). Every step at a team home
+(the board, and a stage the home builds itself) carries `board_note`
+(`teamCommandsNote`, one builder), the commands for those two, sign-off, amend,
+`lead-sign-off on|off`, `release`, hand-off and take-in, so the lead's word is
+recorded from whatever step the chat is at. At such a home `team-board` prints
+the home's own board from the step's builders (`teamHomeClaims`,
+`unitBoardRows`): it fetches the claims and each pushed repo's integration
+branch, checks the merges without writing them, and shows the same text the
+step would; a Unit's build left unpushed ends with
 `done_note`, the push command. `unit turned-down`, `unit merged`, `unit amend`
 and `unit sign-off` record the lead's word only with a turn of theirs behind it
 (`requireLeadsWord` over `personAskedSinceGate`, unless the human-presence guard

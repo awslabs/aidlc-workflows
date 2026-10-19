@@ -1835,6 +1835,13 @@ function prepareEmission(directive: Directive): PreparedEmission {
       stage_validity: activeStageValidityAdvisory,
     } as Directive;
   }
+  // At a team home every step carries the team commands, so the lead's word
+  // about a team's Unit is recorded from whatever step the chat is at.
+  if (directive.kind !== "load-steering" && directive.kind !== "error" && !("board_note" in directive) &&
+    engineProjectDir && atTeamHome(engineProjectDir)) {
+    const noted = { ...directive, board_note: teamCommandsNote() } as Directive;
+    if (Buffer.byteLength(JSON.stringify(noted), "utf-8") <= directiveMaxBytes()) directive = noted;
+  }
   // Per-unit Construction beats: `unit` is attached by callers after the
   // run-stage is built, so the builder's stage-entry line is wrong here (the
   // stage was entered on the first unit, not on this one). Every path that sets
@@ -5125,6 +5132,29 @@ function lockFolderHeldStep(projectDir: string | null | undefined, line: string)
 let restoreSpentRequestFile: (() => void) | null = null;
 
 type StepOffer = NonNullable<PrintDirective["offers"]>[number];
+
+// For the agent at a team home: the commands for the lead's words about the
+// teams' Units, whatever the step is.
+function teamCommandsNote(): string {
+  const unitTool = aidlcToolInvocation("unit");
+  return "When the person says a repo turned a Unit down, run " +
+    `\`${unitTool} turned-down <unit> --repo <repo> --person-words '<their words>'\`; when they say a repo merged it ` +
+    `where the board does not see it, run \`${unitTool} merged <unit> --repo <repo> --person-words '<their words>'\`. ` +
+    `When they sign a team's result off, run \`${unitTool} sign-off <unit> --person-words '<their words>'\`; when they ` +
+    `answer a team's proposed change, run \`${unitTool} amend <unit> --input <file> --answer <approve|reject> ` +
+    "--person-words '<their words>'`. " +
+    `When they ask for their sign-off on every team's result, run \`${unitTool} lead-sign-off on\` (\`off\` to stop); ` +
+    `when they ask to free a Unit a team holds, run \`${unitTool} release <unit>\`. ` +
+    `When they ask to hand a Unit off by file, run \`${unitTool} hand-off <unit> --team <team> --person-words '<their words>'\`; ` +
+    `when they ask to take in a team's result or progress file, run \`${unitTool} take-in <file>\`. Say the notice line ` +
+    "each prints.";
+}
+
+// The work selected here is the home of Units teams build (not a team's build).
+function atTeamHome(projectDir: string): boolean {
+  const state = loadStateFileIfPresent(projectDir);
+  return state !== null && isTeamUnitOwnership(state) && homeLocation(state) !== null && unitBuildOf(state) === null;
+}
 
 // A step of teams building Units that says where things stand and ends the
 // turn, with what the person may answer: a print, which every orchestrator
@@ -16658,6 +16688,129 @@ function refreshTeamUnitProgress(
   return readStateFile(projectDir);
 }
 
+// The teams' Units as a team home has them now: the claims (fetched once per
+// chat, at each step that shows or acts on them), and each pushed result
+// checked against its repos. A merge the home saw, a verdict it could not send
+// and a home it could not reach are each said once. A query (`query`, for
+// `team-board`) fetches now and writes nothing.
+function teamHomeClaims(
+  projectDir: string,
+  teamHome: boolean,
+  query = false,
+): { overview: UnitClaimOverview | null; results: ReturnType<typeof checkTeamResults>; heldElsewhere: Set<string> } {
+  const readOverview = () => teamHome && hasAnyUnitClaimRefs(projectDir)
+    ? cachedUnitClaimOverview(projectDir, { writeCache: !query && !isReadOnlyEngineProbe() })
+    : null;
+  let overview = readOverview();
+  const unreached: string[] = [];
+  if (teamHome && !isReadOnlyEngineProbe()) {
+    // No Unit left to take is the board, except while the home builds the
+    // walking skeleton, which every other Unit waits on.
+    const board = overview !== null && overview.claimable.length === 0 &&
+      !overview.waiting.some((row) => row.blockedBy.includes("walking-skeleton"));
+    const now = query || (overview !== null && (board || [...overview.claims.values()].some((claim) =>
+      claim.status === "claimed" && !claim.payload.done &&
+      (claim.payload.result !== undefined || (claim.payload.proposals ?? []).some((entry) => entry.answer === undefined))
+    )));
+    const refreshed = refreshHomeClaims(projectDir, { sessionId: engineSessionId, now });
+    if (refreshed.unreached !== null) unreached.push(refreshed.unreached);
+    if (refreshed.fetched) overview = readOverview();
+  }
+  const heldElsewhere = new Set(overview?.claimed.map((row) => row.unit) ?? []);
+  // What came back from the teams, checked against each repo once per step
+  // (with the home unreached, the board is the last fetch's).
+  let results: ReturnType<typeof checkTeamResults> = new Map();
+  const unsent: string[] = [];
+  const told: ToldMerge[] = [];
+  if (heldElsewhere.size > 0 && !isReadOnlyEngineProbe() && unreached.length === 0) {
+    try {
+      results = checkTeamResults(projectDir, unreached, unsent, told, query);
+    } catch (e) {
+      sayWithStepOnce(projectDir, `The teams' results could not be checked just now: ${errorMessage(e)}`);
+    }
+  }
+  // A merge the home saw is the one thing it writes for the teams: said once, in plain words.
+  for (const merge of told) {
+    sayWithStepOnce(projectDir, merge.done
+      ? `I've told the teams ${merge.unit} is merged.`
+      : `I've told the teams ${joinRepoNames(merge.repos)} merged ${merge.unit}.`);
+  }
+  if (unsent.length > 0) {
+    sayWithStepOnce(projectDir, `What the board shows here could not be sent to ${unsent[0]} just now; the teams may not see it yet, and the next step sends it again.`);
+  }
+  if (unreached.length > 0) {
+    sayWithStepOnce(projectDir, `${[...new Set(unreached)].join(", ")} could not be reached just now, so the board may be behind: it shows what your last fetch brought.`);
+  }
+  return { overview, results, heldElsewhere };
+}
+
+// The Units merged at a team home, read from the audit too when no progress
+// model was derived (a read-only probe, the route check of `unit start`).
+function homeMergedUnits(projectDir: string, model: TeamUnitProgressModel | null, auditRows: readonly AuditShardEvent[], finalStage: string): Set<string> {
+  return model?.mergedUnits ?? new Set([...unitMergedReceipts(projectDir, auditRows), ...unitsBuiltBeforeTeams(auditRows, finalStage)]);
+}
+
+// Where each Unit of a team home stands: the board's rows, the one builder for
+// the home's step and for `team-board`.
+function unitBoardRows(
+  projectDir: string,
+  stateContent: string,
+  planUnits: string[],
+  overview: UnitClaimOverview | null,
+  results: ReturnType<typeof checkTeamResults>,
+  mergedHere: ReadonlySet<string>,
+): { rows: UnitBoardRow[]; heldNotTaken: Array<{ unit: string; team: string }> } {
+  const heldNotTaken: Array<{ unit: string; team: string }> = [];
+  const dependencies = unitDependencies(projectDir);
+  const rows = unitsInPlanOrder(projectDir, planUnits).map((unit): UnitBoardRow => {
+    const claim = overview?.claims.get(unit);
+    const team = claim?.status === "claimed" ? claim.owner : null;
+    if (mergedHere.has(unit)) return { unit, team: team ?? "here", status: "done" };
+    if (team === null) {
+      const waits = (dependencies.get(unit) ?? []).filter((dep) => !mergedHere.has(dep));
+      return { unit, team: "here", status: waits.length > 0 ? `waits on ${waits.join(", ")}` : "built here" };
+    }
+    const payload = claim!.payload;
+    if (payload.turned_down) return { unit, team, status: `turned down in ${payload.turned_down.repo}, back with ${team}` };
+    if (payload.result) {
+      const verdicts = results.get(unit)?.verdicts ?? payload.verdicts ??
+        payload.result.repos.map((repo) => ({ repo: repo.repo, merged: false }));
+      const waiting = leadSignOffOn(stateContent) && !payload.signoff ? ", waiting for your sign-off" : "";
+      return { unit, team, status: `${mergedStatus(verdicts)}${waiting}` };
+    }
+    if (payload.by_file) {
+      const at = payload.progress?.stage ? stageLabel(findStageBySlug(payload.progress.stage), payload.progress.stage) : null;
+      return { unit, team, status: at ? `handed off by file, at ${at}` : "handed off by file" };
+    }
+    if (payload.taken_by) {
+      const early = (payload.early_on ?? []).map((dep) => dep.unit);
+      return { unit, team, status: `building${early.length > 0 ? ` early on ${early.join(", ")}` : ""}, taken by ${payload.taken_by}` };
+    }
+    heldNotTaken.push({ unit, team });
+    return { unit, team, status: `held for ${team}, not taken yet` };
+  });
+  return { rows, heldNotTaken };
+}
+
+// `team-board` at a team home: the home's own board, from the same builders as
+// its step, with the lines a look says once; a query, so nothing is written.
+function teamHomeBoardText(projectDir: string, stateContent: string): string {
+  const dag = resolveBoltBatches(projectDir, routingEvidenceFor(projectDir, stateContent));
+  if (dag.state !== "ok") throw new Error("The work's Units could not be read for its board.");
+  const { overview, results } = teamHomeClaims(projectDir, true, true);
+  const auditRows = sortAttemptEvents(readAuditShardEvents(projectDir));
+  const finalStage = unitMajorConstructionStageSlugs(getField(stateContent, "Scope") ?? "", stateContent, true).at(-1) ?? "";
+  let model: TeamUnitProgressModel | null = null;
+  try {
+    model = deriveTeamUnitProgressModel(projectDir, stateContent, auditRows);
+  } catch {
+    // The audit alone says what merged.
+  }
+  const { rows } = unitBoardRows(projectDir, stateContent, dag.batches.flat(), overview, results,
+    homeMergedUnits(projectDir, model, auditRows, finalStage));
+  return [renderUnitBoard(workLabel(projectDir), rows), ...settledNotices].join("\n");
+}
+
 function emitTeamUnitMajorRunStage(
   projectType: "brownfield" | "greenfield" | null,
   scope: string,
@@ -16682,49 +16835,7 @@ function emitTeamUnitMajorRunStage(
   // per chat, and at each step that shows or acts on them: the board (nothing
   // left for the home to build now), a result to check, a change to answer.
   const teamHome = !scopeStamp && homeLocation(stateContent) !== null;
-  const readOverview = () => teamHome && hasAnyUnitClaimRefs(projectDir)
-    ? cachedUnitClaimOverview(projectDir, { writeCache: !isReadOnlyEngineProbe() })
-    : null;
-  let overview = readOverview();
-  const unreached: string[] = [];
-  if (teamHome && !isReadOnlyEngineProbe()) {
-    // No Unit left to take is the board, except while the home builds the
-    // walking skeleton, which every other Unit waits on.
-    const board = overview !== null && overview.claimable.length === 0 &&
-      !overview.waiting.some((row) => row.blockedBy.includes("walking-skeleton"));
-    const now = overview !== null && (board || [...overview.claims.values()].some((claim) =>
-      claim.status === "claimed" && !claim.payload.done &&
-      (claim.payload.result !== undefined || (claim.payload.proposals ?? []).some((entry) => entry.answer === undefined))
-    ));
-    const refreshed = refreshHomeClaims(projectDir, { sessionId: engineSessionId, now });
-    if (refreshed.unreached !== null) unreached.push(refreshed.unreached);
-    if (refreshed.fetched) overview = readOverview();
-  }
-  const heldElsewhere = new Set(overview?.claimed.map((row) => row.unit) ?? []);
-  // What came back from the teams, checked against each repo once per step
-  // (with the home unreached, the board is the last fetch's).
-  let results: ReturnType<typeof checkTeamResults> = new Map();
-  const unsent: string[] = [];
-  const told: ToldMerge[] = [];
-  if (heldElsewhere.size > 0 && !isReadOnlyEngineProbe() && unreached.length === 0) {
-    try {
-      results = checkTeamResults(projectDir, unreached, unsent, told);
-    } catch (e) {
-      sayWithStepOnce(projectDir, `The teams' results could not be checked just now: ${errorMessage(e)}`);
-    }
-  }
-  // A merge the home saw is the one thing it writes for the teams: said once, in plain words.
-  for (const merge of told) {
-    sayWithStepOnce(projectDir, merge.done
-      ? `I've told the teams ${merge.unit} is merged.`
-      : `I've told the teams ${joinRepoNames(merge.repos)} merged ${merge.unit}.`);
-  }
-  if (unsent.length > 0) {
-    sayWithStepOnce(projectDir, `What the board shows here could not be sent to ${unsent[0]} just now; the teams may not see it yet, and the next step sends it again.`);
-  }
-  if (unreached.length > 0) {
-    sayWithStepOnce(projectDir, `${[...new Set(unreached)].join(", ")} could not be reached just now, so the board may be behind: it shows what your last fetch brought.`);
-  }
+  const { overview, results, heldElsewhere } = teamHomeClaims(projectDir, teamHome);
   const units = scopeStamp ? [scopeStamp.unit] : resolution.batches.flat().filter((unit) => !heldElsewhere.has(unit));
   const kinds = resolution.unitKinds;
   const rhythm = effectiveUnitGateRhythm(projectDir, stateContent);
@@ -16777,8 +16888,7 @@ function emitTeamUnitMajorRunStage(
   const finalStage = block[block.length - 1];
   // The Units merged here, read from the audit too when this run derives no
   // progress model (a read-only probe, the route check of `unit start`).
-  const mergedHere = model?.mergedUnits ??
-    new Set([...unitMergedReceipts(projectDir, auditRows), ...unitsBuiltBeforeTeams(auditRows, finalStage?.slug ?? "")]);
+  const mergedHere = homeMergedUnits(projectDir, model, auditRows, finalStage?.slug ?? "");
   // A Unit of the home's that waits, directly or through another, on a Unit a
   // team still builds is not started here yet.
   const dependencies = heldElsewhere.size > 0 ? unitDependencies(projectDir) : new Map<string, string[]>();
@@ -16959,34 +17069,7 @@ function emitTeamUnitMajorRunStage(
     }
   }
   if ([...heldElsewhere].some((unit) => !mergedHere.has(unit))) {
-    const heldNotTaken: Array<{ unit: string; team: string }> = [];
-    const rows = unitsInPlanOrder(projectDir, resolution.batches.flat()).map((unit): UnitBoardRow => {
-      const claim = overview?.claims.get(unit);
-      const team = claim?.status === "claimed" ? claim.owner : null;
-      if (mergedHere.has(unit)) return { unit, team: team ?? "here", status: "done" };
-      if (team === null) {
-        const waits = (dependencies.get(unit) ?? []).filter((dep) => !mergedHere.has(dep));
-        return { unit, team: "here", status: waits.length > 0 ? `waits on ${waits.join(", ")}` : "built here" };
-      }
-      const payload = claim!.payload;
-      if (payload.turned_down) return { unit, team, status: `turned down in ${payload.turned_down.repo}, back with ${team}` };
-      if (payload.result) {
-        const verdicts = results.get(unit)?.verdicts ?? payload.verdicts ??
-          payload.result.repos.map((repo) => ({ repo: repo.repo, merged: false }));
-        const waiting = leadSignOffOn(stateContent) && !payload.signoff ? ", waiting for your sign-off" : "";
-        return { unit, team, status: `${mergedStatus(verdicts)}${waiting}` };
-      }
-      if (payload.by_file) {
-        const at = payload.progress?.stage ? stageLabel(findStageBySlug(payload.progress.stage), payload.progress.stage) : null;
-        return { unit, team, status: at ? `handed off by file, at ${at}` : "handed off by file" };
-      }
-      if (payload.taken_by) {
-        const early = (payload.early_on ?? []).map((dep) => dep.unit);
-        return { unit, team, status: `building${early.length > 0 ? ` early on ${early.join(", ")}` : ""}, taken by ${payload.taken_by}` };
-      }
-      heldNotTaken.push({ unit, team });
-      return { unit, team, status: `held for ${team}, not taken yet` };
-    });
+    const { rows, heldNotTaken } = unitBoardRows(projectDir, stateContent, resolution.batches.flat(), overview, results, mergedHere);
     // A team the home holds a Unit for may not reach this workspace: the lead
     // is offered once to hand the Unit to them as a file.
     const unitTool = aidlcToolInvocation("unit");
@@ -17026,17 +17109,7 @@ function emitTeamUnitMajorRunStage(
     emit(lineEndingTurn(
       renderUnitBoard(workLabel(projectDir), rows),
       allOffers,
-      "Show the board as it is. When the person says a repo turned a Unit down, run " +
-        `\`${unitTool} turned-down <unit> --repo <repo> --person-words '<their words>'\`; when they say a repo merged it ` +
-        `where the board does not see it, run \`${unitTool} merged <unit> --repo <repo> --person-words '<their words>'\`. ` +
-        `When they sign a team's result off, run \`${unitTool} sign-off <unit> --person-words '<their words>'\`; when they ` +
-        `answer a team's proposed change, run \`${unitTool} amend <unit> --input <file> --answer <approve|reject> ` +
-        "--person-words '<their words>'`. " +
-        `When they ask for their sign-off on every team's result, run \`${unitTool} lead-sign-off on\` (\`off\` to stop); ` +
-        `when they ask to free a Unit a team holds, run \`${unitTool} release <unit>\`. ` +
-        `When they ask to hand a Unit off by file, run \`${unitTool} hand-off <unit> --team <team> --person-words '<their words>'\`; ` +
-        `when they ask to take in a team's result or progress file, run \`${unitTool} take-in <file>\`. Say the notice line ` +
-        "each prints.",
+      `Show the board as it is. ${teamCommandsNote()}`,
     ));
     return;
   }
@@ -22945,6 +23018,11 @@ function handleTeamBoard(
     if (!isTeamUnitOwnership(stateContent)) {
       throw new Error("Team Construction board requires Unit Ownership: team.");
     }
+    if (homeLocation(stateContent) !== null && selectedSpace === defaultSelection.space && intentDir === defaultSelection.intent) {
+      process.stdout.write(`${teamHomeBoardText(pd, stateContent)}\n`);
+      return;
+    }
+    if (homeLocation(stateContent) !== null) refreshListedHome(pd, intentDir, selectedSpace, { now: true });
     board =
       selectedSpace === defaultSelection.space &&
           intent.dirName === defaultSelection.intent
@@ -22961,6 +23039,11 @@ function handleTeamBoard(
     stateContent = readStateFile(pd);
     if (!isTeamUnitOwnership(stateContent)) {
       throw new Error("Team Construction board requires Unit Ownership: team.");
+    }
+    // A home teams build for: its own board, as its step shows it.
+    if (homeLocation(stateContent) !== null) {
+      process.stdout.write(`${teamHomeBoardText(pd, stateContent)}\n`);
+      return;
     }
     board = buildTeamConstructionBoard(pd, stateContent, {
       readOnly: true,

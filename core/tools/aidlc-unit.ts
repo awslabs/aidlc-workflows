@@ -6138,14 +6138,16 @@ export interface ToldMerge {
   done: boolean;
 }
 
+// `readOnly` (a query such as `team-board`): the same verdicts, nothing written.
 export function checkTeamResults(
   projectDir: string,
   unreached?: string[],
   unsent?: string[],
   told?: ToldMerge[],
+  readOnly = false,
 ): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
   const pd = resolveProjectDir(projectDir);
-  return quietly(() => checkTeamResultsQuietly(pd, unreached, unsent, told));
+  return quietly(() => checkTeamResultsQuietly(pd, unreached, unsent, told, readOnly));
 }
 
 function checkTeamResultsQuietly(
@@ -6153,6 +6155,7 @@ function checkTeamResultsQuietly(
   unreached?: string[],
   unsent?: string[],
   told?: ToldMerge[],
+  readOnly = false,
 ): Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }> {
   const found = new Map<string, { team: string; verdicts: NonNullable<UnitClaimPayload["verdicts"]>; done: boolean }>();
   const identity = activeIdentity(pd);
@@ -6162,7 +6165,7 @@ function checkTeamResultsQuietly(
     // Done on its claim is the home's own word, wherever it was recorded: a
     // fresh clone or another machine of the home records it here too.
     if (claim.payload.done) {
-      recordUnitDone(pd, claim, claim.payload.verdicts ?? []);
+      if (!readOnly) recordUnitDone(pd, claim, claim.payload.verdicts ?? []);
       found.set(unit, { team: claim.owner, verdicts: claim.payload.verdicts ?? [], done: true });
       continue;
     }
@@ -6200,8 +6203,8 @@ function checkTeamResultsQuietly(
     // board that sees no new merge leaves the claim as the team sent it.
     const newlyMerged = verdicts.filter((verdict) => verdict.merged &&
       !(live.payload.verdicts ?? []).some((before) => before.repo === verdict.repo && before.merged)).map((verdict) => verdict.repo);
-    if (done) recordUnitDone(pd, live, verdicts);
-    if (newlyMerged.length > 0 || done) {
+    if (done && !readOnly) recordUnitDone(pd, live, verdicts);
+    if (!readOnly && (newlyMerged.length > 0 || done)) {
       const payload: UnitClaimPayload = { ...live.payload, predecessor_oid: live.oid, verdicts, ...(done ? { done: true as const } : {}) };
       const commit = createClaimCommit(pd, live.oid, payload);
       // Unwritten, the verdict stays here and the next step writes it again.
