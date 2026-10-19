@@ -23,6 +23,7 @@ import {
   cleanupTeamBuild,
   cloneOf,
   codeGenerated,
+  codeHost,
   GIT_ENV,
   git,
   homeState,
@@ -132,7 +133,10 @@ describe("a team member's clone of the home's workspace", () => {
     expect(run(UTILITY, ["space", "data"], dana).status).toBe(0);
     const waiting = next(dana);
     expect(waiting.kind, JSON.stringify(waiting)).toBe("notice");
-    expect(String(waiting.message)).toContain("Waiting: reporting (for data; on refunds). Nothing is ready to take yet.");
+    expect(waiting.message).toBe(
+      "fixture is built by teams, one Unit each. Waiting: reporting (for data; on refunds). Being built: refunds " +
+        "(by alice for payments). Held for other teams: checkout-ui (for web). Nothing is ready to take yet.",
+    );
     codeGenerated(alice, record);
     expect(run(UNIT, ["push"], alice).status).toBe(0);
     git(home.dir, ["fetch", "-q", "origin"]);
@@ -230,6 +234,90 @@ describe("a Unit someone holds is not taken again", () => {
     const waiting = take(cloneOf(home.remote, "carol"), "reporting");
     expect(waiting.status).not.toBe(0);
     expect(waiting.out).toContain("reporting waits on refunds, which is not done at the home yet. It opens once it is done.");
+  });
+});
+
+describe("who takes what", () => {
+  test("a team the lead named with a capital letter is one team: its second Unit is offered to it and taken", () => {
+    const home = homeWithTeams(["refunds=Payments", "checkout-ui=Payments"]);
+    expect(take(cloneOf(home.remote, "alice"), "refunds").status).toBe(0);
+    const bob = cloneOf(home.remote, "bob");
+    expect(run(UTILITY, ["space-create", "payments"], bob).status).toBe(0);
+    expect(run(UTILITY, ["space", "payments"], bob).status).toBe(0);
+    const ask = next(bob);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-take");
+    expect((ask.choices as Array<{ label: string }>).map((choice) => choice.label)).toContain("Start checkout-ui");
+    const took = take(bob, "checkout-ui");
+    expect(took.status, took.out).toBe(0);
+    expect(took.json?.space).toBe("payments");
+  });
+
+  test("an open Unit in a fresh clone is offered for each team the lead named, and its build is that team's", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    const carol = cloneOf(home.remote, "carol");
+    const ask = next(carol);
+    const choices = ask.choices as Array<{ label: string; command: string }>;
+    expect(choices.map((choice) => choice.label)).toEqual([
+      "Start refunds",
+      "Start checkout-ui for payments",
+      "Start checkout-ui for another team",
+      "Carry on fixture here, as its home",
+    ]);
+    expect(choices[1].command).toEndWith(`aidlc-unit.ts take checkout-ui --home ${HOME} --team payments`);
+    expect(choices[2].command).toEndWith(`aidlc-unit.ts take checkout-ui --home ${HOME} --team '<their team>'`);
+    const unnamed = take(carol, "checkout-ui");
+    expect(unnamed.status).not.toBe(0);
+    expect(unnamed.out).toContain("Which team builds checkout-ui? Ask the person, then run this again with --team '<their team>'.");
+    const took = take(carol, "checkout-ui", ["--team", "payments"]);
+    expect(took.status, took.out).toBe(0);
+    expect(took.json?.space).toBe("payments");
+  });
+
+  test("every Unit taken or held for other teams: the clone hears where each is, and none of the home's work is offered", () => {
+    const dependencies = "# Unit dependencies\n\n```yaml\nunits:\n  - name: refunds\n    depends_on: []\n" +
+      "  - name: checkout-ui\n    depends_on: []\n```\n";
+    const home = homeWithTeams(["refunds=payments", "checkout-ui=web"], dependencies);
+    expect(take(cloneOf(home.remote, "alice"), "refunds").status).toBe(0);
+    const dana = cloneOf(home.remote, "dana");
+    expect(run(UTILITY, ["space-create", "data"], dana).status).toBe(0);
+    expect(run(UTILITY, ["space", "data"], dana).status).toBe(0);
+    const step = next(dana);
+    expect(step.kind, JSON.stringify(step)).toBe("notice");
+    expect(step.message).toBe(
+      "fixture is built by teams, one Unit each. Being built: refunds (by alice for payments). " +
+        "Held for other teams: checkout-ui (for web). Nothing is ready to take yet.",
+    );
+  });
+
+  test("a Unit the home started is not offered, and taking it says it is the home's, with the way on", () => {
+    const home = homeWithTeams(["refunds=payments"]);
+    const step = next(home.dir);
+    expect(step.unit, JSON.stringify(step)).toBe("checkout-ui");
+    const started = run(STATE, ["unit", "start", "--stage", "functional-design", "--unit", "checkout-ui"], home.dir);
+    expect(started.status, started.out).toBe(0);
+    commitAll(home.dir, "checkout-ui started");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const carol = cloneOf(home.remote, "carol");
+    const ask = next(carol);
+    expect(String(ask.question)).toContain("Being built: checkout-ui (at the home).");
+    expect((ask.choices as Array<{ label: string }>).map((choice) => choice.label).filter((label) => label.includes("checkout-ui"))).toEqual([]);
+    const refused = take(carol, "checkout-ui", ["--team", "web"]);
+    expect(refused.status).not.toBe(0);
+    expect(refused.out).toContain("checkout-ui is being built at the home, so it is not open to take. Run `");
+  });
+
+  test("a teammate who takes before cloning the code repos: the build records the home's repos", () => {
+    const hosts = { "checkout-api": codeHost("checkout-api"), billing: codeHost("billing") };
+    const home = makeHome({ repos: hosts });
+    expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    commitAll(home.dir, "teams");
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const alice = cloneOf(home.remote, "alice");
+    const took = take(alice, "refunds");
+    expect(took.status, took.out).toBe(0);
+    const row = readIntentRegistry(alice, "payments").find((entry) => entry.dirName === took.json?.record);
+    expect(row?.repos).toEqual(["billing", "checkout-api"]);
   });
 });
 

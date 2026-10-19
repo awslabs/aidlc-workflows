@@ -24,6 +24,7 @@ import {
   loadStageGraphAll,
   parseBoltDag,
   readStateFile,
+  slugify,
   unitDependencyPath,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
@@ -104,24 +105,6 @@ export function unitsAssignedSinceTeams(rows: readonly AuditShardEvent[]): boole
   return ordered.slice(teamsAt + 1).some((row) => row.event === "UNITS_ASSIGNED");
 }
 
-// Which team the lead named for each Unit at the home, as the UNITS_ASSIGNED
-// rows since teams were chosen record it (a later row wins for its Units).
-export function unitsAssignedAtHome(rows: readonly AuditShardEvent[]): Map<string, string> {
-  const named = new Map<string, string>();
-  const ordered = [...rows].sort((a, b) => (a.timestamp < b.timestamp ? -1 : a.timestamp > b.timestamp ? 1 : 0));
-  let teamsAt = -1;
-  ordered.forEach((row, at) => {
-    if (row.event === "UNIT_OWNERSHIP_SET" && auditBlockField(row.block, "Mode") === "team") teamsAt = at;
-  });
-  for (const row of ordered.slice(teamsAt + 1).filter((entry) => entry.event === "UNITS_ASSIGNED")) {
-    for (const pair of (auditBlockField(row.block, "Assigned") ?? "").split(",")) {
-      const [unit, team] = pair.split("=").map((part) => part.trim());
-      if (unit && team) named.set(unit, team);
-    }
-  }
-  return named;
-}
-
 // The line for likely repos the work does not record: said once, kept as
 // written. Null when every one names a recorded repo, or the work records none
 // (its likely folders are inside the one repo).
@@ -137,6 +120,11 @@ export function unknownLikelyReposLine(projectDir: string): string | null {
   if (unknown.length === 0) return null;
   return `The Unit plan names ${unknown.join(", ")}, which is not one of this work's repos (${recorded.join(", ")}). ` +
     "It stays as written, as a guide.";
+}
+
+// The space a team's label names: "Payments" and "payments" are one team.
+export function teamSpaceOf(label: string): string {
+  return slugify(label);
 }
 
 // --- A Unit's build -----------------------------------------------------------

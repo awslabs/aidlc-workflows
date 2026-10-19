@@ -684,6 +684,7 @@ import {
   homeLocation,
   inputName,
   soloUnitsProgress,
+  teamSpaceOf,
   parseHandFile,
   unitLikelyReposFrom,
   workspaceHomeLocation,
@@ -692,7 +693,6 @@ import {
   renderUnitBoard,
   type UnitBoardRow,
   UNIT_PUSH_FIELD,
-  unitsAssignedAtHome,
   isHomesCopiedWork,
   unitBuildOf,
   unitDependencies,
@@ -8430,27 +8430,51 @@ function unitTakeLook(
         continue;
       }
       if (space === active && !isHomesCopiedWork(projectDir, state)) homeHere.push(intent);
-      // Who the lead named, for a Unit whose claim git has not brought here yet.
-      const named = unitsAssignedAtHome(readAuditShardEvents(projectDir, intent.dirName, space));
       const take = `${unitTool} take %s --home ${shellArg(intent.dirName)}` +
         (space === DEFAULT_SPACE ? "" : ` --home-space ${shellArg(space)}`);
       const likely = unitLikelyRepos(projectDir, intent.dirName, space);
+      // A Unit no team holds that the home started is the home's.
+      const startedAtHome = soloUnitsProgress(readAuditShardEvents(projectDir, intent.dirName, space), "").started;
+      // The teams the lead named: an open Unit is started for one of them, or another the person names.
+      const named = [...new Set([...overview.claims.values()].filter((claim) => claim.status === "claimed").map((claim) => claim.owner))];
+      const forTeams = (unit: string, holder: string | null, label: string, detail: string, extra = ""): AskChoice[] => {
+        const command = (forTeam: string) => `${take.replace("%s", shellArg(unit))}${extra} --team ${forTeam}`;
+        if (holder !== null) return [{ label, detail, command: `${take.replace("%s", shellArg(unit))}${extra}` }];
+        if (team !== null) return [{ label, detail, command: command(shellArg(team)) }];
+        return [
+          ...named.map((owner) => ({ label: `${label} for ${owner}`, detail, command: command(shellArg(owner)) })),
+          { label: named.length > 0 ? `${label} for another team` : label, detail: `${detail} I'll ask which team builds it.`, command: command("'<their team>'") },
+        ];
+      };
       // The walking skeleton, while the home builds it, is the home's: every
       // other Unit waits on it.
       const skeleton = teamSkeletonOn(state) && !opening.completed.has(opening.skeleton) ? opening.skeleton : null;
       const ready: string[] = [];
       const waiting: string[] = [];
+      const building: string[] = [];
+      const others: string[] = [];
       for (const unit of unitsInPlanOrder(projectDir, opening.units)) {
         if (opening.completed.has(unit) || unit === skeleton) continue;
         const built = findUnitBuild(projectDir, intent.uuid, unit);
         const claim = overview.claims.get(unit);
-        const holder = claim?.status === "claimed" ? claim.owner : claim === undefined ? named.get(unit) ?? null : null;
+        // The claim is the one record of who holds a Unit.
+        const holder = claim?.status === "claimed" ? claim.owner : null;
         if (built !== null) {
           choices.push({ label: `Carry on ${unit}`, detail: `The ${built.space} team's build of it, here.`, command: take.replace("%s", shellArg(unit)) });
           continue;
         }
-        if (claim?.payload.taken_by !== undefined) continue;
-        if (team !== null && holder !== null && holder !== team) continue;
+        if (claim?.payload.taken_by !== undefined) {
+          building.push(`${unit} (by ${claim.payload.taken_by} for ${claim.owner})`);
+          continue;
+        }
+        if (holder === null && startedAtHome.has(unit)) {
+          building.push(`${unit} (at the home)`);
+          continue;
+        }
+        if (team !== null && holder !== null && teamSpaceOf(holder) !== team) {
+          others.push(`${unit} (for ${holder})`);
+          continue;
+        }
         const blockers = [...new Set((opening.blockers.get(unit) ?? [])
           .map((dep) => (dep === "walking-skeleton" ? skeleton ?? dep : dep))
           .filter((dep) => overview.claims.get(dep)?.payload.done !== true))];
@@ -8458,30 +8482,35 @@ function unitTakeLook(
           waiting.push(`${unit} (${holder !== null ? `for ${holder}; ` : ""}on ${blockers.join(", ")})`);
           // Every Unit it waits on is pushed: it can start early on their branches.
           if (blockers.every((dep) => overview.claims.get(dep)?.payload.result !== undefined)) {
-            choices.push({
-              label: `Start ${unit} early`,
-              detail: `On the pushed branches of ${blockers.join(" and ")}; ${blockers.length === 1 ? "it" : "they"} may still change before merging.`,
-              command: take.replace("%s", shellArg(unit)) + " --early" + (holder === null && team !== null ? ` --team ${shellArg(team)}` : ""),
-            });
+            choices.push(...forTeams(
+              unit,
+              holder,
+              `Start ${unit} early`,
+              `On the pushed branches of ${blockers.join(" and ")}; ${blockers.length === 1 ? "it" : "they"} may still change before merging.`,
+              " --early",
+            ));
           }
           continue;
         }
         const notes = [holder !== null ? `for ${holder}` : "open", ...(likely.has(unit) ? [`likely ${likely.get(unit)!.join(", ")}`] : [])];
         ready.push(`${unit} (${notes.join("; ")})`);
-        choices.push({
-          label: `Start ${unit}`,
-          detail: holder !== null ? `For the ${holder} team.` : `Open: for ${team !== null ? `the ${team} team` : "your team"}.`,
-          command: take.replace("%s", shellArg(unit)) + (holder === null && team !== null ? ` --team ${shellArg(team)}` : ""),
-        });
+        choices.push(...forTeams(
+          unit,
+          holder,
+          `Start ${unit}`,
+          holder !== null ? `For the ${holder} team.` : `Open: for ${team !== null ? `the ${team} team` : "a team"}.`,
+        ));
       }
       const elsewhere = isHomesCopiedWork(projectDir, state) ? ` (its home is ${homeLocation(state)})` : "";
       const label = intentDisplayLabel(intent);
-      if (ready.length > 0 || waiting.length > 0) {
+      if (ready.length > 0 || waiting.length > 0 || building.length > 0 || others.length > 0) {
         sentences.push(
           `${label}${elsewhere} is built by teams, one Unit each.` +
             (skeleton !== null ? ` The walking skeleton, ${skeleton}, is built at the home first.` : "") +
             (ready.length > 0 ? ` Ready to take: ${ready.join(", ")}.` : "") +
-            (waiting.length > 0 ? ` Waiting: ${waiting.join(", ")}.` : ""),
+            (waiting.length > 0 ? ` Waiting: ${waiting.join(", ")}.` : "") +
+            (building.length > 0 ? ` Being built: ${building.join(", ")}.` : "") +
+            (others.length > 0 ? ` Held for other teams: ${others.join(", ")}.` : ""),
         );
       }
     }

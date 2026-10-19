@@ -82,6 +82,7 @@ import {
   readUnitGateRhythm,
   readUnitScopeStamp,
   readAnswerTextFile,
+  parseAuditShardEvents,
   parseReviewRecordBytes,
   personAskedSinceGate,
   pairedReviewRecordForCompletion,
@@ -152,6 +153,7 @@ import {
   type RepoResult,
   sameGitAddress,
   soloUnitsProgress,
+  teamSpaceOf,
   textFingerprint,
   UNIT_BUILD_FIELD,
   UNIT_PUSH_FIELD,
@@ -5081,20 +5083,24 @@ function homeInputPaths(stages: string[]): string[] {
   return [...paths].sort();
 }
 
-// The home's approvals of the stages that produced the copy, as data: when
-// each was approved at the home. Never this build's own approval.
-function homeApprovals(projectDir: string, home: HomeWork, oid: string, slugs: Set<string>): string[] {
+// The home's audit as its commit has it.
+function homeAuditAt(projectDir: string, home: HomeWork, oid: string): AuditShardEvent[] {
   const listed = git(projectDir, ["ls-tree", "--name-only", `${oid}:${home.recordPrefix}/audit`]);
   if (!listed.ok) return [];
-  const approvals = new Map<string, string>();
-  for (const shard of listed.stdout.split(/\r?\n/).filter((name) => name.endsWith(".md"))) {
+  return listed.stdout.split(/\r?\n/).filter((name) => name.endsWith(".md")).flatMap((shard, index) => {
     const text = git(projectDir, ["show", `${oid}:${home.recordPrefix}/audit/${shard}`, "--"]);
-    if (!text.ok) continue;
-    for (const block of text.stdout.replace(/\r\n/g, "\n").split(/\n---\n/)) {
-      if (auditBlockField(block, "Event") !== "GATE_APPROVED") continue;
-      const stage = auditBlockField(block, "Stage");
-      if (stage && slugs.has(stage)) approvals.set(stage, auditBlockField(block, "Timestamp") ?? "");
-    }
+    return text.ok ? parseAuditShardEvents(text.stdout, shard, index) : [];
+  });
+}
+
+// The home's approvals of the stages that produced the copy, as data: when
+// each was approved at the home. Never this build's own approval.
+function homeApprovals(rows: readonly AuditShardEvent[], slugs: Set<string>): string[] {
+  const approvals = new Map<string, string>();
+  for (const row of rows) {
+    if (row.event !== "GATE_APPROVED") continue;
+    const stage = auditBlockField(row.block, "Stage");
+    if (stage && slugs.has(stage)) approvals.set(stage, row.timestamp);
   }
   return [...approvals].sort(([a], [b]) => a.localeCompare(b)).map(([stage, when]) => `${stage} approved at the home ${when}`.trim());
 }
@@ -5115,7 +5121,7 @@ function runEngineUtility(projectDir: string, args: string[]): GitResult {
 // home's planned per-Unit stages from a copy of what the Unit was approved with.
 // What a build needs to know of its home, whether it read the home by git or
 // from a hand-off file.
-type HomeRef = Pick<HomeWork, "location" | "uuid" | "space" | "dirName" | "label">;
+type HomeRef = Pick<HomeWork, "location" | "uuid" | "space" | "dirName" | "label" | "repos">;
 
 // Where a build's copy comes from: the home's commit, or a hand-off file.
 interface BuildSource {
@@ -5135,7 +5141,7 @@ function createUnitBuild(
   // A build taken from solo work lives in the home's own space.
   inSpace?: string,
 ): { space: string; dirName: string } {
-  const space = inSpace ?? slugify(team);
+  const space = inSpace ?? teamSpaceOf(team);
   if (!listSpacesHere(projectDir).includes(space)) {
     const created = runEngineUtility(projectDir, isCompiledExecutable() ? ["space", "create", space] : ["space-create", space]);
     if (!created.ok) fail(`The ${team} team's space could not be made: ${(created.stderr || created.stdout).trim()}`);
@@ -5158,6 +5164,8 @@ function createUnitBuild(
     "--space", space,
     ...(skip.length > 0 ? ["--skip", skip.join(",")] : []),
     ...(add.length > 0 ? ["--add", add.join(",")] : []),
+    // The home's repos, cloned here or not yet: the Unit's work goes where the home's plan says.
+    ...(home.repos.length > 0 ? ["--repos", home.repos.join(",")] : []),
     "--keep-entry-in-record",
   ]);
   if (!created.ok) fail(`${unit}'s build could not be started: ${(created.stderr || created.stdout).trim()}`);
@@ -5430,11 +5438,16 @@ function takeUnit(args: string[], projectDir?: string): void {
     if (current.payload.taken_by !== undefined) {
       fail(`${unit} is held by the ${current.owner} team (${current.payload.taken_by} took it).`);
     }
-    if (activeTeam !== null && flags.team === undefined && current.owner !== activeTeam) {
+    if (activeTeam !== null && flags.team === undefined && teamSpaceOf(current.owner) !== activeTeam) {
       fail(`${unit} is held by the ${current.owner} team.${openUnits.length > 0 ? ` Open: ${openUnits.join(", ")}.` : ""}`);
     }
   }
   if (opening.completed.has(unit)) fail(`${unit} is already done at the home.`);
+  const homeRows = homeAuditAt(pd, home, integration.oid);
+  // A Unit no team holds that the home started is the home's.
+  if (!home.solo && current?.status !== "claimed" && soloUnitsProgress(homeRows, "").started.has(unit)) {
+    fail(`${unit} is being built at the home, so it is not open to take. Run \`${aidlcToolInvocation("orchestrate")} next\` for what is.`);
+  }
   // A Unit the home marked done on its claim counts as done, pushed state or not.
   const depClaims = new Map<string, UnitClaimView | null>();
   const blockers = (opening.blockers.get(unit) ?? []).filter((dep) => {
@@ -5464,6 +5477,10 @@ function takeUnit(args: string[], projectDir?: string): void {
       })),
     }))
     : undefined;
+  // An open Unit is taken for a team: the one the person names, or the space they are in.
+  if (!home.solo && current?.status !== "claimed" && flags.team === undefined && activeTeam === null) {
+    fail(`Which team builds ${unit}? Ask the person, then run this again with --team '<their team>'.`);
+  }
   const team = current?.status === "claimed" ? current.owner : flags.team ?? activeTeam ?? me;
   if (/[\r\n|]/.test(team)) fail("Team labels cannot contain pipes or newlines.");
   const generation = current?.status === "claimed"
@@ -5512,7 +5529,7 @@ function takeUnit(args: string[], projectDir?: string): void {
       const shown = git(pd, ["show", `${integration.oid}:${home.recordPrefix}/${rel}`, "--"]);
       return shown.ok ? shown.stdout : null;
     },
-    approvals: (produced) => homeApprovals(pd, home, integration.oid, produced),
+    approvals: (produced) => homeApprovals(homeRows, produced),
   }, home.solo ? home.space : undefined);
   setActiveSpaceCursor(pd, build.space);
   // Early: the Unit's branch starts at each dependency's pushed head, checked
@@ -6423,6 +6440,7 @@ function takeFromFile(pd: string, path: string): void {
     space: fields["Home Record"]?.slice(0, at) ?? DEFAULT_SPACE,
     dirName: fields["Home Record"]?.slice(at + 1) ?? "",
     label: fields["Home Label"] ?? unit,
+    repos: (fields.Repos ?? "").split(",").map((repo) => repo.trim()).filter(Boolean),
   };
   const existing = findUnitBuild(pd, home.uuid, unit);
   if (existing !== null) {
@@ -6444,10 +6462,9 @@ function takeFromFile(pd: string, path: string): void {
     writeStateFile(pd, setRuntimeField(readStateFile(pd, build.dirName, build.space), "Home Result", "by file"), build.dirName, build.space);
   });
   setActiveSpaceCursor(pd, build.space);
-  const repos = (fields.Repos ?? "").split(",").map((repo) => repo.trim()).filter(Boolean);
   const likely = unitLikelyRepos(pd, build.dirName, build.space).get(unit) ?? [];
   const missing = [...new Set(likely.map((repo) => repo.split("/")[0]))]
-    .filter((repo) => repos.includes(repo) && !isGitRepoDir(repoDir(pd, repo)));
+    .filter((repo) => home.repos.includes(repo) && !isGitRepoDir(repoDir(pd, repo)));
   console.log(JSON.stringify({
     taken: true,
     unit,

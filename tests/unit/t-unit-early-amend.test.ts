@@ -60,7 +60,9 @@ describe("starting early", () => {
     const { dana, hosts } = refundsPushed();
     const ask = next(dana);
     const labels = (ask.choices as Array<{ label: string; command: string }>).map((choice) => choice.label);
-    expect(labels, JSON.stringify(ask)).toContain("Start reporting early");
+    // reporting is open: started early for a team the lead named, or another.
+    expect(labels, JSON.stringify(ask)).toContain("Start reporting early for payments");
+    expect(labels).toContain("Start reporting early for another team");
     const took = run(UNIT, ["take", "reporting", "--home", HOME_RECORD, "--early", "--team", "data"], dana);
     expect(took.status, took.out).toBe(0);
     expect(String(took.json?.notice)).toContain(
