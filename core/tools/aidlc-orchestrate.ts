@@ -8683,11 +8683,11 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
   if (build === null || stateContent === null) return null;
   const push = getField(stateContent, UNIT_PUSH_FIELD)?.trim();
   const unit = build.unit;
-  if (push === "pushed" && !redoneSincePush(projectDir, unit)) return null;
   if (push === "later") {
     sayWithStepOnce(projectDir, `${unit} is built and approved, and not pushed yet. Do you want me to push it now?`);
     return null;
   }
+  if (!unitPushToOffer(projectDir, stateContent)) return null;
   const unitTool = aidlcToolInvocation("unit");
   if (push === "unsent") {
     return {
@@ -8737,6 +8737,14 @@ function unitPushAsk(projectDir: string, stateContent: string | null): AskDirect
       { label: "Not now", detail: "Nothing is pushed until you want it to be.", command: `${unitTool} push --later` },
     ],
   };
+}
+
+// A Unit's build whose end still has its push to offer: not pushed and not put
+// off, a result the home did not take, or pushed and built again since.
+function unitPushToOffer(projectDir: string, stateContent: string): boolean {
+  const build = unitBuildOf(stateContent);
+  const push = getField(stateContent, UNIT_PUSH_FIELD)?.trim();
+  return build !== null && push !== "later" && (push !== "pushed" || redoneSincePush(projectDir, build.unit));
 }
 
 // Code Generation approved again since the build's last push (the redo after
@@ -21480,9 +21488,10 @@ function stageOfPlan(slug: string, scope: string, stateContent: string | null, w
   return at < 0 ? "" : ` (stage ${at + 1} of ${planned.length})`;
 }
 
+// A Unit's build that finished its stages still has its push to offer.
 function workflowContinues(pd: string): { workflow_continues?: true } {
   const after = loadStateFileIfPresent(pd);
-  return after !== null && getField(after, "Status")?.trim() !== "Completed"
+  return after !== null && (getField(after, "Status")?.trim() !== "Completed" || unitPushToOffer(pd, after))
     ? { workflow_continues: true }
     : {};
 }

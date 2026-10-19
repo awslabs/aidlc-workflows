@@ -10,10 +10,12 @@
 // main; a team by file starts from the file,
 // sends progress (taken in by its path) and its result (by the command); the
 // home answers two proposals; no step met tells the person what to type
-// (tellsWhatToType). Then each step that waits on an answer the person
+// (tellsWhatToType), and every step is a kind each harness's skill acts on
+// in a fresh chat (kindsEverySkillHandles). Then each step that waits on an answer the person
 // did not give yet, and each way on from a push or a take that could not go as
 // it was (a push their own change is in the way of waits for it to be out of
-// the way): none hands them the same thing again.
+// the way; the team's approval of its last stage goes on to the push): none
+// hands them the same thing again. A print with no offers reads as before.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -21,7 +23,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
-import { AIDLC_SRC, cleanupTestProject, createTestProject, removeWorkspaceRecord, seedAidlcMemory } from "../harness/fixtures.ts";
+import { AIDLC_SRC, cleanupTestProject, createTestProject, REPO_ROOT, removeWorkspaceRecord, seedAidlcMemory } from "../harness/fixtures.ts";
 import {
   cleanupTeamBuild,
   cloneCode,
@@ -48,7 +50,10 @@ import {
   tempDir,
   UNIT,
   UTILITY,
+  GIT_ENV,
 } from "../harness/team-build.ts";
+import { hostFor } from "../harness/scope-hosts.ts";
+import { AgentStandIn, type Directive, PersonScript } from "../harness/scope-run.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTeamBuild);
@@ -337,6 +342,34 @@ describe("a step that waits on the person, and every way on the round added, nev
     expect(unsent.ask_type, JSON.stringify(unsent)).toBe("unit-push");
     writeFileSync(hostHook, "#!/bin/sh\nexit 0\n");
     movesOn(alice, ENV, unsent, choice(unsent, "Send it again"));
+  });
+
+  test("the team approves its build's last stage: the report says the workflow goes on, and the next step offers the push", () => {
+    const { alice } = refundsTaken();
+    cpSync(join(REPO_ROOT, "dist", "claude"), alice, { recursive: true, force: false, errorOnExist: false });
+    const host = hostFor("claude", alice, GIT_ENV);
+    const person = new PersonScript(host);
+    const agent = new AgentStandIn(host, person, {
+      units: ["refunds"],
+      codeRepo: () => [{ repo: "billing" }],
+      until: (d: Directive) => d.kind === "ask" && d.ask_type === "unit-push",
+    });
+    // What each report answered, as the agent reads it.
+    const reports: Array<{ stage: string; out: Record<string, unknown> }> = [];
+    const report = agent.report.bind(agent);
+    agent.report = (stage: string, ...args: string[]) => {
+      const out = report(stage, ...args);
+      reports.push({ stage, out });
+      return out;
+    };
+    host.sessionStart("startup");
+    person.say("/aidlc");
+    const end = agent.drive(agent.next());
+    expect(end.ask_type, JSON.stringify(end)).toBe("unit-push");
+    const approved = reports.filter((entry) => entry.stage === "code-generation" && entry.out.kind === "done").at(-1);
+    expect(approved?.out.workflow_continues, JSON.stringify(reports.map((entry) => [entry.stage, entry.out.kind, entry.out.workflow_continues ?? null])))
+      .toBe(true);
+    readsAsOffers(end);
   });
 
   test("the push again with their own change in the way of the Unit's branch: refused in git's words, not offered again until it is out of the way, then it goes", () => {
