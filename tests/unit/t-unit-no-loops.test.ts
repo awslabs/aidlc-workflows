@@ -569,6 +569,11 @@ describe("a step that waits on the person, and every way on the round added, nev
     const desk = withTools(cloneOf(home.remote, "lead"));
     expect((next(desk, chat).offers as Offer[] | undefined)?.length).toBe(1);
     expect(next(desk, chat).offers).toBeUndefined();
+    // A second chat on that clone hears it once too, and switching between them offers it to neither again.
+    const other = { ...ENV, AIDLC_SESSION_OVERRIDE: "lead-desk-2" };
+    expect((next(desk, other).offers as Offer[] | undefined)?.length).toBe(1);
+    expect(next(desk, chat).offers).toBeUndefined();
+    expect(next(desk, other).offers).toBeUndefined();
     // A teammate's clone of the same workspace hears where things stand, and is offered nothing it should not take.
     const bob = withTools(cloneOf(home.remote, "bob"));
     expect(next(bob, ENV).offers).toBeUndefined();

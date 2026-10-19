@@ -5178,7 +5178,7 @@ function offersOnce(projectDir: string, offers: StepOffer[]): StepOffer[] {
   if (fresh.length > 0 && !isReadOnlyEngineProbe()) {
     try {
       mkdirSync(dirname(path), { recursive: true });
-      writeFileAtomic(path, `${JSON.stringify({ [chat]: [...(put[chat] ?? []), ...fresh.map((offer) => offer.question)] })}\n`);
+      writeFileAtomic(path, `${JSON.stringify({ ...put, [chat]: [...(put[chat] ?? []), ...fresh.map((offer) => offer.question)] })}\n`);
     } catch {
       // Unnoted, the offer comes once more.
     }
