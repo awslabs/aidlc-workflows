@@ -1428,18 +1428,15 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
 
   // A person who types the same words again while the turn is still closing
   // lands in the same Codex turn: Codex 0.162.1 sends that UserPromptSubmit,
-  // and the Stop after it, with stdin byte-identical to the first. Ageing the
-  // slot's response stands in for the seconds between the two replies.
-  function ageResponses(dir: string, byMs = 10_000): void {
+  // and the Stop after it, with stdin byte-identical to the first. A slot with
+  // its response taken away stands in for the first delivery still running,
+  // which is when Codex's own duplicate arrives.
+  function holdResponses(dir: string): void {
     const cache = join(sessionsDir(dir), "codex-dedupe");
-    const when = new Date(Date.now() - byMs);
-    for (const slot of readdirSync(cache)) {
-      const response = join(cache, slot, "response.json");
-      if (existsSync(response)) utimesSync(response, when, when);
-    }
+    for (const slot of readdirSync(cache)) rmSync(join(cache, slot, "response.json"), { force: true });
   }
 
-  test("9c: the same words typed again in one Codex turn record a second HUMAN_TURN; the duplicate delivery still records none", () => {
+  test("9c: the same words typed again in one Codex turn record a second HUMAN_TURN; a duplicate of a running delivery records none", () => {
     const dir = scratchProject(true);
     try {
       const payload = {
@@ -1450,15 +1447,10 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
         prompt: "1",
       };
       expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
-      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
       expect(humanTurnCount(dir)).toBe(1);
-      ageResponses(dir);
       expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
       expect(humanTurnCount(dir)).toBe(2);
-      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
-      expect(humanTurnCount(dir)).toBe(2);
-      // A response dated in the future (the clock stepped back) is not old.
-      ageResponses(dir, -60_000);
+      holdResponses(dir);
       expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
       expect(humanTurnCount(dir)).toBe(2);
     } finally {
@@ -1478,16 +1470,14 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       const picker = structuredSelectionPayload(dir, JSON.stringify({
         answers: { decision: { answers: ["Approve"] } },
       }));
+      const stopRuns = () => recordedRuns(capture).filter((run) => run.hook === "aidlc-continue-workflow.ts");
       runAdapter(dir, "continue-workflow", stop);
       runAdapter(dir, "continue-workflow", stop);
+      expect(stopRuns()).toHaveLength(2);
+      runAdapter(dir, "guard-tool-call", call);
       runAdapter(dir, "guard-tool-call", call);
       expect(runAdapter(dir, "record-human-turn", picker).code).toBe(0);
-      expect(recordedRuns(capture).filter((run) => run.hook === "aidlc-continue-workflow.ts")).toHaveLength(1);
-      ageResponses(dir);
-      runAdapter(dir, "continue-workflow", stop);
-      runAdapter(dir, "guard-tool-call", call);
       expect(runAdapter(dir, "record-human-turn", picker).code).toBe(0);
-      expect(recordedRuns(capture).filter((run) => run.hook === "aidlc-continue-workflow.ts")).toHaveLength(2);
       expect(recordedRuns(capture).filter((run) => run.hook !== "aidlc-continue-workflow.ts")).toHaveLength(GUARD_HOOKS.length);
       expect(humanTurnCount(dir)).toBe(1);
     } finally {
