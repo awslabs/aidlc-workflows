@@ -14,6 +14,10 @@
 //       refused with that way past; after it both are admitted;
 //   (f) a call to one of the person's MCP servers runs, whatever the state.
 //
+// And before any `next`, a build step the chat compaction set aside: under
+// Guard Policy off its own work goes on in every shape; under strict and
+// relaxed each refusal names a way past that leads back to the build.
+//
 // The states and the seven shapes live in tests/harness/code-generation-states.ts.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
@@ -21,6 +25,7 @@ import { cleanupTestProject } from "../harness/fixtures.ts";
 import { refusalSignature } from "../harness/scope-run.ts";
 import {
   answer,
+  approvedBuildSetAside,
   auditEvents,
   type BuiltState,
   cleanupWorktreeFixtures,
@@ -222,6 +227,44 @@ describe("the Code Generation no-dead-end sweep", () => {
       expect(problems, summary).toEqual([]);
     });
   }
+});
+
+describe("a build step the chat compaction set aside, before any next", () => {
+  const doors = (proj: string): ToolCall[] => [
+    { tool: "Bash", command: "bun .claude/tools/aidlc-testing-posture.ts brief --stage-level" },
+    { tool: "Task", agent: DEVELOPER, prompt: developerBrief(proj) },
+    { tool: "Write", path: join(proj, "src", "slugify.ts") },
+    { tool: "Bash", command: "echo built > src/slugify.ts" },
+  ];
+
+  test("Guard Policy off: every shape admits the build's brief, handoff, writes and shell", async () => {
+    const state = approvedBuildSetAside("off");
+    created.push(state.proj);
+    const problems: string[] = [];
+    for (const shape of SHAPES) {
+      shape.install(state.proj);
+      for (const door of doors(state.proj)) {
+        const verdict = await shape.call(state.proj, state.session, door);
+        if (verdict.code !== 0) problems.push(`[${shape.name}] refused: ${describeCall(door)} -> ${verdict.said}`);
+      }
+    }
+    expect(problems).toEqual([]);
+  });
+
+  test.each(["strict", "relaxed"] as const)("%s: each refusal names a way past that leads back to the build", async (policy) => {
+    const state = approvedBuildSetAside(policy);
+    created.push(state.proj);
+    const problems: string[] = [];
+    for (const shape of SHAPES) {
+      shape.install(state.proj);
+      for (const door of doors(state.proj).slice(1)) {
+        const verdict = await shape.call(state.proj, state.session, door);
+        if (verdict.code === 0) continue;
+        await wayPastIsAdmitted(state, shape, door, verdict, problems, true);
+      }
+    }
+    expect(problems).toEqual([]);
+  });
 });
 
 // The person's lookup while the plan is written ran into a refusal on Kiro IDE;

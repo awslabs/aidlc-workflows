@@ -3099,7 +3099,7 @@ export function codeGenerationExecutionAllowed(
 export function setAsideBuildUnderOff(
   projectDir: string,
   marker?: ActiveDirectiveMarker | null,
-): CodeGenerationIssuance | null {
+): Extract<CodeGenerationIssuance, { kind: "run-stage" }> | null {
   try {
     const current = marker ?? readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
     if (

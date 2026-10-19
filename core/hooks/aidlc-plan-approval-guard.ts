@@ -1928,11 +1928,11 @@ function recordGuardDisabled(input: string): void {
 function recordSetAsidePass(
   projectDir: string,
   hookInput: ClaudeCodeHookInput,
-  issued: CodeGenerationIssuance,
+  issued: NonNullable<ReturnType<typeof setAsideBuildUnderOff>>,
   details: string,
 ): void {
   try {
-    const target = { unit: issued.kind === "run-stage" ? issued.unit?.trim() || null : null };
+    const target = { unit: issued.unit?.trim() || null };
     const gate = codeGenerationPlanApprovalFence(projectDir, target, { hookInput });
     const recorded = recordGuardStoodAside(projectDir, {
       fence: "plan-approval", authority: gate.authority, stage: GUARDED_STAGE, tool: hookInput.tool_name ?? "", details,
@@ -2050,7 +2050,7 @@ async function evaluate(
   // Under Guard Policy off, the build step a compaction or a state sync set
   // aside since it was issued, when the person's approval for it still stands:
   // the last instruction on record, so its work goes on as it did before.
-  let setAside: CodeGenerationIssuance | null = null;
+  let setAside: ReturnType<typeof setAsideBuildUnderOff> = null;
   // Why that step went out of date, for the row its pass leaves.
   let setAsideWhy = "";
   // Plain sentences: some hosts (Codex) show a hook's refusal to the person as

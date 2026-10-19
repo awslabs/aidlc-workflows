@@ -3245,7 +3245,7 @@ function artifactGuardDisabled(pd: string): boolean {
 // gets) is still owed. Under a Guard Policy that accepts changes the change
 // was recorded and said once instead, so nothing is owed: `unit complete` and
 // the stage's gate read this one rule, and a team-locked strict resolves strict.
-function recoveryReviewOwed(pd: string, content: string, pending: { recovery: boolean } | undefined): boolean {
+function recoveryReviewOwed(pd: string, content: string, pending: { recovery: boolean } | null | undefined): boolean {
   return pending?.recovery === true && !guardPolicyAcceptsChanges(pd, content);
 }
 

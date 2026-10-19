@@ -524,6 +524,28 @@ export const STATES: StateBuilder[] = [
   },
 ];
 
+/**
+ * The plan approved and the build step handed over, then the chat compacted:
+ * the step the agent held is set aside (`kind: "error"`, out of date) and no
+ * `next` has run since. Under Guard Policy off it is still the step.
+ */
+export function approvedBuildSetAside(policy: "strict" | "relaxed" | "off"): BuiltState {
+  const proj = createCodeGenerationProject(policy);
+  next(proj);
+  askOpen(proj);
+  approve(proj);
+  const step = next(proj);
+  if (step.kind !== "run-stage" || step.plan_approval?.status !== "approved") {
+    throw new Error(`expected the build step, got ${JSON.stringify(step)}`);
+  }
+  const markerPath = join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json");
+  const marker = JSON.parse(readFileSync(markerPath, "utf-8")) as { owner_session?: string };
+  if (!invalidateActiveDirectiveContext(proj, readFileSync(seededStateFile(proj), "utf-8"), marker.owner_session ?? SESSION)) {
+    throw new Error("the build step could not be marked as lost to compaction");
+  }
+  return { proj, session: SESSION, approved: true, how: `Guard Policy ${policy}: approved, the build handed over, then the chat compacted` };
+}
+
 // ---------------------------------------------------------------------------
 // The seven harness shapes of one tool call
 // ---------------------------------------------------------------------------
