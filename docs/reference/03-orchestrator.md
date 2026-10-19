@@ -842,7 +842,16 @@ writes the new version into the build's copy and appends `SHARED_INPUT_AMENDED`
 for the build's stages that used it, so its own validity check stays quiet and
 the line (`staleStageLine`, or the follow-up offer for a done Unit) comes from
 the amendment alone. `completionReceiptsFromAudit` reads `SHARED_INPUT_AMENDED`
-as it reads `STAGE_DEFINITION_CHANGED`.
+as it reads `STAGE_DEFINITION_CHANGED`. A build whose claim was turned down (and is not done) reads as
+work under way again (`reopenTurnedDownBuild` sets `Status: Running`, so the
+person's turns in it are recorded and their way back passes the plan-approval
+guard), and its end step is `ask_type: unit-turned-down` once (the choice runs
+`report --result resumed --choice redo --target code-generation`), then a notice
+carrying the same choice in `offers`. The board's notice carries `offers`
+(each a question and its choices, with the command each runs) for a Unit held
+for a team and not taken: the hand-off by file. A team's result carries the
+outputs the home's later stages consume and the files the cross-Unit coverage
+check at Build and Test reads of the Unit (`crossUnitCoverageReads`).
 
 Solo work built unit-major whose last per-Unit row is in another clone's audit
 shard (`builtFromAnotherMachine`), committed by another git identity

@@ -786,8 +786,9 @@ theirs (their own words, after the question was shown, not the agent's).
 
 At the home, when a team's pull request in one repo is turned down. The agent
 runs it from your words with `--person-words '<your words>'`. Your words go onto
-the Unit's claim, and the team hears them once at its next step, with the way
-back to Code Generation. A repo that already merged stays merged.
+the Unit's claim, and the team hears them once at its next step; its build asks
+once whether to take the Unit back to Code Generation so it can be changed and
+pushed again. A repo that already merged stays merged.
 
 ### `/aidlc unit merged <unit> --repo <repo>` - Count a repo merged
 

@@ -209,15 +209,17 @@ Units of checkout-revamp:
 ```
 
 A Unit is done when every repo it changed has merged, however it merged (when a
-repo merged it in a way the board cannot see, say so at the home and AI-DLC runs
-`aidlc unit merged <unit> --repo <repo>` with your words): the
+repo merged it in a way the board cannot see, tell the lead's chat at the home and
+AI-DLC runs `aidlc unit merged <unit> --repo <repo>` with your words): the
 home records `UNIT_MERGED`, writes the Unit's outputs into its record where
 Build and Test reads them, and marks the claim done, so the Units waiting on it
 open for the home and for every team. A repo the home has no checkout of stays
 "not merged yet" there. To send a repo back, the lead says so at the home and
 AI-DLC runs `aidlc unit turned-down <unit> --repo <repo>` with their words; the
-team hears them once at its next step, with the way back to Code Generation.
-What already merged stays merged.
+team hears them once at its next step, and its build, finished until then, is
+open again: AI-DLC asks once whether to take the Unit back to Code Generation so
+the team can change it and push it again, which it recommends, and runs the way
+back when they say yes. What already merged stays merged.
 
 ## Start early, and change a shared input
 
@@ -278,8 +280,8 @@ publish, pin, gate and land flow described above, unchanged.
 
 A partner team in another company, or behind a locked network, works from
 files instead of git. While a Unit is held for a team and not taken yet, the
-board says once that it can go as a file: if that team cannot reach this
-workspace, say "hand off reporting by file" and send them the file it writes.
+board offers once to hand it to that team as a file, in case they cannot reach
+this workspace; the lead answers in their own words.
 The lead says to hand the Unit off ("hand off reporting to the data team");
 AI-DLC runs `aidlc unit hand-off reporting --team data`,
 holds the Unit for that team, and writes one readable Markdown file,
