@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-unit:assign, subcommand:aidlc-unit:take, subcommand:aidlc-unit:push, subcommand:aidlc-unit:hand-off, subcommand:aidlc-unit:progress, subcommand:aidlc-unit:take-in, subcommand:aidlc-unit:turned-down, subcommand:aidlc-unit:propose, subcommand:aidlc-unit:amend, function:handFileStep, function:reopenTurnedDownBuild
+// covers: subcommand:aidlc-unit:assign, subcommand:aidlc-unit:take, subcommand:aidlc-unit:push, subcommand:aidlc-unit:hand-off, subcommand:aidlc-unit:progress, subcommand:aidlc-unit:take-in, subcommand:aidlc-unit:turned-down, subcommand:aidlc-unit:propose, subcommand:aidlc-unit:amend, function:handFileStep, function:reopenTurnedDownBuild, subcommand:aidlc-unit:sign-off
 //
 // No step the build-out adds hands the person the same thing twice. Each walk
 // runs a step's own command as the agent would (from the project's tool tree,
@@ -8,12 +8,14 @@
 // lead assigns and the board offers a hand-off; a team takes, pushes, is turned
 // down and goes back to Code Generation; a team by file starts from the file,
 // sends progress (taken in by its path) and its result (by the command); the
-// home answers two proposals.
+// home answers two proposals. Then each step that waits on an answer the person
+// did not give yet, and each way on from a push or a take that could not go as
+// it was: none hands them the same thing again.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { AIDLC_SRC, createTestProject, seedAidlcMemory } from "../harness/fixtures.ts";
@@ -26,8 +28,10 @@ import {
   ENV,
   finishBuild,
   git,
+  HOME_RECORD,
   hook,
   makeHome,
+  mergeOnHost,
   next,
   personsChat,
   personsNext,
@@ -36,6 +40,7 @@ import {
   STATE,
   tempDir,
   UNIT,
+  UTILITY,
 } from "../harness/team-build.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -46,7 +51,8 @@ type Step = Record<string, unknown>;
 // What a step is about: two steps with the same key hand the person the same thing.
 function key(step: Step): string {
   return JSON.stringify([step.kind, step.ask_type ?? null, step.stage ?? null, step.unit ?? null,
-    step.kind === "print" || step.kind === "notice" ? step.message : null, step.kind === "ask" ? step.question : null]);
+    step.kind === "print" || step.kind === "notice" ? step.message : null, step.kind === "ask" ? step.question : null,
+    step.kind === "notice" ? ((step.offers ?? []) as Array<{ question: string }>).map((offer) => offer.question) : null]);
 }
 
 // The project's own tool tree, so a command runs exactly as the engine printed it.
@@ -57,7 +63,8 @@ function withTools(dir: string): string {
 
 // A command as the agent runs it: the person's words in place of the slot.
 function runPrinted(dir: string, env: NodeJS.ProcessEnv, command: string): { status: number; out: string } {
-  const line = command.replace(/^bun /, `${process.execPath} `).replace(/'<their words>'/g, "'yes, go ahead'");
+  const line = command.replace(/^bun /, `${process.execPath} `).replace(/'<their words>'/g, "'yes, go ahead'")
+    .replace(/'<their team>'/g, "'payments'");
   const r = spawnSync("bash", ["-c", line], { cwd: dir, encoding: "utf-8", env });
   return { status: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
@@ -166,9 +173,9 @@ describe("no step of the build-out comes back after its own command ran", () => 
     };
     // The hand-off file: pointed at, then started; pointed at again, the build carries on.
     const file = deliver(home.dir, "aidlc/handoff/fixture-reporting.md");
-    const offer = next(partner, ENV, [file]);
+    const offer = next(partner, ENV, ["--hand-file", file]);
     expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-handoff");
-    movesOn(partner, ENV, offer, choice(offer, "Start reporting"), [file]);
+    movesOn(partner, ENV, offer, choice(offer, "Start reporting"), ["--hand-file", file]);
     // Progress, taken in by its path (the turn keeps the path for every step in it).
     expect(run(UNIT, ["progress"], partner).status).toBe(0);
     const progress = deliver(partner, "aidlc/handoff/fixture-reporting-progress.md");
@@ -204,5 +211,146 @@ describe("no step of the build-out comes back after its own command ran", () => 
       const command = String(ask.amend_command).replace("<approve|reject>", answer);
       movesOn(taken.home.dir, ENV, ask, command);
     }
+  });
+});
+
+type Offer = { question: string; choices: Array<{ label: string; command?: string }> };
+
+function offered(step: Step, label: string): string {
+  const command = ((step.offers ?? []) as Offer[]).flatMap((offer) => offer.choices).find((entry) => entry.label === label)?.command;
+  expect(command, JSON.stringify(step)).toBeDefined();
+  return command!;
+}
+
+function teamsHome(): ReturnType<typeof makeHome> {
+  const home = makeHome();
+  withTools(home.dir);
+  expect(run(STATE, ["set-unit-ownership", "team"], home.dir).status).toBe(0);
+  return home;
+}
+
+describe("a step that waits on the person, and every way on the round added, never comes back for the same thing", () => {
+  test("who builds which Unit: after not yet, the offer; with the home unreachable, try again", () => {
+    const home = teamsHome();
+    expect(next(home.dir).ask_type).toBe("unit-assignment");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "not yet" }, home.dir);
+    const waits = next(home.dir);
+    expect(waits.kind, JSON.stringify(waits)).toBe("notice");
+    movesOn(home.dir, ENV, waits, offered(waits, "Leave them all open"));
+    // The home unreachable: the answer is kept, and trying again holds the Units.
+    const other = teamsHome();
+    git(other.dir, ["remote", "set-url", "origin", join(other.remote, "gone")]);
+    expect(run(UNIT, ["assign", "refunds=payments", "--person-words", "payments takes refunds"], other.dir).status).toBe(0);
+    const kept = next(other.dir);
+    expect(kept.kind, JSON.stringify(kept)).toBe("notice");
+    git(other.dir, ["remote", "set-url", "origin", other.remote]);
+    movesOn(other.dir, ENV, kept, offered(kept, "Try again"));
+  });
+
+  test("the lead's sign-off and a team's proposal after not now: the board's offer answers each, once", () => {
+    const { home, alice, record } = refundsTaken();
+    withTools(home.dir);
+    expect(run(UNIT, ["lead-sign-off", "on"], home.dir).status).toBe(0);
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    expect(next(home.dir).ask_type).toBe("unit-signoff");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "not now" }, home.dir);
+    const board = next(home.dir);
+    expect(board.kind, JSON.stringify(board)).toBe("notice");
+    movesOn(home.dir, ENV, board, offered(board, "Sign it off"));
+    // A team's proposal, not answered at once: the board's offer answers it.
+    const taken = refundsTaken();
+    withTools(taken.home.dir);
+    writeFileSync(join(taken.record, "inception", "requirements-analysis", "requirements.md"), "# Requirements\n\nFR1 refunds, faster.\n");
+    expect(run(UNIT, ["propose", "--input", "requirements.md", "--person-words", "faster refunds"], taken.alice).status).toBe(0);
+    git(taken.home.dir, ["fetch", "-q", "origin"]);
+    expect(next(taken.home.dir).ask_type).toBe("unit-amend");
+    appendAuditEntry("HUMAN_TURN", { "Person Reply": "later" }, taken.home.dir);
+    const later = next(taken.home.dir);
+    movesOn(taken.home.dir, ENV, later, offered(later, "Approve it"));
+  });
+
+  test("a team that changed its copy: the offer to send it home, once", () => {
+    const { alice, record } = refundsTaken();
+    withTools(alice);
+    writeFileSync(join(record, "inception", "requirements-analysis", "requirements.md"), "# Requirements\n\nFR1 refunds, faster.\n");
+    const ask = next(alice);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-propose");
+    movesOn(alice, ENV, ask, choice(ask, "Send it to the home"));
+  });
+
+  test("the push: a repo the plan did not list goes with it; a result the home did not take is offered again as that; a read-only take sends by git once it can", () => {
+    const { home, alice, record } = refundsTaken();
+    withTools(alice);
+    codeGenerated(alice, record);
+    cloneCode(codeHost("ledger"), alice, "ledger", "alice");
+    writeFileSync(join(alice, "ledger", "entries.ts"), "export const entry = 1;\n");
+    const manifest = join(record, "construction", "refunds", "code-generation", "source-manifest.json");
+    const written = JSON.parse(readFileSync(manifest, "utf-8")) as { writes: Array<{ repo: string; path: string }> };
+    written.writes.push({ repo: "ledger", path: "entries.ts" });
+    writeFileSync(manifest, `${JSON.stringify(written, null, 2)}\n`);
+    finishBuild(record);
+    const hostHook = join(home.remote, "hooks", "pre-receive");
+    writeFileSync(hostHook, "#!/bin/sh\nwhile read old new ref; do case \"$ref\" in refs/heads/claim/*) exit 1;; esac; done\n");
+    chmodSync(hostHook, 0o755);
+    const push = next(alice, ENV);
+    expect(push.ask_type, JSON.stringify(push)).toBe("unit-push");
+    const unsent = movesOn(alice, ENV, push, choice(push, "Push"));
+    expect(unsent.ask_type, JSON.stringify(unsent)).toBe("unit-push");
+    writeFileSync(hostHook, "#!/bin/sh\nexit 0\n");
+    movesOn(alice, ENV, unsent, choice(unsent, "Send it again"));
+  });
+
+  test("a take: a Unit the home started is refused with a way on that does not offer it; an open Unit starts for a team the lead named", () => {
+    const home = teamsHome();
+    expect(run(UNIT, ["assign", "refunds=payments"], home.dir).status).toBe(0);
+    const homeStep = next(home.dir);
+    expect(homeStep.unit, JSON.stringify(homeStep)).toBe("checkout-ui");
+    expect(run(STATE, ["unit", "start", "--stage", "functional-design", "--unit", "checkout-ui"], home.dir).status).toBe(0);
+    git(home.dir, ["add", "-A"]);
+    git(home.dir, ["commit", "-q", "-m", "teams"]);
+    git(home.dir, ["push", "-q", "origin", "main"]);
+    const carol = withTools(cloneOf(home.remote, "carol"));
+    // The agent's own command for the home's Unit: refused, with a way on that does not offer it again.
+    const refused = runPrinted(carol, ENV, `bun .claude/tools/aidlc-unit.ts take checkout-ui --home ${HOME_RECORD} --team web`);
+    expect(refused.status).not.toBe(0);
+    const way = /`(bun [^`]+)`/.exec(refused.out)?.[1];
+    expect(way, refused.out).toBeDefined();
+    const after = runPrinted(carol, ENV, way!);
+    expect(after.status, after.out).toBe(0);
+    expect(after.out).not.toContain("Start checkout-ui");
+    // An open Unit nobody started, from the default space: started for a team the lead named.
+    const other = teamsHome();
+    expect(run(UNIT, ["assign", "refunds=payments"], other.dir).status).toBe(0);
+    git(other.dir, ["add", "-A"]);
+    git(other.dir, ["commit", "-q", "-m", "teams"]);
+    git(other.dir, ["push", "-q", "origin", "main"]);
+    const dana = withTools(cloneOf(other.remote, "dana"));
+    const offer = next(dana);
+    expect(offer.ask_type, JSON.stringify(offer)).toBe("unit-take");
+    movesOn(dana, ENV, offer, choice(offer, "Start checkout-ui for payments"));
+  });
+
+  test("a clone where nothing is ready: words for new work start it, and the take opens once the home moves", () => {
+    const { hosts, home, alice, record } = refundsTaken(["refunds=payments", "checkout-ui=web", "reporting=data"]);
+    const dana = withTools(cloneOf(home.remote, "dana"));
+    expect(run(UTILITY, ["space-create", "data"], dana).status).toBe(0);
+    expect(run(UTILITY, ["space", "data"], dana).status).toBe(0);
+    const waiting = next(dana);
+    expect(waiting.kind, JSON.stringify(waiting)).toBe("notice");
+    const erin = withTools(cloneOf(home.remote, "erin"));
+    expect(run(UTILITY, ["space-create", "data"], erin).status).toBe(0);
+    expect(run(UTILITY, ["space", "data"], erin).status).toBe(0);
+    expect(key(next(erin, ENV, ["build", "a", "ledger", "export"]))).not.toBe(key(waiting));
+    codeGenerated(alice, record);
+    expect(run(UNIT, ["push"], alice).status).toBe(0);
+    git(home.dir, ["fetch", "-q", "origin"]);
+    mergeOnHost(hosts["checkout-api"], "refunds", "squash");
+    mergeOnHost(hosts.billing, "refunds", "merge");
+    next(home.dir);
+    const ready = next(dana);
+    expect(ready.ask_type, JSON.stringify(ready)).toBe("unit-take");
+    movesOn(dana, ENV, ready, choice(ready, "Start reporting"));
   });
 });
