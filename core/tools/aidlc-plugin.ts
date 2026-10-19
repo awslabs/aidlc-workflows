@@ -2090,13 +2090,20 @@ export function hostListsPlugins(harnessName: string): boolean {
 // The command that composes `key` again, for every line that sends the
 // person to sync. A host that lists its plugins (Claude Code, Codex) finds
 // them itself; elsewhere sync needs the plugin's folder (`root`, when the
-// tool knows it). The native aidlc picks the first harness installed here, so
-// where that is another one it is told which, as the plugin hooks do.
-export function syncCommand(harnessName: string, key: string, root: string | null): string {
+// tool knows it). A tool acts on its own harness folder and the native aidlc
+// on the first one installed here, so where the target `harnessDir` is another
+// it is told which, as the plugin hooks do.
+export function syncCommand(
+  harnessName: string,
+  key: string,
+  root: string | null,
+  harnessDir = runtimeHarnessDir(),
+): string {
   const invocation = aidlcInvocation();
   const first = discoverProjectHarnesses(runtimeProjectDir())[0]?.harnessDir;
-  const named = invocation === "aidlc" && first !== undefined && first !== runtimeHarnessDir();
-  const sync = `${invocation} engine plugin sync${named ? ` --harness-dir ${runtimeHarnessDir()}` : ""}`;
+  const named = harnessDir !== runtimeHarnessDir() ||
+    (invocation === "aidlc" && first !== undefined && first !== harnessDir);
+  const sync = `${invocation} engine plugin sync${named ? ` --harness-dir ${harnessDir}` : ""}`;
   if (hostListsPlugins(harnessName)) return sync;
   return `${sync} --plugin-root ${root === null ? `<${key}'s folder>` : quoteCommandArgument(root)}`;
 }
@@ -2114,9 +2121,16 @@ export function noPluginListLine(projectDir: string, harnessDir: string): string
 // When a plugin composes next, for every line that says so. Kiro CLI and
 // opencode run no compose hook (opencode reads no hooks.json), so there it is
 // when the person runs sync, after `base` when the plugin waits for one.
-export function nextCompose(harnessName: string, key: string, root: string | null, base?: string): string {
+export function nextCompose(
+  harnessName: string,
+  key: string,
+  root: string | null,
+  base?: string,
+  harnessDir?: string,
+): string {
   if (harnessName !== "kiro" && harnessName !== "opencode") return "at the next session start";
-  return `when you run \`${syncCommand(harnessName, key, root)}\`` + (base === undefined ? "" : ` after ${base} composes`);
+  return `when you run \`${syncCommand(harnessName, key, root, harnessDir)}\`` +
+    (base === undefined ? "" : ` after ${base} composes`);
 }
 
 type HeldProblem =
