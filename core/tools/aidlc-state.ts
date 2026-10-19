@@ -4659,10 +4659,10 @@ function sayAndRecordSourceWork(
 // refused, naming the way on that always works: report again, and the approval
 // question goes to the person with the note. A later report, the person's own
 // approval, or a first refusal that cannot be recorded or read back opens the
-// gate with the note instead, and the approval records it. Where an approval
-// would not be a person's reply after the gate (an autonomous Construction
-// gate, the human-presence check switched off, an unattended run), and for the
-// agent's own completion verbs, the refusal stays.
+// gate with the note instead, and the approval records it. Under strict or
+// relaxed, where an approval would not be a person's reply after the gate (an
+// autonomous Construction gate, the human-presence check switched off, an
+// unattended run), and for the agent's own completion verbs, the refusal stays.
 function sourceWorkNotFound(
   pd: string,
   content: string,

@@ -1,15 +1,16 @@
-// covers: function:workspaceHasWork, function:sourceWorkNotFound, function:linkedWorktrees, function:nestedCheckouts, function:sourceChangedSinceStageStarted, function:sourceClaimCheckout, function:verifyStageArtifacts
+// covers: function:workspaceHasWork, function:sourceWorkNotFound, function:linkedWorktrees, function:nestedCheckouts, function:sourceChangedSinceStageStarted, function:sourceClaimCheckout, function:linkTargetListingRel, function:verifyStageArtifacts
 //
 // Code Generation finds the code where the person keeps it. Each layout is
 // built with real git: AI-DLC set up in the project, the code written only in
 // the layout's folder (a worktree in a child, nested or harness folder, a
 // worktree of a repo kept outside the project, a clone, a submodule, a
-// monorepo package, a commit of the code followed by a records-only commit,
-// and on Windows a worktree on another drive and a junction), and Code
-// Generation driven through the engine as the conductor drives it, for the
-// whole stage and for one Unit whose source manifest names the code where it
-// is: the agent's report opens the approval question and the person's approval
-// completes the stage. Runs on Linux, macOS (darwin) and Windows.
+// monorepo package, a commit of the code followed by a records-only commit, a
+// link to a checkout elsewhere (a junction on Windows), and on Windows a
+// worktree on another drive), and Code Generation driven through the engine as
+// the conductor drives it, for the whole stage and for one Unit whose source
+// manifest names the code where it is: the agent's report opens the approval
+// question and the person's approval completes the stage. Runs on Linux, macOS
+// (darwin) and Windows.
 //
 // When the check cannot see the code, Guard Policy decides: off (from the
 // scope default, a memory layer or the person's switch) stands aside for the

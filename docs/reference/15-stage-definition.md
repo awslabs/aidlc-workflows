@@ -241,10 +241,10 @@ under <where it looked>". Under strict or relaxed the agent's own first report i
 refused, naming the way on that always works: report again, and the approval
 question goes to the person with that line ("If your code is somewhere else,
 approve as usual; if it is missing, ask for changes."). Their approval records
-it as `Source Work` beside their words. Where no approval would be the person's
-reply after the gate (an autonomous Construction gate, the human-presence
-check switched off, an unattended run) and for the agent's own `advance`,
-`finalize` and `complete-workflow`, the refusal stays. Each outcome is
+it as `Source Work` beside their words. Under strict or relaxed, where no
+approval would be the person's reply after the gate (an autonomous Construction
+gate, the human-presence check switched off, an unattended run) and for the
+agent's own `advance`, `finalize` and `complete-workflow`, the refusal stays. Each outcome is
 recorded once per stage attempt as a `SOURCE_WORK_NOT_FOUND` row.
 
 Today only `code-generation` declares it. Its per-unit reviews additionally
@@ -258,7 +258,9 @@ its recorded repo, while a Bolt's manifest is relative to its one selected repo.
 In a workspace that records no repos, an entry inside a checkout nested in the
 project (a worktree or clone its git does not track) is judged by that
 checkout's own git, so the workspace's `.gitignore` for that folder does not
-refuse it.
+refuse it. So is an entry through a link or junction to a checkout outside the
+project (`wt-link/src/`, or `wt-link/` for all of it), and it covers what the
+source walk lists through that link.
 Missing pre-upgrade fields fail open only as documented migration evidence;
 present-but-unbindable or destroyed modern evidence fails closed under Guard
 Policy strict; under relaxed or off it is recorded once and the work continues. A team that

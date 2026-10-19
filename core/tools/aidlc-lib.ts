@@ -23443,6 +23443,17 @@ function pathIsWithinRoot(root: string, target: string): boolean {
   );
 }
 
+// How the source listing names what a link leads to: the target's own path
+// when it lies inside the root, else the link's path marked `@target`. The walk
+// names the entries below a link this way, and a source claim through a link
+// is keyed the same way (sourceClaimCheckout), so the claim covers what the
+// walk lists.
+function linkTargetListingRel(rootReal: string, target: string, linkListingRel: string): string {
+  return pathIsWithinRoot(rootReal, target)
+    ? relative(rootReal, target).split(sep).join("/")
+    : `${linkListingRel}@target`;
+}
+
 interface SourceSymlinkResolution {
   externalHop: boolean;
   target: string | null;
@@ -25075,9 +25086,7 @@ function filesystemSourceIdentity(
             ) {
               continue;
             }
-            const targetListingRel = internal
-              ? targetRelNative.split(sep).join("/")
-              : `${childListingRel}@target`;
+            const targetListingRel = linkTargetListingRel(rootReal, target, childListingRel);
             if (
               recordIdentity &&
               recordFile(
@@ -25099,9 +25108,7 @@ function filesystemSourceIdentity(
               snapshotEligible &&
               internal &&
               !existsSync(join(target, ".git"));
-            const targetListingRel = internal
-              ? targetSnapshotRel
-              : `${childListingRel}@target`;
+            const targetListingRel = linkTargetListingRel(rootReal, target, childListingRel);
             if (earlierOutput) earlierOutputDepth += 1;
             if (
               !walk(
@@ -26258,33 +26265,62 @@ export function registryExcludedSourceKeys(
   return excluded;
 }
 
-// The checkout that judges a source claim, and the claim's path within it. A
-// claim with no repo field whose path lies inside a checkout nested under the
-// project (a worktree or clone the project's git does not track) is judged by
-// that checkout's own git: the outer repository's .gitignore only says the
-// outer repository does not track that folder. The innermost folder on the
-// path with a real .git entry wins; lstat only, so a link or a junction on the
-// way is never followed.
+// The checkout that judges a source claim, the claim's path within it, and the
+// path the source listing knows it by. A claim with no repo field whose path
+// lies inside a checkout nested under the project (a worktree or clone the
+// project's git does not track) is judged by that checkout's own git: the
+// outer repository's .gitignore only says the outer repository does not track
+// that folder. The innermost folder on the path with a real .git entry wins;
+// lstat only, so a link or a junction on the way is not followed, except one
+// that leads to a checkout outside the project (a junction to a clone kept
+// elsewhere): its own git judges the claim, and the claim is keyed as the walk
+// lists what the link leads to (linkTargetListingRel). A claim through any
+// other link keeps the link rules below.
 function sourceClaimCheckout(
   repoRoot: string,
   path: string,
   nestedAllowed: boolean,
-): { dir: string; path: string } {
-  let claim = { dir: repoRoot, path };
+): { dir: string; path: string; listingPath: string } {
+  let claim = { dir: repoRoot, path, listingPath: path };
   if (!nestedAllowed) return claim;
+  let rootReal: string;
+  try {
+    rootReal = realpathSync(repoRoot);
+  } catch {
+    return claim;
+  }
   const trailing = path.endsWith("/") ? "/" : "";
   const parts = path.replace(/\/+$/, "").split("/");
+  // A folder claim may name the link itself; a file claim names a file below.
+  const folders = trailing ? parts.length : parts.length - 1;
   let dir = repoRoot;
-  for (let at = 0; at < parts.length - 1; at++) {
+  for (let at = 0; at < folders; at++) {
     dir = join(dir, parts[at]);
+    let entry: ReturnType<typeof lstatSync>;
     try {
-      if (!lstatSync(dir).isDirectory()) return claim;
+      entry = lstatSync(dir);
     } catch {
       return claim;
     }
+    const rest = parts.slice(at + 1).join("/");
+    const restPath = rest === "" ? "" : `${rest}${trailing}`;
+    if (entry.isSymbolicLink()) {
+      const target = resolveSourceSymlinkTarget(rootReal, dir)?.target ?? null;
+      if (target === null || pathIsWithinRoot(rootReal, target)) return claim;
+      try {
+        if (!statSync(target).isDirectory()) return claim;
+        const git = lstatSync(join(target, ".git"));
+        if (!git.isDirectory() && !git.isFile()) return claim;
+      } catch {
+        return claim;
+      }
+      const linked = linkTargetListingRel(rootReal, target, parts.slice(0, at + 1).join("/"));
+      return { dir: target, path: restPath, listingPath: `${linked}/${restPath}` };
+    }
+    if (!entry.isDirectory() || at + 1 >= parts.length) return claim;
     try {
       const git = lstatSync(join(dir, ".git"));
-      if (git.isDirectory() || git.isFile()) claim = { dir, path: `${parts.slice(at + 1).join("/")}${trailing}` };
+      if (git.isDirectory() || git.isFile()) claim = { dir, path: restPath, listingPath: path };
     } catch {
       // No .git entry here: the folder belongs to the checkout above it.
     }
@@ -26803,7 +26839,7 @@ function validateUnitSourceManifestBytes(
     if (symlinkReason !== null) {
       return { ok: false, reason: `writes[${index}].path: ${symlinkReason}` };
     }
-    const key = sourcePathKey(canonicalRepo ?? "", normalized.path);
+    const key = sourcePathKey(canonicalRepo ?? "", claim.listingPath);
     if (seen.has(key)) return { ok: false, reason: `writes[${index}] duplicates a normalized source claim` };
     seen.add(key);
     if (normalized.prefix) prefixes.push(key);

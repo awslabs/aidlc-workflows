@@ -447,16 +447,30 @@ export const LAYOUTS: Layout[] = [
     ignore: "wt-link\n",
     made: "after",
     skip: process.platform !== "win32" ? "Windows only" : false,
-    make: (proj) => {
-      const elsewhere = join(tempDir("t-source-work-junction-"), "app");
-      git(dirname(elsewhere), ["clone", "-q", outsideRepo(), elsewhere]);
-      identity(elsewhere);
-      symlinkSync(elsewhere, join(proj, "wt-link"), "junction");
-      return elsewhere;
-    },
-    claim: () => ({ path: "src/" }),
+    make: (proj) => linkedCheckout(proj, "junction"),
+    claim: () => ({ path: "wt-link/" }),
+  },
+  // The same shape as the junction where links need no admin rights.
+  {
+    name: "a symlink to a checkout elsewhere",
+    ignore: "wt-link\n",
+    made: "after",
+    skip: process.platform === "win32" ? "a junction on Windows" : false,
+    make: (proj) => linkedCheckout(proj, "dir"),
+    claim: () => ({ path: "wt-link/" }),
   },
 ];
+
+// A clone kept outside the project, linked into it at `wt-link`. Made after
+// the work started, every file in it is new to the stage, so the Unit claims
+// the whole link.
+function linkedCheckout(proj: string, type: "junction" | "dir"): string {
+  const elsewhere = join(tempDir("t-source-work-link-"), "app");
+  git(dirname(elsewhere), ["clone", "-q", outsideRepo(), elsewhere]);
+  identity(elsewhere);
+  symlinkSync(elsewhere, join(proj, "wt-link"), type);
+  return elsewhere;
+}
 
 // The layout built around Code Generation, the code written where it keeps
 // it (and committed with the records after it when the layout says so), and
