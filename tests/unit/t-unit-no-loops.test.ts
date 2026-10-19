@@ -679,6 +679,23 @@ describe("a Unit started early whose dependency merged: the move onto main is of
     expect(git(join(dana, "billing"), ["branch", "--show-current"])).toBe("reporting");
   });
 
+  test("a move git refused for their own change is offered again once their tree is clean, and then goes", () => {
+    const { dana } = earlyThenMerged("squash", true);
+    const billing = join(dana, "billing");
+    writeFileSync(join(billing, "README.md"), "# billing\n\nmine\n");
+    const ask = next(dana, ENV);
+    expect(ask.ask_type, JSON.stringify(ask)).toBe("unit-move-onto");
+    const refused = runPrinted(dana, ENV, choice(ask, "Move reporting onto main"));
+    expect(refused.status).not.toBe(0);
+    // While their change is in the way the move is not offered; once it is not, it is, once.
+    expect(next(dana, ENV).ask_type ?? null).not.toBe("unit-move-onto");
+    git(billing, ["checkout", "--", "README.md"]);
+    const again = next(dana, ENV);
+    expect(again.ask_type, JSON.stringify(again)).toBe("unit-move-onto");
+    movesOn(dana, ENV, again, choice(again, "Move reporting onto main"));
+    expect(git(billing, ["merge-base", "--is-ancestor", "origin/main", "reporting"]) === "").toBe(true);
+  });
+
   test("a move git stops on a conflict: git's words and the way back, and the repo before it stays moved", () => {
     const { dana, hosts } = earlyThenMerged("squash", true);
     // A teammate's report.ts lands on main in billing meanwhile.

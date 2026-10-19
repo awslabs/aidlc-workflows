@@ -61,6 +61,7 @@ import {
   isTeamUnitOwnership,
   isoTimestamp,
   isRequestTurn,
+  noteEngineAskMark,
   loadStageGraphAll,
   engineAskMark,
   noteEngineAskMark,
@@ -6419,6 +6420,24 @@ export function earlyBaseMerged(projectDir: string, stateContent: string, skip: 
   });
 }
 
+// A rebase git stopped in a repo, waiting for the person.
+function rebaseUnderWay(dir: string): boolean {
+  return ["rebase-merge", "rebase-apply"].some((name) => existsSync(resolve(dir, git(dir, ["rev-parse", "--git-path", name]).stdout.trim())));
+}
+
+// Whether something of the person's would stop the move in a repo now: a
+// rebase under way, a change to a tracked file (a rebase refuses any), or a
+// change to a file `reset --keep` would replace.
+export function moveInTheWay(repo: { dir: string; onto: string; rebase: string[] }): boolean {
+  if (rebaseUnderWay(repo.dir)) return true;
+  const changed = git(repo.dir, ["diff", "-z", "--name-only", "HEAD"]).stdout.split("\0").filter(Boolean);
+  if (repo.rebase[0] === "rebase") return changed.length > 0;
+  const replaced = new Set(git(repo.dir, ["diff", "-z", "--name-only", "HEAD", repo.onto]).stdout.split("\0").filter(Boolean));
+  return changed.some((path) => replaced.has(path));
+}
+
+export const moveRefusedMark = (dep: string): string => `unit-move-refused-${dep}`;
+
 // Where a command that switched the person onto the Unit's branch left them,
 // and the way back, in one wording for the push and the move.
 function whereNowLine(unit: string, moved: Array<{ name: string; from: string }>, also = ""): string {
@@ -6450,8 +6469,9 @@ function rebaseUnit(args: string[], projectDir?: string): void {
       const from = git(repo.dir, ["branch", "--show-current"]).stdout.trim();
       const ran = git(repo.dir, repo.rebase);
       if (!ran.ok) {
-        const stopped = existsSync(resolve(repo.dir, git(repo.dir, ["rev-parse", "--git-path", "rebase-merge"]).stdout.trim())) ||
-          existsSync(resolve(repo.dir, git(repo.dir, ["rev-parse", "--git-path", "rebase-apply"]).stdout.trim()));
+        const stopped = rebaseUnderWay(repo.dir);
+        // Refused for their own changes: offered again once they are out of the way.
+        if (!stopped) noteEngineAskMark(pd, moveRefusedMark(dep.unit));
         fail(`${build.unit} could not be moved onto ${branch} in ${repo.name}. Git says: "${gitSaid(ran.stderr || ran.stdout)}".` +
           (stopped ? ` To go back to where ${build.unit} was there, run git rebase --abort in ${repo.name}.` : "") +
           (moved.length > 0 ? ` In ${joinNames(moved)} it is on ${joinNames([...onto])} now.${whereNowLine(build.unit, switched)}` : ""));

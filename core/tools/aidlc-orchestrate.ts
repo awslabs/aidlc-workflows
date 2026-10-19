@@ -337,6 +337,7 @@ import {
   type IntentInfo,
   listSpaces,
   auditShardName,
+  clearEngineAskMark,
   engineAskMark,
   noteEngineAskMark,
   personRepliedAfter,
@@ -615,6 +616,8 @@ import {
   refreshHomeClaims,
   refreshListedHome,
   earlyBaseMerged,
+  moveInTheWay,
+  moveRefusedMark,
   shareBlocker,
   shareTarget,
   teamHandoverMarkName,
@@ -8729,7 +8732,14 @@ function unitMoveOntoAsk(projectDir: string, stateContent: string): AskDirective
   const unit = build.unit;
   const pushed = getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed";
   const askName = (dep: string): string => `unit-move-onto-${dep}${pushed ? "-pushed" : ""}`;
-  for (const dep of earlyBaseMerged(projectDir, stateContent, (dep) => engineAskMark(projectDir, askName(dep)) !== null)) {
+  const asked = (dep: string): boolean => engineAskMark(projectDir, askName(dep)) !== null;
+  const refused = (dep: string): boolean => engineAskMark(projectDir, moveRefusedMark(dep)) !== null;
+  for (const dep of earlyBaseMerged(projectDir, stateContent, (dep) => asked(dep) && !refused(dep))) {
+    // A move git refused for their own changes comes back once nothing of theirs is in the way.
+    if (asked(dep.unit)) {
+      if (dep.repos.some((repo) => moveInTheWay(repo))) continue;
+      clearEngineAskMark(projectDir, moveRefusedMark(dep.unit));
+    }
     noteEngineAskMark(projectDir, askName(dep.unit));
     const into = joinRepoNames([...new Set(dep.repos.map((repo) => repo.onto.slice(repo.remote.length + 1)))]);
     return {
