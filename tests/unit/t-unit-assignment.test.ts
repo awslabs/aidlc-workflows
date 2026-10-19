@@ -79,9 +79,9 @@ describe("who builds which Unit is asked once, at the home", () => {
     const assigned = run(UNIT, ["assign", "refunds=payments", "checkout-ui=web", "--person-words", words], home.dir);
     expect(assigned.status, assigned.out).toBe(0);
     expect(assigned.json?.notice).toBe(
-      "Refunds: payments. Checkout-ui: web. Open for any team: reporting. Each team approves its Unit after every " +
-        "stage, which I'd keep, so each design is checked before the next one is built. Do you want them to approve " +
-        "once, at the end of each Unit, instead?",
+      "Refunds: payments. Checkout-ui: web. Open for any team: reporting. Each team will approve its Unit after every " +
+        "stage. Do you want them to approve once at the end of each Unit instead? I'd keep after every stage, so a wrong " +
+        "turn is caught at the stage where it happens.",
     );
     expect(tellsWhatToType(assigned.json?.notice)).toBe(false);
     // The offer reaches the agent as choices, each with what it runs.

@@ -4979,8 +4979,8 @@ function assignUnits(args: string[], projectDir?: string): void {
   // and why, and gives the agent the command for the other choice.
   const perStage = readUnitGateRhythm(state) !== "unit-end";
   const rhythm = perStage
-    ? "Each team approves its Unit after every stage, which I'd keep, so each design is checked before the next one is " +
-      "built. Do you want them to approve once, at the end of each Unit, instead?"
+    ? "Each team will approve its Unit after every stage. Do you want them to approve once at the end of each Unit " +
+      "instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens."
     : "Each team approves its Unit once, at the end.";
   console.log(JSON.stringify({
     assigned,
