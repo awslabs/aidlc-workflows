@@ -1878,7 +1878,7 @@ describe("t244 AI-DLC's plugin catalogue keeps one path across updates", () => {
     cpSync(join(REPO_ROOT, "dist", "plugins"), laterPlugins, { recursive: true });
     for (const file of walkFiles(laterPlugins).filter((path) => path.endsWith(".json"))) {
       const path = join(laterPlugins, file);
-      writeFileSync(path, readFileSync(path, "utf-8").replaceAll('"version": "0.1.0"', `"version": "${LATER_TEST_PRO}"`));
+      writeFileSync(path, readFileSync(path, "utf-8").replaceAll('"version": "0.1.1"', `"version": "${LATER_TEST_PRO}"`));
     }
     releaseA = fixture(AIDLC_VERSION, { binary: "executable" });
     releaseB = fixture(NEXT_VERSION, { binary: "executable" });
@@ -1947,7 +1947,7 @@ describe("t244 AI-DLC's plugin catalogue keeps one path across updates", () => {
     expect(rolledBack.status, rolledBack.stdout + rolledBack.stderr).toBe(0);
     expect(rolledBack.stdout.toLowerCase()).not.toContain("plugin marketplace");
     expectCatalogueOf(machine, NEXT_VERSION);
-    expect(listedTestPro(machine)).toBe("0.1.0");
+    expect(listedTestPro(machine)).toBe("0.1.1");
 
     const doctor = run(DISPATCHER, ["doctor", "--json", "--project-dir", project], project, env);
     const checks = (JSON.parse(doctor.stdout) as { data: { checks: Array<{ pass: boolean; label: string }> } }).data.checks;

@@ -145,12 +145,12 @@ function edit(path: string, from: string, to: string): void {
   writeFileSync(path, text.replace(from, to));
 }
 
-// test-pro 0.1.1: one sentence of its build-and-test fragment and one of its
+// test-pro 0.1.2: one sentence of its build-and-test fragment and one of its
 // quality-agent fragment say more.
 function update(plugin: string): void {
   for (const dir of readdirSync(plugin).filter((name) => name.startsWith("."))) {
     const manifest = join(plugin, dir, "plugin.json");
-    if (existsSync(manifest)) edit(manifest, '"version": "0.1.0"', '"version": "0.1.1"');
+    if (existsSync(manifest)) edit(manifest, '"version": "0.1.1"', '"version": "0.1.2"');
   }
   edit(join(plugin, "contributions", "construction", "build-and-test.md"), ...STAGE_LINE);
   edit(join(plugin, "contributions", "agents", "aidlc-quality-agent.md"), ...PERSONA_LINE);
