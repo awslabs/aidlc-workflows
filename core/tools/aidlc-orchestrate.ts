@@ -16714,7 +16714,7 @@ function emitTeamUnitMajorRunStage(
       question: `If ${team} cannot reach this workspace, I can hand ${unit} to them as a file they build it from. Do you want me to?`,
       choices: [
         { label: `Hand ${unit} to ${team} as a file`, command: `${unitTool} hand-off ${unit} --team ${shellArg(team)} --person-words '<their words>'` },
-        { label: `Keep ${unit} for ${team} here`, recommended: true },
+        { label: `Keep ${unit} for ${team} here`, recommended: true as const },
       ],
     }));
     for (const offer of offers) sayWithStepOnce(projectDir, offer.question);
