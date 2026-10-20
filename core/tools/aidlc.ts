@@ -13,6 +13,7 @@ import {
   parseDispatcherPluginCommand,
   parseDispatcherWorkspaceCommand,
   type RouteNamespaceName,
+  TRUSTED_ROUTE_NAMESPACE,
 } from "./aidlc-command.ts";
 import {
   cmd,
@@ -2168,6 +2169,19 @@ function theirWordsBegin(argv: readonly string[], route: number): number | undef
     if (named > route + 1) return i;
   }
   return undefined;
+}
+
+// Whether the dispatcher words after `engine` route to a command in `admitted`
+// (the state-transition guard's delegateAdmittedVerbs): Kiro IDE builds each
+// persona's shell deny from it, and the Cursor adapter lets a delegate run that
+// command. It lives here, not in the guard, so the guard loads without the
+// dispatcher, as a guard that cannot load refuses nothing.
+export function admittedEngineRoute(
+  admitted: Readonly<Record<string, readonly string[]>>,
+  words: readonly string[],
+): boolean {
+  const action = resolveAction([TRUSTED_ROUTE_NAMESPACE, ...words]);
+  return action.type === "delegate" && (admitted[action.tool] ?? []).includes(action.args[0] ?? "");
 }
 
 export function resolveAction(

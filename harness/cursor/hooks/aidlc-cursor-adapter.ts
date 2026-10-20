@@ -2549,9 +2549,11 @@ export async function run(
         join(HOOKS_DIR, "aidlc-state-transition-guard.ts")
       );
       const admitted = guard.delegateAdmittedVerbs(agent);
-      return script === "aidlc.ts"
-        ? guard.admittedEngineRoute(admitted, rest.slice(1))
-        : (admitted[script] ?? []).includes(rest[0] ?? "");
+      if (script !== "aidlc.ts") return (admitted[script] ?? []).includes(rest[0] ?? "");
+      const dispatcher: typeof import("../tools/aidlc.ts") = await import(
+        join(HOOKS_DIR, "..", "tools", "aidlc.ts")
+      );
+      return dispatcher.admittedEngineRoute(admitted, rest.slice(1));
     } catch {
       return false;
     }

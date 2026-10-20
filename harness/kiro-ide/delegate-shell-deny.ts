@@ -22,11 +22,10 @@
 // bare X, so each command is excluded both ways.
 
 import {
-  admittedEngineRoute,
   delegateAdmittedVerbs,
   delegatedLifecycleCommand,
 } from "../../core/hooks/aidlc-state-transition-guard.ts";
-import { copyChannelDispatcherCommands, ROUTES } from "../../core/tools/aidlc.ts";
+import { admittedEngineRoute, copyChannelDispatcherCommands, ROUTES } from "../../core/tools/aidlc.ts";
 import { LAUNCHER_GLOBAL_FLAGS, trustedCommand, TRUSTED_ROUTE_NAMESPACE } from "../../core/tools/aidlc-command.ts";
 import { isWorkspaceNoun, parseWorkspaceCommand, WORKSPACE_NOUNS } from "../../core/tools/aidlc-lib.ts";
 
