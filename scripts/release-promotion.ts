@@ -134,13 +134,17 @@ export function listPreviews(repository: string, run: Command = command): string
 const STEP = /^\*\*[^*\n]+:\*\* \S/;
 const BULLET = /^[-*] \S/;
 const SCRIPT_COMPATIBILITY = "Script compatibility";
-type Entry = { compatibility: string; summary: string; affected: string | null; steps: string[]; highlights: string[] };
+// A Highlights line, and whether it sits under ### Script compatibility.
+type Line = { text: string; script: boolean };
+type Entry = { compatibility: string; summary: string; affected: string | null; steps: string[]; highlights: Line[][] };
 
 // The entry is both the CHANGELOG text and the stable page's words, so its
 // author groups the bullets once, in the reviewed entry (the shape is in
 // AGENTS.md, Release Metadata Policy), and the page renders every line in the
-// order written. A line outside that shape is shown where it is, never
-// refused: the page preview and the release approval are the maintainer's read.
+// order written. A line outside that shape is shown where it is, for the page
+// preview and the release approval to read, except a bullet on the wrong side
+// of ### Script compatibility: prepare reserves the version before it prints
+// the page, so that one is refused first. Version 1 records never come here.
 function parseEntry(notes: string): Entry {
   const body = validateNotes(notes);
   const newline = body.indexOf("\n");
@@ -150,10 +154,24 @@ function parseEntry(notes: string): Entry {
   const [summary = "", ...steps] = paragraphs;
   const breaking = body.startsWith("Compatibility: breaking for scripts\n");
   const affected = breaking && steps.length && !STEP.test(steps[0]) ? steps.shift() ?? null : null;
-  return {
-    compatibility: body.slice("Compatibility: ".length, newline), summary, affected, steps,
-    highlights: first < 0 ? [] : blocks.slice(first),
-  };
+  let script = false;
+  const highlights = (first < 0 ? [] : blocks.slice(first)).map((block) => block.split("\n").map((text) => {
+    if (text.startsWith("### ")) script = text.slice(4).trim() === SCRIPT_COMPATIBILITY;
+    return { text, script };
+  }));
+  for (const line of highlights.flat()) {
+    if (!BULLET.test(line.text)) continue;
+    const bullet = line.text.slice(2);
+    if (bullet.startsWith("Breaking for scripts: ") && !line.script) {
+      throw new Error(`notes: "${bullet.slice(0, 80)}" is a Breaking for scripts bullet outside ### ${SCRIPT_COMPATIBILITY}; ` +
+        `move it under ### ${SCRIPT_COMPATIBILITY}.`);
+    }
+    if (!bullet.startsWith("Breaking for scripts: ") && line.script) {
+      throw new Error(`notes: "${bullet.slice(0, 80)}" sits under ### ${SCRIPT_COMPATIBILITY}, which holds only Breaking for scripts bullets; ` +
+        `move it to another group, or start it with "Breaking for scripts: ".`);
+    }
+  }
+  return { compatibility: body.slice("Compatibility: ".length, newline), summary, affected, steps, highlights };
 }
 
 export function validateNotes(notes: string): string {
@@ -300,6 +318,7 @@ function requestedPage(options: PromotionRequest, run: Command): Omit<PagePromot
   const { repository, preview, version } = options;
   const selected = resolvePreview(repository, preview, run);
   const notes = validateNotes(options.notes);
+  parseEntry(notes);
   const contributors = parseContributors(options.contributors ?? "");
   if (!STABLE_VERSION.test(version)) throw new Error("stable version must be X.Y.Z");
   parseVersion(version);
@@ -402,14 +421,11 @@ export function promotionNotes(p: Promotion): string {
 // The entry's bullets as the page lists them: a dash for every bullet, the
 // Breaking for scripts prefix dropped under Script compatibility, and a heading
 // in its own block, as on the 2.11.1 page.
-function highlightBlocks(blocks: string[]): string[] {
-  let scriptCompatibility = false;
+function highlightBlocks(blocks: Line[][]): string[] {
   return blocks.flatMap((block) => {
-    const lines = block.split("\n").map((line) => {
-      if (line.startsWith("### ")) scriptCompatibility = line.slice(4).trim() === SCRIPT_COMPATIBILITY;
-      if (!BULLET.test(line)) return line;
-      const text = line.slice(2);
-      return `- ${scriptCompatibility ? text.replace(/^Breaking for scripts: /, "") : text}`;
+    const lines = block.map(({ text, script }) => {
+      if (!BULLET.test(text)) return text;
+      return `- ${script ? text.slice(2).replace(/^Breaking for scripts: /, "") : text.slice(2)}`;
     });
     return lines[0].startsWith("### ") && lines.length > 1 ? [lines[0], lines.slice(1).join("\n")] : [lines.join("\n")];
   });

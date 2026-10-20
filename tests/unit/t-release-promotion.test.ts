@@ -403,20 +403,34 @@ describe("the stable page", () => {
   const BREAKING = "Compatibility: breaking for scripts\n\nA summary.\n\nOnly scripts that run the tool are affected.\n\n" +
     "### Changes\n\n* A change.\n\n### Script compatibility\n\n* Breaking for scripts: a flag is gone.";
   test("Breaking for scripts bullets render under Script compatibility with the prefix dropped", () => {
-    const page = promotionNotes({ ...shipped, notes: validateNotes(`${BREAKING}\n* A plain change.`), contributors: [] });
+    const page = promotionNotes({ ...shipped, notes: validateNotes(BREAKING), contributors: [] });
     expect(page).toContain("## Summary\n\nA summary.\n\n**Compatibility:** breaking for scripts. Only scripts that run the tool are affected.\n\n## Upgrade");
-    expect(page).toContain("## Highlights\n\n### Changes\n\n- A change.\n\n### Script compatibility\n\n- a flag is gone.\n- A plain change.\n\nPromoted from");
+    expect(page).toContain("## Highlights\n\n### Changes\n\n- A change.\n\n### Script compatibility\n\n- a flag is gone.\n\nPromoted from");
   });
 
-  // The page preview and the release approval are the maintainer's read of
-  // the shape; the release refuses no entry for it.
-  test("an entry off that shape still renders every line where its author put it", () => {
+  // prepare reserves the version before it prints the page, so a bullet whose
+  // Script compatibility placement is wrong is refused first; any other line
+  // off the shape renders where its author put it, for the page preview and
+  // the release approval to read.
+  test.each([
+    ["a Breaking for scripts bullet outside it", BREAKING.replace("* A change.", "* Breaking for scripts: a change."),
+      "\"Breaking for scripts: a change.\" is a Breaking for scripts bullet outside ### Script compatibility; move it under ### Script compatibility."],
+    ["a plain bullet inside it", `${BREAKING}\n* A plain change.`,
+      "\"A plain change.\" sits under ### Script compatibility, which holds only Breaking for scripts bullets; move it to another group, or start it with \"Breaking for scripts: \"."],
+  ])("Script compatibility placement: %s is refused before any version is reserved", (_, notes, message) => {
+    const f = fixture();
+    expect(() => f.prepare({ notes })).toThrow(message);
+    expect(f.commands.some((args) => args.includes("commit-tree") || args.includes("push"))).toBe(false);
+    expect(() => previewPage({ repository: REPOSITORY, preview: PREVIEW, version: "2.11.1", notes }, f.run)).toThrow(message);
+  });
+
+  test("an entry otherwise off that shape still renders every line where its author put it", () => {
     const loose = "Compatibility: breaking for scripts\n\nA summary.\n\n**Plugins:** One step.\n\nThen one more.\n\n" +
-      "* Breaking for scripts: a flag is gone.\n\n### Later\n* A change.\nA closing line.";
+      "* A first change.\n\n### Later\n* A change.\nA closing line.";
     const page = promotionNotes({ ...shipped, notes: validateNotes(loose), contributors: [] });
     expect(page).toContain("**Compatibility:** breaking for scripts.\n\n## Upgrade");
     expect(page).toContain("**Plugins:** One step.\n\nThen one more.\n\nManual-copy");
-    expect(page).toContain("## Highlights\n\n- Breaking for scripts: a flag is gone.\n\n### Later\n\n- A change.\nA closing line.\n\nPromoted from");
+    expect(page).toContain("## Highlights\n\n- A first change.\n\n### Later\n\n- A change.\nA closing line.\n\nPromoted from");
   });
 
   test("the contributors input is only logins with an optional first PR number", () => {
