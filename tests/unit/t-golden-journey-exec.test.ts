@@ -141,6 +141,19 @@ describe("the golden path checks", () => {
     row(proj, "DECISION_RECORDED", { Stage: "requirements-analysis", Decision: "Q1: no name given", Options: "A,B,C,X" });
     expect(ownWords()).toEqual(["no question at requirements-analysis took the person's own words"]);
   });
+
+  test("the person's own words are on the record as given: the box's reply, or beside the answer", () => {
+    const kept = (proj: string) => goldenPathProblems(journey(proj), run(new GoldenPerson(journey(proj)), { start: 0, ownWordsUsed: true }))
+      .filter((p) => p.includes("own words"));
+    const boxed = project("requirements-analysis");
+    row(boxed, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: "B" });
+    expect(kept(boxed)).toEqual(["the person's own words at requirements-analysis are not on the record"]);
+    row(boxed, "QUESTION_REPLIED", { Question: "Q1: no name given", Reply: "Keep it small" });
+    expect(kept(boxed)).toEqual([]);
+    const typed = project("requirements-analysis");
+    row(typed, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: "B", "Person Reply": "keep it  small" });
+    expect(kept(typed)).toEqual([]);
+  });
 });
 
 describe("Codex exec's JSON stream", () => {

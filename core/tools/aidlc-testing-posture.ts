@@ -4752,10 +4752,13 @@ function approvedWorktreeSource(
   if (!parentSource) throw new Error(generationSourceUnavailableMessage());
   // Under a relaxed or off Guard Policy, parent source that moved after Plan
   // Approval is kept, as on the single-agent path: generation start records it
-  // and says it in one line. An AI-DLC update the person took moves only
+  // and says it in one line. So is source that moved after the engine built a
+  // plan with plan approval off (a skipped receipt): nobody approved it, and
+  // `next` would never ask. An AI-DLC update the person took moves only
   // AI-DLC's own files, which is no reason to approve the plan again.
   if (
     !approved.continuing &&
+    approved.receipt.skipped === undefined &&
     !sameWorkspaceSource(approved.receipt.certifiedSourceSha256, parentSource.fingerprint) &&
     !guardPolicyAcceptsChanges(parent) &&
     !onlyAidlcFilesChangedInSwarmStage(parent, CODE_GENERATION_STAGE, parentSource)
