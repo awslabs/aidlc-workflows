@@ -1164,9 +1164,13 @@ function unresolvedAuditTrailWrite(visible: string, command: string, cwd: string
 // every site returns on its first hit, the flag is set only when the hit that
 // ended the walk was an audit-trail target.
 let auditTrailMatched = false;
+let integrityTargetMatched: string | null = null;
 
 function protectedWriteTarget(path: string, cwd: string): boolean {
-  if (protectedRuntimePath(path, cwd) || protectedInstalledPath(path, cwd)) return true;
+  if (protectedRuntimePath(path, cwd) || protectedInstalledPath(path, cwd)) {
+    integrityTargetMatched ??= path;
+    return true;
+  }
   if (protectedAuditTrailPath(path, cwd)) {
     auditTrailMatched = true;
     return true;
@@ -1175,7 +1179,10 @@ function protectedWriteTarget(path: string, cwd: string): boolean {
 }
 
 function protectedDirectoryTarget(path: string, cwd: string): boolean {
-  if (protectedRuntimePath(path, cwd)) return true;
+  if (protectedRuntimePath(path, cwd)) {
+    integrityTargetMatched ??= path;
+    return true;
+  }
   if (protectedAuditTrailPath(path, cwd)) {
     auditTrailMatched = true;
     return true;
@@ -1380,6 +1387,7 @@ function runtimeIntegrityViolation(input: ClaudeCodeHookInput): RuntimeIntegrity
   const toolInput = input.tool_input;
   const cwd = typeof input.cwd === "string" ? input.cwd : process.cwd();
   auditTrailMatched = false;
+  integrityTargetMatched = null;
   if (toolName === "Bash") {
     const raw = toolInput?.command;
     if (typeof raw !== "string") return null;
@@ -1403,11 +1411,20 @@ function runtimeIntegrityViolation(input: ClaudeCodeHookInput): RuntimeIntegrity
       }
     }
   }
-  if (targets.some((path) => protectedRuntimePath(path, cwd) || protectedInstalledPath(path, cwd))) {
+  const guarded = targets.find((path) =>
+    protectedRuntimePath(path, cwd) || protectedInstalledPath(path, cwd));
+  if (guarded !== undefined) {
+    integrityTargetMatched ??= guarded;
     return "runtime";
   }
-  if (targets.some((path) => protectedAuditTrailPath(path, cwd))) return "audit";
-  return protectedContentWrite(toolName, toolInput, cwd) ? "content" : null;
+  const audited = targets.find((path) => protectedAuditTrailPath(path, cwd));
+  if (audited !== undefined) {
+    integrityTargetMatched ??= audited;
+    return "audit";
+  }
+  if (!protectedContentWrite(toolName, toolInput, cwd)) return null;
+  integrityTargetMatched ??= targets[0] ?? null;
+  return "content";
 }
 
 export function violatesRuntimeIntegrity(input: ClaudeCodeHookInput): boolean {
@@ -1417,6 +1434,12 @@ export function violatesRuntimeIntegrity(input: ClaudeCodeHookInput): boolean {
 /** The refusal class for a tool call, or null when the call is allowed. */
 export function runtimeIntegrityViolationKind(input: ClaudeCodeHookInput): RuntimeIntegrityViolation | null {
   return runtimeIntegrityViolation(input);
+}
+
+function displayTarget(path: string, cwd: string | undefined): string {
+  if (!isAbsolute(path)) return path;
+  const root = resolve(typeof cwd === "string" ? cwd : process.cwd());
+  return pathWithin(path, root) ? relative(root, path).replaceAll("\\", "/") : path;
 }
 
 /** Write the refusal for a violating tool call; true when the caller must exit 2. */
@@ -1430,6 +1453,9 @@ export function refuseRuntimeIntegrityViolation(input: ClaudeCodeHookInput): boo
   const clause = violation === "content"
     ? " (Scripts the agent writes or runs may not import these hooks either.)"
     : "";
-  process.stderr.write(`${RUNTIME_INTEGRITY_REFUSAL}${clause}\n`);
+  const matched = integrityTargetMatched === null
+    ? ""
+    : ` Matched: ${displayTarget(integrityTargetMatched, typeof input.cwd === "string" ? input.cwd : undefined)}.`;
+  process.stderr.write(`${RUNTIME_INTEGRITY_REFUSAL}${clause}${matched}\n`);
   return true;
 }
