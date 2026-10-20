@@ -170,7 +170,9 @@ import {
   GIT_PLATFORM_ARGS,
   auditBlockField,
   auditFilePath,
+  auditShardHost,
   auditShards,
+  knownAuditShardName,
   assertChangeControlLedgerWritable,
   GUARD_POLICY_FIELD,
   GUARD_POLICY_VALUES,
@@ -5219,7 +5221,8 @@ export async function collectDoctorReport(
   //       before workflow progress → hooks have not had a chance to fire. Pass.
   //       This preserves debug-only dirs and ignores doctor's HEALTH_CHECKED.
   //   (b) No readable heartbeat after progress, or unreadable .last files →
-  //       hooks should have fired. Fail.
+  //       hooks should have fired. Fail, or warn when only other clones'
+  //       audit shards record the progress.
   //   (c) Readable .last files exist → compare the newest one to progress.
   // The comparison itself lives in aidlc-lib.ts (hookLiveness) because the Plan
   // Approval decision refuses on the same staleness.
@@ -5248,12 +5251,38 @@ export async function collectDoctorReport(
     !heartbeatDirExists &&
     workflowHasProgress
   ) {
-    const stages = progressedStageCount === 1 ? "stage" : "stages";
-    results.push({
-      pass: false,
-      label: `Hooks have never executed although this workflow has progressed ${progressedStageCount} ${stages}`,
-      fix: hookExecutionRecovery,
-    });
+    // Heartbeats are git-ignored and stay in the clone whose hooks wrote them,
+    // while audit shards travel in commits. Progress that only other clones'
+    // shards record says nothing about this clone's hooks, and the hooks step
+    // would be aimed at the wrong machine.
+    const ownShard = knownAuditShardName(projectDir);
+    const ranElsewhere = stageOrGateEvents.length > 0 &&
+      stageOrGateEvents.every((event) => basename(event.shard) !== ownShard);
+    if (ranElsewhere) {
+      const hosts = [
+        ...new Set(
+          stageOrGateEvents
+            .map((event) => auditShardHost(event.shard))
+            .filter((host): host is string => host !== null),
+        ),
+      ].sort();
+      const clones = hosts.length > 1 ? "other clones" : "another clone";
+      results.push({
+        pass: false,
+        severity: "warn",
+        label: `This workflow was run in ${clones}${hosts.length > 0 ? ` (${hosts.join(", ")})` : ""}; this clone has no hook record for it yet`,
+        fix:
+          "nothing to fix in this clone: its hooks record this workflow once you carry on with it here. " +
+          `To check the hooks where it ran, run doctor in ${hosts.length > 1 ? "those clones" : "that clone"}`,
+      });
+    } else {
+      const stages = progressedStageCount === 1 ? "stage" : "stages";
+      results.push({
+        pass: false,
+        label: `Hooks have never executed although this workflow has progressed ${progressedStageCount} ${stages}`,
+        fix: hookExecutionRecovery,
+      });
+    }
   } else if (
     heartbeatDirExists &&
     !hasHookFiredContent &&

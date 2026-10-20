@@ -15341,9 +15341,10 @@ export function auditShardName(projectDir: string): string {
 }
 
 // This clone's shard name when it is already known, without minting a token or
-// upgrading the clone-id file: readers use it to prefer their own shard and must
-// not write.
-function knownAuditShardName(projectDir: string): string | null {
+// upgrading the clone-id file: readers use it to prefer their own shard, or to
+// tell their own rows from other clones', and must not write. Null means this
+// clone has written no shard yet.
+export function knownAuditShardName(projectDir: string): string | null {
   const scoped = scopedAuditShardName(projectDir);
   if (scoped) return scoped;
   const cached = AUDIT_SHARD_NAMES.get(canonicalPathKey(projectDir));
@@ -15489,6 +15490,13 @@ function auditShardBlocks(content: string): string[] {
 // Repeats inside one file are not copies and stay. Returns, per shard, the
 // block positions to skip. `ownShard` is only asked when a copy exists.
 const AUDIT_SHARD_FILE_RE = /^[a-z0-9][a-z0-9-]*-[a-z0-9]{1,32}\.md$/;
+
+// The machine a shard's file name records (the token never holds a hyphen), or
+// null for a file not named like a shard.
+export function auditShardHost(shard: string): string | null {
+  const name = basename(shard);
+  return AUDIT_SHARD_FILE_RE.test(name) ? name.slice(0, name.lastIndexOf("-")) : null;
+}
 
 export function copiedAuditBlocks(
   shards: readonly AuditShardText[],
