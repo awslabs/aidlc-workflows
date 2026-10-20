@@ -212,8 +212,9 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    the section as written, because the section and the recorded reason can hold
    text taken from the reviewed artifacts. Proceed as that verdict directs.
    If the retried attempt is ALSO incomplete, stop retrying: record the
-   terminal receipt with `--verdict NOT-READY` and no review file; the logger
-   accepts a missing review only for this retried NOT-READY fallback, and
+   terminal receipt with `--verdict NOT-READY` and no `--review-file`; the
+   logger accepts a missing or incomplete review only for this retried
+   NOT-READY fallback, records none of an incomplete file's text, and
    writes an empty review record for it. That receipt is no reviewer's
    verdict, and the person's approval over it is recorded as
    `Review: not finished`. The person hears that the review did not finish,

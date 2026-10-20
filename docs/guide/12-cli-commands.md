@@ -2141,7 +2141,7 @@ approval (`review_not_finished.approved_in_words`: `approve` asks nothing more),
 recorded with the review as not finished, as at a stage gate. A verdict for that review that comes in later is
 recorded and leaves the Unit approved. Under a team's locked `strict` the review finishes
 first, without asking the person. A Unit whose review ended in the NOT-READY
-fallback the conductor records when a retried review still wrote nothing is asked
+fallback the conductor records when a retried review still wrote no whole review is asked
 about once (`review_not_finished.question`) and approved the same way, with no
 option to pass. A Unit review never asked
 for in this run of the Unit's work (after a jump back or a reopen, a review from

@@ -18760,7 +18760,7 @@ export function completionCarriesVerifiedReview(
 }
 
 /** The REVIEW_COMPLETED field the logger writes, as `no`, on the NOT-READY
- *  fallback recorded when a retried review still wrote nothing. */
+ *  fallback recorded when a retried review still wrote no whole review. */
 export const REVIEW_FINISHED_FIELD = "Review Finished";
 
 /**
@@ -30951,6 +30951,16 @@ export function matchSubagentInflight(
   });
 }
 
+/** Whether an agent sent in the background at or after `sinceMs` has not
+ *  returned: a fresh in-flight entry started since. The completion hook that
+ *  records an agent's finish removes its entry; a missing or malformed ledger
+ *  shows none. */
+export function backgroundAgentOutSince(projectDir: string, sinceMs: number): boolean {
+  const current = readSubagentInflightLedger(projectDir);
+  if (!current.exists || current.malformed) return false;
+  return freshSubagentEntries(current.entries, Date.now()).some((entry) => entry.startedAtMs >= sinceMs);
+}
+
 export function inspectSubagentInflight(
   projectDir: string,
 ): SubagentInflightSummary {
@@ -33506,7 +33516,7 @@ export function nextReviewStepFor(input: {
     text: `${subject} and its review is waiting for a verdict, and its one retry is spent: ${record}.` +
       (input.fallback === false
         ? ""
-        : " If the retried reviewer still wrote no review file, record NOT-READY without one; that records a " +
+        : " If the retried reviewer still wrote no whole review, record NOT-READY; that records a " +
           "review that did not finish, not a finding."),
   };
 }

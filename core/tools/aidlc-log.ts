@@ -132,6 +132,7 @@ import {
   governedChangeControl,
   guardPolicyAcceptsChanges,
   readAuditShardEvents,
+  backgroundAgentOutSince,
   isRequestTurn,
   latestPersonTurn,
   personSpokeSinceReviewRequest,
@@ -4373,11 +4374,47 @@ function handleReview(args: string[]): void {
             "appended section so the artifact carries the bytes the reviewer was dispatched on.",
         );
       }
-      const incompleteFallback =
-        body === null &&
-        !appendedAfterRequest &&
-        pendingRequest.retried &&
-        verdict === "NOT-READY";
+      // After the retry, a file that is not a whole review for either verdict
+      // is an incomplete attempt too (the reviewer protocol's step 3) and
+      // records the same fallback as a missing one: none of its text is the
+      // review. A whole review for the other verdict is refused below, so a
+      // finished reviewer's verdict is never recorded as this fallback.
+      const wholeReview = (bytes: Buffer): boolean =>
+        (["READY", "NOT-READY"] as const).some((candidate) => {
+          const expected = {
+            verdict: candidate,
+            reviewer: flags.reviewer,
+            iteration,
+            reviewChallenge: null,
+            standalone: true,
+          };
+          if (validateReviewAppendix(bytes, expected).valid) return true;
+          const demoted = demoteReviewHeadings(bytes);
+          return demoted !== null && validateReviewAppendix(demoted.bytes, expected).valid;
+        });
+      const retriedFallback = !appendedAfterRequest && pendingRequest.retried && verdict === "NOT-READY";
+      const incompleteFile = retriedFallback && body !== null && !wholeReview(body);
+      if (incompleteFile && requestBinding.requestId !== null) {
+        // Only once the reviewer has finished: its completion row since the
+        // retry, or no agent sent in the background since the retry still out
+        // (the SubagentStop hook that writes the row also removes the agent's
+        // in-flight entry). Audit times are whole seconds, so an agent sent in
+        // the second before the retry counts as sent since it.
+        const events = readAuditShardEvents(pd, intent, space);
+        const retry = openReviewRequests(events).find((open) => open.requestId === requestBinding.requestId);
+        if (
+          retry !== undefined &&
+          reviewerCompletionAfter(events, flags.reviewer, retry.row) === null &&
+          backgroundAgentOutSince(pd, Date.parse(retry.row.timestamp))
+        ) {
+          refuseReview(
+            `Cannot record the verdict for "${flags.stage}" yet: an agent sent in the background ` +
+              `since the retry has not returned, and ${readFrom.reviewerPath} is not a whole review. ` +
+              "Wait for it to return, then record the verdict again.",
+          );
+        }
+      }
+      const incompleteFallback = retriedFallback && (body === null || incompleteFile);
       const embeddedLegacy = body === null && !incompleteFallback && appendedAfterRequest;
       if (body === null && !incompleteFallback && !embeddedLegacy) {
         // After a retry the slot was reopened, so a review written before the
@@ -4409,7 +4446,8 @@ function handleReview(args: string[]): void {
       // where noAgentFinishedSinceReview says so (on Claude Code, outside a
       // worktree, with no background agent sent since): there the row says no
       // reviewer had finished, said once here, and at the gate under strict.
-      if (body !== null && requestBinding.requestId !== null) {
+      // The fallback records none of the file, so none of this applies to it.
+      if (body !== null && !incompleteFallback && requestBinding.requestId !== null) {
         const events = readAuditShardEvents(pd, intent, space);
         const request = openReviewRequests(events)
           .find((open) => open.requestId === requestBinding.requestId);
@@ -4474,7 +4512,10 @@ function handleReview(args: string[]): void {
         }
         if (!validity.valid) {
           refuseReview(
-            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${validity.reason}.`,
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${validity.reason}.` +
+              (pendingRequest.retried && body !== null && !wholeReview(body)
+                ? " Its one retry is spent, so record --verdict NOT-READY: that records a review that did not finish."
+                : ""),
           );
         }
         // The reviewer's own answer to whether its brief told it what to
