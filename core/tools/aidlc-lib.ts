@@ -15049,6 +15049,12 @@ export function auditBlockField(block: string, fieldName: string): string | null
   return null;
 }
 
+// The rows every `aidlc doctor` run writes about itself (collectDoctorReport is
+// their only writer). They are doctor's receipt, not work: a reader that asks
+// what changed in the work, or whether teammates still need a record, leaves
+// them out.
+export const DOCTOR_RUN_AUDIT_EVENTS: ReadonlySet<string> = new Set(["GUARDRAIL_LOADED", "HEALTH_CHECKED"]);
+
 // Whether a `GATE_REJECTED` row is a fresh attempt rather than the person's
 // change request. `aidlc-jump.ts reopen` marks its rows `Reopen: jump` (a
 // `/aidlc --stage` reopen) or `Reopen: redo` (redo on re-entry): the person
