@@ -1493,7 +1493,8 @@ describe("t299 first-run setup wizard", () => {
     }
     return installed;
   };
-  // `config --harness <name> --yes`, then the walk: Fix the sections? yes.
+  // `config --harness <name>`, then the walk: Fix the sections? yes. (Under
+  // --yes the walk asks nothing.)
   // Kiro IDE's walk offers only the PATH fix; Kiro CLI's opens its session
   // model and preset menu, kept as it is. Answers come through the scripted
   // seam, not stdin.
@@ -1518,7 +1519,7 @@ describe("t299 first-run setup wizard", () => {
     runWizard("", {
       ...kiroIdeTerminal({ ...setupMachine, ...env, AIDLC_TEST_CONFIG_INPUT: `${answers.join("\n")}\n` }),
       aidlc: false,
-      configArgs: ["--from", join(RUNTIME, harness), "--harness", harness, "--mcp", "none", "--yes"],
+      configArgs: ["--from", join(RUNTIME, harness), "--harness", harness, "--mcp", "none"],
       ...(project ? { project } : {}),
     });
   const setupScreens = (env: NodeJS.ProcessEnv = {}) => {

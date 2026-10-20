@@ -3047,6 +3047,7 @@ async function runSetupWalk(
   harnessDir: string,
   distribution: string,
   initialOutstanding: readonly ConfigOutstandingAction[],
+  yes = false,
 ): Promise<void> {
   const initialLedger = setupLedgerActions(
     projectDir,
@@ -3082,7 +3083,9 @@ async function runSetupWalk(
   }
   let answer: boolean;
   try {
-    answer = promptYesDefault(
+    // Every flagged section is an answer only the person gives, which --yes
+    // never chooses: under --yes the map and what is left, and no question.
+    answer = !yes && promptYesDefault(
       `\n  Fix the ${flagged.length} sections that need you now?`,
       true,
     );
@@ -14016,6 +14019,7 @@ export async function main(
         descriptor.harnessDir,
         stamp.distribution,
         outstandingActions,
+        options.yes,
       );
     }
   } catch (error) {

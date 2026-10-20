@@ -103,6 +103,11 @@ function scaffoldArgs(path: string, extra: string[] = []): string[] {
   ];
 }
 
+// The walk is offered to `aidlc config` without --yes; --yes asks nothing.
+function walkArgs(path: string): string[] {
+  return scaffoldArgs(path).filter((arg) => arg !== "--yes");
+}
+
 function run(
   args: string[],
   cwd: string,
@@ -140,7 +145,7 @@ describe("t296 first-run config setup walk", () => {
   test("fresh scaffold renders eight rows, one gate, and decline changes no section state", () => {
     const path = project("aidlc-t296-map-decline-");
     const result = run(
-      scaffoldArgs(path),
+      walkArgs(path),
       path,
       hookPathEnv(null, true),
       "n\n",
@@ -194,6 +199,37 @@ describe("t296 first-run config setup walk", () => {
     expect(records.runtime).toBeNull();
     expect(records.providers).toBeNull();
     expect(records.trust).toBeNull();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("--yes at a terminal asks nothing: the map and what still needs the person, and no section answer chosen", () => {
+    // "y" would walk the sections if the question were put; it must not be.
+    const path = project("aidlc-t296-yes-asks-nothing-");
+    const codex = project("aidlc-t296-yes-asks-nothing-codex-");
+    const runs = [
+      { root: join(path, ".claude"), result: run(scaffoldArgs(path), path, hookPathEnv(null, true), "y\n") },
+      // The refresh `aidlc update` names: `aidlc config --yes` in a set-up project.
+      {
+        root: join(path, ".claude"),
+        result: run(["config", "--project-dir", path, "--from", CLAUDE_RELEASE, "--yes"], path, hookPathEnv(null, true), "y\n"),
+      },
+      {
+        root: join(codex, ".codex"),
+        result: run(
+          ["config", "--project-dir", codex, "--from", CODEX_RELEASE, "--harness", "codex", "--mcp", "none", "--yes"],
+          codex,
+          hookPathEnv(null, true),
+          "y\n",
+        ),
+      },
+    ];
+    for (const { root, result } of runs) {
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(result.stdout).toMatch(/Setup check - \d of 8 sections need you\./);
+      expect(result.stdout).not.toContain("Fix the");
+      expect(result.stdout).toMatch(/Setup complete\. \d actions? still needs? you/);
+      expect(result.stdout).toMatch(/providers\s+bun \.\w+\/tools\/aidlc\.ts config providers/);
+      expect(readConfigDiagnosticRecords(root).providers).toBeNull();
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("a Bedrock-oriented harness defaults to keeping the current provider", () => {
@@ -584,7 +620,7 @@ describe("t296 first-run config setup walk", () => {
     // balanced. Providers follows with region and profile. Recording the preset
     // is the point of the walk: without it every agent inherits the session.
     const result = run(
-      scaffoldArgs(path),
+      walkArgs(path),
       path,
       env,
       "\nproject\n1\nbalanced\n2\nus-west-2\ndev\ny\n",
@@ -654,7 +690,6 @@ describe("t296 first-run config setup walk", () => {
         path,
         "--from",
         CLAUDE_RELEASE,
-        "--yes",
       ],
       path,
       hookPathEnv(null, true),
