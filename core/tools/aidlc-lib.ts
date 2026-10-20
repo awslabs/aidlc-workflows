@@ -14370,30 +14370,46 @@ export function summaryConfirmationOwed(
   return stage.summary_confirmation !== undefined;
 }
 
-// A Unit's stage work finished while summary confirmation was off owes no
-// summary when a later change turns it on (the person's scope change or
-// setting): finished work is never re-checked against a ceremony it was never
-// asked for. A Unit that starts the stage again after that asks it as usual.
-function unitFinishedBeforeSummaryOn(
+// Work done while summary confirmation was off owes no summary when a later
+// change turns it on (the person's scope change or setting): finished work is
+// never re-checked against a ceremony it was never asked for. That is a Unit
+// whose stage work finished before the change (unit given), and a stage whose
+// gate was already open then and has not closed since (unit null; showing the
+// gate again keeps it open). Work that runs the stage again after that asks it
+// as usual. A row that only says on again, under a value already on, turns
+// nothing on.
+function finishedBeforeSummaryOn(
   projectDir: string,
   slug: string,
-  unit: string,
+  unit: string | null,
   stateContent: string,
   auditRows: readonly AuditShardEvent[],
 ): boolean {
   const on = sortAttemptEvents(auditRows.filter((row) =>
     row.event === "CEREMONY_SET" &&
     auditBlockField(row.block, "Key") === "summary_confirmation" &&
-    auditBlockField(row.block, "New") === "on")).at(-1);
+    auditBlockField(row.block, "New") === "on" &&
+    parseCeremonySetting(auditBlockField(row.block, "Old")) !== "on")).at(-1);
   if (on === undefined) return false;
+  const before = (ts: string, shard: string, pos: number): boolean =>
+    ts < on.timestamp || (ts === on.timestamp && shard === on.shard && pos < on.pos);
+  if (unit === null) {
+    let opened: AuditShardEvent | null = null;
+    for (const row of sortAttemptEvents(auditRows)) {
+      if (!GATE_WORDS_LIFECYCLE_EVENTS.has(row.event) || auditBlockField(row.block, "Stage") !== slug) continue;
+      if (auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")) continue;
+      if (row.event !== "STAGE_AWAITING_APPROVAL") opened = null;
+      else opened ??= row;
+    }
+    return opened !== null && before(opened.timestamp, opened.shard, opened.pos);
+  }
   const unitMajor =
     getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
     getField(stateContent, "Construction Checkpoints") === "enabled";
   const last = currentUnitLifecycleRows(projectDir, "", slug, unitMajor, auditRows, stateContent)
     .filter((row) => row.unit === unit)
     .at(-1);
-  return last?.event === "UNIT_COMPLETED" &&
-    (last.ts < on.timestamp || (last.ts === on.timestamp && last.shard === on.shard && last.pos < on.pos));
+  return last?.event === "UNIT_COMPLETED" && before(last.ts, last.shard, last.pos);
 }
 
 /** The stage's questions file (for one Unit on a per-unit stage), relative to the project. */
@@ -14554,10 +14570,11 @@ export function checkSummaryConfirmationEvidence(
   }
   let auditRowsRead: AuditShardEvent[] | null = null;
   const readAuditRows = (): AuditShardEvent[] => (auditRowsRead ??= readAuditShardEvents(projectDir));
-  const finishedBeforeOn = (unit: string): boolean =>
-    options.workflow === undefined && isPerUnitStage(stage) && typeof options.stateContent === "string" &&
-    unitFinishedBeforeSummaryOn(projectDir, stage.slug, unit, options.stateContent, readAuditRows());
-  if (options.unit !== undefined && finishedBeforeOn(options.unit)) {
+  const finishedBeforeOn = (unit: string | null): boolean =>
+    options.workflow === undefined && (unit !== null) === isPerUnitStage(stage) &&
+    typeof options.stateContent === "string" &&
+    finishedBeforeSummaryOn(projectDir, stage.slug, unit, options.stateContent, readAuditRows());
+  if (finishedBeforeOn(options.unit ?? null)) {
     return { ok: true, required: false };
   }
 
@@ -36711,7 +36728,7 @@ export function effectiveSupportAgentsForProject(
  * The collaborators a stage's open gate holds it to. While a stage waits at its
  * gate, "Approve, and bring the specialists in" flips the switch for the next
  * stage; the finished stage is never re-checked against a setting it did not run
- * under (the rule unitFinishedBeforeSummaryOn applies to summary confirmation).
+ * under (the rule finishedBeforeSummaryOn applies to summary confirmation).
  * The anchor is the stage's LAST organic STAGE_AWAITING_APPROVAL row in the
  * current attempt (a relaxed Guard Policy keeps the floor after a GATE_REJECTED,
  * so a gate shown again has a later row) that no GATE_APPROVED, GATE_REJECTED or
