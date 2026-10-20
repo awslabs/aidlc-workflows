@@ -263,7 +263,11 @@ export function kiroIdeWorkflowsAsk(invoke: string, env: NodeJS.ProcessEnv = pro
     // Not asked rather than asked in every chat.
     return "";
   }
-  return "ASK ONCE: after you answer the person's message, ask them this in their language: " +
+  return "ASK ONCE: if the person's message already says what they want for Kiro's Workflows feature (and does not " +
+    `name Kiro CLI), that is their answer and you do not ask: to turn it off, run ` +
+    `\`${invoke} config trust --kiro-workflows off --yes\` and tell them what it prints; to keep it on, leave it. ` +
+    "Otherwise, after you " +
+    "answer their message, ask them this in their language: " +
     "\"Kiro's Workflows feature is on, and it stops AI-DLC's reviews and helpers from running in this chat. " +
     "Do you want me to turn Workflows off? It is a Kiro setting for all your projects; you can turn it back on " +
     `any time." On yes, run \`${invoke} config trust --kiro-workflows off --yes\` and tell them what it prints. ` +
@@ -394,7 +398,10 @@ export function kiroCliWorkflowsAsk(invoke: string, env: NodeJS.ProcessEnv = pro
     // Not asked rather than asked in every chat.
     return "";
   }
-  return "ASK ONCE: after you answer the person's message, ask them this in their language: " +
+  return "ASK ONCE: if the person's message already says what they want for Kiro CLI's Workflows feature (in this " +
+    "chat, Kiro's Workflows feature counts unless they name Kiro IDE), that is their answer and you do not ask: to " +
+    `turn it off, run \`${invoke} config trust --kiro-cli-workflows off --yes\` and tell them what it prints; to ` +
+    "keep it on, leave it. Otherwise, after you answer their message, ask them this in their language: " +
     "\"Kiro CLI's Workflows feature is on, and it stops AI-DLC's reviews and helpers from running in this chat. " +
     "Do you want me to turn Workflows off? It is a Kiro CLI setting for all your projects; you can turn it back on " +
     `any time." On yes, run \`${invoke} config trust --kiro-cli-workflows off --yes\` and tell them what it prints. ` +

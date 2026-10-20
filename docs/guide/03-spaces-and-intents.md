@@ -579,6 +579,7 @@ and machines.
 | Kiro CLI's session model, and the effort a preset sets | Shared | Shared | Saved in your personal Kiro settings, so every Kiro CLI project uses them. Changes to agent or group policy do not do this |
 | Update, offline, mirror, and CA-bundle settings | Shared | Shared | Machine-only. A project file cannot set them |
 | Kiro IDE's Workflows switch and, on Windows, its default terminal | Shared | Shared | Kept in Kiro's user settings, outside the project. Setup asks once (`aidlc config --yes` takes the recommended answer), and `aidlc config trust` changes them on request. They apply to every project you open in that IDE |
+| Kiro CLI's Workflows switch | Shared | Shared | Kept in your own Kiro CLI settings, outside the project. In a Kiro IDE project, setup asks once, with an answer kept apart from Kiro IDE's (`aidlc config --yes` takes the recommended answer), and `aidlc config trust --kiro-cli-workflows off|on --yes` changes it on request. It applies to every project you run Kiro CLI in |
 | The AI-DLC release itself | Shared | Shared | A native project with no pinned release (`.aidlc-version`) runs the release the machine has active, so `aidlc update` changes it for every such project (its own files catch up at its next `aidlc config`). A copied project runs its own copied release |
 
 Apart from those machine-wide settings, IDE choices, and the active release, nothing in

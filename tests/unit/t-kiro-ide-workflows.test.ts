@@ -269,6 +269,8 @@ describe("the chat asks once", () => {
       expect(line).toContain("Kiro's Workflows feature is on, and it stops AI-DLC's reviews and helpers from running in this chat.");
       expect(line).toContain("Do you want me to turn Workflows off? It is a Kiro setting for all your projects");
       expect(line).toContain("run `bun .kiro/tools/aidlc.ts config trust --kiro-workflows off --yes`");
+      // A first message that already asks to turn it off or on is the answer, never asked again.
+      expect(line).toStartWith("ASK ONCE: if the person's message already says what they want for Kiro's Workflows feature (and does not name Kiro CLI), that is their answer and you do not ask: to turn it off, run `bun .kiro/tools/aidlc.ts config trust --kiro-workflows off --yes` and tell them what it prints; to keep it on, leave it. Otherwise, after you answer their message, ask them");
       expect(readKiroWorkflowsAnswer()).toBe("asked");
       expect(kiroIdeWorkflowsAsk("bun .kiro/tools/aidlc.ts", process.env)).toBe("");
     });
@@ -666,6 +668,8 @@ describe("Kiro CLI's own Workflows switch", () => {
     const first = await prompt({});
     expect(first).toContain("Kiro CLI's Workflows feature is on, and it stops AI-DLC's reviews and helpers from running in this chat.");
     expect(first).toContain("config trust --kiro-cli-workflows off --yes");
+    expect(first).toContain("ASK ONCE: if the person's message already says what they want for Kiro CLI's Workflows feature (in this chat, Kiro's Workflows feature counts unless they name Kiro IDE), that is their answer and you do not ask: to turn it off, run `");
+    expect(first).toContain("--kiro-cli-workflows off --yes` and tell them what it prints; to keep it on, leave it. Otherwise, after you answer their message, ask them");
     expect(await prompt({})).not.toContain("Workflows");
     expect(readFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-cli-workflows"), "utf-8")).toBe("asked\n");
     expect(existsSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-ide-workflows"))).toBe(false);
