@@ -31,9 +31,6 @@ what they say, in their own words and in context, and do it.
   say in one line that it is off for this piece of work, comes back on for the
   next one, and that they can ask you to turn it back on. Never hand them a
   command to type.
-- A rule the team recorded in memory (a strict Guard Policy, say) wins over one
-  person's request in chat. Say in one line that the team's rule holds, in which
-  file, and that changing that line changes it.
 - When they ask for a review of a stage or of a Unit ("review Unit 1 again",
   "have the reviewer look at the design", or yes to "Do you want me to have the
   new approach checked before you decide?"), record it through AI-DLC the first
