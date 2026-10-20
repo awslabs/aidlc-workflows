@@ -1,4 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { lockFolderHeldGiveUpMs, lockFolderHeldLine } from "./aidlc-lock-line.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
@@ -6848,6 +6849,20 @@ export function personLineHeard(projectDir: string, sessionId: string, line: str
   return readPendingPersonLines(path, turn, work).said.includes(line);
 }
 
+// The same record for a line that stays true across turns (a lock folder a
+// program holds): said once a turn, and again after the person next speaks.
+function turnKeyedPersonLine(projectDir: string, line: string): string {
+  return `${personTurnAndWork(projectDir).turn}\u0000${line}`;
+}
+
+export function personLineHeardThisTurn(projectDir: string, sessionId: string, line: string): boolean {
+  return personLineHeard(projectDir, sessionId, turnKeyedPersonLine(projectDir, line));
+}
+
+export function markPersonLineHeardThisTurn(projectDir: string, sessionId: string, line: string): void {
+  markPersonLinesHeard(projectDir, sessionId, [turnKeyedPersonLine(projectDir, line)]);
+}
+
 // The reason the engine's skip step hands the agent for a stage the person
 // asked to skip where it stands (orchestrate's planChangeDirective). report
 // and the state tool read it back: that skip is the person's, so a stage that
@@ -8824,6 +8839,41 @@ export class ActiveDirectiveLockContendedError extends Error {
   }
 }
 
+// The lock folder could not be moved for the whole budget: a dead owner's, or
+// this process's own. On Windows the message is the person's line; elsewhere
+// the words of the plain busy case it falls under.
+export class ActiveDirectiveLockFolderHeldError extends ActiveDirectiveLockContendedError {
+  // The message is the person's line, not the fallback words.
+  readonly personLine: boolean;
+  constructor(fallback: string) {
+    const line = activeDirectiveLockHeldLine();
+    super(line ?? fallback);
+    this.personLine = line !== null;
+    this.name = "ActiveDirectiveLockFolderHeldError";
+  }
+}
+
+// The line where the step did not run; null where there is no likely cause.
+export function activeDirectiveLockHeldLine(): string | null {
+  return lockFolderHeldLine("stopped", activeDirectiveLockBudgetMs());
+}
+
+// The line where the step went on without the record, each step waiting out
+// the lock's budget or the give-up; null where there is no likely cause.
+export function activeDirectiveLockHeldNote(): string | null {
+  return lockFolderHeldLine("goes-on", Math.min(activeDirectiveLockBudgetMs(), lockFolderHeldGiveUpMs()));
+}
+
+// A transaction in this process went on after its release spent the whole
+// budget (transactActiveDirectiveTarget does not throw for it). True once.
+let ACTIVE_DIRECTIVE_RELEASE_HELD = false;
+
+export function takeActiveDirectiveReleaseHeld(): boolean {
+  const held = ACTIVE_DIRECTIVE_RELEASE_HELD;
+  ACTIVE_DIRECTIVE_RELEASE_HELD = false;
+  return held;
+}
+
 // Thrown when an engine observer reaches a durable write primitive. The
 // per-call-site suppressions below keep observers off those paths; this barrier
 // is what makes the guarantee a property of the code shape rather than of an
@@ -9759,7 +9809,7 @@ function transactActiveDirectiveTarget<T>(
   if (pendingRelease) {
     const outcome = releaseCanonicalOwnerStampedLock(pendingRelease.receipt);
     if (outcome === "retryable") {
-      throw new ActiveDirectiveLockContendedError(
+      throw new ActiveDirectiveLockFolderHeldError(
         "Active-directive lock release is still pending",
       );
     }
@@ -9774,8 +9824,13 @@ function transactActiveDirectiveTarget<T>(
   assertRecordPathNoFollow(recordRoot, target.lockDir);
   mkdirSync(dirname(target.markerPath), { recursive: true });
   assertRecordPathNoFollow(recordRoot, target.markerPath);
-  const receipt = acquireActiveDirectiveLock(target.lockDir);
-  if (!receipt) throw new ActiveDirectiveLockContendedError();
+  const acquisition = acquireActiveDirectiveLock(target.lockDir);
+  const receipt = acquisition.receipt;
+  if (!receipt) {
+    throw acquisition.folderHeld
+      ? new ActiveDirectiveLockFolderHeldError("Active-directive coordination is busy")
+      : new ActiveDirectiveLockContendedError();
+  }
   ACTIVE_DIRECTIVE_TRANSACTIONS.add(target.markerPath);
   const onExit = () => releaseCanonicalOwnerStampedLock(receipt);
   ACTIVE_DIRECTIVE_EXIT_HANDLERS.set(target.markerPath, {
@@ -9829,6 +9884,7 @@ function transactActiveDirectiveTarget<T>(
   } finally {
     ACTIVE_DIRECTIVE_TRANSACTIONS.delete(target.markerPath);
     const outcome = releaseCanonicalOwnerStampedLock(receipt);
+    if (outcome === "retryable") ACTIVE_DIRECTIVE_RELEASE_HELD = true;
     const registered = ACTIVE_DIRECTIVE_EXIT_HANDLERS.get(target.markerPath);
     if (
       outcome !== "retryable" &&
@@ -34857,6 +34913,13 @@ function restoreReapPrivate(
   return false;
 }
 
+// Every try at moving the lock or released gate folder of a provably dead owner,
+// or this process's own gate, was refused: on Windows, a program holds that
+// folder open (aidlc-lock-line.ts).
+// A plain null from the gate (a mutex miss, a live owner, an invalid gate) and
+// an owner of unknown generation are not one.
+let HELD_FOLDER_RENAME_FAILURES = 0;
+
 function retireReapClaim(claimDir: string): boolean {
   for (let attempt = 0; attempt <= 100; attempt++) {
     const retired = `${claimDir}.retired.${randomUUID()}`;
@@ -34952,7 +35015,11 @@ function retryPendingReapGateRelease(claimDir: string): boolean {
   }
   if (!markReapGateReleasable(pending.receipt)) return false;
   const outcome = releaseOwnerStampedLock(pending.receipt, false, true);
-  if (outcome === "retryable") return false;
+  if (outcome === "retryable") {
+    // Our own gate folder could not be moved: part of our own release.
+    HELD_FOLDER_RENAME_FAILURES++;
+    return false;
+  }
   clearPendingReapGateRelease(claimDir);
   return true;
 }
@@ -34974,7 +35041,13 @@ function acquireReapClaim(lockDir: string): OwnerStampedLockReceipt | null {
           AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.afterReleasableGateCheck?.(
             claimDir,
           );
-          if (!retireReapClaim(claimDir)) return null;
+          if (!retireReapClaim(claimDir)) {
+            // Only a gate whose owner is provably gone: a live owner may still
+            // be retrying its own release.
+            const owner = ownerProcessState(inspected.owner);
+            if (owner === "dead" || owner === "different") HELD_FOLDER_RENAME_FAILURES++;
+            return null;
+          }
           continue;
         }
         const state = ownerProcessState(inspected.owner);
@@ -35062,7 +35135,10 @@ function reapStaleLock(lockDir: string, reapUnstamped = true): boolean {
         if (attempt < 100) Bun.sleepSync(5);
       }
     }
-    if (!moved) return false;
+    if (!moved) {
+      HELD_FOLDER_RENAME_FAILURES++;
+      return false;
+    }
     if (!reapCandidateStillMatches(dead, candidate)) {
       if (!restoreReapPrivate(lockDir, dead)) releaseClaim = false;
       return false;
@@ -35085,6 +35161,10 @@ interface OwnerStampedLockReceipt {
   lockDir: string; tokenDir: string; owner: LockOwner & { token: string };
   // The contention budget the lock was acquired with; release retries within it.
   releaseBudgetMs?: number;
+  // A release already spent that whole budget once. Later retries (at exit, at
+  // the next transaction) make one short try: a second budget only holds the
+  // person's tool call, and the next process reaps a dead owner's lock anyway.
+  releaseSpent?: boolean;
 }
 
 interface AuditLockReceipt extends OwnerStampedLockReceipt {
@@ -35158,19 +35238,29 @@ function releaseCanonicalOwnerStampedLock(
   // deferring it to process exit: callers such as sensors run subprocesses
   // between audit windows and must not retain the first window's lock across
   // that work.
-  const budgetMs = Math.max(500, receipt.releaseBudgetMs ?? 0);
+  const budgetMs = Math.max(500, receipt.releaseSpent ? 0 : receipt.releaseBudgetMs ?? 0);
   const deadline = process.hrtime.bigint() + BigInt(Math.ceil(budgetMs)) * 1_000_000n;
+  // Rounds whose rename of our own folder, or of a dead owner's gate, was refused.
+  let heldSince: bigint | null = null;
   for (;;) {
+    const failures = HELD_FOLDER_RENAME_FAILURES;
     const gate = acquireReapClaim(receipt.lockDir);
+    let refused = false;
     if (gate) {
       try {
         const outcome = releaseOwnerStampedLock(receipt);
         if (outcome !== "retryable") return outcome;
+        refused = true;
       } finally {
         releaseReapClaim(gate);
       }
     }
-    if (process.hrtime.bigint() >= deadline) return "retryable";
+    const now = process.hrtime.bigint();
+    heldSince = refused || HELD_FOLDER_RENAME_FAILURES > failures ? heldSince ?? now : null;
+    if (now >= deadline || heldTooLong(heldSince, now)) {
+      receipt.releaseSpent = true;
+      return "retryable";
+    }
     Bun.sleepSync(5);
   }
 }
@@ -35205,6 +35295,22 @@ function acquireOwnerStampedLock(
   retryMs: number,
   reapLiveOwnerAfterStale = true,
 ): OwnerStampedLockReceipt | null {
+  return acquireOwnerStampedLockFor(lockDir, maxRetries, retryMs, reapLiveOwnerAfterStale).receipt;
+}
+
+interface OwnerStampedLockAcquisition {
+  receipt: OwnerStampedLockReceipt | null;
+  // The rounds that ran out the budget were stopped by a dead owner's folder
+  // that could not be moved, not by a live owner.
+  folderHeld: boolean;
+}
+
+function acquireOwnerStampedLockFor(
+  lockDir: string,
+  maxRetries: number,
+  retryMs: number,
+  reapLiveOwnerAfterStale: boolean,
+): OwnerStampedLockAcquisition {
   const create = (): OwnerStampedLockReceipt | null => {
     // Negative fast path only. A missing name still goes through the complete
     // coordinated create/recovery protocol and its exclusive mkdir.
@@ -35244,17 +35350,33 @@ function acquireOwnerStampedLock(
       releaseReapClaim(gate);
     }
   };
+  // The budget is time as well as a count: a round that waits out refused
+  // renames (about 0.5 s, 1.5 s on Windows) would otherwise stretch it a
+  // hundredfold. Never less than half a second, as the release, so a small
+  // explicit count still gets its rounds. `heldSince` is when the rounds
+  // started meeting a held folder.
+  const deadline = process.hrtime.bigint() + BigInt(Math.ceil(Math.max(500, maxRetries * retryMs))) * 1_000_000n;
+  let heldSince: bigint | null = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const failures = HELD_FOLDER_RENAME_FAILURES;
     const acquired = create();
-    if (acquired) return acquired;
+    if (acquired) return { receipt: acquired, folderHeld: false };
     if (reapStaleLock(lockDir)) {
       const afterReap = create();
-      if (afterReap) return afterReap;
+      if (afterReap) return { receipt: afterReap, folderHeld: false };
     }
     retryOwnDeferredGateRelease(lockDir);
-    if (attempt < maxRetries) Bun.sleepSync(retryMs);
+    const now = process.hrtime.bigint();
+    heldSince = HELD_FOLDER_RENAME_FAILURES > failures ? heldSince ?? now : null;
+    if (attempt >= maxRetries || now >= deadline || heldTooLong(heldSince, now)) break;
+    Bun.sleepSync(retryMs);
   }
-  return null;
+  return { receipt: null, folderHeld: heldSince !== null };
+}
+
+// Waiting longer does not free a folder a program holds; only stopping it does.
+function heldTooLong(heldSince: bigint | null, now: bigint): boolean {
+  return heldSince !== null && now - heldSince >= BigInt(lockFolderHeldGiveUpMs()) * 1_000_000n;
 }
 
 // A gate release that could not get the native mutex stays deferred, and only
@@ -35298,16 +35420,19 @@ export function runWithOwnerStampedLock<T>(
   }
 }
 
-function acquireActiveDirectiveLock(lockDir: string): OwnerStampedLockReceipt | null {
-  // This wait protects required marker publication, not a best-effort probe.
-  // A caller can request a short/zero contention budget without changing the
-  // ownership, stale-owner, or unstamped-grace rules.
+// This wait protects required marker publication, not a best-effort probe.
+// A caller can request a short/zero contention budget without changing the
+// ownership, stale-owner, or unstamped-grace rules.
+function activeDirectiveLockBudgetMs(): number {
   const raw = process.env.AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS;
   const configured = raw?.trim() ? Number(raw) : NaN;
-  const timeoutMs = Number.isSafeInteger(configured) && configured >= 0
+  return Number.isSafeInteger(configured) && configured >= 0
     ? configured
     : DEFAULT_SUBPROCESS_TIMEOUT_MS;
-  return acquireOwnerStampedLock(lockDir, Math.floor(timeoutMs / 10), 10);
+}
+
+function acquireActiveDirectiveLock(lockDir: string): OwnerStampedLockAcquisition {
+  return acquireOwnerStampedLockFor(lockDir, Math.floor(activeDirectiveLockBudgetMs() / 10), 10, true);
 }
 
 // Receipts, reentrancy, and exit handlers are keyed by the acquisition-bound

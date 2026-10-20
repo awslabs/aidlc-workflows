@@ -148,6 +148,7 @@ function copyCore(root: string, relativePath: string): void {
       "aidlc-guard-operation.ts",
       "aidlc-reply-reader.ts",
       "aidlc-runtime-budget.ts",
+      "aidlc-lock-line.ts",
     ]) {
       copyFileSync(
         join(REPO_ROOT, "core", "tools", dependency),
