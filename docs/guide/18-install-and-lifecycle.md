@@ -746,7 +746,7 @@ Recorded Bedrock answers apply through the normal staged config transaction:
 
 | Harness | Recorded answer application |
 |---------|-----------------------------|
-| Claude Code | Enables Bedrock and writes `AWS_REGION` plus optional `AWS_PROFILE` in `.claude/settings.json`; also keeps the AWS MCP URL and `AWS_REGION` metadata in `.mcp.json` on the same region |
+| Claude Code | Enables Bedrock and writes `AWS_REGION` plus optional `AWS_PROFILE` in your own `.claude/settings.local.json` (git ignores it; the profile is not recorded in `harness.json`); also keeps the AWS MCP URL and `AWS_REGION` metadata in `.mcp.json` on the same region |
 | Codex CLI | Records the choice and instructs the user to keep provider, credentials, and model in `~/.codex/config.toml` |
 | Kiro CLI | No provider answer; model access comes with Kiro |
 | Kiro IDE | No provider answer; model access comes with Kiro |
@@ -770,14 +770,23 @@ the configuration clean. `--provider other` records a manually configured
 non-Bedrock provider and reports that setup as pending until `--acknowledge` is
 supplied. `--reset` removes exact legacy AI-DLC Bedrock defaults or values written
 for the previous recorded answer from Claude, Codex, and opencode project files;
-unproven values are preserved.
+unproven values are preserved. On Claude Code, `--provider current`, `--provider other` and `--reset` also
+take the Bedrock switch and region out of your `.claude/settings.local.json`; an
+`AWS_PROFILE` there stays, and the command says so.
+
+On Claude Code each person's Bedrock answer is their own. A teammate's clone
+carries the project's record but none of your settings, and `aidlc config providers
+--check` and doctor warn them once that Bedrock is recorded but not turned on
+for them. A project set up by an earlier release keeps the answer in the shared
+`.claude/settings.json` until someone answers `aidlc config providers` again,
+which moves it to their own file and says so; a refresh or update leaves it.
 
 The question is worded for the harness in front of you, so each install offers
 the two paths that actually exist for it:
 
 | Harness | `amazon-bedrock` records |
 |---------|--------------------------|
-| Claude Code | the AWS region and profile in `settings.json`, and the AWS MCP region in `.mcp.json` when present |
+| Claude Code | the AWS region and profile in your own `settings.local.json`, and the AWS MCP region in `.mcp.json` when present |
 | Codex CLI | the AWS region and profile in the project record, then guides user-level provider setup in `$CODEX_HOME/config.toml` |
 | OpenCode | the AWS region and profile, and offers to write them to `opencode.json` |
 | GitHub Copilot | that you set the Copilot BYOK provider variables yourself |

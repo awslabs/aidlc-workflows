@@ -279,8 +279,12 @@ import {
 } from "./aidlc-model-policy.ts";
 import { resolveTierCap } from "./aidlc-tiers.ts";
 import {
+  applyClaudeLocalProvider,
   applyConfigDiagnosticRecords,
   applyProjectFlagsToProjection,
+  CLAUDE_PROVIDER_NOT_SET_UP_ID,
+  sharedProvidersRecord,
+  withLocalClaudeProfile,
   harnessOwnsModelAccess,
   providerAnswerIsTheSession,
   sessionModelAccessFact,
@@ -2089,7 +2093,8 @@ function providerRecordFromArgs(
   if (
     next.provider !== current?.provider ||
     next.region !== current?.region ||
-    next.profile !== current?.profile ||
+    // A Claude profile is the person's own, not part of the shared record.
+    (selected.harness !== "claude" && next.profile !== current?.profile) ||
     next.opencodeDefault !== current?.opencodeDefault
   ) {
     delete next.acknowledged;
@@ -2589,6 +2594,10 @@ function diagnosticSummary(
           ? "  Providers    legacy builtin answer; no provider settings written"
           : `  Providers    ${record.provider} region=${record.region ?? "manual"} profile=${
             record.profile ?? "default-chain"
+          }${
+            harness === "claude" && record.provider === "amazon-bedrock"
+              ? ", in .claude/settings.local.json (just for you)"
+              : ""
           }`,
       ],
       notes: record
@@ -3185,6 +3194,9 @@ function prepareDiagnosticSection(
     section,
   );
   const records = readConfigDiagnosticRecords(selected.root);
+  if (section === "providers" && selected.harness === "claude") {
+    records.providers = withLocalClaudeProfile(projectDir, selected.harnessDir, records.providers);
+  }
   if (argv.includes("--show")) {
     showDiagnosticSection(section, projectDir, selected, records, options);
     return null;
@@ -3258,7 +3270,7 @@ function prepareDiagnosticSection(
       selected.harnessDir,
       selected.harness,
       next as ProvidersRecord,
-    ).some((issue) => issue.severity !== "warn");
+    ).some((issue) => issue.severity !== "warn" || issue.id === CLAUDE_PROVIDER_NOT_SET_UP_ID);
   if (canonical(previous) === canonical(next) && !providerSurfaceDrift) {
     emitResult(success(`${section} configuration unchanged`), options);
     return null;
@@ -3290,7 +3302,12 @@ function prepareDiagnosticSection(
       harnessDir: selected.harnessDir,
       previous,
       next,
-      overrides: diagnosticOverrides(section, next),
+      overrides: diagnosticOverrides(
+        section,
+        section === "providers" && selected.harness === "claude"
+          ? sharedProvidersRecord(next as ProvidersRecord | null)
+          : next,
+      ),
       summaryLines: summary.lines,
       notes: summary.notes,
     },
@@ -5224,6 +5241,7 @@ function preserveClaudeProviderFields(
   projectFlags: ProjectFlagsRecord | null,
   prior: Baseline | null,
   notes: string[],
+  providersAnswered: boolean,
 ): Set<string> {
   const retiredManagedFiles = new Set<string>();
   const relative = `${harnessDir}/settings.json`;
@@ -5376,9 +5394,17 @@ function preserveClaudeProviderFields(
     (!previousProvider.profile ||
       currentEnv.AWS_PROFILE === previousProvider.profile)
   ) {
-    delete currentEnv.CLAUDE_CODE_USE_BEDROCK;
-    delete currentEnv.AWS_REGION;
-    if (previousProvider.profile) delete currentEnv.AWS_PROFILE;
+    // An earlier release wrote this answer into the shared file. A refresh
+    // leaves it there; only a new providers answer takes it out, and a Bedrock
+    // answer then lives in the person's settings.local.json.
+    if (providersAnswered) {
+      delete currentEnv.CLAUDE_CODE_USE_BEDROCK;
+      delete currentEnv.AWS_REGION;
+      if (previousProvider.profile) delete currentEnv.AWS_PROFILE;
+      if (nextProvider?.provider === "amazon-bedrock") {
+        notes.push(`Moved your Amazon Bedrock settings from ${relative} to ${harnessDir}/settings.local.json.`);
+      }
+    }
   } else if (currentLegacy) {
     delete currentEnv.CLAUDE_CODE_USE_BEDROCK;
     delete currentEnv.AWS_REGION;
@@ -5387,7 +5413,9 @@ function preserveClaudeProviderFields(
       !Array.isArray(staged.env)
     ? { ...staged.env as Record<string, unknown> }
     : {};
-  if (nextProvider?.provider !== "amazon-bedrock") {
+  // A providers answer stages the project's own file, which still holds the
+  // earlier answer; a Bedrock answer now goes to settings.local.json instead.
+  if (nextProvider?.provider !== "amazon-bedrock" || providersAnswered) {
     const stagedLegacy = hasLegacyClaudeProviderConfig(stagedEnv);
     if (
       previousProvider?.provider === "amazon-bedrock" ||
@@ -6529,6 +6557,7 @@ function preserveUserProviderFields(
   notes: string[],
   retiredManagedFiles: Set<string>,
   unproven: Set<string>,
+  providersAnswered: boolean,
 ): boolean {
   if (harness === "claude") {
     // Claude settings merge per entry, so the refreshed file always applies.
@@ -6541,6 +6570,7 @@ function preserveUserProviderFields(
       projectFlags,
       prior,
       notes,
+      providersAnswered,
     )) retiredManagedFiles.add(rel);
     return true;
   } else if (harness === "codex") {
@@ -6839,6 +6869,7 @@ function prepareRefreshSource(
     notes,
     retiredManagedFiles,
     unproven,
+    diagnosticsOverride !== undefined && Object.hasOwn(diagnosticsOverride, "providers"),
   );
   // A recorded flag overrides a directly customized settings value.
   applyProjectFlagsToProjection(
@@ -11773,7 +11804,17 @@ function settingsChangeLines(
 // one back where a command can.
 function recordChangeLines(projectDir: string, context: DiagnosticsMutationContext): string[] {
   if (canonical(context.previous) === canonical(context.next)) return [];
-  const file = `${context.harnessDir}/tools/data/harness.json`;
+  // Only a Claude answer's profile changed: that lives in the person's own file.
+  const personalOnly = context.section === "providers" && context.harness === "claude" &&
+    context.previous !== null && context.next !== null &&
+    canonical(sharedProvidersRecord(context.previous as ProvidersRecord)) ===
+      canonical(sharedProvidersRecord(context.next as ProvidersRecord));
+  // With no earlier profile no command puts the file back, and the summary
+  // line already says where the answer went.
+  if (personalOnly && !(context.previous as ProvidersRecord).profile) return [];
+  const file = personalOnly
+    ? `${context.harnessDir}/settings.local.json`
+    : `${context.harnessDir}/tools/data/harness.json`;
   const command = (args: string[]): string =>
     `${configInvocationFor(projectDir)} config ${context.section} ${
       args.map((arg) => quoteCommandArgument(arg)).join(" ")
@@ -13789,6 +13830,16 @@ export async function main(
       ? await applyKiroSessionPlan(pendingKiroSession)
       : null;
     if (kiroSession && options.mode === "human") writeKiroSessionLines(kiroSession.lines);
+    // A Claude Bedrock answer's env is written to the person's own file once
+    // AI-DLC's record is saved.
+    if (diagnosticsContext?.section === "providers" && diagnosticsContext.harness === "claude") {
+      diagnosticsContext.notes.push(...applyClaudeLocalProvider(
+        projectDir,
+        diagnosticsContext.harnessDir,
+        diagnosticsContext.previous as ProvidersRecord | null,
+        diagnosticsContext.next as ProvidersRecord | null,
+      ));
+    }
     if (diagnosticsContext && options.mode === "human") {
       writeMenuLines("", diagnosticsContext.summaryLines);
       writeMenuLines("", diagnosticsContext.notes.map((note) => `  Note: ${note}`));

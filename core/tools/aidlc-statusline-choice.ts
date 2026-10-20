@@ -309,7 +309,7 @@ export function claudeHasOwnStatusLine(layers: ClaudeStatusLineLayers, projectDi
 // Claude Code: AI-DLC's status line in the person's .claude/settings.local.json
 // ---------------------------------------------------------------------------
 
-function readSettingsObject(path: string): { text: string; value: Record<string, unknown> } {
+export function readSettingsObject(path: string): { text: string; value: Record<string, unknown> } {
   if (!existsSync(path)) return { text: "", value: {} };
   const text = readFileSync(path, "utf-8");
   let parsed: unknown;
@@ -374,7 +374,7 @@ export function setClaudeStatusLine(
   return { changed: true, restored: Boolean(options.restore) };
 }
 
-function writeSettingsObject(path: string, value: Record<string, unknown>, like: string): void {
+export function writeSettingsObject(path: string, value: Record<string, unknown>, like: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileAtomic(path, jsonFileText(value, like));
 }

@@ -210,7 +210,7 @@ every default except the provider, where it chose Amazon Bedrock:
   Step 2 of 6 - Model provider
   No AWS credentials were detected.
     1. keep current     inherit the provider already configured in the harness (default)
-    2. amazon-bedrock   write the AWS region and profile to settings.json
+    2. amazon-bedrock   write the AWS region and profile to settings.local.json, just for you
   Provider [1]: 2
   AWS region [us-east-1]:
   AWS profile [default credential chain]:
@@ -260,7 +260,7 @@ What each step writes:
 | Step | Writes |
 | --- | --- |
 | 1. Harness | Which tool's files to set up (`.claude/` for Claude Code). |
-| 2. Model provider | `keep current` writes nothing. `amazon-bedrock` adds `CLAUDE_CODE_USE_BEDROCK` and `AWS_REGION` (and the profile, when you name one) to the `env` block of `.claude/settings.json`. |
+| 2. Model provider | `keep current` writes nothing. `amazon-bedrock` adds `CLAUDE_CODE_USE_BEDROCK` and `AWS_REGION` (and the profile, when you name one) to the `env` block of your own `.claude/settings.local.json` (git ignores it), never the shared `.claude/settings.json`; the project's record of the answer keeps no profile. |
 | 3. Model effort preset | The preset name in the file step 6 picks; `unchanged` records none. |
 | 4. Plugins | Which installed plugins are on. |
 | 5. MCP servers | `.mcp.json` with the shipped servers, or none. |

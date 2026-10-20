@@ -27,6 +27,7 @@ import {
   readdirSync,
   realpathSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, platform as hostPlatform } from "node:os";
@@ -61,6 +62,13 @@ import {
 } from "./aidlc-runtime-paths.ts";
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import { compareVersions, VERSION_ID } from "./aidlc-channel.ts";
+import {
+  claudeUserSettingsPath,
+  managedSettingsFiles,
+  readSettingsObject,
+  resolveManagedSettingsCandidates,
+  writeSettingsObject,
+} from "./aidlc-statusline-choice.ts";
 import { installedExecutablePath } from "./aidlc-install-paths.ts";
 import { cmdScriptLaunch, isCmdScript, pathEntries, resolveExecutableOnPath } from "./aidlc-executable-path.ts";
 import { personaTwinRels } from "./aidlc-plugin.ts";
@@ -131,7 +139,7 @@ export function providerMenuCopy(
 ): ProviderMenuCopy {
   switch (harness) {
     case "claude":
-      return { bedrock: "write the AWS region and profile to settings.json" };
+      return { bedrock: "write the AWS region and profile to settings.local.json, just for you" };
     case "codex":
       return { bedrock: "record the AWS region and profile and guide user-level Codex setup" };
     case "opencode":
@@ -1240,22 +1248,13 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, jsonFileText(value, existsSync(path) ? readFileSync(path, "utf-8") : ""));
 }
 
-function writeClaudeProvider(
+// The Bedrock answer's env is the person's own and never goes into the shared
+// settings.json (applyClaudeLocalProvider writes it); the project's aws-mcp
+// server follows the recorded region.
+function writeClaudeMcpRegion(
   projectionRoot: string,
-  harnessDir: string,
   record: ProvidersRecord,
 ): void {
-  const settingsPath = join(projectionRoot, harnessDir, "settings.json");
-  const settings = readJsonFile(settingsPath) as Record<string, unknown>;
-  const env = isRecord(settings.env) ? { ...settings.env } : {};
-  stripLegacyClaudeModelAliases(env);
-  env.CLAUDE_CODE_USE_BEDROCK = "1";
-  env.AWS_REGION = record.region;
-  if (record.profile) env.AWS_PROFILE = record.profile;
-  else delete env.AWS_PROFILE;
-  settings.env = env;
-  writeJson(settingsPath, settings);
-
   const mcpPath = join(projectionRoot, ".mcp.json");
   if (!existsSync(mcpPath)) return;
   const mcp = readJsonFile(mcpPath) as Record<string, unknown>;
@@ -1321,6 +1320,209 @@ export function hasLegacyClaudeProviderConfig(
   return Object.entries(LEGACY_CLAUDE_BEDROCK_ENV).every(
     ([key, value]) => env[key] === value,
   );
+}
+
+// A Bedrock answer on Claude Code is the person's own (#2712): its env lives
+// in their .claude/settings.local.json, which git ignores and Claude Code reads
+// over the shared settings.json, and the record in harness.json keeps no
+// profile. The profile is read back from that file wherever it is shown.
+export const CLAUDE_PROVIDER_NOT_SET_UP_ID = "provider-claude-not-set-up";
+
+function claudeLocalSettingsFile(projectDir: string, harnessDir: string): string {
+  return join(projectDir, harnessDir, "settings.local.json");
+}
+
+/** The record as it is shared: a Claude answer's profile stays out of harness.json. */
+export function sharedProvidersRecord(record: ProvidersRecord | null): ProvidersRecord | null {
+  if (!record || record.profile === undefined) return record;
+  const { profile: _personal, ...shared } = record;
+  return shared;
+}
+
+/** A Claude Bedrock record with the profile this person's settings.local.json gives it. */
+export function withLocalClaudeProfile(
+  projectDir: string,
+  harnessDir: string,
+  record: ProvidersRecord | null,
+): ProvidersRecord | null {
+  if (record?.provider !== "amazon-bedrock") return record;
+  try {
+    const value = readJsonFile(claudeLocalSettingsFile(projectDir, harnessDir));
+    const profile = isRecord(value) && isRecord(value.env) ? value.env.AWS_PROFILE : undefined;
+    return typeof profile === "string" && profile !== "" ? { ...record, profile } : record;
+  } catch {
+    // No local file, or one AI-DLC cannot read: the record says what it has.
+    return record;
+  }
+}
+
+/**
+ * Write a providers answer into the person's .claude/settings.local.json, once
+ * AI-DLC's record is saved. Every other key of the file stays. Moving off
+ * Bedrock takes out the switch and region the earlier answer wrote; an
+ * AWS_PROFILE stays, since nothing proves it was AI-DLC's. Returns the lines
+ * to say; a file AI-DLC cannot edit is one of them, never a failure.
+ */
+export function applyClaudeLocalProvider(
+  projectDir: string,
+  harnessDir: string,
+  previous: ProvidersRecord | null,
+  next: ProvidersRecord | null,
+): string[] {
+  const shown = `${harnessDir}/settings.local.json`;
+  const path = claudeLocalSettingsFile(projectDir, harnessDir);
+  const lines: string[] = [];
+  try {
+    const { text, value } = readSettingsObject(path);
+    const before = isRecord(value.env) ? value.env : {};
+    const env = { ...before };
+    if (next?.provider === "amazon-bedrock" && next.region) {
+      env.CLAUDE_CODE_USE_BEDROCK = "1";
+      env.AWS_REGION = next.region;
+      if (next.profile) env.AWS_PROFILE = next.profile;
+    } else if (
+      previous?.provider === "amazon-bedrock" &&
+      env.CLAUDE_CODE_USE_BEDROCK === "1" &&
+      env.AWS_REGION === previous.region
+    ) {
+      delete env.CLAUDE_CODE_USE_BEDROCK;
+      delete env.AWS_REGION;
+      if (env.AWS_PROFILE !== undefined) {
+        lines.push(`AWS_PROFILE stays in ${shown}; delete it there if it was only for Amazon Bedrock.`);
+      }
+    }
+    if (JSON.stringify(env) === JSON.stringify(before)) return lines;
+    if (Object.keys(env).length > 0) value.env = env;
+    else delete value.env;
+    if (Object.keys(value).length === 0) unlinkSync(path);
+    else writeSettingsObject(path, value, text);
+    return lines;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    return [
+      `Could not write your Amazon Bedrock settings to ${shown} (${
+        code ?? "it is not a JSON object AI-DLC can edit"
+      }); fix that file, then run ${invocationForHarness(harnessDir)} config providers again.`,
+    ];
+  }
+}
+
+type ClaudeEnvLayer = {
+  /** The file that sets these, or null for the environment Claude Code starts in. */
+  file: string | null;
+  managed: boolean;
+  env: Record<string, unknown>;
+};
+
+function managedClaudeEnv(env: NodeJS.ProcessEnv): ClaudeEnvLayer | null {
+  for (const candidate of resolveManagedSettingsCandidates(hostPlatform(), env)) {
+    let found: ClaudeEnvLayer | null = null;
+    for (const file of managedSettingsFiles(candidate)) {
+      try {
+        const value = readJsonFile(file);
+        if (isRecord(value) && isRecord(value.env)) found = { file, managed: true, env: value.env };
+      } catch {
+        // An absent or unreadable managed file sets nothing.
+      }
+    }
+    if (found) return found;
+  }
+  return null;
+}
+
+// Every place Claude Code takes env from, highest first: the organization's
+// managed settings, the project's settings.local.json, its settings.json, the
+// person's user file, then the environment it starts in (measured on 2.1.304:
+// local over project over user over the shell, key by key). The project's
+// files must be readable; a person's own file that is not sets nothing here.
+function claudeEnvLayers(
+  projectDir: string,
+  harnessDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+): ClaudeEnvLayer[] {
+  const layers: ClaudeEnvLayer[] = [];
+  const managed = managedClaudeEnv(env);
+  if (managed) layers.push(managed);
+  for (const file of [
+    claudeLocalSettingsFile(projectDir, harnessDir),
+    join(projectDir, harnessDir, "settings.json"),
+  ]) {
+    if (!existsSync(file)) continue;
+    const value = readJsonFile(file);
+    layers.push({ file, managed: false, env: isRecord(value) && isRecord(value.env) ? value.env : {} });
+  }
+  const user = claudeUserSettingsPath(env);
+  if (user && existsSync(user)) {
+    try {
+      const value = readJsonFile(user);
+      if (isRecord(value) && isRecord(value.env)) layers.push({ file: user, managed: false, env: value.env });
+    } catch {
+      // Claude Code reports its own unreadable user file.
+    }
+  }
+  layers.push({ file: null, managed: false, env });
+  return layers;
+}
+
+// What Claude Code makes of the recorded Bedrock answer, with the step that
+// fixes it. A value set above settings.local.json (managed settings) is named
+// with its file: writing the answer again would not change it.
+function claudeBedrockIssues(
+  projectDir: string,
+  harnessDir: string,
+  record: ProvidersRecord,
+): DiagnosticIssue[] {
+  const layers = claudeEnvLayers(projectDir, harnessDir);
+  const holder = (key: string) => layers.find((layer) => layer.env[key] !== undefined);
+  const value = (key: string) => holder(key)?.env[key];
+  const invoke = invocationForHarness(harnessDir);
+  const local = `${harnessDir}/settings.local.json`;
+  if (value("CLAUDE_CODE_USE_BEDROCK") === undefined) {
+    return [{
+      id: CLAUDE_PROVIDER_NOT_SET_UP_ID,
+      severity: "warn",
+      message:
+        `Amazon Bedrock (${record.region}) is recorded for this project but not turned on in your Claude Code settings; ` +
+        `to use it, run ${invoke} config providers`,
+      remediation: `Run ${invoke} config providers; it writes the region and your AWS profile to ${local}, just for you.`,
+    }];
+  }
+  const keys = [
+    ...(value("CLAUDE_CODE_USE_BEDROCK") !== "1" ? ["CLAUDE_CODE_USE_BEDROCK"] : []),
+    ...(value("AWS_REGION") !== record.region ? ["AWS_REGION"] : []),
+    ...(record.profile && value("AWS_PROFILE") !== record.profile ? ["AWS_PROFILE"] : []),
+  ];
+  if (keys.length === 0) return [];
+  const managed = keys.map(holder).find((layer) => layer?.managed);
+  if (managed?.file) {
+    const held = keys.filter((key) => holder(key) === managed).join(", ");
+    return [{
+      id: "provider-claude-managed-override",
+      message:
+        `Your organization's managed Claude Code settings (${managed.file}) set ${held} differently from the recorded ` +
+        "Amazon Bedrock answer, and they outrank this project's settings; change that file, or ask whoever manages it",
+      remediation: `Change ${held} in ${managed.file}, or ask whoever manages that file.`,
+    }];
+  }
+  const holders = [...new Set(keys.map(holder).filter((layer): layer is ClaudeEnvLayer => layer !== undefined))];
+  const places = holders.map((layer) =>
+    layer.file === null
+      ? "the environment Claude Code starts in"
+      : layer.file.startsWith(projectDir)
+      ? relative(projectDir, layer.file).replaceAll("\\", "/")
+      : layer.file
+  );
+  const step = `run ${invoke} config providers to write it to ${local}`;
+  return [{
+    id: holders.some((layer) => layer.file === claudeLocalSettingsFile(projectDir, harnessDir))
+      ? "provider-claude-local-override"
+      : "provider-claude-settings",
+    message: places.length > 0
+      ? `${keys.join(", ")} in ${places.join(" and ")} ${keys.length === 1 ? "does" : "do"} not match the ` +
+        `recorded Amazon Bedrock answer; ${step}`
+      : `Claude Code turns Amazon Bedrock on without the recorded ${keys.join(", ")}; ${step}`,
+    remediation: `Run ${invoke} config providers to write the recorded answer to ${local}.`,
+  }];
 }
 
 function clearClaudeProvider(
@@ -1715,7 +1917,7 @@ export function applyConfigDiagnosticRecords(
   }
   if (!provider.region) return;
   if (harness === "claude") {
-    writeClaudeProvider(projectionRoot, harnessDir, provider);
+    writeClaudeMcpRegion(projectionRoot, provider);
   } else if (harness === "opencode") {
     writeOpenCodeProvider(projectionRoot, provider);
   }
@@ -1762,7 +1964,7 @@ export function providerFiles(
   if (harness === "claude") {
     files.push({
       setting: "AWS region and profile",
-      file: join(harnessDir, "settings.json"),
+      file: join(harnessDir, "settings.local.json"),
     });
     if (existsSync(join(projectDir, ".mcp.json"))) {
       files.push({
@@ -2281,43 +2483,7 @@ export function providerSurfaceIssues(
         PROVIDER_PENDING_ACTIONS["codex-provider-configuration"].remediation,
       );
     } else if (harness === "claude") {
-      const settingsPath = join(projectDir, harnessDir, "settings.json");
-      const settings = readJsonFile(settingsPath) as Record<string, unknown>;
-      const env = isRecord(settings.env) ? settings.env : {};
-      if (
-        env.CLAUDE_CODE_USE_BEDROCK !== "1" ||
-        env.AWS_REGION !== record.region ||
-        (record.profile && env.AWS_PROFILE !== record.profile)
-      ) {
-        mismatch("provider-claude-settings", settingsPath, "Claude settings do not enable Bedrock with the recorded AWS region/profile");
-      }
-      const localPath = join(projectDir, harnessDir, "settings.local.json");
-      if (existsSync(localPath)) {
-        const local = readJsonFile(localPath) as Record<string, unknown>;
-        const localEnv = isRecord(local.env) ? local.env : {};
-        const conflicts = [
-          ...(Object.hasOwn(localEnv, "CLAUDE_CODE_USE_BEDROCK") &&
-              localEnv.CLAUDE_CODE_USE_BEDROCK !== "1"
-            ? ["CLAUDE_CODE_USE_BEDROCK"]
-            : []),
-          ...(Object.hasOwn(localEnv, "AWS_REGION") &&
-              localEnv.AWS_REGION !== record.region
-            ? ["AWS_REGION"]
-            : []),
-          ...(record.profile &&
-              Object.hasOwn(localEnv, "AWS_PROFILE") &&
-              localEnv.AWS_PROFILE !== record.profile
-            ? ["AWS_PROFILE"]
-            : []),
-        ];
-        if (conflicts.length > 0) {
-          mismatch(
-            "provider-claude-local-override",
-            localPath,
-            `Claude local settings override the recorded Bedrock choice with: ${conflicts.join(", ")}`,
-          );
-        }
-      }
+      issues.push(...claudeBedrockIssues(projectDir, harnessDir, record));
       const mcpPath = join(projectDir, ".mcp.json");
       if (existsSync(mcpPath)) {
         const text = readFileSync(mcpPath, "utf-8");

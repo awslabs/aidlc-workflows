@@ -485,10 +485,15 @@ function expectConfiguredProject(
         expect.objectContaining({ id: "bedrock-model-access", status: "done" }),
       ]),
     }));
-    expect(nativeSettings.env).toEqual(expect.objectContaining({
-      CLAUDE_CODE_USE_BEDROCK: "1",
-      AWS_REGION: "us-east-2",
-    }));
+    // The answer is the person's own (#2712): their git-ignored file, never
+    // the shared settings.json, and the shared record keeps no profile.
+    expect(harness.providers).not.toHaveProperty("profile");
+    expect(nativeSettings.env?.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(project, ".claude", "settings.local.json"), "utf-8")).env)
+      .toEqual(expect.objectContaining({
+        CLAUDE_CODE_USE_BEDROCK: "1",
+        AWS_REGION: "us-east-2",
+      }));
   }
   expect(readFileSync(join(project, ".claude", "agents", "aidlc-product-lead-agent.md"), "utf-8"))
     .toContain("effort: medium");

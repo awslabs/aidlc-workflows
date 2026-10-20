@@ -253,7 +253,7 @@ describe("t296 first-run config setup walk", () => {
       "1. keep current     inherit the provider already configured in the harness (default)",
     );
     expect(result.stdout).toContain(
-      "2. amazon-bedrock   write the AWS region and profile to settings.json",
+      "2. amazon-bedrock   write the AWS region and profile to settings.local.json, just for you",
     );
     expect(result.stdout).not.toContain("builtin");
     expect(readConfigDiagnosticRecords(join(path, ".claude")).providers)
@@ -657,14 +657,17 @@ describe("t296 first-run config setup walk", () => {
     expect(records.providers).toEqual(expect.objectContaining({
       provider: "amazon-bedrock",
       region: "us-west-2",
-      profile: "dev",
       pendingActions: [
         { id: "bedrock-model-access", status: "done" },
       ],
     }));
-    const settings = readFileSync(join(path, ".claude", "settings.json"), "utf-8");
+    expect(records.providers).not.toHaveProperty("profile");
+    // The answer is the person's own (#2712): their git-ignored file, never the
+    // shared settings.json, and the shared record keeps no profile.
+    const settings = readFileSync(join(path, ".claude", "settings.local.json"), "utf-8");
     expect(settings).toContain('"AWS_REGION": "us-west-2"');
     expect(settings).toContain('"AWS_PROFILE": "dev"');
+    expect(readFileSync(join(path, ".claude", "settings.json"), "utf-8")).not.toContain("AWS_PROFILE");
 
     const rerun = run(
       [
@@ -748,7 +751,7 @@ describe("t296 first-run config setup walk", () => {
     );
     expect(walked.status, walked.stdout + walked.stderr).toBe(0);
     expect(walked.stdout).toContain(
-      "2. amazon-bedrock   write the AWS region and profile to settings.json (recorded: eu-west-1, team; default)",
+      "2. amazon-bedrock   write the AWS region and profile to settings.local.json, just for you (recorded: eu-west-1, team; default)",
     );
     expect(walked.stdout).toContain("Provider [2]:");
     expect(walked.stdout).toContain("AWS region [eu-west-1]:");
