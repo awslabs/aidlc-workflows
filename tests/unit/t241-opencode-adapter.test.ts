@@ -671,7 +671,6 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     const none = folder("empty-bin", []);
     // Windows allows % and ! in an account name, and the default install sits under the profile.
     const account = folder("Users\\me%USERNAME%!x!\\bin", ["aidlc.cmd"]);
-    const quoted = folder('bin"q', ["aidlc.cmd"]);
     const hookArgs = ["engine", "hook", "session-start"];
     const comSpec = "C:\\Windows\\system32\\cmd.exe";
     // Windows names the variable Path, and ComSpec as it likes.
@@ -693,7 +692,10 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
       env: { AIDLC_CMD_SCRIPT: resolve(account, "aidlc.cmd") },
     });
     expect(windowsScriptLaunch("aidlc", ["engine", "hook", "a&b"], "win32", { Path: cmdOnly })).toBe("refused");
-    expect(windowsScriptLaunch("aidlc", hookArgs, "win32", { Path: quoted })).toBe("refused");
+    // Windows cannot make a folder whose name holds a ", so this one runs elsewhere.
+    if (process.platform !== "win32") {
+      expect(windowsScriptLaunch("aidlc", hookArgs, "win32", { Path: folder('bin"q', ["aidlc.cmd"]) })).toBe("refused");
+    }
   });
 
   test.skipIf(process.platform !== "win32")("on Windows the plugin's hooks reach the aidlc.cmd launcher the install puts on PATH", async () => {
