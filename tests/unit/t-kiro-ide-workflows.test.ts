@@ -70,6 +70,9 @@ function machine(settings?: string): { env: Record<string, string>; settingsPath
       AIDLC_INSTALL_ROOT: join(root, "aidlc"),
       AIDLC_BIN_DIR: join(root, "aidlc", "bin"),
       AIDLC_TEST_KIRO_IDE_SETTINGS: settingsPath,
+      // The runner sets it too; named here so a plain `bun test` of this file
+      // never reaches the person's own kiro-cli and Kiro CLI settings.
+      AIDLC_TEST_NAME: "t-kiro-ide-workflows",
     },
   };
 }
@@ -270,7 +273,7 @@ describe("the chat asks once", () => {
       expect(line).toContain("Do you want me to turn Workflows off? It is a Kiro setting for all your projects");
       expect(line).toContain("run `bun .kiro/tools/aidlc.ts config trust --kiro-workflows off --yes`");
       // A first message that already asks to turn it off or on is the answer, never asked again.
-      expect(line).toStartWith("ASK ONCE: if the person's message already says what they want for Kiro's Workflows feature (and does not name Kiro CLI), that is their answer and you do not ask: to turn it off, run `bun .kiro/tools/aidlc.ts config trust --kiro-workflows off --yes` and tell them what it prints; to keep it on, leave it. Otherwise, after you answer their message, ask them");
+      expect(line).toStartWith("ASK ONCE: if the person's message already asks to turn this Kiro's Workflows feature off or to keep it on (the Kiro skill's Workflows note says which Kiro a request means), that is their answer and you do not ask: do what it asks as that note says (keeping a switch on runs its setter with `on --yes`, so the answer is kept) and tell them what it prints. Otherwise, after you answer their message, ask them");
       expect(readKiroWorkflowsAnswer()).toBe("asked");
       expect(kiroIdeWorkflowsAsk("bun .kiro/tools/aidlc.ts", process.env)).toBe("");
     });
@@ -445,12 +448,23 @@ describe("config trust and doctor", () => {
     const off = runInit(["config", "trust", "--project-dir", project, "--kiro-workflows", "off", "--yes"], project, m.env);
     expect(off.status, off.out).toBe(0);
     expect(off.out).toContain("Turned Kiro's Workflows feature off");
+    const offAgain = runInit(["config", "trust", "--project-dir", project, "--kiro-workflows", "off", "--yes"], project, m.env);
+    expect(offAgain.status, offAgain.out).toBe(0);
+    expect(offAgain.out).toContain("Kiro's Workflows feature is already off; nothing changed.");
     expect(readKiroIdeWorkflows(m.env).enabled).toBe(false);
     withEnv(m.env, () => expect(readKiroWorkflowsAnswer()).toBe("off"));
 
     const on = runInit(["config", "trust", "--project-dir", project, "--kiro-workflows", "on", "--yes"], project, m.env);
     expect(on.status, on.out).toBe(0);
     expect(on.out).toContain("Turned Kiro's Workflows feature back on");
+    expect(readFileSync(m.settingsPath, "utf-8")).toBe(ON_WITH_COMMENTS);
+    withEnv(m.env, () => expect(readKiroWorkflowsAnswer()).toBe("on"));
+
+    // Keeping it on when it is on changes nothing and keeps the answer, with the way to turn it off later.
+    const kept = runInit(["config", "trust", "--project-dir", project, "--kiro-workflows", "on", "--yes"], project, m.env);
+    expect(kept.status, kept.out).toBe(0);
+    expect(kept.out).toContain("Kept Kiro's Workflows feature on; AI-DLC will not ask again. To turn it off later:");
+    expect(kept.out).not.toContain("Turned Kiro's Workflows feature back on");
     expect(readFileSync(m.settingsPath, "utf-8")).toBe(ON_WITH_COMMENTS);
     withEnv(m.env, () => expect(readKiroWorkflowsAnswer()).toBe("on"));
 
@@ -596,6 +610,23 @@ describe("Kiro CLI's own Workflows switch", () => {
     expect(writesIn(off.writes)).toEqual([["settings", "chat.enableWorkflows", "true"]]);
     expect(readFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-cli-workflows"), "utf-8")).toBe("on\n");
 
+    const keep = kiroCli(m, CLI_ON);
+    const keptWrites = writesIn(keep.writes);
+    const kept = runInit(["config", "trust", "--project-dir", project, "--kiro-cli-workflows", "on", "--yes"], project, { ...m.env, ...keep.env });
+    expect(kept.status, kept.out).toBe(0);
+    expect(kept.out).toContain("Kept Kiro CLI's Workflows feature on; AI-DLC will not ask again. To turn it off later:");
+    expect(kept.out).not.toContain("Turned Kiro CLI's Workflows feature back on");
+    expect(writesIn(keep.writes)).toEqual(keptWrites);
+    expect(readFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-cli-workflows"), "utf-8")).toBe("on\n");
+
+    const alreadyOff = kiroCli(m, { "chat.enableWorkflows": false });
+    const offAgain = runInit(["config", "trust", "--project-dir", project, "--kiro-cli-workflows", "off", "--yes"], project, { ...m.env, ...alreadyOff.env });
+    expect(offAgain.status, offAgain.out).toBe(0);
+    expect(offAgain.out).toContain("Kiro CLI's Workflows feature is already off; nothing changed.");
+    expect(readFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-cli-workflows"), "utf-8")).toBe("off\n");
+
+    // A write Kiro CLI refuses keeps whatever answer was there.
+    writeFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-cli-workflows"), "on\n");
     const refused = kiroCli(m, CLI_ON, "chat.enableWorkflows");
     const failed = runInit(["config", "trust", "--project-dir", project, "--kiro-cli-workflows", "off", "--yes"], project, { ...m.env, ...refused.env });
     expect(failed.status).not.toBe(0);
@@ -668,8 +699,7 @@ describe("Kiro CLI's own Workflows switch", () => {
     const first = await prompt({});
     expect(first).toContain("Kiro CLI's Workflows feature is on, and it stops AI-DLC's reviews and helpers from running in this chat.");
     expect(first).toContain("config trust --kiro-cli-workflows off --yes");
-    expect(first).toContain("ASK ONCE: if the person's message already says what they want for Kiro CLI's Workflows feature (in this chat, Kiro's Workflows feature counts unless they name Kiro IDE), that is their answer and you do not ask: to turn it off, run `");
-    expect(first).toContain("--kiro-cli-workflows off --yes` and tell them what it prints; to keep it on, leave it. Otherwise, after you answer their message, ask them");
+    expect(first).toContain("ASK ONCE: if the person's message already asks to turn this Kiro's Workflows feature off or to keep it on (the Kiro skill's Workflows note says which Kiro a request means), that is their answer and you do not ask: do what it asks as that note says (keeping a switch on runs its setter with `on --yes`, so the answer is kept) and tell them what it prints. Otherwise, after you answer their message, ask them");
     expect(await prompt({})).not.toContain("Workflows");
     expect(readFileSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-cli-workflows"), "utf-8")).toBe("asked\n");
     expect(existsSync(join(m.env.AIDLC_INSTALL_ROOT, "kiro-ide-workflows"))).toBe(false);

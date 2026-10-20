@@ -160,6 +160,15 @@ export function kiroWorkflowsQuestionDue(env: NodeJS.ProcessEnv = process.env): 
   return readKiroIdeWorkflows(env).enabled && readKiroWorkflowsAnswer() === null;
 }
 
+// Both once-only asks open with this: a first message that already says what
+// to do with Workflows is the answer. Which Kiro's switch it means is the Kiro
+// skill's Workflows note, its one reader.
+const ALREADY_ANSWERED =
+  "if the person's message already asks to turn this Kiro's Workflows feature off or to keep it on (the Kiro " +
+  "skill's Workflows note says which Kiro a request means), that is their answer and you do not ask: do what it " +
+  "asks as that note says (keeping a switch on runs its setter with `on --yes`, so the answer is kept) and tell " +
+  "them what it prints. ";
+
 const RELOAD_STEP =
   "If Kiro is open, run Developer: Reload Window from the Command Palette (Ctrl+Shift+P, or Cmd+Shift+P on macOS) " +
   "so open chats pick it up.";
@@ -176,6 +185,10 @@ export function kiroWorkflowsOffLine(): string {
 
 export function kiroWorkflowsOnLine(): string {
   return `Turned Kiro's Workflows feature back on (a Kiro setting for all your projects). ${RELOAD_STEP}`;
+}
+
+export function kiroWorkflowsAlreadyOffLine(): string {
+  return "Kiro's Workflows feature is already off; nothing changed.";
 }
 
 export function kiroWorkflowsKeptLine(invoke: string): string {
@@ -263,11 +276,7 @@ export function kiroIdeWorkflowsAsk(invoke: string, env: NodeJS.ProcessEnv = pro
     // Not asked rather than asked in every chat.
     return "";
   }
-  return "ASK ONCE: if the person's message already says what they want for Kiro's Workflows feature (and does not " +
-    `name Kiro CLI), that is their answer and you do not ask: to turn it off, run ` +
-    `\`${invoke} config trust --kiro-workflows off --yes\` and tell them what it prints; to keep it on, leave it. ` +
-    "Otherwise, after you " +
-    "answer their message, ask them this in their language: " +
+  return "ASK ONCE: " + ALREADY_ANSWERED + "Otherwise, after you answer their message, ask them this in their language: " +
     "\"Kiro's Workflows feature is on, and it stops AI-DLC's reviews and helpers from running in this chat. " +
     "Do you want me to turn Workflows off? It is a Kiro setting for all your projects; you can turn it back on " +
     `any time." On yes, run \`${invoke} config trust --kiro-workflows off --yes\` and tell them what it prints. ` +
@@ -370,6 +379,10 @@ export function kiroCliWorkflowsOnLine(): string {
   return `Turned Kiro CLI's Workflows feature back on (a Kiro CLI setting for all your projects). ${KIRO_CLI_RESTART_STEP}`;
 }
 
+export function kiroCliWorkflowsAlreadyOffLine(): string {
+  return "Kiro CLI's Workflows feature is already off; nothing changed.";
+}
+
 export function kiroCliWorkflowsKeptLine(invoke: string): string {
   return "Kept Kiro CLI's Workflows feature on; AI-DLC will not ask again. To turn it off later: " +
     `\`${invoke} config trust --kiro-cli-workflows off\`.`;
@@ -398,10 +411,7 @@ export function kiroCliWorkflowsAsk(invoke: string, env: NodeJS.ProcessEnv = pro
     // Not asked rather than asked in every chat.
     return "";
   }
-  return "ASK ONCE: if the person's message already says what they want for Kiro CLI's Workflows feature (in this " +
-    "chat, Kiro's Workflows feature counts unless they name Kiro IDE), that is their answer and you do not ask: to " +
-    `turn it off, run \`${invoke} config trust --kiro-cli-workflows off --yes\` and tell them what it prints; to ` +
-    "keep it on, leave it. Otherwise, after you answer their message, ask them this in their language: " +
+  return "ASK ONCE: " + ALREADY_ANSWERED + "Otherwise, after you answer their message, ask them this in their language: " +
     "\"Kiro CLI's Workflows feature is on, and it stops AI-DLC's reviews and helpers from running in this chat. " +
     "Do you want me to turn Workflows off? It is a Kiro CLI setting for all your projects; you can turn it back on " +
     `any time." On yes, run \`${invoke} config trust --kiro-cli-workflows off --yes\` and tell them what it prints. ` +

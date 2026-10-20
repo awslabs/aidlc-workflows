@@ -211,10 +211,12 @@ import {
   KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID,
   kiroCliWorkflowsKeptLine,
   kiroCliWorkflowsOffLine,
+  kiroCliWorkflowsAlreadyOffLine,
   kiroCliWorkflowsOnLine,
   kiroCliWorkflowsQuestionDue,
   kiroWorkflowsKeptLine,
   kiroWorkflowsOffLine,
+  kiroWorkflowsAlreadyOffLine,
   kiroWorkflowsOnLine,
   kiroWorkflowsQuestionDue,
   readKiroCliWorkflows,
@@ -2449,14 +2451,20 @@ function kiroWorkflowsSwitch(
       return success("Kiro's Workflows feature left as it is");
     }
   }
+  let changed: boolean;
   try {
-    setKiroIdeWorkflows(enabled);
+    changed = setKiroIdeWorkflows(enabled).changed;
   } catch (error) {
     return failure(error instanceof Error ? error.message : String(error), EXIT.failure);
   }
+  // The answer is kept either way: a person who keeps Workflows on has answered.
   recordKiroWorkflowsAnswer(value);
   return success(
-    enabled ? kiroWorkflowsOnLine() : kiroWorkflowsOffLine(),
+    !changed
+      ? enabled ? kiroWorkflowsKeptLine(configInvocationFor(projectDirFrom(argv))) : kiroWorkflowsAlreadyOffLine()
+      : enabled
+      ? kiroWorkflowsOnLine()
+      : kiroWorkflowsOffLine(),
     data(value),
   );
 }
@@ -2526,13 +2534,23 @@ function kiroCliWorkflowsSwitch(
       return success("Kiro CLI's Workflows feature left as it is");
     }
   }
+  let changed: boolean;
   try {
-    setKiroCliWorkflows(enabled);
+    changed = setKiroCliWorkflows(enabled).changed;
   } catch (error) {
     return failure(error instanceof Error ? error.message : String(error), EXIT.failure);
   }
   recordKiroCliWorkflowsAnswer(value);
-  return success(enabled ? kiroCliWorkflowsOnLine() : kiroCliWorkflowsOffLine(), data(value));
+  return success(
+    !changed
+      ? enabled
+        ? kiroCliWorkflowsKeptLine(configInvocationFor(projectDirFrom(argv)))
+        : kiroCliWorkflowsAlreadyOffLine()
+      : enabled
+      ? kiroCliWorkflowsOnLine()
+      : kiroCliWorkflowsOffLine(),
+    data(value),
+  );
 }
 
 // Asked once per machine while Kiro CLI's Workflows is on and the person never
