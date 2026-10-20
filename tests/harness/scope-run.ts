@@ -1444,7 +1444,9 @@ export class AgentStandIn {
       return;
     }
     if (d.gate_only !== true) {
-      const opened = this.report(stage, "--result", "awaiting-approval");
+      // A stage being revised ([R]) shows its gate again as revised.
+      const revising = new RegExp(`^- \\[R\\] ${stage} `, "m").test(readFileSync(activeRecord(this.host.proj).state, "utf-8"));
+      const opened = this.report(stage, "--result", revising ? "revised" : "awaiting-approval");
       // The gate does not open over a units block the engine cannot read: the
       // agent repairs it and runs the same report again.
       if (opened.kind === "print" && this.repairUnitsBlockIfNamed(String(opened.message ?? ""), "gate")) {
