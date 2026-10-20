@@ -886,6 +886,38 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(open?.gate).toBe("unresolved");
   });
 
+  test("16c: a skipped stage reads skipped with its skip time, beside the current stage that reads incomplete", () => {
+    // The conditional-skip path records STAGE_STARTED then STAGE_SKIPPED; a jump
+    // past a pending stage records STAGE_SKIPPED alone. Neither is unfinished.
+    const audit = [
+      "## a1\n**Timestamp**: 2026-01-01T00:00:00Z\n**Event**: STAGE_STARTED\n**Stage**: alpha",
+      "## a1c\n**Timestamp**: 2026-01-01T01:00:00Z\n**Event**: STAGE_COMPLETED\n**Stage**: alpha",
+      "## b1\n**Timestamp**: 2026-01-01T02:00:00Z\n**Event**: STAGE_STARTED\n**Stage**: beta",
+      "## b1s\n**Timestamp**: 2026-01-01T02:05:00Z\n**Event**: STAGE_SKIPPED\n**Stage**: beta",
+      "## g1s\n**Timestamp**: 2026-01-01T02:06:00Z\n**Event**: STAGE_SKIPPED\n**Stage**: gamma",
+      "## d1\n**Timestamp**: 2026-01-01T02:10:00Z\n**Event**: STAGE_STARTED\n**Stage**: delta",
+    ].join("\n\n");
+    const tl = reconstructTimeline(audit, "");
+    const row = (slug: string) => tl.stages.find((s) => s.slug === slug)!;
+
+    expect(row("beta").abnormal).toEqual(["skipped"]);
+    expect(row("beta").completedRaw).toBe("2026-01-01T02:05:00Z");
+    expect(row("beta").durationMs).toBe(5 * 60 * 1000);
+    expect(row("gamma").abnormal).toEqual(["skipped"]);
+    expect(row("gamma").completedRaw).toBe("2026-01-01T02:06:00Z");
+    expect(row("gamma").startedRaw).toBe(UNKNOWN);
+    // The gap to the next stage runs from the skip, not from the last completion.
+    expect(row("delta").gapFromPrevMs).toBe(5 * 60 * 1000);
+    expect(row("delta").abnormal).toEqual(["incomplete"]);
+    expect(row("alpha").abnormal).toEqual([]);
+
+    // A skipped stage started again (a jump back to it) is unfinished again.
+    const reopened = `${audit}\n\n## b2\n**Timestamp**: 2026-01-01T03:00:00Z\n**Event**: STAGE_STARTED\n**Stage**: beta`;
+    const beta = reconstructTimeline(reopened, "").stages.find((s) => s.slug === "beta")!;
+    expect(beta.abnormal).toEqual(["incomplete"]);
+    expect(beta.completedRaw).toBe(UNKNOWN);
+  });
+
   test("17: a truncated report.json stays valid JSON (Arden r2 #10)", () => {
     // Force a per-file truncation by seeding a huge audit trail, then assert the
     // machine-readable artifacts still parse (a byte slice would not).

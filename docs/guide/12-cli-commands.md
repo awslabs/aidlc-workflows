@@ -890,8 +890,9 @@ The report contains:
 | `evidence/normalized.json` | Allowlisted, normalized fields only — never raw files |
 
 **What it diagnoses:** the report reconstructs the workflow **timeline** from the
-audit trail (stage durations, gates, revisions, gaps, and abnormal/incomplete
-flags), then runs **deterministic** condition→remedy rules (no LLM) for the
+audit trail (stage durations, gates, revisions, gaps, and long-duration,
+incomplete or skipped flags; a skipped stage shows its skip time as Completed),
+then runs **deterministic** condition→remedy rules (no LLM) for the
 common "it will not advance" causes: unresolved approval gates, state/audit
 drift, and a stale or missing runtime graph / cold or frozen hook heartbeats.
 Findings come from the same shared `DoctorFinding` model the

@@ -340,12 +340,12 @@ export const UNKNOWN = "unknown";
 export interface StageTimelineEntry {
   slug: string;
   startedRaw: string | typeof UNKNOWN;
-  completedRaw: string | typeof UNKNOWN;
+  completedRaw: string | typeof UNKNOWN; // a skip ends the attempt too, flagged "skipped"
   durationMs: number | null; // null when either endpoint is unknown
   gate: "approved" | "rejected" | "unresolved" | "none";
   revisionCount: number | null;
   gapFromPrevMs: number | null; // time between previous stage's end and this start
-  abnormal: string[]; // e.g. ["long-duration"], ["incomplete"]
+  abnormal: string[]; // e.g. ["long-duration"], ["incomplete"], ["skipped"]
 }
 
 export interface Timeline {
@@ -433,16 +433,18 @@ export function reconstructTimeline(audit: string, stateContent: string): Timeli
     // Pair CHRONOLOGICALLY, scoped to the CURRENT attempt: a stage jumped back
     // to (aidlc-jump re-emits STAGE_STARTED after a completion) must not read as
     // completed with a stale duration. The current attempt begins at the LAST
-    // STAGE_STARTED; it is complete only if a STAGE_COMPLETED follows that start
-    // (events are timestamp-sorted with ledger tie-break above). A completion
-    // that predates the latest start belongs to an earlier attempt and is
-    // ignored, so a re-worked stage correctly reads incomplete/in-progress.
+    // STAGE_STARTED; it ends at the first STAGE_COMPLETED or STAGE_SKIPPED
+    // after that start (events are timestamp-sorted with ledger tie-break
+    // above). An end that predates the latest start belongs to an earlier
+    // attempt and is ignored, so a re-worked stage correctly reads
+    // incomplete/in-progress. A skip ends the attempt because the engine skips
+    // a started stage on the conditional-skip path, and that stage is settled,
+    // not unfinished.
     const startIdx = lastEventIndex(evs, "STAGE_STARTED");
     const started = startIdx >= 0 ? evs[startIdx] : undefined;
+    const isEnd = (e: AuditEvent) => e.event === "STAGE_COMPLETED" || e.event === "STAGE_SKIPPED";
     const completed =
-      startIdx >= 0
-        ? evs.slice(startIdx).find((e) => e.event === "STAGE_COMPLETED")
-        : lastEvent(evs, "STAGE_COMPLETED");
+      startIdx >= 0 ? evs.slice(startIdx).find(isEnd) : evs.findLast(isEnd);
     const startedMs = started?.timestampMs ?? NaN;
     const completedMs = completed?.timestampMs ?? NaN;
 
@@ -467,6 +469,7 @@ export function reconstructTimeline(audit: string, stateContent: string): Timeli
     const abnormal: string[] = [];
     if (durationMs !== null && durationMs > LONG_STAGE_MS) abnormal.push("long-duration");
     if (started && !completed) abnormal.push("incomplete");
+    if (completed?.event === "STAGE_SKIPPED") abnormal.push("skipped");
 
     stages.push({
       slug,
@@ -495,10 +498,6 @@ export function reconstructTimeline(audit: string, stateContent: string): Timeli
   };
 }
 
-function lastEvent(evs: AuditEvent[], name: string): AuditEvent | undefined {
-  for (let i = evs.length - 1; i >= 0; i--) if (evs[i].event === name) return evs[i];
-  return undefined;
-}
 function lastEventIndex(evs: AuditEvent[], name: string): number {
   for (let i = evs.length - 1; i >= 0; i--) if (evs[i].event === name) return i;
   return -1;
