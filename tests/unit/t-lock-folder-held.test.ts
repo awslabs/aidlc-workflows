@@ -132,6 +132,8 @@ const WINDOWS_HELD = lockFolderHeldLine("stopped", 300_000, "win32");
 const WINDOWS_GOES_ON = lockFolderHeldLine("goes-on", 300_000, "win32");
 // The guard cases run at a 300 ms budget, so each step waits about that long.
 const GUARD_GOES_ON = lockFolderHeldLine("goes-on", 300, "win32");
+// A guard whose own call went through, then could not move the folder.
+const GUARD_WENT_THROUGH = lockFolderHeldLine("went-through", 300, "win32");
 
 describe("the lock line", () => {
   test("says what the person meets, on Windows only", () => {
@@ -145,10 +147,18 @@ describe("the lock line", () => {
         "goes back to normal.",
     );
     expect(lockFolderHeldLine("goes-on", 2_000, "win32")).toContain("each step waits about 2 seconds.");
+    // The step that went through says so, and what the next one meets.
+    expect(lockFolderHeldLine("went-through", 10_000, "win32")).toBe(
+      "A program is watching the project folder (most likely a dev server or a test watcher still running). This " +
+        "step went through, but AI-DLC cannot update its record of this work after it, and each step waits about 10 " +
+        "seconds. Stop that program and the work goes back to normal.",
+    );
+
     expect(lockFolderHeldLine("goes-on", 90_000, "win32")).toContain("each step waits about 2 minutes.");
     for (const platform of ["linux", "darwin"] as const) {
-      expect(lockFolderHeldLine("stopped", 300_000, platform)).toBeNull();
-      expect(lockFolderHeldLine("goes-on", 300_000, platform)).toBeNull();
+      for (const outcome of ["stopped", "goes-on", "went-through"] as const) {
+        expect(lockFolderHeldLine(outcome, 300_000, platform)).toBeNull();
+      }
     }
   });
 });
@@ -356,14 +366,21 @@ type Fault = "held" | "release" | "none";
 
 // The guard as a Write reaches it, its own process reading stdin, with the
 // fault hooks set by a preload that loads the same lib the hook imports.
-function guard(proj: string, file: string, fault: Fault, windowsLine = true): { code: number; stdout: string; stderr: string } {
+// `platform` is the one the line module answers for, never the box the test
+// runs on, so the Windows and Linux cases mean the same everywhere.
+function guard(
+  proj: string,
+  file: string,
+  fault: Fault,
+  platform: NodeJS.Platform = "win32",
+): { code: number; stdout: string; stderr: string } {
   // Outside the project: a file there would count as source changed since approval.
   const preload = join(tmpdir(), `aidlc-lfh-faults-${randomUUID()}.ts`);
   const tools = join(proj, ".claude", "tools");
   writeFileSync(preload, [
     `const lib = await import(${JSON.stringify(join(tools, "aidlc-lib.ts"))});`,
     `const line = await import(${JSON.stringify(join(tools, "aidlc-lock-line.ts"))});`,
-    windowsLine ? 'line._setLockFolderHeldPlatformForTests("win32");' : "",
+    `line._setLockFolderHeldPlatformForTests(${JSON.stringify(platform)});`,
     // Only the directive lock's folders are held; the audit lock lives in the temp folder.
     "const directive = (path) => path.includes('active-directive.lock');",
     fault === "held" ? "lib._setAuditLockFaultHooksForTests({ failReapRename: directive });" : "",
@@ -407,8 +424,9 @@ describe("the plan-approval guard meets a held lock folder", () => {
       expect(nextTurn.code, nextTurn.stderr).toBe(0);
       expect(nextTurn.stdout).toContain(JSON.stringify({ systemMessage: GUARD_GOES_ON }));
       expect(asideRows(proj)).toBe(rows);
-      // Without the Windows line the write still goes on, and nothing is said.
-      const plain = guard(proj, "e.ts", "held", false);
+      // Without the Windows line the write still goes on, and nothing is said, on a turn that could say it.
+      say(proj, "and now?");
+      const plain = guard(proj, "e.ts", "held", "linux");
       expect(plain.code, plain.stderr).toBe(0);
       expect(plain.stdout).not.toContain("systemMessage");
     });
@@ -420,7 +438,7 @@ describe("the plan-approval guard meets a held lock folder", () => {
     const refused = guard(proj, "b.ts", "held");
     expect(refused.code).toBe(2);
     expect(refused.stderr.trim()).toBe(WINDOWS_HELD as string);
-    const today = guard(proj, "b.ts", "held", false);
+    const today = guard(proj, "b.ts", "held", "linux");
     expect(today.code).toBe(2);
     expect(today.stderr.trim()).toBe(PROVENANCE);
     const cleared = guard(proj, "b.ts", "none");
@@ -429,18 +447,28 @@ describe("the plan-approval guard meets a held lock folder", () => {
     expect(next(proj).kind).toBe("run-stage");
   });
 
-  test("the guard whose own release spent its budget says the line once its call goes through", () => {
+  test("the guard whose own call went through says so, and what the next step meets, once a turn", () => {
     const proj = guardProject("off");
     started(proj);
     const held = guard(proj, "b.ts", "release");
     expect(held.code, held.stderr).toBe(0);
-    expect(held.stdout).toContain(JSON.stringify({ systemMessage: GUARD_GOES_ON }));
-    // Under strict the next write is refused, so the line says the work stopped.
+    expect(held.stdout).toContain(JSON.stringify({ systemMessage: GUARD_WENT_THROUGH }));
+    // The next step meets the held folder: the same cause is said once a turn.
+    const next1 = guard(proj, "c.ts", "held");
+    expect(next1.code, next1.stderr).toBe(0);
+    expect(next1.stdout).not.toContain("A program is watching");
+    say(proj, "how is it going?");
+    const nextTurn = guard(proj, "d.ts", "held");
+    expect(nextTurn.stdout).toContain(JSON.stringify({ systemMessage: GUARD_GOES_ON }));
+    // Under strict it says nothing: the next write is refused with the line, which is then true.
     const strict = guardProject("strict");
     started(strict);
-    const stopped = guard(strict, "b.ts", "release");
-    expect(stopped.code, stopped.stderr).toBe(0);
-    expect(stopped.stdout).toContain(JSON.stringify({ systemMessage: WINDOWS_HELD }));
+    const quiet = guard(strict, "b.ts", "release");
+    expect(quiet.code, quiet.stderr).toBe(0);
+    expect(quiet.stdout).not.toContain("A program is watching");
+    const refused = guard(strict, "c.ts", "held");
+    expect(refused.code).toBe(2);
+    expect(refused.stderr.trim()).toBe(WINDOWS_HELD as string);
   });
 });
 
@@ -465,6 +493,41 @@ describe("next meets a held lock folder", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain(JSON.stringify(WINDOWS_HELD).slice(1, -1));
     expect(result.stdout).not.toContain("--doctor");
+  });
+
+  test("a question it cannot publish is not shown: a reply would land on the question beneath it", () => {
+    const proj = guardProject("off");
+    started(proj);
+    const tools = join(proj, ".claude", "tools");
+    const run = (args: string[], held: boolean): string => {
+      const driver = join(tmpdir(), `aidlc-lfh-next-${randomUUID()}.ts`);
+      writeFileSync(driver, [
+        `const lib = await import(${JSON.stringify(join(tools, "aidlc-lib.ts"))});`,
+        `const line = await import(${JSON.stringify(join(tools, "aidlc-lock-line.ts"))});`,
+        'line._setLockFolderHeldPlatformForTests("win32");',
+        held ? "lib._setAuditLockFaultHooksForTests({ failReapRename: (path) => path.includes('active-directive.lock') });" : "",
+        `const { main } = await import(${JSON.stringify(join(tools, "aidlc-orchestrate.ts"))});`,
+        `main(${JSON.stringify(["next", ...args])});`,
+      ].join("\n"));
+      if (held && !existsSync(lockDirOf(proj))) seedDeadOwner(lockDirOf(proj));
+      const result = spawnSync(BUN, [driver], {
+        cwd: proj, env: env(proj, { AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS: "300" }), encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(120_000),
+      });
+      rmSync(driver, { force: true });
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout;
+    };
+    // The person asks for other work; the engine keeps their words for the question where it belongs.
+    const reading = run(["Add a dark mode toggle"], false);
+    const request = /--request ([0-9a-f]+)/.exec(reading)?.[1] ?? "";
+    expect(request, reading).not.toBe("");
+    // Held, the line instead of a question no marker binds.
+    const held = run(["--request", request], true);
+    expect(held).not.toContain('"kind":"ask"');
+    expect(held).toContain(JSON.stringify(WINDOWS_HELD).slice(1, -1));
+    // Once the program stops, the same command asks the question, with its marker.
+    expect(run(["--request", request], false)).toContain('"kind":"ask"');
   });
 });
 

@@ -2465,16 +2465,20 @@ function emit(requested: Directive): void {
       if (projectDir) {
         recordHookDrop(projectDir, "active-directive", errorMessage(e));
       }
+      // A program holding the lock folder is not freed by a retry or by doctor:
+      // the step is to stop it. That comes before showing an open question
+      // unpublished, whose reply would land on the question beneath it (#2047);
+      // once the program stops, the same command asks it with its marker.
+      if (e instanceof ActiveDirectiveLockFolderHeldError && e.personLine) {
+        writePrepared(prepareEmission(errorDirective(e.message)));
+        return;
+      }
       if (prepared.marker !== undefined && openQuestionMarkers.has(prepared.marker)) {
         writePrepared(prepared);
         return;
       }
-      // A program holding the lock folder is not freed by a retry or by doctor:
-      // the step is to stop it.
       writePrepared(prepareEmission(errorDirective(
-        e instanceof ActiveDirectiveLockFolderHeldError && e.personLine
-          ? e.message
-          : `The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run \`${entrySkillInvocation()} --doctor\`.`,
+        `The directive could not be published, so no work directive was issued. Retry the command; if coordination remains busy, run \`${entrySkillInvocation()} --doctor\`.`,
       )));
       return;
     }

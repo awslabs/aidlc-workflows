@@ -8858,6 +8858,12 @@ export function activeDirectiveLockHeldLine(): string | null {
   return lockFolderHeldLine("stopped", activeDirectiveLockBudgetMs());
 }
 
+// The line where this step and its record went through, the folder was then
+// held, and the next step waits.
+export function activeDirectiveLockHeldAfterStepLine(): string | null {
+  return lockFolderHeldLine("went-through", Math.min(activeDirectiveLockBudgetMs(), lockFolderHeldGiveUpMs()));
+}
+
 // The line where the step went on without the record, each step waiting out
 // the lock's budget or the give-up; null where there is no likely cause.
 export function activeDirectiveLockHeldNote(): string | null {
@@ -35161,9 +35167,10 @@ interface OwnerStampedLockReceipt {
   lockDir: string; tokenDir: string; owner: LockOwner & { token: string };
   // The contention budget the lock was acquired with; release retries within it.
   releaseBudgetMs?: number;
-  // A release already spent that whole budget once. Later retries (at exit, at
-  // the next transaction) make one short try: a second budget only holds the
-  // person's tool call, and the next process reaps a dead owner's lock anyway.
+  // A release already spent its budget once, or gave up on a held folder (the
+  // 10 s give-up). Later retries (at exit, at the next transaction) make one
+  // short try: a second budget only holds the person's tool call, and the next
+  // process reaps a dead owner's lock anyway.
   releaseSpent?: boolean;
 }
 
