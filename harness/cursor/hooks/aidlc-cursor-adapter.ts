@@ -2510,10 +2510,13 @@ export async function run(
   // denies stand aside for it; the core guards still run. One plain call only:
   // nothing chained, redirected, expanded, globbed or set before it.
   async function runsAdmittedAidlcCommand(command: string, agent: string): Promise<boolean> {
-    if (agent === AMBIGUOUS_REVIEWER || /[;&|<>(){}[\]`$%*?\r\n]/.test(command)) return false;
+    // A POSIX shell reads a line that ends in a backslash as going on (the
+    // stage writes its publish that way); PowerShell ends the command there.
+    const joined = process.platform === "win32" ? command : command.replace(/\\\r?\n/g, " ");
+    if (agent === AMBIGUOUS_REVIEWER || /[;&|<>(){}[\]`$%*?\r\n]/.test(joined)) return false;
     // A call this cannot read keeps the denies.
     try {
-      const parsed = shellWords(command);
+      const parsed = shellWords(joined);
       if (parsed.ambiguous) return false;
       // The host's own shell reads the words: PowerShell keeps a backslash, a
       // POSIX shell reads it as an escape.

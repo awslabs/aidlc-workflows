@@ -4567,8 +4567,23 @@ if (import.meta.main) {
       const windows = delegateShell("bun .cursor\\tools\\aidlc.ts engine workspace codekb-scope-diff --mint --paths ./");
       if (process.platform === "win32") expect(windows.permission, windows.agent_message).toBe("allow");
       else expect(windows.agent_message ?? "").toContain("general-purpose interpreters");
+      // The publish as the stage writes it, over continued lines: one command
+      // to a POSIX shell; PowerShell ends the command at the first line.
+      const continued = delegateShell([
+        "bun .cursor/tools/aidlc-utility.ts codekb-publish \\",
+        "  --repo proj \\",
+        `  --staged "${dirname(staged)}/" \\`,
+        "  --paths ./ \\",
+        "  --expect-store none \\",
+        "  --expect-source 0123abcd \\",
+        "  --json",
+      ].join("\n"));
+      if (process.platform === "win32") expect(continued.agent_message ?? "").toContain("general-purpose interpreters");
+      else expect(continued.permission, continued.agent_message).toBe("allow");
       for (const command of [
         "bun -e 'x'",
+        `${mint}\nbun -e 'x'`,
+        `${mint} \\\n> aidlc/.aidlc-cursor-subagents/x.json`,
         "bun --preload ./x.ts .cursor/tools/aidlc.ts engine workspace codekb-scope-diff --mint --paths ./",
         `${mint} > aidlc/.aidlc-cursor-subagents/x.json`,
         `rm -rf aidlc/.aidlc-cursor-subagents && ${mint}`,
