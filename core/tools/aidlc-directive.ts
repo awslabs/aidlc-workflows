@@ -1592,6 +1592,13 @@ export function withAgentNotes<T extends object>(
       notes.gate_note = unitStepNote(invocation);
     }
   }
+  // The answer mode reaches the agent as its note alone: handed the object the
+  // note was made from too, the agent read its fields aloud on Kiro CLI ("The
+  // answer mode needs to be asked (answer_mode.ask: true)").
+  if (d.kind === "run-stage" && "answer_mode" in d) {
+    const { answer_mode: _resolved, ...step } = d;
+    return { ...step, ...notes } as T;
+  }
   return Object.keys(notes).length > 0 ? { ...directive, ...notes } : directive;
 }
 
@@ -1653,7 +1660,7 @@ export function validateDirective(obj: unknown): ValidationResult {
   checkAgentNote(o, "gate_note", true, kind, errors);
   checkAgentNote(o, "protocol_note", true, kind, errors);
   checkAgentNote(o, "construction_policy_note", true, kind, errors);
-  checkAgentNote(o, "answer_mode_note", "answer_mode" in o, kind, errors);
+  checkAgentNote(o, "answer_mode_note", "stage_file" in o, kind, errors);
   checkAgentNote(o, "context_note", "stage_file" in o, kind, errors);
   checkAgentNote(o, "brief_note", "stage_file" in o, kind, errors);
   checkAgentNote(o, "ceremony_note", "stage_file" in o, kind, errors);
