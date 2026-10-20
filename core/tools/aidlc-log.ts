@@ -111,6 +111,7 @@ import {
   isAutonomousConstructionDecision,
   legacyReviewAppendixEchoFields,
   isAutonomousSwarmStage,
+  waveEligible,
   loadStageGraphAll,
   isNonAnswer,
   ANSWER_MODE_LABELS,
@@ -3136,9 +3137,11 @@ function stageBox(state: string, stage: string): string | undefined {
 // (learningsRitualRuns), and the gate's command is the report the stage
 // protocol names. A review the person asked for past the budget (even with
 // reviews off) and the one bounded stale-receipt recovery are one-off passes:
-// their verdict is terminal whatever the class. A Unit's review, an isolated
-// single-stage run, an autonomous Construction gate and a stage no longer in
-// flight keep the step their own directive names: no note.
+// their verdict is terminal whatever the class. A Unit's last pass hands on to
+// `next`, which names its route's step. An isolated single-stage run,
+// a Unit in a swarm batch or a wave (their own loop goes on), an autonomous
+// Construction gate and a stage no longer in flight keep the step their own
+// directive names: no note.
 function reviewVerdictStep(
   pd: string,
   flags: Record<string, string>,
@@ -3146,15 +3149,21 @@ function reviewVerdictStep(
   iteration: number,
   context: {
     state: string;
-    node: { slug: string; phase: string; for_each?: string; reviewer_max_iterations?: number };
+    node: { slug: string; phase: string; for_each?: string; mode?: string; reviewer_max_iterations?: number };
     reviewClass: ReviewClass | null;
+    autonomousCandidate: boolean;
   },
   selection: { intent: string | null; space: string },
   request: { personAsked: boolean; recovery: boolean },
 ): string | null {
   const { state, node, reviewClass } = context;
+  const unit = flags.unit;
   const oneOff = request.personAsked || request.recovery;
-  if (flags.unit !== undefined || flags.single === "true" || reviewClass === null) return null;
+  if (flags.single === "true" || reviewClass === null) return null;
+  if (unit !== undefined && context.autonomousCandidate) return null;
+  if (unit !== undefined && waveEligible(node) && getField(state, "Construction Iteration")?.trim() !== "unit-major") {
+    return null;
+  }
   if (reviewClass === "none" && !oneOff) return null;
   if (node.phase === "initialization") return null;
   const box = stageBox(state, flags.stage);
@@ -3167,7 +3176,7 @@ function reviewVerdictStep(
   ) !== null;
   // What the person said while the reviewer worked comes first
   // (stage-protocol-reviewer.md): `next` names the step, with their words.
-  if (personSpokeSinceReviewRequest(pd, flags.stage, flags.reviewer, undefined, selection.intent, selection.space)) {
+  if (personSpokeSinceReviewRequest(pd, flags.stage, flags.reviewer, unit, selection.intent, selection.space)) {
     return reviewVerdictNote({ kind: "person-wrote", next: aidlcDispatcherInvocation("orchestrate next") });
   }
   if (!terminal) {
@@ -3178,10 +3187,12 @@ function reviewVerdictStep(
         projectDir: pd,
         stage: flags.stage,
         reviewer: flags.reviewer,
+        ...(unit !== undefined ? { unit } : {}),
         iteration: iteration + 1,
       }),
     });
   }
+  if (unit !== undefined) return reviewVerdictNote({ kind: "unit", next: aidlcDispatcherInvocation("orchestrate next") });
   if (node.phase === "construction" && isAutonomousConstructionGate(state, node, pd)) return null;
   // A recovery pass re-checked an invalidated review, and a backward jump began
   // this attempt: either way the gate's brief is the stale one.

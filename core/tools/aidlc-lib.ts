@@ -31822,6 +31822,31 @@ export function readUnitGateRhythm(stateContent: string | null): UnitGateRhythm 
     : "per-stage";
 }
 
+// The per-Unit stages a stage-major walk may run as one wave
+// (stage-protocol-wave.md). The route and the verdict's step both read it.
+const WAVE_ELIGIBLE_STAGES: ReadonlySet<string> = new Set([
+  "functional-design",
+  "nfr-requirements",
+  "nfr-design",
+  "infrastructure-design",
+]);
+
+export function waveEligible(node: {
+  slug: string;
+  phase: string;
+  for_each?: string;
+  mode?: string;
+  workspace_requires?: boolean;
+}): boolean {
+  return (
+    WAVE_ELIGIBLE_STAGES.has(node.slug) &&
+    node.phase === "construction" &&
+    node.for_each === "unit-of-work" &&
+    node.mode === "inline" &&
+    node.workspace_requires !== true
+  );
+}
+
 // True only for the topology the engine can dispatch as an autonomous swarm.
 // A truthy `--unit` is not proof: the four inline Construction design stages
 // are also per-unit. Keep this predicate shared by receipt and budget guards so

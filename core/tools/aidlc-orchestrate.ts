@@ -463,6 +463,7 @@ import {
   readUnitSourceManifest,
   unitPlainName,
   unitSkippedItsCode,
+  waveEligible,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
@@ -11868,23 +11869,6 @@ function soloUnitReceiptStep(
   return unitReceiptOnlyStep(
     projectDir, node, unit, engineRelativeRecordDir(projectDir), codekbCtxFor(projectDir),
     resolution.unitKinds?.get(unit) ?? null, unitLedgerFor(projectDir, node.slug), stateContent, scope,
-  );
-}
-
-const WAVE_ELIGIBLE_STAGES: ReadonlySet<string> = new Set([
-  "functional-design",
-  "nfr-requirements",
-  "nfr-design",
-  "infrastructure-design",
-]);
-
-function waveEligible(node: GraphStage): boolean {
-  return (
-    WAVE_ELIGIBLE_STAGES.has(node.slug) &&
-    node.phase === "construction" &&
-    node.for_each === "unit-of-work" &&
-    node.mode === "inline" &&
-    node.workspace_requires !== true
   );
 }
 
