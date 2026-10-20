@@ -669,13 +669,17 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     const cmdOnly = folder("native-bin", ["aidlc", "aidlc.cmd"]);
     const withExe = folder("exe-bin", ["aidlc.exe", "aidlc.cmd"]);
     const none = folder("empty-bin", []);
-    const expanding = folder("bin%USERNAME%", ["aidlc.cmd"]);
+    // Windows allows % and ! in an account name, and the default install sits under the profile.
+    const account = folder("Users\\me%USERNAME%!x!\\bin", ["aidlc.cmd"]);
+    const quoted = folder('bin"q', ["aidlc.cmd"]);
     const hookArgs = ["engine", "hook", "session-start"];
     const comSpec = "C:\\Windows\\system32\\cmd.exe";
     // Windows names the variable Path, and ComSpec as it likes.
+    // The launcher's path reaches cmd.exe through the environment, so nothing in it is read again.
     expect(windowsScriptLaunch("aidlc", hookArgs, "win32", { Path: `${none};${cmdOnly}`, ComSpec: comSpec })).toEqual({
       file: comSpec,
-      args: ["/d", "/s", "/c", `""${resolve(cmdOnly, "aidlc.cmd")}" engine hook session-start"`],
+      args: ["/d", "/v:off", "/s", "/c", '""%AIDLC_CMD_SCRIPT%" engine hook session-start"'],
+      env: { AIDLC_CMD_SCRIPT: resolve(cmdOnly, "aidlc.cmd") },
     });
     expect(windowsScriptLaunch("aidlc", hookArgs, "win32", { PATH: cmdOnly })).toMatchObject({ file: "cmd.exe" });
     // An .exe, nothing on PATH, a command named by its path, or another platform: started as named.
@@ -684,15 +688,19 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     expect(windowsScriptLaunch("aidlc", hookArgs, "linux", { PATH: cmdOnly })).toBeNull();
     expect(windowsScriptLaunch(join(cmdOnly, "aidlc.cmd"), hookArgs, "win32", { Path: cmdOnly })).toBeNull();
     expect(windowsScriptLaunch("bun", [".aidlc/tools/aidlc.ts", ...hookArgs], "win32", { Path: none })).toBeNull();
-    // A launcher path cmd.exe would expand, or a word it would read again, is not started.
-    expect(windowsScriptLaunch("aidlc", hookArgs, "win32", { Path: expanding })).toBe("refused");
+    // A path with % or ! is started as it is; only a word cmd.exe would read again, or a " no Windows path holds, is not.
+    expect(windowsScriptLaunch("aidlc", hookArgs, "win32", { Path: account })).toMatchObject({
+      env: { AIDLC_CMD_SCRIPT: resolve(account, "aidlc.cmd") },
+    });
     expect(windowsScriptLaunch("aidlc", ["engine", "hook", "a&b"], "win32", { Path: cmdOnly })).toBe("refused");
+    expect(windowsScriptLaunch("aidlc", hookArgs, "win32", { Path: quoted })).toBe("refused");
   });
 
   test.skipIf(process.platform !== "win32")("on Windows the plugin's hooks reach the aidlc.cmd launcher the install puts on PATH", async () => {
     const root = freshProject();
-    const bin = join(root, "bin");
-    mkdirSync(bin);
+    // As under an account folder whose name holds % and !.
+    const bin = join(root, "me%USERNAME%!x!", "bin");
+    mkdirSync(bin, { recursive: true });
     const capture = join(root, "launched.json");
     const engine = join(bin, "fake-engine.ts");
     writeFileSync(

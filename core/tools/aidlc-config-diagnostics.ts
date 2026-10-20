@@ -569,6 +569,7 @@ function defaultRun(
     if (launch === null) return { status: -1, stdout: "" };
     const result = spawnSync(launch.file, launch.args, {
       encoding: "utf-8",
+      env: { ...process.env, ...launch.env },
       timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
       windowsVerbatimArguments: true,
     });

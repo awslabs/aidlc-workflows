@@ -89,7 +89,12 @@ function runCoreHook(
     if (viaCmd === "refused") return resolve({ stdout: "", stderr: "", code: 0 }); // fail open
     try {
       const child = viaCmd
-        ? spawn(viaCmd.file, viaCmd.args, { cwd, stdio: ["pipe", "pipe", "pipe"], env, windowsVerbatimArguments: true })
+        ? spawn(viaCmd.file, viaCmd.args, {
+          cwd,
+          stdio: ["pipe", "pipe", "pipe"],
+          env: { ...env, ...viaCmd.env },
+          windowsVerbatimArguments: true,
+        })
         : spawn(bin, [...prefix, "hook", hook, "--project-dir", cwd], { cwd, stdio: ["pipe", "pipe", "pipe"], env });
       let out = "";
       let err = "";

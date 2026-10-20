@@ -50,17 +50,25 @@ export function isCmdScript(path: string): boolean {
 
 /**
  * The cmd.exe line that runs a .cmd or .bat with plain-word arguments, to
- * start with windowsVerbatimArguments. The path is quoted whole; a path
- * cmd.exe would expand (% or !) or cannot quote ("), or an argument it would
- * read again, gives null: such a command is not started.
+ * start with windowsVerbatimArguments and `env` added to the environment. The
+ * path goes through that variable: cmd.exe expands it once and never reads
+ * the value again, so a folder name with % or ! (Windows allows both in an
+ * account name, and the default install sits under it) is taken as written,
+ * and /v:off keeps ! literal even where the registry turns delayed expansion
+ * on. A " (no Windows path holds one) or an argument cmd.exe would read again
+ * gives null: such a command is not started.
  */
 export function cmdScriptLaunch(
   script: string,
   args: readonly string[],
   comSpec?: string,
-): { file: string; args: string[] } | null {
-  if (/[%!"]/.test(script) || args.some((arg) => !/^[A-Za-z0-9_./:=-]*$/.test(arg))) return null;
-  return { file: comSpec ?? "cmd.exe", args: ["/d", "/s", "/c", `""${script}" ${args.join(" ")}"`] };
+): { file: string; args: string[]; env: Record<string, string> } | null {
+  if (script.includes('"') || args.some((arg) => !/^[A-Za-z0-9_./:=-]*$/.test(arg))) return null;
+  return {
+    file: comSpec ?? "cmd.exe",
+    args: ["/d", "/v:off", "/s", "/c", `""%AIDLC_CMD_SCRIPT%" ${args.join(" ")}"`],
+    env: { AIDLC_CMD_SCRIPT: script },
+  };
 }
 
 /**
@@ -75,7 +83,7 @@ export function windowsScriptLaunch(
   args: readonly string[],
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
-): { file: string; args: string[] } | "refused" | null {
+): { file: string; args: string[]; env: Record<string, string> } | "refused" | null {
   if (platform !== "win32" || /[\\/]/.test(command)) return null;
   const found = resolveExecutableOnPath(command, envValue(env, "PATH") ?? "", platform);
   if (found === null || !isCmdScript(found)) return null;
