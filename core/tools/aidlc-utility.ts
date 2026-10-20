@@ -113,6 +113,7 @@ import {
   selectionDroppedOrderingEdges,
   stageGraphDrift,
   type GraphStage,
+  takeComposerScores,
   validateGrid,
   validateScope,
 } from "./aidlc-graph.ts";
@@ -7882,11 +7883,15 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
   // An engine question's answer names its request by id. The copy is removed
   // once the answer starts work, so look for that work before the copy.
   const questionId = flags.request;
+  // The requests this creation answers: its own and the one it was composed
+  // from (a report-only or task-less composition), for the composer's scores.
+  const answers: string[] = [];
   if (questionId !== undefined) {
     const session = resolveWorkflowSelection(projectDir, { space: flags.space }).sessionId ?? undefined;
     if (answerAlreadyStarted(projectDir, questionId, session)) return;
     const question = readQuestion(projectDir, questionId);
     if (!question) die(QUESTION_UNAVAILABLE);
+    answers.push(questionId, ...(question.composedFrom ? [question.composedFrom] : []));
     flags.arguments = question.text;
     flags.scope ||= question.proposedScope;
     // Depth, test strategy and review the person set in this chat before any
@@ -8367,6 +8372,8 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
             "Stages added": planChanges.add.join(", ") || "none",
           }
         : {}),
+      // Why each stage is in or out, for a plan the composer tailored.
+      ...takeComposerScores(projectDir, answers, plannedStages.stages),
     }, created.dirName, created.space);
 
     // PHASE_STARTED for the Init phase — Init always runs. Other phases emit

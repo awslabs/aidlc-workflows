@@ -616,7 +616,10 @@ priors-file entry, `aidlc-graph compile` copies it onto the node, and the `ars`
 subcommand screens it exactly like a file entry: `role: core` always executes,
 `structural` and a `null` cost are left to judgment at the gate,
 `project_types` screens the stage out on the other project kind, and a
-`--completed` stage outranks everything.
+`--completed` stage outranks everything. The priors file has one role a stage
+block cannot declare, `project-type` (Reverse Engineering): it runs the stage
+on its own project kind whatever it scores, so on that kind a plugin stage's
+`project_types` still goes by its components.
 
 Three rules keep the screen predictable:
 

@@ -48,7 +48,7 @@ shorter than what was said:
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| ✓ `WORKFLOW_STARTED` | Scope determined, workflow begins | Timestamp, Scope, Request; optional Source Baseline (`sha256:<listing-hash>` or `unbindable`); for a plan composed for this piece of work, Plan, Stages skipped, Stages added | `tools/aidlc-utility.ts intent-create` |
+| ✓ `WORKFLOW_STARTED` | Scope determined, workflow begins | Timestamp, Scope, Request; optional Source Baseline (`sha256:<listing-hash>` or `unbindable`); for a plan composed for this piece of work, Plan, Stages skipped, Stages added; for a plan the composer tailored, ARS Scores (`IAE 0.35, CSU 0.39, VE 0.40, R 0.35, UA 0.30`) and ARS Method (`codekb` or `fallback`) | `tools/aidlc-utility.ts intent-create` |
 | ✓ `WORKFLOW_COMPLETED` | All in-scope stages done | Timestamp, Scope, Details | `tools/aidlc-state.ts complete-workflow` |
 | ✓ `WORKFLOW_PARKED` | Workflow parked mid-flow for a later session (no stage advanced) | Timestamp, Stage; optional Person Reply (what the person said when they stopped, when the hook kept it) | `tools/aidlc-state.ts park` |
 | ✓ `WORKFLOW_UNPARKED` | Park marker cleared on explicit `--resume` re-entry | Timestamp | `tools/aidlc-state.ts unpark` |

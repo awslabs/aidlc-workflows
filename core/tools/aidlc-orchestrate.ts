@@ -482,6 +482,7 @@ import {
   type GraphStage,
   loadGraph,
   memoryDirFor,
+  openComposerScores,
   producersOf,
   subgraphForScope,
 } from "./aidlc-graph.ts";
@@ -9760,6 +9761,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       // approval off) reach the work it creates and no other.
       flags.request = saveQuestion(pd, "", flags.scope ?? "", "compose").id;
     }
+    // The plan's creation for this request records the composer's scores.
+    if (!inFlight && flags.request) openComposerScores(pd, flags.request);
     const dispatch = composeDispatchDirective(flags, inFlight);
     if (splitSaid) dispatch.narration = `${dispatch.narration ?? ""}${splitSaid}`.trim();
     emit(dispatch);
