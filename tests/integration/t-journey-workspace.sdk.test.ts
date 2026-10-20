@@ -22,14 +22,13 @@
 //      swarm (the most fragile/expensive beat, which combines badly with the
 //      in-turn forwarding loop). Asserted: both per-repo codekb dirs exist with
 //      content, unless greenfield RE is skipped (greenfieldReSkip).
-//   3. create a SECOND intent alongside the active one via the deterministic
-//      `intent-create` verb (freeform prose with A active surfaces the engine's
-//      routing ask, Branch 9c; intent-create mints unconditionally, the shared
-//      cross-harness path). Asserted: two isolated registry rows + record dirs,
-//      distinct UUIDs, A's state byte-untouched by B's creation, and no second
+//   3. the person asks for a SECOND piece of work in their own words with A
+//      active (`/aidlc --scope poc "<desc>"`); the engine asks where it goes
+//      and they pick separate new work. Asserted: two isolated registry rows +
+//      record dirs, distinct UUIDs, A's state byte-untouched by B's creation, and no second
 //      WORKFLOW_STARTED in A's audit shard.
-//   4. `/aidlc space-create teamB` → `/aidlc space teamB` → create an intent
-//      there. The two space verbs are driven the PLAIN user way - the engine
+//   4. `/aidlc space-create teamB` -> `/aidlc space teamB` -> ask for work
+//      there the same way. The two space verbs are driven the PLAIN user way - the engine
 //      routes a leading space/space-create/intent token through the conductor
 //      (aidlc-orchestrate.ts Branch 1b -> terminal print naming aidlc.ts),
 //      so no "do NOT run next" steering is needed; the conductor runs the named
@@ -78,9 +77,11 @@ import {
 } from "../harness/fixtures.ts";
 import { stageEvents } from "../harness/outcomes.ts";
 import {
+  type AnswerScript,
   type CapturedToolResult,
   type DriveResult,
   driveAidlc,
+  separateWorkOptionIndex,
 } from "../harness/sdk-drive.ts";
 import {
   activeSpace,
@@ -112,24 +113,19 @@ const UUIDV7_RE =
 const TEAM_B_SLUG = "teamb";
 
 /**
- * Build a prompt that makes the conductor run the deterministic intent-create
- * UTILITY directly (not route the request through `next`). WHY this matters: a
- * bare `/aidlc intent-create ...` slash command is parsed by the conductor as
- * freeform input and fed to `aidlc-orchestrate.ts next`; with intent A ALREADY
- * active, the engine surfaces a routing ask (Branch 9c) instead of creating.
- * A verified live failure motivates the direct command: the conductor ran
- * `scope-change --scope poc` on A, rewriting A's state Scope feature->poc. The
- * journey wants the mints-unconditionally handler (aidlc-utility.ts
- * handleIntentCreate), so we instruct the conductor to invoke that tool verbatim
- * and NOT touch the active intent.
+ * The person asks for new work in their own words. With work active the engine
+ * asks where it goes, and they pick the option for separate new work (as the
+ * agent worded it, found the way question-once and t176 find it); any other
+ * question takes its first option. An agent that changes the active work's
+ * scope instead leaves A's state changed, which the journey checks.
  */
-function intentCreationToolPrompt(scope: string, args: string): string {
-  return (
-    `Run this exact command with the Bash tool and then stop — do NOT run \`next\`, ` +
-    `do NOT advance or scope-change the currently active intent: ` +
-    `bun .claude/tools/aidlc.ts engine intent create --scope ${scope} --arguments ${JSON.stringify(args)}`
-  );
-}
+const SEPARATE_WORK: AnswerScript = {
+  kind: "pick",
+  pick: (question) => {
+    const at = separateWorkOptionIndex(question.options);
+    return at < 0 ? undefined : { optionIndex: at };
+  },
+};
 
 /** Read every codekb artifact filename for a repo, tolerant of WHERE the store
  *  anchors. The engine resolves the per-repo codekb to the SPACE-LEVEL
@@ -180,6 +176,22 @@ function workflowMarkdownSnapshot(recordDir: string): Record<string, string> {
   }
   visit(recordDir);
   return snapshot;
+}
+
+/** A new piece of work carries on into its first stage, so a drive stopped at
+ *  its creation can leave that step's command finishing just after the drive
+ *  returns. Read the record once it has stopped changing, so a later comparison
+ *  sees only what came after. */
+async function settledSnapshot(recordDir: string): Promise<Record<string, string>> {
+  // ponytail: a fixed 3 s quiet window, up to 30 s; a step still writing after that shows as a red diff naming the file.
+  let last = workflowMarkdownSnapshot(recordDir);
+  for (let i = 0; i < 10; i++) {
+    await Bun.sleep(3_000);
+    const now = workflowMarkdownSnapshot(recordDir);
+    if (Bun.deepEquals(now, last)) return now;
+    last = now;
+  }
+  return last;
 }
 
 function assertTerminalWorkspaceTurn(result: DriveResult, output: string): void {
@@ -370,17 +382,13 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         expect(workflowStartedCount(recordADir)).toBe(1);
 
         // --- Step 3: create a SECOND intent alongside active A -----------------
-        // The deterministic shared path: the intent-create utility mints
-        // unconditionally (aidlc-utility.ts handleIntentCreate). Routed through `next`
-        // with A active, freeform prose surfaces the engine's routing ask (Branch
-        // 9c) — a human turn this deterministic journey deliberately avoids —
-        // so we name the tool command directly (see intentCreationToolPrompt). The
-        // conversational offer arc is t176's subject, not this journey's.
+        // In the person's words: with A active the engine asks where the new
+        // work goes, and they pick separate new work (SEPARATE_WORK).
         const r3 = await driveAidlc(
-          intentCreationToolPrompt("poc", "build a standalone metrics dashboard"),
+          `/aidlc --scope poc "build a standalone metrics dashboard"`,
           {
             projectDir: root,
-            answerScript: "default",
+            answerScript: SEPARATE_WORK,
             timeoutMs: operationBudget(VERB_DRIVE_MS),
             stopAfterToolResult: STOP_AFTER_CREATION,
           },
@@ -406,7 +414,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         expect(recordB).toBeDefined();
         const recordBDir = join(root, "aidlc", "spaces", "default", "intents", recordB!);
         const stateAndArtifactsA = workflowMarkdownSnapshot(recordADir);
-        const stateAndArtifactsB = workflowMarkdownSnapshot(recordBDir);
+        const stateAndArtifactsB = await settledSnapshot(recordBDir);
 
         // --- Step 4: a non-default space, no learnings leak -------------------
         // The user TYPES "teamB"; the engine slugifies it to "teamb" on disk
@@ -460,10 +468,10 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         expect(workflowMarkdownSnapshot(recordBDir)).toEqual(stateAndArtifactsB);
 
         const r4b = await driveAidlc(
-          intentCreationToolPrompt("poc", "teamB onboarding flow"),
+          `/aidlc --scope poc "teamB onboarding flow"`,
           {
             projectDir: root,
-            answerScript: "default",
+            answerScript: SEPARATE_WORK,
             timeoutMs: operationBudget(VERB_DRIVE_MS),
             stopAfterToolResult: STOP_AFTER_CREATION,
           },
@@ -478,7 +486,7 @@ describe("t-journey-workspace (live SDK multi-repo·intent·space journey)", () 
         const teamRecord = activeRecordDir(root);
         expect(teamRecord).toBeDefined();
         const teamRecordDir = join(root, "aidlc", "spaces", TEAM_B_SLUG, "intents", teamRecord!);
-        const teamStateAndArtifacts = workflowMarkdownSnapshot(teamRecordDir);
+        const teamStateAndArtifacts = await settledSnapshot(teamRecordDir);
         const switchDefault = await driveAidlc(`/aidlc space default`, {
           projectDir: root,
           answerScript: "default",

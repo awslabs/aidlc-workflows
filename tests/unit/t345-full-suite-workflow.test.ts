@@ -2268,7 +2268,7 @@ describe("t345 complete nightly coverage", () => {
     expect(partition.get("claude-sdk")).toContain("tests/integration/t300-plugin-kit.test.ts");
     expect(Object.keys(FAMILIES)).not.toContain("multi-provider");
     expect(FAMILIES["claude-sdk"].requireCoverage).toBe(true);
-    expect(partition.get("claude-tui")).toContain("tests/integration/t-e2e-isolated-runner.test.ts");
+    expect(flattened).not.toContain("tests/integration/t-e2e-isolated-runner.test.ts");
     expect(flattened).not.toContain("tests/unit/t-e2e-plan.test.ts");
     expect(flattened).not.toContain("tests/unit/t-test-matrix.test.ts");
     for (const files of partition.values()) {
