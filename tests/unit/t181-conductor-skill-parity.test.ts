@@ -719,7 +719,6 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "## The Person Drives",
         "Never make them repeat themselves, retype an option, or confirm what they already said.",
         "fix it in one step",
-        "A rule the team recorded in memory",
         APPROVAL_REPORT_TOKEN,
       ]) {
         if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
@@ -732,6 +731,18 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
     }
     expect(missing).toEqual([]);
+  });
+
+  // From a live enterprise run: a Request Changes on the code plan that touched a Testing Posture the run's own
+  // Practices Discovery had recorded was not recorded, the agent citing this rule. A team's locked setting is refused
+  // by the tool that owns it, with the one line naming the file; the prose is not a second owner.
+  test("no shipped conductor SKILL or the stage protocol tells the agent a rule in team memory wins over the person", () => {
+    const found: string[] = [];
+    for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      if (body.includes("A rule the team recorded in memory")) found.push(rel);
+    }
+    expect(found).toEqual([]);
   });
 
   // From live runs: on "please review Unit 1 again" the agent reviewed in chat,
