@@ -21,8 +21,6 @@ import {
 } from "./aidlc-kiro-ide-terminal.ts";
 import { spawnSync } from "node:child_process";
 import {
-  accessSync,
-  constants,
   existsSync,
   lstatSync,
   readFileSync,
@@ -32,7 +30,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, platform as hostPlatform } from "node:os";
-import { delimiter, dirname, extname, join, relative, resolve } from "node:path";
+import { delimiter, dirname, join, relative, resolve } from "node:path";
 import {
   assertProjectionPathHasNoSymlinks,
   isSafeOnboardingPath,
@@ -64,6 +62,7 @@ import {
 import { AIDLC_VERSION } from "./aidlc-version.ts";
 import { compareVersions, VERSION_ID } from "./aidlc-channel.ts";
 import { installedExecutablePath } from "./aidlc-install-paths.ts";
+import { cmdScriptLaunch, isCmdScript, pathEntries, resolveExecutableOnPath } from "./aidlc-executable-path.ts";
 import { personaTwinRels } from "./aidlc-plugin.ts";
 import { readBoundedRegularFile } from "./aidlc-inline-context.ts";
 import {
@@ -564,18 +563,15 @@ function defaultRun(
   command: string,
   args: readonly string[],
 ): { status: number; stdout: string } {
-  // Windows runs a .cmd or .bat (what npm installs, for example copilot.cmd)
-  // only through cmd.exe. The path is quoted whole; one that cmd.exe would
-  // expand (% or !) or cannot quote (") is not run.
-  if (process.platform === "win32" && /\.(?:cmd|bat)$/i.test(command)) {
-    if (/[%!"]/.test(command) || args.some((arg) => !/^[A-Za-z0-9_./:=-]*$/.test(arg))) {
-      return { status: -1, stdout: "" };
-    }
-    const result = spawnSync(
-      process.env.ComSpec ?? "cmd.exe",
-      ["/d", "/s", "/c", `""${command}" ${args.join(" ")}"`],
-      { encoding: "utf-8", timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS, windowsVerbatimArguments: true },
-    );
+  // npm's copilot.cmd on Windows runs only through cmd.exe.
+  if (process.platform === "win32" && isCmdScript(command)) {
+    const launch = cmdScriptLaunch(command, args, process.env.ComSpec);
+    if (launch === null) return { status: -1, stdout: "" };
+    const result = spawnSync(launch.file, launch.args, {
+      encoding: "utf-8",
+      timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS,
+      windowsVerbatimArguments: true,
+    });
     return { status: result.status ?? -1, stdout: result.stdout ?? "" };
   }
   const result = spawnSync(command, [...args], {
@@ -588,36 +584,8 @@ function defaultRun(
   };
 }
 
-function pathEntries(value: string, platform: NodeJS.Platform): string[] {
-  return value.split(platform === "win32" ? ";" : delimiter).filter(Boolean);
-}
-
-function executableCandidates(command: string, platform: NodeJS.Platform): string[] {
-  if (platform !== "win32" || extname(command)) return [command];
-  // Windows runs only a file with an executable extension; npm puts an
-  // extensionless shell script beside its copilot.cmd, so it comes last.
-  return [`${command}.exe`, `${command}.cmd`, `${command}.bat`, command];
-}
-
-export function resolveExecutableOnPath(
-  command: string,
-  pathValue: string,
-  platform: NodeJS.Platform = hostPlatform(),
-): string | null {
-  for (const directory of pathEntries(pathValue, platform)) {
-    for (const candidate of executableCandidates(command, platform)) {
-      const path = resolve(directory, candidate);
-      try {
-        if (!statSync(path).isFile()) continue;
-        if (platform !== "win32") accessSync(path, constants.X_OK);
-        return path;
-      } catch {
-        // Keep searching.
-      }
-    }
-  }
-  return null;
-}
+// Its callers (aidlc-kiro-session.ts) import it from here; the rule is aidlc-executable-path.ts's.
+export { resolveExecutableOnPath };
 
 export function deriveNonInteractivePath(
   options: RuntimeProbeOptions = {},

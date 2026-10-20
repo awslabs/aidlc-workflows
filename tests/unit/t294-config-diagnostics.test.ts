@@ -61,6 +61,7 @@ import {
   type ConfigDiagnosticRecords,
   type ProvidersRecord,
 } from "../../core/tools/aidlc-config-diagnostics.ts";
+import { cmdScriptLaunch } from "../../core/tools/aidlc-executable-path.ts";
 import { collectDoctorReport, firingHooksLastFired, kiroDisabledHookChecks } from "../../core/tools/aidlc-utility.ts";
 import * as runtimePaths from "../../core/tools/aidlc-runtime-paths.ts";
 
@@ -897,6 +898,18 @@ describe("t294 runtime diagnostics", () => {
     for (const name of ["copilot", "copilot.cmd", "copilot.ps1"]) writeFileSync(join(npmLayout, name), "");
     expect(resolveExecutableOnPath("copilot", npmLayout, "win32")).toBe(resolve(npmLayout, "copilot.cmd"));
     expect(resolveExecutableOnPath("copilot.cmd", npmLayout, "win32")).toBe(resolve(npmLayout, "copilot.cmd"));
+    // The one cmd.exe rule (config's probes and opencode's plugin): the path
+    // quoted whole, plain words after it; what cmd.exe would expand or read
+    // again is not started.
+    expect(cmdScriptLaunch("C:\\npm\\copilot.cmd", ["--version"], "C:\\Windows\\system32\\cmd.exe")).toEqual({
+      file: "C:\\Windows\\system32\\cmd.exe",
+      args: ["/d", "/s", "/c", '""C:\\npm\\copilot.cmd" --version"'],
+    });
+    expect(cmdScriptLaunch("C:\\Program Files\\npm\\copilot.cmd", [])?.args.at(-1)).toBe('""C:\\Program Files\\npm\\copilot.cmd" "');
+    for (const script of ["C:\\npm%PATH%\\copilot.cmd", "C:\\npm!x!\\copilot.cmd", 'C:\\npm"\\copilot.cmd']) {
+      expect(cmdScriptLaunch(script, ["--version"]), script).toBeNull();
+    }
+    for (const arg of ["a b", "a&b", "a|b", "%x%", "^"]) expect(cmdScriptLaunch("C:\\npm\\copilot.cmd", [arg]), arg).toBeNull();
 
     // Windows spelling: any case, backslashes, a trailing separator. The
     // search skips the folder, and a resolver that names it anyway is ignored.

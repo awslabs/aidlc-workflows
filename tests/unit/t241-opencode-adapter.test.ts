@@ -18,10 +18,11 @@ import {
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import createAdapter, {
   type PluginInput,
 } from "../../harness/opencode/plugin/aidlc-opencode-adapter.ts";
+import { windowsScriptLaunch } from "../../core/tools/aidlc-executable-path.ts";
 import {
   createTestProject,
   seedAidlcMemory,
@@ -649,6 +650,85 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
     ].entries()) {
       await expect(posixPwsh(`posix-ps-no-${i}`, command)).rejects.toThrow("one direct invocation");
     }
+  });
+
+  // On Windows the native install's `aidlc` is aidlc.cmd, which Windows starts
+  // only through cmd.exe: a hook started as a bare `aidlc` failed with ENOENT,
+  // the plugin went on as if it had run, and no hook ever ran (measured on
+  // Windows Server with the 2.11.1 install). The launch is what the person's
+  // shell would find; anything else starts as before.
+  test("a hook's launch on Windows goes through cmd.exe only for a .cmd or .bat the shell would find", () => {
+    const root = mkdtempSync(join(tmpdir(), "t241-launch-"));
+    scratch.push(root);
+    const folder = (name: string, files: string[]) => {
+      const dir = join(root, name);
+      mkdirSync(dir, { recursive: true });
+      for (const file of files) writeFileSync(join(dir, file), "", { mode: 0o755 });
+      return dir;
+    };
+    const cmdOnly = folder("native-bin", ["aidlc", "aidlc.cmd"]);
+    const withExe = folder("exe-bin", ["aidlc.exe", "aidlc.cmd"]);
+    const none = folder("empty-bin", []);
+    const expanding = folder("bin%USERNAME%", ["aidlc.cmd"]);
+    const hookArgs = ["engine", "hook", "session-start"];
+    const comSpec = "C:\\Windows\\system32\\cmd.exe";
+    // Windows names the variable Path, and ComSpec as it likes.
+    expect(windowsScriptLaunch("aidlc", hookArgs, "win32", { Path: `${none};${cmdOnly}`, ComSpec: comSpec })).toEqual({
+      file: comSpec,
+      args: ["/d", "/s", "/c", `""${resolve(cmdOnly, "aidlc.cmd")}" engine hook session-start"`],
+    });
+    expect(windowsScriptLaunch("aidlc", hookArgs, "win32", { PATH: cmdOnly })).toMatchObject({ file: "cmd.exe" });
+    // An .exe, nothing on PATH, a command named by its path, or another platform: started as named.
+    expect(windowsScriptLaunch("aidlc", hookArgs, "win32", { Path: withExe })).toBeNull();
+    expect(windowsScriptLaunch("aidlc", hookArgs, "win32", { Path: none })).toBeNull();
+    expect(windowsScriptLaunch("aidlc", hookArgs, "linux", { PATH: cmdOnly })).toBeNull();
+    expect(windowsScriptLaunch(join(cmdOnly, "aidlc.cmd"), hookArgs, "win32", { Path: cmdOnly })).toBeNull();
+    expect(windowsScriptLaunch("bun", [".aidlc/tools/aidlc.ts", ...hookArgs], "win32", { Path: none })).toBeNull();
+    // A launcher path cmd.exe would expand, or a word it would read again, is not started.
+    expect(windowsScriptLaunch("aidlc", hookArgs, "win32", { Path: expanding })).toBe("refused");
+    expect(windowsScriptLaunch("aidlc", ["engine", "hook", "a&b"], "win32", { Path: cmdOnly })).toBe("refused");
+  });
+
+  test.skipIf(process.platform !== "win32")("on Windows the plugin's hooks reach the aidlc.cmd launcher the install puts on PATH", async () => {
+    const root = freshProject();
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const capture = join(root, "launched.json");
+    const engine = join(bin, "fake-engine.ts");
+    writeFileSync(
+      engine,
+      [
+        'import { writeFileSync } from "node:fs";',
+        "const input = await Bun.stdin.text();",
+        `writeFileSync(${JSON.stringify(capture)}, JSON.stringify({ args: process.argv.slice(2), projectDir: process.env.AIDLC_PROJECT_DIR, cwd: process.cwd(), input }));`,
+        'process.stdout.write(JSON.stringify({ additionalContext: "active" }) + "\\n");',
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+    writeFileSync(join(bin, "aidlc.cmd"), `@echo off\r\n"${process.execPath}" "${engine}" %*\r\nexit /b %ERRORLEVEL%\r\n`, "utf-8");
+    const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
+    const saved = process.env[pathKey];
+    process.env[pathKey] = `${bin};${saved ?? ""}`;
+    try {
+      const { client } = fakeClient();
+      const adapter = await createAdapter({
+        client,
+        directory: root,
+        aidlcEntrypoints: TEST_ENTRYPOINTS,
+        aidlcCommand: ["aidlc", "engine"],
+        platform: "win32",
+      });
+      await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "first" }] });
+    } finally {
+      process.env[pathKey] = saved;
+    }
+    expect(existsSync(capture)).toBe(true);
+    const launched = JSON.parse(readFileSync(capture, "utf-8")) as { args: string[]; projectDir: string; cwd: string };
+    expect(launched.args.slice(0, 2)).toEqual(["engine", "hook"]);
+    expect(launched.args).not.toContain("--project-dir");
+    expect(launched.projectDir).toBe(root);
+    expect(resolve(launched.cwd).toLowerCase()).toBe(resolve(root).toLowerCase());
   });
 
   // What cmd.exe and Windows PowerShell hand the program, through the same
