@@ -417,6 +417,23 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(auditHook.remedy).toContain("recorded more than a day after this hook last fired");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  test("2g: opening a chat to run doctor does not make an idle intent's hooks read frozen", () => {
+    const proj = freshProject();
+    const record = seedIdleIntentBeats(proj);
+    // What a fresh chat records before doctor runs: its session start and the
+    // person's prompt, both dated now.
+    const now = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+    writeFileSync(
+      join(record, "audit", "chat.md"),
+      `## Session Start\n**Timestamp**: ${now}\n**Event**: SESSION_STARTED\n**Source**: startup\n\n` +
+        `## Human Turn\n**Timestamp**: ${now}\n**Event**: HUMAN_TURN\n`,
+      "utf-8",
+    );
+    const { bundleDir, out } = runExport(proj);
+    expect(bundleDir, out).not.toBeNull();
+    expect(frozenFindings(bundleDir!)).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("3: report.json exposes findings + timeline.stages and the gate-unresolved error", () => {
     const proj = freshProject();
     seedCanaryIntent(proj);

@@ -998,9 +998,10 @@ deterministic condition→remedy rules. The two most common causes it catches:
   most common "it will not advance" cause.
 - **Stale or missing runtime graph / cold hooks** — a runtime graph older than its
   authored inputs (or absent), or a hook that last fired more than a day before
-  the newest work recorded on the intent, points at a recompile that did not
-  run. Doctor's own audit rows are not counted as work, so an intent nobody is
-  working on does not read as having cold hooks.
+  the newest stage or approval step recorded on the intent, points at a
+  recompile that did not run. Opening a chat, a prompt and doctor's own audit
+  rows are not counted as work, so an intent nobody is working on does not read
+  as having cold hooks.
 
 `report.md` inside the report lists every finding with a remedy; a remedy that
 names a recovery bypass (such as an `AIDLC_DISABLE_*` env var) is flagged

@@ -55,12 +55,12 @@ import {
   activeSpace,
   auditBlockField,
   auditShardDir,
-  DOCTOR_RUN_AUDIT_EVENTS,
   findStageBySlug,
   harnessDir,
   hooksHealthReadDir,
   isoTimestamp,
   isPerUnitStage,
+  isStageOrGateEvent,
   isTeamUnitOwnership,
   listIntentDirs,
   listSpaces,
@@ -1662,13 +1662,14 @@ function readMarkers(projectDir: string): NormalizedEvidence["markers"] {
   };
 }
 
-// Doctor writes its own rows for this run before the analysis reads the audit,
-// so counting them would date every idle intent's newest work to now and read
-// all of its hooks as frozen.
+// The newest stage or gate row. Opening a chat to run doctor records its
+// session start and the person's prompt, and doctor records its own rows,
+// before the analysis reads the audit: counting any of them would date every
+// idle intent's newest work to now and read all of its hooks as frozen.
 function newestWorkAuditMs(audit: string): number | null {
   let newest: number | null = null;
   for (const e of parseAuditEvents(audit)) {
-    if (DOCTOR_RUN_AUDIT_EVENTS.has(e.event)) continue;
+    if (!isStageOrGateEvent(e.event)) continue;
     if (Number.isFinite(e.timestampMs) && (newest === null || e.timestampMs > newest)) {
       newest = e.timestampMs;
     }

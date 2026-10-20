@@ -28422,6 +28422,14 @@ function creationHeartbeat(
   }
 }
 
+// The audit rows that mean the workflow advanced. A chat's session start, the
+// person's prompt and doctor's own receipt land whenever someone opens a chat
+// or runs doctor, so a reader that weighs hooks against the work (hookLiveness,
+// doctor's frozen-hook rule) counts only these.
+export function isStageOrGateEvent(event: string): boolean {
+  return event.startsWith("STAGE_") || event.startsWith("GATE_");
+}
+
 // The one comparison behind the doctor's "Hooks last fired ... but the workflow
 // last advanced ..." row and the Plan Approval decision's liveness refusal, so
 // the two cannot disagree about what "hooks are not firing" means.
@@ -28441,7 +28449,7 @@ export function hookLiveness(
   const healthDirExists = existsSync(healthDir);
   let newestStageOrGateEvent: HookHeartbeatStamp | null = null;
   for (const event of recordEvents) {
-    if (!event.event.startsWith("STAGE_") && !event.event.startsWith("GATE_")) continue;
+    if (!isStageOrGateEvent(event.event)) continue;
     const timestampMs = Date.parse(event.timestamp);
     if (
       Number.isFinite(timestampMs) &&
