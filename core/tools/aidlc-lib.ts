@@ -42823,8 +42823,9 @@ export function recordAcceptedChanges(
  * the effective value for this running intent since it was last recorded,
  * write one GUARD_POLICY_SET row naming that source. The previous effective
  * value is the newest GUARD_POLICY_SET row (or a CHANGE_CONTROL_SET row written
- * by an earlier release), else the state-derived value (the intent's line when
- * valid, otherwise strict).
+ * by an earlier release) in the shared causal order, else the state-derived
+ * value (the intent's line when valid, otherwise strict), which is also where
+ * it starts when the newest rows disagree.
  */
 export function governedGuardPolicy(
   projectDir: string,
@@ -42840,15 +42841,14 @@ export function governedGuardPolicy(
   // The newest setting row is read and the flip row written under one lock, so
   // two governed checks observing the same memory edit at once record it once.
   withAuditLock(projectDir, () => {
-    const events = readAuditShardEvents(projectDir, intent, selection.space);
-    let previous: GuardPolicy | null = null;
-    for (const row of events) {
-      if (row.event !== "GUARD_POLICY_SET" && row.event !== "CHANGE_CONTROL_SET") continue;
-      previous = parseGuardPolicy(auditBlockField(row.block, "New Value")) ?? previous;
-    }
-    if (previous === null) {
-      previous = resolution.stateValue;
-    }
+    const settings = readAuditShardEvents(projectDir, intent, selection.space).filter((row) =>
+      (row.event === "GUARD_POLICY_SET" || row.event === "CHANGE_CONTROL_SET") &&
+      parseGuardPolicy(auditBlockField(row.block, "New Value")) !== null);
+    // Shards are read in filename order (a teammate's clone keeps its own), so
+    // "newest" is the shared causal order; newest rows that disagree tell nothing.
+    const newest = new Set(maximalAttemptEvents(settings).map((row) =>
+      parseGuardPolicy(auditBlockField(row.block, "New Value"))!));
+    const previous = newest.size === 1 ? [...newest][0] : resolution.stateValue;
     if (previous !== resolution.value) {
       appendGuardPolicySetRow(
         projectDir,
