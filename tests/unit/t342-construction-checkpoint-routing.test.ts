@@ -3209,6 +3209,100 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     policyHuman(p, "Please review alpha again", "t342-pick");
     expect(reviewThroughLog(p, [...codeReview("alpha", 2), "--person-asked"]).status).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // With checkpoints on, a re-check of a Unit's changed code is its one
+  // recovery pass; each new attempt the person starts for that Unit after it
+  // (Request Changes at its checkpoint, or its step started again) opens a
+  // fresh one, so a redo that changes the code is reviewed, never refused.
+  function sendBack(p: string, unit: string, words: string) {
+    recordCommand(p);
+    const checkpoint = (args: string[]) => {
+      const result = tool(p, "bolt", ["checkpoint", "--unit", unit, "--kind", "unit", ...args]);
+      expect(result.status, result.out).toBe(0);
+      return JSON.parse(result.stdout);
+    };
+    expect(checkpoint(["--action", "verify"]).verified).toBe(true);
+    checkpoint(["--action", "ask", "--session", "t342-checkpoint"]);
+    policyHuman(p, `Request Changes: ${words}`, "t342-checkpoint");
+    expect(checkpoint([
+      "--action", "reject", "--session", "t342-checkpoint", "--user-input", "Request Changes", "--reason", words,
+    ]).approved).toBe(false);
+  }
+
+  const alphaAt = (p: string, version: number) => () =>
+    writeFileSync(join(p, "src", "alpha.ts"), `export const alpha = ${version};\n`);
+  const chat = (p: string): NodeJS.ProcessEnv =>
+    ({ ...process.env, CLAUDE_PROJECT_DIR: p, AIDLC_PROJECT_DIR: p, AIDLC_UNATTENDED: "0" });
+  const SPENT = "the one recovery review was already used";
+
+  for (const policy of ["strict", "relaxed", "off"]) {
+    test(`${policy}: a Unit sent back twice at its checkpoint, the code changed each time, gets each redo reviewed`, () => {
+      const p = policyFixture("classic", `${policy} (set by you)`, "adversarial");
+      buildReviewed(p, "alpha", alphaAt(p, 1));
+      for (const round of [1, 2]) {
+        expect(next(p).construction_checkpoint?.unit).toBe("alpha");
+        sendBack(p, "alpha", `Return a clear error for an empty name (round ${round})`);
+        buildReviewed(p, "alpha", alphaAt(p, round + 1));
+      }
+      // Each redo's own code was reviewed: three reviews of three versions.
+      const reviewed = readAuditShardEvents(p).filter((row) =>
+        row.event === "REVIEW_COMPLETED" && auditBlockField(row.block, "Stage") === "code-generation" &&
+        auditBlockField(row.block, "Unit") === "alpha");
+      expect(new Set(reviewed.map((row) => auditBlockField(row.block, "Unit Source Fingerprint"))).size).toBe(3);
+      expect(next(p).construction_checkpoint).toMatchObject({ unit: "alpha", ready: true });
+      approve(p, "alpha");
+      expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  test("strict: after one send-back, the person's redo of the Unit's Code Generation gets its changed code reviewed", () => {
+    const p = policyFixture("classic", "strict (set by you)", "adversarial");
+    buildReviewed(p, "alpha", alphaAt(p, 1));
+    sendBack(p, "alpha", "Return a clear error for an empty name");
+    buildReviewed(p, "alpha", alphaAt(p, 2));
+    policyHuman(p, "Redo Code Generation for alpha, please.");
+    const printed = tool(p, "orchestrate", ["next", "--stage", "code-generation"], chat(p));
+    const reopen = /Run `bun \S+aidlc-jump\.ts (reopen [^`]+)`/.exec(printed.stdout)?.[1];
+    expect(reopen, printed.out).toBeDefined();
+    const reopened = tool(p, "jump", reopen!.split(" "), chat(p));
+    expect(reopened.status, reopened.out).toBe(0);
+    alphaAt(p, 3)();
+    cover(p, "alpha", ["code-generation"], false);
+    const redone = reviewThroughLog(p, codeReview("alpha", 1));
+    expect(redone.status, redone.out).toBe(0);
+    expect(redone.request?.recovery).toBe("stale-receipt");
+    cover(p, "alpha", ["code-generation"]);
+    expect(next(p).construction_checkpoint?.unit).toBe("alpha");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A change after the re-check with no new attempt still waits: a send-back
+  // before the re-check and another Unit's reopen leave it spent; the reopen
+  // its refusal offers opens a fresh one.
+  test("strict: alpha changed again after its re-check waits for alpha's own new attempt", () => {
+    const p = policyFixture("classic", "strict (set by you)", "adversarial");
+    buildReviewed(p, "alpha", alphaAt(p, 1));
+    sendBack(p, "alpha", "Return a clear error for an empty name");
+    expect(buildReviewed(p, "alpha", alphaAt(p, 2)).request?.recovery).toBe("stale-receipt");
+    alphaAt(p, 3)();
+    const again = tool(p, "log", codeReview("alpha", 2));
+    expect(again.status).not.toBe(0);
+    expect(again.out).toContain(SPENT);
+    const betaReopened = tool(p, "jump", ["reopen", "--target", "code-generation", "--units", "beta"]);
+    expect(betaReopened.status, betaReopened.out).toBe(0);
+    const stillSpent = tool(p, "log", codeReview("alpha", 2));
+    expect(stillSpent.status).not.toBe(0);
+    expect(stillSpent.out).toContain(SPENT);
+    const offered = /`bun \S+aidlc-jump\.ts (reopen --target code-generation --units alpha)`/.exec(stillSpent.out)?.[1];
+    expect(offered, stillSpent.out).toBeDefined();
+    const reopened = tool(p, "jump", offered!.split(" "));
+    expect(reopened.status, reopened.out).toBe(0);
+    alphaAt(p, 4)();
+    cover(p, "alpha", ["code-generation"], false);
+    const redone = reviewThroughLog(p, codeReview("alpha", 1));
+    expect(redone.status, redone.out).toBe(0);
+    cover(p, "alpha", ["code-generation"]);
+    expect(next(p).construction_checkpoint?.unit).toBe("alpha");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // The walking skeleton gates the per-unit stages. Once they are all done or
