@@ -716,7 +716,10 @@ describe("t241 OpenCode adapter command boundary and transition filter", () => {
       ].join("\n"),
       "utf-8",
     );
-    writeFileSync(join(bin, "aidlc.cmd"), `@echo off\r\n"${process.execPath}" "${engine}" %*\r\nexit /b %ERRORLEVEL%\r\n`, "utf-8");
+    // cmd.exe expands % inside a batch file, so the paths are written with it
+    // doubled, as the install writes its own launcher (windowsShim).
+    const literal = (path: string) => path.replaceAll("%", "%%");
+    writeFileSync(join(bin, "aidlc.cmd"), `@echo off\r\n"${literal(process.execPath)}" "${literal(engine)}" %*\r\nexit /b %ERRORLEVEL%\r\n`, "utf-8");
     const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH";
     const saved = process.env[pathKey];
     process.env[pathKey] = `${bin};${saved ?? ""}`;
