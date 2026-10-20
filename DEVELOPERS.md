@@ -284,9 +284,9 @@ renamed or reused.
    expected by installed clients' provenance checks. The stable build checks
    the metadata-only relationship, packaging determinism, native binaries,
    installers, lifecycle flows, upgrades, checksums and provenance. It does not
-   rerun PR CI or Full Suite. Existing test failures remain recorded on the
-   preview's page and in the promotion record, and the stable page links that
-   preview; selecting a preview is the maintainer's release
+   rerun PR CI or Full Suite. Existing test failures remain on the preview's
+   page, the promotion record keeps their warning lines, and the stable page
+   links that preview; selecting a preview is the maintainer's release
    decision, not a new passing test result. The `release` environment's existing
    publication approval still applies.
 

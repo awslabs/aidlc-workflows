@@ -1823,9 +1823,10 @@ live opt-in switch in this release workflow. Missing
 prerequisites, skipped jobs, or failed tests fail an ordinary Full Suite run.
 They do not block preview publication: the preview still builds, its notes end
 with a Full Suite failure report, and only the separate Full Suite run stays red.
-Stable promotion preserves those results and warnings on the preview's page and
-in its promotion record, and the stable page links that preview; it does not
-repeat the suite or claim that a previous failure passed. Stable publication still requires
+Stable promotion preserves those results and warnings on the preview's page,
+keeps the warning lines in its promotion record, and the stable page links
+that preview; it does not repeat the suite or claim that a previous failure
+passed. Stable publication still requires
 the new binaries to pass installation and upgrade checks. The credential-free
 Windows release-contract job also runs.
 

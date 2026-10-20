@@ -291,7 +291,7 @@ export function publicationStatus(version: string, repository: string, run: Comm
 
 // The stable page: the reviewed notes and the preview it was promoted from.
 // The preview's test warnings and its failure report stay on the preview's
-// page, which the link opens, and in the promotion record.
+// page, which the link opens; the promotion record keeps the warning lines.
 export function promotionNotes(p: Promotion): string {
   return `${p.notes}\n\nPromoted from [${p.preview}](https://github.com/${p.repository}/releases/tag/${p.preview}), source \`${p.source}\`.\n`;
 }

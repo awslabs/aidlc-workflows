@@ -260,9 +260,9 @@ gh release create "$RELEASE_TAG" build/release/* \
 The body contains the reviewed notes from the verified promotion record, which
 also supplies this version's `CHANGELOG.md` entry, followed by the selected
 preview/source reference, which links the preview's page. The preview's
-recorded validation warnings and failure report stay on that page and in the
-promotion record, not on the stable page; the promotion run's summary still
-shows them. The helper
+recorded validation warnings and failure report stay on that page, not on the
+stable page; the promotion record keeps the warning lines, and the promotion
+run's summary shows them. The helper
 rechecks the promotion before writing the notes. GitHub's own generated notes
 are not used: their "What's Changed" list names every contributing account by handle.
 
