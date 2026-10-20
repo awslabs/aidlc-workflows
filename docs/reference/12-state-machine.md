@@ -1534,7 +1534,8 @@ review (`SOURCE_REVIEW_STALE`, the source still readable) offers the one
 `start-recovery-review`, as a changed output does, and that remedy names its
 exact request; and a review pass the cap refuses with nobody having asked for it
 (`REVIEW_BUDGET_EXHAUSTED`) offers `present-findings-at-gate` before
-`present-approval-gate`, the same gate with its findings, or, part way through a
+`present-approval-gate`, the same gate with its findings (on a stage this work
+runs with no review, the gate alone, since no review ran), or, part way through a
 Unit's step in a walk one Unit at a time, `finish-unit-step` (the Unit's step
 finished with the review it has, then `next`) before the same finish and the
 redo put to the person. `lower-fence`

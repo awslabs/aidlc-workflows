@@ -32857,8 +32857,11 @@ export function evaluateGuardRefusal(
     // has, or start the step again for that Unit.
     // A stage this work runs with no review (express, a Review Override of
     // none) has nothing to review and nothing to wait for: its way on is the
-    // gate, as for a stage whose passes are spent on current work.
-    const runsNoReview = input.attempt.reviewBudget?.limit === 0;
+    // gate, as for a stage whose passes are spent on current work. Only the
+    // budget refusal says so; the log tool sends it after the summary and
+    // every other review check passed, and any other refusal still stands
+    // between the stage and its gate.
+    const runsNoReview = input.code === "REVIEW_BUDGET_EXHAUSTED" && input.attempt.reviewBudget?.limit === 0;
     const reviewSettled = input.attempt.reviewCoverage === "current" || runsNoReview;
     const midStep = !reviewBudgetAvailable && reviewSettled
       ? unitStepInProgress(input)

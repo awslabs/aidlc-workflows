@@ -963,6 +963,30 @@ describe("t271 review iteration ceiling", () => {
     });
   }
 
+  // Only the budget refusal hands over the gate: a review asked for before the
+  // summary is confirmed is refused for the summary, and the gate, which would
+  // refuse it for the same reason, is not offered, first time or again.
+  test("a Review Override of none: a review refused for the summary offers no gate", () => {
+    const proj = seedProject("feature");
+    try {
+      const sf = seededStateFile(proj);
+      writeFileSync(sf, readFileSync(sf, "utf8").replace("- **Scope**: feature", "- **Scope**: feature\n- **Review Override**: none"));
+      const request = ["--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"];
+      for (const attempt of [1, 2]) {
+        const refused = runReview(proj, request, { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "0" });
+        expect(refused.status, `attempt ${attempt}`).not.toBe(0);
+        expect(refused.stderr).not.toContain("allows 0 review passes");
+        const ops = refusalAsk(refused.stderr).remedies.map((remedy) => remedy.op);
+        expect(ops, `attempt ${attempt}: ${refused.stderr}`).toContain("reconfirm-summary");
+        expect(ops).not.toContain("present-approval-gate");
+        expect(ops).not.toContain("present-findings-at-gate");
+      }
+      expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(0);
+    } finally {
+      cleanupTestProject(proj);
+    }
+  });
+
   test("a resumed classic intent keeps one advisory pass gated and the cap-exempt pre-merge reviewer", () => {
     const proj = seedProject("classic");
     try {
