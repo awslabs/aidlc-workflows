@@ -495,6 +495,10 @@ describe("the engine asks for Plan Approval", () => {
     next(proj);
     askFor(proj);
     expect(statusLine(proj)).toBe("Awaiting your approval on the code plan");
+    // They chose to edit the files themselves: the work waits on their edit.
+    reply(proj, "/aidlc 3");
+    expect(next(proj).plan_approval?.editing).toBe(true);
+    expect(statusLine(proj)).toBe("Waiting for you to finish editing the code plan");
     const units = unitProject("unit-b", "unit-a");
     writePlan(units, "", "unit-b");
     writePlan(units, "", "unit-a");

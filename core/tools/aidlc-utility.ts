@@ -35,6 +35,7 @@ import {
 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { QUESTION_UNAVAILABLE, readQuestion, retireRequest, startedRequestFor } from "./aidlc-question-store.ts";
+import { planApprovalAskState } from "./aidlc-plan-approval-ask.ts";
 import {
   appendAuditEntries,
   appendAuditEntry,
@@ -2022,11 +2023,15 @@ To get started:
     statusLine = `Paused at ${at}${stopped}; pick it back up with ${entrySkillInvocation()} --resume`;
   } else if (planAsk !== null) {
     // The code plan question is open: the work waits on the person, in the
-    // question's own words, not on the agent.
+    // question's own words, not on the agent; while they edit the files
+    // themselves (the question's own record says so), on their edit.
     const units = planAsk.units ?? (typeof planAsk.unit === "string" ? [planAsk.unit] : []);
-    statusLine = units.length > 1
-      ? `Awaiting your approval on the code plans for ${units.join(", ")}`
-      : `Awaiting your approval on the code plan${units.length === 1 ? ` for ${units[0]}` : ""}`;
+    const plans = units.length > 1
+      ? `code plans for ${units.join(", ")}`
+      : `code plan${units.length === 1 ? ` for ${units[0]}` : ""}`;
+    statusLine = planApprovalAskState(projectDir) === "editing"
+      ? `Waiting for you to finish editing the ${plans}`
+      : `Awaiting your approval on the ${plans}`;
   } else if (currentCheckbox?.state === "awaiting-approval") {
     const displayName = currentName;
     statusLine = `Awaiting your approval on ${displayName}`;
