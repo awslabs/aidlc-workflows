@@ -4873,8 +4873,9 @@ function observeChangeControl(
   if (notices.length > 0) console.log(JSON.stringify({ change_notices: notices }));
 }
 
-// A change outside every unit's work that relaxed or off keeps: recorded once
-// and said once, the same way the receipt scan's accepted changes are.
+// A change outside every unit's work that is kept (relaxed or off, or a start
+// record lost on this machine): recorded once and said once, the same way the
+// receipt scan's accepted changes are.
 function acceptOutsideUnitChanges(pd: string, content: string, change: AcceptedChange): void {
   observeChangeControl(pd, content, { changeControlRead: true, acceptedChanges: [change] });
 }
@@ -5483,13 +5484,16 @@ function verifyReviewerPrecondition(
   if (!attributionApplies) return;
 
   // Under relaxed or off, what changed outside the units is kept and said once;
-  // only strict holds completion on it.
+  // only strict holds completion on it. A start record that is not on this
+  // machine (a fresh clone) is AI-DLC's own lost bookkeeping, so strict says the
+  // same one line and carries on too; one that is here and does not match holds.
   const acceptsChanges = guardPolicyAcceptsChanges(pd, content);
   if (
     receipts.sourceBaseline.state === "unbindable" ||
-    receipts.sourceBaseline.state === "invalid"
+    receipts.sourceBaseline.state === "invalid" ||
+    receipts.sourceBaseline.state === "missing"
   ) {
-    if (acceptsChanges) {
+    if (acceptsChanges || receipts.sourceBaseline.state === "missing") {
       acceptOutsideUnitChanges(pd, content, {
         checkpoint: "review-receipt",
         stage: stage.slug,

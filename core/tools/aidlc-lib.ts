@@ -16240,6 +16240,8 @@ export type SourceBaselineResult =
   | { state: "legacy" }
   | { state: "unbindable" }
   | { state: "invalid" }
+  // The audit names a well-formed baseline and no copy of it is on this machine.
+  | { state: "missing" }
   | { state: "ready"; listing: WorkspaceSourceListing };
 
 export interface FreshReviewReceipts {
@@ -21815,7 +21817,11 @@ export function freshReviewReceipts(
     if (baselineField === UNBINDABLE_FINGERPRINT) sourceBaseline = { state: "unbindable" };
     else if (baselineField !== null) {
       const listing = readBaselineSourceSnapshot(projectDir, stage.slug, baselineField);
-      sourceBaseline = listing === null ? { state: "invalid" } : { state: "ready", listing };
+      sourceBaseline = listing !== null
+        ? { state: "ready", listing }
+        : baselineSourceSnapshotMissing(projectDir, stage.slug, baselineField)
+          ? { state: "missing" }
+          : { state: "invalid" };
     } else if (modernSourceBindingEvidence) {
       sourceBaseline = { state: "invalid" };
     }
@@ -27659,6 +27665,28 @@ export function readBaselineSourceSnapshot(
   return serialized === null ? null : parseSourceListing(serialized);
 }
 
+// The baseline file is AI-DLC's own ignored copy, so a fresh clone or another
+// machine has none; that is lost bookkeeping, not a mismatch. A file that is
+// here (even a dangling link) and does not match is not this.
+function baselineSourceSnapshotMissing(
+  projectDir: string,
+  stageSlug: string,
+  fingerprint: string,
+  intent?: string,
+  space?: string,
+): boolean {
+  const hash = validSourceSnapshotFingerprint(fingerprint);
+  if (hash === null) return false;
+  const path = sourceSnapshotReadPath(projectDir, stageSlug, `baseline-${hash.slice(0, 12)}.tsv`, intent, space);
+  if (path === null) return false;
+  try {
+    lstatSync(path);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
+}
+
 // --- Workspace source snapshots keyed by the workspace fingerprint -----------
 //
 // A Plan Approval binds to the workspace source FINGERPRINT (the `[Planned
@@ -27866,7 +27894,10 @@ export function currentStageSourceBaseline(
     intent,
     space,
   );
-  return listing === null ? { state: "invalid" } : { state: "ready", listing };
+  if (listing !== null) return { state: "ready", listing };
+  return baselineSourceSnapshotMissing(projectDir, stageSlug, field, intent, space)
+    ? { state: "missing" }
+    : { state: "invalid" };
 }
 
 export interface UnitSourceSnapshot {
@@ -43382,7 +43413,7 @@ export function recordAcceptedChanges(
         changeControlLedgerAppend(projectDir, "CHANGE_ACCEPTED", acceptedChangeFields(change), selection);
       } catch (error) {
         throw new Error(
-          `Cannot continue under a relaxed or off Guard Policy: the accepted change for "${change.stage}"` +
+          `Cannot continue: the accepted change for "${change.stage}"` +
             `${change.unit ? ` (unit ${change.unit})` : ""} could not be recorded in the audit ledger ` +
             `(${errorMessage(error)}). Repair the ledger, then run the same command again.`,
         );

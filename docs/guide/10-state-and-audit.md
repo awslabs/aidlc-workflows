@@ -284,8 +284,10 @@ and is reviewed once more, a change nobody meant is undone, or a path that is
 not source is excluded there. Under relaxed or
 off, an uncovered change is kept: completion records it once as
 `CHANGE_ACCEPTED` and names the files in one line ("These files changed outside
-any unit's work in Code Generation: ... Kept them."), and a stage-entry baseline
-that is missing on this machine skips the check with one line.
+any unit's work in Code Generation: ... Kept them."). A stage-entry baseline
+that is missing on this machine (a fresh clone) skips the check with one line
+under every Guard Policy; one that is here and does not match still blocks
+completion under strict.
 
 The workspace-global `Source Fingerprint` is normally the outer post-review
 mutation boundary. One narrow reconciliation makes the documented “revert”
