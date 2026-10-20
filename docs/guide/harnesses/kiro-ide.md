@@ -594,9 +594,9 @@ Kiro CLI has a Workflows switch of its own (`/settings` > Features >
 `~/.kiro/settings/cli.json`). While it is on, Kiro CLI takes both sub-agent
 tools away from the `aidlc` agent, so AI-DLC's reviews and helpers do not run
 in your Kiro CLI chats; its "Workflows: sub-agent tool" setting does not bring
-them back (measured on Kiro CLI 2.32.0). Kiro CLI's chat reads the switch only
-from your own Kiro CLI settings, so a project's `.kiro/settings/cli.json` value
-does not turn it off. AI-DLC asks about it the same way, with an answer of its
+them back (measured on Kiro CLI 2.31.1 and 2.32.0). Kiro CLI's chat reads the
+switch only from your own Kiro CLI settings, so a project's
+`.kiro/settings/cli.json` value does not turn it off. AI-DLC asks about it the same way, with an answer of its
 own: during `aidlc config`, or once in your first Kiro CLI chat; `aidlc config
 --yes` takes the recommended answer and turns it off. AI-DLC changes it through
 Kiro CLI's own `kiro-cli settings` command; quit Kiro CLI and start `kiro-cli`

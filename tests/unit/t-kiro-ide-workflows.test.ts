@@ -5,7 +5,7 @@
 // says yes (setup, `config --yes`, a chat), keeps their answer once per machine,
 // and never touches any other byte of their settings file. Kiro CLI, the row's
 // other host, has its own switch (`chat.enableWorkflows`, measured on Kiro CLI
-// 2.32.0) with the same question and an answer of its own.
+// 2.31.1 and 2.32.0) with the same question and an answer of its own.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";

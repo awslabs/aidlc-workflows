@@ -209,12 +209,14 @@ describe("uninstall file ownership plans", () => {
     });
   }
 
-  test("purge plans the Kiro IDE settings-error marker with the machine's other answers; uninstall keeps it", () => {
+  test("purge plans the Kiro settings-error and Kiro CLI Workflows markers with the machine's other answers; uninstall keeps them", () => {
     withInstall((fixture) => {
-      const marker = join(fixture.root, "kiro-ide-settings-error-told");
-      put(marker, "told\n");
-      expect(plan(fixture, true).files.some((file) => file.path === marker)).toBe(true);
-      expect(plan(fixture, false).files.some((file) => file.path === marker)).toBe(false);
+      for (const name of ["kiro-ide-settings-error-told", "kiro-cli-workflows"]) {
+        const marker = join(fixture.root, name);
+        put(marker, "told\n");
+        expect(plan(fixture, true).files.some((file) => file.path === marker), name).toBe(true);
+        expect(plan(fixture, false).files.some((file) => file.path === marker), name).toBe(false);
+      }
     });
   });
 

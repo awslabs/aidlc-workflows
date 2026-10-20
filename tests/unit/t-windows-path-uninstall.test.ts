@@ -104,7 +104,7 @@ function fixturePlan(
     ...[
       "active-version", "active-executable", "rollback-version", "aidlc-shim.ps1", "windows-path.json",
       ...["aidlc.bash", "_aidlc", "aidlc.fish", "aidlc.ps1"].map((name) => join("completions", name)),
-      ...(purge ? ["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal"] : []),
+      ...(purge ? ["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-cli-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal"] : []),
     ].map((name) => join(root, name)),
     ...additionalFiles,
   ];
@@ -768,7 +768,7 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
           ].map((name) => join(root, name));
           for (const path of owned) writeFileSync(path, "owned");
           const settings = [
-            "aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal",
+            "aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-cli-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal",
           ].map((name) => join(root, name));
           for (const path of settings) writeFileSync(path, `setting: ${path}`);
           const receipt = registration(dirname(commandPath()));

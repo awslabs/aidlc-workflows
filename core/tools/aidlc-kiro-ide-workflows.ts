@@ -9,8 +9,9 @@
 // Kiro CLI, the other host of this row, has a switch of its own,
 // `chat.enableWorkflows` in the person's own Kiro CLI settings: on its v3 engine
 // it takes both sub-agent tools away from the aidlc agent (measured on Kiro CLI
-// 2.32.0; 2.23.1 kept them). Its interactive chat reads only that personal
-// value, so a project file cannot turn it off either. It gets the same
+// 2.31.1 and 2.32.0; 2.23.1, older than this row's oldest checked build, kept
+// them). Its interactive chat reads only that personal value, so a project file
+// cannot turn it off either. It gets the same
 // question, kept as an answer of its own: an answer about Kiro IDE says nothing
 // about Kiro CLI.
 import { createHash } from "node:crypto";
