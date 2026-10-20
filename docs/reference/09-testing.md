@@ -1856,10 +1856,10 @@ The declared coverage is:
   (`tests/e2e/t-exec-codex-journey-golden-bugfix.serial.test.ts`, Linux and
   Windows) fixes the same greeter from the first line to Code Generation approved,
   with the plan question left for the day and approved in a new session; Copilot's
-  (`tests/e2e/t-exec-copilot-journey-golden-bugfix.serial.test.ts`, Linux only:
-  on Windows it runs past the 25 minutes a retry allows) does the same on the
-  copy-channel install of its release journey. opencode's
-  (`tests/e2e/t-run-opencode-journey-golden-change.serial.test.ts`, Linux) takes the
+  (`tests/e2e/t-exec-copilot-journey-golden-bugfix.serial.test.ts`, Linux and
+  Windows) does the same on the copy-channel install of its release journey.
+  opencode's (`tests/e2e/t-run-opencode-journey-golden-change.serial.test.ts`,
+  Linux and Windows) takes the
   same request to Reverse Engineering, where the person asks for one change in
   their own words and approves the revision, on the shipped permission table.
 - Kiro ACP, TUI and IDE are declared exclusions pending a dedicated isolated
@@ -1873,10 +1873,12 @@ After authorization and dependency installation, the plan emits `--matrix
 linux`, `--matrix macos` and `--matrix windows` as the dynamic matrices of the
 `live_linux`, `live_macos` and `live_windows` jobs. Each row's `shard: N/M`
 selects a duration-balanced group for its family/platform. Each OS has two Claude
-SDK (five on Linux, which alone runs the golden journeys and the answers corpus,
-the corpus on a shard of its own), three Claude TUI, one Codex (two on Linux and
-Windows, where the Codex golden journey runs), one Copilot and one opencode shard:
-29 live harness jobs in all. Timing weights in
+SDK (five on Linux, which runs the golden journeys and alone the answers corpus,
+the corpus on a shard of its own; three on Windows, which runs the golden
+journeys too), three Claude TUI, one Codex (two on Linux and Windows, where the
+Codex golden journey runs), one Copilot and one opencode shard: 30 live harness
+jobs in all. A golden journey runs on Linux and Windows while it takes under the
+25 minutes a retry allows there. Timing weights in
 `tests/live-shard-weights.json` are scheduling hints;
 discovery still assigns every eligible file exactly once per platform. Each OS
 has its own concurrency cap: four Linux, two macOS and three Windows live jobs.

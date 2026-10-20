@@ -1150,6 +1150,9 @@ export async function driveAidlc(
           num_turns: resultEvent.num_turns,
           permissionDenialsCount: resultEvent.permissionDenialsCount,
           pendingTasks: pendingTasks.size,
+          // What the session has used so far, as Claude Code counts it: the nightly's model cost.
+          costUsd: m.total_cost_usd,
+          modelUsage: m.modelUsage,
         });
         // With a task still unreported the session resumes when it reports,
         // so the stream stays open; the drive's own timeout bounds the wait,
