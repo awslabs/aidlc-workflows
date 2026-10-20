@@ -31,8 +31,9 @@
 // receipt) waits while the plan does (the person's answer at the held gate and
 // the recovery remedy they picked excepted); a jump waits for the person's
 // move: the restart they picked at the recovery question, or one they asked
-// for, unless the engine's last step was superseded or is its Code Generation
-// recovery question. While the person is editing the plan
+// for, unless the engine's last step is its Code Generation recovery question
+// and the jump is one it offers or not the choice the person just picked
+// there. While the person is editing the plan
 // files themselves, those files are theirs (personIsEditingPlanFile). Three
 // kinds of files pass too: the composer's grid proposal, a person's answer text
 // and a person's request file, which the engine reads and nothing else.
@@ -1477,45 +1478,54 @@ function isSelectedGuardRestartContinuation(
 interface EngineCommandContext {
   gateHeld: boolean;
   marker: ActiveDirectiveMarker | null;
-  jumpAdmitted: () => boolean;
+  jumpAdmitted: (target: string | undefined) => boolean;
 }
 
 const NO_ENGINE_CONTEXT: EngineCommandContext = { gateHeld: false, marker: null, jumpAdmitted: () => false };
 
-// The engine's last step was delivered as issued, and it is not its Code
-// Generation recovery question, whose own picked restart is the one jump it
-// carries out (isSelectedGuardRestartContinuation), bound to the state it was
-// picked at. The report that opens the gate moves the state and writes no step,
-// so the step the person answers there is the one the engine issued last
+// The engine's last step leaves a jump to `target` to the person's turn. At
+// its Code Generation recovery question, a restart or Unit reopen the question
+// offers runs only as the person's pick of it
+// (isSelectedGuardRestartContinuation), bound to the state it was picked at,
+// and right after they picked one of its choices exactly (the hook's record on
+// the current step) another jump goes against that pick; any other jump is
+// their own move. The report that opens the gate moves the state and writes no
+// step, so the step the person answers there is the one the engine issued last
 // (readIssuedDirectiveMarker); whether their words still stand is
-// personSpokeSinceGate's. With no step on record there is nothing to wait for.
-// Parked work's last step is the park, which no issued step outlives.
-function lastStepAdmitsPersonsMoves(projectDir: string): boolean {
+// personSpokeSinceGate's. Whether the agent has read the step since (its
+// delivery) binds nothing of theirs. With no step on record there is nothing to
+// wait for. Parked work's last step is the park, which no issued step outlives.
+function lastStepAdmitsPersonsMoves(projectDir: string, target: string | undefined): boolean {
   try {
     const state = readFileSync(stateFilePath(projectDir), "utf-8");
     if ((getField(state, "Parked") ?? "").trim().length > 0) return true;
-    const marker = readActiveDirectiveMarker(projectDir, state) ?? readIssuedDirectiveMarker(projectDir);
-    if (marker === null) return true;
-    return marker.delivery !== "superseded" &&
-      !(marker.kind === "ask" && marker.ask_type === GUARD_RECOVERY_ASK_TYPE);
+    const current = readActiveDirectiveMarker(projectDir, state);
+    const marker = current ?? readIssuedDirectiveMarker(projectDir);
+    if (marker === null || marker.kind !== "ask" || marker.ask_type !== GUARD_RECOVERY_ASK_TYPE) return true;
+    const reply = current?.guard_recovery_response;
+    return target !== undefined &&
+      !(marker.remedies ?? []).some(({ operation }) =>
+        (operation?.kind === "restart-stage" || operation?.kind === "reopen-unit") && operation.stage === target) &&
+      !(reply?.picked_by === "person" && reply.selected_op && reply.feedback_sha256 === undefined);
   } catch {
     return false;
   }
 }
 
 // A jump is the person's move: the restart they picked at the engine's recovery
-// question, or one they asked for since the last decision, unless the engine's
-// last step was superseded or is its Code Generation recovery question. The jump
-// tool checks neither.
+// question, or one they asked for since the last decision that the question
+// does not keep for their pick (lastStepAdmitsPersonsMoves). The jump tool
+// checks neither.
 function jumpIsPersonsMove(
   projectDir: string,
   cwd: string,
   command: unknown,
   state: string,
   marker: ActiveDirectiveMarker | null,
+  target: string | undefined,
 ): boolean {
   return (typeof command === "string" && isSelectedGuardRestartContinuation(projectDir, cwd, command, state, marker)) ||
-    (personSpokeSinceGate(projectDir, { requests: true }) && lastStepAdmitsPersonsMoves(projectDir));
+    (personSpokeSinceGate(projectDir, { requests: true }) && lastStepAdmitsPersonsMoves(projectDir, target));
 }
 
 // The results that open the Code Generation gate or complete the stage.
@@ -1600,7 +1610,7 @@ function engineCommandAdmitted(
     !(report && context.gateHeld && stage === GUARDED_STAGE && result === "approved") &&
     !guardRecoveryAnswerAdmits(context.marker, engineArgs, projectDir)
   ) return false;
-  if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted()) return false;
+  if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted(lastFlag(args, "--target"))) return false;
   // `next` takes no `--bypass`: on its line the token is one of the person's
   // words ("add a --bypass option"), never a check turned off, as the engine's
   // own reading says (nextLineFlags). Every other command is read whole, as its
@@ -2188,8 +2198,8 @@ async function evaluate(
             {
               gateHeld: codeGenerationGateHeld(state),
               marker: activeDirective,
-              jumpAdmitted: () =>
-                toolName === "Bash" && jumpIsPersonsMove(projectDir, cwd, toolInput.command, state ?? "", activeDirective),
+              jumpAdmitted: (target) =>
+                toolName === "Bash" && jumpIsPersonsMove(projectDir, cwd, toolInput.command, state ?? "", activeDirective, target),
             },
           )
         : {

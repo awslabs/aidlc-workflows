@@ -20,6 +20,7 @@
 //
 // The states and the seven shapes live in tests/harness/code-generation-states.ts.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { cleanupTestProject } from "../harness/fixtures.ts";
@@ -35,6 +36,7 @@ import {
   namedCommands,
   next,
   openCodeGenerationGate,
+  openRecoveryQuestion,
   reply,
   respell,
   reviewText,
@@ -50,6 +52,7 @@ import {
   type Verdict,
   writePlan,
 } from "../harness/code-generation-states.ts";
+import { writeSessionPidEntry } from "../../dist/copilot/.aidlc/tools/aidlc-lib.ts";
 
 setDefaultTimeout(600_000);
 
@@ -543,16 +546,43 @@ describe("the six plan-answer cases from the hook's gate, at the open question",
 // jump the engine names for their request is still theirs once they have spoken
 // since the last decision (lastStepAdmitsPersonsMoves), under every Guard
 // Policy, with no `next` first and no gate shown again.
+const ASK = "Actually, go back to Requirements Analysis: I want slugify to cap the slug at 60 characters.";
+
+function jumpFor(proj: string, stage: string): string {
+  const step = next(proj, ["--stage", stage]);
+  const jump = namedCommands(String(step.message ?? "")).find((command) => command.includes("aidlc-jump.ts execute"));
+  expect(jump, JSON.stringify(step)).toBeDefined();
+  return jump as string;
+}
+
+/** Requirements Analysis, the step `next` gave after the jump, run to the person's approval; then the step after it. */
+async function requirementsAnalysisApproved(proj: string, step: Step): Promise<Step> {
+  const claude = SHAPES[0];
+  for (const rel of (step.produces as string[] | undefined) ?? []) {
+    const path = join(proj, rel);
+    const write = await claude.call(proj, SESSION, { tool: "Write", path });
+    expect(write.code, `${rel} -> ${write.said}`).toBe(0);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, "# Requirements\n\n## Functional Requirements\n\n- FR-1: slugify caps the slug at 60 characters.\n", "utf-8");
+  }
+  const reviewer = String(step.reviewer);
+  const review = `bun .claude/tools/aidlc.ts engine log review --stage requirements-analysis --reviewer ${reviewer} --iteration 1`;
+  const requested = runNamed(proj, review);
+  const reviewFile = (JSON.parse(requested.stdout || "{}") as { reviewFile?: string }).reviewFile;
+  expect(reviewFile, requested.stdout + requested.stderr).toBeDefined();
+  mkdirSync(dirname(join(proj, reviewFile as string)), { recursive: true });
+  writeFileSync(join(proj, reviewFile as string), reviewText(reviewer), "utf-8");
+  expect(runNamed(proj, `${review} --verdict READY`).status).toBe(0);
+  const opened = runNamed(proj, "bun .claude/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result awaiting-approval");
+  expect(opened.status, opened.stdout + opened.stderr).toBe(0);
+  expect(reply(proj, "approve").status).toBe(0);
+  const approved = runNamed(proj, "bun .claude/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved --user-input Approve");
+  expect(approved.status, approved.stdout + approved.stderr).toBe(0);
+  return next(proj);
+}
+
 describe("the person's jump back from the open gate goes through on the first ask", () => {
   const claude = SHAPES[0];
-  const ASK = "Actually, go back to Requirements Analysis: I want slugify to cap the slug at 60 characters.";
-
-  function jumpFor(proj: string, stage: string): string {
-    const step = next(proj, ["--stage", stage]);
-    const jump = namedCommands(String(step.message ?? "")).find((command) => command.includes("aidlc-jump.ts execute"));
-    expect(jump, JSON.stringify(step)).toBeDefined();
-    return jump as string;
-  }
 
   function gate(policy: "strict" | "relaxed" | "off", planApproval: "on" | "off"): string {
     const proj = openCodeGenerationGate(policy, planApproval);
@@ -561,10 +591,8 @@ describe("the person's jump back from the open gate goes through on the first as
   }
 
   // Each shape's adapter hands the jump to the guard, and the guard admits it,
-  // with the step as `next` and the report left it. Copilot's adapter settles
-  // its own step after every engine command, which leaves the step superseded
-  // after the report: there the person still meets one refusal before `next`
-  // carries the jump, as before. This test does not run that settle.
+  // with the step as `next` and the report left it. Copilot's own settle after
+  // every engine command is driven in the recovery question's Copilot case.
   test("stock poc: the jump is admitted in every harness shape", async () => {
     const proj = gate("off", "off");
     expect(reply(proj, ASK).status).toBe(0);
@@ -648,29 +676,199 @@ describe("the person's jump back from the open gate goes through on the first as
     expect(runNamed(proj, jump).status).toBe(0);
     const step = next(proj);
     expect(step.stage, JSON.stringify(step)).toBe("requirements-analysis");
-    for (const rel of (step.produces as string[] | undefined) ?? []) {
-      const path = join(proj, rel);
-      const write = await claude.call(proj, SESSION, { tool: "Write", path });
-      expect(write.code, `${rel} -> ${write.said}`).toBe(0);
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, "# Requirements\n\n## Functional Requirements\n\n- FR-1: slugify caps the slug at 60 characters.\n", "utf-8");
-    }
-    const reviewer = String(step.reviewer);
-    const review = `bun .claude/tools/aidlc.ts engine log review --stage requirements-analysis --reviewer ${reviewer} --iteration 1`;
-    const requested = runNamed(proj, review);
-    const reviewFile = (JSON.parse(requested.stdout || "{}") as { reviewFile?: string }).reviewFile;
-    expect(reviewFile, requested.stdout + requested.stderr).toBeDefined();
-    mkdirSync(dirname(join(proj, reviewFile as string)), { recursive: true });
-    writeFileSync(join(proj, reviewFile as string), reviewText(reviewer), "utf-8");
-    expect(runNamed(proj, `${review} --verdict READY`).status).toBe(0);
-    const opened = runNamed(proj, "bun .claude/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result awaiting-approval");
-    expect(opened.status, opened.stdout + opened.stderr).toBe(0);
-    expect(reply(proj, "approve").status).toBe(0);
-    const approved = runNamed(proj, "bun .claude/tools/aidlc.ts engine orchestrate report --stage requirements-analysis --result approved --user-input Approve");
-    expect(approved.status, approved.stdout + approved.stderr).toBe(0);
-    const after = next(proj);
+    const after = await requirementsAnalysisApproved(proj, step);
     expect(after.kind, JSON.stringify(after)).toBe("run-stage");
     expect(["requirements-analysis", "code-generation"]).not.toContain(after.stage);
     expect(next(proj).stage).toBe(after.stage);
+  });
+});
+
+// Copilot's adapter around one command, as VS Code runs it: the claim before
+// (the adapter may rewrite the command), the terminal, the settle after.
+const COPILOT_CHAT = "copilot-recovery-jump";
+let copilotCall = 0;
+
+function copilotAdapter(proj: string, target: string, payload: Record<string, unknown>) {
+  if (target === "record-human-turn") writeSessionPidEntry(proj, process.pid, COPILOT_CHAT);
+  const run = spawnSync(process.execPath, [join(proj, ".aidlc", "hooks", "aidlc-copilot-adapter.ts"), target], {
+    cwd: proj, input: JSON.stringify({ cwd: proj, session_id: COPILOT_CHAT, ...payload }), encoding: "utf-8",
+    env: { ...process.env, AIDLC_UNATTENDED: undefined, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined },
+  });
+  return { stdout: run.stdout ?? "", stderr: run.stderr ?? "", code: run.status ?? -1 };
+}
+
+// The terminal a command runs in: Git's bash on Windows, as VS Code users there run it, and /bin/sh elsewhere.
+function terminal(proj: string, command: string) {
+  const sh = process.platform === "win32"
+    ? join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe")
+    : "/bin/sh";
+  const run = spawnSync(sh, [process.platform === "win32" ? "-lc" : "-c", command], {
+    cwd: proj, encoding: "utf-8",
+    env: { ...process.env, AIDLC_UNATTENDED: undefined, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined },
+  });
+  return { stdout: run.stdout ?? "", stderr: run.stderr ?? "", code: run.status ?? -1 };
+}
+
+/** One command through Copilot's adapter: the guard's refusal, or what the terminal printed after the settle. */
+function copilotRuns(proj: string, command: string): { refused: string | null; stdout: string } {
+  const id = `recovery-jump-${++copilotCall}`;
+  const pre = copilotAdapter(proj, "guard-tool-call", {
+    hook_event_name: "PreToolUse", tool_use_id: id, tool_name: "Bash", tool_input: { command },
+  });
+  const decided = JSON.parse(pre.stdout.trim() || "{}") as {
+    modifiedArgs?: { command?: string };
+    hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+  };
+  if (decided.hookSpecificOutput?.permissionDecision === "deny") {
+    return { refused: decided.hookSpecificOutput.permissionDecisionReason ?? "", stdout: "" };
+  }
+  const rewritten = decided.modifiedArgs?.command ?? command;
+  const ran = terminal(proj, rewritten);
+  expect(ran.code, `${rewritten}\n${ran.stderr}`).toBe(0);
+  copilotAdapter(proj, "post-tool", {
+    hook_event_name: "PostToolUse", tool_use_id: id, tool_name: "Bash", tool_input: { command: rewritten },
+    tool_result: { result_type: "success", text_result_for_llm: `${ran.stdout.trim()}\n<shellId: t completed with exit code 0>` },
+  });
+  return { refused: null, stdout: ran.stdout };
+}
+
+function copilotStep(proj: string, args: string): Step {
+  const ran = copilotRuns(proj, `bun .aidlc/tools/aidlc-orchestrate.ts ${args}`);
+  expect(ran.refused).toBeNull();
+  return JSON.parse(ran.stdout.trim()) as Step;
+}
+
+describe("the person's jump at an open recovery question goes through on the first ask", () => {
+  const claude = SHAPES[0];
+  const copilot = SHAPES.find((shape) => shape.name === "copilot") as Shape;
+  const RESUMED = "bun .claude/tools/aidlc.ts engine orchestrate report --result resumed --choice jump --target requirements-analysis";
+
+  // The review was asked for and never finished, and the agent opened the gate
+  // twice: AI-DLC asks the person how to go on, with Request Changes the one
+  // choice. The person asks for a jump instead.
+  function question(policy: "strict" | "relaxed" | "off" = "off", planApproval: "on" | "off" = "off"): string {
+    const proj = openRecoveryQuestion(policy, planApproval);
+    created.push(proj);
+    return proj;
+  }
+
+  test("stock poc: the jump is admitted in every harness shape", async () => {
+    const proj = question();
+    expect(reply(proj, ASK).status).toBe(0);
+    const jump = jumpFor(proj, "requirements-analysis");
+    const refused: string[] = [];
+    for (const shape of SHAPES) {
+      shape.install(proj);
+      const verdict = await shape.call(proj, SESSION, { tool: "Bash", command: jump });
+      if (verdict.code !== 0) refused.push(`[${shape.name}] ${verdict.said}`);
+    }
+    expect(refused).toEqual([]);
+  });
+
+  test.each(["strict", "relaxed", "off"] as const)("%s, plan approval on: the jump runs and Requirements Analysis is next", async (policy) => {
+    const proj = question(policy, "on");
+    expect(reply(proj, ASK).status).toBe(0);
+    const jump = jumpFor(proj, "requirements-analysis");
+    const verdict = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
+    expect(verdict.code, verdict.said).toBe(0);
+    const ran = runNamed(proj, jump);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    const step = next(proj);
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    expect(step.stage).toBe("requirements-analysis");
+  });
+
+  test("the resumed jump report first: the jump runs, Requirements Analysis is next, and nobody recorded a Request Changes", async () => {
+    const proj = question();
+    expect(reply(proj, ASK).status).toBe(0);
+    const resumed = runNamed(proj, RESUMED);
+    expect(resumed.status, resumed.stdout + resumed.stderr).toBe(0);
+    const jump = jumpFor(proj, "requirements-analysis");
+    const verdict = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
+    expect(verdict.code, verdict.said).toBe(0);
+    expect(runNamed(proj, jump).status).toBe(0);
+    expect(next(proj).stage).toBe("requirements-analysis");
+    expect(auditEvents(proj).filter((row) => row.event === "GATE_REJECTED")).toHaveLength(0);
+  });
+
+  // Copilot's adapter settles the step after every engine command, and a print
+  // (the jump `next --stage` names) leaves it superseded: the jump still goes
+  // through on the first ask, here and at the open gate.
+  test("Copilot, through its adapter: at the recovery question and at the open gate, the jump runs on the first ask", () => {
+    for (const open of [question, (policy: "off", planApproval: "off") => {
+      const proj = openCodeGenerationGate(policy, planApproval);
+      created.push(proj);
+      return proj;
+    }]) {
+      const proj = open("off", "off");
+      copilot.install(proj);
+      const said = copilotAdapter(proj, "record-human-turn", {
+        hook_event_name: "UserPromptSubmit", prompt: ASK, timestamp: new Date().toISOString(),
+      });
+      expect(said.code, said.stderr).toBe(0);
+      copilotStep(proj, "report --result resumed --choice jump --target requirements-analysis");
+      const step = copilotStep(proj, "next --stage requirements-analysis");
+      const jump = namedCommands(String(step.message ?? "")).find((command) => command.includes("aidlc-jump.ts execute"));
+      expect(jump, JSON.stringify(step)).toBeDefined();
+      const ran = copilotRuns(proj, jump as string);
+      expect(ran.refused).toBeNull();
+      expect(copilotStep(proj, "next").stage).toBe("requirements-analysis");
+    }
+  });
+
+  test("still refused: a jump nobody asked for, whose way past is admitted, and a jump after the person picked Request Changes", async () => {
+    const proj = question();
+    const jump = "bun .claude/tools/aidlc-jump.ts execute --target requirements-analysis --direction backward --scope poc";
+    const unasked = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
+    expect(unasked.code).toBe(2);
+    const named = namedCommands(unasked.said).filter((command) => command.startsWith("bun ") && !/[<>]/.test(command));
+    expect(named.length, unasked.said).toBeGreaterThan(0);
+    for (const command of named) {
+      const way = await claude.call(proj, SESSION, { tool: "Bash", command: respell(command, ".claude") });
+      expect(way.code, `${command} -> ${way.said}`).toBe(0);
+    }
+    expect(reply(proj, "Request Changes").status).toBe(0);
+    const picked = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
+    expect(picked.code, "a jump went through against the person's pick").toBe(2);
+  });
+
+  test("the person's next words after an exact pick lift it: the jump they then ask for runs", async () => {
+    const proj = question();
+    expect(reply(proj, "Request Changes").status).toBe(0);
+    expect(reply(proj, ASK).status).toBe(0);
+    const verdict = await claude.call(proj, SESSION, { tool: "Bash", command: jumpFor(proj, "requirements-analysis") });
+    expect(verdict.code, verdict.said).toBe(0);
+  });
+
+  test("no loop: back to Requirements Analysis, run to its approval, next moves on, the same twice; the question never comes back", async () => {
+    const proj = question();
+    expect(reply(proj, ASK).status).toBe(0);
+    const jump = jumpFor(proj, "requirements-analysis");
+    expect((await claude.call(proj, SESSION, { tool: "Bash", command: jump })).code).toBe(0);
+    expect(runNamed(proj, jump).status).toBe(0);
+    const step = next(proj);
+    expect(step.stage, JSON.stringify(step)).toBe("requirements-analysis");
+    const after = await requirementsAnalysisApproved(proj, step);
+    expect(after.kind, JSON.stringify(after)).toBe("run-stage");
+    expect(["requirements-analysis", "code-generation"]).not.toContain(after.stage);
+    expect(next(proj).stage).toBe(after.stage);
+  });
+
+  test("forward past the unfinished review: the jump runs, says the skipped stage once, and Build and Test is next", async () => {
+    const proj = question();
+    expect(reply(proj, "Skip the review, I checked it myself: go on to Build and Test.").status).toBe(0);
+    const jump = jumpFor(proj, "build-and-test");
+    expect(jump).toContain("--direction forward");
+    const verdict = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
+    expect(verdict.code, verdict.said).toBe(0);
+    const ran = runNamed(proj, jump);
+    expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+    expect((JSON.parse(ran.stdout) as { notice?: string }).notice).toBe(
+      "Moved to Build and Test; skipped Code Generation. You can go back to Code Generation any time.",
+    );
+    const step = next(proj);
+    expect(step.kind, JSON.stringify(step)).toBe("run-stage");
+    expect(step.stage).toBe("build-and-test");
+    expect(next(proj).stage).toBe("build-and-test");
   });
 });
