@@ -61,6 +61,7 @@ import {
 import {
   flagsDoctorCheck,
   frameworkFilesDoctorCheck,
+  kiroCliWorkflowsDoctorCheck,
   kiroIdeWorkflowsDoctorCheck,
   kiroIdeTerminalDoctorCheck,
   providerDoctorCheck,
@@ -609,6 +610,8 @@ export async function main(argv: string[]): Promise<void> {
   checks.push(...await kiroSessionDoctorChecks(projectDir));
   const kiroWorkflows = kiroIdeWorkflowsDoctorCheck(projectDir, harnessDir());
   if (kiroWorkflows) checks.push(kiroWorkflows);
+  const kiroCliWorkflows = kiroCliWorkflowsDoctorCheck(projectDir, harnessDir());
+  if (kiroCliWorkflows) checks.push(kiroCliWorkflows);
   const kiroTerminal = kiroIdeTerminalDoctorCheck(projectDir, harnessDir());
   if (kiroTerminal) checks.push(kiroTerminal);
   checks.push(flagsDoctorCheck(projectDir, harnessDir(), switchesOffLines(projectDir, process.env, "command")));

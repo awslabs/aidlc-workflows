@@ -508,7 +508,12 @@ or the once-per-machine chat ask from session start) and keeps the answer in the
 install root's `kiro-ide-workflows` marker. A settings file it cannot read as
 JSONC is reported as unknown, never as off (trust, setup, doctor), and session
 start tells the chat once per error, keeping the file's path and fingerprint in
-the `kiro-ide-settings-error-told` marker. On Windows it also reads Kiro's
+the `kiro-ide-settings-error-told` marker. It reads Kiro CLI's own Workflows
+switch too (`chat.enableWorkflows`), through `kiro-cli settings` in an empty
+folder (the transport `aidlc-kiro-session.ts` owns), and sets it the same way on
+the person's answer (`--kiro-cli-workflows`, setup, `config --yes`, or the ask a
+Kiro CLI chat's session start makes), keeping that answer in the separate
+`kiro-cli-workflows` marker. On Windows it also reads Kiro's
 default terminal profile (`terminal.integrated.defaultProfile.windows`): in
 Command Prompt the agent's AI-DLC commands split the person's words and every
 command reports exit code -1, so `core/tools/aidlc-kiro-ide-terminal.ts` sets

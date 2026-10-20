@@ -42,7 +42,7 @@ import {
   refreshActiveMemory,
   trackedKiroIdeSteeringAsk,
 } from "../tools/aidlc-includes.ts";
-import { kiroIdeWorkflowsAsk } from "../tools/aidlc-kiro-ide-workflows.ts";
+import { kiroCliWorkflowsAsk, kiroIdeWorkflowsAsk } from "../tools/aidlc-kiro-ide-workflows.ts";
 import { kiroIdeTerminalAsk, kiroIdeTerminalStandingLine, recordKiroTerminalShell } from "../tools/aidlc-kiro-ide-terminal.ts";
 import {
   isBindableIntentRecordName,
@@ -317,7 +317,8 @@ if (sessionId && !rebindCheckOnly) {
 // Kiro IDE: a repo that committed the steering file before AI-DLC wrote the
 // memory text into it keeps tracking it; the person is asked once. With Kiro's
 // Workflows feature on, AI-DLC's reviews and helpers cannot run in the chat;
-// the person is asked once per machine whether to turn it off.
+// the person is asked once per machine whether to turn it off: in a Kiro IDE
+// chat about Kiro IDE's switch, in a Kiro CLI chat about Kiro CLI's own.
 let trackedSteeringAsk = "";
 if (sessionId && !rebindCheckOnly) {
   const asks: string[] = [];
@@ -328,6 +329,11 @@ if (sessionId && !rebindCheckOnly) {
   }
   try {
     if (runtimeHarnessName(projectDir) === "kiro-ide") asks.push(kiroIdeWorkflowsAsk(aidlcInvocation()));
+  } catch {
+    // Asked at a later start.
+  }
+  try {
+    if (runtimeHarnessName(projectDir) === "kiro-ide") asks.push(kiroCliWorkflowsAsk(aidlcInvocation()));
   } catch {
     // Asked at a later start.
   }

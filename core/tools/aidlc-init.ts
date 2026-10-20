@@ -204,16 +204,26 @@ import {
   setByDotenvFile,
 } from "./aidlc-kiro-session.ts";
 import {
+  KIRO_CLI_WORKFLOWS_ISSUE_ID,
+  KIRO_CLI_WORKFLOWS_QUESTION,
   KIRO_WORKFLOWS_ISSUE_ID,
   KIRO_WORKFLOWS_QUESTION,
   KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID,
+  kiroCliWorkflowsKeptLine,
+  kiroCliWorkflowsOffLine,
+  kiroCliWorkflowsOnLine,
+  kiroCliWorkflowsQuestionDue,
   kiroWorkflowsKeptLine,
   kiroWorkflowsOffLine,
   kiroWorkflowsOnLine,
   kiroWorkflowsQuestionDue,
+  readKiroCliWorkflows,
+  readKiroCliWorkflowsAnswer,
   readKiroIdeWorkflows,
   readKiroWorkflowsAnswer,
+  recordKiroCliWorkflowsAnswer,
   recordKiroWorkflowsAnswer,
+  setKiroCliWorkflows,
   setKiroIdeWorkflows,
   type KiroWorkflowsAnswer,
 } from "./aidlc-kiro-ide-workflows.ts";
@@ -505,6 +515,7 @@ const CONFIG_VALUE_FLAGS = new Set([
   "--agent",
   "--statusline",
   "--kiro-workflows",
+  "--kiro-cli-workflows",
   "--kiro-terminal",
   "--ca-bundle",
   "--channel",
@@ -575,6 +586,7 @@ const CHOICE_BARE_FLAGS = new Set([
 const DIAGNOSTIC_VALUE_FLAGS = new Set([
   "--harness",
   "--kiro-workflows",
+  "--kiro-cli-workflows",
   "--kiro-terminal",
   "--mark-done",
   "--opencode-default",
@@ -1587,7 +1599,7 @@ function validateDiagnosticArgs(
         "--region",
       ])
     : section === "trust"
-    ? new Set(["--harness", "--kiro-workflows", "--kiro-terminal", "--plan-token", "--project-dir"])
+    ? new Set(["--harness", "--kiro-workflows", "--kiro-cli-workflows", "--kiro-terminal", "--plan-token", "--project-dir"])
     : new Set(["--harness", "--plan-token", "--project-dir"]);
   const sectionBare = section === "runtime"
     ? new Set([...DIAGNOSTIC_BARE_FLAGS, "--record-paths"])
@@ -1616,7 +1628,7 @@ function validateDiagnosticArgs(
         "--region",
         "--reset",
       ]
-    : ["--acknowledge", "--kiro-workflows", "--kiro-terminal", "--reset"];
+    : ["--acknowledge", "--kiro-workflows", "--kiro-cli-workflows", "--kiro-terminal", "--reset"];
   return validateConfigMutationModes(argv, section, mutationFlags);
 }
 
@@ -1659,6 +1671,7 @@ function diagnosticHelp(section: DiagnosticSection): string {
         heading("Trust answers:", out),
         "  --acknowledge",
         "  --kiro-workflows <on|off>   Kiro IDE: turn Kiro's Workflows feature on or off, a Kiro setting for all your projects (while it is on, AI-DLC's reviews and helpers do not run)",
+        "  --kiro-cli-workflows <on|off>  Kiro CLI: turn Kiro CLI's Workflows feature on or off, a Kiro CLI setting for all your projects (while it is on, AI-DLC's reviews and helpers do not run)",
         "  --kiro-terminal powershell  Kiro IDE on Windows: set Kiro's default terminal to PowerShell, a Kiro setting for all your projects (in Command Prompt, AI-DLC's commands can split your words)",
         "",
         "Trust is read, verified, and instructed. This section never regenerates trust seeds or permission rules.",
@@ -1934,6 +1947,9 @@ function showDiagnosticSection(
         : "off";
       output += `  Kiro Workflows: ${workflows} (${status.kiroWorkflows.settingsPath})\n`;
     }
+    if (status.kiroCliWorkflows) {
+      output += `  Kiro CLI Workflows: ${status.kiroCliWorkflows.enabled ? "on" : "off"} (${status.kiroCliWorkflows.settingsPath})\n`;
+    }
     if (status.kiroTerminal?.commandPrompt) {
       output += `  Kiro terminal: Command Prompt (${status.kiroTerminal.settingsPath})\n`;
     }
@@ -2158,6 +2174,7 @@ function diagnosticWizard(
   selected: ReturnType<typeof selectedDiagnosticHarness>,
   records: ConfigDiagnosticRecords,
   _options: ReturnType<typeof globalOptions>,
+  dryRun: boolean,
 ): RuntimeRecord | ProvidersRecord | TrustRecord | null {
   if (section === "runtime") {
     const diagnostics = probeRuntime(projectDir, selected.harnessDir, selected.harness);
@@ -2312,8 +2329,13 @@ function diagnosticWizard(
     }
     return next;
   }
-  if (selected.harness === "kiro-ide") askKiroWorkflows(projectDir);
-  if (selected.harness === "kiro-ide") askKiroTerminal(projectDir);
+  // These questions set the person's own Kiro settings on yes, so a preview
+  // (--dry-run) does not ask them.
+  if (selected.harness === "kiro-ide" && !dryRun) {
+    askKiroWorkflows(projectDir);
+    askKiroCliWorkflows(projectDir);
+    askKiroTerminal(projectDir);
+  }
   // Codex's own hook trust comes first, so the review question below never
   // reads as that step.
   const issues = selected.harness === "codex" || selected.harness === "kiro-ide"
@@ -2405,7 +2427,7 @@ function kiroWorkflowsSwitch(
   if (selected.harness !== "kiro-ide") {
     return usage(`--kiro-workflows applies to Kiro IDE projects; this project is set up for ${selected.distribution}`);
   }
-  const other = ["--acknowledge", "--reset"].find((flag) => argv.includes(flag));
+  const other = ["--acknowledge", "--reset", "--kiro-cli-workflows"].find((flag) => argv.includes(flag));
   if (other) return usage(`--kiro-workflows cannot be combined with ${other}`);
   const state = readKiroIdeWorkflows();
   if (!state.settingsPath) return failure("Kiro IDE's settings are not in reach here", EXIT.failure);
@@ -2464,6 +2486,77 @@ function applyKiroWorkflowsAnswer(projectDir: string, off: boolean): string {
   return kiroWorkflowsOffLine();
 }
 
+// Kiro CLI's Workflows switch is the person's Kiro CLI setting for all their
+// projects, set the same way as Kiro IDE's: on its own, through Kiro, and only
+// when they ask for it.
+function kiroCliWorkflowsSwitch(
+  selected: ReturnType<typeof selectedDiagnosticHarness>,
+  argv: readonly string[],
+  options: ReturnType<typeof globalOptions>,
+): CommandResult {
+  const value = valueAfter([...argv], "--kiro-cli-workflows");
+  if (value !== "on" && value !== "off") {
+    return usage("--kiro-cli-workflows must be on or off", configCommand("trust --help"));
+  }
+  if (selected.harness !== "kiro-ide") {
+    return usage(`--kiro-cli-workflows applies to Kiro IDE projects; this project is set up for ${selected.distribution}`);
+  }
+  const other = ["--acknowledge", "--reset", "--kiro-terminal"].find((flag) => argv.includes(flag));
+  if (other) return usage(`--kiro-cli-workflows cannot be combined with ${other}`);
+  const state = readKiroCliWorkflows();
+  if (!state) return failure("Kiro CLI did not answer here, so its Workflows feature was not changed", EXIT.failure);
+  const enabled = value === "on";
+  const data = (answer: KiroWorkflowsAnswer | null) => ({
+    kiroCliWorkflows: { enabled, settingsPath: state.settingsPath, answer },
+  });
+  if (argv.includes("--dry-run")) {
+    return success(
+      `would turn Kiro CLI's Workflows feature ${value} in ${state.settingsPath}`,
+      data(readKiroCliWorkflowsAnswer()),
+    );
+  }
+  if (!options.yes) {
+    if (!configInputIsTty()) {
+      return usage(
+        "non-interactive trust mutation requires --yes; --yes confirms but never chooses",
+        configMutationRerun("trust", [...argv]),
+      );
+    }
+    if (!promptYesDefault(`  Turn Kiro CLI's Workflows feature ${value}? It is a Kiro CLI setting for all your projects.`, true)) {
+      return success("Kiro CLI's Workflows feature left as it is");
+    }
+  }
+  try {
+    setKiroCliWorkflows(enabled);
+  } catch (error) {
+    return failure(error instanceof Error ? error.message : String(error), EXIT.failure);
+  }
+  recordKiroCliWorkflowsAnswer(value);
+  return success(enabled ? kiroCliWorkflowsOnLine() : kiroCliWorkflowsOffLine(), data(value));
+}
+
+// Asked once per machine while Kiro CLI's Workflows is on and the person never
+// answered about it, as for Kiro IDE's.
+function askKiroCliWorkflows(projectDir: string): void {
+  if (!kiroCliWorkflowsQuestionDue()) return;
+  const off = promptYesDefault(`\n  ${KIRO_CLI_WORKFLOWS_QUESTION}`, true);
+  writeMenuText(`  ${applyKiroCliWorkflowsAnswer(projectDir, off)}\n\n`);
+}
+
+function applyKiroCliWorkflowsAnswer(projectDir: string, off: boolean): string {
+  if (!off) {
+    recordKiroCliWorkflowsAnswer("on");
+    return kiroCliWorkflowsKeptLine(configInvocationFor(projectDir));
+  }
+  try {
+    setKiroCliWorkflows(false);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  recordKiroCliWorkflowsAnswer("off");
+  return kiroCliWorkflowsOffLine();
+}
+
 // Kiro IDE's default terminal is the person's Kiro setting for all their
 // projects, outside this project: set on its own, never inside the project's
 // transaction, and only when they ask for it. It only ever moves to PowerShell,
@@ -2478,7 +2571,7 @@ function kiroTerminalSwitch(
   if (selected.harness !== "kiro-ide") {
     return usage(`--kiro-terminal applies to Kiro IDE projects; this project is set up for ${selected.distribution}`);
   }
-  const other = ["--acknowledge", "--reset", "--kiro-workflows"].find((flag) => argv.includes(flag));
+  const other = ["--acknowledge", "--reset", "--kiro-workflows", "--kiro-cli-workflows"].find((flag) => argv.includes(flag));
   if (other) return usage(`--kiro-terminal cannot be combined with ${other}`);
   const state = readKiroIdeTerminal();
   if (!state.settingsPath) return failure("Kiro IDE's settings are not in reach here", EXIT.failure);
@@ -2834,7 +2927,7 @@ function setupMapRows(
   // names them as the person's to check instead of reporting all trust as met.
   const copilot = modelHarness(distribution) === "copilot";
   const trustDetail = trust.length === 1 &&
-      (trust[0].id === "copilot-folder-untrusted" || trust[0].id === KIRO_WORKFLOWS_ISSUE_ID || trust[0].id === KIRO_TERMINAL_ISSUE_ID || trust[0].step)
+      (trust[0].id === "copilot-folder-untrusted" || trust[0].id === KIRO_WORKFLOWS_ISSUE_ID || trust[0].id === KIRO_CLI_WORKFLOWS_ISSUE_ID || trust[0].id === KIRO_TERMINAL_ISSUE_ID || trust[0].step)
     ? trust[0].message
     : trust.length > 0
     ? `${trust.length} host trust issue${trust.length === 1 ? "" : "s"}`
@@ -3171,7 +3264,7 @@ function prepareDiagnosticSection(
         "--region",
         "--reset",
       ]
-    : ["--acknowledge", "--kiro-workflows", "--kiro-terminal", "--reset"];
+    : ["--acknowledge", "--kiro-workflows", "--kiro-cli-workflows", "--kiro-terminal", "--reset"];
   const hasMutationFlags = mutationFlags.some((flag) => argv.includes(flag));
   if (
     (argv.includes("--show") || argv.includes("--check")) &&
@@ -3207,6 +3300,10 @@ function prepareDiagnosticSection(
   }
   if (section === "trust" && argv.includes("--kiro-workflows")) {
     emitResult(kiroWorkflowsSwitch(selected, argv, options), options);
+    return null;
+  }
+  if (section === "trust" && argv.includes("--kiro-cli-workflows")) {
+    emitResult(kiroCliWorkflowsSwitch(selected, argv, options), options);
     return null;
   }
   if (section === "trust" && argv.includes("--kiro-terminal")) {
@@ -3259,7 +3356,7 @@ function prepareDiagnosticSection(
       emitResult(copilotTrustStep(projectDir), options);
       return null;
     }
-    next = diagnosticWizard(section, projectDir, selected, records, options);
+    next = diagnosticWizard(section, projectDir, selected, records, options, argv.includes("--dry-run"));
   }
   const previous = currentDiagnosticRecord(records, section);
   const providerSurfaceDrift =
@@ -7971,6 +8068,8 @@ type FirstRunChoices = {
   kiro?: FirstRunKiroSession | null;
   // Kiro IDE only, asked while its Workflows feature is on: true turns it off.
   kiroWorkflowsOff?: boolean;
+  // Kiro's row, asked while Kiro CLI's own Workflows feature is on: true turns it off.
+  kiroCliWorkflowsOff?: boolean;
   // Kiro IDE on Windows only, asked while its terminal is Command Prompt: true sets PowerShell.
   kiroTerminalPowerShell?: boolean;
   // Claude Code and Codex, asked once: true shows AI-DLC's progress in the status line.
@@ -9572,6 +9671,9 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
   if (choices.candidate.stamp.distribution === "kiro-ide" && kiroWorkflowsQuestionDue()) {
     choices.kiroWorkflowsOff = promptYesDefault(`\n  ${KIRO_WORKFLOWS_QUESTION}`, true);
   }
+  if (choices.candidate.stamp.distribution === "kiro-ide" && kiroCliWorkflowsQuestionDue()) {
+    choices.kiroCliWorkflowsOff = promptYesDefault(`\n  ${KIRO_CLI_WORKFLOWS_QUESTION}`, true);
+  }
   if (choices.candidate.stamp.distribution === "kiro-ide" && kiroTerminalQuestionDue()) {
     choices.kiroTerminalPowerShell = promptYesDefault(`\n  ${KIRO_TERMINAL_QUESTION}`, true);
   }
@@ -9591,6 +9693,10 @@ async function runFirstRunWizard(projectDir: string): Promise<boolean> {
     if (choices.kiroWorkflowsOff !== undefined) {
       process.stdout.write("\n");
       writeMenuRow("  ", applyKiroWorkflowsAnswer(projectDir, choices.kiroWorkflowsOff));
+    }
+    if (choices.kiroCliWorkflowsOff !== undefined) {
+      process.stdout.write("\n");
+      writeMenuRow("  ", applyKiroCliWorkflowsAnswer(projectDir, choices.kiroCliWorkflowsOff));
     }
     if (choices.kiroTerminalPowerShell !== undefined) {
       process.stdout.write("\n");
@@ -13915,6 +14021,14 @@ export async function main(
       descriptor.distribution === "kiro-ide" && !argv.includes("--dry-run") && kiroWorkflowsQuestionDue()
     ) {
       changes.push(applyKiroWorkflowsAnswer(projectDir, true));
+    }
+    // Kiro CLI's own Workflows switch takes the same tools away there, so --yes
+    // takes the same recommended answer for it.
+    if (
+      options.yes && !deferKiro && !recordOnly && !modelsContext && !diagnosticsContext && !choicesContext &&
+      descriptor.distribution === "kiro-ide" && !argv.includes("--dry-run") && kiroCliWorkflowsQuestionDue()
+    ) {
+      changes.push(applyKiroCliWorkflowsAnswer(projectDir, true));
     }
     // Command Prompt as Kiro's terminal splits the person's words in AI-DLC's
     // commands; --yes takes the recommended answer, PowerShell, the same way.

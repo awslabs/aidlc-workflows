@@ -1,11 +1,16 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
 import {
+  KIRO_CLI_WORKFLOWS_ISSUE_ID,
   KIRO_WORKFLOWS_ISSUE_ID,
   KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID,
+  kiroCliWorkflowsFix,
+  kiroCliWorkflowsIssueMessage,
   kiroWorkflowsFix,
   kiroWorkflowsIssueMessage,
   kiroWorkflowsUnreadableFix,
   kiroWorkflowsUnreadableMessage,
+  readKiroCliWorkflows,
+  readKiroCliWorkflowsAnswer,
   readKiroIdeWorkflows,
   readKiroWorkflowsAnswer,
   type KiroWorkflowsAnswer,
@@ -270,6 +275,8 @@ export type TrustStatus = {
   issues: DiagnosticIssue[];
   /** Kiro IDE only: its Workflows switch and the person's answer on this machine. */
   kiroWorkflows?: { enabled: boolean; readable: boolean; settingsPath: string; answer: KiroWorkflowsAnswer | null };
+  /** The Kiro row's Kiro CLI, when it answered here: its own Workflows switch and the person's answer about it. */
+  kiroCliWorkflows?: { enabled: boolean; settingsPath: string; answer: KiroWorkflowsAnswer | null };
   /** Kiro IDE on Windows only: whether its terminal is Command Prompt, and the person's answer on this machine. */
   kiroTerminal?: { commandPrompt: boolean; profile: string | null; settingsPath: string; answer: KiroTerminalAnswer | null };
 };
@@ -3001,6 +3008,21 @@ export function trustStatus(
       });
     }
   }
+  // Kiro CLI, the row's other host, has a Workflows switch of its own that
+  // takes the same tools away; it is read through Kiro and has its own answer.
+  let kiroCliWorkflows: TrustStatus["kiroCliWorkflows"];
+  const cliState = harness === "kiro-ide" ? readKiroCliWorkflows(env) : null;
+  if (cliState) {
+    kiroCliWorkflows = { ...cliState, answer: readKiroCliWorkflowsAnswer() };
+    if (cliState.enabled && kiroCliWorkflows.answer === null) {
+      issues.push({
+        id: KIRO_CLI_WORKFLOWS_ISSUE_ID,
+        message: kiroCliWorkflowsIssueMessage(),
+        remediation: kiroCliWorkflowsFix(invocationForHarness(harnessDir)),
+        severity: "warn",
+      });
+    }
+  }
   // Kiro IDE runs its agent's commands in the person's default terminal. In
   // Command Prompt AI-DLC's commands split the person's words and every command
   // reports exit code -1, so it is named until they answered once on this machine.
@@ -3026,6 +3048,7 @@ export function trustStatus(
     files: trustFilesForHarness(projectDir, harnessDir, harness),
     issues,
     ...(kiroWorkflows ? { kiroWorkflows } : {}),
+    ...(kiroCliWorkflows ? { kiroCliWorkflows } : {}),
     ...(kiroTerminal ? { kiroTerminal } : {}),
   };
 }
@@ -3117,6 +3140,14 @@ export function postApplyOutstandingActions(
           id: issue.id,
           message: issue.message,
           command: `${invoke} config trust --kiro-workflows off`,
+        };
+      }
+      if (issue.id === KIRO_CLI_WORKFLOWS_ISSUE_ID) {
+        return {
+          section: "trust" as const,
+          id: issue.id,
+          message: issue.message,
+          command: `${invoke} config trust --kiro-cli-workflows off`,
         };
       }
       // No AI-DLC command repairs the file: the step is the person's, and the
@@ -3597,6 +3628,26 @@ export function kiroIdeWorkflowsDoctorCheck(
     severity: "warn",
     label: "Kiro Workflows is on, so AI-DLC's reviews and helpers do not run in your Kiro IDE chats",
     fix: kiroWorkflowsFix(invocationForHarness(selected.harnessDir)),
+  };
+}
+
+// Doctor reads Kiro CLI's own Workflows switch for the same row; no row when no
+// Kiro CLI answered here.
+export function kiroCliWorkflowsDoctorCheck(
+  projectDir: string,
+  harnessDirHint?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): DiagnosticDoctorCheck | null {
+  const selected = selectedHarness(projectDir, harnessDirHint);
+  if (selected?.harness !== "kiro-ide") return null;
+  const state = readKiroCliWorkflows(env);
+  if (!state) return null;
+  if (!state.enabled) return { pass: true, label: "Kiro CLI Workflows is off" };
+  return {
+    pass: false,
+    severity: "warn",
+    label: "Kiro CLI Workflows is on, so AI-DLC's reviews and helpers do not run in your Kiro CLI chats",
+    fix: kiroCliWorkflowsFix(invocationForHarness(selected.harnessDir)),
   };
 }
 

@@ -286,7 +286,7 @@ function assertDeletionPlan(
   }
   const files = new Set<string>();
   const settings = new Set([
-    "aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal",
+    "aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-cli-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal",
   ].map((name) => planPathKey(join(root, name))));
   for (const file of plan.files) {
     if (

@@ -831,8 +831,8 @@ actions can still be completed with `--mark-done`.
 
 `aidlc config trust` reads and verifies host-native trust. It never regenerates
 trust seeds, permission rules, or IDE settings; its only writes outside the
-project are Kiro IDE's Workflows switch and Kiro IDE's default terminal on
-Windows, and only when you ask for them.
+project are Kiro IDE's and Kiro CLI's Workflows switches and Kiro IDE's
+default terminal on Windows, and only when you ask for them.
 
 ```bash
 aidlc config trust --show
@@ -840,6 +840,7 @@ aidlc config trust --check
 aidlc config trust --acknowledge --yes
 aidlc config trust --reset --yes
 aidlc config trust --kiro-workflows off --yes   # Kiro IDE; or: on
+aidlc config trust --kiro-cli-workflows off --yes   # Kiro CLI; or: on
 aidlc config trust --kiro-terminal powershell --yes   # Kiro IDE on Windows
 ```
 
@@ -853,7 +854,13 @@ setup asks once and `aidlc config --yes` turns it off; your answer is kept in
 again. When that settings file has an error AI-DLC cannot read past, Kiro may
 still read Workflows as on, so `--show` says it could not be read, `--check`
 and setup warn until the file reads again (whatever you answered before), and
-the next Kiro IDE chat tells you once; fix the error in that file. See [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers).
+the next Kiro IDE chat tells you once; fix the error in that file. On the same
+Kiro row, `--show` and `--check` also read Kiro CLI's own Workflows switch
+(`chat.enableWorkflows` in your Kiro CLI settings, read through `kiro-cli
+settings`), which takes the same tools away in Kiro CLI chats;
+`--kiro-cli-workflows off|on` sets it through Kiro CLI, and its answer is kept
+in `kiro-cli-workflows`, apart from Kiro IDE's. With no Kiro CLI answering, it
+is not shown. See [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers).
 
 On Windows, Kiro IDE runs its agent's commands in your default terminal profile
 (`terminal.integrated.defaultProfile.windows` in Kiro's user settings). While

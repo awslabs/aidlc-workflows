@@ -1894,6 +1894,7 @@ describe("t265b hook lifecycle", () => {
         "config providers --provider amazon-bedrock --region us-east-1 --profile dev --yes",
         "config trust --acknowledge --yes",
         "config trust --kiro-workflows off --yes",
+        "config trust --kiro-cli-workflows off --yes",
         "config trust --kiro-terminal powershell --yes",
         "config flags --default-scope feature --swarm on --local --yes",
         "config flags --hook-debug on --question-retention-days 30 --global --yes",
@@ -1910,6 +1911,7 @@ describe("t265b hook lifecycle", () => {
       }
       const asked = [
         "config trust --kiro-workflows on --yes",
+        "config trust --kiro-cli-workflows on --yes",
         "config flags --sensor-timeout-ms 5 --local --yes",
         "config flags --default-scope feature --sensor-timeout-ms 5 --local --yes",
         "config project --plugins all --yes",

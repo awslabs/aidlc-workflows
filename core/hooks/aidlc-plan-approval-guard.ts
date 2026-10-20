@@ -1564,7 +1564,8 @@ function configToolAdmitted(projectDir: string, rest: readonly string[]): boolea
   const sectioned = (CONFIG_SECTIONS as readonly string[]).includes(section);
   const release = (!sectioned && !names.includes("--help") && !names.includes("--statusline")) ||
     names.some((name) => RELEASE_FLAGS.has(name)) || (section !== "models" && names.includes("--from"));
-  const lowers = release || names.some((name, index) => name === "--kiro-workflows" && valueAt(index) !== "off") ||
+  const lowers = release ||
+    names.some((name, index) => (name === "--kiro-workflows" || name === "--kiro-cli-workflows") && valueAt(index) !== "off") ||
     names.includes("--sensor-timeout-ms") || names.includes("--plugins") ||
     (section === "project" && names.includes("--reset"));
   return !lowers || personAskedSinceGate(projectDir);
