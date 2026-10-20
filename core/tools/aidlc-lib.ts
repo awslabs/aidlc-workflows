@@ -5758,13 +5758,19 @@ export const PLAN_APPROVAL_ASK_TYPE = "plan-approval";
 export const PLAN_APPROVAL_ASKED_BY_ENGINE =
   "Plan Approval is asked by the engine now. Run next, show the person the question it returns, and end the turn.";
 
-export function planApprovalAskIsOpen(projectDir: string): boolean {
+// The engine's Plan Approval question while it is open for the selected work:
+// its step marker, which names the Unit or Units it asks about; null otherwise.
+export function openPlanApprovalAsk(projectDir: string): ActiveDirectiveMarker | null {
   try {
     const marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
-    return marker?.version === 2 && marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE;
+    return marker?.version === 2 && marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE ? marker : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+export function planApprovalAskIsOpen(projectDir: string): boolean {
+  return openPlanApprovalAsk(projectDir) !== null;
 }
 
 export function planApprovalRuntimeFile(projectDir: string, name: string): string {
