@@ -16304,9 +16304,9 @@ export interface FreshReviewReceipts {
    *  project source cannot be read, now or when it was reviewed. Each is said
    *  once. */
   unitSourceKept: Set<string>;
-  /** Units the person approved at their checkpoint after their latest
-   *  re-check: that approval opens a fresh one, so their progress above
-   *  reports it unspent. */
+  /** Units the person approved at their checkpoint, or started a new attempt
+   *  for, after their latest re-check: either opens a fresh one, so their
+   *  progress above reports it unspent. */
   unitRecheckReopened: Set<string>;
   /** Effective stage-entry source baseline for unclaimed-path verification. */
   sourceBaseline: SourceBaselineResult;
@@ -21746,7 +21746,10 @@ export function freshReviewReceipts(
   }
 
   // A Unit's re-check is spent only until the person next approves the Unit
-  // at its checkpoint: that approval opens a fresh one.
+  // at its checkpoint or starts a new attempt for it (their Request Changes
+  // there, or the Unit's step started again): either opens a fresh one. Only
+  // with checkpoints on, the one place the review request reads it.
+  const checkpointsOn = getField(stateContent, "Construction Checkpoints") === "enabled";
   const unitRecheckReopened = new Set<string>();
   for (const unit of new Set([...unitSourceMoved.keys(), ...unitStaleProgress.keys()])) {
     const recheck = events.slice(floorIdx + 1).findLast((row) =>
@@ -21754,9 +21757,13 @@ export function freshReviewReceipts(
       auditBlockField(row.block, "Stage") === stage.slug && auditBlockField(row.block, "Unit") === unit &&
       auditBlockField(row.block, "Reviewer") === reviewer && eventMatchesClaimAttempt(projectDir, row.block, unit));
     if (!recheck || !allEvents.some((row) =>
-      row.event === "GATE_APPROVED" && auditBlockField(row.block, "Unit") === unit &&
-      auditBlockField(row.block, "User Input") === "Approve" &&
-      ["construction-unit", "walking-skeleton"].includes(auditBlockField(row.block, "Checkpoint") ?? "") &&
+      auditBlockField(row.block, "Unit") === unit &&
+      (row.event === "GATE_APPROVED"
+        ? auditBlockField(row.block, "User Input") === "Approve" &&
+          ["construction-unit", "walking-skeleton"].includes(auditBlockField(row.block, "Checkpoint") ?? "")
+        : row.event === "GATE_REJECTED" && checkpointsOn &&
+          (auditBlockField(row.block, "User Input") === "Request Changes" ||
+            auditBlockField(row.block, "Reopen") !== null)) &&
       gateStagesFromBlock(row.block).includes(stage.slug) &&
       eventMatchesClaimAttempt(projectDir, row.block, unit) && attemptEventDefinitelyBefore(recheck, row))) continue;
     unitRecheckReopened.add(unit);

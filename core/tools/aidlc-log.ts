@@ -3649,8 +3649,8 @@ function handleReview(args: string[]): void {
             : receipts.stageStale);
         // With Construction checkpoints on, a review of a Unit whose reviewed
         // code changed outside any review re-checks that change: it is the
-        // recovery pass, and the person's approval of the Unit since the last
-        // re-check opens a fresh one.
+        // recovery pass, and the person's approval of the Unit or a new attempt
+        // they start for it since the last re-check opens a fresh one.
         const checkpointUnit = receipts !== null && flags.unit !== undefined &&
           getField(state, "Construction Checkpoints") === "enabled";
         const unitSourceScopeStale = checkpointUnit && !artifactScopeStale &&

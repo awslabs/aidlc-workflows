@@ -473,9 +473,12 @@ changes writes it: a review request or completion of that stage, or that Unit's
 checkpoint `verify`, which returns the line as `change_notices`. For a
 Unit-bound receipt the scan names only the Unit's own paths and leaves out the
 workspace-wide `Reviewed source` line, since the whole workspace also moves
-with another Unit's own build. A person's checkpoint approval after a re-check
-opens a fresh one (`unitRecheckReopened`; the Unit's progress reports the
-recovery unspent again), so every later edit is re-checked and asked about once.
+with another Unit's own build. A person's checkpoint approval after a re-check,
+or a new attempt they start for the Unit (their Request Changes at its
+checkpoint, or the Unit's step started again), opens a fresh one
+(`unitRecheckReopened`; the Unit's progress reports the recovery unspent
+again), so every later edit is re-checked and asked about once and every redo's
+changed code is reviewed.
 The same holds with reviews off: the Unit's `GATE_APPROVED` row records
 `Approved Evidence` (each stage's artifact and source fingerprints, and up to
 50 claimed paths with their entries), and under `relaxed` and `off` a stage no
