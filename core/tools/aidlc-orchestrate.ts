@@ -8750,12 +8750,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // The settings typed with the request ride this answer as they ride the
     // option's command: the question it names fills them in below.
   }
-  // An explicit --resume with one piece of work here and none selected (a
+  // A bare --resume with one piece of work here and none selected (a
   // teammate's clone): that piece is what they asked to pick up, so it is
   // picked up the way the pick question's answer picks it, not asked about.
-  // Two pieces, words on the line, or a record that cannot be selected here
-  // keep the question.
-  if (flags.resume && !routingAnswer && !flags.workspaceCommand && !flags.intent?.trim()) {
+  // Anything typed with it (a stage to jump to, a setting) keeps its own
+  // route; two pieces, words on the line, or a record that cannot be selected
+  // here keep the question.
+  if (args.length === 1 && args[0] === "--resume" && !routingAnswer && !flags.workspaceCommand && !flags.intent?.trim()) {
     const records = unselectedRecords(resolveProjectDir(projectDir));
     const only = records !== null && records.presentCount === 1 && records.selectable.length === 1 ? records.selectable[0] : null;
     if (only !== null) {

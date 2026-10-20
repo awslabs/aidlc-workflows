@@ -429,6 +429,22 @@ describe("t-carry-on-continues-the-work: work here but none selected in this cha
       const ask = next(tools, proj, ["--resume"]);
       expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("intent-pick");
     });
+
+    // Only a bare --resume picks the one piece up: anything typed with it keeps
+    // its own route, so a stage target jumps there as it always did, and a
+    // setting gets the pick question, as before.
+    test(`${harness}: one piece, none selected: --resume with a stage target jumps there`, () => {
+      proj = cloneWithWork(tools, ["auth"]);
+      const jump = next(tools, proj, ["--resume", "--stage", "code-generation"]);
+      expect(jump.kind, JSON.stringify(jump).slice(0, 300)).toBe("run-stage");
+      expect(jump.stage).toBe("code-generation");
+    });
+
+    test(`${harness}: one piece, none selected: --resume with a setting asks which work, as before`, () => {
+      proj = cloneWithWork(tools, ["auth"]);
+      const ask = next(tools, proj, ["--resume", "--guard-policy", "relaxed"]);
+      expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("intent-pick");
+    });
   }
 
   // With a chat identity the hook kept the person's `/aidlc` line, and a bare
