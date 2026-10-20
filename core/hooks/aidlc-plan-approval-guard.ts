@@ -1484,12 +1484,14 @@ interface EngineCommandContext {
 const NO_ENGINE_CONTEXT: EngineCommandContext = { gateHeld: false, marker: null, jumpAdmitted: () => false };
 
 // The engine's last step leaves a jump to `target` to the person's turn. At
-// its Code Generation recovery question, a restart or Unit reopen the question
-// offers runs only as the person's pick of it
-// (isSelectedGuardRestartContinuation), bound to the state it was picked at,
-// and right after they picked one of its choices exactly (the hook's record on
-// the current step) another jump goes against that pick; any other jump is
-// their own move. The report that opens the gate moves the state and writes no
+// its Code Generation recovery question, a restart the question offers runs
+// only as the person's pick of it (isSelectedGuardRestartContinuation), bound
+// to the state it was picked at; a Unit reopen it offers has no pick path
+// (that check reads `jump execute` only), so it stays refused while this
+// question is the published step, picked or not; and right after they
+// picked one of its choices exactly (the hook's record on the current step)
+// another jump goes against that pick. Any other jump is their own move. The
+// report that opens the gate moves the state and writes no
 // step, so the step the person answers there is the one the engine issued last
 // (readIssuedDirectiveMarker); whether their words still stand is
 // personSpokeSinceGate's. Whether the agent has read the step since (its
@@ -1514,8 +1516,8 @@ function lastStepAdmitsPersonsMoves(projectDir: string, target: string | undefin
 
 // A jump is the person's move: the restart they picked at the engine's recovery
 // question, or one they asked for since the last decision that the question
-// does not keep for their pick (lastStepAdmitsPersonsMoves). The jump tool
-// checks neither.
+// does not hold back (lastStepAdmitsPersonsMoves). The jump tool checks
+// neither.
 function jumpIsPersonsMove(
   projectDir: string,
   cwd: string,
