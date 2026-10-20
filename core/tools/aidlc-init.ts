@@ -61,6 +61,7 @@ import {
   legacyAidlcHookTarget,
   mergeBlock,
   mergeJsonEntries,
+  newlineOf,
   ownTitleLine,
   type ProjectionDescriptor,
   projectionFiles,
@@ -9729,9 +9730,15 @@ function planManagedFiles(
         // its proof; a model written into it then reaches the record too.
         const unmodified = currentHash === priorHash ||
           (priorHash !== undefined && modelStamped.has(rel) && composedRecords.has(rel));
+        // A file staged from the project's own CRLF checkout (Codex's
+        // config.toml, Kiro CLI's mcp.json) keeps the record it equals once
+        // line endings are set aside, so a clone's refresh leaves it as committed.
+        const recordHash = priorHash !== undefined && hash !== priorHash && sha256FileMatching(source, [priorHash]) === priorHash
+          ? priorHash
+          : hash;
         const nextHash = retainBaseline
-          ? regenerated.has(rel) && targetRegular && unmodified ? composedRecords.get(rel) ?? hash : priorHash
-          : composedRecords.get(rel) ?? hash;
+          ? regenerated.has(rel) && targetRegular && unmodified ? composedRecords.get(rel) ?? recordHash : priorHash
+          : composedRecords.get(rel) ?? recordHash;
         if (nextHash !== undefined) nextHashes[rel] = nextHash;
       }
       if (runtimeGenerated(rel, descriptor.harnessDir, regenerated) && !modelWritten.has(rel)) {
@@ -13492,9 +13499,12 @@ export async function main(
       ...(statusLineKept ? { statusLineKept: true as const } : {}),
     };
     const baselineRel = join(descriptor.harnessDir, "tools", "data", "aidlc-manifest.json");
+    // In the line endings the committed copy has, so a CRLF clone's refresh
+    // that records nothing new leaves the file as Git checked it out.
+    const baselineNewline = regularFile(baselinePath) ? newlineOf(readFileSync(baselinePath, "utf-8")) : "\n";
     operations.push(writeOperation(
       baselineRel,
-      `${JSON.stringify(baseline, null, 2)}\n`,
+      `${JSON.stringify(baseline, null, 2)}\n`.replace(/\n/g, baselineNewline),
       expected(baselinePath),
     ));
     actions.push({ path: baselineRel, action: pathPresent(baselinePath) ? "update" : "create" });

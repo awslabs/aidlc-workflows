@@ -15,7 +15,7 @@
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -80,12 +80,47 @@ function config(
 }
 
 type Plan = { counts: Record<string, number>; actions: Array<{ path: string; action: string; detail?: string }> };
+type Manifest = { files: Record<string, string>; rootContributions: Record<string, { hash: string }> };
+
+function porcelain(project: string): string[] {
+  const result = spawnSync("git", ["-c", "core.autocrlf=true", "status", "--porcelain"], { cwd: project, encoding: "utf-8" });
+  if (result.error) throw result.error;
+  return (result.stdout ?? "").split("\n").filter(Boolean);
+}
 
 function dryRun(project: string, harness: string): { status: number; plan: Plan; text: string } {
   const result = config(project, harness, ["--dry-run", "--json"]);
   const parsed = JSON.parse(result.stdout) as { data?: Plan };
   expect(parsed.data?.counts, result.stdout + result.stderr).toBeDefined();
   return { status: result.status, plan: parsed.data as Plan, text: result.stdout };
+}
+
+// A copy install's own tool (what a teammate runs in a clone): config from the
+// project's tree, so nothing differs between the two runs but the checkout.
+function copyConfig(project: string, harness: string, extra: string[]): { status: number; stdout: string; stderr: string } {
+  const harnessDir = HARNESS_DIRS[harness as keyof typeof HARNESS_DIRS];
+  const result = spawnSync(BUN, [
+    join(project, harnessDir, "tools", "aidlc.ts"), "config", "--from", join(REPO_ROOT, "dist", harness),
+    "--harness", harness, "--mcp", "none", ...extra,
+  ], { cwd: project, encoding: "utf-8", timeout: NATIVE_STARTUP_TIMEOUT_MS });
+  if (result.error) throw result.error;
+  return { status: result.status ?? -1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+}
+
+// The same steps on a copy install: copy the release tree in, configure, commit, clone with CRLF checkouts.
+function copiedClone(harness: string): { clone: string } {
+  const root = temp(`aidlc-t2057-copy-${harness}-`);
+  const project = join(root, "proj");
+  const clone = join(root, "clone");
+  git(root, ["init", "-q", project]);
+  cpSync(join(REPO_ROOT, "dist", harness), project, { recursive: true });
+  const configured = copyConfig(project, harness, ["--yes"]);
+  expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+  git(project, ["add", "-A"]);
+  git(project, ["commit", "-q", "-m", "aidlc config"]);
+  git(root, ["clone", "-q", project, clone], true);
+  git(clone, ["config", "core.autocrlf", "true"]);
+  return { clone };
 }
 
 // The reporter's steps: configure, commit, clone with CRLF checkouts.
@@ -139,6 +174,71 @@ describe("#2057 line endings Git rewrites are not the person's change", () => {
       }
     });
   }
+
+  // A teammate's CRLF clone, refreshed on the release it was committed with:
+  // AI-DLC's record and the team's files stay as committed, so git shows
+  // nothing changed (the parts, Codex's config.toml and Kiro CLI's mcp.json
+  // each recorded a CRLF hash, and opencode.json was rewritten with LF).
+  for (const harness of ["codex", "kiro", "opencode"] as const) {
+    test(`${harness}: a refresh in a CRLF clone keeps the committed record and leaves git clean`, () => {
+      const { clone } = copiedClone(harness);
+      const manifestPath = join(clone, HARNESS_DIRS[harness], "tools", "data", "aidlc-manifest.json");
+      const committed = JSON.parse(readFileSync(manifestPath, "utf-8")) as Manifest;
+      const opencodeJson = harness === "opencode" ? readFileSync(join(clone, "opencode.json")) : null;
+      if (opencodeJson) expect(opencodeJson.includes("\r\n")).toBe(true);
+      const applied = copyConfig(clone, harness, ["--yes"]);
+      expect(applied.status, applied.stdout + applied.stderr).toBe(0);
+      const refreshed = JSON.parse(readFileSync(manifestPath, "utf-8")) as Manifest;
+      expect(refreshed.files).toEqual(committed.files);
+      expect(refreshed.rootContributions).toEqual(committed.rootContributions);
+      if (opencodeJson) expect(readFileSync(join(clone, "opencode.json")).equals(opencodeJson)).toBe(true);
+      expect(porcelain(clone)).toEqual([]);
+    });
+  }
+
+  test("copilot: a CRLF clone whose AI-DLC part carries the team's own title line keeps it, and its record", () => {
+    const { clone } = copiedClone("copilot");
+    const agents = join(clone, "AGENTS.md");
+    const shipped = readFileSync(agents, "utf-8");
+    expect(shipped).toContain("# AI-DLC\r\n");
+    const own = shipped.replace("# AI-DLC\r\n", "# Order Totals\r\n");
+    writeFileSync(agents, own);
+    git(clone, ["commit", "-q", "-am", "our title"], true);
+    const manifestPath = join(clone, ".aidlc", "tools", "data", "aidlc-manifest.json");
+    const committed = JSON.parse(readFileSync(manifestPath, "utf-8")) as Manifest;
+    const planned = JSON.parse(copyConfig(clone, "copilot", ["--dry-run", "--json"]).stdout) as { data: Plan };
+    expect(planned.data.actions.find((item) => item.path === "AGENTS.md")?.action).toBe("preserve");
+    const applied = copyConfig(clone, "copilot", ["--yes"]);
+    expect(applied.status, applied.stdout + applied.stderr).toBe(0);
+    expect(readFileSync(agents, "utf-8")).toBe(own);
+    expect((JSON.parse(readFileSync(manifestPath, "utf-8")) as Manifest).rootContributions)
+      .toEqual(committed.rootContributions);
+    expect(porcelain(clone)).toEqual([]);
+  });
+
+  test("codex: in a CRLF clone a part the release changed is still refreshed, with the record of what it wrote", () => {
+    const { clone } = copiedClone("codex");
+    const gitignore = join(clone, ".gitignore");
+    const current = readFileSync(gitignore, "utf-8");
+    expect(current).toContain("aidlc/diagnostics/\r\n");
+    // The part an earlier release wrote lacked a line; its record is that part's LF hash.
+    const earlier = current.replace("aidlc/diagnostics/\r\n", "");
+    writeFileSync(gitignore, earlier);
+    const earlierBlock = /# BEGIN AI-DLC:gitignore\r\n[\s\S]*?# END AI-DLC:gitignore/.exec(earlier)?.[0] ?? "";
+    expect(earlierBlock).not.toBe("");
+    const manifestPath = join(clone, ".codex", "tools", "data", "aidlc-manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as Manifest;
+    manifest.rootContributions[".gitignore"].hash = sha256Bytes(earlierBlock.replaceAll("\r\n", "\n"));
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`.replaceAll("\n", "\r\n"));
+    const applied = copyConfig(clone, "codex", ["--yes"]);
+    expect(applied.status, applied.stdout + applied.stderr).toBe(0);
+    const refreshed = readFileSync(gitignore, "utf-8");
+    expect(refreshed).toBe(current);
+    const block = /# BEGIN AI-DLC:gitignore\r\n[\s\S]*?# END AI-DLC:gitignore/.exec(refreshed)?.[0] ?? "";
+    const recorded = (JSON.parse(readFileSync(manifestPath, "utf-8")) as Manifest).rootContributions[".gitignore"].hash;
+    expect(recorded).toBe(sha256Bytes(block));
+    expect(sha256Matching(block.replaceAll("\r\n", "\n"), [recorded])).toBe(recorded);
+  });
 
   test("claude: the refresh goes through, keeps an unchanged copy as it is, and doctor agrees", () => {
     const { clone } = configuredClone("claude");
