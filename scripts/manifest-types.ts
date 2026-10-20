@@ -223,6 +223,15 @@ export type HarnessManifest = {
      * `recovery` instead.
      */
     agentStepEdits?: string;
+    /**
+     * The project JSON file this host reads AI-DLC's hook registrations from,
+     * relative to the project, and the line the person is shown instead of
+     * `agentStep` while it is missing (`missing`) or is not valid JSON
+     * (`invalid`): no setting brings those hooks back. `<repair>` is doctor's
+     * command that puts the file back; `<entry>` and `<folder>` as in
+     * `agentStep`.
+     */
+    registration?: { file: string; missing: string; invalid: string };
   };
   /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;

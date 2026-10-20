@@ -414,6 +414,7 @@ import {
   fillHookActivationText,
   hookActivation,
   hookExecutionRecoveryText,
+  projectSettingsRepair,
   hookLiveness,
   workspaceSourceState,
   hasRealGitEntry,
@@ -3034,14 +3035,6 @@ function canonical(value: unknown): string {
     return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonical(object[key])}`).join(",")}}`;
   }
   return JSON.stringify(value);
-}
-
-function projectSettingsRepair(distribution: string): string {
-  const invoke = aidlcInvocation();
-  const source = invoke === "aidlc"
-    ? ""
-    : ` --from <the runtime/${distribution} root you copied from>`;
-  return `run \`${invoke} config --harness ${distribution}${source}\` to put back AI-DLC's hooks (your own hooks are kept)`;
 }
 
 const FLOW_ALTERING_CLAUDE_HOOKS = new Set([

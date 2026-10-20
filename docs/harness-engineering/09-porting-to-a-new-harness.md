@@ -104,8 +104,14 @@ Create `harness/<name>/manifest.ts` exporting a `HarnessManifest`
   carry, so Kiro CLI in VS Code's terminal (`TERM_PROGRAM=vscode`) is not
   taken for Kiro IDE. `agentStepInHost` (`{ env, text }`) does the same for
   `agentStep`, so the agent gets only its own tool's line: given one line
-  per tool, an agent showed the wrong one. Set `notRunYet` only when the
-  harness's hooks leave a heartbeat on every chat message, the first one before
+  per tool, an agent showed the wrong one. `registration`
+  (`{ file, missing, invalid }`) names the project JSON file the host reads
+  AI-DLC's hook registrations from: while it is missing or is not valid JSON
+  no setting brings those hooks back, so the step is the line `missing` (its
+  `<repair>` is doctor's command that puts the file back) or `invalid` for the
+  person instead; Claude Code declares it for `.claude/settings.json`. Set
+  `notRunYet` only when the harness's hooks leave a heartbeat on every chat
+  message, the first one before
   any workflow included (the human-turn hook does, and so do the Copilot and
   Kiro IDE adapters); doctor then warns with that text while no heartbeat
   exists, and with `agentStep` the first `next` stops with the agent's step

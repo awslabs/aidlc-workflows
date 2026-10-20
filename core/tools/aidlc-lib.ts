@@ -106,7 +106,7 @@ export {
 // runtime require() below avoids the circular import (aidlc-graph.ts
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
 // imports are erased at runtime so they don't create the cycle.
-import { readRootIntegrations } from "./aidlc-distribution.ts";
+import { readRootIntegrations, withoutBom } from "./aidlc-distribution.ts";
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
 import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
@@ -404,6 +404,14 @@ function hostLine<K extends "missedReplyInHost" | "agentStepInHost">(
     : {};
 }
 
+function registrationLines(value: unknown): Pick<HookActivation, "registration"> {
+  const lines = value as { file?: unknown; missing?: unknown; invalid?: unknown } | null | undefined;
+  return typeof lines?.file === "string" && lines.file !== "" && typeof lines.missing === "string" &&
+      typeof lines.invalid === "string"
+    ? { registration: { file: lines.file, missing: lines.missing, invalid: lines.invalid } }
+    : {};
+}
+
 // Whether the agent's shell is in the host a harness's `{ env }` names: `NAME`
 // matches when set, `NAME=value` when it holds that value (TERM_PROGRAM=kiro).
 // A `NAME=value` variable holding another value rules the host out: Kiro CLI in
@@ -428,6 +436,7 @@ export interface HookActivation {
   agentStep?: string;
   agentStepInHost?: { env: string[]; text: string };
   agentStepEdits?: string;
+  registration?: { file: string; missing: string; invalid: string };
 }
 
 interface ShippedHarnessData {
@@ -620,6 +629,7 @@ function readShippedHarnessData(): ShippedHarnessData {
           ...(typeof activation.agentStep === "string" ? { agentStep: activation.agentStep } : {}),
           ...(typeof activation.agentStep === "string" ? hostLine("agentStepInHost", activation.agentStepInHost) : {}),
           ...(typeof activation.agentStepEdits === "string" ? { agentStepEdits: activation.agentStepEdits } : {}),
+          ...(registrationLines(activation.registration)),
         }
         : null;
     // agentFinishRecorded is evidence the engine relies on to say no reviewer
@@ -28214,6 +28224,33 @@ export function hookActivation(): HookActivation | null {
   }
 }
 
+/** Doctor's repair for a missing or unreadable project settings file; the hooks-off step names it too. */
+export function projectSettingsRepair(distribution: string): string {
+  const invoke = aidlcInvocation();
+  const source = invoke === "aidlc"
+    ? ""
+    : ` --from <the runtime/${distribution} root you copied from>`;
+  return `run \`${invoke} config --harness ${distribution}${source}\` to put back AI-DLC's hooks (your own hooks are kept)`;
+}
+
+// Missing, or there and not valid JSON (read as doctor reads it); null for a
+// valid file and for one that cannot be opened for another reason, which the
+// lines would not describe. Never throws: both callers run it outside a try.
+function registrationFault(path: string): "missing" | "invalid" | null {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf-8");
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : null;
+  }
+  try {
+    JSON.parse(withoutBom(text));
+    return null;
+  } catch {
+    return "invalid";
+  }
+}
+
 /** The doctor's recovery sentence for hooks that stopped firing, per harness. */
 export function hookExecutionRecoveryText(projectDir?: string): string {
   const declared = hookActivation()?.recovery;
@@ -28258,15 +28295,24 @@ const HOOKS_OFF_AGENT_RULES =
 export function hooksOffAgentStep(projectDir?: string, next?: string, keep?: () => string | null): string | null {
   const activation = hookActivation();
   if (!activation?.agentStep) return null;
-  // Through a link the agent would change a file outside the project.
-  const edits = activation.agentStepEdits;
-  if (edits && !plainProjectFile(resolveProjectDir(projectDir), edits)) {
-    return `${HOOKS_OFF_AGENT_RULES} \`${edits}\` in this project is a link, so do not change it. Show the person ` +
-      `this line and end your turn: "${edits} in this project is a link, so it was left as it is. Make it a plain ` +
-      `file in this project, then send your next message."`;
+  const project = resolveProjectDir(projectDir);
+  const registration = activation.registration;
+  const fault = registration ? registrationFault(join(project, registration.file)) : null;
+  let step: string;
+  if (registration && fault) {
+    const line = registration[fault].replaceAll("<repair>", projectSettingsRepair(runtimeHarnessName(project, harnessDir())));
+    step = `Show the person this line and end your turn: "${line}"`;
+  } else {
+    // Through a link the agent would change a file outside the project.
+    const edits = activation.agentStepEdits;
+    if (edits && !plainProjectFile(project, edits)) {
+      return `${HOOKS_OFF_AGENT_RULES} \`${edits}\` in this project is a link, so do not change it. Show the person ` +
+        `this line and end your turn: "${edits} in this project is a link, so it was left as it is. Make it a plain ` +
+        `file in this project, then send your next message."`;
+    }
+    // An agent given each tool's line showed the wrong one (#2167), so the engine picks it.
+    step = inHostShell(activation.agentStepInHost?.env) ? activation.agentStepInHost!.text : activation.agentStep;
   }
-  // An agent given each tool's line showed the wrong one (#2167), so the engine picks it.
-  const step = inHostShell(activation.agentStepInHost?.env) ? activation.agentStepInHost!.text : activation.agentStep;
   const kept = keep && step.includes("<entry>") ? keep() : null;
   const entry = kept === null ? undefined : `${entrySkillInvocation()} --request ${kept}`;
   return `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(step, projectDir, next, entry)}`;
