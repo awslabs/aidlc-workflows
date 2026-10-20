@@ -594,10 +594,11 @@ is recorded once as `CHANGE_ACCEPTED`.
 
 Migration is deliberate: a pre-upgrade workflow with no baseline skips the
 unclaimed check, and a fieldless per-unit receipt retains the #629 global
-policy. A present but `unbindable`, missing, or corrupt modern baseline/unit
-snapshot fails closed under strict; under relaxed or off a missing or corrupt
-stage-entry baseline skips the unclaimed check with one line, and a missing unit
-snapshot keeps the unit's verdict. `AIDLC_SKIP_SOURCE_FRESHNESS=1` bypasses both global and
+policy. A present but `unbindable` or corrupt modern baseline/unit snapshot,
+and a missing unit snapshot, fail closed under strict. A stage-entry baseline
+missing on this machine (a fresh clone) skips the unclaimed check with one line
+under every Guard Policy; under relaxed or off a corrupt one does the same, and a
+missing unit snapshot keeps the unit's verdict. `AIDLC_SKIP_SOURCE_FRESHNESS=1` bypasses both global and
 per-unit checks; missing/invalid-manifest receipts explicitly record
 `Unit Source Binding Bypass: true`, so the switch must be present again at
 completion. In a modern Bolt, finalize also verifies the attested base-to-
