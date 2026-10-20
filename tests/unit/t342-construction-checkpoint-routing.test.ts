@@ -3255,6 +3255,22 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
+  // The recovery another Unit used is not this one's.
+  test("strict: each Unit sent back once, the code changed, gets its redo reviewed", () => {
+    const p = policyFixture("classic", "strict (set by you)", "adversarial");
+    buildReviewed(p, "alpha", alphaAt(p, 1));
+    sendBack(p, "alpha", "Return a clear error for an empty name");
+    buildReviewed(p, "alpha", alphaAt(p, 2));
+    approve(p, "alpha");
+    expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
+    const betaAt = (version: number) => () => writeFileSync(join(p, "src", "beta.ts"), `export const beta = ${version};\n`);
+    buildReviewed(p, "beta", betaAt(1));
+    expect(next(p).construction_checkpoint?.unit).toBe("beta");
+    sendBack(p, "beta", "Return a clear error for an empty name");
+    expect(buildReviewed(p, "beta", betaAt(2)).request?.recovery).toBe("stale-receipt");
+    expect(next(p).construction_checkpoint?.unit).toBe("beta");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("strict: after one send-back, the person's redo of the Unit's Code Generation gets its changed code reviewed", () => {
     const p = policyFixture("classic", "strict (set by you)", "adversarial");
     buildReviewed(p, "alpha", alphaAt(p, 1));
