@@ -642,25 +642,26 @@ describe("t325 atomic team Unit claims", () => {
         "**Iteration:** 1\n\n" +
         "### Findings\n\nNo blocking findings.\n",
     );
-    expect(
-      run(
-        LOG,
-        [
-          "review",
-          "--stage",
-          "functional-design",
-          "--reviewer",
-          "aidlc-architecture-reviewer-agent",
-          "--iteration",
-          "1",
-          "--verdict",
-          "READY",
-          "--unit",
-          "alpha",
-        ],
-        checkout,
-      ).status,
-    ).toBe(0);
+    const verdict = run(
+      LOG,
+      [
+        "review",
+        "--stage",
+        "functional-design",
+        "--reviewer",
+        "aidlc-architecture-reviewer-agent",
+        "--iteration",
+        "1",
+        "--verdict",
+        "READY",
+        "--unit",
+        "alpha",
+      ],
+      checkout,
+    );
+    expect(verdict.status, verdict.out).toBe(0);
+    // A team's Unit goes on through `next`, which names its receipt and then its gate.
+    expect(JSON.parse(verdict.stdout.trim().split("\n").at(-1) ?? "{}").agent_note).toContain("orchestrate next");
     expect(
       run(
         STATE,

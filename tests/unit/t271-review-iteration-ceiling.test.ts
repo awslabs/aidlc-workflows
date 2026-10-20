@@ -678,7 +678,7 @@ describe("t271 review iteration ceiling", () => {
       expect(turnMarkersShowConversational(proj)).toBe(true);
     });
 
-    test("an adversarial pass with one left names the next pass; an autonomous Construction gate and a Unit name none", () => {
+    test("an adversarial pass with one left names the next pass; an autonomous Construction gate names none", () => {
       const iterationOnly = { AIDLC_SKIP_SOURCE_FRESHNESS: "1" };
       const first = ["--stage", "code-generation", "--reviewer", "aidlc-architecture-reviewer-agent", "--iteration", "1"];
       for (const autonomous of [false, true]) {
@@ -704,17 +704,102 @@ describe("t271 review iteration ceiling", () => {
           expect(note(recorded.stdout)).not.toContain("stage-completion verification");
         }
       }
+    });
 
-      const unitProj = seedProject("feature");
-      writeReviewedArtifact(unitProj, "code-generation", "plan\n", "unit-alpha");
-      const unit = [
-        "--stage", "code-generation", "--reviewer", "aidlc-architecture-reviewer-agent",
-        "--unit", "unit-alpha", "--iteration", "1",
-      ];
-      expect(runReview(unitProj, unit).status).toBe(0);
-      const unitVerdict = runReview(unitProj, [...unit, "--verdict", "READY"]);
-      expect(unitVerdict.status, unitVerdict.stderr).toBe(0);
-      expect(note(unitVerdict.stdout)).toBeUndefined();
+    // A Unit's verdict named no step either, so on Kiro IDE the turn
+    // could end before the Unit's completion or its checkpoint. What follows a
+    // Unit is its route's, so the step is `next`.
+    describe("a Unit's verdict", () => {
+      const CG = ["--stage", "code-generation", "--reviewer", "aidlc-architecture-reviewer-agent", "--unit", "unit-alpha"];
+      function unitVerdict(
+        verdict: "READY" | "NOT-READY",
+        options: { box?: string; between?: (proj: string) => void } = {},
+      ): string | undefined {
+        const proj = seedProject("feature");
+        const sf = seededStateFile(proj);
+        writeFileSync(sf, readFileSync(sf, "utf-8").replace("- [ ] code-generation", `- [${options.box ?? "-"}] code-generation`));
+        writeReviewedArtifact(proj, "code-generation", "plan\n", "unit-alpha");
+        const pass = [...CG, "--iteration", "1"];
+        expect(runReview(proj, pass).status).toBe(0);
+        options.between?.(proj);
+        const recorded = runReview(proj, [...pass, "--verdict", verdict]);
+        expect(recorded.status, recorded.stderr).toBe(0);
+        return note(recorded.stdout);
+      }
+
+      test("with no further pass, names next and nothing of a stage's gate", () => {
+        const step = unitVerdict("READY");
+        expect(step).toMatch(/^No further review pass follows: run `[^`]*orchestrate next` and follow the step it returns/);
+        expect(step).not.toContain("--result");
+        expect(step).not.toContain("stage-completion verification");
+        expect(step).not.toContain("READY");
+      });
+
+      test("with a pass left, names the Unit's next pass", () => {
+        const step = unitVerdict("NOT-READY");
+        expect(step).toContain("--unit unit-alpha");
+        expect(step).toContain("--iteration 2");
+        expect(step).not.toContain("orchestrate next");
+      });
+
+      test("when the person wrote while it ran, names next first, with their words", () => {
+        const step = unitVerdict("READY", {
+          between: (proj) => {
+            const replied = spawnSync(process.execPath, [join(dirname(LOG_TOOL), "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+              cwd: proj, encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_UNATTENDED: "" },
+              input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t271-unit-wrote", prompt: "looks fine, approve it" }),
+            });
+            expect(replied.status, `${replied.stdout}${replied.stderr}`).toBe(0);
+          },
+        });
+        expect(step).toMatch(/^The person wrote since the review was requested: run `[^`]*orchestrate next`/);
+      });
+
+      test("of a stage no longer in flight names none", () => {
+        expect(unitVerdict("READY", { box: " " })).toBeUndefined();
+      });
+
+      // A swarm batch and a wave go on through their own loop (the referee's
+      // check and finalize; the wave's other entries and `unit complete
+      // --wave`), so a `next` there would run ahead of it.
+      test("in a swarm Bolt names none, though a pass is left", () => {
+        const proj = seedProject("feature");
+        const sf = seededStateFile(proj);
+        writeFileSync(sf, readFileSync(sf, "utf8")
+          .replace("- [ ] code-generation", "- [-] code-generation")
+          .replace("- **Test Strategy**: Minimal", "- **Test Strategy**: Minimal\n- **Review Override**: none\n- **Construction Autonomy Mode**: autonomous"));
+        appendAuditEntry("BOLT_STARTED", {
+          "Bolt names": "unit-alpha",
+          "Batch number": "1",
+          "Walking skeleton": "false",
+          "Bolt slug": "unit-alpha",
+        }, proj);
+        writeSourceManifest(proj, "unit-alpha");
+        const iterationOnly = { AIDLC_SKIP_SOURCE_FRESHNESS: "1" };
+        const pass = [...CG, "--iteration", "1"];
+        // Admitted with reviews off: the swarm's own declared class, so a second pass is left.
+        expect(runReview(proj, pass, iterationOnly).status).toBe(0);
+        const recorded = runReview(proj, [...pass, "--verdict", "NOT-READY"], iterationOnly);
+        expect(recorded.status, recorded.stderr).toBe(0);
+        expect(note(recorded.stdout)).toBeUndefined();
+      });
+
+      test("of a design stage a stage-major walk may run as a wave names none; unit by unit it names next", () => {
+        for (const unitMajor of [false, true]) {
+          const proj = seedProject("feature");
+          const sf = seededStateFile(proj);
+          let state = readFileSync(sf, "utf-8").replace(/^- \[S\] functional-design .*$/m, "- [-] functional-design \u2014 EXECUTE");
+          if (unitMajor) state = state.replace("## Runtime State\n", "## Runtime State\n- **Construction Iteration**: unit-major\n");
+          writeFileSync(sf, state);
+          writeReviewedArtifact(proj, "functional-design", "# spec\n", "unit-alpha");
+          const pass = ["--stage", "functional-design", "--reviewer", "aidlc-architecture-reviewer-agent", "--unit", "unit-alpha", "--iteration", "1"];
+          expect(runReview(proj, pass).status).toBe(0);
+          const recorded = runReview(proj, [...pass, "--verdict", "READY"]);
+          expect(recorded.status, recorded.stderr).toBe(0);
+          if (unitMajor) expect(note(recorded.stdout), "unit-major").toContain("orchestrate next");
+          else expect(note(recorded.stdout), "stage-major").toBeUndefined();
+        }
+      });
     });
   });
 
