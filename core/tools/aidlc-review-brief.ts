@@ -87,6 +87,7 @@ export interface ReviewFindingDisposition {
   fingerprint: string;
   status:
     | "Accepted risk"
+    | "Changed after review"
     | `Rejected: ${string}`
     | `Reopened: ${string}`;
   decided_at_severity?: string;
@@ -737,6 +738,8 @@ function applyDisposition(
     return;
   }
   if (!findingIsOpen(finding)) return;
+  // `Changed after review` is no decision: the finding stays open, so the next
+  // review re-checks it against the changed work.
   const status = disposition.status === "Accepted risk" ||
       disposition.status.startsWith("Rejected: ")
     ? disposition.status as ReviewFindingStatus
@@ -1160,6 +1163,7 @@ function parseDispositionField(
       /^sha256:[0-9a-f]{64}$/.test(row.fingerprint ?? "") &&
       (
         row.status === "Accepted risk" ||
+        row.status === "Changed after review" ||
         /^Rejected: \S[\s\S]*$/.test(row.status ?? "") ||
         /^Reopened: \S[\s\S]*$/.test(row.status ?? "")
       ) &&
@@ -1278,6 +1282,7 @@ export function hydrateReviewArtifactContexts(
             }
           : finding;
       }
+      if (disposition.status === "Changed after review") return finding;
       const status = disposition.status === "Accepted risk" ||
           disposition.status.startsWith("Rejected: ")
         ? disposition.status as ReviewFindingStatus
@@ -1292,29 +1297,38 @@ export function hydrateReviewArtifactContexts(
   }));
 }
 
-export function acceptedRiskDispositionField(
+// What Approve records for each open finding: `Accepted risk`, or `Changed
+// after review` when the work its review covered changed afterwards and no
+// finished review has seen the change (the change the brief names), so a
+// finding the work was changed to fix never reads as a risk the person accepted.
+export function approvalDispositionField(
   projectDir: string,
   stages: ReviewDispositionStages,
   unit?: string,
 ): string | undefined {
   const dispositions = dispositionStages(stages).flatMap((stage) => {
     if (!stage.reviewer) return [];
-    return readReviewArtifactContexts(projectDir, stage, unit).flatMap((context) =>
-      context.findings
-        .filter((finding) =>
-          finding.status === "New" || finding.status === "Unresolved"
-        )
-        .map((finding): ReviewFindingDisposition => ({
-          artifact: finding.artifact,
-          id: finding.id,
-          fingerprint: finding.fingerprint,
-          status: "Accepted risk",
-          decided_at_severity: finding.severity,
-          ...(context.reviewRecord
-            ? { reviewed_record: context.reviewRecord }
-            : {}),
-        }))
-    );
+    return readReviewArtifactContexts(projectDir, stage, unit).flatMap((context) => {
+      const open = context.findings.filter((finding) =>
+        finding.status === "New" || finding.status === "Unresolved"
+      );
+      if (open.length === 0) return [];
+      const changed = acceptedReviewChanges(
+        projectDir,
+        stage.slug,
+        stage.for_each === "unit-of-work" ? context.unit : undefined,
+      ).length > 0;
+      return open.map((finding): ReviewFindingDisposition => ({
+        artifact: finding.artifact,
+        id: finding.id,
+        fingerprint: finding.fingerprint,
+        status: changed ? "Changed after review" : "Accepted risk",
+        decided_at_severity: finding.severity,
+        ...(context.reviewRecord
+          ? { reviewed_record: context.reviewRecord }
+          : {}),
+      }));
+    });
   });
   return serializeReviewFindingDispositions(dispositions);
 }

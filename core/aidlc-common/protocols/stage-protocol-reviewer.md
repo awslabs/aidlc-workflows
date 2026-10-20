@@ -295,8 +295,8 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    an internal verdict token.
 
    Gate dispositions are receipt-safe audit data, never artifact edits:
-   - **Approve** automatically maps every current `New` or `Unresolved` finding
-     to `Accepted risk` on the tool-owned `GATE_APPROVED` row.
+   - **Approve** records every current `New` or `Unresolved` finding on the
+     tool-owned `GATE_APPROVED` row.
    - **Request Changes** leaves open findings unresolved. When the human
      explicitly rejects a finding as inapplicable, append
      `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` to the

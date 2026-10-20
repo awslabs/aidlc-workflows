@@ -26,7 +26,7 @@ import {
 import { fileURLToPath } from "node:url";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
-  acceptedRiskDispositionField,
+  approvalDispositionField,
   rejectedFindingDispositionField,
   REVIEW_FINDING_DISPOSITIONS_FIELD,
 } from "./aidlc-review-brief.ts";
@@ -7429,7 +7429,7 @@ function handleApprove(args: string[]): void {
       unit: teamGate.unit,
       personCall: teamPersonCall,
     });
-    const reviewFindingDispositions = acceptedRiskDispositionField(
+    const reviewFindingDispositions = approvalDispositionField(
       pd,
       teamGate.stages,
       teamGate.unit,
@@ -7601,7 +7601,7 @@ function handleApprove(args: string[]): void {
     entrypoint: "approve",
     personCall,
   });
-  const reviewFindingDispositions = acceptedRiskDispositionField(pd, stage);
+  const reviewFindingDispositions = approvalDispositionField(pd, stage);
 
   // Scope is required for next-stage derivation. Validate it before persisting
   // approval: a post-write routing failure would otherwise leave `[x]` as a

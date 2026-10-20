@@ -1356,7 +1356,9 @@ severity increase into a new finding, and keeps unmentioned open rows marked
 not re-checked. A fixed finding reported as still applying is open again, or
 back to the decision made before it was fixed. A Redo row resets the list of
 each Unit whose artifacts it names, or every Unit when it names none. `GATE_APPROVED` atomically records `Accepted risk` for each
-current open finding. A Request Changes report records `Rejected: <reason>`
+current open finding, or `Changed after review` for one whose reviewed work
+changed after that review with no finished review since; that value is no
+decision, so the finding stays open and the next review re-checks it. A Request Changes report records `Rejected: <reason>`
 only for explicit
 `--reject-finding <review-artifact>#R-NN=<exact human reason>` values. It uses
 `--reopen-finding <review-artifact>#R-NN=<exact human reason>` when the person
