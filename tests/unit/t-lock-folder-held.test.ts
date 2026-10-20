@@ -173,27 +173,38 @@ describe("giving up on a held folder", () => {
     });
   });
 
+  // The time cases count rounds of 101 refused renames, not milliseconds: a
+  // round is half a second on Linux, 1.4 s on Windows and 2.8 s on a loaded
+  // macOS runner, and the lock checks its budget and the give-up between rounds.
   test("a provably dead owner's folder held for the give-up time is given up before the budget", () => {
     _setLockFolderHeldGiveUpMsForTests(300);
     const fixture = markerProject();
     seedDeadOwner(fixture.lockDir);
-    _setAuditLockFaultHooksForTests({ failReapRename: () => true });
+    let rounds = 0;
+    _setAuditLockFaultHooksForTests({ failReapRename: (_path, attempt) => { if (attempt === 0) rounds++; return true; } });
     const started = performance.now();
-    withTimeout("6000", () => {
+    withTimeout("30000", () => {
       expect(() => writeMarker(fixture.projectDir, fixture.state)).toThrow(ActiveDirectiveLockFolderHeldError);
     });
-    // The give-up plus at most two rounds, not the 6 s budget.
-    expect(performance.now() - started).toBeLessThan(4_000);
+    // The round that finds the folder held and the first one past the give-up;
+    // the 30 s budget has room for dozens.
+    expect(rounds).toBeLessThanOrEqual(2);
+    expect(performance.now() - started).toBeLessThan(30_000);
   });
 
   test("our own release held for the give-up time stops before the budget", () => {
     _setLockFolderHeldGiveUpMsForTests(300);
     const fixture = markerProject();
     writeMarker(fixture.projectDir, fixture.state);
-    _setAuditLockFaultHooksForTests({ failReleaseRename: () => true, failGateReleaseRename: () => true });
+    let rounds = 0;
+    const refuse = (_path: string, attempt: number) => { if (attempt === 0) rounds++; return true; };
+    _setAuditLockFaultHooksForTests({ failReleaseRename: refuse, failGateReleaseRename: refuse });
     const started = performance.now();
-    withTimeout("6000", () => withActiveDirectiveLock(fixture.projectDir, () => null));
-    expect(performance.now() - started).toBeLessThan(4_000);
+    withTimeout("30000", () => withActiveDirectiveLock(fixture.projectDir, () => null));
+    // The gate's release as the lock is taken, then the release's retries of it
+    // up to the first one past the give-up.
+    expect(rounds).toBeLessThanOrEqual(3);
+    expect(performance.now() - started).toBeLessThan(30_000);
     expect(takeActiveDirectiveReleaseHeld()).toBe(true);
     _setAuditLockFaultHooksForTests(null);
     withActiveDirectiveLock(fixture.projectDir, () => null);
@@ -225,17 +236,15 @@ describe("a lock folder a program holds", () => {
     seedDeadOwner(fixture.lockDir);
     let rounds = 0;
     _setAuditLockFaultHooksForTests({ failReapRename: (_path, attempt) => { if (attempt === 0) rounds++; return true; } });
-    const started = performance.now();
     let thrown: unknown = null;
     withTimeout("200", () => {
       try { writeMarker(fixture.projectDir, fixture.state); } catch (error) { thrown = error; }
     });
-    const took = performance.now() - started;
     expect(thrown).toBeInstanceOf(ActiveDirectiveLockFolderHeldError);
     expect((thrown as Error).message).toBe(WINDOWS_HELD as string);
-    // The budget plus at most one round of 101 refused renames (about 0.5 s, 1.5 s on Windows).
-    expect(took).toBeLessThan(2_600);
-    expect(rounds).toBeLessThanOrEqual(5);
+    // The budget (half a second at least, less than a round) plus at most one
+    // round; counted alone, the 200 ms budget allows 21.
+    expect(rounds).toBeLessThanOrEqual(2);
   });
 
   test("without the Windows line the held kind keeps today's words", () => {
@@ -272,18 +281,20 @@ describe("a lock folder a program holds", () => {
     _setLockFolderHeldPlatformForTests("win32");
     const fixture = markerProject();
     writeMarker(fixture.projectDir, fixture.state);
-    _setAuditLockFaultHooksForTests({ failReleaseRename: () => true, failGateReleaseRename: () => true });
+    let rounds = 0;
+    const refuse = (_path: string, attempt: number) => { if (attempt === 0) rounds++; return true; };
+    _setAuditLockFaultHooksForTests({ failReleaseRename: refuse, failGateReleaseRename: refuse });
     withTimeout("3000", () => {
       const first = performance.now();
       withActiveDirectiveLock(fixture.projectDir, () => null);
       expect(performance.now() - first).toBeGreaterThanOrEqual(2_900);
       expect(takeActiveDirectiveReleaseHeld()).toBe(true);
       expect(takeActiveDirectiveReleaseHeld()).toBe(false);
-      const second = performance.now();
+      const spent = rounds;
       let thrown: unknown = null;
       try { withActiveDirectiveLock(fixture.projectDir, () => null); } catch (error) { thrown = error; }
-      // One short retry (a round is about 0.5 s, 1.5 s on Windows), not a second budget.
-      expect(performance.now() - second).toBeLessThan(2_500);
+      // One short retry, one round; a second budget would run rounds until it ran out.
+      expect(rounds - spent).toBe(1);
       expect(thrown).toBeInstanceOf(ActiveDirectiveLockFolderHeldError);
       expect((thrown as Error).message).toBe(WINDOWS_HELD as string);
     });
@@ -299,23 +310,28 @@ describe("a lock folder a program holds", () => {
     const driver = join(fixture.projectDir, "hold.ts");
     writeFileSync(driver, [
       `const lib = await import(${JSON.stringify(LIB)});`,
-      "lib._setAuditLockFaultHooksForTests({ failReleaseRename: () => true, failGateReleaseRename: () => true });",
+      'const { writeSync } = await import("node:fs");',
+      "let rounds = 0;",
+      "const refuse = (_path, attempt) => { if (attempt === 0) rounds++; return true; };",
+      "lib._setAuditLockFaultHooksForTests({ failReleaseRename: refuse, failGateReleaseRename: refuse });",
       "const started = performance.now();",
       `lib.withActiveDirectiveLock(${JSON.stringify(fixture.projectDir)}, () => null);`,
-      'process.stdout.write(String(Math.round(performance.now() - started)) + "\\n");',
+      "const call = Math.round(performance.now() - started);",
+      "const spent = rounds;",
+      // Registered after the lib's own exit retries, so it runs after them.
+      'process.on("exit", () => { writeSync(1, call + " " + (rounds - spent) + "\\n"); });',
     ].join("\n"));
-    const started = performance.now();
     const result = spawnSync(BUN, [driver], {
       encoding: "utf-8",
       env: { ...process.env, AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS: "4000" },
       timeout: remainingOperationTimeoutMs(60_000),
     });
-    const wall = performance.now() - started;
     expect(result.status, result.stderr).toBe(0);
-    const call = Number(result.stdout.trim());
+    const [call, atExit] = result.stdout.trim().split(" ").map(Number);
     expect(call).toBeGreaterThanOrEqual(3_900);
-    // Today the exit handler spends the whole budget again (a wall of twice the call).
-    expect(wall - call).toBeLessThan(3_000);
+    // The gate's exit retry and one short retry of the lock's release, where a
+    // second budget would run rounds until it ran out.
+    expect(atExit).toBeLessThanOrEqual(2);
   });
 });
 
