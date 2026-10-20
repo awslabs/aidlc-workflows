@@ -318,7 +318,6 @@ function requestedPage(options: PromotionRequest, run: Command): Omit<PagePromot
   const { repository, preview, version } = options;
   const selected = resolvePreview(repository, preview, run);
   const notes = validateNotes(options.notes);
-  parseEntry(notes);
   const contributors = parseContributors(options.contributors ?? "");
   if (!STABLE_VERSION.test(version)) throw new Error("stable version must be X.Y.Z");
   parseVersion(version);
@@ -352,13 +351,19 @@ export function preparePromotion(options: PromotionRequest & { controls: string;
   if (remote) {
     run("git", ["fetch", "--force", "origin", `refs/tags/${tag}:refs/tags/${tag}`]);
     const p = verifyPromotion(tag, repository, run);
-    if (p.schemaVersion !== 2 || p.preview !== preview || p.notes !== page.notes || p.previous !== page.previous ||
-      JSON.stringify(p.contributors) !== JSON.stringify(page.contributors)) {
-      throw new Error("version is already reserved for a different promotion; dispatch again with the same preview, notes and contributors, or choose a new version");
+    // A version 1 reservation, from the earlier tooling, has flat notes and no
+    // contributors or previous version.
+    const same = p.preview === preview && p.notes === page.notes && (p.schemaVersion === 1
+      ? !page.contributors.length
+      : p.previous === page.previous && JSON.stringify(p.contributors) === JSON.stringify(page.contributors));
+    if (!same) {
+      throw new Error(`version is already reserved for a different promotion; dispatch again with the same preview${
+        p.schemaVersion === 1 ? " and notes and no contributors" : ", notes and contributors"}, or choose a new version`);
     }
     return { sha: run("git", ["rev-parse", `${tag}^{commit}`]).trim(), promotion: p, existing: true, published };
   }
   if (published) throw new Error("version is already published");
+  parseEntry(page.notes);
   verifyPreviewCompatibility(repository, preview, page.source, run);
   const promotion: Promotion = {
     schemaVersion: 2, repository, preview, source: page.source, controls, version, date, notes: page.notes,

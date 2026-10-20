@@ -464,10 +464,10 @@ describe("the stable page", () => {
     expect(() => verifyPromotion("v2.11.1", REPOSITORY, f.run)).toThrow("invalid release promotion record");
   });
 
-  test("a version 1 record, as 2.11.1 shipped, still verifies, keeps its page and syncs", () => {
-    const f = fixture();
+  // Rewrites the prepared release commit into the version 1 record the
+  // earlier release tooling wrote, with its flat notes.
+  const v1Release = (f: ReturnType<typeof fixture>, notes: string) => {
     const { sha, promotion } = f.prepare();
-    const notes = "Compatibility: refresh only\n\nRun aidlc update, then aidlc config in each project.\n\n- Keep the chosen preview's fixes.";
     const { previous: _previous, contributors: _contributors, ...v1 } = { ...promotion, schemaVersion: 1, notes } as Promotion & { previous: unknown; contributors: unknown };
     const files = Object.fromEntries(["core/tools/aidlc-version.ts", "README.md", "CHANGELOG.md"]
       .map((path) => [path, f.git("git", ["show", `${f.source}:${path}`])])) as Parameters<typeof metadataFiles>[0];
@@ -475,10 +475,28 @@ describe("the stable page", () => {
       "CHANGELOG.md": metadataFiles(files, "2.11.1", promotion.date, notes)["CHANGELOG.md"],
       [PROMOTION_FILE]: `${JSON.stringify(v1, null, 2)}\n`,
     });
+  };
+  const FLAT = "Compatibility: breaking for scripts\n\nRun aidlc update, then aidlc config in each project.\n\n- Keep the chosen preview's fixes.\n- Breaking for scripts: a flag is gone.";
+
+  test("a version 1 record, as 2.11.1 shipped, still verifies, keeps its page and syncs", () => {
+    const f = fixture();
+    v1Release(f, FLAT);
     const read = verifyPromotion("v2.11.1", REPOSITORY, f.run);
     expect(read.schemaVersion).toBe(1);
-    expect(promotionNotes(read)).toBe(`${notes}\n\nPromoted from [${PREVIEW}](https://github.com/${REPOSITORY}/releases/tag/${PREVIEW}), source \`${f.source}\`.\n`);
+    expect(promotionNotes(read)).toBe(`${FLAT}\n\nPromoted from [${PREVIEW}](https://github.com/${REPOSITORY}/releases/tag/${PREVIEW}), source \`${f.source}\`.\n`);
     expect(syncMetadata("v2.11.1", REPOSITORY, f.run)).toContain("release-metadata/v2.11.1");
+  });
+
+  test("a version reserved or published by the version 1 tooling is reused for the same preview and notes", () => {
+    const f = fixture();
+    v1Release(f, FLAT);
+    f.git("git", ["push", "origin", "refs/tags/v2.11.1"]);
+    const sha = f.git("git", ["rev-parse", "v2.11.1^{commit}"]).trim();
+    expect(f.prepare({ notes: FLAT })).toMatchObject({ sha, existing: true, published: false });
+    f.published.push({ ...f.stable, tag_name: "v2.11.1" });
+    expect(f.prepare({ notes: FLAT })).toMatchObject({ sha, existing: true, published: true });
+    expect(() => f.prepare({ notes: FLAT, contributors: CONTRIBUTORS }))
+      .toThrow("version is already reserved for a different promotion; dispatch again with the same preview and notes and no contributors, or choose a new version");
   });
 
   const pr = (number: number, login: string, oid: string, is_bot = false) => ({ number, author: { login, is_bot }, mergeCommit: { oid } });
