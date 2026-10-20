@@ -772,7 +772,7 @@ describe("t244 machine configuration and update discovery", () => {
       const unavailable = await refreshUpdateState(remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!);
       expect(unavailable.state).toBe("unavailable");
       expect(unavailable.message).toBe(
-        `update refresh unavailable; cached version ${NEXT_VERSION} is stale or unverifiable`,
+        `could not check for a newer release; binary ${AIDLC_VERSION}, latest known ${NEXT_VERSION}, checked less than an hour ago`,
       );
       expect(readFileSync(join(machine, "update-check.json"), "utf-8")).toBe(before);
       await captive.stop();

@@ -153,7 +153,9 @@ export async function doctorUpdateState(
   interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY),
 ): Promise<UpdateState> {
   const explicit = flags["check-updates"] === "true";
-  const mayRefresh = interactive &&
+  // An export is a report someone asked for, often run by a script or an agent
+  // with no terminal, and it is passed on: it refreshes an old check too.
+  const mayRefresh = (interactive || "export" in flags) &&
     flags.json !== "true" &&
     flags.quiet !== "true";
   let update = cachedUpdateState();
@@ -181,8 +183,9 @@ export function updateCheck(state: UpdateState): DoctorCheck {
   const running = versionChannel(state.currentVersion);
   const otherChannel = state.state === "behind" && running !== state.channel;
   // A machine that has never checked is not behind: doctor refreshes the cache
-  // only in a terminal, so the first doctor from a chat tool would otherwise
-  // warn on every fresh install. The row passes and names the check.
+  // only in a terminal or for --export, so the first doctor from a chat tool
+  // would otherwise warn on every fresh install. The row passes and names the
+  // check.
   const neverChecked = state.state === "absent";
   return {
     pass: state.state === "current" || neverChecked,
