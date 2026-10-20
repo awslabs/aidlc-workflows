@@ -80,6 +80,7 @@ import {
   NATIVE_STARTUP_TIMEOUT_MS,
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
+import { memoryTemplatesDir } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
 import { auditLockDir, readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { resolveSensorScriptPath } from "../../dist/claude/.claude/tools/aidlc-sensor.ts";
 import { localEslintPath } from "../../dist/claude/.claude/tools/aidlc-sensor-linter.ts";
@@ -706,12 +707,15 @@ describe("t92 Group B: PASSED real round-trip per sensor", () => {
 // (t92-sensor-fire.sh)
 // ============================================================
 
-/** run_failed_md_real (t92-sensor-fire.sh). */
+/** run_failed_md_real (t92-sensor-fire.sh). A `template` is written as the
+ *  team's template for the output, which is what gives required-sections
+ *  headings to require; `detailSays` is a line the detail file must hold. */
 function runFailedMdReal(
   id: string,
   stage: string,
   fixtureMd: string,
   expectedFindings: string,
+  opts: { template?: string; detailSays?: string } = {},
 ): void {
   const proj = makeProj();
   // basename, not split("/"): on native Windows fixtureMd is an absolute path
@@ -719,6 +723,11 @@ function runFailedMdReal(
   // element and join(proj, ..., <abs-path>) yields C:\...\C:\... (ENOENT).
   const outname = basename(fixtureMd);
   copyFileSync(fixtureMd, join(proj, "aidlc-docs", outname));
+  if (opts.template !== undefined) {
+    const templates = memoryTemplatesDir(proj);
+    mkdirSync(templates, { recursive: true });
+    writeFileSync(join(templates, outname), opts.template);
+  }
   fire([id, "--stage", stage, "--output-path", join(proj, "aidlc-docs", outname)], {
     CLAUDE_PROJECT_DIR: proj,
   });
@@ -737,6 +746,9 @@ function runFailedMdReal(
   expect(findings).toBe(expectedFindings);
   expect(detailPath).toBe(`${RP}/.aidlc-engine/sensors/${stage}/${id}-${firedId}.md`);
   expect(existsSync(join(proj, detailPath))).toBe(true);
+  if (opts.detailSays !== undefined) {
+    expect(readFileSync(join(proj, detailPath), "utf-8")).toContain(opts.detailSays);
+  }
   expect(path).toBe(`aidlc-docs/${outname}`);
 }
 
@@ -775,12 +787,17 @@ function runFailedTsReal(
 }
 
 describe("t92 Group C: FAILED real round-trip per sensor", () => {
-  test("13: required-sections — failing markdown (0 H2s) -> Findings count=2", () => {
+  test("13: required-sections - markdown missing its template's 2 sections -> Findings count=2", () => {
     runFailedMdReal(
       "required-sections",
       "intent-capture",
       join(FIXTURES_ROOT, "failing-required-sections", "intent-statement.md"),
       "2",
+      {
+        template: "# Intent Statement\n\n## Problem Statement\n\n## Assumptions & Open Questions\n",
+        detailSays:
+          "intent-statement.md is missing 2 sections its template asks for: `## Problem Statement`, `## Assumptions & Open Questions`.",
+      },
     );
   });
 

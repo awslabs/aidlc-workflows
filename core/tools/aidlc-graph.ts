@@ -446,14 +446,15 @@ export function memoryTemplatesDir(projectDir: string, space?: string): string {
 }
 
 /** The FRAMEWORK-DEFAULT templates dir — the read-only, engine-shipped middle
- *  tier of the §10 templates resolution order (team override → framework default
- *  → generic floor). Ships at `<harness>/tools/data/templates/` beside the
+ *  tier of the templates resolution order (team override, then framework
+ *  default, then no heading required). Ships at
+ *  `<harness>/tools/data/templates/` beside the
  *  compiled data, resolved relative to THIS tool's location (like DATA_DIR), so
  *  it is harness-correct and space-INDEPENDENT (a framework default is the same
  *  for every space — it's the baseline a team optionally overrides per-space via
  *  `memoryTemplatesDir`). The framework ships zero default files at GA, so this
  *  dir resolves but holds only a marker → the sensor's middle branch misses and
- *  falls through to the floor. AIDLC_FRAMEWORK_TEMPLATES_DIR is a test/relocation
+ *  no heading is required. AIDLC_FRAMEWORK_TEMPLATES_DIR is a test/relocation
  *  seam mirroring AIDLC_TEMPLATES_DIR. */
 export function frameworkTemplatesDir(): string {
   return process.env.AIDLC_FRAMEWORK_TEMPLATES_DIR ?? join(resolveDataDir(), "templates");

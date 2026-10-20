@@ -572,9 +572,7 @@ the record dir); the planning, plan-approval, and summary artefacts
 
 Imports: `required-sections`, `traceability`.
 
-`required-sections` checks each planning and summary artefact for at least two
-H2 headings, and `traceability` verifies the per-Unit coverage table and every
-`OK` target.
+`traceability` verifies the per-Unit coverage table and every `OK` target.
 
 `linter` and `type-check` are not imported here: they ran on every file write
 and nothing read their results; Build and Test runs the project's build and

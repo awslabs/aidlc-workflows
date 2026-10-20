@@ -94,13 +94,15 @@ output_schema:
   template_expected: string[]
   template_missing: string[]
   config_warning: string
+  message: string
 timeout_seconds: 300
 ---
 
 # required-sections sensor
 
-Default mode: checks the output contains at least 2 H2 headings (generic
-content-shape sanity check).
+With no template for the output, no heading is required: the stage's prose
+shapes the file, so the check passes and still reports the output's `##`
+headings. When a template applies (below), its `##` headings are required.
 ```
 
 Keep comments off the field lines: the parser reads a `# ...` after a
