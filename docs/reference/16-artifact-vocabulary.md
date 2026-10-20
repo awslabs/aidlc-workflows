@@ -143,8 +143,10 @@ The canonical names are split so the two never collide on the wire:
 
 - `build-test-results` — emitted by `build-and-test`. Pairs with
   sibling names in that stage: `build-instructions`,
-  `integration-test-instructions`, `performance-test-instructions`,
-  `security-test-instructions`, `build-and-test-summary`.
+  `build-and-test-summary`, and the strategy-dependent
+  `integration-test-instructions`, `performance-test-instructions` and
+  `security-test-instructions`, which that stage declares under
+  `optional_produces`.
 - `unit-test-instructions` is produced per-unit by `code-generation` and
   consumed by `build-and-test`.
 - `source-manifest.json` is the engine-required per-unit companion to

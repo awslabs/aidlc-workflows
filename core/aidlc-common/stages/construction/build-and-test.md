@@ -10,12 +10,13 @@ support_agents:
 mode: inline
 produces:
   - build-instructions
-  - integration-test-instructions
-  - performance-test-instructions
-  - security-test-instructions
   - build-and-test-summary
   - build-test-results
   - cross-unit-traceability
+optional_produces:
+  - integration-test-instructions
+  - performance-test-instructions
+  - security-test-instructions
 consumes:
   - artifact: code-generation-plan
     required: true
@@ -41,7 +42,7 @@ scopes:
   - workshop
   - express
 inputs: ALL code generation outputs across all units
-outputs: build-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, cross-unit-traceability.md (under this stage's record dir, engine-resolved)
+outputs: "build-instructions.md, build-and-test-summary.md, test-results.md, cross-unit-traceability.md, CONDITIONAL: integration-test-instructions.md (Standard and above), performance-test-instructions.md and security-test-instructions.md (Comprehensive, when that NFR kind exists) (under this stage's record dir, engine-resolved)"
 ---
 
 # Build and Test
@@ -114,6 +115,11 @@ Each instruction file should include:
 - How to run the tests (commands, flags, filters)
 - Expected coverage targets appropriate to the strategy level
 - Test data management and environment setup
+
+These three instruction files are declared under `optional_produces`, because a
+Minimal run writes none of them and a Standard run writes only the integration
+one; only the build instructions, the summary, the results and the cross-unit
+traceability are always written.
 
 These are soft guidelines — the LLM can generate additional test types at any strategy level if context demands it (e.g., a Minimal security-patch may still warrant security test instructions).
 
