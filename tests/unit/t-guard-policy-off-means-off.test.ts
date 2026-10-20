@@ -3,7 +3,8 @@
 //
 // Guard Policy off means off: with relaxed or off, a changed input after a
 // review is recorded and said once, never a stop. Strict keeps its stop, and
-// the step that stop names is one AI-DLC accepts in that state.
+// the step that stop names is one AI-DLC accepts in that state; a stage-start
+// record missing on this machine (a fresh clone) is said once under strict too.
 
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
