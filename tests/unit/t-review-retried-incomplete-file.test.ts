@@ -1,5 +1,6 @@
 // covers: function:handleReview, function:backgroundAgentOutSince, function:reviewCompletionDidNotFinish,
-// subcommand:aidlc-log:review, hook:aidlc-log-subagent, hook:aidlc-deliver-stage-rules,
+// function:personSpokeSinceReviewRequest, subcommand:aidlc-log:review, hook:aidlc-log-subagent,
+// hook:aidlc-deliver-stage-rules, hook:aidlc-record-human-turn,
 // audit:REVIEW_COMPLETED, file:aidlc-common/protocols/stage-protocol-reviewer.md
 //
 // A review whose retried reviewer again leaves a file that is not a whole
@@ -12,8 +13,10 @@
 // Only once the reviewer has finished: while an agent sent in the background
 // since the retry has not returned and the reviewer has no completion row
 // since it, the verdict waits; when it returns, its whole review records as
-// its own verdict, or the fallback does. A whole review for the other verdict
-// is never buried under the fallback.
+// its own verdict, or the fallback does. An agent stopped with no finish (Esc,
+// a closed chat) never returns, so once the person has written since the
+// retry their words come first and the fallback records. A whole review for
+// the other verdict is never buried under the fallback.
 //
 // Mechanism: the real log and orchestrate tools and the shipped dispatch and
 // SubagentStop hooks, spawned over a real ledger (DIST tree).
@@ -154,6 +157,21 @@ function finishes(p: string): void {
   expect(r.status, r.out).toBe(0);
 }
 
+/** What the person types, through the real prompt hook every harness forwards to. */
+function says(p: string, prompt: string): void {
+  const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_UNATTENDED: "0", AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p };
+  delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+  delete env.AIDLC_SESSION_OVERRIDE_SOURCE;
+  const r = spawnSync(BUN, [join(DIST_CLAUDE, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+    cwd: p,
+    env,
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: CLAUDE_SHELL.CLAUDE_CODE_SESSION_ID, prompt }),
+  });
+  expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+}
+
 function completions(p: string): string[] {
   return readAllAuditShards(p).split("\n---\n").filter((b) => b.includes("**Event**: REVIEW_COMPLETED"));
 }
@@ -276,6 +294,20 @@ describe("only once the reviewer has finished", () => {
       expectMovesOn(p);
     });
   }
+
+  test("a person who writes after a background reviewer stopped with no finish (Esc, a closed chat): their words come first, and the fallback records", () => {
+    const p = project();
+    const file = retried(p);
+    sentInBackground(p, file);
+    writes(file, NOT_WHOLE["no verdict line"]);
+    // No SubagentStop ever runs for it: its in-flight entry stays fresh.
+    expect(logReview(p, ["--verdict", "NOT-READY"]).out).toContain("has not returned");
+    says(p, "carry on with the review");
+    const recorded = logReview(p, ["--verdict", "NOT-READY"]);
+    expect(recorded.status, recorded.out).toBe(0);
+    expectFallback(p, completions(p)[0]);
+    expect(existsSync(subagentInflightMarkerPath(p))).toBe(true);
+  });
 
   test("a reviewer that returns with a file still not whole: the fallback records then", () => {
     const p = project();

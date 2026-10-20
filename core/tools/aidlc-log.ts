@@ -4399,13 +4399,17 @@ function handleReview(args: string[]): void {
         // retry, or no agent sent in the background since the retry still out
         // (the SubagentStop hook that writes the row also removes the agent's
         // in-flight entry). Audit times are whole seconds, so an agent sent in
-        // the second before the retry counts as sent since it.
+        // the second before the retry counts as sent since it. The ledger
+        // names no agent and an interrupted one is never removed, so once the
+        // person has written since the retry their words come first and the
+        // fallback records.
         const events = readAuditShardEvents(pd, intent, space);
         const retry = openReviewRequests(events).find((open) => open.requestId === requestBinding.requestId);
         if (
           retry !== undefined &&
           reviewerCompletionAfter(events, flags.reviewer, retry.row) === null &&
-          backgroundAgentOutSince(pd, Date.parse(retry.row.timestamp))
+          backgroundAgentOutSince(pd, Date.parse(retry.row.timestamp)) &&
+          !personSpokeSinceReviewRequest(pd, flags.stage, flags.reviewer, flags.unit, intent, space)
         ) {
           refuseReview(
             `Cannot record the verdict for "${flags.stage}" yet: an agent sent in the background ` +
