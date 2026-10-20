@@ -405,7 +405,9 @@ heading names the trade whose decision it is after its number
 (`## Q3. [Developer] ...`), and each trade's questions sit together unless a
 question depends on another's answer. The trade alone never skips or
 delegates a question. An existing file is never reordered or renumbered; a
-follow-up takes the next unused number.
+follow-up takes the next unused number. When the agent asks one of these
+questions, its trade goes in front of the question text, so the person sees it
+in the chat or the picker too.
 
 When the stage's `<slug>-questions.md` already exists with its questions (an
 `[Answer]:` tag, filled in or still blank), the run-stage directive carries

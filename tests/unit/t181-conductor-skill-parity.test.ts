@@ -1709,6 +1709,20 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
     expect(missing).toEqual([]);
   });
 
+  test("a question put to the person shows the trade its heading names", () => {
+    // Claude Code's picker and Kiro CLI's numbered batch both showed `Q1 — <question>`
+    // while the file said `## Q1. [Product owner] ...`: the trade reached the file
+    // only, because no rule said to show it when the question is asked.
+    const protocol = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"), "utf-8")
+      .replace(/\s+/g, " ");
+    const missing = [
+      "Each ordinary question you ask the person, whether or not it is in the file yet, shows the trade its heading names or will name in front of the question text",
+      "a heading without a trade shows none",
+      "Present questions as structured questions in batches, each with the trade its heading names in front of its text (Step 1; none when the heading has none;",
+    ].filter((rule) => !protocol.includes(rule));
+    expect(missing).toEqual([]);
+  });
+
   test("a bare re-entry carries on: no surface offers the old resume menu", () => {
     // A new session's bare /aidlc used to stop on a Resume / Redo / Jump / Start
     // Fresh menu although the person wanted to carry on. Every copy of that rule
