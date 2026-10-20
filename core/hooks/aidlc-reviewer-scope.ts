@@ -45,12 +45,9 @@
 
 import { existsSync, statSync, unlinkSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
   hookOutsideGate,
   enterHookWorkflow,
-  acquireAuditLock,
-  auditFilePath,
   type ClaudeCodeHookInput,
   decideFence,
   errorMessage,
@@ -66,13 +63,14 @@ import {
   readActiveDirectiveMarker,
   readStateFile,
   readUnitScopeStamp,
-  releaseAuditLock,
   resolveProjectFlag,
   resolveProjectDirFromHook,
   REVIEWER_DISPATCH_TTL_MS,
   reviewerDispatchPath,
   toPosix,
   writeGuardStoodAside,
+  recordGuardBlockedRow,
+  validSessionId,
 } from "../tools/aidlc-lib.ts";
 import { writeTargets } from "./review-freeze-command.ts";
 
@@ -861,38 +859,18 @@ function emitReviewerScopeBlocked(
   target: string,
   stage: string,
   unit: string,
+  session: unknown = null,
 ): void {
-  // Best-effort: an audit failure never changes the block decision. The lock
-  // acquisition deliberately keeps a short reporting budget (5 x 50ms):
-  // the block decision is already made, and a lock-starved Bolt fan-out must
-  // not stretch a fast refuse into a laggy one.
-  try {
-    if (!existsSync(auditFilePath(projectDir))) return;
-    if (!acquireAuditLock(projectDir, 5, 50)) {
-      recordHookDrop(
-        projectDir,
-        HOOK_NAME,
-        "audit lock contended; REVIEWER_SCOPE_BLOCKED row dropped (block still enforced)",
-      );
-      return;
-    }
-    try {
-      appendAuditEntryUnlocked(
-        "REVIEWER_SCOPE_BLOCKED",
-        {
-          Tool: toolName,
-          Target: target,
-          Stage: stage,
-          Unit: unit,
-        },
-        projectDir,
-      );
-    } finally {
-      releaseAuditLock(projectDir);
-    }
-  } catch {
-    // Advisory emission only.
-  }
+  recordGuardBlockedRow(projectDir, {
+    eventType: "REVIEWER_SCOPE_BLOCKED",
+    hook: HOOK_NAME,
+    reason: "reviewer-read-scope",
+    tool: toolName,
+    target,
+    stage,
+    unit,
+    session: validSessionId(typeof session === "string" ? session : undefined),
+  });
 }
 
 // The two shipped review-only agents. Used ONLY for the advisory
@@ -1010,13 +988,6 @@ async function checkScope(input: string, projectDir: string, outside: boolean): 
       // switches, and the reviewer-scope environment escape hatch govern the
       // reviewer's read boundary only; none authorizes writes into a sibling
       // Unit's construction subtree.
-      emitReviewerScopeBlocked(
-        projectDir,
-        toolName,
-        scopedVerdict.target ?? "",
-        "claimed-checkout",
-        unitScope.unit,
-      );
       const defaultNote = scopedVerdict.defaulted
         ? " (an implicit search root the command falls back to with no path, not a path you typed)"
         : "";
@@ -1024,6 +995,14 @@ async function checkScope(input: string, projectDir: string, outside: boolean): 
         `This checkout is scoped to Unit "${unitScope.unit}"; refusing cross-unit write target "${scopedVerdict.target ?? ""}"${defaultNote}. ` +
           `This checkout changes only Unit "${unitScope.unit}"'s files: make that change from the project's main checkout, ` +
           "or ask whoever claimed that Unit.\n",
+      );
+      emitReviewerScopeBlocked(
+        projectDir,
+        toolName,
+        scopedVerdict.target ?? "",
+        "claimed-checkout",
+        unitScope.unit,
+        parsed.session_id,
       );
       return 2;
     }
@@ -1141,16 +1120,16 @@ async function checkScope(input: string, projectDir: string, outside: boolean): 
   if (reviewerScopeStandsAside(projectDir, parsed, toolName, dispatch.unit, verdict.target ?? "", dispatch.stage)) {
     return 0;
   }
+  process.stderr.write(
+    `${blockReason(verdict.target ?? "", dispatch, verdict.defaulted)}\n`,
+  );
   emitReviewerScopeBlocked(
     projectDir,
     toolName,
     verdict.target ?? "",
     dispatch.stage,
     dispatch.unit,
-  );
-
-  process.stderr.write(
-    `${blockReason(verdict.target ?? "", dispatch, verdict.defaulted)}\n`,
+    parsed.session_id,
   );
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
 }

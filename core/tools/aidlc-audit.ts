@@ -181,6 +181,8 @@ const VALID_EVENT_TYPES = new Set([
   // developer-agent dispatch was refused because no unit had an approved
   // code-generation plan on disk (stage Steps 2-3 must precede Step 4).
   "PLAN_APPROVAL_BLOCKED",
+  "STATE_TRANSITION_BLOCKED",
+  "STAGE_RULES_BLOCKED",
   // A guard's deterministic off-switch was set while a workflow existed, so a
   // tool call passed without enforcement. One row per streak: the hook appends
   // only when the newest row in its shard is not already this event.
@@ -359,6 +361,8 @@ const EVENT_HEADINGS: Record<string, string> = {
   REVIEWER_SCOPE_BLOCKED: "Reviewer Scope Blocked",
   REVIEW_FREEZE_BLOCKED: "Review Freeze Blocked",
   PLAN_APPROVAL_BLOCKED: "Plan Approval Blocked",
+  STATE_TRANSITION_BLOCKED: "State Transition Blocked",
+  STAGE_RULES_BLOCKED: "Stage Rules Blocked",
   GUARD_DISABLED: "Guard Disabled",
   DOCUMENT_INDEXED: "Document Indexed",
   DOCUMENT_UPDATED: "Document Updated",

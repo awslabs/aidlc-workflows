@@ -24,6 +24,7 @@ import {
   getField,
   isAidlcAgentFile,
   markSubagentInflight,
+  recordGuardBlockedRow,
   resolveWorkflowSelection,
   stateFilePath,
   stateFilePathForSelection,
@@ -362,6 +363,19 @@ export async function run(input: string): Promise<number> {
   }
 }
 
+function recordStageRulesBlocked(parsed: HookInput, projectDir: string, reason: string): void {
+  try {
+    recordGuardBlockedRow(projectDir, {
+      eventType: "STAGE_RULES_BLOCKED",
+      hook: "deliver-stage-rules",
+      reason,
+      session: validSessionId(typeof parsed.session_id === "string" ? parsed.session_id : undefined),
+    });
+  } catch {
+    return;
+  }
+}
+
 function deliver(parsed: HookInput, projectDir: string): number {
   // The rules were delivered before the dispatch; afterwards the hook only
   // records a background launch its input did not announce.
@@ -372,6 +386,7 @@ function deliver(parsed: HookInput, projectDir: string): number {
   const result = dispatchHookOutput(parsed, projectDir);
   if (result.error) {
     process.stderr.write(`${result.error}\n`);
+    recordStageRulesBlocked(parsed, projectDir, "rules-unreadable");
     return 2;
   }
   if (!result.changed || !result.updatedInput) {
@@ -402,6 +417,7 @@ function deliver(parsed: HookInput, projectDir: string): number {
         "brief. The subagent was not started, and nothing partial was written. Shorten or split " +
         "the rule files for the active stage, then start the subagent again.\n",
     );
+    recordStageRulesBlocked(parsed, projectDir, "oversize");
     return 2;
   }
   recordAcceptedBackgroundDispatch(parsed, projectDir);

@@ -43279,6 +43279,64 @@ export function recordGuardStoodAside(
   }
 }
 
+export type GuardRefusalEvent =
+  | "PLAN_APPROVAL_BLOCKED"
+  | "STATE_TRANSITION_BLOCKED"
+  | "STAGE_RULES_BLOCKED"
+  | "REVIEW_FREEZE_BLOCKED"
+  | "REVIEWER_SCOPE_BLOCKED";
+
+
+export function recordGuardBlockedRow(
+  projectDir: string,
+  row: {
+    eventType: GuardRefusalEvent;
+    hook: string;
+    reason: string;
+    tool?: string;
+    target?: string;
+    session?: string | null;
+    stage?: string;
+    unit?: string | null;
+    intent?: string | null;
+    space?: string;
+  },
+): boolean {
+  try {
+    if (!existsSync(cloneIdPath(projectDir))) return false;
+    if (!existsSync(auditFilePath(projectDir, row.intent ?? undefined, row.space))) return false;
+    const fields: Record<string, string> = {
+      Guard: row.hook,
+      Reason: row.reason,
+      ...(row.tool ? { Tool: row.tool } : {}),
+      ...(row.target ? { Target: row.target } : {}),
+      ...(row.session ? { Session: row.session } : {}),
+      ...(row.stage ? { Stage: row.stage } : {}),
+      ...(row.unit ? { Unit: row.unit } : {}),
+    };
+    if (!acquireAuditLock(projectDir, 5, 50, row.intent ?? undefined, row.space)) {
+      recordHookDrop(
+        projectDir,
+        row.hook,
+        `audit lock contended; ${row.eventType} row dropped (block still enforced)`,
+      );
+      return false;
+    }
+    const audit = require("./aidlc-audit.ts") as {
+      appendAuditEntryUnlocked: typeof AppendAuditEntryUnlocked;
+    };
+    try {
+      audit.appendAuditEntryUnlocked(row.eventType, fields, projectDir, row.intent ?? undefined, row.space);
+      return true;
+    } finally {
+      releaseAuditLock(projectDir, row.intent ?? undefined, row.space);
+    }
+  } catch {
+    return false;
+  }
+}
+
+
 // Ledger append for the two Change Control rows. Under `relaxed` the
 // CHANGE_ACCEPTED row IS the evidence that stands in for the refusal, and the
 // CHANGE_CONTROL_SET row is how a moved setting is traced, so neither append

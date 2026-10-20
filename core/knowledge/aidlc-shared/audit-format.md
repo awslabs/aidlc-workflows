@@ -42,7 +42,7 @@ shorter than what was said:
 - A picked option in a picker is kept only when it is one of a stage gate's own
   choices; other picked labels are the conductor's text, not the person's words.
 
-## Event Registry (121 events, 25 categories)
+## Event Registry (123 events, 26 categories)
 
 ### Workflow Lifecycle (8 events)
 
@@ -280,14 +280,21 @@ the active space's shared `codekb/<repo>/` tree.
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `REVIEWER_SCOPE_BLOCKED` | A per-unit reviewer's tool call was refused for reaching into sibling units' `construction/` paths (the §12a read-scope bound) | Timestamp, Tool, Target, Stage, Unit | `hooks/aidlc-reviewer-scope.ts` (PreToolUse) |
-| `REVIEW_FREEZE_BLOCKED` | A file-tool or shell `produces[]` write was refused because it would invalidate a fresh READY review receipt before the gate (the §12a terminal-receipt ordering) | Timestamp, Tool, Target, Stage, optional Unit | `hooks/aidlc-review-freeze.ts` (PreToolUse) |
+| `REVIEWER_SCOPE_BLOCKED` | A per-unit reviewer's tool call was refused for reaching into sibling units' `construction/` paths (the §12a read-scope bound) | Timestamp, Guard, Reason (`reviewer-read-scope`), Tool, Target, Stage, Unit, Session when the host names the chat | `hooks/aidlc-reviewer-scope.ts` (PreToolUse) |
+| `REVIEW_FREEZE_BLOCKED` | A file-tool or shell `produces[]` write was refused because it would invalidate a fresh READY review receipt before the gate (the §12a terminal-receipt ordering) | Timestamp, Guard, Reason (`review-receipt`), Tool, Target, Stage, optional Unit, Session when the host names the chat | `hooks/aidlc-review-freeze.ts` (PreToolUse) |
+
+### Guard Refusal Events (2 events - hook-emitted)
+
+| Event | When | Required Fields | Emitter |
+|-------|------|-----------------|---------|
+| `STATE_TRANSITION_BLOCKED` | A delegated agent's lifecycle or routing command was refused because only the main workflow session may change stage status or routing | Timestamp, Guard, Reason (`delegated-lifecycle`), Tool, Target; Session when the host names the chat | `hooks/aidlc-state-transition-guard.ts` (PreToolUse) |
+| `STAGE_RULES_BLOCKED` | Stage rules were not delivered to a subagent: the assembled brief exceeded the hook output limit (`Reason: oversize`) or a required rule file could not be read (`Reason: rules-unreadable`) | Timestamp, Guard, Reason; Session when the host names the chat | `hooks/aidlc-deliver-stage-rules.ts` (PreToolUse) |
 
 ### Plan Approval Enforcement Events (2 events - hook-emitted)
 
 | Event | When | Required Fields | Emitter |
 |-------|------|-----------------|---------|
-| `PLAN_APPROVAL_BLOCKED` | A code-generation developer-agent dispatch or workspace mutation was refused because the active unit or zero-Unit stage target lacked a current, explicitly approved plan contract (stage Steps 2-3 must precede Step 4) | Timestamp, Tool, Target, Stage, Unit | `hooks/aidlc-plan-approval-guard.ts` (PreToolUse) |
+| `PLAN_APPROVAL_BLOCKED` | A code-generation developer-agent dispatch or workspace mutation was refused: the target lacked a current, explicitly approved plan contract (stage Steps 2-3 must precede Step 4), the stage rules were still arriving, the build's start could not be recorded, or the runtime lock folder is held | Timestamp, Guard, Reason (`plan-approval`, `rules-arriving`, `start-record`), Tool, Stage; Target, Unit and Session when the refusal has them | `hooks/aidlc-plan-approval-guard.ts` (PreToolUse) |
 | `GUARD_DISABLED` | Either a tool call passed the Plan Approval guard because its deterministic off-switch (the disable environment variable documented in the hooks reference) was set while a workflow existed (one row per streak: the hook appends only when the newest row in the active shard is not already this event for the same guard), or a CLI setter lowered it for the person's typed or asked-for switch or through the fixture/harness-launch presence bypass | Timestamp, Guard (`plan-approval-guard` from the hook; `plan-approval`, `review-freeze`, `state-transition`, or `reviewer-scope` from the switch), Tool (hook rows) or Scope and Source (`you` when theirs, `command` otherwise; switch rows), and on a switch row that is theirs, Person Reply (the words of the reply that asked, as the record kept them) | `hooks/aidlc-plan-approval-guard.ts` (PreToolUse); `tools/aidlc-utility.ts` batches the switch rows, including `applyTypedGuardSwitchPrompt` from `hooks/aidlc-record-human-turn.ts` |
 
 ### Documents (3 events)

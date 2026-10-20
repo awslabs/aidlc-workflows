@@ -4203,7 +4203,11 @@ describe("t265b hook lifecycle", () => {
       expect(r.code).toBe(2);
       const shard = readFileSync(shardPath, "utf-8");
       expect(shard).toContain("PLAN_APPROVAL_BLOCKED");
+      expect(shard).toContain("**Reason**: plan-approval");
       expect(shard).toContain("todo-core");
+      expect(runHook(proj, DISPATCH(proj, "Generate code for todo-core")).code).toBe(2);
+      const rows = readFileSync(shardPath, "utf-8").match(/PLAN_APPROVAL_BLOCKED/g) ?? [];
+      expect(rows).toHaveLength(2);
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }

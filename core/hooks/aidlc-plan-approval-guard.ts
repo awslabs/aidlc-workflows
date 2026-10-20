@@ -137,6 +137,8 @@ import {
   markPersonLineHeardThisTurn,
   personLineHeardThisTurn,
   takeActiveDirectiveReleaseHeld,
+  recordGuardBlockedRow,
+  validSessionId,
 } from "../tools/aidlc-lib.ts";
 import { LOCK_FOLDER_HELD_SAID_KEY } from "../tools/aidlc-lock-line.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
@@ -2128,11 +2130,36 @@ async function evaluate(
   // it is written. A path or command the reason quotes stays on the one line.
   // biome-ignore lint/suspicious/noControlCharactersInRegex: replacing them is the point
   const oneLine = (text: string): string => text.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g, " ");
+  let blockedMutation: {
+    target: string;
+    unit: string | null;
+    opaqueShell: boolean;
+    detail: string | null;
+  } | null = null;
+  const refusalFields = (): { tool: string; target: string; unit?: string } => {
+    const unit = blockedMutation?.unit ?? (verdict.mentioned[0] === `stage:${GUARDED_STAGE}`
+      ? STAGE_TARGET
+      : verdict.mentioned.join(", ") || "(missing marker)");
+    return {
+      tool: toolName,
+      target: guardedDispatch ? subagentType : blockedMutation?.target ?? "",
+      ...(unit ? { unit } : {}),
+    };
+  };
+  const planRefusalReason = (): string => "plan-approval";
   const refuseProvenanceFailure = (reason: string): number => {
     recordHookDrop(projectDir, HOOK_NAME, reason);
     process.stderr.write(
       `Code Generation source provenance could not be committed. ${oneLine(reason)} Repair the source or runtime/audit write problem and retry; the plan-approval setting is unchanged.\n`,
     );
+    recordGuardBlockedRow(projectDir, {
+      eventType: "PLAN_APPROVAL_BLOCKED",
+      hook: HOOK_NAME,
+      reason: "start-record",
+      ...refusalFields(),
+      stage: GUARDED_STAGE,
+      session: validSessionId(typeof parsed.session_id === "string" ? parsed.session_id : undefined),
+    });
     return 2;
   };
   // A program holding the project's folders (on Windows, a dev server's file
@@ -2167,6 +2194,14 @@ async function evaluate(
       if (!error.personLine) return refuseProvenanceFailure(errorMessage(error));
       recordHookDrop(projectDir, HOOK_NAME, error.message);
       process.stderr.write(`${oneLine(error.message)}\n`);
+    recordGuardBlockedRow(projectDir, {
+      eventType: "PLAN_APPROVAL_BLOCKED",
+      hook: HOOK_NAME,
+      reason: "start-record",
+      ...refusalFields(),
+      stage: GUARDED_STAGE,
+      session: validSessionId(typeof parsed.session_id === "string" ? parsed.session_id : undefined),
+    });
       return 2;
     }
     recordHookDrop(projectDir, HOOK_NAME, error.message);
@@ -2184,23 +2219,30 @@ async function evaluate(
   };
   // `lead` false: the reason is already a whole refusal that says what cannot happen.
   // `settingNote` false: a question waiting on the person, where the setting is not in play.
-  const refuseExecutionIneligible = (reason: string, lead = true, settingNote = true): number => {
+  const refuseExecutionIneligible = (
+    reason: string,
+    lead = true,
+    settingNote = true,
+    code = "plan-approval",
+  ): number => {
     process.stderr.write(
       `${lead ? "Code Generation cannot start: " : ""}${oneLine(reason).trim().replace(/\.*$/, ".")}${
         settingNote ? " The plan-approval setting is unchanged." : ""
       }\n`,
     );
+    recordGuardBlockedRow(projectDir, {
+      eventType: "PLAN_APPROVAL_BLOCKED",
+      hook: HOOK_NAME,
+      reason: code,
+      ...refusalFields(),
+      stage: GUARDED_STAGE,
+      session: validSessionId(typeof parsed.session_id === "string" ? parsed.session_id : undefined),
+    });
     return 2;
   };
   // The step a held jump's wait lets it through after (jumpIsPersonsMove), for
   // the refusal to name in place of `next`.
   let jumpWayOn: GuardRecoveryOperation | null = null;
-  let blockedMutation: {
-    target: string;
-    unit: string | null;
-    opaqueShell: boolean;
-    detail: string | null;
-  } | null = null;
   try {
     const statePath = stateFilePath(projectDir);
     if (!existsSync(statePath)) return 0; // no workflow - fail open
@@ -2528,11 +2570,16 @@ async function evaluate(
       ? handoffBlockReason(verdict.mentioned, handoffDefect, briefTargets)
       : blockReason(verdict.mentioned, detail ?? receiptDetail(units, verdict.mentioned), briefTargets, planApprovalOff);
 
-  // The rules still arriving is about the delivery, not the plan, so it holds
-  // under every Guard Policy and is said on its own: a lowered fence has
-  // nothing to stand aside for, and no Plan Approval block is recorded.
   if (rulesArriving !== null) {
     process.stderr.write(`${rulesArriving}\n`);
+    recordGuardBlockedRow(projectDir, {
+      eventType: "PLAN_APPROVAL_BLOCKED",
+      hook: HOOK_NAME,
+      reason: "rules-arriving",
+      ...refusalFields(),
+      stage: GUARDED_STAGE,
+      session: validSessionId(typeof parsed.session_id === "string" ? parsed.session_id : undefined),
+    });
     return 2;
   }
   if (!verdict.block) {
@@ -2599,10 +2646,11 @@ async function evaluate(
         const waiting = authorityFailure === PLAN_APPROVAL_ASK_OPEN;
         return refuseExecutionIneligible(
           authorityRemedy(authorityFailure, standing, asked, editingReply, jumpWayOn), !waiting, !waiting,
+          planRefusalReason(),
         );
       }
       if (verdict.mentioned.length === 0) {
-        return refuseExecutionIneligible(refusalProse(null), false);
+        return refuseExecutionIneligible(refusalProse(null), false, true, "plan-approval");
       }
       const issued = setAside ?? undefined;
       const selected = verdict.mentioned.map((mentioned) => {
@@ -2615,7 +2663,7 @@ async function evaluate(
       for (const { target, approval } of selected) {
         if (approval.executionFailure) return refuseProvenanceFailure(approval.executionFailure);
         if (!codeGenerationExecutionAllowed(projectDir, target, approval, issued)) {
-          return refuseExecutionIneligible(refusalProse(approval.reason || null), false);
+          return refuseExecutionIneligible(refusalProse(approval.reason || null), false, true, "plan-approval");
         }
       }
       // A blocked path is written the way the write-audit hook writes one
@@ -2669,45 +2717,15 @@ async function evaluate(
     }
   }
 
-  // Audit the refusal so the run's record shows when the ordering bit.
-  // Best-effort: an audit failure never changes the block decision. The lock
-  // acquisition deliberately keeps a short reporting budget (5 x 50ms):
-  // the block decision is already made, and a dropped advisory row is
-  // preferable to a slow block.
-  try {
-    if (existsSync(auditFilePath(projectDir))) {
-      if (acquireAuditLock(projectDir, 5, 50)) {
-        try {
-          appendAuditEntryUnlocked(
-            "PLAN_APPROVAL_BLOCKED",
-            {
-              Tool: toolName,
-              Target: guardedDispatch ? subagentType : blockedMutation?.target ?? "",
-              Stage: GUARDED_STAGE,
-              Unit:
-                blockedMutation?.unit ??
-                (verdict.mentioned[0] === `stage:${GUARDED_STAGE}`
-                  ? STAGE_TARGET
-                  : verdict.mentioned.join(", ") || "(missing marker)"),
-            },
-            projectDir,
-          );
-        } finally {
-          releaseAuditLock(projectDir);
-        }
-      } else {
-        recordHookDrop(
-          projectDir,
-          HOOK_NAME,
-          "audit lock contended; PLAN_APPROVAL_BLOCKED row dropped (block still enforced)",
-        );
-      }
-    }
-  } catch {
-    // Advisory emission only.
-  }
-
   process.stderr.write(`${refusalProse(null)}\n`);
+  recordGuardBlockedRow(projectDir, {
+    eventType: "PLAN_APPROVAL_BLOCKED",
+    hook: HOOK_NAME,
+    reason: planRefusalReason(),
+    ...refusalFields(),
+    stage: GUARDED_STAGE,
+    session: validSessionId(typeof parsed.session_id === "string" ? parsed.session_id : undefined),
+  });
   return 2; // harness PreToolUse reject contract: exit 2 + stderr blocks
 }
 
