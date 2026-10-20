@@ -2921,7 +2921,9 @@ function reviewBudgetMessage(stage: string, ordinal: number, budget: number, ret
   return unlessPersonAsked(
     `Cannot request review pass ${ordinal} for "${stage}" because this stage allows ` +
       `${budget} review pass${budget === 1 ? "" : "es"}. `,
-    budget === 1
+    budget === 0
+      ? "This stage runs no review in this work: open the approval gate."
+      : budget === 1
       ? "Do not ask the reviewer again; include the findings in the approval summary for the human."
       : "Present the unresolved findings at the approval gate for the human instead of starting another review.",
     retryWith,
