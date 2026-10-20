@@ -836,6 +836,9 @@ describe("the person's jump at an open recovery question goes through on the fir
     copilotStep(proj, "next --stage code-generation");
     const reopen = copilotRuns(proj, "bun .aidlc/tools/aidlc-jump.ts reopen --target code-generation --units api");
     expect(reopen.refused, "the offered Unit reopen ran on Copilot").not.toBeNull();
+    // `next --stage` lets no reopen through, so the refusal keeps the plain `next`.
+    expect(namedCommands(reopen.refused as string).filter((command) => command.startsWith("bun ") && !/[<>]/.test(command)))
+      .toEqual(["bun .aidlc/tools/aidlc-orchestrate.ts next"]);
   });
 
   test("still refused: a jump nobody asked for, whose way past is admitted, and a jump after the person picked Request Changes", async () => {
@@ -892,5 +895,60 @@ describe("the person's jump at an open recovery question goes through on the fir
     expect(step.kind, JSON.stringify(step)).toBe("run-stage");
     expect(step.stage).toBe("build-and-test");
     expect(next(proj).stage).toBe("build-and-test");
+  });
+});
+
+// A step gone out of date makes a jump wait for a fresh step. On Copilot a
+// fresh `next` comes back as a print, which the adapter's settle leaves out of
+// date again; the jump's way on there is its own `next --stage`, and the
+// refusal names it. On the other harnesses `next` delivers the step.
+describe("a jump the person asked for on a step gone out of date names the step that lets it through", () => {
+  const claude = SHAPES[0];
+  const copilot = SHAPES.find((shape) => shape.name === "copilot") as Shape;
+  const JUMP = "bun .aidlc/tools/aidlc-jump.ts execute --target requirements-analysis --direction backward --scope poc";
+  const engineCommands = (said: string) => namedCommands(said).filter((command) => command.startsWith("bun ") && !/[<>]/.test(command));
+
+  test.each([["off", "off"], ["strict", "on"]] as const)(
+    "Copilot, Guard Policy %s, plan approval %s: the jump run without next --stage is refused naming it, and one follow admits it",
+    (policy, planApproval) => {
+      const proj = openRecoveryQuestion(policy, planApproval);
+      created.push(proj);
+      copilot.install(proj);
+      const said = copilotAdapter(proj, "record-human-turn", {
+        hook_event_name: "UserPromptSubmit", prompt: ASK, timestamp: new Date().toISOString(),
+      });
+      expect(said.code, said.stderr).toBe(0);
+      copilotStep(proj, "report --result resumed --choice jump --target requirements-analysis");
+      const refused = copilotRuns(proj, JUMP).refused;
+      expect(refused, "the jump ran with the step out of date").not.toBeNull();
+      expect(engineCommands(refused as string)).toEqual(["bun .aidlc/tools/aidlc-orchestrate.ts next --stage requirements-analysis"]);
+      expect(copilotRuns(proj, "bun .aidlc/tools/aidlc-orchestrate.ts next --stage requirements-analysis").refused).toBeNull();
+      const ran = copilotRuns(proj, JUMP);
+      expect(ran.refused).toBeNull();
+      expect(copilotStep(proj, "next").stage).toBe("requirements-analysis");
+    },
+  );
+
+  test("Copilot: a jump nobody asked for keeps the plain next", () => {
+    const proj = openRecoveryQuestion();
+    created.push(proj);
+    copilot.install(proj);
+    copilotStep(proj, "next");
+    const refused = copilotRuns(proj, JUMP).refused;
+    expect(refused).not.toBeNull();
+    expect(engineCommands(refused as string)).toEqual(["bun .aidlc/tools/aidlc-orchestrate.ts next"]);
+  });
+
+  test("Claude Code, the build step set aside by a compaction under strict: the refusal names next, and one follow admits the jump", async () => {
+    const state = approvedBuildSetAside("strict");
+    created.push(state.proj);
+    expect(reply(state.proj, ASK).status).toBe(0);
+    const jump = respell(JUMP, ".claude");
+    const refused = await claude.call(state.proj, state.session, { tool: "Bash", command: jump });
+    expect(refused.code).toBe(2);
+    expect(engineCommands(refused.said)).toEqual(["bun .claude/tools/aidlc-orchestrate.ts next"]);
+    expect(runNamed(state.proj, "bun .claude/tools/aidlc-orchestrate.ts next").status).toBe(0);
+    const admitted = await claude.call(state.proj, state.session, { tool: "Bash", command: jump });
+    expect(admitted.code, admitted.said).toBe(0);
   });
 });

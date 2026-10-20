@@ -76,8 +76,10 @@ import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import { CONFIG_SECTIONS } from "../tools/aidlc-command.ts";
 import { commandPath, readActiveExecutable } from "../tools/aidlc-install-paths.ts";
 import {
+  type GuardRecoveryOperation,
   guardOperationMatchesRemedy,
   parseGuardRestartContinuationCommand,
+  renderGuardOperation,
   sameGuardOperation,
 } from "../tools/aidlc-guard-operation.ts";
 import {
@@ -138,7 +140,7 @@ import {
 } from "../tools/aidlc-lib.ts";
 import { LOCK_FOLDER_HELD_SAID_KEY } from "../tools/aidlc-lock-line.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
-import { aidlcToolInvocation, quoteCommandArgument } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../tools/aidlc-settings.ts";
 import {
   AS_ITS_OWN_COMMAND,
@@ -466,9 +468,12 @@ function promptCarriesReviewAppendix(
 // Every command a refusal names is spelled the way this install runs it, so
 // the agent can run it as printed (the native `aidlc engine ...`, or the
 // source tree's `bun <harness-dir>/tools/...`), and `next` is always named
-// with how to run it so this guard reads it as that command.
-function nextOnItsOwn(): string {
-  return `\`${aidlcToolInvocation("orchestrate")} next\` ${AS_ITS_OWN_COMMAND}`;
+// with how to run it so this guard reads it as that command. The `next --stage`
+// a held jump's wait names is the operation's own rendering: the argv its
+// claim is hashed over (nextStageClaimSha256).
+function nextOnItsOwn(operation: GuardRecoveryOperation | null = null): string {
+  const command = operation === null ? `${aidlcToolInvocation("orchestrate")} next` : renderGuardOperation(operation);
+  return `\`${command}\` ${AS_ITS_OWN_COMMAND}`;
 }
 
 /** The Code Generation targets the current step builds (null: the zero-Unit stage-level work). */
@@ -638,13 +643,15 @@ interface PlanStanding {
 
 // What ends an authority refusal, said the same way under every Guard Policy:
 // what is stale, where the person's approval stands when it does, and the fresh
-// `next` that issues the current step again. The agent never asks the person
-// again for a judgement they already gave.
+// `next` that issues the current step again, or for a jump the person asked for
+// the step its wait lets it through after (`wayOn`, from jumpIsPersonsMove).
+// The agent never asks the person again for a judgement they already gave.
 function authorityRemedy(
   reason: string,
   standing: PlanStanding | null,
   asked: ReturnType<typeof planApprovalAskState> = null,
   editingReply: string | null = null,
+  wayOn: GuardRecoveryOperation | null = null,
 ): string {
   if (reason === ENGINE_QUESTION_OPEN) return engineQuestionOpenReason();
   if (reason === PLAN_APPROVAL_ASK_OPEN) {
@@ -679,7 +686,7 @@ function authorityRemedy(
         ? `Plan approval is off for the plan for ${standing.scope}, so it needs no approval: ` +
           "do not ask the person to approve it. "
         : `The plan for ${standing.scope} is already approved: do not ask the person to approve it again yourself. `;
-  return `${reason}. ${stands}Run ${nextOnItsOwn()}, and follow the step it prints.`;
+  return `${reason}. ${stands}Run ${nextOnItsOwn(wayOn)}, and follow the step it prints.`;
 }
 
 function authorityBlockReason(
@@ -687,13 +694,14 @@ function authorityBlockReason(
   standing: PlanStanding | null = null,
   asked: ReturnType<typeof planApprovalAskState> = null,
   editingReply: string | null = null,
+  wayOn: GuardRecoveryOperation | null = null,
 ): string {
   if (reason === ENGINE_QUESTION_OPEN || reason === PLAN_APPROVAL_ASK_OPEN) {
     return authorityRemedy(reason, standing, asked, editingReply);
   }
   return (
     "Code generation cannot start because its Plan Approval authority is ambiguous or stale. " +
-    authorityRemedy(reason, standing)
+    authorityRemedy(reason, standing, null, null, wayOn)
   );
 }
 
@@ -1492,12 +1500,14 @@ interface JumpCommand {
 
 const NO_ENGINE_CONTEXT: EngineCommandContext = { gateHeld: false, marker: null, jumpAdmitted: () => false };
 
-// The engine's last step leaves the jump to the person's turn. A superseded
-// step waits for a fresh `next`, with one exception: Copilot's settle
-// supersedes the step after every print, `next --stage`'s jump print included,
-// so a `jump execute` to the stage the state-bound step's settled claim asked
-// for with `next --stage`, on the state as it is now, is the agent carrying
-// that print out. A picked restart's own `next` is not (its claim carries the
+// Whether the engine's last step leaves the jump to the person's turn: true
+// when it does; when a superseded step holds back a `jump execute` to a stage
+// that is an identifier, the `next --stage` operation its one exception admits
+// the jump after; else false. A superseded step waits for a fresh `next`, with
+// one exception: Copilot's settle supersedes the step after every print,
+// `next --stage`'s jump print included, so a `jump execute` to the stage the
+// state-bound step's settled claim asked for with `next --stage`, on the state
+// as it is now, is the agent carrying that print out. A picked restart's own `next` is not (its claim carries the
 // pick, and the settle keeps the question only for its exact print); a
 // `next --stage` carrying anything else, a stage that is no identifier, and a
 // step with no settled claim (a compaction, a status sync) fall to the wait.
@@ -1513,7 +1523,7 @@ const NO_ENGINE_CONTEXT: EngineCommandContext = { gateHeld: false, marker: null,
 // (readIssuedDirectiveMarker); whether their words still stand is
 // personSpokeSinceGate's. With no step on record there is nothing to wait for.
 // Parked work's last step is the park, which no issued step outlives.
-function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand): boolean {
+function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand): boolean | GuardRecoveryOperation {
   try {
     const state = readFileSync(stateFilePath(projectDir), "utf-8");
     if ((getField(state, "Parked") ?? "").trim().length > 0) return true;
@@ -1522,11 +1532,13 @@ function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand): bool
     if (marker === null) return true;
     if (marker.delivery === "superseded") {
       const attempt = current?.active_attempt;
-      const claim = jump.target === undefined ? null : nextStageClaimSha256(jump.target);
-      return jump.verb === "execute" && claim !== null && attempt?.status === "settled" &&
+      const target = jump.target;
+      const claim = target === undefined ? null : nextStageClaimSha256(target);
+      if (jump.verb !== "execute" || target === undefined || claim === null) return false;
+      return (attempt?.status === "settled" &&
         attempt.command_kind === "next" && attempt.command_sha256 === claim &&
         attempt.guard_recovery_selection_sha256 === undefined &&
-        attempt.issued_state_sha256 === stateDigest(state);
+        attempt.issued_state_sha256 === stateDigest(state)) || { kind: "restart-stage", stage: target };
     }
     if (marker.kind !== "ask" || marker.ask_type !== GUARD_RECOVERY_ASK_TYPE) return true;
     const reply = current?.guard_recovery_response;
@@ -1542,7 +1554,12 @@ function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand): bool
 // A jump is the person's move: the restart they picked at the engine's recovery
 // question, or one they asked for since the last decision that the last step
 // does not hold back (lastStepAdmitsPersonsMoves). The jump tool checks
-// neither.
+// neither. One they asked for that a superseded step holds back gets, on
+// Copilot, the operation that lets it through, for the refusal to name: only
+// Copilot's adapter writes the settled claim that exception reads, and on every
+// other harness a fresh `next` delivers the step, so `next` stays their way on.
+// The harness name says which, never the step's attempt: freshActiveDirectiveMarker
+// gives every harness a settled attempt, so a Claude Code step can carry one.
 function jumpIsPersonsMove(
   projectDir: string,
   cwd: string,
@@ -1550,9 +1567,11 @@ function jumpIsPersonsMove(
   state: string,
   marker: ActiveDirectiveMarker | null,
   jump: JumpCommand,
-): boolean {
-  return (typeof command === "string" && isSelectedGuardRestartContinuation(projectDir, cwd, command, state, marker)) ||
-    (personSpokeSinceGate(projectDir, { requests: true }) && lastStepAdmitsPersonsMoves(projectDir, jump));
+): boolean | GuardRecoveryOperation {
+  if (typeof command === "string" && isSelectedGuardRestartContinuation(projectDir, cwd, command, state, marker)) return true;
+  if (!personSpokeSinceGate(projectDir, { requests: true })) return false;
+  const last = lastStepAdmitsPersonsMoves(projectDir, jump);
+  return typeof last === "boolean" || runtimeHarnessName(projectDir) === "copilot" ? last : false;
 }
 
 // The results that open the Code Generation gate or complete the stage.
@@ -2172,6 +2191,9 @@ async function evaluate(
     );
     return 2;
   };
+  // The step a held jump's wait lets it through after (jumpIsPersonsMove), for
+  // the refusal to name in place of `next`.
+  let jumpWayOn: GuardRecoveryOperation | null = null;
   let blockedMutation: {
     target: string;
     unit: string | null;
@@ -2225,8 +2247,12 @@ async function evaluate(
             {
               gateHeld: codeGenerationGateHeld(state),
               marker: activeDirective,
-              jumpAdmitted: (jump) =>
-                toolName === "Bash" && jumpIsPersonsMove(projectDir, cwd, toolInput.command, state ?? "", activeDirective, jump),
+              jumpAdmitted: (jump) => {
+                const move = toolName === "Bash" &&
+                  jumpIsPersonsMove(projectDir, cwd, toolInput.command, state ?? "", activeDirective, jump);
+                if (typeof move === "object") jumpWayOn = move;
+                return move === true;
+              },
             },
           )
         : {
@@ -2487,7 +2513,7 @@ async function evaluate(
   }
   const refusalProse = (detail: string | null): string =>
     authorityFailure
-      ? authorityBlockReason(authorityFailure, standing, asked, editingReply)
+      ? authorityBlockReason(authorityFailure, standing, asked, editingReply, jumpWayOn)
       : blockedMutation
       ? mutationBlockReason(
           blockedMutation.unit,
@@ -2570,7 +2596,9 @@ async function evaluate(
       if (authorityFailure && !swarmBatchOut) {
         // The plan question is open: the same words as with the fence on.
         const waiting = authorityFailure === PLAN_APPROVAL_ASK_OPEN;
-        return refuseExecutionIneligible(authorityRemedy(authorityFailure, standing, asked, editingReply), !waiting, !waiting);
+        return refuseExecutionIneligible(
+          authorityRemedy(authorityFailure, standing, asked, editingReply, jumpWayOn), !waiting, !waiting,
+        );
       }
       if (verdict.mentioned.length === 0) {
         return refuseExecutionIneligible(refusalProse(null), false);
