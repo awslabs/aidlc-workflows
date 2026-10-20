@@ -7605,6 +7605,50 @@ describe("t294 a Claude Bedrock answer stays the person's own", () => {
     expect(recorded(project)).not.toHaveProperty("profile");
   });
 
+  test("--show names the shared settings.json while an earlier release's answer is still there", () => {
+    const project = install("claude");
+    asEarlierRelease(project, "eu-west-1", "team");
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      join(DIST_RELEASE, "claude"),
+      "--harness",
+      "claude",
+      "--yes",
+    ], project, hostFree());
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const carrying = () => {
+      const shown = run(["config", "providers", "--project-dir", project, "--show", "--json"], project, hostFree());
+      expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+      return (JSON.parse(shown.stdout).data.files as { setting: string; file: string }[])
+        .filter((entry) => entry.setting === "AWS region and profile")
+        .map((entry) => entry.file);
+    };
+    expect(carrying()).toEqual([join(project, ".claude", "settings.json")]);
+    providers(project, bedrock("us-west-2"));
+    expect(carrying()).toEqual([join(project, ".claude", "settings.local.json")]);
+  });
+
+  test("a Bedrock answer with no profile says once that the profile left in the person's file is the one used", () => {
+    const project = install("claude");
+    providers(project, bedrock("eu-west-1", "--profile", "team"));
+    providers(project, ["--provider", "current"]);
+    const stays =
+      "AWS_PROFILE in .claude/settings.local.json stays, so Claude Code uses that profile with Amazon Bedrock; " +
+      "delete it there to use the default credential chain.";
+    expect(providers(project, bedrock("eu-west-1"))).toContain(stays);
+    // Nothing proves the profile was AI-DLC's, so it stays.
+    expect(envOf(project, "settings.local.json")).toEqual({
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: "eu-west-1",
+      AWS_PROFILE: "team",
+    });
+    // The answer now carries that profile, so the next one says nothing more.
+    expect(providers(project, bedrock("eu-west-1"))).not.toContain(stays);
+  });
+
   test("moving off Bedrock takes out the switch and region and keeps what is the person's", () => {
     for (const transition of [["--provider", "current"], ["--reset"]]) {
       const project = install("claude");

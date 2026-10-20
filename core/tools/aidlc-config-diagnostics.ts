@@ -1380,6 +1380,12 @@ export function applyClaudeLocalProvider(
       env.CLAUDE_CODE_USE_BEDROCK = "1";
       env.AWS_REGION = next.region;
       if (next.profile) env.AWS_PROFILE = next.profile;
+      else if (env.AWS_PROFILE !== undefined) {
+        lines.push(
+          `AWS_PROFILE in ${shown} stays, so Claude Code uses that profile with Amazon Bedrock; ` +
+            "delete it there to use the default credential chain.",
+        );
+      }
     } else if (
       previous?.provider === "amazon-bedrock" &&
       env.CLAUDE_CODE_USE_BEDROCK === "1" &&
@@ -1405,6 +1411,24 @@ export function applyClaudeLocalProvider(
       }); fix that file, then run ${invocationForHarness(harnessDir)} config providers again.`,
     ];
   }
+}
+
+// Where this project's Bedrock answer is: an earlier release left it in the
+// shared settings.json, and only the next providers answer moves it.
+function claudeBedrockAnswerFile(projectDir: string, harnessDir: string, record: ProvidersRecord): string {
+  const envIn = (file: string): Record<string, unknown> => {
+    try {
+      const value = readJsonFile(join(projectDir, harnessDir, file));
+      return isRecord(value) && isRecord(value.env) ? value.env : {};
+    } catch {
+      return {};
+    }
+  };
+  const shared = envIn("settings.json");
+  return envIn("settings.local.json").CLAUDE_CODE_USE_BEDROCK === undefined &&
+      shared.CLAUDE_CODE_USE_BEDROCK === "1" && shared.AWS_REGION === record.region
+    ? "settings.json"
+    : "settings.local.json";
 }
 
 type ClaudeEnvLayer = {
@@ -1964,7 +1988,7 @@ export function providerFiles(
   if (harness === "claude") {
     files.push({
       setting: "AWS region and profile",
-      file: join(harnessDir, "settings.local.json"),
+      file: join(harnessDir, claudeBedrockAnswerFile(projectDir, harnessDir, record)),
     });
     if (existsSync(join(projectDir, ".mcp.json"))) {
       files.push({
