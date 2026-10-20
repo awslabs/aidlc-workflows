@@ -258,13 +258,13 @@ export function readJsonFile(path: string): unknown {
   return JSON.parse(withoutBom(readFileSync(path, "utf-8")));
 }
 
-// The JSON text AI-DLC writes for a file, with the byte order mark the file
-// had (`like` is its text before the write).
 /** The line ending a text uses: CRLF where Git checked it out that way (#2057). */
 export function newlineOf(text: string): "\r\n" | "\n" {
   return text.includes("\r\n") ? "\r\n" : "\n";
 }
 
+// The JSON text AI-DLC writes for a file, with the byte order mark the file
+// had (`like` is its text before the write).
 export function jsonFileText(value: unknown, like = ""): string {
   return `${like.startsWith(BOM) ? BOM : ""}${JSON.stringify(value, null, 2)}\n`;
 }
@@ -734,8 +734,13 @@ export function mergeBlock(
   const block = `${begin}${newline}${body}${newline}${end}`;
   // Written in the file's own line endings, the part keeps the hash recorded
   // for it when that is the only difference (a CRLF checkout of a part
-  // recorded from LF), so a refresh never rewrites the record for it.
-  const blockHash = sha256Matching(block, recorded);
+  // recorded from LF), so a refresh never rewrites the record for it. The
+  // records are matched in order, this harness's own first, so another
+  // harness's record of the same part in other line endings never stands in.
+  const firstMatching = (text: string, known: readonly (string | undefined)[]): string =>
+    known.find((hash): hash is string => hash !== undefined && sha256Matching(text, [hash]) === hash) ??
+      sha256Bytes(text);
+  const blockHash = firstMatching(block, recorded);
   if (beginAt >= 0) {
     if (endAt < beginAt) return { error: "managed end marker precedes its begin marker" };
     const currentBlock = current.slice(beginAt, endAt + end.length);
@@ -747,7 +752,7 @@ export function mergeBlock(
       }`,
       // A part a space switch pointed at another space is still the one written.
       currentHash: [currentBlock, withSpace(currentBlock, "default")]
-        .map((text) => sha256Matching(text, [blockHash, ...recorded]))
+        .map((text) => firstMatching(text, [blockHash, ...recorded]))
         .find((hash) => hash === blockHash || recorded.includes(hash)) ??
         sha256Matching(currentBlock, [blockHash, ...recorded]),
       nextHash: blockHash,

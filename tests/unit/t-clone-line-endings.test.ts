@@ -19,7 +19,7 @@ import { cpSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { sha256Bytes, sha256Matching } from "../../core/tools/aidlc-distribution.ts";
+import { mergeBlock, sha256Bytes, sha256Matching } from "../../core/tools/aidlc-distribution.ts";
 import {
   frameworkFilesDoctorCheck,
   instructionFileDoctorCheck,
@@ -212,6 +212,49 @@ describe("#2057 line endings Git rewrites are not the person's change", () => {
     expect(applied.status, applied.stdout + applied.stderr).toBe(0);
     expect(readFileSync(agents, "utf-8")).toBe(own);
     expect((JSON.parse(readFileSync(manifestPath, "utf-8")) as Manifest).rootContributions)
+      .toEqual(committed.rootContributions);
+    expect(porcelain(clone)).toEqual([]);
+  });
+
+  test("a part's own record wins over another harness's record of it in other line endings", () => {
+    const lf = "# BEGIN AI-DLC:gitignore\nfoo/\n# END AI-DLC:gitignore";
+    const crlf = lf.replaceAll("\n", "\r\n");
+    const [lfHash, crlfHash] = [sha256Bytes(lf), sha256Bytes(crlf)];
+    const inCrlf = mergeBlock(".gitignore", `${crlf}\r\n`, "foo/\n", "gitignore", [], [lfHash, crlfHash]);
+    expect([inCrlf.currentHash, inCrlf.nextHash]).toEqual([lfHash, lfHash]);
+    const inLf = mergeBlock(".gitignore", `${lf}\n`, "foo/\n", "gitignore", [], [crlfHash, lfHash]);
+    expect([inLf.currentHash, inLf.nextHash]).toEqual([crlfHash, crlfHash]);
+  });
+
+  // Each harness keeps its own record of a part the harnesses share, whatever
+  // line endings another harness recorded it in (a Windows teammate's refresh
+  // from before this fix left Claude Code's record in the CRLF form).
+  test("codex beside Claude Code: a CRLF clone keeps Codex's record of the shared .gitignore part, and git clean", () => {
+    const root = temp("aidlc-t2057-two-");
+    const project = join(root, "proj");
+    const clone = join(root, "clone");
+    git(root, ["init", "-q", project]);
+    for (const harness of ["claude", "codex", "claude"]) {
+      cpSync(join(REPO_ROOT, "dist", harness), project, { recursive: true });
+      const configured = copyConfig(project, harness, ["--yes"]);
+      expect(configured.status, configured.stdout + configured.stderr).toBe(0);
+    }
+    const block = /# BEGIN AI-DLC:gitignore\n[\s\S]*?# END AI-DLC:gitignore/.exec(readFileSync(join(project, ".gitignore"), "utf-8"))?.[0] ?? "";
+    const claudeManifest = join(project, ".claude", "tools", "data", "aidlc-manifest.json");
+    const claude = JSON.parse(readFileSync(claudeManifest, "utf-8")) as Manifest;
+    expect(claude.rootContributions[".gitignore"].hash).toBe(sha256Bytes(block));
+    claude.rootContributions[".gitignore"].hash = sha256Bytes(block.replaceAll("\n", "\r\n"));
+    writeFileSync(claudeManifest, `${JSON.stringify(claude, null, 2)}\n`);
+    git(project, ["add", "-A"]);
+    git(project, ["commit", "-q", "-m", "two harnesses"]);
+    git(root, ["clone", "-q", project, clone], true);
+    git(clone, ["config", "core.autocrlf", "true"]);
+    const codexManifest = join(clone, ".codex", "tools", "data", "aidlc-manifest.json");
+    const committed = JSON.parse(readFileSync(codexManifest, "utf-8")) as Manifest;
+    expect(committed.rootContributions[".gitignore"].hash).toBe(sha256Bytes(block));
+    const applied = copyConfig(clone, "codex", ["--yes"]);
+    expect(applied.status, applied.stdout + applied.stderr).toBe(0);
+    expect((JSON.parse(readFileSync(codexManifest, "utf-8")) as Manifest).rootContributions)
       .toEqual(committed.rootContributions);
     expect(porcelain(clone)).toEqual([]);
   });
