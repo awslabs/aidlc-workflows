@@ -328,6 +328,7 @@ import {
   listSpaces,
   finishedWork,
   workStanding,
+  readUnitScopeStamp,
   workToPickUp,
   readProjectDescriptionAuthority,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
@@ -574,6 +575,7 @@ import {
   cachedUnitClaimOverview,
   localUnitClaimOverviewForIntent,
   type UnitClaimOverview,
+  type UnitClaimView,
 } from "./aidlc-unit.ts";
 import {
   type ApprovedComposerPlan,
@@ -5076,6 +5078,26 @@ function projectTypeIsWholeRequest(flags: ParsedFlags): boolean {
   );
 }
 
+// An unscoped checkout of a team-owned workflow while Units are claimed or
+// await their merge: the dispatcher board answers there, and no stage runs, so
+// a park in its state stays as it is. Unparking would only rewrite the state
+// and audit of a checkout where nothing runs (and leave them uncommitted); the
+// park is the person's, for when the walk comes back to this checkout.
+function teamFanoutHoldsCheckout(pd: string, stateContent: string): boolean {
+  if (!isTeamUnitOwnership(stateContent) || !existsSync(join(pd, ".git"))) return false;
+  try {
+    return unitMergeTransactions(pd).some(mergeTransactionOpen) ||
+      cachedUnitClaimOverview(pd, { writeCache: false }).claimed.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+// A merge transaction the board lists as awaiting its merge.
+function mergeTransactionOpen(transaction: { status: string }): boolean {
+  return transaction.status !== "complete";
+}
+
 function noticeDirective(message: string): NoticeDirective {
   return { kind: "notice", message };
 }
@@ -5118,6 +5140,8 @@ export interface TeamConstructionBoard {
     owner: string;
     generation: number;
     observedActivity: string;
+    /** The worktree on this machine the claim is worked in, when one is. */
+    checkout?: { path: string; branch: string | null };
   }>;
   awaitingMerge: Array<{
     unit: string;
@@ -5186,6 +5210,7 @@ export function buildTeamConstructionBoard(
     { readOnly: options.readOnly === true },
   );
   return assembleTeamConstructionBoard(
+    projectDir,
     model.section,
     overview,
     unitMergeTransactions(projectDir),
@@ -5281,17 +5306,75 @@ export function buildTeamConstructionBoardForIntent(
       transactions,
     );
   return assembleTeamConstructionBoard(
+    projectDir,
     grid,
     overview,
     transactions,
   );
 }
 
+// Where each claimed Unit is worked on this machine: a git worktree of this
+// repository whose Unit scope holds that very claim (its nonce), with the
+// branch it is on. A claim worked in another clone or on another machine has
+// no entry. Read-only: git's worktree list and each worktree's scope file.
+function localClaimCheckouts(
+  projectDir: string,
+  claims: UnitClaimView[],
+): Map<string, { path: string; branch: string | null }> {
+  const found = new Map<string, { path: string; branch: string | null }>();
+  if (!claims.some((claim) => claim.status === "claimed")) return found;
+  const listed = Bun.spawnSync({
+    cmd: ["git", "worktree", "list", "--porcelain"],
+    cwd: projectDir,
+    stdout: "pipe",
+    stderr: "ignore",
+  });
+  if (listed.exitCode !== 0) return found;
+  for (const block of new TextDecoder().decode(listed.stdout).split(/\r?\n\r?\n/)) {
+    const path = /^worktree (.+)$/m.exec(block)?.[1];
+    if (!path) continue;
+    const stamp = readUnitScopeStamp(path);
+    const claim = stamp && claims.find((entry) =>
+      entry.status === "claimed" && entry.unit === stamp.unit && entry.nonce === stamp.nonce
+    );
+    if (!claim) continue;
+    found.set(claim.unit, {
+      path,
+      branch: /^branch refs\/heads\/(.+)$/m.exec(block)?.[1] ?? null,
+    });
+  }
+  return found;
+}
+
+// Main's Unit Progress shows merged work only, so a Unit claimed elsewhere
+// reads as untouched there. Its row says it is in progress in its claim
+// (owner, attempt); the state file itself is not changed.
+function markClaimedUnitRows(
+  grid: string,
+  claims: TeamConstructionBoard["claims"],
+): string {
+  const claimed = new Map(
+    claims.filter((claim) => claim.status === "claimed").map((claim) => [claim.unit, claim]),
+  );
+  if (claimed.size === 0) return grid;
+  return grid.split("\n").map((line) => {
+    const cells = line.split("|");
+    if (cells.length < 4 || cells[0] !== "") return line;
+    const claim = claimed.get(cells[1].trim());
+    if (!claim) return line;
+    cells[1] = ` ${claim.unit} (in progress: claimed by ${claim.owner}, attempt ${claim.generation}) `;
+    cells[2] = ` ${claim.owner} `;
+    return cells.join("|");
+  }).join("\n");
+}
+
 function assembleTeamConstructionBoard(
+  projectDir: string,
   grid: string,
   overview: UnitClaimOverview,
   transactions: ReturnType<typeof unitMergeTransactions>,
 ): TeamConstructionBoard {
+  const checkouts = localClaimCheckouts(projectDir, [...overview.claims.values()]);
   const claims = [...overview.claims.values()]
     .sort((a, b) => compareBoardKeys(a.unit, b.unit))
     .map((claim) => ({
@@ -5300,9 +5383,10 @@ function assembleTeamConstructionBoard(
       owner: claim.owner,
       generation: claim.generation,
       observedActivity: observedClaimActivity(claim),
+      ...(checkouts.has(claim.unit) ? { checkout: checkouts.get(claim.unit)! } : {}),
     }));
   const awaitingMerge = transactions
-    .filter((transaction) => transaction.status !== "complete")
+    .filter(mergeTransactionOpen)
     .sort((a, b) => compareBoardKeys(a.unit, b.unit))
     .map((transaction) => ({
       unit: transaction.unit,
@@ -5320,7 +5404,7 @@ function assembleTeamConstructionBoard(
     }))
     .sort((a, b) => compareBoardKeys(a.unit, b.unit));
   return {
-    grid,
+    grid: markClaimedUnitRows(grid, claims),
     claims,
     awaitingMerge,
     claimable,
@@ -5402,9 +5486,26 @@ export function renderTeamConstructionBoard(
       );
     }
   }
+  const claimedUnits = board.claims.filter((claim) => claim.status === "claimed");
   if (nextActions.length === 0) {
     nextActions.push(
-      "- No dispatcher action is pending; main may resume the normal Construction walk.",
+      claimedUnits.length === 0
+        ? "- No dispatcher action is pending; main may resume the normal Construction walk."
+        : mode === "dispatcher"
+        ? "- Nothing runs from this checkout: every Unit not yet merged is claimed or waits on one. " +
+          "Each claimed Unit is worked in its own checkout:"
+        : "- No dispatcher action is pending. Each claimed Unit is worked in its own checkout:",
+    );
+  } else if (claimedUnits.length > 0) {
+    nextActions.push("- Each claimed Unit is worked in its own checkout:");
+  }
+  for (const claim of claimedUnits) {
+    nextActions.push(
+      `  - \`${claim.unit}\` is claimed by ${claim.owner} (attempt ${claim.generation}): ${
+        claim.checkout
+          ? `worktree \`${claim.checkout.path}\`${claim.checkout.branch ? ` on branch \`${claim.checkout.branch}\`` : ""}.`
+          : "in a checkout not on this machine, or a separate clone."
+      }`,
     );
   }
   return [
@@ -11194,7 +11295,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     !flags.phase &&
     !parkedWorkChange &&
     !flags.newIntent &&
-    (getField(stateContent, "Parked") ?? "").trim().length > 0
+    (getField(stateContent, "Parked") ?? "").trim().length > 0 &&
+    !teamFanoutHoldsCheckout(pd, stateContent)
   ) {
     const parkedAt = (getField(stateContent, "Parked At Stage") ?? "").trim();
     const currentSlug = (getField(stateContent, "Current Stage") ?? "").trim();
@@ -11235,7 +11337,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     resuming &&
     !flags.stage &&
     !flags.phase &&
-    (getField(stateContent, "Parked") ?? "").trim().length > 0
+    (getField(stateContent, "Parked") ?? "").trim().length > 0 &&
+    !teamFanoutHoldsCheckout(pd, stateContent)
   ) {
     emit(printDirective(
       `This workflow is parked. Run \`${aidlcToolInvocation("state")} unpark\` ` +
