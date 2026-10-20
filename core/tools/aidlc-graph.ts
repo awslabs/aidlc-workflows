@@ -3605,9 +3605,8 @@ export function computeArs(
   };
 }
 
-// The composer's scores for the plan a front compose dispatch is working out,
-// kept so the plan's creation can say on its first audit entry why a stage is
-// in or out (#2575). The dispatch opens the record with its request id; `ars`
+// The composer's scores for the plan a front compose dispatch is working out
+// (#2575). The dispatch opens the record with its request id; `ars`
 // fills it with the scores it screened; creation of the plan the composer
 // validated writes them on WORKFLOW_STARTED and removes the record. It sits
 // beside the proposal, in the space's gitignored engine dir. Every step is

@@ -174,8 +174,7 @@ and copy its numbers verbatim. The tool owns the weighted composite, the band
 labels, the per-stage EV screen against the cost priors, the nearest stock
 scopes by grid diff count, and the two pre-rendered gate tables. `--method`
 is the structural evidence source Step 3 selects; the tool keeps the five
-scores and the method so the plan's creation records why each stage is in or
-out. Pass
+scores and the method. Pass
 `--project-type` with the classification Stage 0.2 (Workspace Detection)
 recorded: a stage whose compiled `condition:` restricts it to one kind of
 project (today Reverse Engineering, brownfield-only) is then screened out on

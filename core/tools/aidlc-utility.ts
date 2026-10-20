@@ -8372,7 +8372,6 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
             "Stages added": planChanges.add.join(", ") || "none",
           }
         : {}),
-      // Why each stage is in or out, for a plan the composer tailored.
       ...takeComposerScores(projectDir, answers, plannedStages.stages),
     }, created.dirName, created.space);
 
