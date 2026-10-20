@@ -766,7 +766,9 @@ export async function run(
         return (verb === "reclassify" && !personSpoke()) ||
           (verb === "document-input" && hasFlag(rest, "--onboard"));
       // Switching the active intent or space redirects the work that follows.
-      case "intent": return !["", "list", "create", "unarchive"].includes(verb) || (verb === "create" && hasFlag(rest, "--skip"));
+      // Recording the checkout the code is in only widens what the review
+      // covers, a routine step the stage names; taking one out narrows it.
+      case "intent": return !["", "list", "create", "unarchive", "add-checkout"].includes(verb) || (verb === "create" && hasFlag(rest, "--skip"));
       case "space": return !["", "list", "create"].includes(verb);
       // Onboarding and sync run the extractor the project's harness names.
       case "knowledge": return verb === "onboard" || verb === "sync";

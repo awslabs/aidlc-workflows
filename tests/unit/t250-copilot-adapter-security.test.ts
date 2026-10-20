@@ -1749,6 +1749,9 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         "aidlc engine worktree info --slug bolt-a",
         "aidlc unit merge-status U01",
         "aidlc engine intent unarchive auth-service",
+        // recording the checkout the code is in only widens what the review covers
+        "aidlc engine intent add-checkout .claude/worktrees/app",
+        "bun .aidlc/tools/aidlc.ts engine intent add-checkout .claude/worktrees/app",
         "aidlc engine bolt complete --name b1 --batch 1 --merge --slug bolt-a",
         "aidlc engine swarm prepare --batch 1 --units a,b",
         "aidlc engine plugin list",
@@ -1786,6 +1789,8 @@ describe("t250 Copilot adapter security (fail-open + path confinement)", () => {
         "aidlc engine orchestrate next --add security-review",
         "aidlc engine orchestrate next --add=security-review",
         "aidlc engine orchestrate next config set review none",
+        // taking a recorded checkout out narrows what the review covers
+        "aidlc engine intent remove-checkout .claude/worktrees/app",
         // switching the active intent or space redirects the work that follows
         "aidlc engine intent switch billing",
         "aidlc engine intent billing",
