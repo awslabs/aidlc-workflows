@@ -108,11 +108,12 @@ export const PLATFORM_ONLY: Record<string, readonly NodeJS.Platform[]> = {
   "tests/e2e/t-tui-windows-user-settings-isolation.serial.test.ts": ["win32"],
   // The golden journeys run nightly on Linux and Windows; macOS shares Linux's
   // paths. A live file keeps its retry only under 25 minutes (tests/lib/file-retry.ts),
-  // so a journey that runs longer than that on Windows stays on Linux.
+  // so a journey that runs longer than that on Windows stays on Linux: Copilot's
+  // ran past 40 there.
   "tests/integration/t-journey-golden-bugfix.sdk.test.ts": ["linux", "win32"],
   "tests/integration/t-journey-golden-poc.sdk.test.ts": ["linux", "win32"],
   "tests/e2e/t-exec-codex-journey-golden-bugfix.serial.test.ts": ["linux", "win32"],
-  "tests/e2e/t-exec-copilot-journey-golden-bugfix.serial.test.ts": ["linux", "win32"],
+  "tests/e2e/t-exec-copilot-journey-golden-bugfix.serial.test.ts": ["linux"],
   "tests/e2e/t-run-opencode-journey-golden-change.serial.test.ts": ["linux", "win32"],
   // The answers corpus opens on the family's gate in a live job too: one item
   // per question a night, by a date rotation, on Linux (its own shard).

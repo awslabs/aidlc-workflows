@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { codexToolResults, copilotToolResults, copilotTurnCommand, opencodeRunArgs, opencodeToolResults } from "../harness/exec-drive.ts";
+import { codexToolResults, copilotToolResults, copilotTurnCommand, opencodeRunCommand, opencodeToolResults } from "../harness/exec-drive.ts";
 import { cleanupTestProject, createTestProject, seededAuditShard, seededStateFile } from "../harness/fixtures.ts";
 import { type GoldenJourney, type GoldenRun, goldenPathProblems, GoldenPerson } from "../harness/golden-journey.ts";
 import type { CapturedToolResult } from "../harness/sdk-drive.ts";
@@ -252,17 +252,20 @@ describe("one change request at a stage's approval", () => {
 
 describe("an opencode run turn", () => {
   test("a line after the skill runs the shipped command with its words, each word an argument", () => {
-    const argv = opencodeRunArgs("/aidlc fix the greeter: it says hello");
+    const { argv, input } = opencodeRunCommand("/aidlc fix the greeter: it says hello");
+    expect(input).toBeUndefined();
     expect(argv.slice(0, 3)).toEqual(["run", "--command", "aidlc"]);
     expect(argv.slice(argv.indexOf("--"))).toEqual(["--", "fix", "the", "greeter:", "it", "says", "hello"]);
     expect(argv.slice(argv.indexOf("--format"), argv.indexOf("--format") + 2)).toEqual(["--format", "json"]);
   });
 
-  test("any other line continues the session as typed", () => {
-    const argv = opencodeRunArgs('Go ahead with the "bugfix" plan', "ses_1");
+  test("any other line continues the session as typed, on stdin, never as an argument a Windows launcher refuses", () => {
+    const { argv, input } = opencodeRunCommand('Go ahead with the "bugfix" plan', "ses_1");
     expect(argv.slice(0, 3)).toEqual(["run", "-s", "ses_1"]);
     expect(argv).not.toContain("--command");
-    expect(argv.slice(argv.indexOf("--") + 1).join(" ")).toBe('Go ahead with the "bugfix" plan');
+    expect(argv).not.toContain("--");
+    expect(argv.some((arg) => arg.includes('"'))).toBe(false);
+    expect(input).toBe('Go ahead with the "bugfix" plan');
   });
 
   test("its JSON events give the session and each tool call with what it printed", () => {

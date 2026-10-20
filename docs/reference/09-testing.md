@@ -1856,8 +1856,9 @@ The declared coverage is:
   (`tests/e2e/t-exec-codex-journey-golden-bugfix.serial.test.ts`, Linux and
   Windows) fixes the same greeter from the first line to Code Generation approved,
   with the plan question left for the day and approved in a new session; Copilot's
-  (`tests/e2e/t-exec-copilot-journey-golden-bugfix.serial.test.ts`, Linux and
-  Windows) does the same on the copy-channel install of its release journey.
+  (`tests/e2e/t-exec-copilot-journey-golden-bugfix.serial.test.ts`, Linux only:
+  on Windows it runs past the 25 minutes a retry allows) does the same on the
+  copy-channel install of its release journey.
   opencode's (`tests/e2e/t-run-opencode-journey-golden-change.serial.test.ts`,
   Linux and Windows) takes the
   same request to Reverse Engineering, where the person asks for one change in

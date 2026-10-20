@@ -424,18 +424,23 @@ export function setupOpencodeProject(): OpencodeProject {
 }
 
 /**
- * The argv of one `opencode run` turn for a line the person typed: `/aidlc ...`
- * runs the shipped command with the words after it, any other line goes to the
- * session as it is. Each word is its own argument: `opencode run` quotes an
- * argument that holds a space, so a whole line would arrive in quotation marks.
+ * One `opencode run` turn for a line the person typed: `/aidlc ...` runs the
+ * shipped command with the words after it, each word its own argument
+ * (`opencode run` quotes an argument that holds a space, so a whole line would
+ * arrive in quotation marks). Any other line goes to the session as it is, on
+ * stdin, which `opencode run` reads as the message: on Windows the npm launcher
+ * is a .cmd file, and Bun refuses an argument with a quotation mark for one.
  */
-export function opencodeRunArgs(line: string, sessionId?: string): string[] {
+export function opencodeRunCommand(line: string, sessionId?: string): { argv: string[]; input?: string } {
   const command = /^\/aidlc(?:\s|$)/.test(line);
-  const words = (command ? line.replace(/^\/aidlc\s*/, "") : line).split(/\s+/).filter(Boolean);
-  return [
-    "run", ...(sessionId ? ["-s", sessionId] : []), ...(command ? ["--command", "aidlc"] : []),
-    "-m", OPENCODE_MODEL, "--format", "json", ...(words.length ? ["--", ...words] : []),
-  ];
+  const words = command ? line.replace(/^\/aidlc\s*/, "").split(/\s+/).filter(Boolean) : [];
+  return {
+    argv: [
+      "run", ...(sessionId ? ["-s", sessionId] : []), ...(command ? ["--command", "aidlc"] : []),
+      "-m", OPENCODE_MODEL, "--format", "json", ...(words.length ? ["--", ...words] : []),
+    ],
+    ...(command ? {} : { input: line }),
+  };
 }
 
 /** The session and tool calls of one `opencode run --format json` turn, in the shape the SDK drive captures tool calls. */
@@ -463,10 +468,11 @@ export function opencodeToolResults(stdout: string): { sessionId?: string; resul
 
 /** One person turn as `opencode run --format json`: a new session, or `sessionId` continued. */
 export function opencodeTurn(proj: string, line: string, options: { sessionId?: string; timeoutMs?: number } = {}): ExecResult & { stdout: string } {
-  const result = spawnSync(OPENCODE_BIN, opencodeRunArgs(line, options.sessionId), {
+  const { argv, input } = opencodeRunCommand(line, options.sessionId);
+  const result = spawnSync(OPENCODE_BIN, argv, {
     cwd: proj,
     encoding: "utf-8",
-    stdio: ["ignore", "pipe", "pipe"],
+    ...(input === undefined ? { stdio: ["ignore", "pipe", "pipe"] as const } : { input, stdio: ["pipe", "pipe", "pipe"] as const }),
     env: { ...process.env, PWD: proj },
     timeout: remainingOperationTimeoutMs(options.timeoutMs ?? TEST_TIMEOUT_MS, { phase: "opencode turn" }),
     maxBuffer: 64 * 1024 * 1024,
