@@ -96,9 +96,10 @@ notes, or with no inputs to list available previews. The prepared tag contains
 one child commit with version metadata and pinned publication controls;
 `release.yml` validates that relationship and builds the stable artifacts.
 It runs packaging and native/installer/lifecycle/upgrade checks without repeating
-CI or Full Suite. Preview results and failures remain visible in the release
-notes. After publication, a metadata-only branch and PR link record the version
-on current `main`. See [the release steps](../../DEVELOPERS.md#4-promote-a-preview-to-production).
+CI or Full Suite. Preview results and failures remain on the preview's release
+page and in the promotion record; the stable page links that preview. After
+publication, a metadata-only branch and PR link record the version on current
+`main`. See [the release steps](../../DEVELOPERS.md#4-promote-a-preview-to-production).
 The isolated `.github/workflows/preview-release.yml` workflow schedules or
 manually dispatches preview builds from `main`, gates them through contract
 checks and release-asset validation, runs native obligations and the bounded live suite (deterministic tiers remain in PR/merge CI),

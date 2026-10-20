@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   type Command, listPreviews, metadataFiles, preparePromotion, PROMOTION_FILE,
-  promotionNotes, RELEASE_CONTROLS, resolvePreview, syncMetadata, validateNotes, verifyPromotion,
+  promotionNotes, promotionSummary, RELEASE_CONTROLS, resolvePreview, syncMetadata, validateNotes, verifyPromotion,
 } from "../../scripts/release-promotion.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
@@ -109,13 +109,22 @@ describe("release promotion", () => {
     expect(f.git("git", ["rev-parse", "HEAD"]).trim()).toBe(f.controls);
   });
 
-  test("does not manufacture passing evidence from a preview with reported failures", () => {
+  // The stable page links the preview, whose page carries its test warnings
+  // and failure report; the promotion record keeps the warnings, and the
+  // person promoting still sees them in the run summary.
+  test("the stable page links the preview and leaves its test warnings on the preview page", () => {
     const f = fixture();
     const { promotion } = f.prepare();
     expect(promotion.warnings).toEqual([f.release.body]);
-    expect(promotionNotes(promotion)).toContain("Full Suite failed");
-    expect(promotionNotes(promotion)).toContain("were not rerun or changed");
-    expect(promotionNotes(promotion)).toContain(f.source);
+    const notes = promotionNotes(promotion);
+    expect(notes).not.toContain("Full Suite failed");
+    expect(notes).not.toContain("Warning");
+    expect(notes).not.toContain("were not rerun or changed");
+    expect(notes).toContain(`Promoted from [${PREVIEW}](https://github.com/${REPOSITORY}/releases/tag/${PREVIEW}), source \`${f.source}\`.`);
+    expect(notes.endsWith(`source \`${f.source}\`.\n`)).toBe(true);
+    const summary = promotionSummary(promotion);
+    expect(summary.startsWith(notes)).toBe(true);
+    expect(summary).toContain("Full Suite failed");
   });
 
   test("lists every page, includes source and warnings, and does not call missing warnings approval", () => {

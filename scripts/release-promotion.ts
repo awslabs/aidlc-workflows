@@ -289,10 +289,18 @@ export function publicationStatus(version: string, repository: string, run: Comm
   return published;
 }
 
+// The stable page: the reviewed notes and the preview it was promoted from.
+// The preview's test warnings and its failure report stay on the preview's
+// page, which the link opens, and in the promotion record.
 export function promotionNotes(p: Promotion): string {
-  return `${p.notes}\n\nPromoted from [${p.preview}](https://github.com/${p.repository}/releases/tag/${p.preview}), source \`${p.source}\`.\n\n` +
-    "The preview's recorded test results were not rerun or changed by promotion.\n" +
-    (p.warnings.length ? `\n${p.warnings.join("\n")}\n` : "");
+  return `${p.notes}\n\nPromoted from [${p.preview}](https://github.com/${p.repository}/releases/tag/${p.preview}), source \`${p.source}\`.\n`;
+}
+
+// What the promotion run shows the person promoting: the stable page as it
+// will read, then the preview's warnings, said once.
+export function promotionSummary(p: Promotion): string {
+  return promotionNotes(p) +
+    (p.warnings.length ? `\nOn the preview's page, not the stable page:\n\n${p.warnings.join("\n")}\n` : "");
 }
 
 export function syncMetadata(tag: string, repository: string, run: Command = command): string | null {
@@ -353,7 +361,7 @@ function main(args: string[]): void {
     });
     const tag = `v${result.promotion.version}`;
     if (!result.existing) command("git", ["push", "origin", `${result.sha}:refs/tags/${tag}`]);
-    report(promotionNotes(result.promotion));
+    report(promotionSummary(result.promotion));
     if (result.published) report(`${tag} is already published. Run the sync command if its main metadata branch is missing.`);
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\npublished=${result.published}\n`);
   } else if (operation === "verify" || operation === "notes") {
@@ -365,7 +373,7 @@ function main(args: string[]): void {
       const sha = command("git", ["rev-parse", `${tag}^{commit}`]).trim();
       if (process.env.GITHUB_SHA && sha !== process.env.GITHUB_SHA) throw new Error("run is not on the selected release commit");
       if (publicationStatus(p.version, repository)) throw new Error(`${tag} is already published; use sync for main metadata`);
-      report(promotionNotes(p));
+      report(promotionSummary(p));
       if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\nsha=${sha}\ncontrols=${p.controls}\n`);
     }
   } else if (operation === "sync") {
