@@ -23,7 +23,8 @@ import {
   TESTING_POSTURE_SUBCOMMANDS,
   writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
-import { LAUNCHER_GLOBAL_FLAGS } from "../tools/aidlc-command.ts";
+import { LAUNCHER_GLOBAL_FLAGS, TRUSTED_ROUTE_NAMESPACE } from "../tools/aidlc-command.ts";
+import { resolveAction } from "../tools/aidlc.ts";
 import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 
 export const DELEGATED_STATE_MUTATIONS = new Set([
@@ -167,6 +168,17 @@ export function delegateAdmittedVerbs(agent: string): Readonly<Record<string, re
   return Object.fromEntries(
     files.map((file) => [file, [...new Set([...(DELEGATE_ADMITTED_VERBS[file] ?? []), ...(own[file] ?? [])])]]),
   );
+}
+
+// Whether the dispatcher words after `engine` route to a command in `admitted`
+// (delegateAdmittedVerbs): Kiro IDE builds each persona's shell deny from it,
+// and the Cursor adapter lets a delegate run that command.
+export function admittedEngineRoute(
+  admitted: Readonly<Record<string, readonly string[]>>,
+  words: readonly string[],
+): boolean {
+  const action = resolveAction([TRUSTED_ROUTE_NAMESPACE, ...words]);
+  return action.type === "delegate" && (admitted[action.tool] ?? []).includes(action.args[0] ?? "");
 }
 
 // Bare, these print the current selection instead of changing it.
