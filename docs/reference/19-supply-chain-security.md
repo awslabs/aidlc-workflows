@@ -9,8 +9,9 @@ needed. Only the preview's Full Suite uses the live model environment.
 ## Release trigger
 
 Run **Promote preview** on `main`. An empty dispatch lists all published previews
-with their source, manifest compatibility and warnings. A promotion supplies `preview`, `version` and
-reviewed release `notes`; [DEVELOPERS.md](../../DEVELOPERS.md#4-promote-a-preview-to-production)
+with their source, manifest compatibility and warnings. A promotion supplies `preview`, `version`,
+reviewed release `notes` and, optionally, the `contributors` list made and
+scanned on the maintainer's machine; [DEVELOPERS.md](../../DEVELOPERS.md#4-promote-a-preview-to-production)
 has the commands. Preview publication may have succeeded despite test failures;
 selection is the maintainer's decision, with those failures still recorded.
 
@@ -28,7 +29,8 @@ the maintainer must select a compatible preview. It prepares one child commit wi
   manifest verifier from the
   immutable main snapshot checked out during preparation;
 - `.github/release-promotion.json`, binding the preview, source, controls,
-  version, notes, date and recorded warnings.
+  version, notes, date, recorded warnings, the previous stable version and
+  the contributor list.
 
 The workflow tree is copied in full, including deletions, so its files match
 reviewed main content and do not require an additional workflow-writing token.
@@ -45,7 +47,8 @@ explicitly on that tag, because a `GITHUB_TOKEN` push does not trigger another
 push workflow. The tagged workflow checks the event ref, checkout and tag SHA.
 The source identity seen by provenance remains the actual stable tag and commit.
 Preparation serializes independently from stable builds. Retries reuse only a
-matching verified reservation; another preview or notes cannot claim its tag.
+matching verified reservation; another preview, notes or contributor list
+cannot claim its tag.
 
 Stable promotion does not repeat CI or Full Suite. Previous results remain
 associated with the selected preview and are linked from the stable notes;
@@ -257,14 +260,18 @@ gh release create "$RELEASE_TAG" build/release/* \
   --notes-file "$RUNNER_TEMP/release-notes.md"
 ```
 
-The body contains the reviewed notes from the verified promotion record, which
-also supplies this version's `CHANGELOG.md` entry, followed by the selected
-preview/source reference, which links the preview's page. The preview's
+The body is the stable page rendered from the verified promotion record: the
+reviewed entry, which also supplies this version's `CHANGELOG.md` entry, laid
+out under Summary, Upgrade, Fresh install and Highlights; the contributor
+sections when the record has a contributor list; the selected preview/source
+reference, which links the preview's page; and the Full Changelog link. The preview's
 recorded validation warnings and failure report stay on that page, not on the
 stable page; the promotion record keeps the warning lines, and the promotion
 run's summary shows them. The helper
 rechecks the promotion before writing the notes. GitHub's own generated notes
-are not used: their "What's Changed" list names every contributing account by handle.
+are not used: their "What's Changed" list names every contributing account by
+handle with no private-names scan. The contributor list is made on the
+maintainer's machine, where that scan runs, and CI only renders it.
 
 The job then compares the local asset names with the asset names returned by
 the GitHub Release API. A missing or extra upload fails the workflow.
@@ -280,7 +287,7 @@ These jobs use `GITHUB_TOKEN`; final publication remains in the protected
 
 Use [Promote a preview to production](../../DEVELOPERS.md#4-promote-a-preview-to-production).
 Select the published preview's tag, choose the final stable version and supply
-its release notes. Follow the dispatched stable build, then open the generated
+its release notes and the contributor list made on your machine. Follow the dispatched stable build, then open the generated
 metadata-only PR to record the version on `main`.
 
 If the build fails before publication, rerun the failed jobs or dispatch Release

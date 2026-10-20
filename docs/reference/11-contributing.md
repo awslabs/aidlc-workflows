@@ -91,8 +91,8 @@ uploaded asset inventory. Never rebuild, repackage, or substitute the
 candidate.
 
 Stable releases promote the source commit of a selected published preview.
-Run `promote-release.yml` on `main` with a preview tag, stable version and release
-notes, or with no inputs to list available previews. The prepared tag contains
+Run `promote-release.yml` on `main` with a preview tag, stable version, release
+notes and, optionally, the contributor list, or with no inputs to list available previews. The prepared tag contains
 one child commit with version metadata and pinned publication controls;
 `release.yml` validates that relationship and builds the stable artifacts.
 It runs packaging and native/installer/lifecycle/upgrade checks without repeating

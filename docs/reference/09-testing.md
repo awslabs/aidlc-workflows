@@ -189,7 +189,9 @@ Distribution coverage is split by contract:
 - `t-ci-full-suite-evidence.test.ts` covers the optional Full Suite evidence
   inspector and exact commit/run matching. `t-release-promotion.test.ts` uses
   real Git histories to cover preview selection, exact source preservation,
-  metadata, control snapshots, retries and main metadata synchronization.
+  metadata, control snapshots, retries, the stable page rendered from the
+  entry (the 2.11.1 page is the golden), the scanned contributor list and main
+  metadata synchronization.
 
 The test runner regenerates all projections under a process lock before test
 discovery, so a fresh clone has no dependency on pre-existing `dist/` bytes.

@@ -11,7 +11,10 @@ on:
         description: 'Stable version, for example 2.11.1.'
         type: string
       notes:
-        description: 'Release notes: Compatibility line, summary, and bullets. Required when promoting.'
+        description: 'Release notes: Compatibility line, summary, upgrade steps, and grouped bullets. Required when promoting.'
+        type: string
+      contributors:
+        description: 'Contributor list from release-promotion.ts contributors, made on your machine. Leave empty for no contributor sections.'
         type: string
 
 permissions:
@@ -43,9 +46,10 @@ jobs:
           PREVIEW: ${{ inputs.preview }}
           VERSION: ${{ inputs.version }}
           NOTES: ${{ inputs.notes }}
+          CONTRIBUTORS: ${{ inputs.contributors }}
         run: |
           set -euo pipefail
-          if [ -z "$PREVIEW$VERSION$NOTES" ]; then
+          if [ -z "$PREVIEW$VERSION$NOTES${CONTRIBUTORS:-}" ]; then
             bun scripts/release-promotion.ts list --repository "$GITHUB_REPOSITORY"
             exit 0
           fi
@@ -58,10 +62,12 @@ jobs:
             exit 1
           fi
           printf '%s\n' "$NOTES" >"$RUNNER_TEMP/release-notes.md"
+          printf '%s\n' "${CONTRIBUTORS:-}" >"$RUNNER_TEMP/contributors.txt"
           bun scripts/release-promotion.ts prepare \
             --repository "$GITHUB_REPOSITORY" \
             --preview "$PREVIEW" --version "$VERSION" \
-            --controls "$(git rev-parse HEAD)" --notes-file "$RUNNER_TEMP/release-notes.md"
+            --controls "$(git rev-parse HEAD)" --notes-file "$RUNNER_TEMP/release-notes.md" \
+            --contributors-file "$RUNNER_TEMP/contributors.txt"
       # A tag written with GITHUB_TOKEN does not trigger a push workflow.
       # Dispatch explicitly on the prepared tag: provenance must name that
       # commit and tag, not the main commit running this preparation.
