@@ -11598,9 +11598,19 @@ export function recordCopilotHumanSequence(
   });
 }
 
-// The adapter and orchestrator hash JSON.stringify([verb, ...args]) after
-// removing the dispatcher prefix, --project-dir and --aidlc-attempt-id. Compare
-// that identity to the operation's argv, not to shell spelling or jumpRequest.
+// The claim identity of `next --stage <stage>`: the adapter and orchestrator
+// hash JSON.stringify([verb, ...args]) after removing the dispatcher prefix,
+// --project-dir and --aidlc-attempt-id. Null for a stage that is no identifier,
+// which no such claim carries.
+export function nextStageClaimSha256(stage: string): string | null {
+  const operation = { kind: "restart-stage", stage } as const;
+  return isGuardRecoveryOperation(operation)
+    ? contentSha256(JSON.stringify(guardOperationInvocation(operation).args))
+    : null;
+}
+
+// The selected restart's own `next --stage` is matched by its claim identity
+// (nextStageClaimSha256), never by shell spelling or jumpRequest.
 // emitJumpDirective emits this exact {kind,message} print before stage-validity
 // decoration. The adapter retains only its byte-exact resultSha256, so enumerate
 // aidlcToolInvocation("jump")'s source/native representations here. Both command
@@ -11630,7 +11640,7 @@ function copilotGuardRestartPrintHashes(
   if (
     operation?.kind !== "restart-stage" ||
     !guardOperationMatchesRemedy(operation, selected[0].op, marker.stage, marker.unit) ||
-    input.commandSha256 !== contentSha256(JSON.stringify(guardOperationInvocation(operation).args))
+    input.commandSha256 !== nextStageClaimSha256(operation.stage)
   ) return [];
   try {
     const scope = getField(stateContent, "Scope");

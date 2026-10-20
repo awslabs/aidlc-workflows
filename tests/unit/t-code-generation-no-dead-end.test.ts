@@ -21,9 +21,9 @@
 // The states and the seven shapes live in tests/harness/code-generation-states.ts.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { cleanupTestProject } from "../harness/fixtures.ts";
+import { cleanupTestProject, seededStateFile } from "../harness/fixtures.ts";
 import { refusalSignature } from "../harness/scope-run.ts";
 import {
   answer,
@@ -52,7 +52,7 @@ import {
   type Verdict,
   writePlan,
 } from "../harness/code-generation-states.ts";
-import { writeSessionPidEntry } from "../../dist/copilot/.aidlc/tools/aidlc-lib.ts";
+import { stateDigest, writeActiveDirectiveMarker, writeSessionPidEntry } from "../../dist/copilot/.aidlc/tools/aidlc-lib.ts";
 
 setDefaultTimeout(600_000);
 
@@ -814,6 +814,28 @@ describe("the person's jump at an open recovery question goes through on the fir
       expect(ran.refused).toBeNull();
       expect(copilotStep(proj, "next").stage).toBe("requirements-analysis");
     }
+  });
+
+  // A Unit reopen the question offers waits for a pick it has no path to; on
+  // Copilot, running `next --stage` first does not carry it past that wait.
+  test("Copilot, through its adapter: a Unit reopen the question offers stays refused after next --stage", () => {
+    const proj = question();
+    copilot.install(proj);
+    writeActiveDirectiveMarker(proj, {
+      kind: "ask", ask_type: "guard-recovery", stage: "code-generation",
+      state_sha256: stateDigest(readFileSync(seededStateFile(proj), "utf-8")),
+      remedies: [{
+        op: "reopen-unit-step", action: "Start code-generation again for unit api.", interaction: "command",
+        operation: { kind: "reopen-unit", stage: "code-generation", unit: "api" },
+      }],
+    } as never);
+    const said = copilotAdapter(proj, "record-human-turn", {
+      hook_event_name: "UserPromptSubmit", prompt: "Start Code Generation again for api, please.", timestamp: new Date().toISOString(),
+    });
+    expect(said.code, said.stderr).toBe(0);
+    copilotStep(proj, "next --stage code-generation");
+    const reopen = copilotRuns(proj, "bun .aidlc/tools/aidlc-jump.ts reopen --target code-generation --units api");
+    expect(reopen.refused, "the offered Unit reopen ran on Copilot").not.toBeNull();
   });
 
   test("still refused: a jump nobody asked for, whose way past is admitted, and a jump after the person picked Request Changes", async () => {
