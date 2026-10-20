@@ -55,6 +55,7 @@ import {
   activeSpace,
   auditBlockField,
   auditShardDir,
+  DOCTOR_RUN_AUDIT_EVENTS,
   findStageBySlug,
   harnessDir,
   hooksHealthReadDir,
@@ -654,7 +655,7 @@ export interface MarkerSnapshot {
 }
 
 // Freshness window past which a heartbeat is "frozen" relative to the newest
-// recorded audit activity. A hook that has not fired since well before the last
+// recorded work (newestWorkAuditMs). A hook that has not fired since well before the last
 // stage transition is the cold-hook signal (#571's rebuild-stage-graph case).
 export const FROZEN_HEARTBEAT_MS = 24 * 60 * 60 * 1000;
 
@@ -887,8 +888,8 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
     });
   }
 
-  // Rule 5 — frozen / missing hook heartbeats. A registered hook that has not
-  // fired since well before the latest audit activity is cold.
+  // Rule 5 - frozen / missing hook heartbeats. A registered hook that has not
+  // fired since well before the latest recorded work is cold.
   if (!hooksHealth.dirExists) {
     findings.push({
       id: "hooks-never-fired",
@@ -907,8 +908,10 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
           summary: `Hook "${hb.hook}" has not fired in over ${Math.floor(hb.ageMs / (60 * 60 * 1000))}h.`,
           evidence: { hook: hb.hook, lastFired: hb.timestampRaw, ageMs: hb.ageMs },
           remedy:
-            "A cold hook silently skips its side effects (audit, sensors, runtime " +
-            "compile). Verify the hook is wired and firing on this harness.",
+            "A hook that last fired long ago is expected on an intent nobody is working on, " +
+            "but work on this intent was recorded more than a day after this hook last fired. " +
+            "A hook that does not run skips its side effects (audit, sensors, runtime compile): " +
+            "check the hook is wired and firing on this harness.",
           safeToAutomate: true,
         });
       }
@@ -1609,9 +1612,9 @@ function readHookHealth(projectDir: string, audit: string): HookHealthSnapshot {
   const dirExists = existsSync(dir);
   const heartbeats: HookHealthSnapshot["heartbeats"] = [];
   const degradedDrops: HookHealthSnapshot["degradedDrops"] = [];
-  // Age is measured against the newest audit timestamp (the run's own clock),
-  // not wall-clock — a bundle produced days later must not flag every hook.
-  const latestAudit = newestAuditMs(audit);
+  // Age is measured against the newest recorded work (the run's own clock),
+  // not wall-clock: a bundle produced days later must not flag every hook.
+  const latestAudit = newestWorkAuditMs(audit);
   if (dirExists) {
     let files: string[] = [];
     try {
@@ -1659,9 +1662,13 @@ function readMarkers(projectDir: string): NormalizedEvidence["markers"] {
   };
 }
 
-function newestAuditMs(audit: string): number | null {
+// Doctor writes its own rows for this run before the analysis reads the audit,
+// so counting them would date every idle intent's newest work to now and read
+// all of its hooks as frozen.
+function newestWorkAuditMs(audit: string): number | null {
   let newest: number | null = null;
   for (const e of parseAuditEvents(audit)) {
+    if (DOCTOR_RUN_AUDIT_EVENTS.has(e.event)) continue;
     if (Number.isFinite(e.timestampMs) && (newest === null || e.timestampMs > newest)) {
       newest = e.timestampMs;
     }

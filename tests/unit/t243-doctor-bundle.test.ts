@@ -369,6 +369,54 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
     expect(typeof currentNormalized.hooks.heartbeats[0].ageMs).toBe("number");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // The seeded audit ends months ago and every hook beat with it, so the only
+  // newer rows are the ones doctor itself records on this run.
+  function seedIdleIntentBeats(proj: string): string {
+    seedCanaryIntent(proj);
+    const record = join(proj, "aidlc", "spaces", "default", "intents", INTENT_SLUG);
+    const health = join(record, ".aidlc-engine", "hooks-health");
+    mkdirSync(health, { recursive: true });
+    writeFileSync(join(health, "write-audit-log.last"), "2026-05-19T11:00:00Z\n", "utf-8");
+    writeFileSync(join(health, "session-start.last"), "2026-05-19T10:30:00Z\n", "utf-8");
+    return record;
+  }
+
+  function frozenFindings(bundleDir: string): Array<{ id: string; summary: string; remedy: string; evidence: { hook: string } }> {
+    const report = JSON.parse(readFileSync(join(bundleDir, "report.json"), "utf-8"));
+    return report.findings.filter((f: { id: string }) => f.id === "hook-heartbeat-frozen");
+  }
+
+  test("2e: doctor's own audit rows do not make an idle intent's hooks read frozen", () => {
+    const proj = freshProject();
+    const record = seedIdleIntentBeats(proj);
+    const { bundleDir, out } = runExport(proj);
+    expect(bundleDir, out).not.toBeNull();
+    const audit = readdirSync(join(record, "audit"))
+      .map((f) => readFileSync(join(record, "audit", f), "utf-8"))
+      .join("\n");
+    expect(audit).toContain("**Event**: HEALTH_CHECKED");
+    expect(frozenFindings(bundleDir!)).toEqual([]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("2f: a hook still reads frozen when work was recorded more than a day after it last fired", () => {
+    const proj = freshProject();
+    const record = seedIdleIntentBeats(proj);
+    writeFileSync(
+      join(record, "audit", "later.md"),
+      "## Stage Started\n**Timestamp**: 2026-05-21T11:00:00Z\n" +
+        "**Event**: STAGE_STARTED\n**Stage**: requirements-analysis\n",
+      "utf-8",
+    );
+    const { bundleDir, out } = runExport(proj);
+    expect(bundleDir, out).not.toBeNull();
+    const frozen = frozenFindings(bundleDir!);
+    expect(frozen.map((f) => f.evidence.hook).sort()).toEqual(["session-start", "write-audit-log"]);
+    const auditHook = frozen.find((f) => f.evidence.hook === "write-audit-log")!;
+    expect(auditHook.summary).toBe('Hook "write-audit-log" has not fired in over 48h.');
+    expect(auditHook.remedy).toContain("expected on an intent nobody is working on");
+    expect(auditHook.remedy).toContain("recorded more than a day after this hook last fired");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("3: report.json exposes findings + timeline.stages and the gate-unresolved error", () => {
     const proj = freshProject();
     seedCanaryIntent(proj);
