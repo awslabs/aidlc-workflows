@@ -512,13 +512,15 @@ stage's questions:
 You choose once; later stages use the same answer and say so in one line
 ("Answering the way you chose earlier: Guide me. Say if you'd rather edit the
 file or chat."). With **Guide me**, the questions come a few at a time, each
-with its options. The top line lists them; after the last one, **Submit** shows
-your answers for review and **Submit answers** sends them:
+with its options and, in front of its text, who would usually answer it (this
+screen was captured before AI-DLC showed that label; `[Product owner]` is added
+to it to show where the label goes). The top line lists them; after the last
+one, **Submit** shows your answers for review and **Submit answers** sends them:
 
 ```text
  < [ ] Q1 Problem  [ ] Q2 Users  [ ] Q3 Success  [ ] Q4 Trigger  Submit >
- Q1. What business problem should the inventory API solve first? (If it's not defined yet, pick
- "Type something" and say so.)
+ Q1. [Product owner] What business problem should the inventory API solve first? (If it's not
+ defined yet, pick "Type something" and say so.)
  > 1. Stock counts drift
       A. We don't know accurately what stock we have (counts drift, spreadsheets go stale)
    2. Stock-outs / overstock
