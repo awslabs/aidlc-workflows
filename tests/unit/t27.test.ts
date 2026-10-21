@@ -586,10 +586,13 @@ describe("t27 aidlc-utility doctor", () => {
     expect(r.status).not.toBe(0);
   });
 
-  test("59: doctor reports AWS_AIDLC_DEFAULT_SCOPE unset", () => {
+  // In a terminal doctor cannot see the value Claude Code passes from .claude/settings.json, so "unset" would be false
+  // there; with nothing to check, it says nothing.
+  test("59: doctor says nothing about AWS_AIDLC_DEFAULT_SCOPE when no default is set where it can see one", () => {
     const p = bareProj();
     const r = util(["doctor", "--verbose"], p); // env stripped of the var by util()
-    expect(r.stdout).toContain("AWS_AIDLC_DEFAULT_SCOPE (unset");
+    expect(r.stdout).toContain("Plugin selection"); // the verbose list ran past where the row was
+    expect(r.stdout).not.toContain("AWS_AIDLC_DEFAULT_SCOPE");
   });
 
   test("60: doctor reports AWS_AIDLC_DEFAULT_SCOPE=classic as valid", () => {

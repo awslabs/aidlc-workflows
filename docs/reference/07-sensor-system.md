@@ -414,15 +414,17 @@ step between them:
    --slug <stage-slug>` reads the stage's `memory.md` and prints structured
    JSON: `candidates[]` (one per non-blank Interpretation / Deviation /
    Tradeoff entry, each carrying `id`, `source_heading`, `ts`, `summary`,
-   `context`, `default_scope: "project"`) plus a read-only
-   `parked_open_questions[]`. No AskUserQuestion field names — pure domain
+   `context`, `default_scope: "project"`), a read-only
+   `parked_open_questions[]`, and `questions[]`: what to ask, in order, with
+   exact options (which notes to keep, when there are any, **Keep none of
+   these** first and then each candidate `summary` verbatim; then always
+   "Anything to add for next time?"). No AskUserQuestion field names: pure domain
    data. Open questions never become candidates (they are research items).
-2. **Conductor renders the AskUserQuestion (knowledge).** One option per
-   candidate (label = the candidate `summary`, verbatim; description = the
-   derived destination, e.g. `→ memory/project.md (Deviation)` plus
-   a promote-to-team affordance). After `multiSelect`, the conductor
-   correlates each kept label back to its candidate `id` + `source_heading`.
-   It then always asks "Anything to add for next time?"; any free-text gets
+2. **Conductor asks those questions (knowledge).** Each is its own question;
+   each candidate option gets a description naming the derived destination
+   (e.g. `-> memory/project.md (Deviation)`) plus a promote-to-team
+   affordance. After `multiSelect`, the conductor correlates each kept label
+   back to its candidate `id` + `source_heading`; any free-text gets
    a single heading-pick AUQ (Interpretation / Deviation / Tradeoff / Open
    question) — the heading pick is the user's only classification, and the
    destination is derived from it.

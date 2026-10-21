@@ -2450,12 +2450,14 @@
       "mode": "inline",
       "produces": [
         "build-instructions",
-        "integration-test-instructions",
-        "performance-test-instructions",
-        "security-test-instructions",
         "build-and-test-summary",
         "build-test-results",
         "cross-unit-traceability"
+      ],
+      "optional_produces": [
+        "integration-test-instructions",
+        "performance-test-instructions",
+        "security-test-instructions"
       ],
       "consumes": [
         {
@@ -2492,7 +2494,7 @@
         "express"
       ],
       "inputs": "ALL code generation outputs across all units",
-      "outputs": "build-instructions.md, integration-test-instructions.md, performance-test-instructions.md, security-test-instructions.md, build-and-test-summary.md, test-results.md, cross-unit-traceability.md (under this stage's record dir, engine-resolved)",
+      "outputs": "build-instructions.md, build-and-test-summary.md, test-results.md, cross-unit-traceability.md, CONDITIONAL: integration-test-instructions.md (Standard and above), performance-test-instructions.md and security-test-instructions.md (Comprehensive, when that NFR kind exists) (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",

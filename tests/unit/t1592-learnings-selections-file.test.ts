@@ -155,6 +155,18 @@ describe("t1592 one selections file per piece of work", () => {
     expect(projectMd(pd)).toContain("Picked by person B");
   });
 
+  // Windows PowerShell 5.1 writes UTF-8 with a byte order mark; the person's
+  // pick in a file written that way is kept, not refused as malformed (#2452).
+  test("a selections file written with a byte order mark and CRLF keeps the person's pick", () => {
+    const pd = twoIntentProject();
+    const a = surface(pd, RECORD_A);
+    writeAt(pd, a.selections_file!, `﻿${selections(RECORD_A, "Kept — from PowerShell")}\r\n`);
+    const r = persist(pd, a.selections_file!);
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).not.toContain("malformed");
+    expect(projectMd(pd)).toContain("Kept — from PowerShell");
+  });
+
   // However the full path is spelled, it names the same file and is accepted.
   const spellings: Array<[string, (pd: string, printed: string) => string]> = [
     ["the native path", (pd, printed) => join(pd, printed)],

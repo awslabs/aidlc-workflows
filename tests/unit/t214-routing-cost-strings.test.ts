@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:scope-change
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-utility:scope-change, subcommand:aidlc-utility:intent-create
 //
 // t214 - the scope-cost preview reaches the emitted routing strings (issue:
 // preview the cost at scope confirmation). t213 pins the helper; this pins the
@@ -11,7 +11,9 @@
 //     for the MATCHED scope (N: the stages after Initialization),
 //   - the compose offer carries the express/classic/feature example trio,
 //     computed from the grid, and still avoids the t198 `"feature" workflow` trap,
-//   - the explicit-scope creation print carries the cost parenthetical, and
+//   - the explicit-scope creation print carries the cost parenthetical,
+//   - intent create's "State initialized" line says that print's count, for
+//     every shipped scope on a new project and on existing code, and
 //   - scope-change stdout carries the "Approval gates:" line (greenfield
 //     reverse-engineering adjustment applied, matching the handler).
 //
@@ -303,4 +305,30 @@ describe("t214 scope-change stdout carries the stage and gate counts", () => {
     expect(r.out).toContain(`Switched to mvp (the set of stages this work runs): ${mvp.shown} stages (`);
     expect(r.out).toContain(`, ${mvp.gates} approval gates. You can switch back to feature any time.`);
   });
+});
+
+describe("t214 the creation line says the count the creation print said", () => {
+  // The offer, the creation print and each stage's "(stage N of M)" count the
+  // stages after Initialization; the line `intent create` prints says that same
+  // number, not Initialization's three stages on top.
+  for (const scope of Object.keys(GRID)) {
+    for (const code of [false, true]) {
+      test(`${scope}, ${code ? "existing code" : "a new project"}`, () => {
+        proj = createTestProject();
+        removeWorkspaceRecord(proj);
+        if (code) writeFileSync(join(proj, "app.ts"), "export const existing = true;\n");
+        const d = directiveOf(runNext(proj, ["--scope", scope, "add login support"]).out);
+        expect(d.kind).toBe("print");
+        const message = String(d.message);
+        const shown = counts(GRID[scope].stages, !code).shown;
+        expect(message).toContain(`(${shown} stages, `);
+        const request = /--request (\S+)/.exec(message)?.[1];
+        const created = runUtility(proj, [
+          "intent-create", "--scope", scope, ...(request ? ["--request", request] : []), "--label", "count check",
+        ]);
+        expect(created.rc, created.out).toBe(0);
+        expect(created.out).toContain(`State initialized: ${scope} scope, ${shown} stages,`);
+      });
+    }
+  }
 });

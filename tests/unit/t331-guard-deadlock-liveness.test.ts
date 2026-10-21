@@ -2514,6 +2514,60 @@ describe("AttemptView projections and refusal streaks", () => {
     expect(again.remedies.map((remedy) => remedy.label)).toEqual(["Decide at approval", "Request Changes"]);
   });
 
+  // The review freeze refused a write to a document whose review is final, and
+  // no turn of the person's stands behind the write: the change was the agent's
+  // own, so leaving the document and quoting the change at the gate is its step.
+  // A repeat, or a write the person may have asked for, still asks them.
+  test("a write the agent made on its own after a final review is its own step to leave and quote at the gate", () => {
+    const attempt = {
+      recovery: "available" as const,
+      summaryCoverage: "current" as const,
+      reviewCoverage: "current" as const,
+      sourceCoverage: "current" as const,
+    };
+    const freeze = (humanAuthority: GuardRefusalInput["humanAuthority"]) => evaluateGuardRefusal({
+      code: "REVIEW_FREEZE_ACTIVE",
+      blockedAction: "artifact-write:requirements.md",
+      stage: "requirements-analysis",
+      stateContent: "# AI-DLC State\n- **Scope**: enterprise\n- [-] requirements-analysis \u2014 EXECUTE\n",
+      invariant: "A terminal review continues to cover the bytes it certified.",
+      userMessage: "",
+      attempt,
+      humanAuthority,
+      fence: "review-freeze",
+      fenceSwitch: "offer",
+    });
+    const opsOf = (remedies: ReadonlyArray<{ op: string }>): string[] => remedies.map((remedy) => remedy.op);
+    const theirs = ["request-changes", "lower-fence"];
+    const question = "Requirements Analysis still can't go ahead as things stand: which way would you like to go on?";
+    const own = freeze({ freshTurn: false, unattended: false });
+    expect(opsOf(own.remedies)).toEqual(["present-findings-at-gate", ...theirs]);
+    expect(own.remedies[0]).toMatchObject({ requiresHuman: false, executableNow: true, interaction: "external-work" });
+    expect(own.remedies[0].action).toContain("Leave the document as its final review left it");
+    expect(own.remedies[0].action).toContain("quote the change you meant to make at the next approval gate or Unit checkpoint");
+    expect(own.remedies[0].action).toMatch(/Carry on: run `[^`]*orchestrate[^`]* next`\.$/);
+    const { first, again } = ownThenTheirs(own, attempt);
+    expect(first.agent_work).toBe(true);
+    expect(opsOf(first.remedies)).toEqual(["present-findings-at-gate"]);
+    expect(again.agent_work).toBeUndefined();
+    expect(again.question).toBe(question);
+    expect(opsOf(again.remedies)).toEqual(theirs);
+
+    // The person spoke since the last decision: they may have asked for it, so
+    // the first refusal is their question, as before.
+    const asked = freeze({ freshTurn: true, unattended: false });
+    expect(opsOf(asked.remedies)).toEqual(theirs);
+    expect(ownThenTheirs(asked, attempt).first.agent_work).toBeUndefined();
+
+    // Unattended, nobody is there to ask: the first refusal carries on to the
+    // gate the same way, and a repeat halts as it does today.
+    const unattended = ownThenTheirs(freeze({ freshTurn: false, unattended: true }), attempt);
+    expect(unattended.first.agent_work).toBe(true);
+    expect(opsOf(unattended.first.remedies)).toEqual(["present-findings-at-gate"]);
+    expect(unattended.again.agent_work).toBeUndefined();
+    expect(opsOf(unattended.again.remedies)).toEqual(["unset-unattended", "lower-fence"]);
+  });
+
   // A stage reported before its outputs or its code exist: writing them is the
   // agent's step, which the refusal's own sentence names. Build and Test has no
   // reviewer, so a review request was never a way on there.
@@ -3277,8 +3331,12 @@ describe("unit-major resets name what they throw away", () => {
     ];
     for (const [label, attempt, code] of stuck) {
       const refusal = walkRefusal({ attempt, ...(code ? { code } : {}) });
-      expect(ops(refusal), label).toEqual(["reopen-unit-step"]);
-      const reopen = refusal.remedies[0];
+      // The freeze's first refusal of a write nobody asked for is the agent's
+      // own step first; the person's way is the same.
+      expect(ops(refusal), label).toEqual(
+        code === "REVIEW_FREEZE_ACTIVE" ? ["present-findings-at-gate", "reopen-unit-step"] : ["reopen-unit-step"],
+      );
+      const reopen = refusal.remedies.find((remedy) => remedy.op === "reopen-unit-step")!;
       expect(reopen, label).toMatchObject({
         executableNow: true, requiresHuman: true, interaction: "command",
         operation: { kind: "reopen-unit", stage: "code-generation", unit: "beta" },

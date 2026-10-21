@@ -647,9 +647,17 @@ describe("t259 the stage's work recorded through log leaves the engine mark", ()
   // kind existed has none, and its exact options are its form (an upgrade
   // leaves it pending). Whether the person's reply already holds the note is
   // the agent's to read, so the note says to take it from their reply, kept on
-  // the row, and ask only otherwise.
+  // the row, and ask only otherwise. The agent may log the whole learnings box
+  // as one question and record each pick (stage-protocol.md's batch form, with
+  // or without the Q<n>: labels): the box is still known by its two exact
+  // options, and Add a note by its exact pick.
   test("Add a note on the learnings question ends the turn; Nothing to add and other questions do not", async () => {
+    const box = "Keep none of these,brownfield first scan (NO_STORE),Nothing to add,Add a note";
     for (const [options, kind, reply, picked, ends] of [
+      [box, null, "Keep none of these, Add a note", "Keep none of these; Add a note", true],
+      [box, null, "Q1: 1, Q2: 2", "Q1: Keep none of these; Q2: Add a note", true],
+      [box, null, "Q1: 1, Q2: 1", "Q1: Keep none of these; Q2: Nothing to add", false],
+      ["Nothing to add,Add a note", "learnings-note", "Keep none, Add a note", "Keep none of these; Add a note", true],
       ["Nothing to add,Add a note", "learnings-note", "Add a note", "Add a note", true],
       ["Nothing to add,Add a note", "learnings-note", "Add a note: always run lint", "Add a note", true],
       ["Nothing to add,Add a note", "learnings-note", "Nothing to add", "Nothing to add", false],
@@ -687,6 +695,66 @@ describe("t259 the stage's work recorded through log leaves the engine mark", ()
         const row = readAuditShardEvents(proj).filter((entry) => entry.event === "QUESTION_ANSWERED").at(-1);
         expect(row?.block, label).toContain("always run lint");
       }
+    }
+  }, 180_000);
+
+  // Picked in a question box, the person's own pick decides, as the hook
+  // recorded it, however the agent logged the box: here as a live Claude Code
+  // run did, one question with its options joined by " | ", no kind, and each
+  // pick under a label of its own. Claude Code hands the box over as the tool's
+  // answers; Codex's adapter as picker_reply.
+  test("Add a note picked in the question box ends the turn however the agent logged the box", async () => {
+    const keep = "Which notes from this step should I keep as practices for future work?";
+    const note = "Anything to add for next time?";
+    for (const [harness, choice, ends] of [
+      ["claude", "Add a note", true],
+      ["codex", "Add a note", true],
+      ["claude", "Nothing to add", false],
+      ["codex", "Nothing to add", false],
+    ] as const) {
+      const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
+      tempDirs.push(proj);
+      const env: Record<string, string | undefined> = Object.fromEntries(
+        Object.entries(process.env).filter(([key]) =>
+          !/^(?:CLAUDECODE|CLAUDE_CODE_|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_|AIDLC_)/i.test(key) && key !== "TERM_PROGRAM"),
+      );
+      env.CLAUDE_PROJECT_DIR = proj;
+      const run = (args: string[], input?: string) =>
+        spawnSync(process.execPath, [".claude/tools/aidlc.ts", "engine", ...args], { cwd: proj, encoding: "utf-8", env, input });
+      markEngineTouch(proj);
+      const asked = run(["log", "decision", "--stage", "feasibility", "--decision", `${keep}; ${note}`,
+        "--options", "Keep none of these,client-only SPA, no backend | Nothing to add,Add a note"]);
+      expect(asked.status, asked.stderr).toBe(0);
+      await Bun.sleep(20);
+      const box = harness === "claude"
+        ? {
+          tool_name: "AskUserQuestion",
+          tool_input: { questions: [
+            { question: keep, multiSelect: true, options: [{ label: "Keep none" }, { label: "Client-only SPA note" }] },
+            { question: note, options: [{ label: "Nothing to add" }, { label: "Add a note" }] },
+          ] },
+          tool_response: { answers: { [keep]: "Keep none", [note]: choice } },
+        }
+        : {
+          tool_name: "request_user_input",
+          tool_input: { questions: [
+            { id: "keep", question: keep, options: ["Keep none", "Client-only SPA note"] },
+            { id: "note", question: note, options: ["Nothing to add", "Add a note"] },
+          ] },
+          tool_response: { answer: `Keep none, ${choice}` },
+          picker_reply: { answers: { keep: { answers: ["Keep none"] }, note: { answers: [choice] } } },
+        };
+      const replied = run(["hook", "record-human-turn"],
+        JSON.stringify({ hook_event_name: "PostToolUse", session_id: "t259-box", ...box }));
+      expect(replied.status, `${replied.stdout}${replied.stderr}`).toBe(0);
+      await Bun.sleep(20);
+      const answered = run(["log", "answer", "--stage", "feasibility", "--details",
+        `Which notes to keep: Keep none of these; Anything to add: ${choice}`]);
+      const label = `${harness} -> ${choice}`;
+      expect(answered.status, `${label}: ${answered.stderr}`).toBe(0);
+      expect(turnEndIsOpen(proj), label).toBe(ends);
+      const agentNote = String((JSON.parse(answered.stdout.trim().split("\n").at(-1) ?? "{}") as { agent_note?: string }).agent_note ?? "");
+      expect(agentNote.includes("Otherwise ask what the note should say"), label).toBe(ends);
     }
   }, 180_000);
 });

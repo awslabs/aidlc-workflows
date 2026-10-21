@@ -424,8 +424,10 @@ async function checkFreeze(input: string, projectDir: string): Promise<number> {
       (typeof parsed.tool_input?.subagent_type === "string" && parsed.tool_input.subagent_type.trim().length > 0) ||
       memoryStrictHoldsGuardPolicy(projectDir, stateContent) ? "withhold" : "offer",
   });
+  // The sentence above already says to quote a suggestion at the gate, so the
+  // agent's own step to do that is never the guidance.
   const guidance =
-    evaluated.remedies.find((remedy) => remedy.executableNow)?.action ??
+    evaluated.remedies.find((remedy) => remedy.executableNow && remedy.op !== "present-findings-at-gate")?.action ??
     reviewFreezeRecoveryGuidance(projectDir, stateContent, stage.slug, recoveryGuidance, {
       ...(verdict.unit ? { unit: verdict.unit } : {}),
       ...(teamGate ? { teamGate } : {}),

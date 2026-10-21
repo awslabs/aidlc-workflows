@@ -716,6 +716,15 @@ describe("t351 (5) scope save keeps a work's plan as a reusable scope", () => {
     const stages = grid["quick-fix"].stages;
     expect(stages[ADD]).toBe("EXECUTE");
     expect(stages["deployment-pipeline"]).toBe("SKIP");
+    // The count is the stages the saved plan runs after Initialization, the
+    // count its plan offer gives on existing code.
+    const graph = JSON.parse(readFileSync(join(proj, ".claude", "tools", "data", "stage-graph.json"), "utf-8")) as Array<{
+      slug: string;
+      phase: string;
+    }>;
+    const runs = graph.filter((stage) => stage.phase !== "initialization" && stages[stage.slug] === "EXECUTE").length;
+    expect(saved.out).toContain(`Saved as scope quick-fix (${runs} stages, `);
+    expect(record).toContain(`scope: ${runs} stages.`);
     // The empty project scanned greenfield, which skips reverse-engineering for
     // this run only; the saved scope keeps it for the next project.
     expect(suffixOf(stateBefore, "reverse-engineering")).toBe("SKIP");

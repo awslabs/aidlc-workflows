@@ -62,8 +62,8 @@ Things that are **not** artifacts in this registry:
   "Filesystem mapping" below.
 - **Filenames.** The on-disk `.md` file and the canonical name don't have
   to match (they usually do, except at collisions).
-- **State plumbing.** `aidlc-state.md`, the `audit/` shards, and
-  `.aidlc-engine/recovery.md` are managed by tools (`aidlc-state.ts`, hook
+- **State plumbing.** `aidlc-state.md` and the `audit/` shards
+  are managed by tools (`aidlc-state.ts`, hook
   scripts), not by stages via `produces[]`. They never appear in the
   registry.
 - **Runtime values.** Strings like "user's prose answer" or
@@ -143,8 +143,10 @@ The canonical names are split so the two never collide on the wire:
 
 - `build-test-results` — emitted by `build-and-test`. Pairs with
   sibling names in that stage: `build-instructions`,
-  `integration-test-instructions`, `performance-test-instructions`,
-  `security-test-instructions`, `build-and-test-summary`.
+  `build-and-test-summary`, and the strategy-dependent
+  `integration-test-instructions`, `performance-test-instructions` and
+  `security-test-instructions`, which that stage declares under
+  `optional_produces`.
 - `unit-test-instructions` is produced per-unit by `code-generation` and
   consumed by `build-and-test`.
 - `source-manifest.json` is the engine-required per-unit companion to

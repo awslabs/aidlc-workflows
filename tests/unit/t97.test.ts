@@ -422,6 +422,48 @@ describe("t97 surface (cli)", () => {
     const pd = mkproj("p17");
     expect(runCli(["surface", "--slug", "some-other-stage", "--project-dir", pd]).rc).toBe(1);
   });
+
+  // The agent asks what surface prints, so the box the person sees and the
+  // question the record names are the same: live runs folded the two into one
+  // question of the agent's own and recorded a pick the person never made.
+  const NOTE_QUESTION = {
+    question: "Anything to add for next time?",
+    multi_select: false,
+    options: ["Nothing to add", "Add a note"],
+  };
+
+  test("nothing in the diary -> only the Anything to add question", () => {
+    const pd = mkproj("p40");
+    writeFileSync(memoryFile(pd), "", "utf-8");
+    const j = JSON.parse(runCli(["surface", "--slug", "user-stories", "--project-dir", pd]).stdout);
+    expect(j.questions).toEqual([NOTE_QUESTION]);
+  });
+
+  test("notes in the diary -> which to keep first, Keep none of these first, then Anything to add", () => {
+    const pd = mkproj("p41");
+    writeFileSync(
+      memoryFile(pd),
+      `## Interpretations
+- 2026-05-28T14:00:00Z \u2014 Single-package React/Vite SPA, no backend; ctx i
+
+## Deviations
+- 2026-05-28T14:01:00Z \u2014 dev one; ctx d
+
+## Open questions
+- 2026-05-28T15:00:00Z \u2014 q?
+`,
+      "utf-8",
+    );
+    const j = JSON.parse(runCli(["surface", "--slug", "user-stories", "--project-dir", pd]).stdout);
+    expect(j.questions).toEqual([
+      {
+        question: "Which notes from this step should I keep as practices for future work?",
+        multi_select: true,
+        options: ["Keep none of these", "Single-package React/Vite SPA, no backend", "dev one"],
+      },
+      NOTE_QUESTION,
+    ]);
+  });
 });
 
 // =====================================================================

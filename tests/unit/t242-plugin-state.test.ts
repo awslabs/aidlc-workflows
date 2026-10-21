@@ -1430,6 +1430,98 @@ describe("t242 transactional sync and ownership-safe prune", () => {
     expect(pruned).not.toContain("test-pro-test-harness-design");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // test-pro ships no adds.scopes: a copy whose build-and-test contribution puts
+  // that core stage in test-pro's own scope.
+  const SCOPE_ADD = "adds:\n  scopes:\n    - test-pro-validation\n";
+  function testProAddingItsScope(): string {
+    const root = temp("aidlc-plugin-adds-scopes-");
+    cpSync(TEST_PRO, root, { recursive: true });
+    const contribution = join(root, "contributions", "construction", "build-and-test.md");
+    const source = readFileSync(contribution, "utf-8");
+    expect(source).toContain("adds:\n");
+    writeFileSync(contribution, source.replace("adds:\n", SCOPE_ADD));
+    return root;
+  }
+  function stageScopes(path: string): string[] {
+    const block = readFileSync(path, "utf-8").match(/^scopes:\n((?: {2}- .+\n)*)/m)?.[1] ?? "";
+    return [...block.matchAll(/^ {2}- (.+)$/gm)].map((entry) => entry[1].trim());
+  }
+
+  test("removing a plugin that put a core stage in its scope leaves the stage as shipped, so the next config goes through (#1247)", async () => {
+    // Compose records adds.scopes in the sidecar. If prune leaves the scope in the
+    // stage, the next config finds a core stage it did not install and stops on it
+    // as a local edit the person never made.
+    const project = temp("aidlc-plugin-scopes-refresh-");
+    mkdirSync(join(project, ".git"));
+    const env: NodeJS.ProcessEnv = { ...process.env, AIDLC_PROJECT_DIR: project };
+    for (const key of ["AIDLC_STAGE_GRAPH", "AIDLC_SCOPE_GRID", "AIDLC_SCOPES_DIR", "AIDLC_STAGES_DIR"]) delete env[key];
+    const config = (...extra: string[]) => spawnSync(process.execPath, [
+      join(REPO_ROOT, "core", "tools", "aidlc-init.ts"),
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      join(REPO_ROOT, "dist-release", "claude"),
+      ...extra,
+    ], {
+      timeout: remainingOperationTimeoutMs(NATIVE_FIXTURE_SETUP_TIMEOUT_MS),
+      cwd: project,
+      encoding: "utf-8",
+      env,
+    });
+    const installed = config("--harness", "claude");
+    expect(installed.status, installed.stdout + installed.stderr).toBe(0);
+    const stage = join(project, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md");
+    const shipped = readFileSync(stage, "utf-8");
+
+    withClaudeFixture(testProAddingItsScope());
+    await syncPlugins(project, [], ".claude");
+    expect(stageScopes(stage)).toContain("test-pro-validation");
+
+    // The step doctor names once the plugin is uninstalled in the host.
+    writeFileSync(
+      process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string,
+      "{\"version\":2,\"plugins\":{}}\n",
+    );
+    const result = await syncPlugins(project, ["--prune-missing", "--yes"], ".claude");
+    expect(result.pruned).toEqual(["test-pro"]);
+
+    const refreshed = config();
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(readFileSync(stage, "utf-8")).toBe(shipped);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("a plugin update that stops adding its scope takes it back out of the core stage", async () => {
+    const project = installedProject();
+    const stage = join(project, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md");
+    const shippedScopes = stageScopes(stage);
+    const root = testProAddingItsScope();
+    withClaudeFixture(root);
+    await syncPlugins(project, [], ".claude");
+    expect(stageScopes(stage)).toEqual([...shippedScopes, "test-pro-validation"]);
+
+    const contribution = join(root, "contributions", "construction", "build-and-test.md");
+    writeFileSync(contribution, readFileSync(contribution, "utf-8").replace(SCOPE_ADD, "adds:\n"));
+    writeFileSync(
+      join(root, ".claude-plugin", "plugin.json"),
+      `${JSON.stringify({ name: "aidlc-test-pro", version: "0.2.0" }, null, 2)}\n`,
+    );
+    writeFileSync(
+      process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string,
+      readFileSync(process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string, "utf-8")
+        .replaceAll(`"version": "${TEST_PRO_VERSION}"`, '"version": "0.2.0"'),
+    );
+    const result = await syncPlugins(project, [], ".claude");
+    expect(result.synced).toEqual(["test-pro"]);
+
+    expect(stageScopes(stage)).toEqual(shippedScopes);
+    const sidecar = JSON.parse(readFileSync(
+      join(project, ".claude", "tools", "data", "plugin-contrib-test-pro.json"),
+      "utf-8",
+    )) as Record<string, { scopes?: string[] }>;
+    expect(sidecar["build-and-test"]?.scopes).toBeUndefined();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("prune refuses a locally modified owned file without deleting it", async () => {
     const project = installedProject();
     withClaudeFixture(TEST_PRO);

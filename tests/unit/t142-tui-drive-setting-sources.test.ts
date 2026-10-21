@@ -762,6 +762,18 @@ describe("Kiro numbered-prose answer classification", () => {
     expect(state.learningsAnswered).toBe(1);
   });
 
+  test("answers both learnings questions surface prints, the notes one first", () => {
+    const state = createKiroNumberedProseAnswerState();
+    expect(
+      nextKiroNumberedProseAnswer(
+        "Which notes from this step should I keep as practices for future work?\n1. Keep none of these\n" +
+          "2. Reused the auth module\nAnything to add for next time?\n1. Nothing to add\n2. Add a note",
+        state,
+      ),
+    ).toBe("Nothing to keep. Nothing to add.");
+    expect(state.learningsAnswered).toBe(1);
+  });
+
   test("rejects an approval prompt combined with the unanswered learning channel", () => {
     const state = createKiroNumberedProseAnswerState();
     expect(() =>

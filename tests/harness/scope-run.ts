@@ -32,7 +32,7 @@ export type Directive = Record<string, unknown> & { kind?: string };
 
 type AuditReader = Pick<
   typeof import("../../dist/claude/.claude/tools/aidlc-lib.ts"),
-  "auditBlockField" | "readAuditShardEvents" | "classifyRuntimeCompileCommand"
+  "auditBlockField" | "readAuditShardEvents" | "classifyRuntimeCompileCommand" | "findStageBySlug" | "summaryConfirmationOwed"
 >;
 let reader: AuditReader | undefined;
 function lib(): AuditReader {
@@ -1444,7 +1444,9 @@ export class AgentStandIn {
       return;
     }
     if (d.gate_only !== true) {
-      const opened = this.report(stage, "--result", "awaiting-approval");
+      // A stage being revised ([R]) shows its gate again as revised.
+      const revising = new RegExp(`^- \\[R\\] ${stage} `, "m").test(readFileSync(activeRecord(this.host.proj).state, "utf-8"));
+      const opened = this.report(stage, "--result", revising ? "revised" : "awaiting-approval");
       // The gate does not open over a units block the engine cannot read: the
       // agent repairs it and runs the same report again.
       if (opened.kind === "print" && this.repairUnitsBlockIfNamed(String(opened.message ?? ""), "gate")) {
@@ -1958,8 +1960,13 @@ function switchProblems(
   for (const d of runStages) {
     const got = { ...(d.ceremony as Record<string, string> | undefined) };
     if (skipLearnings) delete got.learnings;
-    if (d.ceremony && JSON.stringify(got) !== JSON.stringify(ceremony)) {
-      problems.push(`${String(d.stage)} carried ceremony ${JSON.stringify(got)}, the scope declares ${JSON.stringify(ceremony)}`);
+    const stage = lib().findStageBySlug(String(d.stage));
+    if (!stage) throw new Error(`Missing stage declaration for ${String(d.stage)}`);
+    const effective = { ...ceremony, summary_confirmation: onOff(lib().summaryConfirmationOwed(stage, {
+      scope: run.scope, stateContent: state, ignoreGuardSwitch: true,
+    })) };
+    if (d.ceremony && JSON.stringify(got) !== JSON.stringify(effective)) {
+      problems.push(`${String(d.stage)} carried ceremony ${JSON.stringify(got)}, the stage owes ${JSON.stringify(effective)}`);
     }
   }
   const has = (pred: (d: Directive) => boolean) => runStages.some(pred);

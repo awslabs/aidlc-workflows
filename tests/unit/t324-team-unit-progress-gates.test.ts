@@ -1553,7 +1553,6 @@ describe("t324 doctor stage drift against the engine (#1190)", () => {
       markers: {
         planExists: false,
         planParseable: null,
-        recoveryExists: false,
         stopHookDirExists: true,
       },
     }).filter(

@@ -8,7 +8,8 @@
 // function:isReviewRecordRelativePath, function:readReviewRecord,
 // function:latestReviewRecordRefs, function:mergeReviewRecordsFromDelta,
 // function:reviewRecordMatchesCompletion, function:pairedReviewRecordForCompletion,
-// function:completionCarriesVerifiedReview, function:stageGateReportCommand, function:learningsRitualRuns,
+// function:completionCarriesVerifiedReview, function:stageGateReportCommand, function:stageReviewBriefCommand,
+// function:learningsRitualRuns,
 // function:reviewVerdictNote
 //
 // t271 — engine-enforced review iteration ceiling (aidlc-log review).
@@ -514,6 +515,10 @@ describe("t271 review iteration ceiling", () => {
       (JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}") as { agent_note?: string }).agent_note;
     const RA = ["--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"];
     const NO_LEARNINGS = { AIDLC_DISABLE_LEARNINGS: "1" };
+    // The gate's review brief is named with its command, so an agent that does
+    // not hold the reviewer protocol (after a compaction, live on Copilot) does
+    // not guess at the tool.
+    const BRIEF_FIRST = "aidlc-review-brief.ts review --stage requirements-analysis --why first";
     // The skill's completion sequence runs stage-completion verification
     // before the summary, the learnings question and the gate's report.
     const verifiesFirst = (step: string | undefined, ...after: string[]): void => {
@@ -548,7 +553,8 @@ describe("t271 review iteration ceiling", () => {
         });
         expect(step, verdict).toContain("say the completion summary, then run");
         expect(step).toContain("report --stage requirements-analysis --result awaiting-approval");
-        verifiesFirst(step, "completion summary", "report --stage");
+        verifiesFirst(step, "completion summary", "report --stage", BRIEF_FIRST);
+        expect(step?.indexOf(BRIEF_FIRST) ?? -1).toBeGreaterThan(step?.indexOf("report --stage") ?? -1);
         expect(step).not.toContain("learnings");
         // Agent-facing only: no verdict token.
         expect(step).not.toContain("READY");
@@ -561,17 +567,65 @@ describe("t271 review iteration ceiling", () => {
       const { step } = verdictNote("-", "READY");
       expect(step).toContain("learnings ritual");
       expect(step).not.toContain("--result");
-      verifiesFirst(step, "completion summary", "learnings ritual");
+      verifiesFirst(step, "completion summary", "learnings ritual", BRIEF_FIRST);
     });
 
     test("an open gate is shown again, and a revision's gate with --result revised", () => {
       const open = verdictNote("?", "READY").step;
       expect(open).toContain("report --stage requirements-analysis --result awaiting-approval");
-      verifiesFirst(open, "report --stage");
+      verifiesFirst(open, "report --stage", BRIEF_FIRST);
       const revised = verdictNote("R", "READY").step;
       expect(revised).toContain("report --stage requirements-analysis --result revised");
-      verifiesFirst(revised, "report --stage");
+      verifiesFirst(revised, "report --stage", "aidlc-review-brief.ts review --stage requirements-analysis --why revision");
       expect(revised).not.toContain("learnings");
+    });
+
+    // The step's brief command runs as named: it prints the gate's brief, adds
+    // no audit row, and hands back no step of its own, so nothing loops.
+    test("the review brief the step names runs as written and prints the gate's brief", () => {
+      const { proj, step } = verdictNote("-", "READY", NO_LEARNINGS);
+      const named = [...(step ?? "").matchAll(/`([^`]+)`/g)].map((m) => m[1]).find((c) => c.includes("aidlc-review-brief.ts"));
+      expect(named, step).toBeDefined();
+      const words = (named as string).split(" ");
+      expect(words.slice(0, 2)).toEqual(["bun", ".claude/tools/aidlc-review-brief.ts"]);
+      const before = (readAllAuditShards(proj).match(/\*\*Event\*\*: ERROR_LOGGED/g) ?? []).length;
+      const ran = spawnSync(process.execPath, [join(dirname(LOG_TOOL), "aidlc-review-brief.ts"), ...words.slice(2)], {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
+      expect(ran.stdout).toContain("**Stage:** Requirements Analysis");
+      expect(ran.stdout).not.toContain('"kind"');
+      expect((readAllAuditShards(proj).match(/\*\*Event\*\*: ERROR_LOGGED/g) ?? []).length).toBe(before);
+    });
+
+    // A backward jump starts the stage's attempt again, and the brief at its
+    // gate says what the jump changed and invalidated only as the stale brief,
+    // so the step names that one (the reviewer protocol's own choice).
+    test("after a backward jump the stage's review names the stale brief", () => {
+      const proj = seedProject("feature");
+      const sf = seededStateFile(proj);
+      writeFileSync(sf, readFileSync(sf, "utf-8")
+        .replace("- [-] requirements-analysis", "- [x] requirements-analysis")
+        .replace("- [ ] units-generation", "- [-] units-generation")
+        .replace("- **Current Stage**: requirements-analysis", "- **Current Stage**: units-generation"));
+      const jumped = spawnSync(process.execPath, [
+        join(dirname(LOG_TOOL), "aidlc-jump.ts"), "execute", "--target", "requirements-analysis",
+        "--direction", "backward", "--scope", "feature", "--project-dir", proj,
+      ], {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(jumped.status, `${jumped.stdout}${jumped.stderr}`).toBe(0);
+      const requested = runReview(proj, RA, NO_LEARNINGS);
+      expect(requested.status, requested.stderr).toBe(0);
+      const recorded = runReview(proj, [...RA, "--verdict", "READY"], NO_LEARNINGS);
+      expect(recorded.status, recorded.stderr).toBe(0);
+      expect(note(recorded.stdout)).toContain("aidlc-review-brief.ts review --stage requirements-analysis --why stale");
     });
 
     // Their words come first, so on a terminal verdict too nothing runs
@@ -624,7 +678,7 @@ describe("t271 review iteration ceiling", () => {
       expect(turnMarkersShowConversational(proj)).toBe(true);
     });
 
-    test("an adversarial pass with one left names the next pass; an autonomous Construction gate and a Unit name none", () => {
+    test("an adversarial pass with one left names the next pass; an autonomous Construction gate names none", () => {
       const iterationOnly = { AIDLC_SKIP_SOURCE_FRESHNESS: "1" };
       const first = ["--stage", "code-generation", "--reviewer", "aidlc-architecture-reviewer-agent", "--iteration", "1"];
       for (const autonomous of [false, true]) {
@@ -650,17 +704,135 @@ describe("t271 review iteration ceiling", () => {
           expect(note(recorded.stdout)).not.toContain("stage-completion verification");
         }
       }
+    });
 
-      const unitProj = seedProject("feature");
-      writeReviewedArtifact(unitProj, "code-generation", "plan\n", "unit-alpha");
-      const unit = [
-        "--stage", "code-generation", "--reviewer", "aidlc-architecture-reviewer-agent",
-        "--unit", "unit-alpha", "--iteration", "1",
-      ];
-      expect(runReview(unitProj, unit).status).toBe(0);
-      const unitVerdict = runReview(unitProj, [...unit, "--verdict", "READY"]);
-      expect(unitVerdict.status, unitVerdict.stderr).toBe(0);
-      expect(note(unitVerdict.stdout)).toBeUndefined();
+    // A Unit's verdict named no step either, so on Kiro IDE the turn
+    // could end before the Unit's completion or its checkpoint. What follows a
+    // Unit is its route's, so the step is `next`.
+    describe("a Unit's verdict", () => {
+      const CG = ["--stage", "code-generation", "--reviewer", "aidlc-architecture-reviewer-agent", "--unit", "unit-alpha"];
+      function unitVerdict(
+        verdict: "READY" | "NOT-READY",
+        options: { box?: string; between?: (proj: string) => void } = {},
+      ): string | undefined {
+        const proj = seedProject("feature");
+        const sf = seededStateFile(proj);
+        writeFileSync(sf, readFileSync(sf, "utf-8").replace("- [ ] code-generation", `- [${options.box ?? "-"}] code-generation`));
+        writeReviewedArtifact(proj, "code-generation", "plan\n", "unit-alpha");
+        const pass = [...CG, "--iteration", "1"];
+        expect(runReview(proj, pass).status).toBe(0);
+        options.between?.(proj);
+        const recorded = runReview(proj, [...pass, "--verdict", verdict]);
+        expect(recorded.status, recorded.stderr).toBe(0);
+        return note(recorded.stdout);
+      }
+
+      test("with no further pass, names next and nothing of a stage's gate", () => {
+        const step = unitVerdict("READY");
+        expect(step).toMatch(/^No further review pass follows: run `[^`]*orchestrate next` and follow the step it returns/);
+        expect(step).not.toContain("--result");
+        expect(step).not.toContain("stage-completion verification");
+        expect(step).not.toContain("READY");
+      });
+
+      test("with a pass left, names the Unit's next pass", () => {
+        const step = unitVerdict("NOT-READY");
+        expect(step).toContain("--unit unit-alpha");
+        expect(step).toContain("--iteration 2");
+        expect(step).not.toContain("orchestrate next");
+      });
+
+      test("when the person wrote while it ran, names next first, with their words", () => {
+        const step = unitVerdict("READY", {
+          between: (proj) => {
+            const replied = spawnSync(process.execPath, [join(dirname(LOG_TOOL), "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+              cwd: proj, encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_UNATTENDED: "" },
+              input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t271-unit-wrote", prompt: "looks fine, approve it" }),
+            });
+            expect(replied.status, `${replied.stdout}${replied.stderr}`).toBe(0);
+          },
+        });
+        expect(step).toMatch(/^The person wrote since the review was requested: run `[^`]*orchestrate next`/);
+      });
+
+      test("of a stage no longer in flight names none", () => {
+        expect(unitVerdict("READY", { box: "x" })).toBeUndefined();
+      });
+
+      // A unit-major walk keeps Current Stage on the first per-Unit stage, and
+      // a later one's own box stays pending while its Units are worked.
+      test("of a later stage of a unit-major walk, its box still pending, names next", () => {
+        expect(unitVerdict("READY", { box: " " })).toMatch(/^No further review pass follows: run `[^`]*orchestrate next`/);
+      });
+
+      // A team's route hands the stage body back to a Unit with no completion
+      // receipt, so a Unit still open on the stage records its completion first.
+      test("of a Unit still open on its stage, records its completion before next", () => {
+        const step = unitVerdict("READY", {
+          between: (proj) => appendAuditEntry("UNIT_STARTED", {
+            Stage: "code-generation", Unit: "unit-alpha", "Run floor": "unstarted#0",
+          }, proj),
+        });
+        expect(step).toMatch(
+          /^No further review pass follows: record this Unit's completion with `[^`]*state unit complete --stage code-generation --unit unit-alpha`, then run `[^`]*orchestrate next`/,
+        );
+      });
+
+      test("of autonomous unit-major Code Generation, outside a swarm Bolt, names next", () => {
+        const proj = seedProject("feature");
+        const sf = seededStateFile(proj);
+        writeFileSync(sf, readFileSync(sf, "utf8")
+          .replace("- [ ] code-generation", "- [-] code-generation")
+          .replace("## Runtime State\n", "## Runtime State\n- **Construction Iteration**: unit-major\n- **Construction Autonomy Mode**: autonomous\n"));
+        writeReviewedArtifact(proj, "code-generation", "plan\n", "unit-alpha");
+        const pass = [...CG, "--iteration", "1"];
+        expect(runReview(proj, pass).status).toBe(0);
+        const recorded = runReview(proj, [...pass, "--verdict", "READY"]);
+        expect(recorded.status, recorded.stderr).toBe(0);
+        expect(note(recorded.stdout)).toMatch(/^No further review pass follows: run `[^`]*orchestrate next`/);
+      });
+
+      // A swarm batch and a wave go on through their own loop (the referee's
+      // check and finalize; the wave's other entries and `unit complete
+      // --wave`), so a `next` there would run ahead of it.
+      test("in a swarm Bolt names none, though a pass is left", () => {
+        const proj = seedProject("feature");
+        const sf = seededStateFile(proj);
+        writeFileSync(sf, readFileSync(sf, "utf8")
+          .replace("- [ ] code-generation", "- [-] code-generation")
+          .replace("- **Test Strategy**: Minimal", "- **Test Strategy**: Minimal\n- **Review Override**: none\n- **Construction Autonomy Mode**: autonomous"));
+        appendAuditEntry("BOLT_STARTED", {
+          "Bolt names": "unit-alpha",
+          "Batch number": "1",
+          "Walking skeleton": "false",
+          "Bolt slug": "unit-alpha",
+        }, proj);
+        writeSourceManifest(proj, "unit-alpha");
+        const iterationOnly = { AIDLC_SKIP_SOURCE_FRESHNESS: "1" };
+        const pass = [...CG, "--iteration", "1"];
+        // Admitted with reviews off: the swarm's own declared class, so a second pass is left.
+        expect(runReview(proj, pass, iterationOnly).status).toBe(0);
+        const recorded = runReview(proj, [...pass, "--verdict", "NOT-READY"], iterationOnly);
+        expect(recorded.status, recorded.stderr).toBe(0);
+        expect(note(recorded.stdout)).toBeUndefined();
+      });
+
+      test("of a design stage a stage-major walk may run as a wave names none; unit by unit it names next", () => {
+        for (const unitMajor of [false, true]) {
+          const proj = seedProject("feature");
+          const sf = seededStateFile(proj);
+          let state = readFileSync(sf, "utf-8").replace(/^- \[S\] functional-design .*$/m, "- [-] functional-design \u2014 EXECUTE");
+          if (unitMajor) state = state.replace("## Runtime State\n", "## Runtime State\n- **Construction Iteration**: unit-major\n");
+          writeFileSync(sf, state);
+          writeReviewedArtifact(proj, "functional-design", "# spec\n", "unit-alpha");
+          const pass = ["--stage", "functional-design", "--reviewer", "aidlc-architecture-reviewer-agent", "--unit", "unit-alpha", "--iteration", "1"];
+          expect(runReview(proj, pass).status).toBe(0);
+          const recorded = runReview(proj, [...pass, "--verdict", "READY"]);
+          expect(recorded.status, recorded.stderr).toBe(0);
+          if (unitMajor) expect(note(recorded.stdout), "unit-major").toContain("orchestrate next");
+          else expect(note(recorded.stdout), "stage-major").toBeUndefined();
+        }
+      });
     });
   });
 
@@ -747,9 +919,11 @@ describe("t271 review iteration ceiling", () => {
     expect(pendingRetry.stdout).toContain('"retry":"pending-request"');
     expect(pendingRetry.stdout).not.toContain('"recovery"');
 
-    expect(
-      runReview(proj, [...base, "--iteration", "2", "--verdict", "READY"]).status,
-    ).toBe(0);
+    const recovered = runReview(proj, [...base, "--iteration", "2", "--verdict", "READY"]);
+    expect(recovered.status).toBe(0);
+    // The recovery pass re-checked a changed output: its gate's brief is the stale one.
+    const recoveredStep = (JSON.parse(recovered.stdout.trim().split("\n").at(-1) ?? "{}") as { agent_note?: string }).agent_note;
+    expect(recoveredStep).toContain("aidlc-review-brief.ts review --stage requirements-analysis --why stale");
     writeReviewedArtifact(proj, "requirements-analysis", "changed again\n");
 
     const spent = runReview(proj, [...base, "--iteration", "3"]);

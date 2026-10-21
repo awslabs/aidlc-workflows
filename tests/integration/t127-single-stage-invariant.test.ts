@@ -56,6 +56,11 @@ import {
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  createCodeGenerationProject,
+  next as codeGenerationNext,
+  writePlan,
+} from "../harness/code-generation-states.ts";
+import {
   artifactFilename,
   loadStageGraphAll,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
@@ -826,5 +831,206 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
       "next", "--single", "--phase", "inception", "--project-dir", proj,
     ]);
     expect(r.out).toContain("Cannot use --single with --phase");
+  });
+
+  // =========================================================================
+  // Test 17 (#2654): a depth or test strategy typed with --single is that
+  // run's alone. It is recorded on the isolated start and rides on the
+  // run-stage; the workflow's own settings stay as they are. A Guard Policy or
+  // check cannot be the run's own, so it is refused, naming no config set.
+  // Review and ceremony flags meet their own refusals earlier in handleNext.
+  // =========================================================================
+  type SingleDirective = {
+    kind?: string;
+    message?: string;
+    single?: boolean;
+    depth?: string;
+    test_strategy?: string;
+  };
+
+  function nextSingleStage(proj: string, stage: string, extra: string[]): SingleDirective {
+    const r = run(TOOL, ["next", "--stage", stage, "--single", ...extra, "--project-dir", proj]);
+    return JSON.parse(r.out.trim()) as SingleDirective;
+  }
+
+  function nextSingle(proj: string, extra: string[]): SingleDirective {
+    const r = run(TOOL, ["next", "--stage", "build-and-test", "--single", ...extra, "--project-dir", proj]);
+    return JSON.parse(r.out.trim()) as SingleDirective;
+  }
+
+  function startedBlocks(proj: string): string[] {
+    return readFileSync(seededAuditShard(proj), "utf-8")
+      .split("\n---")
+      .filter((block) => block.includes("**Event**: STAGE_STARTED"));
+  }
+
+  function seededSingleProject(): string {
+    const proj = freshProject();
+    seedStateFile(proj, STATE_FIXTURE);
+    seedAuditFile(proj);
+    return proj;
+  }
+
+  test("17: next --single --test-strategy runs the stage with it and leaves the workflow's as it is", () => {
+    const proj = seededSingleProject();
+    const directive = nextSingle(proj, ["--test-strategy", "comprehensive"]);
+    expect(directive.kind, JSON.stringify(directive)).toBe("run-stage");
+    expect(directive.single).toBe(true);
+    expect(directive.test_strategy).toBe("Comprehensive");
+    expect(directive.depth).toBeUndefined();
+    const started = startedBlocks(proj);
+    expect(started).toHaveLength(1);
+    expect(started[0]).toContain("**Workflow**: single-stage:build-and-test");
+    expect(started[0]).toContain("**Test Strategy**: Comprehensive");
+    expect(run(STATE_TOOL, ["get", "Test Strategy", "--project-dir", proj]).out.trim()).toBe("Standard");
+    expect(currentStage(proj)).toBe("feasibility");
+  });
+
+  test("17b: next --single with a depth and a test strategy carries both", () => {
+    const proj = seededSingleProject();
+    const directive = nextSingle(proj, ["--depth", "minimal", "--test-strategy", "comprehensive"]);
+    expect(directive.kind, JSON.stringify(directive)).toBe("run-stage");
+    expect(directive.depth).toBe("Minimal");
+    expect(directive.test_strategy).toBe("Comprehensive");
+    expect(startedBlocks(proj)[0]).toContain("**Depth**: Minimal");
+  });
+
+  test("17c: a re-run of the open attempt keeps its settings; a different one starts it over", () => {
+    const proj = seededSingleProject();
+    expect(nextSingle(proj, ["--depth", "minimal"]).kind).toBe("run-stage");
+    const again = nextSingle(proj, []);
+    expect(again.kind, JSON.stringify(again)).toBe("run-stage");
+    expect(again.depth).toBe("Minimal");
+    expect(startedBlocks(proj)).toHaveLength(1);
+    // The person asked for Standard: the stage starts over with it. The
+    // unfinished attempt is set aside, never recorded as completed.
+    const other = nextSingle(proj, ["--depth", "standard"]) as SingleDirective & { change_notices?: string[] };
+    expect(other.kind, JSON.stringify(other)).toBe("run-stage");
+    expect(other.depth).toBe("Standard");
+    expect(other.change_notices?.join("\n")).toContain("starts over with the settings you gave");
+    const started = startedBlocks(proj);
+    expect(started).toHaveLength(2);
+    expect(started[1]).toContain("**Depth**: Standard");
+    expect(readFileSync(seededAuditShard(proj), "utf-8")).not.toContain("**Event**: STAGE_COMPLETED");
+    // Its re-run keeps the new attempt's setting.
+    expect(nextSingle(proj, []).depth).toBe("Standard");
+  });
+
+  test("17c2: a typed depth picks the knowledge the stage loads, on the first part and after the steering continuation", () => {
+    const roster = (extra: string[], steered: boolean) => {
+      const proj = freshProject();
+      // Rules too large for one message make the step arrive in parts, so the
+      // final run-stage is the one `continue` rebuilds from the recorded start.
+      if (steered) {
+        writeFileSync(join(proj, "aidlc/spaces/default/memory/org.md"),
+          Array.from({ length: 180 }, (_, i) => `## Rule ${i}\n\n${"x".repeat(320)}\n`).join("\n"));
+      }
+      const r = runOrchestrateNext(TOOL, proj, [
+        "--scope", "bugfix", "--stage", "requirements-analysis", "--single", ...extra,
+      ]);
+      const directive = r.directive as { kind?: string; depth?: string; test_strategy?: string; inline_context_paths?: string[] } | null;
+      expect(directive?.kind, r.out).toBe("run-stage");
+      if (steered) expect(r.steering.length, r.out).toBeGreaterThan(1);
+      return { paths: directive?.inline_context_paths ?? [], depth: directive?.depth, testStrategy: directive?.test_strategy };
+    };
+    // bugfix runs at Minimal, which prunes the lead's knowledge.
+    const minimal = roster([], false);
+    const comprehensive = roster(["--depth", "comprehensive"], false);
+    expect(comprehensive.paths.length).toBeGreaterThan(minimal.paths.length);
+    for (const path of minimal.paths) expect(comprehensive.paths).toContain(path);
+    const continued = roster(["--depth", "comprehensive", "--test-strategy", "comprehensive"], true);
+    expect(continued.depth).toBe("Comprehensive");
+    expect(continued.testStrategy).toBe("Comprehensive");
+    expect(continued.paths).toEqual(comprehensive.paths);
+  });
+
+  test("17c3: an isolated Code Generation run's Testing Contract follows its own test strategy; the workflow's does not", () => {
+    const proj = seededSingleProject();
+    const POSTURE_TOOL = join(AIDLC_SRC, "tools", "aidlc-testing-posture.ts");
+    const contractStrategy = (): string => {
+      const r = spawnSync(BUN, [POSTURE_TOOL, "render", "--project-dir", proj], { encoding: "utf-8" });
+      expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+      const json = r.stdout.match(/```json\n([\s\S]*?)\n```/)?.[1] ?? "{}";
+      return (JSON.parse(json) as { test_strategy?: string }).test_strategy ?? "";
+    };
+    expect(contractStrategy()).toBe("standard");
+
+    const started = nextSingleStage(proj, "code-generation", ["--test-strategy", "comprehensive"]);
+    expect(started.kind, JSON.stringify(started)).toBe("run-stage");
+    expect(started.test_strategy).toBe("Comprehensive");
+    expect(contractStrategy()).toBe("comprehensive");
+
+    // The plan carries that contract, and the engine takes it: it asks for
+    // Plan Approval instead of calling the contract out of date.
+    const planDir = join(seededRecordDir(proj), "construction", "code-generation");
+    mkdirSync(planDir, { recursive: true });
+    const render = spawnSync(BUN, [POSTURE_TOOL, "render", "--project-dir", proj], { encoding: "utf-8" });
+    writeFileSync(
+      join(planDir, "code-generation-plan.md"),
+      "# Code Generation Plan\n\n## Summary\n\n- Builds: slugify\n\n## Steps\n\n- [ ] Step 1: write slugify\n\n" + render.stdout,
+      "utf-8",
+    );
+    writeFileSync(join(planDir, "unit-test-instructions.md"), "# Unit Test Instructions\n\nRun `bun test`.\n", "utf-8");
+    const asked = nextSingleStage(proj, "code-generation", []) as SingleDirective & { ask_type?: string };
+    expect(asked.kind, JSON.stringify(asked)).toBe("ask");
+    expect(asked.ask_type).toBe("plan-approval");
+    expect(contractStrategy()).toBe("comprehensive");
+
+    // The workflow's own setting and contract stay as they were.
+    expect(run(STATE_TOOL, ["get", "Test Strategy", "--project-dir", proj]).out.trim()).toBe("Standard");
+    expect(run(TOOL, ["next", "--project-dir", proj]).status).toBe(0);
+    expect(contractStrategy()).toBe("standard");
+  });
+
+  test("17c4: an interrupted isolated Code Generation run leaves the workflow's own plan approval as it was", () => {
+    const proj = createCodeGenerationProject();
+    projects.push(proj);
+    writePlan(proj);
+    // The workflow's Standard plan is ready: the engine asks to approve it.
+    expect(codeGenerationNext(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+    // An isolated Comprehensive run starts and is left open.
+    const isolated = codeGenerationNext(proj, ["--stage", "code-generation", "--single", "--test-strategy", "comprehensive"]);
+    expect(isolated).toMatchObject({ kind: "run-stage", single: true, test_strategy: "Comprehensive" });
+    // Back on the workflow, its plan still matches its own Testing Contract.
+    expect(codeGenerationNext(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
+  });
+
+  test("17d: with no workflow, next --single --test-strategy runs the stage with it", () => {
+    const proj = freshProject();
+    const directive = nextSingle(proj, ["--test-strategy", "comprehensive"]);
+    expect(directive.kind, JSON.stringify(directive)).toBe("run-stage");
+    expect(directive.test_strategy).toBe("Comprehensive");
+  });
+
+  for (const [flag, value] of [
+    ["--guard-policy", "relaxed"],
+    ["--guard.review-freeze", "off"],
+  ] as const) {
+    test(`17e: next --single ${flag} errors, names no config set and starts nothing`, () => {
+      const proj = seededSingleProject();
+      const directive = nextSingle(proj, [flag, value]);
+      expect(directive.kind, JSON.stringify(directive)).toBe("error");
+      expect(directive.message).toContain(`Cannot use --single with ${flag}.`);
+      expect(directive.message).not.toContain("config set");
+      expect(startedBlocks(proj)).toHaveLength(0);
+    });
+  }
+
+  test("17f: next --single with a ceremony flag stays refused", () => {
+    const proj = seededSingleProject();
+    const directive = nextSingle(proj, ["--sensors", "off"]);
+    expect(directive.kind, JSON.stringify(directive)).toBe("error");
+    expect(directive.message).toContain("Cannot combine ceremony flags");
+    expect(startedBlocks(proj)).toHaveLength(0);
+  });
+
+  test("17g: plain next --stage build-and-test --single carries no settings of its own", () => {
+    const proj = seededSingleProject();
+    const directive = nextSingle(proj, []);
+    expect(directive.kind, JSON.stringify(directive)).toBe("run-stage");
+    expect(directive.single).toBe(true);
+    expect(directive.depth).toBeUndefined();
+    expect(directive.test_strategy).toBeUndefined();
+    expect(startedBlocks(proj)).toHaveLength(1);
   });
 });

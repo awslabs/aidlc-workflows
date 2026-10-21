@@ -149,6 +149,9 @@ interface RunStageDirective {
   consumes_absent?: Array<{ path: string; expected: boolean }>;
   produces: string[];
   receipt?: string;
+  ceremony?: { summary_confirmation: "on" | "off"; plan_approval: "on" | "off" };
+  ceremony_note?: string;
+  protocol_modules?: string[];
 }
 
 /**
@@ -408,6 +411,20 @@ describe("t116 per-unit {unit-name} injection", () => {
     // domain-design here is only used for the test-11 negative; greenfield
     // fixture so it EXECUTEs and is non-per-unit (inception phase).
     AD = emitFor("state-construction.md", "domain-design");
+  });
+
+  test("Code Generation owes Plan Approval but no summary confirmation in a summary-on scope", () => {
+    expect(CG.ceremony?.summary_confirmation).toBe("off");
+    expect(CG.ceremony?.plan_approval).toBe("on");
+    expect(CG.ceremony_note).toStartWith("Summary confirmation is off for this work:");
+    expect(CG.ceremony_note).not.toContain("confirm the summary of the answers");
+    expect(CG.protocol_modules ?? []).not.toContain("summary");
+  });
+
+  test("a stage declaring summary confirmation retains its confirmation note", () => {
+    expect(FD.ceremony?.summary_confirmation).toBe("on");
+    expect(FD.ceremony_note).toContain("confirm the summary of the answers with the person");
+    expect(FD.protocol_modules).toContain("summary");
   });
 
   // .sh test 9: functional-design (per-unit) resolves a produces name to the

@@ -12816,8 +12816,7 @@ export async function main(
     Boolean(process.env.AIDLC_PROJECT_DIR) ||
     Boolean(process.env.CLAUDE_PROJECT_DIR) ||
     Boolean(process.env.KIRO_PROJECT_DIR);
-  const recognized = [".git", "package.json", "Cargo.toml", "go.mod", "pyproject.toml"]
-    .some((entry) => existsSync(join(projectDir, entry)));
+  const recognized = settingsProjectAvailable(projectDir);
   const firstRunWizard = !section &&
     configInputIsTty() &&
     options.mode === "human" &&

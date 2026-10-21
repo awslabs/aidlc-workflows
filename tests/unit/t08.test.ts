@@ -2,16 +2,16 @@
 //
 // Port of tests/unit/t08-hook-validate-state.sh (TAP plan 14), mechanism = none.
 // The unit under test is a HOOK — aidlc-validate-state.ts, the PreCompact hook
-// that validates aidlc-state.md structure, writes a recovery breadcrumb, and
-// emits SESSION_COMPACTED when an audit.md already exists. Hooks are
+// that validates aidlc-state.md structure and emits SESSION_COMPACTED when an
+// audit.md already exists. Hooks are
 // mechanism=none: they resolve the project dir from the CLAUDE_PROJECT_DIR env
 // var (aidlc-lib.ts) and have no exported pure function to import. So
 // every .sh assertion is preserved by SPAWNING the hook via
 // node:child_process spawnSync with CLAUDE_PROJECT_DIR set, exactly as the .sh
 // ran `CLAUDE_PROJECT_DIR=<p> bun "$HOOK"`. We assert on res.stderr (the .sh's
 // `2>&1` WARNING grep — the hook prints warnings via console.error,
-// aidlc-validate-state.ts), on the recovery breadcrumb / heartbeat the hook
-// writes, and on the SESSION_COMPACTED row it appends to audit.md.
+// aidlc-validate-state.ts), on the heartbeat the hook writes, and on the
+// SESSION_COMPACTED row it appends to audit.md.
 //
 // NO STDIN: unlike the SubagentStop/PostToolUse hooks (t09/t29), this PreCompact
 // hook reads NOTHING from stdin — it only consumes the state file under
@@ -21,16 +21,12 @@
 // HOOK CONTRACT (aidlc-validate-state.ts):
 //   - Always writes the heartbeat aidlc-docs/.aidlc-engine/hooks-health/validate-state.last
 //     (an ISO timestamp), even before the no-state-file early exit (lines 26-28).
-//   - No state file -> process.exit(0) BEFORE any WARNING / breadcrumb / audit
-//     work (line 30). So: no WARNING on stderr, no .aidlc-engine/recovery.md.
+//   - No state file -> process.exit(0) BEFORE any WARNING / audit work. So: no
+//     WARNING on stderr.
 //   - State file present -> validates `## Stage Progress` + `## Current Status`
 //     (lines 36-37); missing sections print `WARNING: aidlc-state.md missing
-//     sections: <names>` on stderr (line 40) and drive the breadcrumb's
-//     `State file: INVALID — missing sections: ...` line (lines 43-45, 53).
-//   - Always (when state exists) writes aidlc-docs/.aidlc-engine/recovery.md carrying
-//     `**Current stage**: <getField "Current Stage">` and
-//     `**State file**: valid (all required sections present)` | `INVALID — ...`
-//     (lines 47-55).
+//     sections: <names>` on stderr and make the row's State Validity `invalid`.
+//   - It keeps no other record of the compaction: no .aidlc-engine/recovery.md.
 //   - SESSION_COMPACTED emitted via appendAuditEntry ONLY when audit.md already
 //     exists (lines 58-59); the hook never auto-creates audit.md. The audit row
 //     renders under `## Session Compacted` with `**Event**: SESSION_COMPACTED`
@@ -44,8 +40,7 @@
 //   - .sh Test 2  no state -> heartbeat written anyway                -> Test 2:
 //       heartbeat exists (same observable) + STRONGER: its contents are an ISO
 //       timestamp (hook line 28 writes isoTimestamp()).
-//   - .sh Test 3  no state -> no .aidlc-engine/recovery.md breadcrumb        -> Test 3:
-//       breadcrumb absent (same observable).
+//   - .sh Test 3  no state -> no breadcrumb: retired with the breadcrumb (Test 7).
 //   - .sh Test 4  valid mid-ideation fixture -> no WARNING            -> Test 4:
 //       res.stderr has no /WARNING/i (same observable).
 //   - .sh Test 5  state missing `## Stage Progress` -> WARNING names it -> Test 5:
@@ -55,15 +50,14 @@
 //   - .sh Test 6  state missing `## Current Status` -> WARNING names it -> Test 6:
 //       res.stderr contains "Current Status" (same observable) + STRONGER: the
 //       full canonical diagnostic line.
-//   - .sh Test 7  valid fixture -> writes .aidlc-engine/recovery.md          -> Test 7:
-//       breadcrumb exists (same observable).
-//   - .sh Test 8  breadcrumb contains stage + "valid" status (2 grep) -> Test 8a/8b:
-//       breadcrumb contains "feasibility" AND "valid" (same observables) +
-//       STRONGER: pins the exact `**Current stage**: feasibility` and
-//       `**State file**: valid (all required sections present)` lines.
-//   - .sh Test 9/10 breadcrumb shows INVALID when sections missing     -> Test 9:
-//       breadcrumb contains "INVALID" (same observable) + STRONGER: the exact
-//       `**State file**: INVALID — missing sections: Stage Progress` line.
+//   - .sh Test 7  valid fixture -> writes the breadcrumb: now the opposite. Test 7
+//       pins that a compaction keeps no recovery.md (its stage and validity were
+//       copies of the SESSION_COMPACTED row), still writes the heartbeat and the
+//       row, and that no shipped file names the breadcrumb.
+//   - .sh Test 8  breadcrumb stage + "valid": retired; Test 13 pins the row's
+//       Current Stage and State Validity.
+//   - .sh Test 9/10 breadcrumb INVALID when sections missing -> Test 9: the row's
+//       State Validity is `invalid`.
 //   - .sh Test 11 corrupted fixture (missing Stage Progress) -> WARNING -> Test 11:
 //       res.stderr contains "Stage Progress" (same observable) + STRONGER: the
 //       full canonical diagnostic naming the corrupted fixture's missing section.
@@ -75,13 +69,7 @@
 //       SESSION_COMPACTED block — not a bare presence grep) + the new block's
 //       exact Current Stage / State Validity field values, block-scoped.
 //   - .sh Test 14 no audit.md -> hook does NOT auto-create audit.md     -> Test 14:
-//       audit.md absent (same observable) + STRONGER: the hook still exits 0
-//       (the breadcrumb path is independent of the audit emit) and the recovery
-//       breadcrumb is still written (the primary signal per the hook's comment).
-//
-// 14 .sh asserts -> 15 expect()-bearing test() cases here (test 8's two greps
-// kept as 8a + 8b to keep one observable per case, matching the .sh's two
-// assert_grep lines under one plan slot).
+//       audit.md absent (same observable) + STRONGER: the hook still exits 0.
 //
 // FIXTURE DISCIPLINE (mirrors the .sh's create_test_project + seed_state_file +
 // seed_audit_file + cleanup_test_project per case): each case uses a FRESH temp
@@ -142,19 +130,17 @@ function proj(): string {
   return p;
 }
 
-// Per-intent record paths. state + recovery + heartbeat re-root under the
+// Per-intent record paths. state + heartbeat re-root under the
 // default intent's record dir; the audit trail is a DIR of per-clone shards
 // (read via readShards below).
 const statePath = (p: string): string => join(seededRecordDir(p), "aidlc-state.md");
-const recoveryPath = (p: string): string =>
-  join(seededRecordDir(p), ".aidlc-engine/recovery.md");
+const heartbeatPath = (p: string): string =>
+  join(seededRecordDir(p), ".aidlc-engine/hooks-health", "validate-state.last");
 // With NO state file the active-intent cursor does not resolve (a record without
 // aidlc-state.md is not honoured), so docsRoot() falls back to the bare SPACE
-// record root — the heartbeat/breadcrumb land there, not under the record.
+// record root, so the heartbeat lands there, not under the record.
 const heartbeatPathNoState = (p: string): string =>
   join(intentsDirOf(p), ".aidlc-engine/hooks-health", "validate-state.last");
-const recoveryPathNoState = (p: string): string =>
-  join(intentsDirOf(p), ".aidlc-engine/recovery.md");
 
 // The shard the spawned hook resolves, computed from a clone-id we pin on disk
 // (mirrors auditShardName()'s `<host>-<clone>.md` shape). Used only by test 13,
@@ -263,6 +249,16 @@ function lastCompactedBlock(body: string): Record<string, string> {
   return last;
 }
 
+// What ships: the source trees the packager projects into every harness.
+const BREADCRUMB = /\.aidlc-engine\/recovery\.md|recovery breadcrumb|recoveryFilePath|recoveryExists/i;
+function shippedFiles(): string[] {
+  return ["core", "harness", "plugins"].flatMap((root) =>
+    readdirSync(join(REPO_ROOT, root), { recursive: true, withFileTypes: true })
+      .filter((entry) => entry.isFile() && !entry.parentPath.includes("node_modules"))
+      .map((entry) => join(entry.parentPath, entry.name)),
+  );
+}
+
 describe("t08 aidlc-validate-state hook (migrated from t08-hook-validate-state.sh, plan 14)", () => {
   test("1: no state file -> no WARNING on stderr", () => {
     const p = proj();
@@ -279,13 +275,6 @@ describe("t08 aidlc-validate-state hook (migrated from t08-hook-validate-state.s
     expect(existsSync(heartbeatPathNoState(p))).toBe(true);
     const ts = readFileSync(heartbeatPathNoState(p), "utf-8").trim();
     expect(ts).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
-  });
-
-  test("3: no recovery breadcrumb when no state file", () => {
-    const p = proj();
-    rmSync(statePath(p), { force: true });
-    runHook(p);
-    expect(existsSync(recoveryPathNoState(p))).toBe(false);
   });
 
   test("4: valid mid-ideation fixture -> no WARNING", () => {
@@ -321,45 +310,27 @@ describe("t08 aidlc-validate-state hook (migrated from t08-hook-validate-state.s
     );
   });
 
-  test("7: valid fixture -> writes recovery breadcrumb", () => {
+  test("7: a compaction keeps no recovery.md, still writes its heartbeat and SESSION_COMPACTED, and no shipped file names one", () => {
     const p = proj();
     seedStateFile(p, "state-mid-ideation.md");
-    runHook(p);
-    expect(existsSync(recoveryPath(p))).toBe(true);
+    const auditDir = seedAuditShard(p);
+    expect(runHook(p).status).toBe(0);
+    expect(existsSync(join(seededRecordDir(p), ".aidlc-engine", "recovery.md"))).toBe(false);
+    expect(existsSync(heartbeatPath(p))).toBe(true);
+    expect(sessionCompactedCount(readShards(auditDir))).toBe(1);
+    const naming = shippedFiles().filter((file) => BREADCRUMB.test(readFileSync(file, "utf-8")));
+    expect(naming).toEqual([]);
   });
 
-  test("8a: breadcrumb contains the current stage (feasibility)", () => {
-    const p = proj();
-    seedStateFile(p, "state-mid-ideation.md");
-    runHook(p);
-    const breadcrumb = readFileSync(recoveryPath(p), "utf-8");
-    expect(breadcrumb).toContain("feasibility");
-    expect(breadcrumb).toContain("**Current stage**: feasibility");
-  });
-
-  test("8b: breadcrumb reports valid state-file status", () => {
-    const p = proj();
-    seedStateFile(p, "state-mid-ideation.md");
-    runHook(p);
-    const breadcrumb = readFileSync(recoveryPath(p), "utf-8");
-    expect(breadcrumb).toContain("valid");
-    expect(breadcrumb).toContain(
-      "**State file**: valid (all required sections present)",
-    );
-  });
-
-  test("9: breadcrumb shows INVALID when sections missing", () => {
+  test("9: missing sections -> the SESSION_COMPACTED row says invalid", () => {
     const p = proj();
     writeState(
       p,
       "# AI-DLC State Tracking\n## Current Status\n- **Lifecycle Phase**: IDEATION\n- **Current Stage**: feasibility\n",
     );
+    const auditDir = seedAuditShard(p);
     runHook(p);
-    const breadcrumb = readFileSync(recoveryPath(p), "utf-8");
-    expect(breadcrumb).toContain("INVALID");
-    expect(breadcrumb).toContain(
-      "**State file**: INVALID — missing sections: Stage Progress",
-    );
+    expect(lastCompactedBlock(readShards(auditDir))["State Validity"]).toBe("invalid");
   });
 
   test("11: corrupted fixture -> WARNING names missing Stage Progress", () => {
@@ -397,17 +368,13 @@ describe("t08 aidlc-validate-state hook (migrated from t08-hook-validate-state.s
     expect(blk["State Validity"]).toBe("valid");
   });
 
-  test("14: no audit shard -> hook does not auto-create it (breadcrumb still written)", () => {
+  test("14: no audit shard -> hook does not auto-create it", () => {
     const p = proj();
     seedStateFile(p, "state-mid-ideation.md");
     const auditDir = seededAuditDir(p);
     expect(existsSync(auditDir)).toBe(false);
     const r = runHook(p);
     expect(existsSync(auditDir)).toBe(false);
-    // The audit emit is gated on the shard's presence, but the breadcrumb path
-    // is independent - so the hook still exits 0 and still writes the recovery
-    // breadcrumb (its primary signal, see compact in aidlc-validate-state.ts).
     expect(r.status).toBe(0);
-    expect(existsSync(recoveryPath(p))).toBe(true);
   });
 });

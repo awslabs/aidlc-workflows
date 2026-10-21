@@ -54,6 +54,7 @@ import {
   runtimeProjectDir,
 } from "./aidlc-runtime-paths.ts";
 import {
+  agentFileText,
   _resetAgentsForTests,
   _resetHarnessDataForTests,
   _resetScopeMappingForTests,
@@ -3876,7 +3877,7 @@ const COMMANDS: Record<string, Handler> = {
       // A proposal piped in (`--proposal /dev/stdin` or `-`) is read from the
       // command's own input to its end, whatever kind of pipe carries it.
       const fromStdin = proposalPath === "/dev/stdin" || proposalPath === "-";
-      parsed = JSON.parse(readFileSync(fromStdin ? 0 : proposalPath, "utf-8"));
+      parsed = JSON.parse(agentFileText(readFileSync(fromStdin ? 0 : proposalPath)));
     } catch (err) {
       console.error(
         `validate-grid: cannot read ${proposalPath}: ${errorMessage(err)}` +

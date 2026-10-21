@@ -1114,7 +1114,7 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     }
   });
 
-  test("approved inline units are excluded, and cannot substitute for native batch members", () => {
+  test("approved inline units are excluded, and cannot substitute for native batch members", async () => {
     const pd = fixture();
     const content = readFileSync(seededStateFile(pd), "utf-8");
     for (const stage of unitMajorConstructionStageSlugs("feature", content, true)) {
@@ -1131,7 +1131,7 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
       : `'${process.execPath.replaceAll("'", "'\\''")}'`;
     const check = `${executable} -e "if (!require('fs').readFileSync('src/alpha.ts','utf8').includes('alpha = 1')) process.exit(1)"`;
     recordCommand(pd, check);
-    expect(verifyConstructionCheckpoint(pd, "alpha", "unit").verified).toBe(true);
+    expect((await verifyConstructionCheckpoint(pd, "alpha", "unit")).verified).toBe(true);
     expect(tool(pd, "bolt", ["checkpoint", "--action", "ask", "--unit", "alpha", "--kind", "unit", "--session", "inline-checkpoint"]).code).toBe(0);
     choice(pd, "inline-checkpoint", "Approve");
     expect(approveConstructionCheckpoint(pd, "alpha", "unit", "Approve", "inline-checkpoint").approved).toBe(true);

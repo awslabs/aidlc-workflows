@@ -16,6 +16,7 @@ import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { projectInvocationTokens } from "./aidlc-command.ts";
 import {
   acquireAuditLock,
   committedTextBytes,
@@ -1093,7 +1094,7 @@ function pluginPrimitiveTargets(
 function projectedSourceBytes(source: string, harnessDir: string): Buffer {
   const bytes = readFileSync(source);
   return source.endsWith(".md")
-    ? Buffer.from(bytes.toString("utf-8").replaceAll("{{HARNESS_DIR}}", harnessDir))
+    ? Buffer.from(projectInvocationTokens(bytes.toString("utf-8"), harnessDir))
     : bytes;
 }
 
@@ -1718,16 +1719,7 @@ function removeFragments(content: string, key: string, path: string): string {
 
 function pruneContributions(stagedProject: string, harnessDir: string, key: string): void {
   const sidecar = join(harnessDataDir(stagedProject, harnessDir), `plugin-contrib-${key}.json`);
-  let records: Record<string, {
-    produces?: string[];
-    sensors?: string[];
-    // Compose records consumed artifacts as objects; the shape must match the
-    // compose hook's output or the strip matches nothing. See issue #1247.
-    consumes?: Array<string | { artifact: string; required: boolean; conditional_on?: string }>;
-    requires_stage?: string[];
-    required_sections?: string[];
-    required_sections_created?: boolean;
-  }> = {};
+  let records: Record<string, StageContribRecord> = {};
   if (existsSync(sidecar)) {
     try {
       const parsed = readJson(sidecar);
@@ -1753,6 +1745,7 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
       if (record) {
         if (record.produces?.length) after = removeListValues(after, "produces", new Set(record.produces), false);
         if (record.sensors?.length) after = removeListValues(after, "sensors", new Set(record.sensors), false);
+        if (record.scopes?.length) after = removeListValues(after, "scopes", new Set(record.scopes), false);
         if (record.consumes?.length) {
           after = removeConsumes(
             after,

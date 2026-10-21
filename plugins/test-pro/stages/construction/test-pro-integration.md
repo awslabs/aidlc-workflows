@@ -75,7 +75,7 @@ each failure touches).
 
 ### Step 5: Open the Approval Gate
 
-Run `bun {{HARNESS_DIR}}/tools/aidlc-orchestrate.ts report --stage test-pro-integration --result awaiting-approval`.
+Run `{{INVOKE}} engine orchestrate report --stage test-pro-integration --result awaiting-approval`.
 
 ### Step 6: Present Completion & Request Approval
 

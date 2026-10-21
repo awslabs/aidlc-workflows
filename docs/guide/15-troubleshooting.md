@@ -17,6 +17,7 @@ This chapter covers common issues and their solutions, organized by symptom.
 | Symptom | Quick Fix |
 |---------|-----------|
 | No audit entries appearing | Run `aidlc doctor`; for a copy install, also verify `bun` is on the hook PATH |
+| Windows: the audit or another record shows `â€”` for `—` and `â†’` for `→` | The file is UTF-8, and Windows PowerShell 5.1 read it as ANSI. Read it with `Get-Content -Encoding UTF8`, or use PowerShell 7. A file rewritten from that reading keeps the wrong characters, so copy a record with `Copy-Item` or Explorer, and share a run with `/aidlc --doctor --export` |
 | I edited a file by hand; will the agent accept it? | Yes: edit, then say **done** (or carry on). An edit to a finished stage is used as is but not re-approved; to have it approved, jump back with `/aidlc --stage <name>`, which reopens that stage and every stage after it. See [Editing Files Yourself](07-interaction-modes.md#editing-files-yourself) for each case |
 | Claude hooks are restricted by policy | Ask the Claude Code administrator to lift managed `allowManagedHooksOnly`; project settings cannot override it |
 | Cursor: approvals are never recorded | If the project is not in a git repository, run `git init` in it, then fully restart Cursor and trust the folder (see [Cursor project outside a git repository](#cursor-project-outside-a-git-repository)) |
@@ -685,6 +686,13 @@ directory in its paths list, or remove a broken symlink), then run `/aidlc`
 (`$aidlc` on Codex). `/aidlc --doctor` has a "Workspace source boundary binds"
 check that names the failing path and says which of these applies to you.
 
+A valid Git checkout kept inside the project can share its object store with
+jj, including through a linked worktree. If an older AI-DLC install reports
+"no resolvable HEAD commit" for a commit that Git can read from a jj-created
+pack, update AI-DLC and refresh the project's install. Repacking the repository
+or changing jj settings is unnecessary. A genuinely missing or unreadable
+HEAD object still needs repair.
+
 If the plan's Testing Contract is refused, the message names one of three
 causes: the block is missing, it is not valid JSON, or it changed after it was
 rendered. The repair is the same for all three: re-run `render` and replace the
@@ -849,17 +857,16 @@ do not change live create/discard commands or the required human consent.
 
 ### What is preserved
 
-All record-dir artifacts, `aidlc-state.md`, the `audit/` shards, and `.aidlc-engine/recovery.md` persist on disk. Only in-memory conversation context and partial in-progress work not yet written to files is lost.
+All record-dir artifacts, `aidlc-state.md` and the `audit/` shards persist on disk. Only in-memory conversation context and partial in-progress work not yet written to files is lost.
 
 ### How to recover
 
 Run `/aidlc` after compaction. The framework:
 
 1. Reads `aidlc-state.md` to load workflow position
-2. Compares `.aidlc-engine/recovery.md` against the state file - warns if they differ
-3. Carries on where the work stopped
+2. Carries on where the work stopped
 
-If the recovery breadcrumb warns about a mismatch, say "redo this stage" to safely re-execute the stage that was in progress during compaction.
+To have the stage that was in progress done again, say "redo this stage".
 
 ### The build stops after a compaction
 
@@ -1017,4 +1024,4 @@ for the full report contents and safety model.
 - [State Tracking and Audit Trail](10-state-and-audit.md) — State file structure
 - [Session Management](11-session-management.md): carrying on after compaction
 - [CLI Commands](12-cli-commands.md) — `--doctor`, `--status`, `--stage` usage
-- [Glossary](glossary.md) — Definitions for compaction, recovery breadcrumb, hook
+- [Glossary](glossary.md): definitions for compaction, hook

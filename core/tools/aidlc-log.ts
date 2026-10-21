@@ -31,9 +31,12 @@ import {
   recordGuardRecoveryChoice,
   requestChangesReportCommand,
   stageGateReportCommand,
+  stageReviewBriefCommand,
+  backwardJumpBoundary,
+  reviewInvalidationAttemptView,
   markStageWorkLogged,
   markTurnEnd,
-  LEARNINGS_NOTE_CHOICES,
+  LEARNINGS_NOTE_QUESTION,
   learningsRitualRuns,
   ceremonyPolicyValues,
   terminalReviewVerdict,
@@ -108,6 +111,8 @@ import {
   isAutonomousConstructionDecision,
   legacyReviewAppendixEchoFields,
   isAutonomousSwarmStage,
+  unitOpenCheckpoints,
+  waveEligible,
   loadStageGraphAll,
   isNonAnswer,
   ANSWER_MODE_LABELS,
@@ -142,6 +147,7 @@ import {
   sortAttemptEvents,
   UNTRUSTED_AUDIT_NOTICE,
   planApprovalChallengeRelativePath,
+  agentFileText,
   readRegularFileNoFollowOrThrow,
   readStateFile,
   readUnitSourceManifest,
@@ -152,7 +158,7 @@ import {
   REVIEW_EDITED_FIELD,
   dictatedReviewNotice,
   REVIEW_DICTATED_FIELD,
-  noAgentFinishedSinceReview,
+  noReviewerFinishedSinceReview,
   noReviewerNotice,
   REVIEWER_FINISHED_FIELD,
   recordFileTargetOrThrow,
@@ -193,6 +199,8 @@ import {
   isSummaryConfirmationChoice,
   isSummaryConfirmationOptions,
   isLearningsNoteDecision,
+  boxPicksAddANote,
+  picksAddANote,
   summaryConfirmationCommands,
   summaryConfirmationOwed,
   summaryQuestionFileRelative,
@@ -255,7 +263,7 @@ import {
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
-import { aidlcDispatcherInvocation, entrySkillInvocation, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES,
   SUMMARY_CONFIRMATION_CHOICES,
@@ -571,15 +579,15 @@ function readOverrideReasonFile(pd: string, supplied: string): string {
   }
   let text: string;
   try {
-    text = readRegularFileNoFollowOrThrow(
+    text = agentFileText(readRegularFileNoFollowOrThrow(
       recordFileTargetOrThrow(root, relative(root, absolute)),
       "Plan Approval override reason file",
       4 * 1024,
-    ).toString("utf-8");
+    ));
   } catch (e) {
     error(`Cannot read --override-file ${supplied}: ${errorMessage(e)}`);
   }
-  return text.replace(/^\uFEFF/, "").replace(/\r?\n$/, "");
+  return text.replace(/\r?\n$/, "");
 }
 
 function summaryQuestionEvidence(
@@ -1233,7 +1241,7 @@ function handleDecision(args: string[]): void {
       error(
         `--question-kind ${JSON.stringify(kind)} is not a kind log decision records. Its kinds are ` +
           `"${ANSWER_MODE_QUESTION_KIND}", for the question of how the person answers a stage's questions, and ` +
-          `"${LEARNINGS_NOTE_QUESTION_KIND}", for the learnings question "Anything to add for next time?"; leave ` +
+          `"${LEARNINGS_NOTE_QUESTION_KIND}", for the learnings question "${LEARNINGS_NOTE_QUESTION}"; leave ` +
           "the flag off for any other question.",
       );
     }
@@ -2659,13 +2667,16 @@ function handleAnswer(args: string[]): void {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
 
-    // The learnings question's Add a note (its exact option, on the question
-    // its kind names): the person's next reply answers what follows, so the
-    // turn ends at that question (stage-protocol-learnings.md section 13).
-    // Whether their reply already holds the note is the agent's to read.
+    // The learnings question's Add a note: the person's next reply answers
+    // what follows, so the turn ends at that question (stage-protocol-learnings.md
+    // section 13). A pick in a question box is read from the person's own
+    // recorded reply; a typed one from the exact option the agent recorded on
+    // the question its kind (or its two options) names. Whether their reply
+    // already holds the note is the agent's to read.
+    const fromBox = instruction === undefined && !autonomousDecision ? boxPicksAddANote(pd, named?.id) : null;
     const question = decisionRowsInScope(readAuditShardEvents(pd), flags.stage, flags.unit).at(-1);
-    const asksForNote = flags.details === LEARNINGS_NOTE_CHOICES[1] && question !== undefined &&
-      isLearningsNoteDecision(question.block);
+    const asksForNote = fromBox ?? (picksAddANote(flags.details) && question !== undefined &&
+      isLearningsNoteDecision(question.block));
     if (asksForNote) rowEndsTurn = true;
     const sayBack = taken.length > 0 ? takenFromReply(taken, flags.details) : null;
     const notes = [
@@ -3132,9 +3143,14 @@ function stageBox(state: string, stage: string): string | undefined {
 // (learningsRitualRuns), and the gate's command is the report the stage
 // protocol names. A review the person asked for past the budget (even with
 // reviews off) and the one bounded stale-receipt recovery are one-off passes:
-// their verdict is terminal whatever the class. A Unit's review, an isolated
-// single-stage run, an autonomous Construction gate and a stage no longer in
-// flight keep the step their own directive names: no note.
+// their verdict is terminal whatever the class. A Unit's last pass hands on to
+// `next`, which names its route's step, after the Unit's completion when it
+// is still open on the stage (a team's route hands the body back without it).
+// A unit-major walk keeps a later per-Unit stage's own box pending, so for a
+// Unit a pending stage is in flight too. An isolated single-stage run, a Unit
+// in a swarm Bolt or a wave (their own loop goes on), an autonomous
+// Construction gate and a stage no longer in flight keep the step their own
+// directive names: no note.
 function reviewVerdictStep(
   pd: string,
   flags: Record<string, string>,
@@ -3142,19 +3158,26 @@ function reviewVerdictStep(
   iteration: number,
   context: {
     state: string;
-    node: { slug: string; phase: string; for_each?: string; reviewer_max_iterations?: number };
+    node: { slug: string; phase: string; for_each?: string; mode?: string; reviewer_max_iterations?: number };
     reviewClass: ReviewClass | null;
+    autonomousCandidate: boolean;
+    attempt: { boltStarted: boolean };
   },
   selection: { intent: string | null; space: string },
   request: { personAsked: boolean; recovery: boolean },
 ): string | null {
   const { state, node, reviewClass } = context;
+  const unit = flags.unit;
   const oneOff = request.personAsked || request.recovery;
-  if (flags.unit !== undefined || flags.single === "true" || reviewClass === null) return null;
+  if (flags.single === "true" || reviewClass === null) return null;
+  if (unit !== undefined && context.autonomousCandidate && context.attempt.boltStarted) return null;
+  if (unit !== undefined && waveEligible(node) && getField(state, "Construction Iteration")?.trim() !== "unit-major") {
+    return null;
+  }
   if (reviewClass === "none" && !oneOff) return null;
   if (node.phase === "initialization") return null;
   const box = stageBox(state, flags.stage);
-  if (box === undefined || !REVIEW_IN_FLIGHT.has(box)) return null;
+  if (box === undefined || !(REVIEW_IN_FLIGHT.has(box) || (unit !== undefined && box === "pending"))) return null;
   const terminal = oneOff || terminalReviewVerdict(
     verdict,
     String(iteration),
@@ -3163,7 +3186,7 @@ function reviewVerdictStep(
   ) !== null;
   // What the person said while the reviewer worked comes first
   // (stage-protocol-reviewer.md): `next` names the step, with their words.
-  if (personSpokeSinceReviewRequest(pd, flags.stage, flags.reviewer, undefined, selection.intent, selection.space)) {
+  if (personSpokeSinceReviewRequest(pd, flags.stage, flags.reviewer, unit, selection.intent, selection.space)) {
     return reviewVerdictNote({ kind: "person-wrote", next: aidlcDispatcherInvocation("orchestrate next") });
   }
   if (!terminal) {
@@ -3174,25 +3197,43 @@ function reviewVerdictStep(
         projectDir: pd,
         stage: flags.stage,
         reviewer: flags.reviewer,
+        ...(unit !== undefined ? { unit } : {}),
         iteration: iteration + 1,
       }),
     });
   }
+  if (unit !== undefined) {
+    const open = unitOpenCheckpoints(pd, flags.stage).some((entry) => entry.unit === unit && entry.state === "in-progress");
+    return reviewVerdictNote({
+      kind: "unit",
+      next: aidlcDispatcherInvocation("orchestrate next"),
+      ...(open
+        ? { complete: aidlcDispatcherInvocation(`state unit complete --stage ${flags.stage} --unit ${quoteCommandArgument(unit)}`) }
+        : {}),
+    });
+  }
   if (node.phase === "construction" && isAutonomousConstructionGate(state, node, pd)) return null;
+  // A recovery pass re-checked an invalidated review, and a backward jump began
+  // this attempt: either way the gate's brief is the stale one.
+  const stale = request.recovery ||
+    backwardJumpBoundary(reviewInvalidationAttemptView(readAuditShardEvents(pd), flags.stage).floor) !== undefined;
+  const brief = stageReviewBriefCommand(flags.stage, stale ? "stale" : box === "revising" ? "revision" : "first");
   if (box === "in-progress") {
     if (learningsRitualRuns(ceremonyPolicyValues(getField(state, "Scope"), state).learnings, state, flags.stage)) {
-      return reviewVerdictNote({ kind: "learnings" });
+      return reviewVerdictNote({ kind: "learnings", brief });
     }
     return reviewVerdictNote({
       kind: "gate",
       report: stageGateReportCommand(flags.stage, "awaiting-approval"),
       summary: true,
+      brief,
     });
   }
   return reviewVerdictNote({
     kind: "gate",
     report: stageGateReportCommand(flags.stage, box === "revising" ? "revised" : "awaiting-approval"),
     summary: false,
+    brief,
   });
 }
 
@@ -3649,8 +3690,8 @@ function handleReview(args: string[]): void {
             : receipts.stageStale);
         // With Construction checkpoints on, a review of a Unit whose reviewed
         // code changed outside any review re-checks that change: it is the
-        // recovery pass, and the person's approval of the Unit since the last
-        // re-check opens a fresh one.
+        // recovery pass, and the person's approval of the Unit or a new attempt
+        // they start for it since the last re-check opens a fresh one.
         const checkpointUnit = receipts !== null && flags.unit !== undefined &&
           getField(state, "Construction Checkpoints") === "enabled";
         const unitSourceScopeStale = checkpointUnit && !artifactScopeStale &&
@@ -4446,10 +4487,12 @@ function handleReview(args: string[]): void {
       // the gate tells the person in one line; under relaxed or off the change
       // is accepted and said once here, like every other accepted change. A
       // completion row without the digest is no evidence, and the row carries
-      // nothing. No completion of any agent since the request is evidence only
-      // where noAgentFinishedSinceReview says so (on Claude Code, outside a
-      // worktree, with no background agent sent since): there the row says no
-      // reviewer had finished, said once here, and at the gate under strict.
+      // nothing. No completion of the reviewer since the request (its row,
+      // with the digest for this review file; another agent's row is not it)
+      // is evidence only where noReviewerFinishedSinceReview says so (on Claude
+      // Code, outside a worktree, with no background agent sent since): there
+      // the row says no reviewer had finished, said once here, and at the gate
+      // under strict.
       // The fallback records none of the file, so none of this applies to it.
       if (body !== null && !incompleteFallback && requestBinding.requestId !== null) {
         const events = readAuditShardEvents(pd, intent, space);
@@ -4480,8 +4523,7 @@ function handleReview(args: string[]): void {
             verdictChangeNotices.push(notice);
           }
         }
-        if (request !== undefined && finished === null &&
-          noAgentFinishedSinceReview(pd, events, request.row, selection)) {
+        if (request !== undefined && noReviewerFinishedSinceReview(pd, events, request, selection)) {
           fields[REVIEWER_FINISHED_FIELD] = "no";
           verdictChangeNotices.push(noReviewerNotice(node.name, flags.unit));
         }

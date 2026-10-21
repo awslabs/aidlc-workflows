@@ -3,7 +3,8 @@
  * the engine owns when to present a checkpoint and which Unit is the skeleton.
  */
 import { EXTENDED_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import type { Writable } from "node:stream";
 import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, readSync, rmdirSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -212,6 +213,142 @@ export interface ConstructionCheckpoint {
 
 const PROOF_DIR = ".aidlc-construction-checkpoints";
 const CHECK_TIMEOUT_MS = EXTENDED_SUBPROCESS_TIMEOUT_MS;
+
+/** A finite execution budget; Node timers cannot represent larger values. */
+export function verificationTimeoutMs(value: number = CHECK_TIMEOUT_MS): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 2_147_483_647) {
+    throw new Error("checkpoint --timeout-ms must be an integer between 1 and 2147483647 milliseconds.");
+  }
+  return value;
+}
+
+interface VerificationProcessResult {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  error: Error | null;
+}
+
+// Own one newly-created process group, never discover processes by their name.
+// Retire it before reading outputs or taking the post-check evidence snapshot.
+async function runVerificationProcess(
+  command: string, args: string[], cwd: string, outFd: number, errFd: number, timeoutMs: number,
+): Promise<VerificationProcessResult> {
+  // A watcher in the check's own group reads a private pipe from the verifier.
+  // SIGKILL cannot be caught: EOF on that pipe retires the group even when the
+  // verifier disappears. A normal shell exit disarms it; no PID polling/reuse.
+  let retiring = false;
+  const watched = process.platform !== "win32";
+  // Ignore forwarded stops before forking, so the watcher inherits protection;
+  // restore the shell's defaults before executing the person's command.
+  const watcher = [
+    'aidlc_group=$$; trap "" INT TERM HUP;',
+    '(if ! read -r aidlc_done <&3; then kill -s KILL -- "-$aidlc_group"; fi) >/dev/null 2>&1 &',
+    'trap - INT TERM HUP; exec "$@" 3<&-',
+  ].join(" ");
+  const child = spawn(watched ? "/bin/sh" : command, watched ? ["-c", watcher, "aidlc-check", command, ...args] : args, {
+    cwd, detached: watched, stdio: watched ? ["ignore", outFd, errFd, "pipe"] : ["ignore", outFd, errFd],
+    windowsHide: true, windowsVerbatimArguments: process.platform === "win32",
+  });
+  const control = watched ? child.stdio[3] as Writable | null : null;
+  if (watched) {
+    // The group can close the pipe while we are retiring it.
+    control?.on("error", () => {});
+    child.on("exit", () => { if (!retiring) control?.end("done\n"); });
+  }
+  let error: Error | null = null;
+  let timedOut = false;
+  let interrupted: NodeJS.Signals | null = null;
+  let closed = false;
+  let cleanup: Promise<string | null> = Promise.resolve(null);
+  const completed = new Promise<VerificationProcessResult>((resolve) => {
+    child.on("error", (failure) => { error = failure; });
+    child.on("close", (status, signal) => {
+      closed = true;
+      resolve({ status, signal, error });
+    });
+  });
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  let stalled!: (result: VerificationProcessResult) => void;
+  const retirementLimit = new Promise<VerificationProcessResult>((resolve) => { stalled = resolve; });
+  const retire = (signal: NodeJS.Signals) => {
+    if (retiring || closed || child.pid === undefined) return;
+    retiring = true;
+    watchdog = setTimeout(() => stalled({ status: null, signal: null,
+      error: new Error("verification process did not close") }), 4_000);
+    const pid = child.pid;
+    cleanup = (async () => {
+      if (process.platform === "win32") {
+        // Keep the root alive until taskkill has enumerated its owned tree.
+        return await new Promise<string | null>((resolve) => {
+          const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+          const ceiling = setTimeout(() => { killer.kill(); child.kill("SIGKILL"); resolve("taskkill did not finish"); }, 2_000);
+          killer.on("error", (failure) => { clearTimeout(ceiling); child.kill("SIGKILL"); resolve(failure.message); });
+          killer.on("close", (code) => { clearTimeout(ceiling); if (code !== 0) child.kill("SIGKILL"); resolve(code === 0 ? null : `taskkill exited ${code}`); });
+        });
+      }
+      try { process.kill(-pid, signal); }
+      catch (failure) {
+        if ((failure as NodeJS.ErrnoException).code !== "ESRCH") {
+          child.kill("SIGKILL");
+          return String(failure);
+        }
+      }
+      const started = Date.now();
+      const deadline = started + 2_000;
+      let forced = signal === "SIGKILL";
+      do {
+        try { process.kill(-pid, 0); }
+        catch (failure) {
+          return (failure as NodeJS.ErrnoException).code === "ESRCH" ? null : String(failure);
+        }
+        // Forward the person's stop first, then retire children that ignore it.
+        if (!forced && Date.now() - started >= 250) {
+          try { process.kill(-pid, "SIGKILL"); }
+          catch (failure) {
+            return (failure as NodeJS.ErrnoException).code === "ESRCH" ? null : String(failure);
+          }
+          forced = true;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      } while (Date.now() < deadline);
+      return "the owned process group still exists";
+    })().catch((failure: unknown) => String(failure));
+  };
+  const stopSignals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  const handlers = stopSignals.map((signal) => ({ signal, listener: () => {
+    interrupted ??= signal;
+    retire(signal);
+  } }));
+  if (process.platform !== "win32") {
+    for (const { signal, listener } of handlers) process.on(signal, listener);
+  }
+  const timer = setTimeout(() => {
+    if (retiring || closed) return;
+    timedOut = true;
+    retire("SIGKILL");
+  }, timeoutMs);
+  // Both a timeout and a person's stop wait for the same bounded retirement.
+  try {
+    const result = await Promise.race([completed, retirementLimit]);
+    if (!closed) child.unref();
+    if (!timedOut && interrupted === null) return result;
+    const incomplete = await cleanup;
+    const reason = interrupted !== null
+      ? `Verification command interrupted by ${interrupted}.`
+      : `Verification command timed out after ${timeoutMs} ms.`;
+    return {
+      ...result,
+      error: new Error(reason +
+        (incomplete || !closed ? ` Process cleanup incomplete: ${incomplete ?? "the shell did not close"}.` : " Owned process cleanup completed.")),
+    };
+  } finally {
+    clearTimeout(timer);
+    if (watchdog !== undefined) clearTimeout(watchdog);
+    for (const { signal, listener } of handlers) process.removeListener(signal, listener);
+    control?.destroy();
+  }
+}
+
 const CHECK_OUTPUT_TAIL_BYTES = 2048;
 const EMPTY_OUTPUT_SHA256 = createHash("sha256").update("").digest("hex");
 
@@ -1280,19 +1417,20 @@ function outputTail(output: Buffer | null): string {
   );
 }
 
-export function verifyConstructionCheckpoint(
+export async function verifyConstructionCheckpoint(
   projectDir: string,
   unit: string,
   kind: ConstructionCheckpointKind,
-  options: { overUnfinishedReview?: boolean } = {},
-): ConstructionCheckpoint {
+  options: { overUnfinishedReview?: boolean; timeoutMs?: number } = {},
+): Promise<ConstructionCheckpoint> {
   // A check that formats or regenerates the Unit's files changes what it
   // checked, so it runs once more against the files as they are now.
   const over = options.overUnfinishedReview === true;
-  const first = verifyOnce(projectDir, unit, kind, false, over);
+  const timeoutMs = verificationTimeoutMs(options.timeoutMs);
+  const first = await verifyOnce(projectDir, unit, kind, false, over, timeoutMs);
   if (!first.rerun) return first.result;
   // The line about an accepted change is said once, on whichever run made it.
-  const second = verifyOnce(projectDir, unit, kind, true, over).result;
+  const second = (await verifyOnce(projectDir, unit, kind, true, over, timeoutMs)).result;
   const notices = [...(first.result.change_notices ?? []), ...(second.change_notices ?? [])];
   return notices.length > 0 ? { ...second, change_notices: notices } : second;
 }
@@ -1301,13 +1439,14 @@ const CHECK_KEPT_CHANGING =
   "The check changed this Unit's files each time it ran, so no one version of them passed. " +
   "Use a check that leaves the files as they are, then verify again.";
 
-function verifyOnce(
+async function verifyOnce(
   projectDir: string,
   unit: string,
   kind: ConstructionCheckpointKind,
   secondRun: boolean,
   overUnfinishedReview: boolean,
-): { result: ConstructionCheckpoint; rerun: boolean } {
+  timeoutMs: number,
+): Promise<{ result: ConstructionCheckpoint; rerun: boolean }> {
   // The agent passes on the person's "approve it as it is"; their words since
   // the last decision are what let the Unit go on without its review.
   const personAllows = overUnfinishedReview && personSpokeSinceGate(projectDir, { requests: true });
@@ -1352,18 +1491,14 @@ function verifyOnce(
   const outputDir = mkdtempSync(join(tmpdir(), "aidlc-check-"));
   const outPath = join(outputDir, "stdout");
   const errPath = join(outputDir, "stderr");
-  let check: ReturnType<typeof spawnSync>;
+  let check: VerificationProcessResult;
   let stdout: ReturnType<typeof capturedOutput>;
   let stderr: ReturnType<typeof capturedOutput>;
   try {
     const outFd = openSync(outPath, "w");
     const errFd = openSync(errPath, "w");
     try {
-      check = spawnSync(command, args, {
-        cwd: projectDir, timeout: CHECK_TIMEOUT_MS,
-        stdio: ["pipe", outFd, errFd], killSignal: "SIGKILL", windowsHide: true,
-        windowsVerbatimArguments: process.platform === "win32",
-      });
+      check = await runVerificationProcess(command, args, projectDir, outFd, errFd, timeoutMs);
     } finally {
       closeSync(outFd);
       closeSync(errFd);

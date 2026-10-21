@@ -68,6 +68,7 @@ import { readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
+  agentFileText,
   type AuditShardEvent,
   auditBlockField,
   copiedAuditBlocks,
@@ -826,7 +827,7 @@ function parseManifestClaims(
 ): SourceClaimModel | null {
   let value: unknown;
   try {
-    value = JSON.parse(bytes.toString("utf-8"));
+    value = JSON.parse(agentFileText(bytes));
   } catch {
     return null;
   }

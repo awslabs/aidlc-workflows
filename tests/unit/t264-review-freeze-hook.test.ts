@@ -60,7 +60,7 @@ import {
   shellCommandInvocations,
   writeTargets,
 } from "../../dist/claude/.claude/hooks/aidlc-review-freeze.ts";
-import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { readAllAuditShards, setGuardPolicyLine } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { KIRO_HOOK_GROUPS } from "../../harness/kiro-ide/hooks/aidlc-kiro-tool-names.ts";
 import {
   cleanupTestProject,
@@ -1339,7 +1339,9 @@ describe("t264 (d) Kiro IDE adapter route", () => {
 // The hook says what was refused and names `next`; the question waits in the
 // refusal record and the next `next` asks it once, unless it no longer stands
 // (the stage was approved or sent back, the check was lowered) or another
-// question is already open.
+// question is already open. When no turn of the person's stands behind the
+// write, it was the agent's own, and the first refusal hands the agent its own
+// step instead: leave the document and quote the change at the gate.
 
 const ORCH_TOOL = join(DIST_CLAUDE, "tools", "aidlc-orchestrate.ts");
 
@@ -1387,6 +1389,40 @@ function refusedWrite(p: string): string {
   return refused.stderr;
 }
 
+const PERSON = {
+  AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-000000000264",
+  AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
+  AIDLC_UNATTENDED: "0",
+};
+
+// The person's message, as the human-turn hook records it.
+function personSays(p: string, prompt: string): void {
+  const said = spawnSync(BUN, [join(DIST_CLAUDE, "tools", "aidlc.ts"), "engine", "hook", "record-human-turn"], {
+    cwd: p,
+    input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: PERSON.AIDLC_SESSION_OVERRIDE, prompt }),
+    env: { ...process.env, ...PERSON, CLAUDE_PROJECT_DIR: p, AIDLC_PROJECT_DIR: p },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(said.status, said.stderr).toBe(0);
+}
+
+function logTool(p: string, args: string[]): void {
+  const r = spawnSync(BUN, [LOG_TOOL, ...args, "--project-dir", p], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+    env: process.env,
+  });
+  expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+}
+
+// The refused file as the hook prints it is in the platform's own path form (on
+// Windows, backslashes and the project folder as the hook resolved it), so only
+// the sentence around it is compared.
+const sentenceAroundTarget = (stderr: string) => stderr.replace(/review-freeze: "[^"]*"/, 'review-freeze: "<file>"');
+
+const opsOf = (directive: Record<string, unknown>) => (directive.remedies as { op: string }[]).map((remedy) => remedy.op);
+
 describe("t264 (d) the refusal names next; next asks the recovery question", () => {
   test("the refusal says what was refused and the step to take, with no JSON line", () => {
     const p = projBeforeGate();
@@ -1398,9 +1434,20 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
     expect(stderr.trim()).toMatch(/ Next: `[^`\n]*orchestrate[^`\n]* next`\.$/);
   });
 
-  test("the next `next` asks the recovery question, once", () => {
+  test("when no turn of the person's stands behind the write, the next `next` hands the agent its own step, once; a repeat asks the person", () => {
     const p = projBeforeGate();
     recordReview(p, "READY");
+    refusedWrite(p);
+    const own = nextDirective(p);
+    expect(own).toMatchObject({
+      kind: "ask",
+      ask_type: "guard-recovery",
+      agent_work: true,
+      stage: "requirements-analysis",
+      reason_codes: ["REVIEW_FREEZE_ACTIVE"],
+    });
+    expect(opsOf(own)).toEqual(["present-findings-at-gate"]);
+    expect(nextDirective(p)).toMatchObject({ kind: "run-stage", stage: "requirements-analysis" });
     refusedWrite(p);
     const asked = nextDirective(p);
     expect(asked).toMatchObject({
@@ -1408,12 +1455,55 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
       ask_type: "guard-recovery",
       stage: "requirements-analysis",
       reason_codes: ["REVIEW_FREEZE_ACTIVE"],
+      question: "Requirements Analysis still can't go ahead as things stand: which way would you like to go on?",
     });
-    expect((asked.remedies as { op: string }[]).map((remedy) => remedy.op)).toEqual([
-      "request-changes",
-      "lower-fence",
-    ]);
+    expect(asked.agent_work).toBeUndefined();
+    expect(opsOf(asked)).toEqual(["request-changes", "lower-fence"]);
     expect(nextDirective(p)).toMatchObject({ kind: "run-stage", stage: "requirements-analysis" });
+  });
+
+  // The person spoke since the last decision, or answered the agent's question
+  // ("apply the reviewer's suggestion?" "yes, add them"): they may have asked for
+  // the edit, so the first refusal is their question, as it always was, and the
+  // sentence the tool shows them is the same either way.
+  test("a write the person may have asked for keeps their question; the refusal reads the same", () => {
+    const silent = projBeforeGate();
+    recordReview(silent, "READY");
+    const sentence = sentenceAroundTarget(refusedWrite(silent));
+    expect(sentence).toContain('review-freeze: "<file>" is this stage\'s output document');
+    const spoke = projBeforeGate();
+    recordReview(spoke, "READY");
+    personSays(spoke, "add the missing FR IDs to the requirements");
+    const answered = projBeforeGate();
+    recordReview(answered, "READY");
+    logTool(answered, [
+      "decision", "--stage", "requirements-analysis",
+      "--decision", "Apply the reviewer's suggestion to the requirements?", "--options", "Yes,No",
+    ]);
+    personSays(answered, "yes, add them");
+    logTool(answered, ["answer", "--stage", "requirements-analysis", "--details", "yes, add them"]);
+    for (const [label, p] of [["spoke", spoke], ["answered", answered]] as const) {
+      expect(sentenceAroundTarget(refusedWrite(p)), label).toBe(sentence);
+      const asked = nextDirective(p);
+      expect(asked, label).toMatchObject({
+        kind: "ask",
+        ask_type: "guard-recovery",
+        question: "Requirements Analysis can't go ahead as things stand: which way would you like to go on?",
+      });
+      expect(asked.agent_work, label).toBeUndefined();
+      expect(opsOf(asked), label).toEqual(["request-changes", "lower-fence"]);
+    }
+  });
+
+  test("relaxed and off: the check stands aside and leaves nothing to ask", () => {
+    for (const policy of ["relaxed", "off"]) {
+      const p = projBeforeGate();
+      const statePath = join(seededRecordDir(p), "aidlc-state.md");
+      writeFileSync(statePath, setGuardPolicyLine(readFileSync(statePath, "utf-8"), `${policy} (set by you)`));
+      recordReview(p, "READY");
+      expect(runHook(p, writePayload(raArtifact(p))).code, policy).toBe(0);
+      expect(refusalRecords(p), policy).toEqual([]);
+    }
   });
 
   // A live run picked Request Changes on this question after saying what should
@@ -1423,6 +1513,7 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
   test("the question is not published, so the person's own words carry their Request Changes", () => {
     const p = projBeforeGate();
     recordReview(p, "READY");
+    personSays(p, "the requirements should say an empty name prints hello there");
     refusedWrite(p);
     expect(nextDirective(p)).toMatchObject({ kind: "ask", ask_type: "guard-recovery" });
     const answered = spawnSync(
@@ -1484,33 +1575,20 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
   test("the turn-it-off choice picked by its number: the check is off, set by you", () => {
     const p = projBeforeGate();
     recordReview(p, "READY");
+    personSays(p, "add the missing FR IDs to the requirements");
     refusedWrite(p);
-    const person = {
-      AIDLC_SESSION_OVERRIDE: "01995000-7a11-7000-8000-000000000264",
-      AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "0",
-      AIDLC_UNATTENDED: "0",
-    };
-    const asked = nextDirective(p, person);
+    const asked = nextDirective(p, PERSON);
     const remedies = asked.remedies as { op: string; action: string }[];
     const at = remedies.findIndex((remedy) => remedy.op === "lower-fence");
     expect(at, JSON.stringify(asked)).toBeGreaterThan(-1);
     expect(remedies[at].action).toContain("--person-words '<their words>'");
     const dispatcher = join(DIST_CLAUDE, "tools", "aidlc.ts");
-    const picked = spawnSync(BUN, [dispatcher, "engine", "hook", "record-human-turn"], {
-      cwd: p,
-      input: JSON.stringify({
-        hook_event_name: "UserPromptSubmit", session_id: person.AIDLC_SESSION_OVERRIDE, prompt: String(at + 1),
-      }),
-      env: { ...process.env, ...person, CLAUDE_PROJECT_DIR: p, AIDLC_PROJECT_DIR: p },
-      encoding: "utf-8",
-      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
-    });
-    expect(picked.status, picked.stderr).toBe(0);
+    personSays(p, String(at + 1));
     const off = spawnSync(BUN, [
       dispatcher, "engine", "config", "set", "guard.review-freeze", "off", "--person-words", String(at + 1), "--project-dir", p,
     ], {
       cwd: p,
-      env: { ...process.env, ...person, CLAUDE_PROJECT_DIR: p },
+      env: { ...process.env, ...PERSON, CLAUDE_PROJECT_DIR: p },
       encoding: "utf-8",
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
@@ -1532,8 +1610,7 @@ describe("t264 (d) the refusal names next; next asks the recovery question", () 
 
 const HOOK_REFUSAL_NEXT_RULE =
   "A hook refusal that ends with `Next:` and a command names your next step: run that command and act on " +
-  "the directive it returns (after a refused write, the recovery question to put to the person); never retry " +
-  "the refused call.";
+  "the directive it returns; never retry the refused call.";
 
 
 // ---------------------------------------------------------------------------

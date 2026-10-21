@@ -2121,6 +2121,16 @@ The loopback proxy admits only the configured model IDs and
 authentication headers and signs each upstream request; successful streams are
 forwarded byte-for-byte. Other routes are forbidden, redirects are not followed,
 and upstream error bodies are suppressed because AWS errors can echo signatures.
+On the Mantle route it removes `reasoning.summary` from a request before signing
+it: Mantle's `openai.gpt-5.5` stalls a response that asks for a reasoning summary
+once the model reasons, and Copilot CLI asks for one on every request. A request
+without one, such as Codex's, is forwarded as sent. The broker appends one line
+per request to `tests/logs/credential-broker.log` (method, path, admitted model,
+status, duration, time of the last byte, bytes, and whether the answer ended),
+never a header or a body, so a stalled stream shows in the uploaded logs.
+A response whose upstream sends no data for two minutes after its headers is
+ended (`end=idle-timeout` in that line). An SSE `:` keepalive comment is not
+data: Mantle sends one every 15 seconds, during a stall too.
 
 Claude uses documented `ANTHROPIC_BEDROCK_BASE_URL` and
 `CLAUDE_CODE_SKIP_BEDROCK_AUTH=1`; its t19 preflight checks the broker's startup
@@ -2258,6 +2268,38 @@ no binary/screenshot allowlist. Remaining UTF-8 text is redacted for AWS
 credentials, vendor keys, bearer tokens and Anthropic keys; links are removed
 without following targets. Redaction remains defense in depth, not proof against
 encoded secrets; retaining raw text traces increases that residual risk.
+
+### Reading every live leg: the trace audit
+
+A leg that passes can still show friction a person would meet, and the nightly
+keeps its traces. `scripts/trace-audit.ts` reads them for a maintainer, on
+their own machine, in two layers kept apart:
+
+- `bun scripts/trace-audit.ts extract --run <full-suite run id>` downloads the
+  run's `full-suite-live-*` artifacts with the maintainer's own `gh` (or
+  `--dir <folder>` reads a downloaded run, a `tests/logs` folder, or a local
+  session folder: a scratch project, a Claude Code config folder, a Codex
+  home). It only counts and matches recorded events and fields, and writes, outside the
+  folders it reads, `table.txt` and `table.json` (one row per check finding,
+  guard refusal, engine error, question handed to the person again, stage
+  file written after its approval, silence of ten minutes or more, retry and
+  agent tool error, each naming its run, harness, OS, test, stage and
+  evidence file and line) and one `legs/<leg>/story.md` per leg: what the
+  person typed and picked, what they were asked, what the agent ran and said,
+  in time order, cut to a size budget.
+- `bun scripts/trace-audit.ts judge <out>` (`scripts/trace-audit-judge.ts`,
+  instructions in `scripts/trace-audit-judge.md`) hands each test's legs to the
+  maintainer's own `claude` in print mode, able only to read (`Read`, `Grep`,
+  `Glob`) and only in the judged legs' own folders, never the home a session
+  folder sits in, with the known list (`--known`) and the open issues and pull
+  requests (`--issues`). The model returns friction items as JSON. The tool
+  counts how many legs each item was met in and writes `JUDGE.md`. `--dry-run`
+  writes each group's input and calls no model; `--max-usd` and `--budget-kb`
+  bound each call.
+
+The extractor reads only what the run kept: an SDK drive trace keeps the
+first 240 characters of each tool reply and none of the agent's words, and a
+leg's audit shard is kept only when its fixture is retained.
 
 ## Kiro prompt-hook transport controls
 

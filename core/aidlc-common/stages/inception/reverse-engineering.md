@@ -478,7 +478,7 @@ completion sequence in this order:
 
 1. Present Step 5's announcement and per-repo summary, including any NARROWER
    warning.
-2. When `directive.protocol_modules` lists `learnings`, ask its question and
+2. When `directive.protocol_modules` lists `learnings`, ask its questions and
    end the turn; continue once the answer is logged.
 3. Open the approval gate exactly once with
    `{{INVOKE}} engine orchestrate report --stage reverse-engineering --result awaiting-approval`.

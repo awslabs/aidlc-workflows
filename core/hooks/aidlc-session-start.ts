@@ -72,7 +72,6 @@ import {
   clearSessionPlanApprovalBypass,
   recordSessionPlanApprovalBypass,
   recordSessionPresenceBypass,
-  recoveryFilePath,
   resolveWorkflowSelection,
   resolveProjectDirFromHook,
   stateFilePathForSelection,
@@ -619,15 +618,6 @@ const unitLine = activeUnit
       : "")
   : "";
 
-const recoveryFile = recoveryFilePath(
-  projectDir,
-  selection.intent ?? undefined,
-  selection.space,
-);
-const recovery = existsSync(recoveryFile)
-  ? "NOTE: A compaction recovery breadcrumb exists at .aidlc-engine/recovery.md - check if state was preserved correctly.\n"
-  : "";
-
 // Stage-graph drift advisory (issue #364). The runtime resolves stages from
 // the compiled stage-graph.json only, a stage `.md` added to disk without a
 // recompile is silently never executed. Surface it once at session start so the
@@ -666,7 +656,7 @@ Status: ${status}
 Active Agent: ${agent}
 Last Completed: ${last}
 Next Action: ${next}
-${unitLine}${recovery}${driftNote}${switchOffContext(projectDir).trimStart()}A BARE /aidlc re-entry carries on with this work, with no resume menu. Then follow the recovery protocol's Session resume, including its one SAY line. When the person asks to redo, jump, or start fresh (at an approval gate too, where it is that request and not the gate's answer), report it with \`report --result resumed --choice <redo|jump|fresh>\` (add \`--target <stage slug>\` for the stage they named, and \`--unit <unit>\` or \`--every-unit\` when they named a Unit or said every Unit) and follow the print it returns. Check the active intent's aidlc-state.md for full context.
+${unitLine}${driftNote}${switchOffContext(projectDir).trimStart()}A BARE /aidlc re-entry carries on with this work, with no resume menu. Then follow the recovery protocol's Session resume, including its one SAY line. When the person asks to redo, jump, or start fresh (at an approval gate too, where it is that request and not the gate's answer), report it with \`report --result resumed --choice <redo|jump|fresh>\` (add \`--target <stage slug>\` for the stage they named, and \`--unit <unit>\` or \`--every-unit\` when they named a Unit or said every Unit) and follow the print it returns. Check the active intent's aidlc-state.md for full context.
 
 - The engine route (\`aidlc engine orchestrate\`) is the ONLY authority on the next move. You run it, you do EXACTLY what its one directive says, and you report stage-work outcomes. Repeat only when the directive calls for continuation; a terminal directive or required human wait ends the turn. You never re-derive routing yourself.
 - First: take everything the user typed after \`/aidlc\` and append it to the first \`next\` call UNCHANGED. The flags ARE the user's intent; dropping them sends the workflow to the wrong place. \`/aidlc --phase ideation\` -> you MUST run \`next --phase ideation\`, never bare \`next\`. \`/aidlc --stage X\` -> \`next --stage X\`. Before running that first \`next\`, verify: if the user's message contained \`--phase\`/\`--stage\`/\`--scope\`/\`--depth\`/freeform text, it MUST appear on your \`next\` command; a bare \`next\` when the user gave arguments is a bug.

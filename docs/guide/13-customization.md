@@ -106,7 +106,7 @@ With this set, implicit scope resolution uses `feature`. Alternatively, record a
   ok    AWS_AIDLC_DEFAULT_SCOPE=classic (valid)
 ```
 
-`aidlc doctor` in a terminal outside Claude Code does not get the `env` block from `.claude/settings.json`, so there the same line reads `AWS_AIDLC_DEFAULT_SCOPE (unset - no project default)`. The scope a piece of work runs on shows on the `Scope:` line of `/aidlc --status`.
+`aidlc doctor` in a terminal outside Claude Code does not get the `env` block from `.claude/settings.json`, so there it shows this line only when your shell sets `AWS_AIDLC_DEFAULT_SCOPE` or a default is recorded with `aidlc config flags --default-scope`. The scope a piece of work runs on shows on the `Scope:` line of `/aidlc --status`.
 
 Why only scope and not depth or test-strategy? Each scope declares a depth, and test strategy inherits that depth unless the scope overrides it. `classic` therefore starts at Standard/Standard, `workshop` at Standard/Minimal, and `express` at Minimal/Minimal. If you need to override either, pass `--depth` or `--test-strategy` on the CLI.
 
@@ -266,6 +266,9 @@ confirmation or plan approval off for work already under way needs your own
 turn: run by the agent, it is refused with a message asking you to type it. On a Kiro IDE build that gives hooks no message text, typing it cannot work, so the refusal asks you to update Kiro IDE ([Kiro IDE guide](harnesses/kiro-ide.md#whats-different-on-kiro)). `/aidlc --status` shows the effective value and source.
 Changing scope updates scope-sourced settings while keeping your overrides;
 an absent or malformed field falls back to the scope instead of blocking the run.
+Turning summary confirmation on, by a setting or a scope change, applies to work
+that runs after it: a stage waiting at its gate, or Unit work already finished,
+is not asked for a summary it never had.
 
 The composer proposes these five, plus the scope's `review_cap`, at the compose
 gate, and you can change any of them before approving. Plan approval is the

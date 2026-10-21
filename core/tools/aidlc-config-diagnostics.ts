@@ -58,6 +58,7 @@ import {
   rootBlockPath,
   rootIntegrationTarget,
   sha256Matching,
+  withoutBom,
   withSpace,
 } from "./aidlc-distribution.ts";
 import {
@@ -2766,7 +2767,7 @@ function codexTrustEntries(seedText: string, projectDir: string): Array<{
   table: string;
   hash: string;
 }> {
-  const rendered = seedText.replaceAll("<PROJECT_DIR>", projectDir.replaceAll("\\", "/"));
+  const rendered = seedText.replaceAll("<PROJECT_DIR>", projectDir);
   return [...rendered.matchAll(
     /^\[hooks\.state\."([^"]+)"\]\r?\ntrusted_hash\s*=\s*"([^"]+)"$/gm,
   )].map((match) => ({
@@ -2775,10 +2776,33 @@ function codexTrustEntries(seedText: string, projectDir: string): Array<{
   }));
 }
 
+const CODEX_CONFIG_UNREADABLE_ISSUE_ID = "codex-config-unreadable";
+
+// The hash Codex trusts for each hook, by the hook's key. Codex writes a key
+// in whichever TOML quoting fits it (one holding a backslash, so every key on
+// Windows, as a literal string), so the file is read as TOML. Codex trims a
+// key; a Windows path is the same path in either slash direction and any case.
+function codexTrustedHashes(config: unknown, platform: NodeJS.Platform): Map<string, string> {
+  const hooks = isRecord(config) ? config.hooks : undefined;
+  const state = isRecord(hooks) ? hooks.state : undefined;
+  const trusted = new Map<string, string>();
+  for (const [key, entry] of Object.entries(isRecord(state) ? state : {})) {
+    if (isRecord(entry) && typeof entry.trusted_hash === "string") {
+      trusted.set(codexHookKey(key, platform), entry.trusted_hash);
+    }
+  }
+  return trusted;
+}
+
+function codexHookKey(key: string, platform: NodeJS.Platform): string {
+  return platform === "win32" ? key.trim().replaceAll("\\", "/").toLowerCase() : key.trim();
+}
+
 export function codexTrustIssues(
   projectDir: string,
   harnessDir: string,
   env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = hostPlatform(),
 ): DiagnosticIssue[] {
   const seedPath = join(projectDir, harnessDir, "trust-seed.toml");
   const configPath = join(
@@ -2808,11 +2832,17 @@ export function codexTrustIssues(
         "Run one Codex TUI session and choose Trust all and continue, or replace <PROJECT_DIR> in the complete trust seed and merge the complete set into $CODEX_HOME/config.toml. Until then zero Codex hooks fire. --dangerously-bypass-hook-trust does not fire them. Do not append a duplicate set.",
     }];
   }
-  const config = readFileSync(configPath, "utf-8");
-  const missing = entries.filter(({ table, hash }) =>
-    !config.includes(`[hooks.state.${JSON.stringify(table)}]`) ||
-    !config.includes(`trusted_hash = ${JSON.stringify(hash)}`)
-  );
+  let trusted: Map<string, string>;
+  try {
+    trusted = codexTrustedHashes(Bun.TOML.parse(withoutBom(readFileSync(configPath, "utf-8"))), platform);
+  } catch {
+    return [{
+      id: CODEX_CONFIG_UNREADABLE_ISSUE_ID,
+      message: `${configPath} is not a Codex config AI-DLC can read, so Codex's hook trust is unknown`,
+      remediation: `Repair ${configPath}: valid TOML, then rerun the setup check.`,
+    }];
+  }
+  const missing = entries.filter(({ table, hash }) => trusted.get(codexHookKey(table, platform)) !== hash);
   if (missing.length === 0) return [];
   return [{
     id: "codex-hook-trust-incomplete",
@@ -3152,7 +3182,7 @@ export function postApplyOutstandingActions(
       }
       // No AI-DLC command repairs the file: the step is the person's, and the
       // command only checks the result.
-      if (issue.id === KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID) {
+      if (issue.id === KIRO_WORKFLOWS_UNREADABLE_ISSUE_ID || issue.id === CODEX_CONFIG_UNREADABLE_ISSUE_ID) {
         return {
           section: "trust" as const,
           id: issue.id,

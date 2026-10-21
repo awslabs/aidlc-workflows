@@ -233,6 +233,32 @@ describe("t155 template-override sensor branch (cli, spawnSync)", () => {
     expect(r.status).toBe(0);
   });
 
+  // #2417: a leading emoji is decoration (headingKey, as in #1385), so
+  // `## 📌 Overview` is the template's `## Overview`, and back.
+  test("emoji-decorated headings match their template headings", () => {
+    const ws = makeWorkspace();
+    writeFile(
+      join(ws.templatesDir, "requirements.md"),
+      "# Requirements\n\n## Overview\n\n## \u{1F4CB} Constraints\n\n## Risks\n",
+    );
+    const out = join(ws.outDir, "requirements.md");
+    writeFile(
+      out,
+      "# Requirements\n\n## \u{1F4CC} Overview\nO1\n\n## Constraints\nC1\n",
+    );
+    const r = runSensor({
+      stage: "requirements-analysis",
+      outputPath: out,
+      templatesDir: ws.templatesDir,
+      eligible: ["requirements"],
+    });
+    expect(r.template).toBe("applied");
+    // A missing section is still reported as the template spells it.
+    expect(r.template_missing).toEqual(["## Risks"]);
+    expect(r.findings_count).toBe(1);
+    expect(r.pass).toBe(false);
+  });
+
   // 3 — override-before-default keyed by stem: a multi-artifact stage resolves
   // EACH artifact against its own template, distinctly. reverse-engineering
   // produces both business-overview and architecture (verified produces list).

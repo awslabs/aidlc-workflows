@@ -387,6 +387,7 @@ import {
   commandAtPersonsTerminal,
   clearSessionIntentUuid,
   sourceBaselineAuditFields,
+  workspaceBaselineStageSlugs,
   unitDependencyPath,
   withAuditLock,
   validScopes,
@@ -481,6 +482,7 @@ import {
   tomlFragmentText,
   withFileLineEndings,
 } from "./aidlc-plugin.ts";
+import { resolveHookPath } from "./aidlc.ts";
 import { executePlan } from "./aidlc-transaction.ts";
 import {
   aidlcDispatcherInvocation,
@@ -837,11 +839,13 @@ export function renderHelpText(): string {
   const mapping = loadScopeMapping();
   const defaultResolution = defaultScopeResolution();
   const effectiveDefaultScope = defaultResolution.error ? "" : defaultResolution.scope;
+  // The stages a scope runs after Initialization, of all the stages after it:
+  // the count its plan offer gives on existing code. Help has no project, so a
+  // new project's Reverse Engineering skip is the offer's to say.
+  const total = loadStageGraph().filter((stage) => stage.phase !== "initialization").length;
   const scopeLines = [...validScopes()].map((name) => {
     const def = mapping[name];
-    const execute = Object.values(def.stages).filter((v) => v === "EXECUTE")
-      .length;
-    const total = Object.keys(def.stages).length;
+    const execute = gridCostSummary(def.stages).shown;
     const depth = def.depth.toLowerCase();
     const ts = def.testStrategy
       ? `, ${def.testStrategy.toLowerCase()} test strategy`
@@ -4337,6 +4341,19 @@ export async function collectDoctorReport(
       });
     } else {
       for (const h of expectedHooks) {
+        if (compiled) {
+          const packaged = resolveHookPath(h, undefined, projectDir);
+          const runs = packaged !== "" && existsSync(packaged);
+          const name = h.replace(/^aidlc-/, "").replace(/\.ts$/, "");
+          results.push({
+            pass: runs,
+            label: runs
+              ? `${h} present`
+              : `${h} is not in this install's runtime: \`${aidlcInvocation()} engine hook ${name}\` exits 1 without running it`,
+            fix: `\`${aidlcInvocation()} engine hook\` runs only the hooks the installed runtime ships; register a project hook in .claude/settings.json with a command that runs its own file`,
+          });
+          continue;
+        }
         const hookPath = join(projectDir, harness, "hooks", h);
         results.push({
           pass: existsSync(hookPath),
@@ -4775,26 +4792,23 @@ export async function collectDoctorReport(
   const treeVersions = harnessTreeVersionsCheck(projectDir);
   if (treeVersions) results.push(treeVersions);
 
-  // 4a. Project-default scope — real env overrides the recorded project flag.
-  // The framework fallback is not a configured project default.
+  // 4a. Project-default scope: real env overrides the recorded project flag.
+  // The framework fallback is not a configured project default, so with
+  // nothing set there is no row: in a terminal this process cannot see the
+  // value Claude Code passes from .claude/settings.json, and "unset" would be
+  // false there.
   const defaultResolution = defaultScopeResolution();
   const envScope = defaultResolution.scope;
-  if (defaultResolution.source !== "env") {
-    results.push({
-      pass: true,
-      label: "AWS_AIDLC_DEFAULT_SCOPE (unset - no project default)",
-    });
-  } else if (!defaultResolution.error && validScopes().has(envScope)) {
-    results.push({
-      pass: true,
-      label: `AWS_AIDLC_DEFAULT_SCOPE=${envScope} (valid)`,
-    });
-  } else {
-    results.push({
-      pass: false,
-      label: `AWS_AIDLC_DEFAULT_SCOPE=${envScope} (invalid)`,
-      fix: `valid values: ${[...validScopes()].join(", ")}`,
-    });
+  if (defaultResolution.source === "env") {
+    results.push(
+      !defaultResolution.error && validScopes().has(envScope)
+        ? { pass: true, label: `AWS_AIDLC_DEFAULT_SCOPE=${envScope} (valid)` }
+        : {
+          pass: false,
+          label: `AWS_AIDLC_DEFAULT_SCOPE=${envScope} (invalid)`,
+          fix: `valid values: ${[...validScopes()].join(", ")}`,
+        },
+    );
   }
 
   // 4c. Plugin selection — doctor is a full-graph consumer. Runtime consumers
@@ -8380,7 +8394,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       // not from the registry.
       ...sourceBaselineAuditFields(
         projectDir,
-        "code-generation",
+        workspaceBaselineStageSlugs(),
         created.dirName,
         created.space,
         repos,
@@ -8675,6 +8689,9 @@ function handleIntentCreateStateBuild(
 
   const totalInScope = executeStages.length;
   const completedInit = graph.filter((s) => s.phase === "initialization").length;
+  // The lines the person reads count the stages the plan runs after
+  // Initialization, from the list the offer and each stage's start count.
+  const shownInScope = plannedStages(stageProgress, scope).length;
 
   const firstPostInitEntry = graph.find((s) => s.slug === firstPostInit);
   const firstPostInitPhase = firstPostInitEntry
@@ -8817,11 +8834,11 @@ ${stageProgress}
     Languages: scan.languages,
     Frameworks: scan.frameworks,
     "Build System": scan.buildSystem,
-    Details: `${totalInScope} stages in scope, routing to ${firstPostInit}`,
+    Details: `${shownInScope} stages in scope, routing to ${firstPostInit}`,
   }, createdDir, createdSpace);
   appendAuditEvent(projectDir, "STAGE_COMPLETED", {
     Stage: "state-init",
-    Details: `State initialized: ${scope} scope, ${totalInScope} stages, routing to ${firstPostInit}`,
+    Details: `State initialized: ${scope} scope, ${shownInScope} stages, routing to ${firstPostInit}`,
   }, createdDir, createdSpace);
 
   // Phase hand-off: initialization → first post-init phase. The state file
@@ -8863,7 +8880,7 @@ ${stageProgress}
       : "";
   process.stdout.write(
     `Intent created: ${createdDir} (space: ${createdSpace})
-State initialized: ${scope} scope, ${totalInScope} stages, ${effectiveDepth} depth
+State initialized: ${scope} scope, ${shownInScope} stages, ${effectiveDepth} depth
 ${composedPlan ? `Plan: ${composedPlanLabel(flags["plan-name"])}, for this piece of work only (no scope file written)\n` : ""}Project type: ${projectType}${declaredType ? " (you said so)" : ""}
 ${declaredType === "Brownfield" && scan.projectType !== "Brownfield" ? `${NO_CODE_FOUND_YET}\n` : ""}Languages: ${scan.languages}
 Frameworks: ${scan.frameworks}
@@ -12505,7 +12522,11 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
       stages[stage.slug] =
         action === "EXECUTE" || (greenfieldOnly && stage.slug === "reverse-engineering") ? "EXECUTE" : "SKIP";
     }
-    const running = Object.values(stages).filter((a) => a === "EXECUTE").length;
+    // The saved plan's lines count the stages it runs after Initialization, the
+    // count its plan offer gives on existing code (the plan keeps Reverse
+    // Engineering for the next project); the audit row keeps every stage it runs.
+    const running = gridCostSummary(stages).shown;
+    const executing = Object.values(stages).filter((a) => a === "EXECUTE").length;
 
     const depth = getField(content, "Depth") || scopeDef.depth;
     const testStrategy = getField(content, "Test Strategy");
@@ -12551,7 +12572,7 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
         appendAuditEvent(projectDir, "SCOPE_SAVED", {
           Scope: scope,
           "Saved as": name,
-          "Stages in Scope": String(running),
+          "Stages in Scope": String(executing),
         }, flags.intent, flags.space));
     } catch (error) {
       die(`Cannot save the scope: ${errorMessage(error)}`);

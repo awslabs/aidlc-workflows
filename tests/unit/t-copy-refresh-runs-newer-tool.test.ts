@@ -332,22 +332,23 @@ describe("a copied project's refresh from a newer release runs that release's ow
 
   test("at a terminal, what the person answered before the hand-off is never asked again", async () => {
     const project = copiedAt2110();
-    // Outside a recognized project config first asks whether to set it up here.
+    // Not a Git repository, but AI-DLC is set up here, so config does not ask
+    // whether to set it up here.
     rmSync(join(project, ".git"), { recursive: true, force: true });
     writeFileSync(join(project, ".aidlc-version"), `${NEWER}\n`);
     const release = servedRelease();
     const mark = join(temp("aidlc-t-copy-newer-mark-"), "ran");
     try {
-      // Set it up here: yes; download: Enter. The test terminal takes every
-      // answer at the first question, so the newer tool's own setup map after
-      // the refresh finds the input closed and stops there.
+      // Download: Enter. The test terminal takes every answer at the first
+      // question, so the newer tool's own setup map after the refresh finds
+      // the input closed and stops there.
       const { status, out } = await ownAsync(project, ["config", "--harness", "codex", "--mcp", "none"], {
         AIDLC_RELEASE_BASE_URL: release.baseUrl,
         AIDLC_TEST_CONFIG_TTY: "1",
         [MARK]: mark,
-      }, "y\n\n");
+      }, "\n");
       expect(existsSync(mark), out).toBe(true);
-      expect(out.split("Initialize AI-DLC in "), out).toHaveLength(2);
+      expect(out).not.toContain("Initialize AI-DLC in ");
       expect(out.split(`Download ${NEWER} from `), out).toHaveLength(2);
       expect(out).toContain(ranLine(NEWER));
       expect(JSON.parse(readFileSync(join(project, ".codex", "tools", "data", "aidlc-stamp.json"), "utf-8")).frameworkVersion)

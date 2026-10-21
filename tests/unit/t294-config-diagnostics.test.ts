@@ -1909,6 +1909,94 @@ describe("t294 trust diagnostics", () => {
     expect(codexTrustIssues(project, ".codex", { HOME: home, CODEX_HOME: home })).toEqual([]);
   });
 
+  // Each shipped hook as Codex keys it in `project`, with its hash.
+  function codexSeedEntries(project: string): Array<[string, string]> {
+    const seed = parseToml(readFileSync(join(project, ".codex", "trust-seed.toml"), "utf-8")) as {
+      hooks: { state: Record<string, { trusted_hash: string }> };
+    };
+    return Object.entries(seed.hooks.state).map(([key, state]) => [
+      key.replace("<PROJECT_DIR>", project),
+      state.trusted_hash,
+    ]);
+  }
+
+  function codexTrustText(entries: Array<[string, string]>, quote: (key: string) => string): string {
+    return entries.map(([key, hash]) => `[hooks.state.${quote(key)}]\ntrusted_hash = "${hash}"\n`).join("\n");
+  }
+
+  test("Codex counts the trust it writes on Windows as complete: literal keys, backslashes, any case", () => {
+    const project = temp("aidlc-t294-trust-codex-win-");
+    cpSync(join(DIST, "codex"), project, { recursive: true });
+    const home = temp("aidlc-t294-codex-win-home-");
+    const env = { HOME: home, CODEX_HOME: home };
+    // Codex writes a key that holds a backslash as a TOML literal string (seen
+    // live on Codex 0.160), so on Windows every hook key is one (#2838).
+    writeFileSync(
+      join(home, "config.toml"),
+      codexTrustText(codexSeedEntries(project), (key) => `'${key.replaceAll("/", "\\").toLowerCase()}'`),
+    );
+    expect(codexTrustIssues(project, ".codex", env, "win32")).toEqual([]);
+    // Elsewhere a backslash is part of a folder name, as Codex keys it there.
+    expect(codexTrustIssues(project, ".codex", env, "linux")[0]?.id).toBe("codex-hook-trust-incomplete");
+  });
+
+  test("Codex counts a literal-string key with forward slashes as the same key", () => {
+    const project = temp("aidlc-t294-trust-codex-literal-");
+    cpSync(join(DIST, "codex"), project, { recursive: true });
+    const home = temp("aidlc-t294-codex-literal-home-");
+    writeFileSync(join(home, "config.toml"), codexTrustText(codexSeedEntries(project), (key) => `'${key}'`));
+    expect(codexTrustIssues(project, ".codex", { HOME: home, CODEX_HOME: home })).toEqual([]);
+  });
+
+  test("Codex counts a hash only under its own hook's key", () => {
+    const project = temp("aidlc-t294-trust-codex-stale-");
+    cpSync(join(DIST, "codex"), project, { recursive: true });
+    const home = temp("aidlc-t294-codex-stale-home-");
+    const entries = codexSeedEntries(project);
+    const [[firstKey, firstHash]] = entries;
+    // This project's first hook was trusted at an older hash; another
+    // project's copy of it holds the current one.
+    writeFileSync(join(home, "config.toml"), codexTrustText([
+      [firstKey, "sha256:older"],
+      ...entries.slice(1),
+      [`${join(home, "other", ".codex", "hooks.json")}:session_start:0:0`, firstHash],
+    ], (key) => JSON.stringify(key)));
+    expect(codexTrustIssues(project, ".codex", { HOME: home, CODEX_HOME: home })).toEqual([
+      expect.objectContaining({
+        id: "codex-hook-trust-incomplete",
+        message: `1 of ${entries.length} Codex hook trust entries are missing`,
+      }),
+    ]);
+  });
+
+  test("a Codex config.toml that does not parse is named with its repair, not as missing trust", () => {
+    const project = temp("aidlc-t294-trust-codex-invalid-");
+    cpSync(join(DIST, "codex"), project, { recursive: true });
+    const home = temp("aidlc-t294-codex-invalid-home-");
+    const env = { HOME: home, CODEX_HOME: home };
+    const configPath = join(home, "config.toml");
+    const entries = codexSeedEntries(project);
+    const trusted = codexTrustText(entries, (key) => JSON.stringify(key));
+    // A second copy of one table, which Codex refuses to load too.
+    writeFileSync(configPath, `${trusted}\n${codexTrustText(entries.slice(0, 1), (key) => JSON.stringify(key))}`);
+    const message = `${configPath} is not a Codex config AI-DLC can read, so Codex's hook trust is unknown`;
+    const remediation = `Repair ${configPath}: valid TOML, then rerun the setup check.`;
+    expect(codexTrustIssues(project, ".codex", env)).toEqual([
+      { id: "codex-config-unreadable", message, remediation },
+    ]);
+    const actions = postApplyOutstandingActions(project, ".codex", "codex", {
+      skipSections: ["runtime", "providers", "models"],
+      env,
+    });
+    const action = actions.find((entry) => entry.id === "codex-config-unreadable");
+    expect(action).toEqual(expect.objectContaining({ section: "trust", message, step: remediation }));
+    expect(action?.command.endsWith("config trust --check")).toBe(true);
+    expect(actions.some((entry) => entry.message === "Codex has not trusted this project's hooks yet")).toBe(false);
+    // Repaired, the check goes on to count the trust.
+    writeFileSync(configPath, trusted);
+    expect(codexTrustIssues(project, ".codex", env)).toEqual([]);
+  });
+
   test("Copilot config is found in the home the Copilot CLI uses on each platform", () => {
     const configIn = (dir: string) => join(dir, ".copilot", "config.json");
     // A Windows desktop process has no HOME; the CLI reads USERPROFILE. The

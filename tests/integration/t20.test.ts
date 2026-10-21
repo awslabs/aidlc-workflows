@@ -75,8 +75,7 @@ function docMdFiles(proj: string): string[] {
     (f) =>
       f.endsWith(".md") &&
       f !== "aidlc-state.md" &&
-      f !== "audit.md" &&
-      f !== ".aidlc-engine/recovery.md",
+      f !== "audit.md",
   );
 }
 

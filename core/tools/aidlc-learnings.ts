@@ -109,6 +109,7 @@ import {
   appendUnderHeading,
   LEARNINGS_SELECTIONS_DIR,
   normalizeDriveLetter,
+  agentFileText,
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
   errorMessage,
@@ -117,6 +118,10 @@ import {
   getField,
   isoTimestamp,
   intentsDir,
+  LEARNINGS_KEEP_NONE,
+  LEARNINGS_KEEP_QUESTION,
+  LEARNINGS_NOTE_CHOICES,
+  LEARNINGS_NOTE_QUESTION,
   listIntentDirs,
   listField,
   parseMemoryEntries,
@@ -226,6 +231,14 @@ interface SurfaceOutput {
   memory_entries_total: number;
   candidates: SurfaceCandidate[];
   parked_open_questions: SurfaceParkedQuestion[];
+  /** What the agent asks, in order, each as its own question with these options. */
+  questions: SurfaceQuestion[];
+}
+
+interface SurfaceQuestion {
+  question: string;
+  multi_select: boolean;
+  options: string[];
 }
 
 const SELECTIONS_MAX_BYTES = 1024 * 1024;
@@ -522,6 +535,18 @@ function handleSurface(args: string[], projectDir: string): void {
     memory_entries_total: entries.length,
     candidates,
     parked_open_questions: parked,
+    // Handed over whole, so the agent does not compose the box: live runs
+    // folded both into one question and dropped a choice from it.
+    questions: [
+      ...(candidates.length > 0
+        ? [{
+          question: LEARNINGS_KEEP_QUESTION,
+          multi_select: true,
+          options: [LEARNINGS_KEEP_NONE, ...candidates.map((c) => c.summary)],
+        }]
+        : []),
+      { question: LEARNINGS_NOTE_QUESTION, multi_select: false, options: [...LEARNINGS_NOTE_CHOICES] },
+    ],
   };
   console.log(JSON.stringify(out));
 }
@@ -637,7 +662,7 @@ function parseSelectionsFile(path: string): SelectionsFile {
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(bytes.toString("utf-8"));
+    parsed = JSON.parse(agentFileText(bytes));
   } catch (e) {
     fail(`selections-json is malformed: ${errorMessage(e)}`, 1);
   }
