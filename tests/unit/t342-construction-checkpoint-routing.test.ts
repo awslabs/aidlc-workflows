@@ -31,6 +31,9 @@ import {
   AIDLC_SRC, cleanupTestProject, createTestProject, resetAidlcEnv,
   runOrchestrateNext, seedAidlcMemory, seedBoltDag, seededRecordDir, seededStateFile,
 } from "../harness/fixtures.ts";
+import {
+  copilotAdapter, copilotRuns, copilotStep, namedCommands, SHAPES, type Step,
+} from "../harness/code-generation-states.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { guardOperationInvocation } from "../../dist/claude/.claude/tools/aidlc-guard-operation.ts";
 import {
@@ -2515,6 +2518,60 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(jumped(p)).toBe(0);
     expect(latestMainWorkflowStageRunFloorForProject(p, "code-generation", true, "alpha")).toBe(floor);
     expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // On Copilot the adapter's settle leaves the step out of date after every
+  // print. A redo of a built Unit's Code Generation is the reopen `next
+  // --stage` prints for one Unit, run as that print's own command; a `next
+  // --stage` that names the Unit lets only that Unit's reopen through.
+  const COPILOT = SHAPES.find((shape) => shape.name === "copilot")!;
+  function copilotNext(p: string, args: string): Step {
+    let step = copilotStep(p, args);
+    for (let i = 0; i < 4 && step.kind === "load-steering"; i++) {
+      step = copilotStep(p, String(step.next).replace(/^bun \.aidlc\/tools\/aidlc-orchestrate\.ts /, ""));
+    }
+    return step;
+  }
+  function copilotSays(p: string, prompt: string) {
+    const said = copilotAdapter(p, "record-human-turn", {
+      hook_event_name: "UserPromptSubmit", prompt, timestamp: new Date().toISOString(),
+    });
+    expect(said.code, said.stderr).toBe(0);
+  }
+  const printedReopen = (step: Step) =>
+    /Run `(bun \.aidlc\/tools\/aidlc-jump\.ts reopen [^`]+)`/.exec(String(step.message ?? ""))?.[1];
+
+  for (const policy of ["strict", "off"]) {
+    test(`Copilot, Guard Policy ${policy}: the person's redo of a built Unit runs the reopen next --stage prints`, () => {
+      const p = policyFixture("classic", `${policy} (set by you)`, "adversarial");
+      COPILOT.install(p);
+      buildReviewed(p, "alpha");
+      copilotSays(p, "carry on");
+      copilotNext(p, "next");
+      copilotSays(p, "Redo Code Generation for alpha, please.");
+      const printed = copilotNext(p, "next --stage code-generation");
+      const reopen = printedReopen(printed);
+      expect(reopen, JSON.stringify(printed)).toContain("--units alpha");
+      const ran = copilotRuns(p, reopen!);
+      expect(ran.refused, "the redo the person asked for was refused on Copilot").toBeNull();
+      expect(copilotNext(p, "next")).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha" });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  test("Copilot: next --stage naming the Unit lets that Unit's reopen through, and another Unit's is told its own", () => {
+    const p = policyFixture("classic", "strict (set by you)", "adversarial");
+    COPILOT.install(p);
+    buildReviewed(p, "alpha");
+    copilotSays(p, "carry on");
+    copilotNext(p, "next");
+    copilotSays(p, "Redo Code Generation for alpha, please.");
+    const printed = copilotNext(p, "next --stage code-generation --unit alpha");
+    const reopen = printedReopen(printed);
+    expect(reopen, JSON.stringify(printed)).toContain("--units alpha");
+    const other = copilotRuns(p, reopen!.replace("--units alpha", "--units beta")).refused;
+    expect(other, "another Unit's reopen ran on a claim for alpha").not.toBeNull();
+    expect(namedCommands(other!)).toContain("bun .aidlc/tools/aidlc-orchestrate.ts next --stage code-generation --unit beta");
+    expect(copilotRuns(p, reopen!).refused).toBeNull();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A side-by-side build was prepared (a Bolt opened per Unit) and the person

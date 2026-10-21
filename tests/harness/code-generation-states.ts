@@ -9,6 +9,7 @@
 // developer dispatch and a source write refused before the approval and
 // admitted after it. The helpers here are the plan-approval ask test's
 // (tests/unit/t-plan-approval-ask.test.ts).
+import { expect } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -39,6 +40,7 @@ import {
   writeActiveDirectiveMarker,
   writeBaselineSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { writeSessionPidEntry } from "../../dist/copilot/.aidlc/tools/aidlc-lib.ts";
 
 /** Worktree fixtures a state built; the sweep cleans them with cleanupWorktreeFixtures(). */
 const worktreeFixtures: string[] = [];
@@ -877,3 +879,58 @@ async function opencodeCall(proj: string, session: string, tool: string, args: R
 export const SHAPES: Shape[] = [claude, codex, copilot, cursor, kiro, kiroIde, opencode];
 
 export const DEVELOPER = "aidlc-developer-agent";
+
+// Copilot's adapter around one command, as VS Code runs it: the claim before
+// (the adapter may rewrite the command), the terminal, the settle after.
+const COPILOT_CHAT = "copilot-recovery-jump";
+let copilotToolUse = 0;
+
+export function copilotAdapter(proj: string, target: string, payload: Record<string, unknown>) {
+  if (target === "record-human-turn") writeSessionPidEntry(proj, process.pid, COPILOT_CHAT);
+  const run = spawnSync(process.execPath, [join(proj, ".aidlc", "hooks", "aidlc-copilot-adapter.ts"), target], {
+    cwd: proj, input: JSON.stringify({ cwd: proj, session_id: COPILOT_CHAT, ...payload }), encoding: "utf-8",
+    env: { ...process.env, AIDLC_UNATTENDED: undefined, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined },
+  });
+  return { stdout: run.stdout ?? "", stderr: run.stderr ?? "", code: run.status ?? -1 };
+}
+
+// The terminal a command runs in: Git's bash on Windows, as VS Code users there run it, and /bin/sh elsewhere.
+function terminal(proj: string, command: string) {
+  const sh = process.platform === "win32"
+    ? join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe")
+    : "/bin/sh";
+  const run = spawnSync(sh, [process.platform === "win32" ? "-lc" : "-c", command], {
+    cwd: proj, encoding: "utf-8",
+    env: { ...process.env, AIDLC_UNATTENDED: undefined, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined },
+  });
+  return { stdout: run.stdout ?? "", stderr: run.stderr ?? "", code: run.status ?? -1 };
+}
+
+/** One command through Copilot's adapter: the guard's refusal, or what the terminal printed after the settle. */
+export function copilotRuns(proj: string, command: string): { refused: string | null; stdout: string } {
+  const id = `recovery-jump-${++copilotToolUse}`;
+  const pre = copilotAdapter(proj, "guard-tool-call", {
+    hook_event_name: "PreToolUse", tool_use_id: id, tool_name: "Bash", tool_input: { command },
+  });
+  const decided = JSON.parse(pre.stdout.trim() || "{}") as {
+    modifiedArgs?: { command?: string };
+    hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
+  };
+  if (decided.hookSpecificOutput?.permissionDecision === "deny") {
+    return { refused: decided.hookSpecificOutput.permissionDecisionReason ?? "", stdout: "" };
+  }
+  const rewritten = decided.modifiedArgs?.command ?? command;
+  const ran = terminal(proj, rewritten);
+  expect(ran.code, `${rewritten}\n${ran.stderr}`).toBe(0);
+  copilotAdapter(proj, "post-tool", {
+    hook_event_name: "PostToolUse", tool_use_id: id, tool_name: "Bash", tool_input: { command: rewritten },
+    tool_result: { result_type: "success", text_result_for_llm: `${ran.stdout.trim()}\n<shellId: t completed with exit code 0>` },
+  });
+  return { refused: null, stdout: ran.stdout };
+}
+
+export function copilotStep(proj: string, args: string): Step {
+  const ran = copilotRuns(proj, `bun .aidlc/tools/aidlc-orchestrate.ts ${args}`);
+  expect(ran.refused).toBeNull();
+  return JSON.parse(ran.stdout.trim()) as Step;
+}
