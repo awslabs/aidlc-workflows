@@ -3336,6 +3336,78 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(script).not.toMatch(/^\s*apk add\b/m);
   });
 
+  test("Unix installer keeps the printed PATH command when no terminal can answer (#2660)", () => {
+    if (process.platform === "win32" || process.getuid?.() === 0) return;
+    const root = temp("aidlc-t244-path-offer-");
+    const release = fixture(AIDLC_VERSION, { binary: "executable" });
+    const manifestPath = join(release, "version.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+      assets: Array<{ name: string; kind: string; sha256: string; bytes: number }>;
+    };
+    const binary = manifest.assets.find((asset) => asset.kind === "binary");
+    expect(binary).toBeDefined();
+    const binaryPath = join(release, binary!.name);
+    writeFileSync(
+      binaryPath,
+      [
+        "#!/bin/sh",
+        'if [ "$1" = system ] && [ "$2" = lifecycle ] && [ "$3" = install-apply ]; then',
+        '  mkdir -p "$AIDLC_BIN_DIR"',
+        '  cp "$0" "$AIDLC_BIN_DIR/aidlc"',
+        '  chmod 755 "$AIDLC_BIN_DIR/aidlc"',
+        "  exit 0",
+        "fi",
+        "exit 0",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    binary!.sha256 = createHash("sha256").update(readFileSync(binaryPath)).digest("hex");
+    binary!.bytes = statSync(binaryPath).size;
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    writeFileSync(
+      join(release, "checksums.txt"),
+      readFileSync(join(release, "checksums.txt"), "utf-8")
+        .replace(
+          new RegExp(`^[a-f0-9]{64}  ${binary!.name}$`, "m"),
+          `${binary!.sha256}  ${binary!.name}`,
+        )
+        .replace(
+          /^[a-f0-9]{64} {2}version\.json$/m,
+          `${createHash("sha256").update(readFileSync(manifestPath)).digest("hex")}  version.json`,
+        ),
+    );
+    const home = join(root, "home");
+    const bin = join(root, "bin");
+    mkdirSync(home, { recursive: true });
+    const result = spawnSync("sh", [
+      INSTALL_SH,
+      "--from",
+      release,
+      "--offline",
+      "--json",
+    ], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      cwd: root,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        HOME: home,
+        SHELL: "/bin/zsh",
+        AIDLC_INSTALL_ROOT: join(root, "install"),
+        AIDLC_BIN_DIR: bin,
+        PATH: "/usr/bin:/bin",
+      },
+    });
+    expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+    const payload = JSON.parse(result.stdout.trim()) as {
+      data: { pathCommand: string | null; profile: string | null };
+    };
+    expect(payload.data.pathCommand).toBe(`export PATH="${bin}:$PATH"`);
+    expect(payload.data.profile).toBeNull();
+    expect(existsSync(join(home, ".zshrc"))).toBe(false);
+  });
+
   test("Unix installer does not require GitHub CLI attestation support", () => {
     if (process.platform === "win32" || process.getuid?.() === 0) return;
     const root = temp("aidlc-t244-old-gh-installer-");
