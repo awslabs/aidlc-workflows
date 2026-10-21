@@ -405,7 +405,9 @@ heading names the trade whose decision it is after its number
 (`## Q3. [Developer] ...`), and each trade's questions sit together unless a
 question depends on another's answer. The trade alone never skips or
 delegates a question. An existing file is never reordered or renumbered; a
-follow-up takes the next unused number.
+follow-up takes the next unused number. When the agent asks one of these
+questions, its trade goes in front of the question text, so the person sees it
+in the chat or the picker too.
 
 When the stage's `<slug>-questions.md` already exists with its questions (an
 `[Answer]:` tag, filled in or still blank), the run-stage directive carries
@@ -417,14 +419,16 @@ the stage's next step), never creating it again, writing new questions over it,
 or asking an answered question again (#1873). A redo the person asked for
 (`artifact_reuse`, which drops the field, or Redo from scratch) starts afresh.
 
-**Step 2: How the person answers.** The run-stage directive carries
-`answer_mode` (`mode`, `ask`, `reused_from`, `notice`) and, beside it, the
-instruction the conductor follows, `answer_mode_note` (`answerModeNote` in
-`aidlc-directive.ts`). The first stage with questions in a piece of work asks;
+**Step 2: How the person answers.** The engine resolves the stage's answer
+mode (`resolveStageAnswerMode`: `mode`, `ask`, `reused_from`, `notice`), and the
+run-stage directive carries only the instruction the conductor follows, made
+from it: `answer_mode_note` (`answerModeNote` in `aidlc-directive.ts`).
+`withAgentNotes` leaves the mode itself out of the step, because an agent handed
+it read its fields aloud ("answer_mode.ask: true"). The first stage with questions in a piece of work asks;
 the engine then reuses the latest recorded answer to the mode question
 (`latestRecordedAnswerMode`, the same DECISION_RECORDED / QUESTION_ANSWERED
 pairing the Stop hook reads). The note makes the branch the protocol used to
-make on the field: with `ask: true` it carries the question ("I've created [N]
+make on the mode: with `ask: true` it carries the question ("I've created [N]
 questions at [the questions file]. How would you like to answer them?"), the
 three choices with their descriptions (Guide me, I'll edit the file, Chat), the
 exact `log decision` and `log answer` commands for this stage, and the notice to
@@ -1352,7 +1356,9 @@ severity increase into a new finding, and keeps unmentioned open rows marked
 not re-checked. A fixed finding reported as still applying is open again, or
 back to the decision made before it was fixed. A Redo row resets the list of
 each Unit whose artifacts it names, or every Unit when it names none. `GATE_APPROVED` atomically records `Accepted risk` for each
-current open finding. A Request Changes report records `Rejected: <reason>`
+current open finding, or `Changed after review` for one whose reviewed work
+changed after that review with no finished review since; that value is no
+decision, so the finding stays open and the next review re-checks it. A Request Changes report records `Rejected: <reason>`
 only for explicit
 `--reject-finding <review-artifact>#R-NN=<exact human reason>` values. It uses
 `--reopen-finding <review-artifact>#R-NN=<exact human reason>` when the person

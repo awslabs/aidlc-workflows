@@ -7,7 +7,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { codexToolResults, copilotToolResults, copilotTurnCommand, opencodeRunArgs, opencodeToolResults } from "../harness/exec-drive.ts";
+import { codexToolResults, copilotToolResults, copilotTurnCommand, opencodeRunCommand, opencodeToolResults } from "../harness/exec-drive.ts";
 import { cleanupTestProject, createTestProject, seededAuditShard, seededStateFile } from "../harness/fixtures.ts";
 import { type GoldenJourney, type GoldenRun, goldenPathProblems, GoldenPerson } from "../harness/golden-journey.ts";
 import type { CapturedToolResult } from "../harness/sdk-drive.ts";
@@ -141,6 +141,19 @@ describe("the golden path checks", () => {
     row(proj, "DECISION_RECORDED", { Stage: "requirements-analysis", Decision: "Q1: no name given", Options: "A,B,C,X" });
     expect(ownWords()).toEqual(["no question at requirements-analysis took the person's own words"]);
   });
+
+  test("the person's own words are on the record as given: the box's reply, or beside the answer", () => {
+    const kept = (proj: string) => goldenPathProblems(journey(proj), run(new GoldenPerson(journey(proj)), { start: 0, ownWordsUsed: true }))
+      .filter((p) => p.includes("own words"));
+    const boxed = project("requirements-analysis");
+    row(boxed, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: "B" });
+    expect(kept(boxed)).toEqual(["the person's own words at requirements-analysis are not on the record"]);
+    row(boxed, "QUESTION_REPLIED", { Question: "Q1: no name given", Reply: "Keep it small" });
+    expect(kept(boxed)).toEqual([]);
+    const typed = project("requirements-analysis");
+    row(typed, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: "B", "Person Reply": "keep it  small" });
+    expect(kept(typed)).toEqual([]);
+  });
 });
 
 describe("Codex exec's JSON stream", () => {
@@ -239,17 +252,20 @@ describe("one change request at a stage's approval", () => {
 
 describe("an opencode run turn", () => {
   test("a line after the skill runs the shipped command with its words, each word an argument", () => {
-    const argv = opencodeRunArgs("/aidlc fix the greeter: it says hello");
+    const { argv, input } = opencodeRunCommand("/aidlc fix the greeter: it says hello");
+    expect(input).toBeUndefined();
     expect(argv.slice(0, 3)).toEqual(["run", "--command", "aidlc"]);
     expect(argv.slice(argv.indexOf("--"))).toEqual(["--", "fix", "the", "greeter:", "it", "says", "hello"]);
     expect(argv.slice(argv.indexOf("--format"), argv.indexOf("--format") + 2)).toEqual(["--format", "json"]);
   });
 
-  test("any other line continues the session as typed", () => {
-    const argv = opencodeRunArgs('Go ahead with the "bugfix" plan', "ses_1");
+  test("any other line continues the session as typed, on stdin, never as an argument a Windows launcher refuses", () => {
+    const { argv, input } = opencodeRunCommand('Go ahead with the "bugfix" plan', "ses_1");
     expect(argv.slice(0, 3)).toEqual(["run", "-s", "ses_1"]);
     expect(argv).not.toContain("--command");
-    expect(argv.slice(argv.indexOf("--") + 1).join(" ")).toBe('Go ahead with the "bugfix" plan');
+    expect(argv).not.toContain("--");
+    expect(argv.some((arg) => arg.includes('"'))).toBe(false);
+    expect(input).toBe('Go ahead with the "bugfix" plan');
   });
 
   test("its JSON events give the session and each tool call with what it printed", () => {

@@ -1197,4 +1197,61 @@ describe("prepare with plan approval off", () => {
     expect(readAuditShardEvents(pd).filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toHaveLength(0);
     expect(readFileSync(join(codeGenerationRecordDir(pd, UNIT), "code-generation-questions.md"), "utf-8")).toBe(questions);
   });
+
+  // Nobody approved this plan, so a change after the engine's record is no
+  // reason to ask for an approval: strict built one Unit at a time carries on,
+  // and so does the parallel build. Asking would loop, since `next` never asks.
+  test("under strict, a pull after the plan-approval-off record still sets the Units up, with no approval asked", () => {
+    const pd = fixture(false, false);
+    const statePath = seededStateFile(pd);
+    writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(
+      "- **Guard Policy**: strict (set by you)\n",
+      "- **Guard Policy**: strict (set by you)\n- **Plan Approval**: off (set by you)\n",
+    ));
+    publish(pd);
+    const directive = { kind: "invoke-swarm", stage: STAGE, units: [UNIT] } as unknown as Parameters<typeof publishPlanApprovalSkip>[1];
+    expect(publishPlanApprovalSkip(pd, directive)).toBe(true);
+    const questionsPath = join(codeGenerationRecordDir(pd, UNIT), "code-generation-questions.md");
+    const questions = readFileSync(questionsPath, "utf-8");
+    writeFileSync(join(pd, "src", "pulled.ts"), "export const pulled = 1;\n");
+    git(pd, ["add", "src/pulled.ts"]);
+    git(pd, ["commit", "-qm", "a pull"]);
+
+    const prepared = prepare(pd);
+    expect(prepared.code, `${prepared.out}\n${prepared.err}`).toBe(0);
+    expect(JSON.parse(prepared.out).change_notices).toEqual([
+      "1 file changed since this plan was approved: src/pulled.ts. Building alpha now.",
+    ]);
+    const worker = child(pd);
+    expect(existsSync(join(worker, "src", "pulled.ts"))).toBe(true);
+    expect(starts(pd)).toHaveLength(1);
+    expect(codeGenerationExecutionAllowed(worker, TARGET)).toBe(true);
+    const rows = () => readAuditShardEvents(pd);
+    expect(rows().filter((row) => row.event === "CHANGE_ACCEPTED")).toHaveLength(1);
+    expect(rows().filter((row) => row.event === "PLAN_APPROVAL_SKIPPED")).toHaveLength(1);
+    expect(rows().filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toHaveLength(0);
+    expect(rows().filter((row) => row.event === "DECISION_RECORDED" &&
+      auditBlockField(row.block, "Checkpoint") === "plan-approval")).toHaveLength(0);
+    expect(readFileSync(questionsPath, "utf-8")).toBe(questions);
+
+    // The way on leads on: `next` hands back the batch that is out, asking nothing.
+    const after = tool(pd, "aidlc-orchestrate.ts", ["next", "--project-dir", pd]);
+    succeeded(after);
+    expect(JSON.parse(after.out)).toMatchObject({ kind: "invoke-swarm", units: [UNIT] });
+
+    // The batch is sent back, the engine builds the new attempt's plan without
+    // asking again, and another pull lands before the batch is picked up again.
+    completeAndReject(pd);
+    expect(publishPlanApprovalSkip(pd, directive)).toBe(true);
+    expect(rows().filter((row) => row.event === "PLAN_APPROVAL_SKIPPED")).toHaveLength(2);
+    writeFileSync(join(pd, "src", "later.ts"), "export const later = 1;\n");
+    git(pd, ["add", "src/later.ts"]);
+    git(pd, ["commit", "-qm", "another pull"]);
+    const resumed = prepare(pd, true);
+    expect(resumed.code, `${resumed.out}\n${resumed.err}`).toBe(0);
+    expect(JSON.parse(resumed.out).change_notices).toEqual([
+      "1 file changed since this plan was approved: src/later.ts. Building alpha now.",
+    ]);
+    expect(rows().filter((row) => row.event === "PLAN_APPROVAL_RECORDED")).toHaveLength(0);
+  });
 });

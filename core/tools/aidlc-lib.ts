@@ -1,4 +1,5 @@
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "./aidlc-runtime-budget.ts";
+import { lockFolderHeldGiveUpMs, lockFolderHeldLine } from "./aidlc-lock-line.ts";
 import { spawnSync } from "node:child_process";
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { accessSync, chmodSync, closeSync, constants as fsConstants, cpSync, type Dirent, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync, writeSync } from "node:fs";
@@ -9,6 +10,7 @@ import { TextDecoder } from "node:util";
 import { inflateSync } from "node:zlib";
 import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import {
+  aidlcDispatcherInvocation,
   aidlcInvocation,
   aidlcToolInvocation,
   entrySkillInvocation,
@@ -104,7 +106,7 @@ export {
 // runtime require() below avoids the circular import (aidlc-graph.ts
 // imports loadScopeMapping/loadStageGraph from this file). Type-only
 // imports are erased at runtime so they don't create the cycle.
-import { readRootIntegrations } from "./aidlc-distribution.ts";
+import { readRootIntegrations, withoutBom } from "./aidlc-distribution.ts";
 import type { subgraphForScope as SubgraphForScope } from "./aidlc-graph.ts";
 import type * as SwarmCheckpoints from "./aidlc-swarm-checkpoints.ts";
 import type { ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
@@ -402,6 +404,14 @@ function hostLine<K extends "missedReplyInHost" | "agentStepInHost">(
     : {};
 }
 
+function registrationLines(value: unknown): Pick<HookActivation, "registration"> {
+  const lines = value as { file?: unknown; missing?: unknown; invalid?: unknown } | null | undefined;
+  return typeof lines?.file === "string" && lines.file !== "" && typeof lines.missing === "string" &&
+      typeof lines.invalid === "string"
+    ? { registration: { file: lines.file, missing: lines.missing, invalid: lines.invalid } }
+    : {};
+}
+
 // Whether the agent's shell is in the host a harness's `{ env }` names: `NAME`
 // matches when set, `NAME=value` when it holds that value (TERM_PROGRAM=kiro).
 // A `NAME=value` variable holding another value rules the host out: Kiro CLI in
@@ -426,6 +436,7 @@ export interface HookActivation {
   agentStep?: string;
   agentStepInHost?: { env: string[]; text: string };
   agentStepEdits?: string;
+  registration?: { file: string; missing: string; invalid: string };
 }
 
 interface ShippedHarnessData {
@@ -618,6 +629,7 @@ function readShippedHarnessData(): ShippedHarnessData {
           ...(typeof activation.agentStep === "string" ? { agentStep: activation.agentStep } : {}),
           ...(typeof activation.agentStep === "string" ? hostLine("agentStepInHost", activation.agentStepInHost) : {}),
           ...(typeof activation.agentStepEdits === "string" ? { agentStepEdits: activation.agentStepEdits } : {}),
+          ...(registrationLines(activation.registration)),
         }
         : null;
     // agentFinishRecorded is evidence the engine relies on to say no reviewer
@@ -1327,6 +1339,8 @@ export const INTENT_VERBS: ReadonlySet<string> = new Set([
   "unarchive",
   "add-repo",
   "remove-repo",
+  "add-checkout",
+  "remove-checkout",
 ]);
 
 export const SPACE_VERBS: ReadonlySet<string> = new Set([
@@ -1340,9 +1354,10 @@ export const SPACE_VERBS: ReadonlySet<string> = new Set([
 // `archived` status, `unarchive` brings it back to the status it had.
 export type IntentLifecycleVerb = "archive" | "unarchive";
 
-// The two repo verbs that change which sibling repos a piece of work touches,
-// by the person's word: `add-repo` records one more, `remove-repo` drops one.
-export type IntentRepoVerb = "add-repo" | "remove-repo";
+// The verbs that change where a piece of work's code is, by name: `add-repo`
+// and `remove-repo` its sibling repos, `add-checkout` and `remove-checkout` a
+// checkout outside the review's reach (they take a path).
+export type IntentRepoVerb = "add-repo" | "remove-repo" | "add-checkout" | "remove-checkout";
 
 export type WorkspaceCommand =
   // `all` is only ever set (true) for `intent list --all`; a plain list omits
@@ -1374,7 +1389,7 @@ function missingWorkspaceName(
 ): WorkspaceCommand {
   const usage = verb === "space-create"
     ? "space-create <name>"
-    : `${noun} ${verb} <name>`;
+    : `${noun} ${verb} ${verb === "add-checkout" || verb === "remove-checkout" ? "<path>" : "<name>"}`;
   return {
     kind: "error",
     noun,
@@ -1409,7 +1424,7 @@ function isIntentLifecycleVerb(token: string | undefined): token is IntentLifecy
 }
 
 function isIntentRepoVerb(token: string | undefined): token is IntentRepoVerb {
-  return token === "add-repo" || token === "remove-repo";
+  return token === "add-repo" || token === "remove-repo" || token === "add-checkout" || token === "remove-checkout";
 }
 
 // `intent list [--json] [--all]` / `space list [--json]`. The flags may appear
@@ -1519,6 +1534,8 @@ export function workspaceCommandUtilityArgv(
     case "unarchive":
     case "add-repo":
     case "remove-repo":
+    case "add-checkout":
+    case "remove-checkout":
       // The lifecycle and repo verbs forward verbatim, trailing flags included:
       // `intent archive <name> --reason <text>`.
       return [command.noun, command.kind, command.name, ...command.rest];
@@ -5752,13 +5769,19 @@ export const PLAN_APPROVAL_ASK_TYPE = "plan-approval";
 export const PLAN_APPROVAL_ASKED_BY_ENGINE =
   "Plan Approval is asked by the engine now. Run next, show the person the question it returns, and end the turn.";
 
-export function planApprovalAskIsOpen(projectDir: string): boolean {
+// The engine's Plan Approval question while it is open for the selected work:
+// its step marker, which names the Unit or Units it asks about; null otherwise.
+export function openPlanApprovalAsk(projectDir: string): ActiveDirectiveMarker | null {
   try {
     const marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
-    return marker?.version === 2 && marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE;
+    return marker?.version === 2 && marker.kind === "ask" && marker.ask_type === PLAN_APPROVAL_ASK_TYPE ? marker : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+export function planApprovalAskIsOpen(projectDir: string): boolean {
+  return openPlanApprovalAsk(projectDir) !== null;
 }
 
 export function planApprovalRuntimeFile(projectDir: string, name: string): string {
@@ -6840,6 +6863,20 @@ export function personLineHeard(projectDir: string, sessionId: string, line: str
   if (!path || !existsSync(path)) return false;
   const { turn, work } = personTurnAndWork(projectDir);
   return readPendingPersonLines(path, turn, work).said.includes(line);
+}
+
+// The same record for a line that stays true across turns (a lock folder a
+// program holds): said once a turn, and again after the person next speaks.
+function turnKeyedPersonLine(projectDir: string, line: string): string {
+  return `${personTurnAndWork(projectDir).turn}\u0000${line}`;
+}
+
+export function personLineHeardThisTurn(projectDir: string, sessionId: string, line: string): boolean {
+  return personLineHeard(projectDir, sessionId, turnKeyedPersonLine(projectDir, line));
+}
+
+export function markPersonLineHeardThisTurn(projectDir: string, sessionId: string, line: string): void {
+  markPersonLinesHeard(projectDir, sessionId, [turnKeyedPersonLine(projectDir, line)]);
 }
 
 // The reason the engine's skip step hands the agent for a stage the person
@@ -8818,6 +8855,47 @@ export class ActiveDirectiveLockContendedError extends Error {
   }
 }
 
+// The lock folder could not be moved for the whole budget: a dead owner's, or
+// this process's own. On Windows the message is the person's line; elsewhere
+// the words of the plain busy case it falls under.
+export class ActiveDirectiveLockFolderHeldError extends ActiveDirectiveLockContendedError {
+  // The message is the person's line, not the fallback words.
+  readonly personLine: boolean;
+  constructor(fallback: string) {
+    const line = activeDirectiveLockHeldLine();
+    super(line ?? fallback);
+    this.personLine = line !== null;
+    this.name = "ActiveDirectiveLockFolderHeldError";
+  }
+}
+
+// The line where the step did not run; null where there is no likely cause.
+export function activeDirectiveLockHeldLine(): string | null {
+  return lockFolderHeldLine("stopped", activeDirectiveLockBudgetMs());
+}
+
+// The line where this step and its record went through, the folder was then
+// held, and the next step waits.
+export function activeDirectiveLockHeldAfterStepLine(): string | null {
+  return lockFolderHeldLine("went-through", Math.min(activeDirectiveLockBudgetMs(), lockFolderHeldGiveUpMs()));
+}
+
+// The line where the step went on without the record, each step waiting out
+// the lock's budget or the give-up; null where there is no likely cause.
+export function activeDirectiveLockHeldNote(): string | null {
+  return lockFolderHeldLine("goes-on", Math.min(activeDirectiveLockBudgetMs(), lockFolderHeldGiveUpMs()));
+}
+
+// A transaction in this process went on after its release spent the whole
+// budget (transactActiveDirectiveTarget does not throw for it). True once.
+let ACTIVE_DIRECTIVE_RELEASE_HELD = false;
+
+export function takeActiveDirectiveReleaseHeld(): boolean {
+  const held = ACTIVE_DIRECTIVE_RELEASE_HELD;
+  ACTIVE_DIRECTIVE_RELEASE_HELD = false;
+  return held;
+}
+
 // Thrown when an engine observer reaches a durable write primitive. The
 // per-call-site suppressions below keep observers off those paths; this barrier
 // is what makes the guarantee a property of the code shape rather than of an
@@ -9753,7 +9831,7 @@ function transactActiveDirectiveTarget<T>(
   if (pendingRelease) {
     const outcome = releaseCanonicalOwnerStampedLock(pendingRelease.receipt);
     if (outcome === "retryable") {
-      throw new ActiveDirectiveLockContendedError(
+      throw new ActiveDirectiveLockFolderHeldError(
         "Active-directive lock release is still pending",
       );
     }
@@ -9768,8 +9846,13 @@ function transactActiveDirectiveTarget<T>(
   assertRecordPathNoFollow(recordRoot, target.lockDir);
   mkdirSync(dirname(target.markerPath), { recursive: true });
   assertRecordPathNoFollow(recordRoot, target.markerPath);
-  const receipt = acquireActiveDirectiveLock(target.lockDir);
-  if (!receipt) throw new ActiveDirectiveLockContendedError();
+  const acquisition = acquireActiveDirectiveLock(target.lockDir);
+  const receipt = acquisition.receipt;
+  if (!receipt) {
+    throw acquisition.folderHeld
+      ? new ActiveDirectiveLockFolderHeldError("Active-directive coordination is busy")
+      : new ActiveDirectiveLockContendedError();
+  }
   ACTIVE_DIRECTIVE_TRANSACTIONS.add(target.markerPath);
   const onExit = () => releaseCanonicalOwnerStampedLock(receipt);
   ACTIVE_DIRECTIVE_EXIT_HANDLERS.set(target.markerPath, {
@@ -9823,6 +9906,7 @@ function transactActiveDirectiveTarget<T>(
   } finally {
     ACTIVE_DIRECTIVE_TRANSACTIONS.delete(target.markerPath);
     const outcome = releaseCanonicalOwnerStampedLock(receipt);
+    if (outcome === "retryable") ACTIVE_DIRECTIVE_RELEASE_HELD = true;
     const registered = ACTIVE_DIRECTIVE_EXIT_HANDLERS.get(target.markerPath);
     if (
       outcome !== "retryable" &&
@@ -11530,9 +11614,19 @@ export function recordCopilotHumanSequence(
   });
 }
 
-// The adapter and orchestrator hash JSON.stringify([verb, ...args]) after
-// removing the dispatcher prefix, --project-dir and --aidlc-attempt-id. Compare
-// that identity to the operation's argv, not to shell spelling or jumpRequest.
+// The claim identity of `next --stage <stage>`: the adapter and orchestrator
+// hash JSON.stringify([verb, ...args]) after removing the dispatcher prefix,
+// --project-dir and --aidlc-attempt-id. Null for a stage that is no identifier,
+// which no such claim carries.
+export function nextStageClaimSha256(stage: string): string | null {
+  const operation = { kind: "restart-stage", stage } as const;
+  return isGuardRecoveryOperation(operation)
+    ? contentSha256(JSON.stringify(guardOperationInvocation(operation).args))
+    : null;
+}
+
+// The selected restart's own `next --stage` is matched by its claim identity
+// (nextStageClaimSha256), never by shell spelling or jumpRequest.
 // emitJumpDirective emits this exact {kind,message} print before stage-validity
 // decoration. The adapter retains only its byte-exact resultSha256, so enumerate
 // aidlcToolInvocation("jump")'s source/native representations here. Both command
@@ -11562,7 +11656,7 @@ function copilotGuardRestartPrintHashes(
   if (
     operation?.kind !== "restart-stage" ||
     !guardOperationMatchesRemedy(operation, selected[0].op, marker.stage, marker.unit) ||
-    input.commandSha256 !== contentSha256(JSON.stringify(guardOperationInvocation(operation).args))
+    input.commandSha256 !== nextStageClaimSha256(operation.stage)
   ) return [];
   try {
     const scope = getField(stateContent, "Scope");
@@ -15043,6 +15137,12 @@ export function auditBlockField(block: string, fieldName: string): string | null
   return null;
 }
 
+// The rows every `aidlc doctor` run writes about itself (collectDoctorReport is
+// their only writer). They are doctor's receipt, not work: a reader that asks
+// what changed in the work, or whether teammates still need a record, leaves
+// them out.
+export const DOCTOR_RUN_AUDIT_EVENTS: ReadonlySet<string> = new Set(["GUARDRAIL_LOADED", "HEALTH_CHECKED"]);
+
 // Whether a `GATE_REJECTED` row is a fresh attempt rather than the person's
 // change request. `aidlc-jump.ts reopen` marks its rows `Reopen: jump` (a
 // `/aidlc --stage` reopen) or `Reopen: redo` (redo on re-entry): the person
@@ -15335,9 +15435,10 @@ export function auditShardName(projectDir: string): string {
 }
 
 // This clone's shard name when it is already known, without minting a token or
-// upgrading the clone-id file: readers use it to prefer their own shard and must
-// not write.
-function knownAuditShardName(projectDir: string): string | null {
+// upgrading the clone-id file: readers use it to prefer their own shard, or to
+// tell their own rows from other clones', and must not write. Null means this
+// clone has written no shard yet.
+export function knownAuditShardName(projectDir: string): string | null {
   const scoped = scopedAuditShardName(projectDir);
   if (scoped) return scoped;
   const cached = AUDIT_SHARD_NAMES.get(canonicalPathKey(projectDir));
@@ -15483,6 +15584,13 @@ function auditShardBlocks(content: string): string[] {
 // Repeats inside one file are not copies and stay. Returns, per shard, the
 // block positions to skip. `ownShard` is only asked when a copy exists.
 const AUDIT_SHARD_FILE_RE = /^[a-z0-9][a-z0-9-]*-[a-z0-9]{1,32}\.md$/;
+
+// The machine a shard's file name records (the token never holds a hyphen), or
+// null for a file not named like a shard.
+export function auditShardHost(shard: string): string | null {
+  const name = basename(shard);
+  return AUDIT_SHARD_FILE_RE.test(name) ? name.slice(0, name.lastIndexOf("-")) : null;
+}
 
 export function copiedAuditBlocks(
   shards: readonly AuditShardText[],
@@ -16146,6 +16254,8 @@ export type SourceBaselineResult =
   | { state: "legacy" }
   | { state: "unbindable" }
   | { state: "invalid" }
+  // The audit names a well-formed baseline and no copy of it is on this machine.
+  | { state: "missing" }
   | { state: "ready"; listing: WorkspaceSourceListing };
 
 export interface FreshReviewReceipts {
@@ -18692,7 +18802,7 @@ export function completionCarriesVerifiedReview(
 }
 
 /** The REVIEW_COMPLETED field the logger writes, as `no`, on the NOT-READY
- *  fallback recorded when a retried review still wrote nothing. */
+ *  fallback recorded when a retried review still wrote no whole review. */
 export const REVIEW_FINISHED_FIELD = "Review Finished";
 
 /**
@@ -21750,7 +21860,11 @@ export function freshReviewReceipts(
     if (baselineField === UNBINDABLE_FINGERPRINT) sourceBaseline = { state: "unbindable" };
     else if (baselineField !== null) {
       const listing = readBaselineSourceSnapshot(projectDir, stage.slug, baselineField);
-      sourceBaseline = listing === null ? { state: "invalid" } : { state: "ready", listing };
+      sourceBaseline = listing !== null
+        ? { state: "ready", listing }
+        : baselineSourceSnapshotMissing(projectDir, stage.slug, baselineField)
+          ? { state: "missing" }
+          : { state: "invalid" };
     } else if (modernSourceBindingEvidence) {
       sourceBaseline = { state: "invalid" };
     }
@@ -21866,6 +21980,174 @@ export function isValidRepoName(name: string): boolean {
 // The on-disk dir for a sibling repo: an immediate child of the workspace root.
 export function repoDir(projectDir: string, repoName: string): string {
   return join(projectDir, repoName);
+}
+
+// A folder a person made a Git checkout of: a real .git entry (a folder, or a
+// worktree's or submodule's file), by lstat, so no link is followed. A commit
+// can never carry a .git entry, so a committed folder merely shaped like a repo
+// never passes and git never runs on its config.
+export function hasRealGitEntry(dir: string): boolean {
+  try {
+    const entry = lstatSync(join(dir, ".git"));
+    return entry.isDirectory() || entry.isFile();
+  } catch {
+    return false;
+  }
+}
+
+// The checkouts a piece of work keeps its code in where the source walk does
+// not reach: a worktree in a harness folder (Claude Code's .claude/worktrees/)
+// or one outside the project. The agent or the person names one (`intent
+// add-checkout <path>`, or a Unit's source claim inside it); the record is kept
+// per clone in the intent's .aidlc-engine/ folder, and the one source identity
+// walks each as an extra root, its files listed as `<label>@checkout/<path>`.
+// Nothing rebuilds it from the audit trail or any committed text, so a
+// teammate's clone has no record and walks as before.
+export interface RecordedSourceCheckout {
+  // Stable and path-free (a repo-name-shaped folder name), so a Unit's reviewed
+  // listing, which is committed, never carries a local path.
+  label: string;
+  path: string;
+  real: string;
+}
+
+const SOURCE_CHECKOUTS_RECORD = "source-checkouts.json";
+
+export function readRecordedSourceCheckouts(
+  projectDir: string,
+  intent?: string,
+  space?: string,
+): RecordedSourceCheckout[] {
+  const dir = recordDir(projectDir, intent, space);
+  if (dir === null) return [];
+  const file = join(engineDirFor(dir), SOURCE_CHECKOUTS_RECORD);
+  try {
+    if (!lstatSync(file).isFile()) return [];
+    const parsed = JSON.parse(readFileSync(file, "utf-8")) as { version?: unknown; checkouts?: unknown };
+    if (parsed.version !== 1 || !Array.isArray(parsed.checkouts)) return [];
+    const checkouts: RecordedSourceCheckout[] = [];
+    for (const entry of parsed.checkouts as Array<Record<string, unknown>>) {
+      if (
+        entry === null || typeof entry !== "object" ||
+        typeof entry.label !== "string" || !isValidRepoName(entry.label) ||
+        typeof entry.path !== "string" || typeof entry.real !== "string" || !isAbsolute(entry.real) ||
+        checkouts.some((known) => known.label === entry.label)
+      ) {
+        continue;
+      }
+      checkouts.push({ label: entry.label, path: entry.path, real: entry.real });
+    }
+    return checkouts;
+  } catch {
+    return [];
+  }
+}
+
+// The record's only writer. The source boundary changed, so a memo of the
+// walk taken before it no longer holds.
+export function writeRecordedSourceCheckouts(
+  projectDir: string,
+  checkouts: readonly RecordedSourceCheckout[],
+  intent?: string,
+  space?: string,
+): void {
+  refuseEngineObserverWrite("writeRecordedSourceCheckouts");
+  writeEngineFileNoFollow(
+    projectDir,
+    SOURCE_CHECKOUTS_RECORD,
+    `${JSON.stringify({ version: 1, checkouts }, null, 2)}\n`,
+    intent,
+    space,
+  );
+  workspaceSourceStateCache?.clear();
+}
+
+// How the source listing names a recorded checkout's files: `<label>@checkout`.
+export function sourceCheckoutListingRel(label: string): string {
+  return `${label}@checkout`;
+}
+
+// Whether a manifest path is spelled with a checkout's listing name as its
+// first folder (`<label>@checkout/...`): the walk's own name, so such a claim is
+// never a recorded repo's.
+export function namesSourceCheckout(path: string): boolean {
+  const head = path.replace(/^(?:\.\/)+/, "").split("/")[0];
+  return head.length > sourceCheckoutListingRel("").length && head.endsWith(sourceCheckoutListingRel(""));
+}
+
+// The recorded checkout a listing path (a key's path part, repo "") lies in,
+// and the path within it. The walk, a Unit's claims and the coverage check all
+// read a recorded checkout's files through this one name.
+export function recordedCheckoutOfListingPath(
+  path: string,
+  checkouts: readonly RecordedSourceCheckout[],
+): { checkout: RecordedSourceCheckout; rest: string } | null {
+  const slash = path.indexOf("/");
+  const head = slash === -1 ? path : path.slice(0, slash);
+  const checkout = checkouts.find((entry) => sourceCheckoutListingRel(entry.label) === head);
+  return checkout === undefined ? null : { checkout, rest: slash === -1 ? "" : path.slice(slash + 1) };
+}
+
+function comparablePath(path: string): string {
+  let real: string;
+  try {
+    real = realpathSync(path);
+  } catch {
+    real = resolvePath(path);
+  }
+  return process.platform === "win32" ? real.toLowerCase() : real;
+}
+
+// The recorded checkout at `dir`, compared by real path (case-folded on Windows).
+export function recordedCheckoutAt(
+  dir: string,
+  checkouts: readonly RecordedSourceCheckout[],
+): RecordedSourceCheckout | null {
+  const at = comparablePath(dir);
+  return checkouts.find((entry) => comparablePath(entry.real) === at) ?? null;
+}
+
+// A label for a newly recorded checkout: its folder's name made repo-name
+// shaped, with a number added when another recorded checkout has it.
+export function sourceCheckoutLabelFor(real: string, checkouts: readonly RecordedSourceCheckout[]): string {
+  const base = basename(real).replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "") || "checkout";
+  const taken = new Set(checkouts.map((entry) => entry.label));
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`;
+}
+
+// Whether the review's source binding reaches `dir`: the source walk lists a
+// file below it that is not one of AI-DLC's own (aidlcOwnedSourceKey), under
+// its project-relative path or, for a recorded checkout, under its
+// `<label>@checkout` name. The source-work look, `intent add-checkout` and the
+// review request's claim recording all ask this one test.
+export function sourceWalkReach(
+  projectDir: string,
+  listing: ReadonlyMap<string, string> | null,
+  checkouts: readonly RecordedSourceCheckout[],
+): (dir: string) => boolean {
+  const root = comparablePath(projectDir);
+  const owned = aidlcOwnedSourceKey(projectDir);
+  const fold = (path: string): string => (process.platform === "win32" ? path.toLowerCase() : path);
+  const walked: string[] = [];
+  for (const key of listing?.keys() ?? []) {
+    if (owned(key)) continue;
+    const parsed = splitSourcePathKey(key);
+    if (parsed !== null) walked.push(fold(parsed.repo === "" ? parsed.path : `${parsed.repo}/${parsed.path}`));
+  }
+  return (dir: string): boolean => {
+    const checkout = recordedCheckoutAt(dir, checkouts);
+    let below: string;
+    if (checkout !== null) {
+      below = `${sourceCheckoutListingRel(checkout.label)}/`;
+    } else {
+      const rel = relative(root, comparablePath(dir));
+      if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false;
+      below = `${rel.split(sep).join("/")}/`;
+    }
+    const prefix = fold(below);
+    return walked.some((path) => path.startsWith(prefix));
+  };
 }
 
 // --- Workspace source fingerprint (#629) -----------------------------------
@@ -22141,14 +22423,17 @@ const legacyWorkspaceSourceAliases = new Map<string, string>();
 // their files. That earlier walk is redone only when a comparison would
 // otherwise fail, once per value, and yields what it recorded both before and
 // after the name exclusions above.
-const earlierBoundarySources = new Map<string, { projectDir: string; repos: readonly string[]; values?: string[] }>();
+const earlierBoundarySources = new Map<
+  string,
+  { projectDir: string; repos: readonly string[]; checkouts: readonly RecordedSourceCheckout[]; values?: string[] }
+>();
 function earlierBoundaryWorkspaceSources(current: string): readonly string[] {
   const entry = earlierBoundarySources.get(current);
   if (entry === undefined) return [];
   if (entry.values === undefined) {
     const failure = lastSourceFailure;
     try {
-      const walked = walkWorkspaceSource(entry.projectDir, entry.repos, false);
+      const walked = walkWorkspaceSource(entry.projectDir, entry.repos, false, entry.checkouts);
       entry.values = walked === null ? [] : [walked.state.fingerprint, ...(walked.legacy === null ? [] : [walked.legacy])];
     } finally {
       lastSourceFailure = failure;
@@ -23211,6 +23496,18 @@ function noteSourceFailure<T extends null | false>(
 ): T {
   lastSourceFailure = { code, detail, ...(path !== undefined ? { path } : {}) };
   return result;
+}
+
+// The way to repair a source boundary the walk could not finish: the source
+// registry, or, when the walk stopped in a checkout the work recorded, taking
+// that checkout out again.
+export function sourceBoundaryRepairStep(): string {
+  const repo = lastSourceFailure?.repo;
+  return repo?.endsWith("@checkout")
+    ? "Repair .aidlc-source-paths.json or the workspace source boundary, or, if the checkout recorded as " +
+      `${repo} does not hold this work's code, take it out with ` +
+      `\`${aidlcDispatcherInvocation("intent remove-checkout <its path>")}\``
+    : "Repair .aidlc-source-paths.json or the workspace source boundary";
 }
 
 export function lastWorkspaceSourceFailure(): WorkspaceSourceFailure | null {
@@ -25510,12 +25807,13 @@ function workspaceSourceStateUncached(
 ): WorkspaceSourceState | null {
   clearSourceFailure();
   const repos = knownRepos ?? intentRepos(projectDir, intent, space);
-  const walked = walkWorkspaceSource(projectDir, repos, true);
+  const checkouts = readRecordedSourceCheckouts(projectDir, intent, space);
+  const walked = walkWorkspaceSource(projectDir, repos, true, checkouts);
   if (walked === null) return null;
   const { fingerprint } = walked.state;
   if (walked.legacy === null) legacyWorkspaceSourceAliases.delete(fingerprint);
   else legacyWorkspaceSourceAliases.set(fingerprint, walked.legacy);
-  if (walked.dotnetOutputSeen) earlierBoundarySources.set(fingerprint, { projectDir, repos: [...repos] });
+  if (walked.dotnetOutputSeen) earlierBoundarySources.set(fingerprint, { projectDir, repos: [...repos], checkouts: [...checkouts] });
   else earlierBoundarySources.delete(fingerprint);
   return walked.state;
 }
@@ -25526,10 +25824,70 @@ interface WorkspaceSourceWalk {
   dotnetOutputSeen: boolean;
 }
 
+// Each recorded checkout, walked as a root of its own with the shell rule on (a
+// same-repo worktree carries the project's aidlc/ records and harness folder,
+// which are AI-DLC's own there as at the root): one fingerprint line and its
+// files listed as `<label>@checkout/<path>`. A checkout no longer on disk is
+// one `missing` line.
+interface SourceCheckoutWalk {
+  lines: string[];
+  legacyLines: string[];
+  legacyDiffers: boolean;
+  listing: WorkspaceSourceListing;
+  dotnetOutputSeen: boolean;
+}
+
+function walkSourceCheckouts(
+  checkouts: readonly RecordedSourceCheckout[],
+  dotnetOutputs: boolean,
+): SourceCheckoutWalk | null {
+  const walk: SourceCheckoutWalk = { lines: [], legacyLines: [], legacyDiffers: false, listing: new Map(), dotnetOutputSeen: false };
+  for (const checkout of [...checkouts].sort((a, b) => (a.label < b.label ? -1 : a.label > b.label ? 1 : 0))) {
+    const name = sourceCheckoutListingRel(checkout.label);
+    let present = false;
+    try {
+      present = statSync(checkout.real).isDirectory();
+    } catch {
+      present = false;
+    }
+    if (!present) {
+      walk.lines.push(`checkout:${checkout.label}=missing`);
+      walk.legacyLines.push(`checkout:${checkout.label}=missing`);
+      continue;
+    }
+    const source = filesystemSourceIdentity(checkout.real, true, new Set(), "follow", true, new Map(), dotnetOutputs);
+    if (source === null) {
+      if (lastSourceFailure !== null) lastSourceFailure = { ...lastSourceFailure, repo: name };
+      return null;
+    }
+    walk.dotnetOutputSeen ||= source.dotnetOutputSeen;
+    walk.lines.push(`checkout:${checkout.label}=filesystem:${source.fingerprint}`);
+    walk.legacyLines.push(`checkout:${checkout.label}=filesystem:${source.legacyFingerprint ?? source.fingerprint}`);
+    walk.legacyDiffers ||= source.legacyFingerprint !== undefined;
+    for (const [path, entry] of source.listing) walk.listing.set(`\0${name}/${path}`, entry);
+  }
+  return walk;
+}
+
+// The digest of a walk's lines, and the raw-line-ending form it had before line
+// endings were read as LF, remembered when that differs.
+function workspaceSourceDigest(lines: readonly string[]): string {
+  const digest = (parts: readonly string[]): string =>
+    createHash("sha256").update(["aidlc-workspace-source-v2", ...parts].join("\n")).digest("hex");
+  const rawParts = lines.map((line) => line.replace(/^filesystem=([0-9a-f]{64})$|=filesystem:([0-9a-f]{64})$/, (whole, lone?: string, member?: string) => {
+    const raw = rawFingerprintForm(lone ?? member ?? "");
+    if (raw === null) return whole;
+    return lone !== undefined ? `filesystem=${raw}` : `=filesystem:${raw}`;
+  }));
+  if (rawParts.some((line, at) => line !== lines[at])) rememberRawFingerprint(digest(rawParts), digest(lines));
+  return digest(lines);
+}
+
 function walkWorkspaceSource(
   projectDir: string,
   repos: readonly string[],
   dotnetOutputs: boolean,
+  checkouts: readonly RecordedSourceCheckout[] = [],
 ): WorkspaceSourceWalk | null {
   if (repos.length === 0) {
     const hasWorktreeContext = existsSync(
@@ -25556,6 +25914,22 @@ function walkWorkspaceSource(
       dotnetOutputs,
     );
     if (source === null) return null;
+    if (checkouts.length > 0 && worktreeContext === null) {
+      const extra = walkSourceCheckouts(checkouts, dotnetOutputs);
+      if (extra === null) return null;
+      const lines = [`filesystem=${source.fingerprint}`, ...extra.lines];
+      const legacyDiffers = source.legacyFingerprint !== undefined || extra.legacyDiffers;
+      return {
+        state: {
+          fingerprint: workspaceSourceDigest(lines),
+          listing: new Map([...prefixedSourceListing(source.listing), ...extra.listing]),
+        },
+        legacy: legacyDiffers
+          ? workspaceSourceDigest([`filesystem=${source.legacyFingerprint ?? source.fingerprint}`, ...extra.legacyLines])
+          : null,
+        dotnetOutputSeen: source.dotnetOutputSeen || extra.dotnetOutputSeen,
+      };
+    }
     const workspaceDigest = (filesystem: string): string =>
       createHash("sha256")
         .update(["aidlc-workspace-source-v2", `filesystem=${filesystem}`].join("\n"))
@@ -25608,6 +25982,15 @@ function walkWorkspaceSource(
     for (const [key, entry] of prefixedSourceListing(source.listing, name)) {
       listing.set(key, entry);
     }
+  }
+  if (checkouts.length > 0) {
+    const extra = walkSourceCheckouts(checkouts, dotnetOutputs);
+    if (extra === null) return null;
+    dotnetOutputSeen ||= extra.dotnetOutputSeen;
+    lines.push(...extra.lines);
+    legacyLines.push(...extra.legacyLines);
+    legacyDiffers ||= extra.legacyDiffers;
+    for (const [key, entry] of extra.listing) listing.set(key, entry);
   }
   const digest = (parts: readonly string[]): string =>
     createHash("sha256").update(["aidlc-workspace-source-v2", ...parts].join("\n")).digest("hex");
@@ -26224,7 +26607,10 @@ function ignoredPathClaimable(
  * The source keys (`<repo>\0<path>`) among `keys` that no Unit can claim
  * because Git ignores them: the paths a source manifest refuses as review
  * evidence (`ignoredSourceClaimReason`). A path whose ignore rule or HEAD
- * membership cannot be read is not returned.
+ * membership cannot be read is not returned. A file in one of the work's
+ * recorded checkouts is returned too, as a gitignored nested worktree's is: a
+ * checkout recorded after the stage began never asks a Unit to claim files it
+ * did not write.
  */
 export function unclaimableIgnoredSourceKeys(
   projectDir: string,
@@ -26239,11 +26625,16 @@ export function unclaimableIgnoredSourceKeys(
     return unclaimable;
   }
   const carriesWorkspaceShell = recordedRepos.length === 0;
+  const checkouts = readRecordedSourceCheckouts(projectDir);
   const sourceClaimValidation: GitSourceClaimValidationCache = new Map();
   const candidates: { key: string; sourceRepoDir: string; path: string }[] = [];
   for (const key of keys) {
     const parsed = splitSourcePathKey(key);
     if (parsed === null) continue;
+    if (parsed.repo === "" && recordedCheckoutOfListingPath(parsed.path, checkouts) !== null) {
+      unclaimable.add(key);
+      continue;
+    }
     const sourceRepoDir = parsed.repo === "" ? projectDir : repoDir(projectDir, parsed.repo);
     if (!isGitRepoDir(sourceRepoDir)) continue;
     seedGitSourceClaimIgnorePath(sourceRepoDir, parsed.path, sourceClaimValidation);
@@ -26322,12 +26713,17 @@ export function registryExcludedSourceKeys(
 // that leads to a checkout outside the project (a junction to a clone kept
 // elsewhere): its own git judges the claim, and the claim is keyed as the walk
 // lists what the link leads to (linkTargetListingRel). A claim through any
-// other link keeps the link rules below.
+// other link keeps the link rules below. A claim inside one of the work's
+// recorded checkouts, by its path in the project or by its listing name
+// (`<label>@checkout/<path>`, the only spelling a checkout outside the project
+// has), is judged by that checkout's git and keyed by that listing name; a
+// listing name no recorded checkout has is refused with the step.
 function sourceClaimCheckout(
   repoRoot: string,
   path: string,
   nestedAllowed: boolean,
-): { dir: string; path: string; listingPath: string } {
+  checkouts: readonly RecordedSourceCheckout[] = [],
+): { dir: string; path: string; listingPath: string; reason?: string } {
   let claim = { dir: repoRoot, path, listingPath: path };
   if (!nestedAllowed) return claim;
   let rootReal: string;
@@ -26338,6 +26734,15 @@ function sourceClaimCheckout(
   }
   const trailing = path.endsWith("/") ? "/" : "";
   const parts = path.replace(/\/+$/, "").split("/");
+  const named = recordedCheckoutOfListingPath(path, checkouts);
+  if (named !== null) return { dir: named.checkout.real, path: named.rest, listingPath: path };
+  if (namesSourceCheckout(path) && !existsSync(join(repoRoot, parts[0]))) {
+    return {
+      ...claim,
+      reason: `${JSON.stringify(path)} names a checkout this piece of work has not recorded. Record it first with ` +
+        `\`${aidlcDispatcherInvocation("intent add-checkout <its path>")}\`, then dispatch the review again`,
+    };
+  }
   // A folder claim may name the link itself; a file claim names a file below.
   const folders = trailing ? parts.length : parts.length - 1;
   let dir = repoRoot;
@@ -26351,13 +26756,15 @@ function sourceClaimCheckout(
     }
     const rest = parts.slice(at + 1).join("/");
     const restPath = rest === "" ? "" : `${rest}${trailing}`;
+    const recorded = entry.isDirectory() ? recordedCheckoutAt(dir, checkouts) : null;
+    if (recorded !== null) {
+      return { dir: recorded.real, path: restPath, listingPath: `${sourceCheckoutListingRel(recorded.label)}/${restPath}` };
+    }
     if (entry.isSymbolicLink()) {
       const target = resolveSourceSymlinkTarget(rootReal, dir)?.target ?? null;
       if (target === null || pathIsWithinRoot(rootReal, target)) return claim;
       try {
-        if (!statSync(target).isDirectory()) return claim;
-        const git = lstatSync(join(target, ".git"));
-        if (!git.isDirectory() && !git.isFile()) return claim;
+        if (!statSync(target).isDirectory() || !hasRealGitEntry(target)) return claim;
       } catch {
         return claim;
       }
@@ -26365,12 +26772,8 @@ function sourceClaimCheckout(
       return { dir: target, path: restPath, listingPath: `${linked}/${restPath}` };
     }
     if (!entry.isDirectory() || at + 1 >= parts.length) return claim;
-    try {
-      const git = lstatSync(join(dir, ".git"));
-      if (git.isDirectory() || git.isFile()) claim = { dir, path: restPath, listingPath: path };
-    } catch {
-      // No .git entry here: the folder belongs to the checkout above it.
-    }
+    // A folder with no .git entry belongs to the checkout above it.
+    if (hasRealGitEntry(dir)) claim = { dir, path: restPath, listingPath: path };
   }
   return claim;
 }
@@ -26699,6 +27102,58 @@ function symlinkClaimTargetReason(
   return null;
 }
 
+// The review request's own write: a claim of the Unit's source manifest that
+// lies in a checkout the source walk does not reach (a worktree in a harness
+// folder) records that checkout, so the review that follows binds it. Returns
+// the checkouts it recorded. Only the review request calls this; reading or
+// checking a manifest never writes.
+export function recordUnitClaimCheckouts(
+  projectDir: string,
+  stageSlug: string,
+  unit: string,
+): RecordedSourceCheckout[] {
+  if (existsSync(join(projectDir, ".aidlc", "worktree-meta.json")) || intentRepos(projectDir).length > 0) return [];
+  const record = recordDir(projectDir);
+  if (record === null || validateUnitName(unit) !== null || !/^[a-z][a-z0-9-]*$/.test(stageSlug)) return [];
+  let writes: unknown;
+  try {
+    writes = (JSON.parse(readFileSync(join(record, "construction", unit, stageSlug, "source-manifest.json"), "utf-8")) as {
+      writes?: unknown;
+    }).writes;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(writes)) return [];
+  const checkouts = readRecordedSourceCheckouts(projectDir);
+  let reaches: ((dir: string) => boolean) | null = null;
+  const added: RecordedSourceCheckout[] = [];
+  for (const write of writes) {
+    if (!isPlainObject(write) || typeof write.path !== "string" || "repo" in write) continue;
+    const normalized = normalizeManifestSourcePath(write.path);
+    if ("reason" in normalized) continue;
+    const claim = sourceClaimCheckout(projectDir, normalized.path, true, [...checkouts, ...added]);
+    // Only a nested checkout found on the claim's own path, not a link's target
+    // or one already recorded.
+    if (claim.reason !== undefined || claim.dir === projectDir || claim.listingPath !== normalized.path) continue;
+    reaches ??= sourceWalkReach(projectDir, workspaceSourceState(projectDir)?.listing ?? null, checkouts);
+    if (reaches(claim.dir)) continue;
+    let real: string;
+    try {
+      real = realpathSync(claim.dir);
+    } catch {
+      continue;
+    }
+    if (recordedCheckoutAt(real, [...checkouts, ...added]) !== null) continue;
+    added.push({
+      label: sourceCheckoutLabelFor(real, [...checkouts, ...added]),
+      path: relative(projectDir, claim.dir).split(sep).join("/"),
+      real,
+    });
+  }
+  if (added.length > 0) writeRecordedSourceCheckouts(projectDir, [...checkouts, ...added]);
+  return added;
+}
+
 /** Strictly read and validate a unit's engine-required source-manifest.json. */
 export function readUnitSourceManifest(
   projectDir: string,
@@ -26768,6 +27223,7 @@ function validateUnitSourceManifestBytes(
   const worktreeRelative = worktreeContext !== null;
   const recordedRepos = worktreeRelative ? [] : intentRepos(projectDir);
   const recordedRepoSet = new Set(recordedRepos);
+  const checkouts = worktreeRelative ? [] : readRecordedSourceCheckouts(projectDir);
   const carriesWorkspaceShell =
     worktreeContext?.carriesWorkspaceShell ?? recordedRepos.length === 0;
   const claims = new Set<string>();
@@ -26794,6 +27250,8 @@ function validateUnitSourceManifestBytes(
       ) {
         continue;
       }
+    } else if (!worktreeRelative && namesSourceCheckout(candidate.path)) {
+      // Keyed as the walk lists a recorded checkout, whatever repos are recorded.
     } else if (recordedRepos.length > 1) {
       continue;
     } else if (recordedRepos.length === 1) {
@@ -26809,7 +27267,9 @@ function validateUnitSourceManifestBytes(
           : repoDir(projectDir, canonicalRepo),
       normalized.path,
       !worktreeRelative && canonicalRepo === undefined,
+      checkouts,
     );
+    if (claim.reason !== undefined) continue;
     seedGitSourceClaimIgnorePath(
       claim.dir,
       claim.path,
@@ -26838,6 +27298,8 @@ function validateUnitSourceManifestBytes(
       if (!recordedRepoSet.has(canonicalRepo)) {
         return { ok: false, reason: `writes[${index}].repo ${JSON.stringify(canonicalRepo)} is not recorded for this intent`, unrecordedRepo: canonicalRepo };
       }
+    } else if (!worktreeRelative && namesSourceCheckout(write.path)) {
+      // Keyed as the walk lists a recorded checkout, whatever repos are recorded.
     } else if (recordedRepos.length > 1) {
       return { ok: false, reason: `writes[${index}].repo is required for a multi-repo intent` };
     } else if (recordedRepos.length === 1) {
@@ -26863,14 +27325,18 @@ function validateUnitSourceManifestBytes(
           : repoDir(projectDir, canonicalRepo),
       normalized.path,
       !worktreeRelative && canonicalRepo === undefined,
+      checkouts,
     );
+    if (claim.reason !== undefined) return { ok: false, reason: `writes[${index}].path: ${claim.reason}` };
+    // A recorded checkout is walked with the shell rule on, so its claims are read that way too.
+    const claimCarriesShell = recordedCheckoutOfListingPath(claim.listingPath, checkouts) !== null || carriesWorkspaceShell;
     const ignoredReason = ignoredSourceClaimReason(
       claim.dir,
       claim.path,
       normalized.prefix,
       pathModeIndexes,
       sourceClaimValidation,
-      carriesWorkspaceShell,
+      claimCarriesShell,
     );
     if (ignoredReason !== null) {
       return { ok: false, reason: `writes[${index}].path: ${ignoredReason}` };
@@ -26879,7 +27345,7 @@ function validateUnitSourceManifestBytes(
       claim.dir,
       claim.path,
       normalized.prefix,
-      carriesWorkspaceShell,
+      claimCarriesShell,
       pathModeIndexes,
       sourceClaimValidation,
     );
@@ -27242,6 +27708,28 @@ export function readBaselineSourceSnapshot(
   return serialized === null ? null : parseSourceListing(serialized);
 }
 
+// The baseline file is AI-DLC's own ignored copy, so a fresh clone or another
+// machine has none; that is lost bookkeeping, not a mismatch. A file that is
+// here (even a dangling link) and does not match is not this.
+function baselineSourceSnapshotMissing(
+  projectDir: string,
+  stageSlug: string,
+  fingerprint: string,
+  intent?: string,
+  space?: string,
+): boolean {
+  const hash = validSourceSnapshotFingerprint(fingerprint);
+  if (hash === null) return false;
+  const path = sourceSnapshotReadPath(projectDir, stageSlug, `baseline-${hash.slice(0, 12)}.tsv`, intent, space);
+  if (path === null) return false;
+  try {
+    lstatSync(path);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
+}
+
 // --- Workspace source snapshots keyed by the workspace fingerprint -----------
 //
 // A Plan Approval binds to the workspace source FINGERPRINT (the `[Planned
@@ -27449,7 +27937,10 @@ export function currentStageSourceBaseline(
     intent,
     space,
   );
-  return listing === null ? { state: "invalid" } : { state: "ready", listing };
+  if (listing !== null) return { state: "ready", listing };
+  return baselineSourceSnapshotMissing(projectDir, stageSlug, field, intent, space)
+    ? { state: "missing" }
+    : { state: "invalid" };
 }
 
 export interface UnitSourceSnapshot {
@@ -27823,6 +28314,33 @@ export function hookActivation(): HookActivation | null {
   }
 }
 
+/** Doctor's repair for a missing or unreadable project settings file; the hooks-off step names it too. */
+export function projectSettingsRepair(distribution: string): string {
+  const invoke = aidlcInvocation();
+  const source = invoke === "aidlc"
+    ? ""
+    : ` --from <the runtime/${distribution} root you copied from>`;
+  return `run \`${invoke} config --harness ${distribution}${source}\` to put back AI-DLC's hooks (your own hooks are kept)`;
+}
+
+// Missing, or there and not valid JSON (read as doctor reads it); null for a
+// valid file and for one that cannot be opened for another reason, which the
+// lines would not describe. Never throws: both callers run it outside a try.
+function registrationFault(path: string): "missing" | "invalid" | null {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf-8");
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : null;
+  }
+  try {
+    JSON.parse(withoutBom(text));
+    return null;
+  } catch {
+    return "invalid";
+  }
+}
+
 /** The doctor's recovery sentence for hooks that stopped firing, per harness. */
 export function hookExecutionRecoveryText(projectDir?: string): string {
   const declared = hookActivation()?.recovery;
@@ -27867,15 +28385,24 @@ const HOOKS_OFF_AGENT_RULES =
 export function hooksOffAgentStep(projectDir?: string, next?: string, keep?: () => string | null): string | null {
   const activation = hookActivation();
   if (!activation?.agentStep) return null;
-  // Through a link the agent would change a file outside the project.
-  const edits = activation.agentStepEdits;
-  if (edits && !plainProjectFile(resolveProjectDir(projectDir), edits)) {
-    return `${HOOKS_OFF_AGENT_RULES} \`${edits}\` in this project is a link, so do not change it. Show the person ` +
-      `this line and end your turn: "${edits} in this project is a link, so it was left as it is. Make it a plain ` +
-      `file in this project, then send your next message."`;
+  const project = resolveProjectDir(projectDir);
+  const registration = activation.registration;
+  const fault = registration ? registrationFault(join(project, registration.file)) : null;
+  let step: string;
+  if (registration && fault) {
+    const line = registration[fault].replaceAll("<repair>", projectSettingsRepair(runtimeHarnessName(project, harnessDir())));
+    step = `Show the person this line and end your turn: "${line}"`;
+  } else {
+    // Through a link the agent would change a file outside the project.
+    const edits = activation.agentStepEdits;
+    if (edits && !plainProjectFile(project, edits)) {
+      return `${HOOKS_OFF_AGENT_RULES} \`${edits}\` in this project is a link, so do not change it. Show the person ` +
+        `this line and end your turn: "${edits} in this project is a link, so it was left as it is. Make it a plain ` +
+        `file in this project, then send your next message."`;
+    }
+    // An agent given each tool's line showed the wrong one (#2167), so the engine picks it.
+    step = inHostShell(activation.agentStepInHost?.env) ? activation.agentStepInHost!.text : activation.agentStep;
   }
-  // An agent given each tool's line showed the wrong one (#2167), so the engine picks it.
-  const step = inHostShell(activation.agentStepInHost?.env) ? activation.agentStepInHost!.text : activation.agentStep;
   const kept = keep && step.includes("<entry>") ? keep() : null;
   const entry = kept === null ? undefined : `${entrySkillInvocation()} --request ${kept}`;
   return `${HOOKS_OFF_AGENT_RULES} ${fillHookActivationText(step, projectDir, next, entry)}`;
@@ -28087,6 +28614,14 @@ function creationHeartbeat(
   }
 }
 
+// The audit rows that mean the workflow advanced. A chat's session start, the
+// person's prompt and doctor's own receipt land whenever someone opens a chat
+// or runs doctor, so a reader that weighs hooks against the work (hookLiveness,
+// doctor's frozen-hook rule) counts only these.
+export function isStageOrGateEvent(event: string): boolean {
+  return event.startsWith("STAGE_") || event.startsWith("GATE_");
+}
+
 // The one comparison behind the doctor's "Hooks last fired ... but the workflow
 // last advanced ..." row and the Plan Approval decision's liveness refusal, so
 // the two cannot disagree about what "hooks are not firing" means.
@@ -28106,7 +28641,7 @@ export function hookLiveness(
   const healthDirExists = existsSync(healthDir);
   let newestStageOrGateEvent: HookHeartbeatStamp | null = null;
   for (const event of recordEvents) {
-    if (!event.event.startsWith("STAGE_") && !event.event.startsWith("GATE_")) continue;
+    if (!isStageOrGateEvent(event.event)) continue;
     const timestampMs = Date.parse(event.timestamp);
     if (
       Number.isFinite(timestampMs) &&
@@ -30560,6 +31095,16 @@ export function matchSubagentInflight(
   });
 }
 
+/** Whether an agent sent in the background at or after `sinceMs` has not
+ *  returned: a fresh in-flight entry started since. The completion hook that
+ *  records an agent's finish removes its entry; a missing or malformed ledger
+ *  shows none. */
+export function backgroundAgentOutSince(projectDir: string, sinceMs: number): boolean {
+  const current = readSubagentInflightLedger(projectDir);
+  if (!current.exists || current.malformed) return false;
+  return freshSubagentEntries(current.entries, Date.now()).some((entry) => entry.startedAtMs >= sinceMs);
+}
+
 export function inspectSubagentInflight(
   projectDir: string,
 ): SubagentInflightSummary {
@@ -32513,7 +33058,7 @@ export function evaluateGuardRefusal(
       remedies.push({
         op: "repair-source-boundary",
         action:
-          "Repair .aidlc-source-paths.json or the workspace source boundary so " +
+          `${sourceBoundaryRepairStep()} so ` +
           "the application source can be checked, then request a fresh review.",
         requiresHuman: false,
         executableNow: state !== "completed",
@@ -32526,7 +33071,15 @@ export function evaluateGuardRefusal(
     // before that step is done, and an approved stage leaves only a stage-wide
     // reset. The ways on are the Unit's own: finish the step with the review it
     // has, or start the step again for that Unit.
-    const midStep = !reviewBudgetAvailable && input.attempt.reviewCoverage === "current"
+    // A stage this work runs with no review (express, a Review Override of
+    // none) has nothing to review and nothing to wait for: its way on is the
+    // gate, as for a stage whose passes are spent on current work. Only the
+    // budget refusal says so; the log tool sends it after the summary and
+    // every other review check passed, and any other refusal still stands
+    // between the stage and its gate.
+    const runsNoReview = input.code === "REVIEW_BUDGET_EXHAUSTED" && input.attempt.reviewBudget?.limit === 0;
+    const reviewSettled = input.attempt.reviewCoverage === "current" || runsNoReview;
+    const midStep = !reviewBudgetAvailable && reviewSettled
       ? unitStepInProgress(input)
       : null;
     if (midStep !== null) {
@@ -32540,7 +33093,7 @@ export function evaluateGuardRefusal(
       remedies.push(finish, reopenUnitStepRemedy(input.stage, midStep));
     } else if (
       !reviewBudgetAvailable &&
-      input.attempt.reviewCoverage === "current" &&
+      reviewSettled &&
       openForWork
     ) {
       // With Construction checkpoints the Unit's checkpoint is its gate, and
@@ -32554,7 +33107,12 @@ export function evaluateGuardRefusal(
         route: "orchestrate",
         args: ["next", ...(input.projectDir ? ["--project-dir", input.projectDir] : [])],
       }, { harnessDir: harnessDir() });
-      const presentGate = checkpointUnit === null
+      const presentGate = runsNoReview
+        ? checkpointUnit === null
+          ? "This stage runs no review in this work: open its approval gate for the human."
+          : `This stage runs no review in this work: run \`${showCheckpoint}\`, which shows unit ` +
+            `"${checkpointUnit}"'s checkpoint, and ask it.`
+        : checkpointUnit === null
         ? "Present the unresolved review findings at the approval gate for the " +
           "human instead of starting another review pass."
         : `Present the unresolved review findings at unit "${checkpointUnit}"'s checkpoint ` +
@@ -33102,7 +33660,7 @@ export function nextReviewStepFor(input: {
     text: `${subject} and its review is waiting for a verdict, and its one retry is spent: ${record}.` +
       (input.fallback === false
         ? ""
-        : " If the retried reviewer still wrote no review file, record NOT-READY without one; that records a " +
+        : " If the retried reviewer still wrote no whole review, record NOT-READY; that records a " +
           "review that did not finish, not a finding."),
   };
 }
@@ -34528,6 +35086,13 @@ function restoreReapPrivate(
   return false;
 }
 
+// Every try at moving the lock or released gate folder of a provably dead owner,
+// or this process's own gate, was refused: on Windows, a program holds that
+// folder open (aidlc-lock-line.ts).
+// A plain null from the gate (a mutex miss, a live owner, an invalid gate) and
+// an owner of unknown generation are not one.
+let HELD_FOLDER_RENAME_FAILURES = 0;
+
 function retireReapClaim(claimDir: string): boolean {
   for (let attempt = 0; attempt <= 100; attempt++) {
     const retired = `${claimDir}.retired.${randomUUID()}`;
@@ -34623,7 +35188,11 @@ function retryPendingReapGateRelease(claimDir: string): boolean {
   }
   if (!markReapGateReleasable(pending.receipt)) return false;
   const outcome = releaseOwnerStampedLock(pending.receipt, false, true);
-  if (outcome === "retryable") return false;
+  if (outcome === "retryable") {
+    // Our own gate folder could not be moved: part of our own release.
+    HELD_FOLDER_RENAME_FAILURES++;
+    return false;
+  }
   clearPendingReapGateRelease(claimDir);
   return true;
 }
@@ -34645,7 +35214,13 @@ function acquireReapClaim(lockDir: string): OwnerStampedLockReceipt | null {
           AUDIT_LOCK_FAULT_HOOKS_FOR_TESTS?.afterReleasableGateCheck?.(
             claimDir,
           );
-          if (!retireReapClaim(claimDir)) return null;
+          if (!retireReapClaim(claimDir)) {
+            // Only a gate whose owner is provably gone: a live owner may still
+            // be retrying its own release.
+            const owner = ownerProcessState(inspected.owner);
+            if (owner === "dead" || owner === "different") HELD_FOLDER_RENAME_FAILURES++;
+            return null;
+          }
           continue;
         }
         const state = ownerProcessState(inspected.owner);
@@ -34733,7 +35308,10 @@ function reapStaleLock(lockDir: string, reapUnstamped = true): boolean {
         if (attempt < 100) Bun.sleepSync(5);
       }
     }
-    if (!moved) return false;
+    if (!moved) {
+      HELD_FOLDER_RENAME_FAILURES++;
+      return false;
+    }
     if (!reapCandidateStillMatches(dead, candidate)) {
       if (!restoreReapPrivate(lockDir, dead)) releaseClaim = false;
       return false;
@@ -34756,6 +35334,11 @@ interface OwnerStampedLockReceipt {
   lockDir: string; tokenDir: string; owner: LockOwner & { token: string };
   // The contention budget the lock was acquired with; release retries within it.
   releaseBudgetMs?: number;
+  // A release already spent its budget once, or gave up on a held folder (the
+  // 10 s give-up). Later retries (at exit, at the next transaction) make one
+  // short try: a second budget only holds the person's tool call, and the next
+  // process reaps a dead owner's lock anyway.
+  releaseSpent?: boolean;
 }
 
 interface AuditLockReceipt extends OwnerStampedLockReceipt {
@@ -34829,19 +35412,29 @@ function releaseCanonicalOwnerStampedLock(
   // deferring it to process exit: callers such as sensors run subprocesses
   // between audit windows and must not retain the first window's lock across
   // that work.
-  const budgetMs = Math.max(500, receipt.releaseBudgetMs ?? 0);
+  const budgetMs = Math.max(500, receipt.releaseSpent ? 0 : receipt.releaseBudgetMs ?? 0);
   const deadline = process.hrtime.bigint() + BigInt(Math.ceil(budgetMs)) * 1_000_000n;
+  // Rounds whose rename of our own folder, or of a dead owner's gate, was refused.
+  let heldSince: bigint | null = null;
   for (;;) {
+    const failures = HELD_FOLDER_RENAME_FAILURES;
     const gate = acquireReapClaim(receipt.lockDir);
+    let refused = false;
     if (gate) {
       try {
         const outcome = releaseOwnerStampedLock(receipt);
         if (outcome !== "retryable") return outcome;
+        refused = true;
       } finally {
         releaseReapClaim(gate);
       }
     }
-    if (process.hrtime.bigint() >= deadline) return "retryable";
+    const now = process.hrtime.bigint();
+    heldSince = refused || HELD_FOLDER_RENAME_FAILURES > failures ? heldSince ?? now : null;
+    if (now >= deadline || heldTooLong(heldSince, now)) {
+      receipt.releaseSpent = true;
+      return "retryable";
+    }
     Bun.sleepSync(5);
   }
 }
@@ -34876,6 +35469,22 @@ function acquireOwnerStampedLock(
   retryMs: number,
   reapLiveOwnerAfterStale = true,
 ): OwnerStampedLockReceipt | null {
+  return acquireOwnerStampedLockFor(lockDir, maxRetries, retryMs, reapLiveOwnerAfterStale).receipt;
+}
+
+interface OwnerStampedLockAcquisition {
+  receipt: OwnerStampedLockReceipt | null;
+  // The rounds that ran out the budget were stopped by a dead owner's folder
+  // that could not be moved, not by a live owner.
+  folderHeld: boolean;
+}
+
+function acquireOwnerStampedLockFor(
+  lockDir: string,
+  maxRetries: number,
+  retryMs: number,
+  reapLiveOwnerAfterStale: boolean,
+): OwnerStampedLockAcquisition {
   const create = (): OwnerStampedLockReceipt | null => {
     // Negative fast path only. A missing name still goes through the complete
     // coordinated create/recovery protocol and its exclusive mkdir.
@@ -34915,17 +35524,33 @@ function acquireOwnerStampedLock(
       releaseReapClaim(gate);
     }
   };
+  // The budget is time as well as a count: a round that waits out refused
+  // renames (about 0.5 s, 1.5 s on Windows) would otherwise stretch it a
+  // hundredfold. Never less than half a second, as the release, so a small
+  // explicit count still gets its rounds. `heldSince` is when the rounds
+  // started meeting a held folder.
+  const deadline = process.hrtime.bigint() + BigInt(Math.ceil(Math.max(500, maxRetries * retryMs))) * 1_000_000n;
+  let heldSince: bigint | null = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const failures = HELD_FOLDER_RENAME_FAILURES;
     const acquired = create();
-    if (acquired) return acquired;
+    if (acquired) return { receipt: acquired, folderHeld: false };
     if (reapStaleLock(lockDir)) {
       const afterReap = create();
-      if (afterReap) return afterReap;
+      if (afterReap) return { receipt: afterReap, folderHeld: false };
     }
     retryOwnDeferredGateRelease(lockDir);
-    if (attempt < maxRetries) Bun.sleepSync(retryMs);
+    const now = process.hrtime.bigint();
+    heldSince = HELD_FOLDER_RENAME_FAILURES > failures ? heldSince ?? now : null;
+    if (attempt >= maxRetries || now >= deadline || heldTooLong(heldSince, now)) break;
+    Bun.sleepSync(retryMs);
   }
-  return null;
+  return { receipt: null, folderHeld: heldSince !== null };
+}
+
+// Waiting longer does not free a folder a program holds; only stopping it does.
+function heldTooLong(heldSince: bigint | null, now: bigint): boolean {
+  return heldSince !== null && now - heldSince >= BigInt(lockFolderHeldGiveUpMs()) * 1_000_000n;
 }
 
 // A gate release that could not get the native mutex stays deferred, and only
@@ -34969,16 +35594,19 @@ export function runWithOwnerStampedLock<T>(
   }
 }
 
-function acquireActiveDirectiveLock(lockDir: string): OwnerStampedLockReceipt | null {
-  // This wait protects required marker publication, not a best-effort probe.
-  // A caller can request a short/zero contention budget without changing the
-  // ownership, stale-owner, or unstamped-grace rules.
+// This wait protects required marker publication, not a best-effort probe.
+// A caller can request a short/zero contention budget without changing the
+// ownership, stale-owner, or unstamped-grace rules.
+function activeDirectiveLockBudgetMs(): number {
   const raw = process.env.AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS;
   const configured = raw?.trim() ? Number(raw) : NaN;
-  const timeoutMs = Number.isSafeInteger(configured) && configured >= 0
+  return Number.isSafeInteger(configured) && configured >= 0
     ? configured
     : DEFAULT_SUBPROCESS_TIMEOUT_MS;
-  return acquireOwnerStampedLock(lockDir, Math.floor(timeoutMs / 10), 10);
+}
+
+function acquireActiveDirectiveLock(lockDir: string): OwnerStampedLockAcquisition {
+  return acquireOwnerStampedLockFor(lockDir, Math.floor(activeDirectiveLockBudgetMs() / 10), 10, true);
 }
 
 // Receipts, reentrancy, and exit handlers are keyed by the acquisition-bound
@@ -42836,7 +43464,7 @@ export function recordAcceptedChanges(
         changeControlLedgerAppend(projectDir, "CHANGE_ACCEPTED", acceptedChangeFields(change), selection);
       } catch (error) {
         throw new Error(
-          `Cannot continue under a relaxed or off Guard Policy: the accepted change for "${change.stage}"` +
+          `Cannot continue: the accepted change for "${change.stage}"` +
             `${change.unit ? ` (unit ${change.unit})` : ""} could not be recorded in the audit ledger ` +
             `(${errorMessage(error)}). Repair the ledger, then run the same command again.`,
         );
@@ -42852,8 +43480,9 @@ export function recordAcceptedChanges(
  * the effective value for this running intent since it was last recorded,
  * write one GUARD_POLICY_SET row naming that source. The previous effective
  * value is the newest GUARD_POLICY_SET row (or a CHANGE_CONTROL_SET row written
- * by an earlier release), else the state-derived value (the intent's line when
- * valid, otherwise strict).
+ * by an earlier release) in the shared causal order, else the state-derived
+ * value (the intent's line when valid, otherwise strict), which is also where
+ * it starts when the newest rows disagree.
  */
 export function governedGuardPolicy(
   projectDir: string,
@@ -42869,15 +43498,14 @@ export function governedGuardPolicy(
   // The newest setting row is read and the flip row written under one lock, so
   // two governed checks observing the same memory edit at once record it once.
   withAuditLock(projectDir, () => {
-    const events = readAuditShardEvents(projectDir, intent, selection.space);
-    let previous: GuardPolicy | null = null;
-    for (const row of events) {
-      if (row.event !== "GUARD_POLICY_SET" && row.event !== "CHANGE_CONTROL_SET") continue;
-      previous = parseGuardPolicy(auditBlockField(row.block, "New Value")) ?? previous;
-    }
-    if (previous === null) {
-      previous = resolution.stateValue;
-    }
+    const settings = readAuditShardEvents(projectDir, intent, selection.space).filter((row) =>
+      (row.event === "GUARD_POLICY_SET" || row.event === "CHANGE_CONTROL_SET") &&
+      parseGuardPolicy(auditBlockField(row.block, "New Value")) !== null);
+    // Shards are read in filename order (a teammate's clone keeps its own), so
+    // "newest" is the shared causal order; newest rows that disagree tell nothing.
+    const newest = new Set(maximalAttemptEvents(settings).map((row) =>
+      parseGuardPolicy(auditBlockField(row.block, "New Value"))!));
+    const previous = newest.size === 1 ? [...newest][0] : resolution.stateValue;
     if (previous !== resolution.value) {
       appendGuardPolicySetRow(
         projectDir,

@@ -160,6 +160,7 @@ import {
   SPACE_NAME_REGEX,
   workflowParticipation,
   ActiveDirectiveLockContendedError,
+  ActiveDirectiveLockFolderHeldError,
   advanceContinuationCursor,
   clearSessionIntentSwitch,
   type UnitCheckpoint,
@@ -481,6 +482,7 @@ import {
   type GraphStage,
   loadGraph,
   memoryDirFor,
+  openComposerScores,
   producersOf,
   subgraphForScope,
 } from "./aidlc-graph.ts";
@@ -2463,6 +2465,14 @@ function emit(requested: Directive): void {
       if (e instanceof EngineModeViolationError) throw e;
       if (projectDir) {
         recordHookDrop(projectDir, "active-directive", errorMessage(e));
+      }
+      // A program holding the lock folder is not freed by a retry or by doctor:
+      // the step is to stop it. That comes before showing an open question
+      // unpublished, whose reply would land on the question beneath it (#2047);
+      // once the program stops, the same command asks it with its marker.
+      if (e instanceof ActiveDirectiveLockFolderHeldError && e.personLine) {
+        writePrepared(prepareEmission(errorDirective(e.message)));
+        return;
       }
       if (prepared.marker !== undefined && openQuestionMarkers.has(prepared.marker)) {
         writePrepared(prepared);
@@ -4795,6 +4805,7 @@ export interface ParsedFlags {
   record?: string; // --record <selector>: the listed record a routing question's reshape answer chose
   workspaceCommand?: WorkspaceCommand; // leading workspace command (space/space-create/intent)
   carryOn?: boolean; // the pick question's answer: select the record, then carry on in the same turn
+  pickedUp?: string; // --resume picking up the only work here: the person's one line for it
   pluginCommand?: Exclude<PluginCommand, { kind: "not-plugin" }>; // leading plugin noun: terminal list/sync/select/help/error
   knowledgeCommand?: Exclude<KnowledgeCommand, { kind: "not-knowledge" }>; // leading knowledge noun: terminal DocumentKB verbs/help/error
   compose?: boolean; // leading `compose` verb: force the composer (front or in-flight)
@@ -8740,6 +8751,24 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // The settings typed with the request ride this answer as they ride the
     // option's command: the question it names fills them in below.
   }
+  // A bare --resume with one piece of work here and none selected (a
+  // teammate's clone): that piece is what they asked to pick up, so it is
+  // picked up the way the pick question's answer picks it, not asked about.
+  // Anything typed with it (a stage to jump to, a setting) keeps its own
+  // route; two pieces, words on the line, or a record that cannot be selected
+  // here keep the question.
+  if (args.length === 1 && args[0] === "--resume" && !routingAnswer && !flags.workspaceCommand && !flags.intent?.trim()) {
+    const records = unselectedRecords(resolveProjectDir(projectDir));
+    const only = records !== null && records.presentCount === 1 && records.selectable.length === 1 ? records.selectable[0] : null;
+    if (only !== null) {
+      const picked = parseNextFlags(["--pick", only.selector]);
+      flags.workspaceCommand = picked.workspaceCommand;
+      flags.carryOn = picked.carryOn;
+      const standing = workStanding(only.state);
+      flags.pickedUp = `Picked up \`${intentDisplayLabel(only.intent)}\`, the only open work${standing ? `; it is ${standing}` : ""}. ` +
+        "You can start something new any time.";
+    }
+  }
 
   // The agent's answer to a plan proposal step needs its shape: a plan (or
   // `compose`) and the request it is for. A slip here is the agent's own, so it
@@ -9130,10 +9159,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     if (flags.carryOn && command.kind === "switch") {
       const statePath = stateFilePath(resolveProjectDir(projectDir), command.name);
       const parked = existsSync(statePath) && parkedWhereItStands(readFileSync(statePath, "utf-8"));
-      emit(printDirective(
-        `Run \`${aidlcDispatcherInvocation(route)}${suffix}\`, print its output verbatim, then run ` +
-          `\`${aidlcToolInvocation("orchestrate")} next${parked ? " --resume" : ""}\` and follow what it returns.`,
-      ));
+      // Picked up by --resume: the person's one line, and the --resume they typed.
+      const print = printDirective(
+        `Run \`${aidlcDispatcherInvocation(route)}${suffix}\`, ${flags.pickedUp ? "" : "print its output verbatim, "}then run ` +
+          `\`${aidlcToolInvocation("orchestrate")} next${parked || flags.pickedUp ? " --resume" : ""}\` and follow what it returns.`,
+      );
+      if (flags.pickedUp) print.narration = flags.pickedUp;
+      emit(print);
       return;
     }
     // Navigation ends the turn even when the destination has unfinished work:
@@ -9729,6 +9761,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       // approval off) reach the work it creates and no other.
       flags.request = saveQuestion(pd, "", flags.scope ?? "", "compose").id;
     }
+    // The plan's creation for this request records the composer's scores.
+    if (!inFlight && flags.request) openComposerScores(pd, flags.request);
     const dispatch = composeDispatchDirective(flags, inFlight);
     if (splitSaid) dispatch.narration = `${dispatch.narration ?? ""}${splitSaid}`.trim();
     emit(dispatch);
@@ -16188,7 +16222,7 @@ function unknownWorkspaceWordStep(
 ): string {
   const { noun, name } = command;
   const verbs = noun === "intent"
-    ? "list, switch <name>, create, archive <name>, unarchive <name>, add-repo <name>, remove-repo <name>"
+    ? "list, switch <name>, create, archive <name>, unarchive <name>, add-repo <name>, remove-repo <name>, add-checkout <path>, remove-checkout <path>"
     : "list, switch <name>, create <name>";
   const recent = recentWorkspaceRecordNames(pd, noun);
   const records = recent.names.length === 0
@@ -17961,7 +17995,12 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
         );
         break;
       } catch (error) {
-        if (!(error instanceof ActiveDirectiveLockContendedError) || attempt === 3) throw error;
+        // Waiting does not move a folder a program holds.
+        if (
+          !(error instanceof ActiveDirectiveLockContendedError) ||
+          error instanceof ActiveDirectiveLockFolderHeldError ||
+          attempt === 3
+        ) throw error;
         Bun.sleepSync(500);
       }
     }
@@ -18011,7 +18050,9 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   } catch (error) {
     if (!(error instanceof ActiveDirectiveLockContendedError)) throw error;
     writePrepared(prepareEmission(errorDirective(
-      "The workflow is busy for a moment. Run the same command again.",
+      error instanceof ActiveDirectiveLockFolderHeldError && error.personLine
+        ? error.message
+        : "The workflow is busy for a moment. Run the same command again.",
     )));
   }
 }

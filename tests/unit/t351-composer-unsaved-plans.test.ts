@@ -2,6 +2,7 @@
 // function:splitSlugList, function:composedPlanLabel, function:PLAN_NAME_PATTERN,
 // function:firstPlannedStageOfPhase, function:customPlanBase, function:customPlanStart,
 // function:guardPolicyAtLeast,
+// function:composerScoresPath, function:openComposerScores, function:takeComposerScores,
 // function:saveComposedScope, function:writeCompiledGraphLocked,
 // function:delegatedLifecycleCommand,
 // subcommand:aidlc-graph:validate-grid, subcommand:aidlc-utility:intent-create,
@@ -18,7 +19,8 @@
 // work's plan as a durable scope record and projects it. Approved stage changes
 // and settings land in one recompose write, so a mixed approval is never left
 // half-applied, and next checks every depth, test-strategy, and stage value it
-// echoes into a command.
+// echoes into a command. The plan the composer validated keeps its scores on
+// its first audit entry, and no other plan or work picks them up (#2575).
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -1085,5 +1087,147 @@ describe("t351 (8) a custom plan starts from classic's ceremony, whatever stock 
     const dispatch = read("core/tools/aidlc-orchestrate.ts");
     expect(dispatch).toContain("a custom one starts from the classic scope's default, which the validator echoes as custom_start");
     expect(dispatch).not.toContain("a custom one the composer's choice");
+  });
+});
+
+describe("t351 (9) a tailored plan's scores are on its first audit entry (#2575)", () => {
+  // The front compose dispatch opens a score record for its request, the
+  // composer's `graph ars` fills it, and creation of the plan the composer
+  // validated writes the scores on WORKFLOW_STARTED and spends the record.
+  const SCORES = ["--iae", "0.35", "--csu", "0.39", "--ve", "0.40", "--r", "0.35", "--ua", "0.30"];
+  const RECORDED = "**ARS Scores**: IAE 0.35, CSU 0.39, VE 0.40, R 0.35, UA 0.30";
+  const engineDir = (proj: string) => join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-engine");
+  const recordOf = (proj: string) => join(engineDir(proj), "composer-scores.json");
+  const requestOf = (message: string): string => {
+    const id = /--request ([0-9a-f]{8})/.exec(message)?.[1];
+    expect(id, message).toBeDefined();
+    return id as string;
+  };
+  function compose(proj: string, args: string[] = ["compose", "fix the flaky date parser"]): string {
+    const d = nextDirective(proj, args);
+    expect(d.kind, d.message).toBe("print");
+    return requestOf(d.message);
+  }
+  function screen(proj: string, extra: string[] = ["--method", "codekb"]): void {
+    const ars = runTool(proj, "aidlc-graph.ts", ["ars", ...SCORES, "--project-type", "brownfield", ...extra]);
+    expect(ars.status, ars.out).toBe(0);
+  }
+  function propose(proj: string, grid: unknown): void {
+    mkdirSync(engineDir(proj), { recursive: true });
+    writeFileSync(join(engineDir(proj), "composer-proposal.json"), typeof grid === "string" ? grid : JSON.stringify({ stages: grid }));
+  }
+
+  test("the plan the composer validated records the five scores and the method, then the record is spent", () => {
+    const proj = installedProject();
+    const id = compose(proj);
+    expect(JSON.parse(readFileSync(recordOf(proj), "utf-8"))).toEqual({ request: id });
+    screen(proj);
+    propose(proj, composedGrid());
+    const created = createComposed(proj, ["--plan-name", "date-parser-fix", "--request", id]);
+    expect(created.status, created.out).toBe(0);
+    const audit = auditOf(proj);
+    expect(audit).toContain(RECORDED);
+    expect(audit).toContain("**ARS Method**: codekb");
+    expect(existsSync(recordOf(proj))).toBe(false);
+    // Nothing is added to what the person sees, and the work moves on.
+    expect(created.out).not.toContain("ARS");
+    const after = nextDirective(proj, []);
+    expect(after.kind).not.toBe("error");
+    expect(after.message).not.toContain("intent create");
+  });
+
+  test("a matched plan records them too, and a screen with no method leaves the method out", () => {
+    const proj = installedProject();
+    const id = compose(proj);
+    screen(proj, []);
+    propose(proj, stockGrid("bugfix"));
+    const created = runTool(proj, "aidlc-utility.ts", ["intent-create", "--scope", "bugfix", "--request", id, "--label", "date parser"]);
+    expect(created.status, created.out).toBe(0);
+    expect(auditOf(proj)).toContain(RECORDED);
+    expect(auditOf(proj)).not.toContain("**ARS Method**");
+  });
+
+  test("an install with a stage switched off still records them (the plan is compared by its changes)", () => {
+    const proj = installedProject();
+    // A plugin selection marks a stage it leaves out `enabled: false`; the
+    // proposal still names it, from the scope grid.
+    const graphPath = join(proj, ".claude", "tools", "data", "stage-graph.json");
+    const graph = JSON.parse(readFileSync(graphPath, "utf-8")) as Array<{ slug: string; enabled?: boolean }>;
+    writeFileSync(graphPath, JSON.stringify(graph.map((s) => (s.slug === "market-research" ? { ...s, enabled: false } : s))));
+    const id = compose(proj);
+    screen(proj);
+    const grid = composedGrid();
+    expect(grid["market-research"]).toBe("SKIP");
+    propose(proj, grid);
+    const created = createComposed(proj, ["--request", id]);
+    expect(created.status, created.out).toBe(0);
+    expect(auditOf(proj)).toContain(RECORDED);
+  });
+
+  test("a report-only composition binds through the request its approval saved", () => {
+    const proj = installedProject();
+    const entry = compose(proj, ["compose", "--report", "scan.json"]);
+    screen(proj);
+    propose(proj, composedGrid());
+    const approval = nextDirective(proj, [
+      "--scope", "bugfix", "--add", ADD, "--skip", SKIP, "--plan-name", "date-parser-fix", "--request", entry, "--", "fix the parser",
+    ]);
+    expect(approval.kind, approval.message).toBe("print");
+    const described = requestOf(approval.message);
+    expect(described).not.toBe(entry);
+    const created = createComposed(proj, ["--plan-name", "date-parser-fix", "--request", described]);
+    expect(created.status, created.out).toBe(0);
+    expect(auditOf(proj)).toContain(RECORDED);
+  });
+
+  test("another plan for the same request, or other work, records no scores", () => {
+    // After a Reject the person names another plan for the same request.
+    const rejected = installedProject();
+    const id = compose(rejected);
+    screen(rejected);
+    propose(rejected, composedGrid());
+    const other = runTool(rejected, "aidlc-utility.ts", ["intent-create", "--scope", "feature", "--request", id, "--label", "date parser"]);
+    expect(other.status, other.out).toBe(0);
+    expect(auditOf(rejected)).not.toContain("**ARS Scores**");
+    expect(existsSync(recordOf(rejected))).toBe(false);
+    // A plan created for other work never takes an open record's scores.
+    const later = installedProject();
+    compose(later);
+    screen(later);
+    propose(later, composedGrid());
+    const plain = createComposed(later);
+    expect(plain.status, plain.out).toBe(0);
+    expect(auditOf(later)).not.toContain("**ARS Scores**");
+    expect(existsSync(recordOf(later))).toBe(true);
+  });
+
+  test("a missing or unreadable proposal writes no scores and stops nothing", () => {
+    for (const proposal of [null, "{"]) {
+      const proj = installedProject();
+      const id = compose(proj);
+      screen(proj);
+      if (proposal !== null) propose(proj, proposal);
+      const created = createComposed(proj, ["--request", id]);
+      expect(created.status, created.out).toBe(0);
+      expect(auditOf(proj)).not.toContain("**ARS Scores**");
+    }
+  });
+
+  test("a second dispatch opens a fresh record, and a mid-workflow compose opens none", () => {
+    const proj = installedProject();
+    compose(proj);
+    screen(proj);
+    const second = compose(proj, ["compose", "fix the date parser and its tests"]);
+    expect(JSON.parse(readFileSync(recordOf(proj), "utf-8"))).toEqual({ request: second });
+    propose(proj, composedGrid());
+    expect(createComposed(proj, ["--request", second]).status).toBe(0);
+    expect(existsSync(recordOf(proj))).toBe(false);
+    // The work now runs: a compose reshapes it, and its screen is not kept.
+    const reshape = nextDirective(proj, ["compose", "drop the deployment stages"]);
+    expect(reshape.kind, reshape.message).toBe("print");
+    expect(reshape.message).toContain("RUNNING workflow");
+    expect(existsSync(recordOf(proj))).toBe(false);
+    screen(proj);
+    expect(existsSync(recordOf(proj))).toBe(false);
   });
 });

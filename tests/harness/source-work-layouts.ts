@@ -7,6 +7,7 @@
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -42,6 +43,7 @@ const BUN = process.execPath;
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
+const UTILITY = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
 export const UNIT = "user-auth";
 
 // Every folder a case made, removed after it.
@@ -68,7 +70,7 @@ function initRepo(cwd: string): void {
   identity(cwd);
 }
 
-function tempDir(prefix: string, base = process.env.TMPDIR || tmpdir()): string {
+export function tempDir(prefix: string, base = process.env.TMPDIR || tmpdir()): string {
   const dir = toPortablePath(realpathSync(mkdtempSync(join(base, prefix))));
   made.push(dir);
   return dir;
@@ -101,6 +103,23 @@ export function workspace(ignore: string, proj = createTestProject()): string {
   git(proj, ["add", "-A"]);
   git(proj, ["commit", "-q", "-m", "workspace shell"]);
   return proj;
+}
+
+// The workspace with AI-DLC's harness folder installed, as a person's is: the
+// source walk then leaves the whole folder out, worktrees in it included.
+export function shellWorkspace(ignore: string): string {
+  const proj = workspace(ignore);
+  mkdirSync(join(proj, ".claude", "tools", "data"), { recursive: true });
+  copyFileSync(join(AIDLC_SRC, "tools", "data", "harness.json"), join(proj, ".claude", "tools", "data", "harness.json"));
+  git(proj, ["add", "-A"]);
+  git(proj, ["commit", "-q", "-m", "the harness folder"]);
+  return proj;
+}
+
+// `intent add-checkout <path>` or `remove-checkout <path>`, as the agent runs it.
+export function checkoutCommand(proj: string, verb: "add-checkout" | "remove-checkout", path: string): { rc: number; out: string } {
+  const r = spawnSync(BUN, [UTILITY, "intent", verb, path, "--project-dir", proj], { encoding: "utf-8", env: engineEnv() });
+  return { rc: r.status ?? -1, out: `${r.stdout ?? ""}${r.stderr ?? ""}` };
 }
 
 // A project that is a folder of a larger repo (a monorepo package).
@@ -323,11 +342,15 @@ export interface Layout {
   // The source walk (what the review binds) does not reach the code here, so
   // the check does not count it: the person decides with the note.
   outOfReview?: boolean;
+  // The code's checkout is recorded for the review: by `intent add-checkout`
+  // before the review ("command"), or for the whole stage only, a Unit's claim
+  // recording it at the review request ("claim").
+  records?: "command" | "claim";
   project?: () => string;
   skip?: string | false;
 }
 
-function worktreeOf(repo: string, path: string): string {
+export function worktreeOf(repo: string, path: string): string {
   git(repo, ["worktree", "add", "-q", path, "-b", `feature-${Math.random().toString(36).slice(2, 8)}`]);
   return path;
 }
@@ -374,8 +397,19 @@ export const LAYOUTS: Layout[] = [
     outOfReview: true,
     ignore: ".claude/worktrees/\n",
     made: "after",
+    project: () => shellWorkspace(".claude/worktrees/\n"),
     make: (proj) => worktreeOf(proj, join(proj, ".claude", "worktrees", "feature")),
-    claim: inPlace(".claude/worktrees/feature"),
+    // The agent never names the checkout: the claim is not inside it.
+    claim: () => ({ path: "src/" }),
+  },
+  {
+    name: "a worktree in the harness folder, recorded",
+    records: "claim",
+    ignore: ".claude/worktrees/\n",
+    made: "after",
+    project: () => shellWorkspace(".claude/worktrees/\n"),
+    make: (proj) => worktreeOf(proj, join(proj, ".claude", "worktrees", "feature")),
+    claim: () => ({ path: ".claude/worktrees/feature/src/" }),
   },
   {
     name: "an outside repo's worktree in a child folder, made after the work started",
@@ -396,8 +430,35 @@ export const LAYOUTS: Layout[] = [
     outOfReview: true,
     ignore: ".claude/worktrees/\n",
     made: "after",
+    project: () => shellWorkspace(".claude/worktrees/\n"),
     make: (proj) => worktreeOf(outsideRepo(), join(proj, ".claude", "worktrees", "app")),
-    claim: inPlace(".claude/worktrees/app"),
+    // The agent never names the checkout: the claim is not inside it.
+    claim: () => ({ path: "src/" }),
+  },
+  {
+    name: "an outside repo's worktree in the harness folder, recorded",
+    records: "claim",
+    ignore: ".claude/worktrees/\n",
+    made: "after",
+    project: () => shellWorkspace(".claude/worktrees/\n"),
+    make: (proj) => worktreeOf(outsideRepo(), join(proj, ".claude", "worktrees", "app")),
+    claim: () => ({ path: ".claude/worktrees/app/src/" }),
+  },
+  {
+    name: "a worktree outside the project",
+    outOfReview: true,
+    ignore: "",
+    made: "after",
+    make: (proj) => worktreeOf(proj, join(tempDir("t-source-work-sibling-"), "feature")),
+    claim: () => ({ path: "src/" }),
+  },
+  {
+    name: "a worktree outside the project, recorded",
+    records: "command",
+    ignore: "",
+    made: "after",
+    make: (proj) => worktreeOf(proj, join(tempDir("t-source-work-sibling-"), "feature")),
+    claim: () => ({ path: "feature@checkout/src/" }),
   },
   {
     name: "a separate clone, made after the work started",
@@ -449,6 +510,15 @@ export const LAYOUTS: Layout[] = [
     claim: () => ({ path: "src/" }),
   },
   {
+    name: "a worktree on another drive, recorded",
+    records: "command",
+    ignore: "",
+    made: "after",
+    skip: process.platform !== "win32" ? "Windows only" : otherDrive() === null ? "one drive on this machine" : false,
+    make: (proj) => worktreeOf(proj, join(tempDir("t-source-work-drive-", otherDrive() ?? undefined), "feature")),
+    claim: () => ({ path: "feature@checkout/src/" }),
+  },
+  {
     name: "a junction to a checkout elsewhere",
     ignore: "wt-link\n",
     made: "after",
@@ -463,6 +533,15 @@ export const LAYOUTS: Layout[] = [
     made: "after",
     skip: process.platform === "win32" ? "a junction on Windows" : false,
     make: (proj) => linkedCheckout(proj, "dir"),
+    claim: () => ({ path: "wt-link/" }),
+  },
+  // Recorded by the link's path: the checkout behind it is recorded.
+  {
+    name: process.platform === "win32" ? "a junction to a checkout elsewhere, recorded" : "a symlink to a checkout elsewhere, recorded",
+    records: "command",
+    ignore: "wt-link\n",
+    made: "after",
+    make: (proj) => linkedCheckout(proj, process.platform === "win32" ? "junction" : "dir"),
     claim: () => ({ path: "wt-link/" }),
   },
 ];
@@ -493,6 +572,11 @@ export function buildLayout(layout: Layout, perUnit: boolean): { proj: string; c
   if (layout.commitsCode) {
     git(codeDir, ["add", "src"]);
     git(codeDir, ["commit", "-q", "-m", "the code"]);
+  }
+  if (layout.records === "command" || (layout.records === "claim" && !perUnit)) {
+    const where = layout.claim(proj, recorded).path.startsWith("wt-link/") ? "wt-link" : codeDir;
+    const added = checkoutCommand(proj, "add-checkout", where);
+    if (added.rc !== 0) throw new Error(`add-checkout for ${layout.name} failed: ${added.out}`);
   }
   const reviewed = review(proj, perUnit, [layout.claim(proj, recorded)]);
   if (reviewed.rc !== 0) throw new Error(`review of ${layout.name} failed: ${reviewed.out}`);

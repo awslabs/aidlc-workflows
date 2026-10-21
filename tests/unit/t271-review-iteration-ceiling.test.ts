@@ -54,6 +54,7 @@ import { basename, dirname, join, relative } from "node:path";
 import {
   cleanupTestProject,
   createTestProject,
+  seedAidlcMemory,
   seedAuditFile,
   seedBoltDagBatches,
   seededAuditDir,
@@ -247,7 +248,28 @@ function runState(proj: string, args: string[]) {
 // state-mid-inception.md: Scope bugfix (review_cap advisory), Current Stage
 // requirements-analysis (declared advisory anyway). For adversarial cases we
 // flip the scope field to `feature` (uncapped).
-function seedProject(scope: "bugfix" | "feature" | "classic"): string {
+const ORCHESTRATE_TOOL = join(import.meta.dir, "..", "..", "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts");
+
+function orchestrate(proj: string, args: string[]) {
+  const result = spawnSync(process.execPath, [ORCHESTRATE_TOOL, ...args, "--project-dir", proj], {
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    encoding: "utf-8",
+    cwd: proj,
+    env: { ...process.env, AIDLC_PROJECT_DIR: proj, CLAUDE_PROJECT_DIR: proj },
+  });
+  return { status: result.status, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+}
+
+/** The guard-recovery step a refusal carries inside its error text. */
+function refusalAsk(stderr: string): { agent_work?: boolean; remedies: { op: string; requiresHuman: boolean; action: string }[] } {
+  const line = stderr.split("\n").find((entry) => entry.startsWith("{")) ?? "{}";
+  const error = String((JSON.parse(line) as { error?: string }).error ?? "");
+  const at = error.indexOf('{"kind":"ask"');
+  expect(at, error).toBeGreaterThanOrEqual(0);
+  return JSON.parse(error.slice(at));
+}
+
+function seedProject(scope: "bugfix" | "feature" | "classic" | "express"): string {
   const proj = createTestProject();
   seedStateFile(proj, "state-mid-inception.md");
   seedAuditFile(proj);
@@ -894,6 +916,77 @@ describe("t271 review iteration ceiling", () => {
     expect(refused.stderr).toContain("allows 0 review passes");
   });
 
+  // A stage this work runs with no review (express's review_cap none, a Review
+  // Override of none): an agent that asks for one anyway is answered with its
+  // own way on, the gate, and the person is asked nothing. Copilot's agent did
+  // this on express in the 2.11.1 testing, and the person was asked what to
+  // change in requirements nobody had found a problem with.
+  for (const [label, scope, override] of [
+    ["express", "express", false],
+    ["a Review Override of none", "feature", true],
+  ] as const) {
+    test(`${label}: a review the stage does not run is refused with the gate as the agent's own step, then the gate opens`, () => {
+      const proj = seedProject(scope);
+      try {
+        if (override) {
+          const sf = seededStateFile(proj);
+          writeFileSync(sf, readFileSync(sf, "utf8").replace(`- **Scope**: ${scope}`, `- **Scope**: ${scope}\n- **Review Override**: none`));
+        }
+        const request = ["--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"];
+        const refused = runReview(proj, request);
+        expect(refused.status).not.toBe(0);
+        expect(refused.stderr).toContain("allows 0 review passes. This stage runs no review in this work: open the approval gate.");
+        expect(refused.stderr).not.toContain("unresolved findings");
+        const ask = refusalAsk(refused.stderr);
+        expect(ask.agent_work, refused.stderr).toBe(true);
+        expect(ask.remedies.map((remedy) => [remedy.op, remedy.requiresHuman])).toEqual([["present-findings-at-gate", false]]);
+        expect(ask.remedies[0].action).toBe("This stage runs no review in this work: open its approval gate for the human.");
+        expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(0);
+        // The step it names, then next: the gate, never the stage body or a review again.
+        seedAidlcMemory(proj);
+        const opened = orchestrate(proj, ["report", "--stage", "requirements-analysis", "--result", "awaiting-approval"]);
+        expect(opened.status, `${opened.stdout}${opened.stderr}`).toBe(0);
+        expect(opened.stdout).toContain("Recorded awaiting-approval");
+        const after = orchestrate(proj, ["next"]);
+        const step = JSON.parse(after.stdout) as { kind: string; stage?: string; gate_only?: boolean; reviewer?: string };
+        expect(step.stage, after.stdout).toBe("requirements-analysis");
+        expect(step.gate_only, after.stdout).toBe(true);
+        expect(step.reviewer).toBeUndefined();
+        // Asked again at the open gate, the review is still refused.
+        const again = runReview(proj, request);
+        expect(again.status).not.toBe(0);
+        expect(again.stderr).toContain("allows 0 review passes");
+        expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(0);
+      } finally {
+        cleanupTestProject(proj);
+      }
+    });
+  }
+
+  // Only the budget refusal hands over the gate: a review asked for before the
+  // summary is confirmed is refused for the summary, and the gate, which would
+  // refuse it for the same reason, is not offered, first time or again.
+  test("a Review Override of none: a review refused for the summary offers no gate", () => {
+    const proj = seedProject("feature");
+    try {
+      const sf = seededStateFile(proj);
+      writeFileSync(sf, readFileSync(sf, "utf8").replace("- **Scope**: feature", "- **Scope**: feature\n- **Review Override**: none"));
+      const request = ["--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"];
+      for (const attempt of [1, 2]) {
+        const refused = runReview(proj, request, { AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "0" });
+        expect(refused.status, `attempt ${attempt}`).not.toBe(0);
+        expect(refused.stderr).not.toContain("allows 0 review passes");
+        const ops = refusalAsk(refused.stderr).remedies.map((remedy) => remedy.op);
+        expect(ops, `attempt ${attempt}: ${refused.stderr}`).toContain("reconfirm-summary");
+        expect(ops).not.toContain("present-approval-gate");
+        expect(ops).not.toContain("present-findings-at-gate");
+      }
+      expect(auditBlocks(proj, "REVIEW_REQUESTED")).toHaveLength(0);
+    } finally {
+      cleanupTestProject(proj);
+    }
+  });
+
   test("a resumed classic intent keeps one advisory pass gated and the cap-exempt pre-merge reviewer", () => {
     const proj = seedProject("classic");
     try {
@@ -981,6 +1074,8 @@ describe("t271 review iteration ceiling", () => {
     ]);
     expect(over.status).not.toBe(0);
     expect(over.stderr).toContain("allows 1 review pass");
+    // A spent pass keeps its own way on; only a stage that runs no review names the gate.
+    expect(over.stderr).not.toContain("runs no review");
   });
 
   test("a matching autonomous Bolt attempt uses the declared class", () => {

@@ -148,8 +148,8 @@ describe("bounded live file sharding", () => {
 
   test("the live matrix stays bounded as files accumulate", () => {
     expect(LIVE_SHARD_COUNTS).toEqual({ "claude-sdk": 2, "claude-tui": 3, codex: 1, copilot: 1, opencode: 1, "release-contract": 1 });
-    expect(LIVE_PLATFORM_SHARD_COUNTS).toEqual({ "claude-sdk": { linux: 5 }, codex: { linux: 2, win32: 2 } });
-    expect(kinds.flatMap(kind => liveMatrix(kind).include).filter(row => row.family !== "release-contract")).toHaveLength(29);
+    expect(LIVE_PLATFORM_SHARD_COUNTS).toEqual({ "claude-sdk": { linux: 5, win32: 3 }, codex: { linux: 2, win32: 2 } });
+    expect(kinds.flatMap(kind => liveMatrix(kind).include).filter(row => row.family !== "release-contract")).toHaveLength(30);
     expect(selectedLiveFiles("claude-sdk", "linux", "2/5").length).toBeGreaterThan(1);
     expect(["1/2", "2/2"].flatMap((shard) => selectedLiveFiles("codex", "linux", shard))).toHaveLength(7);
     expect(selectedLiveFiles("codex", "darwin", "1/1")).toHaveLength(6);

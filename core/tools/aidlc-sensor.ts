@@ -1050,8 +1050,8 @@ function decideOutcome(
 //
 // Rationale: control-plane / data-plane separation puts per-sensor
 // findings derivation in the script (the script knows its own pass
-// threshold; e.g., required-sections script knows 2 H2 sections is the
-// minimum). The dispatcher stays generic and adds new framework sensors
+// threshold; e.g., the required-sections script counts the template headings
+// an output lacks). The dispatcher stays generic and adds new framework sensors
 // without an arm in this function.
 function readFindingsCount(out: Record<string, unknown>): number {
 	const v = out.findings_count;

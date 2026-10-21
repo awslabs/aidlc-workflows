@@ -36,10 +36,12 @@ usually answer it, such as `[Product owner]` or `[Developer]`, and questions for
 the same person are kept together, unless one of them has to wait for another
 person's answer. A team can split the questions that way, and on your own you
 can see which are about what the product does and which about how it is built.
-Anyone can still answer any question. A question added later goes at the end
-with its own label. The confirmation, change-request and approval sections carry
-no label. A file that already existed keeps its questions as they were, unless
-you ask to redo the stage from scratch, which replaces it with a new one.
+Anyone can still answer any question. When the agent asks you one of these
+questions, in the chat or its question picker, the label comes in front of its
+text too. A question added later goes at the end with its own label. The
+confirmation, change-request and approval sections carry no label. A file that
+already existed keeps its questions as they were, unless you ask to redo the
+stage from scratch, which replaces it with a new one.
 
 ### Guide Me
 

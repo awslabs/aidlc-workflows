@@ -225,7 +225,7 @@ Six sensors ship with the framework:
 | Sensor | Fires on | Checks |
 |--------|----------|--------|
 | `claim-sources` | Intent Capture record-dir outputs | Every claim has a visible source tag; registered description, workflow scope, and memory text match authoritative inputs; retained assumptions exactly match explicit confirmation |
-| `required-sections` | Any record-dir markdown output, plus reverse-engineering's `codekb/` files | The output contains the required H2 headings (a generic content-shape check). Timestamp run records such as `practices-discovery-timestamp.md` always pass |
+| `required-sections` | Any record-dir markdown output, plus reverse-engineering's `codekb/` files | The output contains the `##` headings of its template, when your team has written one in `memory/templates/`; with no template nothing is required |
 | `upstream-coverage` | Any record-dir markdown output, plus reverse-engineering's `codekb/` files | The stage's deliverables (evaluated as a set) reference each upstream artifact the stage declares it requires (`required: true`) or marks `cited: true`, by slug, wikilink, or the producing stage's directory path |
 | `traceability` | `traceability.json` stage artifacts | Stable upstream IDs are declared and covered, statuses and targets are valid, and deterministic downstream targets exist |
 | `linter` | `.ts` / `.js` code outputs | Wraps your configured linter (ESLint by default) |

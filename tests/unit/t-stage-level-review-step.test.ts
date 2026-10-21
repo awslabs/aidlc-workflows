@@ -350,7 +350,7 @@ describe("nextReviewStepFor: the table", () => {
     const attempt = { pendingReview: { iteration: 1, retryable: false, verdictRecordable: true, recordVerdict: "VERD" } };
     const on = nextReviewStepFor({ attempt: { ...base, ...attempt }, subject: "S" });
     const off = nextReviewStepFor({ attempt: { ...base, ...attempt }, fallback: false, subject: "S" });
-    expect(on?.text).toContain("NOT-READY without one");
+    expect(on?.text).toContain("still wrote no whole review, record NOT-READY;");
     expect(off?.text).toContain("VERD");
     expect(off?.text).not.toContain("NOT-READY");
     expect(off?.personFirst).toBeUndefined();

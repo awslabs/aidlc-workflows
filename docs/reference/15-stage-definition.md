@@ -227,7 +227,12 @@ How "source work" is detected depends on the workspace:
   where the source walk lists files below it outside AI-DLC's own: code kept in
   a harness folder such as Claude Code's `.claude/worktrees/`, outside the
   project or on another drive is not counted, so it goes to the person with the
-  line below. Git is asked only in a folder with a real `.git` entry (a clone,
+  line below, unless the work records that checkout (`intent add-checkout
+  <path>`, which the agent runs before the review, or a Unit's claim inside a
+  worktree of the harness folder, recorded at the review request). A recorded
+  checkout is walked by the review as a root of its own, its files listed as
+  `<label>@checkout/<path>`, so it is asked and found, and a change there after
+  the review is a stale review. Git is asked only in a folder with a real `.git` entry (a clone,
   submodule, init or worktree the person made); a committed folder merely
   shaped like a repo gets the filesystem check, so its committed git config
   never runs. AI-DLC's own Bolt worktrees under `.aidlc/` are left to the
@@ -262,7 +267,12 @@ project (a worktree or clone its git does not track) is judged by that
 checkout's own git, so the workspace's `.gitignore` for that folder does not
 refuse it. So is an entry through a link or junction to a checkout outside the
 project (`wt-link/src/`, or `wt-link/` for all of it), and it covers what the
-source walk lists through that link.
+source walk lists through that link. An entry inside one of the work's
+recorded checkouts is judged by that checkout's git too and keyed by its
+listing name; a checkout outside the project is named that way
+(`<label>@checkout/src/`), with no `repo` even in work that records repos,
+and a listing name the work has not recorded is refused with the step to
+record it.
 Missing pre-upgrade fields fail open only as documented migration evidence;
 present-but-unbindable or destroyed modern evidence fails closed under Guard
 Policy strict; under relaxed or off it is recorded once and the work continues. A team that
@@ -606,7 +616,10 @@ priors-file entry, `aidlc-graph compile` copies it onto the node, and the `ars`
 subcommand screens it exactly like a file entry: `role: core` always executes,
 `structural` and a `null` cost are left to judgment at the gate,
 `project_types` screens the stage out on the other project kind, and a
-`--completed` stage outranks everything.
+`--completed` stage outranks everything. The priors file has one role a stage
+block cannot declare, `project-type` (Reverse Engineering): it runs the stage
+on its own project kind whatever it scores, so on that kind a plugin stage's
+`project_types` still goes by its components.
 
 Three rules keep the screen predictable:
 

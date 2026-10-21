@@ -189,7 +189,9 @@ Distribution coverage is split by contract:
 - `t-ci-full-suite-evidence.test.ts` covers the optional Full Suite evidence
   inspector and exact commit/run matching. `t-release-promotion.test.ts` uses
   real Git histories to cover preview selection, exact source preservation,
-  metadata, control snapshots, retries and main metadata synchronization.
+  metadata, control snapshots, retries, the stable page rendered from the
+  entry (the 2.11.1 page is the golden), the scanned contributor list and main
+  metadata synchronization.
 
 The test runner regenerates all projections under a process lock before test
 discovery, so a fresh clone has no dependency on pre-existing `dist/` bytes.
@@ -867,7 +869,7 @@ run for the preview source SHA. Its failures remain visible in that run and in
 the preview notes, without failing the preview workflow. Once contract checks
 pass, preview native smoke, builds and artifact validation run in parallel with
 Full Suite. Publication waits for both the validated artifacts and the completed
-test report, so the release notes retain any Full Suite or upgrade warning.
+test report, so the preview's release notes retain any Full Suite or upgrade warning.
 An unchanged source still runs contract checks and Full Suite while skipping
 the build and publication.
 
@@ -1823,8 +1825,10 @@ live opt-in switch in this release workflow. Missing
 prerequisites, skipped jobs, or failed tests fail an ordinary Full Suite run.
 They do not block preview publication: the preview still builds, its notes end
 with a Full Suite failure report, and only the separate Full Suite run stays red.
-Stable promotion preserves those results and warnings; it does not repeat the
-suite or claim that a previous failure passed. Stable publication still requires
+Stable promotion preserves those results and warnings on the preview's page,
+keeps the warning lines in its promotion record, and the stable page links
+that preview; it does not repeat the suite or claim that a previous failure
+passed. Stable publication still requires
 the new binaries to pass installation and upgrade checks. The credential-free
 Windows release-contract job also runs.
 
@@ -1854,8 +1858,9 @@ The declared coverage is:
   with the plan question left for the day and approved in a new session; Copilot's
   (`tests/e2e/t-exec-copilot-journey-golden-bugfix.serial.test.ts`, Linux only:
   on Windows it runs past the 25 minutes a retry allows) does the same on the
-  copy-channel install of its release journey. opencode's
-  (`tests/e2e/t-run-opencode-journey-golden-change.serial.test.ts`, Linux) takes the
+  copy-channel install of its release journey.
+  opencode's (`tests/e2e/t-run-opencode-journey-golden-change.serial.test.ts`,
+  Linux and Windows) takes the
   same request to Reverse Engineering, where the person asks for one change in
   their own words and approves the revision, on the shipped permission table.
 - Kiro ACP, TUI and IDE are declared exclusions pending a dedicated isolated
@@ -1869,10 +1874,12 @@ After authorization and dependency installation, the plan emits `--matrix
 linux`, `--matrix macos` and `--matrix windows` as the dynamic matrices of the
 `live_linux`, `live_macos` and `live_windows` jobs. Each row's `shard: N/M`
 selects a duration-balanced group for its family/platform. Each OS has two Claude
-SDK (five on Linux, which alone runs the golden journeys and the answers corpus,
-the corpus on a shard of its own), three Claude TUI, one Codex (two on Linux and
-Windows, where the Codex golden journey runs), one Copilot and one opencode shard:
-29 live harness jobs in all. Timing weights in
+SDK (five on Linux, which runs the golden journeys and alone the answers corpus,
+the corpus on a shard of its own; three on Windows, which runs the golden
+journeys too), three Claude TUI, one Codex (two on Linux and Windows, where the
+Codex golden journey runs), one Copilot and one opencode shard: 30 live harness
+jobs in all. A golden journey runs on Linux and Windows while it takes under the
+25 minutes a retry allows there. Timing weights in
 `tests/live-shard-weights.json` are scheduling hints;
 discovery still assigns every eligible file exactly once per platform. Each OS
 has its own concurrency cap: four Linux, two macOS and three Windows live jobs.

@@ -150,7 +150,8 @@ export function dispatched(command: string): boolean {
 /**
  * The hook commands a project's tool runs, as its shell gets them, each with
  * whether the hook phase trace must show it. That is read from the command the
- * wiring names, before opencode's plugin adds the project folder.
+ * wiring names; opencode's plugin gives the project folder itself (on Windows,
+ * through the environment when it starts the aidlc.cmd launcher with cmd.exe).
  */
 export function hookRuns(harness: string, project: string): { command: string; traced: boolean }[] {
   if (harness === "opencode") {

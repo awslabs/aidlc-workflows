@@ -175,7 +175,7 @@ function stageAwaitingApproval(proj: string): string | undefined {
  * yet" to an agent that ran ahead), so the step before it counts; a print alone
  * is the last step.
  */
-function lastEngineStep(results: readonly CapturedToolResult[]): Record<string, unknown> | undefined {
+export function lastEngineStep(results: readonly CapturedToolResult[]): Record<string, unknown> | undefined {
   let print: Record<string, unknown> | undefined;
   for (let i = results.length - 1; i >= 0; i--) {
     const t = results[i];
@@ -486,14 +486,17 @@ export function goldenPathProblems(j: GoldenJourney, run: GoldenRun): string[] {
 
   // The person answered one question in their own words, where the stage asked
   // one: a stage may find the request clear and ask none. That every answer is
-  // backed by their own turn is the drive's own check (person-turns.ts). The
-  // check that their words are kept as their answer is re-enabled with the fix
-  // that keeps the person's own words on every answer: today a picker answer in
-  // their own words can be recorded as the option it is closest to.
+  // backed by their own turn is the drive's own check (person-turns.ts). Their
+  // words are on the record as given: the reply a question box carried back
+  // (QUESTION_REPLIED), or the Person Reply beside the answer the agent logged.
   const own = j.ownWords;
   const asked = own !== undefined && rows.some((r) => r.event === "DECISION_RECORDED" && stageField(r) === own.stage &&
     plainChoice(decisionOptions(r)) === undefined);
   if (own && asked && !run.ownWordsUsed) problems.push(`no question at ${own.stage} took the person's own words`);
+  const kept = own !== undefined && rows.some((r) =>
+    [r.event === "QUESTION_REPLIED" ? auditBlockField(r.block, "Reply") : null, auditBlockField(r.block, "Person Reply")]
+      .some((words) => words !== null && norm(words).includes(norm(own.words))));
+  if (own && run.ownWordsUsed && !kept) problems.push(`the person's own words at ${own.stage} are not on the record`);
   return problems;
 }
 

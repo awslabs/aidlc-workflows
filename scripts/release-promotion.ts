@@ -3,7 +3,7 @@
 // release workflow travels with it so an older preview can use today's
 // publication process without taking today's product code.
 import { spawnSync } from "node:child_process";
-import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { compareVersions, parseVersion, PREVIEW_VERSION, STABLE_VERSION } from "../core/tools/aidlc-channel.ts";
@@ -27,8 +27,7 @@ type Release = {
   published_at: string;
   body: string;
 };
-export type Promotion = {
-  schemaVersion: 1;
+type PromotionFields = {
   repository: string;
   preview: string;
   source: string;
@@ -38,6 +37,16 @@ export type Promotion = {
   notes: string;
   warnings: string[];
 };
+export type Contributor = { login: string; first?: number };
+// Version 1 records (2.11.1 and earlier) carry flat notes and render the notes
+// with the preview line. Version 2 renders the whole stable page.
+export type Promotion =
+  | (PromotionFields & { schemaVersion: 1 })
+  | (PromotionFields & { schemaVersion: 2; previous: string | null; contributors: Contributor[] });
+type PagePromotion = Extract<Promotion, { schemaVersion: 2 }>;
+// Left out of the page's thanks. A named list, not the promoting account, so
+// a retry by another maintainer computes the same contributors.
+const MAINTAINERS = ["apackeer"];
 export type Command = (program: string, args: string[], input?: string, env?: NodeJS.ProcessEnv) => string;
 
 export const command: Command = (program, args, input, env) => {
@@ -120,6 +129,49 @@ export function listPreviews(repository: string, run: Command = command): string
     }
   }
   return `${lines.join("\n")}\n`;
+}
+
+const STEP = /^\*\*[^*\n]+:\*\* \S/;
+const BULLET = /^[-*] \S/;
+const SCRIPT_COMPATIBILITY = "Script compatibility";
+// A Highlights line, and whether it sits under ### Script compatibility.
+type Line = { text: string; script: boolean };
+type Entry = { compatibility: string; summary: string; affected: string | null; steps: string[]; highlights: Line[][] };
+
+// The entry is both the CHANGELOG text and the stable page's words, so its
+// author groups the bullets once, in the reviewed entry (the shape is in
+// AGENTS.md, Release Metadata Policy), and the page renders every line in the
+// order written. A line outside that shape is shown where it is, for the page
+// preview and the release approval to read, except a bullet on the wrong side
+// of ### Script compatibility: prepare reserves the version before it prints
+// the page, so that one is refused first. Version 1 records never come here.
+function parseEntry(notes: string): Entry {
+  const body = validateNotes(notes);
+  const newline = body.indexOf("\n");
+  const blocks = body.slice(newline + 1).trim().split(/\n{2,}/);
+  const first = blocks.findIndex((block) => /^([-*] |### )/m.test(block));
+  const paragraphs = first < 0 ? blocks : blocks.slice(0, first);
+  const [summary = "", ...steps] = paragraphs;
+  const breaking = body.startsWith("Compatibility: breaking for scripts\n");
+  const affected = breaking && steps.length && !STEP.test(steps[0]) ? steps.shift() ?? null : null;
+  let script = false;
+  const highlights = (first < 0 ? [] : blocks.slice(first)).map((block) => block.split("\n").map((text) => {
+    if (text.startsWith("### ")) script = text.slice(4).trim() === SCRIPT_COMPATIBILITY;
+    return { text, script };
+  }));
+  for (const line of highlights.flat()) {
+    if (!BULLET.test(line.text)) continue;
+    const bullet = line.text.slice(2);
+    if (bullet.startsWith("Breaking for scripts: ") && !line.script) {
+      throw new Error(`notes: "${bullet.slice(0, 80)}" is a Breaking for scripts bullet outside ### ${SCRIPT_COMPATIBILITY}; ` +
+        `move it under ### ${SCRIPT_COMPATIBILITY}.`);
+    }
+    if (!bullet.startsWith("Breaking for scripts: ") && line.script) {
+      throw new Error(`notes: "${bullet.slice(0, 80)}" sits under ### ${SCRIPT_COMPATIBILITY}, which holds only Breaking for scripts bullets; ` +
+        `move it to another group, or start it with "Breaking for scripts: ".`);
+    }
+  }
+  return { compatibility: body.slice("Compatibility: ".length, newline), summary, affected, steps, highlights };
 }
 
 export function validateNotes(notes: string): string {
@@ -211,12 +263,24 @@ function commitFiles(parent: string, files: Record<string, string | null>, messa
 
 export function readPromotion(ref: string, run: Command = command): Promotion {
   const p = JSON.parse(run("git", ["show", `${ref}:${PROMOTION_FILE}`])) as Promotion;
-  if (p.schemaVersion !== 1 || !COMMIT.test(p.source) || !COMMIT.test(p.controls) ||
+  const invalid = new Error("invalid release promotion record");
+  if ((p.schemaVersion !== 1 && p.schemaVersion !== 2) || !COMMIT.test(p.source) || !COMMIT.test(p.controls) ||
     typeof p.preview !== "string" || !PREVIEW_VERSION.test(p.preview.slice(1)) ||
     !STABLE_VERSION.test(p.version) || !Array.isArray(p.warnings) ||
-    p.warnings.some((warning) => typeof warning !== "string")) throw new Error("invalid release promotion record");
+    p.warnings.some((warning) => typeof warning !== "string")) throw invalid;
   repositoryName(p.repository);
   validateNotes(p.notes);
+  if (p.schemaVersion === 1) return p;
+  if (p.previous !== null && !(typeof p.previous === "string" && STABLE_VERSION.test(p.previous) &&
+    compareVersions(p.previous, p.version) < 0)) throw invalid;
+  // The page prints each login; a record holds only what the contributors
+  // parser itself would return.
+  try {
+    if (!Array.isArray(p.contributors) ||
+      JSON.stringify(parseContributors(contributorsText(p.contributors))) !== JSON.stringify(p.contributors)) throw invalid;
+  } catch {
+    throw invalid;
+  }
   return p;
 }
 
@@ -246,33 +310,66 @@ export function verifyPromotion(ref: string, repository: string, run: Command = 
   return p;
 }
 
-export function preparePromotion(options: {
-  repository: string; preview: string; version: string; notes: string; controls: string; date: string;
-}, run: Command = command): { sha: string; promotion: Promotion; existing: boolean; published: boolean } {
+type PromotionRequest = { repository: string; preview: string; version: string; notes: string; contributors?: string };
+
+// What a promotion request selects, the same for the page preview and for
+// preparation.
+function requestedPage(options: PromotionRequest, run: Command): Omit<PagePromotion, "controls" | "date"> {
+  const { repository, preview, version } = options;
+  const selected = resolvePreview(repository, preview, run);
+  const notes = validateNotes(options.notes);
+  const contributors = parseContributors(options.contributors ?? "");
+  if (!STABLE_VERSION.test(version)) throw new Error("stable version must be X.Y.Z");
+  parseVersion(version);
+  return {
+    schemaVersion: 2, repository, preview, source: selected.source, version, notes,
+    warnings: releaseWarnings(selected.release.body ?? ""),
+    previous: previousStable(version, releases(repository, run)), contributors,
+  };
+}
+
+// The newest published stable release older than this one: the page's Full
+// Changelog starts there, and so does its contributor range.
+function previousStable(version: string, published: Release[]): string | null {
+  return published
+    .filter((release) => !release.prerelease && STABLE_VERSION.test(release.tag_name.slice(1)) &&
+      compareVersions(release.tag_name.slice(1), version) < 0)
+    .map((release) => release.tag_name.slice(1))
+    .sort(compareVersions).at(-1) ?? null;
+}
+
+export function preparePromotion(options: PromotionRequest & { controls: string; date: string },
+  run: Command = command): { sha: string; promotion: Promotion; existing: boolean; published: boolean } {
   const { repository, preview, version, controls, date } = options;
   if (!COMMIT.test(controls)) throw new Error("controls must be an immutable commit");
   run("git", ["merge-base", "--is-ancestor", controls, "origin/main"]);
-  const selected = resolvePreview(repository, preview, run);
-  run("git", ["merge-base", "--is-ancestor", selected.source, "origin/main"]);
-  const notes = validateNotes(options.notes);
-  if (!STABLE_VERSION.test(version)) throw new Error("stable version must be X.Y.Z");
-  parseVersion(version);
+  const page = requestedPage(options, run);
+  run("git", ["merge-base", "--is-ancestor", page.source, "origin/main"]);
   const tag = `v${version}`;
   const published = publicationStatus(version, repository, run);
   const remote = run("git", ["ls-remote", "--refs", "origin", `refs/tags/${tag}`]).trim();
   if (remote) {
     run("git", ["fetch", "--force", "origin", `refs/tags/${tag}:refs/tags/${tag}`]);
     const p = verifyPromotion(tag, repository, run);
-    if (p.preview !== preview || p.notes !== notes) throw new Error("version is already reserved for a different promotion");
+    // A version 1 reservation, from the earlier tooling, has flat notes and no
+    // contributors or previous version.
+    const same = p.preview === preview && p.notes === page.notes && (p.schemaVersion === 1
+      ? !page.contributors.length
+      : p.previous === page.previous && JSON.stringify(p.contributors) === JSON.stringify(page.contributors));
+    if (!same) {
+      throw new Error(`version is already reserved for a different promotion; dispatch again with the same preview${
+        p.schemaVersion === 1 ? " and notes and no contributors" : ", notes and contributors"}, or choose a new version`);
+    }
     return { sha: run("git", ["rev-parse", `${tag}^{commit}`]).trim(), promotion: p, existing: true, published };
   }
   if (published) throw new Error("version is already published");
-  verifyPreviewCompatibility(repository, preview, selected.source, run);
+  parseEntry(page.notes);
+  verifyPreviewCompatibility(repository, preview, page.source, run);
   const promotion: Promotion = {
-    schemaVersion: 1, repository, preview, source: selected.source, controls, version, date, notes,
-    warnings: releaseWarnings(selected.release.body ?? ""),
+    schemaVersion: 2, repository, preview, source: page.source, controls, version, date, notes: page.notes,
+    warnings: page.warnings, previous: page.previous, contributors: page.contributors,
   };
-  const sha = commitFiles(selected.source, promotionFiles(promotion, run), `chore(release): promote ${preview} as ${tag}`, run);
+  const sha = commitFiles(page.source, promotionFiles(promotion, run), `chore(release): promote ${preview} as ${tag}`, run);
   return { sha, promotion, existing: false, published: false };
 }
 
@@ -289,10 +386,162 @@ export function publicationStatus(version: string, repository: string, run: Comm
   return published;
 }
 
+// The stable page, the only one the release publishes. The preview's test
+// warnings and its failure report stay on the preview's page, which the
+// Promoted line opens; the promotion record keeps the warning lines.
 export function promotionNotes(p: Promotion): string {
-  return `${p.notes}\n\nPromoted from [${p.preview}](https://github.com/${p.repository}/releases/tag/${p.preview}), source \`${p.source}\`.\n\n` +
-    "The preview's recorded test results were not rerun or changed by promotion.\n" +
-    (p.warnings.length ? `\n${p.warnings.join("\n")}\n` : "");
+  const promoted = `Promoted from [${p.preview}](https://github.com/${p.repository}/releases/tag/${p.preview}), source \`${p.source}\`.`;
+  if (p.schemaVersion === 1) return `${p.notes}\n\n${promoted}\n`;
+  const entry = parseEntry(p.notes);
+  const github = `https://github.com/${p.repository}`;
+  const download = `${github}/releases/download/v${p.version}`;
+  const blocks = [
+    "## Summary",
+    ...(entry.summary ? [entry.summary] : []),
+    `**Compatibility:** ${entry.compatibility}.${entry.affected ? ` ${entry.affected}` : ""}`,
+    "## Upgrade",
+    "```bash\naidlc update\ncd /path/to/project\naidlc config --yes\naidlc doctor\n```",
+    "Open work carries on through the refresh. When a project contains multiple harnesses, run `aidlc config --harness <name> --yes` for each harness you want to refresh.",
+    ...entry.steps,
+    // The Bun floor is the one aidlc-lib.ts's Bun.markdown error names;
+    // t-release-promotion pins the two together.
+    `Manual-copy users must copy the complete \`runtime/<harness>/\` tree from [\`aidlc-copy-runtime-${p.version}.tar.gz\`](${download}/aidlc-copy-runtime-${p.version}.tar.gz). ` +
+      `Copy it over the project following the [copy-channel instructions](${github}/blob/v${p.version}/docs/guide/18-install-and-lifecycle.md#copy-channel). ` +
+      "This installation path requires **Bun 1.3.8 or newer** but does not require the native `aidlc` executable.",
+    "Chat commands below use `/aidlc`; in Codex CLI, use `$aidlc` instead.",
+    "## Fresh install",
+    "### macOS and Linux",
+    `\`\`\`bash\ncurl -fsSL ${download}/install.sh | sh -s -- --version ${p.version}\n\`\`\``,
+    "### Windows PowerShell",
+    `\`\`\`powershell\nirm ${download}/install.ps1 -OutFile install.ps1\n./install.ps1 -Version ${p.version}\n\`\`\``,
+    "## Highlights",
+    ...highlightBlocks(entry.highlights),
+    ...contributorSections(p.contributors, p.repository),
+    promoted,
+    ...(p.previous ? [`**Full Changelog**: ${github}/compare/v${p.previous}...v${p.version}`] : []),
+  ];
+  return `${blocks.join("\n\n")}\n`;
+}
+
+// The entry's bullets as the page lists them: a dash for every bullet, the
+// Breaking for scripts prefix dropped under Script compatibility, and a heading
+// in its own block, as on the 2.11.1 page.
+function highlightBlocks(blocks: Line[][]): string[] {
+  return blocks.flatMap((block) => {
+    const lines = block.map(({ text, script }) => {
+      if (!BULLET.test(text)) return text;
+      return `- ${script ? text.slice(2).replace(/^Breaking for scripts: /, "") : text.slice(2)}`;
+    });
+    return lines[0].startsWith("### ") && lines.length > 1 ? [lines[0], lines.slice(1).join("\n")] : [lines.join("\n")];
+  });
+}
+
+// The contributor input: one GitHub login per line, its first PR's number
+// after it when this release holds that first PR. The contributors command
+// makes it, after the private-names scan on the maintainer's machine; CI only
+// renders it.
+export function parseContributors(text: string): Contributor[] {
+  const body = text.replaceAll("\r\n", "\n").trim();
+  if (!body) return [];
+  const seen = new Set<string>();
+  return body.split("\n").map((line, index) => {
+    const match = /^([A-Za-z0-9][A-Za-z0-9-]{0,38})(?: ([1-9][0-9]{0,9}))?$/.exec(line);
+    if (!match || seen.has(match[1].toLowerCase())) {
+      throw new Error(`contributors line ${index + 1} is not a GitHub login with an optional first PR number; ` +
+        "make the list with: bun scripts/release-promotion.ts contributors");
+    }
+    seen.add(match[1].toLowerCase());
+    return match[2] ? { login: match[1], first: Number(match[2]) } : { login: match[1] };
+  });
+}
+
+function contributorsText(contributors: Contributor[]): string {
+  return contributors.map((c) => (c.first ? `${c.login} ${c.first}\n` : `${c.login}\n`)).join("");
+}
+
+function contributorSections(contributors: Contributor[], repository: string): string[] {
+  if (!contributors.length) return [];
+  const thanks = `Thank you to everyone who contributed to this release: ${contributors.map((c) => `@${c.login}`).join(", ")}.`;
+  const first = contributors.filter((c) => c.first).sort((a, b) => (a.first ?? 0) - (b.first ?? 0))
+    .map((c) => `* @${c.login} made their first contribution in https://github.com/${repository}/pull/${c.first}`);
+  return ["## Contributors", thanks, ...(first.length ? [["## New Contributors", ...first].join("\n")] : [])];
+}
+
+// The page the promotion will publish for these inputs; it writes nothing.
+export function previewPage(options: PromotionRequest, run: Command = command): string {
+  return promotionNotes({ ...requestedPage(options, run), controls: "", date: "" });
+}
+
+const NO_CONTRIBUTORS = "Promote without the contributors input for a page with no contributor sections.";
+
+// True when the text names nobody on the private list.
+type Scanner = (text: string) => boolean;
+
+function privateNamesScanner(run: Command): Scanner {
+  const path = join(run("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"]).trim(), "info", "scan-private-names");
+  if (!existsSync(path)) {
+    throw new Error(`No private-names scanner at ${path}, so nothing was printed. Put the scanner there and run this again, ` +
+      "or promote without the contributors input: the page then has no contributor sections.");
+  }
+  return (text) => {
+    // The scanner prints what it matched; keep that off the screen.
+    const result = spawnSync("bash", [path], { input: text, encoding: "utf8" });
+    if (result.status === 0) return true;
+    if (result.status === 1) return false;
+    throw new Error(`The private-names scan did not run (${result.status ?? result.error}), so nothing was printed. ${NO_CONTRIBUTORS}`);
+  };
+}
+
+// Everyone whose PR merged between the previous stable release and this
+// preview's source, most PRs first, then by login; the maintainers and bots
+// are left out, and so is any login the private-names scan flags.
+export function contributorList(
+  options: { repository: string; preview: string; version: string },
+  run: Command = command,
+  scan: Scanner = privateNamesScanner(run),
+): { text: string; left: number } {
+  const { repository, version } = options;
+  const { source } = resolvePreview(repository, options.preview, run);
+  if (!STABLE_VERSION.test(version)) throw new Error("stable version must be X.Y.Z");
+  const previous = previousStable(version, releases(repository, run));
+  const since: string[] = [];
+  if (previous) {
+    run("git", ["fetch", "--no-tags", "origin", `refs/tags/v${previous}`]);
+    since.push(`^${run("git", ["rev-parse", "FETCH_HEAD^{commit}"]).trim()}`);
+  }
+  const range = new Set(run("git", ["rev-list", source, ...since]).split("\n").filter(Boolean));
+  const prs = JSON.parse(run("gh", [
+    "pr", "list", "--repo", repository, "--state", "merged", "--limit", "100000", "--json", "number,author,mergeCommit",
+  ])) as Array<{ number: number; author: { login: string; is_bot?: boolean } | null; mergeCommit: { oid: string } | null }>;
+  const inRange = (pr: (typeof prs)[number]) => Boolean(pr.mergeCommit && range.has(pr.mergeCommit.oid));
+  const firstPr = new Map<string, (typeof prs)[number]>();
+  const counts = new Map<string, number>();
+  for (const pr of prs) {
+    const login = pr.author?.login ?? "";
+    if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(login) || pr.author?.is_bot ||
+      MAINTAINERS.some((maintainer) => maintainer.toLowerCase() === login.toLowerCase())) continue;
+    if (pr.number < (firstPr.get(login)?.number ?? Number.POSITIVE_INFINITY)) firstPr.set(login, pr);
+    if (inRange(pr)) counts.set(login, (counts.get(login) ?? 0) + 1);
+  }
+  const ordered: Contributor[] = [...counts]
+    .sort(([a, x], [b, y]) => y - x || (a.toLowerCase() < b.toLowerCase() ? -1 : 1))
+    .map(([login]) => {
+      const first = firstPr.get(login);
+      return first && inRange(first) ? { login, first: first.number } : { login };
+    });
+  const kept = ordered.filter((contributor) => scan(contributor.login));
+  const text = contributorsText(kept);
+  if (!scan(text) || !scan(contributorSections(kept, repository).join("\n\n"))) {
+    throw new Error(`The private-names scan flagged the contributor list itself, so nothing was printed. ${NO_CONTRIBUTORS}`);
+  }
+  return { text, left: ordered.length - kept.length };
+}
+
+// What the promotion run shows the person promoting: the stable page as it
+// will read, then the preview's warnings, said once.
+export function promotionSummary(p: Promotion): string {
+  return promotionNotes(p) +
+    (p.warnings.length ? `\nOn the preview's page, not the stable page:\n\n${p.warnings.join("\n")}\n` : "");
 }
 
 export function syncMetadata(tag: string, repository: string, run: Command = command): string | null {
@@ -332,6 +581,10 @@ function option(args: string[], name: string): string {
   return args[index + 1];
 }
 
+function optional(args: string[], name: string): string | undefined {
+  return args.includes(name) ? option(args, name) : undefined;
+}
+
 function report(text: string): void {
   console.log(text);
   if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${text}\n`);
@@ -345,15 +598,25 @@ function main(args: string[]): void {
     return;
   }
   command("git", ["fetch", "--no-tags", "origin", "main"]);
-  if (operation === "prepare") {
+  const contributorsFile = optional(args, "--contributors-file");
+  const request = () => ({
+    repository, preview: option(args, "--preview"), version: option(args, "--version"),
+    notes: readFileSync(option(args, "--notes-file"), "utf8"),
+    contributors: contributorsFile === undefined ? "" : readFileSync(contributorsFile, "utf8"),
+  });
+  if (operation === "contributors") {
+    const list = contributorList({ repository, preview: option(args, "--preview"), version: option(args, "--version") });
+    process.stdout.write(list.text);
+    if (list.left) console.error(`Left out ${list.left} login${list.left === 1 ? "" : "s"} that the private-names scan flagged.`);
+  } else if (operation === "page") {
+    process.stdout.write(previewPage(request()));
+  } else if (operation === "prepare") {
     const result = preparePromotion({
-      repository, preview: option(args, "--preview"), version: option(args, "--version"),
-      notes: readFileSync(option(args, "--notes-file"), "utf8"),
-      controls: option(args, "--controls"), date: new Date().toISOString().slice(0, 10),
+      ...request(), controls: option(args, "--controls"), date: new Date().toISOString().slice(0, 10),
     });
     const tag = `v${result.promotion.version}`;
     if (!result.existing) command("git", ["push", "origin", `${result.sha}:refs/tags/${tag}`]);
-    report(promotionNotes(result.promotion));
+    report(promotionSummary(result.promotion));
     if (result.published) report(`${tag} is already published. Run the sync command if its main metadata branch is missing.`);
     if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\npublished=${result.published}\n`);
   } else if (operation === "verify" || operation === "notes") {
@@ -365,7 +628,7 @@ function main(args: string[]): void {
       const sha = command("git", ["rev-parse", `${tag}^{commit}`]).trim();
       if (process.env.GITHUB_SHA && sha !== process.env.GITHUB_SHA) throw new Error("run is not on the selected release commit");
       if (publicationStatus(p.version, repository)) throw new Error(`${tag} is already published; use sync for main metadata`);
-      report(promotionNotes(p));
+      report(promotionSummary(p));
       if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `tag=${tag}\nsha=${sha}\ncontrols=${p.controls}\n`);
     }
   } else if (operation === "sync") {
@@ -373,7 +636,7 @@ function main(args: string[]): void {
     command("git", ["fetch", "--force", "origin", `refs/tags/${tag}:refs/tags/${tag}`]);
     const link = syncMetadata(tag, repository);
     report(link ? `Open the metadata-only PR to record ${tag} on main: ${link}` : "main already records this or a newer version.");
-  } else throw new Error("expected list, prepare, verify, notes or sync");
+  } else throw new Error("expected list, contributors, page, prepare, verify, notes or sync");
 }
 
 if (import.meta.main) {

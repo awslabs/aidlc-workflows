@@ -801,6 +801,38 @@ describe("source and native guard remedies execute their owning operations", () 
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
+  // The pick does not carry the restart past the ordinary print, and the
+  // refusal names the restart's own `next --stage`: run once on the state as it
+  // is now, the jump it prints goes through.
+  test("native/copilot: after an ordinary print, the picked restart's refusal names its next --stage, and one follow admits it", () => {
+    const { p, remedy } = restartFixture(HARNESS_RUNTIMES[2]);
+    succeeded(p.copilotAdapter("record-human-turn", {
+      hook_event_name: "UserPromptSubmit", prompt: remedy.op,
+    }));
+    const selectedJump = returnedJump(json(p.exact(remedy.command!)));
+    const settled = (id: string, delivered?: string) => {
+      const input = {
+        hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: id,
+        tool_input: { command: remedy.command },
+      };
+      const command = (json(p.copilotAdapter("guard-tool-call", input)).modifiedArgs as { command?: string } | undefined)?.command;
+      expect(command).toContain(`--aidlc-attempt-id ${id}`);
+      const output = succeeded(p.exact(command!));
+      succeeded(p.copilotAdapter("post-tool", {
+        ...input, hook_event_name: "PostToolUse", tool_input: { command },
+        tool_result: { result_type: "success", text_result_for_llm: delivered ?? output.stdout.trim() },
+      }));
+    };
+    settled("restart-ordinary-print", JSON.stringify({ kind: "print", message: "The workflow status is unchanged." }));
+    expect(p.marker()).toMatchObject({ kind: "print", delivery: "superseded", active_attempt: { status: "settled" } });
+    expect(p.marker()?.active_attempt?.guard_recovery_selection_sha256).toBeDefined();
+    const refused = p.guard("Bash", { command: selectedJump });
+    expect(refused.status).toBe(2);
+    expect(refused.stderr).toContain(`\`${remedy.command}\``);
+    settled("restart-follow");
+    succeeded(p.guard("Bash", { command: selectedJump }));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   for (const choice of ["wrong", "stale"] as const) {
     test(`native reset refuses a ${choice} recorded choice without changing state or approving a plan`, () => {
       const { p, remedy } = restartFixture();

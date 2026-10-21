@@ -61,6 +61,7 @@ import {
   type ConfigDiagnosticRecords,
   type ProvidersRecord,
 } from "../../core/tools/aidlc-config-diagnostics.ts";
+import { cmdScriptLaunch } from "../../core/tools/aidlc-executable-path.ts";
 import { collectDoctorReport, firingHooksLastFired, kiroDisabledHookChecks } from "../../core/tools/aidlc-utility.ts";
 import * as runtimePaths from "../../core/tools/aidlc-runtime-paths.ts";
 
@@ -881,13 +882,13 @@ describe("t294 runtime diagnostics", () => {
     );
     expect(existsSync(ran)).toBe(false);
     if (windows) {
-      // cmd.exe would expand % in the path, so such a .cmd is not run.
-      const expanding = join(root, "npm%PATH%");
-      const expandingRan = join(root, "expanding-ran");
+      // A folder name with % or ! (an account name can hold them) is taken as written, never expanded.
+      const expanding = join(root, "npm%PATH%!x!");
       mkdirSync(expanding, { recursive: true });
-      writeFileSync(join(expanding, command), script([`type nul > "${expandingRan}"`, "echo 1.0.80"]));
-      expect(probeHarnessCli("copilot", { ...host, interactivePath: expanding }).status).toBe("missing");
-      expect(existsSync(expandingRan)).toBe(false);
+      writeFileSync(join(expanding, command), script(["echo 1.0.81"]));
+      expect(probeHarnessCli("copilot", { ...host, interactivePath: expanding })).toEqual(
+        expect.objectContaining({ status: "found", version: "1.0.81", path: join(expanding, command) }),
+      );
     }
 
     // npm's Windows layout: the extensionless shell script, copilot.cmd and
@@ -897,6 +898,20 @@ describe("t294 runtime diagnostics", () => {
     for (const name of ["copilot", "copilot.cmd", "copilot.ps1"]) writeFileSync(join(npmLayout, name), "");
     expect(resolveExecutableOnPath("copilot", npmLayout, "win32")).toBe(resolve(npmLayout, "copilot.cmd"));
     expect(resolveExecutableOnPath("copilot.cmd", npmLayout, "win32")).toBe(resolve(npmLayout, "copilot.cmd"));
+    // The one cmd.exe rule (config's probes and opencode's plugin): the path
+    // quoted whole, plain words after it; what cmd.exe would expand or read
+    // again is not started.
+    // The path goes through the environment, so cmd.exe never reads it again.
+    expect(cmdScriptLaunch("C:\\npm\\copilot.cmd", ["--version"], "C:\\Windows\\system32\\cmd.exe")).toEqual({
+      file: "C:\\Windows\\system32\\cmd.exe",
+      args: ["/d", "/v:off", "/s", "/c", '""%AIDLC_CMD_SCRIPT%" --version"'],
+      env: { AIDLC_CMD_SCRIPT: "C:\\npm\\copilot.cmd" },
+    });
+    for (const script of ["C:\\Program Files\\npm\\copilot.cmd", "C:\\npm%PATH%\\copilot.cmd", "C:\\npm!x!\\copilot.cmd", "C:\\a&b^(c)\\copilot.cmd"]) {
+      expect(cmdScriptLaunch(script, ["--version"])?.env, script).toEqual({ AIDLC_CMD_SCRIPT: script });
+    }
+    expect(cmdScriptLaunch('C:\\npm"\\copilot.cmd', ["--version"])).toBeNull();
+    for (const arg of ["a b", "a&b", "a|b", "%x%", "^"]) expect(cmdScriptLaunch("C:\\npm\\copilot.cmd", [arg]), arg).toBeNull();
 
     // Windows spelling: any case, backslashes, a trailing separator. The
     // search skips the folder, and a resolver that names it anyway is ignored.
@@ -1190,7 +1205,9 @@ describe("t294 provider diagnostics", () => {
 
     // Each surface is independent. Keep its real distribution and assertions,
     // but do not charge eleven tree copies to one default test deadline.
-    test("Claude writes provider settings and MCP region", () => {
+    // The Bedrock env is the person's own (applyClaudeLocalProvider, #2712);
+    // the shared settings.json carries none of it.
+    test("Claude writes the MCP region and no Bedrock env to the shared settings", () => {
       const claude = temp("aidlc-t294-provider-claude-");
       cpSync(join(DIST, "claude"), claude, { recursive: true });
       applyConfigDiagnosticRecords(
@@ -1202,9 +1219,9 @@ describe("t294 provider diagnostics", () => {
       const settings = JSON.parse(
         readFileSync(join(claude, ".claude", "settings.json"), "utf-8"),
       ) as { env: Record<string, string> };
-      expect(settings.env.CLAUDE_CODE_USE_BEDROCK).toBe("1");
-      expect(settings.env.AWS_REGION).toBe("eu-west-1");
-      expect(settings.env.AWS_PROFILE).toBe("dev");
+      expect(settings.env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+      expect(settings.env.AWS_REGION).toBeUndefined();
+      expect(settings.env.AWS_PROFILE).toBeUndefined();
       const claudeMcp = readFileSync(join(claude, ".mcp.json"), "utf-8");
       expect(claudeMcp).toContain("https://aws-mcp.eu-west-1.api.aws/mcp");
       expect(claudeMcp).toContain("AWS_REGION=eu-west-1");
@@ -2923,8 +2940,10 @@ describe("t294 config diagnostics CLI", () => {
       "--yes",
     ], project, env);
     expect(applied.status, applied.stdout + applied.stderr).toBe(0);
+    const localPath = join(project, ".claude", "settings.local.json");
+    expect(readFileSync(localPath, "utf-8")).toContain('"AWS_REGION": "eu-west-1"');
     expect(readFileSync(join(project, ".claude", "settings.json"), "utf-8"))
-      .toContain('"AWS_REGION": "eu-west-1"');
+      .not.toContain('"AWS_REGION"');
     expect(readFileSync(join(project, ".mcp.json"), "utf-8"))
       .toContain("https://aws-mcp.eu-west-1.api.aws/mcp");
 
@@ -2953,7 +2972,7 @@ describe("t294 config diagnostics CLI", () => {
       };
     };
     expect(payload.data.files.map((entry) => entry.file)).toContain(
-      join(project, ".claude", "settings.json"),
+      join(project, ".claude", "settings.local.json"),
     );
     expect(payload.data.files.map((entry) => entry.file)).toContain(
       join(project, ".mcp.json"),
@@ -2985,8 +3004,7 @@ describe("t294 config diagnostics CLI", () => {
       project,
       "--yes",
     ], project, env).status).toBe(0);
-    expect(readFileSync(join(project, ".claude", "settings.json"), "utf-8"))
-      .toContain('"AWS_REGION": "eu-west-1"');
+    expect(readFileSync(localPath, "utf-8")).toContain('"AWS_REGION": "eu-west-1"');
 
     const reset = run([
       "config",
@@ -3001,6 +3019,8 @@ describe("t294 config diagnostics CLI", () => {
       .not.toContain('"AWS_REGION"');
     expect(readFileSync(join(project, ".claude", "settings.json"), "utf-8"))
       .not.toContain('"CLAUDE_CODE_USE_BEDROCK"');
+    // The profile stays in the person's file; nothing proves it was AI-DLC's.
+    expect(JSON.parse(readFileSync(localPath, "utf-8")).env).toEqual({ AWS_PROFILE: "dev" });
     expect(readConfigDiagnosticRecords(join(project, ".claude")).providers)
       .toBeNull();
 
@@ -4174,10 +4194,12 @@ describe("t294 config diagnostics CLI", () => {
       const after = JSON.parse(readFileSync(settingsPath, "utf-8"));
       expect(after.permissions).toEqual(settings.permissions);
       expect(after.hooks).toEqual(settings.hooks);
-      expect(after.env).toEqual(expect.objectContaining({
+      expect(after.env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+      const localPath = join(project, ".claude", "settings.local.json");
+      expect(JSON.parse(readFileSync(localPath, "utf-8")).env).toEqual({
         CLAUDE_CODE_USE_BEDROCK: "1",
         AWS_REGION: "us-east-1",
-      }));
+      });
       if (change !== "pristine") expect(after.env.MY_TEAM_SETTING).toBe("preserved");
       if (change === "permissions") {
         const current = run([
@@ -4194,6 +4216,7 @@ describe("t294 config diagnostics CLI", () => {
         expect(optedOut.permissions).toEqual(settings.permissions);
         expect(optedOut.env.MY_TEAM_SETTING).toBe("preserved");
         expect(optedOut.env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+        expect(existsSync(localPath)).toBe(false);
         expect(optedOut.hooks).toEqual(settings.hooks);
       }
     }
@@ -7391,12 +7414,342 @@ describe("t294 invariants", () => {
     expect(files).toEqual(expect.arrayContaining([
       {
         setting: "AWS region and profile",
-        file: join(project, ".claude", "settings.json"),
+        file: join(project, ".claude", "settings.local.json"),
       },
       {
         setting: "AWS MCP region endpoint and metadata",
         file: join(project, ".mcp.json"),
       },
     ]));
+  });
+});
+
+// A Bedrock answer on Claude Code is the person's own (#2712): it goes into
+// their git-ignored .claude/settings.local.json, never the team's shared
+// settings.json, and the shared record keeps no profile.
+describe("t294 a Claude Bedrock answer stays the person's own", () => {
+  const BEDROCK_KEYS = ["CLAUDE_CODE_USE_BEDROCK", "AWS_REGION", "AWS_PROFILE"];
+  // Doctor reads every place Claude Code takes env from, so the host's own
+  // shell must not decide these cases (run() already isolates the user file).
+  const hostFree = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => runtimeEnv({
+    CLAUDE_CODE_USE_BEDROCK: undefined,
+    AWS_REGION: undefined,
+    AWS_PROFILE: undefined,
+    AWS_DEFAULT_REGION: undefined,
+    ...extra,
+  });
+  const envOf = (project: string, file: string): Record<string, string> | null => {
+    const path = join(project, ".claude", file);
+    return existsSync(path) ? (JSON.parse(readFileSync(path, "utf-8")).env ?? {}) : null;
+  };
+  const recorded = (project: string) => readConfigDiagnosticRecords(join(project, ".claude")).providers;
+  const providers = (project: string, args: string[], env = hostFree()): string => {
+    const result = run(["config", "providers", "--project-dir", project, ...args, "--yes"], project, env);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    return result.stdout;
+  };
+  const check = (project: string, env = hostFree()) =>
+    run(["config", "providers", "--project-dir", project, "--check"], project, env);
+  const bedrock = (region: string, ...rest: string[]) => ["--provider", "amazon-bedrock", "--region", region, ...rest];
+  // As 2.11.1 left a Bedrock answer: in the shared settings.json, the profile in the record.
+  const asEarlierRelease = (project: string, region: string, profile: string): void => {
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    Object.assign(settings.env, { CLAUDE_CODE_USE_BEDROCK: "1", AWS_REGION: region, AWS_PROFILE: profile });
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    const dataPath = join(project, ".claude", "tools", "data", "harness.json");
+    const data = JSON.parse(readFileSync(dataPath, "utf-8"));
+    data.providers = {
+      schemaVersion: 1,
+      provider: "amazon-bedrock",
+      region,
+      profile,
+      pendingActions: [{ id: "bedrock-model-access", status: "done" }],
+    };
+    writeFileSync(dataPath, `${JSON.stringify(data, null, 2)}\n`);
+  };
+
+  test("the answer goes to settings.local.json, and no tracked file holds the profile", () => {
+    const project = install("claude");
+    const out = providers(project, bedrock("eu-west-1", "--profile", "my-personal-profile"));
+    expect(out).toContain(
+      "Providers    amazon-bedrock region=eu-west-1 profile=my-personal-profile, in .claude/settings.local.json (just for you)",
+    );
+    expect(envOf(project, "settings.local.json")).toEqual({
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: "eu-west-1",
+      AWS_PROFILE: "my-personal-profile",
+    });
+    const shared = envOf(project, "settings.json") ?? {};
+    for (const key of BEDROCK_KEYS) expect(shared, key).not.toHaveProperty(key);
+    expect(recorded(project)).toEqual(expect.objectContaining({ provider: "amazon-bedrock", region: "eu-west-1" }));
+    expect(recorded(project)).not.toHaveProperty("profile");
+    const holding = (readdirSync(project, { recursive: true }) as string[])
+      .filter((name) => name.split(/[\\/]/)[0] !== ".git")
+      .map((name) => join(project, name))
+      .filter((path) => {
+        try {
+          return readFileSync(path, "utf-8").includes("my-personal-profile");
+        } catch {
+          return false; // a folder
+        }
+      });
+    expect(holding).toEqual([join(project, ".claude", "settings.local.json")]);
+    expect(readFileSync(join(project, ".gitignore"), "utf-8").split(/\r?\n/)).toContain(".claude/settings.local.json");
+    // What --show reports still names the profile, from the person's own file.
+    const shown = run(["config", "providers", "--project-dir", project, "--show", "--json"], project, hostFree());
+    expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+    const data = JSON.parse(shown.stdout).data;
+    expect(data.record.profile).toBe("my-personal-profile");
+    expect(data.files).toContainEqual(expect.objectContaining({
+      setting: "AWS region and profile",
+      file: join(project, ".claude", "settings.local.json"),
+    }));
+  });
+
+  test("a teammate's clone is told once how to use it, and their answer of the same values is written", () => {
+    const project = install("claude");
+    providers(project, bedrock("eu-west-1", "--profile", "setter", "--mark-done", "bedrock-model-access"));
+    // A clone has the shared record and none of the setter's own file.
+    rmSync(join(project, ".claude", "settings.local.json"));
+    const warned = check(project);
+    expect(warned.status, warned.stdout + warned.stderr).toBe(0);
+    expect(warned.stdout).toContain(
+      "provider-claude-not-set-up (Amazon Bedrock (eu-west-1) is recorded for this project but not turned on in " +
+        "your Claude Code settings; to use it, run",
+    );
+    const saved = {
+      config: process.env.CLAUDE_CONFIG_DIR,
+      bedrock: process.env.CLAUDE_CODE_USE_BEDROCK,
+      region: process.env.AWS_REGION,
+      profile: process.env.AWS_PROFILE,
+      key: process.env.AWS_ACCESS_KEY_ID,
+      secret: process.env.AWS_SECRET_ACCESS_KEY,
+    };
+    process.env.CLAUDE_CONFIG_DIR = temp("aidlc-t294-claude-user-");
+    delete process.env.CLAUDE_CODE_USE_BEDROCK;
+    delete process.env.AWS_REGION;
+    delete process.env.AWS_PROFILE;
+    process.env.AWS_ACCESS_KEY_ID = "test-access";
+    process.env.AWS_SECRET_ACCESS_KEY = "test-secret";
+    try {
+      expect(providerDoctorCheck(project, ".claude")).toEqual(expect.objectContaining({
+        pass: true,
+        severity: "warn",
+        label: "Providers: 1 warning(s)",
+      }));
+    } finally {
+      for (const [name, value] of [
+        ["CLAUDE_CONFIG_DIR", saved.config],
+        ["CLAUDE_CODE_USE_BEDROCK", saved.bedrock],
+        ["AWS_REGION", saved.region],
+        ["AWS_PROFILE", saved.profile],
+        ["AWS_ACCESS_KEY_ID", saved.key],
+        ["AWS_SECRET_ACCESS_KEY", saved.secret],
+      ] as const) {
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      }
+    }
+    const before = readFileSync(join(project, ".claude", "tools", "data", "harness.json"));
+    const first = providers(project, bedrock("eu-west-1"));
+    expect(first).not.toContain("providers configuration unchanged");
+    expect(envOf(project, "settings.local.json")).toEqual({ CLAUDE_CODE_USE_BEDROCK: "1", AWS_REGION: "eu-west-1" });
+    // Their own answer changes nothing the team shares.
+    expect(readFileSync(join(project, ".claude", "tools", "data", "harness.json"))).toEqual(before);
+    expect(providers(project, bedrock("eu-west-1"))).toContain("providers configuration unchanged");
+    const clean = check(project);
+    expect(clean.status, clean.stdout + clean.stderr).toBe(0);
+    expect(clean.stdout).toContain("providers configuration is clean for claude");
+  });
+
+  test("a refresh leaves an earlier release's shared answer byte for byte", () => {
+    const project = install("claude");
+    asEarlierRelease(project, "eu-west-1", "team");
+    const settings = readFileSync(join(project, ".claude", "settings.json"));
+    const data = readFileSync(join(project, ".claude", "tools", "data", "harness.json"));
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      join(DIST_RELEASE, "claude"),
+      "--harness",
+      "claude",
+      "--yes",
+    ], project, hostFree());
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    expect(refreshed.stdout).not.toContain("Moved your Amazon Bedrock settings");
+    expect(readFileSync(join(project, ".claude", "settings.json"))).toEqual(settings);
+    expect(readFileSync(join(project, ".claude", "tools", "data", "harness.json"))).toEqual(data);
+    expect(existsSync(join(project, ".claude", "settings.local.json"))).toBe(false);
+    const clean = check(project);
+    expect(clean.status, clean.stdout + clean.stderr).toBe(0);
+    expect(clean.stdout).toContain("providers configuration is clean for claude");
+  });
+
+  test("a new answer moves an earlier release's shared answer into the person's file", () => {
+    const project = install("claude");
+    asEarlierRelease(project, "eu-west-1", "team");
+    const out = providers(project, bedrock("us-west-2"));
+    expect(out).toContain("Moved your Amazon Bedrock settings from .claude/settings.json to .claude/settings.local.json.");
+    expect(out).toContain("config providers --provider amazon-bedrock --region eu-west-1 --profile team");
+    const shared = envOf(project, "settings.json") ?? {};
+    for (const key of BEDROCK_KEYS) expect(shared, key).not.toHaveProperty(key);
+    expect(envOf(project, "settings.local.json")).toEqual({
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: "us-west-2",
+      AWS_PROFILE: "team",
+    });
+    expect(recorded(project)).toEqual(expect.objectContaining({ region: "us-west-2" }));
+    expect(recorded(project)).not.toHaveProperty("profile");
+  });
+
+  test("--show names the shared settings.json while an earlier release's answer is still there", () => {
+    const project = install("claude");
+    asEarlierRelease(project, "eu-west-1", "team");
+    const refreshed = run([
+      "config",
+      "--project-dir",
+      project,
+      "--from",
+      join(DIST_RELEASE, "claude"),
+      "--harness",
+      "claude",
+      "--yes",
+    ], project, hostFree());
+    expect(refreshed.status, refreshed.stdout + refreshed.stderr).toBe(0);
+    const carrying = () => {
+      const shown = run(["config", "providers", "--project-dir", project, "--show", "--json"], project, hostFree());
+      expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+      return (JSON.parse(shown.stdout).data.files as { setting: string; file: string }[])
+        .filter((entry) => entry.setting === "AWS region and profile")
+        .map((entry) => entry.file);
+    };
+    expect(carrying()).toEqual([join(project, ".claude", "settings.json")]);
+    providers(project, bedrock("us-west-2"));
+    expect(carrying()).toEqual([join(project, ".claude", "settings.local.json")]);
+  });
+
+  test("a Bedrock answer with no profile says once that the profile left in the person's file is the one used", () => {
+    const project = install("claude");
+    providers(project, bedrock("eu-west-1", "--profile", "team"));
+    providers(project, ["--provider", "current"]);
+    const stays =
+      "AWS_PROFILE in .claude/settings.local.json stays, so Claude Code uses that profile with Amazon Bedrock; " +
+      "delete it there to use the default credential chain.";
+    expect(providers(project, bedrock("eu-west-1"))).toContain(stays);
+    // Nothing proves the profile was AI-DLC's, so it stays.
+    expect(envOf(project, "settings.local.json")).toEqual({
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: "eu-west-1",
+      AWS_PROFILE: "team",
+    });
+    // The answer now carries that profile, so the next one says nothing more.
+    expect(providers(project, bedrock("eu-west-1"))).not.toContain(stays);
+  });
+
+  test("moving off Bedrock takes out the switch and region and keeps what is the person's", () => {
+    for (const transition of [["--provider", "current"], ["--reset"]]) {
+      const project = install("claude");
+      const localPath = join(project, ".claude", "settings.local.json");
+      writeFileSync(localPath, `${JSON.stringify({ env: { MY_OWN: "kept" }, permissions: { allow: [] } }, null, 2)}\n`);
+      providers(project, bedrock("eu-west-1", "--profile", "team"));
+      const out = providers(project, transition);
+      expect(out, transition.join(" ")).toContain(
+        "AWS_PROFILE stays in .claude/settings.local.json; delete it there if it was only for Amazon Bedrock.",
+      );
+      expect(JSON.parse(readFileSync(localPath, "utf-8"))).toEqual({
+        env: { MY_OWN: "kept", AWS_PROFILE: "team" },
+        permissions: { allow: [] },
+      });
+    }
+    // A file AI-DLC made for an answer with no profile goes with it.
+    const project = install("claude");
+    providers(project, bedrock("eu-west-1"));
+    const out = providers(project, ["--reset"]);
+    expect(out).not.toContain("AWS_PROFILE stays");
+    expect(existsSync(join(project, ".claude", "settings.local.json"))).toBe(false);
+  });
+
+  test("each conflict names its file, and following its step clears it", () => {
+    const project = install("claude");
+    providers(project, bedrock("eu-west-1", "--mark-done", "bedrock-model-access"));
+    const issue = (env: NodeJS.ProcessEnv) => {
+      const shown = run(["config", "providers", "--project-dir", project, "--show", "--json"], project, env);
+      expect(shown.status, shown.stdout + shown.stderr).toBe(0);
+      return (JSON.parse(shown.stdout).data.issues as { id: string; message: string; remediation: string }[])
+        .filter((item) => item.id.startsWith("provider-claude-"));
+    };
+    // Above the person's file: the organization's managed settings. Writing the
+    // answer again cannot change them, so the step never says to.
+    const managed = join(temp("aidlc-t294-managed-"), "managed-settings.json");
+    writeFileSync(managed, `${JSON.stringify({ env: { AWS_REGION: "ap-southeast-2" } })}\n`);
+    const managedEnv = hostFree({ AIDLC_MANAGED_SETTINGS_PATH: managed });
+    const [above] = issue(managedEnv);
+    expect(above.id).toBe("provider-claude-managed-override");
+    expect(above.message).toContain(managed);
+    expect(above.message + above.remediation).not.toContain("config providers");
+    providers(project, bedrock("eu-west-1"), managedEnv);
+    expect(issue(managedEnv).map((item) => item.id)).toEqual(["provider-claude-managed-override"]);
+    writeFileSync(managed, `${JSON.stringify({ env: { AWS_REGION: "eu-west-1" } })}\n`);
+    expect(issue(managedEnv)).toEqual([]);
+    // Below it: the team's shared settings.json. Its step writes the person's
+    // file, which Claude Code reads first, and the row goes.
+    rmSync(join(project, ".claude", "settings.local.json"));
+    const settingsPath = join(project, ".claude", "settings.json");
+    const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+    Object.assign(settings.env, { CLAUDE_CODE_USE_BEDROCK: "1", AWS_REGION: "us-east-1" });
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    const [below] = issue(hostFree());
+    expect(below.id).toBe("provider-claude-settings");
+    expect(below.message).toContain("AWS_REGION in .claude/settings.json does not match the recorded Amazon Bedrock answer");
+    expect(below.remediation).toContain("config providers to write the recorded answer to .claude/settings.local.json");
+    providers(project, bedrock("eu-west-1"));
+    expect(issue(hostFree())).toEqual([]);
+    // The team's own values stay theirs.
+    expect(envOf(project, "settings.json")).toEqual(expect.objectContaining({ AWS_REGION: "us-east-1" }));
+    // Lowest: the environment Claude Code starts in.
+    delete settings.env.CLAUDE_CODE_USE_BEDROCK;
+    delete settings.env.AWS_REGION;
+    writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`);
+    rmSync(join(project, ".claude", "settings.local.json"));
+    const shellEnv = hostFree({ CLAUDE_CODE_USE_BEDROCK: "1", AWS_REGION: "us-east-1" });
+    const [shell] = issue(shellEnv);
+    expect(shell.message).toContain(
+      "AWS_REGION in the environment Claude Code starts in does not match the recorded Amazon Bedrock answer",
+    );
+    providers(project, bedrock("eu-west-1"), shellEnv);
+    expect(issue(shellEnv)).toEqual([]);
+  });
+
+  test("a dry run writes nothing, and a file AI-DLC cannot edit is a note, not a refusal", () => {
+    const project = install("claude");
+    const localPath = join(project, ".claude", "settings.local.json");
+    writeFileSync(localPath, `${JSON.stringify({ env: { MY_OWN: "kept" } }, null, 2)}\n`);
+    const before = readFileSync(localPath);
+    const dry = run(
+      ["config", "providers", "--project-dir", project, ...bedrock("eu-west-1"), "--dry-run", "--yes"],
+      project,
+      hostFree(),
+    );
+    expect(dry.status, dry.stdout + dry.stderr).toBe(0);
+    expect(readFileSync(localPath)).toEqual(before);
+    writeFileSync(localPath, "{ not json\n");
+    const out = providers(project, bedrock("eu-west-1"));
+    expect(out).toContain(
+      "Could not write your Amazon Bedrock settings to .claude/settings.local.json (it is not a JSON object AI-DLC can edit); " +
+        "fix that file, then run",
+    );
+    expect(recorded(project)).toEqual(expect.objectContaining({ provider: "amazon-bedrock", region: "eu-west-1" }));
+    expect(readFileSync(localPath, "utf-8")).toBe("{ not json\n");
+    // The same answer once the file is fixed is written.
+    writeFileSync(localPath, `${JSON.stringify({ env: { MY_OWN: "kept" } }, null, 2)}\n`);
+    expect(providers(project, bedrock("eu-west-1"))).not.toContain("providers configuration unchanged");
+    expect(envOf(project, "settings.local.json")).toEqual({
+      MY_OWN: "kept",
+      CLAUDE_CODE_USE_BEDROCK: "1",
+      AWS_REGION: "eu-west-1",
+    });
   });
 });

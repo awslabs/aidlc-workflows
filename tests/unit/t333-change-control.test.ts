@@ -1522,6 +1522,62 @@ describe("t333 (6) a memory edit observed by a governed check", () => {
     mkdirSync(join(proj, "nothing"), { recursive: true });
     expect(existsSync(join(proj, "aidlc", "spaces", "default", "intents", "audit"))).toBe(false);
   });
+
+  // A teammate's clone keeps its own shard, and shards are read in filename
+  // order, which is not the order the rows were written in.
+  const stamp = () => new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+  function nextSecond(): void {
+    const second = Math.floor(Date.now() / 1000);
+    while (Math.floor(Date.now() / 1000) === second) {}
+  }
+  function teammateRow(proj: string, fields: Record<string, string>, timestamp: string): void {
+    const ours = readAuditShardEvents(proj).at(-1)!.shard;
+    const shard = isAbsolute(ours) ? ours : join(proj, ours);
+    const body = Object.entries(fields).map(([key, value]) => `**${key}**: ${value}\n`).join("");
+    // "~" sorts after ".", so the teammate's shard is read after ours.
+    writeFileSync(shard.replace(/\.md$/, "~teammate.md"),
+      `\n## Guard Policy Set\n**Timestamp**: ${timestamp}\n**Event**: GUARD_POLICY_SET\n${body}\n---\n`);
+  }
+  const ours = (proj: string) => guardPolicyRows(proj).filter((row) => !row.shard.endsWith("~teammate.md"));
+
+  test("the person's newer setting is the value a governed check starts from, though a teammate's older one is read last", () => {
+    const { proj, state } = project("enterprise");
+    teammateRow(proj, { "Old Value": "off", "New Value": "strict", Source: "you" }, stamp());
+    nextSecond();
+    writeFileSync(state, setField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD, "off (set by you)"));
+    appendAuditEntry("GUARD_POLICY_SET", { "Old Value": "strict", "New Value": "off", Source: "you" }, proj);
+    expect(guardPolicyRows(proj).at(-1)!.shard).toEndWith("~teammate.md");
+    expect(governedGuardPolicy(proj)).toMatchObject({ value: "off", source: "you" });
+    governedGuardPolicy(proj);
+    expect(ours(proj)).toHaveLength(1);
+    const status = run(UTILITY, ["status"], proj);
+    expect(status.stdout).toContain(`${STATUS_POLICY}off (set by you)\n`);
+  });
+
+  test("a memory edit undone is recorded, though a teammate's older setting naming the same value is read last", () => {
+    const { proj } = project("classic");
+    teammateRow(proj, { "Old Value": "strict", "New Value": "off", Source: "scope classic" }, stamp());
+    nextSecond();
+    declareMemoryMode(proj, "team", "strict");
+    expect(governedGuardPolicy(proj).value).toBe("strict");
+    const path = memoryFile(proj, "team");
+    writeFileSync(path, readFileSync(path, "utf-8").replace("Mode: strict\n", ""));
+    expect(governedGuardPolicy(proj).value).toBe("off");
+    const rows = ours(proj);
+    expect(rows).toHaveLength(2);
+    expect(auditBlockField(rows[1].block, "Old Value")).toBe("strict");
+    expect(auditBlockField(rows[1].block, "New Value")).toBe("off");
+    expect(auditBlockField(rows[1].block, "Source")).toBe("scope classic");
+  });
+
+  test("two settings in the same second in two shards: the record cannot tell, so the intent's own line is where it starts", () => {
+    const { proj, state } = project("enterprise");
+    writeFileSync(state, setField(readFileSync(state, "utf-8"), GUARD_POLICY_FIELD, "relaxed (set by you)"));
+    appendAuditEntry("GUARD_POLICY_SET", { "Old Value": "strict", "New Value": "relaxed", Source: "you" }, proj);
+    teammateRow(proj, { "Old Value": "relaxed", "New Value": "strict", Source: "you" }, guardPolicyRows(proj).at(-1)!.timestamp);
+    expect(governedGuardPolicy(proj).value).toBe("relaxed");
+    expect(ours(proj)).toHaveLength(1);
+  });
 });
 
 describe("t333 (7) a refusal's ERROR_LOGGED row lands in the selected workflow", () => {

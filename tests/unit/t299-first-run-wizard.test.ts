@@ -485,10 +485,15 @@ function expectConfiguredProject(
         expect.objectContaining({ id: "bedrock-model-access", status: "done" }),
       ]),
     }));
-    expect(nativeSettings.env).toEqual(expect.objectContaining({
-      CLAUDE_CODE_USE_BEDROCK: "1",
-      AWS_REGION: "us-east-2",
-    }));
+    // The answer is the person's own (#2712): their git-ignored file, never
+    // the shared settings.json, and the shared record keeps no profile.
+    expect(harness.providers).not.toHaveProperty("profile");
+    expect(nativeSettings.env?.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(project, ".claude", "settings.local.json"), "utf-8")).env)
+      .toEqual(expect.objectContaining({
+        CLAUDE_CODE_USE_BEDROCK: "1",
+        AWS_REGION: "us-east-2",
+      }));
   }
   expect(readFileSync(join(project, ".claude", "agents", "aidlc-product-lead-agent.md"), "utf-8"))
     .toContain("effort: medium");
@@ -1493,7 +1498,8 @@ describe("t299 first-run setup wizard", () => {
     }
     return installed;
   };
-  // `config --harness <name> --yes`, then the walk: Fix the sections? yes.
+  // `config --harness <name>`, then the walk: Fix the sections? yes. (Under
+  // --yes the walk asks nothing.)
   // Kiro IDE's walk offers only the PATH fix; Kiro CLI's opens its session
   // model and preset menu, kept as it is. Answers come through the scripted
   // seam, not stdin.
@@ -1518,7 +1524,7 @@ describe("t299 first-run setup wizard", () => {
     runWizard("", {
       ...kiroIdeTerminal({ ...setupMachine, ...env, AIDLC_TEST_CONFIG_INPUT: `${answers.join("\n")}\n` }),
       aidlc: false,
-      configArgs: ["--from", join(RUNTIME, harness), "--harness", harness, "--mcp", "none", "--yes"],
+      configArgs: ["--from", join(RUNTIME, harness), "--harness", harness, "--mcp", "none"],
       ...(project ? { project } : {}),
     });
   const setupScreens = (env: NodeJS.ProcessEnv = {}) => {

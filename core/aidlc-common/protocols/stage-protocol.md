@@ -31,9 +31,6 @@ what they say, in their own words and in context, and do it.
   say in one line that it is off for this piece of work, comes back on for the
   next one, and that they can ask you to turn it back on. Never hand them a
   command to type.
-- A rule the team recorded in memory (a strict Guard Policy, say) wins over one
-  person's request in chat. Say in one line that the team's rule holds, in which
-  file, and that changing that line changes it.
 - When they ask for a review of a stage or of a Unit ("review Unit 1 again",
   "have the reviewer look at the design", or yes to "Do you want me to have the
   new approach checked before you decide?"), record it through AI-DLC the first
@@ -478,6 +475,9 @@ redo the person asked for starts a fresh one), and give a follow-up question
 the next unused number and its trade, at the end. The summary and assumption
 confirmations, the `## Requested Changes Feedback` question and approval
 headings such as `## Plan Approval`, numbered or not, carry no trade.
+Each ordinary question you ask the person, whether or not it is in the file
+yet, shows the trade its heading names or will name in front of the question
+text, so they see who it is for; a heading without a trade shows none.
 
 ### Depth-aware question generation
 
@@ -549,7 +549,7 @@ record the new choice the same way, with `--on-instruction '<their words>'`, so
 the later stages use it too.
 
 **Step 3a: If "Guide me" (interactive mode):**
-- Present questions as structured questions in batches (batching limits are harness-specific — see the question-rendering annex)
+- Present questions as structured questions in batches, each with the trade its heading names in front of its text (Step 1; none when the heading has none; batching limits are harness-specific — see the question-rendering annex)
 - Where the tool shows questions as a numbered list, number every option and never ask for a file letter: a batch ends with "Reply with each question's number and the number of your choice (for example Q1: 2, Q2: 1), or just tell me." and a single question with "Reply with a number (or just tell me)."
 - For questions with 5+ options (single-select or multi-select): present ALL answer options, splitting across multiple structured questions if the harness's per-question option limit requires it (e.g., options A-D first, then options E+ in a follow-up). The user must see every option to make an informed choice. The file retains the full option set as the authoritative record.
 - Every structured question offers an "Other" escape (built into the harness UI or rendered as an explicit option per the annex). In interactive mode, when the user selects "Other" and answers in their own words, those words are their answer for that question. When they select it to ask about the question or talk it through, engage in conversation, then record what they settle on before continuing the batch. Explicitly tell the user this before the first batch, naming the escape the way their tool labels it (Claude Code's picker: "Type something"; Codex's question tool: "None of the above"; a numbered list: "Other"; the question-rendering annex gives it too): "Pick "[the escape's label]" on any question to answer in your own words or talk it through."

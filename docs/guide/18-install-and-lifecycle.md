@@ -746,7 +746,7 @@ Recorded Bedrock answers apply through the normal staged config transaction:
 
 | Harness | Recorded answer application |
 |---------|-----------------------------|
-| Claude Code | Enables Bedrock and writes `AWS_REGION` plus optional `AWS_PROFILE` in `.claude/settings.json`; also keeps the AWS MCP URL and `AWS_REGION` metadata in `.mcp.json` on the same region |
+| Claude Code | Enables Bedrock and writes `AWS_REGION` plus optional `AWS_PROFILE` in your own `.claude/settings.local.json` (git ignores it; the profile is not recorded in `harness.json`); also keeps the AWS MCP URL and `AWS_REGION` metadata in `.mcp.json` on the same region |
 | Codex CLI | Records the choice and instructs the user to keep provider, credentials, and model in `~/.codex/config.toml` |
 | Kiro CLI | No provider answer; model access comes with Kiro |
 | Kiro IDE | No provider answer; model access comes with Kiro |
@@ -770,14 +770,23 @@ the configuration clean. `--provider other` records a manually configured
 non-Bedrock provider and reports that setup as pending until `--acknowledge` is
 supplied. `--reset` removes exact legacy AI-DLC Bedrock defaults or values written
 for the previous recorded answer from Claude, Codex, and opencode project files;
-unproven values are preserved.
+unproven values are preserved. On Claude Code, `--provider current`, `--provider other` and `--reset` also
+take the Bedrock switch and region out of your `.claude/settings.local.json`; an
+`AWS_PROFILE` there stays, and the command says so.
+
+On Claude Code each person's Bedrock answer is their own. A teammate's clone
+carries the project's record but none of your settings, and `aidlc config providers
+--check` and doctor warn them once that Bedrock is recorded but not turned on
+for them. A project set up by an earlier release keeps the answer in the shared
+`.claude/settings.json` until someone answers `aidlc config providers` again,
+which moves it to their own file and says so; a refresh or update leaves it.
 
 The question is worded for the harness in front of you, so each install offers
 the two paths that actually exist for it:
 
 | Harness | `amazon-bedrock` records |
 |---------|--------------------------|
-| Claude Code | the AWS region and profile in `settings.json`, and the AWS MCP region in `.mcp.json` when present |
+| Claude Code | the AWS region and profile in your own `settings.local.json`, and the AWS MCP region in `.mcp.json` when present |
 | Codex CLI | the AWS region and profile in the project record, then guides user-level provider setup in `$CODEX_HOME/config.toml` |
 | OpenCode | the AWS region and profile, and offers to write them to `opencode.json` |
 | GitHub Copilot | that you set the Copilot BYOK provider variables yourself |
@@ -822,8 +831,8 @@ actions can still be completed with `--mark-done`.
 
 `aidlc config trust` reads and verifies host-native trust. It never regenerates
 trust seeds, permission rules, or IDE settings; its only writes outside the
-project are Kiro IDE's Workflows switch and Kiro IDE's default terminal on
-Windows, and only when you ask for them.
+project are Kiro IDE's and Kiro CLI's Workflows switches and Kiro IDE's
+default terminal on Windows, and only when you ask for them.
 
 ```bash
 aidlc config trust --show
@@ -831,6 +840,7 @@ aidlc config trust --check
 aidlc config trust --acknowledge --yes
 aidlc config trust --reset --yes
 aidlc config trust --kiro-workflows off --yes   # Kiro IDE; or: on
+aidlc config trust --kiro-cli-workflows off --yes   # Kiro CLI; or: on
 aidlc config trust --kiro-terminal powershell --yes   # Kiro IDE on Windows
 ```
 
@@ -844,7 +854,13 @@ setup asks once and `aidlc config --yes` turns it off; your answer is kept in
 again. When that settings file has an error AI-DLC cannot read past, Kiro may
 still read Workflows as on, so `--show` says it could not be read, `--check`
 and setup warn until the file reads again (whatever you answered before), and
-the next Kiro IDE chat tells you once; fix the error in that file. See [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers).
+the next Kiro IDE chat tells you once; fix the error in that file. On the same
+Kiro row, `--show` and `--check` also read Kiro CLI's own Workflows switch
+(`chat.enableWorkflows` in your Kiro CLI settings, read through `kiro-cli
+settings`), which takes the same tools away in Kiro CLI chats;
+`--kiro-cli-workflows off|on` sets it through Kiro CLI, and its answer is kept
+in `kiro-cli-workflows`, apart from Kiro IDE's. With no Kiro CLI answering, it
+is not shown. See [Kiro's Workflows feature](harnesses/kiro-ide.md#kiros-workflows-feature-stops-ai-dlcs-reviews-and-helpers).
 
 On Windows, Kiro IDE runs its agent's commands in your default terminal profile
 (`terminal.integrated.defaultProfile.windows` in Kiro's user settings). While
@@ -1657,9 +1673,12 @@ The native release client honors `HTTPS_PROXY` / `https_proxy` and
 `curl.exe`.
 
 Bare help and management listings never refresh the network. They may display
-a valid cached update notice. Interactive human `aidlc doctor` may refresh
-stale or absent metadata within 750 ms. Non-TTY, `--json`, and `--quiet`
-doctor runs are cache-only unless `--check-updates` is explicit.
+a valid cached update notice. Interactive human `aidlc doctor`, and
+`aidlc doctor --export` with or without a terminal, may refresh stale or
+absent metadata within 750 ms. Other non-TTY, `--json`, and `--quiet` doctor
+runs are cache-only unless `--check-updates` is explicit. A doctor update row
+read from a check older than 24 hours names the version as the latest known
+one and says how long ago it was checked.
 `doctor --check-updates` and `update --check` use a five-minute metadata
 backstop. Preview discovery and metadata downloads share the same deadline;
 looking up the preview release does not restart the timeout.

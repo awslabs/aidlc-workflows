@@ -204,9 +204,9 @@ Each call owns its checkout. Default PR CI includes Linux integration; the merge
 queue and expanded manual CI also run deterministic E2E. Ordinary nightly and
 release Full Suite runs do not repeat those tiers or production-guard jobs.
 
-Hosted live coverage uses 27 jobs: on each existing OS, two Claude SDK shards
-(five on Linux), three Claude TUI shards, one Codex shard, one Copilot CLI shard
-and one opencode shard. Each shard runs
+Hosted live coverage uses 30 jobs: on each existing OS, two Claude SDK shards
+(five on Linux, three on Windows), three Claude TUI shards, one Codex shard (two
+on Linux and Windows), one Copilot CLI shard and one opencode shard. Each shard runs
 at most two files concurrently, restoring the checkout and application home
 between files and retrying only a failed file after confirmed cleanup. Platform
 preparation is independent, so Linux and Windows do not wait for macOS.
@@ -263,20 +263,46 @@ renamed or reused.
    missing, run the
    [Kiro journey](docs/reference/09-testing.md#nightly-full-suite-matrix-and-provisioning)
    on that source before selecting it. Put the stable release notes in a
-   file, starting with `Compatibility: refresh only`, `Compatibility: refresh
-   plus a step`, or `Compatibility: breaking for scripts`, followed by the
-   summary, upgrade instructions and flat bullets. Then dispatch:
+   file, in the entry shape of the Release Metadata Policy in
+   [AGENTS.md](AGENTS.md): the line `Compatibility: refresh only`,
+   `Compatibility: refresh plus a step` or `Compatibility: breaking for
+   scripts`; the summary paragraph; for breaking for scripts, one paragraph
+   saying who is affected; each extra upgrade step as a paragraph starting
+   with its bold label, such as `**Plugins:**`; then the bullets under
+   `### <group>` headings, the `Breaking for scripts:` bullets last, under
+   `### Script compatibility`. The stable page adds the upgrade and install
+   commands itself.
+
+   Make the contributor list on your machine. This command is the only way to
+   make it: it runs `.git/info/scan-private-names` and leaves out any login
+   the scan flags, and with no scanner it prints nothing.
+
+   ```bash
+   bun scripts/release-promotion.ts contributors --repository awslabs/aidlc-workflows \
+     --preview v2.11.1-preview.20261016.1 --version 2.11.1 >contributors.txt
+   ```
+
+   Read the exact page the promotion will publish:
+
+   ```bash
+   bun scripts/release-promotion.ts page --repository awslabs/aidlc-workflows \
+     --preview v2.11.1-preview.20261016.1 --version 2.11.1 \
+     --notes-file release-notes.md --contributors-file contributors.txt
+   ```
+
+   Then dispatch:
 
    ```bash
    gh workflow run promote-release.yml --ref main \
      -f preview=v2.11.1-preview.20261016.1 \
-     -f version=2.11.1 -F notes=@release-notes.md
+     -f version=2.11.1 -F notes=@release-notes.md -F contributors=@contributors.txt
    ```
 
    The same fields are available in Actions. GitHub's input choices are static,
    so the preview tag is a text field and the empty dispatch provides the live
-   list. Supply all three fields to promote; a partial submission names the
-   missing fields and creates no tag. The stable version may be a patch, minor
+   list. Supply preview, version and notes to promote; a partial submission
+   names the missing fields and creates no tag. Without `contributors` the
+   page has no contributor sections. The stable version may be a patch, minor
    or major; it must be newer than the source version and published stable releases.
 
 3. **Follow the Release run.** Preparation creates the stable tag and explicitly
@@ -284,10 +310,12 @@ renamed or reused.
    expected by installed clients' provenance checks. The stable build checks
    the metadata-only relationship, packaging determinism, native binaries,
    installers, lifecycle flows, upgrades, checksums and provenance. It does not
-   rerun PR CI or Full Suite. Existing test failures remain recorded and appear
-   in the release notes; selecting a preview is the maintainer's release
+   rerun PR CI or Full Suite. Existing test failures remain on the preview's
+   page, the promotion record keeps their warning lines, and the stable page
+   links that preview; selecting a preview is the maintainer's release
    decision, not a new passing test result. The `release` environment's existing
-   publication approval still applies.
+   publication approval still applies. The release publishes the page `page`
+   printed, and nobody edits it afterwards.
 
 4. **Record the version on main.** After publication, **Prepare main version
    update** pushes `release-metadata/vX.Y.Z` and provides a link to open its PR.
@@ -302,7 +330,7 @@ renamed or reused.
    ```
 
 A retry before publication reuses a reserved tag only when its verified preview,
-version and notes match. A different decision needs a different version; tags
+version, notes and contributor list match. A different decision needs a different version; tags
 and published assets are never overwritten. A failed build can be retried with
 `gh workflow run release.yml --ref vX.Y.Z`. Preparation success means the build
 was dispatched, not that publication succeeded.

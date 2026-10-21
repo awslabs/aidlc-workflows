@@ -565,6 +565,7 @@ function scratchProject(): string {
     "aidlc-artifact-vocabulary.ts",
     "aidlc-runtime-paths.ts",
     "aidlc-runtime-budget.ts",
+    "aidlc-lock-line.ts",
     "aidlc-guard-fences.ts",
     // The hook reads the plan approval setting when it refuses (the setting
     // decides the refusal's last clause); the setting resolver and what it imports.
@@ -1594,6 +1595,33 @@ describe("t265b hook lifecycle", () => {
     // hosted Windows 15s default expired partway through that sequence.
   });
 
+  test("a Unit reopen the recovery question offers waits for the person's pick of it", () => {
+    const proj = scratchProject();
+    try {
+      const state = seedRestartRecoveryState(proj);
+      writeActiveDirectiveMarker(proj, {
+        kind: "ask",
+        ask_type: GUARD_RECOVERY_ASK_TYPE,
+        stage: "code-generation",
+        state_sha256: stateDigest(state),
+        remedies: [{
+          op: "reopen-unit-step",
+          action: "Reopen code-generation for api.",
+          interaction: "command",
+          operation: { kind: "reopen-unit", stage: "code-generation", unit: "api" },
+        }, {
+          op: "request-changes",
+          action: "Ask what should change.",
+          interaction: "human-input",
+        }] as never,
+      });
+      recordRecoverySelection(proj, "Can we look at the api part again?");
+      expect(runHook(proj, BASH("aidlc engine jump reopen --target code-generation --units api --scope poc")).code).toBe(2);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   test("an open recovery ask admits the answer the person picked and keeps code changes waiting (#1317)", () => {
     const publishAsk = (proj: string, remedies: Array<Record<string, unknown>>) => {
       const state = readFileSync(join(proj, RECORD_REL, "aidlc-state.md"), "utf-8");
@@ -1893,6 +1921,7 @@ describe("t265b hook lifecycle", () => {
         "config providers --provider amazon-bedrock --region us-east-1 --profile dev --yes",
         "config trust --acknowledge --yes",
         "config trust --kiro-workflows off --yes",
+        "config trust --kiro-cli-workflows off --yes",
         "config trust --kiro-terminal powershell --yes",
         "config flags --default-scope feature --swarm on --local --yes",
         "config flags --hook-debug on --question-retention-days 30 --global --yes",
@@ -1909,6 +1938,7 @@ describe("t265b hook lifecycle", () => {
       }
       const asked = [
         "config trust --kiro-workflows on --yes",
+        "config trust --kiro-cli-workflows on --yes",
         "config flags --sensor-timeout-ms 5 --local --yes",
         "config flags --default-scope feature --sensor-timeout-ms 5 --local --yes",
         "config project --plugins all --yes",

@@ -54,6 +54,8 @@
 
 import { spawn } from "node:child_process";
 import { isAbsolute, join } from "node:path";
+// emit.ts points this at the projected .aidlc/tools/ copy.
+import { windowsScriptLaunch } from "../../../core/tools/aidlc-executable-path.ts";
 
 const NUDGE_SENTINEL = "[aidlc-forwarding-nudge]";
 const PROJECTED_INVOKE = "{{INVOKE}}";
@@ -70,21 +72,30 @@ function runCoreHook(
   input: Record<string, unknown>,
   cwd: string,
   aidlcCommand: readonly string[],
+  platform: NodeJS.Platform,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
-    const [bin, ...prefix] = aidlcCommand;
     const hook = hookFile.replace(/^aidlc-/, "").replace(/\.ts$/, "");
+    const env = {
+      ...process.env,
+      AIDLC_PROJECT_DIR: cwd,
+      CLAUDE_PROJECT_DIR: cwd,
+    };
+    const [bin, ...prefix] = aidlcCommand;
     if (!bin) return resolve({ stdout: "", stderr: "", code: 0 });
+    // Windows starts the native install's aidlc.cmd only through cmd.exe; the
+    // project folder then goes by the environment above.
+    const viaCmd = windowsScriptLaunch(bin, [...prefix, "hook", hook], platform, env);
+    if (viaCmd === "refused") return resolve({ stdout: "", stderr: "", code: 0 }); // fail open
     try {
-      const child = spawn(bin, [...prefix, "hook", hook, "--project-dir", cwd], {
-        cwd,
-        stdio: ["pipe", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          AIDLC_PROJECT_DIR: cwd,
-          CLAUDE_PROJECT_DIR: cwd,
-        },
-      });
+      const child = viaCmd
+        ? spawn(viaCmd.file, viaCmd.args, {
+          cwd,
+          stdio: ["pipe", "pipe", "pipe"],
+          env: { ...env, ...viaCmd.env },
+          windowsVerbatimArguments: true,
+        })
+        : spawn(bin, [...prefix, "hook", hook, "--project-dir", cwd], { cwd, stdio: ["pipe", "pipe", "pipe"], env });
       let out = "";
       let err = "";
       child.stdout.on("data", (d: Buffer) => {
@@ -541,7 +552,7 @@ export default async ({
     hookFile: string,
     input: Record<string, unknown>,
     _cwd = directory,
-  ) => runCoreHook(hookFile, input, directory, aidlcCommand);
+  ) => runCoreHook(hookFile, input, directory, aidlcCommand, platform);
 
   // The rebuild-stage-graph hook's only stdout on this harness is the
   // engine-error relay: one {"systemMessage": <exact directive.message>} line.

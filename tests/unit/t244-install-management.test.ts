@@ -772,7 +772,7 @@ describe("t244 machine configuration and update discovery", () => {
       const unavailable = await refreshUpdateState(remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS)!);
       expect(unavailable.state).toBe("unavailable");
       expect(unavailable.message).toBe(
-        `update refresh unavailable; cached version ${NEXT_VERSION} is stale or unverifiable`,
+        `could not check for a newer release; binary ${AIDLC_VERSION}, latest known ${NEXT_VERSION}, checked less than an hour ago`,
       );
       expect(readFileSync(join(machine, "update-check.json"), "utf-8")).toBe(before);
       await captive.stop();
@@ -4115,8 +4115,9 @@ describe("t244 Windows and completion release surfaces", () => {
     expect(release).toContain(`GH_TOKEN: \${{ github.token }}`);
     expect(release).toContain('gh release create "$RELEASE_TAG" build/release/*');
     expect(release).toContain("--verify-tag");
-    // The body is this version's CHANGELOG entry, never GitHub's generated
-    // list, which names every contributing account by handle.
+    // The body is the stable page rendered from the promotion record, never
+    // GitHub's generated list, which names every contributing account by
+    // handle with no private-names scan.
     expect(release).toContain("name: Build release notes from the promotion");
     expect(release).toContain("bun scripts/release-promotion.ts notes");
     expect(release).toContain('--notes-file "$RUNNER_TEMP/release-notes.md"');

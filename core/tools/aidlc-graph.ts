@@ -44,7 +44,7 @@
 // See docs/reference/16-artifact-vocabulary.md for artifact naming.
 
 import { constants as fsConstants, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   aidlcToolInvocation,
@@ -67,7 +67,9 @@ import {
   composerProposalPath,
   errorMessage,
   frontmatterBlock,
+  recordFileTargetOrThrow,
   refuseEngineObserverWrite,
+  removeRecordFileNoFollow,
   gridCostSummary,
   loadAgents,
   loadScopeMapping,
@@ -110,6 +112,7 @@ import {
   SCOPE_NAME_RULE,
   withAuditLock,
   writeFileAtomic,
+  writeRecordFileNoFollow,
 } from "./aidlc-lib.ts";
 import {
   parseRuleFrontmatter,
@@ -446,14 +449,15 @@ export function memoryTemplatesDir(projectDir: string, space?: string): string {
 }
 
 /** The FRAMEWORK-DEFAULT templates dir — the read-only, engine-shipped middle
- *  tier of the §10 templates resolution order (team override → framework default
- *  → generic floor). Ships at `<harness>/tools/data/templates/` beside the
+ *  tier of the templates resolution order (team override, then framework
+ *  default, then no heading required). Ships at
+ *  `<harness>/tools/data/templates/` beside the
  *  compiled data, resolved relative to THIS tool's location (like DATA_DIR), so
  *  it is harness-correct and space-INDEPENDENT (a framework default is the same
  *  for every space — it's the baseline a team optionally overrides per-space via
  *  `memoryTemplatesDir`). The framework ships zero default files at GA, so this
  *  dir resolves but holds only a marker → the sensor's middle branch misses and
- *  falls through to the floor. AIDLC_FRAMEWORK_TEMPLATES_DIR is a test/relocation
+ *  no heading is required. AIDLC_FRAMEWORK_TEMPLATES_DIR is a test/relocation
  *  seam mirroring AIDLC_TEMPLATES_DIR. */
 export function frameworkTemplatesDir(): string {
   return process.env.AIDLC_FRAMEWORK_TEMPLATES_DIR ?? join(resolveDataDir(), "templates");
@@ -3115,6 +3119,11 @@ type ArsBand = "LOW" | "MED" | "HIGH";
 type ArsDecision = "EXECUTE" | "SKIP" | "COMPLETED";
 const ARS_PROJECT_TYPES = ARS_PROJECT_TYPE_KEYS;
 type ArsProjectType = ArsProjectTypeKey;
+// The shipped priors' roles: a stage block's, plus `project-type`, which only
+// reverse-engineering carries (its own store check decides whether to scan,
+// so a judged CSU never drops it, #2575). A plugin stage's project_types keeps
+// its component arithmetic on its own kind.
+const ARS_PRIOR_ROLES: readonly string[] = [...ARS_ROLES, "project-type"];
 
 /** IEEE summation of the weighted terms can land a hair under an exact
  *  half-point - 0.75 + 12.45 + 7.3 evaluates to 20.499999999999996, which
@@ -3140,7 +3149,8 @@ interface ArsPriors {
       role?: string;
       // Present only on stages whose compiled `condition:` restricts them to
       // one kind of project (today: reverse-engineering, brownfield-only).
-      // Absent = the stage runs on either project type.
+      // Absent = the stage runs on either project type. With role
+      // `project-type` the stage also RUNS on these types, whatever it scores.
       projectTypes?: ArsProjectType[];
     }
   >;
@@ -3256,7 +3266,8 @@ export function loadArsPriors(): ArsPriors {
     }
   }
   // Each entry follows the same rules as a stage's own ars: block
-  // (aidlc-stage-schema.ts), so the two sources cannot drift.
+  // (aidlc-stage-schema.ts), so the two sources cannot drift; the one word
+  // only this file may use is the `project-type` role (ARS_PRIOR_ROLES).
   const hasRepeats = (list: readonly unknown[]): boolean => new Set(list).size !== list.length;
   for (const [slug, st] of Object.entries(priors.stages ?? {})) {
     if (
@@ -3268,9 +3279,14 @@ export function loadArsPriors(): ArsPriors {
         `ars priors: stages.${slug}.targets must be a subset of {${ARS_COMPONENTS.join(", ")}}, without repeats.`
       );
     }
-    if (st.role !== undefined && !(ARS_ROLES as readonly string[]).includes(st.role)) {
+    if (st.role !== undefined && !ARS_PRIOR_ROLES.includes(st.role)) {
       throw new Error(
-        `ars priors: stages.${slug}.role must be one of {${ARS_ROLES.join(", ")}}.`
+        `ars priors: stages.${slug}.role must be one of {${ARS_PRIOR_ROLES.join(", ")}}.`
+      );
+    }
+    if (st.role === "project-type" && st.projectTypes === undefined) {
+      throw new Error(
+        `ars priors: stages.${slug}.role project-type needs projectTypes (the project types the stage runs on).`
       );
     }
     // Type before lookup: `String(cost) in evThresholds` alone accepts the
@@ -3421,7 +3437,7 @@ export function computeArs(
       decisionOf.set(s.slug, "SKIP");
     } else if (p?.role === "phase-gate") {
       deferred.add(s.slug);
-    } else if (p?.role === "initialization" || p?.role === "core") {
+    } else if (p?.role === "initialization" || p?.role === "core" || p?.role === "project-type") {
       decisionOf.set(s.slug, "EXECUTE");
     } else if (!p || p.role === "structural" || p.cost === null) {
       decisionOf.set(s.slug, "SKIP");
@@ -3484,6 +3500,16 @@ export function computeArs(
         ...base,
         screen: "project-type",
         reason: `project is ${String(projectType)} - the stage's compiled condition restricts it to ${(p.projectTypes ?? []).join("/")} projects`,
+      });
+    } else if (p.role === "project-type") {
+      // Today only reverse-engineering, whose own store check runs first.
+      const reuse = "when an earlier scan's code map is still current it asks whether to reuse it";
+      evScreen.push({
+        ...base,
+        screen: "project-type",
+        reason: projectType === undefined
+          ? `no project type given - existing code always gets this stage and a new project leaves it out; ${reuse}`
+          : `project is ${projectType} - existing code always gets this stage; ${reuse}`,
       });
     } else if (p.role === "initialization") {
       evScreen.push({ ...base, screen: "initialization", reason: "initialization - always runs" });
@@ -3580,6 +3606,110 @@ export function computeArs(
   };
 }
 
+// The composer's scores for the plan a front compose dispatch is working out
+// (#2575). The dispatch opens the record with its request id; `ars`
+// fills it with the scores it screened; creation of the plan the composer
+// validated writes them on WORKFLOW_STARTED and removes the record. It sits
+// beside the proposal, in the space's gitignored engine dir. Every step is
+// best-effort: a record that cannot be read or written records nothing.
+export type ArsMethod = "codekb" | "fallback";
+interface ComposerScores {
+  request: string;
+  scores?: Record<ArsComponent, number>;
+  method?: ArsMethod;
+}
+
+export function composerScoresPath(projectDir: string): string {
+  return join(dirname(composerProposalPath(projectDir)), "composer-scores.json");
+}
+
+function composerScoresRel(projectDir: string): string {
+  return relative(projectDir, composerScoresPath(projectDir));
+}
+
+function readComposerScores(projectDir: string): ComposerScores | null {
+  try {
+    const parsed = JSON.parse(
+      readFileSync(recordFileTargetOrThrow(projectDir, composerScoresRel(projectDir)), "utf-8"),
+    ) as Partial<ComposerScores> | null;
+    if (typeof parsed?.request !== "string" || parsed.request === "") return null;
+    const record: ComposerScores = { request: parsed.request };
+    const scores = parsed.scores;
+    if (scores !== undefined) {
+      if (!ARS_COMPONENTS.every((c) => typeof scores?.[c] === "number" && scores[c] >= 0 && scores[c] <= 1)) return null;
+      record.scores = Object.fromEntries(ARS_COMPONENTS.map((c) => [c, scores[c]])) as Record<ArsComponent, number>;
+    }
+    if (parsed.method === "codekb" || parsed.method === "fallback") record.method = parsed.method;
+    return record;
+  } catch {
+    return null;
+  }
+}
+
+/** A front compose dispatch for `request` opens a fresh record, replacing any
+ *  an earlier composition left. */
+export function openComposerScores(projectDir: string, request: string): void {
+  try {
+    writeRecordFileNoFollow(projectDir, composerScoresRel(projectDir), `${JSON.stringify({ request })}\n`);
+  } catch {
+    // No record: the plan's creation records no scores.
+  }
+}
+
+/** `ars` keeps its scores only in a record a dispatch opened; with none open
+ *  (an in-flight compose, a run by hand) it writes nothing. */
+function fillComposerScores(projectDir: string, scores: Record<ArsComponent, number>, method?: ArsMethod): void {
+  const open = readComposerScores(projectDir);
+  if (open === null) return;
+  const record: ComposerScores = {
+    request: open.request,
+    scores: Object.fromEntries(ARS_COMPONENTS.map((c) => [c, scores[c]])) as Record<ArsComponent, number>,
+    ...(method ? { method } : {}),
+  };
+  try {
+    writeRecordFileNoFollow(projectDir, composerScoresRel(projectDir), `${JSON.stringify(record)}\n`);
+  } catch {
+    // Unwritten: creation records no scores.
+  }
+}
+
+/** The WORKFLOW_STARTED fields for a plan being created for `requests` (its
+ *  request id and the one it was composed from): the composer's scores when
+ *  the record belongs to that request AND the plan is the grid the composer
+ *  last validated, so neither another piece of work nor a plan the person
+ *  named after a Reject picks them up. A record for this request is spent
+ *  either way. */
+export function takeComposerScores(
+  projectDir: string,
+  requests: readonly string[],
+  plannedStages: Record<string, "EXECUTE" | "SKIP">,
+): Record<string, string> {
+  const record = readComposerScores(projectDir);
+  if (record === null || !requests.includes(record.request)) return {};
+  try {
+    removeRecordFileNoFollow(projectDir, composerScoresRel(projectDir));
+  } catch {
+    // Left in place, it can match no later request.
+  }
+  if (record.scores === undefined) return {};
+  let proposal: unknown;
+  try {
+    proposal = JSON.parse(readFileSync(composerProposalPath(projectDir), "utf-8"));
+  } catch {
+    return {};
+  }
+  const stages = (proposal as { stages?: unknown } | null)?.stages;
+  const grid = stages !== null && typeof stages === "object" && !Array.isArray(stages) ? stages : proposal;
+  if (grid === null || typeof grid !== "object" || Array.isArray(grid)) return {};
+  const changes = planChangesBetween(plannedStages, grid as Record<string, string>);
+  if (changes.skip.length > 0 || changes.add.length > 0) return {};
+  const scores = record.scores;
+  return {
+    "ARS Scores": ARS_COMPONENTS.map((c) => `${c.toUpperCase()} ${scores[c].toFixed(2)}`).join(", "),
+    ...(record.method ? { "ARS Method": record.method } : {}),
+  };
+}
+
 const COMMANDS: Record<string, Handler> = {
   artifacts: () => {
     for (const name of [...artifactsRegistry()].sort()) {
@@ -3619,16 +3749,20 @@ const COMMANDS: Record<string, Handler> = {
     }
   },
   // ars --iae <s> --csu <s> --ve <s> --r <s> --ua <s> [--completed <csv>]
-  // [--project-type <bg>] - the deterministic ARS arithmetic: weighted
-  // composite + band labels, the per-stage EV screen against the cost-prior
-  // table, nearest stock scopes by grid diff count, and the two gate tables
-  // pre-rendered as markdown - all constants read from
+  // [--project-type <bg>] [--method <codekb|fallback>] - the deterministic ARS
+  // arithmetic: weighted composite + band labels, the per-stage EV screen
+  // against the cost-prior table, nearest stock scopes by grid diff count, and
+  // the two gate tables pre-rendered as markdown - all constants read from
   // tools/data/ars-priors.json. The composer scores the five components from
   // evidence, runs this, and copies the output verbatim; a model never does
   // the multiplication. --project-type screens out the stages whose compiled
   // condition restricts them to the other kind of project (greenfield ->
   // reverse-engineering SKIPs) so the mechanical screen cannot contradict a
-  // stage's own execution condition. Prints a JSON ArsResult on stdout; exit
+  // stage's own execution condition; reverse-engineering's project-type role
+  // runs it otherwise, whatever CSU scores. --method names the composer's
+  // structural evidence source; with the scores it fills the record a front
+  // compose dispatch opened (fillComposerScores), and the output never
+  // changes because of it. Prints a JSON ArsResult on stdout; exit
   // 1 on out-of-range scores, unknown stage slugs (same typo discipline as
   // validate-grid), or a priors-schema violation. The composite is advisory:
   // nothing deterministic routes on it.
@@ -3677,7 +3811,14 @@ const COMMANDS: Record<string, Handler> = {
       }
       projectType = lowered;
     }
+    const methodIdx = args.indexOf("--method");
+    const methodRaw = methodIdx >= 0 ? args[methodIdx + 1] : undefined;
+    if (methodIdx >= 0 && methodRaw !== "codekb" && methodRaw !== "fallback") {
+      console.error(`ars: --method must be codekb or fallback (got ${methodRaw === undefined ? "no value" : `"${methodRaw}"`}).`);
+      process.exit(1);
+    }
     const result = computeArs(scores, { completed, projectType });
+    fillComposerScores(resolveProjectDir(), scores, methodRaw as ArsMethod | undefined);
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   },
   // validate-grid [--proposal <path>] [--strict] [--project-type <bg>]

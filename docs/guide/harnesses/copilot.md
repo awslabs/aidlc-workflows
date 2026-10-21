@@ -212,8 +212,8 @@ then use the ignored local `dist/copilot/` output.
   `sensor-required-sections`, `sensor-upstream-coverage`, and
   `sensor-claim-sources`, which only read files), and the project commands in
   AI-DLC's own command table (`engine log`, `engine state`, `engine runtime`,
-  `engine learnings`, `engine testing-posture`, `engine intent list`, and the
-  rest), in the direct, source-dispatcher, compiled, or tool-script spelling.
+  `engine learnings`, `engine testing-posture`, `engine intent list`,
+  `engine intent add-checkout`, and the rest), in the direct, source-dispatcher, compiled, or tool-script spelling.
   The copy channel's `aidlc-utility.ts <verb>` gets the same answer as its
   `engine workspace <verb>` spelling. It answers only when all of these hold:
   - the call carries VS Code's chat session, every AI-DLC guard has passed,
@@ -264,8 +264,9 @@ then use the ignored local `dist/copilot/` output.
     `engine recompose` when you have not replied since the last question
     (after you approve a plan change, the recompose that applies it runs
     without a click), `next --skip`, `next --add`, `engine jump execute`,
-    `engine scope change`, `engine intent create --skip`, `engine config set`
-    and `next config set`,
+    `engine scope change`, `engine intent create --skip`,
+    `engine intent remove-checkout` (it takes code out of what the review
+    covers), `engine config set` and `next config set`,
     `engine bolt set-autonomy`, the `engine state` status changes while the
     state-transition check is off for that work (by you or by your Guard
     Policy), since then the change would land, and the
