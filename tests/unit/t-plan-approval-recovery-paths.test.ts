@@ -197,6 +197,28 @@ function presentAndApprove(project: string, session: string): void {
 }
 
 describe("Plan Approval recovery paths: every refusal names a step that works", () => {
+  test("a check that was never reached reads as not evaluated, not as false (#1597)", () => {
+    const session = "unreached-checks";
+    const project = createProject(session);
+    const missing = evaluateCodeGenerationApproval(project, { unit: null });
+    expect(missing.ok).toBe(false);
+    expect(missing.planExists).toBe(false);
+    expect(missing.fingerprintValid).toBeNull();
+    expect(missing.receiptValid).toBeNull();
+
+    const rendered = posture(project, "render");
+    expect(rendered.code, rendered.err).toBe(0);
+    writePlan(project, rendered.out);
+    presentAndApprove(project, session);
+    const planPath = join(codeGenerationRecordDir(project, null), "code-generation-plan.md");
+    writeFileSync(planPath, `${readFileSync(planPath, "utf-8")}\n- [ ] changed after approval\n`);
+    const stale = evaluateCodeGenerationApproval(project, { unit: null });
+    expect(stale.ok).toBe(false);
+    expect(stale.planExists).toBe(true);
+    expect(stale.fingerprintValid).toBe(false);
+    expect(stale.receiptValid).toBeNull();
+  });
+
   test("baseline: the documented sequence records an approval", () => {
     const session = "recovery-baseline";
     const project = createProject(session);

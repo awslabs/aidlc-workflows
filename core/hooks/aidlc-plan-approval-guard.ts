@@ -300,8 +300,8 @@ export interface UnitEvidence {
   /** The plan's structured Testing Contract matches the current effective posture. */
   contractValid: boolean;
   /** The recorded approval fingerprint matches the plan, instructions, and contract. */
-  fingerprintValid: boolean;
-  receiptValid: boolean;
+  fingerprintValid: boolean | null;
+  receiptValid: boolean | null;
   /** The current approved Testing Contract hash, used to bind the worker brief. */
   contractHash: string | null;
   /**
@@ -342,8 +342,8 @@ function approvalEvidenceIsCurrent(evidence: UnitEvidence | undefined): boolean 
     evidence.instructionsExist &&
     evidence.approved &&
     evidence.contractValid &&
-    evidence.fingerprintValid &&
-    evidence.receiptValid &&
+    evidence.fingerprintValid === true &&
+    evidence.receiptValid === true &&
     evidence.contractHash !== null
   );
 }
