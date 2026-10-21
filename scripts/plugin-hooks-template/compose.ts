@@ -129,10 +129,13 @@ type ProjectTokens = (text: string, harnessDir: string) => string;
 // An installed tree from before projectInvocationTokens existed (not yet
 // refreshed with `aidlc config`) still composes: compose runs under Bun, so the
 // copy channel's dispatcher line works for that tree until it is refreshed.
+// Token names are assembled, not written whole: this file ships verbatim in
+// every installed tree, which must carry no unprojected invocation token.
+const tokenName = (name: string): string => `{{${name}}}`;
 const copyChannelTokens: ProjectTokens = (text, harnessDir) => text
-  .replaceAll("{{HARNESS_DIR}}", harnessDir)
-  .replaceAll("{{INVOKE}}", `bun ${harnessDir}/tools/aidlc.ts`)
-  .replaceAll("{{TOOL_PREFIX}}", `bun ${harnessDir}/tools/`);
+  .replaceAll(tokenName("HARNESS_DIR"), harnessDir)
+  .replaceAll(tokenName("INVOKE"), `bun ${harnessDir}/tools/aidlc.ts`)
+  .replaceAll(tokenName("TOOL_PREFIX"), `bun ${harnessDir}/tools/`);
 const projectPluginTokens: ProjectTokens = await import(join(HARNESS_DIR, "tools", "aidlc-command.ts"))
   .then((m) => typeof m.projectInvocationTokens === "function" ? m.projectInvocationTokens as ProjectTokens : copyChannelTokens)
   .catch(() => copyChannelTokens);
