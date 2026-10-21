@@ -26,7 +26,7 @@ Authoritative generated views:
 - **Practices Affirmed Timestamp**: [ISO 8601 timestamp on affirmation]
 
 ## Scope Configuration
-- **Stages to Execute**: [comma-separated stage numbers included in scope]
+- **Stages to Execute**: [comma-separated stage numbers with slugs included in scope, e.g. 2.3 (requirements-analysis)]
 - **Stages to Skip**: [comma-separated stage numbers with reasons, or none]
 - **Depth**: [Minimal/Standard/Comprehensive]
 - **Test Strategy**: [Minimal/Standard/Comprehensive]
