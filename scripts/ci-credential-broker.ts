@@ -399,10 +399,11 @@ export async function startCredentialBroker(
           if (!jsonRecord(payload) || payload.model !== CI_BEDROCK_MODELS.codex) return failure(403);
           note.model = CI_BEDROCK_MODELS.codex;
           // Mantle's openai.gpt-5.5 stalls a response that asks for a reasoning
-          // summary once the model reasons: it opens the reasoning item and sends
-          // nothing more (measured 2026-10-21). Copilot CLI asks for one on every
-          // request and has no setting to stop it. Every other request is
-          // forwarded byte for byte. Remove when Mantle answers summary requests.
+          // summary once the model reasons: it opens the reasoning item, then
+          // sends only its 15-second keepalive comments (measured 2026-10-21).
+          // Copilot CLI asks for one on every request and has no setting to stop
+          // it. Every other request is forwarded byte for byte. Remove when
+          // Mantle answers summary requests.
           if (jsonRecord(payload.reasoning) && Object.hasOwn(payload.reasoning, "summary")) {
             delete payload.reasoning.summary;
             body = Buffer.from(JSON.stringify(payload));
