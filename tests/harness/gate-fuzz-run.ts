@@ -4,7 +4,7 @@
 //   bun tests/harness/gate-fuzz-run.ts --seeds 2000 --jobs 3 --out DIR
 //       [--seed S] [--most 40] [--hosts claude,codex,...] [--policies strict,relaxed,off]
 //       [--questions stage-gate,code-plan,...] [--walks bugfix,feature,...] [--walk-hosts claude,...] [--host-scopes bugfix,classic]
-//       [--i8-every 4] [--shrink] [--unattended-every 10]
+//       [--i8-every 4] [--shrink] [--unattended-every 10] [--update-from <older release's dist folder>]
 //   bun tests/harness/gate-fuzz-run.ts --replay '<run id>' [--out DIR]
 //
 // Each seed picks a state (a question the engine knows, on a host, under a Guard Policy; or a point a walked scope
@@ -37,6 +37,8 @@ interface Args {
   walkHosts: HostId[];
   /** The scopes the other tools' wiring walks (Claude Code walks every scope asked for). */
   hostScopes: string[];
+  /** An older release's dist folder: two scopes are walked on it, and each wait answered on this tree. */
+  updateFrom: string | null;
   i8Every: number;
   unattendedEvery: number;
   shrink: boolean;
@@ -64,6 +66,7 @@ function parse(argv: string[]): Args {
     walks: value("--walks")?.split(",").filter(Boolean) ?? [],
     walkHosts: list("--walk-hosts", ["claude"]) as HostId[],
     hostScopes: list("--host-scopes", ["bugfix", "classic"]),
+    updateFrom: value("--update-from") ?? null,
     i8Every: Number(value("--i8-every") ?? 4),
     unattendedEvery: Number(value("--unattended-every") ?? 10),
     shrink: argv.includes("--shrink"),
@@ -90,6 +93,9 @@ function walks(args: Args): Walk[] {
   }
   // One gate asked for changes three times, so Accept as-is is on offer at the fourth showing.
   if (args.walks.length > 0) specs.push({ scope: "bugfix", host: "claude", policy: args.policies[0], units: ["core"], revise: "requirements-analysis" });
+  if (args.updateFrom) {
+    for (const scope of ["bugfix", "feature"]) specs.push({ scope, host: "claude", policy: args.policies[0], units: scope === "feature" ? UNITS : ["core"], from: args.updateFrom });
+  }
   return specs.flatMap((spec, i) => {
     const dir = join(root, walkId(spec));
     if (existsSync(join(dir, "walk.json"))) return [loadWalk(dir)];

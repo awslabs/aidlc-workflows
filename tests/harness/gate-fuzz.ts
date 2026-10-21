@@ -526,6 +526,11 @@ export interface WalkSpec {
   /** A stage asked for changes three times before its approval, so Accept as-is is on offer. */
   revise?: string;
   skip?: string[];
+  /**
+   * Walk on an older release's trees (its `dist` folder): each wait is then answered with this repository's trees laid
+   * in, as when the person updates AI-DLC between the question and their reply.
+   */
+  from?: string;
 }
 
 export interface Walk {
@@ -542,7 +547,25 @@ export interface Walk {
 
 export function walkId(spec: WalkSpec): string {
   return [spec.host, spec.scope, spec.policy, `${spec.units.length}u`, spec.summary ? "sc" : "", spec.revise ? `rev-${spec.revise}` : "",
-    spec.skip?.length ? "skips" : ""].filter(Boolean).join("-");
+    spec.skip?.length ? "skips" : "", spec.from ? `from-${releaseOf(spec.from)}` : ""].filter(Boolean).join("-");
+}
+
+/** The release an older `dist` folder was built from. */
+function releaseOf(dist: string): string {
+  const version = /AIDLC_VERSION = "([^"]+)"/.exec(readFileSync(join(dist, "claude", ".claude", "tools", "aidlc-version.ts"), "utf-8"));
+  return version?.[1] ?? "older";
+}
+
+/** A project with an older release's tree installed as it ships, in a git repository with one commit. */
+function olderProject(dist: string, name: HostId, shape: "code" | "empty"): { proj: string; host: ScopeHost } {
+  const proj = join(mkdtempSync(join(process.env.AIDLC_GATE_FUZZ_SCRATCH ?? tmpdir(), "gate-fuzz-older-")), "proj");
+  cpSync(join(dist, name), proj, { recursive: true });
+  if (shape === "code") cpSync(join(REPO_ROOT, "tests", "fixtures", "brownfield-todo"), proj, { recursive: true });
+  const host = hostFor(name, proj);
+  host.git("init", "-q", "-b", "main");
+  host.git("add", "-A");
+  host.git("commit", "-q", "-m", "Before AI-DLC");
+  return { proj, host };
 }
 
 const ASKING = /\borchestrate report\b.*--result (?:awaiting-approval|revised)\b|\blog decision\b|\bbolt checkpoint\b.*--action ask\b/;
@@ -667,7 +690,8 @@ export function walk(spec: WalkSpec, root: string): Walk {
   const dir = join(root, id);
   mkdirSync(join(dir, "states"), { recursive: true });
   const shape = spec.scope === "workshop" || spec.scope === "express" ? "empty" : "code";
-  const { proj, host } = spec.host === "claude" ? createScopeProject(shape) : createHostProject(spec.host, shape);
+  const { proj, host } = spec.from ? olderProject(spec.from, spec.host, shape)
+    : spec.host === "claude" ? createScopeProject(shape) : createHostProject(spec.host, shape);
   const dirs = installDirs(spec.host).filter((name) => existsSync(join(proj, name)));
   const install = join(dir, "install");
   for (const name of dirs) cpSync(join(proj, name), join(install, name), { recursive: true });
@@ -694,6 +718,8 @@ export function walk(spec: WalkSpec, root: string): Walk {
     stuck = `${stuck ?? ""} | the install tree changed during the walk, so a copy without it is not the project`;
   }
   const gatesMet = [...new Set(recorder.states.filter((s) => s.kind === "gate").map((s) => s.stage))];
+  // The person updated AI-DLC while the question waited: their reply meets this repository's trees.
+  if (spec.from) for (const state of recorder.states) state.install = { from: join(REPO_ROOT, "dist", spec.host), dirs };
   const result: Walk = { id, spec, dir, install, dirs, states: recorder.states, ms: Date.now() - started, stuck, gatesMet };
   writeFileSync(join(dir, "walk.json"), JSON.stringify(result, null, 2));
   cleanupTestProject(proj);
@@ -1193,9 +1219,11 @@ export function play(state: State, seed: number, steps: Step[], opts: { twin?: b
           });
           // A redo or jump answers with the command that makes the move; the agent runs it (the skill's `ask` row).
           // Each print names the next command of the move, up to where it says to run `next` again.
-          if (call.ops.some((op) => op.kind === "bash" && /--result resumed\b/.test(op.line))) {
+          // A plan change answers with the recompose it runs the same way (planChangeDirective).
+          if (call.ops.some((op) => op.kind === "bash" && /--result resumed\b|orchestrate next --(?:skip|add)\b/.test(op.line))) {
             for (let hop = 0; hop < 4; hop++) {
-              const named = /`((?:next|report|bun |aidlc )[^`]*)`/.exec(ops.at(-1)?.out ?? "")?.[1]?.trim();
+              const named = /^\{"message":"Run `((?:next|report|bun |aidlc )[^`]*)`/.exec(ops.at(-1)?.out ?? "")?.[1]?.trim() ??
+                /`((?:next|report|bun |aidlc )[^`]*)`/.exec(ops.at(-1)?.out ?? "")?.[1]?.trim();
               if (!named || /(?:^|\s)next$/.test(named) || /orchestrate(?:\.ts)? next$/.test(named)) break;
               runOp(bashOp(/^(?:bun|aidlc) /.test(named) ? named : engineLine(host, "orchestrate", ...named.split(/\s+/))), ops);
             }
@@ -1466,7 +1494,8 @@ export function checkRun(run: Run): Failure[] {
       if (/"say"\s*:/.test(op.out)) failures.push({ invariant: "I9", what: "an engine output carries a say field", source: locate(op.out) ?? "", step: s.i, detail: clip(op.out, 300) });
       for (const t of run.turns) {
         if (t.step >= s.i) continue;
-        const words = t.text.trim();
+        // A quote may be cut short, so the first 30 characters are enough to show it.
+        const words = t.text.trim().slice(0, 30);
         if (words.length >= 12 && !["label", "label-variant", "engine-string", "digit", "command-bare", "blank"].includes(t.shape) && op.out.includes(words)) {
           failures.push({ invariant: "I9", what: `the person's words in an engine output (${t.shape})`, source: locate(op.out.split(words).join(" ")) ?? "", step: s.i, detail: clip(op.what, 160) });
           break;
@@ -1548,7 +1577,21 @@ export function checkTwin(a: Run, b: Run): Failure[] {
   // A field that holds each run's own words is a copy of them, outside the fields the design names; not a reader.
   const typedA = new Set(a.turns.map((t) => t.text.trim()));
   const typedB = new Set(b.turns.map((t) => t.text.trim()));
-  const copies = differ.filter((where) => typedA.has((va.get(where) ?? "").trim()) && typedB.has((vb.get(where) ?? "").trim()));
+  const strip = (run: Run, value: string) => {
+    let out = value;
+    for (const t of [...run.turns].sort((x, y) => y.text.length - x.text.length)) {
+      const words = t.text.trim();
+      if (words.length === 0) continue;
+      for (const form of [words, JSON.stringify(words).slice(1, -1), words.replace(/\s+/g, " "), words.slice(0, 40)]) out = out.split(form).join("<W>");
+    }
+    return out;
+  };
+  const copies = differ.filter((where) => {
+    const x = va.get(where);
+    const y = vb.get(where);
+    if (x === undefined || y === undefined) return false;
+    return (typedA.has(x.trim()) && typedB.has(y.trim())) || strip(a, x) === strip(b, y);
+  });
   const rest = differ.filter((where) => !copies.includes(where));
   const copyFailures: Failure[] = [...new Set(copies.map((where) => where.replace(/^row(\d+)\./, (_, n) => `${a.rows[a.start + Number(n)]?.event ?? "row"}.`)))]
     .map((where) => ({ invariant: "I5" as const, what: `the person's words copied into ${where}`, source: "", step: null, detail: where }));
