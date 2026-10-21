@@ -838,7 +838,8 @@ export function renderHelpText(): string {
   const defaultResolution = defaultScopeResolution();
   const effectiveDefaultScope = defaultResolution.error ? "" : defaultResolution.scope;
   // The stages a scope runs after Initialization, of all the stages after it:
-  // the count its plan offer and each stage's start give.
+  // the count its plan offer gives on existing code. Help has no project, so a
+  // new project's Reverse Engineering skip is the offer's to say.
   const total = loadStageGraph().filter((stage) => stage.phase !== "initialization").length;
   const scopeLines = [...validScopes()].map((name) => {
     const def = mapping[name];
@@ -12510,7 +12511,8 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
         action === "EXECUTE" || (greenfieldOnly && stage.slug === "reverse-engineering") ? "EXECUTE" : "SKIP";
     }
     // The saved plan's lines count the stages it runs after Initialization, the
-    // count its plan offer will give; the audit row keeps every stage it runs.
+    // count its plan offer gives on existing code (the plan keeps Reverse
+    // Engineering for the next project); the audit row keeps every stage it runs.
     const running = gridCostSummary(stages).shown;
     const executing = Object.values(stages).filter((a) => a === "EXECUTE").length;
 

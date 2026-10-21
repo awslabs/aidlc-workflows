@@ -12,7 +12,7 @@ the same scopes are explained in user-facing terms.
 
 Core ships 11 named scopes. Each scope defines a stage set, a default depth level, and a default Guard Policy value (strict on `enterprise`; off on the rest; see [Guard Policy](13-customization.md#guard-policy) for what the value does and how to set it). Plugin installs can add more scopes, and an install can narrow which plugin scopes are visible with `aidlc engine plugin select <names>`. When a `plugins` selection disables core (`aidlc` omitted), the core scope files remain installed but are not valid runtime scopes until core is re-enabled; the Initialization stages still run for every enabled scope.
 
-Each scope's stage count below is the stages it runs after Initialization's three setup stages, which every scope runs first: the count its plan offer, `/aidlc --help` and each stage's start give.
+Each scope's stage count below is the stages it runs after Initialization's three setup stages, which every scope runs first: the count `/aidlc --help` gives, and the count its plan offer and each stage's start give on existing code. On a new project the offer leaves out Reverse Engineering, so for a scope that runs it the offer says one fewer.
 
 ### enterprise
 

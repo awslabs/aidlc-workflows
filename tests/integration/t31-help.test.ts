@@ -19,8 +19,8 @@
 // loadScopeMapping() (aidlc-lib.ts) over validScopes() (aidlc-lib.ts),
 // so stage counts ("All 30 stages" / "6 of 30 stages") are derived from the
 // shipped scope-grid, not hardcoded: the stages a scope runs after
-// Initialization, of the stages after Initialization, the count the plan
-// offer and each stage's start give. This guards stale counts.
+// Initialization, of the stages after Initialization, the count its plan offer
+// gives on existing code. This guards stale counts.
 //
 // NO AUDIT / NO STATE / NO PROJECT DIR: `help` is a pure read-only renderer.
 // It emits no audit event, writes no file, and needs no --project-dir / temp

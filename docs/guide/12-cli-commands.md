@@ -2892,7 +2892,7 @@ For example, on a piece of work running the `mvp` plan:
 
 ```text
 $ aidlc engine scope save --name quick-fix
-Saved as scope quick-fix (23 stages, sensors on, learnings on, summary confirmation on, reviews adversarial).
+Saved as scope quick-fix (20 stages, sensors on, learnings on, summary confirmation on, reviews adversarial).
 Next time: /aidlc --scope quick-fix "<what to build>"
 ```
 

@@ -171,7 +171,8 @@ const scopeGrid = JSON.parse(
   read("dist", "claude", ".claude", "tools", "data", "scope-grid.json"),
 ) as Record<string, { stages: Record<string, string> }>;
 // A scope's size as the person reads it: the stages it runs after
-// Initialization, of the stages after it (the plan offer and `/aidlc --help`).
+// Initialization, of the stages after it (`/aidlc --help`, and the plan offer on
+// existing code).
 const afterSetup = (JSON.parse(read("dist", "claude", ".claude", "tools", "data", "stage-graph.json")) as Array<{
   slug: string;
   phase: string;
@@ -597,6 +598,22 @@ describe("documentation parity derives current behavior from authored implementa
         frontmatterScalar(scopeFile, "testStrategy") ?? depth,
       );
     }
+  });
+
+  test("onboarding and the scope-save example give a scope's size after setup", () => {
+    const onboarding = read("docs", "guide", "onboarding.md");
+    const rows = [...onboarding.matchAll(/^\| [^|]+ \| `([a-z][a-z-]+)` \| (\d+ \/ \d+) \|$/gm)];
+    expect(rows.length, "the onboarding scope table lists at least one scope").toBeGreaterThan(0);
+    for (const [, scope, count] of rows) {
+      const stages = scopeGrid[scope]?.stages;
+      expect(stages, `missing compiled grid entry for ${scope}`).toBeDefined();
+      expect(count, `${scope} stage count`).toBe(`${runsAfterSetup(stages)} / ${afterSetup.length}`);
+    }
+    expect(normalized(onboarding)).toContain(`A full \`feature\` runs all ${runsAfterSetup(scopeGrid.feature.stages)} stages after setup.`);
+    // The example saves a plan running mvp; the line counts what that scope runs after setup.
+    expect(read("docs", "guide", "12-cli-commands.md")).toContain(
+      `Saved as scope quick-fix (${runsAfterSetup(scopeGrid.mvp.stages)} stages, `,
+    );
   });
 
   test("no copy says the Construction checkpoint re-check holds under every Guard Policy", () => {
