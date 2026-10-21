@@ -1063,6 +1063,7 @@ describe("open-gate resume liveness", () => {
     );
     if (team) {
       content = content.replace("[?] requirements-analysis", "[x] requirements-analysis")
+        .replace("[ ] units-generation", "[x] units-generation")
         .replace("[ ] functional-design", "[?] functional-design")
         .replace("**Current Stage**: requirements-analysis", "**Current Stage**: functional-design")
         .replace("**Lifecycle Phase**: INCEPTION", "**Lifecycle Phase**: CONSTRUCTION")

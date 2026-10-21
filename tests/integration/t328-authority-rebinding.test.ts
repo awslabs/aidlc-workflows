@@ -942,7 +942,7 @@ describe("t328 (5) the per-Unit walk", () => {
         /^- \*\*Revision Count\*\*:.*$/m,
         "- **Revision Count**: 0\n- **Construction Iteration**: unit-major",
       );
-      for (const slug of Object.keys(DESIGN_ARTIFACTS)) {
+      for (const slug of ["units-generation", ...Object.keys(DESIGN_ARTIFACTS)]) {
         state = state.replace(
           new RegExp(`^- \\[[ xSR?-]\\] ${slug}(\\s+\\S\\s+)EXECUTE$`, "m"),
           `- [x] ${slug}$1EXECUTE`,

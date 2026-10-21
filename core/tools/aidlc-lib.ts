@@ -40856,12 +40856,15 @@ export function planWithChanges(
 // Whether the work's cursor (its Current Stage) has moved past `slug` in stage
 // order: only a later stage, or "none" once the work walked off its last
 // stage. A record with no cursor, or one naming a stage the graph does not
-// know (a plugin stage switched off, a stale slug), has passed nothing.
+// know (a plugin stage switched off, a stale slug), has passed nothing. The
+// cursor is read first: a record with none never needs the compiled graph,
+// which a sensor run from a source checkout does not have.
 export function cursorPastStage(stateContent: string, slug: string): boolean {
+  const current = getField(stateContent, "Current Stage")?.trim() ?? "";
+  if (current === "") return false;
   const graph = loadStageGraph();
   const at = graph.findIndex((stage) => stage.slug === slug);
   if (at < 0) return false;
-  const current = getField(stateContent, "Current Stage")?.trim() ?? "";
   if (current === "none") return true;
   const now = graph.findIndex((stage) => stage.slug === current);
   return now >= 0 && now > at;
