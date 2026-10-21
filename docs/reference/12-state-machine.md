@@ -1984,7 +1984,10 @@ plans, validity resolves one stage-level artifact instance under
 `<record>/construction/<stage>/` and does not inspect a Bolt DAG or stale
 per-Unit directories. Units Generation that already completed is the
 exception: a later scope change or recompose that skips it keeps its Units, so
-per-Unit stages keep resolving per Unit (#1401). When Units Generation executes, normal Bolt DAG expansion
+per-Unit stages keep resolving per Unit (#1401). Work whose cursor is already
+past a Units Generation that never ran (a scope change into a scope that runs
+it, or a jump over it) has no Units either, and resolves stage-level the same
+way until a jump back runs Units Generation. When Units Generation executes, normal Bolt DAG expansion
 and the legacy no-DAG directory fallback remain unchanged. Missing or ambiguous
 plan state makes receipt capture or inspection unavailable with a non-blocking
 warning rather than reporting false drift.

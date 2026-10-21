@@ -159,7 +159,7 @@ describe("the same with Code Generation still running at the switch", () => {
 
 describe("a jump past Units Generation that never ran", () => {
   test("bugfix at its Requirements Analysis gate, /aidlc --scope enterprise then /aidlc --stage code-generation", () => {
-    const { run, rows, after, later } = moveAt("bugfix", RA, ["/aidlc --scope enterprise", "/aidlc --stage code-generation"]);
+    const { run, rows, after, later } = moveAt("bugfix", RA, ["/aidlc --scope enterprise", "/aidlc --stage code-generation"], { after: 1 });
     expect(run.agent.refusalsMet).toEqual([]);
     expect(unitFolders(after)).toEqual([]);
     expect(rows.filter((e) => e.event === "SCOPE_CHANGED")).toHaveLength(1);
@@ -169,7 +169,7 @@ describe("a jump past Units Generation that never ran", () => {
   }, SCOPE_RUN_TIMEOUT_MS);
 
   test("the guide's /aidlc --scope enterprise --stage code-generation, from a bugfix at its Requirements Analysis gate", () => {
-    const { run, rows, after, later } = moveAt("bugfix", RA, ["/aidlc --scope enterprise --stage code-generation"]);
+    const { run, rows, after, later } = moveAt("bugfix", RA, ["/aidlc --scope enterprise --stage code-generation"], { after: 1 });
     expect(run.agent.refusalsMet).toEqual([]);
     expect(unitFolders(after)).toEqual([]);
     expect(approvals(rows, CG)).toHaveLength(1);

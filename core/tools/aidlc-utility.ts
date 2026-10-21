@@ -311,6 +311,7 @@ import {
   PLAN_FIELD,
   type PlanChanges,
   plannedStages,
+  cursorPastStage,
   planWithChanges,
   composedPlanLabel,
   PLAN_NAME_PATTERN,
@@ -11747,6 +11748,15 @@ function droppedUnitWorkLine(
   return `${list.charAt(0).toUpperCase()}${list.slice(1)} ${items.length === 1 ? "is" : "are"} no longer part of the plan.`;
 }
 
+// The stages still to run on a record, whatever its plan: from the cursor on,
+// neither finished nor skipped.
+function stagesStillToRun(content: string): StageEntry[] {
+  const boxes = new Map(parseCheckboxes(content).map((c) => [c.slug, c.state]));
+  return loadStageGraph().filter((stage) =>
+    !cursorPastStage(content, stage.slug) &&
+    boxes.get(stage.slug) !== "completed" && boxes.get(stage.slug) !== "skipped");
+}
+
 function handleScopeChange(projectDir: string, flags: Record<string, string>): void {
   const newScope = flags.scope;
   if (!newScope) die("--scope is required for scope-change");
@@ -11840,11 +11850,15 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       const projectType = getField(content, "Project Type") || "Greenfield";
       reopened = stageReopenedByScopeChange(contentBefore, newScope);
 
-      // Compute adjusted mapping (greenfield reverse-engineering adjustment).
-      const adjustedMapping = { ...newScopeDef.stages };
-      if (projectType.toLowerCase() === "greenfield" && adjustedMapping["reverse-engineering"] === "EXECUTE") {
-        adjustedMapping["reverse-engineering"] = "SKIP";
-      }
+      // A scope's own stages on this project: a new project skips Reverse Engineering.
+      const gridFor = (def: { stages: Record<string, string> }): Record<string, string> => {
+        const grid = { ...def.stages };
+        if (projectType.toLowerCase() === "greenfield" && grid["reverse-engineering"] === "EXECUTE") {
+          grid["reverse-engineering"] = "SKIP";
+        }
+        return grid;
+      };
+      const adjustedMapping = gridFor(newScopeDef);
 
       const executeStages: string[] = [];
       const skipStages: string[] = [];
@@ -11969,6 +11983,12 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       }
 
       const oldScopeDef = scopeMapping[oldScope];
+      // Switching back writes the old scope's own stages, so it is the way back
+      // only when the old plan ran those for every stage still to run: a plan
+      // tailored to the work, or recomposed, ran others.
+      const back = oldScopeDef ? gridFor(oldScopeDef) : null;
+      const switchBackRestores = back !== null && stagesStillToRun(contentBefore).every((stage) =>
+        (back[stage.slug] === "EXECUTE") === (effectivePlanAction(stage.slug, oldScope, contentBefore) === "EXECUTE"));
       const oldExecuteCount = oldScopeDef
         ? graph.filter(s => (oldScopeDef.stages[s.slug] || "SKIP") === "EXECUTE").length
         : 0;
@@ -12012,21 +12032,26 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         });
       }
       const droppedUnitWork = droppedUnitWorkLine(projectDir, contentBefore, content, intent, space);
-      // The stages after Initialization, the count the person reads everywhere
-      // during a run (the creation line, the progress line).
-      const shownDone = updatedCheckboxes.filter(
-        (c) => c.state === "completed" && executeSlugs.has(c.slug) &&
-          graph.find((s) => s.slug === c.slug)?.phase !== "initialization",
-      ).length;
+      // The stages the work runs on the new plan, from the one list the
+      // progress line and status count, less each stage the new plan adds
+      // behind the cursor: it never runs unless the person goes back to it.
+      // Reverse Engineering owed there stays, since `next` runs it.
+      const boxes = new Map(updatedCheckboxes.map((c) => [c.slug, c.state]));
+      const reOwed = reverseEngineeringOwedBehindCursor(content, recordDir(projectDir, intent, space));
+      const shown = plannedStages(content, newScope).filter((stage) =>
+        !(cursorPastStage(content, stage.slug) && (boxes.get(stage.slug) ?? "pending") === "pending") ||
+        (stage.slug === "reverse-engineering" && reOwed));
+      const shownDone = shown.filter((stage) => boxes.get(stage.slug) === "completed").length;
+      const shownGates = gridCostSummary(Object.fromEntries(shown.map((stage) => [stage.slug, "EXECUTE" as const]))).gates;
       // What happened and how to go back, then each stage it skipped, the Unit
       // work it dropped, and each setting whose value changed. Whether the
       // work goes on in the same turn is `next`'s call (its scope-change
       // print); on finished work the stage started above is what they asked
       // for, and `next` carries on into it.
       outputLines = [
-        `Switched to ${newScope} (${SCOPE_GLOSS}): ${summary.shown} stages (${shownDone} done), ` +
-          `${gates} approval gates.` +
-          (isScopeName(oldScope) ? ` You can switch back to ${oldScope} any time.` : ""),
+        `Switched to ${newScope} (${SCOPE_GLOSS}): ${shown.length} stages (${shownDone} done), ` +
+          `${shownGates} approval gates.` +
+          (isScopeName(oldScope) && switchBackRestores ? ` You can switch back to ${oldScope} any time.` : ""),
         ...skippedNow.map(({ slug, was }) =>
           `Skipped ${findStageBySlug(slug)?.name ?? slug} (${was}): ${newScope} does not run it. ` +
             "You can still run it on its own any time."),

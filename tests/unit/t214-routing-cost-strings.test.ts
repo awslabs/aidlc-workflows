@@ -27,7 +27,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
@@ -37,6 +37,7 @@ import {
   proposalFollowUp,
   removeWorkspaceRecord,
   resetAidlcEnv,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 
@@ -298,12 +299,22 @@ describe("t214 scope-change stdout carries the stage and gate counts", () => {
   test("scope change --scope mvp says its stages and approval gates in one line", () => {
     proj = createTestProject();
     seedStateFile(proj, MID_IDEATION);
+    // The record as the engine writes it: the Stage Progress note the switch
+    // rewrites the stages under, and a new project's plan with no Reverse
+    // Engineering.
+    const file = seededStateFile(proj);
+    writeFileSync(file, readFileSync(file, "utf-8")
+      .replace("## Stage Progress\n", "## Stage Progress\n<!-- Checkbox states: [ ] not started -->\n")
+      .replace("- [ ] reverse-engineering \u2014 EXECUTE", "- [ ] reverse-engineering \u2014 SKIP"));
     const r = runUtility(proj, ["scope-change", "--scope", "mvp"]);
     expect(r.rc).toBe(0);
-    // The fixture is Greenfield, so reverse-engineering EXECUTE -> SKIP.
+    // The fixture is Greenfield, so reverse-engineering EXECUTE -> SKIP. Market
+    // Research, done before the switch, still counts, as the progress line counts it.
     const mvp = counts(GRID.mvp.stages, true);
-    expect(r.out).toContain(`Switched to mvp (the set of stages this work runs): ${mvp.shown} stages (`);
-    expect(r.out).toContain(`, ${mvp.gates} approval gates. You can switch back to feature any time.`);
+    expect(r.out).toContain(
+      `Switched to mvp (the set of stages this work runs): ${mvp.shown + 1} stages (2 done), ` +
+        `${mvp.gates + 1} approval gates. You can switch back to feature any time.`,
+    );
   });
 });
 

@@ -2610,8 +2610,8 @@ function handleUnit(args: string[]): void {
     const scope = getField(content, "Scope");
     if (usesStageLevelPerUnitArtifacts(scope, content)) {
       error(
-        `Refusing unit ${action} for "${unit}": the effective workflow plan skips ` +
-          "Units Generation, so this stage runs once at stage level.",
+        `Refusing unit ${action} for "${unit}": this work has no Units (Units Generation ` +
+          "is not on its plan, or has not run), so this stage runs once at stage level.",
       );
     }
 

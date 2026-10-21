@@ -256,9 +256,10 @@ function readPlanState(projectDir: string): string | null {
   }
 }
 
-// The engine places per-Unit artifacts at stage level whenever the approved
-// plan skips Units Generation, and then ignores any Unit DAG left on disk (for
-// example after a scope change). Follow the plan when the state records it.
+// The engine places per-Unit artifacts at stage level whenever the work has no
+// Units (the approved plan skips Units Generation, or the work passed it
+// without running it), and then ignores any Unit DAG left on disk (for example
+// after a scope change). Follow the plan when the state records it.
 function planSkipsUnits(stateContent: string | null): boolean {
   if (stateContent === null || !parseStateStageSuffixes(stateContent).has("units-generation")) return false;
   return usesStageLevelPerUnitArtifacts(getField(stateContent, "Scope"), stateContent);

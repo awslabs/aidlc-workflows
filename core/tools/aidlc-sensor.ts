@@ -443,7 +443,8 @@ function handleDescribe(args: string[]): void {
 //   - codekb producers (reverse-engineering): glob every repo dir under the
 //     space-level codekb root.
 //   - per-unit Construction producers (for_each: unit-of-work): use the
-//     stage-level directory when the effective plan skips Units Generation;
+//     stage-level directory when the work has no Units (the plan skips Units
+//     Generation, or the work passed it without running it);
 //     otherwise glob every <record>/construction/<unit>/<slug>/.
 //   - everything else: <record>/<phase>/<slug>/<name>.md.
 //
