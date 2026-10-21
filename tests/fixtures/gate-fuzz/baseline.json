@@ -9,6 +9,7 @@
     "I2 VERIFICATION_COMMAND_RECORDED names no message",
     "I2 the gate-words record dropped some of the person's words",
     "I5 the person's words copied into GATE_REJECTED.Reason",
-    "I7 one reply backed GATE_REJECTED and GATE_REJECTED"
+    "I7 one reply backed GATE_REJECTED and GATE_REJECTED",
+    "STOP the Stop hook kept an attended turn from ending (nothing on record that the agent waits)"
   ]
 }
