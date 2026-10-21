@@ -33,12 +33,14 @@ import {
   pluginSourceHash,
   recordedContributionGaps,
   renderPluginStatuses,
+  stripRecordedAdds,
   supersededLines,
   syncPlugins,
   type CompositionStamp,
   type InstalledPlugin,
   type PluginInventory,
   type ProjectEvidence,
+  type StageContribRecord,
 } from "../../core/tools/aidlc-plugin.ts";
 import { committedTextBytes } from "../../core/tools/aidlc-lib.ts";
 import { aidlcInvocation } from "../../core/tools/aidlc-runtime-paths.ts";
@@ -698,6 +700,36 @@ describe("t242 recorded additions", () => {
     });
     expect(gaps.gone).toBe(true);
     expect(gaps.missing).toEqual([`fragments=[after-step:8@100:${outer.hash}]`]);
+  });
+
+  test("the one strip takes out what compose wrote and leaves a line the stage already had", () => {
+    // Turning a plugin off, removing or updating it, and the config refresh all strip through it.
+    const stage = (lists: string) => `---\nslug: build-and-test\n${lists}---\n\nBody.\n`;
+    const cases: Array<[string, StageContribRecord, string, string]> = [
+      ["one recorded value", { sensors: ["coverage-threshold"] },
+        "sensors:\n  - required-sections\n  - coverage-threshold\n", "sensors:\n  - required-sections\n"],
+      ["the last value leaves an empty list", { produces: ["x-doc"] }, "produces:\n  - x-doc\n", "produces: []\n"],
+      ["a quoted line beside the plugin's stays", { sensors: ["coverage-threshold"] },
+        "sensors:\n  - \"coverage-threshold\"\n  - coverage-threshold\n", "sensors:\n  - \"coverage-threshold\"\n"],
+      ["a single-quoted line beside the plugin's stays", { produces: ["x-doc"] },
+        "produces:\n  - 'x-doc'\n  - x-doc\n", "produces:\n  - 'x-doc'\n"],
+      ["a value written twice keeps one", { requires_stage: ["nfr-design"] },
+        "requires_stage:\n  - nfr-design\n  - nfr-design\n", "requires_stage:\n  - nfr-design\n"],
+      ["a recorded value with its quotes takes out that line", { produces: ["\"x-doc\""] },
+        "produces:\n  - a-doc\n  - \"x-doc\"\n", "produces:\n  - a-doc\n"],
+      ["required sections recorded bare take out one quoted line each", { required_sections: ["Branch Coverage"] },
+        "required_sections:\n  - \"Branch Coverage\"\n  - \"Branch Coverage\"\n", "required_sections:\n  - \"Branch Coverage\"\n"],
+      ["a required_sections field compose created goes", { required_sections: ["Branch Coverage"], required_sections_created: true },
+        "required_sections:\n  - \"Branch Coverage\"\n", ""],
+      ["consumes recorded as objects or legacy strings", { consumes: [{ artifact: "p-doc", required: false }, "q-doc"] },
+        "consumes:\n  - artifact: a-doc\n    required: true\n  - artifact: p-doc\n    required: false\n  - artifact: q-doc\n    required: false\n    conditional_on: brownfield\n",
+        "consumes:\n  - artifact: a-doc\n    required: true\n"],
+      ["a consumes entry with no artifact is skipped", { consumes: [null as unknown as string, "p-doc"] },
+        "consumes:\n  - artifact: p-doc\n    required: false\n", "consumes: []\n"],
+    ];
+    for (const [name, record, before, after] of cases) {
+      expect(stripRecordedAdds(stage(before), record), name).toBe(stage(after));
+    }
   });
 });
 
@@ -1520,6 +1552,29 @@ describe("t242 transactional sync and ownership-safe prune", () => {
       "utf-8",
     )) as Record<string, { scopes?: string[] }>;
     expect(sidecar["build-and-test"]?.scopes).toBeUndefined();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("removing a plugin keeps a line the stage had that matches one the plugin added", async () => {
+    // test-pro adds the edge to nfr-design; the team's own edge, quoted, sits
+    // beside it. The sidecar records only the line compose wrote.
+    const project = installedProject();
+    withClaudeFixture(TEST_PRO);
+    await syncPlugins(project, [], ".claude");
+    const stage = join(project, ".claude", "aidlc-common", "stages", "construction", "build-and-test.md");
+    const composed = readFileSync(stage, "utf-8");
+    expect(composed).toContain("  - nfr-design\n");
+    writeFileSync(stage, composed.replace("  - nfr-design\n", "  - \"nfr-design\"\n  - nfr-design\n"));
+
+    writeFileSync(
+      process.env.AIDLC_CLAUDE_PLUGIN_REGISTRY as string,
+      "{\"version\":2,\"plugins\":{}}\n",
+    );
+    const result = await syncPlugins(project, ["--prune-missing", "--yes"], ".claude");
+    expect(result.pruned).toEqual(["test-pro"]);
+
+    const pruned = readFileSync(stage, "utf-8");
+    expect(pruned).toContain("  - \"nfr-design\"\n");
+    expect(pruned).not.toContain("  - nfr-design\n");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("prune refuses a locally modified owned file without deleting it", async () => {

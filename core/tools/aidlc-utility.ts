@@ -478,6 +478,7 @@ import {
   projectDiffPlan,
   recordedContributionGaps,
   type StageContribRecord,
+  stripRecordedAdds,
   syncCommand,
   tomlFragmentText,
   withFileLineEndings,
@@ -1110,50 +1111,6 @@ function installedStagesRoot(): string {
   return resolveHarnessPath(["aidlc-common", "stages"], { mutable: true });
 }
 
-// Remove recorded values from a `field:` block. An emptied block collapses to
-// the inline `field: []` form (the shape compose's merge expanded from); a
-// created-by-compose required_sections field is deleted outright.
-function removeListValues(content: string, field: string, values: ReadonlySet<string>, dropEmptyField: boolean): string {
-  const blockRe = new RegExp(`^${field}:\\n((?:  - .+\\n)*)`, "m");
-  const m = content.match(blockRe);
-  if (!m) return content;
-  const entries = [...m[1].matchAll(/^ {2}- (.+)$/gm)].map((x) => x[1]);
-  const removeIndexes = new Set<number>();
-  const remaining = new Set(values);
-  // Compose renders ordinary structural additions unquoted. Prefer that exact
-  // spelling so a legacy sidecar cannot remove an equivalent quoted membership
-  // that predated the plugin.
-  for (let i = 0; i < entries.length; i++) {
-    if (remaining.delete(entries[i].trim())) removeIndexes.add(i);
-  }
-  // required_sections are rendered quoted while their sidecar values are bare.
-  // Remove at most one canonical match for each recorded addition.
-  for (const value of remaining) {
-    const index = entries.findIndex((entry, i) => {
-      if (removeIndexes.has(i)) return false;
-      const bare = entry.trim().replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
-      return bare === value;
-    });
-    if (index !== -1) removeIndexes.add(index);
-  }
-  const kept = entries.filter((_, i) => !removeIndexes.has(i));
-  const replacement = kept.length > 0
-    ? `${field}:\n${kept.map((v) => `  - ${v}`).join("\n")}\n`
-    : dropEmptyField ? "" : `${field}: []\n`;
-  return content.replace(blockRe, replacement);
-}
-
-function removeConsumesEntries(content: string, artifacts: ReadonlySet<string>): string {
-  const blockRe = /^consumes:\n((?: {2}- artifact:.*\n(?: {4}(?:required|conditional_on):.*\n)*)*)/m;
-  const m = content.match(blockRe);
-  if (!m) return content;
-  const kept = [...m[1].matchAll(/^ {2}- artifact:\s*([\w-]+).*\n(?: {4}(?:required|conditional_on):.*\n)*/gm)]
-    .filter((entry) => !artifacts.has(entry[1]))
-    .map((entry) => entry[0]);
-  const replacement = kept.length > 0 ? `consumes:\n${kept.join("")}` : "consumes: []\n";
-  return content.replace(blockRe, replacement);
-}
-
 // Strip every sentinel-marked prose fragment this plugin spliced. The open
 // and close markers carry the plugin name, so removal needs no sidecar.
 // Anchors may themselves contain colons (after-step:9, in:Sensors), so the
@@ -1203,28 +1160,8 @@ function stripDisabledPluginContributions(
         const before = readFileSync(path, "utf-8");
         // A CRLF checkout strips as the LF text compose wrote, in its own line endings.
         const content = withFileLineEndings(before, (text) => {
-          let content = text;
           const record = manifest[f.replace(/\.md$/, "")];
-          if (record) {
-            if (record.produces?.length) content = removeListValues(content, "produces", new Set(record.produces), false);
-            if (record.sensors?.length) content = removeListValues(content, "sensors", new Set(record.sensors), false);
-            if (record.scopes?.length) content = removeListValues(content, "scopes", new Set(record.scopes), false);
-            if (record.requires_stage?.length) content = removeListValues(content, "requires_stage", new Set(record.requires_stage), false);
-            if (record.consumes?.length) {
-              const artifacts = record.consumes.flatMap((entry) =>
-                typeof entry === "string"
-                  ? [entry]
-                  : entry && typeof entry.artifact === "string"
-                    ? [entry.artifact]
-                    : []
-              );
-              content = removeConsumesEntries(content, new Set(artifacts));
-            }
-            if (record.required_sections?.length) {
-              content = removeListValues(content, "required_sections", new Set(record.required_sections), record.required_sections_created === true);
-            }
-          }
-          return removePluginFragments(content, plugin);
+          return removePluginFragments(record ? stripRecordedAdds(text, record) : text, plugin);
         });
         if (content !== before) {
           writeFileSync(path, content, "utf-8");

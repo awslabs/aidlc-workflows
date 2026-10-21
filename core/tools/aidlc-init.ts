@@ -158,7 +158,14 @@ import {
   withAuditLock,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
-import { cutPluginFragment, editTomlInstructions, nextCompose, personaTwinRels } from "./aidlc-plugin.ts";
+import {
+  cutPluginFragment,
+  editTomlInstructions,
+  nextCompose,
+  personaTwinRels,
+  type StageContribRecord,
+  stripRecordedAdds,
+} from "./aidlc-plugin.ts";
 import { droppedPluginRegistrations } from "./aidlc-plugin-emit.ts";
 import { regenerateRunnerSurfaces } from "./aidlc-runner-gen.ts";
 import { KIRO_IDE_STEERING, kiroIdeSteering, refreshActiveMemory } from "./aidlc-includes.ts";
@@ -4893,25 +4900,6 @@ function unbaselinedGenerated(harnessDir: string): string[] {
   ];
 }
 
-// Compose records a plugin's consumed artifacts as objects, so the sidecar
-// shape must match what the compose hook writes, or the readers below silently
-// match nothing. See issue #1247.
-type ConsumeContribRecord = {
-  artifact: string;
-  required: boolean;
-  conditional_on?: string;
-};
-
-type StageContribRecord = {
-  produces?: string[];
-  sensors?: string[];
-  consumes?: Array<string | ConsumeContribRecord>;
-  scopes?: string[];
-  requires_stage?: string[];
-  required_sections?: string[];
-  required_sections_created?: boolean;
-};
-
 function resetProjectionCaches(): void {
   __resetGraphCache();
   _resetHarnessDataForTests();
@@ -5006,35 +4994,10 @@ function removeListItems(content: string, field: string, items: readonly string[
   return content.replace(block, replacement);
 }
 
+// The file without any plugin's additions: the refresh reads the union of
+// every sidecar, so every plugin's fragments go too.
 function stripRecordedContributions(content: string, record: StageContribRecord): string {
-  let value = content;
-  for (const [field, items] of [
-    ["produces", record.produces],
-    ["sensors", record.sensors],
-    ["scopes", record.scopes],
-    ["requires_stage", record.requires_stage],
-    ["required_sections", record.required_sections],
-  ] as const) {
-    value = removeListItems(
-      value,
-      field,
-      items ?? [],
-      field === "required_sections" && record.required_sections_created === true,
-    );
-  }
-  if (record.consumes?.length) {
-    const names = new Set(
-      record.consumes.map((entry) => typeof entry === "string" ? entry : entry.artifact),
-    );
-    const block = /^consumes:\n((?: {2}- artifact:.*\n(?: {4}(?:required|conditional_on):.*\n)*)*)/m.exec(value);
-    if (block) {
-      const kept = [...block[1].matchAll(/^ {2}- artifact:\s*([\w-]+).*\n(?: {4}(?:required|conditional_on):.*\n)*/gm)]
-        .filter((entry) => !names.has(entry[1]))
-        .map((entry) => entry[0]);
-      value = value.replace(block[0], kept.length > 0 ? `consumes:\n${kept.join("")}` : "consumes: []\n");
-    }
-  }
-  return stripPluginFragments(value);
+  return stripPluginFragments(stripRecordedAdds(content, record));
 }
 
 function stripPluginFragments(content: string): string {

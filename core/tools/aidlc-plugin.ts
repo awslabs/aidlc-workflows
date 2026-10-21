@@ -1336,37 +1336,6 @@ function assertOwnedPath(projectDir: string, path: string): string {
   return target;
 }
 
-function removeListValues(
-  content: string,
-  field: string,
-  values: ReadonlySet<string>,
-  dropEmptyField: boolean,
-): string {
-  const block = new RegExp(`^${field}:\\n((?:  - .+\\n)*)`, "m");
-  const match = content.match(block);
-  if (!match) return content;
-  const kept = [...match[1].matchAll(/^ {2}- (.+)$/gm)]
-    .map((entry) => entry[1])
-    .filter((value) => {
-      const bare = value.trim().replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
-      return !values.has(bare) && !values.has(value.trim());
-    });
-  const replacement = kept.length > 0
-    ? `${field}:\n${kept.map((value) => `  - ${value}`).join("\n")}\n`
-    : dropEmptyField ? "" : `${field}: []\n`;
-  return content.replace(block, replacement);
-}
-
-function removeConsumes(content: string, artifacts: ReadonlySet<string>): string {
-  const block = /^consumes:\n((?: {2}- artifact:.*\n(?: {4}(?:required|conditional_on):.*\n)*)*)/m;
-  const match = content.match(block);
-  if (!match) return content;
-  const kept = [...match[1].matchAll(/^ {2}- artifact:\s*([\w-]+).*\n(?: {4}(?:required|conditional_on):.*\n)*/gm)]
-    .filter((entry) => !artifacts.has(entry[1]))
-    .map((entry) => entry[0]);
-  return content.replace(block, kept.length > 0 ? `consumes:\n${kept.join("")}` : "consumes: []\n");
-}
-
 // Cuts the sentinel-marked fragment block at [start, end) together with the
 // separator compose inserted with it, and nothing else, so the file's own
 // whitespace survives. Compose wraps the blocks at one insertion point in a
@@ -1439,6 +1408,82 @@ export interface StageContribRecord {
   required_sections?: string[];
   required_sections_created?: boolean;
   fragments?: Array<{ anchor: string; order: number; hash: string }>;
+}
+
+// The one strip of a record's structural adds from a stage's LF text, for a
+// plugin turned off (`stripPluginsTurnedOff()` in aidlc-utility.ts), removed or
+// updated (`pruneContributions`), and the config refresh's test of a composed
+// file (aidlc-init.ts). Fragments carry their own markers, and each caller
+// strips them in its own scope.
+export function stripRecordedAdds(content: string, record: StageContribRecord): string {
+  let value = content;
+  for (const field of ["produces", "sensors", "scopes", "requires_stage"] as const) {
+    const items = record[field];
+    if (items?.length) value = removeRecordedValues(value, field, new Set(items), false);
+  }
+  if (record.consumes?.length) {
+    const artifacts = record.consumes.flatMap((entry) =>
+      typeof entry === "string"
+        ? [entry]
+        : entry && typeof entry.artifact === "string"
+          ? [entry.artifact]
+          : []
+    );
+    value = removeRecordedConsumes(value, new Set(artifacts));
+  }
+  if (record.required_sections?.length) {
+    value = removeRecordedValues(
+      value,
+      "required_sections",
+      new Set(record.required_sections),
+      record.required_sections_created === true,
+    );
+  }
+  return value;
+}
+
+// Remove recorded values from a `field:` block. An emptied block collapses to
+// the inline `field: []` form (the shape compose's merge expanded from); a
+// created-by-compose required_sections field is deleted outright.
+function removeRecordedValues(content: string, field: string, values: ReadonlySet<string>, dropEmptyField: boolean): string {
+  const blockRe = new RegExp(`^${field}:\\n((?:  - .+\\n)*)`, "m");
+  const m = content.match(blockRe);
+  if (!m) return content;
+  const entries = [...m[1].matchAll(/^ {2}- (.+)$/gm)].map((x) => x[1]);
+  const removeIndexes = new Set<number>();
+  const remaining = new Set(values);
+  // Compose renders ordinary structural additions unquoted. Prefer that exact
+  // spelling so a legacy sidecar cannot remove an equivalent quoted membership
+  // that predated the plugin.
+  for (let i = 0; i < entries.length; i++) {
+    if (remaining.delete(entries[i].trim())) removeIndexes.add(i);
+  }
+  // required_sections are rendered quoted while their sidecar values are bare.
+  // Remove at most one canonical match for each recorded addition.
+  for (const value of remaining) {
+    const index = entries.findIndex((entry, i) => {
+      if (removeIndexes.has(i)) return false;
+      const bare = entry.trim().replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
+      return bare === value;
+    });
+    if (index !== -1) removeIndexes.add(index);
+  }
+  const kept = entries.filter((_, i) => !removeIndexes.has(i));
+  const replacement = kept.length > 0
+    ? `${field}:\n${kept.map((v) => `  - ${v}`).join("\n")}\n`
+    : dropEmptyField ? "" : `${field}: []\n`;
+  return content.replace(blockRe, replacement);
+}
+
+function removeRecordedConsumes(content: string, artifacts: ReadonlySet<string>): string {
+  const blockRe = /^consumes:\n((?: {2}- artifact:.*\n(?: {4}(?:required|conditional_on):.*\n)*)*)/m;
+  const m = content.match(blockRe);
+  if (!m) return content;
+  const kept = [...m[1].matchAll(/^ {2}- artifact:\s*([\w-]+).*\n(?: {4}(?:required|conditional_on):.*\n)*/gm)]
+    .filter((entry) => !artifacts.has(entry[1]))
+    .map((entry) => entry[0]);
+  const replacement = kept.length > 0 ? `consumes:\n${kept.join("")}` : "consumes: []\n";
+  return content.replace(blockRe, replacement);
 }
 
 // A recorded target's file, read as compose wrote it (CRLF reads as LF): a stage
@@ -1740,29 +1785,8 @@ function pruneContributions(stagedProject: string, harnessDir: string, key: stri
   for (const path of composedFiles) {
     const before = readFileSync(path, "utf-8");
     const after = withFileLineEndings(before, (text) => {
-      let after = text;
       const record = records[basename(path, ".md")];
-      if (record) {
-        if (record.produces?.length) after = removeListValues(after, "produces", new Set(record.produces), false);
-        if (record.sensors?.length) after = removeListValues(after, "sensors", new Set(record.sensors), false);
-        if (record.scopes?.length) after = removeListValues(after, "scopes", new Set(record.scopes), false);
-        if (record.consumes?.length) {
-          after = removeConsumes(
-            after,
-            new Set(record.consumes.map((entry) => typeof entry === "string" ? entry : entry.artifact)),
-          );
-        }
-        if (record.requires_stage?.length) after = removeListValues(after, "requires_stage", new Set(record.requires_stage), false);
-        if (record.required_sections?.length) {
-          after = removeListValues(
-            after,
-            "required_sections",
-            new Set(record.required_sections),
-            record.required_sections_created === true,
-          );
-        }
-      }
-      return removeFragments(after, key, path);
+      return removeFragments(record ? stripRecordedAdds(text, record) : text, key, path);
     });
     if (after !== before) writeFileSync(path, after);
   }

@@ -428,7 +428,12 @@ own sentinel markers. On disable, `select-plugins` and every config refresh
 (`aidlc config project --plugins` among them) strip both from the installed
 stage source inside their own rollback transaction, through one rule
 (`stripPluginsTurnedOff()`), so a disabled or paused plugin's contributions stop
-steering enabled stages. Re-enabling restores them on the next session start (on
+steering enabled stages. The structural adds come out through one strip,
+`stripRecordedAdds()` in `aidlc-plugin.ts`, which a plugin turned off, a plugin
+removed or updated by sync, and a config refresh's check of a composed stage
+share: each recorded value takes out the entry spelled as compose wrote it, else
+one entry that means the same, so a quoted line the stage already had stays.
+Re-enabling restores the contributions on the next session start (on
 Kiro CLI and opencode, which run no compose hook, when the person runs
 `aidlc engine plugin sync --plugin-root <folder>` with the plugin's folder): the
 plugin's compose re-merges, byte-identical. The select line says which, and so
