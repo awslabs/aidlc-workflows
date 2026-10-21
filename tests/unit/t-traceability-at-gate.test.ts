@@ -87,11 +87,41 @@ function recordFile(proj: string, rel: string, body: string): string {
   return path;
 }
 
+const READY_REVIEW = (reviewer: string, iteration: number): string => [
+  "## Review",
+  "",
+  "**Verdict:** READY",
+  `**Reviewer:** ${reviewer}`,
+  `**Iteration:** ${iteration}`,
+  "",
+  "### Findings",
+  "",
+  "**Prior findings**",
+  "",
+  "| ID | Now | Severity | Note |",
+  "|---|---|---|---|",
+  "",
+  "**New findings**",
+  "",
+  "| Severity | Location | Finding | Required action |",
+  "|---|---|---|---|",
+  "",
+].join("\n");
+
+// One READY review of the stage's current output, through the logger.
+function review(proj: string, env: NodeJS.ProcessEnv, stage: string, reviewer: string, iteration: number): void {
+  const base = ["engine", "log", "review", "--stage", stage, "--reviewer", reviewer, "--iteration", String(iteration)];
+  const requested = reply(proj, env, base);
+  writeFileSync(join(proj, String(requested.reviewFile)), READY_REVIEW(reviewer, iteration));
+  const recorded = engine(proj, env, [...base, "--verdict", "READY"]);
+  expect(recorded.status, recorded.out).toBe(0);
+}
+
 describe("t-traceability-at-gate: the check reads the finished tables when the gate opens", () => {
   // The checks under test run at the gate; the fixture's other gate checks stand aside.
   const ENV = baseEnv({
     AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
-    AIDLC_SKIP_REVIEWER_GATE_GUARD: "1",
+    AIDLC_SKIP_REVIEWER_GATE_GUARD: "0",
     AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1",
     AIDLC_DISABLE_COLLABORATORS: "1",
   });
@@ -123,6 +153,7 @@ describe("t-traceability-at-gate: the check reads the finished tables when the g
   }
 
   function openGate(proj: string): Record<string, unknown> {
+    review(proj, ENV, STAGE, "aidlc-product-lead-agent", 1);
     const opened = reply(proj, ENV, ["engine", "orchestrate", "report", "--stage", STAGE, "--result", "awaiting-approval"]);
     expect(opened.kind, JSON.stringify(opened)).toBe("print");
     return opened;
@@ -217,33 +248,6 @@ describe("t-traceability-at-gate: the Requirements Analysis gate open across the
   const ENV = baseEnv({ AIDLC_SKIP_REVIEWER_GATE_GUARD: "0" });
   delete ENV.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
 
-  function review(proj: string, iteration: number): void {
-    const base = ["engine", "log", "review", "--stage", STAGE, "--reviewer", REVIEWER, "--iteration", String(iteration)];
-    const requested = reply(proj, ENV, base);
-    const file = String(requested.reviewFile);
-    writeFileSync(join(proj, file), [
-      "## Review",
-      "",
-      "**Verdict:** READY",
-      `**Reviewer:** ${REVIEWER}`,
-      `**Iteration:** ${iteration}`,
-      "",
-      "### Findings",
-      "",
-      "**Prior findings**",
-      "",
-      "| ID | Now | Severity | Note |",
-      "|---|---|---|---|",
-      "",
-      "**New findings**",
-      "",
-      "| Severity | Location | Finding | Required action |",
-      "|---|---|---|---|",
-      "",
-    ].join("\n"));
-    const recorded = engine(proj, ENV, [...base, "--verdict", "READY"]);
-    expect(recorded.status, recorded.out).toBe(0);
-  }
 
   function personSays(proj: string, prompt: string): void {
     const result = engine(proj, ENV, ["engine", "hook", "record-human-turn"], JSON.stringify({
@@ -269,7 +273,7 @@ describe("t-traceability-at-gate: the Requirements Analysis gate open across the
 
     recordFile(proj, `inception/${STAGE}/requirements.md`, "# Requirements\n\n- FR1 Sign up\n");
     recordFile(proj, `inception/${STAGE}/${STAGE}-questions.md`, "# Questions\n");
-    review(proj, 1);
+    review(proj, ENV, STAGE, REVIEWER, 1);
     reply(proj, ENV, ["engine", "orchestrate", "report", "--stage", STAGE, "--result", "awaiting-approval"]);
 
     writeFileSync(graphPath, shipped);
@@ -298,7 +302,7 @@ describe("t-traceability-at-gate: the Requirements Analysis gate open across the
     expect(refused.reason_codes).toEqual(["ARTIFACT_REVIEW_STALE"]);
     const remedies = refused.remedies as Array<{ op: string; requiresHuman: boolean }>;
     expect(remedies.map((remedy) => [remedy.op, remedy.requiresHuman])).toEqual([["start-recovery-review", false]]);
-    review(proj, 2);
+    review(proj, ENV, STAGE, REVIEWER, 2);
     const approved = approve(proj);
     expect(approved.kind, JSON.stringify(approved)).toBe("done");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toMatch(/^- \[x\] requirements-analysis/m);

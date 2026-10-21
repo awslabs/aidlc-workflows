@@ -123,10 +123,11 @@ sub-number, such as `NFR4.1` and `NFR4.2`. Carry these IDs on every requirement
 row.
 
 Create
-`<record>/construction/{unit-name}/nfr-requirements/traceability.json`.
-Enumerate every inception `NFR{n}` in `requirements.md`, or, when User Stories
+`<record>/construction/{unit-name}/nfr-requirements/traceability.json` by running
+`{{INVOKE}} engine sensor-traceability --stage nfr-requirements --output-path <that path> --write-upstream`:
+it lists every inception `NFR{n}` Requirements Analysis recorded, or, when User Stories
 did not run and `unit-of-work-story-map.md` gives this Unit NFR rows, the NFRs
-on those rows. Target the derived `NFRx.y` IDs; one that does not apply to this
+on those rows, each with a `GAP` row. Target the derived `NFRx.y` IDs; one that does not apply to this
 Unit is `N/A` in `coverage`, with the reason as its target:
 
 ```json

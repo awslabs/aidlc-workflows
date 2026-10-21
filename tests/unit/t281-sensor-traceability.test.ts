@@ -2234,8 +2234,9 @@ describe("t281 the table the tool starts (--write-upstream)", () => {
     rmSync(join(seededRecordDir(proj), "inception", "requirements-analysis", "traceability.json"));
     const path = join(seededRecordDir(proj), "inception", "user-stories", "traceability.json");
     const started = start(proj, "user-stories", path);
-    expect(started.reply.written).toBe(true);
+    expect(started.reply.written).toBe(false);
     expect(started.reply.upstream_ids).toEqual([]);
+    expect(readdirSync(join(seededRecordDir(proj), "inception", "user-stories"))).not.toContain("traceability.json");
     expect(started.reply.reason).toContain("Requirements Analysis recorded no requirement IDs");
     expect(started.reply.reason).toContain("every FR and NFR ID requirements.md defines");
 
