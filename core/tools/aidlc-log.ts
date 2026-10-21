@@ -111,6 +111,7 @@ import {
   isAutonomousConstructionDecision,
   legacyReviewAppendixEchoFields,
   isAutonomousSwarmStage,
+  unitOpenCheckpoints,
   waveEligible,
   loadStageGraphAll,
   isNonAnswer,
@@ -260,7 +261,7 @@ import {
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
-import { aidlcDispatcherInvocation, entrySkillInvocation, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES,
   SUMMARY_CONFIRMATION_CHOICES,
@@ -3138,8 +3139,11 @@ function stageBox(state: string, stage: string): string | undefined {
 // protocol names. A review the person asked for past the budget (even with
 // reviews off) and the one bounded stale-receipt recovery are one-off passes:
 // their verdict is terminal whatever the class. A Unit's last pass hands on to
-// `next`, which names its route's step. An isolated single-stage run,
-// a Unit in a swarm batch or a wave (their own loop goes on), an autonomous
+// `next`, which names its route's step, after the Unit's completion when it
+// is still open on the stage (a team's route hands the body back without it).
+// A unit-major walk keeps a later per-Unit stage's own box pending, so for a
+// Unit a pending stage is in flight too. An isolated single-stage run, a Unit
+// in a swarm Bolt or a wave (their own loop goes on), an autonomous
 // Construction gate and a stage no longer in flight keep the step their own
 // directive names: no note.
 function reviewVerdictStep(
@@ -3152,6 +3156,7 @@ function reviewVerdictStep(
     node: { slug: string; phase: string; for_each?: string; mode?: string; reviewer_max_iterations?: number };
     reviewClass: ReviewClass | null;
     autonomousCandidate: boolean;
+    attempt: { boltStarted: boolean };
   },
   selection: { intent: string | null; space: string },
   request: { personAsked: boolean; recovery: boolean },
@@ -3160,14 +3165,14 @@ function reviewVerdictStep(
   const unit = flags.unit;
   const oneOff = request.personAsked || request.recovery;
   if (flags.single === "true" || reviewClass === null) return null;
-  if (unit !== undefined && context.autonomousCandidate) return null;
+  if (unit !== undefined && context.autonomousCandidate && context.attempt.boltStarted) return null;
   if (unit !== undefined && waveEligible(node) && getField(state, "Construction Iteration")?.trim() !== "unit-major") {
     return null;
   }
   if (reviewClass === "none" && !oneOff) return null;
   if (node.phase === "initialization") return null;
   const box = stageBox(state, flags.stage);
-  if (box === undefined || !REVIEW_IN_FLIGHT.has(box)) return null;
+  if (box === undefined || !(REVIEW_IN_FLIGHT.has(box) || (unit !== undefined && box === "pending"))) return null;
   const terminal = oneOff || terminalReviewVerdict(
     verdict,
     String(iteration),
@@ -3192,7 +3197,16 @@ function reviewVerdictStep(
       }),
     });
   }
-  if (unit !== undefined) return reviewVerdictNote({ kind: "unit", next: aidlcDispatcherInvocation("orchestrate next") });
+  if (unit !== undefined) {
+    const open = unitOpenCheckpoints(pd, flags.stage).some((entry) => entry.unit === unit && entry.state === "in-progress");
+    return reviewVerdictNote({
+      kind: "unit",
+      next: aidlcDispatcherInvocation("orchestrate next"),
+      ...(open
+        ? { complete: aidlcDispatcherInvocation(`state unit complete --stage ${flags.stage} --unit ${quoteCommandArgument(unit)}`) }
+        : {}),
+    });
+  }
   if (node.phase === "construction" && isAutonomousConstructionGate(state, node, pd)) return null;
   // A recovery pass re-checked an invalidated review, and a backward jump began
   // this attempt: either way the gate's brief is the stale one.

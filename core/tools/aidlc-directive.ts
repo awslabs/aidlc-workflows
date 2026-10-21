@@ -1258,12 +1258,12 @@ export function reviewRequestNote(
 // wrote comes before it: their branch is `next` alone. The gate's Review brief
 // is named with its command too: an agent that no longer holds the reviewer
 // protocol (after a compaction) otherwise guesses at the tool. A Unit's step
-// after its last pass is its route's (its completion, the next Unit, its
-// checkpoint, a team's Unit gate), so it is `next`.
+// after its last pass is its route's (the next Unit, its checkpoint, a team's
+// Unit gate), so it is `next`, after the Unit's completion when it is still open.
 export type ReviewVerdictStep =
   | { kind: "person-wrote"; next: string }
   | { kind: "next-pass"; request: string }
-  | { kind: "unit"; next: string }
+  | { kind: "unit"; next: string; complete?: string }
   | { kind: "learnings"; brief: string }
   | { kind: "gate"; report: string; summary: boolean; brief: string };
 const NO_FURTHER_PASS = "No further review pass follows: run stage-completion verification, then ";
@@ -1277,7 +1277,8 @@ export function reviewVerdictNote(step: ReviewVerdictStep): string {
       return "Another review pass follows: fix what its findings name (a review that did not finish names nothing " +
         `to fix), then request the next pass with \`${step.request}\` in this turn.`;
     case "unit":
-      return `No further review pass follows: run \`${step.next}\` and follow the step it returns, in this turn.`;
+      return `No further review pass follows: ${step.complete === undefined ? "" : `record this Unit's completion with \`${step.complete}\`, then `}` +
+        `run \`${step.next}\` and follow the step it returns, in this turn.`;
     case "learnings":
       return `${NO_FURTHER_PASS}say the completion summary, then run the learnings ritual and ask its question, ` +
         `which ends the turn. The approval gate comes after their answer, with the review brief that \`${step.brief}\` prints.`;
