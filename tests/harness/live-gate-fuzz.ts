@@ -15,7 +15,8 @@
 //   P5 no loop and no dead end: the work ends at the next step or at a wait on the person, and no engine refusal
 //      comes back for the same call.
 //
-// Records are read by script, the agent's words to the person by a model (live-corpus.ts judgeText); a difference in
+// Records are read by script, the agent's words to the person by a model (judgeWords, with what the person had been
+// shown before their reply); a difference in
 // wording between runs is never a failure. The drivers: Claude Code through the SDK (its own Claude Code, the nightly's
 // model pins) and through the box's own `claude -p` (AIDLC_GATE_FUZZ_CLAUDE_BIN, the shell's models), Codex through `codex exec`,
 // Kiro CLI over ACP, opencode through `opencode run`, the Cursor agent through `agent -p`, Copilot CLI through
@@ -36,7 +37,7 @@ import {
   setupOpencodeProject, trustCopilotFolder,
 } from "./exec-drive.ts";
 import { AcpSession, driveKiroAcp } from "./kiro-acp-drive.ts";
-import { homeDigest, judgeText, liveProject, PERSON_READS_RULE } from "./live-corpus.ts";
+import { homeDigest, judgeVerdict, liveProject, PERSON_READS_RULE } from "./live-corpus.ts";
 import { auditCursor, type PersonTurn, unbackedDecisions } from "./person-turns.ts";
 import { driveAidlc } from "./sdk-drive.ts";
 import { remainingOperationTimeoutMs } from "./test-budget.ts";
@@ -625,8 +626,33 @@ export interface Verdict {
 }
 
 const CARRYING_ON = /AI-DLC is carrying on/;
-// The judge reads only the agent's last words: it is told that the next stage's own opening question is the work moving on.
-const MOVES_ON = "Once their decision is on record the work moves on, and the next stage may open with its own question (how to answer its questions, a plan to approve, its own gate): that question is the work moving on, not a question back about this reply.";
+/**
+ * The agent's words after the person's reply, judged by meaning with what the person had been shown before it, so the
+ * next stage's own opening question reads as the work moving on and not as a question back.
+ */
+export async function judgeWords(reply: Reply, shown: string, said: string, judgeDir: string): Promise<{ failure: string | null; asked: number | null }> {
+  if (said.trim().length === 0) return { failure: "the agent said nothing to the person before carrying on (no line about what it did)", asked: null };
+  const end = reply.expected.end;
+  const proc = Bun.spawn(["claude", "-p", [
+    "You judge what an AI assistant told a person in a software project tool, right after the person replied to it.",
+    `What the assistant had shown the person just before (its end):\n${shown.slice(-2500) || "(nothing in this chat yet)"}`,
+    `The person typed: ${JSON.stringify(reply.inputs.at(-1) ?? "")}`,
+    `What the person meant: ${reply.meaning}`,
+    ...(end.says.length ? [`The reply must tell the person each of these, by meaning and not by exact words (a reply that stops at the one allowed question need only ask it):\n${end.says.map((x) => `- ${x}`).join("\n")}`] : []),
+    end.asks > 0
+      ? "One question back to the person about their reply is allowed: the meaning leaves a choice to them or the line is ambiguous. Asking it plainly passes; acting consistently with the meaning without asking passes too."
+      : "No question back to the person about their reply is allowed: the meaning is clear.",
+    "A question back is one about the person's reply or the same decision: asking again, asking them to confirm, or asking something their reply already settled. Once the decision is carried out the work moves on, and the next step may open with its own question (how to answer a new stage's questions, a plan to approve, the next gate): that is not a question back. One question with several options is one question.",
+    `The reply passes when all hold: (1) it says in plain words what was done, or what the person now needs to decide, consistent with what they meant; ${PERSON_READS_RULE}(3) it asks a question back only where allowed above. Judge the words to the person, not the work log.`,
+    'Answer with one line of JSON only: {"ok": true or false, "asked": <the number of questions back, as defined above>, "reason": "<one sentence>"}',
+    `What the assistant told the person after their reply:\n${said.slice(-4000)}`,
+  ].join("\n\n"), "--output-format", "json", "--model", "opus", "--no-session-persistence", "--permission-mode", "default",
+  "--disallowedTools", "Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "Skill", "AskUserQuestion"],
+  { cwd: judgeDir, stdout: "pipe", stderr: "pipe", env: { ...process.env, CLAUDE_CONFIG_DIR: join(judgeDir, "config"), DISABLE_AUTOUPDATER: "1" } });
+  const [stdout, status] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+  if (status !== 0) return { failure: `the judge could not run (exit ${status})`, asked: null };
+  return judgeVerdict(String((JSON.parse(stdout) as { result?: string }).result ?? ""));
+}
 const REFUSAL = /"kind"\s*:\s*"error"|Cannot (?:approve|record|reject)|Refusing to/;
 
 /** Judge one exchange against the reply: the record by script, the agent's words by the model judge. */
@@ -654,7 +680,8 @@ export async function judge(reply: Reply, tool: LiveTool, rig: LiveRig, ex: Exch
   // P2: the agent's words after the last line, by meaning; refusals the agent met are counted.
   const last = ex.turns.at(-1);
   const read = last?.text ?? "";
-  const verdict = await judgeText({ typed: reply.inputs.at(-1) ?? "", meaning: `${reply.meaning} ${MOVES_ON}`, asksAllowed: end.asks, says: end.says, engineWords: PERSON_READS_RULE }, read, judgeDir);
+  const shown = ex.turns.at(-2)?.text ?? "";
+  const verdict = await judgeWords(reply, shown, read, judgeDir);
   if (verdict.failure !== null) failures.push({ pass: "P2", what: verdict.failure });
   const asks = Math.max(verdict.asked ?? 0, tool === "claude" ? ex.boxes - 1 : 0);
   if (asks > end.asks) failures.push({ pass: "P2", what: `${asks} question(s) back to the person, ${end.asks} allowed` });
@@ -748,7 +775,8 @@ export function writeReport(dir: string, verdicts: Verdict[], header: string[]):
   return file;
 }
 
-// `--rejudge <report dir>`: a finished run's answers judged again by meaning (sameAnswer), into <dir>/rejudged.
+// `--rejudge <report dir>`: a finished run's answers judged again by meaning (sameAnswer), and where the run kept its
+// traces the agent's words judged again (judgeWords), into <dir>/rejudged.
 if (import.meta.main && process.argv.includes("--rejudge")) {
   const dir = process.argv[process.argv.indexOf("--rejudge") + 1];
   const verdicts = JSON.parse(readFileSync(join(dir, "verdicts.json"), "utf-8")) as Verdict[];
@@ -763,6 +791,16 @@ if (import.meta.main && process.argv.includes("--rejudge")) {
       kept.push(f);
     }
     v.failures = kept;
+    const trace = join(dir, "traces", v.tool, v.reply.id, "exchange.json");
+    const ex = existsSync(trace) ? (JSON.parse(readFileSync(trace, "utf-8")) as { exchange: Exchange | null }).exchange : null;
+    if (ex && ex.turns.length > 0) {
+      const words = await judgeWords(v.reply, ex.turns.at(-2)?.text ?? "", ex.turns.at(-1)?.text ?? "", judgeDir);
+      v.failures = v.failures.filter((f) => !(f.pass === "P2" && (/^the agent('s words| said nothing)|^the judge /.test(f.what) || / question\(s\) back to the person/.test(f.what))));
+      if (words.failure !== null) v.failures.push({ pass: "P2", what: words.failure });
+      const asks = Math.max(words.asked ?? 0, v.tool === "claude" ? ex.boxes - 1 : 0);
+      if (asks > v.reply.expected.end.asks) v.failures.push({ pass: "P2", what: `${asks} question(s) back to the person, ${v.reply.expected.end.asks} allowed` });
+      v.asks = asks;
+    }
   }
   console.log(writeReport(join(dir, "rejudged"), verdicts, ["The answers judged again by meaning (live-gate-fuzz.ts --rejudge)."]));
 }
