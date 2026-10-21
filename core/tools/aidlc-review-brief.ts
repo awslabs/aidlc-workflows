@@ -14,6 +14,7 @@ import {
   ENGINE_DIR,
   attemptEventDefinitelyBefore,
   auditBlockField,
+  backwardJumpBoundary,
   changesSinceLastReview,
   constructionCheckpointsApply,
   errorMessage,
@@ -1951,13 +1952,8 @@ export function reviewInvalidationDetails(
   // A backward jump is itself an attempt boundary. Remove downstream paths
   // whose own stage gate has since consumed them, while preserving the changed
   // upstream source as context for stages that still require re-check.
-  const boundary = attemptFrontier.length === 1
-    ? attemptFrontier[0]
-    : undefined;
-  if (
-    boundary?.event === "STAGE_JUMPED" &&
-    auditBlockField(boundary.block, "Direction") === "BACKWARD"
-  ) {
+  const boundary = backwardJumpBoundary(attemptFrontier);
+  if (boundary) {
     const jumpChanged = parseAuditPathArray(
       auditBlockField(boundary.block, "Changed Upstream Artifacts"),
     );

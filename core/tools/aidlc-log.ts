@@ -32,6 +32,8 @@ import {
   requestChangesReportCommand,
   stageGateReportCommand,
   stageReviewBriefCommand,
+  backwardJumpBoundary,
+  reviewInvalidationAttemptView,
   markStageWorkLogged,
   markTurnEnd,
   LEARNINGS_NOTE_CHOICES,
@@ -3180,11 +3182,11 @@ function reviewVerdictStep(
     });
   }
   if (node.phase === "construction" && isAutonomousConstructionGate(state, node, pd)) return null;
-  // The recovery pass re-checked an invalidated review, so its brief is the stale one.
-  const brief = stageReviewBriefCommand(
-    flags.stage,
-    request.recovery ? "stale" : box === "revising" ? "revision" : "first",
-  );
+  // A recovery pass re-checked an invalidated review, and a backward jump began
+  // this attempt: either way the gate's brief is the stale one.
+  const stale = request.recovery ||
+    backwardJumpBoundary(reviewInvalidationAttemptView(readAuditShardEvents(pd), flags.stage).floor) !== undefined;
+  const brief = stageReviewBriefCommand(flags.stage, stale ? "stale" : box === "revising" ? "revision" : "first");
   if (box === "in-progress") {
     if (learningsRitualRuns(ceremonyPolicyValues(getField(state, "Scope"), state).learnings, state, flags.stage)) {
       return reviewVerdictNote({ kind: "learnings", brief });

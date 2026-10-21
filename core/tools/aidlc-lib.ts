@@ -19638,6 +19638,16 @@ export function reviewInvalidationAttemptView(
   return { events, floor };
 }
 
+// The backward jump that began the stage's current attempt, when one did (the
+// attempt's only boundary). The Review brief says what it changed and
+// invalidated, which is why the gate after it shows the stale brief.
+export function backwardJumpBoundary(floor: ReadonlyArray<AuditShardEvent>): AuditShardEvent | undefined {
+  const boundary = floor.length === 1 ? floor[0] : undefined;
+  return boundary?.event === "STAGE_JUMPED" && auditBlockField(boundary.block, "Direction") === "BACKWARD"
+    ? boundary
+    : undefined;
+}
+
 export function attemptEventAfterFrontier(
   frontier: ReadonlyArray<AuditShardEvent>,
   event: AuditShardEvent,
