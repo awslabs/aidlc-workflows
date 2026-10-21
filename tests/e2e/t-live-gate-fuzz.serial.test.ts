@@ -7,7 +7,7 @@
 //
 // On demand only: AIDLC_GATE_FUZZ_LIVE=1 opens it; no CI job sets it. AIDLC_GATE_FUZZ_TOOLS picks the tools (default
 // claude,claude-cli,codex,kiro,opencode,cursor; copilot when its account has quota), AIDLC_GATE_FUZZ_SAMPLE a comma list of reply
-// ids or a number per wait point (default 1), AIDLC_GATE_FUZZ_SEED the sample's seed, AIDLC_GATE_FUZZ_REPORT_DIR the
+// ids or a number per wait point (default 1) and AIDLC_GATE_FUZZ_ALSO ids beside it, AIDLC_GATE_FUZZ_SEED the sample's seed, AIDLC_GATE_FUZZ_REPORT_DIR the
 // report folder (default tests/logs/gate-fuzz-live). Scratch projects; the tools' scratch homes where a tool has one
 // (Claude Code's own config folder, CODEX_HOME, opencode's XDG_CONFIG_HOME, COPILOT_HOME) with self-updates off; the
 // person's homes are hashed before and after, and a change in one the run owes unchanged fails the file. Kiro CLI keeps
@@ -37,8 +37,12 @@ function eligible(tool: LiveTool): Reply[] {
   return loadCorpus().filter((reply) => !(reply.shownBy === "box" && tool !== "claude") && !(reply.inputs.some((i) => i.startsWith("$aidlc")) && tool !== "codex") &&
     reply.wait !== "guard-recovery");
 }
-const sample = (tool: LiveTool) =>
-  sampleByGroup(eligible(tool), process.env.AIDLC_GATE_FUZZ_SAMPLE ?? "1", process.env.AIDLC_GATE_FUZZ_SEED, (reply) => reply.wait);
+// AIDLC_GATE_FUZZ_ALSO: reply ids run beside the sample (the measured losses, say).
+const sample = (tool: LiveTool) => {
+  const picked = sampleByGroup(eligible(tool), process.env.AIDLC_GATE_FUZZ_SAMPLE ?? "1", process.env.AIDLC_GATE_FUZZ_SEED, (reply) => reply.wait);
+  const also = (process.env.AIDLC_GATE_FUZZ_ALSO ?? "").split(",").filter(Boolean);
+  return [...picked, ...eligible(tool).filter((reply) => also.includes(reply.id) && !picked.includes(reply))];
+};
 
 const verdicts: Verdict[] = [];
 const before = new Map<LiveTool, Record<string, string>>();

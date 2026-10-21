@@ -683,7 +683,8 @@ class WalkStandIn extends AgentStandIn {
         this.host.write(p, `${readFileSync(path, "utf-8")}\n\nRevision ${this.revised}: tightened the wording.\n`);
       }
     }
-    if (typeof d.reviewer === "string") this.reviewAgain(stage, typeof d.unit === "string" ? d.unit : null);
+    // The revised work is reviewed again; after a rejection the engine counts the passes from one again.
+    if (typeof d.reviewer === "string") this.review(d);
     this.gate({ ...d, gate_only: false });
   }
 }

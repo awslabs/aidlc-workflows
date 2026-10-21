@@ -6,6 +6,7 @@
 //       [--questions stage-gate,code-plan,...] [--walks bugfix,feature,...] [--walk-hosts claude,...] [--host-scopes bugfix,classic]
 //       [--i8-every 4] [--shrink] [--unattended-every 10] [--update-from <older release's dist folder>]
 //   bun tests/harness/gate-fuzz-run.ts --replay '<run id>' [--out DIR]
+//   bun tests/harness/gate-fuzz-run.ts --report-only --out DIR      (the report of a run's results so far)
 //
 // Each seed picks a state (a question the engine knows, on a host, under a Guard Policy; or a point a walked scope
 // waited on the person) and a run of steps; the run and its twin (the same steps, other words of the same shapes) are
@@ -206,6 +207,13 @@ function report(args: Args): void {
 async function main(): Promise<void> {
   const args = parse(process.argv.slice(2));
   mkdirSync(args.out, { recursive: true });
+  if (process.argv.includes("--report-only")) {
+    // A report of the jobs' results so far, while they run.
+    const merged = readdirSync(args.out).filter((f) => /^results-\d+\.jsonl$/.test(f)).map((f) => readFileSync(join(args.out, f), "utf-8")).join("");
+    if (merged) writeFileSync(join(args.out, "results.jsonl"), merged);
+    report(args);
+    return;
+  }
   if (args.replay) {
     const { state: id, seed, most, dropped } = parseRunId(args.replay);
     const state = await stateById(id, args);
