@@ -1395,7 +1395,11 @@ after its `UNIT_COMPLETED`, a wave completion included). That run of the step
 gets the stage's budget and its one stale-review recovery again, so a redo the
 engine asked for finishes under any review setting. Its passes keep their
 numbers (the redo's first request is the next ordinal), and team-owned Units
-keep their Bolt floors.
+keep their Bolt floors. A reopen of one Unit's step (its Unit-tagged
+`GATE_REJECTED`, as `aidlc-jump.ts reopen --units` records it) starts a new
+attempt for that Unit alone, with Construction checkpoints on or off: its stale
+review still gets the one recovery pass, unspent again, and another Unit's
+reopen leaves this Unit's spent recovery spent.
 Autonomous Units halt before `finalize` and
 restart their Bolt attempt only after a human decision. The reviewer
 never blocks — the human always has final say at the gate — and does not fire

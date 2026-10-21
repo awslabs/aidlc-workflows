@@ -3376,6 +3376,52 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     cover(p, "alpha", ["code-generation"]);
     expect(next(p).construction_checkpoint?.unit).toBe("alpha");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // With checkpoints off, unit-major still starts a new attempt per Unit
+  // (#2773): a reopen of the Unit's step, its start and its new Plan Approval
+  // open a fresh recovery, so the redo is reviewed instead of refused with the
+  // very reopen the refusal names. Another Unit's reopen leaves it spent.
+  function alphaRecoverySpentUncheckpointed(): string {
+    const p = policyFixture("classic", "strict (set by you)", "adversarial");
+    writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
+      .replace("- **Construction Checkpoints**: enabled", "- **Construction Checkpoints**: disabled"));
+    buildReviewed(p, "alpha", alphaAt(p, 1));
+    expect(tool(p, "jump", ["reopen", "--target", "code-generation", "--units", "alpha"]).status).toBe(0);
+    expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "alpha"]).status).toBe(0);
+    cover(p, "alpha", ["code-generation"], false);
+    alphaAt(p, 2)();
+    expect(reviewThroughLog(p, codeReview("alpha", 1)).request?.recovery).toBe("stale-receipt");
+    cover(p, "alpha", ["code-generation"]);
+    alphaAt(p, 3)();
+    const spent = tool(p, "log", codeReview("alpha", 2));
+    expect(spent.status).not.toBe(0);
+    expect(spent.out).toContain("REVIEW_RECOVERY_SPENT");
+    return p;
+  }
+
+  for (const changed of [true, false]) {
+    test(`strict, checkpoints off: alpha's step reopened, started and its plan approved gets its redo reviewed (code ${changed ? "changed" : "unchanged"})`, () => {
+      const p = alphaRecoverySpentUncheckpointed();
+      const reopened = tool(p, "jump", ["reopen", "--target", "code-generation", "--units", "alpha"]);
+      expect(reopened.status, reopened.out).toBe(0);
+      expect(tool(p, "state", ["unit", "start", "--stage", "code-generation", "--unit", "alpha"]).status).toBe(0);
+      planApproved(p, "alpha");
+      if (changed) alphaAt(p, 4)();
+      cover(p, "alpha", ["code-generation"], false);
+      const redone = reviewThroughLog(p, codeReview("alpha", 1));
+      expect(redone.status, redone.out).toBe(0);
+      expect(redone.request?.recovery).toBe("stale-receipt");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  test("strict, checkpoints off: beta's reopen leaves alpha's spent recovery spent", () => {
+    const p = alphaRecoverySpentUncheckpointed();
+    const reopened = tool(p, "jump", ["reopen", "--target", "code-generation", "--units", "beta"]);
+    expect(reopened.status, reopened.out).toBe(0);
+    const stillSpent = tool(p, "log", codeReview("alpha", 2));
+    expect(stillSpent.status).not.toBe(0);
+    expect(stillSpent.out).toContain("REVIEW_RECOVERY_SPENT");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });
 
 // The walking skeleton gates the per-unit stages. Once they are all done or

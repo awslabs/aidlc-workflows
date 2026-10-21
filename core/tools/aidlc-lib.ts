@@ -21261,12 +21261,22 @@ export function freshReviewReceipts(
       if (!rejectedUnit || !gateStagesFromBlock(e.block).includes(stage.slug)) {
         continue;
       }
+      // The rejection starts a new attempt for this Unit, and the stale-receipt
+      // recovery is single-use within an attempt (reviewAttemptAccounting floors
+      // the Unit's passes here too): its old receipt stays stale, but its
+      // recovery, and the retained-source mark when this Unit holds it, are
+      // unspent again. Another Unit's rejection leaves this Unit's mark alone.
       if (unitVerdicts.delete(rejectedUnit)) {
         unitStale.add(rejectedUnit);
         unitStaleProgress.set(rejectedUnit, {
           nextIteration: (unitIterations.get(rejectedUnit) ?? 0) + 1,
-          recoverySpent: unitReceiptRecovery.get(rejectedUnit) ?? false,
+          recoverySpent: false,
         });
+      }
+      if (newestSourceUnit === rejectedUnit) {
+        sourceRecoverySpent = false;
+        const progress = newestSourceProgress as StaleReviewProgress | null;
+        if (progress) newestSourceProgress = { ...progress, recoverySpent: false };
       }
       unitIterations.delete(rejectedUnit);
       unitReceiptRecovery.delete(rejectedUnit);
