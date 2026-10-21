@@ -133,8 +133,8 @@ describe("t-traceability-at-gate: the check reads the finished tables when the g
     projects.push(proj);
     const state = readFileSync(join(FIXTURES_DIR, "state-mid-inception.md"), "utf-8")
       .replace("**Scope**: bugfix", "**Scope**: feature")
-      .replace("- [-] requirements-analysis — EXECUTE", "- [x] requirements-analysis — EXECUTE")
-      .replace("- [S] user-stories — SKIP (bugfix scope)", "- [-] user-stories — EXECUTE")
+      .replace("- [-] requirements-analysis \u2014 EXECUTE", "- [x] requirements-analysis \u2014 EXECUTE")
+      .replace("- [S] user-stories \u2014 SKIP (bugfix scope)", "- [-] user-stories \u2014 EXECUTE")
       .replace("**Current Stage**: requirements-analysis", "**Current Stage**: user-stories")
       .replace("**In Progress**: requirements-analysis", "**In Progress**: user-stories");
     mkdirSync(seededRecordDir(proj), { recursive: true });
