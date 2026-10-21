@@ -4792,26 +4792,23 @@ export async function collectDoctorReport(
   const treeVersions = harnessTreeVersionsCheck(projectDir);
   if (treeVersions) results.push(treeVersions);
 
-  // 4a. Project-default scope — real env overrides the recorded project flag.
-  // The framework fallback is not a configured project default.
+  // 4a. Project-default scope: real env overrides the recorded project flag.
+  // The framework fallback is not a configured project default, so with
+  // nothing set there is no row: in a terminal this process cannot see the
+  // value Claude Code passes from .claude/settings.json, and "unset" would be
+  // false there.
   const defaultResolution = defaultScopeResolution();
   const envScope = defaultResolution.scope;
-  if (defaultResolution.source !== "env") {
-    results.push({
-      pass: true,
-      label: "AWS_AIDLC_DEFAULT_SCOPE (unset - no project default)",
-    });
-  } else if (!defaultResolution.error && validScopes().has(envScope)) {
-    results.push({
-      pass: true,
-      label: `AWS_AIDLC_DEFAULT_SCOPE=${envScope} (valid)`,
-    });
-  } else {
-    results.push({
-      pass: false,
-      label: `AWS_AIDLC_DEFAULT_SCOPE=${envScope} (invalid)`,
-      fix: `valid values: ${[...validScopes()].join(", ")}`,
-    });
+  if (defaultResolution.source === "env") {
+    results.push(
+      !defaultResolution.error && validScopes().has(envScope)
+        ? { pass: true, label: `AWS_AIDLC_DEFAULT_SCOPE=${envScope} (valid)` }
+        : {
+          pass: false,
+          label: `AWS_AIDLC_DEFAULT_SCOPE=${envScope} (invalid)`,
+          fix: `valid values: ${[...validScopes()].join(", ")}`,
+        },
+    );
   }
 
   // 4c. Plugin selection — doctor is a full-graph consumer. Runtime consumers
