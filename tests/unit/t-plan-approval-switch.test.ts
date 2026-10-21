@@ -652,6 +652,15 @@ describe("asked before the piece of work exists", () => {
     if (id === null) throw new Error(`no request in ${printed.out}`);
     return { id: id[1], message };
   };
+  // Their line named no plan, so the one the agent passed gave way: the agent
+  // proposes one, and the answers the question names carry their flags.
+  const proposedFor = (proj: string, message: string): string => {
+    const propose = /`[^`]*next (--propose <plan> --request [0-9a-f]{8})`/.exec(message);
+    if (propose === null) return message;
+    return runOrchestrateNext(ORCHESTRATE, proj, propose[1].replace("<plan>", "feature").split(" "), {
+      env: { ...process.env, ...CLEAR },
+    }).out;
+  };
 
   test("the person's own words at the gate turn it off for the work that request creates", () => {
     const proj = emptyProject();
@@ -961,7 +970,7 @@ describe("asked before the piece of work exists", () => {
     const proj = emptyProject();
     reply(proj, "/aidlc --plan-approval off build the export");
     const asked = requestOf(proj, "build the export", ["--plan-approval", "off"]);
-    expect(asked.message).toContain("--plan-approval off");
+    expect(proposedFor(proj, asked.message)).toContain("--plan-approval off");
     const made = utility(proj, ["intent-create", "--request", asked.id, "--plan-approval", "off"]);
     expect(made.status, made.stderr).toBe(0);
     expect(createdPlanApproval(proj)).toBe("off (set by you)");
@@ -975,7 +984,7 @@ describe("asked before the piece of work exists", () => {
       "/aidlc --project-type greenfield --skip user-stories --collaborators off --guard-policy off --plan-approval off build the export"))
       .not.toContain("AIDLC Guard Policy");
     const asked = requestOf(proj, "build the export", ["--skip", "user-stories", "--plan-approval", "off"]);
-    expect(asked.message).toContain("--plan-approval off");
+    expect(proposedFor(proj, asked.message)).toContain("--plan-approval off");
     const made = utility(proj, ["intent-create", "--request", asked.id, "--skip", "user-stories", "--plan-approval", "off"]);
     expect(made.status, made.stderr).toBe(0);
     expect(createdPlanApproval(proj)).toBe("off (set by you)");
