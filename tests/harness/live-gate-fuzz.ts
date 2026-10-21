@@ -620,6 +620,8 @@ export interface Verdict {
 }
 
 const CARRYING_ON = /AI-DLC is carrying on/;
+// The judge reads only the agent's last words: it is told that the next stage's own opening question is the work moving on.
+const MOVES_ON = "Once their decision is on record the work moves on, and the next stage may open with its own question (how to answer its questions, a plan to approve, its own gate): that question is the work moving on, not a question back about this reply.";
 const REFUSAL = /"kind"\s*:\s*"error"|Cannot (?:approve|record|reject)|Refusing to/;
 
 /** Judge one exchange against the reply: the record by script, the agent's words by the model judge. */
@@ -647,7 +649,7 @@ export async function judge(reply: Reply, tool: LiveTool, rig: LiveRig, ex: Exch
   // P2: the agent's words after the last line, by meaning; refusals the agent met are counted.
   const last = ex.turns.at(-1);
   const read = last?.text ?? "";
-  const verdict = await judgeText({ typed: reply.inputs.at(-1) ?? "", meaning: reply.meaning, asksAllowed: end.asks, says: end.says, engineWords: PERSON_READS_RULE }, read, judgeDir);
+  const verdict = await judgeText({ typed: reply.inputs.at(-1) ?? "", meaning: `${reply.meaning} ${MOVES_ON}`, asksAllowed: end.asks, says: end.says, engineWords: PERSON_READS_RULE }, read, judgeDir);
   if (verdict.failure !== null) failures.push({ pass: "P2", what: verdict.failure });
   const asks = Math.max(verdict.asked ?? 0, tool === "claude" ? ex.boxes - 1 : 0);
   if (asks > end.asks) failures.push({ pass: "P2", what: `${asks} question(s) back to the person, ${end.asks} allowed` });
