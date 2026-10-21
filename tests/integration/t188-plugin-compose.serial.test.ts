@@ -1294,6 +1294,37 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(body).not.toContain("{{INVOKE}}");
   });
 
+  test("a project whose installed tree predates projectInvocationTokens still composes the plugin's stages", () => {
+    // The plugin is rebuilt on a new release before the project runs `aidlc config`:
+    // the project's aidlc-command.ts loads but has no projectInvocationTokens. The
+    // tree's own callers are renamed with it, so the rest of the tree still loads.
+    const oldTree = join(tmp, "proj-old-tree");
+    cpSync(join(REPO_ROOT, "dist", "claude"), oldTree, { recursive: true });
+    const toolsDir = join(oldTree, ".claude", "tools");
+    expect(readFileSync(join(toolsDir, "aidlc-command.ts"), "utf-8")).toContain("export function projectInvocationTokens(");
+    for (const name of readdirSync(toolsDir).filter((file) => file.endsWith(".ts"))) {
+      const text = readFileSync(join(toolsDir, name), "utf-8");
+      if (text.includes("projectInvocationTokens")) {
+        writeFileSync(join(toolsDir, name), text.replaceAll("projectInvocationTokens", "retiredProjectInvocationTokens"));
+      }
+    }
+    const result = spawnSync(BUN, [join(pluginBuilt, "hooks", "compose.ts")], {
+      cwd: oldTree,
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_ROOT: pluginBuilt,
+        CLAUDE_PROJECT_DIR: oldTree,
+        AIDLC_HARNESS_DIR: ".claude",
+      },
+    });
+    expect(result.status).toBe(0);
+    expect(hookDrops(oldTree)).toBe("");
+    const body = stageBody(oldTree, "construction", "test-pro-integration");
+    expect(body).toContain("bun .claude/tools/aidlc.ts engine orchestrate report");
+    expect(body).not.toContain("{{INVOKE}}");
+  });
+
   // --- New stages compose + route ---
   test("new plugin stages are in the compiled graph", () => {
     const slugs = graph(project).map((s) => s.slug);

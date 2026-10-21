@@ -126,9 +126,16 @@ interface InstalledStageSchema {
 // Plugin prose gets core's invocation tokens (the INVOKE and TOOL_PREFIX ones) for the
 // channel the installed tree was projected for; the installed module knows it.
 type ProjectTokens = (text: string, harnessDir: string) => string;
+// An installed tree from before projectInvocationTokens existed (not yet
+// refreshed with `aidlc config`) still composes: compose runs under Bun, so the
+// copy channel's dispatcher line works for that tree until it is refreshed.
+const copyChannelTokens: ProjectTokens = (text, harnessDir) => text
+  .replaceAll("{{HARNESS_DIR}}", harnessDir)
+  .replaceAll("{{INVOKE}}", `bun ${harnessDir}/tools/aidlc.ts`)
+  .replaceAll("{{TOOL_PREFIX}}", `bun ${harnessDir}/tools/`);
 const projectPluginTokens: ProjectTokens = await import(join(HARNESS_DIR, "tools", "aidlc-command.ts"))
-  .then((m) => m.projectInvocationTokens as ProjectTokens)
-  .catch(() => (text: string, harnessDir: string) => text.replaceAll("{{HARNESS_DIR}}", harnessDir));
+  .then((m) => typeof m.projectInvocationTokens === "function" ? m.projectInvocationTokens as ProjectTokens : copyChannelTokens)
+  .catch(() => copyChannelTokens);
 
 let installedLibPromise: Promise<InstalledAidlcLib | null> | null = null;
 let installedSchemaPromise: Promise<InstalledStageSchema | null> | null = null;
