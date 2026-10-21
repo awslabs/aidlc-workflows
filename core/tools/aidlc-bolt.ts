@@ -1451,7 +1451,7 @@ function boltUsage(subcommand: string | undefined): string {
     checkpoint: [
       `${invoke("checkpoint")} --unit <name> [--action ${CHECKPOINT_ACTIONS.join("|")}]`,
       "  The Unit's Construction checkpoint. Required: --unit. --action defaults to status.",
-      `  --kind: ${CHECKPOINT_KINDS.join(", ")} (default unit). --over-unfinished-review goes with --action verify.`,
+      `  --kind: ${CHECKPOINT_KINDS.join(", ")} (default unit). --over-unfinished-review and --timeout-ms <milliseconds> go with --action verify.`,
       "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject)",
     ],
     "swarm-checkpoint": [

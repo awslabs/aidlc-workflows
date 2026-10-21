@@ -162,6 +162,7 @@ describe("bolt", () => {
     const checkpoint = run(p, "aidlc-bolt.ts", ["checkpoint", "--help"]).stdout;
     expect(checkpoint).toContain("--action status|ask|verify|approve|reject");
     expect(checkpoint).toContain("--kind: unit, skeleton");
+    expect(checkpoint).toContain("--over-unfinished-review and --timeout-ms <milliseconds> go with --action verify.");
     expect(run(p, "aidlc-bolt.ts", ["swarm-checkpoint", "--help"]).stdout).toContain("--action status|ask|approve|reject");
     expect(run(p, "aidlc-bolt.ts", ["dispatch-event", "--help"]).stdout).toContain("--strategy squash|merge|rebase");
   });
