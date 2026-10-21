@@ -31,8 +31,9 @@
 // receipt) waits while the plan does (the person's answer at the held gate and
 // the recovery remedy they picked excepted); a jump waits for the person's
 // move: the restart they picked at the recovery question, or one they asked
-// for, unless the engine's last step was superseded (a `jump execute` the
-// agent's own settled `next --stage` printed on this state excepted) or is its
+// for, unless the engine's last step was superseded (a `jump execute`, or one
+// Unit's `jump reopen`, to the stage the agent's own settled `next --stage`
+// claimed on this state excepted) or is its
 // Code Generation recovery question and the jump is one it offers or not the
 // choice the person just picked there. While the person is editing the plan
 // files themselves, those files are theirs (personIsEditingPlanFile). Three
