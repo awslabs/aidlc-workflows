@@ -162,6 +162,7 @@ describe("bolt", () => {
     const checkpoint = run(p, "aidlc-bolt.ts", ["checkpoint", "--help"]).stdout;
     expect(checkpoint).toContain("--action status|ask|verify|approve|reject");
     expect(checkpoint).toContain("--kind: unit, skeleton");
+    expect(checkpoint).toContain("--over-unfinished-review and --timeout-ms <milliseconds> go with --action verify.");
     expect(run(p, "aidlc-bolt.ts", ["swarm-checkpoint", "--help"]).stdout).toContain("--action status|ask|approve|reject");
     expect(run(p, "aidlc-bolt.ts", ["dispatch-event", "--help"]).stdout).toContain("--strategy squash|merge|rebase");
   });
@@ -223,6 +224,7 @@ describe("engine <noun> --help", () => {
     ["bolt", ["start", "complete"], true],
     ["worktree", ["create", "restore"], true],
     ["sensor", ["list", "describe", "fire"], true],
+    ["review-brief", ["review", "context", "summary"], true],
     ["state", ["unit"], false],
   ] as const) {
     for (const help of ["--help", "-h"]) {
@@ -242,7 +244,7 @@ describe("engine <noun> --help", () => {
   test("every verb of a route marked verbHelp answers --help", () => {
     const p = project();
     const marked = ROUTES.filter((route) => route.verbHelp === true);
-    expect(marked.map((route) => route.group).sort()).toEqual(["bolt", "log", "sensor", "worktree"]);
+    expect(marked.map((route) => route.group).sort()).toEqual(["bolt", "log", "review-brief", "sensor", "worktree"]);
     const before = errorRows(p);
     for (const route of marked) {
       for (const verb of route.verbs) {

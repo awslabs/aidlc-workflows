@@ -142,10 +142,6 @@ describe("§6 Error Recovery — context compaction", () => {
   test("references the PreCompact hook [.sh 25]", () => {
     expect(recovery).toContain("PreCompact hook");
   });
-
-  test("references the .aidlc-engine/recovery.md breadcrumb [.sh 26]", () => {
-    expect(recovery).toContain(".aidlc-engine/recovery.md");
-  });
 });
 
 describe("§7 Change Handling — change categories", () => {

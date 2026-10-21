@@ -62,8 +62,8 @@ Things that are **not** artifacts in this registry:
   "Filesystem mapping" below.
 - **Filenames.** The on-disk `.md` file and the canonical name don't have
   to match (they usually do, except at collisions).
-- **State plumbing.** `aidlc-state.md`, the `audit/` shards, and
-  `.aidlc-engine/recovery.md` are managed by tools (`aidlc-state.ts`, hook
+- **State plumbing.** `aidlc-state.md` and the `audit/` shards
+  are managed by tools (`aidlc-state.ts`, hook
   scripts), not by stages via `produces[]`. They never appear in the
   registry.
 - **Runtime values.** Strings like "user's prose answer" or

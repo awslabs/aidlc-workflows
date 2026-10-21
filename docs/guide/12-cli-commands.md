@@ -244,7 +244,7 @@ Run with no arguments when a state file exists to resume.
 /aidlc
 ```
 
-**Behavior:** Reads `aidlc-state.md`, checks `.aidlc-engine/recovery.md` for corruption, then carries on from the saved checkpoint, the same as `/aidlc --resume`. Say redo, jump to a stage, or start fresh to do something else. See [Session Management](11-session-management.md) for details.
+**Behavior:** Reads `aidlc-state.md`, then carries on from the saved checkpoint, the same as `/aidlc --resume`. Say redo, jump to a stage, or start fresh to do something else. See [Session Management](11-session-management.md) for details.
 
 `/aidlc --resume` continues directly from the saved checkpoint too. Add `--stage <slug>` when the explicit target should win and route through the normal jump behavior.
 
@@ -965,6 +965,10 @@ the plan stays as it is.
 The isolated run still uses the stage's configured agents and reviewer, but it
 does not run workflow learnings or ask for a workflow approval. Its synthetic
 completion is recorded in the audit log, then the command stops.
+A `--depth` or `--test-strategy` typed with it applies to that run only; your
+workflow's settings stay as they are. `--review`, `--guard-policy`, a
+`--guard.<check>` switch and the ceremony switches (such as `--sensors`) are
+refused with `--single`; run the stage without them.
 
 ```
 /aidlc --stage requirements-analysis --single
@@ -1950,6 +1954,25 @@ always need the human. Pre-generation summary confirmation needs the human only 
 `directive.ceremony.summary_confirmation === "on"`. Failures halt. Existing
 workflows without `Construction Checkpoints` retain their legacy first-stage
 and late stage approvals; team-owned Unit gates retain their own policy.
+
+### Checkpoint verification timeout
+
+`aidlc engine bolt checkpoint --unit <unit> --kind unit --action verify`
+runs the approved project check with a default limit of 30 minutes. For a
+longer check, add `--timeout-ms 3600000` (one hour). The value must be an integer
+from 1 through 2,147,483,647 milliseconds and is accepted only with
+`--action verify`. Each execution, including an evidence-refresh retry, uses
+that budget.
+
+A timeout retires the owned process group on POSIX or process tree on Windows
+before recording a failed verification, reporting incomplete cleanup if it
+cannot confirm termination. On POSIX, stopping verification with SIGINT,
+SIGTERM or SIGHUP forwards that signal to the owned group; processes that
+ignore it are killed after a short grace period. Cleanup can add up to four
+seconds. A watcher in the owned POSIX group also retires it if the verifier is killed
+with SIGKILL, which cannot be forwarded. An interrupted verifier cannot record
+a passing proof; a hard kill leaves its started proof unfinished and unverified.
+Independently detached POSIX processes are outside that group.
 
 ### Construction order and execution
 

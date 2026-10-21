@@ -29,6 +29,7 @@ import {
 } from "./aidlc-runtime-paths.ts";
 export { entrySkillInvocation, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import {
+  type EngineInvocation,
   GUARD_REMEDY_WORDING,
   guardOperationInvocation,
   guardOperationMatchesEngineArgs,
@@ -3452,8 +3453,9 @@ function resolveRecordDir(
   projectDir: string,
   intent?: string,
   space?: string,
+  bind?: boolean,
 ): { dir: string | null; space: string } {
-  const selection = resolveWorkflowSelection(projectDir, { space, intent });
+  const selection = resolveWorkflowSelection(projectDir, { space, intent, ...(bind === undefined ? {} : { bind }) });
   return {
     dir:
       selection.intent === null
@@ -7488,6 +7490,7 @@ export interface WorkflowSelectionOptions {
   space?: string;
   intent?: string;
   sessionId?: string;
+  bind?: boolean;
 }
 
 // THE ONE DOOR. Every id a host hands the engine (a hook payload's session_id,
@@ -7701,7 +7704,8 @@ export function resolveWorkflowSelection(
   // session, or identity a hook handed us, is read-only.
   const chat = rawSession
     ? resolveChat(projectDir, rawSession, {
-        bind: named === null && process.env.AIDLC_SESSION_OVERRIDE_SOURCE !== "payload",
+        bind: options.bind !== false && named === null &&
+          process.env.AIDLC_SESSION_OVERRIDE_SOURCE !== "payload",
       })
     : null;
   const sessionId = chat?.chatId ?? null;
@@ -8768,6 +8772,9 @@ export interface ActiveDirectiveGuardRecoveryResponse {
 export interface ActiveDirectiveMarker {
   version: 1 | 2; stage: string; unit?: string; state_sha256: string;
   units?: string[];
+  // The step belongs to an isolated `--single` run (its run-stage, a part of
+  // it, or the question asked over it), not to the workflow.
+  single?: true;
   revision?: number; project_sha256?: string; intent_uuid?: string | null; state_present?: boolean;
   code_generation_source_sha256?: string;
   code_generation_authority_revision?: number;
@@ -9640,6 +9647,7 @@ function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | nu
       )) ||
     ("cursor_harness" in parsed &&
       (typeof parsed.cursor_harness !== "string" || !/^[a-z0-9][a-z0-9._-]*$/i.test(parsed.cursor_harness))) ||
+    ("single" in parsed && parsed.single !== undefined && parsed.single !== true) ||
     ("ask_type" in parsed &&
       (typeof parsed.ask_type !== "string" || !/^[a-z][a-z0-9-]*$/.test(parsed.ask_type))) ||
     ("guard_recovery_response" in parsed &&
@@ -10066,6 +10074,7 @@ export function writeActiveDirectiveMarker(
     steering_payload_receipt?: string;
     ask_type?: string;
     remedies?: ActiveDirectiveGuardRemedy[];
+    single?: true;
   },
   invocation?: {
     attemptId?: string;
@@ -10385,6 +10394,7 @@ export function writeActiveDirectiveMarker(
       ...(marker.kind === "ask" && marker.ask_type
         ? { ask_type: marker.ask_type }
         : { ask_type: undefined }),
+      ...(marker.single ? { single: true as const } : { single: undefined }),
       ...(marker.kind === "ask" &&
           marker.ask_type === GUARD_RECOVERY_ASK_TYPE &&
           marker.remedies !== undefined
@@ -11614,15 +11624,21 @@ export function recordCopilotHumanSequence(
   });
 }
 
-// The claim identity of `next --stage <stage>`: the adapter and orchestrator
-// hash JSON.stringify([verb, ...args]) after removing the dispatcher prefix,
-// --project-dir and --aidlc-attempt-id. Null for a stage that is no identifier,
-// which no such claim carries.
-export function nextStageClaimSha256(stage: string): string | null {
+// `next --stage <stage>`, with `--unit <unit>` for one Unit's step, as the
+// engine prints it. Null for a stage or Unit that is no identifier.
+export function nextStageInvocation(stage: string, unit?: string): EngineInvocation | null {
   const operation = { kind: "restart-stage", stage } as const;
-  return isGuardRecoveryOperation(operation)
-    ? contentSha256(JSON.stringify(guardOperationInvocation(operation).args))
-    : null;
+  if (!isGuardRecoveryOperation(operation) || (unit !== undefined && !UNIT_NAME_REGEX.test(unit))) return null;
+  const invocation = guardOperationInvocation(operation);
+  return unit === undefined ? invocation : { ...invocation, args: [...invocation.args, "--unit", unit] };
+}
+
+// The claim identity of that `next --stage`: the adapter and orchestrator
+// hash JSON.stringify([verb, ...args]) after removing the dispatcher prefix,
+// --project-dir and --aidlc-attempt-id. Null where no such claim exists.
+export function nextStageClaimSha256(stage: string, unit?: string): string | null {
+  const invocation = nextStageInvocation(stage, unit);
+  return invocation === null ? null : contentSha256(JSON.stringify(invocation.args));
 }
 
 // The selected restart's own `next --stage` is matched by its claim identity
@@ -14370,30 +14386,46 @@ export function summaryConfirmationOwed(
   return stage.summary_confirmation !== undefined;
 }
 
-// A Unit's stage work finished while summary confirmation was off owes no
-// summary when a later change turns it on (the person's scope change or
-// setting): finished work is never re-checked against a ceremony it was never
-// asked for. A Unit that starts the stage again after that asks it as usual.
-function unitFinishedBeforeSummaryOn(
+// Work done while summary confirmation was off owes no summary when a later
+// change turns it on (the person's scope change or setting): finished work is
+// never re-checked against a ceremony it was never asked for. That is a Unit
+// whose stage work finished before the change (unit given), and a stage whose
+// gate was already open then and has not closed since (unit null; showing the
+// gate again keeps it open). Work that runs the stage again after that asks it
+// as usual. A row that only says on again, under a value already on, turns
+// nothing on.
+function finishedBeforeSummaryOn(
   projectDir: string,
   slug: string,
-  unit: string,
+  unit: string | null,
   stateContent: string,
   auditRows: readonly AuditShardEvent[],
 ): boolean {
   const on = sortAttemptEvents(auditRows.filter((row) =>
     row.event === "CEREMONY_SET" &&
     auditBlockField(row.block, "Key") === "summary_confirmation" &&
-    auditBlockField(row.block, "New") === "on")).at(-1);
+    auditBlockField(row.block, "New") === "on" &&
+    parseCeremonySetting(auditBlockField(row.block, "Old")) !== "on")).at(-1);
   if (on === undefined) return false;
+  const before = (ts: string, shard: string, pos: number): boolean =>
+    ts < on.timestamp || (ts === on.timestamp && shard === on.shard && pos < on.pos);
+  if (unit === null) {
+    let opened: AuditShardEvent | null = null;
+    for (const row of sortAttemptEvents(auditRows)) {
+      if (!GATE_WORDS_LIFECYCLE_EVENTS.has(row.event) || auditBlockField(row.block, "Stage") !== slug) continue;
+      if (auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")) continue;
+      if (row.event !== "STAGE_AWAITING_APPROVAL") opened = null;
+      else opened ??= row;
+    }
+    return opened !== null && before(opened.timestamp, opened.shard, opened.pos);
+  }
   const unitMajor =
     getField(stateContent, "Construction Iteration")?.trim() === "unit-major" ||
     getField(stateContent, "Construction Checkpoints") === "enabled";
   const last = currentUnitLifecycleRows(projectDir, "", slug, unitMajor, auditRows, stateContent)
     .filter((row) => row.unit === unit)
     .at(-1);
-  return last?.event === "UNIT_COMPLETED" &&
-    (last.ts < on.timestamp || (last.ts === on.timestamp && last.shard === on.shard && last.pos < on.pos));
+  return last?.event === "UNIT_COMPLETED" && before(last.ts, last.shard, last.pos);
 }
 
 /** The stage's questions file (for one Unit on a per-unit stage), relative to the project. */
@@ -14554,10 +14586,11 @@ export function checkSummaryConfirmationEvidence(
   }
   let auditRowsRead: AuditShardEvent[] | null = null;
   const readAuditRows = (): AuditShardEvent[] => (auditRowsRead ??= readAuditShardEvents(projectDir));
-  const finishedBeforeOn = (unit: string): boolean =>
-    options.workflow === undefined && isPerUnitStage(stage) && typeof options.stateContent === "string" &&
-    unitFinishedBeforeSummaryOn(projectDir, stage.slug, unit, options.stateContent, readAuditRows());
-  if (options.unit !== undefined && finishedBeforeOn(options.unit)) {
+  const finishedBeforeOn = (unit: string | null): boolean =>
+    options.workflow === undefined && (unit !== null) === isPerUnitStage(stage) &&
+    typeof options.stateContent === "string" &&
+    finishedBeforeSummaryOn(projectDir, stage.slug, unit, options.stateContent, readAuditRows());
+  if (finishedBeforeOn(options.unit ?? null)) {
     return { ok: true, required: false };
   }
 
@@ -15490,12 +15523,13 @@ export function auditShards(
   intent?: string,
   space?: string,
   unreadableLocations?: string[],
+  bind?: boolean,
 ): string[] {
   const dirs: string[] = [];
   if (intent === undefined && space !== undefined) {
     dirs.push(join(spaceRecordRoot(projectDir, space), "audit"));
   }
-  const resolved = resolveRecordDir(projectDir, intent, space);
+  const resolved = resolveRecordDir(projectDir, intent, space, bind);
   const intentDir =
     resolved.dir === null ? null : join(resolved.dir, "audit");
   if (intentDir !== null && !dirs.includes(intentDir)) dirs.push(intentDir);
@@ -15739,12 +15773,14 @@ export function readAuditShardEvents(
   intent?: string,
   space?: string,
   unreadableShards?: string[],
+  bind?: boolean,
 ): AuditShardEvent[] {
   const shards = auditShards(
     projectDir,
     intent,
     space,
     unreadableShards,
+    bind,
   );
   // A vanished or refused shard is skipped; growth during read is tolerated.
   const texts = readAuditShardTexts(projectDir, shards, unreadableShards);
@@ -15773,7 +15809,7 @@ export function readActiveAuditShardEvents(
   projectDir: string,
   options: { includeNotes?: boolean } = {},
 ): Array<AuditShardEvent | AuditShardNote> {
-  const selection = resolveWorkflowSelection(projectDir);
+  const selection = resolveWorkflowSelection(projectDir, { bind: false });
   if (selection.intent === null) {
     throw new Error("No active workflow is selected. Start a workflow or select an existing intent.");
   }
@@ -15783,7 +15819,7 @@ export function readActiveAuditShardEvents(
   const unreadable: string[] = [];
   const rows: Array<AuditShardEvent | AuditShardNote> = [];
   if (options.includeNotes) {
-    const shards = auditShards(projectDir, selection.intent, selection.space, unreadable);
+    const shards = auditShards(projectDir, selection.intent, selection.space, unreadable, false);
     const texts = readAuditShardTexts(projectDir, shards, unreadable);
     const copied = copiedAuditBlocks(texts, () => knownAuditShardName(projectDir));
     texts.forEach(({ shard, content, shardIndex }, index) => {
@@ -15791,7 +15827,7 @@ export function readActiveAuditShardEvents(
       rows.push(...parseAuditShardNotes(content, shard, shardIndex, copied[index]));
     });
   } else {
-    rows.push(...readAuditShardEvents(projectDir, selection.intent, selection.space, unreadable));
+    rows.push(...readAuditShardEvents(projectDir, selection.intent, selection.space, unreadable, false));
   }
   if (unreadable.length > 0) {
     throw new Error("Cannot read the active intent's audit history: an audit shard or directory is unreadable.");
@@ -16314,9 +16350,9 @@ export interface FreshReviewReceipts {
    *  project source cannot be read, now or when it was reviewed. Each is said
    *  once. */
   unitSourceKept: Set<string>;
-  /** Units the person approved at their checkpoint after their latest
-   *  re-check: that approval opens a fresh one, so their progress above
-   *  reports it unspent. */
+  /** Units the person approved at their checkpoint, or started a new attempt
+   *  for, after their latest re-check: either opens a fresh one, so their
+   *  progress above reports it unspent. */
   unitRecheckReopened: Set<string>;
   /** Effective stage-entry source baseline for unclaimed-path verification. */
   sourceBaseline: SourceBaselineResult;
@@ -18874,8 +18910,9 @@ export function dictatedReviewNotice(stageName: string, unit?: string | null): s
 }
 
 /** The REVIEW_COMPLETED field the logger writes, as `no`, when the verdict was
- *  recorded before any agent had finished since its review was requested, on
- *  a host where that absence is evidence (noAgentFinishedSinceReview). True
+ *  recorded before the request's reviewer had finished since its review was
+ *  requested, on a host where that absence is evidence
+ *  (noReviewerFinishedSinceReview). True
  *  when written, even if an agent finishes later; distinct from
  *  REVIEW_FINISHED_FIELD, the NOT-READY fallback with no review at all. */
 export const REVIEWER_FINISHED_FIELD = "Reviewer Finished Before Verdict";
@@ -18905,28 +18942,37 @@ export function hostRecordsAgentFinishes(): boolean {
 }
 
 /**
- * Whether the record shows that no agent finished after `request`, on a host
- * where a missing completion row means that. Every doubt reads as false, so a
- * lost or late row can never put a wrong line in front of the person: another
- * host, a delegated worktree (its reviewers' rows land in the parent's ledger),
- * a chat whose hooks do not write into this record (the check log-subagent
- * makes), a background agent sent or finished since the request (the in-flight
- * ledger written since, or an entry still fresh), a completion hook that ran
- * since (its heartbeat), or any SUBAGENT_COMPLETED row, of any agent, not
- * definitely before the request. The caller holds the audit lock, so neither
- * the rows nor the ledger move while this reads.
+ * Whether the record shows that the reviewer `request` named has not finished
+ * its review since the request, on a host where a missing completion row means
+ * that. The reviewer finished only when a SUBAGENT_COMPLETED row definitely
+ * after the request names it as Agent Type and carries a Review File Digest for
+ * the request's review file: the log-subagent hook writes that digest for every
+ * review still open for the reviewer that finished, so a row naming any other
+ * agent, or naming the reviewer without the digest, is not the reviewer
+ * finishing this review (#943: dispatching an unrelated agent after the request
+ * no longer reads as the reviewer having finished). Every doubt reads as false,
+ * so a lost or late row can never put a wrong line in front of the person:
+ * another host, a delegated worktree (its reviewers' rows land in the parent's
+ * ledger), a chat whose hooks do not write into this record (the check
+ * log-subagent makes), a background agent sent or finished since the request
+ * (the in-flight ledger written since, or an entry still fresh: the ledger
+ * names no agent), a completion row that names no agent (`unknown`, a host
+ * that sent no agent type), a completion hook that ran since and left no row
+ * (its heartbeat newer than every completion row since), or a failure that
+ * hook recorded since (its drops file). The caller holds the audit lock, so
+ * neither the rows nor the ledger move while this reads.
  */
-export function noAgentFinishedSinceReview(
+export function noReviewerFinishedSinceReview(
   projectDir: string,
   events: ReadonlyArray<AuditShardEvent>,
-  request: AuditShardEvent,
+  request: Pick<OpenReviewRequest, "reviewer" | "reviewFile" | "row">,
   selection: WorkflowSelection,
 ): boolean {
   try {
     if (!hostRecordsAgentFinishes()) return false;
     if (delegatedWorktreeIntent(projectDir) !== null) return false;
     if (selection.intent === null || workflowParticipation(projectDir, selection) !== "participant") return false;
-    const requested = Date.parse(request.timestamp);
+    const requested = Date.parse(request.row.timestamp);
     if (!Number.isFinite(requested)) return false;
     const ledger = subagentInflightMarkerPath(projectDir);
     if (existsSync(ledger)) {
@@ -18934,12 +18980,31 @@ export function noAgentFinishedSinceReview(
       const inflight = inspectSubagentInflight(projectDir);
       if (inflight.malformed || inflight.freshCount > 0) return false;
     }
-    const heartbeat = join(hooksHealthReadDir(projectDir, selection.intent, selection.space), "log-subagent.last");
+    const since = events.filter((row) =>
+      row.event === "SUBAGENT_COMPLETED" && !attemptEventDefinitelyBefore(row, request.row));
+    for (const row of since) {
+      const agent = auditBlockField(row.block, "Agent Type");
+      if (agent === null || agent === "" || agent === "unknown") return false;
+      if (agent === request.reviewer && recordedReviewFileDigest(row.block, request.reviewFile) !== null) return false;
+    }
+    const health = hooksHealthReadDir(projectDir, selection.intent, selection.space);
+    const heartbeat = join(health, "log-subagent.last");
     if (existsSync(heartbeat)) {
       const beat = Date.parse(readFileSync(heartbeat, "utf-8").trim());
-      if (!Number.isFinite(beat) || beat >= requested) return false;
+      if (!Number.isFinite(beat)) return false;
+      // The hook beats, then appends its row in the same run: a beat since the
+      // request with no completion row at or after it is a run that left none.
+      if (beat >= requested && !since.some((row) => Date.parse(row.timestamp) >= beat)) return false;
     }
-    return !events.some((row) => row.event === "SUBAGENT_COMPLETED" && !attemptEventDefinitelyBefore(row, request));
+    const drops = join(health, "log-subagent.drops");
+    if (existsSync(drops)) {
+      for (const line of readFileSync(drops, "utf-8").split("\n")) {
+        if (line.trim() === "") continue;
+        const at = Date.parse(line.split("\t", 1)[0]);
+        if (!Number.isFinite(at) || at >= requested) return false;
+      }
+    }
+    return true;
   } catch {
     return false;
   }
@@ -19646,6 +19711,16 @@ export function reviewInvalidationAttemptView(
     ),
   );
   return { events, floor };
+}
+
+// The backward jump that began the stage's current attempt, when one did (the
+// attempt's only boundary). The Review brief says what it changed and
+// invalidated, which is why the gate after it shows the stale brief.
+export function backwardJumpBoundary(floor: ReadonlyArray<AuditShardEvent>): AuditShardEvent | undefined {
+  const boundary = floor.length === 1 ? floor[0] : undefined;
+  return boundary?.event === "STAGE_JUMPED" && auditBlockField(boundary.block, "Direction") === "BACKWARD"
+    ? boundary
+    : undefined;
 }
 
 export function attemptEventAfterFrontier(
@@ -21756,17 +21831,26 @@ export function freshReviewReceipts(
   }
 
   // A Unit's re-check is spent only until the person next approves the Unit
-  // at its checkpoint: that approval opens a fresh one.
+  // at its checkpoint or starts a new attempt for it (their Request Changes
+  // there, or the Unit's step started again): either opens a fresh one. With
+  // checkpoints on, the one place the review request reads it, a Unit with no
+  // re-check of its own has not used one: the source mark above is shared by
+  // every Unit.
+  const checkpointsOn = getField(stateContent, "Construction Checkpoints") === "enabled";
   const unitRecheckReopened = new Set<string>();
   for (const unit of new Set([...unitSourceMoved.keys(), ...unitStaleProgress.keys()])) {
     const recheck = events.slice(floorIdx + 1).findLast((row) =>
       row.event === "REVIEW_REQUESTED" && auditBlockField(row.block, "Recovery") === "stale-receipt" &&
       auditBlockField(row.block, "Stage") === stage.slug && auditBlockField(row.block, "Unit") === unit &&
       auditBlockField(row.block, "Reviewer") === reviewer && eventMatchesClaimAttempt(projectDir, row.block, unit));
-    if (!recheck || !allEvents.some((row) =>
-      row.event === "GATE_APPROVED" && auditBlockField(row.block, "Unit") === unit &&
-      auditBlockField(row.block, "User Input") === "Approve" &&
-      ["construction-unit", "walking-skeleton"].includes(auditBlockField(row.block, "Checkpoint") ?? "") &&
+    if (recheck === undefined ? !checkpointsOn : !allEvents.some((row) =>
+      auditBlockField(row.block, "Unit") === unit &&
+      (row.event === "GATE_APPROVED"
+        ? auditBlockField(row.block, "User Input") === "Approve" &&
+          ["construction-unit", "walking-skeleton"].includes(auditBlockField(row.block, "Checkpoint") ?? "")
+        : row.event === "GATE_REJECTED" && checkpointsOn &&
+          (auditBlockField(row.block, "User Input") === "Request Changes" ||
+            auditBlockField(row.block, "Reopen") !== null)) &&
       gateStagesFromBlock(row.block).includes(stage.slug) &&
       eventMatchesClaimAttempt(projectDir, row.block, unit) && attemptEventDefinitelyBefore(recheck, row))) continue;
     unitRecheckReopened.add(unit);
@@ -24230,8 +24314,10 @@ function packedGitObjectLocation(
   const packDir = join(objectDir, "pack");
   let indexes: string[];
   try {
+    // Pack writers choose the basename (jj uses loose-*); validate the index
+    // and its matching pack rather than requiring Git's usual pack-* prefix.
     indexes = readdirSync(packDir)
-      .filter((name) => /^pack-[0-9a-f]+\.idx$/.test(name))
+      .filter((name) => name.endsWith(".idx"))
       .sort();
   } catch {
     return null;
@@ -26870,11 +26956,14 @@ function ignoredSourceClaimReason(
     if (seeded.status !== 0) {
       return `Git could not seed ignore verification for ${JSON.stringify(path)}`;
     }
+    // Literal, like the probe's pathspecs: git would otherwise read a route
+    // folder's `[id]` as a character class and list its ignored siblings.
     const ignoredDescendants = spawnSync(
       "git",
       [
         "-C",
         sourceRepoDir,
+        "--literal-pathspecs",
         "ls-files",
         "-z",
         "--others",
@@ -27554,10 +27643,32 @@ export function writeBaselineSourceSnapshot(
   return writeSourceSnapshot(record, join(dir, `baseline-${hash.slice(0, 12)}.tsv`), serialized);
 }
 
+/** The same listing kept under each slug, so every stage the boundary reaches reads it. Returns the one fingerprint. */
+function writeBaselineSourceSnapshotUnderStages(
+  projectDir: string,
+  stageSlugs: readonly string[],
+  listing: ReadonlyMap<string, string>,
+  intent?: string,
+  space?: string,
+): string {
+  const fingerprints = stageSlugs.map((slug) => writeBaselineSourceSnapshot(projectDir, slug, listing, intent, space));
+  return fingerprints[0];
+}
+
+/** The workspace_requires stages a boundary at `targetSlug` reaches (all of them without one), plus code-generation. */
+export function workspaceBaselineStageSlugs(targetSlug?: string): string[] {
+  const graph = loadStageGraph();
+  const from = targetSlug === undefined ? -1 : graph.findIndex((stage) => stage.slug === targetSlug);
+  const slugs = graph
+    .filter((stage, index) => stage.workspace_requires === true && index >= from)
+    .map((stage) => stage.slug);
+  return slugs.includes("code-generation") ? slugs : ["code-generation", ...slugs];
+}
+
 /** Build the modern source-baseline audit field for any workflow/stage boundary. */
 export function sourceBaselineAuditFields(
   projectDir: string,
-  stageSlug: string,
+  stageSlug: string | readonly string[],
   intent?: string,
   space?: string,
   // The repo set of a record not listed yet (start-work lists it last).
@@ -27574,9 +27685,9 @@ export function sourceBaselineAuditFields(
       return { "Source Baseline": UNBINDABLE_FINGERPRINT };
     }
     return {
-      "Source Baseline": writeBaselineSourceSnapshot(
+      "Source Baseline": writeBaselineSourceSnapshotUnderStages(
         projectDir,
-        stageSlug,
+        typeof stageSlug === "string" ? [stageSlug] : stageSlug,
         new Map(),
         intent,
         space,
@@ -27584,9 +27695,9 @@ export function sourceBaselineAuditFields(
     };
   }
   return {
-    "Source Baseline": writeBaselineSourceSnapshot(
+    "Source Baseline": writeBaselineSourceSnapshotUnderStages(
       projectDir,
-      stageSlug,
+      typeof stageSlug === "string" ? [stageSlug] : stageSlug,
       sourceState.listing,
       intent,
       space,
@@ -28194,7 +28305,7 @@ export function resolveConstructionRepo(
 // P9 end state has no flat `aidlc-docs/` root, so the whole tree stays on ONE
 // root per intent (state split across two roots is meaningless). The
 // state/audit/worktree helpers above are the load-bearing pair; these cover the
-// rest of the family (runtime graph, hook health, recovery breadcrumb, plan,
+// rest of the family (runtime graph, hook health, plan,
 // stop-hook guard, the bare docs dir, and a stage's per-run directory) plus the
 // per-worktree mirror copies.
 //
@@ -28703,12 +28814,6 @@ export function recordPreWorkflowHeartbeat(projectDir: string, hook: string): vo
   } catch {
     // Advisory: without it doctor keeps its "not run yet" warning.
   }
-}
-
-// `<root>/.aidlc-engine/recovery.md` - the validate-state breadcrumb the orchestrator
-// reads on resume.
-export function recoveryFilePath(projectDir: string, intent?: string, space?: string): string {
-  return join(engineDir(projectDir, intent, space), "recovery.md");
 }
 
 // `<root>/.aidlc-engine/plan.json` - `aidlc-graph resolve` output.
@@ -32658,6 +32763,15 @@ export function requestChangesReportCommand(projectDir: string, stage: string, u
 export function stageGateReportCommand(stage: string, result: "awaiting-approval" | "revised"): string {
   return renderEngineInvocation(
     { route: "orchestrate", args: ["report", "--stage", stage, "--result", result] },
+    { harnessDir: harnessDir() },
+  );
+}
+
+// The Review brief that opens that gate (stage-protocol-reviewer.md), rendered
+// the same way: `stale` after a recovery pass, `revision` after a revision.
+export function stageReviewBriefCommand(stage: string, why: "first" | "revision" | "stale"): string {
+  return renderEngineInvocation(
+    { route: "review-brief", args: ["review", "--stage", stage, "--why", why] },
     { harnessDir: harnessDir() },
   );
 }
@@ -36711,7 +36825,7 @@ export function effectiveSupportAgentsForProject(
  * The collaborators a stage's open gate holds it to. While a stage waits at its
  * gate, "Approve, and bring the specialists in" flips the switch for the next
  * stage; the finished stage is never re-checked against a setting it did not run
- * under (the rule unitFinishedBeforeSummaryOn applies to summary confirmation).
+ * under (the rule finishedBeforeSummaryOn applies to summary confirmation).
  * The anchor is the stage's LAST organic STAGE_AWAITING_APPROVAL row in the
  * current attempt (a relaxed Guard Policy keeps the floor after a GATE_REJECTED,
  * so a gate shown again has a later row) that no GATE_APPROVED, GATE_REJECTED or
@@ -36864,6 +36978,12 @@ export function pipelineAttemptStartedAt(
 // after confirming an open attempt. Match its boundary ordering and never
 // borrow ceremony policy from the main workflow; legacy rows return null.
 export function singleStageAttemptScope(projectDir: string, slug: string): string | null {
+  return singleStageAttemptField(projectDir, slug, "Scope");
+}
+
+// A field the latest isolated start of <slug> recorded (Scope, Depth, Test
+// Strategy), or null when that start did not record it.
+export function singleStageAttemptField(projectDir: string, slug: string, field: string): string | null {
   const workflow = `single-stage:${slug}`;
   const attemptStart = readAuditShardEvents(projectDir)
     .filter((entry) =>
@@ -36877,7 +36997,17 @@ export function singleStageAttemptScope(projectDir: string, slug: string): strin
       return a.pos - b.pos;
     })
     .pop();
-  return attemptStart ? auditBlockField(attemptStart.block, "Scope") : null;
+  return attemptStart ? auditBlockField(attemptStart.block, field) : null;
+}
+
+// The Test Strategy an isolated Code Generation run took for itself, while the
+// Code Generation step issued last is that run's and its attempt is open: its
+// Testing Contract is built to it, as its run-stage is. Null otherwise, and the
+// workflow's own setting stands.
+export function isolatedCodeGenerationTestStrategy(projectDir: string): string | null {
+  const marker = readIssuedDirectiveMarker(projectDir);
+  if (marker?.single !== true || !singleStageAttemptIsOpen(projectDir, "code-generation")) return null;
+  return singleStageAttemptField(projectDir, "code-generation", "Test Strategy");
 }
 
 export function singleStageAttemptIsOpen(

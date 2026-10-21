@@ -31,8 +31,9 @@
 // receipt) waits while the plan does (the person's answer at the held gate and
 // the recovery remedy they picked excepted); a jump waits for the person's
 // move: the restart they picked at the recovery question, or one they asked
-// for, unless the engine's last step was superseded (a `jump execute` the
-// agent's own settled `next --stage` printed on this state excepted) or is its
+// for, unless the engine's last step was superseded (a `jump execute`, or one
+// Unit's `jump reopen`, to the stage the agent's own settled `next --stage`
+// claimed on this state excepted) or is its
 // Code Generation recovery question and the jump is one it offers or not the
 // choice the person just picked there. While the person is editing the plan
 // files themselves, those files are theirs (personIsEditingPlanFile). Three
@@ -76,10 +77,10 @@ import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import { CONFIG_SECTIONS } from "../tools/aidlc-command.ts";
 import { commandPath, readActiveExecutable } from "../tools/aidlc-install-paths.ts";
 import {
-  type GuardRecoveryOperation,
+  type EngineInvocation,
   guardOperationMatchesRemedy,
   parseGuardRestartContinuationCommand,
-  renderGuardOperation,
+  renderEngineInvocation,
   sameGuardOperation,
 } from "../tools/aidlc-guard-operation.ts";
 import {
@@ -126,6 +127,7 @@ import {
   resolveProjectFlag,
   resolveProjectDirFromHook,
   nextStageClaimSha256,
+  nextStageInvocation,
   selectedRecordIsFinished,
   stateDigest,
   stateFilePath,
@@ -471,10 +473,10 @@ function promptCarriesReviewAppendix(
 // the agent can run it as printed (the native `aidlc engine ...`, or the
 // source tree's `bun <harness-dir>/tools/...`), and `next` is always named
 // with how to run it so this guard reads it as that command. The `next --stage`
-// a held jump's wait names is the operation's own rendering: the argv its
-// claim is hashed over (nextStageClaimSha256).
-function nextOnItsOwn(operation: GuardRecoveryOperation | null = null): string {
-  const command = operation === null ? `${aidlcToolInvocation("orchestrate")} next` : renderGuardOperation(operation);
+// a held jump's wait names is the invocation its claim is hashed over
+// (nextStageInvocation).
+function nextOnItsOwn(wayOn: EngineInvocation | null = null): string {
+  const command = wayOn === null ? `${aidlcToolInvocation("orchestrate")} next` : renderEngineInvocation(wayOn);
   return `\`${command}\` ${AS_ITS_OWN_COMMAND}`;
 }
 
@@ -653,7 +655,7 @@ function authorityRemedy(
   standing: PlanStanding | null,
   asked: ReturnType<typeof planApprovalAskState> = null,
   editingReply: string | null = null,
-  wayOn: GuardRecoveryOperation | null = null,
+  wayOn: EngineInvocation | null = null,
 ): string {
   if (reason === ENGINE_QUESTION_OPEN) return engineQuestionOpenReason();
   if (reason === PLAN_APPROVAL_ASK_OPEN) {
@@ -696,7 +698,7 @@ function authorityBlockReason(
   standing: PlanStanding | null = null,
   asked: ReturnType<typeof planApprovalAskState> = null,
   editingReply: string | null = null,
-  wayOn: GuardRecoveryOperation | null = null,
+  wayOn: EngineInvocation | null = null,
 ): string {
   if (reason === ENGINE_QUESTION_OPEN || reason === PLAN_APPROVAL_ASK_OPEN) {
     return authorityRemedy(reason, standing, asked, editingReply);
@@ -1494,22 +1496,25 @@ interface EngineCommandContext {
   jumpAdmitted: (jump: JumpCommand) => boolean;
 }
 
-// The jump tool's verb (`execute` or `reopen`) and its `--target`.
+// The jump tool's verb (`execute` or `reopen`), its `--target` and a reopen's `--units`.
 interface JumpCommand {
   verb: string;
   target: string | undefined;
+  units: string | undefined;
 }
 
 const NO_ENGINE_CONTEXT: EngineCommandContext = { gateHeld: false, marker: null, jumpAdmitted: () => false };
 
 // Whether the engine's last step leaves the jump to the person's turn: true
-// when it does; when a superseded step holds back a `jump execute` to a stage
-// that is an identifier, the `next --stage` operation its one exception admits
-// the jump after; else false. A superseded step waits for a fresh `next`, with
-// one exception: Copilot's settle supersedes the step after every print,
-// `next --stage`'s jump print included, so a `jump execute` to the stage the
-// state-bound step's settled claim asked for with `next --stage`, on the state
-// as it is now, is the agent carrying that print out. A picked restart's own `next` is not (its claim carries the
+// when it does; when a superseded step holds back a `jump execute`, or one
+// Unit's `jump reopen`, to a stage that is an identifier, the `next --stage`
+// its one exception admits the jump after; else false. A superseded step waits
+// for a fresh `next`, with one exception: Copilot's settle supersedes the step
+// after every print, `next --stage`'s jump print included, so a `jump execute`
+// to the stage the state-bound step's settled claim asked for with `next
+// --stage`, on the state as it is now, is the agent carrying that print out,
+// and so is the one Unit's `jump reopen` it prints for a unit-major walk (with
+// `--unit`, that Unit's only). A picked restart's own `next` is not (its claim carries the
 // pick, and the settle keeps the question only for its exact print); a
 // `next --stage` carrying anything else, a stage that is no identifier, and a
 // step with no settled claim (a compaction, a status sync) fall to the wait.
@@ -1525,7 +1530,7 @@ const NO_ENGINE_CONTEXT: EngineCommandContext = { gateHeld: false, marker: null,
 // (readIssuedDirectiveMarker); whether their words still stand is
 // personSpokeSinceGate's. With no step on record there is nothing to wait for.
 // Parked work's last step is the park, which no issued step outlives.
-function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand): boolean | GuardRecoveryOperation {
+function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand): boolean | EngineInvocation {
   try {
     const state = readFileSync(stateFilePath(projectDir), "utf-8");
     if ((getField(state, "Parked") ?? "").trim().length > 0) return true;
@@ -1535,12 +1540,16 @@ function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand): bool
     if (marker.delivery === "superseded") {
       const attempt = current?.active_attempt;
       const target = jump.target;
-      const claim = target === undefined ? null : nextStageClaimSha256(target);
-      if (jump.verb !== "execute" || target === undefined || claim === null) return false;
+      // One Unit's reopen: the plain print names one, and with `--unit` that one.
+      const unit = jump.verb === "reopen" && jump.units !== undefined && !jump.units.includes(",") ? jump.units : undefined;
+      if (target === undefined || (jump.verb !== "execute" && unit === undefined)) return false;
+      const wayOn = nextStageInvocation(target, unit);
+      const claims = [nextStageClaimSha256(target), ...(unit === undefined ? [] : [nextStageClaimSha256(target, unit)])];
+      if (wayOn === null || claims.includes(null)) return false;
       return (attempt?.status === "settled" &&
-        attempt.command_kind === "next" && attempt.command_sha256 === claim &&
+        attempt.command_kind === "next" && claims.includes(attempt.command_sha256) &&
         attempt.guard_recovery_selection_sha256 === undefined &&
-        attempt.issued_state_sha256 === stateDigest(state)) || { kind: "restart-stage", stage: target };
+        attempt.issued_state_sha256 === stateDigest(state)) || wayOn;
     }
     if (marker.kind !== "ask" || marker.ask_type !== GUARD_RECOVERY_ASK_TYPE) return true;
     const reply = current?.guard_recovery_response;
@@ -1569,7 +1578,7 @@ function jumpIsPersonsMove(
   state: string,
   marker: ActiveDirectiveMarker | null,
   jump: JumpCommand,
-): boolean | GuardRecoveryOperation {
+): boolean | EngineInvocation {
   if (typeof command === "string" && isSelectedGuardRestartContinuation(projectDir, cwd, command, state, marker)) return true;
   if (!personSpokeSinceGate(projectDir, { requests: true })) return false;
   const last = lastStepAdmitsPersonsMoves(projectDir, jump);
@@ -1659,7 +1668,7 @@ function engineCommandAdmitted(
     !(report && context.gateHeld && stage === GUARDED_STAGE && result === "approved") &&
     !guardRecoveryAnswerAdmits(context.marker, engineArgs, projectDir)
   ) return false;
-  if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted({ verb: args[1], target: lastFlag(args, "--target") })) return false;
+  if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted({ verb: args[1], target: lastFlag(args, "--target"), units: lastFlag(args, "--units") })) return false;
   // `next` takes no `--bypass`: on its line the token is one of the person's
   // words ("add a --bypass option"), never a check turned off, as the engine's
   // own reading says (nextLineFlags). Every other command is read whole, as its
@@ -2242,7 +2251,7 @@ async function evaluate(
   };
   // The step a held jump's wait lets it through after (jumpIsPersonsMove), for
   // the refusal to name in place of `next`.
-  let jumpWayOn: GuardRecoveryOperation | null = null;
+  let jumpWayOn: EngineInvocation | null = null;
   try {
     const statePath = stateFilePath(projectDir);
     if (!existsSync(statePath)) return 0; // no workflow - fail open

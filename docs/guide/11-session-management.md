@@ -20,9 +20,6 @@ flowchart TD
     START(["/aidlc invoked"])
     MODE{"Invocation"}
     STATE_EXISTS{"aidlc-state.md\nexists?"}
-    RECOVERY_CHECK{".aidlc-engine/recovery.md\nexists?"}
-    CORRUPTION{"State matches\nrecovery file?"}
-    WARN["Warn about possible\nstate corruption"]
     RESUME_STATE{"aidlc-state.md\nexists?"}
     PARKED{"Workflow parked?"}
     UNPARK["Clear park marker"]
@@ -36,13 +33,8 @@ flowchart TD
     MODE -->|"bare /aidlc"| STATE_EXISTS
     MODE -->|"/aidlc --resume"| RESUME_STATE
     MODE -->|"/aidlc --resume --stage"| JUMP
-    STATE_EXISTS -->|Yes| RECOVERY_CHECK
+    STATE_EXISTS -->|Yes| PARKED
     STATE_EXISTS -->|No| SCOPE_DETECT
-
-    RECOVERY_CHECK -->|Yes| CORRUPTION
-    RECOVERY_CHECK -->|No| RESUME_STATE
-    CORRUPTION -->|Mismatch| WARN --> RESUME_STATE
-    CORRUPTION -->|Match| RESUME_STATE
 
     RESUME_STATE -->|No| NO_STATE
     RESUME_STATE -->|Yes| PARKED
@@ -53,11 +45,10 @@ flowchart TD
     style START fill:#e1bee7,stroke:#7b1fa2,color:#000
     style OTHER fill:#bbdefb,stroke:#1565c0,color:#000
     style CONTINUE fill:#c8e6c9,stroke:#388e3c,color:#000
-    style WARN fill:#ffcdd2,stroke:#c62828,color:#000
     style NO_STATE fill:#ffcdd2,stroke:#c62828,color:#000
 ```
 
-<!-- Text fallback: bare /aidlc with state checks the recovery breadcrumb and carries on like /aidlc --resume; you can ask to redo, jump, or start fresh at any time; without state it starts with a plan proposal. /aidlc --resume with state clears a park marker if needed and continues directly; without state it errors. /aidlc --resume --stage jumps to the named stage. -->
+<!-- Text fallback: bare /aidlc with state carries on like /aidlc --resume; you can ask to redo, jump, or start fresh at any time; without state it starts with a plan proposal. /aidlc --resume with state clears a park marker if needed and continues directly; without state it errors. /aidlc --resume --stage jumps to the named stage. -->
 
 Park from the command surface with `/aidlc park`; the engine names the park command and the conductor reports where it stopped. `/aidlc --resume` brings it back.
 
@@ -98,18 +89,6 @@ starts fresh; a plan you edited before the build picks up like any other.
 
 ---
 
-## Recovery Breadcrumb
-
-Before Claude Code compacts conversation context, the `aidlc-validate-state.ts` hook writes a hidden recovery file at `.aidlc-engine/recovery.md` in the active intent's record dir. This file contains:
-
-- Timestamp of the last validation
-- Current stage name (extracted from `aidlc-state.md`)
-- State file validity status
-
-On the next `/aidlc` invocation, AI-DLC compares `.aidlc-engine/recovery.md` against `aidlc-state.md`. If the "Current stage" fields differ, it warns you about possible state corruption from context compaction.
-
----
-
 ## Context Compaction
 
 Claude Code automatically summarizes earlier conversation context when the context window fills up. This is called **compaction**. This implementation has safeguards to preserve workflow state across compaction events.
@@ -121,13 +100,12 @@ Claude Code automatically summarizes earlier conversation context when the conte
 | All record-dir artifacts (files on disk) | In-memory conversation context (prior discussion) |
 | `aidlc-state.md` (stage progress, scope, project info) | Partial in-progress work not yet written to files |
 | `audit/` shards (full history of decisions and actions) | Task IDs (rebuilt from state file on resume) |
-| `.aidlc-engine/recovery.md` (stage checkpoint) | Agent persona context (reloaded from agent files) |
+| | Agent persona context (reloaded from agent files) |
 
 ### How to recover after compaction
 
 1. Run `/aidlc`. AI-DLC reads the state file and carries on where the work stopped
-2. If the recovery breadcrumb warns about a mismatch, ask to redo the current stage to re-execute the stage that was in progress during compaction. When Construction runs one Unit at a time, the resume context names the step the active Unit is on (for example `Current Step: code-generation for unit beta`), and Redo redoes only that Unit's step; the other Units' finished work stays approved
-3. If no warning appears, there is nothing else to do: the work continues normally
+2. To have the stage that was in progress done again, ask to redo it. When Construction runs one Unit at a time, the resume context names the step the active Unit is on (for example `Current Step: code-generation for unit beta`), and Redo redoes only that Unit's step; the other Units' finished work stays approved
 
 Compaction is a normal part of long sessions. The state file and artifacts on disk ensure no completed work is lost.
 
@@ -272,4 +250,4 @@ This is read-only and safe to run at any point in a workflow. Like the skills, i
 - [Skills and Runner Commands](17-skills.md) — The read-only session views (`/aidlc-session-cost`, `/aidlc-replay`, `/aidlc-outcomes-pack`) and the runner family
 - [CLI Commands](12-cli-commands.md) — Full reference for `--stage`, `--phase`, and other flags
 - [Troubleshooting](15-troubleshooting.md) — Compaction recovery and state corruption
-- [Glossary](glossary.md) — Definitions for compaction, recovery breadcrumb, session
+- [Glossary](glossary.md): definitions for compaction, session

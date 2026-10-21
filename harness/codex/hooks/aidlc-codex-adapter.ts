@@ -677,8 +677,8 @@ switch (target) {
   }
 
   case "validate-state": {
-    // PreCompact: the core hook reads no stdin fields — state validation +
-    // SESSION_COMPACTED + recovery breadcrumb are all self-contained.
+    // PreCompact: the core hook reads only the session id from stdin; state
+    // validation and SESSION_COMPACTED are its own.
     runCore("aidlc-validate-state.ts", rawInput);
     persistResponse("", 0);
     return 0;

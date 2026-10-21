@@ -212,9 +212,8 @@ There is no separate scaffold command (the earlier `init` flag was retired; the 
 When the active intent's `aidlc-state.md` exists and a new harness session re-enters with bare `/aidlc`, the session-start context tells the conductor to carry on with the work, the same as `/aidlc --resume`: the first call is `next --resume`, with no resume menu. After the first line that says where the work picks up, the conductor says the recovery protocol's one SAY line, that the person can ask to redo, jump to a stage, or start fresh. When they do, the conductor reads which one they mean and reports it with `report --result resumed --choice <redo|jump|fresh>` (plus `--target <stage slug>` for a named stage); none of the person's words travel in that command, and the engine keeps the per-choice routing deterministic.
 
 1. The session-start hook reads the state file and injects the persisted scope, phase, stage, status, agent, and next action.
-2. It flags `.aidlc-engine/recovery.md` (in the intent's record dir) when present so the conductor can check for compaction-related state corruption.
-3. On bare `/aidlc` re-entry, the conductor calls `next --resume` and continues.
-4. When the person asks to redo, jump, or start fresh, the conductor reads which one they mean and reports it as a typed choice (`report --result resumed --choice ...`); the engine routes that choice, never the person's words, and returns the exact follow-up move.
+2. On bare `/aidlc` re-entry, the conductor calls `next --resume` and continues.
+3. When the person asks to redo, jump, or start fresh, the conductor reads which one they mean and reports it as a typed choice (`report --result resumed --choice ...`); the engine routes that choice, never the person's words, and returns the exact follow-up move.
 
 Under solo unit-major Construction, Current Stage stays on the first per-unit stage while each Unit works through the later ones. The session-start context therefore names the active Unit's own stage (`Active Unit: <unit> on <stage>` and `Current Step: <stage> for unit <unit>`). `/aidlc --status` names it the same way, from the step the engine last handed out when the Unit's fields are gone (between its steps, at its checkpoint), and its Construction line counts Units ("Unit 2 of 2") while one is open, as the status line does; a setting typed while a Unit is open ends with where the work picks up, from the walk's own step ("The work picks up at Code Generation for u2-note-tags.", or "at the Unit checkpoint for u2-note-tags." while the Unit waits there). Once any Unit has finished work, Redo names no jump, because a redo jump would throw away every Unit's finished work. It names `aidlc-jump.ts reopen --via redo` for that Unit's step instead, with no question, so only that Unit redoes it from a new attempt: the step the Unit is on or paused at (its build progress and Plan Approval do not carry over), the summary's step, or at a Unit checkpoint the last step the Unit did. The agent tells the person in one line what is redone; for Code Generation that is the plan too, which comes back to them for approval unless plan approval is off. A step the Unit has not started yet has nothing to reset, so Redo there tells the conductor to re-run `next` and do it. The reopen records Redo as the answer to that step's artifact re-use question, so the step's directive carries `artifact_reuse` and the conductor redoes it without asking Keep, Modify or Redo again. The other Units keep their finished work, reviews, Plan Approvals and checkpoint approvals.
 
@@ -237,9 +236,6 @@ flowchart TD
     START(["/aidlc invoked"])
     MODE{"Invocation"}
     STATE_EXISTS{"Active intent\nexists?"}
-    RECOVERY_CHECK{".aidlc-engine/recovery.md\nexists?"}
-    CORRUPTION{"State matches\nrecovery file?"}
-    WARN["Warn user about\npossible corruption"]
     RESUME_STATE{"State exists?"}
     PARKED{"Workflow parked?"}
     UNPARK["Print unpark command"]
@@ -258,13 +254,8 @@ flowchart TD
     MODE -->|"/aidlc --resume"| RESUME_STATE
     MODE -->|"/aidlc --resume --stage"| JUMP
 
-    STATE_EXISTS -->|Yes| RECOVERY_CHECK
+    STATE_EXISTS -->|"Yes: next --resume"| PARKED
     STATE_EXISTS -->|No| SCOPE_DETECT
-
-    RECOVERY_CHECK -->|"Yes"| CORRUPTION
-    RECOVERY_CHECK -->|"No: next --resume"| RESUME_STATE
-    CORRUPTION -->|Mismatch| WARN --> RESUME_STATE
-    CORRUPTION -->|Match| RESUME_STATE
 
     RESUME_STATE -->|No| NO_STATE
     RESUME_STATE -->|Yes| PARKED
@@ -280,7 +271,6 @@ flowchart TD
     style OTHER fill:#bbdefb,stroke:#1565c0,color:#000
     style CONTINUE fill:#c8e6c9,stroke:#388e3c,color:#000
     style CREATE fill:#c8e6c9,stroke:#388e3c,color:#000
-    style WARN fill:#ffcdd2,stroke:#c62828,color:#000
     style NO_STATE fill:#ffcdd2,stroke:#c62828,color:#000
 ```
 
@@ -325,12 +315,6 @@ message is the deterministic Team Construction board: Unit Progress, locally
 observed claim movement, merge readiness, claimable Units, and blockers. Stop
 hooks probe the same branch without cache or state writes. `/aidlc --status`
 invokes the same pure board query in snapshot mode.
-
-### Recovery Breadcrumb
-
-The recovery breadcrumb (`.aidlc-engine/recovery.md` in the intent's record dir) is written by the `aidlc-validate-state.ts` PreCompact hook. It records a snapshot of the workflow's last known-good state before context compaction occurs.
-
-On session resume, the orchestrator compares the breadcrumb's "Current stage" with the state file's "Current Stage". If they differ, it warns the user that compaction may have caused state corruption. This is important because PreCompact hooks are informational-only and cannot block compaction.
 
 ### Redo, Jump, or Start Fresh on Re-entry
 
@@ -1003,8 +987,6 @@ If `aidlc-state.md` exists but cannot be parsed:
 3. Rebuild the state file from artifact evidence.
 4. Inform the user: "State file was corrupted. Rebuilt from artifacts. Please verify."
 
-If `.aidlc-engine/recovery.md` disagrees with `aidlc-state.md` on resume, warn the user of possible compaction-related corruption.
-
 ### Missing Artifact Recovery
 
 If a stage references prior artifacts that do not exist:
@@ -1099,7 +1081,7 @@ The framework hooks are registered project-wide in `settings.json` (they self-ga
 
 - **Matcher**: (empty -- matches all compaction events)
 - **Trigger**: Before Claude Code performs context compaction.
-- **Behavior**: Exits silently if no state file exists. Validates `aidlc-state.md` contains "Stage Progress" and "Current Status" sections. Writes `.aidlc-engine/recovery.md` breadcrumb.
+- **Behavior**: Exits silently if no state file exists. Validates `aidlc-state.md` contains "Stage Progress" and "Current Status" sections. Appends `SESSION_COMPACTED` to the audit trail when the trail exists.
 
 ### SubagentStop: aidlc-log-subagent.ts
 

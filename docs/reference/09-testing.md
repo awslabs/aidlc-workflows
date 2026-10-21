@@ -2121,6 +2121,13 @@ The loopback proxy admits only the configured model IDs and
 authentication headers and signs each upstream request; successful streams are
 forwarded byte-for-byte. Other routes are forbidden, redirects are not followed,
 and upstream error bodies are suppressed because AWS errors can echo signatures.
+On the Mantle route it removes `reasoning.summary` from a request before signing
+it: Mantle's `openai.gpt-5.5` stalls a response that asks for a reasoning summary
+once the model reasons, and Copilot CLI asks for one on every request. A request
+without one, such as Codex's, is forwarded as sent. The broker appends one line
+per request to `tests/logs/credential-broker.log` (method, path, admitted model,
+status, duration, time of the last byte, bytes, and whether the answer ended),
+never a header or a body, so a stalled stream shows in the uploaded logs.
 
 Claude uses documented `ANTHROPIC_BEDROCK_BASE_URL` and
 `CLAUDE_CODE_SKIP_BEDROCK_AUTH=1`; its t19 preflight checks the broker's startup

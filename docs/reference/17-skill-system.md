@@ -41,7 +41,19 @@ calls `report --single --stage <slug> --result completed` exactly once. Report
 requires the open start boundary and records the matching `STAGE_COMPLETED`; it
 does not fabricate both rows. The isolated path keeps no diary and does not run workflow learnings,
 open an approval gate, call main-workflow `next`, or park. The returned `done`
-terminates the isolated run.
+terminates the isolated run. A typed `--depth` or `--test-strategy` is the
+run's own: `next --single` records it on the synthetic `STAGE_STARTED` (`Depth`,
+`Test Strategy`) and the run-stage carries it as `depth` / `test_strategy`,
+leaving the workflow's settings unchanged; the typed depth also picks the
+knowledge roster. A re-run of the open attempt keeps the recorded values; a
+different one starts a new attempt (a new `STAGE_STARTED`), and the unfinished
+one is set aside, never recorded as completed. In an isolated Code Generation run the
+Testing Contract follows the run's recorded Test Strategy too, while the
+workflow's own contract and plan approval keep the workflow's (see
+[Hooks and Tools](06-hooks-and-tools.md)).
+Review, Guard Policy, a fence switch and ceremony switches are refused with an
+`error`: hooks read those from the workflow, so an isolated run cannot take its
+own.
 
 The engine is deterministic code by design — routing is the determinism concern, so it lives in a tool, never in LLM prose (handing route string-building to an LLM would invert the tool/agent/human thesis). It **composes** the existing deterministic library: `loadGraph()` for the compiled graph, `nextInScopeStage()` / `firstInScopeStageOfPhase()` for sequencing, `validScopes()` for the scope-name set, and `getField` / `parseCheckboxes` for state reads. The non-happy-path branches (jump, intent creation, scope/config change, env-scope validation) compose the sibling CLI tools by shelling out and relaying their stderr verbatim, so user-facing error wording is never reconstructed. Explicit resume falls through to normal continuation after its parked/no-state guards. The only things the engine *adds* rather than composes are the decision rule mapping `(observed state + graph) → directive kind` and the artifact-path resolver that turns the graph node's vocabulary names into canonical record-dir paths (`aidlc/spaces/<space>/intents/<YYMMDD>-<label>/<phase>/<stage>/...`).
 

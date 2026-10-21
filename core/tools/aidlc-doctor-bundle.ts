@@ -69,7 +69,6 @@ import {
   readAllAuditShards,
   readRegularFileNoFollowOrThrow,
   recordDir,
-  recoveryFilePath,
   relativeRecordDir,
   runtimeGraphPath,
   stateFilePath,
@@ -80,7 +79,7 @@ import { AIDLC_VERSION } from "./aidlc-version.ts";
 
 // The bundle format version — bumped when the report/manifest/evidence SHAPE
 // changes so a maintainer reading an old bundle knows what to expect.
-export const BUNDLE_SCHEMA_VERSION = "1";
+export const BUNDLE_SCHEMA_VERSION = "2";
 
 // Caps. A diagnostic bundle should never approach the size of the thing it is
 // meant to replace; a runaway audit or a pathological graph is truncated with a
@@ -649,7 +648,6 @@ export interface HookHealthSnapshot {
 export interface MarkerSnapshot {
   planExists: boolean;
   planParseable: boolean | null; // null when absent
-  recoveryExists: boolean;
   stopHookDirExists: boolean;
 }
 
@@ -1654,7 +1652,6 @@ function readMarkers(projectDir: string): NormalizedEvidence["markers"] {
   return {
     planExists,
     planParseable,
-    recoveryExists: existsSync(recoveryFilePath(projectDir)),
     stopHookDirExists: existsSync(stopDir),
     turnCounter: existsSync(turnCounterPath) ? safeRead(turnCounterPath).trim() : null,
     readonlyLatch: existsSync(latchPath),

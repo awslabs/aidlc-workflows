@@ -269,6 +269,11 @@ export interface RunStageDirective {
   // on this before gate handling, reports with `report --single`, and treats
   // the returned `done` as terminal.
   single?: boolean;
+  // The depth and test strategy typed with an isolated run, recorded on its
+  // start: the stage works to these instead of the workflow's, which the run
+  // never changes. Absent when none was typed.
+  depth?: string;
+  test_strategy?: string;
   // Exact persona + knowledge files the conductor must read for work it owns
   // inline: the supports' personas on inline stages, then the knowledge of the
   // lead and of every agent the chat works as (the lead alone on a mob, whose
@@ -925,6 +930,8 @@ const RUN_STAGE_FIELDS = [
   "mode",
   "pipeline",
   "single",
+  "depth",
+  "test_strategy",
   "inline_context_paths",
   "lead_persona",
   "context_warnings",
@@ -994,6 +1001,8 @@ const DISPATCH_SUBAGENT_FIELDS = [
   ...RUN_STAGE_FIELDS.filter(
     (field) =>
       field !== "single" &&
+      field !== "depth" &&
+      field !== "test_strategy" &&
       field !== "wave" &&
       field !== "protocol_modules" &&
       field !== "swarm_settled" &&
@@ -1246,12 +1255,14 @@ export function reviewRequestNote(
 // it: one branch, with its exact command. A verdict no further pass follows
 // leads into the skill's ordered completion sequence at its next step,
 // stage-completion verification, named here and owned there. What the person
-// wrote comes before it: their branch is `next` alone.
+// wrote comes before it: their branch is `next` alone. The gate's Review brief
+// is named with its command too: an agent that no longer holds the reviewer
+// protocol (after a compaction) otherwise guesses at the tool.
 export type ReviewVerdictStep =
   | { kind: "person-wrote"; next: string }
   | { kind: "next-pass"; request: string }
-  | { kind: "learnings" }
-  | { kind: "gate"; report: string; summary: boolean };
+  | { kind: "learnings"; brief: string }
+  | { kind: "gate"; report: string; summary: boolean; brief: string };
 const NO_FURTHER_PASS = "No further review pass follows: run stage-completion verification, then ";
 export function reviewVerdictNote(step: ReviewVerdictStep): string {
   switch (step.kind) {
@@ -1264,10 +1275,11 @@ export function reviewVerdictNote(step: ReviewVerdictStep): string {
         `to fix), then request the next pass with \`${step.request}\` in this turn.`;
     case "learnings":
       return `${NO_FURTHER_PASS}say the completion summary, then run the learnings ritual and ask its question, ` +
-        "which ends the turn. The approval gate comes after their answer.";
+        `which ends the turn. The approval gate comes after their answer, with the review brief that \`${step.brief}\` prints.`;
     case "gate":
       return `${NO_FURTHER_PASS}${step.summary ? "say the completion summary, then " : ""}run ` +
-        `\`${step.report}\`, print the review brief and ask the approval question in this turn.`;
+        `\`${step.report}\`, then \`${step.brief}\`, printing its output as the review brief, and ask the approval ` +
+        "question in this turn.";
   }
 }
 
@@ -1697,6 +1709,8 @@ export function validateDirective(obj: unknown): ValidationResult {
     case "run-stage":
       checkRunStageShared(o, kind, errors);
       checkOptionalBoolean(o, "single", kind, errors);
+      checkOptionalLevel(o, "depth", kind, errors);
+      checkOptionalLevel(o, "test_strategy", kind, errors);
       checkOptionalWave(o, "wave", kind, errors);
       checkOptionalCodeGenerationPlanState(o, kind, errors);
       break;
@@ -2495,6 +2509,19 @@ function checkOptionalString(
   if (!(field in o)) return;
   if (typeof o[field] !== "string") {
     errors.push(`${kind}: ${field} must be string, got ${describe(o[field])}`);
+  }
+}
+
+// checkOptionalLevel: a depth or test strategy, in the state file's words.
+function checkOptionalLevel(
+  o: Record<string, unknown>,
+  field: string,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  if (!(field in o)) return;
+  if (!["Minimal", "Standard", "Comprehensive"].includes(o[field] as string)) {
+    errors.push(`${kind}: ${field} must be Minimal, Standard or Comprehensive, got ${describe(o[field])}`);
   }
 }
 

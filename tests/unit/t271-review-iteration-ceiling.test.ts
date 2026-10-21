@@ -8,7 +8,8 @@
 // function:isReviewRecordRelativePath, function:readReviewRecord,
 // function:latestReviewRecordRefs, function:mergeReviewRecordsFromDelta,
 // function:reviewRecordMatchesCompletion, function:pairedReviewRecordForCompletion,
-// function:completionCarriesVerifiedReview, function:stageGateReportCommand, function:learningsRitualRuns,
+// function:completionCarriesVerifiedReview, function:stageGateReportCommand, function:stageReviewBriefCommand,
+// function:learningsRitualRuns,
 // function:reviewVerdictNote
 //
 // t271 — engine-enforced review iteration ceiling (aidlc-log review).
@@ -514,6 +515,10 @@ describe("t271 review iteration ceiling", () => {
       (JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}") as { agent_note?: string }).agent_note;
     const RA = ["--stage", "requirements-analysis", "--reviewer", "aidlc-product-lead-agent", "--iteration", "1"];
     const NO_LEARNINGS = { AIDLC_DISABLE_LEARNINGS: "1" };
+    // The gate's review brief is named with its command, so an agent that does
+    // not hold the reviewer protocol (after a compaction, live on Copilot) does
+    // not guess at the tool.
+    const BRIEF_FIRST = "aidlc-review-brief.ts review --stage requirements-analysis --why first";
     // The skill's completion sequence runs stage-completion verification
     // before the summary, the learnings question and the gate's report.
     const verifiesFirst = (step: string | undefined, ...after: string[]): void => {
@@ -548,7 +553,8 @@ describe("t271 review iteration ceiling", () => {
         });
         expect(step, verdict).toContain("say the completion summary, then run");
         expect(step).toContain("report --stage requirements-analysis --result awaiting-approval");
-        verifiesFirst(step, "completion summary", "report --stage");
+        verifiesFirst(step, "completion summary", "report --stage", BRIEF_FIRST);
+        expect(step?.indexOf(BRIEF_FIRST) ?? -1).toBeGreaterThan(step?.indexOf("report --stage") ?? -1);
         expect(step).not.toContain("learnings");
         // Agent-facing only: no verdict token.
         expect(step).not.toContain("READY");
@@ -561,17 +567,65 @@ describe("t271 review iteration ceiling", () => {
       const { step } = verdictNote("-", "READY");
       expect(step).toContain("learnings ritual");
       expect(step).not.toContain("--result");
-      verifiesFirst(step, "completion summary", "learnings ritual");
+      verifiesFirst(step, "completion summary", "learnings ritual", BRIEF_FIRST);
     });
 
     test("an open gate is shown again, and a revision's gate with --result revised", () => {
       const open = verdictNote("?", "READY").step;
       expect(open).toContain("report --stage requirements-analysis --result awaiting-approval");
-      verifiesFirst(open, "report --stage");
+      verifiesFirst(open, "report --stage", BRIEF_FIRST);
       const revised = verdictNote("R", "READY").step;
       expect(revised).toContain("report --stage requirements-analysis --result revised");
-      verifiesFirst(revised, "report --stage");
+      verifiesFirst(revised, "report --stage", "aidlc-review-brief.ts review --stage requirements-analysis --why revision");
       expect(revised).not.toContain("learnings");
+    });
+
+    // The step's brief command runs as named: it prints the gate's brief, adds
+    // no audit row, and hands back no step of its own, so nothing loops.
+    test("the review brief the step names runs as written and prints the gate's brief", () => {
+      const { proj, step } = verdictNote("-", "READY", NO_LEARNINGS);
+      const named = [...(step ?? "").matchAll(/`([^`]+)`/g)].map((m) => m[1]).find((c) => c.includes("aidlc-review-brief.ts"));
+      expect(named, step).toBeDefined();
+      const words = (named as string).split(" ");
+      expect(words.slice(0, 2)).toEqual(["bun", ".claude/tools/aidlc-review-brief.ts"]);
+      const before = (readAllAuditShards(proj).match(/\*\*Event\*\*: ERROR_LOGGED/g) ?? []).length;
+      const ran = spawnSync(process.execPath, [join(dirname(LOG_TOOL), "aidlc-review-brief.ts"), ...words.slice(2)], {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj },
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
+      expect(ran.stdout).toContain("**Stage:** Requirements Analysis");
+      expect(ran.stdout).not.toContain('"kind"');
+      expect((readAllAuditShards(proj).match(/\*\*Event\*\*: ERROR_LOGGED/g) ?? []).length).toBe(before);
+    });
+
+    // A backward jump starts the stage's attempt again, and the brief at its
+    // gate says what the jump changed and invalidated only as the stale brief,
+    // so the step names that one (the reviewer protocol's own choice).
+    test("after a backward jump the stage's review names the stale brief", () => {
+      const proj = seedProject("feature");
+      const sf = seededStateFile(proj);
+      writeFileSync(sf, readFileSync(sf, "utf-8")
+        .replace("- [-] requirements-analysis", "- [x] requirements-analysis")
+        .replace("- [ ] units-generation", "- [-] units-generation")
+        .replace("- **Current Stage**: requirements-analysis", "- **Current Stage**: units-generation"));
+      const jumped = spawnSync(process.execPath, [
+        join(dirname(LOG_TOOL), "aidlc-jump.ts"), "execute", "--target", "requirements-analysis",
+        "--direction", "backward", "--scope", "feature", "--project-dir", proj,
+      ], {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(jumped.status, `${jumped.stdout}${jumped.stderr}`).toBe(0);
+      const requested = runReview(proj, RA, NO_LEARNINGS);
+      expect(requested.status, requested.stderr).toBe(0);
+      const recorded = runReview(proj, [...RA, "--verdict", "READY"], NO_LEARNINGS);
+      expect(recorded.status, recorded.stderr).toBe(0);
+      expect(note(recorded.stdout)).toContain("aidlc-review-brief.ts review --stage requirements-analysis --why stale");
     });
 
     // Their words come first, so on a terminal verdict too nothing runs
@@ -747,9 +801,11 @@ describe("t271 review iteration ceiling", () => {
     expect(pendingRetry.stdout).toContain('"retry":"pending-request"');
     expect(pendingRetry.stdout).not.toContain('"recovery"');
 
-    expect(
-      runReview(proj, [...base, "--iteration", "2", "--verdict", "READY"]).status,
-    ).toBe(0);
+    const recovered = runReview(proj, [...base, "--iteration", "2", "--verdict", "READY"]);
+    expect(recovered.status).toBe(0);
+    // The recovery pass re-checked a changed output: its gate's brief is the stale one.
+    const recoveredStep = (JSON.parse(recovered.stdout.trim().split("\n").at(-1) ?? "{}") as { agent_note?: string }).agent_note;
+    expect(recoveredStep).toContain("aidlc-review-brief.ts review --stage requirements-analysis --why stale");
     writeReviewedArtifact(proj, "requirements-analysis", "changed again\n");
 
     const spent = runReview(proj, [...base, "--iteration", "3"]);

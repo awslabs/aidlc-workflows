@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { headingKey } from "./aidlc-artifact-vocabulary.ts";
 import { errorMessage, parseBoltDag, unitsBlockRepair } from "./aidlc-lib.ts";
 
 interface Result {
@@ -219,9 +220,13 @@ export function main(argv: string[]): void {
 					`failed to read template ${templatePath}: ${errorMessage(err)}`,
 				);
 			}
+			// A leading emoji is decoration, so `## 📌 Overview` is the
+			// template's `## Overview`; a missing one is reported as the
+			// template spells it.
+			const sectionKey = (h: string) => headingKey(h.slice(3));
 			const expected = parseH2Headings(templateBody);
-			const present = new Set(headings);
-			const missing = expected.filter((h) => !present.has(h));
+			const present = new Set(headings.map(sectionKey));
+			const missing = expected.filter((h) => !present.has(sectionKey(h)));
 			findings_count = missing.length;
 			result.template = "applied";
 			result.template_expected = expected;

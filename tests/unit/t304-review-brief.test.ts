@@ -634,6 +634,55 @@ function appendLegacyRecordReview(
   );
 }
 
+// After a compaction an agent that no longer holds the reviewer protocol asks
+// the tool itself: live on Copilot it tried `--help`, a verb-less `--stage`
+// and `--stage=`, each answered "Missing --stage <slug>." or "Expected --flag
+// value", before it found a verb. Help prints each verb's line (#2449's shape)
+// and a missing or unknown verb is named as one, before any flag is read.
+describe("t304 the brief tool answers --help and names its verbs", () => {
+  const VERB_LINES = [
+    "engine review-brief review --stage <slug> --why <first|revision|stale>",
+    "engine review-brief context --stage <slug>",
+    "engine review-brief summary --stage <slug> --questions-file <path>",
+  ];
+
+  test("--help, -h, help and no arguments print every verb's usage and exit 0", () => {
+    const { proj } = requirementProject([]);
+    for (const help of ["--help", "-h", "help"]) {
+      const r = run(REVIEW_BRIEF, [help], proj);
+      expect(r.status, r.out).toBe(0);
+      for (const line of VERB_LINES) expect(r.stdout, help).toContain(line);
+    }
+    const bare = Bun.spawnSync({ cmd: [process.execPath, REVIEW_BRIEF], cwd: proj, env: TEST_ENV, stdout: "pipe", stderr: "pipe" });
+    expect(bare.exitCode, bare.stderr.toString()).toBe(0);
+    for (const line of VERB_LINES) expect(bare.stdout.toString()).toContain(line);
+  });
+
+  test("<verb> --help prints that verb's usage and exits 0", () => {
+    const { proj } = requirementProject([]);
+    for (const [verb, line] of [["review", VERB_LINES[0]], ["context", VERB_LINES[1]], ["summary", VERB_LINES[2]]] as const) {
+      const r = run(REVIEW_BRIEF, [verb, "--help"], proj);
+      expect(r.status, r.out).toBe(0);
+      expect(r.stdout).toContain(line);
+      for (const other of VERB_LINES.filter((l) => l !== line)) expect(r.stdout).not.toContain(other);
+    }
+  });
+
+  test("a flag where the verb goes is answered with the verbs, not a flag error", () => {
+    const { proj } = requirementProject([]);
+    for (const args of [["--stage", "requirements-analysis"], ["--stage=requirements-analysis"]]) {
+      const r = run(REVIEW_BRIEF, args, proj);
+      expect(r.status, r.out).toBe(1);
+      expect(r.out).toContain("Valid: review, context, summary.");
+      expect(r.out).not.toContain("Expected --flag value");
+      expect(r.out).not.toContain("Missing --stage");
+    }
+    const ok = run(REVIEW_BRIEF, ["review", "--stage", "requirements-analysis", "--why", "first"], proj);
+    expect(ok.status, ok.out).toBe(0);
+    expect(ok.stdout).toContain("**Stage:** Requirements Analysis");
+  });
+});
+
 describe("t304 executable review brief scenarios", () => {
   test("a stale brief with nothing changed upstream says no reason line", () => {
     const { proj } = requirementProject([]);
