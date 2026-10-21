@@ -1,0 +1,14 @@
+{
+  "seed": 20261022,
+  "runs": 24,
+  "groups": [
+    "I1 GATE_REJECTED with no unspent reply of the person's",
+    "I2 GATE_REJECTED names no message",
+    "I2 QUESTION_ANSWERED names no message",
+    "I2 SUMMARY_CONFIRMATION_RECORDED names no message",
+    "I2 VERIFICATION_COMMAND_RECORDED names no message",
+    "I2 the gate-words record dropped some of the person's words",
+    "I5 the person's words copied into GATE_REJECTED.Reason",
+    "I7 one reply backed GATE_REJECTED and GATE_REJECTED"
+  ]
+}
