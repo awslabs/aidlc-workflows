@@ -1003,19 +1003,24 @@ function writeUpstream(stage: string, rawOutputPath: string): void {
   const docsDir = recordDir(projectDir);
   const path = resolve(normalizePath(rawOutputPath));
   const refusal = docsDir ? tableWhere(docsDir, stage, path) : "nothing written: cannot resolve the active intent record directory";
-  if (refusal) return reply({ written: false, reason: refusal });
+  if (refusal) {
+    reply({ written: false, reason: refusal });
+    return;
+  }
   let table: Record<string, unknown> = {};
   if (existsSync(path)) {
     const value = parseJson(readFileSync(path, "utf-8"));
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
-      return reply({ written: false, reason: "nothing written: traceability.json is not a JSON object" });
+      reply({ written: false, reason: "nothing written: traceability.json is not a JSON object" });
+      return;
     }
     table = value as Record<string, unknown>;
   }
   const declared = table.upstream_ids ?? [];
   const coverage = table.coverage ?? [];
   if (!Array.isArray(declared) || !declared.every((id) => typeof id === "string") || !Array.isArray(coverage)) {
-    return reply({ written: false, reason: "nothing written: upstream_ids must be an array of strings and coverage an array" });
+    reply({ written: false, reason: "nothing written: upstream_ids must be an array of strings and coverage an array" });
+    return;
   }
   const upstream = resolveUpstream(stage, projectDir, path, declared);
   const required = [...withoutTracedParents(upstream.ids, upstream.recorded)];
