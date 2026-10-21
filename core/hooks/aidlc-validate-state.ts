@@ -35,7 +35,7 @@ export async function run(input: string): Promise<number> {
   // whatever workflow it works on.
   if (typeof payloadSession === "string") clearRulesDelivered(projectDir, payloadSession);
   // A compaction in a conversation that has not joined the selected workflow
-  // leaves that workflow's heartbeat, breadcrumb and ledger alone.
+  // leaves that workflow's heartbeat and ledger alone.
   const workflow = enterHookWorkflow(projectDir, payloadSession);
   try {
     if (hookStandsOutside(workflow)) return 0;
