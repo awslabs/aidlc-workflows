@@ -1587,7 +1587,10 @@ function openAt(run: Run, at: number): boolean {
 const TIMESTAMP = /\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)/g;
 const HEX = /\b[0-9a-f]{8,}\b/g;
 function norm(run: Run, text: string): string {
-  let out = text.split(run.proj).join("<PROJ>");
+  // The run's folder as written raw, inside a JSON string (Windows doubles its backslashes) and with forward slashes.
+  let out = text;
+  for (const form of [JSON.stringify(run.proj).slice(1, -1), run.proj, run.proj.replace(/\\/g, "/")]) out = out.split(form).join("<PROJ>");
+  out = out.replace(/gate-fuzz-runs-[A-Za-z0-9]+(?:\\\\|\\|\/)r-[A-Za-z0-9]+/g, "<RUN>");
   run.chats.forEach((chat, at) => {
     out = out.split(chat).join(`<CHAT${at}>`);
   });
@@ -1614,7 +1617,7 @@ export function recordView(run: Run): Map<string, string> {
     for (const [k, v] of row.fields) if (!WORD_FIELDS.has(k)) view.set(`row${at}.${k}`, MINTED_FIELD.test(k) ? "<N>" : clean(v));
   });
   view.set("state", clean(run.finalState));
-  for (const [path, text] of Object.entries(run.files)) view.set(`file ${norm(run, path)}`, clean(text));
+  for (const [path, text] of Object.entries(run.files)) view.set(`file ${norm(run, path).replace(/\\/g, "/")}`, clean(text));
   // Messages that land in one second sort by their random ids, so the sources are compared as a set.
   view.set("messages", run.messages.map((m) => `${m.source}${m.cut ? " cut" : ""}`).sort().join(","));
   return view;

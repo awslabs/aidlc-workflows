@@ -156,7 +156,7 @@ async function seedResult(args: Args, n: number, walked: Walk[]): Promise<Result
     for (const failure of failures) {
       if (failure.invariant === "I8" || failure.invariant === "RUN") continue;
       // One shrink per group in a job: the first run that shows a group is the one its replay names.
-      const name = `${failure.invariant} ${failure.what.replace(/"[^"]*"/g, '"_"').replace(/\d+/g, "#")}`;
+      const name = `${failure.invariant} ${failure.what.replace(/\\/g, "/").replace(/"[^"]*"/g, '"_"').replace(/\d+/g, "#")}`;
       if (shrunk.has(name)) continue;
       shrunk.add(name);
       const small = shrink(state, seed, failure, { most: args.most, budget: 12 });

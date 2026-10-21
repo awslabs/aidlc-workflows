@@ -27,7 +27,8 @@ const BASELINE = join(REPO_ROOT, "tests", "fixtures", "gate-fuzz", "baseline.jso
 const OTHER: readonly HostId[] = ["codex", "kiro", "kiro-ide", "copilot", "cursor", "opencode"];
 
 /** A failure's group, as the baseline names it: what fails, with the run's own values taken out. */
-const group = (invariant: string, what: string) => `${invariant} ${what.replace(/"[^"]*"/g, '"_"').replace(/\d+/g, "#")}`;
+const group = (invariant: string, what: string) =>
+  `${invariant} ${what.replace(/\\/g, "/").replace(/"[^"]*"/g, '"_"').replace(/\d+/g, "#")}`;
 
 describe("the engine does not read the person's words (gate fuzz, short mode)", () => {
   afterAll(() => {
