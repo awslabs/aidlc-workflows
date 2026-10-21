@@ -126,7 +126,7 @@ describe("t-stop-carries-on-line: the agent's steps for the one-line Stop note",
     expect(step).toContain("it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it");
   });
 
-  test("(c) the old agent-addressed wordings are gone from prose and kept only as the hook's matcher", () => {
+  test("(c) the old agent-addressed wordings are gone from prose and from the hook", () => {
     const stale = [
       "tell the person nothing about this note",
       "The AI-DLC workflow is not finished",
@@ -148,10 +148,11 @@ describe("t-stop-carries-on-line: the agent's steps for the one-line Stop note",
     };
     for (const root of roots) walk(root);
     expect(hits).toEqual([]);
+    // The hook tells its own entries from the person's by the host's mark
+    // (Claude's isMeta, Codex's Stop wrapper), so it keeps no copy of them.
     const hook = readFileSync(join(REPO_ROOT, "core/hooks/aidlc-continue-workflow.ts"), "utf-8");
-    for (const phrase of stale.slice(0, 2)) expect(hook.split(phrase).length - 1, phrase).toBe(1);
-    // The older one-line note is matched only with its command in backticks.
-    expect(hook).toContain("is not finished yet\\. Next: (?:finish its steps, then )?`[^`\\n]+`\\.$/");
+    for (const phrase of stale) expect(hook, phrase).not.toContain(phrase);
+    expect(hook).not.toContain("is not finished yet\\. Next:");
   });
 
   // Kiro CLI showed the person nothing of a Stop block, and its agent, started

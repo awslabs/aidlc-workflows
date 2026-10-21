@@ -192,7 +192,6 @@ import {
   findIntentByUuid,
   findStageBySlug,
   listIntents,
-  loadStageGraph,
   parseRecordIntentKey,
   effectiveUnitGateRhythm,
   getField,
@@ -289,9 +288,6 @@ const INTERACTIVE_BLOCK_CAP = 2;
 // OPEN (allows the stop).
 const ENGINE_TIMEOUT_MS = DEFAULT_SUBPROCESS_TIMEOUT_MS;
 const ERROR_DIRECTIVE_FINGERPRINT_LIMIT = 32;
-// The earlier error reason's opening, still matched in older transcripts.
-const ERROR_DIRECTIVE_REASON_PREFIX =
-  "The AIDLC workflow returned an error diagnostic";
 const STOPPED_ON_A_PROBLEM = "The last AI-DLC step stopped on a problem: ";
 const KNOWN_DIRECTIVE_KINDS = new Set([
   "load-steering",
@@ -1065,17 +1061,13 @@ function isPendingSubagentStop(
 // Fail-closed throughout: any error returns false and the cap-bounded block stands.
 
 // The line continuationReason() writes ("AI-DLC is carrying on with <stage>."
-// or "AI-DLC is carrying on."), and earlier notes' words, still found in older
-// transcripts.
+// or "AI-DLC is carrying on.").
 const CARRYING_ON = "AI-DLC is carrying on";
-const CARRYING_ON_LINE = /^AI-DLC is carrying on(?: with ([^\n]{1,200}))?\.$/;
 const STAGE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
-const CONTINUATION_OPENING = "The AI-DLC workflow is not finished";
-const SAY_NOTHING = "tell the person nothing about this note";
 // What follows the line, on its own line, where the tool hides the note from
 // the person. It reaches the agent even when the aidlc skill is not in its
-// context (a plain prompt, no /aidlc), and the line stays first so logs and the
-// matcher read it the same way on every tool. A person who asked to stop or
+// context (a plain prompt, no /aidlc), and the line stays first so logs read it
+// the same way on every tool. A person who asked to stop or
 // pause gets the park, named as this install runs it: there no tool sees what
 // they typed while the agent worked (Kiro CLI runs no prompt hook for it).
 const AGENT_STEP_OPENING = "If you had just asked the person a question";
@@ -1086,87 +1078,12 @@ function sayTheLine(): string {
     "Otherwise, if you carry on with the work, first say that line to the person once, on its own line; " +
     `it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it. ${AGENT_STEP_CLOSING}`;
 }
-// The one-line note the hook wrote before: "<step> is not finished yet. Next:
-// `<command>`." (or "Next: finish its steps, then `<command>`."). The command
-// in backticks is part of the shape, so a person's own sentence that happens
-// to start the same way is still read as the person.
-const STOP_NOTE = /^[^\n`]{1,300} is not finished yet\. Next: (?:finish its steps, then )?`[^`\n]+`\.$/;
-
-// True when the WHOLE message is a line carryingOnLine() writes: no stage, or
-// a stage named as stageName() names one, with a valid Unit after " for ". A
-// person's own sentence that starts the same way names no stage that way, so
-// it is still read as the person.
-function isCarryingOnLine(text: string): boolean {
-  const line = CARRYING_ON_LINE.exec(text);
-  if (line === null) return false;
-  const named = line[1];
-  if (named === undefined) return true;
-  let names: string[];
-  try {
-    names = loadStageGraph().map((s) => stageName(s.slug) ?? "");
-  } catch {
-    // An unreadable stage graph names every stage by its slug.
-    names = [named.split(" for ")[0]].filter((slug) => STAGE_SLUG.test(slug));
-  }
-  return names.some((name) =>
-    name.length > 0 && (named === name ||
-      (named.startsWith(`${name} for `) && validateUnitName(named.slice(name.length + 5)) === null)),
-  );
-}
-
-// The line alone, when the agent's step follows it as one line, in this
-// wording or an earlier one with the same opening and close (the command in it
-// is the install's). Words of the person's own around it keep it theirs.
-function withoutAgentStep(text: string): string {
-  const end = text.indexOf("\n");
-  const step = end === -1 ? "" : text.slice(end + 1);
-  return step.startsWith(AGENT_STEP_OPENING) && step.endsWith(AGENT_STEP_CLOSING) && !step.includes("\n")
-    ? text.slice(0, end)
-    : text;
-}
-
-// True when a user-role transcript entry's text is actually the hook's OWN
-// injected continuation (a re-prompt after a block), not the human talking.
-// Two shapes: Claude Code wraps the block reason as "Stop hook feedback: ..."
-// (isMeta:true), but other harnesses (Codex) may re-inject the RAW reason text
-// with no wrapper, or (Codex 0.160) in its own <hook_prompt> tag, which is
-// unwrapped first. continuationReason() writes one carrying-on line, and
-// errorDirectiveReason() opens with STOPPED_ON_A_PROBLEM. Excluding these is
-// what keeps an engine-engaged turn whose last user entry is the hook's nudge
-// from being misread as a fresh human prompt. These shapes MUST stay in step
-// with both reason builders: if their wording changes without this matcher
-// changing too, an injected reason reads as a fresh human prompt and the
-// conversational carve-out silently mis-allows the stop.
-function isInjectedHookFeedback(text: string): boolean {
-  const wrapped = CODEX_HOOK_PROMPT.exec(text.trim());
-  return isHookNote(wrapped ? unescapeHookPrompt(wrapped[1] as string) : text);
-}
 
 // Codex 0.160 stores a Stop reason as a user message of its own,
-// <hook_prompt hook_run_id="stop:...">REASON</hook_prompt>, with < > and &
-// escaped. Only exactly that wrapper, around the whole message, is unwrapped,
-// and the text inside must still be one of the hook's own lines, so a
-// person's message with the tag and words of their own stays theirs.
-const CODEX_HOOK_PROMPT = /^<hook_prompt hook_run_id="stop:[^"\n]*">((?:(?!<\/?hook_prompt\b)[\s\S])*)<\/hook_prompt>$/;
-function unescapeHookPrompt(text: string): string {
-  return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
-}
-
-function isHookNote(text: string): boolean {
-  const t = text.trimStart();
-  return (
-    t.startsWith("Stop hook feedback:") ||
-    isCarryingOnLine(withoutAgentStep(t.trimEnd())) ||
-    t.startsWith(STOPPED_ON_A_PROBLEM) ||
-    // The earlier wordings, still found in older transcripts.
-    STOP_NOTE.test(t.trimEnd()) ||
-    (t.startsWith(CONTINUATION_OPENING) && t.includes(SAY_NOTHING)) ||
-    (t.startsWith("The AIDLC workflow has a pending step") &&
-      /workflow loop/.test(t)) ||
-    (t.startsWith(ERROR_DIRECTIVE_REASON_PREFIX) &&
-      /exact engine message is quoted verbatim/.test(t))
-  );
-}
+// <hook_prompt hook_run_id="stop:...">REASON</hook_prompt>. That wrapper around
+// the whole message is Codex's own mark that a Stop hook sent it; nothing inside
+// it is read. Any other user message is the person's, whatever its words.
+const CODEX_STOP_HOOK_PROMPT = /^<hook_prompt hook_run_id="stop:[^"\n]*">(?:(?!<\/?hook_prompt\b)[\s\S])*<\/hook_prompt>$/;
 
 // Read the transcript and classify the ending turn as conversational. Supports
 // both delivered formats; returns true ONLY with positive evidence. `format`
@@ -1272,20 +1189,6 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
           }
           continue; // a tool_result is not a human prompt
         }
-        // Defence-in-depth: the hook's continuation text is injected as a user
-        // turn; exclude it by content even if a future build drops `isMeta`.
-        const asText =
-          typeof content === "string"
-            ? content
-            : Array.isArray(content)
-              ? content
-                  .map((x) => {
-                    const b = x as Record<string, unknown>;
-                    return b?.type === "text" ? String(b.text ?? "") : "";
-                  })
-                  .join("")
-              : "";
-        if (isInjectedHookFeedback(asText)) continue;
         const isHuman =
           typeof content === "string" ||
           (Array.isArray(content) &&
@@ -1313,9 +1216,8 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
       if (ptype === "message" && payload.role === "user") {
         // input_text blocks are the human prompt; tool output rides function_call_output.
         const content = payload.content;
-        // Exclude the hook's own injected continuation (delivered as a user
-        // message on a re-prompt) so it is not mistaken for the human, mirroring
-        // the Claude reader's `Stop hook feedback:` guard.
+        // A Stop hook's reason that Codex put back on a re-prompt carries
+        // Codex's own wrapper (CODEX_STOP_HOOK_PROMPT); it is not the person.
         const asText =
           typeof content === "string"
             ? content
@@ -1327,7 +1229,7 @@ function transcriptIsConversational(transcriptPath: string, format: "claude" | "
                   })
                   .join("")
               : "";
-        if (isInjectedHookFeedback(asText)) continue;
+        if (CODEX_STOP_HOOK_PROMPT.test(asText.trim())) continue;
         const isHuman =
           typeof content === "string" ||
           (Array.isArray(content) &&

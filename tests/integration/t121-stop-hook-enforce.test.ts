@@ -4661,13 +4661,13 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("(h) content exclusion (no isMeta): a 'Stop hook feedback:' user entry is excluded by content, so the last GENUINE prompt was a chat answer -> ALLOW", () => {
+  test("(h) no isMeta: a user entry is the person's whatever its words, so one that reads 'Stop hook feedback:' answered with text only -> ALLOW", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
-    // No isMeta flag this time. The genuine human prompt is "explain X", answered
-    // with TEXT only (no engine call). A later type:"user" entry whose content
-    // starts "Stop hook feedback:" is excluded BY CONTENT, so it must not become
-    // the new anchor; the last genuine prompt stays "explain X" -> conversational.
+    // No isMeta flag this time. The human prompt is "explain X", answered with
+    // TEXT only (no engine call). A later type:"user" entry whose content starts
+    // "Stop hook feedback:" is not marked as the hook's, so it is the person's
+    // and the newest prompt; it too was answered with text only -> conversational.
     const tp = seedTranscriptEntries(proj, "claude", [
       { kind: "human", text: "explain what this stage does" },
       { kind: "text" },
@@ -4680,7 +4680,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       "run-stage",
     );
     expect(r.rc).toBe(0);
-    expect(r.out).toBe(""); // allowed: feedback entry excluded by content prefix
+    expect(r.out).toBe(""); // allowed: the unmarked entry is the person's, answered with text
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // --- (h) Codex-format equivalents (read-only ALLOW + bare-next BLOCK) ---
@@ -4778,9 +4778,9 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // =========================================================================
-  // (i) CLASSIFIER-LEAK REGRESSIONS (commit e9b6e48). Three precision fixes to
-  // isEngineToolCall (aidlc-continue-workflow.ts) / isEngineEngagementSegment /
-  // isInjectedHookFeedback, all closing 'wrong-allow' leaks an adversarial
+  // (i) CLASSIFIER-LEAK REGRESSIONS (commit e9b6e48). Precision fixes to
+  // isEngineToolCall (aidlc-continue-workflow.ts) / isEngineEngagementSegment,
+  // closing 'wrong-allow' leaks an adversarial
   // review of the tier-3 conversational carve-out found. They could let an
   // engine-engaged turn be misread as chat (ALLOW) when it should BLOCK:
   //
@@ -4794,13 +4794,10 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
   //      state-mutating) and aidlc-state skip/reject/revise/resume now count as
   //      engagement; an unrecognised aidlc-* verb fails TOWARD
   //      engagement (BLOCK). A read-only `aidlc-bolt --help` stays chat (ALLOW).
-  //   3. CODEX RAW CONTINUATION - the hook's own injected nudge is excluded from
-  //      human-prompt detection not just by the Claude "Stop hook feedback:"
-  //      wrapper but also by the RAW continuationReason body ("The AIDLC workflow
-  //      has a pending step" + "workflow loop"; aidlc-continue-workflow.ts), in BOTH
-  //      readers. So an engine-engaged turn whose last user entry is that raw
-  //      nudge (no wrapper) still BLOCKS - the nudge must not reset the human
-  //      anchor.
+  //   3. WHO SPOKE LAST - the hook's own re-prompt is known only by the host's
+  //      mark (Claude's isMeta, Codex's Stop wrapper), never by its words. An
+  //      entry with no mark is the person's whatever it says, so the raw-body
+  //      cases below ALLOW when it was answered with no engine call.
   //
   // Each BLOCK-expecting case uses a FRESH makeProject() (the interactive cap is
   // 2; a reused project's counter would release on the 2nd no-progress call and
@@ -4911,17 +4908,12 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(r.out).toBe(""); // allowed: read-only --help is not engagement
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // --- (i.3) CODEX RAW CONTINUATION: the raw nudge body must not reset the human anchor ---
-  // The hook's continuationReason body (aidlc-continue-workflow.ts) is excluded from
-  // human-prompt detection by isInjectedHookFeedback's RAW-body branches: the
-  // one-line "AI-DLC is carrying on ..." reason, and the older wordings kept for
-  // older transcripts. So a turn that engaged the engine (bare `next` after the
-  // real "continue") whose LAST user entry is that raw nudge (no "Stop hook
-  // feedback:" wrapper) must STILL BLOCK: were the raw nudge counted as the
-  // latest human prompt, the anchor would move past the engine call and the
-  // engaged run would be misread as chat (wrong ALLOW).
-  // The two earlier wordings, still in older transcripts, and the hook's own
-  // current one-line reason.
+  // --- (i.3) RAW CONTINUATION: the hook's words with no host mark are the person's ---
+  // A turn that engaged the engine (bare `next` after the real "continue") whose
+  // LAST user entry carries the hook's words but no mark of the host's (no
+  // isMeta, no Codex Stop wrapper) is the person's newest prompt, answered with
+  // no engine call: ALLOW. The two earlier wordings and the hook's own current
+  // one-line reason.
   const RAW_NUDGE =
     "The AIDLC workflow has a pending step (a run-stage directive). " +
     "You have not finished the workflow loop yet. Run `bun .claude/tools/aidlc-orchestrate.ts next`, " +
@@ -4942,7 +4934,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     return [RAW_NUDGE, RAW_NUDGE_LONG, commandNote, (JSON.parse(current.out) as { reason: string }).reason];
   };
 
-  test("(i) a RAW error diagnostic reason does NOT reset the human anchor; the engaged turn still BLOCKS", () => {
+  test("(i) Codex: the error reason inside Codex's Stop wrapper is the hook's (BLOCKS); the same words unwrapped are the person's (ALLOWS)", () => {
     const diagnosticProject = makeProject();
     seedActive(diagnosticProject, "requirements-analysis");
     const diagnostic = runHook(
@@ -4957,30 +4949,34 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       { MOCK_MESSAGE: "source diagnostic for transcript classification" },
     );
     const reason = (JSON.parse(diagnostic.out) as { reason: string }).reason;
+    // Codex 0.160 keeps a Stop reason as <hook_prompt hook_run_id="stop:...">, with < > & escaped.
+    const wrapped = `<hook_prompt hook_run_id="stop:7:/repo/.codex/hooks.json">${
+      reason.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    }</hook_prompt>`;
 
-    const proj = makeProject();
-    seedActive(proj, "requirements-analysis");
-    const tp = seedTranscriptEntries(proj, "codex", [
-      { kind: "human", text: "continue" },
-      { kind: "bash", command: "bun .codex/tools/aidlc-orchestrate.ts next" },
-      { kind: "userText", text: reason },
-    ]);
-    const stopped = runHook(
-      proj,
-      JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
-      "run-stage",
-    );
-    expect(stopped.rc).toBe(0);
-    expect(
-      (JSON.parse(stopped.out) as { decision?: string }).decision,
-    ).toBe("block");
+    for (const [text, decision] of [[wrapped, "block"], [reason, undefined]] as const) {
+      const proj = makeProject();
+      seedActive(proj, "requirements-analysis");
+      const tp = seedTranscriptEntries(proj, "codex", [
+        { kind: "human", text: "continue" },
+        { kind: "bash", command: "bun .codex/tools/aidlc-orchestrate.ts next" },
+        { kind: "userText", text },
+      ]);
+      const stopped = runHook(
+        proj,
+        JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
+        "run-stage",
+      );
+      expect(stopped.rc).toBe(0);
+      expect((JSON.parse(stopped.out || "{}") as { decision?: string }).decision, text).toBe(decision);
+    }
   }, 30000);
 
-  test("(i) Claude: a RAW continuation body (no 'Stop hook feedback:' wrapper) does NOT reset the human anchor; the engaged turn still BLOCKS", () => {
-    // Genuine human prompt "continue"; conductor ran the engine (bare next) then
-    // bailed; the hook re-injected its RAW nudge as a user entry (no wrapper).
-    // The classifier must exclude the raw nudge by body, keeping the anchor at
-    // "continue" with the engine call after it -> NOT conversational -> BLOCK.
+  test("(i) Claude: a user entry Claude Code did not mark (no isMeta) is the person's whatever its words; answered with no engine call it ALLOWS", () => {
+    // Genuine human prompt "continue"; conductor ran the engine (bare next);
+    // then a user entry with the hook's words and no isMeta. Only the host's
+    // mark tells its own entries from the person's, so this one is theirs and
+    // the turn after it touched no engine -> conversational -> ALLOW.
     for (const nudge of rawNudges()) {
       const proj = makeProject();
       seedActive(proj, "requirements-analysis");
@@ -4995,13 +4991,12 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
         "run-stage",
       );
       expect(r.rc).toBe(0);
-      expect((JSON.parse(r.out) as { decision?: string }).decision, nudge).toBe("block");
+      expect(r.out, nudge).toBe("");
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("(i) Codex: a RAW continuation body (no wrapper) does NOT reset the human anchor; the engaged turn still BLOCKS", () => {
-    // The codex reader applies the same isInjectedHookFeedback raw-body guard
-    // (aidlc-continue-workflow.ts), so the raw nudge is excluded there too.
+  test("(i) Codex: a user message with the hook's words and no wrapper of Codex's is the person's; answered with no engine call it ALLOWS", () => {
+    // Only Codex's own Stop wrapper marks a message as the hook's (t149 1e).
     for (const nudge of rawNudges()) {
       const proj = makeProject();
       seedActive(proj, "requirements-analysis");
@@ -5016,7 +5011,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
         "run-stage",
       );
       expect(r.rc).toBe(0);
-      expect((JSON.parse(r.out) as { decision?: string }).decision, nudge).toBe("block");
+      expect(r.out, nudge).toBe("");
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 

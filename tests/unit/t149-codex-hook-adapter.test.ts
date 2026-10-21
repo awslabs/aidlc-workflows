@@ -980,11 +980,11 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     return runAdapter(dir, "continue-workflow", withCwd({ ...FIXTURES.stop, transcript_path: transcript }, dir)).stdout.trim();
   }
 
-  // Codex puts the note back into the chat as a message of the person's. The
-  // hook still knows it as its own, so the agent that engaged the work and then
-  // only answered the note is still steered on. Each line the hook writes, and
-  // the earlier one-line note still found in older transcripts, counts.
-  test("1c: the stop note put back into the chat is not read as the person talking", () => {
+  // A user message Codex did not wrap as a hook's is a message of the person's,
+  // whatever its words: no text match tells the hook's own lines from theirs,
+  // so an answer to it with no engine call ends the turn. Each line the hook
+  // writes, and the earlier one-line note, alike.
+  test("1c: a message with the stop note's words and no wrapper of Codex's is the person's", () => {
     for (const note of [
       "AI-DLC is carrying on with Requirements Analysis.",
       "AI-DLC is carrying on with Code Generation for alpha.",
@@ -996,7 +996,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     ]) {
       const dir = scratchProject(true);
       try {
-        expect((JSON.parse(stopAfterMessage(dir, note) || "{}") as { decision?: string }).decision, note).toBe("block");
+        expect(stopAfterMessage(dir, note), note).toBe("");
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
@@ -1048,9 +1048,10 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
   const LIVE_WRAPPED_NOTE =
     'The AI-DLC workflow is not finished (current stage "reverse-engineering"). If you just asked the person a question and are waiting for the answer, run `bun .codex/tools/aidlc.ts engine log decision --stage reverse-engineering --decision "&lt;the question&gt;" --options "&lt;the choices&gt;"`, adding any `--single`, `--checkpoint` or `--questions-file` flags that question\'s own instructions use, and end your turn without asking it again. Otherwise run `bun .codex/tools/aidlc-orchestrate.ts next`, do what the step it prints asks, then run `bun .codex/tools/aidlc-orchestrate.ts report --stage &lt;stage&gt; --result &lt;outcome&gt;`; repeat until it answers `done`. If the person asked to stop here, run `bun .codex/tools/aidlc-orchestrate.ts park`. Never mark a stage done or approved just to end the turn, and tell the person nothing about this note.';
 
-  test("1e: Codex's wrapped stop note is the hook's, so a reply with no engine call is still sent on", () => {
+  test("1e: a message Codex wrapped as a Stop hook's is the hook's, whatever is inside, so a reply with no engine call is still sent on", () => {
     for (const inner of [
       LIVE_WRAPPED_NOTE,
+      "please explain the plan",
       "AI-DLC is carrying on with Requirements Analysis.",
       "AI-DLC is carrying on with Feedback &amp; Optimization.",
       "AI-DLC is carrying on.",
@@ -1067,15 +1068,13 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     }
   });
 
-  // Only that exact wrapper around one of the hook's own lines is unwrapped.
-  // A person's message with the tag and words of their own, a wrapped text
-  // that is not a hook line, or another wrapper stays the person's: the
-  // answer to it with no engine call ends the turn.
+  // Only Codex's Stop wrapper around the whole message is the hook's. A
+  // person's message with the tag and words of their own, or another wrapper,
+  // stays the person's: the answer to it with no engine call ends the turn.
   test("1f: a person's message that only looks like Codex's wrapper is still the person", () => {
     for (const said of [
       (dir: string) => `${hookPrompt(dir, "AI-DLC is carrying on with Requirements Analysis.")} why does this keep showing up?`,
       (dir: string) => `what is this? ${hookPrompt(dir, "AI-DLC is carrying on with Requirements Analysis.")}`,
-      (dir: string) => hookPrompt(dir, "please explain the plan"),
       () => '<hook_prompt hook_run_id="session:1">AI-DLC is carrying on with Requirements Analysis.</hook_prompt>',
       () => "<hook_prompt>AI-DLC is carrying on with Requirements Analysis.</hook_prompt>",
     ]) {
