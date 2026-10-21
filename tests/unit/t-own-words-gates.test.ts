@@ -18,7 +18,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
   AIDLC_SRC,
@@ -53,6 +53,8 @@ import {
   stateDigest,
   stripRecommendedDecorator,
   turnEndIsOpen,
+  engineTouchMarkerPath,
+  humanTurnMarkerPath,
   writeActiveDirectiveMarker,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { exactOptionPick } from "../../dist/claude/.claude/tools/aidlc-reply-reader.ts";
@@ -379,6 +381,9 @@ describe("the stage gate records the choice the agent read, with the person's wo
     says(proj, "approve, rename the handler, and let's stop for today");
     const parked = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve", "--park"]);
     expect(parked.kind, JSON.stringify(parked)).toBe("parked");
+    expect((parked as { narration?: string }).narration).toMatch(
+      /^Approved, and paused at [^\n]+ with everything saved\. Pick it back up any time here, or with \/aidlc --resume in a new chat\.$/,
+    );
     expect(events(proj, "GATE_APPROVED")).toHaveLength(1);
     expect(events(proj, "WORKFLOW_PARKED")).toHaveLength(1);
   });
@@ -550,6 +555,20 @@ describe("the summary confirmation records the choice the agent read", () => {
     const r = answer("Request changes: rename the handler");
     expect(r.rc, r.out).toBe(0);
     expect(r.out).toContain("rename the handler");
+    // What to change is known, so the agent revises: the stage's work goes on.
+    expect(r.out).not.toContain("agent_note");
+    expect(turnEndIsOpen(proj)).toBe(false);
+    expect(statSync(engineTouchMarkerPath(proj)).mtimeMs).toBeGreaterThan(statSync(humanTurnMarkerPath(proj)).mtimeMs);
+  });
+
+  // #2400: a bare Request changes is answered by the person next ("What
+  // should change?"), so the turn ends there and the Stop hook lets it.
+  test("a bare Request changes says to ask what should change, and the turn ends", () => {
+    summary("Request changes");
+    const r = answer("Request changes");
+    expect(r.rc, r.out).toBe(0);
+    expect(r.out).toContain('Ask \\"What should change?\\" and end the turn');
+    expect(turnEndIsOpen(proj)).toBe(true);
   });
 
   // The protocol's quoting rule, through a real shell: single quotes keep a

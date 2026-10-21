@@ -33,8 +33,9 @@
 // id is a documentation annotation, matching t251's and t237's convention.
 //
 // The behavioural cases drive the real `required-sections` sensor rather than a
-// stub: it fails on fewer than two H2 headings, so rewriting an output file
-// between fires produces a genuine FAILED -> PASSED pair. The noted-pass case
+// stub: with a team template for requirements.md it fails when the file lacks a
+// template heading, so rewriting an output file between fires produces a
+// genuine FAILED -> PASSED pair. The noted-pass case
 // swaps in a stub script through the AIDLC_SENSOR_SCRIPT_DIR seam for its
 // second fire only. The stage graph comes from AIDLC_SRC (the generated dist
 // tree) through the AIDLC_STAGE_GRAPH seam, exactly as t94 does.
@@ -53,6 +54,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { memoryTemplatesDir } from "../../core/tools/aidlc-graph.ts";
 import { pruneSupersededDetailFiles } from "../../core/tools/aidlc-sensor.ts";
 import { readAllAuditShards } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
@@ -233,10 +235,12 @@ const DISPATCHER = join(REPO_ROOT, "core", "tools", "aidlc-sensor.ts");
 const FRAMEWORK_GRAPH = join(AIDLC_SRC, "tools", "data", "stage-graph.json");
 const STAGE = "requirements-analysis";
 
-// required-sections fails below two H2 headings, so the same output file
-// rewritten between fires yields a real FAILED then a real PASSED.
+// required-sections fails an output missing a heading its template asks for, so
+// the same output file rewritten between fires yields a real FAILED then a real
+// PASSED.
 const ONE_H2 = "# Title\n\n## Only One\n\nbody\n";
 const THREE_H2 = "# Title\n\n## One\n\na\n\n## Two\n\nb\n\n## Three\n\nc\n";
+const REQUIREMENTS_TEMPLATE = "# Requirements\n\n## One\n\n## Two\n\n## Three\n";
 
 interface Fire {
 	result: string;
@@ -273,6 +277,9 @@ function setupProject(): {
 
 	const outputDir = join(record, "inception", STAGE);
 	mkdirSync(outputDir, { recursive: true });
+	const templates = memoryTemplatesDir(proj);
+	mkdirSync(templates, { recursive: true });
+	writeFileSync(join(templates, "requirements.md"), REQUIREMENTS_TEMPLATE, "utf-8");
 	const detailDir = join(record, ".aidlc-engine", "sensors", STAGE);
 
 	const fire = (outputPath: string, env: Record<string, string> = {}, extraArgs: string[] = []): Fire => {

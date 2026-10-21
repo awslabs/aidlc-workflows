@@ -13,7 +13,10 @@ import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   mkdirSync,
+  readdirSync,
   readFileSync,
+  renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -142,6 +145,31 @@ function activeHealthDir(project: string): string {
   const intentsDir = join(project, "aidlc", "spaces", "default", "intents");
   const active = readFileSync(join(intentsDir, "active-intent"), "utf-8").trim();
   return join(intentsDir, active, ".aidlc-engine/hooks-health");
+}
+
+function activeAuditDir(project: string): string {
+  const intentsDir = join(project, "aidlc", "spaces", "default", "intents");
+  const active = readFileSync(join(intentsDir, "active-intent"), "utf-8").trim();
+  return join(intentsDir, active, "audit");
+}
+
+// A second clone after a pull: the audit shards travel in git, while the clone
+// id and the heartbeats are git-ignored and stay with the clone that ran the work.
+function asPulledByAnotherClone(project: string, writerShard: string, ownCloneId: string | null): void {
+  const audit = activeAuditDir(project);
+  const shards = readdirSync(audit).filter((file) => file.endsWith(".md"));
+  expect(shards).toHaveLength(1);
+  renameSync(join(audit, shards[0]), join(audit, writerShard));
+  const cloneId = join(project, "aidlc", ".aidlc-clone-id");
+  if (ownCloneId === null) rmSync(cloneId, { force: true });
+  else writeFileSync(cloneId, ownCloneId, "utf-8");
+}
+
+function doctorRow(text: string, label: string): string {
+  const lines = text.split("\n");
+  const at = lines.findIndex((line) => line.includes(label));
+  expect(at, text).toBeGreaterThanOrEqual(0);
+  return lines.slice(at, at + 2).join("\n");
 }
 
 function writeHeartbeat(project: string, timestamp: string): void {
@@ -355,6 +383,49 @@ describe("t319 doctor detects hooks blocked before their first heartbeat", () =>
       /warn {2}Your replies are not being recorded: [1-9]\d* steps? or approvals? so far and no message of yours on record/,
     );
     expect(output(run)).not.toContain("Human-turn receipts");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A clone that pulled a teammate's record has their audit shard but none of
+  // their heartbeats, which says nothing about its own hooks: one warning that
+  // names the machine the work ran on, and no hooks step aimed at this one.
+  for (const [name, ownCloneId] of [
+    ["a clone with its own AI-DLC record", "c10ne0000b0b\nthis-machine\n"],
+    ["a clone that has not written any AI-DLC record yet", null],
+  ] as const) {
+    test(`${name}: a workflow run only in another clone warns and names that machine`, () => {
+      const project = projectWithWorkflowProgress();
+      asPulledByAnotherClone(project, "teammate-laptop-0a1b2c3d4e5f.md", ownCloneId);
+
+      const run = runUtility(project, ["doctor", "--verbose"]);
+      const text = output(run);
+      expect(text).not.toContain("Hooks have never executed");
+      const row = doctorRow(text, "was run in another clone");
+      expect(row).toContain(
+        "warn  This workflow was run in another clone (teammate-laptop); this clone has no hook record for it yet",
+      );
+      expect(row).toContain(
+        "fix: nothing to fix in this clone: its hooks record this workflow once you carry on with it here. " +
+          "To check the hooks where it ran, run doctor in that clone",
+      );
+      expect(row).not.toContain("disableAllHooks");
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  test("progress in this clone's own shard keeps the error beside a teammate's shard", () => {
+    const project = projectWithWorkflowProgress();
+    writeFileSync(
+      join(activeAuditDir(project), "teammate-laptop-0a1b2c3d4e5f.md"),
+      "# AI-DLC Audit Log\n\n## Stage Start\n**Timestamp**: 2026-01-02T03:04:05Z\n" +
+        "**Event**: STAGE_STARTED\n**Stage**: requirements-analysis\n**Agent**: orchestrator\n\n---\n",
+      "utf-8",
+    );
+
+    const run = runUtility(project, ["doctor", "--verbose"]);
+    expect(run.status).toBe(1);
+    expect(output(run)).toMatch(
+      /fail {2}Hooks have never executed although this workflow has progressed [1-9]\d* stages?/,
+    );
+    expect(output(run)).not.toContain("was run in another clone");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A brand-new piece of work: the opening message arrives before the work

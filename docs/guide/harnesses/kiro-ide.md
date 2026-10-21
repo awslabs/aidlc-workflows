@@ -478,6 +478,85 @@ harnesses (or running both side by side) is supported-but-untested; `/aidlc
 --doctor` will warn if it detects a conflicting harness setup with an active
 workflow.
 
+### A Unit's reviewer reads only that Unit
+
+During a Unit's review, the reviewer is meant to read only that Unit's files
+and the shared contracts it is given. On Claude Code and the other harnesses a
+hook holds it to that; on Kiro no hook can tell the reviewer's reads apart, so
+Kiro holds the reviewer to it instead. For each Unit review, AI-DLC writes a
+copy of the reviewer, `.kiro/agents/aidlc-scoped-review-<id>.md`, whose
+permissions deny reads in every other Unit's `construction/` folder (a Unit of
+the same name in another piece of work included), and dispatches that copy.
+Kiro refuses such a read and leaves those files out of search results; a shell
+read such as `cat` is not covered and asks you first. The
+copy opens no other Unit's file, not even one the Unit's design names as an
+integration point: the reviewer notes that point as a finding instead. The
+copy shows in Kiro's agent list and `/` menu while the review runs; AI-DLC
+dispatches it, so there is no need to pick it. It is deleted when its verdict
+is recorded; AI-DLC's `.gitignore` block keeps it out of commits, and you can
+delete one left by a review that never finished (one you approved the Unit
+without, or one a closed chat stopped). When AI-DLC cannot write a copy it
+should write, or Kiro has no agent by the copy's name (an older Kiro build may
+not load it), AI-DLC dispatches the reviewer itself, as without the copy,
+and says in one line that this review runs without the check. Doctor then
+counts a hook drop: for a copy AI-DLC could not write, under `reviewer-scope`,
+naming the cause; for one Kiro did not load, under `kiro-adapter`, and that
+file (`<record>/.aidlc-engine/hooks-health/kiro-adapter.drops`) names the
+copy. Measured on Kiro CLI 2.31.0 and Kiro IDE 1.3.0, and in a whole workflow
+on Kiro CLI 2.31.1. There is no copy for Units built in parallel, or while
+the reviewer read-scope check is off: under Guard Policy `off`, the default of
+every plan but enterprise, with `guard.reviewer-scope off`, or with
+`AIDLC_DISABLE_REVIEWER_SCOPE_HOOK=1`; the reviewer is then held to its Unit by
+its instructions only. To have the copy on such a plan, ask in chat to turn the
+reviewer read-scope check on for the work (or type
+`/aidlc config set guard.reviewer-scope on`). A copy keeps the permissions it
+was written with, so turning the check off applies from the next Unit review.
+
+### One agent on its own model and effort
+
+On Kiro every AI-DLC agent runs on your chat's model and effort (the model you
+pick in Kiro IDE, or Kiro CLI's session model) unless a model or effort is set
+for that agent. Kiro can run a delegated agent on its own model and effort, for
+example a reviewer on another model family:
+
+```bash
+aidlc config models --agent architecture-reviewer --model gpt-5.6-terra --effort high --project --yes
+```
+
+AI-DLC records the model and effort in `aidlc.settings.json` and writes
+`model:` (as a quoted string) and `effortLevel:` into that agent's
+`.kiro/agents/aidlc-architecture-reviewer-agent.md`; a Unit's reviewer copy
+keeps them. Kiro reads them when it next dispatches the agent, in a chat that
+is already open too. The model must be one your Kiro offers
+(`kiro-cli chat --list-models`, or Kiro IDE's model picker): one it does not
+offer can fail that agent's dispatch. An effort the model does not take runs
+at the model's own default, and an agent given a model but no effort runs at
+that model's default effort, not your chat's. `--model default` and
+`--effort default` take them out again. A preset or a group effort
+(`--preset`, `--reviewing-effort`) still changes nothing on Kiro, setup records
+no preset there, and the conductor keeps your chat's model.
+
+AI-DLC owns the model and effort lines (`model:`, `effortLevel:`, and the
+`effort:`, `variant:` and `tier:` keys other tools use) of the agent files it
+ships, as it does on Claude Code: `aidlc config` writes those of the agents
+that have a setting, so change them through `aidlc config models` rather than
+by hand; `aidlc config models --check` reports a `model:` or `effortLevel:`
+line that does not match the setting, one you added by hand included. An agent
+file you added yourself is not touched.
+
+An agent's effort is shared by every tool, while its model is recorded per
+tool, so an effort recorded for one agent for another tool applies on Kiro too.
+An `aidlc config` run that writes a model or effort value into a Kiro agent
+file that differs from what the file had, other than a value that run changes
+itself, says so in one line and names
+`aidlc config models --show --harness kiro-ide`, which shows where each value
+is set; `--effort default` (or `--model default`) for that agent, with
+`--project`, `--local` or `--global` (machine settings) for the file it is in,
+and `--harness kiro-ide` when the project has another harness, takes it out
+(an effort taken out this way is gone for every tool).
+`effortLevel` is not in Kiro's documentation. Measured on Kiro CLI 2.31.1 on
+its v3 engine and Kiro IDE 1.3.0.
+
 ### Kiro's Workflows feature stops AI-DLC's reviews and helpers
 
 Kiro IDE's **Workflows** feature (Settings > **Kiro Agent > Workflows:
@@ -508,9 +587,26 @@ Kiro's own **Disable Workflows** and **Enable Workflows** commands do the same.
 `/aidlc --doctor` shows a warning while Workflows is on, and while Kiro's
 settings file has an error AI-DLC cannot read past (Kiro may still read
 Workflows as on from it; the next chat tells you once, and the fix is the
-error in that file). Kiro CLI keeps its
-sub-agent tool with Workflows on (unless you turn its "Workflows: sub-agent
-tool" setting off), so it needs nothing.
+error in that file).
+
+Kiro CLI has a Workflows switch of its own (`/settings` > Features >
+**Workflows**, `chat.enableWorkflows` in your Kiro CLI settings,
+`~/.kiro/settings/cli.json`). While it is on, Kiro CLI takes both sub-agent
+tools away from the `aidlc` agent, so AI-DLC's reviews and helpers do not run
+in your Kiro CLI chats; its "Workflows: sub-agent tool" setting does not bring
+them back (measured on Kiro CLI 2.31.1 and 2.32.0). Kiro CLI's chat reads the
+switch only from your own Kiro CLI settings, so a project's
+`.kiro/settings/cli.json` value does not turn it off. AI-DLC asks about it the same way, with an answer of its
+own: during `aidlc config`, or once in your first Kiro CLI chat; `aidlc config
+--yes` takes the recommended answer and turns it off. AI-DLC changes it through
+Kiro CLI's own `kiro-cli settings` command; quit Kiro CLI and start `kiro-cli`
+again afterwards. To change it later, ask the agent, or run:
+
+```bash
+aidlc config trust --kiro-cli-workflows off --yes   # or: on
+```
+
+`/aidlc --doctor` shows a warning while it is on.
 
 ### Command Prompt as Kiro's terminal on Windows
 

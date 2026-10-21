@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { appendAuditEntries, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { checkpointRecordForms, loadConstructionEvidence, type ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
+import { APPROVAL_GATE_CHOICES } from "./aidlc-reply-reader.ts";
 import {
   activeIntentUuid,
   approvedConstructionUnits,
@@ -366,13 +367,14 @@ export function askSwarmCheckpoint(pd: string, batch: number, units: string[], s
     }
     const notices = recordAcceptedChanges(pd, current.accepted);
     withdrawProtectedQuestions(pd, session);
+    const choices = current.result.ready ? APPROVAL_GATE_CHOICES : ["Request Changes" as const];
     appendAuditEntryUnlocked("DECISION_RECORDED", {
       Checkpoint: "Swarm Batch Approval", Stage: STAGE, "Batch number": String(batch),
       Units: current.result.units.join(", "), Fingerprint: current.result.fingerprint,
-      Session: session, Options: current.result.ready ? "Approve,Request Changes" : "Request Changes",
+      Session: session, Options: choices.join(","),
     }, pd, selection.intent, selection.space);
     mintProtectedQuestion(pd, {
-      kind: "checkpoint-approval", session, target: approvalTarget(current.result, current.commandSha256s),
+      kind: "checkpoint-approval", session, target: approvalTarget(current.result, current.commandSha256s), choices,
     });
     return notices.length > 0 ? { ...current.result, notices } : current.result;
   });

@@ -175,6 +175,13 @@ function pluginNameFromRoot(): string {
   const supplied = process.env.AIDLC_PLUGIN_KEY?.trim();
   if (supplied && SAFE_PLUGIN_KEY.test(supplied)) return supplied;
   if (!PLUGIN_ROOT) return "plugin";
+  // The plugin's own manifest names it whatever the host calls it; a build
+  // from before it travelled with the plugin named the host package aidlc-<name>.
+  try {
+    const own = JSON.parse(readFileSync(join(PLUGIN_ROOT, ".aidlc-plugin", "plugin.json"), "utf-8"));
+    const name = typeof own?.name === "string" ? own.name.trim() : "";
+    if (SAFE_PLUGIN_KEY.test(name)) return name;
+  } catch { /* fall through to the host manifest */ }
   for (const md of [
     ".claude-plugin",
     ".codex-plugin",
@@ -632,6 +639,20 @@ function priorOwned(): Map<string, string> {
 }
 // Files this run wrote, replaced, or found byte-identical to the plugin's copy.
 const ownedThisRun = new Map<string, string>();
+// The knowledge preflight: its marker line and the paragraph below it, where the
+// after-preflight persona anchor lands. It is the one part of a plugin agent the
+// plugin builder writes, and its wording moves with AI-DLC releases. 2.11.0 never
+// recorded an agent the harness reshapes at install, so a file that is this copy
+// everywhere but there is the plugin's own older copy; any other difference may
+// be the person's, and stays theirs.
+const KNOWLEDGE_PREFLIGHT = /^<!-- aidlc-delegated-knowledge-preflight -->\n[^\n]*\n/m;
+function sameButKnowledgePreflight(installed: Buffer, current: Buffer): boolean {
+  const own = committedText(current).toString("utf-8");
+  const ownBlock = KNOWLEDGE_PREFLIGHT.exec(own);
+  const theirs = committedText(installed).toString("utf-8");
+  if (!ownBlock || !KNOWLEDGE_PREFLIGHT.test(theirs)) return false;
+  return theirs.replace(KNOWLEDGE_PREFLIGHT, () => ownBlock[0]) === own;
+}
 
 if (!pluginEnabledBySelection()) {
   recordDrop(
@@ -1696,10 +1717,11 @@ function copyTreeNoClobber(
       }
       const recorded = priorOwned().get(projectRelPosix(dest));
       if (recorded === undefined) {
-        recordDrop(`${kind} "${rel}" collides with an existing file this plugin has no record of installing (core, another plugin, an older copy of this plugin, or a local edit); not overwritten - if it is this plugin's older copy, remove it and re-run compose; if it is core's or another plugin's, rename yours to a plugin-namespaced path`);
-        continue;
-      }
-      if (!recordedDigestMatches(installed, recorded)) {
+        if (current === null || !sameButKnowledgePreflight(installed, current)) {
+          recordDrop(`${kind} "${rel}" collides with an existing file this plugin has no record of installing (core, another plugin, an older copy of this plugin, or a local edit); not overwritten - if it is this plugin's older copy, remove it and re-run compose; if it is core's or another plugin's, rename yours to a plugin-namespaced path`);
+          continue;
+        }
+      } else if (!recordedDigestMatches(installed, recorded)) {
         recordDrop(`${kind} "${rel}" was changed after this plugin installed it; not overwritten - to take the plugin's current copy, move your change elsewhere, remove the file, and re-run compose`);
         continue;
       }
@@ -2005,7 +2027,7 @@ function locateAnchor(content: string, anchor: string, target: string): number {
   if (anchor === "after-preflight") {
     // Personas: right after the delegated-knowledge preflight the packager
     // injects at build time — its marker line and the one paragraph below it.
-    const m = content.match(/^<!-- aidlc-delegated-knowledge-preflight -->\n[^\n]*\n/m);
+    const m = content.match(KNOWLEDGE_PREFLIGHT);
     if (!m) { recordDrop(`contribution to ${target}: anchor "after-preflight" — no delegated-knowledge preflight block found (the target must be a persona); prose dropped`); return -1; }
     return m.index! + m[0].length;
   }

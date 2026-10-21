@@ -16,8 +16,11 @@ export type DirMap = { src: string; dst: string };
  * By default <dst> is relative to <harnessDir>/ (e.g. .kiro/skills/aidlc/SKILL.md).
  * Set projectRoot:true to land it at the dist tree ROOT instead, beside the
  * harness dir (e.g. dist/kiro/AGENTS.md) — Kiro/Codex put AGENTS.md there.
+ * Set copyOnly:true for a file only the copy runtime (dist/<name>/) ships,
+ * such as Cursor's copy installer: the native projection, and so
+ * `aidlc config`, leaves it out.
  */
-export type FileMap = { src: string; dst: string; projectRoot?: boolean };
+export type FileMap = { src: string; dst: string; projectRoot?: boolean; copyOnly?: boolean };
 
 /**
  * Context handed to a harness emit() plugin. Everything it needs to write
@@ -220,6 +223,15 @@ export type HarnessManifest = {
      * `recovery` instead.
      */
     agentStepEdits?: string;
+    /**
+     * The project JSON file this host reads AI-DLC's hook registrations from,
+     * relative to the project, and the line the person is shown instead of
+     * `agentStep` while it is missing (`missing`) or is not valid JSON
+     * (`invalid`): no setting brings those hooks back. `<repair>` is doctor's
+     * command that puts the file back; `<entry>` and `<folder>` as in
+     * `agentStep`.
+     */
+    registration?: { file: string; missing: string; invalid: string };
   };
   /** The harness directory the token substitutes to (".claude" | ".kiro" | ".codex" | ".aidlc" | ".cursor"). */
   harnessDir: string;
@@ -371,6 +383,17 @@ export type HarnessManifest = {
   plugin?: {
     /** Host plugin-manifest dir name (for example ".claude-plugin" or ".cursor-plugin"). */
     manifestDir: string;
+    /**
+     * Where the host reads a plugin catalogue (`marketplace.json`) when the
+     * person adds the projection as a marketplace. Defaults to `manifestDir`.
+     */
+    marketplaceDir?: string;
+    /**
+     * Whether the host adds a folder of plugins as one marketplace from that
+     * catalogue, so AI-DLC's own plugins share one there. Defaults to true for
+     * "store" and "cursor" kinds; a folder drop has no catalogue.
+     */
+    hostCatalogue?: boolean;
     /** Host-specific plugin hook projection shape. */
     kind: "store" | "kiro" | "kiro-ide" | "cursor";
     /**

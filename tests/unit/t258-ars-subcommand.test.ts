@@ -22,12 +22,15 @@
 //      --completed slugs, and a corrupted priors file (weights not summing to
 //      1, wrong schemaVersion, a string cost, an unknown projectTypes value)
 //      exit 1 with a naming error, never a silent fallback.
-//   5. CONDITION AGREEMENT — --project-type screens out a stage whose
+//   5. CONDITION AGREEMENT: --project-type screens out a stage whose
 //      compiled condition restricts it to the other project type, so the
 //      mechanical screen cannot contradict the stage it would have to run.
 //      Pinned in BOTH directions: every priors `projectTypes` mirror answers
 //      to a restricting condition, and every restricting condition has a
-//      mirror — editing one side alone turns this file red.
+//      mirror; editing one side alone turns this file red. Reverse
+//      Engineering's priors-only `project-type` role runs it on its own kind
+//      whatever CSU scores (#2575); a plugin stage's project_types keeps its
+//      arithmetic there.
 //   6. INSTALL TOLERANCE — an install whose plugin selection disables a core
 //      stage still runs `ars`: priors validate against the unfiltered graph.
 //   7. STAGE-AUTHORED PRIORS — a stage the shipped priors do not name (a
@@ -35,6 +38,9 @@
 //      graph node (targets/cost/role/project_types), the shipped entry wins
 //      when both exist, a stage with neither stays a `no-prior` row, and a
 //      stage-side cost with no evThresholds entry exits 1 naming the stage.
+//   8. SCORE RECORD: `ars` fills the record a front compose dispatch opened
+//      (the five scores and --method) and writes nothing when none is open;
+//      its output never changes because of it.
 //
 // Mechanism: MIXED — in-process imports for the arithmetic/band/schema pins,
 // spawns for the CLI exit-code rows (cli). Priors fault-injection rides the
@@ -47,7 +53,7 @@ import {
 } from "../harness/test-budget.ts";
 import { describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { computeArs, loadArsPriors } from "../../dist/claude/.claude/tools/aidlc-graph.ts";
@@ -119,12 +125,12 @@ describe("t258 ars arithmetic pin (in-process)", () => {
   });
 
   test("--project-type screens a brownfield-only stage out of a greenfield run", () => {
-    // CSU 0.80 clears reverse-engineering's cost-4 threshold, so the
-    // component screen alone says EXECUTE on every project type.
+    // With no type given, reverse-engineering runs by its project-type role
+    // (creation leaves it out of a new project), never by its CSU.
     const scores = { iae: 0, csu: 0.8, ve: 0, r: 0, ua: 0 };
     const unset = computeArs(scores);
     expect(unset.screenGrid["reverse-engineering"]).toBe("EXECUTE");
-    expect(unset.evScreen.find((x) => x.stage === "reverse-engineering")?.screen).toBe("component");
+    expect(unset.evScreen.find((x) => x.stage === "reverse-engineering")?.screen).toBe("project-type");
 
     const brownfield = computeArs(scores, { projectType: "brownfield" });
     expect(brownfield.screenGrid["reverse-engineering"]).toBe("EXECUTE");
@@ -140,6 +146,35 @@ describe("t258 ars arithmetic pin (in-process)", () => {
     expect(greenfield.screenGrid["practices-discovery"]).toBe(
       brownfield.screenGrid["practices-discovery"]
     );
+  });
+
+  test("on existing code Reverse Engineering is decided by project type, not by CSU (#2575)", () => {
+    // The same repo scored CSU 0.39 on one run and 0.55 on the next, and the
+    // 0.40 cutoff dropped the stage on the first. The stage checks its own
+    // store before it scans, so the screen no longer judges it by a score.
+    const brownfieldRow =
+      "project is brownfield - existing code always gets this stage; when an earlier scan's code map is still current it asks whether to reuse it";
+    for (const csu of [0, 0.39, 0.41, 0.8]) {
+      const r = computeArs({ iae: 0.35, csu, ve: 0.4, r: 0.35, ua: 0.3 }, { projectType: "brownfield" });
+      const row = r.evScreen.find((x) => x.stage === "reverse-engineering");
+      expect([csu, row?.decision, row?.screen, row?.reason]).toEqual([csu, "EXECUTE", "project-type", brownfieldRow]);
+      expect(r.screenGrid["reverse-engineering"]).toBe("EXECUTE");
+    }
+    const unset = computeArs({ iae: 0.35, csu: 0.39, ve: 0.4, r: 0.35, ua: 0.3 });
+    const unsetRow = unset.evScreen.find((x) => x.stage === "reverse-engineering");
+    expect(unsetRow?.decision).toBe("EXECUTE");
+    expect(unsetRow?.reason).toBe(
+      "no project type given - existing code always gets this stage and a new project leaves it out; when an earlier scan's code map is still current it asks whether to reuse it"
+    );
+    const greenfield = computeArs({ iae: 0.35, csu: 0.39, ve: 0.4, r: 0.35, ua: 0.3 }, { projectType: "greenfield" });
+    expect(greenfield.screenGrid["reverse-engineering"]).toBe("SKIP");
+    // Only Reverse Engineering moves: the other CSU stages keep their arithmetic.
+    const low = computeArs({ iae: 0.35, csu: 0.39, ve: 0.4, r: 0.35, ua: 0.3 }, { projectType: "brownfield" });
+    for (const slug of ["domain-design", "functional-design", "infrastructure-design"]) {
+      const row = low.evScreen.find((x) => x.stage === slug);
+      expect([slug, row?.decision, row?.screen]).toEqual([slug, "SKIP", "component"]);
+    }
+    expect(loadArsPriors().stages["reverse-engineering"].role).toBe("project-type");
   });
 
   test("--completed outranks the project-type screen (the stage already ran)", () => {
@@ -291,6 +326,49 @@ describe("t258 ars CLI (spawn)", () => {
     expect(r.stderr).toContain("brownfield or greenfield");
   });
 
+  test("--method takes codekb or fallback; anything else exits 1 naming both", () => {
+    for (const method of ["codekb", "fallback"]) {
+      expect(runArs([...SCORE_FLAGS, "--method", method]).status, method).toBe(0);
+    }
+    for (const args of [["--method", "guess"], ["--method"], ["--method", "--project-type", "brownfield"]]) {
+      const r = runArs([...SCORE_FLAGS, ...args]);
+      expect(r.status, args.join(" ")).toBe(1);
+      expect(r.stderr).toContain("--method must be codekb or fallback");
+    }
+  });
+
+  test("the scores fill the record a front compose dispatch opened, and nothing else (#2575)", () => {
+    const proj = mkdtempSync(join(tmpdir(), "t258-scores-"));
+    try {
+      const env = { CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: "" };
+      // No engine folder at all: nothing is made and the result is unchanged.
+      const before = runArs([...SCORE_FLAGS, "--method", "fallback"], env);
+      expect(before.status, before.stderr).toBe(0);
+      expect(existsSync(join(proj, "aidlc"))).toBe(false);
+      const engine = join(proj, "aidlc", "spaces", "default", "intents", ".aidlc-engine");
+      mkdirSync(engine, { recursive: true });
+      const record = join(engine, "composer-scores.json");
+      // No record open (an in-flight or hand run): nothing is written.
+      expect(runArs(SCORE_FLAGS, env).status).toBe(0);
+      expect(existsSync(record)).toBe(false);
+      // An open record gets the five scores it screened with and the method.
+      writeFileSync(record, JSON.stringify({ request: "abcd1234" }));
+      const filled = runArs([...SCORE_FLAGS, "--method", "fallback"], env);
+      expect(filled.stdout).toBe(before.stdout);
+      const scores = { iae: 0.55, csu: 0.75, ve: 0.65, r: 0.5, ua: 0.55 };
+      expect(JSON.parse(readFileSync(record, "utf-8"))).toEqual({ request: "abcd1234", scores, method: "fallback" });
+      // The last run wins; with no --method the method is left out.
+      runArs(SCORE_FLAGS, env);
+      expect(JSON.parse(readFileSync(record, "utf-8"))).toEqual({ request: "abcd1234", scores });
+      // A record that is not one the dispatch wrote is left as it is.
+      writeFileSync(record, "not json");
+      expect(runArs(SCORE_FLAGS, env).status).toBe(0);
+      expect(readFileSync(record, "utf-8")).toBe("not json");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
   test("trailing --project-type with no value exits 1 (never a silent unset)", () => {
     // Falling through to "unset" here is worse than a typo: the run succeeds
     // and reports EXECUTE for a stage the caller believes the greenfield
@@ -373,6 +451,13 @@ describe("t258 ars CLI (spawn)", () => {
       const r5 = runArs(SCORE_FLAGS, { AIDLC_ARS_PRIORS: badRolePath });
       expect(r5.status).toBe(1);
       expect(r5.stderr).toContain("stages.approval-handoff.role must be one of");
+      // The priors-only project-type role runs a stage on the types it names,
+      // so it is refused without them.
+      const roleNoTypesPath = join(dir, "role-no-types.json");
+      writeFileSync(roleNoTypesPath, JSON.stringify(withStage("feasibility", { role: "project-type" })));
+      const r5b = runArs(SCORE_FLAGS, { AIDLC_ARS_PRIORS: roleNoTypesPath });
+      expect(r5b.status).toBe(1);
+      expect(r5b.stderr).toContain("stages.feasibility.role project-type needs projectTypes");
       const repeatedPath = join(dir, "repeated-target.json");
       writeFileSync(repeatedPath, JSON.stringify(withStage("market-research", { targets: ["ve", "ve"] })));
       const r6 = runArs(SCORE_FLAGS, { AIDLC_ARS_PRIORS: repeatedPath });
@@ -535,6 +620,12 @@ describe("t258 stage-authored priors (spawn)", () => {
       expect(rows(runArs([...scores, "--project-type", "brownfield"], env).stdout).screenGrid["t258-brownfield"]).toBe(
         "EXECUTE"
       );
+      // A plugin stage's project_types only screens it out on the other kind:
+      // on its own kind it keeps its arithmetic (the project-type role is the
+      // shipped priors' alone, #2575).
+      const lowScores = ["--iae", "0", "--csu", "0.3", "--ve", "0.9", "--r", "0", "--ua", "0", "--project-type", "brownfield"];
+      const lowRow = rows(runArs(lowScores, env).stdout).evScreen.find((x) => x.stage === "t258-brownfield");
+      expect([lowRow?.decision, lowRow?.screen]).toEqual(["SKIP", "component"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

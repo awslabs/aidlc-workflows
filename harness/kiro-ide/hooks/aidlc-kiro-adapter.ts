@@ -153,7 +153,7 @@ import {
   UNBINDABLE_FINGERPRINT,
   workspaceSourceState,
   writeWorkspaceSourceSnapshot,
-  ANSWER_TEXT_DIR,
+  ENGINE_TEXT_DIRS,
   composerProposalPath,
   docsRoot,
   memoryFilePath,
@@ -563,8 +563,9 @@ function latestPlanApprovalAnswer(questions: string): string | null {
 
 // The record files the shared plan-approval guard admits in every Plan
 // Approval state, by the identity it uses: the Code Generation stage's
-// learnings diary, the composer's proposal, a file in the answer-text folder,
-// and one directly in the request-text folder. None is a planning authority file.
+// learnings diary, the composer's proposal, a file in one of the engine text
+// folders (ENGINE_TEXT_DIRS), and one directly in the request-text folder.
+// None is a planning authority file.
 function isGuardAdmittedRecordWrite(projectDir: string, normalizedPath: string): boolean {
   try {
     const path = normalizeDriveLetter(normalizedPath);
@@ -573,8 +574,10 @@ function isGuardAdmittedRecordWrite(projectDir: string, normalizedPath: string):
       return true;
     }
     if (dirname(path) === normalizeDriveLetter(resolve(join(projectDir, REQUEST_TEXT_DIR)))) return true;
-    const inside = relative(normalizeDriveLetter(resolve(join(docsRoot(projectDir), ANSWER_TEXT_DIR))), path);
-    return inside !== "" && !inside.startsWith("..") && !isAbsolute(inside);
+    return ENGINE_TEXT_DIRS.some((dir) => {
+      const inside = relative(normalizeDriveLetter(resolve(join(docsRoot(projectDir), dir))), path);
+      return inside !== "" && !inside.startsWith("..") && !isAbsolute(inside);
+    });
   } catch {
     return false;
   }
@@ -3693,10 +3696,28 @@ function buildForward(): Forward {
         );
         return null;
       }
+      // Kiro answers a dispatch to an agent it has no file for with this one
+      // line and no other sign of failure (measured on Kiro CLI 2.31.0 and IDE
+      // 1.3.0). Nothing ran, so nothing finished: a completion row would read as
+      // that agent having done its work.
+      const ran: Array<{ target: KiroDelegationTarget; input: ReturnType<typeof completion> }> = [];
+      for (const t of targets) {
+        const input = completion(t);
+        if (t.agent === "" || input.last_assistant_message.trim() !== `Agent '${t.agent}' not found in registry`) {
+          ran.push({ target: t, input });
+          continue;
+        }
+        recordHookDrop(
+          projectDir,
+          "kiro-adapter",
+          `log-subagent: Kiro has no agent named ${t.agent} — SUBAGENT_COMPLETED not recorded`,
+        );
+      }
+      if (ran.length === 0) return null;
       // A pipeline finishes every stage in one result: one row per stage, the
       // last through the ordinary forward.
-      for (const t of targets.slice(0, -1)) {
-        const r = runCore("aidlc-log-subagent.ts", completion(t));
+      for (const { target: t, input } of ran.slice(0, -1)) {
+        const r = runCore("aidlc-log-subagent.ts", input);
         if (r.code !== 0) {
           recordHookDrop(
             projectDir,
@@ -3705,7 +3726,7 @@ function buildForward(): Forward {
           );
         }
       }
-      return { hook: "aidlc-log-subagent.ts", input: completion(targets.at(-1)) };
+      return { hook: "aidlc-log-subagent.ts", input: ran[ran.length - 1].input };
     }
 
     case "continue-workflow":

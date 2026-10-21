@@ -17,7 +17,8 @@ import {
   unbackedFailure,
   unbackedTuiDecisions,
 } from "../harness/person-turns.ts";
-import { reviewedPicks } from "../harness/tui-drive.ts";
+import { menuPick, reviewedPicks } from "../harness/tui-drive.ts";
+import { saveMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 
 const projects: string[] = [];
 const folders: string[] = [];
@@ -219,6 +220,33 @@ describe("person-turn check", () => {
     drive.sent("it is a new project");
     row(dir, "WORKSPACE_RECLASSIFIED", { "New Project Type": "Brownfield (you)" });
     expect(drive.unbacked()).toHaveLength(1);
+  });
+
+  // The rows of the 2026-10-16 nightly's compose-front run: the person's only words came in the first chat; the
+  // second chat's "Approve" created the work as a new project, and the agent changed it to existing code in those words.
+  test("a project type changed in the person's own words is backed by the turn that holds them, from an earlier chat too", () => {
+    const words = "harden the deployment pipeline and add observability for our existing service - no new features, compose a custom plan for exactly this";
+    const opening = `Use the $aidlc skill to run: /aidlc compose "${words}"`;
+    const beat = (earlier: string[], quoted?: string) => {
+      const dir = createTestProject();
+      projects.push(dir);
+      const drive = new PersonTurnLedger(dir, earlier);
+      drive.sent("Approve");
+      row(dir, "WORKFLOW_STARTED");
+      row(dir, "WORKSPACE_INITIALISED", { "Project Type": "Greenfield", "Project Type Source": "scan" });
+      row(dir, "WORKSPACE_RECLASSIFIED", {
+        "Old Project Type": "Greenfield (scan)", "New Project Type": "Brownfield (you)", ...(quoted === undefined ? {} : { "Person Words": quoted }),
+      });
+      return drive.unbacked();
+    };
+    expect(beat([opening], words)).toEqual([]);
+    // The run's own failure stays for a change that quotes nothing, words the person never sent, or a turn not in the work.
+    const failure = 'recorded words "Brownfield (you)": no reply from the person after it opened; the driver sent 1 turn(s): "Approve"';
+    for (const problems of [beat([opening]), beat([opening], "it is an existing service"), beat([], words)]) {
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toStartWith("WORKSPACE_RECLASSIFIED at ");
+      expect(problems[0]).toEndWith(failure);
+    }
   });
 
   test("decisions written before the drive started are not this drive's", () => {
@@ -645,6 +673,53 @@ describe("person-turn check", () => {
     expect(readdirSync(folder)).toEqual([]);
   });
 
+  // Run 38809298225 on Windows: the person picked "Guide me" on a lone
+  // question, and the agent recorded it as a choice left to it, quoting the
+  // pick. Only the pick's own words can back that quote.
+  test("a lone menu pick backs an answer the agent records quoting it", () => {
+    const screen = [
+      "─".repeat(60),
+      " ☐ Answer mode",
+      "",
+      "│ I've created 5 questions about how your team wants to work on this project, at",
+      "│ inception/practices-discovery/practices-discovery-questions.md. How would you like to answer them?",
+      "",
+      "❯ 1. Guide me",
+      "     I'll walk you through each question here, one batch at a time.",
+      "  2. I'll edit the file",
+      "     You fill in the answers directly in the questions file, then tell me you're done.",
+      "  3. Chat",
+      "     We discuss freely and I pull the decisions out of the conversation.",
+      "  4. Type something.",
+      "─".repeat(60),
+    ].join("\n");
+    expect(menuPick(screen)).toBe("Guide me");
+    expect(menuPick(screen.replace("❯ 1. Guide me", "❯ 1.─Guide me─────"))).toBe("Guide me");
+    expect(menuPick("│ Which areas apply?\n\n❯ 1. [ ] Storage\n  2. [ ] Network")).toBe("Storage");
+    ledgerFolder();
+    const problems = [menuPick(screen), ""].map((words, which) => {
+      const dir = project();
+      const session = `t-person-turns-lone-pick-${which}-${process.pid}`;
+      startPersonTurnSession(session, dir);
+      submittedToPersonTurnSession(session, "/aidlc --scope classic Build a simple React todo app");
+      row(dir, "DECISION_RECORDED", {
+        Stage: "practices-discovery", Decision: "How would you like to answer the questions?", "Question Kind": "answer-mode",
+      });
+      nextPersonTurnCarriesPicks(session, 1, words);
+      submittedToPersonTurnSession(session, "");
+      row(dir, "QUESTION_ANSWERED", {
+        Stage: "practices-discovery", Details: "Guide me",
+        "Answer Source": "chosen by the agent as the person asked", Instruction: "Guide me",
+      });
+      return unbackedTuiDecisions(dir);
+    });
+    expect(problems[0]).toEqual([]);
+    // A pick with no words backs no quote.
+    expect(problems[1]).toHaveLength(1);
+    expect(problems[1][0]).toContain("QUESTION_ANSWERED practices-discovery");
+    expect(problems[1][0]).toContain('recorded words "Guide me"');
+  });
+
   test("a form's picks are read off its review screen, or its ticked tabs when the review is out of view", () => {
     const review = [
       "────────────────────────────────────────",
@@ -699,5 +774,69 @@ describe("person-turn check", () => {
     tamper(join(folder, ledger));
     expect(() => unbackedTuiDecisions(dir)).toThrow(says);
     expect(readdirSync(folder)).toEqual([]);
+  });
+});
+
+// The engine binds an answer to the message the agent names for a question it
+// logged after the reply (proveMessage in aidlc-log.ts); the ledger reads the
+// binding the same way.
+describe("an answer that names the person's message", () => {
+  // The store drops records older than a day as it saves one, so these rows run on a recent clock.
+  const base = Date.now() - 60 * 60_000;
+  let tick = 0;
+  const stamp = () => new Date(base + 1000 * tick++).toISOString().replace(/\.\d{3}Z$/, "Z");
+  function recent(dir: string, event: string, fields: Record<string, string> = {}): void {
+    const shard = seededAuditShard(dir);
+    mkdirSync(dirname(shard), { recursive: true });
+    const lines = Object.entries(fields).map(([name, value]) => `**${name}**: ${value}`);
+    appendFileSync(shard, [`## ${event}`, `**Timestamp**: ${stamp()}`, `**Event**: ${event}`, ...lines, "", "---", "", ""].join("\n"));
+  }
+  // The driver types `words` into `chat`; the human-turn hook keeps the message and writes its turn row.
+  function typed(dir: string, drive: PersonTurnLedger, words: string, chat = "chat-a"): string {
+    drive.sent(words);
+    const message = saveMessage(dir, {
+      session: chat, at: stamp(), source: "prompt", text: words, picker: null, words, settings: [],
+      route: { scope: null, newIntent: false, skip: [], add: [], projectType: null },
+    });
+    recent(dir, "HUMAN_TURN", { Session: chat, Origin: "person", Source: "typed", "Message Id": message.id });
+    return message.id;
+  }
+  const question = (decision: string) => ({ Stage: "requirements-analysis", Decision: decision, Options: "A,B,X" });
+  const REPLY = "Keep it small: the greeting uses the name, and nothing else changes";
+
+  test("a typed reply backs the answer to a question the agent logged after it, when the answer names it", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    recent(dir, "DECISION_RECORDED", question("Q1: no name given"));
+    const id = typed(dir, drive, REPLY);
+    recent(dir, "DECISION_RECORDED", question("Q2: name handling"));
+    recent(dir, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: "Q1: A; Q2: A", "Message Id": id, "Person Reply": REPLY });
+    expect(drive.unbacked()).toEqual([]);
+  });
+
+  test("a message from another chat does not back it", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    recent(dir, "DECISION_RECORDED", question("Q1: no name given"));
+    const id = typed(dir, drive, REPLY, "chat-b");
+    typed(dir, drive, "what does Q1 mean?");
+    recent(dir, "DECISION_RECORDED", question("Q2: name handling"));
+    recent(dir, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: "Q1: A; Q2: A", "Message Id": id });
+    const problems = drive.unbacked();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("QUESTION_ANSWERED requirements-analysis");
+  });
+
+  test("a message an approval spent does not back it", () => {
+    const dir = project();
+    const drive = new PersonTurnLedger(dir);
+    recent(dir, "STAGE_AWAITING_APPROVAL", { Stage: "reverse-engineering" });
+    const id = typed(dir, drive, "Approve");
+    recent(dir, "GATE_APPROVED", { Stage: "reverse-engineering", "User Input": "Approve", "Message Id": id });
+    recent(dir, "DECISION_RECORDED", question("Q1: no name given"));
+    recent(dir, "QUESTION_ANSWERED", { Stage: "requirements-analysis", Details: "Q1: A", "Message Id": id });
+    const problems = drive.unbacked();
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("QUESTION_ANSWERED requirements-analysis");
   });
 });

@@ -22,7 +22,7 @@
 //   log-subagent      → SUBAGENT_COMPLETED in the audit.
 //   duplicate delivery → the second identical stdin replays the first
 //                       response (the ×2 idempotency contract) — the audit
-//                       gains NO second row.
+//                       gains NO second row; the Stop check runs again (9d, 9e).
 //   malformed stdin   → fail-open exit 0 (advisory contract).
 //   record-human-turn -> a subagent's prompt (it carries agent_id) is not the
 //                       person's turn: no HUMAN_TURN, no kept words (#1411).
@@ -953,12 +953,17 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
   });
 
   // The step a tool that hides the note gets after the line (Kiro CLI,
-  // opencode, Kiro IDE); the matcher knows that form too.
-  const AGENT_STEP =
+  // opencode, Kiro IDE), in its wording now (it names the install's park) and
+  // the one before; the matcher knows both by their opening and close.
+  const OLD_AGENT_STEP =
     "If you had just asked the person a question, record it with `log decision` and end your turn saying nothing. " +
     "Otherwise, if you carry on with the work, first say that line to the person once, on its own line; " +
     "it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it. " +
     "Say nothing else about this note.";
+  const AGENT_STEP = OLD_AGENT_STEP.replace(
+    "Otherwise,",
+    "If the person asked you to stop or pause, run `bun .kiro/tools/aidlc-orchestrate.ts park --person-asked` and end your turn. Otherwise,",
+  );
 
   // A turn whose person engaged the work, then a user-role message, then an
   // answer with no engine call: blocks when that message is the hook's own
@@ -985,6 +990,7 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       "AI-DLC is carrying on with Code Generation for alpha.",
       "AI-DLC is carrying on.",
       `AI-DLC is carrying on with Code Generation for alpha.\n${AGENT_STEP}`,
+      `AI-DLC is carrying on with Code Generation for alpha.\n${OLD_AGENT_STEP}`,
       "Requirements Analysis is not finished yet. Next: `bun .codex/tools/aidlc-orchestrate.ts next`.",
       "Code Generation for alpha is not finished yet. Next: finish its steps, then `aidlc engine orchestrate report --stage code-generation --result <outcome>`.",
     ]) {
@@ -1423,6 +1429,104 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
       rmSync(temp, { recursive: true, force: true });
+    }
+  });
+
+  // A person who types the same words again while the turn is still closing
+  // lands in the same Codex turn: Codex 0.162.1 sends that UserPromptSubmit,
+  // and the Stop after it, with stdin byte-identical to the first. The agent
+  // has spoken in between; a Codex duplicate of the UserPromptSubmit that comes
+  // with its original finds no new assistant message in the rollout. The Stop
+  // check runs on every delivery, so the rollout changes nothing for it (9d). The rollout carries what 0.162.1
+  // writes around each message: the user's line and the agent_message event
+  // that repeats the assistant's words.
+  const REPEAT_SESSION = "019eb8c2-aa02-72e1-9ab4-53e67fca5d63";
+  function rolloutWith(dir: string, assistantMessages: string[], beingWritten = ""): string {
+    const path = join(dir, `rollout-2026-10-19T09-57-33-${REPEAT_SESSION}.jsonl`);
+    const lines = [
+      { type: "session_meta", payload: { id: REPEAT_SESSION } },
+      { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "1" }] } },
+      ...assistantMessages.flatMap((text) => [
+        { type: "event_msg", payload: { type: "agent_message", message: text, role: "assistant" } },
+        { type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text }] } },
+      ]),
+    ].map((entry) => JSON.stringify(entry));
+    writeFileSync(path, `${lines.join("\n")}\n${beingWritten}`, "utf-8");
+    return path;
+  }
+
+  test("9c: the same words typed again after the agent spoke record a second HUMAN_TURN; a duplicate delivery records none", () => {
+    const dir = scratchProject(true);
+    try {
+      const payload = {
+        hook_event_name: "UserPromptSubmit",
+        session_id: REPEAT_SESSION,
+        turn_id: "same-running-turn",
+        cwd: dir,
+        transcript_path: rolloutWith(dir, ["Which deck? 1. Basics 2. Advanced"]),
+        prompt: "1",
+      };
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(1);
+      // The agent's next message still being written does not count yet.
+      rolloutWith(dir, ["Which deck? 1. Basics 2. Advanced"], '{"type":"response_item","payload":{"type":"message","role":"assistant"');
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(1);
+      rolloutWith(dir, ["Which deck? 1. Basics 2. Advanced", "How often? 1. Daily 2. Weekly"]);
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(2);
+      expect(runAdapter(dir, "record-human-turn", payload).code).toBe(0);
+      expect(humanTurnCount(dir)).toBe(2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("9d: a Stop identical to an earlier one runs the stop check again, whether or not the agent has spoken", () => {
+    const dir = scratchProject(true);
+    try {
+      const capture = join(dir, "repeat-runs.ndjson");
+      writeFileSync(
+        join(dir, ".codex", "hooks", "aidlc-continue-workflow.ts"),
+        standInHook(capture, "aidlc-continue-workflow.ts", { code: 0 }),
+        "utf-8",
+      );
+      const stop = withCwd({ ...FIXTURES.stop, session_id: REPEAT_SESSION, transcript_path: rolloutWith(dir, ["1"]) }, dir);
+      runAdapter(dir, "continue-workflow", stop);
+      runAdapter(dir, "continue-workflow", stop);
+      expect(recordedRuns(capture)).toHaveLength(2);
+      rolloutWith(dir, ["1", "1"]);
+      runAdapter(dir, "continue-workflow", stop);
+      runAdapter(dir, "continue-workflow", stop);
+      expect(recordedRuns(capture)).toHaveLength(4);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // After a block, Codex sends the same Stop input again while the agent only
+  // runs tools or says nothing. Each of those Stops reaches the core hook, so
+  // its no-progress count climbs to the cap and the stuck loop lets go.
+  test("9e: identical Stops after a block reach the no-progress cap and let go", () => {
+    const dir = scratchProject(true);
+    try {
+      const guard = join(seededRecordDir(dir), ".aidlc-engine", "stop-hook", "block-count.json");
+      const env = { CLAUDE_CODE_STOP_HOOK_BLOCK_CAP: "4" };
+      const first = withCwd(FIXTURES.stop, dir);
+      const again = withCwd({ ...FIXTURES.stop, stop_hook_active: true }, dir);
+      const outcomes: string[] = [];
+      const counts: number[] = [];
+      for (const stop of [first, again, again, again, again]) {
+        const r = runAdapter(dir, "continue-workflow", stop, env);
+        expect(r.code).toBe(0);
+        outcomes.push(r.stdout.includes('"decision":"block"') ? "block" : "allow");
+        counts.push((JSON.parse(readFileSync(guard, "utf-8")) as { count: number }).count);
+      }
+      expect(counts).toEqual([1, 2, 3, 4, 5]);
+      expect(outcomes).toEqual(["block", "block", "block", "allow", "allow"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

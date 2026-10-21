@@ -251,7 +251,10 @@ particular record.
 Session identity follows one order:
 
 1. The host session id delivered to a hook.
-2. A valid `AIDLC_SESSION_OVERRIDE` inherited from the harness process.
+2. A valid `AIDLC_SESSION_OVERRIDE` inherited from the harness process, or the
+   one AI-DLC's opencode plugin gives each shell command for the chat it runs
+   in (opencode's `shell.env` hook), so two chats in one opencode window each
+   act on their own work.
 3. The chat the host names in the agent's own shell: Codex's `CODEX_THREAD_ID`,
    Claude Code's `CLAUDE_CODE_SESSION_ID` while the process its `CLAUDE_PID`
    names is alive, or Kiro CLI's `KIRO_SESSION_ID`. A shell kept open after its
@@ -318,7 +321,9 @@ creation times, and parent PIDs identify the owning session within the same
 2-second / 64-ancestor limit as Linux and macOS. Reused PID generations and unverified ancestry do not
 select a session.
 Shared-process harnesses still cannot distinguish chats that use one process,
-including Kiro IDE multi-chat and multi-session opencode. Children of payload-bearing hooks follow
+including Kiro IDE multi-chat. In multi-session opencode the shell commands carry
+their chat (item 2), but a file write's audit row and sensors, and the to-do
+list sync, still go by the process. Children of payload-bearing hooks follow
 the payload session; tools without that parent still fall back to the shared
 cursors when ancestry is unavailable unless the harness process has a valid
 `AIDLC_SESSION_OVERRIDE`.
@@ -570,10 +575,11 @@ and machines.
 | Output-format overrides (`memory/templates/`) | Shared | Per space. Not copied into a new space | Copy the files |
 | Agents you add (in the harness folder) | Shared | Shared by every space | Copy the files |
 | Repo list (`repos.json`) | One per workspace | One per workspace | Per project |
-| Model and flag policy | Shared | Shared | Set once in the machine settings file and applied to every project on the machine. A project's own `aidlc.settings.json` overrides it value by value, except bypasses, which add up across the files ([the hierarchy](18-install-and-lifecycle.md)). Model and effort policy does not apply on Kiro IDE, Cursor, and GitHub Copilot, where every agent uses the model you pick in the tool. |
+| Model and flag policy | Shared | Shared | Set once in the machine settings file and applied to every project on the machine. A project's own `aidlc.settings.json` overrides it value by value, except bypasses, which add up across the files ([the hierarchy](18-install-and-lifecycle.md)). Model and effort policy does not apply on Cursor and GitHub Copilot, where every agent uses the model you pick in the tool. On Kiro IDE only one agent's own model and effort apply; a preset or group effort does not. |
 | Kiro CLI's session model, and the effort a preset sets | Shared | Shared | Saved in your personal Kiro settings, so every Kiro CLI project uses them. Changes to agent or group policy do not do this |
 | Update, offline, mirror, and CA-bundle settings | Shared | Shared | Machine-only. A project file cannot set them |
 | Kiro IDE's Workflows switch and, on Windows, its default terminal | Shared | Shared | Kept in Kiro's user settings, outside the project. Setup asks once (`aidlc config --yes` takes the recommended answer), and `aidlc config trust` changes them on request. They apply to every project you open in that IDE |
+| Kiro CLI's Workflows switch | Shared | Shared | Kept in your own Kiro CLI settings, outside the project. In a Kiro IDE project, setup asks once, with an answer kept apart from Kiro IDE's (`aidlc config --yes` takes the recommended answer), and `aidlc config trust --kiro-cli-workflows off|on --yes` changes it on request. It applies to every project you run Kiro CLI in |
 | The AI-DLC release itself | Shared | Shared | A native project with no pinned release (`.aidlc-version`) runs the release the machine has active, so `aidlc update` changes it for every such project (its own files catch up at its next `aidlc config`). A copied project runs its own copied release |
 
 Apart from those machine-wide settings, IDE choices, and the active release, nothing in

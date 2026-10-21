@@ -12,9 +12,9 @@
 // all nine files and upstream-coverage, which reads the whole store, once on
 // its first document, and every fire must pass. architecture.md and the timestamp file,
 // the two artifacts re-artifacts.md gives templates for, are built from those
-// templates, so an architecture template that stops satisfying the
-// required-sections floor reds here rather than on every brownfield run
-// (timestamp markers are run records and always pass).
+// templates. The other seven get no shape there, so they are written the way a
+// model may write them, an H1 with `###` subsections and a table: with no team
+// template the check requires no heading of them (#2721).
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -72,7 +72,7 @@ function artifactBody(name: string, doc: string): string {
       templateAfter(doc, "### Scope of Analysis Block (reverse-engineering-timestamp.md)", "````"),
     ].join("\n");
   }
-  return `# ${name}\n\n## Overview\n\nFixture prose.\n\n## Details\n\nFixture prose.\n`;
+  return `# ${name}\n\n### Overview\n\nFixture prose.\n\n| Item | Note |\n|---|---|\n| one | Fixture prose. |\n`;
 }
 
 function codekbStoreProject(): string {

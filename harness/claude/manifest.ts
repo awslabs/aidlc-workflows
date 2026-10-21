@@ -48,6 +48,20 @@ const manifest: HarnessManifest = {
       "while Claude Code was open, exit Claude Code and start it again in this folder, then type " +
       "<entry>.",
     agentStepEdits: ".claude/settings.local.json",
+    // Measured live: Claude Code runs none of the hooks in a settings.json it
+    // cannot parse as strict JSON, and config stops on such a file, so that
+    // case names the file. The restart matches what config itself says.
+    registration: {
+      file: ".claude/settings.json",
+      missing:
+        ".claude/settings.json is missing from this project, so Claude Code runs none of AI-DLC's hooks here. " +
+        "In a terminal in this folder, <repair>, then exit Claude Code and start it again in this folder, " +
+        "and type <entry>.",
+      invalid:
+        "Claude Code cannot read this project's .claude/settings.json because it is not valid JSON, so it runs " +
+        "none of AI-DLC's hooks here. Correct the file, then exit Claude Code and start it again in this folder, " +
+        "and type <entry>.",
+    },
     // The human-turn hook leaves a heartbeat on every message, before the
     // first workflow too.
     notRunYet:

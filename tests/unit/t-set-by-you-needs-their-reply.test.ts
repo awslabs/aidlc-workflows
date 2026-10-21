@@ -1,4 +1,4 @@
-// covers: function:applyIntentSettings, function:settingTheirs, function:replyOfTheirs, subcommand:aidlc-utility:config-change, audit:CEREMONY_SET, audit:GUARD_POLICY_SET, audit:GUARD_DISABLED
+// covers: function:applyIntentSettings, function:settingTheirs, function:saidInChat, function:replyOfTheirs, subcommand:aidlc-utility:config-change, audit:CEREMONY_SET, audit:GUARD_POLICY_SET, audit:GUARD_DISABLED
 //
 // A setting the agent runs the setter for is the person's ("set by you", their
 // words on the row) only when a reply of theirs that asked for it is on record:
@@ -496,6 +496,25 @@ describe("who may lower a check is unchanged", () => {
 });
 
 describe("a typed line and their own terminal stay theirs", () => {
+  test("their own terminal makes a setting theirs; the chat half of the rule (saidInChat) reads only the chat", () => {
+    const { proj } = project();
+    const env: NodeJS.ProcessEnv = { AIDLC_TEST_CONFIG_TTY: "1", AIDLC_PROJECT_DIR: proj };
+    for (const [key, value] of Object.entries(process.env)) {
+      if (!/^(CLAUDE|CODEX_|CURSOR_|KIRO_|OPENCODE|COPILOT_|VSCODE_|TERM_PROGRAM|AIDLC_SESSION_OVERRIDE)/i.test(key)) {
+        env[key] ??= value;
+      }
+    }
+    const tool = JSON.stringify(join(AIDLC_SRC, "tools", "aidlc-guard-switch.ts"));
+    const at = JSON.stringify(proj);
+    const result = spawnSync(BUN, [
+      "-e",
+      `const gs = await import(${tool}); console.log(JSON.stringify(` +
+        `[gs.settingTheirs(${at}, null, "sensors", "off"), gs.saidInChat(${at}, null, "sensors", "off")]));`,
+    ], { cwd: proj, env, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual([{ words: null }, null]);
+  });
+
   test("a setting typed on their line: set by you without --person-words", () => {
     const { proj, state } = project();
     said(proj, "/aidlc --sensors off");

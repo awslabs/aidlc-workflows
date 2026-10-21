@@ -264,6 +264,35 @@ export function intentsDirOf(proj: string, space = DEFAULT_SPACE): string {
   return join(proj, "aidlc", "spaces", space, "intents");
 }
 
+/** Which piece of work and stage a learnings selections file is bound to. */
+export interface LearningsSelectionsBinding {
+  space: string;
+  intent: string | null;
+  stage_slug: string;
+}
+
+/**
+ * Where `learnings surface` names the selections file for a space, intent, and
+ * stage: the only place `persist` reads it (#1592). The record's engine folder,
+ * or with no intent record the space's intents engine folder.
+ */
+export function learningsSelectionsPath(proj: string, binding: LearningsSelectionsBinding): string {
+  const intents = intentsDirOf(proj, binding.space);
+  const root = binding.intent === null ? intents : join(intents, binding.intent);
+  return join(root, ".aidlc-engine", "learnings", `${binding.stage_slug}-selections.json`);
+}
+
+/** Write a learnings selections file at that path and return the path. */
+export function writeLearningsSelections(
+  proj: string,
+  selections: LearningsSelectionsBinding & { [field: string]: unknown },
+): string {
+  const path = learningsSelectionsPath(proj, selections);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(selections), "utf-8");
+  return path;
+}
+
 /**
  * The default intent's RECORD directory a fixture seeds:
  * `<proj>/aidlc/spaces/default/intents/<DEFAULT_RECORD_DIR>`. The data-path
@@ -927,7 +956,8 @@ export function proposalFollowUp(directive: unknown, plan?: string): string[] | 
   if (!message.includes("--propose <plan> --request")) return null;
   const id = /--request ([0-9a-f]{8})/.exec(message)?.[1];
   if (id === undefined) return null;
-  const request = /^The person asked for new work: "([^"]*)"/.exec(message)?.[1] ?? "";
+  // Beside finished work the print opens "The person said:" instead.
+  const request = /^The person (?:asked for new work|said): "([^"]*)"/.exec(message)?.[1] ?? "";
   return ["--propose", plan ?? proposePlanLikeTheAgent(request), "--request", id];
 }
 

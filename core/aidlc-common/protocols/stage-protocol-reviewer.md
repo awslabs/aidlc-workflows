@@ -82,7 +82,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    its bytes and the currently claimed source bytes into `REVIEW_REQUESTED`; it
    refuses before dispatch when the manifest is missing or invalid. The
    successful request's JSON returns `requestId` and `reviewFile`: the
-   project-relative path, under `<record>/.aidlc-engine/reviews/`, where this
+   path, under `<record>/.aidlc-engine/reviews/`, where this
    request's review is written. The request opens that slot (an earlier draft
    left there by an incomplete dispatch of the same iteration is removed), so
    the file the reviewer leaves is this dispatch's review and no other. It also
@@ -112,9 +112,10 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    reported fixed stays among the settled decisions, so a recurrence keeps its
    decision.
 
-   Then delegate to the reviewer agent named in `directive.reviewer`. The
-   request remains unmatched while the reviewer runs, so the approval gate and
-   completion stay blocked.
+   Then delegate to the reviewer agent named in `directive.reviewer` (or the
+   request's `dispatchAgent` when it returns one, as the reviewer-unit module
+   says). The request remains unmatched while the reviewer runs, so the
+   approval gate and completion stay blocked.
 
    Pass:
    - The stage definition file path (`directive.stage_file`)
@@ -177,7 +178,7 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    projects out a terminal `## Review` section left in the plan by a review
    recorded before review records existed; nothing new is written there.
 
-3. **Read verdict.** After the reviewer returns (when the dispatch comes back before its review exists, run `{{INVOKE}} engine orchestrate wait --stage <directive.stage> --for review --review-file <reviewFile>` and re-run it while it answers `status: waiting`; never a shell loop), record the terminal receipt with the same `aidlc-log.ts review` command plus `--verdict <READY|NOT-READY>` (and the same `--unit` / `--single` fields). The logger reads the review from the request's `reviewFile` (a `--review-file <path>` must name that same file), validates it with Bun's Markdown parser (fenced/inline code and HTML comments cannot supply or conflict with authority fields, list/blockquote/table containers cannot mint ownership, and rendered Markdown or raw-HTML H1/H2 headings are section escapes), rechecks current summary confirmation and output admission, proves from one coherent snapshot that the review manifest (including reviewed output bytes and bound question content) and the request-time source identity are unchanged, and then writes the review record `<record>/.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` (or the Unit path under `units/<unit>/`) (verdict, findings, reviewer, request id, artifact and source fingerprints, and the review text) in the same locked transaction as the `REVIEW_COMPLETED` row that names the record and pins its digest. The record is the review; only this command writes one, and a record edited afterwards stops being the review because its digest no longer matches. The review file is the reviewer's: never rewrite or edit it yourself (dispatch the reviewer again instead). A verdict whose file changed after the reviewer finished (its bytes no longer match the digest the reviewer's `SUBAGENT_COMPLETED` row recorded) still records, as the file reads, marked `Review Edited After Reviewer: yes`: it is on record as an edited review, not the reviewer's, and the approval gate tells the person so in one line (under relaxed or off, as an accepted change said once with the verdict). The reviewer's own `**Verdict Dictated:** yes|no` line records as written (`Review Verdict Dictated: yes` or `no`; a missing or unreadable line records nothing); on `yes` the verdict command and the gate say in one line that the reviewer was told what to conclude before it looked. The command's JSON returns `reviewRecord`, the record's path relative to the intent record. It also writes a readable copy with the full engine-owned list as of this review at `<stage dir>/reviews/review-NN.md`, beside the artifact the review is about, and returns it as `reviewMarkdown`; the copy is not an artifact, nothing reads it back, and the JSON record stays the review.
+3. **Read verdict.** After the reviewer returns (when the dispatch comes back before its review exists, run `{{INVOKE}} engine orchestrate wait --stage <directive.stage> --for review --review-file <reviewFile>` and re-run it while it answers `status: waiting`; never a shell loop), record the terminal receipt with the same `aidlc-log.ts review` command plus `--verdict <READY|NOT-READY>` (and the same `--unit` / `--single` fields). The logger reads the review from the request's `reviewFile` (a `--review-file <path>` must name that same file), validates it with Bun's Markdown parser (fenced/inline code and HTML comments cannot supply or conflict with authority fields, list/blockquote/table containers cannot mint ownership, and rendered Markdown or raw-HTML H1/H2 headings are section escapes), rechecks current summary confirmation and output admission, proves from one coherent snapshot that the review manifest (including reviewed output bytes and bound question content) and the request-time source identity are unchanged, and then writes the review record `<record>/.aidlc-engine/reviews/<stage>/stage/<attempt>/<iteration>.json` (or the Unit path under `units/<unit>/`) (verdict, findings, reviewer, request id, artifact and source fingerprints, and the review text) in the same locked transaction as the `REVIEW_COMPLETED` row that names the record and pins its digest. The record is the review; only this command writes one, and a record edited afterwards stops being the review because its digest no longer matches. The review file is the reviewer's: never rewrite or edit it yourself (dispatch the reviewer again instead). A verdict whose file changed after the reviewer finished (its bytes no longer match the digest the reviewer's `SUBAGENT_COMPLETED` row recorded) still records, as the file reads, marked `Review Edited After Reviewer: yes`: it is on record as an edited review, not the reviewer's, and the approval gate tells the person so in one line (under relaxed or off, as an accepted change said once with the verdict). The reviewer's own `**Verdict Dictated:** yes|no` line records as written (`Review Verdict Dictated: yes` or `no`; a missing or unreadable line records nothing); on `yes` the verdict command and the gate say in one line that the reviewer was told what to conclude before it looked. The command's JSON returns `reviewRecord`, the record's path relative to the intent record. It also writes a readable copy with the full engine-owned list as of this review at `<stage dir>/reviews/review-NN.md`, beside the artifact the review is about, and returns it as `reviewMarkdown`; the copy is not an artifact, nothing reads it back, and the JSON record stays the review. For a stage's own review (no `--unit`, no `--single`) the JSON can also carry `agent_note`, your next step with its exact command: `next` when the person wrote while the review ran (their words come first, so nothing runs before it), otherwise the next pass's request, or, when no further pass follows, stage-completion verification and then the learnings question or the approval gate's `report`. Follow it; a recorded verdict never ends the turn.
 
    Anything else is an INCOMPLETE attempt, not a verdict: no review file at all (the reviewer has a hard turn cap and may have been stopped before writing it; the request opened an empty slot, so a missing file means an incomplete review on every path, first entry or revision alike), a review with no canonical verdict line or one that does not match `--verdict`, forged/missing/conflicting duplicate ownership fields, a later top-level heading the logger cannot make level 3, or a malformed findings report (once the request's retry is spent, a findings report is the one defect that records instead; see below). The logger refuses these; a malformed audit `REVIEW_COMPLETED` row is ignored and does not consume the pending request. A review file that is whole except for top-level `#` or `##` heading lines (for example `## What I verified`) is not one of these: the logger records those lines as `###`, checks the result the same way, and records the verdict, so the reviewer is not dispatched again.
 
@@ -211,8 +212,9 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    the section as written, because the section and the recorded reason can hold
    text taken from the reviewed artifacts. Proceed as that verdict directs.
    If the retried attempt is ALSO incomplete, stop retrying: record the
-   terminal receipt with `--verdict NOT-READY` and no review file; the logger
-   accepts a missing review only for this retried NOT-READY fallback, and
+   terminal receipt with `--verdict NOT-READY` and no `--review-file`; the
+   logger accepts a missing or incomplete review only for this retried
+   NOT-READY fallback, records none of an incomplete file's text, and
    writes an empty review record for it. That receipt is no reviewer's
    verdict, and the person's approval over it is recorded as
    `Review: not finished`. The person hears that the review did not finish,
@@ -293,8 +295,8 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    an internal verdict token.
 
    Gate dispositions are receipt-safe audit data, never artifact edits:
-   - **Approve** automatically maps every current `New` or `Unresolved` finding
-     to `Accepted risk` on the tool-owned `GATE_APPROVED` row.
+   - **Approve** records every current `New` or `Unresolved` finding on the
+     tool-owned `GATE_APPROVED` row.
    - **Request Changes** leaves open findings unresolved. When the human
      explicitly rejects a finding as inapplicable, append
      `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` to the

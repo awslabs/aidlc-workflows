@@ -10,7 +10,7 @@
 // function:humanAuthorityState,
 // function:normalizeGuardRecoveryText, function:consumeSharedDirectiveAsk,
 // function:guardRecoveryFeedbackStatus, function:guardPreflight,
-// directive:guard-recovery
+// function:sourceWorkNotFound, function:handleIntentCheckouts, directive:guard-recovery
 
 import {
   NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS,
@@ -20,6 +20,7 @@ import {
 import { afterEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -86,10 +87,32 @@ import {
   seedAuditFile,
   seedAidlcMemory,
   seedBoltDag,
+  seededAuditShard,
   seededRecordDir,
   seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
+import {
+  buildLayout,
+  checkoutCommand,
+  cleanupLayouts,
+  codeOutOfSight,
+  commitRecords,
+  type EngineStep,
+  isGuardAsk,
+  LAYOUTS,
+  PERSON,
+  personSays,
+  reasonCodes,
+  report,
+  review,
+  setGuardPolicy,
+  shellWorkspace,
+  stageBox,
+  startCodeGeneration,
+  worktreeOf,
+  writeCode,
+} from "../harness/source-work-layouts.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 
@@ -2339,6 +2362,106 @@ describe("AttemptView projections and refusal streaks", () => {
     expect(again.remedies.map((remedy) => remedy.label)).toEqual(["Decide at approval", "Request Changes"]);
   });
 
+  // A stage reported before its outputs or its code exist: writing them is the
+  // agent's step, which the refusal's own sentence names. Build and Test has no
+  // reviewer, so a review request was never a way on there.
+  test("a stage whose outputs or code are missing is the agent's to write, never a review request", () => {
+    const cases = [
+      {
+        code: "REQUIRED_ARTIFACTS_MISSING",
+        stage: "build-and-test",
+        name: "Build and Test",
+        sentence: "Cannot present \"build-and-test\" for approval: none of its declared artifacts exist. Produce the " +
+          "artifacts (declared: build-instructions), then run the same report again.",
+        reviewCoverage: "missing" as const,
+      },
+      {
+        code: "REQUIRED_SOURCE_WORK_MISSING",
+        stage: "code-generation",
+        name: "Code Generation",
+        sentence: "Cannot present \"code-generation\" for approval: no source work is evident. Write the code to the " +
+          "workspace, then run the same report again.",
+        reviewCoverage: "current" as const,
+      },
+    ];
+    for (const c of cases) {
+      const attempt = {
+        recovery: "available" as const,
+        summaryCoverage: "current" as const,
+        reviewCoverage: c.reviewCoverage,
+        sourceCoverage: "current" as const,
+      };
+      const refusal = (marker: "-" | "?" | "R" | " ") => evaluateGuardRefusal({
+        code: c.code,
+        blockedAction: "present-approval-gate",
+        stage: c.stage,
+        stateContent: `# AI-DLC State\n- **Scope**: classic\n- [${marker}] ${c.stage} \u2014 EXECUTE\n`,
+        invariant: "Every applicable required output exists before certification.",
+        userMessage: c.sentence,
+        attempt,
+        humanAuthority: { freshTurn: false, unattended: false },
+      });
+      for (const marker of ["-", "?", "R"] as const) {
+        expect(refusal(marker).remedies[0], `${c.code} ${marker}`).toMatchObject({
+          op: "produce-stage-output", action: c.sentence, requiresHuman: false, executableNow: true,
+          interaction: "external-work",
+        });
+        expect(refusal(marker).remedies.map((remedy) => remedy.op), `${c.code} ${marker}`).not.toContain("request-review");
+      }
+      expect(refusal(" ").remedies.find((remedy) => remedy.op === "produce-stage-output")?.executableNow).toBe(false);
+      expect(refusal("-").remedies.map((remedy) => remedy.op), c.code).toEqual(["produce-stage-output", "request-changes"]);
+      const { first, again } = ownThenTheirs(refusal("-"), attempt);
+      expect(first.agent_work, c.code).toBe(true);
+      expect(first.remedies.map((remedy) => [remedy.op, remedy.action])).toEqual([["produce-stage-output", c.sentence]]);
+      expect(again.agent_work, c.code).toBeUndefined();
+      expect(again.question).toBe(`${c.name} still can't go ahead as things stand: which way would you like to go on?`);
+      expect(again.remedies.map((remedy) => remedy.op)).toEqual(["request-changes"]);
+    }
+  });
+
+  // The source changed after its review, which a changed output already has:
+  // the one recovery review is the agent's step, and it names its request so it
+  // lands in one go. A source this machine cannot read is not a review's to fix.
+  test("the source changed after its review: the one recovery review is the agent's, naming its request", () => {
+    const request = "bun .claude/tools/aidlc-log.ts review --stage code-generation --reviewer " +
+      "aidlc-architecture-reviewer-agent --iteration 2 --project-dir /tmp/t331-source";
+    const attempt = (sourceCoverage: "stale" | "unreadable", reviewCoverage: "current" | "stale" = "current") => ({
+      recovery: "available" as const,
+      summaryCoverage: "current" as const,
+      reviewCoverage,
+      sourceCoverage,
+      requestReview: request,
+    });
+    const refusal = (code: string, input: ReturnType<typeof attempt>) => evaluateGuardRefusal({
+      code,
+      blockedAction: "present-approval-gate",
+      stage: "code-generation",
+      stateContent: "# AI-DLC State\n- **Scope**: enterprise\n- [-] code-generation \u2014 EXECUTE\n",
+      invariant: "The current source remains covered by reviewer evidence.",
+      userMessage: "Cannot complete \"code-generation\" because the project source changed after the reviewer reviewed it.",
+      attempt: input,
+      humanAuthority: { freshTurn: false, unattended: false },
+    });
+    const stale = refusal("SOURCE_REVIEW_STALE", attempt("stale"));
+    expect(stale.remedies.map((remedy) => remedy.op)).toEqual(["start-recovery-review", "request-changes"]);
+    expect(stale.remedies[0]).toMatchObject({ requiresHuman: false, executableNow: true, interaction: "external-work" });
+    expect(stale.remedies[0].action).toContain(`run \`${request}\``);
+    expect(stale.remedies[0].action).toContain("`recordVerdict`");
+    const { first, again } = ownThenTheirs(stale, attempt("stale"));
+    expect(first.agent_work).toBe(true);
+    expect(first.remedies.map((remedy) => remedy.op)).toEqual(["start-recovery-review"]);
+    expect(again.agent_work).toBeUndefined();
+    expect(again.question).toBe("Code Generation still can't go ahead as things stand: which way would you like to go on?");
+    expect(again.remedies.map((remedy) => remedy.op)).toEqual(["request-changes"]);
+    // A changed output's recovery review names its request the same way.
+    const output = refusal("ARTIFACT_REVIEW_STALE", attempt("stale", "stale"));
+    expect(output.remedies[0].op).toBe("start-recovery-review");
+    expect(output.remedies[0].action).toContain(`run \`${request}\``);
+    // The person keeps today's way when the source cannot be read.
+    expect(refusal("SOURCE_REVIEW_STALE", attempt("unreadable")).remedies.map((remedy) => remedy.op))
+      .toEqual(["request-changes"]);
+  });
+
   test("every way on put to the person reads in plain words; the agent's own carry none", () => {
     const humanAuthority = { freshTurn: false, unattended: false };
     const current = {
@@ -2406,6 +2529,11 @@ describe("AttemptView projections and refusal streaks", () => {
       // A solo unit-major walk with beta on Code Generation.
       { ...base, stage: "code-generation", unit: "beta", stateContent: walk(), attempt: { ...current, reviewCoverage: "missing" } },
       { ...base, stage: "code-generation", unit: "beta", stateContent: walk("in-progress"), attempt: spentBudget },
+      {
+        ...base, code: "REVIEW_BUDGET_EXHAUSTED", stage: "code-generation", unit: "beta",
+        stateContent: walk("in-progress"), attempt: spentBudget,
+      },
+      { ...base, code: "REQUIRED_ARTIFACTS_MISSING", stateContent: state("-"), attempt: current },
     ];
     const seen = new Set<string>();
     // The stage protocol's reserved words, the bookkeeping the person has no use
@@ -3036,7 +3164,9 @@ describe("the gate a spent review budget offers is a step the walk accepts", () 
 
   // Part way through the Unit's step (`unit start` recorded it), no gate opens
   // yet, and an approved stage (design stage by stage, then one Unit at a time)
-  // offers only a stage-wide reset. The ways on are that Unit's own.
+  // offers only a stage-wide reset. The ways on are that Unit's own. The cap
+  // refused a pass nobody asked for, so finishing the step with the review it
+  // has is the agent's own step; a repeat offers the person both.
   test("part way through a Unit's step it offers finishing or redoing that step for the Unit", () => {
     const midStep = checkpointWalk(true)
       .replace("- **Unit Stage**: code-generation", "- **Unit Stage**: code-generation\n- **Unit State**: in-progress");
@@ -3044,14 +3174,213 @@ describe("the gate a spent review budget offers is a step the walk accepts", () 
     for (const [stateContent, lifecycle] of [[midStep, "in-progress"], [approved, "completed"]] as const) {
       const refusal = budgetRefusal(stateContent);
       expect(refusal.state).toBe(lifecycle);
-      expect(refusal.remedies.slice(0, 2).map((remedy) => remedy.op), lifecycle)
-        .toEqual(["record-unit-completion", "reopen-unit-step"]);
+      expect(refusal.remedies.slice(0, 3).map((remedy) => remedy.op), lifecycle)
+        .toEqual(["finish-unit-step", "record-unit-completion", "reopen-unit-step"]);
       expect(gate(refusal), lifecycle).toBeUndefined();
-      const [finish, redo] = refusal.remedies;
+      const [own, finish, redo] = refusal.remedies;
+      expect(own, lifecycle).toMatchObject({ requiresHuman: false, executableNow: true, interaction: "external-work" });
+      expect(own.label, lifecycle).toBeUndefined();
+      expect(own.operation, lifecycle).toBeUndefined();
+      expect(own.action, lifecycle).toMatch(/`bun [^`]*aidlc-state(?:\.ts)? unit complete --stage code-generation --unit extra`/);
       expect(finish.executableNow, lifecycle).toBe(true);
       expect(finish.interaction, lifecycle).toBe("command");
       expect(finish.command, lifecycle).toMatch(/aidlc-state(?:\.ts)? unit complete --stage code-generation --unit extra$/);
       expect(redo.command, lifecycle).toMatch(/aidlc-jump(?:\.ts)? reopen --target code-generation --units extra$/);
     }
+    const project = mkdtempSync(join(tmpdir(), "aidlc-guard-unit-step-"));
+    projects.push(project);
+    const refusal = budgetRefusal(midStep);
+    const attempt = {
+      recovery: "available" as const,
+      summaryCoverage: "current" as const,
+      reviewCoverage: "current" as const,
+      sourceCoverage: "current" as const,
+      reviewBudget: { used: 1, limit: 1 },
+    };
+    const first = recordGuardRefusal(project, refusal, attempt).ask;
+    const again = recordGuardRefusal(project, refusal, attempt).ask;
+    expect(validateDirective(first).valid).toBe(true);
+    expect(validateDirective(again).valid).toBe(true);
+    expect(first.agent_work).toBe(true);
+    expect(first.remedies.map((remedy) => remedy.op)).toEqual(["finish-unit-step"]);
+    expect(again.agent_work).toBeUndefined();
+    expect(again.remedies.map((remedy) => remedy.label))
+      .toEqual(["Finish with the review it has", "Do this step again for the Unit", "Request Changes"]);
+  });
+});
+
+// Code Generation's "no source work" check, wherever the code is kept and
+// under each Guard Policy: every refusal at its gate has a way on that leads
+// elsewhere. The agent's own reports reach the approval question within two
+// (one under off), none ends in the terminal "nothing I can safely do", and
+// after the person's Request Changes the redone stage reaches it again the
+// same way. A lost record of the first refusal sends the way on to the
+// person, never back into a loop.
+describe("the source-work check never stops the person", () => {
+  afterEach(() => cleanupLayouts());
+
+  // The agent reports until the approval question is open; how many reports
+  // that took, and every answer it got on the way.
+  function reportUntilGate(proj: string, result: string): { reports: number; steps: EngineStep[] } {
+    const steps: EngineStep[] = [];
+    for (let reports = 1; reports <= 3; reports++) {
+      const step = report(proj, result, PERSON);
+      steps.push(step);
+      if (stageBox(proj) === "?") return { reports, steps };
+    }
+    return { reports: Number.POSITIVE_INFINITY, steps };
+  }
+
+  const policies = ["strict", "relaxed", "off"] as const;
+  for (const layout of LAYOUTS) {
+    for (const policy of policies) {
+      test.skipIf(layout.skip !== undefined && layout.skip !== false)(`${layout.name}, Guard Policy ${policy}`, () => {
+        const { proj } = buildLayout(layout, false);
+        setGuardPolicy(proj, policy, "set by you");
+        const opened = reportUntilGate(proj, "awaiting-approval");
+        expect(opened.reports, opened.steps.map((step) => step.out).join("\n")).toBeLessThanOrEqual(policy === "off" ? 1 : 2);
+        for (const step of opened.steps) expect(step.out).not.toContain("nothing I can safely do");
+      });
+    }
+  }
+
+  for (const policy of policies) {
+    test(`the code out of sight, Guard Policy ${policy}: report 2 opens the gate, and after Request Changes reports 1 and 2 do again`, () => {
+      const { proj } = codeOutOfSight();
+      setGuardPolicy(proj, policy, "set by you");
+      const opened = reportUntilGate(proj, "awaiting-approval");
+      expect(opened.reports, opened.steps.map((step) => step.out).join("\n")).toBe(policy === "off" ? 1 : 2);
+      if (policy !== "off") expect(isGuardAsk(opened.steps[0])).toBe(true);
+      for (const step of opened.steps) expect(step.out).not.toContain("nothing I can safely do");
+      personSays(proj);
+      const rejected = report(proj, "rejected", PERSON, ["--user-input", "Request Changes", "--reason", "write the code here"]);
+      expect(stageBox(proj), rejected.out).toBe("R");
+      writeCode(proj, "export const login = 2;\n");
+      expect(review(proj, false, [], 1).rc).toBe(0);
+      const again = reportUntilGate(proj, "revised");
+      expect(again.reports, again.steps.map((step) => step.out).join("\n")).toBeLessThanOrEqual(2);
+      for (const step of again.steps) expect(step.out).not.toContain("nothing I can safely do");
+    });
+  }
+
+  // The first refusal is recorded in the audit trail itself, not in the
+  // guard-refusals runtime record: losing that record changes nothing.
+  test("the guard-refusals record replaced by a file: the second report still opens the gate", () => {
+    const { proj } = codeOutOfSight();
+    const record = join(seededRecordDir(proj), ".aidlc-engine", "guard-refusals");
+    rmSync(record, { recursive: true, force: true });
+    mkdirSync(dirname(record), { recursive: true });
+    writeFileSync(record, "not a folder\n");
+    const opened = reportUntilGate(proj, "awaiting-approval");
+    expect(opened.reports, opened.steps.map((step) => step.out).join("\n")).toBeLessThanOrEqual(2);
+  });
+
+  // An audit shard this run cannot read could hold the first refusal: the
+  // check reads that as already said, and the question goes to the person.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "an audit shard that cannot be read: the gate opens on the first report",
+    () => {
+      const { proj } = codeOutOfSight();
+      const shard = join(dirname(seededAuditShard(proj)), "other-clone.md");
+      writeFileSync(shard, "## Human Turn\n**Timestamp**: 2026-01-01T00:00:00Z\n**Event**: HUMAN_TURN\n\n---\n");
+      chmodSync(shard, 0o000);
+      try {
+        const opened = reportUntilGate(proj, "awaiting-approval");
+        expect(opened.reports, opened.steps.map((step) => step.out).join("\n")).toBe(1);
+      } finally {
+        chmodSync(shard, 0o644);
+      }
+    },
+  );
+});
+
+// A checkout recorded for the review (`intent add-checkout`) after or while the
+// stage's review stands: the record moves the reviewed source, so under strict
+// the one recovery review rebinds it; under relaxed or off the change is kept.
+// A recorded checkout that vanishes, or one taken out again after the recovery
+// review, still leaves a way on, and never a loop.
+describe("a recorded checkout never stops the person", () => {
+  afterEach(() => cleanupLayouts());
+
+  function harnessCodeReviewed(policy: string): { proj: string; worktree: string } {
+    const proj = shellWorkspace(".claude/worktrees/\n");
+    setGuardPolicy(proj, policy, "set by you");
+    startCodeGeneration(proj, false);
+    commitRecords(proj);
+    const worktree = worktreeOf(proj, join(proj, ".claude", "worktrees", "feature"));
+    writeCode(worktree);
+    expect(review(proj, false, []).rc).toBe(0);
+    return { proj, worktree };
+  }
+
+  // Reports as the conductor makes them, recording the recovery review when a
+  // stale review is refused; how many reports reached the gate, and the codes.
+  function reportsToGate(proj: string, recoveries: number[]): { reports: number; codes: string[]; outs: string[] } {
+    const codes: string[] = [];
+    const outs: string[] = [];
+    for (let reports = 1; reports <= 4; reports++) {
+      const step = report(proj, "awaiting-approval", PERSON);
+      codes.push(...reasonCodes(step));
+      outs.push(step.out);
+      if (stageBox(proj) === "?") return { reports, codes, outs };
+      if (reasonCodes(step).includes("SOURCE_REVIEW_STALE")) {
+        const iteration = 2 + recoveries.length;
+        recoveries.push(iteration);
+        expect(review(proj, false, [], iteration).rc).toBe(0);
+      }
+    }
+    return { reports: Number.POSITIVE_INFINITY, codes, outs };
+  }
+
+  for (const policy of ["strict", "relaxed", "off"] as const) {
+    test(`add-checkout after the review, Guard Policy ${policy}: ${policy === "strict" ? "one recovery review, then the gate" : "the gate, with no refusal"}`, () => {
+      const { proj, worktree } = harnessCodeReviewed(policy);
+      expect(checkoutCommand(proj, "add-checkout", worktree).rc).toBe(0);
+      const recoveries: number[] = [];
+      const opened = reportsToGate(proj, recoveries);
+      expect(opened.reports, opened.outs.join("\n")).toBeLessThanOrEqual(policy === "strict" ? 2 : 1);
+      expect(recoveries).toHaveLength(policy === "strict" ? 1 : 0);
+      for (const out of opened.outs) expect(out).not.toContain("nothing I can safely do");
+    });
+  }
+
+  test("a recorded checkout that vanishes after the review leaves a bounded way to the gate", () => {
+    const proj = shellWorkspace(".claude/worktrees/\n");
+    setGuardPolicy(proj, "strict", "set by you");
+    startCodeGeneration(proj, false);
+    commitRecords(proj);
+    const worktree = worktreeOf(proj, join(proj, ".claude", "worktrees", "feature"));
+    writeCode(worktree);
+    expect(checkoutCommand(proj, "add-checkout", worktree).rc).toBe(0);
+    expect(review(proj, false, []).rc).toBe(0);
+    rmSync(worktree, { recursive: true, force: true });
+    const recoveries: number[] = [];
+    const opened = reportsToGate(proj, recoveries);
+    expect(opened.reports, opened.outs.join("\n")).toBeLessThanOrEqual(4);
+    expect(opened.codes).not.toContain("SOURCE_BOUNDARY_UNBINDABLE");
+    for (const out of opened.outs) expect(out).not.toContain("nothing I can safely do");
+  });
+
+  test("taken out again after the recovery review: the spent recovery is the person's Request Changes to reset", () => {
+    const { proj, worktree } = harnessCodeReviewed("strict");
+    expect(checkoutCommand(proj, "add-checkout", worktree).rc).toBe(0);
+    const recoveries: number[] = [];
+    expect(reportsToGate(proj, recoveries).reports).toBeLessThanOrEqual(2);
+    expect(checkoutCommand(proj, "remove-checkout", worktree).rc).toBe(0);
+    const steps: EngineStep[] = [];
+    for (let reports = 1; reports <= 3 && !steps.some((step) => reasonCodes(step).includes("SOURCE_RECOVERY_SPENT")); reports++) {
+      steps.push(report(proj, "awaiting-approval", PERSON));
+    }
+    const spent = steps.at(-1) as EngineStep;
+    expect(reasonCodes(spent), steps.map((step) => step.out).join("\n")).toContain("SOURCE_RECOVERY_SPENT");
+    expect(JSON.stringify(spent.directive?.choices ?? [])).toContain("Request Changes");
+    personSays(proj);
+    const rejected = report(proj, "rejected", PERSON, ["--user-input", "Request Changes", "--reason", "review it again"]);
+    expect(stageBox(proj), rejected.out).toBe("R");
+    expect(checkoutCommand(proj, "add-checkout", worktree).rc).toBe(0);
+    expect(review(proj, false, [], 1).rc).toBe(0);
+    const again: EngineStep[] = [];
+    for (let reports = 1; reports <= 2 && stageBox(proj) !== "?"; reports++) again.push(report(proj, "revised", PERSON));
+    expect(stageBox(proj), again.map((step) => step.out).join("\n")).toBe("?");
   });
 });

@@ -4,6 +4,10 @@ import { join, relative } from "node:path";
 import {
   auditBlockField,
   type AuditShardEvent,
+  HOOK_HEARTBEAT_STALE_SLACK_MS,
+  hookLiveness,
+  humanTurnMintAllowed,
+  promptHookRanRecently,
   readRegularFileNoFollowOrThrow,
   recordFileTargetOrThrow,
   removeRecordFileNoFollow,
@@ -226,19 +230,37 @@ export function latestMessage(
  * that fast, and the request the question was asked about came at least two of
  * the agent's steps before it. A typed line that only sets something (settings,
  * no words, no route) is a command to AIDLC and no reply, as at a gate; a
- * prompt whose words the host did not pass on may be one. Nothing on
- * record at all is false: a tool that runs no prompt hook has nothing to tell by.
+ * prompt whose words the host did not pass on may be one. Nothing on record at
+ * all is no reply only when the host skipped the prompt hook for the person's
+ * message (promptMissedWhileHooksRun); otherwise there is nothing to tell by.
  */
 export function noReplySince(projectDir: string, session: string | null, since: string): boolean {
   const all = listMessages(projectDir);
+  if (all.length === 0) return promptMissedWhileHooksRun(projectDir);
   const chat = all.filter((message) => message.session === session);
   const from = Math.floor(Date.parse(since) / 1000) * 1000;
   const command = (message: StoredMessage): boolean =>
     message.source === "prompt" && message.words === null && message.settings.length > 0 &&
     message.route.scope === null && !message.route.newIntent && message.route.projectType === null &&
     message.route.skip.length === 0 && message.route.add.length === 0;
-  return all.length > 0 &&
-    !(chat.length > 0 ? chat : all).some((message) => Date.parse(message.at) >= from && !command(message));
+  return !(chat.length > 0 ? chat : all).some((message) => Date.parse(message.at) >= from && !command(message));
+}
+
+// Nothing on record: no prompt hook kept the person's message. While AI-DLC's
+// hooks beat just now and the prompt hook did not, the host skipped that hook
+// for their message (one that failed to start, as Copilot CLI's PowerShell
+// check can), and their next message is seen. Otherwise there is nothing to
+// tell by: the prompt hook ran and its store failed, the hooks are not running
+// (the hooks-off step's), or an unattended driver, whose prompts are never kept.
+// A chat outside the selected workflow returns before the prompt beat but keeps
+// its message (hookStandsOutside in aidlc-record-human-turn.ts), so it never
+// reaches this branch. The tool guards beat through hooksHealthDir and both
+// readers here through hooksHealthReadDir, each for this project's selection.
+function promptMissedWhileHooksRun(projectDir: string): boolean {
+  if (!humanTurnMintAllowed() || promptHookRanRecently(projectDir)) return false;
+  const newest = hookLiveness(projectDir, []).newestHeartbeat;
+  const age = newest === null ? Number.NaN : Date.now() - newest.timestampMs;
+  return age >= 0 && age <= HOOK_HEARTBEAT_STALE_SLACK_MS;
 }
 
 /**

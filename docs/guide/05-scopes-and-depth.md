@@ -93,6 +93,27 @@ Core ships 11 named scopes. Each scope defines a stage set, a default depth leve
 
 Override ceremonies for an intent with `/aidlc --sensors on|off`, `/aidlc --learnings on|off`, `/aidlc --summary-confirmation on|off`, `/aidlc --plan-approval on|off`, or `/aidlc --collaborators on|off`. The global kill switches `AIDLC_DISABLE_SENSORS=1`, `AIDLC_DISABLE_LEARNINGS=1`, `AIDLC_DISABLE_SUMMARY_CONFIRMATION=1`, `AIDLC_DISABLE_PLAN_APPROVAL_GUARD=1`, and `AIDLC_DISABLE_COLLABORATORS=1` force them off. Apart from plan approval, which only you turn off, approval gates, human-turn authority, audit, and team write protection still apply. See [ceremony customization](13-customization.md#ceremony-switches).
 
+#### Fewer stops for a workshop or small work
+
+Two per-stage checks add the most stops to a long run: the learnings question
+and the summary confirmation. To start a plan without them, type both switches
+with the request, so the new work is created with them off:
+
+```
+/aidlc workshop --learnings off --summary-confirmation off <the work>
+```
+
+| Switch | What it removes at each stage | What you lose |
+|--------|-------------------------------|---------------|
+| `--learnings off` | The "Anything to add for next time?" question before the approval gate, and the stage diary (`memory.md`) | Nothing from this work is written to `memory/project.md` or `memory/team.md`, so the next run does not pick up what this one taught. Practices already in memory still load |
+| `--summary-confirmation off` | The `Looks correct` check on a summary of your answers before the stage writes its artifact | The stage writes straight from your answers. A misread answer shows up in the artifact at the approval gate, where fixing it costs a revision |
+
+Neither switch removes a stage's questions or its approval gate. `bugfix` and
+`express` already start with both off, and `classic` with summary confirmation
+off. On work already under way, ask for either one in your own words, or type
+`/aidlc --learnings off` or `/aidlc --summary-confirmation off`; summary
+confirmation goes off only when you ask for it.
+
 #### Upgrading an in-flight classic intent
 
 The saved stage plan is preserved: an older classic intent whose Operation
@@ -269,7 +290,7 @@ composition:
 /aidlc --new-scope "..."               # force a custom plan even on a stock match
 ```
 
-The composer agent reads your task, then estimates five implementation-entropy components - intent ambiguity, codebase structural uncertainty, verification entropy, risk, and unresolved assumptions - and composes the minimum viable workflow: the least sufficient EXECUTE/SKIP grid that still produces every artifact the outcome depends on. Structural estimates ground in CodeKB MCP call-graph and component analysis when a CodeKB server is configured and indexed (an optional external tool; nothing ships with AI-DLC); otherwise the composer falls back to the bounded workspace scan (brownfield/greenfield, languages). The proposal comes to you as a short offer: two or three sentences on what kind of change this looks like, how much process the composer suggests and the steps in plain terms, then one line with the plan's name, stage count and approval questions, and rows for its Guard Policy and its scope settings that you can change before approving. Ask, and the agent shows the score breakdown (each component with a LOW/MED/HIGH band and its evidence) and the reason for every EXECUTE and SKIP. You approve, edit, or reject; nothing is written and no workflow starts before an explicit approval. A plan applies to the piece of work it was approved for, so composing never adds to your scope list unless you ask. On approve:
+The composer agent reads your task, then estimates five implementation-entropy components - intent ambiguity, codebase structural uncertainty, verification entropy, risk, and unresolved assumptions - and composes the minimum viable workflow: the least sufficient EXECUTE/SKIP grid that still produces every artifact the outcome depends on. Structural estimates ground in CodeKB MCP call-graph and component analysis when a CodeKB server is configured and indexed (an optional external tool; nothing ships with AI-DLC); otherwise the composer falls back to the bounded workspace scan (brownfield/greenfield, languages). The proposal comes to you as a short offer: two or three sentences on what kind of change this looks like, how much process the composer suggests and the steps in plain terms, then one line with the plan's name, stage count and approval questions, and rows for its Guard Policy and its scope settings that you can change before approving. Ask, and the agent shows the score breakdown (each component with a LOW/MED/HIGH band and its evidence) and the reason for every EXECUTE and SKIP. On existing code a tailored plan always includes Reverse Engineering, which checks the code map an earlier scan left before it scans again, unless the composer has CodeKB evidence and proposes leaving it out (see CodeKB grounding below). When the plan is created, its scores and their evidence method are kept on the work's first audit entry. You approve, edit, or reject; nothing is written and no workflow starts before an explicit approval. A plan applies to the piece of work it was approved for, so composing never adds to your scope list unless you ask. On approve:
 
 - If the proposal MATCHED a stock scope, AI-DLC creates the workflow with that scope directly (a scan report full of code-level findings usually routes to `bugfix` or `security-patch` this way).
 - For a CUSTOM plan, AI-DLC creates the workflow on the nearest suitable stock scope (one with no walking skeleton and no test strategy other than the plan's depth, so the plan runs as the gate showed it; for a new project, one meant for new work rather than `bugfix`, `refactor`, or `security-patch` when one fits) with the plan's own stage changes and depth, in the same turn, and writes no scope file. The work's state records `Plan: <name>`, the name the composer suggested and the gate showed (`tailored plan` when it gave none), and `/aidlc status` shows it; the scope the plan runs on is not named there. The gate for a custom plan has a second approval, **Approve and save as scope**: it asks for a name (the composer suggests one) and keeps the plan as a reusable scope as well.
@@ -516,7 +537,25 @@ You can change the test strategy at three points:
 | Lightweight requirements-to-deploy run | `express` |
 | AI-DLC workshop or training lab | `workshop` |
 
-When in doubt, start with `feature` for full-lifecycle coverage; choose `classic` for the v1-style Inception and Construction experience without Ideation or Operation.
+When in doubt, pick the plan by the size of the change. For a small,
+well-understood change, start with `express` (or `bugfix` for a known bug) and
+add the one stage you want, rather than starting with `feature`, which runs
+every stage:
+
+```
+/aidlc express --add functional-design <the change>
+/aidlc bugfix --add functional-design <what is broken>
+```
+
+`--add` puts a stage on this piece of work's plan only and keeps the rest of
+the scope as it is, so `express` with Functional Design still runs with no
+reviewers, sensors, learnings question, summary confirmation, or plan approval.
+Add `domain-design` instead when the change first needs its components named.
+On work already under way, `/aidlc --add <stage>` adds a stage that has not
+run yet (see `--skip` / `--add` in [CLI Commands](12-cli-commands.md)).
+Choose `feature` for a production feature that needs the full lifecycle, and
+`classic` for the v1-style Inception and Construction experience without
+Ideation or Operation.
 
 ---
 

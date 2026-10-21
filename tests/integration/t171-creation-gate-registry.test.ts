@@ -272,12 +272,22 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(existsSync(cursorPath(proj))).toBe(false);
       });
 
-      test(`a clone with one piece of work and no cursor: \`next${args.length ? ` ${args.join(" ")}` : ""}\` offers it in one line`, () => {
+      test(`a clone with one piece of work and no cursor: \`next${args.length ? ` ${args.join(" ")}` : ""}\` ${args.length ? "picks it up" : "offers it"} in one line`, () => {
         const [first, second] = seedTwoIntentsNoCursor();
         rmSync(join(intentsDir(proj), second), { recursive: true, force: true });
         const rows = readIntentRegistry(proj).filter((row) => row.dirName !== second);
         writeFileSync(join(intentsDir(proj), "intents.json"), `${JSON.stringify(rows, null, 2)}\n`);
         const d = JSON.parse(next(args).stdout.trim());
+        if (args.includes("--resume")) {
+          // They typed --resume with one piece here: it is picked up and said in
+          // one line, through the pick's own switch, and not asked about.
+          expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
+          expect(String(d.narration)).toStartWith(`Picked up \`${intentDisplayLabel(rows[0])}\`, the only open work; it is at `);
+          expect(String(d.narration)).toEndWith(". You can start something new any time.");
+          expect(String(d.message)).toContain(`intent switch ${first}`);
+          expect(existsSync(cursorPath(proj))).toBe(false);
+          return;
+        }
         expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("intent-pick");
         expect(d.available_intents).toEqual([first]);
         expect(d.question).toMatch(/^This project has one piece of work in progress: [^.]*\(at [A-Z][^)]*\)\. /);

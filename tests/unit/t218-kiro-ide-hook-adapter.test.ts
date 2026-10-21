@@ -2263,6 +2263,7 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
       expect(line).toMatch(/^AI-DLC is carrying on(?: with [^\n]+)?\.$/);
       expect(step).toBe(
         "If you had just asked the person a question, record it with `log decision` and end your turn saying nothing. " +
+          "If the person asked you to stop or pause, run `bun .kiro/tools/aidlc-orchestrate.ts park --person-asked` and end your turn. " +
           "Otherwise, if you carry on with the work, first say that line to the person once, on its own line; " +
           "it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it. " +
           "Say nothing else about this note.",
@@ -6063,6 +6064,40 @@ describe("t218 log-subagent identity extraction (#459)", () => {
       expect(readAudit(dir)).not.toContain("SUBAGENT_COMPLETED");
       const dropFile = join(seededRecordDir(dir), ".aidlc-engine/hooks-health", "kiro-adapter.drops");
       expect(readFileSync(dropFile, "utf-8")).toContain("names no stage");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("S4e: a dispatch Kiro answers with 'not found in registry' records a drop, not a completion", () => {
+    // Kiro CLI 2.31.0 and IDE 1.3.0 answer a dispatch to an agent with no file
+    // with this one line and no success flag. Nothing ran, so nothing finished.
+    const dir = scratchProject(true);
+    try {
+      const missing = (tool_name: string, tool_input: Record<string, unknown>, tool_response: string) =>
+        runIdeStdin(dir, "log-subagent", JSON.stringify({
+          session_id: "sess_t218", hook_event_name: "PostToolUse", cwd: dir, tool_name, tool_input, tool_response,
+        }));
+      expect(missing("invoke_sub_agent", { name: "aidlc-architect-agent", prompt: "Design" },
+        "Agent 'aidlc-architect-agent' not found in registry").code).toBe(0);
+      expect(readAudit(dir)).not.toContain("SUBAGENT_COMPLETED");
+      const health = join(seededRecordDir(dir), ".aidlc-engine/hooks-health");
+      expect(readFileSync(join(health, "kiro-adapter.drops"), "utf-8")).toContain("Kiro has no agent named aidlc-architect-agent");
+      // A pipeline records the stages that ran and drops the one Kiro could not find.
+      expect(missing("orchestrate_subagent", {
+        task: "Review then build",
+        stages: [{ name: "review", role: "aidlc-scoped-review-0123456789ab" }, { name: "build", role: "aidlc-developer-agent" }],
+      }, "Pipeline completed\n\n## review\nAgent 'aidlc-scoped-review-0123456789ab' not found in registry\n\n## build\nBuilt it.").code)
+        .toBe(0);
+      expect(readFileSync(join(health, "kiro-adapter.drops"), "utf-8")).toContain("Kiro has no agent named aidlc-scoped-review-0123456789ab");
+      expect(readAudit(dir)).toContain("**Agent Type**: aidlc-developer-agent");
+      expect(readAudit(dir)).not.toContain("**Agent Type**: aidlc-scoped-review-0123456789ab");
+      // Another agent's words are its own output, not Kiro's answer.
+      const developerRows = () => readAudit(dir).split("**Agent Type**: aidlc-developer-agent").length - 1;
+      const before = developerRows();
+      expect(missing("invoke_sub_agent", { name: "aidlc-developer-agent", prompt: "Implement" },
+        "Agent 'aidlc-scoped-review-0123456789ab' not found in registry").code).toBe(0);
+      expect(developerRows()).toBe(before + 1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -121,6 +121,15 @@ so the AI-DLC conductor agent is active by default — `/aidlc` just works.
 have configured**; if you prefer your own default, remove that setting and use
 `kiro-cli chat --agent aidlc` instead.
 
+Kiro CLI cancels a helper (a reviewer, a persona, a Unit builder) that shows
+no progress for `api.subagentTimeout` seconds; its default is 3600, and AI-DLC
+does not set it. If a helper that never starts holds a stage for an hour, you
+can lower it in your own Kiro CLI settings (`~/.kiro/settings/cli.json`; `900`
+is 15 minutes). Output counts as progress, silence does not: a helper whose
+command prints nothing for longer than that is cancelled too, and the command
+keeps running on its own, so keep the deadline above your longest quiet command
+(a deploy, a test run that prints only at the end).
+
 No shipped agent pins a model: a pinned ID resolves only when that
 model is enabled on the user's Kiro install. A chat, and each of the 14
 personas the conductor dispatches, starts on your session model: the one

@@ -167,7 +167,9 @@ function matrixPlan(root: string, options: {
         ...(options.extraCase ? [{ classname: "", name: "required but unexecuted" }] : []),
       ],
     })),
-    gates: { AIDLC_TUI_LIVE: "0" },
+    // No live gate is named: a named one would put this file, which calls no
+    // model, into that gate's live family (ci-live-filter.ts discoverLiveFiles).
+    gates: {},
   };
   const plan = join(scratch(), "plan.json");
   writeFileSync(plan, JSON.stringify({

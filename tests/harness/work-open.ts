@@ -12,9 +12,10 @@
 //
 // The check runs this file once per project, side by side (see the end of the
 // file), with the machine folder of the person's install, or `copy` for a
-// project that runs its own copied tool: the person's work opens, the file
-// writes <harness>.parked and waits for the check to write `updated`, then
-// carries the work on and writes <harness>.json with what the person lost.
+// project that runs its own copied tool, and the release it installed: the
+// person's work opens, the file writes <harness>.parked and waits for the
+// check to write `updated`, then carries the work on and writes
+// <harness>.json with what the person lost.
 
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -39,10 +40,11 @@ export interface OpenWork {
 }
 
 /** The person's day on the previous release: a bugfix up to its open Requirements gate, then a stop for the day. */
-export function openWork(harness: "claude" | HostName, proj: string, base: NodeJS.ProcessEnv, launcher: string[] | null): OpenWork {
+export function openWork(harness: "claude" | HostName, proj: string, base: NodeJS.ProcessEnv, launcher: string[] | null, release: string): OpenWork {
   const setup = untrackedRoots(proj);
   const host = hostFor(harness, proj, base);
   host.launcher = launcher;
+  if (host instanceof OpencodeScopeHost) host.release = release;
   const person = new PersonScript(host);
   const agent = new AgentStandIn(host, person, {
     answers: { stopAt: (stage) => stage === GATE },
@@ -209,7 +211,7 @@ export function launcherFor(machine: string): string[] | null {
 }
 
 function work(argv: string[]): number {
-  const [harness, proj, machine, signals, until] = argv;
+  const [harness, proj, machine, signals, until, previous] = argv;
   const done = (stage: WorkResult["stage"], problems: string[]) => {
     writeFileSync(join(signals, `${harness}.json`), `${JSON.stringify({ harness, stage, problems } satisfies WorkResult)}\n`);
     return 0;
@@ -217,7 +219,7 @@ function work(argv: string[]): number {
   const deadline = Number(until);
   let open: OpenWork;
   try {
-    open = openWork(harness as "claude" | HostName, proj, process.env, launcherFor(machine));
+    open = openWork(harness as "claude" | HostName, proj, process.env, launcherFor(machine), previous);
   } catch (error) {
     return done("open", [error instanceof Error ? error.message : String(error)]);
   }
@@ -226,8 +228,10 @@ function work(argv: string[]): number {
     if (Date.now() >= deadline) return done("resume", ["the update never came, so the work was not carried on"]);
     Bun.sleepSync(250);
   }
-  // The update moved the machine to the candidate's binary; a copy refreshed its own tool in place.
+  // The update moved the machine to the candidate's binary; a copy refreshed its own tool in place. The resume's
+  // new chat loads the candidate's opencode plugin, which this repository built.
   open.host.launcher = launcherFor(machine);
+  if (open.host instanceof OpencodeScopeHost) open.host.release = null;
   return done("resume", resumeWork(open));
 }
 

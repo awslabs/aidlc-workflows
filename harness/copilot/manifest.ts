@@ -194,6 +194,9 @@ const manifest: HarnessManifest = {
           // The variant whose Guards paragraph had the agent work out and ask the wider-place
           // question itself (the switch's own line now carries it).
           "sha256:724c2e36547e1eab35a3637595cea3f4bf1ddecf75fb798e0e165932c06cd93e",
+          // The variant whose Guards paragraph said the clear with no file named clears a
+          // switch everywhere it is recorded (from a chat it now leaves the shared file).
+          "sha256:b0f5e39317a501be8567bbb0ecbdff651116abc28a500b9c451b732ca8f2e088",
         ],
       },
     },

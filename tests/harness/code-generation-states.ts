@@ -32,6 +32,7 @@ import { readMessage } from "../../dist/claude/.claude/tools/aidlc-message-store
 import {
   invalidateActiveDirectiveContext,
   latestPersonTurn,
+  readActiveDirectiveMarker,
   readAuditShardEvents,
   stateDigest,
   workspaceSourceListing,
@@ -188,10 +189,10 @@ export function shellWords(command: string): string[] {
 }
 
 /** An engine command spelled `bun .claude/tools/... ...`, run as the agent would. */
-export function runNamed(proj: string, command: string): RunResult {
+export function runNamed(proj: string, command: string, extra: NodeJS.ProcessEnv = {}): RunResult {
   const words = shellWords(command);
   if (words[0] !== "bun") throw new Error(`not an engine command: ${command}`);
-  return run(proj, [...words.slice(1)]);
+  return run(proj, [...words.slice(1)], undefined, extra);
 }
 
 export function auditEvents(proj: string) {
@@ -246,7 +247,7 @@ export interface StateBuilder {
 }
 
 /** The review a reviewer leaves for a stage, the shape the engine reads (tests/harness/scope-run.ts reviewText). */
-function reviewText(reviewer: string): string {
+export function reviewText(reviewer: string): string {
   return `## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Date:** 2026-01-01T00:00:00Z\n**Iteration:** 1\n\n### Findings\n\n**Prior findings**\n\n| ID | Now | Severity | Note |\n|---|---|---|---|\n\n**New findings**\n\n| Severity | Location | Finding | Required action |\n|---|---|---|---|\n\n### Summary\n\nReady.\n`;
 }
 
@@ -263,6 +264,91 @@ function askOpen(proj: string): Step {
     throw new Error(`expected the plan question, got ${JSON.stringify(step)}`);
   }
   return step;
+}
+
+/**
+ * Code Generation built: the plan approved (asked, or built without asking
+ * where plan approval is off) and the build's outputs written.
+ */
+function builtCodeGeneration(policy: "strict" | "relaxed" | "off", planApproval: "on" | "off"): string {
+  const proj = createCodeGenerationProject(policy, planApproval);
+  // What a poc run has here: this stage in progress (the previous stage's
+  // approval marks it [-], aidlc-state.ts) and Units Generation skipped
+  // (core/scopes/aidlc-poc.md), so the stage's records are stage-level.
+  const stateFile = seededStateFile(proj);
+  writeFileSync(stateFile, readFileSync(stateFile, "utf-8")
+    .replace("- [ ] code-generation", "- [-] code-generation")
+    .replace(/^(- \[.\] units-generation) \u2014 EXECUTE$/m, "$1 \u2014 SKIP"), "utf-8");
+  next(proj);
+  if (planApproval === "on") {
+    askOpen(proj);
+    approve(proj);
+    next(proj);
+  } else {
+    writePlan(proj);
+    const step = next(proj);
+    if (step.kind !== "run-stage" || step.plan_approval?.status !== "approved") {
+      throw new Error(`expected the build without asking, got ${JSON.stringify(step)}`);
+    }
+  }
+  writeFileSync(join(stageDir(proj), "traceability.json"), "{}\n", "utf-8");
+  writeFileSync(join(proj, "src", "slugify.ts"), "export const slugify = (s: string) => s;\n", "utf-8");
+  return proj;
+}
+
+const REVIEWER = "aidlc-architecture-reviewer-agent";
+const REVIEW = ["engine", "log", "review", "--stage", "code-generation", "--reviewer", REVIEWER, "--iteration", "1"];
+const OPEN_GATE = ["engine", "orchestrate", "report", "--stage", "code-generation", "--result", "awaiting-approval"];
+
+function askReview(proj: string): string {
+  const requested = run(proj, [DISPATCHER, ...REVIEW]);
+  const reviewFile = (JSON.parse(requested.stdout || "{}") as { reviewFile?: string }).reviewFile;
+  if (requested.status !== 0 || !reviewFile) throw new Error(`no review file named:\n${requested.stdout}${requested.stderr}`);
+  return reviewFile;
+}
+
+/**
+ * The open Code Generation gate (S11a): the build, the stage's review written,
+ * and `report --result awaiting-approval` run. The report moves the state and
+ * writes no step, so no step is current: a door is refused naming `next` (the
+ * pin test below the sweep).
+ */
+export function openCodeGenerationGate(
+  policy: "strict" | "relaxed" | "off" = "relaxed",
+  planApproval: "on" | "off" = "on",
+): string {
+  const proj = builtCodeGeneration(policy, planApproval);
+  const reviewFile = askReview(proj);
+  mkdirSync(dirname(join(proj, reviewFile)), { recursive: true });
+  writeFileSync(join(proj, reviewFile), reviewText(REVIEWER), "utf-8");
+  const recorded = run(proj, [DISPATCHER, ...REVIEW, "--verdict", "READY"]);
+  if (recorded.status !== 0) throw new Error(`the review was not recorded:\n${recorded.stdout}${recorded.stderr}`);
+  const opened = run(proj, [DISPATCHER, ...OPEN_GATE]);
+  const gate = JSON.parse(opened.stdout || "{}") as { kind?: string };
+  if (opened.status !== 0 || gate.kind !== "print") throw new Error(`the gate did not open:\n${opened.stdout}${opened.stderr}`);
+  return proj;
+}
+
+/**
+ * The person's recovery question at Code Generation, reached as a run reaches
+ * it: the review is asked for and never finishes, and the agent opens the gate
+ * twice. The first refusal hands the agent its own ways on; the second asks the
+ * person, with Request Changes the one choice, and that question is the step.
+ */
+export function openRecoveryQuestion(
+  policy: "strict" | "relaxed" | "off" = "off",
+  planApproval: "on" | "off" = "off",
+): string {
+  const proj = builtCodeGeneration(policy, planApproval);
+  askReview(proj);
+  run(proj, [DISPATCHER, ...OPEN_GATE]);
+  const asked = JSON.parse(run(proj, [DISPATCHER, ...OPEN_GATE]).stdout || "{}") as { ask_type?: string; remedies?: Array<{ op?: string }> };
+  const step = readActiveDirectiveMarker(proj, readFileSync(seededStateFile(proj), "utf-8"));
+  if (asked.ask_type !== "guard-recovery" || step?.ask_type !== "guard-recovery" ||
+    asked.remedies?.map((remedy) => remedy.op).join() !== "request-changes") {
+    throw new Error(`the recovery question was not asked: ${JSON.stringify(asked)}`);
+  }
+  return proj;
 }
 
 export const STATES: StateBuilder[] = [
@@ -460,43 +546,11 @@ export const STATES: StateBuilder[] = [
   },
   {
     id: "S11a", name: "no current step: the gate opened and retired it",
-    build: () => {
-      const proj = createCodeGenerationProject();
-      // What a poc run has here: this stage in progress (the previous stage's
-      // approval marks it [-], aidlc-state.ts) and Units Generation skipped
-      // (core/scopes/aidlc-poc.md), so the stage's records are stage-level.
-      const stateFile = seededStateFile(proj);
-      writeFileSync(stateFile, readFileSync(stateFile, "utf-8")
-        .replace("- [ ] code-generation", "- [-] code-generation")
-        .replace(/^(- \[.\] units-generation) \u2014 EXECUTE$/m, "$1 \u2014 SKIP"), "utf-8");
-      next(proj);
-      askOpen(proj);
-      approve(proj);
-      next(proj);
-      // The build's outputs, the stage's review, then the gate.
-      writeFileSync(join(stageDir(proj), "traceability.json"), "{}\n", "utf-8");
-      writeFileSync(join(proj, "src", "slugify.ts"), "export const slugify = (s: string) => s;\n", "utf-8");
-      const reviewer = "aidlc-architecture-reviewer-agent";
-      const review = ["engine", "log", "review", "--stage", "code-generation", "--reviewer", reviewer, "--iteration", "1"];
-      const requested = run(proj, [DISPATCHER, ...review]);
-      const reviewFile = (JSON.parse(requested.stdout || "{}") as { reviewFile?: string }).reviewFile;
-      if (requested.status !== 0 || !reviewFile) throw new Error(`no review file named:\n${requested.stdout}${requested.stderr}`);
-      mkdirSync(dirname(join(proj, reviewFile)), { recursive: true });
-      writeFileSync(join(proj, reviewFile), reviewText(reviewer), "utf-8");
-      const recorded = run(proj, [DISPATCHER, ...review, "--verdict", "READY"]);
-      if (recorded.status !== 0) throw new Error(`the review was not recorded:\n${recorded.stdout}${recorded.stderr}`);
-      const opened = run(proj, [DISPATCHER, "engine", "orchestrate", "report", "--stage", "code-generation",
-        "--result", "awaiting-approval"]);
-      const gate = JSON.parse(opened.stdout || "{}") as { kind?: string };
-      if (opened.status !== 0 || gate.kind !== "print") throw new Error(`the gate did not open:\n${opened.stdout}${opened.stderr}`);
-      // No current step now: a door is refused naming `next` (the pin test
-      // below the sweep). The sweep's own `next` makes the step current again,
-      // and the approved plan opens the build's doors.
-      return {
-        proj, session: SESSION, approved: true,
-        how: "approved, built, reviewed; report awaiting-approval opened the gate and retired the step; next re-issues it",
-      };
-    },
+    build: () => ({
+      proj: openCodeGenerationGate(),
+      session: SESSION, approved: true,
+      how: "approved, built, reviewed; report awaiting-approval opened the gate and retired the step; next re-issues it",
+    }),
   },
   {
     id: "S11b", name: "no current step: the chat compacted",
@@ -523,6 +577,28 @@ export const STATES: StateBuilder[] = [
     },
   },
 ];
+
+/**
+ * The plan approved and the build step handed over, then the chat compacted:
+ * the step the agent held is set aside (`kind: "error"`, out of date) and no
+ * `next` has run since. Under Guard Policy off it is still the step.
+ */
+export function approvedBuildSetAside(policy: "strict" | "relaxed" | "off"): BuiltState {
+  const proj = createCodeGenerationProject(policy);
+  next(proj);
+  askOpen(proj);
+  approve(proj);
+  const step = next(proj);
+  if (step.kind !== "run-stage" || step.plan_approval?.status !== "approved") {
+    throw new Error(`expected the build step, got ${JSON.stringify(step)}`);
+  }
+  const markerPath = join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json");
+  const marker = JSON.parse(readFileSync(markerPath, "utf-8")) as { owner_session?: string };
+  if (!invalidateActiveDirectiveContext(proj, readFileSync(seededStateFile(proj), "utf-8"), marker.owner_session ?? SESSION)) {
+    throw new Error("the build step could not be marked as lost to compaction");
+  }
+  return { proj, session: SESSION, approved: true, how: `Guard Policy ${policy}: approved, the build handed over, then the chat compacted` };
+}
 
 // ---------------------------------------------------------------------------
 // The seven harness shapes of one tool call

@@ -55,6 +55,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -74,6 +75,7 @@ import {
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  guardRecoveryAskFromRefusalText,
   pipelineAttemptStartedAt,
   readSummaryAuthorization,
   SUMMARY_CONFIRMATION_HASH_SCOPE,
@@ -89,6 +91,11 @@ const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const MID_IDEATION = "state-mid-ideation.md"; // Current Stage: feasibility
 let handoffClock = 0;
+
+// The guard-recovery ask a refusal carries on the last line of its sentence.
+function refusalAsk(out: string) {
+  return guardRecoveryAskFromRefusalText((JSON.parse(out) as { error: string }).error);
+}
 
 function ensurePipelineAttemptStarted(proj: string): void {
   if (pipelineAttemptStartedAt(proj, "reverse-engineering")) return;
@@ -638,12 +645,49 @@ describe("t185: stage-completion artifact guard (#366)", () => {
     const slug = field(proj, "Current Stage");
     const r = guarded(proj, ["gate-start", slug]);
     expect(r.rc).not.toBe(0);
-    expect((JSON.parse(r.out) as { error: string }).error).toContain(
+    const said = (JSON.parse(r.out) as { error: string }).error;
+    expect(said).toContain(
       'Cannot present "feasibility" for approval: none of its declared artifacts exist',
     );
+    expect(said).toContain("then run the same report again");
+    // Writing the outputs is the agent's own step, the refusal's own sentence;
+    // Feasibility has no reviewer, so a review request is no way on.
+    const ask = refusalAsk(r.out);
+    expect(ask?.agent_work, r.out).toBe(true);
+    expect(ask?.remedies.map((remedy) => [remedy.op, remedy.interaction])).toEqual([
+      ["produce-stage-output", "external-work"],
+    ]);
+    expect(ask?.remedies[0]?.action).toBe(said.split("\n")[0]);
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
       `- [-] ${slug}`,
     );
+  });
+
+  // The reporter's path: `report` hands back only the ask, so the step the
+  // agent takes is the refusal's own sentence on its one way on.
+  test("report on a stage with no outputs hands the agent writing them, in the refusal's own words", () => {
+    const slug = field(proj, "Current Stage");
+    bypassed(proj, ["checkbox", `${slug}=in-progress`]);
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.AIDLC_SKIP_ARTIFACT_GUARD;
+    const r = spawnSync(BUN, [ORCHESTRATE, "report", "--stage", slug, "--result", "awaiting-approval", "--project-dir", proj], {
+      encoding: "utf-8",
+      env,
+    });
+    const step = JSON.parse(r.stdout) as {
+      kind?: string;
+      agent_work?: boolean;
+      reason_codes?: string[];
+      remedies?: { op: string; action: string; interaction?: string }[];
+    };
+    expect(step.kind, r.stdout).toBe("ask");
+    expect(step.agent_work, r.stdout).toBe(true);
+    expect(step.reason_codes).toEqual(["REQUIRED_ARTIFACTS_MISSING"]);
+    expect(step.remedies?.map((remedy) => [remedy.op, remedy.interaction])).toEqual([
+      ["produce-stage-output", "external-work"],
+    ]);
+    expect(step.remedies?.[0]?.action).toContain('Cannot present "feasibility" for approval: none of its declared artifacts exist');
+    expect(step.remedies?.[0]?.action).toContain("then run the same report again");
   });
 
   test("revise REFUSES before [?] when revised artifacts are absent", () => {
@@ -2041,8 +2085,10 @@ X. Other (please specify)
 
     // BROWNFIELD: a git repo whose src/ was committed in a PRIOR
     // commit, with a clean tree and only doc changes this session, must REFUSE -
-    // the bare FS check would have wrongly passed on the pre-existing src/.
-    test("REFUSES when src/ is pre-existing (committed earlier) and no new code this session", () => {
+    // the bare FS check would have wrongly passed on the pre-existing src/. The
+    // refusal names the ways forward that keep the check: a source change not
+    // committed yet counts, and the same approve then goes through.
+    test("REFUSES when src/ is pre-existing (committed earlier) and no new code this session, naming the way forward", () => {
       initGitRepo();
       writeWorkspaceFile(proj, "src/legacy/old.ts");
       git(["add", "-A"]);
@@ -2053,15 +2099,29 @@ X. Other (please specify)
       stageCodeGenDocsOnly();
       git(["add", "aidlc"]);
       git(["commit", "-q", "-m", "code-gen planning docs only"]);
-      const r = approveCodeGen();
-      expect(r.rc).not.toBe(0);
-      expect(r.out).toContain("workspace_requires");
+      const refused = approveCodeGen();
+      expect(refused.rc).not.toBe(0);
+      expect(refused.out).toContain("workspace_requires");
+      expect(refused.out).toContain("a source change not committed yet counts, as does code in the last commit");
+      expect(refused.out).toContain("then run the same report again");
+      // The way on is the agent's own step: it carries no question for the person.
+      expect(refused.out).not.toContain("choose Request Changes");
+      expect(refused.out).not.toContain("--bypass");
+      const ask = refusalAsk(refused.out);
+      expect(ask?.agent_work, refused.out).toBe(true);
+      expect(ask?.remedies.map((remedy) => remedy.op)).toEqual(["produce-stage-output"]);
+      // The step it names: new source, reviewed again as any change is, and
+      // the same approve goes through.
+      writeWorkspaceFile(proj, "src/auth/login.ts");
+      reviewCodeGen(proj, UNIT, 2);
+      const approved = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      expect(approved.rc, approved.out).toBe(0);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-    // The code went in an earlier commit and a docs-only commit landed after
-    // it. The refusal names the ways forward that keep the check: a source
-    // change not committed yet counts, and the same approve then goes through.
-    test("names the way forward when the last commit is docs only, and that step is accepted", () => {
+    // The code went in a commit of its own during this stage and the records
+    // in a later one: the last commit is docs only, and the change since the
+    // stage began is the source work.
+    test("PASSES when this stage's code was committed and the records were committed after it", () => {
       initGitRepo();
       writeWorkspaceFile(proj, "src/legacy/old.ts");
       git(["add", "-A"]);
@@ -2072,16 +2132,7 @@ X. Other (please specify)
       git(["commit", "-q", "-m", "the code"]);
       git(["add", "aidlc"]);
       git(["commit", "-q", "-m", "record docs only"]);
-      const refused = approveCodeGen();
-      expect(refused.rc).not.toBe(0);
-      expect(refused.out).toContain("a source change not committed yet counts, as does code in the last commit");
-      expect(refused.out).toContain("choose Request Changes and say what is missing");
-      expect(refused.out).not.toContain("--bypass");
-      // The step it names: new source, reviewed again as any change is, and
-      // the same approve goes through.
-      writeFileSync(join(proj, "src", "auth", "login.ts"), "export const login = 2;\n");
-      reviewCodeGen(proj, UNIT, 2);
-      const approved = guarded(proj, ["approve", "code-generation", "--user-input", "ok"]);
+      const approved = approveCodeGen();
       expect(approved.rc, approved.out).toBe(0);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -2275,6 +2326,35 @@ X. Other (please specify)
       gateAndApprove();
       expect(existsSync(marker)).toBe(false);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+    // The look also reaches checkouts the workspace's git does not track and
+    // the worktrees git lists, and still asks git only where a .git entry is: a
+    // folder shaped like a repo that an archive dropped into an ignored folder,
+    // and a listed worktree whose .git entry is gone, run no git config.
+    for (const where of ["an ignored folder", "a listed worktree whose .git entry is gone"] as const) {
+      test(`does not run git configuration in a repo-shaped folder in ${where}`, () => {
+        initWorkspaceRepo(".worktrees/\n");
+        const marker = join(proj, "fsmonitor-ran");
+        const shaped = join(proj, ".worktrees", "evil");
+        if (where !== "an ignored folder") {
+          git(proj, ["worktree", "add", "-q", shaped, "-b", "evil"]);
+          rmSync(join(shaped, ".git"), { force: true });
+        }
+        mkdirSync(join(shaped, "objects", "info"), { recursive: true });
+        mkdirSync(join(shaped, "refs", "heads"), { recursive: true });
+        writeFileSync(join(shaped, "HEAD"), "ref: refs/heads/main\n");
+        writeFileSync(join(shaped, "objects", "info", "keep"), "");
+        writeFileSync(join(shaped, "refs", "heads", "keep"), "");
+        writeFileSync(
+          join(shaped, "config"),
+          `[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = .\n\tfsmonitor = touch ${marker}; false\n`,
+        );
+        stageCodeGenDocsOnly();
+        commitRecordsOnly();
+        gateAndApprove();
+        expect(existsSync(marker)).toBe(false);
+      }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+    }
 
     // Sibling discovery accepts a symlinked child repo, so the probe must too:
     // the link's target has the real .git entry.

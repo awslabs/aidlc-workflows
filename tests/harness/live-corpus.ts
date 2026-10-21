@@ -226,15 +226,25 @@ export async function judgeText(input: JudgeInput, text: string, judgeDir: strin
   try {
     const [stdout, stderr, status] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
     if (status !== 0) return { failure: `the judge could not run (exit ${status}): ${stderr.slice(0, 200)}`, asked: null };
-    const result = String((JSON.parse(stdout) as { result?: string }).result ?? "");
-    const verdict = /\{[^{}]*"ok"\s*:\s*(true|false)[^{}]*\}/.exec(result);
-    if (!verdict) return { failure: `the judge gave no verdict: ${result.slice(0, 200)}`, asked: null };
-    const parsed = JSON.parse(verdict[0]) as { ok: boolean; asked?: unknown; reason?: string };
-    const asked = typeof parsed.asked === "number" && Number.isInteger(parsed.asked) && parsed.asked >= 0 ? parsed.asked : null;
-    return { failure: parsed.ok ? null : `the agent's words: ${parsed.reason ?? "did not match what the person meant"}`, asked };
+    return judgeVerdict(String((JSON.parse(stdout) as { result?: string }).result ?? ""));
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** The judge's verdict line in its reply. A line that looks like one but is not JSON (a reason with a bare quote in it)
+ * is the judge giving no verdict, a miss the report counts, never a throw that fails the item. */
+export function judgeVerdict(result: string): WordsVerdict {
+  const verdict = /\{[^{}]*"ok"\s*:\s*(true|false)[^{}]*\}/.exec(result);
+  let parsed: { ok: boolean; asked?: unknown; reason?: string } | null = null;
+  try {
+    if (verdict) parsed = JSON.parse(verdict[0]);
+  } catch {
+    parsed = null;
+  }
+  if (parsed === null) return { failure: `the judge gave no verdict: ${result.slice(0, 200)}`, asked: null };
+  const asked = typeof parsed.asked === "number" && Number.isInteger(parsed.asked) && parsed.asked >= 0 ? parsed.asked : null;
+  return { failure: parsed.ok ? null : `the agent's words: ${parsed.reason ?? "did not match what the person meant"}`, asked };
 }
 
 // A miss is one or more of: the records are wrong or missing (what each check judges on disk, the typed line), a

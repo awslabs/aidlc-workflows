@@ -482,6 +482,30 @@ describe("the engine asks for Plan Approval", () => {
     expect(still.ask_type).toBe("plan-approval");
   });
 
+  test("--status while the code plan question is open says it waits for the person's approval, naming the Unit", () => {
+    const statusLine = (proj: string): string => {
+      const result = spawnSync(BUN, [join(AIDLC_SRC, "tools", "aidlc-utility.ts"), "status", "--project-dir", proj], {
+        encoding: "utf-8",
+        env: { ...process.env, AIDLC_UNATTENDED: "0" },
+      });
+      expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+      return /^Status:\s+(.*)$/m.exec(result.stdout ?? "")?.[1] ?? "";
+    };
+    const proj = project();
+    next(proj);
+    askFor(proj);
+    expect(statusLine(proj)).toBe("Awaiting your approval on the code plan");
+    // They chose to edit the files themselves: the work waits on their edit.
+    reply(proj, "/aidlc 3");
+    expect(next(proj).plan_approval?.editing).toBe(true);
+    expect(statusLine(proj)).toBe("Waiting for you to finish editing the code plan");
+    const units = unitProject("unit-b", "unit-a");
+    writePlan(units, "", "unit-b");
+    writePlan(units, "", "unit-a");
+    expect(next(units).ask_type).toBe("plan-approval");
+    expect(statusLine(units)).toBe("Awaiting your approval on the code plan for unit-b");
+  });
+
   test("a stage without a plan is planned first; a ready plan is asked for with its summary", () => {
     const proj = project();
     const planning = next(proj);
@@ -520,6 +544,11 @@ describe("the engine asks for Plan Approval", () => {
     const answerText = join(seededRecordDir(proj), ".aidlc-engine", "answer-text");
     expect(guardWrite(proj, join(answerText, "answer.txt")).code).toBe(0);
     expect(guardWrite(proj, join(seededRecordDir(proj), ".aidlc-engine", "answer.txt")).code).toBe(2);
+    // So are a stage's learnings picks for `learnings persist` (#1592): the
+    // ritual runs while Code Generation is the current stage, so its file
+    // must be writable while the plan waits.
+    const learnings = join(seededRecordDir(proj), ".aidlc-engine", "learnings");
+    expect(guardWrite(proj, join(learnings, "code-generation-selections.json")).code).toBe(0);
     // A traversal out of it lands on the plan file: AI-DLC's record, which
     // passes on its own (a plan changed under the question is asked about again).
     expect(guardWrite(proj, join(answerText, "..", "..", "construction", "code-generation", "code-generation-plan.md")).code)

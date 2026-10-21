@@ -12,6 +12,7 @@
 //   ----------------------------------------------------------------------------
 //   chat.message (until a workflow is active) -> aidlc-session-start.ts  (SessionStart)
 //   chat.message (every human turn)           -> aidlc-record-human-turn.ts  (UserPromptSubmit)
+//   shell.env (every shell command)           -> names the command's chat (AIDLC_SESSION_OVERRIDE)
 //   tool.execute.before task                  -> aidlc-deliver-stage-rules.ts rewrite + plan-approval guard (PreToolUse)
 //   tool.execute.before other tools           -> entrypoint boundary + state-transition, review-freeze, plan-approval and reviewer-scope guards (PreToolUse)
 //   tool.execute.after write|edit|apply_patch -> aidlc-write-audit-log.ts + aidlc-run-sensors.ts (PostToolUse Write|Edit)
@@ -53,6 +54,8 @@
 
 import { spawn } from "node:child_process";
 import { isAbsolute, join } from "node:path";
+// emit.ts points this at the projected .aidlc/tools/ copy.
+import { windowsScriptLaunch } from "../../../core/tools/aidlc-executable-path.ts";
 
 const NUDGE_SENTINEL = "[aidlc-forwarding-nudge]";
 const PROJECTED_INVOKE = "{{INVOKE}}";
@@ -69,21 +72,30 @@ function runCoreHook(
   input: Record<string, unknown>,
   cwd: string,
   aidlcCommand: readonly string[],
+  platform: NodeJS.Platform,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
-    const [bin, ...prefix] = aidlcCommand;
     const hook = hookFile.replace(/^aidlc-/, "").replace(/\.ts$/, "");
+    const env = {
+      ...process.env,
+      AIDLC_PROJECT_DIR: cwd,
+      CLAUDE_PROJECT_DIR: cwd,
+    };
+    const [bin, ...prefix] = aidlcCommand;
     if (!bin) return resolve({ stdout: "", stderr: "", code: 0 });
+    // Windows starts the native install's aidlc.cmd only through cmd.exe; the
+    // project folder then goes by the environment above.
+    const viaCmd = windowsScriptLaunch(bin, [...prefix, "hook", hook], platform, env);
+    if (viaCmd === "refused") return resolve({ stdout: "", stderr: "", code: 0 }); // fail open
     try {
-      const child = spawn(bin, [...prefix, "hook", hook, "--project-dir", cwd], {
-        cwd,
-        stdio: ["pipe", "pipe", "pipe"],
-        env: {
-          ...process.env,
-          AIDLC_PROJECT_DIR: cwd,
-          CLAUDE_PROJECT_DIR: cwd,
-        },
-      });
+      const child = viaCmd
+        ? spawn(viaCmd.file, viaCmd.args, {
+          cwd,
+          stdio: ["pipe", "pipe", "pipe"],
+          env: { ...env, ...viaCmd.env },
+          windowsVerbatimArguments: true,
+        })
+        : spawn(bin, [...prefix, "hook", hook, "--project-dir", cwd], { cwd, stdio: ["pipe", "pipe", "pipe"], env });
       let out = "";
       let err = "";
       child.stdout.on("data", (d: Buffer) => {
@@ -540,7 +552,7 @@ export default async ({
     hookFile: string,
     input: Record<string, unknown>,
     _cwd = directory,
-  ) => runCoreHook(hookFile, input, directory, aidlcCommand);
+  ) => runCoreHook(hookFile, input, directory, aidlcCommand, platform);
 
   // The rebuild-stage-graph hook's only stdout on this harness is the
   // engine-error relay: one {"systemMessage": <exact directive.message>} line.
@@ -707,6 +719,23 @@ export default async ({
     ) => {
       if (input.command !== "aidlc") return;
       typedCommands.set(input.sessionID, showTypedCommand(output.parts, input.arguments));
+    },
+
+    // One opencode process hosts every chat of a window, so the process tree
+    // names only the chat that started last. opencode asks for each shell
+    // command's environment and names the chat it runs for; that chat's owner
+    // makes the engine act on its own work. opencode's own terminal names no chat.
+    "shell.env": async (
+      input: { cwd: string; sessionID?: string; callID?: string },
+      output: { env: Record<string, string> },
+    ) => {
+      if (!input.sessionID) return;
+      try {
+        output.env.AIDLC_SESSION_OVERRIDE = await owningSession(input.sessionID);
+        output.env.AIDLC_SESSION_OVERRIDE_SOURCE = "payload";
+      } catch {
+        // A throw here fails the person's command; unconfirmed, the engine finds the chat as before.
+      }
     },
 
     "tool.execute.before": async (

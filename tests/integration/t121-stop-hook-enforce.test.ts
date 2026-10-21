@@ -1,5 +1,5 @@
 // covers: hook:aidlc-continue-workflow, function:refreshActiveDirectiveMarker, function:hasCurrentSharedResumeWait, function:hasCurrentSharedGuardRecoveryWait, function:hasPendingDecision
-// covers: function:boundDirectiveMessage
+// covers: function:boundDirectiveMessage, function:isStageWorkLogCall, function:stageWorkLogged
 //
 // Behavioural contract for the Stop hook `aidlc-continue-workflow.ts` — the framework's
 // FIRST flow-altering hook. Migrated from tests/integration/t121-stop-hook-enforce.sh
@@ -714,6 +714,10 @@ function seedTranscript(
  *                                 / a plain user message (Codex). Used to model
  *                                 the hook-feedback turn excluded purely by its
  *                                 "Stop hook feedback:" content prefix.
+ *   - {kind:"queued", text, origin} (Claude only) a message fed into a running
+ *                                 turn: an attachment entry, never a user row,
+ *                                 tagged with Claude Code's origin kind (null:
+ *                                 no origin field, as older builds write it).
  *
  * Mirrors seedTranscript's file-naming contract: the codex variant is written as
  * `rollout-*.jsonl` (so the hook picks the codex reader, aidlc-continue-workflow.ts); the
@@ -728,7 +732,8 @@ type TranscriptEntry =
   | { kind: "bashBatch"; calls: Array<{ command: string; id: string }> }
   | { kind: "result"; id: string; output: unknown; failed?: boolean }
   | { kind: "meta"; text: string }
-  | { kind: "userText"; text: string };
+  | { kind: "userText"; text: string }
+  | { kind: "queued"; text: string; origin: string | null };
 
 function seedTranscriptEntries(
   proj: string,
@@ -812,6 +817,19 @@ function seedTranscriptEntries(
             message: {
               role: "user",
               content: [{ type: "tool_result", tool_use_id: e.id, content: e.output, is_error: e.failed ?? false }],
+            },
+          }));
+          break;
+        case "queued":
+          // The shape Claude Code 2.1.296 writes (live transcripts).
+          lines.push(JSON.stringify({
+            type: "attachment",
+            attachment: {
+              type: "queued_command",
+              prompt: e.text,
+              commandMode: e.origin === "task-notification" ? "task-notification" : "prompt",
+              ...(e.origin === null ? {} : { origin: { kind: e.origin } }),
+              ...(e.origin === "human" ? { humanTurn: true } : {}),
             },
           }));
           break;
@@ -1251,14 +1269,16 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
 
   // The person on every tool gets the line once. Claude Code, Codex, Copilot
   // and Cursor show the reason, so it is the plain line alone. Kiro CLI,
-  // opencode and Kiro IDE hide it, so after the line (still first) comes one
-  // sentence for the agent: say the line itself, on its own line, only when
-  // it carries on with the work. It reaches the agent even when the aidlc
-  // skill is not loaded.
+  // opencode and Kiro IDE hide it, so after the line (still first) comes the
+  // agent's step: a person who asked to stop or pause is parked with this
+  // install's exact command, and the agent says the line itself, on its own
+  // line, only when it carries on with the work. It reaches the agent even
+  // when the aidlc skill is not loaded.
   test("(a) the reason is the plain line where the tool shows it, and the line plus the agent's step where it hides it", () => {
     const line = "AI-DLC is carrying on with Requirements Analysis.";
     const agentStep =
       "If you had just asked the person a question, record it with `log decision` and end your turn saying nothing. " +
+      "If the person asked you to stop or pause, run `bun .claude/tools/aidlc-orchestrate.ts park --person-asked` and end your turn. " +
       "Otherwise, if you carry on with the work, first say that line to the person once, on its own line; " +
       "it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it. " +
       "Say nothing else about this note.";
@@ -3470,6 +3490,73 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // Claude Code feeds what the person types while the agent works into the
+  // running turn and keeps it as a queued attachment, not a user row. The
+  // agent that stops on their "hold on" and says so in words ends the turn,
+  // as it would after a message typed between turns.
+  test("(f) Claude Code: what the person typed while the agent worked, answered in words, ends the turn", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const tp = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "/aidlc carry on" },
+      { kind: "bash", command: "bun .claude/tools/aidlc-orchestrate.ts next" },
+      { kind: "queued", text: "hold on", origin: "human" },
+      { kind: "text" },
+    ]);
+    const r = runHook(proj, JSON.stringify({ stop_hook_active: false, transcript_path: tp }), "run-stage");
+    expect(r.rc, r.diagnostic).toBe(0);
+    expect(r.out).toBe("");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(f) Claude Code: engine work after the person's queued message is still carried on", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const tp = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "/aidlc carry on" },
+      { kind: "bash", command: "bun .claude/tools/aidlc-orchestrate.ts next" },
+      { kind: "queued", text: "keep going", origin: "human" },
+      { kind: "bash", command: "bun .claude/tools/aidlc-orchestrate.ts next" },
+      { kind: "text" },
+    ]);
+    const r = runHook(proj, JSON.stringify({ stop_hook_active: false, transcript_path: tp }), "run-stage");
+    expect((JSON.parse(r.out) as { decision?: string }).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // Only Claude Code's own `human` tag is the person: a background task's
+  // notice, an auto-continuation (the same shape but the tag) and an older
+  // build's entry with no origin never read as them.
+  test("(f) Claude Code: a queued message that is not the person's leaves the turn as it was", () => {
+    for (const origin of ["task-notification", "auto-continuation", "coordinator", null]) {
+      const proj = makeProject();
+      seedActive(proj, "requirements-analysis");
+      const tp = seedTranscriptEntries(proj, "claude", [
+        { kind: "human", text: "/aidlc carry on" },
+        { kind: "bash", command: "bun .claude/tools/aidlc-orchestrate.ts next" },
+        { kind: "queued", text: "the scan finished", origin },
+        { kind: "text" },
+      ]);
+      const r = runHook(proj, JSON.stringify({ stop_hook_active: false, transcript_path: tp }), "run-stage");
+      expect((JSON.parse(r.out) as { decision?: string }).decision, String(origin)).toBe("block");
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(f) Claude Code: under AIDLC_UNATTENDED=1 an autonomous run's queued message keeps the guard", () => {
+    const proj = makeProject();
+    seedInProgressWithQuestions(proj, { autonomy: "autonomous" });
+    const tp = seedTranscriptEntries(proj, "claude", [
+      { kind: "human", text: "/aidlc carry on" },
+      { kind: "bash", command: "bun .claude/tools/aidlc-orchestrate.ts next" },
+      { kind: "queued", text: "hold on", origin: "human" },
+      { kind: "text" },
+    ]);
+    const payload = JSON.stringify({ stop_hook_active: false, transcript_path: tp });
+    const unattended = runHook(proj, payload, "run-stage", "", "", "requirements-analysis", "", false, { AIDLC_UNATTENDED: "1" });
+    expect((JSON.parse(unattended.out) as { decision?: string }).decision).toBe("block");
+    // A person who writes mid-run is present: the attended run is let go.
+    const attended = runHook(proj, payload, "run-stage", "", "", "requirements-analysis", "", false, { AIDLC_UNATTENDED: "0" });
+    expect(attended.out, attended.diagnostic).toBe("");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("(f) Codex rollout chat transcript allows the stop (conversational carve-out, codex reader)", () => {
     const proj = makeProject();
     seedActive(proj, "requirements-analysis");
@@ -3888,6 +3975,82 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(r.out).toBe(""); // allowed: read-only query is not engagement
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // #2400: the turn after the person answered recorded the stage's review
+  // verdict through `aidlc engine log review` and ended before the gate. A
+  // stage-work log call that recorded a row is the stage's work going on; a
+  // refused one (some tell the agent to end its turn) and a read are not.
+  test("(h) a recorded `log review` verdict after the human prompt is engagement in both transcript formats", () => {
+    const recordedReview = JSON.stringify({
+      emitted: "REVIEW_COMPLETED",
+      stage: "requirements-analysis",
+      reviewRecord: ".aidlc-engine/reviews/requirements-analysis/stage/a1/1.json",
+    });
+    for (const format of ["claude", "codex"] as const) {
+      for (const command of [
+        "aidlc engine log review --stage requirements-analysis --reviewer aidlc-product-lead-agent --iteration 1 --verdict READY",
+        "bun .claude/tools/aidlc.ts engine log review --stage requirements-analysis --reviewer aidlc-product-lead-agent --iteration 1 --verdict READY",
+      ]) {
+        // The logger marked the verdict as the stage's work (its engine mark
+        // is newer than the person's turn): BLOCK. Without that mark (a
+        // review of a stage already approved) the same row is not: ALLOW.
+        for (const marked of [true, false]) {
+          const proj = makeProject();
+          seedActive(proj, "requirements-analysis");
+          seedTurnMarkers(proj, { humanNewer: !marked });
+          const tp = seedTranscriptEntries(proj, format, [
+            { kind: "human", text: "Q1: B; Q2: A" },
+            { kind: "bash", id: "verdict", command },
+            { kind: "result", id: "verdict", output: recordedReview },
+            { kind: "text" },
+          ]);
+          const r = runHook(proj, JSON.stringify({ stop_hook_active: false, transcript_path: tp }), "run-stage");
+          const label = `${format} ${command} marked=${marked}`;
+          expect(r.rc, label).toBe(0);
+          if (marked) expect((JSON.parse(r.out || "{}") as { decision?: string }).decision, label).toBe("block");
+          else expect(r.out, label).toBe("");
+        }
+      }
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(h) a refused `log answer` and a read-only `log answers` leave the turn conversational", () => {
+    const refusal = JSON.stringify({
+      error: "Cannot record this answer because no new human reply has arrived for the question. Wait for the human to type an answer, then try again.",
+    });
+    const cases: Array<[string, TranscriptEntry[]]> = [
+      ["refused answer", [
+        { kind: "bash", id: "answer", command: "aidlc engine log answer --stage requirements-analysis --details 'Q1: B'" },
+        { kind: "result", id: "answer", output: refusal, failed: true },
+      ]],
+      // Codex marks no failure on the output; the refusal still recorded nothing.
+      ["refused answer, no failure flag", [
+        { kind: "bash", id: "answer", command: "aidlc engine log answer --stage requirements-analysis --details 'Q1: B'" },
+        { kind: "result", id: "answer", output: refusal },
+      ]],
+      ["read-only answers", [
+        { kind: "bash", id: "answers", command: "aidlc engine log answers --stage requirements-analysis" },
+        { kind: "result", id: "answers", output: JSON.stringify({ stage: "requirements-analysis", answers: [] }) },
+      ]],
+    ];
+    for (const format of ["claude", "codex"] as const) {
+      for (const [label, entries] of cases) {
+        const proj = makeProject();
+        seedActive(proj, "requirements-analysis");
+        // Even with an engine mark newer than the person's turn, a call whose
+        // result recorded nothing is not the stage's work.
+        seedTurnMarkers(proj, { humanNewer: false });
+        const tp = seedTranscriptEntries(proj, format, [
+          { kind: "human", text: "what did I answer for Q1?" },
+          ...entries,
+          { kind: "text" },
+        ]);
+        const r = runHook(proj, JSON.stringify({ stop_hook_active: false, transcript_path: tp }), "run-stage");
+        expect(r.rc, `${format} ${label}`).toBe(0);
+        expect(r.out, `${format} ${label}`).toBe("");
+      }
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("(h) retired-only terminal error allows the stop in both transcript formats", () => {
     for (const format of ["claude", "codex"] as const) {
       const proj = makeProject();
@@ -4146,6 +4309,31 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     const result = runHook(proj, JSON.stringify({ stop_hook_active: false, transcript_path: tp }), "run-stage");
     expect(result.rc).toBe(0);
     expect(JSON.parse(result.out).decision).toBe("block");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(h) a setting their line did not carry, typed with next, allows the stop after the step that names their words", () => {
+    for (const format of ["claude", "codex"] as const) {
+      for (const { typed, command, reply } of [
+        { typed: "--scope mvp --sensors off", command: "scope change --scope mvp --sensors off", reply: "Switched to mvp: 22 stages (7 done), 19 approval gates." },
+        { typed: "--guard.review-freeze off", command: "config set guard.review-freeze off", reply: "Review freeze turned off (set by you)." },
+      ]) {
+        const proj = makeProject();
+        seedActive(proj);
+        const named = `${command} --person-words '<their words>'`;
+        const output = terminalModifierDispatch(proj, typed.split(" "), named, false);
+        const tp = seedTranscriptEntries(proj, format, [
+          { kind: "human", text: "switch to mvp and turn the checks off" },
+          { kind: "bash", id: "modifier-call", command: `bun .claude/tools/aidlc.ts engine orchestrate next ${typed}` },
+          { kind: "result", id: "modifier-call", output },
+          { kind: "bash", id: "setter-call", command: `bun .claude/tools/aidlc.ts engine ${command} --person-words 'switch to mvp and turn the checks off'` },
+          { kind: "result", id: "setter-call", output: reply },
+          { kind: "text" },
+        ]);
+        const result = runHook(proj, JSON.stringify({ stop_hook_active: false, transcript_path: tp }), "run-stage");
+        expect(result.rc, `${format}: ${typed}`).toBe(0);
+        expect(result.out, `${format}: ${typed}`).toBe("");
+      }
+    }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("(h) a guard-policy next whose print names a different value still blocks (#1369)", () => {

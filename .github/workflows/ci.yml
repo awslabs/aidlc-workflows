@@ -9,10 +9,9 @@ name: CI
 # on macOS and Windows too, so a platform regression cannot reach main while
 # macOS/Windows runner queues stay off the per-push path. main is not
 # production: live harness shards run in full-suite.yml, which
-# preview-release.yml calls every night and release.yml requires for a stable
-# tag. By maintainer decision on 2026-09-26, reversing the 2026-09-21 decision,
-# a stable release publishes only after the Full Suite passed for the exact
-# tagged commit; release.yml reuses a passing result or runs the suite itself.
+# preview-release.yml dispatches every night. Stable promotion reuses the
+# selected preview's source and reports its prior results without rerunning CI
+# or Full Suite; newly built stable assets still pass lifecycle/upgrade checks.
 # See docs/reference/09-testing.md for the tier map and publication policy.
 on:
   pull_request:
@@ -50,27 +49,131 @@ concurrency:
 
 jobs:
   check:
-    name: Contract checks (determinism + typecheck + lint)
+    name: Checks (contracts + smoke + production guards)
     runs-on: ubuntu-latest
+    timeout-minutes: 300
     steps:
+      - name: Set cumulative check deadline
+        # Include setup/contracts and leave thirty minutes for process cleanup
+        # and evidence collection outside the shared work deadline.
+        run: echo "CHECK_WORK_DEADLINE=$(( $(date +%s) + 270 * 60 ))" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        id: checkout
+        timeout-minutes: 15
+        with:
+          # The ratchet reads HEAD^1; PR changelog checks need the frozen base.
+          fetch-depth: ${{ github.event_name == 'pull_request' && '0' || '2' }}
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        id: bun
+        timeout-minutes: 15
         with:
           bun-version: '1.4.2'
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        id: install
+        run: bash scripts/ci-check-budget.sh bun install --frozen-lockfile
 
       # `bun run check` regenerates the projections, runs the two-build package
       # determinism guard, then typechecks all three tsconfigs and runs Biome.
       - name: Run contract checks
-        run: bun run check
+        run: bash scripts/ci-check-budget.sh bun run check
 
-      # The same step the preview and stable gates run (t332 holds the three
-      # equal), so a PR that breaks the installer is red before it merges.
+      # Preview and stable gates run the same installer check.
       - name: ShellCheck installer
-        run: shellcheck scripts/install.sh
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        run: bash scripts/ci-check-budget.sh shellcheck scripts/install.sh
+
+      # Keep collecting independent failures after a contract check fails.
+      - name: Prepare test and coverage projections
+        id: coverage_package
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: bash scripts/ci-check-budget.sh bun scripts/package.ts
+
+      - name: Fail if a unit lost coverage against the first parent
+        if: ${{ !cancelled() && steps.coverage_package.outcome == 'success' }}
+        run: bash scripts/ci-check-budget.sh bun tests/gen-coverage-registry.ts --check --base HEAD^1
+
+      - name: Guard against deleted CHANGELOG entries
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && steps.install.outcome == 'success' }}
+        env:
+          CHANGELOG_BASE: ${{ github.event.pull_request.base.sha }}
+        run: bash scripts/ci-check-budget.sh bun scripts/ci-changelog-guard.ts "$CHANGELOG_BASE"
+
+      # Separate runner processes keep the fixture and production profiles
+      # independent while sharing dependency installation and projections.
+      - name: Run Linux smoke
+        if: ${{ !cancelled() && steps.coverage_package.outcome == 'success' }}
+        timeout-minutes: 270
+        env:
+          AIDLC_TEST_PACKAGE_READY: "1"
+          RETRY_ONCE: ${{ github.event_name == 'merge_group' }}
+        run: |
+          set -euo pipefail
+          capture="$GITHUB_WORKSPACE/tmp/ci-smoke"
+          mkdir -p "$capture"
+          # Reserve half the remaining work budget for production guards.
+          run_budget=$(( (CHECK_WORK_DEADLINE - $(date +%s)) / 2 ))
+          if [ "$run_budget" -gt 14400 ]; then run_budget=14400; fi
+          if [ "$run_budget" -le 0 ]; then
+            echo "::error::combined check budget exhausted before smoke"
+            exit 1
+          fi
+          args=(--smoke)
+          if [ "$RETRY_ONCE" = true ]; then args+=(--file-retries 1); fi
+          result=0
+          bash tests/run-tests.sh --debug -P 8 --no-llm "${args[@]}" \
+            --file-timeout 7200 --run-timeout "$run_budget" > "$capture/run.log" 2>&1 || result=$?
+          stamp="$(sed -n '/^Verbose mode: logging to /{s/^Verbose mode: logging to //;p;q;}' "$capture/run.log" | tr -d '\r')"
+          printf '%s\n' "$stamp" > "$capture/stamp.txt"
+          if [ "$result" -eq 0 ] && { [ -z "$stamp" ] || [ ! -f "$stamp/summary.txt" ]; }; then
+            echo "::error::smoke runner produced no summary"
+            result=1
+          fi
+          exit "$result"
+
+      - name: Report smoke tests that passed on retry
+        if: ${{ always() && steps.install.outcome == 'success' && github.event_name == 'merge_group' }}
+        run: bun scripts/ci-retry-report.ts tmp/ci-smoke/stamp.txt || true
+
+      - name: Exercise recovery with production guards
+        if: ${{ !cancelled() && steps.coverage_package.outcome == 'success' }}
+        timeout-minutes: 270
+        env:
+          AIDLC_TEST_PACKAGE_READY: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/tmp/ci-guard-contract"
+          run_budget=$(( CHECK_WORK_DEADLINE - $(date +%s) ))
+          if [ "$run_budget" -gt 14400 ]; then run_budget=14400; fi
+          if [ "$run_budget" -le 0 ]; then
+            echo "::error::combined check budget exhausted before production guards"
+            exit 1
+          fi
+          bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration --no-llm --file-timeout 7200 --run-timeout "$run_budget" --filter '^(t-runner-production-guards|t-guard-recovery-production)' > "$GITHUB_WORKSPACE/tmp/ci-guard-contract/production-run.log" 2>&1
+
+      - name: Sanitize check evidence
+        if: ${{ always() && steps.bun.outcome == 'success' }}
+        id: sanitize_checks
+        run: |
+          bun scripts/ci-sanitize-logs.ts tests/logs
+          bun scripts/ci-sanitize-logs.ts tmp/ci-smoke
+          bun scripts/ci-sanitize-logs.ts tmp/ci-guard-contract
+
+      - name: Preserve check evidence
+        if: ${{ always() && steps.sanitize_checks.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ci-check-evidence
+          path: |
+            tmp/ci-smoke/
+            tmp/ci-guard-contract/
+            tests/logs/
+          include-hidden-files: true
+          if-no-files-found: error
 
   deterministic:
     name: Tests (${{ matrix.runner }}, ${{ matrix.suite.name }})
@@ -78,39 +181,39 @@ jobs:
       fail-fast: false
       matrix:
         runner: ${{ fromJSON((github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' && inputs.platform_regressions) && '["ubuntu-latest","macos-15","windows-latest"]' || '["ubuntu-latest"]') }}
-        # Sixteen unit shards: each runs its files serially, so the slowest
-        # shard sets this gate's time. tests/unit-shard-weights.json balances
-        # them by each file's slowest OS.
+        # Linux uses ten unit shards; Windows and manual macOS runs keep
+        # sixteen. Each checkout runs its files serially with OS-specific weights.
         suite:
           - {name: smoke, tier: smoke}
-          - {name: unit-1, tier: unit, shard: "1/16"}
-          - {name: unit-2, tier: unit, shard: "2/16"}
-          - {name: unit-3, tier: unit, shard: "3/16"}
-          - {name: unit-4, tier: unit, shard: "4/16"}
-          - {name: unit-5, tier: unit, shard: "5/16"}
-          - {name: unit-6, tier: unit, shard: "6/16"}
-          - {name: unit-7, tier: unit, shard: "7/16"}
-          - {name: unit-8, tier: unit, shard: "8/16"}
-          - {name: unit-9, tier: unit, shard: "9/16"}
-          - {name: unit-10, tier: unit, shard: "10/16"}
-          - {name: unit-11, tier: unit, shard: "11/16"}
-          - {name: unit-12, tier: unit, shard: "12/16"}
-          - {name: unit-13, tier: unit, shard: "13/16"}
-          - {name: unit-14, tier: unit, shard: "14/16"}
-          - {name: unit-15, tier: unit, shard: "15/16"}
-          - {name: unit-16, tier: unit, shard: "16/16"}
+          - {name: unit-1, tier: unit, index: 1}
+          - {name: unit-2, tier: unit, index: 2}
+          - {name: unit-3, tier: unit, index: 3}
+          - {name: unit-4, tier: unit, index: 4}
+          - {name: unit-5, tier: unit, index: 5}
+          - {name: unit-6, tier: unit, index: 6}
+          - {name: unit-7, tier: unit, index: 7}
+          - {name: unit-8, tier: unit, index: 8}
+          - {name: unit-9, tier: unit, index: 9}
+          - {name: unit-10, tier: unit, index: 10}
+          - {name: unit-11, tier: unit, index: 11}
+          - {name: unit-12, tier: unit, index: 12}
+          - {name: unit-13, tier: unit, index: 13}
+          - {name: unit-14, tier: unit, index: 14}
+          - {name: unit-15, tier: unit, index: 15}
+          - {name: unit-16, tier: unit, index: 16}
           # The scope runs (tests/integration/t-scope-run-*), the scope runs
           # on every harness tree through its own hooks (t-scope-host-*) and the
           # guard matrix (t-guard-matrix-*) drive whole scopes through the engine
           # and take minutes each, so each runs in its own integration job beside
-          # the rest. The guard matrix is CPU bound, so it runs in two halves by
-          # name; the two filters are complements, so every file is in one.
+          # the rest. The guard matrix uses two duration-balanced partitions
+          # of the same inventory, so every file runs exactly once.
           - {name: integration, tier: integration, exclude: '^t-(scope-run|scope-host|guard-matrix)-'}
           - {name: scope-runs, tier: integration, filter: '^t-scope-run-'}
           - {name: scope-hosts, tier: integration, filter: '^t-scope-host-'}
-          - {name: guard-matrix-1, tier: integration, filter: '^t-guard-matrix-[a-h]'}
-          - {name: guard-matrix-2, tier: integration, filter: '^t-guard-matrix-[^a-h]'}
+          - {name: guard-matrix-1, tier: integration, filter: '^t-guard-matrix-', partition: '1/2'}
+          - {name: guard-matrix-2, tier: integration, filter: '^t-guard-matrix-', partition: '2/2'}
           - {name: e2e, tier: e2e}
+        # Linux smoke runs in check; macOS/Windows keep their own smoke jobs.
         # PR pushes and calls run Linux only and stop at integration. The merge
         # queue and a platform_regressions dispatch run every tier on all three
         # OSes, with integration and isolated E2E in separate fresh jobs per OS,
@@ -120,15 +223,15 @@ jobs:
         # queue, macOS runs its selected unit files (macos-merge-selection
         # below) in two jobs, unit-1 and unit-2, instead of sixteen: macOS
         # runners set the queue's pace.
-        exclude: ${{ fromJSON(github.event_name == 'merge_group' && '[{"runner":"macos-15","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}},{"runner":"windows-latest","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}},{"runner":"macos-15","suite":{"name":"scope-hosts","tier":"integration","filter":"^t-scope-host-"}},{"runner":"windows-latest","suite":{"name":"scope-hosts","tier":"integration","filter":"^t-scope-host-"}},{"runner":"macos-15","suite":{"name":"guard-matrix-1","tier":"integration","filter":"^t-guard-matrix-[a-h]"}},{"runner":"windows-latest","suite":{"name":"guard-matrix-1","tier":"integration","filter":"^t-guard-matrix-[a-h]"}},{"runner":"macos-15","suite":{"name":"guard-matrix-2","tier":"integration","filter":"^t-guard-matrix-[^a-h]"}},{"runner":"windows-latest","suite":{"name":"guard-matrix-2","tier":"integration","filter":"^t-guard-matrix-[^a-h]"}},{"runner":"macos-15","suite":{"name":"unit-3","tier":"unit","shard":"3/16"}},{"runner":"macos-15","suite":{"name":"unit-4","tier":"unit","shard":"4/16"}},{"runner":"macos-15","suite":{"name":"unit-5","tier":"unit","shard":"5/16"}},{"runner":"macos-15","suite":{"name":"unit-6","tier":"unit","shard":"6/16"}},{"runner":"macos-15","suite":{"name":"unit-7","tier":"unit","shard":"7/16"}},{"runner":"macos-15","suite":{"name":"unit-8","tier":"unit","shard":"8/16"}},{"runner":"macos-15","suite":{"name":"unit-9","tier":"unit","shard":"9/16"}},{"runner":"macos-15","suite":{"name":"unit-10","tier":"unit","shard":"10/16"}},{"runner":"macos-15","suite":{"name":"unit-11","tier":"unit","shard":"11/16"}},{"runner":"macos-15","suite":{"name":"unit-12","tier":"unit","shard":"12/16"}},{"runner":"macos-15","suite":{"name":"unit-13","tier":"unit","shard":"13/16"}},{"runner":"macos-15","suite":{"name":"unit-14","tier":"unit","shard":"14/16"}},{"runner":"macos-15","suite":{"name":"unit-15","tier":"unit","shard":"15/16"}},{"runner":"macos-15","suite":{"name":"unit-16","tier":"unit","shard":"16/16"}}]' || github.event_name == 'workflow_dispatch' && inputs.platform_regressions && '[{"runner":"macos-15","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}},{"runner":"windows-latest","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}},{"runner":"macos-15","suite":{"name":"scope-hosts","tier":"integration","filter":"^t-scope-host-"}},{"runner":"windows-latest","suite":{"name":"scope-hosts","tier":"integration","filter":"^t-scope-host-"}},{"runner":"macos-15","suite":{"name":"guard-matrix-1","tier":"integration","filter":"^t-guard-matrix-[a-h]"}},{"runner":"windows-latest","suite":{"name":"guard-matrix-1","tier":"integration","filter":"^t-guard-matrix-[a-h]"}},{"runner":"macos-15","suite":{"name":"guard-matrix-2","tier":"integration","filter":"^t-guard-matrix-[^a-h]"}},{"runner":"windows-latest","suite":{"name":"guard-matrix-2","tier":"integration","filter":"^t-guard-matrix-[^a-h]"}}]' || '[{"suite":{"name":"e2e","tier":"e2e"}}]') }}
+        exclude: ${{ fromJSON(github.event_name == 'merge_group' && '[{"runner":"ubuntu-latest","suite":{"name":"smoke","tier":"smoke"}},{"runner":"ubuntu-latest","suite":{"name":"unit-11","tier":"unit","index":11}},{"runner":"ubuntu-latest","suite":{"name":"unit-12","tier":"unit","index":12}},{"runner":"ubuntu-latest","suite":{"name":"unit-13","tier":"unit","index":13}},{"runner":"ubuntu-latest","suite":{"name":"unit-14","tier":"unit","index":14}},{"runner":"ubuntu-latest","suite":{"name":"unit-15","tier":"unit","index":15}},{"runner":"ubuntu-latest","suite":{"name":"unit-16","tier":"unit","index":16}},{"runner":"macos-15","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}},{"runner":"windows-latest","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}},{"runner":"macos-15","suite":{"name":"scope-hosts","tier":"integration","filter":"^t-scope-host-"}},{"runner":"windows-latest","suite":{"name":"scope-hosts","tier":"integration","filter":"^t-scope-host-"}},{"runner":"macos-15","suite":{"name":"guard-matrix-1","tier":"integration","filter":"^t-guard-matrix-","partition":"1/2"}},{"runner":"windows-latest","suite":{"name":"guard-matrix-1","tier":"integration","filter":"^t-guard-matrix-","partition":"1/2"}},{"runner":"macos-15","suite":{"name":"guard-matrix-2","tier":"integration","filter":"^t-guard-matrix-","partition":"2/2"}},{"runner":"windows-latest","suite":{"name":"guard-matrix-2","tier":"integration","filter":"^t-guard-matrix-","partition":"2/2"}},{"runner":"macos-15","suite":{"name":"unit-3","tier":"unit","index":3}},{"runner":"macos-15","suite":{"name":"unit-4","tier":"unit","index":4}},{"runner":"macos-15","suite":{"name":"unit-5","tier":"unit","index":5}},{"runner":"macos-15","suite":{"name":"unit-6","tier":"unit","index":6}},{"runner":"macos-15","suite":{"name":"unit-7","tier":"unit","index":7}},{"runner":"macos-15","suite":{"name":"unit-8","tier":"unit","index":8}},{"runner":"macos-15","suite":{"name":"unit-9","tier":"unit","index":9}},{"runner":"macos-15","suite":{"name":"unit-10","tier":"unit","index":10}},{"runner":"macos-15","suite":{"name":"unit-11","tier":"unit","index":11}},{"runner":"macos-15","suite":{"name":"unit-12","tier":"unit","index":12}},{"runner":"macos-15","suite":{"name":"unit-13","tier":"unit","index":13}},{"runner":"macos-15","suite":{"name":"unit-14","tier":"unit","index":14}},{"runner":"macos-15","suite":{"name":"unit-15","tier":"unit","index":15}},{"runner":"macos-15","suite":{"name":"unit-16","tier":"unit","index":16}}]' || github.event_name == 'workflow_dispatch' && inputs.platform_regressions && '[{"runner":"ubuntu-latest","suite":{"name":"smoke","tier":"smoke"}},{"runner":"ubuntu-latest","suite":{"name":"unit-11","tier":"unit","index":11}},{"runner":"ubuntu-latest","suite":{"name":"unit-12","tier":"unit","index":12}},{"runner":"ubuntu-latest","suite":{"name":"unit-13","tier":"unit","index":13}},{"runner":"ubuntu-latest","suite":{"name":"unit-14","tier":"unit","index":14}},{"runner":"ubuntu-latest","suite":{"name":"unit-15","tier":"unit","index":15}},{"runner":"ubuntu-latest","suite":{"name":"unit-16","tier":"unit","index":16}},{"runner":"macos-15","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}},{"runner":"windows-latest","suite":{"name":"scope-runs","tier":"integration","filter":"^t-scope-run-"}},{"runner":"macos-15","suite":{"name":"scope-hosts","tier":"integration","filter":"^t-scope-host-"}},{"runner":"windows-latest","suite":{"name":"scope-hosts","tier":"integration","filter":"^t-scope-host-"}},{"runner":"macos-15","suite":{"name":"guard-matrix-1","tier":"integration","filter":"^t-guard-matrix-","partition":"1/2"}},{"runner":"windows-latest","suite":{"name":"guard-matrix-1","tier":"integration","filter":"^t-guard-matrix-","partition":"1/2"}},{"runner":"macos-15","suite":{"name":"guard-matrix-2","tier":"integration","filter":"^t-guard-matrix-","partition":"2/2"}},{"runner":"windows-latest","suite":{"name":"guard-matrix-2","tier":"integration","filter":"^t-guard-matrix-","partition":"2/2"}}]' || '[{"runner":"ubuntu-latest","suite":{"name":"smoke","tier":"smoke"}},{"runner":"ubuntu-latest","suite":{"name":"unit-11","tier":"unit","index":11}},{"runner":"ubuntu-latest","suite":{"name":"unit-12","tier":"unit","index":12}},{"runner":"ubuntu-latest","suite":{"name":"unit-13","tier":"unit","index":13}},{"runner":"ubuntu-latest","suite":{"name":"unit-14","tier":"unit","index":14}},{"runner":"ubuntu-latest","suite":{"name":"unit-15","tier":"unit","index":15}},{"runner":"ubuntu-latest","suite":{"name":"unit-16","tier":"unit","index":16}},{"suite":{"name":"e2e","tier":"e2e"}}]') }}
     uses: ./.github/workflows/deterministic-tests.yml
     with:
       ref: ${{ github.sha }}
       runner: ${{ matrix.runner }}
       tier: ${{ matrix.suite.tier }}
-      # The merge queue's two macOS unit jobs are shards 1/2 and 2/2.
-      unit-shard: ${{ github.event_name == 'merge_group' && matrix.runner == 'macos-15' && matrix.suite.shard == '1/16' && '1/2' || github.event_name == 'merge_group' && matrix.runner == 'macos-15' && matrix.suite.shard == '2/16' && '2/2' || matrix.suite.shard || '' }}
+      unit-shard: ${{ matrix.suite.tier == 'unit' && format('{0}/{1}', matrix.suite.index, matrix.runner == 'ubuntu-latest' && 10 || github.event_name == 'merge_group' && matrix.runner == 'macos-15' && 2 || 16) || '' }}
       filter: ${{ matrix.suite.filter || '' }}
+      integration-shard: ${{ matrix.suite.partition || '' }}
       exclude: ${{ matrix.suite.exclude || '' }}
       artifact-label: ci-deterministic-${{ matrix.suite.name }}
       # No workflow downloads CI evidence, so an upload timeout cannot drop a PR.
@@ -210,7 +313,7 @@ jobs:
         if: always() && steps.sanitize_native.outcome == 'success'
         # Nothing downloads this artifact; the contract step decides the job.
         continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ci-native-${{ runner.os }}
           path: |
@@ -218,39 +321,6 @@ jobs:
             tmp/ci-native/
           include-hidden-files: true
           if-no-files-found: error
-  test_guards:
-    name: Tests (production guards)
-    runs-on: ubuntu-latest
-    timeout-minutes: 300
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: '1.4.2'
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Exercise recovery with production guards
-        timeout-minutes: 270
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/tmp/ci-guard-contract"
-          bash tests/run-tests.sh --debug -P 8 --production-guards --unit --integration --no-llm --file-timeout 7200 --run-timeout 14400 --filter '^(t-runner-production-guards|t-guard-recovery-production)' > "$GITHUB_WORKSPACE/tmp/ci-guard-contract/production-run.log" 2>&1
-
-      - name: Preserve guard evidence
-        if: always()
-        # Nothing downloads this artifact; the guard step decides the job.
-        continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: production-guard-evidence
-          path: |
-            tmp/ci-guard-contract/*.log
-            tests/logs/
-
   test_live_isolation:
     name: Tests (live OS isolation, ${{ matrix.runner }})
     # Cross-OS: the merge queue runs it; PR pushes skip it.
@@ -431,7 +501,7 @@ jobs:
           bun scripts/ci-sanitize-logs.ts tmp/ci-hooks-no-bash
       - name: Preserve hook evidence
         if: always() && steps.sanitize_hooks.outcome == 'success'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ci-hooks-no-bash-Windows
           path: |
@@ -547,92 +617,35 @@ jobs:
         run: bun scripts/ci-sanitize-logs.ts tmp/ci-wsl
       - name: Preserve WSL evidence
         if: always() && steps.sanitize_wsl.outcome == 'success'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ci-wsl-Windows
           path: tmp/ci-wsl/
           include-hidden-files: true
           if-no-files-found: error
 
-  # Coverage only grows. The registry is never committed: this builds it fresh
-  # for this commit and for its first parent (the PR's base, or the queue entry
-  # ahead), and fails naming each unit the parent covers that this commit still
-  # has but no longer covers. A new unit with no claim is listed, not failed.
-  coverage_ratchet:
-    name: Coverage ratchet
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          # The first parent is the base the ratchet compares against.
-          fetch-depth: 2
-          persist-credentials: false
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: '1.4.2'
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Package the tree the registry reads
-        run: bun scripts/package.ts claude
-
-      - name: Fail if a unit lost coverage against the first parent
-        run: bun tests/gen-coverage-registry.ts --check --base HEAD^1
-
   # Preserve the existing required-check name while the work runs in isolated
-  # jobs. Any deterministic matrix failure collapses its result to failure.
+  # jobs. Contract checks and every required test must succeed.
   test:
     name: Tests (smoke + unit)
     # Still collect failures, but let a superseded run release its concurrency
     # slot instead of waiting for this summary job to obtain another runner.
     if: ${{ !cancelled() }}
-    needs: [deterministic, test_native_terminal, test_guards, test_live_isolation, coverage_ratchet]
+    needs: [check, deterministic, test_native_terminal, test_live_isolation]
     runs-on: ubuntu-latest
     steps:
-      - name: Require smoke, unit shards, integration, production guards, the coverage ratchet, and the cross-OS jobs outside PR pushes
+      - name: Require contract checks, deterministic tests, and the cross-OS jobs outside PR pushes
         env:
           EVENT_NAME: ${{ github.event_name }}
+          CONTRACT_RESULT: ${{ needs.check.result }}
           DETERMINISTIC_RESULT: ${{ needs.deterministic.result }}
           NATIVE_RESULT: ${{ needs.test_native_terminal.result }}
-          GUARD_RESULT: ${{ needs.test_guards.result }}
           ISOLATION_RESULT: ${{ needs.test_live_isolation.result }}
-          COVERAGE_RESULT: ${{ needs.coverage_ratchet.result }}
         run: |
+          test "$CONTRACT_RESULT" = "success"
           test "$DETERMINISTIC_RESULT" = "success"
-          test "$GUARD_RESULT" = "success"
-          test "$COVERAGE_RESULT" = "success"
           # PR pushes skip the cross-OS jobs; every other trigger requires them.
           cross_os=success
           if [ "$EVENT_NAME" = pull_request ]; then cross_os=skipped; fi
           test "$NATIVE_RESULT" = "$cross_os"
           test "$ISOLATION_RESULT" = "$cross_os"
-
-  changelog-guard:
-    name: Changelog completeness
-    # pull_request only: the guard diffs against the PR event's base commit,
-    # which does not exist on merge_group, workflow_dispatch, or workflow_call
-    # (github.base_ref is empty there).
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          # Need the PR base commit on disk to diff CHANGELOG headings against.
-          fetch-depth: 0
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: '1.4.2'
-
-      # Fail if this PR removes any `## [x.y.z]` heading that exists on the
-      # base branch. Complements tests/unit/t68 (which guards version⇄changelog
-      # sync and heading uniqueness, but not deletion of an existing entry).
-      # Diff against the FROZEN base commit the PR event fired from
-      # (pull_request.base.sha), NOT origin/<base_ref>: the branch ref moves as
-      # main accrues new entries while this PR is open, which would make the guard
-      # falsely report those newer entries as "removed" on any re-run.
-      - name: Guard against deleted CHANGELOG entries
-        run: bun scripts/ci-changelog-guard.ts "${{ github.event.pull_request.base.sha }}"

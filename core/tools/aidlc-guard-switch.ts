@@ -1,9 +1,15 @@
 import { existsSync } from "node:fs";
-import type { AuditEntryInput } from "./aidlc-audit.ts";
+import { appendAuditEntryUnlocked, type AuditEntryInput } from "./aidlc-audit.ts";
 import { firstFrontQuestionSince, latestFrontQuestionId, readQuestion } from "./aidlc-question-store.ts";
 import {
+  assertChangeControlLedgerWritable,
+  auditBlockField,
+  type GuardPolicy,
   guardPolicyAtLeast,
+  keepActiveDirectiveOverSettingWrite,
+  maximalAttemptEvents,
   personSpokeSinceGate,
+  scopeGuardPolicyDefault,
   readAuditShardEvents,
   type AuditShardEvent,
   CEREMONY_ENV,
@@ -152,6 +158,117 @@ export function normalizeRetiredGuardPolicyField(
   }, intent, space);
 }
 
+/** What settling two disagreeing policy lines kept, and the line said when AI-DLC chose. */
+export interface GuardPolicyConflictSettled {
+  kept: string;
+  line: string | null;
+}
+
+// What each value does, in the words the conflict lines use.
+const POLICY_DOES: Record<GuardPolicy, string> = {
+  strict: "checks everything",
+  relaxed: "carries on with a note when something you approved changes",
+  off: "carries on when something you approved changes and also skips some of its own checks",
+};
+
+type KeptBy = "set last" | "set by you" | "readable" | "scope default" | "stricter";
+
+// Which of the two stored lines is the person's last recorded choice. Read
+// from recorded facts only: the setting rows, the lines' own labels, the scope.
+function keptPolicyLine(
+  content: string,
+  lines: ReadonlyArray<{ raw: string; parsed: { value: GuardPolicy; source: string } | null }>,
+  rows: readonly AuditShardEvent[],
+): { raw: string; value: GuardPolicy; by: KeptBy } | null {
+  const readable = lines.filter((line) => line.parsed !== null);
+  const keep = (line: (typeof lines)[number], by: KeptBy) => ({ raw: line.raw, value: line.parsed!.value, by });
+  if (readable.length === 0) return null;
+  if (readable.length === 1) return keep(readable[0], "readable");
+  // The newer line: the newest setting row naming one line's value and source.
+  // A row a governed check wrote meanwhile names the conflict as its source, so
+  // it matches neither line. Shards are read in filename order, so "newest" is
+  // the shared causal order (maximalAttemptEvents); rows for both lines it
+  // cannot order tell nothing.
+  const lineOf = new Map<AuditShardEvent, (typeof lines)[number]>();
+  for (const row of rows) {
+    if (row.event !== "GUARD_POLICY_SET" && row.event !== "CHANGE_CONTROL_SET") continue;
+    const value = parseGuardPolicy(auditBlockField(row.block, "New Value"));
+    const source = auditBlockField(row.block, "Source");
+    const matched = readable.filter((line) => line.parsed!.value === value && line.parsed!.source === source);
+    if (matched.length === 1) lineOf.set(row, matched[0]);
+  }
+  const newest = new Set(maximalAttemptEvents([...lineOf.keys()]).map((row) => lineOf.get(row)!));
+  if (newest.size === 1) return keep([...newest][0], "set last");
+  const theirs = readable.filter((line) => line.parsed!.source === "you");
+  if (theirs.length === 1) return keep(theirs[0], "set by you");
+  const scopeDefault = scopeGuardPolicyDefault(getField(content, "Scope"));
+  const scoped = readable.filter((line) => line.parsed!.value === scopeDefault);
+  if (scoped.length === 1) return keep(scoped[0], "scope default");
+  const [first, second] = readable;
+  return keep(guardPolicyAtLeast(first.parsed!.value, second.parsed!.value) ? first : second, "stricter");
+}
+
+/**
+ * Settle a state carrying both the Guard Policy line and the retired Change
+ * Control line with different values. That is AI-DLC's own bookkeeping: a
+ * release before the rename writes the retired line beside the new one (a
+ * teammate on it, or a move between releases, since the state travels by git).
+ * The line kept is the person's last recorded choice (keptPolicyLine), written
+ * as the one policy line with a GUARD_POLICY_SET row saying it was settled
+ * (Source `command`: nobody decided anything now), keeping the step in hand as
+ * a setting write does. Only when AI-DLC chose (the record could not tell) is
+ * there a line to say. A team's locked strict decides the value anyway, so
+ * nothing is written then. Null when there is nothing to settle or it could
+ * not be recorded; the caller's notice then says the conflict instead.
+ */
+export function settleGuardPolicyConflict(
+  projectDir: string,
+  selection: { intent?: string; space?: string },
+): GuardPolicyConflictSettled | null {
+  const { intent, space } = selection;
+  if (intent === undefined || !existsSync(stateFilePath(projectDir, intent, space))) return null;
+  try {
+    return withAuditLock(projectDir, () => {
+      const content = readStateFile(projectDir, intent, space);
+      const policy = resolveGuardPolicy(projectDir, content, { selection: { intent, space }, tolerateInvalidState: true });
+      if (policy.conflict === undefined || policy.memoryStrict !== null) return null;
+      const lines = [policy.conflict.guardPolicy, policy.conflict.changeControl]
+        .map((raw) => ({ raw, parsed: parseGuardPolicyStateLine(raw) }));
+      const kept = keptPolicyLine(content, lines, readAuditShardEvents(projectDir, intent, space));
+      if (kept === null) return null;
+      assertChangeControlLedgerWritable();
+      appendAuditEntryUnlocked("GUARD_POLICY_SET", {
+        "Old Value": policy.value,
+        "New Value": kept.value,
+        Source: "command",
+        Settled: lines.map((line) => line.raw).join("; "),
+        "Kept By": kept.by,
+      }, projectDir, intent, space);
+      const written = setField(setGuardPolicyLine(content, kept.raw), "Last Updated", isoTimestamp());
+      writeStateFile(projectDir, written, intent, space);
+      try {
+        keepActiveDirectiveOverSettingWrite(projectDir, content, written);
+      } catch {
+        // The settled line stands; a step set aside is issued again by `next`.
+      }
+      const why = kept.by === "scope default"
+        ? "The record does not say which was set last, so AI-DLC keeps the one this work's scope starts with"
+        : kept.by === "stricter"
+          ? "The record does not say which was set last, so AI-DLC keeps the stricter one"
+          : kept.by === "readable" ? "One of them could not be read, so AI-DLC keeps the other" : null;
+      return {
+        kept: kept.raw,
+        line: why === null
+          ? null
+          : "This work had two settings for how closely AI-DLC checks changes, and they disagreed. " +
+            `${why}: it ${POLICY_DOES[kept.value]}. You can change it any time.`,
+      };
+    }, intent, space);
+  } catch {
+    return null;
+  }
+}
+
 export function parseReviewOverride(
   raw: string | undefined,
   die: (message: string) => never = throwSettingsError,
@@ -278,6 +395,22 @@ export function settingTheirs(
   selection: { intent?: string; space?: string } = {},
 ): { words: string | null } | null {
   if (commandAtPersonsTerminal()) return { words: null };
+  return saidInChat(projectDir, sessionId, key, value, personWords, selection);
+}
+
+/**
+ * The chat half of settingTheirs: their typed line or their whole reply in this
+ * chat, never their own terminal. What the folder is (`project-type`) is read
+ * this way too: the line keeps it as the route's project type, not a setting.
+ */
+export function saidInChat(
+  projectDir: string,
+  sessionId: string | null,
+  key: string,
+  value: string | undefined,
+  personWords?: string,
+  selection: { intent?: string; space?: string } = {},
+): { words: string | null } | null {
   let rows: AuditShardEvent[] = [];
   try {
     rows = readAuditShardEvents(projectDir, selection.intent, selection.space);
@@ -307,6 +440,7 @@ export function settingTheirs(
     if (latest !== null && !lines.some((message) => message.id === latest.id)) lines.push(latest);
     const names = key === "plan-approval" || key === "guard.plan-approval" ? ["plan-approval", "guard.plan-approval"] : [key];
     if (lines.some((message) => message.settings.some((setting) => names.includes(setting.key) && setting.value === value) ||
+      (key === "project-type" && message.route.projectType === value) ||
       names.some((name) => setterCommandNames(message.text, name, value)))) {
       return { words: null };
     }

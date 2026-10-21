@@ -13,6 +13,7 @@ import {
   parseDispatcherPluginCommand,
   parseDispatcherWorkspaceCommand,
   type RouteNamespaceName,
+  TRUSTED_ROUTE_NAMESPACE,
 } from "./aidlc-command.ts";
 import {
   cmd,
@@ -418,7 +419,7 @@ export const ROUTES: readonly Route[] = [
       "config models [--deciding-effort <e>] [--reviewing-effort <e>] [--writing-up-effort <e>] [--agent <name> [--effort <e>] [--model <raw-id>]] [--session-model <id>] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config runtime [--show [--json]|--check|--record-paths|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config providers [--show [--json]|--check|--reset|--provider <current|amazon-bedrock|other>] [--region <region>] [--profile <profile>] [--opencode-default <yes|no>] [--acknowledge] [--mark-done <id>] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
-      "config trust [--show [--json]|--check|--acknowledge|--kiro-workflows <on|off>|--kiro-terminal powershell|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
+      "config trust [--show [--json]|--check|--acknowledge|--kiro-workflows <on|off>|--kiro-cli-workflows <on|off>|--kiro-terminal powershell|--reset] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config flags [--show [--json]|--check|--reset] [--default-scope <name>] [--swarm <on|off>] [--hook-debug <on|off>] [--sensor-timeout-ms <n>] [--question-retention-days <days|unlimited>] [--bypass <name>] [--clear-bypass <name>] [--local|--project|--global] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config project [--show [--json]|--check|--reset] [--plugins <names|all>] [--mcp <defaults|none>] [--completions <shell|none>] [--dry-run] [--yes] [--download [--release-base-url <url>] [--ca-bundle <path>]]",
       "config --pin <version> [--from <dir>] [--release-base-url <url>] [--ca-bundle <path>] [--offline]",
@@ -847,13 +848,13 @@ export const ROUTES: readonly Route[] = [
     group: "intent",
     kind: "custom",
     classification: "translation",
-    verbs: ["list", "switch", "<name>", "create", "archive", "unarchive", "add-repo", "remove-repo"],
+    verbs: ["list", "switch", "<name>", "create", "archive", "unarchive", "add-repo", "remove-repo", "add-checkout", "remove-checkout"],
     custom: "workspace",
     ...PUBLIC_ENGINE,
     human: [
       {
-        command: "intent [list|switch|create|archive|unarchive|add-repo|remove-repo]",
-        summary: "list, switch, create, archive, or unarchive intent context; add or remove one of its sibling repos",
+        command: "intent [list|switch|create|archive|unarchive|add-repo|remove-repo|add-checkout|remove-checkout]",
+        summary: "list, switch, create, archive, or unarchive intent context; add or remove one of its sibling repos or recorded checkouts",
       },
     ],
     all: [
@@ -865,6 +866,8 @@ export const ROUTES: readonly Route[] = [
       "unarchive <name>",
       "add-repo <name>",
       "remove-repo <name>",
+      "add-checkout <path>",
+      "remove-checkout <path>",
     ],
   },
   {
@@ -981,10 +984,10 @@ export const ROUTES: readonly Route[] = [
       { command: "plugin select [names]", summary: "set enabled plugins" },
       { command: "plugin list [--verbose|--json]", summary: "compare installed and composed plugins" },
       { command: "plugin sync [--prune-missing]", summary: "transactionally compose installed plugins" },
-      { command: "plugin validate [path]", summary: "validate an authored plugin" },
+      { command: "plugin validate [path] [--with <base-root>]", summary: "validate an authored plugin" },
       { command: "plugin build <harness> [outDir]", summary: "build an authored plugin for a harness" },
     ],
-    all: ["select [names]", "sync [--prune-missing] [--yes]", "list [--verbose] [--json]", "validate [path]", "build <harness> [outDir]"],
+    all: ["select [names]", "sync [--prune-missing] [--yes]", "list [--verbose] [--json]", "validate [path] [--with <base-root>]", "build <harness> [outDir]"],
   },
   {
     // The plugin AUTHORING surface (v2): `aidlc plugin validate` / `aidlc plugin
@@ -1006,7 +1009,7 @@ export const ROUTES: readonly Route[] = [
     networkPolicy: "forbidden",
     mutationScope: "none",
     outputModes: ["human", "json"],
-    all: ["validate [path]", "build <harness> [outDir] [--plugin-root <path>]"],
+    all: ["validate [path] [--with <base-root>]", "build <harness> [outDir] [--plugin-root <path>]"],
   },
   {
     // The DocumentKB noun. Unlike `plugin`, the verb IS the subcommand -- these
@@ -2166,6 +2169,19 @@ function theirWordsBegin(argv: readonly string[], route: number): number | undef
     if (named > route + 1) return i;
   }
   return undefined;
+}
+
+// Whether the dispatcher words after `engine` route to a command in `admitted`
+// (the state-transition guard's delegateAdmittedVerbs): Kiro IDE builds each
+// persona's shell deny from it, and the Cursor adapter lets a delegate run that
+// command. It lives here, not in the guard, so the guard loads without the
+// dispatcher, as a guard that cannot load refuses nothing.
+export function admittedEngineRoute(
+  admitted: Readonly<Record<string, readonly string[]>>,
+  words: readonly string[],
+): boolean {
+  const action = resolveAction([TRUSTED_ROUTE_NAMESPACE, ...words]);
+  return action.type === "delegate" && (admitted[action.tool] ?? []).includes(action.args[0] ?? "");
 }
 
 export function resolveAction(
@@ -3565,14 +3581,7 @@ function renderPublicGrammarFailure(
     (process.stdin.isTTY || process.env.AIDLC_TEST_CONFIG_TTY === "1")
   ) {
     const invoke = aidlcInvocation();
-    const nearest = [
-      "models",
-      "runtime",
-      "providers",
-      "trust",
-      "flags",
-      "project",
-    ]
+    const nearest = [...CONFIG_SECTIONS]
       .map((candidate) => ({
         candidate,
         distance: editDistance(configSection, candidate),
@@ -3613,9 +3622,15 @@ function projectPolicyError(route: Route, argv: readonly string[]): string | nul
     "aidlc",
   ].some((entry) => existsSync(join(projectDir, entry))) ||
     discoverProjectHarnesses(projectDir).length > 0;
+  // Config there would set up a new project, so the line names the steps that
+  // reach the person's project. Our options are read only before the person's
+  // own words, so the flag goes right after the tool.
   return recognized
     ? null
-    : `${route.id} requires an installed project harness or recognized project directory; run aidlc config`;
+    : `${route.id} requires an installed project harness or recognized project directory; ` +
+      `run it from the project folder, or add --project-dir <path> right after ${
+        aidlcInvocation() === "aidlc" ? "aidlc" : "aidlc.ts"
+      }`;
 }
 
 // A project inside a machine root is never acceptable. The reverse (a machine
@@ -3803,9 +3818,11 @@ export async function main(rawArgv: string[]): Promise<void> {
     !["doctor", "--doctor", "uninstall"].includes(argv[0] ?? "")
   ) {
     try {
-      const { describeWindowsUninstallFailure, recoverWindowsUninstallContinuations } = await import(
-        "./aidlc-windows-uninstall.ts"
-      );
+      const {
+        describeWindowsUninstallFailure,
+        recoverWindowsUninstallContinuations,
+        windowsUninstallStillFinishingLine,
+      } = await import("./aidlc-windows-uninstall.ts");
       // A failed continuation does not block other commands: the fence still
       // stops machine mutation, and `aidlc uninstall` retries it explicitly.
       // A reinstall retries it too, since the failed cleanup may have removed
@@ -3823,7 +3840,7 @@ export async function main(rawArgv: string[]): Promise<void> {
                 ? ` (last attempt ${recovery.retriedFailures.map(describeWindowsUninstallFailure).join("; ")})`
                 : ""
             }`
-            : "a Windows uninstall cleanup is still running; this command was not run",
+            : windowsUninstallStillFinishingLine(recovery.finishesAt, Date.now(), reinstalling ? "install" : "other"),
         );
         return;
       }

@@ -4,9 +4,11 @@
 // the second Unit's checkpoint the agent asks for another review, which the
 // stage's one review pass refuses. Nobody asked for it, so the way on is the
 // agent's own step, never a question for the person: the checkpoint again, with
-// the findings. The engine accepts that step, and the run reaches done. The
-// remedy wording is owned by t331; this run checks it against the real engine
-// and hooks.
+// the findings. The same request part way through that Unit's step, before its
+// completion is recorded, hands the agent finishing the step with the review it
+// has, and `next` then shows the Unit's checkpoint. The engine accepts both
+// steps, and the run reaches done. The remedy wording is owned by t331; this run
+// checks it against the real engine and hooks.
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { cleanupTestProject } from "../harness/fixtures.ts";
@@ -31,6 +33,9 @@ const SKIPPED = [
 
 /** The agent's request at extra's checkpoint, taken before the person answers it. */
 class SecondReviewAsked extends Error {}
+
+/** The agent's request after extra's review, before its step is finished. */
+class MidStepReviewAsked extends Error {}
 
 interface Remedy {
   op: string;
@@ -128,6 +133,64 @@ describe("a second review the review cap refuses at a Unit's checkpoint", () => 
       expect(person.said.length).toBe(saidBefore);
 
       // The person approves the checkpoint they are shown again.
+      const final = agent.drive(shown);
+      expect(final.kind).toBe("done");
+    }, SCOPE_RUN_TIMEOUT_MS);
+  }
+});
+
+describe("a second review the review cap refuses part way through a Unit's step", () => {
+  for (const policy of ["strict", "relaxed"] as const) {
+    test(`Guard Policy ${policy}: the refusal hands the agent finishing the step, and the run reaches done`, () => {
+      const { proj, host } = createScopeProject("empty");
+      projects.push(proj);
+      const person = new PersonScript(host);
+      const agent = new AgentStandIn(host, person, {
+        units: ["core", "extra"],
+        afterReview: (stage, unit) => {
+          if (stage === "code-generation" && unit === "extra") throw new MidStepReviewAsked();
+        },
+      });
+      const first = agent.begin("build the classic work", [
+        "--scope", "classic", "--skip", SKIPPED.join(","),
+        "--guard-policy", policy, "--review", "advisory", "--plan-approval", "on",
+      ]);
+      let midStep = false;
+      try {
+        agent.drive(first);
+      } catch (error) {
+        if (!(error instanceof MidStepReviewAsked)) throw error;
+        midStep = true;
+      }
+      expect(midStep).toBe(true);
+
+      const reviewer = agent.directives.find((d) => d.stage === "code-generation" && typeof d.reviewer === "string")
+        ?.reviewer as string;
+      const refused = host.engine("log", "review", "--stage", "code-generation", "--reviewer", reviewer,
+        "--iteration", "2", "--unit", "extra");
+      expect(refused.status).not.toBe(0);
+      const ask = refusalAsk(`${refused.stdout}\n${refused.stderr}`);
+      expect(ask?.agent_work, refused.stdout + refused.stderr).toBe(true);
+      expect(ask!.remedies.map((remedy) => remedy.op)).toEqual(["finish-unit-step"]);
+      const finish = ask!.remedies[0];
+      expect(finish).toMatchObject({ executableNow: true, interaction: "external-work" });
+      expect(finish.label).toBeUndefined();
+
+      // The agent takes the step with nothing put to the person.
+      const saidBefore = person.said.length;
+      const named = /`(bun \.claude\/tools\/[^`]+)`/.exec(finish.action)?.[1];
+      expect(named, finish.action).toBeDefined();
+      const words = commandWords(named!);
+      expect(words).toEqual(expect.arrayContaining(["unit", "complete", "--unit", "extra"]));
+      const ran = host.bash(named!);
+      expect(ran.status, ran.stdout + ran.stderr).toBe(0);
+      const shown = agent.next();
+      expect(shown.kind).toBe("run-stage");
+      expect((shown.construction_checkpoint as { unit?: string } | undefined)?.unit).toBe("extra");
+      expect(host.refusals).toEqual([]);
+      expect(person.said.length).toBe(saidBefore);
+
+      // The person approves the checkpoint they are shown.
       const final = agent.drive(shown);
       expect(final.kind).toBe("done");
     }, SCOPE_RUN_TIMEOUT_MS);

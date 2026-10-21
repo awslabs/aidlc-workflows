@@ -123,9 +123,10 @@ When resuming, load context appropriate to the current phase and stage type:
 
 **INCEPTION — Requirements stages:**
 - Load RE artifacts (if RE was performed)
-- Load `<record>/inception/requirements-analysis/` (functional requirements, NFRs, user stories)
+- Load `<record>/inception/requirements-analysis/` (functional and non-functional requirements)
+- Load `<record>/inception/user-stories/` (stories and personas) if User Stories ran
 
-**INCEPTION — Design stages (App Design, Refined Mockups, Units Generation):**
+**INCEPTION — Design stages (Refined Mockups, Domain Design, Units Generation, Contract Design):**
 - Load requirements artifacts
 - Load user stories
 - Load `<record>/inception/domain-design/` (component catalogue) and `<record>/inception/contract-design/` (inter-unit contracts)
@@ -292,6 +293,6 @@ If the user wants to add, remove, or split implementation units mid-workflow:
 If the user requests a change that affects the application architecture (e.g., switching databases, changing deployment model, adding a major integration):
 1. Identify the scope: which design artifacts, story designs, and generated code are affected
 2. Present full impact analysis showing all affected artifacts
-3. If approved, return to App Design stage and re-run from there
+3. If approved, return to the Domain Design stage and re-run from there
 4. All downstream artifacts (story designs, code) for affected units must be regenerated
 5. Preserve unaffected units — do NOT re-run stages for units that are not impacted

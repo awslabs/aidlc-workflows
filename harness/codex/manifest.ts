@@ -146,6 +146,11 @@ const manifest: HarnessManifest = {
   // Skills go to .agents/skills/ via emit, not <harnessDir>/skills/ via runner-gen.
   skipRunnerGen: true,
 
+  // `codex plugin marketplace add <folder>` reads only
+  // .agents/plugins/marketplace.json; a catalogue in .codex-plugin/ is refused
+  // as "does not contain a supported manifest" (codex-cli 0.160).
+  plugin: { manifestDir: ".codex-plugin", marketplaceDir: ".agents/plugins", kind: "store" },
+
   emit,
 };
 

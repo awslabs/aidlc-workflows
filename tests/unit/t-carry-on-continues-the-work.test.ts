@@ -13,7 +13,9 @@
 // is not read as that line again (takePersonsOwnLine, wordsAlreadyRead), and words
 // that name one piece and ask for it to go on ("continue auth") get the pick
 // question's own one-step answer, `next --pick <name>`, so the person never
-// says it twice. Team mode (Unit Ownership: team) gets the reading too. Every path also checks the
+// says it twice. Parked work picked that way after `/aidlc --resume` (a fresh
+// clone) carries on through the unpark step, never back to "Run /aidlc
+// --resume". Team mode (Unit Ownership: team) gets the reading too. Every path also checks the
 // chain the agent is told to follow: a stage step or one question within three
 // engine calls, and never the same print twice.
 
@@ -379,6 +381,69 @@ describe("t-carry-on-continues-the-work: work here but none selected in this cha
       // Kiro asks which work it belongs to at once; the others take the plan
       // proposal step first, then the plan the agent proposes, then the question.
       expect(request.calls).toBe(harness === "kiro" ? 2 : 3);
+    });
+
+    // A fresh clone with one piece of work: `/aidlc --resume` picks it up and
+    // says so in one line, then carries it on in the same turn (parked work
+    // through its unpark step), never asking which work and never back to the
+    // parked step that sends the person to type `/aidlc --resume` again. With
+    // two pieces it still asks which.
+    for (const parked of [true, false]) {
+      test(`${harness}: ${parked ? "parked" : "open"} work, the only piece, none selected: --resume picks it up in one line and carries it on`, () => {
+        proj = cloneWithWork(tools, ["auth"]);
+        const intents = join(proj, "aidlc", "spaces", "default", "intents");
+        const selector = readdirSync(intents).find((name) => /^\d{6}-auth$/.test(name))!;
+        if (parked) {
+          switchTool(tools, proj, selector);
+          stateTool(proj, "park");
+          rmSync(join(intents, "active-intent"), { force: true });
+        }
+        let d = next(tools, proj, ["--resume"]);
+        expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
+        expect(d.narration).toBe("Picked up `auth`, the only open work; it is at Requirements Analysis. You can start something new any time.");
+        // One line for the person: the switch's own line is not printed as well.
+        expect(String(d.message)).not.toContain("print its output verbatim");
+        const prints: string[] = [];
+        while (d.kind === "print" && prints.length < 3) {
+          const message = String(d.message);
+          prints.push(message);
+          const switched = /intent switch (\S+)`/.exec(message)?.[1];
+          if (switched !== undefined) switchTool(tools, proj, switched);
+          if (/ unpark`/.test(message)) stateTool(proj, "unpark");
+          const then = [...message.matchAll(/\bnext((?: --resume)?)`/g)].at(-1);
+          expect(then, message).toBeDefined();
+          d = next(tools, proj, then![1] ? ["--resume"] : []);
+        }
+        const note = `${prints.join(" | ")} => ${JSON.stringify(d).slice(0, 300)}`;
+        expect(d.kind, note).toBe("run-stage");
+        expect(prints.length, note).toBeLessThanOrEqual(2);
+        // A second --resume moves on with the work picked up, never back to a pick or this line.
+        const again = next(tools, proj, ["--resume"]);
+        expect(again.ask_type ?? null, JSON.stringify(again).slice(0, 300)).not.toBe("intent-pick");
+        expect(String(again.narration ?? "")).not.toStartWith("Picked up");
+      });
+    }
+
+    test(`${harness}: two pieces, none selected: --resume still asks which to carry on with`, () => {
+      proj = cloneWithWork(tools);
+      const ask = next(tools, proj, ["--resume"]);
+      expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("intent-pick");
+    });
+
+    // Only a bare --resume picks the one piece up: anything typed with it keeps
+    // its own route, so a stage target jumps there as it always did, and a
+    // setting gets the pick question, as before.
+    test(`${harness}: one piece, none selected: --resume with a stage target jumps there`, () => {
+      proj = cloneWithWork(tools, ["auth"]);
+      const jump = next(tools, proj, ["--resume", "--stage", "code-generation"]);
+      expect(jump.kind, JSON.stringify(jump).slice(0, 300)).toBe("run-stage");
+      expect(jump.stage).toBe("code-generation");
+    });
+
+    test(`${harness}: one piece, none selected: --resume with a setting asks which work, as before`, () => {
+      proj = cloneWithWork(tools, ["auth"]);
+      const ask = next(tools, proj, ["--resume", "--guard-policy", "relaxed"]);
+      expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("intent-pick");
     });
   }
 

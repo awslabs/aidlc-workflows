@@ -28,7 +28,7 @@ afterEach(() => {
   }
 });
 
-function workspace() {
+function workspace(open = true) {
   const proj = createTestProject();
   made.push(proj);
   // The machine's settings live in a home of the test's own, outside the project.
@@ -36,7 +36,7 @@ function workspace() {
   made.push(home);
   cpSync(join(REPO_ROOT, "dist", "claude", ".claude"), join(proj, ".claude"), { recursive: true });
   cpSync(join(REPO_ROOT, "dist", "claude", "aidlc"), join(proj, "aidlc"), { recursive: true });
-  writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8"));
+  if (open) writeFileSync(seededStateFile(proj), readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8"));
   const env: Record<string, string | undefined> = {
     ...process.env,
     HOME: home,
@@ -106,7 +106,7 @@ function workspace() {
     expect(r.exitCode, `${r.stdout}${r.stderr}`).toBe(0);
     return r.stdout.toString().trim();
   };
-  return { run, said, off, backOn, file, recorded, stage, typed };
+  return { proj, run, said, off, backOn, file, recorded, stage, typed };
 }
 
 describe("t-back-on-clears-your-own-switch: back on while a settings file keeps it off", () => {
@@ -271,5 +271,191 @@ describe("t-back-on-clears-your-own-switch: back on while a settings file keeps 
     const team = w.run(["engine", "config", "set", "guard.review-freeze", "on"], terminal);
     expect(team).toContain("is still off: aidlc.settings.json keeps it off for this project. To turn it back on: ");
     expect(w.recorded("project")).toEqual(["AIDLC_DISABLE_REVIEW_FREEZE_HOOK"]);
+  });
+});
+
+// The agent's own way back for this project, and for a check with no key for
+// this piece of work: `config flags --clear-bypass <switch> --yes` from the
+// chat. It turns the check back on the way the setter does, so the same words
+// never change the team's committed file from one path and leave it on another.
+describe("t-back-on-clears-your-own-switch: the agent's config flags clear does the same", () => {
+  const SWITCH = "AIDLC_DISABLE_PLAN_APPROVAL_GUARD";
+  const SHARED = `The project's shared settings in aidlc.settings.json keep ${PLAN} off for everyone on this project. ` +
+    "Changing that file changes it.";
+  const TERMINAL = { AIDLC_TEST_CONFIG_TTY: "1", AIDLC_SESSION_OVERRIDE: undefined };
+  const back = (place?: string): string => `config flags --clear-bypass ${SWITCH}${place ? ` --${place}` : ""} --yes`;
+  const teamClone = (open = true) => {
+    const w = workspace(open);
+    const git = (...args: string[]) => Bun.spawnSync(
+      ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", ...args],
+      { cwd: w.proj, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) },
+    );
+    // The team's settings are in the clone's history, as a teammate committed them.
+    const commit = (): void => {
+      expect(git("init", "-q").exitCode).toBe(0);
+      expect(git("add", "aidlc.settings.json").exitCode).toBe(0);
+      expect(git("commit", "-qm", "the team's settings").exitCode).toBe(0);
+    };
+    const changed = (): string => git("status", "--porcelain", "--", "aidlc.settings.json").stdout.toString().trim();
+    const clear = (name: string, ...place: string[]): string => {
+      w.said("turn it back on");
+      return w.run(["config", "flags", "--clear-bypass", name, ...place, "--yes"]);
+    };
+    const notice = (): string => {
+      const notices = (w.stage()?.change_notices ?? []) as string[];
+      const line = notices.find((item) => item.includes("plan approval check"));
+      expect(line, JSON.stringify(notices)).toBeDefined();
+      return line!;
+    };
+    return { ...w, commit, changed, clear, notice };
+  };
+
+  test("the team's committed file keeps it off: the clear leaves it as it is and says the setter's one line", () => {
+    const w = teamClone();
+    w.off(SWITCH, "project");
+    w.commit();
+    expect(w.clear(SWITCH)).toBe(SHARED);
+    expect(w.recorded("project")).toEqual([SWITCH]);
+    expect(w.changed()).toBe("");
+  });
+
+  test("yours and the team's both keep it off: yours is cleared, the team's is named", () => {
+    const w = teamClone();
+    w.off(SWITCH, "project");
+    w.commit();
+    w.off(SWITCH, "local");
+    expect(w.clear(SWITCH)).toBe(`${SHARED} The entry in aidlc.settings.local.json is cleared too.`);
+    expect(w.recorded("local")).toEqual([]);
+    expect(w.recorded("project")).toEqual([SWITCH]);
+    expect(w.changed()).toBe("");
+  });
+
+  test("the machine's file keeps it off: named, and never changed from the chat", () => {
+    const w = teamClone();
+    w.off(SWITCH, "global");
+    const before = readFileSync(w.file("global"), "utf-8");
+    expect(w.clear(SWITCH)).toBe(
+      `This machine's settings in ${w.file("global")} keep ${PLAN} off for every project here. Changing that file changes it.`,
+    );
+    expect(readFileSync(w.file("global"), "utf-8")).toBe(before);
+  });
+
+  test("a check with no key for this piece of work, with no work open, and sensors read the same", () => {
+    const w = teamClone(false);
+    w.off("AIDLC_DISABLE_ENSEMBLE_EVIDENCE", "project");
+    w.off("AIDLC_DISABLE_SENSORS", "project");
+    w.commit();
+    expect(w.clear("AIDLC_DISABLE_ENSEMBLE_EVIDENCE")).toBe(
+      "The project's shared settings in aidlc.settings.json keep the pipeline handoff check (each agent's handoff is " +
+        "recorded before a pipeline stage finishes) off for everyone on this project. Changing that file changes it.",
+    );
+    expect(w.clear("AIDLC_DISABLE_SENSORS")).toBe(
+      "The project's shared settings in aidlc.settings.json keep sensors off for everyone on this project. " +
+        "Changing that file changes it.",
+    );
+    expect(w.recorded("project")).toEqual(["AIDLC_DISABLE_ENSEMBLE_EVIDENCE", "AIDLC_DISABLE_SENSORS"]);
+    expect(w.changed()).toBe("");
+  });
+
+  test("only your own file keeps it off: cleared as before, with the clear's own lines", () => {
+    const w = teamClone();
+    w.off(SWITCH, "local");
+    const out = w.clear(SWITCH);
+    expect(out).toContain(`Cleared ${SWITCH} from aidlc.settings.local.json.`);
+    expect(out).toContain("The plan approval check is on again for this project.");
+    expect(w.recorded("local")).toEqual([]);
+  });
+
+  test("at your own terminal the clear is as typed: every file that records it", () => {
+    const w = teamClone();
+    w.off(SWITCH, "project");
+    w.commit();
+    w.off(SWITCH, "local");
+    const out = w.run(["config", "flags", "--clear-bypass", SWITCH, "--yes"], TERMINAL);
+    expect(out).toContain(`Cleared ${SWITCH} from aidlc.settings.json.`);
+    expect(w.recorded("project")).toEqual([]);
+    expect(w.recorded("local")).toEqual([]);
+  });
+
+  test("a place they name is done there: the team's file is cleared when they ask for it", () => {
+    const w = teamClone();
+    w.off(SWITCH, "project");
+    w.commit();
+    const out = w.clear(SWITCH, "--project");
+    expect(out).toContain(`Cleared ${SWITCH} from aidlc.settings.json.`);
+    expect(w.recorded("project")).toEqual([]);
+    expect(w.changed()).not.toBe("");
+  });
+
+  test("the way back --show and doctor print does what it says where they run", () => {
+    const w = teamClone();
+    w.off(SWITCH, "project");
+    const shown = (extra: Record<string, string | undefined> = {}): string[] =>
+      (JSON.parse(w.run(["config", "flags", "--show", "--json"], extra)) as { data: { switches: string[] } }).data.switches;
+    // From a chat, or an IDE's terminal, the no-layer clear leaves the team's
+    // file, so the line names the clear that reaches it.
+    expect(shown()).toHaveLength(1);
+    expect(shown()[0]).toEndWith(`To turn it back on: bun .claude/tools/aidlc.ts ${back("project")}`);
+    const doctor = w.run(["doctor", "--json"]);
+    expect(doctor).toContain(back("project"));
+    expect(doctor).not.toContain(back());
+    // Their own entry as well: each file that keeps it off, by its place.
+    w.off(SWITCH, "local");
+    expect(shown()[0]).toEndWith(
+      `To turn it back on: bun .claude/tools/aidlc.ts ${back("local")} and bun .claude/tools/aidlc.ts ${back("project")}`,
+    );
+    // At their own terminal the no-layer clear clears every file.
+    expect(shown(TERMINAL)[0]).toEndWith(`To turn it back on: bun .claude/tools/aidlc.ts ${back()}`);
+  });
+
+  test("the next step says what keeps a switch in the team's file on, with no question a yes cannot keep", () => {
+    const w = teamClone();
+    w.off(SWITCH, "local");
+    expect(w.notice()).toEndWith("Do you want it back on?");
+    w.clear(SWITCH);
+    w.off(SWITCH, "project");
+    const team = w.notice();
+    expect(team).toEndWith(
+      "The project's shared settings in aidlc.settings.json keep it off for everyone on this project. Changing that file changes it.",
+    );
+    expect(team).not.toContain("?");
+    w.off(SWITCH, "local");
+    expect(w.notice()).toEndWith(
+      "Your aidlc.settings.local.json and the project's shared settings in aidlc.settings.json keep it off. Changing both changes it.",
+    );
+  });
+
+  test("the next step says the same for a switch the machine's file keeps off, alone or with yours", () => {
+    const w = teamClone();
+    w.off(SWITCH, "global");
+    const machine = w.notice();
+    expect(machine).toEndWith(
+      `This machine's settings in ${w.file("global")} keep it off for every project here. Changing that file changes it.`,
+    );
+    expect(machine).not.toContain("?");
+    w.off(SWITCH, "local");
+    const both = w.notice();
+    expect(both).toEndWith(
+      `Your aidlc.settings.local.json and this machine's settings in ${w.file("global")} keep it off. Changing both changes it.`,
+    );
+    expect(both).not.toContain("?");
+  });
+
+  test("the undo of a switch recorded in the machine's file names that file, and does what it says", () => {
+    const w = teamClone();
+    w.said("turn plan approval off on this machine");
+    const out = w.run(["config", "flags", "--bypass", SWITCH, "--global", "--yes"]);
+    expect(out).toContain(`. To undo: bun .claude/tools/aidlc.ts ${back("global")}`);
+    w.said("undo that");
+    w.run(["config", "flags", "--clear-bypass", SWITCH, "--global", "--yes"]);
+    expect(w.recorded("global")).toEqual([]);
+  });
+
+  test("no instruction sends the agent to a clear that reaches the team's file", () => {
+    const onboarding = readFileSync(join(REPO_ROOT, "core", "templates", "onboarding-harness.md"), "utf-8");
+    expect(onboarding).not.toContain("everywhere it is recorded");
+    expect(onboarding).toContain("To turn it back on, run `{{INVOKE}} config flags --clear-bypass <switch> --yes`");
+    const orchestrate = readFileSync(join(REPO_ROOT, "core", "tools", "aidlc-orchestrate.ts"), "utf-8");
+    expect(orchestrate).not.toContain("run config flags --clear-bypass AIDLC_DISABLE_<NAME> --yes when the person asks");
   });
 });

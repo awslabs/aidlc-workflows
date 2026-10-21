@@ -1034,6 +1034,49 @@ function delegatePluginSyncGate(artifact: string): GateResult {
   }
 }
 
+// A plugin author on the native install validates and builds with the compiled
+// aidlc alone, from the plugin's own folder outside any project, so the bundled
+// compose template and core names come from the runtime staged beside the
+// artifact. The runtime-root variables would point it at a developer's tree.
+function pluginAuthoringGate(artifact: string): GateResult {
+  const root = mkdtempSync(join(tmpdir(), "aidlc-binary-plugin-authoring-"));
+  const pluginRoot = join(root, "test-pro");
+  try {
+    cpSync(join(REPO_ROOT, "plugins", "test-pro"), pluginRoot, { recursive: true });
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const name of [
+      "AIDLC_RUNTIME_ROOT", "AIDLC_RUNTIME_HARNESS_ROOT", "AIDLC_HARNESS_DIR", "AIDLC_HARNESS_NAME",
+      "AIDLC_PROJECT_DIR", "CLAUDE_PROJECT_DIR",
+    ]) delete env[name];
+    const steps = [
+      { args: ["plugin", "validate"], done: "Plugin validation: VALID" },
+      ...runtimeDistributions().map((harness) => ({
+        args: ["plugin", "build", harness, join(root, "out", harness)],
+        done: "Plugin build: COMPLETE",
+      })),
+    ];
+    let last: CommandResult | null = null;
+    for (const step of steps) {
+      last = run(artifact, step.args, { cwd: pluginRoot, env, timeoutMs: DEFAULT_SUBPROCESS_TIMEOUT_MS });
+      const output = `${last.stdout}\n${last.stderr}`;
+      if (last.error || last.status !== 0 || !output.includes(step.done) || /\/\$bunfs\//.test(output)) {
+        return commandGate("plugin-authoring", last, false, {
+          expected: step.done,
+          actual: output.split(/\r?\n/).find((line) => /ERROR|FAILED|\$bunfs/.test(line)) ?? output.trim(),
+          detail: `aidlc ${step.args.join(" ")} from a plugin folder outside any project`,
+        });
+      }
+    }
+    return commandGate("plugin-authoring", last!, true, {
+      expected: "validate VALID, build COMPLETE for every harness",
+      actual: "validate VALID, build COMPLETE for every harness",
+      detail: `validated and built test-pro for ${runtimeDistributions().join(", ")}`,
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function realPluginSyncGate(artifact: string): GateResult {
   const project = mkdtempSync(join(tmpdir(), "aidlc-binary-plugin-"));
   const pluginRoot = join(REPO_ROOT, "dist", "plugins", "test-pro", "claude");
@@ -2502,6 +2545,7 @@ function buildTarget(target: TargetConfig): TargetResult {
     result.gates.push(pluginSelectGate(actual.artifact));
     result.gates.push(delegatePluginSyncGate(actual.artifact));
     result.gates.push(realPluginSyncGate(actual.artifact));
+    result.gates.push(pluginAuthoringGate(actual.artifact));
     result.gates.push(conductorPersonaGate(actual.artifact));
     result.gates.push(workspaceFlagsGate(actual.artifact));
     result.gates.push(boltReentryGate(actual.artifact));

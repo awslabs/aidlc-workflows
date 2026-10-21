@@ -400,4 +400,24 @@ describe("opencode: one plugin instance in a process the host waits on", () => {
       host.dispose();
     }
   });
+
+  test("a command whose chat the plugin does not name stops, unless the plugin came from a release before it named one", () => {
+    const proj = scratch();
+    mkdirSync(join(proj, ".opencode", "plugin"), { recursive: true });
+    writeFileSync(join(proj, ".opencode", "plugin", "aidlc-opencode-adapter.ts"), STUB);
+    const host = new OpencodeScopeHost(proj);
+    try {
+      expect(() => host.bash("bun --version")).toThrow("the opencode plugin named no chat for bun --version");
+      host.release = "2.11.0";
+      expect(host.bash("bun --version").status).toBe(0);
+      host.release = "2.11.1-preview.20261015.1";
+      expect(host.bash("bun --version").status).toBe(0);
+      host.release = "2.11.1-preview.20261016.1";
+      expect(() => host.bash("bun --version")).toThrow("the opencode plugin named no chat");
+      host.release = "2.11.1";
+      expect(() => host.bash("bun --version")).toThrow("the opencode plugin named no chat");
+    } finally {
+      host.dispose();
+    }
+  });
 });

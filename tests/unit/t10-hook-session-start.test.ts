@@ -213,6 +213,10 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
       "if you were doing the work of a `run-stage` you still hold, finish its steps and run the `report` built from it (its stage, plus `--unit` in team-owned Unit work)",
     );
     expect(parsed.additionalContext).toContain("otherwise `continue` with the rules receipt you hold, or run `next`");
+    // A person who asked to stop or pause is parked, with the exact command.
+    expect(parsed.additionalContext).toMatch(
+      /saying anything else; if the person asked to stop or pause, run `[^`]*aidlc[^`]*orchestrate[^`]* park --person-asked` and end the turn; if you were doing the work/,
+    );
   });
 
   // Kiro CLI, opencode and Kiro IDE hide the note from the person, so after a

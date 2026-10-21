@@ -181,17 +181,17 @@ jobs:
           bun scripts/ci-preview-test-report.ts \
             "$RUNNER_TEMP/full-suite-evidence" "$RUNNER_TEMP/full-suite-jobs.json" "$report"
           cat "$report" >>"$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: preview-test-report
           path: ${{ runner.temp }}/preview-test-report/preview-test-report.md
           if-no-files-found: error
 
-  # A job's implicit success() also covers its ancestors, so a failed Full Suite
-  # would skip the whole build. Each build job checks its direct needs instead.
+  # Build and validate artifacts while Full Suite runs. Publication waits for
+  # the report so the release notes include the completed suite's result.
   native-smoke:
-    needs: [validate, gate, test]
-    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.gate.result == 'success' && needs.test.result == 'success' && needs.validate.outputs.skip != 'true' }}
+    needs: [validate, gate]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.gate.result == 'success' && needs.validate.outputs.skip != 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -270,7 +270,7 @@ jobs:
       - run: bun scripts/package.ts
       - run: bun scripts/package.ts --check
       - run: bun scripts/build-binaries.ts --target ${{ matrix.target }}
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: binary-${{ matrix.target }}
           path: |
@@ -331,7 +331,7 @@ jobs:
       - name: Re-verify staged release checksums
         working-directory: build/release
         run: sha256sum -c checksums.txt
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-candidate
           path: build/release
@@ -758,15 +758,15 @@ jobs:
         env:
           AUTHORIZED_SHA: ${{ needs.validate.outputs.sha }}
           RELEASE_TAG: ${{ needs.validate.outputs.tag }}
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: attested-release
           path: build/release
           if-no-files-found: error
 
   release:
-    needs: [validate, full_suite, publish, update-from-previous]
-    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.publish.result == 'success' }}
+    needs: [validate, full_suite, test, publish, update-from-previous]
+    if: ${{ !cancelled() && needs.validate.result == 'success' && needs.test.result == 'success' && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     environment: preview
     permissions:

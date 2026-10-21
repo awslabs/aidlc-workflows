@@ -181,8 +181,9 @@ function where(target: SettingsTarget): string {
   return target === "global" ? "on this machine" : "for this project";
 }
 
-// The way back: a clear with no layer turns the switch off in every settings
-// file that records it, so the check is really back on. Printed from another
+// The way back: at the person's own terminal a clear with no layer turns the
+// switch off in every settings file that records it, so the check is really
+// back on; `place` names the one file to clear. Printed from another
 // folder it names the project, quoted for the platform's shell. Native Windows
 // `aidlc` is aidlc.cmd, and cmd.exe acts on & | < > ^ in an argument with no
 // space and on %NAME% even inside quotes, so for a folder holding one the line
@@ -191,8 +192,9 @@ export function clearSwitchCommand(
   name: RecordableProjectBypass,
   projectDir?: string,
   platform: NodeJS.Platform = process.platform,
+  place?: SettingsTarget,
 ): string {
-  const command = `${aidlcInvocation()} config flags --clear-bypass ${name} --yes`;
+  const command = `${aidlcInvocation()} config flags --clear-bypass ${name}${place ? ` --${place}` : ""} --yes`;
   if (
     projectDir === undefined ||
     normalizeDriveLetter(resolve(projectDir)) === normalizeDriveLetter(resolve(process.cwd()))
@@ -346,17 +348,52 @@ export function backOnLine(
   // At the person's own terminal the line names the command instead.
   const atTerminal = commandAtPersonsTerminal(env) ? stillOffLine(projectDir, name, "keeps", env) : null;
   if (atTerminal !== null) return `${atTerminal}${alsoCleared}`;
-  // Every file's switch counts, so a line naming one of two holders would send them to half the way back.
-  if (by.includes("project") && by.includes("global")) {
-    return `The project's shared settings in ${basename(settingsPathForTarget(projectDir, "project"))} and this machine's ` +
-      `settings in ${settingsPathForTarget(projectDir, "global")} keep ${subject.said} off. Changing both changes it.` +
-      alsoCleared;
+  return `${keptOffInFiles(projectDir, by.filter((target) => target !== "local"), subject.said)}${alsoCleared}`;
+}
+
+/**
+ * What a `config flags --clear-bypass` that names no file says, run from a chat
+ * (anywhere but the person's own terminal), when the project's shared file or
+ * this machine's records one of the switches: each is turned back on the way
+ * the setter turns it on (backOnLine), so the same words never change the
+ * team's file from one path and leave it alone on another. Turning a check back
+ * on never waits for the person's words, so each counts as theirs. Null when
+ * only the person's own file records them, for a switch with no line of its own
+ * (usage tracking), or at the person's own terminal: the command then clears
+ * as typed.
+ */
+export function backOnFromChatLines(
+  projectDir: string,
+  names: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): string[] | null {
+  const unique = [...new Set(names)];
+  if (commandAtPersonsTerminal(env) || unique.some((name) => backOnSubject(name) === null)) return null;
+  if (!unique.some((name) => recordedIn(projectDir, name).some((target) => target !== "local"))) return null;
+  return unique.map((name) =>
+    backOnLine(projectDir, name, true, env) ?? unrecordedSwitchLine(projectDir, name as RecordableProjectBypass, env)
+  );
+}
+
+// What keeps a check off in the files a chat's "turn it back on" does not
+// change, said the way a team's lock is said: each file by name, and that
+// changing it changes it. `files` holds the project's shared file or this
+// machine's, and the person's own file when nothing cleared it. Every file's
+// switch counts, so a line naming one of two holders would send them half the
+// way back.
+function keptOffInFiles(projectDir: string, files: readonly SettingsTarget[], said: string): string {
+  const shared = `the project's shared settings in ${basename(settingsPathForTarget(projectDir, "project"))}`;
+  const machine = `this machine's settings in ${settingsPathForTarget(projectDir, "global")}`;
+  if (files.length === 1) {
+    return files[0] === "global"
+      ? `${capitalized(machine)} keep ${said} off for every project here. Changing that file changes it.`
+      : `${capitalized(shared)} keep ${said} off for everyone on this project. Changing that file changes it.`;
   }
-  return (by.includes("project")
-    ? `The project's shared settings in ${basename(settingsPathForTarget(projectDir, "project"))} keep ${subject.said} ` +
-      "off for everyone on this project. Changing that file changes it."
-    : `This machine's settings in ${settingsPathForTarget(projectDir, "global")} keep ${subject.said} ` +
-      "off for every project here. Changing that file changes it.") + alsoCleared;
+  const named = files.map((target) =>
+    target === "local" ? `your ${basename(settingsPathForTarget(projectDir, "local"))}` : target === "project" ? shared : machine
+  );
+  const listed = named.length === 2 ? named.join(" and ") : `${named.slice(0, -1).join(", ")} and ${named.at(-1)}`;
+  return `${capitalized(listed)} keep ${said} off. Changing ${files.length === 2 ? "both" : "all three"} changes it.`;
 }
 
 // How a line names the setting a switch turns off: a check by its label and
@@ -386,14 +423,20 @@ function keptOffBy(projectDir: string, name: string, env: NodeJS.ProcessEnv): "e
   } catch {
     return null;
   }
-  const files = (["local", "project", "global"] as const).filter((target) => {
+  const files = recordedIn(projectDir, name);
+  return files.length > 0 ? files : null;
+}
+
+// The settings files whose own record holds the switch, nearest first. An
+// unreadable file names none.
+function recordedIn(projectDir: string, name: string): SettingsTarget[] {
+  return (["local", "project", "global"] as const).filter((target) => {
     try {
       return (readSettingsTarget(projectDir, target)?.flags?.bypasses ?? []).includes(name as RecordableProjectBypass);
     } catch {
       return false;
     }
   });
-  return files.length > 0 ? files : null;
 }
 
 // Take one switch out of the person's aidlc.settings.local.json, keeping
@@ -428,7 +471,12 @@ function clearLocalSwitch(projectDir: string, name: RecordableProjectBypass, env
  * The one line the person hears while a switch is off: what the check is for,
  * what is off, where, since when, how it was set, and the way back.
  */
-export function switchOffLine(off: SwitchOff, now: Date = new Date(), wayBack: SwitchWayBack = "offer"): string {
+export function switchOffLine(
+  off: SwitchOff,
+  now: Date = new Date(),
+  wayBack: SwitchWayBack = "offer",
+  env: NodeJS.ProcessEnv = process.env,
+): string {
   const label = PERSON_CHECK_SWITCH_LABELS[off.name] ?? off.name;
   const since = clock(off.entry?.since ?? fileTime(off.settingsPath), now);
   // Where it came from is said only when the person's own words are on record:
@@ -437,12 +485,29 @@ export function switchOffLine(off: SwitchOff, now: Date = new Date(), wayBack: S
   const how = off.entry?.how === "chat" && off.entry.words
     ? `, because you said: "${quoted(off.entry.words)}"`
     : "";
+  const files = off.projectDir === undefined ? [] : recordedIn(off.projectDir, off.name);
   const back = wayBack === "statement"
     ? "You can turn it back on any time."
     : wayBack === "command"
-    ? `To turn it back on: ${clearSwitchCommand(off.name, off.projectDir)}`
+    ? `To turn it back on: ${wayBackCommand(off, files, env)}`
+    // A chat's yes leaves the project's shared file and this machine's as they
+    // are (backOnLine), so where either records the switch the line says what
+    // keeps it off instead of asking what a yes cannot do.
+    : files.some((target) => target !== "local")
+    ? keptOffInFiles(off.projectDir!, files, "it")
     : "Do you want it back on?";
   return `The ${label}${settingPurpose(label)} is off ${where(off.target)} since ${since}${how}. ${back}`;
+}
+
+// The command form's way back, true where the line is printed: at the person's
+// own terminal the no-layer clear clears every file that records the switch;
+// anywhere else (an IDE's terminal reads as an agent's) it leaves the project's
+// shared file and this machine's, so each file that keeps it off is named by
+// its place.
+function wayBackCommand(off: SwitchOff, files: readonly SettingsTarget[], env: NodeJS.ProcessEnv): string {
+  return commandAtPersonsTerminal(env) || files.every((target) => target === "local")
+    ? clearSwitchCommand(off.name, off.projectDir)
+    : files.map((target) => clearSwitchCommand(off.name, off.projectDir, process.platform, target)).join(" and ");
 }
 
 /**
@@ -455,7 +520,7 @@ export function switchesOffLines(
   env: NodeJS.ProcessEnv = process.env,
   wayBack: SwitchWayBack = "offer",
 ): string[] {
-  return switchesOff(projectDir, env).map((off) => switchOffLine(off, new Date(), wayBack));
+  return switchesOff(projectDir, env).map((off) => switchOffLine(off, new Date(), wayBack, env));
 }
 
 /**
@@ -465,7 +530,7 @@ export function switchesOffLines(
 export function switchOffNotices(projectDir: string, env: NodeJS.ProcessEnv = process.env): string[] {
   return switchesOff(projectDir, env)
     .filter((item) => item.entry?.announced === undefined)
-    .map((item) => switchOffLine(item));
+    .map((item) => switchOffLine(item, new Date(), "offer", env));
 }
 
 /**

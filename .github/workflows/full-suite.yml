@@ -165,7 +165,7 @@ jobs:
         if: steps.source.outputs.purpose != 'live-verification'
         run: |
           bun tests/reconcile-tests.ts prepare --profile tests/native-terminal-profile.json --cohort "nightly-${{ github.run_id }}-${{ github.run_attempt }}" --repo . --output "$RUNNER_TEMP/native-plan.json"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: steps.source.outputs.purpose != 'live-verification'
         with:
           name: full-suite-native-plan
@@ -266,7 +266,7 @@ jobs:
           bun scripts/ci-sanitize-logs.ts tmp/full-suite-native
       - name: "Upload diagnostic logs"
         if: "${{ always() && steps.sanitize.outcome == 'success' }}"
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: "full-suite-native-${{ matrix.job }}"
           path: |
@@ -304,7 +304,7 @@ jobs:
             process.exit(child.exitCode);
           '
       - if: "${{ always() }}"
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: full-suite-native-result
           path: "${{ runner.temp }}/native-matrix-result.json"
@@ -314,8 +314,9 @@ jobs:
     if: needs.plan.outputs.purpose == 'full-verification'
     strategy:
       fail-fast: false
+      # Keep manual verification from claiming all hosted runners at once.
+      max-parallel: 12
       matrix:
-        runner: [ubuntu-latest, macos-15, windows-latest]
         # Unit files deliberately stay serial inside a checkout because packaging
         # tests rewrite dist/. Independent weighted shards provide parallelism.
         suite:
@@ -343,9 +344,11 @@ jobs:
           - {name: integration, tier: integration, exclude: '^t-(scope-run|scope-host|guard-matrix)-'}
           - {name: scope-runs, tier: integration, filter: '^t-scope-run-'}
           - {name: scope-hosts, tier: integration, filter: '^t-scope-host-'}
-          - {name: guard-matrix-1, tier: integration, filter: '^t-guard-matrix-[a-h]'}
-          - {name: guard-matrix-2, tier: integration, filter: '^t-guard-matrix-[^a-h]'}
+          - {name: guard-matrix-1, tier: integration, filter: '^t-guard-matrix-', partition: '1/2'}
+          - {name: guard-matrix-2, tier: integration, filter: '^t-guard-matrix-', partition: '2/2'}
           - {name: e2e, tier: e2e}
+        # Suite first interleaves platforms in matrix job creation order.
+        runner: [ubuntu-latest, macos-15, windows-latest]
         # Adds the OS label for the job name to each runner's legs.
         include:
           - {runner: ubuntu-latest, os: Linux}
@@ -358,6 +361,7 @@ jobs:
       tier: ${{ matrix.suite.tier }}
       unit-shard: ${{ matrix.suite.shard || '' }}
       filter: ${{ matrix.suite.filter || '' }}
+      integration-shard: ${{ matrix.suite.partition || '' }}
       exclude: ${{ matrix.suite.exclude || '' }}
       artifact-label: full-suite-deterministic-${{ matrix.suite.name }}
   # The nightly (release purpose) runs no deterministic tier, so the scope runs,
@@ -369,13 +373,15 @@ jobs:
     if: needs.plan.outputs.purpose == 'release'
     strategy:
       fail-fast: false
+      max-parallel: 3
       matrix:
-        runner: [ubuntu-latest, macos-15, windows-latest]
         suite:
           - {name: scope-runs, filter: '^t-scope-run-'}
           - {name: scope-hosts, filter: '^t-scope-host-'}
-          - {name: guard-matrix-1, filter: '^t-guard-matrix-[a-h]'}
-          - {name: guard-matrix-2, filter: '^t-guard-matrix-[^a-h]'}
+          - {name: guard-matrix-1, filter: '^t-guard-matrix-', partition: '1/2'}
+          - {name: guard-matrix-2, filter: '^t-guard-matrix-', partition: '2/2'}
+        # Start each suite across platforms before creating the next suite's jobs.
+        runner: [ubuntu-latest, macos-15, windows-latest]
         include:
           - {runner: ubuntu-latest, os: Linux}
           - {runner: macos-15, os: macOS}
@@ -386,6 +392,7 @@ jobs:
       runner: ${{ matrix.runner }}
       tier: integration
       filter: ${{ matrix.suite.filter }}
+      integration-shard: ${{ matrix.suite.partition || '' }}
       artifact-label: full-suite-${{ matrix.suite.name }}
   production_guards:
     name: "Linux / production-guards"
@@ -421,7 +428,7 @@ jobs:
           bun scripts/ci-sanitize-logs.ts tmp/full-suite-production-guards
       - name: "Upload production guard evidence"
         if: "${{ always() && steps.sanitize.outcome == 'success' }}"
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: full-suite-production-guards
           path: |
@@ -610,7 +617,7 @@ jobs:
         run: bun scripts/ci-sanitize-logs.ts tests/logs
       - name: "Upload diagnostic logs"
         if: "${{ always() && steps.sanitize.outcome == 'success' }}"
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: "full-suite-live-${{ matrix.slice }}-${{ runner.os }}"
           path: tests/logs/
@@ -770,7 +777,7 @@ jobs:
         run: bun scripts/ci-sanitize-logs.ts tests/logs
       - name: "Upload diagnostic logs"
         if: "${{ always() && steps.sanitize.outcome == 'success' }}"
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: "full-suite-live-${{ matrix.slice }}-${{ runner.os }}"
           path: tests/logs/
@@ -909,7 +916,7 @@ jobs:
         run: bun scripts/ci-sanitize-logs.ts tests/logs
       - name: "Upload diagnostic logs"
         if: "${{ always() && steps.sanitize.outcome == 'success' }}"
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: "full-suite-live-${{ matrix.slice }}-Windows"
           path: tests/logs/
@@ -946,7 +953,7 @@ jobs:
         run: bun scripts/ci-sanitize-logs.ts tests/logs
       - name: "Upload diagnostic logs"
         if: "${{ always() && steps.sanitize.outcome == 'success' }}"
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: full-suite-live-release-contract-Windows
           path: tests/logs/
@@ -986,7 +993,7 @@ jobs:
         run: |
           bun scripts/ci-full-suite-result.ts "$RUNNER_TEMP/full-suite-result.json"
       - if: "${{ always() }}"
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: "${{ needs.plan.outputs.purpose == 'live-verification' && 'full-suite-live-verification-result' || needs.plan.outputs.purpose == 'full-verification' && 'full-suite-verification-result' || 'full-suite-result' }}"
           path: "${{ runner.temp }}/full-suite-result.json"

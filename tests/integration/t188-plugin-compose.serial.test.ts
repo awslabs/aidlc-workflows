@@ -30,7 +30,7 @@ import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join, posix, resolve, win32 } from "node:path";
+import { basename, delimiter, dirname, join, posix, resolve, win32 } from "node:path";
 import {
   acquireAuditLock,
   auditLockDir,
@@ -51,9 +51,11 @@ import {
   buildPluginProjection,
   composePluginFixture,
   copyHarnessInstall,
+  pluginRootIn,
 } from "../harness/plugin-kit.ts";
 import { writeWindowsBunLauncher } from "../harness/windows-native-executable.ts";
 import { DEFAULT_SUBPROCESS_TIMEOUT_MS } from "../../core/tools/aidlc-runtime-budget.ts";
+import { readPluginTargets } from "../../core/tools/aidlc-plugin-emit.ts";
 
 const PACKAGE_TS = join(REPO_ROOT, "scripts", "package.ts");
 const BUN = process.execPath; // the bun running this test — robust for hooks
@@ -62,6 +64,7 @@ setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
 const PLUGIN = "test-pro";
 const CLAUDE_DIST = join(REPO_ROOT, "dist", "claude", ".claude");
+const PLUGIN_TARGETS = readPluginTargets(join(CLAUDE_DIST, "tools", "data", "plugin-targets.json"));
 const OPENCODE_DIST = join(REPO_ROOT, "dist", "opencode");
 const KIRO_DIST = join(REPO_ROOT, "dist", "kiro", ".kiro");
 const KIRO_IDE_DIST = join(REPO_ROOT, "dist", "kiro-ide", ".kiro");
@@ -295,6 +298,35 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     if (tmp && existsSync(tmp)) rmSync(tmp, { recursive: true, force: true });
   });
 
+  // The environment a host gives a plugin hook: none of this run's own plugin,
+  // project or harness variables, plus what the host itself sets.
+  function hookEnv(extra: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of [
+      "AIDLC_HARNESS_DIR", "AIDLC_HARNESS_NAME", "AIDLC_PLUGIN_ROOT", "AIDLC_PROJECT_DIR",
+      "CLAUDE_PLUGIN_ROOT", "CLAUDE_PROJECT_DIR", "CURSOR_PLUGIN_ROOT", "CURSOR_PROJECT_DIR", "PLUGIN_ROOT",
+    ]) delete env[key];
+    return { ...env, ...extra };
+  }
+
+  // A native install's `aidlc` on a PATH that holds no Bun: the fixture runs the
+  // project's own dispatcher with this test's Bun by absolute path.
+  function writeAidlcOnPath(name: string, dispatcher: string): string {
+    const binDir = join(tmp, name);
+    mkdirSync(binDir, { recursive: true });
+    const script = join(binDir, process.platform === "win32" ? "aidlc-fixture.js" : "aidlc");
+    writeFileSync(script, [
+      `#!${BUN}`,
+      'import { spawnSync } from "node:child_process";',
+      `const child = spawnSync(${JSON.stringify(BUN)}, [${JSON.stringify(dispatcher)}, ...process.argv.slice(2)], { stdio: "inherit" });`,
+      "process.exit(child.status ?? 1);",
+      "",
+    ].join("\n"));
+    if (process.platform === "win32") writeWindowsBunLauncher(join(binDir, "aidlc.exe"), script);
+    else chmodSync(script, 0o755);
+    return binDir;
+  }
+
   // --- Packager emits every projection; Claude remains the compose E2E below ---
   test("every harness projection carries its declared host manifest, wiring, and content", () => {
     for (const harness of HARNESS_MATRIX) {
@@ -304,9 +336,17 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       expect(fileInventory(committed), `${harness.name}: committed inventory`).toEqual(
         fileInventory(built),
       );
+      // On Kiro the plugin sits in its own folder, named as the host shows it,
+      // so a second plugin dropped into the project never lands on it.
+      const root = pluginRootIn(built, harness.name);
+      if (harness.capabilities.plugin.kind === "kiro" || harness.capabilities.plugin.kind === "kiro-ide") {
+        expect(root, harness.name).toBe(join(built, ".kiro", "aidlc-plugins", `aidlc-${PLUGIN}`));
+      } else {
+        expect(root, harness.name).toBe(built);
+      }
 
       const manifestFile = join(
-        built,
+        root,
         harness.capabilities.plugin.manifestDir,
         "plugin.json",
       );
@@ -314,12 +354,30 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         name?: string;
       };
       expect(hostManifest.name, harness.name).toBe(`aidlc-${PLUGIN}`);
-      expect(existsSync(join(built, "hooks", "compose.ts"))).toBe(true);
+      // Our own plugins share one catalogue at the root of dist/plugins, where
+      // each host reads one (Codex: .agents/plugins/marketplace.json), so no
+      // projection of ours carries a catalogue of its own.
+      expect(
+        fileInventory(built).filter((file) => file.endsWith("marketplace.json")),
+        `${harness.name}: no catalogue of its own`,
+      ).toEqual([]);
+      const target = PLUGIN_TARGETS[harness.name];
+      const shared = join(REPO_ROOT, "dist", "plugins", target.marketplaceDir, "marketplace.json");
+      if (target.hostCatalogue) {
+        expect(
+          (JSON.parse(readFileSync(shared, "utf-8")) as { name?: string; plugins?: Array<{ name?: string; source?: string }> })
+            .plugins?.filter((entry) => entry.name === `aidlc-${PLUGIN}`),
+          `${harness.name}: shared catalogue entry`,
+        ).toEqual([expect.objectContaining({ source: `./${PLUGIN}/${harness.name}` })]);
+      } else {
+        expect(existsSync(shared), `${harness.name}: no catalogue for a host that reads none`).toBe(false);
+      }
+      expect(existsSync(join(root, "hooks", "compose.ts"))).toBe(true);
       const inventory = fileInventory(built);
       if (harness.name === "kiro") {
         expect(harness.capabilities.plugin.wiringFile).toBeNull();
         expect(inventory.some((file) => file.endsWith(".kiro.hook"))).toBe(false);
-        expect(existsSync(join(built, "hooks", "hooks.json"))).toBe(false);
+        expect(existsSync(join(root, "hooks", "hooks.json"))).toBe(false);
         expect(existsSync(join(built, ".kiro", "hooks"))).toBe(false);
       } else {
         const wiringFile = harness.capabilities.plugin.wiringFile;
@@ -343,10 +401,10 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
           expect(hook?.action?.type).toBe("command");
           const command = hook?.action?.command ?? "";
           expect(command).toBe(
-            "bun ./hooks/aidlc-plugin-compose.ts .kiro kiro-ide",
+            `aidlc engine plugin sync --harness-dir .kiro --plugin-root ./.kiro/aidlc-plugins/aidlc-${PLUGIN} || bun ./.kiro/aidlc-plugins/aidlc-${PLUGIN}/hooks/aidlc-plugin-compose.ts .kiro kiro-ide`,
           );
           expect(command).not.toContain("sh -c");
-          expect(existsSync(join(built, "hooks", "aidlc-plugin-compose.ts"))).toBe(true);
+          expect(existsSync(join(root, "hooks", "aidlc-plugin-compose.ts"))).toBe(true);
         } else if (harness.name === "cursor") {
           expect(wiring, `${harness.name}: harness dir argument`).toContain(
             `aidlc-plugin-compose.ts ${harness.manifest.harnessDir}`,
@@ -360,19 +418,19 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
           );
         }
       }
-      expect(existsSync(join(built, "stages", "construction", "test-pro-integration.md"))).toBe(
+      expect(existsSync(join(root, "stages", "construction", "test-pro-integration.md"))).toBe(
         true,
       );
-      expect(existsSync(join(built, "contributions", "construction", "build-and-test.md"))).toBe(
+      expect(existsSync(join(root, "contributions", "construction", "build-and-test.md"))).toBe(
         true,
       );
       // #550 plugin content buckets: scopes, agents, and knowledge must project
       // into EVERY harness (stronger than the pre-matrix Claude-only guard).
-      expect(existsSync(join(built, "scopes", "test-pro-validation.md")), `${harness.name}: scope`).toBe(true);
+      expect(existsSync(join(root, "scopes", "test-pro-validation.md")), `${harness.name}: scope`).toBe(true);
       const agentSource =
         harness.name === "cursor"
-          ? join(built, "aidlc", "agents", "test-pro-metrics-agent.md")
-          : join(built, "agents", "test-pro-metrics-agent.md");
+          ? join(root, "aidlc", "agents", "test-pro-metrics-agent.md")
+          : join(root, "agents", "test-pro-metrics-agent.md");
       expect(existsSync(agentSource), `${harness.name}: agent`).toBe(true);
       const projectedAgent = readFileSync(agentSource, "utf-8");
       expect(projectedAgent).toContain(
@@ -391,18 +449,19 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
         "aidlc/spaces/<active-space>/knowledge/test-pro-metrics-agent/",
       );
       expect(
-        existsSync(join(built, "knowledge", "test-pro-metrics-agent", "methodology.md")),
+        existsSync(join(root, "knowledge", "test-pro-metrics-agent", "methodology.md")),
         `${harness.name}: knowledge`,
       ).toBe(true);
     }
   });
 
-  test("Kiro IDE executes its generated compose wiring after a folder-drop", () => {
-    const built = pluginBuilds.get("kiro-ide")!;
-    const kiroProject = join(tmp, "kiro-ide-folder-drop");
+  // Kiro runs a hook command through the platform shell (Node's shell: true:
+  // /bin/sh, or cmd.exe on Windows) in the workspace the plugin was dropped into.
+  function runKiroIdeFolderDrop(name: string, path: string, alsoClaude = false): { project: string; run: SpawnSyncReturns<string> } {
+    const kiroProject = join(tmp, name);
     cpSync(join(REPO_ROOT, "dist", "kiro-ide"), kiroProject, { recursive: true });
-    cpSync(built, kiroProject, { recursive: true });
-
+    if (alsoClaude) copyHarnessInstall("claude", kiroProject);
+    cpSync(join(pluginBuilds.get("kiro-ide")!, ".kiro"), join(kiroProject, ".kiro"), { recursive: true });
     const registration = JSON.parse(
       readFileSync(
         join(kiroProject, ".kiro", "hooks", `aidlc-${PLUGIN}-compose.json`),
@@ -411,10 +470,58 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     ) as {
       hooks?: Array<{ action?: { command?: string } }>;
     };
-    const command = registration.hooks?.[0]?.action?.command ?? "";
-    const [runtime, script, ...args] = command.split(" ");
-    expect(runtime).toBe("bun");
-    expect(script).toBe("./hooks/aidlc-plugin-compose.ts");
+    const run = spawnSync(registration.hooks?.[0]?.action?.command ?? "", {
+      shell: true,
+      cwd: kiroProject,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      env: hookEnv({ PATH: path }),
+    });
+    return { project: kiroProject, run };
+  }
+
+  test("Kiro IDE's folder-drop hook composes through Bun when aidlc is not on PATH", () => {
+    const path = dirname(BUN);
+    expect(Bun.which("aidlc", { PATH: path })).toBeNull();
+    const { project: kiroProject, run } = runKiroIdeFolderDrop("kiro-ide-folder-drop", path);
+    expect(run.status, run.stderr).toBe(0);
+
+    const kiroGraph = JSON.parse(
+      readFileSync(
+        join(kiroProject, ".kiro", "tools", "data", "stage-graph.json"),
+        "utf-8",
+      ),
+    ) as GraphStage[];
+    expect(kiroGraph.some((item) => item.slug === "test-pro-integration")).toBe(true);
+  });
+
+  test("Kiro IDE composes two plugins dropped into one project, each from its own folder", () => {
+    // A second plugin, built the way someone else builds theirs.
+    const tools = join(REPO_ROOT, "dist", "claude", ".claude", "tools");
+    const authored = join(tmp, "kiro-ide-second-plugin", "acme-standards");
+    const created = spawnSync(BUN, [join(tools, "aidlc-plugin-create.ts"), "acme-standards", authored], {
+      cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+    });
+    expect(created.status, created.stderr).toBe(0);
+    const second = join(tmp, "kiro-ide-second-plugin", "built");
+    const built2 = spawnSync(BUN, [join(tools, "aidlc-plugin-build.ts"), authored, "kiro-ide", second], {
+      cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+    });
+    expect(built2.status, built2.stdout + built2.stderr).toBe(0);
+
+    const kiroProject = join(tmp, "kiro-ide-two-plugins");
+    cpSync(join(REPO_ROOT, "dist", "kiro-ide"), kiroProject, { recursive: true });
+    // The drop is one copy of each projection's .kiro folder.
+    for (const projection of [pluginBuilds.get("kiro-ide")!, second]) {
+      cpSync(join(projection, ".kiro"), join(kiroProject, ".kiro"), { recursive: true });
+    }
+    for (const [plugin, host] of [[PLUGIN, `aidlc-${PLUGIN}`], ["acme-standards", "acme-standards"]]) {
+      const manifest = JSON.parse(
+        readFileSync(join(kiroProject, ".kiro", "aidlc-plugins", host, ".kiro-plugin", "plugin.json"), "utf-8"),
+      ) as { name?: string };
+      expect(manifest.name, plugin).toBe(host);
+    }
+    expect(existsSync(join(kiroProject, ".kiro-plugin")), "nothing lands at the project root").toBe(false);
 
     const env: NodeJS.ProcessEnv = { ...process.env, PATH: "" };
     delete env.AIDLC_HARNESS_DIR;
@@ -424,19 +531,41 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     delete env.CLAUDE_PLUGIN_ROOT;
     delete env.CLAUDE_PROJECT_DIR;
     delete env.PLUGIN_ROOT;
-    const compose = spawnSync(BUN, [script, ...args], {
-      cwd: kiroProject,
-      encoding: "utf-8",
-      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
-      env,
-    });
-    expect(compose.status, compose.stderr).toBe(0);
+    for (const plugin of [PLUGIN, "acme-standards"]) {
+      const registration = JSON.parse(
+        readFileSync(join(kiroProject, ".kiro", "hooks", `aidlc-${plugin}-compose.json`), "utf-8"),
+      ) as { hooks?: Array<{ action?: { command?: string } }> };
+      const command = registration.hooks?.[0]?.action?.command ?? "";
+      const [runtime, script, ...args] = (command.split(" || ")[1] ?? "").split(" ");
+      expect(runtime, plugin).toBe("bun");
+      const compose = spawnSync(BUN, [script, ...args], {
+        cwd: kiroProject,
+        encoding: "utf-8",
+        timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+        env,
+      });
+      expect(compose.status, `${plugin}: ${compose.stderr}`).toBe(0);
+    }
 
     const kiroGraph = JSON.parse(
-      readFileSync(
-        join(kiroProject, ".kiro", "tools", "data", "stage-graph.json"),
-        "utf-8",
-      ),
+      readFileSync(join(kiroProject, ".kiro", "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as GraphStage[];
+    expect(kiroGraph.some((item) => item.slug === "test-pro-integration")).toBe(true);
+    expect(kiroGraph.some((item) => item.slug === "acme-standards-example-stage")).toBe(true);
+  });
+
+  // With Claude Code installed beside the host, a compiled aidlc pins the first
+  // harness it finds, .claude; the fixture runs that harness's dispatcher.
+  for (const alsoClaude of [false, true]) test(`Kiro IDE's folder-drop hook composes through aidlc alone when Bun is not on PATH${alsoClaude ? ", Claude Code installed beside it" : ""}`, () => {
+    const name = alsoClaude ? "kiro-ide-and-claude-aidlc-only" : "kiro-ide-aidlc-only";
+    const binDir = writeAidlcOnPath(`${name}-bin`, join(tmp, name, alsoClaude ? ".claude" : ".kiro", "tools", "aidlc.ts"));
+    expect(Bun.which("bun", { PATH: binDir })).toBeNull();
+    const { project: kiroProject, run } = runKiroIdeFolderDrop(name, binDir, alsoClaude);
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toContain("plugin sync complete: 1 plugin(s)");
+    expect(existsSync(join(kiroProject, ".kiro", "tools", "data", `plugin-compose-${PLUGIN}.json`))).toBe(true);
+    const kiroGraph = JSON.parse(
+      readFileSync(join(kiroProject, ".kiro", "tools", "data", "stage-graph.json"), "utf-8"),
     ) as GraphStage[];
     expect(kiroGraph.some((item) => item.slug === "test-pro-integration")).toBe(true);
   });
@@ -456,12 +585,51 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(wiring.version).toBe(1);
     expect(Object.keys(wiring.hooks ?? {})).toEqual(["sessionStart"]);
     const entries = wiring.hooks?.sessionStart ?? [];
-    expect(entries).toHaveLength(1);
-    expect(Object.keys(entries[0] ?? {})).toEqual(["command"]);
-    const command = String(entries[0]?.command ?? "");
-    expect(command).toBe("bun ./hooks/aidlc-plugin-compose.ts .cursor");
-    expect(command).not.toContain("sh -c");
+    for (const entry of entries) expect(Object.keys(entry)).toEqual(["command"]);
+    expect(entries.map((entry) => entry.command)).toEqual([
+      "aidlc engine plugin sync --harness-dir .cursor",
+      "bun ./hooks/aidlc-plugin-compose.ts .cursor",
+    ]);
     expect(existsSync(join(built, "hooks", "aidlc-plugin-compose.ts"))).toBe(true);
+  });
+
+  for (const alsoClaude of [false, true]) test(`Cursor's sessionStart entries compose through aidlc alone when Bun is not on PATH${alsoClaude ? ", Claude Code installed beside it" : ""}`, () => {
+    const built = pluginBuilds.get("cursor")!;
+    const cursorProject = join(tmp, alsoClaude ? "cursor-and-claude-aidlc-only" : "cursor-aidlc-only");
+    mkdirSync(cursorProject, { recursive: true });
+    const install = spawnSync(BUN, [join(CURSOR_DIST, "install.ts"), cursorProject], {
+      cwd: REPO_ROOT, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+    });
+    expect(install.status, install.stderr).toBe(0);
+    if (alsoClaude) copyHarnessInstall("claude", cursorProject);
+    const binDir = writeAidlcOnPath(`${basename(cursorProject)}-bin`, join(cursorProject, alsoClaude ? ".claude" : ".cursor", "tools", "aidlc.ts"));
+    expect(Bun.which("bun", { PATH: binDir })).toBeNull();
+    const wiring = JSON.parse(readFileSync(join(built, "hooks", "hooks.json"), "utf-8")) as {
+      hooks: { sessionStart: Array<{ command: string }> };
+    };
+    // Cursor starts every entry on its own, in the plugin's folder, with the
+    // plugin root and the workspace in the environment.
+    const runs = wiring.hooks.sessionStart.map(({ command }) => spawnSync(command, {
+      shell: true,
+      cwd: built,
+      input: JSON.stringify({ hook_event_name: "sessionStart", workspace_roots: [cursorProject] }),
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+      env: hookEnv({
+        PATH: binDir,
+        CURSOR_PLUGIN_ROOT: built,
+        CLAUDE_PLUGIN_ROOT: built,
+        CURSOR_PROJECT_DIR: cursorProject,
+        CLAUDE_PROJECT_DIR: cursorProject,
+      }),
+    }));
+    expect(runs.some((run) => run.status === 0 && run.stdout.includes("plugin sync complete: 1 plugin(s)")),
+      runs.map((run) => run.stderr).join("\n")).toBe(true);
+    expect(existsSync(join(cursorProject, ".cursor", "tools", "data", `plugin-compose-${PLUGIN}.json`))).toBe(true);
+    const cursorGraph = JSON.parse(
+      readFileSync(join(cursorProject, ".cursor", "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as GraphStage[];
+    expect(cursorGraph.some((item) => item.slug === "test-pro-integration")).toBe(true);
   });
 
   test("Cursor's cross-platform launcher resolves its plugin root from the hook path", () => {
@@ -875,6 +1043,73 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     expect(compose.status).toBe(1);
     expect(compose.stderr).toContain("multiple Cursor workspace roots");
     expect(compose.stderr).toContain("AIDLC_PROJECT_DIR");
+  });
+
+  // With only Bun (the copy channel) the launcher runs the project's own sync,
+  // so Cursor and Kiro IDE keep the composition record a native install keeps;
+  // where that sync refuses (an older project tool), the plugin's compose.ts
+  // still composes, as before.
+  test("the Bun launcher keeps the composition record on Cursor and Kiro IDE, and composes where the project's sync refuses", () => {
+    const version = (JSON.parse(
+      readFileSync(join(REPO_ROOT, "plugins", PLUGIN, ".aidlc-plugin", "plugin.json"), "utf-8"),
+    ) as { version: string }).version;
+    const env: NodeJS.ProcessEnv = { ...process.env, PATH: "" };
+    for (const key of [
+      "AIDLC_HARNESS_DIR", "AIDLC_HARNESS_NAME", "AIDLC_PLUGIN_ROOT", "AIDLC_PROJECT_DIR",
+      "CLAUDE_PLUGIN_ROOT", "CLAUDE_PROJECT_DIR", "CURSOR_PLUGIN_ROOT", "CURSOR_PROJECT_DIR", "PLUGIN_ROOT",
+    ]) delete env[key];
+    const timeout = remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS);
+    const kiroIde = (name: string) => {
+      const project = join(tmp, name);
+      cpSync(join(REPO_ROOT, "dist", "kiro-ide"), project, { recursive: true });
+      cpSync(pluginBuilds.get("kiro-ide")!, project, { recursive: true });
+      return project;
+    };
+    const runKiroIde = (project: string) => spawnSync(
+      BUN, [`./.kiro/aidlc-plugins/aidlc-${PLUGIN}/hooks/aidlc-plugin-compose.ts`, ".kiro", "kiro-ide"],
+      { cwd: project, encoding: "utf-8", env, timeout },
+    );
+    const cursorProject = join(tmp, "cursor-bun-record");
+    mkdirSync(cursorProject, { recursive: true });
+    const install = spawnSync(BUN, [join(CURSOR_DIST, "install.ts"), cursorProject], {
+      cwd: REPO_ROOT, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000,
+    });
+    expect(install.status, install.stderr).toBe(0);
+    const cursorBuilt = pluginBuilds.get("cursor")!;
+    const kiroProject = kiroIde("kiro-ide-bun-record");
+    for (const { project, leaf, run } of [
+      { project: kiroProject, leaf: ".kiro", run: () => runKiroIde(kiroProject) },
+      {
+        project: cursorProject,
+        leaf: ".cursor",
+        run: () => spawnSync(BUN, [join(cursorBuilt, "hooks", "aidlc-plugin-compose.ts"), ".cursor"], {
+          cwd: cursorBuilt,
+          input: JSON.stringify({ hook_event_name: "sessionStart", workspace_roots: [cursorProject] }),
+          encoding: "utf-8",
+          env: { ...env, CURSOR_PROJECT_DIR: cursorProject },
+          timeout,
+        }),
+      },
+    ]) {
+      const result = run();
+      expect(result.status, result.stderr).toBe(0);
+      const stamp = join(project, leaf, "tools", "data", `plugin-compose-${PLUGIN}.json`);
+      expect(existsSync(stamp), `${leaf}: composition record`).toBe(true);
+      expect((JSON.parse(readFileSync(stamp, "utf-8")) as { version?: string }).version).toBe(version);
+      const list = spawnSync(BUN, [join(project, leaf, "tools", "aidlc.ts"), "engine", "plugin", "list"], {
+        cwd: project, encoding: "utf-8", env, timeout,
+      });
+      expect(list.stdout, list.stderr).toMatch(new RegExp(`^${PLUGIN}\\s+-\\s+${version.replaceAll(".", "\\.")}\\s`, "m"));
+    }
+
+    const staleProject = kiroIde("kiro-ide-bun-stale-tool");
+    writeFileSync(join(staleProject, ".kiro", "tools", "aidlc-plugin.ts"), "process.exit(1);\n");
+    const stale = runKiroIde(staleProject);
+    expect(stale.status, stale.stderr).toBe(0);
+    const staleGraph = JSON.parse(
+      readFileSync(join(staleProject, ".kiro", "tools", "data", "stage-graph.json"), "utf-8"),
+    ) as GraphStage[];
+    expect(staleGraph.some((item) => item.slug === "test-pro-integration")).toBe(true);
   });
 
   // A project installed with `config`, then composed: a same-release refresh is
@@ -3252,8 +3487,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
     { harness: "copilot", leaf: ".aidlc", manifestDir: ".plugin", agentSource: "agents" },
   ];
   for (const { harness, leaf, manifestDir, agentSource } of RESHAPING_HARNESSES) {
-    test(`plugin sync records a reshaped ${harness} agent and a later update replaces it`, () => {
-      const projectDir = mkdtempSync(join(tmp, `sync-reshape-${harness}-`));
+    const reshapeProject = (tag: string): { projectDir: string; root: string; sync: () => SpawnSyncReturns<string> } => {
+      const projectDir = mkdtempSync(join(tmp, `sync-${tag}-${harness}-`));
       if (harness === "cursor") {
         const install = spawnSync(BUN, [join(harnessByName("cursor").distRoot, "install.ts"), projectDir], {
           cwd: REPO_ROOT, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
@@ -3262,8 +3497,8 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       } else {
         copyHarnessInstall(harness, projectDir);
       }
-      const root = join(tmp, `plugin-reshape-${harness}`);
-      cpSync(pluginBuilds.get(harness)!, root, { recursive: true });
+      const root = join(tmp, `plugin-${tag}-${harness}`);
+      cpSync(pluginRootIn(pluginBuilds.get(harness)!, harness), root, { recursive: true });
       const sync = (): SpawnSyncReturns<string> =>
         spawnSync(BUN, [join(projectDir, leaf, "tools", "aidlc-plugin.ts"), "sync"], {
           cwd: projectDir, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
@@ -3278,6 +3513,17 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
             AIDLC_HARNESS_NAME: harness,
           },
         });
+      return { projectDir, root, sync };
+    };
+    const bumpVersion = (root: string): void => {
+      const manifestPath = join(root, manifestDir, "plugin.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as { version?: string };
+      manifest.version = "9.9.9";
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    };
+
+    test(`plugin sync records a reshaped ${harness} agent and a later update replaces it`, () => {
+      const { projectDir, root, sync } = reshapeProject("reshape");
 
       const first = sync();
       expect(first.status, first.stderr).toBe(0);
@@ -3293,14 +3539,70 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       // The plugin's next version changes that agent's prose.
       const source = join(root, agentSource, "test-pro-metrics-agent.md");
       writeFileSync(source, `${readFileSync(source, "utf-8")}\nRESHAPE-UPDATE marker.\n`);
-      const manifestPath = join(root, manifestDir, "plugin.json");
-      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as { version?: string };
-      manifest.version = "9.9.9";
-      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      bumpVersion(root);
 
       const second = sync();
       expect(second.status, second.stderr).toBe(0);
       expect(readFileSync(installedAgent, "utf-8")).toContain("RESHAPE-UPDATE marker");
+    });
+
+    // A project composed by 2.11.0, whose engine never recorded an agent the
+    // harness reshapes, and a newer build of the plugin whose builder words the
+    // agent's knowledge preflight differently. A file that differs only there is
+    // the plugin's older copy; one with the person's change in it is theirs.
+    const KNOWLEDGE_PREFLIGHT = /^<!-- aidlc-delegated-knowledge-preflight -->\n[^\n]*\n/m;
+    const asTwoElevenLeftIt = (projectDir: string, change = ""): string => {
+      const agentRel = `${leaf}/agents/test-pro-metrics-agent.md`;
+      const installedAgent = join(projectDir, agentRel);
+      const installed = readFileSync(installedAgent, "utf-8");
+      expect(installed).toMatch(KNOWLEDGE_PREFLIGHT);
+      writeFileSync(
+        installedAgent,
+        `${installed.replace(
+          KNOWLEDGE_PREFLIGHT,
+          "<!-- aidlc-delegated-knowledge-preflight -->\n**Delegated knowledge preflight (mandatory):** an earlier builder's wording.\n",
+        )}${change}`,
+      );
+      const recordPath = join(projectDir, leaf, "tools", "data", "plugin-owned-test-pro.json");
+      const record = JSON.parse(readFileSync(recordPath, "utf-8")) as { files: Array<{ path: string }> };
+      record.files = record.files.filter((file) => file.path !== agentRel);
+      writeFileSync(recordPath, `${JSON.stringify(record, null, 2)}\n`);
+      return installed;
+    };
+
+    test(`an unrecorded ${harness} agent that differs only in its knowledge preflight is the plugin's older copy`, () => {
+      const { projectDir, root, sync } = reshapeProject("preflight");
+      const first = sync();
+      expect(first.status, first.stderr).toBe(0);
+      const composed = asTwoElevenLeftIt(projectDir);
+      bumpVersion(root);
+
+      const second = sync();
+      expect(second.status, second.stderr).toBe(0);
+      expect(second.stderr).not.toContain("collides");
+      const agentRel = `${leaf}/agents/test-pro-metrics-agent.md`;
+      const installedAgent = join(projectDir, agentRel);
+      expect(readFileSync(installedAgent, "utf-8")).toBe(composed);
+      const record = JSON.parse(
+        readFileSync(join(projectDir, leaf, "tools", "data", "plugin-owned-test-pro.json"), "utf-8"),
+      ) as { files: Array<{ path: string; sha256: string }> };
+      expect(record.files.find((file) => file.path === agentRel)?.sha256).toBe(sha256Of(installedAgent));
+    });
+
+    test(`an unrecorded ${harness} agent with the person's change in it stays theirs`, () => {
+      const { projectDir, root, sync } = reshapeProject("preflight-edit");
+      const first = sync();
+      expect(first.status, first.stderr).toBe(0);
+      asTwoElevenLeftIt(projectDir, "\nOur team's note.\n");
+      const installedAgent = join(projectDir, leaf, "agents", "test-pro-metrics-agent.md");
+      const theirs = readFileSync(installedAgent, "utf-8");
+      bumpVersion(root);
+
+      const second = sync();
+      expect(second.stderr).toContain(
+        'agents "test-pro-metrics-agent.md" collides with an existing file this plugin has no record of installing',
+      );
+      expect(readFileSync(installedAgent, "utf-8")).toBe(theirs);
     });
   }
 

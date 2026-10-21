@@ -26,6 +26,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -315,6 +316,7 @@ describe("t238 build-binaries release builder", () => {
       "compiled-kiro-new-work-routing",
       "plugin-select",
       "real-plugin-sync",
+      "plugin-authoring",
       "conductor-persona",
       "workspace-global-flags",
       "bolt-reentry",
@@ -933,8 +935,13 @@ describe("t238 build-binaries release builder", () => {
         humanInstall.status,
         `${humanInstall.stdout ?? ""}${humanInstall.stderr ?? ""}`,
       ).toBe(0);
-      expect(humanInstall.stdout ?? "")
-        .toContain(`PASS installed AI-DLC ${AIDLC_VERSION} with all harness runtimes`);
+      // The one catalogue path a person adds to Claude Code or Codex, printed to copy.
+      const catalogue = join(realpathSync(installRoot), "plugins");
+      expect(humanInstall.stdout ?? "").toContain(
+        `PASS installed AI-DLC ${AIDLC_VERSION} with all harness runtimes\n` +
+          `Plugin marketplace for Claude Code and Codex: ${catalogue} (add it once; updates keep it current)\n`,
+      );
+      expect(existsSync(join(catalogue, ".claude-plugin", "marketplace.json"))).toBe(true);
       expect(`${humanInstall.stdout ?? ""}${humanInstall.stderr ?? ""}`).not.toContain("\u001b[");
 
       const profileText = readFileSync(profile, "utf-8");
@@ -1066,6 +1073,20 @@ describe("t238 build-binaries release builder", () => {
       expect(readFileSync(join(output, "install.ps1"), "utf-8")).toContain(
         `$PackagedVersion = '${AIDLC_VERSION}'`,
       );
+      // The runtime's plugins/ folder is one catalogue of AI-DLC's own plugins
+      // a person adds once; no plugin in it carries a catalogue of its own.
+      const copy = join(root, "copy-runtime");
+      extractTarGz(join(output, releaseCopyRuntimeAsset(AIDLC_VERSION)), copy);
+      const catalogue = JSON.parse(
+        readFileSync(join(copy, "plugins", ".claude-plugin", "marketplace.json"), "utf-8"),
+      ) as { name: string; plugins: Array<{ name: string; source: string }> };
+      expect(catalogue.name).toBe("aidlc-plugins");
+      expect(catalogue.plugins).toContainEqual(expect.objectContaining({
+        name: "aidlc-test-pro",
+        source: "./test-pro/claude",
+      }));
+      expect(existsSync(join(copy, "plugins", ".agents", "plugins", "marketplace.json"))).toBe(true);
+      expect(existsSync(join(copy, "plugins", "test-pro", "claude", ".claude-plugin", "marketplace.json"))).toBe(false);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

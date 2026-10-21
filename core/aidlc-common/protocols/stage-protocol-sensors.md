@@ -38,16 +38,14 @@ when they ask for changes, correct from that detail file and run the check
 again. A Unit's own gate names that Unit's outputs only; with Sensors off,
 nothing is said about checks.
 
-`required-sections` applies to markdown outputs. Unless a stage declares a
-more specific contract, it enforces the registry default of at least two H2
-headings. A stage's `## Sensors` compartment may retain extra requirements for
-particular files. Timestamp markers (`<slug>-timestamp.md`) are run records
-and always pass.
+`required-sections` requires the `##` headings of a markdown output's
+template when one applies (stage-protocol.md, Template overrides), and nothing
+without one.
 
 `upstream-coverage` compares output prose with the stage's `consumes:`
 frontmatter. Every required artefact that exists must be referenced so the
 output shows which upstream inputs informed it; an optional one
-(`required: false`) is not checked unless the stage lists it under `cites:`. Stages with no required or cited `consumes:` pass
+(`required: false`) is not checked unless the stage marks it `cited: true`. Stages with no required or cited `consumes:` pass
 this check trivially. The compact `Imports:` and `Upstream targets:` lines in
 each stage file are the local summary; frontmatter remains authoritative when
 checks are resolved.

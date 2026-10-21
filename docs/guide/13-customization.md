@@ -45,7 +45,8 @@ Shipped agents are authored with a `tier:` (`judgment` | `balanced` | `templated
 The first-run wizard defaults to the `balanced` **preset**, which is distinct
 from the reviewer **tier**: it records medium effort for all three groups. On
 Kiro IDE, Cursor, and Copilot it records no preset, because agents there keep
-your session's model and effort.
+your session's model and effort (on Kiro, unless a model or effort is set for
+that agent).
 Select a preset with `aidlc config models --preset balanced --project --yes`:
 
 | Preset | Deciding | Reviewing | Writing up |
@@ -66,7 +67,7 @@ Explicit group dials still have no Kiro CLI surface. See
 [Model Policy](18-install-and-lifecycle.md#model-policy) for profiles, overrides,
 and the upgrade path.
 
-To change ONE agent's effort, run `aidlc config models --agent <name> --effort <low|medium|high|xhigh|max> --project --yes`. To pin its model, use `--model <id>` (a model ID enabled on your install) in place of `--effort`, or pass both. `--effort default` (or `--model default`) removes that one setting of the agent's, so the preset or group applies to it again; the command prints it as the undo of a change. `--local` instead of `--project` keeps the change to yourself. Config records the change in the settings file and rewrites that agent's file from it. Do not edit the `aidlc-*-agent` files by hand where config writes them: `aidlc config models --check` reports a hand edit as drift, and the next `aidlc config` puts the recorded value back. Claude Code, Codex, and opencode take both a model and an effort for one agent (Codex runs `max` as `xhigh`, and opencode runs `xhigh` as `high`). Kiro CLI takes a model, and an effort only together with a model. On Kiro IDE, Cursor, and Copilot every agent keeps the session's model and effort, and the command says what it could not apply there; on Kiro IDE a `model:` line you add by hand to an agent's `.kiro/agents/aidlc-*-agent.md` changes that agent until the next `aidlc config`. To cap EVERY agent when building your own distribution from source, set a `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>`. Both are pack-time knobs on `bun scripts/package.ts`, not runtime settings.
+To change ONE agent's effort, run `aidlc config models --agent <name> --effort <low|medium|high|xhigh|max> --project --yes`. To pin its model, use `--model <id>` (a model ID enabled on your install) in place of `--effort`, or pass both. `--effort default` (or `--model default`) removes that one setting of the agent's, so the preset or group applies to it again; the command prints it as the undo of a change. `--local` instead of `--project` keeps the change to yourself. Config records the change in the settings file and rewrites that agent's file from it. Do not edit the `aidlc-*-agent` files by hand where config writes them: `aidlc config models --check` reports a hand edit as drift, and the next `aidlc config` puts the recorded value back. Claude Code, Codex, and opencode take both a model and an effort for one agent (Codex runs `max` as `xhigh`, and opencode runs `xhigh` as `high`). Kiro CLI takes a model, and an effort only together with a model. Kiro IDE (and Kiro CLI on its v3 engine) takes both a model and an effort for one agent, written into that agent's `.kiro/agents/aidlc-<name>-agent.md` ([One agent on its own model and effort](harnesses/kiro-ide.md#one-agent-on-its-own-model-and-effort)); a preset or group effort changes nothing there. On Cursor and Copilot every agent keeps the session's model and effort, and the command says what it could not apply there. To cap EVERY agent when building your own distribution from source, set a `tier_cap:` in `core/memory/org.md`/`project.md` frontmatter or run the packager with `AIDLC_TIER_CAP=<tier>`. Both are pack-time knobs on `bun scripts/package.ts`, not runtime settings.
 
 ---
 
@@ -419,13 +420,20 @@ Intent creation reads Guard Policy from the scope the plan runs on. The conducto
 The resolved value is written to the intent's `aidlc-state.md` at creation as `- **Guard Policy**: <value> (from scope <name>)`, rewritten by the flag, typed confirmation words, or a plain-words request the conductor carries out through the setter, and read by value only. Because the state file is committed with the intent, the value survives sessions and teammates see the same one; a memory edit that changes the effective value for a running intent is recorded as a `GUARD_POLICY_SET` row naming the memory file the next time a governed check runs. An intent created before this field existed stays `strict (not set)` until you set it, unless a memory file declares `relaxed` or `off`, which applies to it too; an invalid field is unavailable until `/aidlc --guard-policy` with one of the three values repairs it. The next intent starts from its scope's default again.
 
 If a state file carries both `Guard Policy` and the retired `Change Control` with
-different policy words, strict applies and status shows
-`strict (from conflicting state lines)`; memory-held strict still takes precedence.
-If both agree, the `Guard Policy` line is used. Any write of the policy line removes
-the retired line, leaving one setting. Until a conflict is resolved, `next` carries
-this notice:
+different policy words (a teammate on a release before the rename can leave both,
+since the state file travels by git), the next `next` keeps one of them and writes
+it as the only line: the one the audit trail shows was set last, else the one you
+set yourself, else the one the scope starts with, else the stricter. It records a
+`GUARD_POLICY_SET` row with `Source: command` and a `Settled` field naming both
+lines, and asks nothing. When it kept your own last choice it says nothing; when
+the record could not tell, it says once which it kept, for example:
 
-> This work has two settings for how closely AI-DLC checks changes, and they disagree, so AI-DLC checks everything for now. Do you want it to keep checking everything, carry on with a note when something you approved changes, or also skip some of its own checks? I'll ask again until you choose.
+> This work had two settings for how closely AI-DLC checks changes, and they disagreed. The record does not say which was set last, so AI-DLC keeps the stricter one: it checks everything. You can change it any time.
+
+Until then status shows `strict (from conflicting state lines)`. A team that holds
+strict in memory keeps strict, and the two lines stay as they are. If both agree,
+the `Guard Policy` line is used. Any write of the policy line removes the retired
+line, leaving one setting.
 
 #### This setting used to be called Change Control
 
@@ -595,7 +603,7 @@ The file is AI-DLC's, so the next `aidlc config` in the project stops at your ed
 ```text
 $ aidlc config --harness claude --yes
 error: 1 config conflict(s): .claude/hooks/aidlc-statusline.ts (locally modified or unowned)
-fix: to keep your version, move .claude/hooks/aidlc-statusline.ts somewhere else and run the same command again; to take the shipped version over it, run it again with --force. `aidlc config --dry-run --verbose` lists every change first.
+fix: to keep your version, move .claude/hooks/aidlc-statusline.ts somewhere else and run the same command again; to take the shipped version over it, run it again with --force.
 ```
 
 Keep a copy of your version before you take the shipped one with `--force`.

@@ -75,13 +75,14 @@ import {
 } from "../harness/test-budget.ts";
 import { afterEach, beforeAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
   cleanupTestProject,
   createOrchestrationTestProject,
   createTestProject,
+  DEFAULT_RECORD_DIR,
   FIXTURES_DIR,
   followProposal,
   REPO_ROOT,
@@ -1017,6 +1018,11 @@ describe("t114 parked branch (#367)", () => {
     const out = runNext(proj, []).out;
     expect(out).toContain('"kind":"parked"');
     expect(out).toContain('"stage":"feasibility"');
+    // The person hears where the work stands and the way back: their own words
+    // in this chat, the entry with --resume in a new one.
+    expect(JSON.parse(out).narration).toBe(
+      "Paused at Feasibility & Constraints with everything saved. Pick it back up any time here, or with /aidlc --resume in a new chat.",
+    );
   });
 
   test("--resume on a parked workflow self-disables (names unpark, not parked)", () => {
@@ -1392,6 +1398,77 @@ describe("t114 new description over a finished workflow -> new work (#1535)", ()
     seedStateFile(proj, COMPLETED);
     const out = runNext(proj, ["--resume", "a standalone metrics dashboard"]).out;
     expect(out).not.toContain("intent create");
+  });
+
+  // Words beside finished work may ask to go back to one of its stages ("go
+  // back to code generation for a second round"): the print names the work and
+  // the way back beside the plans, and leaves the reading to the agent.
+  const GO_BACK = "go back to code generation for a second round on both units";
+  const proposalPrint = (args: string[]): string => {
+    const d = runOrchestrateNext(TOOL, proj, args, { cwd: proj, env: { ...process.env } }).directive as
+      { kind?: string; message?: string } | null;
+    expect(d?.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
+    return String(d?.message);
+  };
+  const intents = () => join(proj, "aidlc", "spaces", "default", "intents");
+
+  test("words over the selected finished workflow name it and the way back to a stage", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    const message = proposalPrint([GO_BACK]);
+    expect(message).toStartWith(`The person said: "${GO_BACK}".`);
+    expect(message).not.toContain("asked for new work");
+    expect(message).toContain(`This project's work \`fixture\` (record: \`${DEFAULT_RECORD_DIR}\`) is finished.`);
+    expect(message).toContain("next --stage <stage slug>` (add `--unit <unit>` or `--every-unit`");
+    // It is selected here, so nothing to select first.
+    expect(message).not.toContain(`intent ${DEFAULT_RECORD_DIR}`);
+    expect(message).toContain("--propose <plan> --request ");
+    expect(message).toContain("Plans: ");
+  });
+
+  test("in a fresh clone the finished work is named with the command that selects it", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    rmSync(join(intents(), "active-intent"), { force: true });
+    const message = proposalPrint([GO_BACK]);
+    expect(message).toStartWith(`The person said: "${GO_BACK}".`);
+    expect(message).toContain("is finished, and it is not selected in this chat.");
+    expect(message).toContain(`intent ${DEFAULT_RECORD_DIR}\`, then \``);
+    expect(message).toContain("next --stage <stage slug>`");
+    expect(message).toContain("--propose <plan> --request ");
+  });
+
+  test("a finished record named outside the record-name shape is not written into a command", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    rmSync(join(intents(), "active-intent"), { force: true });
+    renameSync(join(intents(), DEFAULT_RECORD_DIR), join(intents(), "customer work"));
+    const registry = join(intents(), "intents.json");
+    writeFileSync(registry, readFileSync(registry, "utf-8").replaceAll(`"${DEFAULT_RECORD_DIR}"`, '"customer work"'));
+    const message = proposalPrint([GO_BACK]);
+    expect(message).not.toContain("customer work");
+    expect(message).toStartWith("The person asked for new work: ");
+  });
+
+  // A jump takes no settings (--review beside --stage is refused), so the way
+  // back sets what they typed first, or it would be dropped without a word.
+  test("a setting typed with the words rides the way back, set before the stage step", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    rmSync(join(intents(), "active-intent"), { force: true });
+    const message = proposalPrint(["--review", "none", GO_BACK]);
+    const select = message.indexOf(`intent ${DEFAULT_RECORD_DIR}\``);
+    const set = message.indexOf("config set review none` and say the line it prints, then `");
+    const stage = message.indexOf("next --stage <stage slug>`");
+    expect({ select: select >= 0, set: set > select, stage: stage > set }).toEqual({ select: true, set: true, stage: true });
+  });
+
+  test("new work the person confirmed beside finished work gets the plan step alone", () => {
+    proj = createOrchestrationTestProject();
+    seedStateFile(proj, COMPLETED);
+    const message = proposalPrint(["--new-intent", "a standalone metrics dashboard"]);
+    expect(message).toStartWith("The person asked for new work: ");
+    expect(message).not.toContain("is finished");
   });
 });
 

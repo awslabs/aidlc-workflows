@@ -73,7 +73,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import {
   fixtureIntentId8,
   AIDLC_SRC,
@@ -472,7 +472,7 @@ function logWorktreeReview(
   // worktree's intent record; the verdict records it there. The merge carries
   // the record to main beside the receipt.
   const { reviewFile } = JSON.parse(requested.stdout) as { reviewFile: string };
-  const draft = join(wt, reviewFile);
+  const draft = resolve(wt, reviewFile);
   mkdirSync(dirname(draft), { recursive: true });
   writeFileSync(
     draft,

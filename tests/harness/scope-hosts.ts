@@ -22,6 +22,7 @@ import { tmpdir } from "node:os";
 import { Worker } from "node:worker_threads";
 import { basename, dirname, join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
+import { compareVersions } from "../../dist/claude/.claude/tools/aidlc-channel.ts";
 import { auditShardHostSegment, cloneIdFileContent, cloneIdPath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { copilotSkillPrompt } from "./aidlc-input-corpus.ts";
 import { FIXTURES_DIR, REPO_ROOT } from "./fixtures.ts";
@@ -35,7 +36,6 @@ import {
   runScope,
   SCOPE_RUN_TIMEOUT_MS,
   ScopeHost,
-  RESUME_AGAIN,
   ScopeRunRefused,
   ScopeRunStuck,
   type ScopeRun,
@@ -923,6 +923,9 @@ interface PluginAnswer {
   nudges?: string[];
 }
 
+/** The first build whose opencode plugin names each shell command's chat (its `shell.env` hook). */
+const FIRST_RELEASE_NAMING_THE_CHAT = "2.11.1-preview.20261016.1";
+
 /**
  * opencode: AI-DLC's plugin (`.opencode/plugin/aidlc-opencode-adapter.ts`)
  * loaded into one opencode process, here a worker thread the host waits on
@@ -931,7 +934,8 @@ interface PluginAnswer {
  * thrown error; a turn end that blocks sends a nudge through
  * `client.session.prompt`. A helper is a child session whose parent the client
  * names. A new chat after a stop for the day is a new opencode process, which
- * loads the plugin again. The agent's shell carries `OPENCODE=1`.
+ * loads the plugin again. The agent's shell carries `OPENCODE=1` and the chat
+ * the plugin's `shell.env` names for it.
  */
 export class OpencodeScopeHost extends ScopeHost {
   override readonly dir = ".aidlc";
@@ -944,6 +948,13 @@ export class OpencodeScopeHost extends ScopeHost {
   private readonly hostNumber = ++hostCount;
   private child: string | null = null;
   private uses = 0;
+  /**
+   * The published release the project's plugin came from, when a drive set the
+   * project up from one (the update check's previous release); null for a tree
+   * this repository built. A release from before the plugin named the chat runs
+   * its commands without one, as opencode ran them then.
+   */
+  release: string | null = null;
 
   constructor(proj: string, base?: NodeJS.ProcessEnv) {
     super(proj, base);
@@ -988,7 +999,12 @@ export class OpencodeScopeHost extends ScopeHost {
   }
 
   /** A tool call through the plugin: before (a throw refuses it, as in opencode), the call, then after. */
-  private tool<T>(tool: string, args: Record<string, unknown>, act: (args: Record<string, unknown>) => T, result: (value: T) => string): T {
+  private tool<T>(
+    tool: string,
+    args: Record<string, unknown>,
+    act: (args: Record<string, unknown>, call: { sessionID: string; callID: string }) => T,
+    result: (value: T) => string,
+  ): T {
     const sessionID = this.child ?? this.session;
     const callID = `call_${hex(this.hostNumber, 4)}_${++this.uses}`;
     const before = this.hookCall("tool.execute.before", { tool, sessionID, callID }, { args });
@@ -997,7 +1013,7 @@ export class OpencodeScopeHost extends ScopeHost {
       throw new ScopeRunRefused(`the plugin refused ${tool} ${clip(JSON.stringify(args), 200)}`, before.refused);
     }
     const ran = (before.output?.args as Record<string, unknown> | undefined) ?? args;
-    const value = act(ran);
+    const value = act(ran, { sessionID, callID });
     this.hookCall("tool.execute.after", { tool, sessionID, callID, args: ran }, { output: result(value) });
     return value;
   }
@@ -1032,9 +1048,13 @@ export class OpencodeScopeHost extends ScopeHost {
   }
 
   override bash(line: string): RunResult {
-    return this.tool("bash", { command: line, description: "Run the step AI-DLC named" }, (args) => {
+    return this.tool("bash", { command: line, description: "Run the step AI-DLC named" }, (args, call) => {
       const ran = String(args.command ?? line);
-      return this.spawn(ran, this.argv(ran), undefined, { ...this.env, OPENCODE: "1" });
+      // opencode asks the plugin for the command's environment, which names its chat.
+      const env = this.hookCall("shell.env", { cwd: this.proj, ...call }, { env: {} }).output?.env as Record<string, string> | undefined;
+      const named = this.release === null || compareVersions(this.release, FIRST_RELEASE_NAMING_THE_CHAT) >= 0;
+      if (named && !env?.AIDLC_SESSION_OVERRIDE) throw new ScopeRunStuck(`the opencode plugin named no chat for ${clip(ran, 200)}`);
+      return this.spawn(ran, this.argv(ran), undefined, { ...this.env, OPENCODE: "1", ...env });
     }, (res) => `${res.stdout}${res.stderr}`);
   }
 
@@ -1131,12 +1151,6 @@ export const SKIPPED = [
 ];
 export const UNITS = ["core", "api"];
 
-/**
- * Detours the journey meets today, each with a test.todo named after it in
- * tests/integration/t-scope-host-claude.test.ts; the fix removes it here.
- */
-export const KNOWN_JOURNEY_DETOURS: readonly string[] = [RESUME_AGAIN];
-
 export interface HostJourney {
   run: ScopeRun;
   /** The first clone's audit shard: every row before the fresh clone. */
@@ -1207,9 +1221,7 @@ export function hostJourneyProblems(journey: HostJourney): string[] {
   if (shards.length !== 2 || shards.at(-1) !== basename(firstShard)) {
     problems.push(`the work's audit shards are ${JSON.stringify(shards)}: not the first clone's, sorting last, and one from the fresh clone`);
   }
-  for (const detour of run.agent.detours) {
-    if (!KNOWN_JOURNEY_DETOURS.includes(detour)) problems.push(`the person was sent round a detour: ${detour}`);
-  }
+  for (const detour of run.agent.detours) problems.push(`the person was sent round a detour: ${detour}`);
   if (new Set(chats).size !== 2) problems.push(`the person used chats ${JSON.stringify(chats)}, not two`);
   const checkpoints = run.agent.asked.filter((a) => a.what === "unit checkpoint").map((a) => a.unit);
   if (JSON.stringify(checkpoints) !== JSON.stringify(UNITS)) problems.push(`Unit checkpoints asked for ${JSON.stringify(checkpoints)}, not each Unit once`);

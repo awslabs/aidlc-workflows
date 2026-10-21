@@ -47,6 +47,10 @@
             },
             {
               "classname": "native Bun terminal driver commands",
+              "name": "a pick on a lone menu goes into the drive's record of the person's turns in its own words"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
               "name": "an answered menu that repaints slowly or partially is not answered again"
             },
             {
@@ -899,6 +903,10 @@
             {
               "classname": "native Bun terminal driver commands",
               "name": "a delayed old-generation kill fallback cannot stop or overwrite a replacement's stop"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "a pick on a lone menu goes into the drive's record of the person's turns in its own words"
             },
             {
               "classname": "native Bun terminal driver commands",
@@ -1759,6 +1767,10 @@
             {
               "classname": "native Bun terminal driver commands",
               "name": "a delayed old-generation kill fallback cannot stop or overwrite a replacement's stop"
+            },
+            {
+              "classname": "native Bun terminal driver commands",
+              "name": "a pick on a lone menu goes into the drive's record of the person's turns in its own words"
             },
             {
               "classname": "native Bun terminal driver commands",

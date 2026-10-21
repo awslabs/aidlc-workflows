@@ -22,6 +22,7 @@ import {
   test,
 } from "bun:test";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -42,11 +43,12 @@ import {
   reviewArtifactEntries,
   reviewRecordDigest,
   serializeReviewRecord,
+  setGuardPolicyLine,
   sourcePathKey,
   writeUnitSourceSnapshot,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
-  acceptedRiskDispositionField,
+  approvalDispositionField,
   hydrateReviewArtifactContexts,
   parseReviewArtifact,
   readReviewArtifactContexts,
@@ -372,6 +374,35 @@ function seedReviewedPerUnitStage(
   return artifact;
 }
 
+// A per-Unit stage's files written once for the stage (no Units Generation),
+// with one review section and one Major finding in its primary artifact.
+function seedReviewedStageLevelFiles(
+  proj: string,
+  stage: NonNullable<ReturnType<typeof findStageBySlug>>,
+): string {
+  const entries = reviewArtifactEntries(proj, stage) ?? [];
+  const primary = entries.find((entry) =>
+    entry.path !== null && entry.required && entry.path.endsWith(".md")
+  );
+  if (primary?.path === null || primary === undefined) {
+    throw new Error(`No reviewable artifact for ${stage.slug}`);
+  }
+  for (const entry of entries) {
+    if (entry.path === null) continue;
+    mkdirSync(dirname(entry.path), { recursive: true });
+    writeFileSync(entry.path, `# ${entry.logicalPath}\n`, "utf-8");
+  }
+  const artifact = relative(proj, primary.path).replaceAll("\\", "/");
+  writeFileSync(
+    primary.path,
+    reviewMarkdown("NOT-READY", [
+      `| R-01 | Major | ${artifact} > section | ${stage.slug} concern | Re-check ${stage.slug} | New |`,
+    ]),
+    "utf-8",
+  );
+  return artifact;
+}
+
 function auditBlock(
   title: string,
   timestamp: string,
@@ -415,6 +446,60 @@ function engineOwnedFindingProject(
     { gate: "start" },
   );
   return project;
+}
+
+// #2208's run: an advisory review with a Critical and a Minor, the conductor's
+// fix to the reviewed file after it, kept under Guard Policy `mode`, and the
+// gate presented again, which records the kept change once.
+function fixedAfterReviewProject(
+  mode: "off" | "relaxed",
+): ReturnType<typeof requirementProject> {
+  const project = requirementProject([]);
+  const statePath = seededStateFile(project.proj);
+  writeFileSync(
+    statePath,
+    setGuardPolicyLine(readFileSync(statePath, "utf-8"), `${mode} (set by you)`),
+    "utf-8",
+  );
+  writeFileSync(project.artifact, "# Requirements\n\nFR-1: a caller can force a post.\n", "utf-8");
+  recordReviewViaRecord(
+    project.proj,
+    reviewReportMarkdown("NOT-READY", [], [
+      `| Critical | ${project.relativeArtifact} > FR-1 | A caller can push a balance below the floor | Remove the caller-settable flag |`,
+      `| Minor | ${project.relativeArtifact} > FR-2 | Wording is vague | Tighten it |`,
+    ]),
+    { verdict: "NOT-READY", gate: "start" },
+  );
+  appendFileSync(project.artifact, "\nThere is no caller-settable flag.\n", "utf-8");
+  appendAuditEntry(
+    "ARTIFACT_UPDATED",
+    {
+      File: project.artifact,
+      Tool: "Edit",
+      Context: "inception > requirements-analysis > requirements.md",
+    },
+    project.proj,
+  );
+  const regate = run(STATE, ["gate-start", "requirements-analysis"], project.proj);
+  expect(regate.status, regate.out).toBe(0);
+  expect(regate.stdout).toContain("changed after the Requirements Analysis review; carrying on.");
+  return project;
+}
+
+function approveGate(proj: string): void {
+  const approved = run(
+    ORCHESTRATE,
+    ["report", "--stage", "requirements-analysis", "--result", "approved", "--user-input", "Approve"],
+    proj,
+  );
+  expect(approved.status, approved.out).toBe(0);
+  expect(readAuditShardEvents(proj).some((row) => row.event === "GATE_APPROVED")).toBe(true);
+}
+
+function recordedDispositions(proj: string, stageSlug: string, unit?: string) {
+  return [...readReviewFindingDispositions(proj, stageSlug, unit).values()]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map(({ id, status, decided_at_severity }) => ({ id, status, decided_at_severity }));
 }
 
 function requestChanges(
@@ -924,7 +1009,7 @@ describe("t304 executable review brief scenarios", () => {
     expect(context.stdout).not.toContain("Missing: Required action, Status");
     expect(context.stdout).not.toContain("as written");
 
-    expect(JSON.parse(acceptedRiskDispositionField(proj, stage)!).dispositions).toEqual([
+    expect(JSON.parse(approvalDispositionField(proj, stage)!).dispositions).toEqual([
       expect.objectContaining({ artifact: relativeArtifact, id: "R-00", status: "Accepted risk" }),
     ]);
     expect(
@@ -1086,7 +1171,7 @@ describe("t304 executable review brief scenarios", () => {
     }
 
     const stage = findStageBySlug("functional-design")!;
-    const serialized = acceptedRiskDispositionField(proj, stage);
+    const serialized = approvalDispositionField(proj, stage);
     expect(serialized).toBeString();
     const dispositioned = new Set(
       (
@@ -1143,7 +1228,7 @@ describe("t304 executable review brief scenarios", () => {
       ["unit-a", "unit-b"],
     );
     const stage = findStageBySlug("functional-design")!;
-    const serialized = acceptedRiskDispositionField(proj, stage, "unit-b");
+    const serialized = approvalDispositionField(proj, stage, "unit-b");
     expect(serialized).toBeString();
     expect(
       (
@@ -1217,6 +1302,149 @@ describe("t304 executable review brief scenarios", () => {
       readReviewFindingDispositions(proj, stage.slug),
     );
     expect(hydrated[0].findings[0].status).toBe("Accepted risk");
+  });
+
+  // #2208: the person was told the Critical was fixed and nothing reviewed the
+  // fix. The record says the work changed after the review, never that they
+  // accepted the risk, and nobody decided the findings: the next review re-checks
+  // them. The gate the person sees is unchanged.
+  test.each(["off", "relaxed"] as const)(
+    "Guard Policy %s: Approve over work changed after its review records Changed after review and the findings stay open",
+    (mode) => {
+      const { proj, relativeArtifact } = fixedAfterReviewProject(mode);
+      const stage = findStageBySlug("requirements-analysis")!;
+      const brief = renderReviewBrief(proj, stage, "first");
+      expect(brief).toContain(`**Changed after review:** \`${relativeArtifact}\``);
+      expect(brief).toContain("- **Approve** - continue with the open findings accepted.");
+
+      approveGate(proj);
+      expect(recordedDispositions(proj, "requirements-analysis")).toEqual([
+        { id: "R-01", status: "Changed after review", decided_at_severity: "Critical" },
+        { id: "R-02", status: "Changed after review", decided_at_severity: "Minor" },
+      ]);
+
+      const contexts = readReviewArtifactContexts(proj, stage);
+      expect(contexts[0].findings.map((finding) => finding.status)).toEqual(["New", "New"]);
+      const hydrated = hydrateReviewArtifactContexts(
+        contexts,
+        readReviewFindingDispositions(proj, stage.slug),
+      );
+      expect(hydrated[0].findings.map((finding) => [finding.status, finding.decidedAtSeverity])).toEqual([
+        ["New", undefined],
+        ["New", undefined],
+      ]);
+      const reviewer = renderFindingsContext(contexts, "reviewer");
+      const recheck = reviewer.slice(
+        reviewer.indexOf("**Open findings to re-check**"),
+        reviewer.indexOf("**Decided findings (settled, read-only)**"),
+      );
+      expect(recheck).toContain("| R-01 | Critical |");
+      expect(recheck).toContain("| R-02 | Minor |");
+      expect(reviewer).toContain("_No settled decisions are carried into this review._");
+    },
+  );
+
+  test("a finished review after the change saw it: Approve records Accepted risk", () => {
+    const { proj } = fixedAfterReviewProject("off");
+    appendAuditEntry("HUMAN_TURN", {}, proj);
+    const again = [
+      "review",
+      "--stage",
+      "requirements-analysis",
+      "--reviewer",
+      "aidlc-product-lead-agent",
+      "--iteration",
+      "2",
+      "--person-asked",
+    ];
+    const requested = run(LOG, again, proj);
+    expect(requested.status, requested.out).toBe(0);
+    const draft = join(proj, (JSON.parse(requested.stdout) as { reviewFile: string }).reviewFile);
+    mkdirSync(dirname(draft), { recursive: true });
+    writeFileSync(
+      draft,
+      reviewReportMarkdown(
+        "NOT-READY",
+        [
+          "| R-01 | Still applies | Critical | The flag is still settable |",
+          "| R-02 | Still applies | Minor | Still vague |",
+        ],
+        [],
+        2,
+      ),
+      "utf-8",
+    );
+    const completed = run(LOG, [...again, "--verdict", "NOT-READY"], proj);
+    expect(completed.status, completed.out).toBe(0);
+    const brief = renderReviewBrief(proj, findStageBySlug("requirements-analysis")!, "revision");
+    expect(brief).not.toContain("Changed after review");
+
+    approveGate(proj);
+    expect(recordedDispositions(proj, "requirements-analysis")).toEqual([
+      { id: "R-01", status: "Accepted risk", decided_at_severity: "Critical" },
+      { id: "R-02", status: "Accepted risk", decided_at_severity: "Minor" },
+    ]);
+  });
+
+  // Each Unit is asked about its own work: a change to one Unit's reviewed
+  // files relabels only that Unit's findings, at the stage's gate and at the
+  // Unit's own approval.
+  test("a per-Unit stage records Changed after review only for the Unit whose work changed", () => {
+    const { proj, artifacts } = perUnitReviewProject(
+      "functional-design",
+      ["unit-a", "unit-b"],
+    );
+    appendAuditEntry(
+      "CHANGE_ACCEPTED",
+      {
+        Stage: "functional-design",
+        Unit: "unit-a",
+        Checkpoint: "review-receipt",
+        Changed: artifacts.get("unit-a")!,
+        Details: `${artifacts.get("unit-a")} changed after the unit-a Unit was reviewed; carrying on.`,
+      },
+      proj,
+    );
+    const stage = findStageBySlug("functional-design")!;
+    const unitA = artifacts.get("unit-a")!;
+    const unitB = artifacts.get("unit-b")!;
+    const statuses = (serialized: string | undefined) =>
+      (JSON.parse(serialized!) as { dispositions: Array<{ artifact: string; id: string; status: string }> })
+        .dispositions.map(({ artifact, id, status }) => ({ artifact, id, status }));
+    expect(statuses(approvalDispositionField(proj, stage))).toEqual([
+      { artifact: unitA, id: "R-01", status: "Changed after review" },
+      { artifact: unitB, id: "R-02", status: "Accepted risk" },
+    ]);
+    expect(statuses(approvalDispositionField(proj, stage, "unit-a"))).toEqual([
+      { artifact: unitA, id: "R-01", status: "Changed after review" },
+    ]);
+    expect(statuses(approvalDispositionField(proj, stage, "unit-b"))).toEqual([
+      { artifact: unitB, id: "R-02", status: "Accepted risk" },
+    ]);
+  });
+
+  // With no Units Generation a per-Unit stage writes one set of files for the
+  // stage, so its one review is relabelled by any change to them, the same
+  // grain the brief's "Changed after review" line uses.
+  test("a per-Unit stage with stage-level files records Changed after review for its one review", () => {
+    const { proj } = requirementProject([]);
+    const stage = findStageBySlug("code-generation")!;
+    const artifact = seedReviewedStageLevelFiles(proj, stage);
+    appendAuditEntry(
+      "CHANGE_ACCEPTED",
+      {
+        Stage: "code-generation",
+        Checkpoint: "review-receipt",
+        Changed: artifact,
+        Details: `${artifact} changed after the Code Generation review; carrying on.`,
+      },
+      proj,
+    );
+    const serialized = approvalDispositionField(proj, stage);
+    expect(
+      (JSON.parse(serialized!) as { dispositions: Array<{ id: string; status: string }> })
+        .dispositions.map(({ id, status }) => ({ id, status })),
+    ).toEqual([{ id: "R-01", status: "Changed after review" }]);
   });
 
   test("Request Changes records only explicitly rejected findings with the exact reason", () => {
@@ -1747,9 +1975,7 @@ describe("t304 executable review brief scenarios", () => {
       expect(rendered, mode).toBe(expected);
       expect(rendered).toContain("**Stage:** Requirements Analysis");
       expect(rendered).toContain("**Confirming:** Consolidated answers in");
-      expect(rendered).toContain(
-        "**Why now:** All stage questions are answered",
-      );
+      expect(rendered).not.toContain("Why now");
       expect(rendered).toContain(
         "**Looks correct** - record this confirmation and generate",
       );
@@ -1758,6 +1984,32 @@ describe("t304 executable review brief scenarios", () => {
       );
       expect(rendered).not.toContain("ungenerated");
     }
+  });
+
+  test("the summary brief names what it will generate, never the questions file the person answered in", () => {
+    const { proj, relativeArtifact, questions } = requirementProject([]);
+    const relativeQuestions = relative(proj, questions).replaceAll("\\", "/");
+    expect(
+      renderSummaryConfirmationBrief(proj, findStageBySlug("requirements-analysis")!, questions),
+    ).toContain(
+      `**Confirming:** Consolidated answers in \`${relativeQuestions}\` before generating \`${relativeArtifact}\`.\n`,
+    );
+
+    const planning = join(seededRecordDir(proj), "inception", "delivery-planning");
+    mkdirSync(planning, { recursive: true });
+    const planningQuestions = join(planning, "delivery-planning-questions.md");
+    writeFileSync(planningQuestions, "# Questions\n", "utf-8");
+    const planningRelative = relative(proj, planning).replaceAll("\\", "/");
+    const generated = renderSummaryConfirmationBrief(proj, findStageBySlug("delivery-planning")!, planningQuestions)
+      .split("before generating ")[1]
+      .split("\n")[0];
+    expect(generated).toBe(
+      `${
+        ["bolt-plan", "team-allocation", "risk-and-sequencing-rationale", "external-dependency-map"]
+          .map((name) => `\`${planningRelative}/${name}.md\``)
+          .join(", ")
+      }.`,
+    );
   });
 
   test("the shipped CLI renders the same summary brief", () => {

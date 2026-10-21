@@ -60,6 +60,7 @@ import {
   hooksHealthReadDir,
   isoTimestamp,
   isPerUnitStage,
+  isStageOrGateEvent,
   isTeamUnitOwnership,
   listIntentDirs,
   listSpaces,
@@ -340,12 +341,12 @@ export const UNKNOWN = "unknown";
 export interface StageTimelineEntry {
   slug: string;
   startedRaw: string | typeof UNKNOWN;
-  completedRaw: string | typeof UNKNOWN;
+  completedRaw: string | typeof UNKNOWN; // a skip ends the attempt too, flagged "skipped"
   durationMs: number | null; // null when either endpoint is unknown
   gate: "approved" | "rejected" | "unresolved" | "none";
   revisionCount: number | null;
   gapFromPrevMs: number | null; // time between previous stage's end and this start
-  abnormal: string[]; // e.g. ["long-duration"], ["incomplete"]
+  abnormal: string[]; // e.g. ["long-duration"], ["incomplete"], ["skipped"]
 }
 
 export interface Timeline {
@@ -433,16 +434,18 @@ export function reconstructTimeline(audit: string, stateContent: string): Timeli
     // Pair CHRONOLOGICALLY, scoped to the CURRENT attempt: a stage jumped back
     // to (aidlc-jump re-emits STAGE_STARTED after a completion) must not read as
     // completed with a stale duration. The current attempt begins at the LAST
-    // STAGE_STARTED; it is complete only if a STAGE_COMPLETED follows that start
-    // (events are timestamp-sorted with ledger tie-break above). A completion
-    // that predates the latest start belongs to an earlier attempt and is
-    // ignored, so a re-worked stage correctly reads incomplete/in-progress.
+    // STAGE_STARTED; it ends at the first STAGE_COMPLETED or STAGE_SKIPPED
+    // after that start (events are timestamp-sorted with ledger tie-break
+    // above). An end that predates the latest start belongs to an earlier
+    // attempt and is ignored, so a re-worked stage correctly reads
+    // incomplete/in-progress. A skip ends the attempt because the engine skips
+    // a started stage on the conditional-skip path, and that stage is settled,
+    // not unfinished.
     const startIdx = lastEventIndex(evs, "STAGE_STARTED");
     const started = startIdx >= 0 ? evs[startIdx] : undefined;
+    const isEnd = (e: AuditEvent) => e.event === "STAGE_COMPLETED" || e.event === "STAGE_SKIPPED";
     const completed =
-      startIdx >= 0
-        ? evs.slice(startIdx).find((e) => e.event === "STAGE_COMPLETED")
-        : lastEvent(evs, "STAGE_COMPLETED");
+      startIdx >= 0 ? evs.slice(startIdx).find(isEnd) : evs.findLast(isEnd);
     const startedMs = started?.timestampMs ?? NaN;
     const completedMs = completed?.timestampMs ?? NaN;
 
@@ -467,6 +470,7 @@ export function reconstructTimeline(audit: string, stateContent: string): Timeli
     const abnormal: string[] = [];
     if (durationMs !== null && durationMs > LONG_STAGE_MS) abnormal.push("long-duration");
     if (started && !completed) abnormal.push("incomplete");
+    if (completed?.event === "STAGE_SKIPPED") abnormal.push("skipped");
 
     stages.push({
       slug,
@@ -495,10 +499,6 @@ export function reconstructTimeline(audit: string, stateContent: string): Timeli
   };
 }
 
-function lastEvent(evs: AuditEvent[], name: string): AuditEvent | undefined {
-  for (let i = evs.length - 1; i >= 0; i--) if (evs[i].event === name) return evs[i];
-  return undefined;
-}
 function lastEventIndex(evs: AuditEvent[], name: string): number {
   for (let i = evs.length - 1; i >= 0; i--) if (evs[i].event === name) return i;
   return -1;
@@ -654,7 +654,7 @@ export interface MarkerSnapshot {
 }
 
 // Freshness window past which a heartbeat is "frozen" relative to the newest
-// recorded audit activity. A hook that has not fired since well before the last
+// recorded work (newestWorkAuditMs). A hook that has not fired since well before the last
 // stage transition is the cold-hook signal (#571's rebuild-stage-graph case).
 export const FROZEN_HEARTBEAT_MS = 24 * 60 * 60 * 1000;
 
@@ -887,8 +887,8 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
     });
   }
 
-  // Rule 5 — frozen / missing hook heartbeats. A registered hook that has not
-  // fired since well before the latest audit activity is cold.
+  // Rule 5 - frozen / missing hook heartbeats. A registered hook that has not
+  // fired since well before the latest recorded work is cold.
   if (!hooksHealth.dirExists) {
     findings.push({
       id: "hooks-never-fired",
@@ -907,8 +907,10 @@ export function runDiagnosis(input: DiagnosisInput): DoctorFinding[] {
           summary: `Hook "${hb.hook}" has not fired in over ${Math.floor(hb.ageMs / (60 * 60 * 1000))}h.`,
           evidence: { hook: hb.hook, lastFired: hb.timestampRaw, ageMs: hb.ageMs },
           remedy:
-            "A cold hook silently skips its side effects (audit, sensors, runtime " +
-            "compile). Verify the hook is wired and firing on this harness.",
+            "A hook that last fired long ago is expected on an intent nobody is working on, " +
+            "but work on this intent was recorded more than a day after this hook last fired. " +
+            "A hook that does not run skips its side effects (audit, sensors, runtime compile): " +
+            "check the hook is wired and firing on this harness.",
           safeToAutomate: true,
         });
       }
@@ -1609,9 +1611,9 @@ function readHookHealth(projectDir: string, audit: string): HookHealthSnapshot {
   const dirExists = existsSync(dir);
   const heartbeats: HookHealthSnapshot["heartbeats"] = [];
   const degradedDrops: HookHealthSnapshot["degradedDrops"] = [];
-  // Age is measured against the newest audit timestamp (the run's own clock),
-  // not wall-clock — a bundle produced days later must not flag every hook.
-  const latestAudit = newestAuditMs(audit);
+  // Age is measured against the newest recorded work (the run's own clock),
+  // not wall-clock: a bundle produced days later must not flag every hook.
+  const latestAudit = newestWorkAuditMs(audit);
   if (dirExists) {
     let files: string[] = [];
     try {
@@ -1659,9 +1661,14 @@ function readMarkers(projectDir: string): NormalizedEvidence["markers"] {
   };
 }
 
-function newestAuditMs(audit: string): number | null {
+// The newest stage or gate row. Opening a chat to run doctor records its
+// session start and the person's prompt, and doctor records its own rows,
+// before the analysis reads the audit: counting any of them would date every
+// idle intent's newest work to now and read all of its hooks as frozen.
+function newestWorkAuditMs(audit: string): number | null {
   let newest: number | null = null;
   for (const e of parseAuditEvents(audit)) {
+    if (!isStageOrGateEvent(e.event)) continue;
     if (Number.isFinite(e.timestampMs) && (newest === null || e.timestampMs > newest)) {
       newest = e.timestampMs;
     }

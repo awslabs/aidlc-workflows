@@ -624,6 +624,9 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       for (const token of [
         "Only the person parks: never park on your own to hand them a decision",
         "Carry on with the next stage, or ask your question and wait for their answer in this conversation.",
+        // An agent that has driven many stages in one turn must not invent a
+        // check-in about carrying on; its own real questions stay allowed.
+        "Never ask the person whether to continue, pause or take a break, however long the run has been; they can say stop at any time.",
       ]) {
         if (!body.includes(token)) failures.push(`${rel}  missing: ${token}`);
       }
@@ -716,7 +719,6 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
         "## The Person Drives",
         "Never make them repeat themselves, retype an option, or confirm what they already said.",
         "fix it in one step",
-        "A rule the team recorded in memory",
         APPROVAL_REPORT_TOKEN,
       ]) {
         if (!body.includes(token)) missing.push(`${rel}  missing: ${token}`);
@@ -729,6 +731,18 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       }
     }
     expect(missing).toEqual([]);
+  });
+
+  // From a live enterprise run: a Request Changes on the code plan that touched a Testing Posture the run's own
+  // Practices Discovery had recorded was not recorded, the agent citing this rule. A team's locked setting is refused
+  // by the tool that owns it, with the one line naming the file; the prose is not a second owner.
+  test("no shipped conductor SKILL or the stage protocol tells the agent a rule in team memory wins over the person", () => {
+    const found: string[] = [];
+    for (const rel of [...skills, "core/aidlc-common/protocols/stage-protocol.md"]) {
+      const body = readFileSync(join(REPO_ROOT, rel), "utf-8").replace(/\s+/g, " ");
+      if (body.includes("A rule the team recorded in memory")) found.push(rel);
+    }
+    expect(found).toEqual([]);
   });
 
   // From live runs: on "please review Unit 1 again" the agent reviewed in chat,
@@ -1702,6 +1716,20 @@ describe("t181 per-harness conductor-SKILL freshness gate (P11 RESOLVE-2)", () =
       "anyone may answer any question, and it never skips one or leaves it to you",
       "never reorder or renumber an existing questions file (a redo the person asked for starts a fresh one)",
       "give a follow-up question the next unused number and its trade, at the end",
+    ].filter((rule) => !protocol.includes(rule));
+    expect(missing).toEqual([]);
+  });
+
+  test("a question put to the person shows the trade its heading names", () => {
+    // Claude Code's picker and Kiro CLI's numbered batch both showed `Q1 — <question>`
+    // while the file said `## Q1. [Product owner] ...`: the trade reached the file
+    // only, because no rule said to show it when the question is asked.
+    const protocol = readFileSync(join(REPO_ROOT, "core/aidlc-common/protocols/stage-protocol.md"), "utf-8")
+      .replace(/\s+/g, " ");
+    const missing = [
+      "Each ordinary question you ask the person, whether or not it is in the file yet, shows the trade its heading names or will name in front of the question text",
+      "a heading without a trade shows none",
+      "Present questions as structured questions in batches, each with the trade its heading names in front of its text (Step 1; none when the heading has none;",
     ].filter((rule) => !protocol.includes(rule));
     expect(missing).toEqual([]);
   });

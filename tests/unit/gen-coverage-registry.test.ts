@@ -504,12 +504,13 @@ describe("ratchet anti-regression (a covered unit cannot silently lose its claim
 
   test("CI's required check runs the ratchet against the commit's first parent", () => {
     const ci = Bun.YAML.parse(readFileSync(join(REPO_ROOT, ".github", "workflows", "ci.yml"), "utf-8")) as {
-      jobs: Record<string, { needs?: string[]; steps?: Array<{ run?: string; with?: Record<string, unknown> }> }>;
+      jobs: Record<string, { needs?: string[]; steps?: Array<{ uses?: string; run?: string; with?: Record<string, unknown> }> }>;
     };
-    const job = ci.jobs.coverage_ratchet;
-    expect(job.steps?.[0]?.with?.["fetch-depth"]).toBe(2);
-    expect(job.steps?.map((step) => step.run)).toContain("bun tests/gen-coverage-registry.ts --check --base HEAD^1");
-    expect(ci.jobs.test.needs).toContain("coverage_ratchet");
+    const job = ci.jobs.check;
+    const checkout = job.steps?.find((step) => step.uses?.startsWith("actions/checkout@"));
+    expect(checkout?.with?.["fetch-depth"]).toBe(`\${{ github.event_name == 'pull_request' && '0' || '2' }}`);
+    expect(job.steps?.map((step) => step.run)).toContain("bash scripts/ci-check-budget.sh bun tests/gen-coverage-registry.ts --check --base HEAD^1");
+    expect(ci.jobs.test.needs).toContain("check");
   });
 });
 

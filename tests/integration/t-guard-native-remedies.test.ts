@@ -418,15 +418,24 @@ class Fixture {
 function restartFixture(harness: Harness = HARNESS_RUNTIMES[0], projection: Projection = "native") {
   const p = new Fixture(projection, harness, "state-mid-inception.md");
   writeFileSync(seededStateFile(p.project), p.state()
+    // No plan is written here, so plan approval is off: the report meets the
+    // recovery, not the plan's question.
+    .replace("- **Revision Count**: 0", "- **Revision Count**: 0\n- **Plan Approval**: off (set by you)")
     .replace("- **Current Stage**: requirements-analysis", "- **Current Stage**: code-generation")
     .replace("- **Lifecycle Phase**: INCEPTION", "- **Lifecycle Phase**: CONSTRUCTION")
     .replace("- [-] requirements-analysis — EXECUTE", "- [x] requirements-analysis — EXECUTE")
     .replace("- [ ] code-generation — EXECUTE", "- [R] code-generation — EXECUTE"));
-  // The lifecycle fixture starts mid-revision; the owning report emits and
-  // publishes the real recovery ask. Subsequent selections use actual hooks.
-  const ask = json(p.tool("orchestrate", [
+  // The lifecycle fixture starts mid-revision with no outputs written; the
+  // owning report emits the real recovery ask. The first time, writing the
+  // outputs is the agent's own step; the same report again puts the ways on to
+  // the person and publishes the ask. Subsequent selections use actual hooks.
+  const report = () => json(p.tool("orchestrate", [
     "report", "--stage", "code-generation", "--result", "revised",
   ]));
+  const own = report();
+  expect(own).toMatchObject({ kind: "ask", ask_type: "guard-recovery", agent_work: true });
+  expect((own.remedies as GuardRefusal["remedies"])[0]?.op).toBe("produce-stage-output");
+  const ask = report();
   expect(ask).toMatchObject({ kind: "ask", ask_type: "guard-recovery", stage: "code-generation" });
   const remedy = (ask.remedies as GuardRefusal["remedies"]).find((entry) => entry.op === "redo-jump")!;
   expect(remedy.operation).toEqual({ kind: "restart-stage", stage: "code-generation" });
@@ -791,6 +800,38 @@ describe("source and native guard remedies execute their owning operations", () 
       p.assertNoNestedState();
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
+
+  // The pick does not carry the restart past the ordinary print, and the
+  // refusal names the restart's own `next --stage`: run once on the state as it
+  // is now, the jump it prints goes through.
+  test("native/copilot: after an ordinary print, the picked restart's refusal names its next --stage, and one follow admits it", () => {
+    const { p, remedy } = restartFixture(HARNESS_RUNTIMES[2]);
+    succeeded(p.copilotAdapter("record-human-turn", {
+      hook_event_name: "UserPromptSubmit", prompt: remedy.op,
+    }));
+    const selectedJump = returnedJump(json(p.exact(remedy.command!)));
+    const settled = (id: string, delivered?: string) => {
+      const input = {
+        hook_event_name: "PreToolUse", tool_name: "Bash", tool_use_id: id,
+        tool_input: { command: remedy.command },
+      };
+      const command = (json(p.copilotAdapter("guard-tool-call", input)).modifiedArgs as { command?: string } | undefined)?.command;
+      expect(command).toContain(`--aidlc-attempt-id ${id}`);
+      const output = succeeded(p.exact(command!));
+      succeeded(p.copilotAdapter("post-tool", {
+        ...input, hook_event_name: "PostToolUse", tool_input: { command },
+        tool_result: { result_type: "success", text_result_for_llm: delivered ?? output.stdout.trim() },
+      }));
+    };
+    settled("restart-ordinary-print", JSON.stringify({ kind: "print", message: "The workflow status is unchanged." }));
+    expect(p.marker()).toMatchObject({ kind: "print", delivery: "superseded", active_attempt: { status: "settled" } });
+    expect(p.marker()?.active_attempt?.guard_recovery_selection_sha256).toBeDefined();
+    const refused = p.guard("Bash", { command: selectedJump });
+    expect(refused.status).toBe(2);
+    expect(refused.stderr).toContain(`\`${remedy.command}\``);
+    settled("restart-follow");
+    succeeded(p.guard("Bash", { command: selectedJump }));
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   for (const choice of ["wrong", "stale"] as const) {
     test(`native reset refuses a ${choice} recorded choice without changing state or approving a plan`, () => {

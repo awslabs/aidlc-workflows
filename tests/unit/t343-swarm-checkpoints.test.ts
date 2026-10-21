@@ -2,7 +2,7 @@
 // function:approvedConstructionUnits, function:unitSourceFingerprint, subcommand:aidlc-bolt:swarm-checkpoint,
 // function:readCommittedUnitSourceManifest, function:swarmUnitCheckpointRejections
 // covers: subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize, audit:SWARM_UNIT_CONVERGED
-// covers: function:askSwarmCheckpoint, function:requireProtectedResponse
+// covers: function:askSwarmCheckpoint, function:requireProtectedResponse, function:protectedQuestionPick
 // covers: function:withdrawProtectedQuestions
 // covers: function:gitTreeLeafEntries
 // covers: function:hasPendingDecision
@@ -898,6 +898,50 @@ if (invalid.ok) throw new Error("invalid manifest unexpectedly accepted");
     choice(pd, "t343-checkpoint", "Request Changes");
     rejectSwarmCheckpoint(pd, 1, BATCH, "Request Changes", "Please rework the changed source", "t343-checkpoint");
     expect(gates(pd, "GATE_REJECTED")).toHaveLength(BATCH.length);
+  });
+
+  // A batch asked with Request Changes alone is shown as "1. Request Changes"
+  // where choices are numbered, so a typed number picks from that one choice.
+  for (const typed of ["1", "/aidlc 1"]) {
+    test(`"${typed}" at a batch offering Request Changes alone sends it back, with no second question`, () => {
+      const pd = fixture(true);
+      converge(pd);
+      writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
+      const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
+      expect(asked.code, asked.out).toBe(0);
+      choice(pd, "t343-checkpoint", typed);
+      expect(readProtectedResponse(pd, "t343-checkpoint")?.choice).toBe("Request Changes");
+      const rejected = tool(pd, "bolt", ["swarm-checkpoint", "--action", "reject", "--batch", "1", "--units", BATCH.join(","),
+        "--user-input", typed, "--reason", "Please rework the changed source", "--session", "t343-checkpoint"]);
+      expect(rejected.code, rejected.out).toBe(0);
+      expect(gates(pd, "GATE_REJECTED")).toHaveLength(BATCH.length);
+    });
+  }
+
+  // A number or label that batch did not offer picks nothing: the agent reads it.
+  test("at a batch offering Request Changes alone, \"2\" or \"Approve\" records no pick", () => {
+    const pd = fixture(true);
+    converge(pd);
+    writeFileSync(join(pd, "src", "alpha.ts"), "export const alpha = 2;\n");
+    const asked = tool(pd, "bolt", ["swarm-checkpoint", "--action", "ask", "--batch", "1", "--units", BATCH.join(","), "--session", "t343-checkpoint"]);
+    expect(asked.code, asked.out).toBe(0);
+    expect(readProtectedQuestion(pd, "t343-checkpoint")?.options).toHaveLength(1);
+    for (const typed of ["2", "Approve"]) {
+      choice(pd, "t343-checkpoint", typed);
+      expect(readProtectedResponse(pd, "t343-checkpoint")?.words?.split("\n").at(-1)).toBe(typed);
+      expect(readProtectedResponse(pd, "t343-checkpoint")?.choice).toBeUndefined();
+    }
+  });
+
+  test("at a batch offering both choices, \"1\" is Approve and \"2\" is Request Changes", () => {
+    const pd = fixture();
+    converge(pd);
+    human(pd, "2");
+    expect(readProtectedQuestion(pd, "t343-checkpoint")?.options).toHaveLength(2);
+    expect(readProtectedResponse(pd, "t343-checkpoint")?.choice).toBe("Request Changes");
+    human(pd, "1");
+    expect(readProtectedResponse(pd, "t343-checkpoint")?.choice).toBe("Approve");
+    expect(approveSwarmCheckpoint(pd, 1, BATCH, "1", "t343-checkpoint").approved).toBe(true);
   });
 
   test("under Guard Policy off, prepare goes on when the parent source moved after Plan Approval", () => {

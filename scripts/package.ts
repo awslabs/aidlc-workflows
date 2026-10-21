@@ -73,6 +73,7 @@ import { EARLIER_RELEASE_REGIONS, earlierReleasesReadSkill } from "./earlier-rel
 import { forgetPackagedSources, packageInputsFingerprint, recordPackagedSources } from "./package-sources.ts";
 import {
   buildPluginProjection as emitPluginProjection,
+  writeFirstPartyCatalogues,
   type PluginTarget,
   type PluginTargetTable,
 } from "../core/tools/aidlc-plugin-emit.ts";
@@ -1351,6 +1352,24 @@ function rewriteNativeOnboarding(value: string, exactReads = false): string {
     );
 }
 
+// A copyOnly harness file ships in the copy runtime alone. The native tree
+// drops it and the root integration of the same path, so `aidlc config` never
+// writes it into a project.
+function dropCopyOnlyFiles(outRoot: string, m: HarnessManifest): void {
+  const copyOnly = m.harnessFiles.filter((file) => file.copyOnly);
+  if (copyOnly.length === 0) return;
+  for (const file of copyOnly) {
+    rmSync(file.projectRoot ? join(outRoot, file.dst) : join(outRoot, m.harnessDir, file.dst), { force: true });
+  }
+  const dropped = new Set(copyOnly.filter((file) => file.projectRoot).map((file) => file.dst));
+  const descriptorPath = join(outRoot, m.harnessDir, PROJECTION_DATA);
+  const descriptor = JSON.parse(readFileSync(descriptorPath, "utf-8")) as {
+    rootIntegrations: Array<Record<string, unknown>>;
+  };
+  descriptor.rootIntegrations = descriptor.rootIntegrations.filter((item) => !dropped.has(String(item.path)));
+  writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`);
+}
+
 function projectNativeRootIntegrations(outRoot: string, m: HarnessManifest): void {
   const additions = m.nativeRootIntegrations ?? [];
   if (additions.length === 0) return;
@@ -1397,6 +1416,7 @@ function rewriteNativeInvocations(
   m: HarnessManifest,
   copyRoot: string,
 ): void {
+  dropCopyOnlyFiles(outRoot, m);
   projectNativeRootIntegrations(outRoot, m);
   applyNativeReplacements(outRoot, m);
   const harnessDir = escapeRegExp(m.harnessDir);
@@ -1899,11 +1919,14 @@ function pluginTargets(): PluginTargetTable {
     for (const root of manifest.plugin?.installRoots ?? []) {
       addTopLevel(root);
     }
+    const manifestDir =
+      manifest.plugin?.manifestDir ?? `${manifest.harnessDir}-plugin`;
     pluginTargetCache[harnessName] = {
       harnessName: manifest.name,
-      manifestDir:
-        manifest.plugin?.manifestDir ??
-        `${manifest.harnessDir}-plugin`,
+      manifestDir,
+      marketplaceDir: manifest.plugin?.marketplaceDir ?? manifestDir,
+      hostCatalogue: manifest.plugin?.hostCatalogue ??
+        ["store", "cursor"].includes(manifest.plugin?.kind ?? "store"),
       harnessLeaf: manifest.harnessDir,
       kind: manifest.plugin?.kind ?? "store",
       installRoots: [...installRoots].sort(),
@@ -1935,6 +1958,8 @@ function buildRepositoryPluginProjection(
     outputBoundary,
     templateHooksDir: PLUGIN_HOOKS_TEMPLATE_SRC,
     reviewerAgents: reviewerAgentSet(CORE_ROOT),
+    // This repository's own plugins/ are AI-DLC's: aidlc-<name> in aidlc-plugins.
+    firstParty: true,
   });
 }
 
@@ -1961,6 +1986,10 @@ function emitPlugins(
         console.log(`[plugin:${pluginName}] emitted dist/plugins/${pluginName}/${harnessName}/`);
       }
     }
+  }
+  const built = pluginHarnessesFor(harnesses).map((name) => pluginTargetFor(name) as PluginTarget);
+  for (const file of writeFirstPartyCatalogues(join(distRoot, "plugins"), built)) {
+    if (log) console.log(`[plugins] emitted dist/plugins/${file}`);
   }
 }
 

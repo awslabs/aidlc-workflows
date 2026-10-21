@@ -57,8 +57,8 @@ const CHAT = chat("01995000-7a11-7000-8000-000000001395");
 const QUESTION = "Inception is done, and the plan has 2 Units. Who builds them?";
 const DEFAULT_LINE = "This session builds the 2 Units one after another. To have several teams each own a Unit " +
   "instead, say so before the first Unit is built.";
-const APPROVALS_LINE = "Each team builds its Unit start to finish and approves it after every stage. To approve " +
-  "once at the end of each Unit instead, say so before the first Unit is built.";
+const APPROVALS_LINE = "Each team will approve its Unit after every stage. Do you want them to approve once at the " +
+  "end of each Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.";
 const REPOS_LINE = "This work spans 2 repos, so this session builds its 2 Units: teams each owning a Unit is " +
   "not available yet for work across repos.";
 

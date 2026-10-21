@@ -15,9 +15,15 @@
 // collectDoctorReport is already large) so the workspace-manifest checks read as
 // one unit; collectDoctorReport calls workspaceManifestChecks() and adds its rows.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { discoverSiblingRepos, errorMessage, REQUEST_TEXT_DIR } from "./aidlc-lib.ts";
+import {
+  auditBlockField,
+  discoverSiblingRepos,
+  DOCTOR_RUN_AUDIT_EVENTS,
+  errorMessage,
+  REQUEST_TEXT_DIR,
+} from "./aidlc-lib.ts";
 import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import {
@@ -135,7 +141,9 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   // Reports a passing row outside a git repo (smoke / fresh fixtures).
   // git status --porcelain omits gitignored per-user
   // cursors, so ignored runtime state (active-intent, runtime-graph.json, ...)
-  // never false-positives.
+  // never false-positives. Every doctor run writes its own rows into this
+  // clone's audit log, so a log changed only by those is not counted; else
+  // the run before would make this row ask for a commit of doctor's receipt.
   try {
     const proc = Bun.spawnSync({
       cmd: [
@@ -146,6 +154,7 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
         "status.showUntrackedFiles=all",
         "status",
         "--porcelain=v1",
+        "-z",
         "--untracked-files=all",
         "--",
         "aidlc",
@@ -161,12 +170,22 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
     if (proc.exitCode !== 0) {
       results.push({ pass: true, label: "Workspace records: not a git repo - nothing to commit" });
     } else {
-      const dirty = new TextDecoder()
-        .decode(proc.stdout)
-        .split("\n")
-        .filter((l) => l.trim().length > 0);
+      const changes = porcelainChanges(proc.stdout);
+      let prefix: string | null = null;
+      const dirty = changes.filter((change) => {
+        if (!AUDIT_LOG_PATH.test(change.path)) return true;
+        // Porcelain paths start at the repository root, which may sit above
+        // the project folder.
+        prefix ??= new TextDecoder().decode(git(["rev-parse", "--show-prefix"]).stdout).replace(/\r?\n$/, "");
+        return !onlyDoctorRunRows(projectDir, prefix, change, git);
+      });
       if (dirty.length === 0) {
-        results.push({ pass: true, label: "Workspace records: no uncommitted changes under aidlc/" });
+        results.push({
+          pass: true,
+          label: changes.length === 0
+            ? "Workspace records: no uncommitted changes under aidlc/"
+            : "Workspace records: no uncommitted changes under aidlc/ other than doctor's own entries in the audit log",
+        });
       } else {
         results.push({
           pass: false,
@@ -281,4 +300,52 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   }
 
   return results;
+}
+
+type GitRun = (args: string[]) => { exitCode: number | null; stdout: Uint8Array };
+
+const AUDIT_LOG_PATH = /\/audit\/[^/]+\.md$/;
+
+// One entry per changed path; a rename or copy carries its old path in the
+// next field, which is not a change of its own.
+function porcelainChanges(bytes: Uint8Array): Array<{ status: string; path: string }> {
+  const fields = new TextDecoder().decode(bytes).split("\0");
+  const changes: Array<{ status: string; path: string }> = [];
+  for (let i = 0; i < fields.length; i++) {
+    const field = fields[i];
+    if (field.length < 4) continue;
+    changes.push({ status: field.slice(0, 2), path: field.slice(3) });
+    if (field[0] === "R" || field[0] === "C") i++;
+  }
+  return changes;
+}
+
+// Whether an audit log differs from its committed copy only by rows doctor
+// wrote about its own runs. Only an unstaged change to a committed log or a
+// log git does not track yet can be: anything staged or removed is the
+// person's own git work. Line endings are compared as LF because a Windows
+// checkout holds the committed part with CRLF while every append writes LF.
+function onlyDoctorRunRows(
+  projectDir: string,
+  prefix: string,
+  change: { status: string; path: string },
+  git: GitRun,
+): boolean {
+  if ((change.status !== " M" && change.status !== "??") || !change.path.startsWith(prefix)) return false;
+  try {
+    const file = join(projectDir, ...change.path.slice(prefix.length).split("/"));
+    if (!lstatSync(file).isFile()) return false;
+    let committed = "";
+    if (change.status === " M") {
+      const blob = git(["cat-file", "blob", `HEAD:${change.path}`]);
+      if (blob.exitCode !== 0) return false;
+      committed = new TextDecoder().decode(blob.stdout).replaceAll("\r\n", "\n");
+    }
+    const now = readFileSync(file, "utf-8").replaceAll("\r\n", "\n");
+    if (!now.startsWith(committed)) return false;
+    const added = now.slice(committed.length).split("\n---\n").filter((block) => block.trim().length > 0);
+    return added.length > 0 && added.every((block) => DOCTOR_RUN_AUDIT_EVENTS.has(auditBlockField(block, "Event") ?? ""));
+  } catch {
+    return false;
+  }
 }

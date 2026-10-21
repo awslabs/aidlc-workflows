@@ -32,11 +32,14 @@ import {
   WINDOWS_UNINSTALL_AUTOMATIC_ATTEMPTS,
   WINDOWS_UNINSTALL_RUNNING_GRACE_MS,
   windowsUninstallContinuationState,
+  windowsUninstallFinishesAt,
+  windowsUninstallStillFinishingLine,
   type WindowsPathRegistration,
   type WindowsUninstallJournal,
   type WindowsUninstallPlan,
 } from "../../core/tools/aidlc-windows-uninstall.ts";
 
+const DISPATCHER = join(dirname(dirname(import.meta.dir)), "core", "tools", "aidlc.ts");
 const SID = "S-1-5-21-111-222-333-1001";
 const OTHER = String.raw`C:\Windows;%UNINSTALL_TEST_ROOT%\bin`;
 
@@ -101,7 +104,7 @@ function fixturePlan(
     ...[
       "active-version", "active-executable", "rollback-version", "aidlc-shim.ps1", "windows-path.json",
       ...["aidlc.bash", "_aidlc", "aidlc.fish", "aidlc.ps1"].map((name) => join("completions", name)),
-      ...(purge ? ["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal"] : []),
+      ...(purge ? ["aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-cli-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal"] : []),
     ].map((name) => join(root, name)),
     ...additionalFiles,
   ];
@@ -674,6 +677,39 @@ describe("Windows uninstall continuation states", () => {
     expect(windowsUninstallContinuationState({ ...base, ...change } as WindowsUninstallJournal, now)).toBe(expected);
   });
 
+  test("a command that meets a running cleanup is told when to try again, from the planned files", () => {
+    const running = (count: number): WindowsUninstallJournal => ({
+      ...base,
+      status: "recovering",
+      launchedAt: at(0),
+      attempts: 1,
+      files: Array.from({ length: count }, (_, index) => ({ path: String.raw`C:\machine\f${index}`, expected: "sha256:0" })),
+    });
+    // On Windows Server 2,812 planned files (one version) were done 23 s after
+    // launch and 5,470 (two versions) after 45 s.
+    expect(windowsUninstallFinishesAt(running(2_812))).toBe(now + 1_000 + 28_120);
+    expect(windowsUninstallFinishesAt(running(5_470))).toBe(now + 1_000 + 54_700);
+    const soon = now + 600;
+    const install = "the last AI-DLC uninstall is still finishing. Nothing was changed; run the installer again";
+    expect(windowsUninstallStillFinishingLine(windowsUninstallFinishesAt(running(2_812)), soon, "install"))
+      .toBe(`${install} in a minute.`);
+    expect(windowsUninstallStillFinishingLine(windowsUninstallFinishesAt(running(5_470)), soon, "install"))
+      .toBe(`${install} in a minute.`);
+    expect(windowsUninstallStillFinishingLine(windowsUninstallFinishesAt(running(8_000)), soon, "install"))
+      .toBe(`${install} in 2 minutes.`);
+    // Past its estimate the worker is most likely just slower: the next look is a minute away.
+    expect(windowsUninstallStillFinishingLine(windowsUninstallFinishesAt(running(2_812)), now + 5 * 60_000, "install"))
+      .toBe(`${install} in a minute.`);
+    expect(windowsUninstallStillFinishingLine(undefined, soon, "install")).toBe(`${install} in a minute.`);
+    // Once the cleanup is done aidlc is gone, so another command is not told to run again.
+    expect(windowsUninstallStillFinishingLine(windowsUninstallFinishesAt(running(2_812)), soon, "other"))
+      .toBe("the last AI-DLC uninstall is still finishing, so this command was not run.");
+    expect(windowsUninstallStillFinishingLine(windowsUninstallFinishesAt(running(2_812)), soon, "uninstall"))
+      .toBe("the last AI-DLC uninstall is still finishing; it needs nothing more and is done in a minute.");
+    expect(windowsUninstallStillFinishingLine(windowsUninstallFinishesAt(running(8_000)), soon, "uninstall"))
+      .toBe("the last AI-DLC uninstall is still finishing; it needs nothing more and is done in 2 minutes.");
+  });
+
   test("only a UAC-elevated window is warned, and uninstall asks no question", () => {
     for (const type of [1, 3]) {
       expect(elevatedUninstallWarning(type)).toBeNull();
@@ -732,7 +768,7 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
           ].map((name) => join(root, name));
           for (const path of owned) writeFileSync(path, "owned");
           const settings = [
-            "aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal",
+            "aidlc.settings.json", "update-check.json", "pins.json", "default-harness", "channel", "kiro-ide-workflows", "kiro-cli-workflows", "kiro-ide-settings-error-told", "kiro-ide-terminal",
           ].map((name) => join(root, name));
           for (const path of settings) writeFileSync(path, `setting: ${path}`);
           const receipt = registration(dirname(commandPath()));
@@ -1057,6 +1093,55 @@ describe.skipIf(process.platform !== "win32")("native Windows uninstall PATH cle
       expect(existsSync(pending.journal.installRoot)).toBe(false);
     });
   }, 35_000);
+
+  test("the installer, another command and a second uninstall that meet a running cleanup say when to try again", () => {
+    withInstall((root) => {
+      const pending = schedule();
+      const launchedAt = new Date(Date.now() - 5_000).toISOString();
+      const running: WindowsUninstallJournal = { ...pending.journal, status: "recovering", launchedAt, attempts: 1 };
+      writeFileSync(pending.path, JSON.stringify(running));
+      const launch = spyOn(Bun, "spawnSync").mockImplementation(() => {
+        throw new Error("a running worker must not be launched again");
+      });
+      try {
+        expect(recoverWindowsUninstallContinuations()).toMatchObject({
+          resumed: 0,
+          running: 1,
+          finishesAt: windowsUninstallFinishesAt(running),
+        });
+        expect(launch).not.toHaveBeenCalled();
+      } finally {
+        launch.mockRestore();
+      }
+      const project = join(dirname(root), "project");
+      mkdirSync(project);
+      const aidlc = (args: string[]) => {
+        const result = spawnSync(process.execPath, [DISPATCHER, ...args], {
+          cwd: project, env: { ...process.env }, encoding: "utf-8", timeout: 60_000,
+        });
+        if (result.error) throw result.error;
+        return result;
+      };
+      const reinstall = aidlc(["system", "lifecycle", "install-apply", "--version", "2.11.0", "--from", project, "--json"]);
+      expect(reinstall.status, reinstall.stdout + reinstall.stderr).toBe(3);
+      expect(JSON.parse(reinstall.stdout)).toMatchObject({
+        ok: false,
+        message: "the last AI-DLC uninstall is still finishing. Nothing was changed; run the installer again in a minute.",
+      });
+      const other = aidlc(["version"]);
+      expect(other.status, other.stdout + other.stderr).toBe(3);
+      expect(other.stderr).toContain("the last AI-DLC uninstall is still finishing, so this command was not run.");
+      // The fixture schedules a purge, so the second uninstall asks for one too.
+      const again = aidlc(["uninstall", "--purge", "--yes", "--json"]);
+      expect(again.status, again.stdout + again.stderr).toBe(1);
+      const refused = JSON.parse(again.stdout);
+      expect(refused.message).toBe(
+        "the last AI-DLC uninstall is still finishing; it needs nothing more and is done in a minute.",
+      );
+      expect(refused.remediation).toBeUndefined();
+      expect(JSON.parse(readFileSync(pending.path, "utf-8"))).toMatchObject({ status: "recovering", launchedAt, attempts: 1 });
+    });
+  }, 60_000);
 
   test("reads this session's real token elevation type", () => {
     expect([1, 2, 3]).toContain(currentWindowsElevationType());
