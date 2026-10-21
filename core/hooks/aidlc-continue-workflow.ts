@@ -784,7 +784,8 @@ function repliedToGate(projectDir: string, gate: { stage: string; unit?: string 
 // exact unit and uses `<record>/construction/<unit>/<slug>/`. We never
 // recursively accept a question from a different unit: an old unanswered file
 // must not disable enforcement for the unit currently named by the engine.
-function hasPendingQuestion(
+// The golden-journey driver reads the same wait through it (tests/harness/golden-journey.ts).
+export function hasPendingQuestion(
   projectDir: string,
   slug: string,
   phase: string,
