@@ -105,8 +105,10 @@ describe("t34 stage-protocol.md structure + cross-references (migrated from t34-
     expect(protocolHas("IDEATION and INCEPTION stages may include a 3rd option")).toBe(true);
   });
 
-  test('§1: revision escape hatch triggers after 3 "Request Changes" cycles', () => {
-    expect(protocolHas('After 3 "Request Changes" cycles')).toBe(true);
+  test("§1: revision escape hatch is offered from the gate reply, never a count kept in the chat", () => {
+    expect(protocolHas('accept_as_is: "offered"')).toBe(true);
+    expect(protocolHas('accept_as_is: "next-revision"')).toBe(true);
+    expect(protocolHas("Never count the rounds yourself.")).toBe(true);
   });
 
   test("§1: escape hatch offers Accept as-is option", () => {

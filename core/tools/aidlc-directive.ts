@@ -813,6 +813,13 @@ export interface PrintDirective {
   // a plan change made during the stage is in it. null = the final in-scope
   // stage. Same meaning as run-stage's next_stage.
   next_stage?: string | null;
+  // On the same gate reply: the person's change requests at this gate since it
+  // was last approved, counted from the audit trail so a park keeps it; absent
+  // when there are none. accept_as_is says when that count opens the third
+  // option: "offered" adds Accept as-is to this question, "next-revision" adds
+  // the note that it comes after one more round of changes.
+  revision_cycle?: number;
+  accept_as_is?: "offered" | "next-revision";
 }
 
 // error — stop with an error (unknown scope, mutually-exclusive flags, init
@@ -1077,7 +1084,7 @@ const ASK_FIELDS = [
   "new_project_command",
   "choices",
 ] as const;
-const PRINT_FIELDS = ["kind", "message", "next_stage", "document_note"] as const;
+const PRINT_FIELDS = ["kind", "message", "next_stage", "document_note", "revision_cycle", "accept_as_is"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason", "workflow_continues"] as const;
 const PARKED_FIELDS = ["kind", "reason", "stage"] as const;
@@ -2017,6 +2024,13 @@ export function validateDirective(obj: unknown): ValidationResult {
     case "print":
       checkString(o, "message", kind, errors);
       checkOptionalNullableString(o, "next_stage", kind, errors);
+      checkOptionalPositiveInteger(o, "revision_cycle", kind, errors);
+      if ("accept_as_is" in o) {
+        if (typeof o.accept_as_is !== "string") {
+          errors.push(`${kind}: accept_as_is must be string, got ${describe(o.accept_as_is)}`);
+        }
+        checkEnum(o, "accept_as_is", ["offered", "next-revision"], kind, errors);
+      }
       break;
     case "error":
       checkString(o, "message", kind, errors);

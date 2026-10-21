@@ -1207,7 +1207,10 @@ AskUserQuestion({
 
 ### Revision Loop Escape Hatch
 
-After 3 "Request Changes" cycles on the same stage, a third option appears:
+The reply that shows the gate (`report --result awaiting-approval` or
+`revised`) carries the stage's own change-request count, `revision_cycle`,
+read from the audit trail so it survives a park. When it also carries
+`accept_as_is: "offered"` (from the third request on), a third option appears:
 
 ```
 AskUserQuestion({
@@ -1224,7 +1227,7 @@ AskUserQuestion({
 
 The "Accept as-is" option logs the decision, marks the stage complete, and overrides the NO EMERGENT BEHAVIOR RULE for that specific stage.
 
-After the 2nd revision cycle (before the escape hatch activates), the approval question includes a note: "After one more revision, an 'Accept as-is' option will become available."
+When the reply carries `accept_as_is: "next-revision"` (at the second request, before the escape hatch activates), the approval question includes a note: "After one more revision, an 'Accept as-is' option will become available." The conductor takes both from the reply and never counts the rounds in the chat.
 
 ### Final Stage Gate (4.7 Feedback & Optimization)
 

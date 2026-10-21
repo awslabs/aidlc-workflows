@@ -695,7 +695,11 @@ Unit's, at a Unit gate) has 3 `GATE_REJECTED` rows since it was last approved
 or freshly reopened (`stageRevisionCycles` in `aidlc-lib.ts`, read from the
 audit trail, so a park keeps the count). Only then does the engine record an
 approval as Accept as-is or read a reply of exactly `3` as that pick, and
-`/aidlc --status` shows the same per-stage count as `revision N of 3`.
+`/aidlc --status` shows the same per-stage count as `revision N of 3`. The
+reply that shows the gate (`report --result awaiting-approval` or `revised`)
+carries the same count as `revision_cycle`, with `accept_as_is: "offered"` or
+`"next-revision"`, so the conductor offers the option and its pre-note from
+that reply.
 
 When a revision changes a reviewed output or bound question content on a stage whose directive
 carries a reviewer, the conductor re-runs the `stage-protocol-reviewer.md` §12a step before

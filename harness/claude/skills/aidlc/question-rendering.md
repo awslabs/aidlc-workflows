@@ -147,6 +147,11 @@ reviewer, learnings, or approval steps.
   gate (`report --result awaiting-approval` or `revised`), which includes any
   plan change made during the stage, else the run-stage directive's. Render
   `Complete workflow` when `next_stage` is null. Never guess the next stage.
+- **Approval gate Accept as-is**: the same reply says whether the gate offers
+  a third option. With `accept_as_is: "offered"`, add `Accept as-is` third and
+  name the round from `revision_cycle`; with `"next-revision"`, keep two options
+  and add the note that it comes after one more revision. Never count the
+  rounds yourself.
 - **Batching limits**: max 4 questions per `AskUserQuestion` call, max 4
   options per question, and **at least 2 options per question**. For 5+
   options, split across multiple calls (options A-D, then E+); the questions

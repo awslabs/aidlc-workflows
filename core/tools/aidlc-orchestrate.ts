@@ -347,6 +347,8 @@ import {
   readAllAuditShards,
   QUESTION_TURN_REPLY,
   readAuditShardEvents,
+  ACCEPT_AS_IS_REVISION_CYCLES,
+  stageRevisionCycles,
   reviewCheckOffer,
   readApplicableTeamUnitScopeStamp,
   readStateFile,
@@ -15538,6 +15540,28 @@ function addContextParkOffer(
   markPersonLinesHeard(projectDir, chat, [KIRO_CONTEXT_OFFER_HEARD]);
 }
 
+// How many times the person asked for changes at this gate, and whether that
+// opens Accept as-is, said on the reply that shows the gate. The count comes
+// from the audit trail, so a parked run offers it where the chat no longer
+// remembers; an unreadable trail says nothing, and the gate stays two options.
+function addRevisionCycle(
+  reply: { revision_cycle?: number; accept_as_is?: "offered" | "next-revision" },
+  projectDir: string,
+  slug: string,
+  unit: string | null,
+): void {
+  let cycles = 0;
+  try {
+    cycles = stageRevisionCycles(readAuditShardEvents(projectDir), slug, unit ?? undefined);
+  } catch {
+    return;
+  }
+  if (cycles === 0) return;
+  reply.revision_cycle = cycles;
+  if (cycles >= ACCEPT_AS_IS_REVISION_CYCLES) reply.accept_as_is = "offered";
+  else if (cycles === ACCEPT_AS_IS_REVISION_CYCLES - 1) reply.accept_as_is = "next-revision";
+}
+
 // A retired relaxed or off line needs confirmation before its notice stops. The
 // notice speaks about the EFFECTIVE policy: a memory layer holding strict wins
 // over the retired line, lowers nothing, and would refuse the relaxed setting
@@ -17394,6 +17418,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       if (unitGate.kind === "print" && (flags.result === "awaiting-approval" || flags.result === "revised")) {
         addReviewCheckOffer(unitGate, pd, node, unit);
         addContextParkOffer(unitGate, pd);
+        addRevisionCycle(unitGate, pd, slug, unit);
       }
       emit(unitGate);
       return;
@@ -17663,6 +17688,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         if (narration) gateReply.narration = narration;
         addReviewCheckOffer(gateReply, pd, node, unit);
         addContextParkOffer(gateReply, pd);
+        addRevisionCycle(gateReply, pd, slug, unit);
       }
     }
     emit(gateReply);
