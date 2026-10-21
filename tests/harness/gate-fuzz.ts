@@ -835,14 +835,15 @@ export function closedSet(state: State, host: ScopeHost, ctx: { choices: Array<{
       const report = (...args: string[]) => e("orchestrate", "report", "--stage", state.stage, ...args);
       calls.push({ name: "approve", valid: true, choice: "Approve", lifecycle: true, ops: [report("--result", "approved", "--user-input", "Approve")] });
       calls.push({ name: "approve and park", valid: true, choice: "Approve", lifecycle: true, ops: [report("--result", "approved", "--user-input", "Approve", "--park")] });
-      calls.push({ name: "accept as-is", valid: state.revision >= 3, choice: "Accept as-is", lifecycle: true, ops: [report("--result", "approved", "--user-input", "Accept as-is")] });
+      // Before the third revision the label is the agent's own account of an approval (stageGateApproval), not a choice of its own.
+      if (state.revision >= 3) calls.push({ name: "accept as-is", valid: true, choice: "Accept as-is", lifecycle: true, ops: [report("--result", "approved", "--user-input", "Accept as-is")] });
       calls.push({ name: "request changes", valid: true, choice: "Request Changes", lifecycle: true, ops: [report("--result", "rejected", "--user-input", "Request Changes")] });
       calls.push({ name: "request changes with a reason", valid: true, choice: "Request Changes", lifecycle: true, ops: [report("--result", "rejected", "--user-input", "Request Changes", "--reason", SHELL_REASON)] });
       if (state.plan.skipped.length > 0) calls.push({ name: `add ${state.plan.skipped[0]}`, valid: true, choice: null, lifecycle: false, ops: [e("orchestrate", "next", "--add", state.plan.skipped[0])] });
       if (state.plan.later.length > 0) calls.push({ name: `skip ${state.plan.later.at(-1)}`, valid: true, choice: null, lifecycle: false, ops: [e("orchestrate", "next", "--skip", state.plan.later.at(-1)!)] });
       if (state.plan.done.length > 0) calls.push({ name: `jump to ${state.plan.done.at(-1)}`, valid: true, choice: null, lifecycle: false, ops: [e("orchestrate", "report", "--result", "resumed", "--choice", "jump", "--target", state.plan.done.at(-1)!)] });
       calls.push({ name: "park", valid: true, choice: null, lifecycle: false, ops: [e("orchestrate", "park", "--person-asked")] });
-      if (state.after.length > 0) calls.push({ name: "as walked", valid: true, choice: null, lifecycle: state.kind === "gate", ops: state.after });
+      if (walkedDecides(state)) calls.push({ name: "as walked", valid: true, choice: null, lifecycle: state.kind === "gate", ops: state.after });
       // Practices Discovery promotes its drafts before the approval (the ordered exception): its approval is the walk's own.
       if (state.stage === "practices-discovery") {
         const own = calls.filter((c) => !c.name.startsWith("approve") || c.name === "as walked");
@@ -904,13 +905,18 @@ export function closedSet(state: State, host: ScopeHost, ctx: { choices: Array<{
       for (const choice of ctx.choices) calls.push({ name: `pick ${choice.label}`, valid: true, choice: choice.label, lifecycle: true, ops: [bashOp(onTree(host, choice.command))] });
       break;
     case "walked":
-      if (state.after.length > 0) calls.push({ name: "as walked", valid: true, choice: null, lifecycle: true, ops: state.after });
+      if (walkedDecides(state)) calls.push({ name: "as walked", valid: true, choice: null, lifecycle: true, ops: state.after });
       break;
   }
   return calls;
 }
 
-/** Calls outside the open step's set: a choice the step does not offer, a flag no command takes, a step that is not open. */
+// A walk that only ran `next` after the person's turn had its decision taken from their words by a hook: replaying
+// it is the run's own `next` step, not a call of the agent's.
+const walkedDecides = (state: State) =>
+  state.after.some((op) => op.kind !== "bash" || !/ orchestrate next$/.test(op.line.trim()));
+
+/** Calls the agent gets wrong or words its own way: a choice the step does not offer, a flag no command takes, a step that is not open, an approval in its own words. */
 export function wrongCalls(state: State, host: ScopeHost): Call[] {
   const e = (...args: string[]) => bashOp(engineLine(host, ...args));
   const { strings } = engineExports();
@@ -918,7 +924,8 @@ export function wrongCalls(state: State, host: ScopeHost): Call[] {
   const calls: Call[] = [];
   if (state.kind === "gate" || state.kind === "learnings") {
     for (const input of ["approve", "Approve Plan", label, "Add User Stories"]) {
-      calls.push({ name: `approve as "${input}"`, valid: false, choice: input, lifecycle: true, ops: [e("orchestrate", "report", "--stage", state.stage, "--result", "approved", "--user-input", input)] });
+      // --user-input is the agent's own account of the approval (stageGateApproval): any words, the same approval.
+      calls.push({ name: `approve as "${input}"`, valid: true, choice: null, lifecycle: true, ops: [e("orchestrate", "report", "--stage", state.stage, "--result", "approved", "--user-input", input)] });
     }
     const other = state.plan.later[0] ?? state.plan.done[0];
     if (other) calls.push({ name: `approve ${other}, not open`, valid: false, choice: "Approve", lifecycle: true, ops: [e("orchestrate", "report", "--stage", other, "--result", "approved", "--user-input", "Approve")] });
@@ -1253,9 +1260,20 @@ export function play(state: State, seed: number, steps: Step[], opts: { twin?: b
           if (step.reason && call.lifecycle && call.name === "approve") extra.push("--reason", SHELL_REASON);
           label = `call ${call.name}${extra.length ? ` ${extra.filter((x) => x.startsWith("--")).join(" ")}${step.message ? `=${step.message}` : ""}` : ""}`;
           const last = call.ops.findLastIndex((op) => op.kind === "bash");
-          call.ops.forEach((op, at) => {
-            runOp(at === last && op.kind === "bash" && extra.length > 0 ? { kind: "bash", line: `${op.line} ${extra.map(shellQuote).join(" ")}` } : op, ops);
-          });
+          for (const [at, op] of call.ops.entries()) {
+            if (!(at === last && op.kind === "bash" && extra.length > 0)) {
+              runOp(op, ops);
+              continue;
+            }
+            runOp({ kind: "bash", line: `${op.line} ${extra.map(shellQuote).join(" ")}` }, ops);
+            // A tree whose command does not take --message yet (the design's new flag): the agent runs it without one.
+            const at2 = extra.indexOf("--message");
+            if (at2 < 0 || !/does not accept \\?"--message\\?"/.test(ops.at(-1)?.out ?? "")) continue;
+            ops.pop();
+            const rest = extra.filter((_, k) => k !== at2 && k !== at2 + 1);
+            runOp({ kind: "bash", line: rest.length > 0 ? `${op.line} ${rest.map(shellQuote).join(" ")}` : op.line }, ops);
+            label += " (no --message on this tree)";
+          }
           // A redo or jump answers with the command that makes the move; the agent runs it (the skill's `ask` row).
           // Each print names the next command of the move, up to where it says to run `next` again.
           // A plan change answers with the recompose it runs the same way (planChangeDirective).
