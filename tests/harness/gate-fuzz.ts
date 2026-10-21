@@ -1191,8 +1191,9 @@ export function play(state: State, seed: number, steps: Step[], opts: { twin?: b
               tool_response: { answers: {} },
             });
           } else host.picked(state.prompt, state.options, text);
+          // A host's own template stays the host's turn (Arden 2026-10-22 kept the host-identity checks with no host mark).
           const reply = step.channel === "box-dismissed" ? false : step.channel === "box-pick" ? true :
-            !(isBlank(text) || isBareCommand(text));
+            !(isBlank(text) || isBareCommand(text) || step.shape === "template");
           run.turns.push({ step: i, chat: host.session, channel: step.channel, shape: step.shape, text, at: readRows(proj).length, reply });
           break;
         }
@@ -1504,12 +1505,15 @@ export function checkRun(run: Run): Failure[] {
       }
     }
   }
-  // Stop: where the wait is on record and nobody has replied since, the agent can end its turn.
+  // Stop: where the wait is on record and nobody has replied since, the agent can end its turn; and an attended turn
+  // with nothing on record that the agent waits ends too (Arden 2026-10-22, the design's S4).
   for (const s of run.steps) {
-    if (s.step.kind !== "stop" || s.ops[0]?.status !== 2) continue;
+    if (s.step.kind !== "stop" || s.ops[0]?.status !== 2 || state.unattended) continue;
     const replied = run.turns.some((t) => t.step < s.i);
     const decided = run.steps.some((o) => o.i < s.i && o.landed);
-    if (!replied && !decided) failures.push({ invariant: "STOP", what: "the Stop hook kept the agent from ending its turn at a recorded wait", source: locate(s.ops[0].out) ?? "", step: s.i, detail: clip(s.ops[0].out, 300) });
+    const what = !replied && !decided ? "the Stop hook kept the agent from ending its turn at a recorded wait"
+      : "the Stop hook kept an attended turn from ending (nothing on record that the agent waits)";
+    failures.push({ invariant: "STOP", what, source: locate(s.ops[0].out) ?? "", step: s.i, detail: clip(s.ops[0].out, 300) });
   }
   return failures;
 }
