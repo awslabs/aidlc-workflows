@@ -34,8 +34,8 @@ still fails on a declared output in its `narration`
 on its own line after what the stage produced: say it to the person with the
 approval question, never claim coverage a
 check reports against (every requirement traced, every section present), and
-when they ask for changes, correct from that detail file and run the check
-again. A Unit's own gate names that Unit's outputs only; with Sensors off,
+when they ask for changes, correct from that detail file. A Unit's own gate
+names that Unit's outputs only; with Sensors off,
 nothing is said about checks.
 
 `required-sections` requires the `##` headings of a markdown output's

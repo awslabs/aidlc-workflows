@@ -2042,7 +2042,25 @@ function resolveEngine(argv: string[]): Action {
   );
   if (routeOnly) return handleRouteOnly(routeOnly, argv);
 
-  return topLevelError(`engine ${argv[0]}`);
+  return engineNounError(argv[0]);
+}
+
+// An engine noun the route table does not hold: the nearest one by spelling
+// (`sensors` is `sensor`, which an agent guessed live), and the engine's own
+// help, never the public one, which lists no engine noun.
+function engineNounError(noun: string): Action {
+  const invoke = aidlcInvocation();
+  const nouns = new Set(ROUTES.filter((route) => route.namespace === "engine")
+    .flatMap((route) => route.group === "top" ? route.verbs : [route.group]));
+  const nearest = [...nouns]
+    .map((candidate) => ({ candidate, distance: editDistance(noun, candidate) }))
+    .sort((left, right) => left.distance - right.distance || left.candidate.localeCompare(right.candidate))[0];
+  const tip = nearest && nearest.distance <= 2 ? ` did you mean '${invoke} engine ${nearest.candidate}'?` : "";
+  return {
+    type: "error",
+    code: 2,
+    message: `aidlc: unknown command or noun 'engine ${noun}';${tip} try '${invoke} engine --help'\n`,
+  };
 }
 
 function resolveSystem(argv: string[]): Action {

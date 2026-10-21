@@ -90,6 +90,7 @@ import {
 	aidlcDispatcherInvocation,
 	compiledExecutable,
 	resolveHarnessPath,
+	sensorFireUsage,
 } from "./aidlc-runtime-paths.ts";
 import { parseSensorManifest, type SensorManifest } from "./aidlc-sensor-schema.ts";
 import {
@@ -1232,7 +1233,7 @@ function sensorUsage(subcommand: string | undefined): string {
 			"  Prints one sensor's manifest fields. Required: <id>.",
 		],
 		fire: [
-			`${invoke("fire")} <id> --stage <slug> --output-path <path>`,
+			sensorFireUsage(),
 			"  Fires a sensor against a stage output; emits SENSOR_FIRED and its paired result row.",
 			"  Required: <id>, --stage, --output-path. Options: --unit <name> (named on both rows)",
 		],

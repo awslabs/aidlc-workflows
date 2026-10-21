@@ -1,16 +1,19 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import {
+  asksForHelp,
   errorMessage,
   getField,
   parseCheckboxes,
   parseStateStageSuffixes,
+  printUsageAndExit,
   readStateFile,
   recordDir,
   resolveBoltDag,
   resolveProjectDir,
   usesStageLevelPerUnitArtifacts,
 } from "./aidlc-lib.ts";
+import { aidlcDispatcherInvocation, sensorFireUsage } from "./aidlc-runtime-paths.ts";
 
 const VALID_STATUSES = new Set(["OK", "GAP", "ORPHAN", "Deferred", "N/A"]);
 
@@ -899,6 +902,12 @@ function uniqueSorted(values: string[]): string[] {
 }
 
 export function main(argv: string[]): void {
+  if (asksForHelp(argv)) {
+    printUsageAndExit(
+      `Usage: ${sensorFireUsage("traceability")}\n` +
+        `       ${aidlcDispatcherInvocation("sensor-traceability --stage build-and-test")}`,
+    );
+  }
   const flags = parseFlags(argv);
   if (flags.stage === "build-and-test" && !flags.outputPath) {
     process.stdout.write(`${JSON.stringify(finalCoverage(resolveProjectDir()))}\n`);

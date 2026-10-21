@@ -2,15 +2,17 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { headingKey } from "./aidlc-artifact-vocabulary.ts";
 import {
+	asksForHelp,
 	authoritativeProjectDescription,
 	errorMessage,
 	markdownBlocks,
 	type MarkdownLine,
 	normalizeMarkdownLabel,
+	printUsageAndExit,
 	readProjectDescriptionAuthority,
 	visibleMarkdownLines,
 } from "./aidlc-lib.ts";
-import { knownActiveSpace } from "./aidlc-runtime-paths.ts";
+import { knownActiveSpace, sensorFireUsage } from "./aidlc-runtime-paths.ts";
 
 interface Flags {
 	stage?: string;
@@ -1003,6 +1005,7 @@ function inspectDeliverable(
 }
 
 export function main(argv: string[]): void {
+	if (asksForHelp(argv)) printUsageAndExit(`Usage: ${sensorFireUsage("claim-sources")}`);
 	const flags = parseFlags(argv);
 	if (!flags.outputPath) fail("--output-path is required");
 	if (!existsSync(flags.outputPath)) {
