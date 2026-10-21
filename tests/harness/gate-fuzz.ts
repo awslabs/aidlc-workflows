@@ -262,19 +262,21 @@ function copyTree(src: string, dst: string, skip: ReadonlySet<string>, linkObjec
   }
 }
 
-function treeDigest(dir: string): string {
-  const digest = createHash("sha256");
-  const walkDir = (at: string, rel: string) => {
-    for (const name of readdirSync(at).sort()) {
-      const path = join(at, name);
-      const stat = lstatSync(path);
-      if (stat.isDirectory()) walkDir(path, `${rel}/${name}`);
-      else if (stat.isFile()) digest.update(`${rel}/${name}\0`).update(readFileSync(path));
+/** Copy the files under `src` that are new or differ from `base` into `dst`. */
+function copyChanged(src: string, base: string, dst: string): void {
+  if (!existsSync(src)) return;
+  for (const name of readdirSync(src)) {
+    const from = join(src, name);
+    const was = join(base, name);
+    const stat = lstatSync(from);
+    if (stat.isDirectory()) copyChanged(from, was, join(dst, name));
+    else if (stat.isFile() && (!existsSync(was) || !readFileSync(was).equals(readFileSync(from)))) {
+      mkdirSync(dst, { recursive: true });
+      copyFileSync(from, join(dst, name));
     }
-  };
-  walkDir(dir, "");
-  return digest.digest("hex");
+  }
 }
+
 
 /** The folders a tool's install lays down in a project (its tree, not the method files or the person's own). */
 export function installDirs(host: HostId): string[] {
@@ -631,6 +633,8 @@ class Recorder {
     const n = ++this.n;
     const dir = join(this.dir, "states", String(n));
     copyTree(this.host.proj, dir, new Set(this.dirs), true);
+    // A tool that writes into its own tree as it runs (Kiro IDE does): the files that differ from the install are kept.
+    for (const name of this.dirs) copyChanged(join(this.host.proj, name), join(this.install, name), join(dir, name));
     const state: State = {
       id: `${this.walkName}#${n}`, kind: kindOf(what), question: what, host: this.spec.host, policy: this.spec.policy,
       unattended: false, dir, install: { from: this.install, dirs: this.dirs }, session: this.host.session, stage, unit,
@@ -695,7 +699,6 @@ export function walk(spec: WalkSpec, root: string): Walk {
   const dirs = installDirs(spec.host).filter((name) => existsSync(join(proj, name)));
   const install = join(dir, "install");
   for (const name of dirs) cpSync(join(proj, name), join(install, name), { recursive: true });
-  const before = dirs.map((name) => treeDigest(join(proj, name))).join(",");
   const recorder = new Recorder(host, id, dir, spec, install, dirs);
   const agent = new WalkStandIn(host, new PersonScript(host), { units: spec.units });
   agent.recorder = recorder;
@@ -714,9 +717,6 @@ export function walk(spec: WalkSpec, root: string): Walk {
     stuck = error instanceof Error ? clip(error.message, 2000) : String(error);
   }
   if (host instanceof OpencodeScopeHost) host.dispose();
-  if (dirs.map((name) => treeDigest(join(proj, name))).join(",") !== before) {
-    stuck = `${stuck ?? ""} | the install tree changed during the walk, so a copy without it is not the project`;
-  }
   const gatesMet = [...new Set(recorder.states.filter((s) => s.kind === "gate").map((s) => s.stage))];
   // The person updated AI-DLC while the question waited: their reply meets this repository's trees.
   if (spec.from) for (const state of recorder.states) state.install = { from: join(REPO_ROOT, "dist", spec.host), dirs };
@@ -1097,10 +1097,11 @@ export function turnText(state: State, step: Extract<Step, { kind: "person" }>, 
 /** Play one run of steps against a copy of the state. */
 export function play(state: State, seed: number, steps: Step[], opts: { twin?: boolean; dropped?: number[]; policy?: Policy } = {}): Run {
   const proj = join(runFolder(), "proj");
-  copyTree(state.dir, proj, new Set(), false);
+  // The install first, then the copy over it: a file the tool changed in its own tree is the copy's.
   for (const name of state.install.dirs) {
     if (existsSync(join(state.install.from, name))) cpSync(join(state.install.from, name), join(proj, name), { recursive: true });
   }
+  copyTree(state.dir, proj, new Set(), false);
   if (opts.policy && opts.policy !== state.policy) setPolicy(proj, opts.policy);
   const host = hostFor(state.host, proj, fuzzEnvironment(state.unattended));
   // The host's own profile clears the variable; an unattended driver sets it on every process it starts.

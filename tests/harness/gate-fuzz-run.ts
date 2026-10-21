@@ -114,7 +114,9 @@ async function stateFor(args: Args, n: number, walked: Walk[]): Promise<{ state:
   const pickOf = <T>(list: readonly T[]) => list[Math.floor(r() * list.length)];
   const fromWalk = walked.length > 0 && r() < 0.5;
   if (fromWalk) {
-    const w = pickOf(walked);
+    // A walk recorded before its copies kept the files a tool changes in its own tree is left out.
+    const usable = walked.filter((w) => !(w.stuck ?? "").includes("the install tree changed"));
+    const w = pickOf(usable.length > 0 ? usable : walked);
     const state = pickOf(w.states);
     if (state) return { state, seed };
   }
