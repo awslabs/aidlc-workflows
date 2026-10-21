@@ -463,6 +463,7 @@ import {
   readUnitSourceManifest,
   unitPlainName,
   unitSkippedItsCode,
+  discoverSiblingRepos,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
 import {
@@ -1481,6 +1482,11 @@ function prepareEmission(directive: Directive): PreparedEmission {
       ? codeGenerationResumeNarration(projectDir, unit, issued) ?? codeGenerationStartNarration(projectDir, unit)
       : null;
     if (line !== null) directive.narration = line;
+  }
+  if (directive.kind === "run-stage" && directive.stage === "reverse-engineering" && directive.unit === undefined) {
+    const projectDir = emissionProjectDir(directive);
+    const scope = projectDir ? reverseEngineeringScopeNarration(projectDir) : null;
+    if (scope !== null) directive.narration = scope;
   }
   // The plan step is the conductor's own. The stage's dispatched mode would read
   // "hand the draft to the developer" (a Kiro run did, and the guard refused the
@@ -2734,6 +2740,17 @@ function narrateSpecialistStage(node: GraphStage, scope: string, stateContent: s
 //
 // The placeholder unit (a scope with no unit DAG) is not a real name, so it
 // falls back to the stage alone rather than saying the token out loud.
+export const RE_LARGE_SCOPE_REPOS = 10;
+
+export function reverseEngineeringScopeNarration(projectDir: string): string | null {
+  const repos = discoverSiblingRepos(projectDir).length;
+  if (repos <= 1) return null;
+  const base = `Reverse Engineering reads ${repos} repositories here.`;
+  return repos >= RE_LARGE_SCOPE_REPOS
+    ? `${base} Analysing all ${repos} may take significant time and consume many tokens: say which repositories matter to narrow the scope, or continue and all ${repos} are analysed.`
+    : base;
+}
+
 function narratePerUnitBeat(directive: RunStageDirective): string | null {
   if (directive.gate !== false) return null;
   const unit = directive.unit;
