@@ -76,6 +76,8 @@ export interface Reply {
    * opposite of what the first line meant (the person then corrects it).
    */
   setup?: "misread";
+  /** A question the agent asked beside the open step before the person's reply, laid into the fixture. */
+  beside?: { decision: string; options: string[] };
   /** What the agent's first showing must offer for the reply to mean what the item says (a number or a label picks from it). */
   shows?: string;
   expected: { end: { decision: string; also?: string[]; asks: number; says: string[] } };
@@ -152,6 +154,7 @@ const MEASURED: Reply[] = [
     source: "measure-gate-options (Codex run 1)" },
   { id: "mkl-kiro-2", wait: "stage-gate", shownBy: "agent", replyClass: "number", language: "en", inputs: ["2"],
     shows: "a numbered question beside the gate whose second choice approves the stage as it is (such as I'm comfortable approving as-is)",
+    beside: { decision: "Do you want me to have the new approach checked before you decide?", options: ["Have it checked again", "I'm comfortable approving as-is"] },
     meaning: "beside the gate the agent asked its own question, 1. Have it checked again, 2. I'm comfortable approving as-is; the person picks 2: they approve the stage as it is",
     expected: { end: { decision: "approve", asks: 0, says: ["the requirements are approved and the work moves on"] } },
     source: "measure-kiro-loops F1 (Kiro CLI v3)" },
@@ -196,7 +199,8 @@ const MEASURED: Reply[] = [
     inputs: ["looks good", "no, I meant approve: I did not ask for changes"],
     meaning: "the person's \"looks good\" was recorded as Request Changes; they say so, and the agent fixes it in one step with no question",
     expected: { end: { decision: "approve", asks: 0, says: ["the approval is now recorded", "the requirements are approved"] } }, source: "design 4.3 misread-correction" },
-  { id: "learnings-and-approve", wait: "learnings", shownBy: "agent", replyClass: "two-things", language: "en", inputs: ["Nothing to add, and approve the requirements"],
+  { id: "learnings-and-approve", wait: "stage-gate", shownBy: "agent", replyClass: "two-things", language: "en", inputs: ["Nothing to add, and approve the requirements"],
+    beside: { decision: "Anything to add for next time?", options: ["Nothing to add", "Add a note"] },
     meaning: "the person answers the learnings question (nothing to add) and approves the stage in the same reply", expected: { end: { decision: "answer:Nothing to add", also: ["approve"], asks: 0, says: ["nothing added", "the requirements are approved"] } },
     source: "design 4.4 learnings-then-approve" },
 ];
@@ -660,6 +664,10 @@ export async function driveReply(reply: Reply, tool: LiveTool, judgeDir: string)
   const rig = liveRig(tool);
   try {
     await buildQuestion(rig.proj, reply.wait);
+    if (reply.beside) {
+      spawnTool([process.execPath, join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-log.ts"), "decision", "--stage", "requirements-analysis",
+        "--decision", reply.beside.decision, "--options", reply.beside.options.join(","), "--project-dir", rig.proj], rig.proj, rig.env);
+    }
     const start = { rows: rowsOf(rig.proj).length, intents: lib().listIntents(rig.proj).length, cursor: auditCursor(rig.proj) };
     const first = firstLine(reply, tool);
     const lines = [...(first ? [first] : []), ...reply.inputs.map((line) => said(line, tool))];

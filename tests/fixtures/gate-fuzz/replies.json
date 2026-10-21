@@ -10863,6 +10863,13 @@
       "2"
     ],
     "shows": "a numbered question beside the gate whose second choice approves the stage as it is (such as I'm comfortable approving as-is)",
+    "beside": {
+      "decision": "Do you want me to have the new approach checked before you decide?",
+      "options": [
+        "Have it checked again",
+        "I'm comfortable approving as-is"
+      ]
+    },
     "meaning": "beside the gate the agent asked its own question, 1. Have it checked again, 2. I'm comfortable approving as-is; the person picks 2: they approve the stage as it is",
     "expected": {
       "end": {
@@ -11208,13 +11215,20 @@
   },
   {
     "id": "learnings-and-approve",
-    "wait": "learnings",
+    "wait": "stage-gate",
     "shownBy": "agent",
     "replyClass": "two-things",
     "language": "en",
     "inputs": [
       "Nothing to add, and approve the requirements"
     ],
+    "beside": {
+      "decision": "Anything to add for next time?",
+      "options": [
+        "Nothing to add",
+        "Add a note"
+      ]
+    },
     "meaning": "the person answers the learnings question (nothing to add) and approves the stage in the same reply",
     "expected": {
       "end": {
