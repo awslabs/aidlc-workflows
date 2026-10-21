@@ -245,7 +245,7 @@ describe("t-traceability-at-gate: the Requirements Analysis gate open across the
   const STAGE = "requirements-analysis";
   const REVIEWER = "aidlc-product-lead-agent";
   const SESSION = "ra-gate-update";
-  const ENV = baseEnv({ AIDLC_SKIP_REVIEWER_GATE_GUARD: "0" });
+  const ENV = baseEnv({ AIDLC_SKIP_REVIEWER_GATE_GUARD: "0", AIDLC_SKIP_ARTIFACT_GUARD: "0" });
   delete ENV.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
 
 
@@ -265,10 +265,10 @@ describe("t-traceability-at-gate: the Requirements Analysis gate open across the
     writeFileSync(statePath, setGuardPolicyLine(readFileSync(statePath, "utf-8"), `${policy} (set by you)`));
     const graphPath = join(proj, ".claude", "tools", "data", "stage-graph.json");
     const shipped = readFileSync(graphPath, "utf-8");
-    const graph = JSON.parse(shipped) as Array<{ slug: string; produces?: string[] }>;
+    const graph = JSON.parse(shipped) as Array<{ slug: string; produces?: string[]; optional_produces?: string[] }>;
     const stage = graph.find((entry) => entry.slug === STAGE)!;
-    expect(stage.produces).toContain("traceability");
-    stage.produces = stage.produces!.filter((name) => name !== "traceability");
+    expect(stage.optional_produces).toContain("traceability");
+    stage.optional_produces = stage.optional_produces!.filter((name) => name !== "traceability");
     writeFileSync(graphPath, JSON.stringify(graph));
 
     recordFile(proj, `inception/${STAGE}/requirements.md`, "# Requirements\n\n- FR1 Sign up\n");
@@ -307,4 +307,27 @@ describe("t-traceability-at-gate: the Requirements Analysis gate open across the
     expect(approved.kind, JSON.stringify(approved)).toBe("done");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toMatch(/^- \[x\] requirements-analysis/m);
   });
+
+  // Work already at Requirements Analysis when the person updates (its
+  // documents written, no record yet), or an agent that did not write the
+  // record: the record is not a required output, so the review starts, the gate
+  // opens and the person's Approve goes through, under every Guard Policy.
+  for (const policy of ["strict", "off"] as const) {
+    test(`${policy}: with no record, the review starts and the person's Approve goes through`, () => {
+      const proj = setupIntegrationProject({ withState: "state-mid-inception.md", stripEnvScope: true });
+      projects.push(proj);
+      const statePath = seededStateFile(proj);
+      writeFileSync(statePath, setGuardPolicyLine(readFileSync(statePath, "utf-8"), `${policy} (set by you)`));
+      recordFile(proj, `inception/${STAGE}/requirements.md`, "# Requirements\n\n- FR1 Sign up\n");
+      recordFile(proj, `inception/${STAGE}/${STAGE}-questions.md`, "# Questions\n");
+      review(proj, ENV, STAGE, REVIEWER, 1);
+      const opened = reply(proj, ENV, ["engine", "orchestrate", "report", "--stage", STAGE, "--result", "awaiting-approval"]);
+      expect(opened.kind, JSON.stringify(opened)).toBe("print");
+      personSays(proj, "Approve");
+      const approved = approve(proj);
+      expect(approved.kind, JSON.stringify(approved)).toBe("done");
+      expect(approved.change_notices).toBeUndefined();
+      expect(existsSync(join(seededRecordDir(proj), "inception", STAGE, "traceability.json"))).toBe(false);
+    });
+  }
 });

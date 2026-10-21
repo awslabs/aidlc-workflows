@@ -2086,7 +2086,9 @@ describe("t281 the IDs Requirements Analysis records", () => {
   test("Requirements Analysis declares the record and says how to write it; later stages start their table with the tool", () => {
     const source = readFileSync(join(STAGES, "inception", "requirements-analysis.md"), "utf-8").replace(/\r\n/g, "\n");
     const frontmatter = parseStageFrontmatter(source);
-    expect(frontmatter.produces).toContain("traceability");
+    // Not a required output: a run with no record still reviews and approves.
+    expect(frontmatter.produces).not.toContain("traceability");
+    expect(frontmatter.optional_produces).toContain("traceability");
     expect(frontmatter.sensors).not.toContain("traceability");
     expect(frontmatter.outputs).toContain("traceability.json");
     const step10 = source.slice(source.indexOf("### Step 10"), source.indexOf("### Step 11"));

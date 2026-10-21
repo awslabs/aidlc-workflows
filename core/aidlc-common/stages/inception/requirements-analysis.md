@@ -14,6 +14,7 @@ review_class: advisory
 produces:
   - requirements
   - requirements-analysis-questions
+optional_produces:
   - traceability
 consumes:
   - artifact: intent-statement
