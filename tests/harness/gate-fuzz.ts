@@ -48,7 +48,7 @@ import { join, relative } from "node:path";
 import { cleanupTestProject, createOrchestrationTestProject, REPO_ROOT } from "./fixtures.ts";
 import {
   activeRecord, AgentStandIn, clip, createScopeProject, type Directive, PersonScript, type RunResult, type ScopeHost,
-  shellQuote, sourceStages, stopVerdict,
+  ScopeRunRefused, shellQuote, sourceStages, stopVerdict,
 } from "./scope-run.ts";
 import { createHostProject, type HostName, hostFor, NativeScopeHost, OpencodeScopeHost } from "./scope-hosts.ts";
 
@@ -191,7 +191,7 @@ function typo(r: () => number, text: string): string {
  * every string the engine exports and the host templates among them. Two seeds
  * give two texts of the same shape, which is what the text-blind check swaps.
  */
-export function textOf(shape: Shape, seed: number, options: readonly string[]): string {
+export function textOf(shape: Shape, seed: number, options: readonly string[], kindSeed = seed): string {
   const r = rng(seed);
   const { strings, templates } = engineExports();
   const labels = options.length > 0 ? options : strings;
@@ -229,8 +229,10 @@ export function textOf(shape: Shape, seed: number, options: readonly string[]): 
     case "command-words": return `/aidlc ${pick(r, [...SENTENCES, ...labels, String(Math.floor(r() * 4))])}`;
     case "command-bare": return pick(r, ["/aidlc", "/aidlc ", " /aidlc"]);
     case "template": {
-      for (let i = 0; i < 6; i++) {
-        const text = fromTemplate(pick(r, templates), r);
+      // Which host's template comes from `kindSeed`, so the two texts of a pair are the same template, filled apart.
+      const order = templates.map((_, i) => i).sort((a, b) => rng(kindSeed + a)() - rng(kindSeed + b)());
+      for (const at of order) {
+        const text = fromTemplate(templates[at], r);
         if (text !== null) return text;
       }
       return "<task-notification>\nthe task finished\n</task-notification>";
@@ -802,6 +804,11 @@ export interface Call {
   lifecycle: boolean;
 }
 
+/** A command the engine named on Claude Code's tree (a fixture built there), as this host's tree names it. */
+function onTree(host: ScopeHost, command: string): string {
+  return host.dir === ".claude" ? command : command.replace(/(^|\s)\.claude\/tools\//g, `$1${host.dir}/tools/`);
+}
+
 function engineLine(host: ScopeHost, ...args: string[]): string {
   const head = host.launcher === null ? ["bun", `${host.dir}/tools/aidlc.ts`] : ["aidlc"];
   return [...head, "engine", ...args].map(shellQuote).join(" ");
@@ -835,7 +842,12 @@ export function closedSet(state: State, host: ScopeHost, ctx: { choices: Array<{
       if (state.plan.later.length > 0) calls.push({ name: `skip ${state.plan.later.at(-1)}`, valid: true, choice: null, lifecycle: false, ops: [e("orchestrate", "next", "--skip", state.plan.later.at(-1)!)] });
       if (state.plan.done.length > 0) calls.push({ name: `jump to ${state.plan.done.at(-1)}`, valid: true, choice: null, lifecycle: false, ops: [e("orchestrate", "report", "--result", "resumed", "--choice", "jump", "--target", state.plan.done.at(-1)!)] });
       calls.push({ name: "park", valid: true, choice: null, lifecycle: false, ops: [e("orchestrate", "park", "--person-asked")] });
-      if (state.after.length > 0) calls.push({ name: "as walked", valid: true, choice: "Approve", lifecycle: true, ops: state.after });
+      if (state.after.length > 0) calls.push({ name: "as walked", valid: true, choice: null, lifecycle: state.kind === "gate", ops: state.after });
+      // Practices Discovery promotes its drafts before the approval (the ordered exception): its approval is the walk's own.
+      if (state.stage === "practices-discovery") {
+        const own = calls.filter((c) => !c.name.startsWith("approve") || c.name === "as walked");
+        calls.splice(0, calls.length, ...own);
+      }
       break;
     }
     case "question":
@@ -858,7 +870,7 @@ export function closedSet(state: State, host: ScopeHost, ctx: { choices: Array<{
     }
     case "plan":
       for (const choice of ctx.choices) {
-        calls.push({ name: `plan ${choice.label}`, valid: true, choice: choice.label, lifecycle: /^Approve/.test(choice.label), ops: [bashOp(choice.command)] });
+        calls.push({ name: `plan ${choice.label}`, valid: true, choice: choice.label, lifecycle: /^Approve/.test(choice.label), ops: [bashOp(onTree(host, choice.command))] });
       }
       break;
     case "checkpoint":
@@ -889,7 +901,7 @@ export function closedSet(state: State, host: ScopeHost, ctx: { choices: Array<{
       }
       break;
     case "ask":
-      for (const choice of ctx.choices) calls.push({ name: `pick ${choice.label}`, valid: true, choice: choice.label, lifecycle: true, ops: [bashOp(choice.command)] });
+      for (const choice of ctx.choices) calls.push({ name: `pick ${choice.label}`, valid: true, choice: choice.label, lifecycle: true, ops: [bashOp(onTree(host, choice.command))] });
       break;
     case "walked":
       if (state.after.length > 0) calls.push({ name: "as walked", valid: true, choice: null, lifecycle: true, ops: state.after });
@@ -1089,7 +1101,7 @@ const isBareCommand = (text: string) => /^\s*[/$]aidlc\s*$/i.test(text);
 export function turnText(state: State, step: Extract<Step, { kind: "person" }>, twin: boolean): string {
   if (step.channel === "box-pick") return pick(rng(step.seed), state.options.length ? state.options : ["Approve"]);
   const seed = twin ? (step.seed ^ 0x5bd1e995) >>> 0 : step.seed;
-  let text = textOf(step.shape, seed, state.options);
+  let text = textOf(step.shape, seed, state.options, step.seed);
   // A box's free text is the person's own words, never one of the box's labels (that is a pick).
   if (step.channel === "box-free" && state.options.some((o) => o.toLowerCase() === text.trim().toLowerCase())) text = `${text} please`;
   return text;
@@ -1134,7 +1146,31 @@ export function play(state: State, seed: number, steps: Step[], opts: { twin?: b
     switch (op.kind) {
       case "bash": {
         const line = op.line.replace(/--session (\S+)/g, `--session ${host.session}`);
-        const res = host.bash(line);
+        let res: RunResult;
+        try {
+          res = host.bash(line);
+        } catch (error) {
+          // The tool's own guard refused the command before it ran: the agent reads its refusal as the call's answer.
+          if (!(error instanceof ScopeRunRefused)) throw error;
+          ops.push({ what: line, status: 2, out: `[guard] ${error.refusal}` });
+          return;
+        }
+        // Loading the step's rules comes back as load-steering: the agent follows its continuations to the step itself.
+        for (let hop = 0; hop < 50; hop++) {
+          let d: { kind?: unknown; next?: unknown } | null = null;
+          try {
+            d = JSON.parse(res.stdout.trim().split("\n").at(-1) ?? "");
+          } catch {
+            d = null;
+          }
+          if (d?.kind !== "load-steering" || typeof d.next !== "string") break;
+          try {
+            res = host.bash(d.next);
+          } catch (error) {
+            if (!(error instanceof ScopeRunRefused)) throw error;
+            res = { status: 2, stdout: "", stderr: `[guard] ${error.refusal}` };
+          }
+        }
         const out = `${res.stdout}${res.stderr ? `\n[stderr]\n${res.stderr}` : ""}`;
         heard(res.stdout);
         ops.push({ what: line, status: res.status, out });
@@ -1271,7 +1307,17 @@ export function play(state: State, seed: number, steps: Step[], opts: { twin?: b
       const rows = readRows(proj).slice(from);
       const landedRows = rows.filter((row) => !BOOKKEEPING.has(row.event));
       const stateAfter = stateText();
-      const landed = call === null ? null : landedRows.length > 0 || (stateAfter !== stateBefore && /parked/i.test(stateAfter) && !/parked/i.test(stateBefore));
+      // A pick of the engine's own question may carry the work on with no row of its own (part of the active work).
+      const stepKind = (() => {
+        try {
+          return (JSON.parse((ops.at(-1)?.out ?? "").trim().split("\n").at(-1) ?? "") as { kind?: string }).kind ?? null;
+        } catch {
+          return null;
+        }
+      })();
+      const carriedOn = call !== null && call.name.startsWith("pick ") && ["run-stage", "done", "ask"].includes(stepKind ?? "");
+      const landed = call === null ? null : landedRows.length > 0 || carriedOn ||
+        (stateAfter !== stateBefore && /parked/i.test(stateAfter) && !/parked/i.test(stateBefore));
       const refusal = call !== null && !landed ? clip(ops.map((op) => op.out).join("\n"), 1500) : null;
       run.steps.push({ i, step, label, chat: host.session, ops, from, rows, call, landed, refusal, stateBefore, stateAfter });
     });
@@ -1279,7 +1325,13 @@ export function play(state: State, seed: number, steps: Step[], opts: { twin?: b
     joinChat(host, proj, first);
     host.typed(NEUTRAL[0]);
     // Where no work exists yet, the agent hands `next` the person's words, as the skill forwards a first request.
-    const res = host.bash(engineLine(host, "orchestrate", "next", ...(stateText() === "" ? NEUTRAL[0].split(" ") : [])));
+    let res: RunResult;
+    try {
+      res = host.bash(engineLine(host, "orchestrate", "next", ...(stateText() === "" ? NEUTRAL[0].split(" ") : [])));
+    } catch (error) {
+      if (!(error instanceof ScopeRunRefused)) throw error;
+      res = { status: 2, stdout: "", stderr: `[guard] ${error.refusal}` };
+    }
     let ok = res.status === 0;
     try {
       const d = JSON.parse(res.stdout.trim().split("\n").at(-1) ?? "") as { kind?: string };
@@ -1393,10 +1445,10 @@ export function signature(text: string): string {
   let message = lines[0] ?? "";
   for (const line of lines) {
     try {
-      const d = JSON.parse(line) as { message?: unknown; error?: unknown; reason?: unknown };
+      const d = JSON.parse(line) as { kind?: unknown; message?: unknown; error?: unknown; reason?: unknown };
       const said = [d.message, d.error, d.reason].find((v) => typeof v === "string");
-      if (typeof said === "string") {
-        message = said;
+      if (typeof said === "string" || typeof d.kind === "string") {
+        message = typeof said === "string" ? said : `a ${String(d.kind)} step`;
         break;
       }
     } catch {
