@@ -2565,7 +2565,7 @@ describe("AttemptView projections and refusal streaks", () => {
     expect(unattended.first.agent_work).toBe(true);
     expect(opsOf(unattended.first.remedies)).toEqual(["present-findings-at-gate"]);
     expect(unattended.again.agent_work).toBeUndefined();
-    expect(opsOf(unattended.again.remedies)).toEqual(["unset-unattended", "lower-fence"]);
+    expect(opsOf(unattended.again.remedies)).toEqual(theirs);
   });
 
   // A stage reported before its outputs or its code exist: writing them is the

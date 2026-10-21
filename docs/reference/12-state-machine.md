@@ -1545,7 +1545,7 @@ closed `op` from `GUARD_REMEDY_OPS` in `aidlc-lib.ts` (`present-approval-gate`,
 `restore-or-jump`, `restart-stage`, `redo-unit-step`, `reopen-unit-step`,
 `review-advisory-gate`, `change-scope`, `restore-scope`, `abort-bolt`, `record-unit-completion`,
 `finish-unit-step`, `dispatch-pipeline-links`, `produce-stage-output`, `repair-source-boundary`,
-`reconfirm-summary`, `unset-unattended`, `lower-fence`). Routing decisions compare `op` and never the
+`reconfirm-summary`, `lower-fence`). Routing decisions compare `op` and never the
 remedy sentence; the directive contract refuses an unknown `op`. These refusals
 are the conductor's own step: a missing pipeline handoff
 (`PIPELINE_EVIDENCE_MISSING`) offers `dispatch-pipeline-links`, whose action is
@@ -1605,7 +1605,7 @@ reopen, or, with no Unit on record, asks the person which Unit does the step
 again with `/aidlc --stage <stage> --unit <name>`.
 The first block stage still offers `restart-stage`, which is no forward jump,
 with its cost. The stage-wide resets offered in other states (`request-changes`,
-`unset-unattended`, `redo-jump`, `restore-or-jump`) say in their action that
+`redo-jump`, `restore-or-jump`) say in their action that
 they throw away every Unit's finished work and that each Unit then redoes it and
 needs its approvals again. A `skipped` stage, which the walk never routes,
 stage-major, and team walks keep their remedies.
