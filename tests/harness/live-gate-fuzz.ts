@@ -16,14 +16,15 @@
 //      comes back for the same call.
 //
 // Records are read by script, the agent's words to the person by a model (live-corpus.ts judgeText); a difference in
-// wording between runs is never a failure. The drivers: Claude Code through the SDK, Codex through `codex exec`,
+// wording between runs is never a failure. The drivers: Claude Code through the SDK (its own Claude Code, the nightly's
+// model pins) and through the box's own `claude -p` (AIDLC_GATE_FUZZ_CLAUDE_BIN, the shell's models), Codex through `codex exec`,
 // Kiro CLI over ACP, opencode through `opencode run`, the Cursor agent through `agent -p`, Copilot CLI through
 // `copilot -p`. tests/e2e/t-live-gate-fuzz.serial.test.ts runs a sample; `bun tests/harness/live-gate-fuzz.ts
 // --write-corpus` writes the first corpus from the answers corpus and the measured cases.
 
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { ANSWERS, type AnswersItem, buildQuestion, type Question } from "./aidlc-answers-corpus.ts";
@@ -45,7 +46,7 @@ type Store = typeof import("../../dist/claude/.claude/tools/aidlc-message-store.
 const lib = (): Lib => require("../../dist/claude/.claude/tools/aidlc-lib.ts") as Lib;
 const store = (): Store => require("../../dist/claude/.claude/tools/aidlc-message-store.ts") as Store;
 
-export const LIVE_TOOLS = ["claude", "codex", "kiro", "opencode", "cursor", "copilot"] as const;
+export const LIVE_TOOLS = ["claude", "claude-cli", "codex", "kiro", "opencode", "cursor", "copilot"] as const;
 export type LiveTool = (typeof LIVE_TOOLS)[number];
 
 // ---------------------------------------------------------------------------
@@ -235,6 +236,7 @@ const SCRATCH_TOOL_ENV = { DISABLE_AUTOUPDATER: "1", OPENCODE_DISABLE_AUTOUPDATE
 /** The person's homes a drive must leave as it found them, and the ones a tool writes its own records into (reported). */
 export const REAL_HOMES: Record<LiveTool, { owed: string[]; reported: string[] }> = {
   claude: { owed: [join(homedir(), ".claude")], reported: [] },
+  "claude-cli": { owed: [join(homedir(), ".claude")], reported: [] },
   codex: { owed: [join(homedir(), ".codex")], reported: [] },
   kiro: { owed: [join(homedir(), ".kiro", "settings"), join(homedir(), ".kiro", "agents")], reported: [join(homedir(), ".kiro")] },
   opencode: { owed: [join(homedir(), ".config", "opencode")], reported: [join(homedir(), ".local", "share", "opencode")] },
@@ -251,6 +253,14 @@ export function liveRig(tool: LiveTool): LiveRig {
   if (tool === "claude" || tool === "codex" || tool === "kiro") {
     const made = liveProject(tool);
     return { proj: made.proj, home: made.home ?? null, env, cleanup: made.cleanup };
+  }
+  if (tool === "claude-cli") {
+    const made = liveProject("claude");
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "claude-config-")));
+    return { proj: made.proj, home, env: { ...env, CLAUDE_CONFIG_DIR: home }, cleanup: () => {
+      made.cleanup();
+      cleanupTestProject(home);
+    } };
   }
   if (tool === "opencode") {
     const { proj, root } = setupOpencodeProject();
@@ -312,6 +322,41 @@ function spawnTool(argv: string[], proj: string, env: NodeJS.ProcessEnv, input?:
     timeout: remainingOperationTimeoutMs(30 * 60_000, { phase: "live gate fuzz turn" }),
   });
   return { rc: r.status ?? -1, stdout: r.stdout ?? "", out: `${r.stdout ?? ""}\n${r.stderr ?? ""}${r.error ? `\n${r.error.message}` : ""}` };
+}
+
+/** The box's own Claude Code: AIDLC_GATE_FUZZ_CLAUDE_BIN, else the newest under ~/aidlc-tier/claude, else `claude`. */
+export function claudeBinary(): string {
+  if (process.env.AIDLC_GATE_FUZZ_CLAUDE_BIN) return process.env.AIDLC_GATE_FUZZ_CLAUDE_BIN;
+  const tier = join(homedir(), "aidlc-tier", "claude");
+  if (!existsSync(tier)) return "claude";
+  const versions = readdirSync(tier).filter((v) => existsSync(join(tier, v, "claude")))
+    .sort((a, b) => a.split(".").map(Number).reduce((d, n, i) => d || n - Number(b.split(".")[i] ?? 0), 0));
+  return versions.length > 0 ? join(tier, versions.at(-1)!, "claude") : "claude";
+}
+
+/** What one `claude -p --output-format stream-json` turn said and ran. */
+function claudeStream(stdout: string): { text: string; tools: Array<{ command: string; output: string }> } {
+  const texts: string[] = [];
+  const calls = new Map<string, string>();
+  const tools: Array<{ command: string; output: string }> = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("{")) continue;
+    let event: { type?: string; message?: { content?: Array<{ type?: string; text?: string; id?: string; input?: unknown; tool_use_id?: string; content?: unknown }> } };
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    for (const part of event.message?.content ?? []) {
+      if (event.type === "assistant" && part.type === "text" && part.text) texts.push(part.text);
+      if (event.type === "assistant" && part.type === "tool_use" && part.id) calls.set(part.id, JSON.stringify(part.input ?? {}).slice(0, 400));
+      if (event.type === "user" && part.type === "tool_result" && part.tool_use_id) {
+        const content = Array.isArray(part.content) ? part.content.map((c: { text?: string }) => c.text ?? "").join("") : String(part.content ?? "");
+        tools.push({ command: calls.get(part.tool_use_id) ?? "", output: content });
+      }
+    }
+  }
+  return { text: texts.join("\n"), tools };
 }
 
 /** Text the opencode JSON events carry from the agent. */
@@ -405,6 +450,7 @@ export async function exchange(tool: LiveTool, rig: LiveRig, lines: string[], le
       return result;
     }
     let session: string | undefined;
+    if (tool === "claude-cli") session = randomUUID();
     if (tool === "cursor") {
       const made = spawnTool([process.env.AIDLC_CURSOR_BIN ?? "agent", "create-chat"], rig.proj, rig.env);
       session = made.stdout.trim().split("\n").at(-1)?.trim();
@@ -423,6 +469,10 @@ export async function exchange(tool: LiveTool, rig: LiveRig, lines: string[], le
           text = "";
         }
         result.turns.push({ line, text, tools: r.results.map((t) => ({ command: String(t.input.command ?? ""), output: t.resultText })) });
+      } else if (tool === "claude-cli") {
+        const r = spawnTool([claudeBinary(), "-p", line, "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions",
+          ...(at === 0 ? ["--session-id", session ?? ""] : ["--resume", session ?? ""])], rig.proj, rig.env);
+        result.turns.push({ line, ...claudeStream(r.stdout) });
       } else if (tool === "opencode") {
         const { argv, input } = opencodeRunCommand(line, session);
         const r = spawnTool([process.env.AIDLC_OPENCODE_BIN ?? "opencode", ...argv], rig.proj, rig.env, input);

@@ -6,7 +6,7 @@
 // turn; P4 their words kept whole; P5 no loop and no dead end).
 //
 // On demand only: AIDLC_GATE_FUZZ_LIVE=1 opens it; no CI job sets it. AIDLC_GATE_FUZZ_TOOLS picks the tools (default
-// claude,codex,kiro,opencode,cursor; copilot when its account has quota), AIDLC_GATE_FUZZ_SAMPLE a comma list of reply
+// claude,claude-cli,codex,kiro,opencode,cursor; copilot when its account has quota), AIDLC_GATE_FUZZ_SAMPLE a comma list of reply
 // ids or a number per wait point (default 1), AIDLC_GATE_FUZZ_SEED the sample's seed, AIDLC_GATE_FUZZ_REPORT_DIR the
 // report folder (default tests/logs/gate-fuzz-live). Scratch projects; the tools' scratch homes where a tool has one
 // (Claude Code's own config folder, CODEX_HOME, opencode's XDG_CONFIG_HOME, COPILOT_HOME) with self-updates off; the
@@ -21,16 +21,16 @@ import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import { sampleByGroup } from "../harness/live-corpus.ts";
 import {
-  driveReply, homeDigests, LIVE_TOOLS, type LiveTool, loadCorpus, REAL_HOMES, type Reply, type Verdict, writeReport,
+  claudeBinary, driveReply, homeDigests, LIVE_TOOLS, type LiveTool, loadCorpus, REAL_HOMES, type Reply, type Verdict, writeReport,
 } from "../harness/live-gate-fuzz.ts";
 
 setDefaultTimeout(60 * 60_000);
 
 const LIVE = process.env.AIDLC_GATE_FUZZ_LIVE === "1";
 const REPORT_ONLY = process.env.AIDLC_GATE_FUZZ_REPORT_ONLY === "1";
-const TOOLS = (process.env.AIDLC_GATE_FUZZ_TOOLS ?? "claude,codex,kiro,opencode,cursor").split(",").filter(Boolean) as LiveTool[];
+const TOOLS = (process.env.AIDLC_GATE_FUZZ_TOOLS ?? "claude,claude-cli,codex,kiro,opencode,cursor").split(",").filter(Boolean) as LiveTool[];
 const REPORT_DIR = process.env.AIDLC_GATE_FUZZ_REPORT_DIR ?? join(REPO_ROOT, "tests", "logs", "gate-fuzz-live");
-const BINARIES: Record<LiveTool, string> = { claude: "claude", codex: "codex", kiro: "kiro-cli", opencode: "opencode", cursor: "agent", copilot: "copilot" };
+const BINARIES: Record<LiveTool, string> = { claude: "claude", "claude-cli": claudeBinary(), codex: "codex", kiro: "kiro-cli", opencode: "opencode", cursor: "agent", copilot: "copilot" };
 
 /** The replies a tool can meet: Codex and Kiro CLI type `$aidlc` and `/aidlc` lines as they take them; box picks stay with Claude Code. */
 function eligible(tool: LiveTool): Reply[] {
