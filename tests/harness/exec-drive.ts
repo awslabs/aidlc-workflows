@@ -237,6 +237,24 @@ export function codexToolResults(stdout: string): CapturedToolResult[] {
   return results;
 }
 
+/** What Codex told the person in one `codex exec --json` turn: its finished agent messages. */
+export function codexReplies(stdout: string): AgentWords[] {
+  const replies: AgentWords[] = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("{")) continue;
+    let event: { type?: unknown; item?: { type?: unknown; text?: unknown } };
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const text = event.item?.text;
+    if (event.type !== "item.completed" || event.item?.type !== "agent_message" || typeof text !== "string" || !text.trim()) continue;
+    replies.push({ text });
+  }
+  return replies;
+}
+
 export interface CodexJsonTurn extends ExecResult {
   stdout: string;
   sessionId?: string;
