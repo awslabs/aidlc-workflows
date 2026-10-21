@@ -3,12 +3,12 @@
   "runs": 24,
   "groups": [
     "I1 GATE_REJECTED with no unspent reply of the person's",
+    "I2 GATE_APPROVED names no message",
     "I2 GATE_REJECTED names no message",
     "I2 QUESTION_ANSWERED names no message",
     "I2 SUMMARY_CONFIRMATION_RECORDED names no message",
     "I2 VERIFICATION_COMMAND_RECORDED names no message",
     "I2 the gate-words record dropped some of the person's words",
-    "I4 \"_\" refused with a live reply: Refusing to reject \"_\": the person picked Approve at this gate. Report that, or ask them if you read their words differently.",
     "I5 the person's words copied into GATE_REJECTED.Reason",
     "I7 one reply backed GATE_REJECTED and GATE_REJECTED",
     "STOP the Stop hook kept an attended turn from ending (nothing on record that the agent waits)"
