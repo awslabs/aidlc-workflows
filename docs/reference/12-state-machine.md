@@ -687,8 +687,13 @@ report awaiting-approval  →  [?] AwaitingApproval
 ```
 
 `Revision Count` lives in the state file and increments on each rejected
-report. The conductor uses this to detect the revision-loop escape hatch
-(default is 3 cycles before offering to skip).
+report, across the whole workflow. The revision-loop escape hatch counts per
+stage instead: Accept as-is is on offer once the same stage's gate (one
+Unit's, at a Unit gate) has 3 `GATE_REJECTED` rows since it was last approved
+or freshly reopened (`stageRevisionCycles` in `aidlc-lib.ts`, read from the
+audit trail, so a park keeps the count). Only then does the engine record an
+approval as Accept as-is or read a reply of exactly `3` as that pick, and
+`/aidlc --status` shows the same per-stage count as `revision N of 3`.
 
 When a revision changes a reviewed output or bound question content on a stage whose directive
 carries a reviewer, the conductor re-runs the `stage-protocol-reviewer.md` §12a step before

@@ -761,11 +761,9 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     const p = projWithState("state-mid-ideation.md");
     const guardedEnv = { ...process.env };
     delete guardedEnv.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
-    if (revisions > 0) {
-      writeFileSync(
-        statePath(p),
-        readFileSync(statePath(p), "utf-8").replace("- **Revision Count**: 0", `- **Revision Count**: ${revisions}`),
-      );
+    // Earlier change requests at this stage's gate, as the reject path records them.
+    for (let i = 0; i < revisions; i++) {
+      appendAuditEntry("GATE_REJECTED", { Stage: "feasibility", Feedback: `change ${i + 1}` }, p);
     }
     run(ORCHESTRATE, [
       "report",

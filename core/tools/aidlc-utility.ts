@@ -318,6 +318,8 @@ import {
   readAllAuditShards,
   readAuditShardEvents,
   resolveBoltDag,
+  ACCEPT_AS_IS_REVISION_CYCLES,
+  stageRevisionCycles,
   unitGateStatus,
   unitLifecycleSnapshot,
   unitPlainName,
@@ -2058,12 +2060,20 @@ To get started:
     }
   } else if (currentCheckbox?.state === "revising") {
     const displayName = currentName;
-    const revisionCount = getField(content, "Revision Count");
-    // If the Revision Count field is missing, omit the count rather than
-    // render a literal "?" — state files authored before the field existed
-    // would otherwise render "revision ? of 3".
-    statusLine = revisionCount
-      ? `Revising ${displayName} (revision ${revisionCount} of 3)`
+    // This stage's own change requests, the count its Accept as-is waits on;
+    // the state file's Revision Count runs across the whole workflow. With no
+    // readable request on record, the count is left out.
+    let revisionCount = 0;
+    try {
+      revisionCount = stageRevisionCycles(
+        readAuditShardEvents(projectDir, flags.intent, flags.space),
+        currentStage,
+      );
+    } catch {
+      // Status remains useful when the ledger is absent or unreadable.
+    }
+    statusLine = revisionCount > 0
+      ? `Revising ${displayName} (revision ${revisionCount} of ${ACCEPT_AS_IS_REVISION_CYCLES})`
       : `Revising ${displayName}`;
   } else if (currentCheckbox?.state === "completed" && status === "Running") {
     // Post-approve window: the stage was approved (→ [x]) but the orchestrator

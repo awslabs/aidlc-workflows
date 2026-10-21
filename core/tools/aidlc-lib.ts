@@ -12981,6 +12981,36 @@ export function stageGateApproval(
   return acceptAsIs && ACCEPT_AS_IS_LABEL_RE.test((userInput ?? "").trim()) ? ACCEPT_AS_IS_CHOICE : "Approve";
 }
 
+// The person's change requests at one stage's gate (one Unit's, when a Unit is
+// named) since that gate was last approved or the stage was freshly reopened.
+// The state file's Revision Count runs across the whole workflow, so it cannot
+// say when Accept as-is is on offer: the escape hatch opens after the third
+// request on the same stage. The audit trail keeps the count across a park.
+export const ACCEPT_AS_IS_REVISION_CYCLES = 3;
+export function stageRevisionCycles(
+  rows: readonly AuditShardEvent[],
+  slug: string,
+  unit?: string,
+): number {
+  let cycles = 0;
+  for (const row of sortAttemptEvents(rows)) {
+    if (row.event !== "GATE_APPROVED" && row.event !== "GATE_REJECTED") continue;
+    if (!gateEventMatchesUnit(row.block, slug, unit)) continue;
+    cycles = row.event === "GATE_REJECTED" && !rejectionIsFreshAttempt(row.block) ? cycles + 1 : 0;
+  }
+  return cycles;
+}
+
+// An unreadable audit trail leaves the escape hatch closed: the person's
+// approval is still recorded, as Approve, never blocked on the count.
+export function stageAcceptAsIsOnOffer(projectDir: string, slug: string, unit?: string): boolean {
+  try {
+    return stageRevisionCycles(readAuditShardEvents(projectDir), slug, unit) >= ACCEPT_AS_IS_REVISION_CYCLES;
+  } catch {
+    return false;
+  }
+}
+
 // HUMAN_TURN proves only that a prompt-submit seam fired after the previous
 // resolution. Several harnesses do not expose trusted prompt text, so the
 // framework cannot prove that --user-input/--feedback/--details came from the
