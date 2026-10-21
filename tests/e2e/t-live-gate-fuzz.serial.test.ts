@@ -8,7 +8,8 @@
 // On demand only: AIDLC_GATE_FUZZ_LIVE=1 opens it; no CI job sets it. AIDLC_GATE_FUZZ_TOOLS picks the tools (default
 // claude,claude-cli,codex,kiro,opencode,cursor; copilot when its account has quota), AIDLC_GATE_FUZZ_SAMPLE a comma list of reply
 // ids or a number per wait point (default 1) and AIDLC_GATE_FUZZ_ALSO ids beside it, AIDLC_GATE_FUZZ_SEED the sample's seed, AIDLC_GATE_FUZZ_REPORT_DIR the
-// report folder (default tests/logs/gate-fuzz-live). Scratch projects; the tools' scratch homes where a tool has one
+// report folder (default tests/logs/gate-fuzz-live; each reply's record and what the agent said are kept under its
+// traces/). Scratch projects; the tools' scratch homes where a tool has one
 // (Claude Code's own config folder, CODEX_HOME, opencode's XDG_CONFIG_HOME, COPILOT_HOME) with self-updates off; the
 // person's homes are hashed before and after, and a change in one the run owes unchanged fails the file. Kiro CLI keeps
 // its own records under ~/.kiro and the Cursor agent under ~/.cursor: reported, not asserted. One Kiro leg at a time:
@@ -83,7 +84,7 @@ for (const tool of LIVE_TOOLS) {
     }
     for (const reply of sample(tool)) {
       test(`${reply.id} ${reply.wait} ${reply.replyClass} ${JSON.stringify(reply.inputs)}`, async () => {
-        const verdict = await driveReply(reply, tool, judgeDir);
+        const verdict = await driveReply(reply, tool, judgeDir, join(REPORT_DIR, "traces"));
         verdicts.push(verdict);
         if (!REPORT_ONLY) expect(verdict.failures, `${reply.meaning}\nThe person read: ${verdict.read.slice(-600)}`).toEqual([]);
       });

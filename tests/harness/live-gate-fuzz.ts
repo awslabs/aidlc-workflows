@@ -25,7 +25,7 @@
 
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { ANSWERS, type AnswersItem, buildQuestion, type Question } from "./aidlc-answers-corpus.ts";
@@ -680,8 +680,10 @@ export async function judge(reply: Reply, tool: LiveTool, rig: LiveRig, ex: Exch
 }
 
 /** Drive and judge one reply on one tool. */
-export async function driveReply(reply: Reply, tool: LiveTool, judgeDir: string): Promise<Verdict> {
+/** `keep`: a folder that keeps each reply's audit and what the agent told the person, read after the run. */
+export async function driveReply(reply: Reply, tool: LiveTool, judgeDir: string, keep: string | null = null): Promise<Verdict> {
   const rig = liveRig(tool);
+  let ex: Exchange | null = null;
   try {
     await buildQuestion(rig.proj, reply.wait);
     if (reply.beside) {
@@ -697,9 +699,16 @@ export async function driveReply(reply: Reply, tool: LiveTool, judgeDir: string)
       spawnTool([process.execPath, join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-orchestrate.ts"), "report", "--stage", "requirements-analysis",
         "--result", "rejected", "--user-input", "Request Changes", "--project-dir", rig.proj], rig.proj, rig.env);
     } : undefined;
-    const ex = await exchange(tool, rig, lines, ledger, between);
+    ex = await exchange(tool, rig, lines, ledger, between);
     return await judge(reply, tool, rig, ex, start, ledger, judgeDir);
   } finally {
+    if (keep !== null) {
+      const dir = join(keep, tool, reply.id);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "exchange.json"), `${JSON.stringify({ reply, exchange: ex }, null, 2)}\n`);
+      const records = join(rig.proj, "aidlc");
+      if (existsSync(records)) cpSync(records, join(dir, "aidlc"), { recursive: true, filter: (from) => !/[\\/](?:construction|inception|ideation|operation)[\\/]/.test(from) });
+    }
     rig.cleanup();
   }
 }
