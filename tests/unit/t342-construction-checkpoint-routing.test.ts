@@ -2585,7 +2585,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     approve(p, "alpha");
     buildReviewed(p, "beta");
     copilotSays(p, "carry on");
-    expect(copilotNext(p, "next").construction_checkpoint?.unit).toBe("beta");
+    expect(copilotNext(p, "next")).toMatchObject({ construction_checkpoint: { unit: "beta" } });
     return p;
   }
   const reopenedAs = (p: string) =>
