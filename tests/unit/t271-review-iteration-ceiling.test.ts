@@ -756,7 +756,40 @@ describe("t271 review iteration ceiling", () => {
       });
 
       test("of a stage no longer in flight names none", () => {
-        expect(unitVerdict("READY", { box: " " })).toBeUndefined();
+        expect(unitVerdict("READY", { box: "x" })).toBeUndefined();
+      });
+
+      // A unit-major walk keeps Current Stage on the first per-Unit stage, and
+      // a later one's own box stays pending while its Units are worked.
+      test("of a later stage of a unit-major walk, its box still pending, names next", () => {
+        expect(unitVerdict("READY", { box: " " })).toMatch(/^No further review pass follows: run `[^`]*orchestrate next`/);
+      });
+
+      // A team's route hands the stage body back to a Unit with no completion
+      // receipt, so a Unit still open on the stage records its completion first.
+      test("of a Unit still open on its stage, records its completion before next", () => {
+        const step = unitVerdict("READY", {
+          between: (proj) => appendAuditEntry("UNIT_STARTED", {
+            Stage: "code-generation", Unit: "unit-alpha", "Run floor": "unstarted#0",
+          }, proj),
+        });
+        expect(step).toMatch(
+          /^No further review pass follows: record this Unit's completion with `[^`]*state unit complete --stage code-generation --unit unit-alpha`, then run `[^`]*orchestrate next`/,
+        );
+      });
+
+      test("of autonomous unit-major Code Generation, outside a swarm Bolt, names next", () => {
+        const proj = seedProject("feature");
+        const sf = seededStateFile(proj);
+        writeFileSync(sf, readFileSync(sf, "utf8")
+          .replace("- [ ] code-generation", "- [-] code-generation")
+          .replace("## Runtime State\n", "## Runtime State\n- **Construction Iteration**: unit-major\n- **Construction Autonomy Mode**: autonomous\n"));
+        writeReviewedArtifact(proj, "code-generation", "plan\n", "unit-alpha");
+        const pass = [...CG, "--iteration", "1"];
+        expect(runReview(proj, pass).status).toBe(0);
+        const recorded = runReview(proj, [...pass, "--verdict", "READY"]);
+        expect(recorded.status, recorded.stderr).toBe(0);
+        expect(note(recorded.stdout)).toMatch(/^No further review pass follows: run `[^`]*orchestrate next`/);
       });
 
       // A swarm batch and a wave go on through their own loop (the referee's

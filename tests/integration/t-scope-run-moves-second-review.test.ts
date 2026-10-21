@@ -220,8 +220,11 @@ describe("another review the person asks for at a Unit's checkpoint", () => {
           },
         },
       });
+      // Functional Design runs too, so Code Generation is a later per-Unit
+      // stage, whose own box is still pending at the checkpoint.
       const first = agent.begin("build the classic work", [
-        "--scope", "classic", "--skip", SKIPPED.join(","), "--review", "advisory", "--plan-approval", "on",
+        "--scope", "classic", "--skip", SKIPPED.filter((stage) => stage !== "functional-design").join(","),
+        "--review", "advisory", "--plan-approval", "on",
       ]);
       try {
         agent.drive(first);

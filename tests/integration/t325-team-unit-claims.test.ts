@@ -660,8 +660,11 @@ describe("t325 atomic team Unit claims", () => {
       checkout,
     );
     expect(verdict.status, verdict.out).toBe(0);
-    // A team's Unit goes on through `next`, which names its receipt and then its gate.
-    expect(JSON.parse(verdict.stdout.trim().split("\n").at(-1) ?? "{}").agent_note).toContain("orchestrate next");
+    // A team's route hands the stage body back to a Unit with no completion
+    // receipt, so the step records it first; following it reaches the Unit gate.
+    const step = String(JSON.parse(verdict.stdout.trim().split("\n").at(-1) ?? "{}").agent_note);
+    const named = [...step.matchAll(/`([^`]+)`/g)].map((match) => match[1].replace(/^.* engine /, ""));
+    expect(named, step).toEqual(["state unit complete --stage functional-design --unit alpha", "orchestrate next"]);
     expect(
       run(
         STATE,
@@ -669,6 +672,9 @@ describe("t325 atomic team Unit claims", () => {
         checkout,
       ).status,
     ).toBe(0);
+    expect(nextDirective(checkout)).toMatchObject({
+      kind: "run-stage", stage: "functional-design", unit: "alpha", gate: true, unit_gate: "per-stage",
+    });
     expect(
       JSON.parse(
         run(
