@@ -219,14 +219,17 @@ describe("t-gate-names-failed-checks: a check that still fails is said with the 
 
   // A sentence that told the agent to correct every failing check had a Kiro
   // agent reason aloud about the review freeze above both reviewed gates; the
-  // finding is said at the gate and corrected when the person asks.
-  test("the sensors protocol has the agent correct a failing check only when the person asks", () => {
+  // finding is said at the gate and corrected when the person asks. The
+  // correction's write and its `revised` report run the checks again, so the
+  // agent is never sent to run one (a live Copilot agent guessed at the command).
+  test("the sensors protocol has the agent correct a failing check only when the person asks, and never run it", () => {
     const protocol = readFileSync(
       join(import.meta.dir, "../../core/aidlc-common/protocols/stage-protocol-sensors.md"),
       "utf-8",
     ).replace(/\s+/g, " ");
-    expect(protocol).not.toContain("use that detail file to correct the output and run the check again");
-    expect(protocol).toContain("when they ask for changes, correct from that detail file and run the check again");
+    expect(protocol).not.toContain("use that detail file to correct the output");
+    expect(protocol).toContain("when they ask for changes, correct from that detail file.");
+    expect(protocol).not.toContain("run the check again");
   });
 });
 
