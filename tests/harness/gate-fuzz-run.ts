@@ -3,7 +3,7 @@
 //
 //   bun tests/harness/gate-fuzz-run.ts --seeds 2000 --jobs 3 --out DIR
 //       [--seed S] [--most 40] [--hosts claude,codex,...] [--policies strict,relaxed,off]
-//       [--questions stage-gate,code-plan,...] [--walks bugfix,feature,...] [--walk-hosts claude,...]
+//       [--questions stage-gate,code-plan,...] [--walks bugfix,feature,...] [--walk-hosts claude,...] [--host-scopes bugfix,classic]
 //       [--i8-every 4] [--shrink] [--unattended-every 10]
 //   bun tests/harness/gate-fuzz-run.ts --replay '<run id>' [--out DIR]
 //
@@ -35,11 +35,14 @@ interface Args {
   questions: string[];
   walks: string[];
   walkHosts: HostId[];
+  /** The scopes the other tools' wiring walks (Claude Code walks every scope asked for). */
+  hostScopes: string[];
   i8Every: number;
   unattendedEvery: number;
   shrink: boolean;
   replay: string | null;
   worker: { index: number; of: number } | null;
+  walksOnly: boolean;
 }
 
 function parse(argv: string[]): Args {
@@ -60,11 +63,13 @@ function parse(argv: string[]): Args {
     questions: list("--questions", Object.keys(FIXTURES)),
     walks: value("--walks")?.split(",").filter(Boolean) ?? [],
     walkHosts: list("--walk-hosts", ["claude"]) as HostId[],
+    hostScopes: list("--host-scopes", ["bugfix", "classic"]),
     i8Every: Number(value("--i8-every") ?? 4),
     unattendedEvery: Number(value("--unattended-every") ?? 10),
     shrink: argv.includes("--shrink"),
     replay: value("--replay") ?? null,
     worker: worker ? { index: Number(worker.split("/")[0]), of: Number(worker.split("/")[1]) } : null,
+    walksOnly: argv.includes("--walks-only"),
   };
 }
 
@@ -74,7 +79,7 @@ function walks(args: Args): Walk[] {
   mkdirSync(root, { recursive: true });
   const specs: WalkSpec[] = [];
   for (const scope of args.walks) {
-    for (const host of args.walkHosts) {
+    for (const host of args.walkHosts.filter((h) => h === "claude" || args.hostScopes.includes(scope))) {
       for (const policy of host === "claude" ? args.policies : [args.policies[0]]) {
         // Two Units on the scopes that build them, and the skips the scope-host journey uses off Claude Code.
         const spec: WalkSpec = { scope, host, policy, units: ["mvp", "feature", "classic", "enterprise"].includes(scope) ? UNITS : ["core"] };
@@ -85,12 +90,14 @@ function walks(args: Args): Walk[] {
   }
   // One gate asked for changes three times, so Accept as-is is on offer at the fourth showing.
   if (args.walks.length > 0) specs.push({ scope: "bugfix", host: "claude", policy: args.policies[0], units: ["core"], revise: "requirements-analysis" });
-  return specs.map((spec) => {
+  return specs.flatMap((spec, i) => {
     const dir = join(root, walkId(spec));
-    if (existsSync(join(dir, "walk.json"))) return loadWalk(dir);
+    if (existsSync(join(dir, "walk.json"))) return [loadWalk(dir)];
+    // A walk job walks its share; the seed jobs after it find every walk on disk.
+    if (args.walksOnly && args.worker && i % args.worker.of !== args.worker.index) return [];
     const w = walk(spec, root);
     console.log(`walked ${w.id}: ${w.states.length} waits, ${w.gatesMet.length} gates, ${Math.round(w.ms / 1000)} s${w.stuck ? `, stuck: ${w.stuck.slice(0, 200)}` : ""}`);
-    return w;
+    return [w];
   });
 }
 
@@ -201,7 +208,14 @@ async function main(): Promise<void> {
     console.log(`kept: ${checked.run.proj}`);
     return;
   }
+  const passed = process.argv.slice(2).filter((_, i, all) => all[i - 1] !== "--jobs" && all[i] !== "--jobs");
+  const jobs = (extra: string[]) => Promise.all(Array.from({ length: args.jobs }, (_, index) => new Promise<void>((resolve) => {
+    const child = spawn(process.execPath, [import.meta.path, ...passed, "--out", args.out, ...extra, "--worker", `${index}/${args.jobs}`], { stdio: "inherit" });
+    child.on("exit", () => resolve());
+  })));
+  if (args.jobs > 1 && !args.worker && args.walks.length > 0) await jobs(["--walks-only"]);
   const walked = walks(args);
+  if (args.walksOnly) return;
   if (args.worker) {
     for (let n = args.worker.index; n < args.seeds; n += args.worker.of) {
       const result = await seedResult(args, n, walked);
@@ -211,11 +225,7 @@ async function main(): Promise<void> {
     return;
   }
   if (args.jobs > 1) {
-    const passed = process.argv.slice(2).filter((_, i, all) => all[i - 1] !== "--jobs" && all[i] !== "--jobs");
-    await Promise.all(Array.from({ length: args.jobs }, (_, index) => new Promise<void>((resolve) => {
-      const child = spawn(process.execPath, [import.meta.path, ...passed, "--out", args.out, "--worker", `${index}/${args.jobs}`], { stdio: "inherit" });
-      child.on("exit", () => resolve());
-    })));
+    await jobs([]);
     const merged = readdirSync(args.out).filter((f) => /^results-\d+\.jsonl$/.test(f)).map((f) => readFileSync(join(args.out, f), "utf-8")).join("");
     writeFileSync(join(args.out, "results.jsonl"), merged);
   } else {
