@@ -1093,6 +1093,7 @@ export const ROUTES: readonly Route[] = [
     classification: "passthrough",
     verbs: ["review", "context", "summary"],
     tool: TOOLS.reviewBrief,
+    verbHelp: true,
     ...HIDDEN_ENGINE,
   },
   {

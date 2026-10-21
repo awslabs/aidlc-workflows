@@ -32652,6 +32652,15 @@ export function stageGateReportCommand(stage: string, result: "awaiting-approval
   );
 }
 
+// The Review brief that opens that gate (stage-protocol-reviewer.md), rendered
+// the same way: `stale` after a recovery pass, `revision` after a revision.
+export function stageReviewBriefCommand(stage: string, why: "first" | "revision" | "stale"): string {
+  return renderEngineInvocation(
+    { route: "review-brief", args: ["review", "--stage", stage, "--why", why] },
+    { harnessDir: harnessDir() },
+  );
+}
+
 // The scopes whose plan runs this stage, for a remedy that switches to one.
 function scopesRunningStage(slug: string): string[] {
   try {

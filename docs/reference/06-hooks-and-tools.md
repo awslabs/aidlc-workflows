@@ -2117,7 +2117,7 @@ projects it expands to `aidlc`. Do not author a harness-specific direct script
 path for a framework command.
 
 `aidlc engine <noun> --help` lists a noun's verbs. For `log`, `bolt`,
-`worktree` and `sensor` (the routes marked `verbHelp`), it also names
+`worktree`, `sensor` and `review-brief` (the routes marked `verbHelp`), it also names
 `aidlc engine <noun> <verb> --help` (or `-h`), which prints that verb's flags,
 required ones first, with the values a fixed-value flag such as `--checkpoint`
 accepts. The tool owns its own flags, so the usage is built from the lists its

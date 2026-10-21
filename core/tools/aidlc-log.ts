@@ -31,6 +31,7 @@ import {
   recordGuardRecoveryChoice,
   requestChangesReportCommand,
   stageGateReportCommand,
+  stageReviewBriefCommand,
   markStageWorkLogged,
   markTurnEnd,
   LEARNINGS_NOTE_CHOICES,
@@ -3179,20 +3180,27 @@ function reviewVerdictStep(
     });
   }
   if (node.phase === "construction" && isAutonomousConstructionGate(state, node, pd)) return null;
+  // The recovery pass re-checked an invalidated review, so its brief is the stale one.
+  const brief = stageReviewBriefCommand(
+    flags.stage,
+    request.recovery ? "stale" : box === "revising" ? "revision" : "first",
+  );
   if (box === "in-progress") {
     if (learningsRitualRuns(ceremonyPolicyValues(getField(state, "Scope"), state).learnings, state, flags.stage)) {
-      return reviewVerdictNote({ kind: "learnings" });
+      return reviewVerdictNote({ kind: "learnings", brief });
     }
     return reviewVerdictNote({
       kind: "gate",
       report: stageGateReportCommand(flags.stage, "awaiting-approval"),
       summary: true,
+      brief,
     });
   }
   return reviewVerdictNote({
     kind: "gate",
     report: stageGateReportCommand(flags.stage, box === "revising" ? "revised" : "awaiting-approval"),
     summary: false,
+    brief,
   });
 }
 

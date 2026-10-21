@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 import {
+  asksForHelp,
   type AuditShardEvent,
   attemptEventAfterFrontier,
   ENGINE_DIR,
@@ -24,6 +25,7 @@ import {
   pairedReviewRecordForCompletion,
   parseReviewSection,
   parseReviewerFindingsReport,
+  printUsageAndExit,
   readFindingsTable,
   readAuditShardEvents,
   readUnitSourceSnapshot,
@@ -53,6 +55,7 @@ import {
   validateUnitName,
   writeRecordFileNoFollow,
 } from "./aidlc-lib.js";
+import { aidlcDispatcherInvocation } from "./aidlc-runtime-paths.ts";
 import {
   constructionCheckpointKind,
   resolveConstructionCheckpoint,
@@ -2303,8 +2306,38 @@ function keepGateBrief(
   }
 }
 
+const REVIEW_BRIEF_VERBS = ["review", "context", "summary"] as const;
+
+// Each verb's usage, with the flags its branch in main reads (#2449's shape).
+function reviewBriefUsage(verb: string | undefined): string {
+  const invoke = (name: string) => aidlcDispatcherInvocation(`review-brief ${name}`);
+  const usage: Record<(typeof REVIEW_BRIEF_VERBS)[number], string[]> = {
+    review: [
+      `${invoke("review")} --stage <slug> --why <first|revision|stale> [--unit <unit>] [--fallback-finding "<why>"]`,
+      "  Prints the Review brief that opens a reviewer-backed approval gate. Required: --stage, --why.",
+    ],
+    context: [
+      `${invoke("context")} --stage <slug> [--unit <unit>]`,
+      "  Prints the findings context a reviewer is sent with. Required: --stage.",
+    ],
+    summary: [
+      `${invoke("summary")} --stage <slug> --questions-file <path> [--unit <unit>]`,
+      "  Prints the summary confirmation brief. Required: --stage, --questions-file.",
+    ],
+  };
+  if (verb !== undefined && verb in usage) return usage[verb as keyof typeof usage].join("\n");
+  return `Usage: aidlc-review-brief <subcommand>\n\n${Object.values(usage).map((lines) => lines.join("\n")).join("\n\n")}`;
+}
+
 export function main(argv: string[]): void {
   const command = argv[0];
+  // The verb is read before any flag, so help, and a flag where the verb goes,
+  // are answered with the verbs instead of a flag error.
+  if (command === undefined || asksForHelp([command])) printUsageAndExit(reviewBriefUsage(undefined));
+  if (!(REVIEW_BRIEF_VERBS as readonly string[]).includes(command)) {
+    throw new Error(`Unknown subcommand: ${command}. Valid: ${REVIEW_BRIEF_VERBS.join(", ")}.`);
+  }
+  if (asksForHelp(argv.slice(1))) printUsageAndExit(reviewBriefUsage(command));
   const flags = parseCliFlags(argv.slice(1));
   const projectDir = resolveProjectDir(flags["project-dir"]);
   const stageSlug = flags.stage;
@@ -2355,9 +2388,6 @@ export function main(argv: string[]): void {
     );
     return;
   }
-  throw new Error(
-    `Unknown subcommand: ${command}. Valid: review, context, summary.`,
-  );
 }
 
 if (import.meta.main) {
