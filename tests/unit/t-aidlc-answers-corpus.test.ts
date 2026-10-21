@@ -1,4 +1,4 @@
-// covers: hook:aidlc-record-human-turn, function:exactOptionPick, function:personsLatestGatePick,
+// covers: hook:aidlc-record-human-turn, function:exactOptionPick, function:personsGateReply,
 // function:recordProtectedHumanResponse, function:notePlanApprovalAskReply, function:routingOptionReply,
 // function:consumeSharedDirectiveAsk, function:offeredChoiceLabel, subcommand:aidlc-orchestrate:next,
 // subcommand:aidlc-orchestrate:report, subcommand:aidlc-log:answer, subcommand:aidlc-bolt:checkpoint
@@ -38,9 +38,10 @@ const PARALLEL = Math.max(1, Number.parseInt(process.env.AIDLC_ANSWERS_PARALLEL 
 const ONLY = process.env.AIDLC_ANSWERS_ONLY?.split(",").map((s) => s.trim()).filter(Boolean);
 
 /** Questions whose exact pick a tool records at the hook, before any agent runs. The others are recorded only by the
- * agent's command, where the tool checks the label it passes (offeredChoiceLabel). */
+ * agent's command, where the tool checks the label it passes (offeredChoiceLabel); a stage gate records the choice the
+ * agent reports, as it reports it. */
 const HOOK_RECORDS = new Set<Question>([
-  "stage-gate", "stage-gate-accept-as-is", "code-plan", "code-plan-grouped", "unit-checkpoint", "batch-checkpoint",
+  "code-plan", "code-plan-grouped", "unit-checkpoint", "batch-checkpoint",
   "verification-command", "construction-policy", "guard-recovery",
 ]);
 /** Questions with an answer command of the agent's that this check runs (step 4). */

@@ -2601,10 +2601,10 @@ describe("t242 state-transition ownership guard", () => {
       '{{INVOKE}} engine orchestrate report --stage user-stories --result skipped --reason "<reason>"',
     );
     expect(stage("inception", "requirements-analysis")).toContain(
-      "{{INVOKE}} engine recompose --add user-stories",
+      "{{INVOKE}} engine orchestrate next --add user-stories",
     );
     expect(stage("inception", "domain-design")).toContain(
-      "{{INVOKE}} engine recompose --add units-generation",
+      "{{INVOKE}} engine orchestrate next --add units-generation",
     );
   });
 });

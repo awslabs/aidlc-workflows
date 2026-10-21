@@ -134,29 +134,31 @@ same thing twice:
 AI-DLC records gate, Plan Approval, checkpoint, verification-command, and
 Construction setting changes with your words beside them (`Person Reply` in
 the audit trail), as your harness passed them and trimmed. At a stage gate that
-is every message since the gate was shown, up to 8: if a ninth arrives, or one
-message is over 8000 characters, none of them is attached, and a change request
-records the agent's `--reason` instead; at Plan Approval, your latest 8
+is every message since the last decision and since the stage started: if one of
+them is over 8000 characters or no longer on record, none of them is attached
+and the row names the latest message instead, and a change request records the
+agent's `--reason`; at Plan Approval, your latest 8
 replies, each cut to 8000 characters; at a checkpoint or verification-command
 question, your replies joined in order, keeping the last 8000 characters; for a
 Construction setting you asked to change, the message that asked. The summary confirmation records the
 choice the agent read and, for a change request, what you asked to change. A
-decision needs a reply from you after the question was shown: the agent cannot
+decision needs a reply from you after the question was shown (at a stage gate,
+one since the stage started that the agent names as your answer counts too,
+such as an approval you gave at the learnings question). The agent cannot
 answer for you.
 
 When you ask for changes at a stage gate, the audit trail records, as the
 revision feedback, the words your harness passed to the human-turn hook for
-your chat, exactly as they arrived, and the agent is told to revise from those
-words. If you picked Request Changes and then answered "What should change?",
-your answer is the feedback. Replies to other questions in between, and a
-question on its own, are not. When the agent's own summary of your request
+your chat since the last decision, exactly as they arrived, and the agent
+revises from what you asked for. If you picked Request Changes and then
+answered "What should change?", both are the feedback. When the agent's own summary of your request
 differs, it is kept beside your words as the `Conductor Summary`. This needs a
 harness that passes your typed prompt and chat session to the human-turn hook;
 where it does not, the feedback is what the agent reports, as before. Like the
 human turn itself, this records what the prompt seam received, not who typed
 it.
 
-The gate requires an observed human-interaction seam: typing a prompt or answering a native question picker records a human turn (a `HUMAN_TURN` event) in the audit ledger, and approve (and any clarifying-question answer) refuses unless one was recorded since the last gate resolution, and a stage gate's approval needs one sent after the gate was shown. This proves presence and ordering, not authorship of the later caller-supplied decision text; some harnesses expose no trusted prompt/widget content. A narrow defense-in-depth tripwire rejects recognized explicit conductor/model self-attribution, but unlabelled wording is not authenticated. On a harness whose picker does not record a human turn, type a short message once (for example "approve") so one is on record.
+The gate requires an observed human-interaction seam: typing a prompt or answering a native question picker records a human turn (a `HUMAN_TURN` event) in the audit ledger, and approve (and any clarifying-question answer) refuses unless one was recorded since the last gate resolution, and a stage gate's approval or change request needs one sent since the stage started and after the gate was shown, or the message the agent names as your answer. This proves presence and ordering, not authorship of the later caller-supplied decision text; some harnesses expose no trusted prompt/widget content. A narrow defense-in-depth tripwire rejects recognized explicit conductor/model self-attribution, but unlabelled wording is not authenticated. On a harness whose picker does not record a human turn, type a short message once (for example "approve") so one is on record.
 
 The human-turn hook is activated only through the dispatcher's hook route;
 it does not authenticate who launched the dispatcher. Hooks and tool calls run

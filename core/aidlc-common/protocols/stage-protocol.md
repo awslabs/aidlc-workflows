@@ -221,9 +221,6 @@ Construction completion-only bookkeeping. It grants no approval itself.
 
 When you present an approval gate question, you MUST end your turn immediately and wait for the user's explicit response. Do NOT call any tool until the user has typed their choice in a new message. An approval gate is a mandatory human checkpoint that cannot be inferred, auto-approved, or skipped.
 
-### NO EMERGENT BEHAVIOR RULE
-Construction and Operation stages MUST use standardized 2-option completion messages. DO NOT create 3-option menus or other emergent navigation patterns. Only IDEATION and INCEPTION stages may conditionally include a 3rd option (to add a previously skipped stage). Any deviation from these patterns is a protocol violation. Two sanctioned carve-outs exist: the revision loop escape hatch (below) and the Build-and-Test failure loop-back in the loop-back protocol module (`aidlc-common/protocols/stage-protocol-loopback.md`).
-
 ### For simple decisions (3 or fewer options):
 Present a structured question:
 
@@ -269,7 +266,8 @@ ready yet, do what its reply names, then report that stage approved with the
 same choice: do not ask the person again.
 
 ### For stages with conditional options:
-IDEATION and INCEPTION stages may include a 3rd option to add a previously skipped stage:
+IDEATION and INCEPTION stages may offer to add a previously skipped stage
+together with the approval, as one answer:
 
 ```question
 prompt: "[Stage Name] complete. How to proceed?"
@@ -280,11 +278,16 @@ options:
     description: Continue to [next stage]
   - label: Request Changes
     description: Provide revision feedback
-  - label: Add [Skipped Stage]
-    description: Include [stage] which was skipped
+  - label: Approve, and add [Skipped Stage] next
+    description: Include [stage], which was skipped, and start it now
 ```
 
-CONSTRUCTION and OPERATION stages: Strictly 2-option only (Approve / Request Changes).
+When they pick it, run `{{INVOKE}} engine orchestrate next --add <slug>` and
+follow its step, which names the report that records their approval; the
+added stage runs next. When they only ask to add the stage, with no approval
+in it, run the same `next --add <slug>`, say in one line that it is on the
+plan, and ask once whether they approve this stage as it is or want anything
+changed.
 
 ### Reading the person's reply at a checkpoint
 
@@ -332,11 +335,16 @@ recovery protocol's Session resume says, never as Request Changes.
 - **They also asked to stop for now:** record their choice with `--park`, or run
   `park --person-asked`, and tell them how to resume.
 
-A record is refused only when the person has not replied since the question
-was shown (end the turn and wait for them), or when it contradicts an option
-they picked exactly (record their pick, or ask them). A refusal that asks you to
-re-present the held gate means re-render it with every option it offered,
-because conditional choices are not reconstructible from a fixed fallback list.
+A record is refused when the person has not replied since the last decision
+(end the turn and wait for them). At a stage gate it is also refused when all
+their replies came before the gate was shown: when one of them already
+answered it, run the same report with `--message <id>` (the refusal names the
+ids), otherwise show the gate and end the turn. At a Construction checkpoint,
+Plan Approval or a recovery question it is also refused when it contradicts an
+option they picked exactly from the engine's list (record their pick, or ask
+them). A refusal that asks you to re-present the held gate means
+re-render it with every option it offered, because conditional choices are
+not reconstructible from a fixed fallback list.
 
 A harness-supplied **Other** escape is an offered UI choice but is not a
 persisted summary answer or lifecycle decision. Words the human typed there are
@@ -362,7 +370,7 @@ options:
     description: Archive current version and move on
 ```
 
-If the person chooses "Accept as-is": report it as the gate's approval, for example `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "Accept as-is"`; the engine records the choice (`GATE_APPROVED`) and completes the stage. Never write the decision into the audit trail yourself. This overrides the NO EMERGENT BEHAVIOR RULE for Construction stages only when the reply carries `accept_as_is: "offered"`.
+If the person chooses "Accept as-is": report it as the gate's approval, for example `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "Accept as-is"`; the engine records the choice (`GATE_APPROVED`) and completes the stage. Never write the decision into the audit trail yourself.
 
 When the reply carries `accept_as_is: "next-revision"`, show the usual two options and include a note in the approval question: "After one more revision, an 'Accept as-is' option will become available." With no `accept_as_is`, show neither.
 
@@ -380,7 +388,7 @@ Entering the gate:
 3. Present Part 3 (the approval question). This is a lifecycle gate, not an interview question: do not call `aidlc-log.ts decision` or `aidlc-log.ts answer` for it. Word it per the voice contract at the top of this file: what you produced, what to look at, what happens next.
 4. Based on the user response:
    - **Approve** → `{{INVOKE}} engine orchestrate report --stage <slug> --result approved --user-input "Approve"`. When they approved and asked for something in the same reply ("looks fine but rename the handler"), record the approval, then do what they asked and say in one line what you changed. When they also asked to stop for now, add `--park`. That call emits any missing `STAGE_AWAITING_APPROVAL`, then `GATE_APPROVED` + `STAGE_COMPLETED`, and auto-advances to the next in-scope stage (or completes the workflow on the final stage). No separate `advance` call required.
-   - **Request Changes** → `{{INVOKE}} engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes"`. Where the human-turn hook kept what they typed in this chat, the engine records their words as the feedback, keeps any `--reason` you add beside them as the Conductor Summary, and its returned `print` quotes their words: revise from that quote. Where it kept nothing, pass what they asked for in `--reason`. Ask "What should change?" only when they did not say. On a reviewer-backed gate, add the reviewer module's `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` once for each open finding the human explicitly rejects as inapplicable. When the human says a `Resolved (reviewer)` finding is not fixed, add `--reopen-finding "<review-artifact>#R-NN=<exact human reason>"`. Never pass the same ID in both flags; ordinary change requests carry no disposition flag. That call emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt - a driver or scripted session that answers only structured questions must be able to progress the revision loop). When the revision changed a `produces[]` artifact and the directive carries a reviewer, re-run the `stage-protocol-reviewer.md` §12a reviewer step before reporting revised - fresh dispatch record, fresh `## Review` verdict replacing the stale one; the NOT-READY lead-alone loop and its iteration budget apply as at first entry. (When the directive lists the `learnings` module, its §13 ritual runs once at the initial gate and is not re-run for gate revisions.) Then call `{{INVOKE}} engine orchestrate report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` - always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
+   - **Request Changes** → `{{INVOKE}} engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes"`. Where the human-turn hook kept what they typed in this chat, the engine records their words as the feedback, keeps any `--reason` you add beside them as the Conductor Summary, and its returned `print` says so: revise from what they asked for. Where it kept nothing, pass what they asked for in `--reason`. Ask "What should change?" only when they did not say. On a reviewer-backed gate, add the reviewer module's `--reject-finding "<review-artifact>#R-NN=<exact human reason>"` once for each open finding the human explicitly rejects as inapplicable. When the human says a `Resolved (reviewer)` finding is not fixed, add `--reopen-finding "<review-artifact>#R-NN=<exact human reason>"`. Never pass the same ID in both flags; ordinary change requests carry no disposition flag. That call emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count. When the feedback already names what to change, revise immediately; ask a clarifying question first ONLY when the feedback is genuinely ambiguous, and ask it as a structured question with concrete options drawn from the artifact (never an open-ended freeform prompt - a driver or scripted session that answers only structured questions must be able to progress the revision loop). When the revision changed a `produces[]` artifact and the directive carries a reviewer, re-run the `stage-protocol-reviewer.md` §12a reviewer step before reporting revised - fresh dispatch record, fresh `## Review` verdict replacing the stale one; the NOT-READY lead-alone loop and its iteration budget apply as at first entry. (When the directive lists the `learnings` module, its §13 ritual runs once at the initial gate and is not re-run for gate revisions.) Then call `{{INVOKE}} engine orchestrate report --stage <slug> --result revised` to emit a fresh `STAGE_AWAITING_APPROVAL` and mark `[R]` → `[?]` - always re-present the gate after the revision; never leave the stage parked in `[R]` waiting on further conversation.
    - **Accept as-is** (offered when the gate's reply carries `accept_as_is: "offered"`) → same as Approve, with `--user-input "Accept as-is"`.
 
 **Pipeline revisions keep the declared topology.** After a `mode: pipeline` rejection, run `{{INVOKE}} engine orchestrate next` and follow its fresh `directive.pipeline` ledger. Re-dispatch each missing link in order with the exact feedback, even when the requested change affects only one final artifact. Under Guard Policy strict, the developer must perform fresh analysis and rewrite its handoff for this attempt; the successor then applies the requested revision using that handoff. Record each link only after its agent returns, and retain the configured reviewer step before reporting `revised`. Keep/Modify/Redo describes the requested artifact changes, not permission for the conductor to replace a dispatched pipeline with an inline edit. Under Guard Policy `strict`, a rejection intentionally invalidates earlier receipts: re-stamping old files, touching their timestamps, or setting guard opt-outs is not revision recovery. Under `relaxed` or `off`, a rejection keeps the earlier links' receipts current, so the ledger may show none missing: re-dispatch, with the exact feedback, each link whose work the person's words ask to redo ("scan the payments module again", "start the analysis over"), and apply a change limited to the final artifact through its own link. A fresh run of every link is `/aidlc --stage <stage>`.

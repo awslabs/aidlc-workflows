@@ -63,7 +63,7 @@ import {
   humanActedSinceGate,
   humanTurnMarkerPath,
   humanTurnState,
-  personsGateFeedback,
+  personsGateReply,
   readSessionBinding,
   sessionsDir,
   setActiveIntentCursor,
@@ -734,10 +734,10 @@ describe("t149 Codex subagent prompts are not the person's turn", () => {
       const gate = { stage: "requirements-analysis", acceptAsIs: false };
       appendEvent(dir, "STAGE_AWAITING_APPROVAL", gate.stage);
       prompt(dir, BRIEF, true);
-      expect(personsGateFeedback(dir, ROOT_SESSION, gate)).toBeNull();
+      expect(personsGateReply(dir, ROOT_SESSION, gate.stage).words).toBeNull();
       prompt(dir, "Please add a p99 latency budget of 200 ms.");
       prompt(dir, BRIEF, true);
-      expect(personsGateFeedback(dir, ROOT_SESSION, gate)).toBe("Please add a p99 latency budget of 200 ms.");
+      expect(personsGateReply(dir, ROOT_SESSION, gate.stage).words).toBe("Please add a p99 latency budget of 200 ms.");
       expect(keptWords(dir)).not.toContain("t149-brief-marker");
     } finally {
       rmSync(dir, { recursive: true, force: true });

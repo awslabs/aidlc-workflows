@@ -6,10 +6,11 @@
 // arrived after the question's record, and the person was told "Your answer was
 // not recorded, so you don't need to answer again", then asked for one more
 // message (a live Kiro IDE run). The tool proves only that the person replied
-// since their last answer and keeps their words; the agent says which question
+// since the last decision and keeps their words; the agent says which question
 // the reply answers. A reply that came before the question's record is the
-// agent's reading, so the engine says it back once. No reply since the last
-// answer still records nothing, with no line about a missed reply.
+// agent's reading, so the engine says it back once; an answer spends no reply,
+// so the one the stage's answers stood on backs the summary too. No reply since
+// the last decision still records nothing, with no line about a missed reply.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -156,13 +157,21 @@ describe("t-summary-shown-before-logged: a summary answered before its question 
       expect(said(recorded.out)).toBe(`Recorded your "looks correct now" for "${SUMMARY}".`);
     });
 
-    test(`with no reply since the last answer, nothing is recorded and no reply is called missed (Guard Policy ${policy})`, () => {
+    test(`the reply the stage's answers stood on backs the summary confirmation too (Guard Policy ${policy})`, () => {
       const { proj, questions } = project(policy);
       questionsLeftToTheAgent(proj);
       expect(askSummary(proj, questions).status).toBe(0);
       const recorded = answerSummary(proj, questions, "Looks correct");
+      expect(recorded.status, recorded.out).toBe(0);
+      expect(events(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(1);
+    });
+
+    test(`with no reply since the last decision, nothing is recorded and no reply is called missed (Guard Policy ${policy})`, () => {
+      const { proj, questions } = project(policy);
+      expect(askSummary(proj, questions).status).toBe(0);
+      const recorded = answerSummary(proj, questions, "Looks correct");
       expect(recorded.status).not.toBe(0);
-      expect(recorded.out).toContain("no human reply has arrived since their last answer");
+      expect(recorded.out).toContain("no human reply has arrived since the last decision");
       expect(recorded.out).not.toContain("was not recorded");
       expect(recorded.out).not.toContain("answer again");
       expect(events(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(0);

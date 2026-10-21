@@ -73,7 +73,6 @@ export {
   KNOWN_CODEKB_STAGES,
 } from "./aidlc-artifact-vocabulary.ts";
 import {
-  ACCEPT_AS_IS_CHOICE,
   exactOptionPick,
   formatReceivedReply,
   isNonAnswer,
@@ -12443,24 +12442,22 @@ export function ensureCloneId(projectDir: string): string {
 // --- Human presence at an approval/interview gate ---
 //
 // Ledger-event presence check (the marker-free design). A real human
-// is present for THIS gate-commit iff a HUMAN_TURN event appears AFTER the LAST
-// GATE RESOLUTION (GATE_APPROVED / GATE_REJECTED / QUESTION_ANSWERED) in ledger
-// append order. The prior resolution is the freshness boundary - this is the
-// consume-once semantics expressed as event order instead of a flag.
+// is present for THIS decision iff a HUMAN_TURN event appears AFTER the LAST
+// decision that spends a reply (MESSAGE_SPENDING_EVENTS: an approval, a
+// rejection, the engine's own receipts) in ledger order. The prior decision is
+// the freshness boundary - consume-once expressed as event order instead of a
+// flag - so a fabricated cascade (gate2 approved right after gate1 committed,
+// no new human turn) and a stale approval are both refused. An answer to the
+// agent's own question spends nothing: one message may answer every question
+// the agent asked and back one decision, in any order. The message record
+// (aidlc-message-store.ts) reads the same set, so presence has one rule.
 //
-// Two bounds. The prior RESOLUTION is the freshness bound: a human turn after
-// the last gate approval, rejection or answered question proves a fresh human
-// acted since the last decision, so a fabricated cascade (gate2 approved right
-// after gate1 committed, no new human turn) and a stale approval (human turn
-// long ago, then a fabricated approve) are both refused. For a stage gate the
-// gate's own presentation is the second bound (personRepliedSincePresentation,
-// used by approve and reject): the reply must come after the stage's
-// STAGE_AWAITING_APPROVAL row, since a turn sent before the question was put
-// (an answer to the stage's own questions) is no reply to it. An earlier
-// version kept the presentation out of the rule because one prompt once drove
-// the agent to both open and approve a gate (a Kiro IDE spike, 2026-06-30); the
-// protocol now presents the gate and ends the turn. A gate the engine backfills
-// for a reported approval (Recovered: true) is exempt from the second bound.
+// A stage gate has two more bounds: the stage's own start
+// (repliedSinceStageStart), since the request that started the work approves
+// nothing the stage made from it; and the gate's first showing
+// (personRepliedSinceGateShown), unless the agent names the message it read
+// the choice from, as for an approval given at the learnings question just
+// before the gate. Which question a reply answers is the agent's to read.
 //
 // Ordering is CHRONOLOGICAL (Timestamp, then per-shard position as the SAME-SHARD
 // tiebreak): shards are per-clone files enumerated in FILENAME order (a second
@@ -12475,12 +12472,11 @@ export function ensureCloneId(projectDir: string): string {
 // a winner. Fail-open when no ledger exists (no presence tracking yet on this
 // harness).
 //
-// The resolution boundary is workflow-global (the most recent gate approval,
-// rejection, answered question, summary confirmation, or autonomous grant).
-// This makes a same-turn cascade across DIFFERENT stages refuse correctly;
-// there is no per-stage scoping. AUTONOMY_MODE_SET only counts when its Mode is
-// autonomous because that grant consumes the human turn that unlocks downstream
-// presence carve-outs.
+// The resolution boundary is workflow-global (the most recent decision of any
+// stage), so a same-turn cascade across DIFFERENT stages refuses; there is no
+// per-stage scoping. AUTONOMY_MODE_SET counts only when its Mode is autonomous,
+// because that grant consumes the human turn that unlocks downstream presence
+// carve-outs.
 export const BLOCKING_SENSOR_OVERRIDE_CHOICE = "Override blocking sensors";
 export const BLOCKING_SENSOR_OVERRIDE_DECISION = "Blocking gate sensor failure";
 export const BLOCKING_SENSOR_OVERRIDE_OPTIONS = [
@@ -12496,6 +12492,24 @@ const GATE_RESOLUTION_EVENTS = new Set([
   "VERIFICATION_COMMAND_RECORDED",
   "CONSTRUCTION_POLICY_RECORDED",
   "PLAN_APPROVAL_RECORDED",
+]);
+
+// Rows that spend the person's reply: a decision of another kind than an
+// answer. One message backs at most one of them plus any answers, so an answer
+// never spends it. The presence check (humanTurnState) and the message record
+// (aidlc-message-store.ts) both read this one set.
+export const MESSAGE_SPENDING_EVENTS: ReadonlySet<string> = new Set([
+  "GATE_APPROVED",
+  "GATE_REJECTED",
+  "PLAN_APPROVAL_RECORDED",
+  "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED",
+  "CONSTRUCTION_POLICY_RECORDED",
+  // A question box closed with no answer: a remark typed before it never
+  // carries an answer the person did not give.
+  "QUESTION_UNANSWERED",
+  // A routing answer sends the words before it to the work they named.
+  "REQUEST_ROUTED",
 ]);
 // A question box that came back with nothing picked: Codex returns exactly
 // {"answers":{}} when its box runs out unattended. Nobody answered.
@@ -12516,20 +12530,18 @@ const DOCUMENT_AUDIT_EVENTS = new Set([
   "DOCUMENT_UPDATED",
   "DOCUMENT_REMOVED",
 ]);
-// Where the latest human turn stands against the gate resolutions that consume
-// it: "acted" when a turn follows every resolution; "answered" when every
-// resolution provably after the latest turn is an answer record and no question
-// was logged since that turn, so answers already used that reply (a question
-// box's reply also backs one answer per pick it carried, whenever its questions
-// were logged); "consumed" when some other resolution used it or the
+// Where the latest human turn stands against the decisions that spend it:
+// "acted" when a turn follows every one; "consumed" when one used it or the
 // order cannot be proven; "none" when no turn is on record or a listed audit
 // shard could not be read. With `replies`, a turn that was only a command to
 // AIDLC (its HUMAN_TURN row says `Reply: command`; an older record's
 // `Reply: question`, a question about a switch, reads the same) is not a reply
-// to the question, so it is left out. With `requests`, an older record's
-// question about a switch asks for nothing, and it ends the reach of the turns
-// before it; nothing writes that mark now.
-export type HumanTurnState = "acted" | "answered" | "consumed" | "none";
+// to the question, so it is left out, and a routing answer spends the turns
+// before it. With `requests`, an older record's question about a switch asks
+// for nothing, and it ends the reach of the turns before it; nothing writes
+// that mark now. With `answersSpend`, an answer counts as a decision too, for
+// what a message asks for (personSpokeSinceGate).
+export type HumanTurnState = "acted" | "consumed" | "none";
 
 // The HUMAN_TURN mark for a turn that was only a command to AIDLC, and the
 // older mark for a turn that only asked about a switch ("skip plan approval?"),
@@ -12701,7 +12713,7 @@ export function constructionStaffingPassedOver(projectDir: string): boolean {
 // With `intent` and `space`, the turns read are that work's, not the active work's.
 export function humanTurnState(
   projectDir: string,
-  options: { replies?: boolean; requests?: boolean; intent?: string; space?: string } = {},
+  options: { replies?: boolean; requests?: boolean; intent?: string; space?: string; answersSpend?: boolean } = {},
 ): HumanTurnState {
   // Per-shard reads (not the concatenated buffer): buffer position across
   // shards is FILENAME order, not execution order, so it can only serve as an
@@ -12710,12 +12722,6 @@ export function humanTurnState(
   // below.
   const shards = auditShards(projectDir, options.intent, options.space);
   const events: { ts: string; shard: number; pos: number; human: boolean; event: string }[] = [];
-  // Questions logged since a turn: a later question's reply is not the one the
-  // earlier answers used.
-  const decisions: { ts: string; shard: number; pos: number }[] = [];
-  // What a question box carried back (the hook's QUESTION_REPLIED rows, one per
-  // question it asked), under the turn the hook wrote them with.
-  const picks: { shard: number; turn: number }[] = [];
   let sawPresenceTrackingEvent = false;
   const texts: Array<AuditShardText & { shardIndex: number }> = [];
   for (let s = 0; s < shards.length; s++) {
@@ -12741,7 +12747,6 @@ export function humanTurnState(
   for (let t = 0; t < texts.length; t++) {
     const s = texts[t].shardIndex;
     const blocks = auditShardBlocks(texts[t].content);
-    let lastTurn = -1;
     for (let i = 0; i < blocks.length; i++) {
       if (copied[t].has(i)) continue;
       const ev = auditBlockField(blocks[i], "Event");
@@ -12749,20 +12754,11 @@ export function humanTurnState(
       // A host's own turn (HOST_TURN) is neither a person's turn nor a decision:
       // it leaves presence tracking as it found it.
       if (!DOCUMENT_AUDIT_EVENTS.has(ev) && ev !== "HOST_TURN") sawPresenceTrackingEvent = true;
-      if (ev === "DECISION_RECORDED") {
-        decisions.push({ ts: auditBlockField(blocks[i], "Timestamp") ?? "", shard: s, pos: i });
-      }
-      if (ev === "HUMAN_TURN") lastTurn = i;
-      if (ev === "QUESTION_REPLIED" && lastTurn >= 0) picks.push({ shard: s, turn: lastTurn });
-      // QUESTION_UNANSWERED (hook-owned: a question box closed with no answer)
-      // spends any earlier turn, so a remark typed before the box never answers
-      // the question asked in it. The question itself stays open.
       // Words the person sent to separate new work or a reshape reply to no
       // question here; what they asked for still stands for the new work.
       const isResolution =
-        GATE_RESOLUTION_EVENTS.has(ev) ||
-        ev === "QUESTION_UNANSWERED" ||
-        (options.replies === true && ev === "REQUEST_ROUTED") ||
+        (MESSAGE_SPENDING_EVENTS.has(ev) && (ev !== "REQUEST_ROUTED" || options.replies === true)) ||
+        (options.answersSpend === true && ev === "QUESTION_ANSWERED") ||
         (ev === "AUTONOMY_MODE_SET" &&
           auditBlockField(blocks[i], "Mode") === "autonomous");
       if (!isResolution && ev !== "HUMAN_TURN") continue;
@@ -12797,9 +12793,7 @@ export function humanTurnState(
     "",
   );
   if (latestHumanTimestamp > latestResolutionTimestamp) return "acted";
-  if (latestHumanTimestamp < latestResolutionTimestamp) {
-    return usedOnlyByAnswers(humans, resolutions, decisions, picks, latestHumanTimestamp) ? "answered" : "consumed";
-  }
+  if (latestHumanTimestamp < latestResolutionTimestamp) return "consumed";
 
   // At equal second-precision timestamps, one turn must be provably after EVERY
   // latest resolution. A same-shard append position proves that order; a
@@ -12818,35 +12812,7 @@ export function humanTurnState(
     )
   )
     ? "acted"
-    : usedOnlyByAnswers(humans, resolutions, decisions, picks, latestHumanTimestamp) ? "answered" : "consumed";
-}
-
-// True when one human turn holds the latest timestamp, every resolution
-// provably after it is a QUESTION_ANSWERED, and every logged question is
-// provably before it, or the turn was a question box's reply with a pick left
-// for this answer. A question box answers the questions it showed, whenever the
-// agent logs them, so each of its picks backs one answer and no more. An event
-// at the same second in another shard is unordered, so it proves nothing about
-// what used the turn or what was asked.
-function usedOnlyByAnswers(
-  humans: { ts: string; shard: number; pos: number }[],
-  resolutions: { ts: string; shard: number; pos: number; event: string }[],
-  decisions: { ts: string; shard: number; pos: number }[],
-  picks: { shard: number; turn: number }[],
-  latestHumanTimestamp: string,
-): boolean {
-  const latest = humans.filter((human) => human.ts === latestHumanTimestamp);
-  if (latest.length !== 1) return false;
-  const turn = latest[0];
-  if (resolutions.some((r) => r.ts === turn.ts && r.shard !== turn.shard)) return false;
-  const provablyBefore = (e: { ts: string; shard: number; pos: number }) =>
-    e.ts < turn.ts || (e.ts === turn.ts && e.shard === turn.shard && e.pos < turn.pos);
-  const after = resolutions.filter(
-    (r) => r.ts > turn.ts || (r.ts === turn.ts && r.shard === turn.shard && r.pos > turn.pos),
-  );
-  if (after.length === 0 || !after.every((r) => r.event === "QUESTION_ANSWERED")) return false;
-  if (decisions.every(provablyBefore)) return true;
-  return after.length < picks.filter((pick) => pick.shard === turn.shard && pick.turn === turn.pos).length;
+    : "consumed";
 }
 
 export function humanActedSinceGate(projectDir: string): boolean {
@@ -12936,18 +12902,22 @@ function requestOutlivesItsApproval(projectDir: string, intent?: string, space?:
 // not count). Lowering a check the person asked for in their own words needs it.
 // With `replies`, the turn must be a reply, not only a command to AIDLC; with
 // `requests`, anything but a question about a switch. With `intent` and
-// `space`, the turn must be on that work's record. With `outlivesApproval`,
-// for what the message asks for (a setter, a stop, the grant of autonomy), the
-// approval given in it, the answer it gave the agent's own question, and the
-// run's own approvals do not use it up (requestOutlivesItsApproval); with
-// `replies` too, that message is a reply.
+// `space`, the turn must be on that work's record. What a message asks for (a
+// setter, a lowering, a review past its cap, a stop) is weighed against every
+// decision after it, answers included: a decision on the open question stands
+// on humanRepliedSinceGate instead, where an answer uses no reply up. With
+// `outlivesApproval`, the approval given in that message, the answer it gave
+// the agent's own question, and the run's own approvals leave it standing
+// (requestOutlivesItsApproval); an answer to one of the engine's own
+// questions, or one after a command-only turn, uses it up. With `replies` too,
+// that message is a reply.
 // An approval or an answer never reads it that way: each needs a reply of its own.
 export function personSpokeSinceGate(
   projectDir: string,
   options: { replies?: boolean; requests?: boolean; intent?: string; space?: string; outlivesApproval?: boolean } = {},
 ): boolean {
   if (
-    humanTurnState(projectDir, options) !== "acted" &&
+    humanTurnState(projectDir, { ...options, answersSpend: true }) !== "acted" &&
     !(options.outlivesApproval === true &&
       requestOutlivesItsApproval(projectDir, options.intent, options.space, options.replies === true))
   ) {
@@ -13009,18 +12979,6 @@ export function personCheckSwitchAllowed(projectDir: string, key: string, value:
   return values.on.includes(value) || (values.off.includes(value) && personAskedSinceGate(projectDir));
 }
 
-// The approval the conductor reports at a held stage gate. The conductor reads
-// the person's reply in context and reports the choice they made; the engine
-// never second-guesses the words. "Accept as-is" is that offered label, when it
-// is on offer (after the third revision); every other approval is Approve.
-const ACCEPT_AS_IS_LABEL_RE = /^(?:(?:[A-Za-z]|\d+)[.)])?[\s"'`]*accept\s+as[\s-]+is[\s"'`.!]*(?:\(recommended\)[\s"'`.!]*)?$/i;
-export function stageGateApproval(
-  userInput: string | undefined,
-  acceptAsIs: boolean,
-): "Approve" | typeof ACCEPT_AS_IS_CHOICE {
-  return acceptAsIs && ACCEPT_AS_IS_LABEL_RE.test((userInput ?? "").trim()) ? ACCEPT_AS_IS_CHOICE : "Approve";
-}
-
 // The person's change requests at one stage's gate (one Unit's, when a Unit is
 // named) since that gate was last approved or the stage was freshly reopened.
 // The state file's Revision Count runs across the whole workflow, so it cannot
@@ -13039,16 +12997,6 @@ export function stageRevisionCycles(
     cycles = row.event === "GATE_REJECTED" && !rejectionIsFreshAttempt(row.block) ? cycles + 1 : 0;
   }
   return cycles;
-}
-
-// An unreadable audit trail leaves the escape hatch closed: the person's
-// approval is still recorded, as Approve, never blocked on the count.
-export function stageAcceptAsIsOnOffer(projectDir: string, slug: string, unit?: string): boolean {
-  try {
-    return stageRevisionCycles(readAuditShardEvents(projectDir), slug, unit) >= ACCEPT_AS_IS_REVISION_CYCLES;
-  } catch {
-    return false;
-  }
 }
 
 // HUMAN_TURN proves only that a prompt-submit seam fired after the previous
@@ -13410,10 +13358,9 @@ export function approvedConstructionUnits(
   return approved;
 }
 
-// The interview path (handleAnswer) uses the SAME resolution-boundary check: a
-// QUESTION_ANSWERED is itself a gate resolution, so "a human turn since the last
-// resolution" bounds what a reply can answer (the caller lets one reply answer
-// every question open when it arrived: humanTurnState "answered"). Thin alias for call-site
+// The interview path (handleAnswer) uses the SAME presence check: a reply of
+// the person's since the last decision. An answer is no decision, so one reply
+// answers every question the agent asked. Thin alias for call-site
 // readability; both paths share one definition so the predicate cannot drift.
 export function humanActedSinceLastAnswer(projectDir: string): boolean {
   return humanRepliedSinceGate(projectDir);
@@ -29498,19 +29445,20 @@ export function clearGateWords(projectDir: string): void {
   }
 }
 
-// Where a stage's gate words may begin in `content` (an audit shard): its
-// latest presentation, or the latest answer to another question after it. Null
-// when the latest lifecycle row for the stage (and Unit) is not a presentation:
-// a gate already answered, a stage restarted, a gate never presented (the
-// direct Active to Revising path), or a row the engine backfilled (Recovered:
-// true), which is written after the person's reply by design. With
-// `firstShowing`, a gate re-entered after a revision begins where the person
-// first saw it in this attempt: their correction of a misread Request Changes
-// came after that showing, and the re-entry row shows them nothing new.
+// Where a stage's showing begins in `content` (an audit shard): its latest
+// presentation, or, with `answeredBy`, the latest answer to another question
+// after it. Null when the latest lifecycle row for the stage (and Unit) is not
+// a presentation: a gate already answered, a stage restarted, a gate never
+// presented (the direct Active to Revising path), or a row the engine
+// backfilled (Recovered: true), which is written after the person's reply by
+// design. With `firstShowing`, a gate re-entered after a revision begins where
+// the person first saw it in this attempt: their correction of a misread
+// Request Changes came after that showing, and the re-entry row shows them
+// nothing new.
 function gatePresentationStart(
   content: string,
   gate: { stage: string; unit?: string },
-  options: { firstShowing?: boolean } = {},
+  options: { firstShowing?: boolean; answeredBy?: boolean } = {},
 ): number | null {
   const separator = /\r?\n---\r?\n/g;
   let start = 0;
@@ -29540,41 +29488,13 @@ function gatePresentationStart(
           revised = false;
         }
       }
-    } else if (event !== null && from !== null && GATE_WORDS_ANSWERED_BY.has(event)) {
+    } else if (options.answeredBy === true && event !== null && from !== null && GATE_WORDS_ANSWERED_BY.has(event)) {
       from = start;
     }
     if (match === null) break;
     start = match.index + match[0].length;
   }
   return from;
-}
-
-// The messages this chat's person typed since the stage's latest presentation,
-// in order, or null. `unit` names a team Unit gate. Another question answered
-// after the presentation moves the start past its reply.
-export function gateWordsSincePresentation(
-  projectDir: string,
-  session: string,
-  gate: { stage: string; unit?: string },
-): string[] | null {
-  const record = readGateWords(projectDir, session);
-  if (record === null || record.messages.length === 0) return null;
-  const shardPath = auditFilePath(projectDir);
-  if (projectRelativePath(projectDir, shardPath) !== record.shard) return null;
-  let content: string;
-  try {
-    content = readAppendOnlyFileNoFollowOrThrow(shardPath, "audit shard").toString("utf-8");
-  } catch {
-    return null;
-  }
-  const from = gatePresentationStart(content, gate);
-  if (from === null) return null;
-  const floor = Buffer.byteLength(content.slice(0, from), "utf-8");
-  // A message typed after the presentation was not kept: the words that were
-  // kept are not everything the person said, so none of them stand alone.
-  if (record.dropped > floor) return null;
-  const words = record.messages.filter((message) => message.offset > floor).map((message) => message.text);
-  return words.length > 0 ? words : null;
 }
 
 // The messages this chat's person typed while a Unit's review ran, before its
@@ -29640,17 +29560,15 @@ export function gateWordsSinceUnitReview(
   return words.length > 0 ? words : null;
 }
 
-// Whether the person replied to the stage's approval question: a reply turn is
-// on this clone's record after its latest presentation (and after any other
-// question's answer since). A turn sent before the question was put to them is
-// no reply to it. Null when the stage is not waiting on that question (never
-// put to them, or already answered), and when the record cannot be read. With
-// `firstShowing` (approve), a re-entered gate counts from the showing the person
-// first saw in this attempt (gatePresentationStart).
+// Whether the person replied to the stage's approval question as it was last
+// shown: a reply turn is on this clone's record after its latest presentation
+// (and after any other question's answer since). The Stop hook reads it to let
+// the turn end while the person has not answered the gate; it decides nothing
+// about their reply. Null when the stage is not waiting on that question (never
+// put to them, or already answered), and when the record cannot be read.
 export function personRepliedSincePresentation(
   projectDir: string,
   gate: { stage: string; unit?: string },
-  options: { firstShowing?: boolean } = {},
 ): boolean | null {
   let content: string;
   try {
@@ -29658,10 +29576,157 @@ export function personRepliedSincePresentation(
   } catch {
     return null;
   }
-  const from = gatePresentationStart(content, gate, options);
+  const from = gatePresentationStart(content, gate, { answeredBy: true });
   if (from === null) return null;
   return auditShardBlocks(content.slice(from))
     .some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+}
+
+// Whether a reply of the person's came after the stage's gate was first shown
+// in this attempt: a decision on the gate stands on one, unless the agent names
+// the message it read the decision from (a reply that answered the gate before
+// it was shown, such as an approval given at the learnings question). A gate
+// re-entered after a revision counts from the showing they first saw, so their
+// "no, I approved it" still answers it. Which question a reply answered is the
+// agent's to read, so no answer row moves the start. Null when the stage is not
+// waiting on that question (never put to them, or already answered), and when
+// the record cannot be read.
+export function personRepliedSinceGateShown(
+  projectDir: string,
+  gate: { stage: string; unit?: string },
+): boolean | null {
+  let content: string;
+  try {
+    content = readAppendOnlyFileNoFollowOrThrow(auditFilePath(projectDir), "audit shard").toString("utf-8");
+  } catch {
+    return null;
+  }
+  const from = gatePresentationStart(content, gate, { firstShowing: true });
+  if (from === null) return null;
+  return auditShardBlocks(content.slice(from))
+    .some((block) => isReplyTurn({ event: auditBlockField(block, "Event") ?? "", block }));
+}
+
+// The person's rows on this clone's own shard, in the order they were written.
+// Shards are per clone and committed, and a concatenated read lists them in
+// filename order, which is not causal order (see AuditShardEvent); the person's
+// turns in this chat are written here, so one shard orders them exactly.
+function ownShardRows(projectDir: string): { mine: AuditShardEvent[]; others: AuditShardEvent[] } {
+  const own = projectRelativePath(projectDir, auditFilePath(projectDir));
+  const rows = readAuditShardEvents(projectDir);
+  return {
+    mine: rows.filter((row) => projectRelativePath(projectDir, row.shard) === own),
+    others: rows.filter((row) => projectRelativePath(projectDir, row.shard) !== own),
+  };
+}
+
+// Where a stage gate's replies may begin on this clone's shard: the stage's
+// latest start, or, when a gate whose one question named this stage too was
+// shown after the last decision and before that start, that showing: the
+// person's reply to that question may decide what the plan change it asked for
+// started ("skip Functional Design and approve the rest"). A backfilled showing
+// (Recovered) is written after the reply and is no question put to them. -1
+// when the stage has no start row here.
+function stageReplyFloor(rows: readonly AuditShardEvent[], stage: string): number {
+  let started = -1;
+  rows.forEach((row, index) => {
+    if (row.event === "STAGE_STARTED" && auditBlockField(row.block, "Stage") === stage) started = index;
+  });
+  if (started < 0) return -1;
+  for (let at = started - 1; at >= 0; at--) {
+    const row = rows[at];
+    if (MESSAGE_SPENDING_EVENTS.has(row.event)) break;
+    if (
+      row.event === "STAGE_AWAITING_APPROVAL" && auditBlockField(row.block, "Recovered") !== "true" &&
+      approvesTogetherField(row.block).includes(stage)
+    ) {
+      return at;
+    }
+  }
+  return started;
+}
+
+// A decision at a stage gate stands on a reply of the person's after the
+// stage's latest start (stageReplyFloor): the request that started the work
+// came before it and decides nothing about what the stage made from it. With
+// `message`, the turn that kept that message must come after it. A record with
+// no start row for the stage here (an older record, or a stage started on
+// another clone) has no floor, and a record that cannot be read refuses
+// nothing: this is the second bound of presence, never a reading of what they
+// said.
+export function repliedSinceStageStart(projectDir: string, stage: string, message?: string): boolean {
+  try {
+    const { mine } = ownShardRows(projectDir);
+    const floor = stageReplyFloor(mine, stage);
+    if (floor < 0) return true;
+    return mine.slice(floor + 1).some((row) =>
+      isReplyTurn(row) && (message === undefined || auditBlockField(row.block, "Message Id") === message));
+  } catch {
+    return true;
+  }
+}
+
+// What the person said to a stage gate, for its record: every reply turn of
+// theirs in `session` on this clone's shard after the later of the last
+// decision that spent a reply (MESSAGE_SPENDING_EVENTS) and the stage's latest
+// start (stageReplyFloor), in the order they came. `words` is their words as the message record
+// keeps them, joined by line breaks, left out when one of those messages is no
+// longer readable or was cut (the words kept would not be everything they
+// said); `messageId` names the latest; `replies` lists every one with its time,
+// for a step that lets the agent name one. With no chat named, the one chat
+// that replied since is named by its message and never copied onto a row the
+// engine cannot tie to it; with several, nothing is theirs to name. Nothing
+// here reads what the words mean.
+export interface GateReply {
+  words: string | null;
+  messageId: string | null;
+  replies: Array<{ id: string; at: string }>;
+}
+export function personsGateReply(projectDir: string, session: string | null, stage: string): GateReply {
+  const none: GateReply = { words: null, messageId: null, replies: [] };
+  try {
+    const { mine, others } = ownShardRows(projectDir);
+    let from = stageReplyFloor(mine, stage);
+    mine.forEach((row, index) => {
+      if (MESSAGE_SPENDING_EVENTS.has(row.event) && index > from) from = index;
+    });
+    // A decision on another clone is ordered by its time; a turn in the same
+    // second is not spent by it, as the message record reads a tie.
+    const spentElsewhere = others.reduce<string | null>((latest, row) =>
+      MESSAGE_SPENDING_EVENTS.has(row.event) && (latest === null || row.timestamp > latest) ? row.timestamp : latest, null);
+    let turns = mine.slice(from + 1).filter((row) =>
+      isReplyTurn(row) && (spentElsewhere === null || row.timestamp >= spentElsewhere));
+    const chatOf = (row: AuditShardEvent): string => auditBlockField(row.block, "Session") ?? "";
+    if (session !== null) {
+      turns = turns.filter((row) => chatOf(row) === session);
+    } else if (new Set(turns.map(chatOf)).size > 1) {
+      return none;
+    }
+    const tied = session !== null;
+    if (turns.length === 0) return none;
+    const { readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+    const replies: GateReply["replies"] = [];
+    const said: string[] = [];
+    let whole = true;
+    for (const row of turns) {
+      const id = auditBlockField(row.block, "Message Id");
+      if (id === null) {
+        whole = false;
+        continue;
+      }
+      const message = readMessage(projectDir, id);
+      if (message === null || message.cut === true) whole = false;
+      replies.push({ id, at: message?.at ?? row.timestamp });
+      if (message?.words && !isNonAnswer(message.words)) said.push(message.words);
+    }
+    return {
+      words: tied && whole && said.length > 0 ? said.join("\n") : null,
+      messageId: replies.at(-1)?.id ?? null,
+      replies,
+    };
+  } catch {
+    return none;
+  }
 }
 
 // What the person replied in any chat since the stage started, after the
@@ -29863,23 +29928,6 @@ function pickedLabels(raw: string | null): string | null {
   return labels.length > 0 ? labels.map((label) => label.trim()).join(", ") : null;
 }
 
-// The option the person's latest message at a stage gate picked exactly ("2",
-// "Request Changes"), or null when it was anything else. Approve and Request
-// Changes are always the gate's first two options.
-export function personsLatestGatePick(
-  projectDir: string,
-  session: string | null,
-  gate: { stage: string; unit?: string },
-  acceptAsIs = false,
-): "Approve" | "Request Changes" | typeof ACCEPT_AS_IS_CHOICE | null {
-  if (!session) return null;
-  const words = (gateWordsSincePresentation(projectDir, session, gate) ?? []).filter((text) => !isNonAnswer(text));
-  // The gate offers Accept as-is third once the revision cap is reached.
-  const pick = exactOptionPick(words[words.length - 1], acceptAsIs
-    ? [...APPROVAL_GATE_LABELS, ACCEPT_AS_IS_CHOICE]
-    : APPROVAL_GATE_LABELS);
-  return pick === 0 ? "Approve" : pick === 1 ? "Request Changes" : pick === 2 ? ACCEPT_AS_IS_CHOICE : null;
-}
 const APPROVAL_GATE_LABELS = ["Approve", "Request Changes"] as const;
 
 // The person's words at an Approve / Request Changes question as what to
@@ -29889,84 +29937,6 @@ export function changeRequestWords(words: string | undefined): string {
   return (words ?? "").split(/\r?\n/).map((line) => line.trim())
     .filter((line) => line.length > 0 && exactOptionPick(line, APPROVAL_GATE_LABELS) === null)
     .join(" ");
-}
-
-// The person's own words at a stage gate: every message this chat's person
-// typed since the gate was presented, in order and verbatim, joined by line
-// breaks, for the record. Host-made cancellation text is left out; nothing else
-// is judged. Null when there are none.
-export function personsGateWords(
-  projectDir: string,
-  session: string | null,
-  gate: { stage: string; unit?: string },
-): string | null {
-  if (!session) return null;
-  const words = (gateWordsSincePresentation(projectDir, session, gate) ?? []).filter((text) => !isNonAnswer(text));
-  return words.length > 0 ? words.join("\n") : null;
-}
-
-// Where the person's words are, when the engine cannot tell which chat said
-// them. Their words are kept per chat (personsGateWords above), so a command
-// the engine cannot tie to a chat records a gate with nothing of theirs on it,
-// which reads as though they never answered. This is the pointer that row
-// carries instead: the message the human-turn hook kept for their latest reply
-// after this gate was shown, never a copy of the words themselves. Null when
-// more than one chat has replied since, because which of them answered is not
-// the engine's to guess, and null when no reply was kept.
-export function personsGateMessagePointer(
-  projectDir: string,
-  gate: { stage: string; unit?: string },
-): string | null {
-  try {
-    // This machine's own shard only, as the kept-words reader above does.
-    // Shards are per clone and committed, and a concatenated read lists them
-    // in filename order, which is not causal order (see AuditShardEvent): a
-    // teammate's shard can sort either side of ours and carry its own showing
-    // of this same gate. The showing this approval answers happened here and
-    // the hook kept their reply here, so one shard is both necessary and
-    // enough; a gate shown on another machine leaves no pointer rather than
-    // the wrong one.
-    const mine = projectRelativePath(projectDir, auditFilePath(projectDir));
-    const rows = readAuditShardEvents(projectDir)
-      .filter((row) => projectRelativePath(projectDir, row.shard) === mine);
-    let shown = -1;
-    rows.forEach((row, at) => {
-      if (
-        row.event === "STAGE_AWAITING_APPROVAL" &&
-        auditBlockField(row.block, "Stage") === gate.stage &&
-        (gate.unit === undefined || auditBlockField(row.block, "Unit") === gate.unit) &&
-        auditBlockField(row.block, "Recovered") !== "true"
-      ) {
-        shown = at;
-      }
-    });
-    if (shown < 0) return null;
-    const replies = rows.slice(shown + 1).filter((row) => isReplyTurn(row));
-    if (new Set(replies.map((row) => auditBlockField(row.block, "Session") ?? "")).size > 1) return null;
-    for (let at = replies.length - 1; at >= 0; at -= 1) {
-      const id = auditBlockField(replies[at].block, "Message Id");
-      if (id) return id;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-// What the person asked to change at a stage gate, in their own words: every
-// message they typed since the gate was presented, in order and verbatim,
-// leaving out a message that is only an option pick ("2", "Request Changes"),
-// which says nothing about what to change. Nothing they said is dropped for its
-// meaning; the conductor reads it. Null when there are none.
-export function personsGateFeedback(
-  projectDir: string,
-  session: string | null,
-  gate: { stage: string; unit?: string },
-): string | null {
-  if (!session) return null;
-  const said = (gateWordsSincePresentation(projectDir, session, gate) ?? [])
-    .filter((text) => !isNonAnswer(text) && exactOptionPick(text, APPROVAL_GATE_LABELS) === null);
-  return said.length > 0 ? said.join("\n") : null;
 }
 
 // `<root>/.aidlc-engine/reviewer-dispatch.json` - the per-unit reviewer dispatch
@@ -32572,16 +32542,16 @@ export interface GuardHumanAuthorityState {
 
 // The one place the human-authority inputs are read. `freshTurn` says the
 // person may stand behind what the agent does now: their turn since the last
-// decision, or one only answers used (a reply to the agent's own question, such
-// as "yes, add them"); `unattended` is the operator's declaration that no human
-// is watching.
+// decision (an answer to the agent's own question, such as "yes, add them",
+// spends none); `unattended` is the operator's declaration that no human is
+// watching.
 export function humanAuthorityState(
   projectDir: string | null,
   options: { freshTurn?: boolean } = {},
 ): GuardHumanAuthorityState {
   const turn = options.freshTurn !== undefined || projectDir === null ? null : humanTurnState(projectDir);
   return {
-    freshTurn: options.freshTurn ?? (turn === "acted" || turn === "answered"),
+    freshTurn: options.freshTurn ?? turn === "acted",
     unattended: process.env.AIDLC_UNATTENDED === "1",
   };
 }

@@ -297,8 +297,9 @@ then use the ignored local `dist/copilot/` output.
   check stays click-free, and so does `doctor`, which may refresh its update
   check from the release feed as it does when you run it yourself. Skipping
   the click records no decision for you: before the engine records a stage
-  approval, you must have sent a chat message after the gate was shown, which
-  the prompt hook records. That check confirms you took a turn, not what you
+  approval, you must have sent a chat message since the stage started and
+  since the last decision, which the prompt hook records: after the gate was
+  shown, or one the agent names as your answer to it. That check confirms you took a turn, not what you
   meant, so read what the agent reports back. This does not use VS Code's own
   auto-approve, so it also works where an organization policy turns that off;
   it does need chat hooks enabled, as the rest of AI-DLC does. On the Copilot

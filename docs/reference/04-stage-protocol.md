@@ -163,22 +163,27 @@ plan change made during the stage is in it), else the run-stage directive's
 (computed at emit time), or `Complete workflow` when `next_stage` is null. The
 conductor never guesses the next stage.
 
-The conductor reads the person's reply and records the choice they made by its
-label: `--user-input "Approve"`, `"Request Changes"`, or `"Accept as-is"` when that
-choice is available. The engine never reads meaning into the reply
-(`core/tools/aidlc-reply-reader.ts` keeps only the exact parts: a reply with no
-words in it, the `(Recommended)` decoration, and the offered labels; a word such as
-"Cancelled" is the person's reply like any other). It requires a
-human turn since the gate was shown and records the person's exact words, kept by
-the human-turn hook for that chat, on `GATE_APPROVED` as `Person Reply` and on
-`GATE_REJECTED` as the feedback. Those words are kept per chat. When the engine
+The conductor reads the person's reply, in any words, against what it showed
+them, and reports the choice it read: `--user-input "Approve"`,
+`"Request Changes"`, `"Accept as-is"` when that choice is available, or the
+option it offered ("Approve, and add User Stories next"). The engine records
+that choice on `GATE_APPROVED` as it was passed and never reads meaning into it
+or into the person's reply; a word such as "Cancelled" is the person's reply like
+any other. It requires a reply turn of the person's since the last decision and
+since the stage started (the request that started the work answers nothing the
+stage made), after the gate was first shown unless the conductor names the
+message it read the choice from (`report --message <id>`: an approval given at
+the learnings question just before the gate; the refusal and the step for
+their reply at an open gate list the ids). It records the person's words: every
+reply of theirs in that chat since then, as the message record keeps them, on
+`GATE_APPROVED` as `Person Reply` and on `GATE_REJECTED` as the feedback, with
+`Message Id` naming the latest, or the named message alone. A message too long to
+keep whole leaves the words off and keeps the `Message Id`. When the engine
 cannot tell which chat ran the command (an agent shell no host names it in), the
-row instead carries `Message Id`, naming the message the hook kept for their
-latest reply after the gate was shown, so the record says where their words are
-rather than nothing about the person. It is never a copy the agent typed, and it
-is left out when more than one chat has replied since the gate was shown. An
-approval with an instruction ("looks fine but rename the handler") is recorded as
-**Approve**, and the conductor then does what they asked. An approval that also asks to stop for now is reported with `--park`,
+row carries only the `Message Id` of the one chat that replied, never a copy of
+their words, and nothing when more than one chat has replied. An approval with an
+instruction ("looks fine but rename the handler") is recorded as the approval
+the conductor reported, and the conductor then does what they asked. An approval that also asks to stop for now is reported with `--park`,
 and the engine parks the workflow, so `report` answers `parked`.
 
 When a report names no choice, the refusal says what to do: with the person's
@@ -188,15 +193,10 @@ is the open one, it names that question's answer command instead of the gate. It
 does not report a lifecycle transition, record a decision, or consume the gate
 turn for that reply.
 
-**No Emergent Behavior Rule:** Construction and Operation stages (phases 3-4)
-must always use this 2-option format. They must never introduce additional
-navigation options. Two sanctioned carve-outs exist: the revision escape
-hatch (below) and the Build-and-Test failure loop-back in the loop-back
-protocol module (`aidlc-common/protocols/stage-protocol-loopback.md`,
-"Build-and-Test failure loop-back" -- the bounded 3.6 to 3.5 repair loop with
-its impact-estimated halt-and-ask question).
-
-The loop-back reopens Code Generation for the Unit(s) the diagnosis names;
+**Build-and-Test failure loop-back:** the loop-back protocol module
+(`aidlc-common/protocols/stage-protocol-loopback.md`, "Build-and-Test failure
+loop-back") holds the bounded 3.6 to 3.5 repair loop with its
+impact-estimated halt-and-ask question. The loop-back reopens Code Generation for the Unit(s) the diagnosis names;
 every other Unit keeps its finished work, reviews and approvals, and only a
 cause that spans every Unit reopens it for all of them. It has two
 deterministic re-entry routes. If Construction checkpoints are off and Code
@@ -216,17 +216,19 @@ generation. The Loop-Back Log
 records the plan delta. The gated "Retry with fix" answer authorizes the jump, not
 the plan content.
 
-### Conditional 3rd Option
+### Conditional Approve-and-Add Option
 
-Ideation and Inception stages (phases 1-2) may conditionally include a third
-option when a previously skipped stage could be added back:
+Ideation and Inception stages (phases 1-2) may offer to add a previously
+skipped stage together with the approval, as one answer:
 
 ```
-{ label: "Add [Skipped Stage]", description: "Include [stage] which was skipped" }
+{ label: "Approve, and add [Skipped Stage] next", description: "Include [stage], which was skipped, and start it now" }
 ```
 
-This is the only circumstance for a 3rd option in phases 1-2. The label must
-reference the specific skipped stage.
+The label names the specific skipped stage. On that pick the conductor runs
+`next --add <slug>` and follows its step, which names the report that records
+the approval; a request to add the stage with no approval in it is the same
+`next --add`, said in one line, with the gate kept open and asked once more.
 
 ### Revision Escape Hatch
 
@@ -248,9 +250,7 @@ The question text changes to include the cycle count, `[N]` from
 
 **When "Accept as-is" is selected:** report it as the gate's approval
 (`report --stage <slug> --result approved --user-input "Accept as-is"`); the
-engine records the choice and completes the stage. This overrides the
-No Emergent Behavior Rule for Construction stages only when the reply carries
-`accept_as_is: "offered"`.
+engine records the choice and completes the stage.
 
 **Pre-activation notice:** When the reply carries
 `accept_as_is: "next-revision"`, include: "After one more revision, an

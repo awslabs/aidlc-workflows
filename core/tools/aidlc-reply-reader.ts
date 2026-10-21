@@ -160,5 +160,4 @@ export function aidlcEntryWords(prompt: string): string | null {
   const entry = /^[/$]aidlc(?:\s+|$)/i.exec(text);
   return entry === null ? null : text.slice(entry[0].length).trim();
 }
-export const ACCEPT_AS_IS_CHOICE = "Accept as-is";
 export const SUMMARY_CONFIRMATION_CHOICES = ["Looks correct", "Request changes"] as const;

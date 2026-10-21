@@ -3,8 +3,8 @@
 // On every real human prompt, append a HUMAN_TURN event to the active intent's
 // audit shard (the state machine's own append-only ledger). The approval /
 // interview gate (handleApprove / handleAnswer) refuses unless a HUMAN_TURN was
-// recorded since the last gate resolution (and, at a stage gate, after the gate
-// was shown). The hook records presence and order;
+// recorded since the last decision (and, at a stage gate, since the stage
+// started). The hook records presence and order;
 // it does not authenticate who launched the dispatcher.
 //
 // Presence remains the gate signal; the prompt payload also answers the single
@@ -29,8 +29,9 @@
 // the conversational marker. See the marker family in aidlc-lib.ts.
 //
 // The same locked section keeps the words the person typed in this chat (the
-// gate-words family in aidlc-lib.ts), so a Request Changes at a stage gate
-// records what they said as the feedback instead of the conductor's rewording.
+// gate-words family in aidlc-lib.ts), for the steps that hand the agent replies
+// a later chat or a Construction checkpoint still needs. A stage gate's record
+// takes their words from the message record instead.
 //
 // UNATTENDED DRIVING (AIDLC_UNATTENDED=1). The mint is a presence ASSERTION, and
 // this hook has no evidence for it: UserPromptSubmit carries no signal about who
@@ -347,18 +348,6 @@ function pickerFreeText(text: string, picker: PlanApprovalPickerQuestion | undef
   if (!picker || !text || picker.severalPicks || picker.options === null) return "";
   const typed = stripRecommendedDecorator(text).toLowerCase();
   return picker.options.some((label) => stripRecommendedDecorator(label).toLowerCase() === typed) ? "" : text;
-}
-
-// A stage-gate choice picked in the picker is the person's exact pick: it is
-// kept like a typed one, so a report of another choice is refused. Only a
-// picker that offers the gate's own two choices is a gate picker.
-const GATE_PICK_LABELS = ["approve", "request changes", "accept as-is"];
-function pickedGateLabel(text: string, picker: PlanApprovalPickerQuestion | undefined): string {
-  if (!picker || !text || picker.severalPicks || picker.options === null) return "";
-  const offered = picker.options.map((option) => stripRecommendedDecorator(option).trim().toLowerCase());
-  if (!offered.includes("approve") || !offered.includes("request changes")) return "";
-  const label = stripRecommendedDecorator(text).trim();
-  return GATE_PICK_LABELS.includes(label.toLowerCase()) ? label : "";
 }
 
 // What a question box carried back, one entry per question it asked: the
@@ -806,15 +795,12 @@ try {
             ...(picked.length > 0 ? { Picked: JSON.stringify(picked) } : {}),
             ...(messageId ? { "Message Id": messageId } : {}),
           }, projectDir);
-          // Keep what the person typed in this chat, so a decision at a stage
-          // gate records their own words beside the conductor's reading
-          // (recordGateWords in aidlc-lib.ts). A command to AIDLC instructs
-          // the framework; of a picker
-          // reply, free text typed into it counts, and so does a picked gate
-          // choice, which is their exact pick. Never blocks the turn.
+          // Keep what the person typed in this chat (recordGateWords in
+          // aidlc-lib.ts). A command to AIDLC instructs the framework; of a
+          // picker reply, free text typed into it counts. Never blocks the turn.
           const typedWords = answersEngineQuestion ? "" : typedPrompt
             ? (notAReply ? "" : entryReply ?? typedPrompt)
-            : pickerFreeText(humanResponseText, pickerQuestion) || pickedGateLabel(humanResponseText, pickerQuestion);
+            : pickerFreeText(humanResponseText, pickerQuestion);
           if (sessionId && typedWords) {
             try {
               keptWordsOffset = recordGateWords(projectDir, sessionId, typedWords);

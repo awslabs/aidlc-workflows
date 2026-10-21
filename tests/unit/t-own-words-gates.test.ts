@@ -1,7 +1,7 @@
 // covers: function:isNonAnswer, function:stripRecommendedDecorator, function:formatReceivedReply
-// covers: function:exactOptionPick, function:stageGateApproval, function:personsGateWords
-// covers: function:stageRevisionCycles, function:stageAcceptAsIsOnOffer, function:ACCEPT_AS_IS_REVISION_CYCLES, function:addRevisionCycle
-// covers: function:personsLatestGatePick, function:changeRequestWords, function:markProtectedQuestionReplied
+// covers: function:exactOptionPick, function:personsGateReply
+// covers: function:changeRequestWords, function:markProtectedQuestionReplied
+// covers: function:stageRevisionCycles, function:ACCEPT_AS_IS_REVISION_CYCLES, function:addRevisionCycle
 // covers: function:recordProtectedHumanResponse, function:requireProtectedResponse
 // covers: function:consumeSharedDirectiveAsk, function:recordGuardRecoveryChoice
 // covers: function:openDecisionBlock, function:PROTECTED_RESPONSE_WORDS_MAX_CHARS
@@ -11,10 +11,12 @@
 // for judgement). The agent reads the person's reply and records the choice
 // they made; the engine keeps their exact words on the receipt and never reads
 // meaning into them. What stays a tool's job is exact: that a person replied
-// since the question was shown, their words verbatim, and a reply that is
-// exactly one offered option, which is recorded as their pick and cannot be
-// overruled by the agent. These cases protect that split at a stage gate, the
-// summary confirmation, a protected checkpoint question, and a recovery ask.
+// since the last decision, their words verbatim, and, at the engine's own
+// checkpoint and recovery questions, a reply that is exactly one of the choices
+// the engine handed, which is recorded as their pick. At a stage gate the
+// choice is the agent's reading, recorded as it passed it. These cases protect
+// that split at a stage gate, the summary confirmation, a protected checkpoint
+// question, and a recovery ask.
 
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
@@ -34,6 +36,7 @@ import {
   seedStateFile,
 } from "../harness/fixtures.ts";
 import {
+  ACCEPT_AS_IS_REVISION_CYCLES,
   type ActiveDirectiveGuardRemedy,
   auditBlockField,
   changeRequestWords,
@@ -51,7 +54,7 @@ import {
   readProtectedResponse,
   recordGuardRecoveryChoice,
   requireProtectedResponse,
-  stageGateApproval,
+  stageRevisionCycles,
   stateDigest,
   stripRecommendedDecorator,
   turnEndIsOpen,
@@ -187,10 +190,6 @@ describe("an exact pick is syntax, and only syntax", () => {
     for (const blank of ["", "   ", "\n\t", null, undefined]) expect(isNonAnswer(blank)).toBe(true);
     expect(stripRecommendedDecorator("Approve (Recommended)")).toBe("Approve");
     expect(formatReceivedReply("  a\n b ")).toBe('"a b"');
-    expect(stageGateApproval("Accept as-is", true)).toBe("Accept as-is");
-    expect(stageGateApproval("c) Accept as-is", true)).toBe("Accept as-is");
-    expect(stageGateApproval("Accept as-is", false)).toBe("Approve");
-    expect(stageGateApproval("looks fine but rename the handler", true)).toBe("Approve");
     expect(changeRequestWords("2\nrename the handler\nRequest Changes")).toBe("rename the handler");
   });
 });
@@ -219,21 +218,6 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(refused.message).toContain("never answer it for the person");
     expect(refused.message).not.toContain('"error":');
     expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
-    return refused;
-  }
-
-  // The person already chose, and the agent reported something else: nothing
-  // is recorded and the gate stays as it was, but the step is to record their
-  // choice now, not to ask them again, so the turn does not end there.
-  function theirChoice(refuse: () => { kind: string; message?: string }): { kind: string; message?: string } {
-    const before = readFileSync(seededStateFile(proj), "utf-8");
-    const refused = refuse();
-    expect(refused.kind, JSON.stringify(refused)).toBe("print");
-    expect(refused.message).toContain("Report that");
-    expect(refused.message).not.toContain("is still open");
-    expect(refused.message).not.toContain('"error":');
-    expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
-    expect(turnEndIsOpen(proj)).toBe(false);
     return refused;
   }
 
@@ -391,11 +375,16 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(events(proj, "WORKFLOW_PARKED")).toHaveLength(1);
   });
 
-  test.each(["2", "b) Request Changes"])("an exact Request Changes (%s) is the person's pick: an approval is refused", (pick) => {
-    says(proj, pick);
-    const refused = theirChoice(() => report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]));
-    expect(refused.message).toContain("picked Request Changes");
-    expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
+  // The agent read "2" against the list it showed (its own question beside the
+  // gate, say): its approval stands, and the record keeps "2" beside it.
+  test.each(["2", "b) Request Changes"])("the agent's approval on %s is recorded, with their words beside it", (typed) => {
+    says(proj, typed);
+    const done = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
+    expect(done.kind, JSON.stringify(done)).toBe("done");
+    const approved = events(proj, "GATE_APPROVED");
+    expect(approved).toHaveLength(1);
+    expect(auditBlockField(approved[0].block, "User Input")).toBe("Approve");
+    expect(auditBlockField(approved[0].block, "Person Reply")).toBe(typed);
   });
 
   // The gate is shown as a picker or as numbered options, never with letters:
@@ -420,11 +409,13 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(events(proj, "GATE_REJECTED")).toHaveLength(1);
   });
 
-  test("a Request Changes picked in the picker is the person's pick: an approval is refused", () => {
+  test("a pick in the question box is their words on the record, beside the choice the agent reported", () => {
     picks(proj, "Request Changes");
-    const refused = theirChoice(() => report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]));
-    expect(refused.message).toContain("picked Request Changes");
-    expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
+    const done = report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]);
+    expect(done.kind, JSON.stringify(done)).toBe("done");
+    const approved = events(proj, "GATE_APPROVED");
+    expect(approved).toHaveLength(1);
+    expect(auditBlockField(approved[0].block, "Person Reply")).toBe("Request Changes");
   });
 
   test("an Approve picked in some other picker is not the gate's pick", () => {
@@ -435,7 +426,7 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(events(proj, "GATE_REJECTED")).toHaveLength(1);
   });
 
-  // The change requests the escape hatch counts, as the reject path records
+  // Change requests at the stage's gate, as the reject path records
   // them, each followed by the revised gate shown again.
   function changesRequested(stage: string, times: number, fields: Record<string, string> = {}): void {
     for (let i = 0; i < times; i++) {
@@ -444,43 +435,30 @@ describe("the stage gate records the choice the agent read, with the person's wo
     }
   }
 
-  test("once Accept as-is is on offer, a typed 3 is that pick, whatever approval the agent reports", () => {
+  test("once Accept as-is is on offer, the approval the agent read from a typed 3 is the one recorded", () => {
     changesRequested(slug, 3);
     says(proj, "3");
-    expect(report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]).kind).toBe("done");
-    expect(auditBlockField(events(proj, "GATE_APPROVED")[0].block, "User Input")).toBe("Accept as-is");
-  });
-
-  // The escape hatch opens after three change requests on the same stage. The
-  // state file's Revision Count runs across the workflow, so other stages'
-  // requests never put it on offer here.
-  test("other stages' change requests leave Accept as-is off: a typed 3 is no pick at a two-option gate", () => {
-    changesRequested("intent-capture", 3);
-    expect(state(proj, ["set", "Revision Count=3"]).rc).toBe(0);
-    says(proj, "3");
-    const revised = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "tighten it"]);
-    expect(revised.kind, JSON.stringify(revised)).toBe("print");
-    expect(revised.message ?? "").not.toContain("picked Accept as-is");
-    expect(events(proj, "GATE_REJECTED").filter((row) => auditBlockField(row.block, "Stage") === slug)).toHaveLength(1);
-  });
-
-  test("other stages' change requests leave Accept as-is off: the approval is recorded as Approve", () => {
-    changesRequested("intent-capture", 3);
-    expect(state(proj, ["set", "Revision Count=3"]).rc).toBe(0);
-    says(proj, "Accept as-is");
     expect(report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Accept as-is"]).kind).toBe("done");
-    expect(auditBlockField(events(proj, "GATE_APPROVED")[0].block, "User Input")).toBe("Approve");
+    const approved = events(proj, "GATE_APPROVED")[0].block;
+    expect(auditBlockField(approved, "User Input")).toBe("Accept as-is");
+    expect(auditBlockField(approved, "Person Reply")).toBe("3");
   });
 
-  test("an approval or a fresh reopen of the stage starts its count again", () => {
-    changesRequested(slug, 3);
+  // The count the status line shows is this stage's own change requests since
+  // it was last approved or freshly reopened; the state file's Revision Count
+  // runs across the workflow.
+  test("the revision count is this stage's own change requests since its last approval or fresh reopen", () => {
+    const count = () => stageRevisionCycles(readAuditShardEvents(proj), slug);
+    changesRequested("intent-capture", 3);
+    expect(state(proj, ["set", "Revision Count=3"]).rc).toBe(0);
+    expect(count()).toBe(0);
+    changesRequested(slug, ACCEPT_AS_IS_REVISION_CYCLES);
+    expect(count()).toBe(ACCEPT_AS_IS_REVISION_CYCLES);
     appendAuditEntry("GATE_APPROVED", { Stage: slug, "User Input": "Approve" }, proj);
+    expect(count()).toBe(0);
     changesRequested(slug, 1, { Reopen: "jump" });
     changesRequested(slug, 2);
-    says(proj, "Accept as-is");
-    expect(report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Accept as-is"]).kind).toBe("done");
-    const approvals = events(proj, "GATE_APPROVED");
-    expect(auditBlockField(approvals[approvals.length - 1].block, "User Input")).toBe("Approve");
+    expect(count()).toBe(2);
   });
 
   // The conductor offers Accept as-is from the gate reply, never from its own
@@ -549,30 +527,33 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect("accept_as_is" in opened).toBe(false);
   });
 
-  test("an exact Approve is the person's pick: a rejection is refused", () => {
+  // A misread shows on the record, where the person's correction starts from:
+  // their word as the feedback, the agent's own account beside it.
+  test("a rejection the agent reports on \"Approve\" is recorded with their word as the feedback", () => {
     says(proj, "Approve");
-    const refused = theirChoice(() =>
-      report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "x"])
-    );
-    expect(refused.message).toContain("picked Approve");
-    expect(events(proj, "GATE_REJECTED")).toHaveLength(0);
+    const revised = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "x"]);
+    expect(revised.kind, JSON.stringify(revised)).toBe("print");
+    const rejected = events(proj, "GATE_REJECTED");
+    expect(rejected).toHaveLength(1);
+    expect(auditBlockField(rejected[0].block, "Feedback")).toBe("Approve");
+    expect(auditBlockField(rejected[0].block, "Conductor Summary")).toBe("x");
   });
 
-  test("their latest message decides: a pick they then talked past is not held against them", () => {
+  test("a reply they then talked past is theirs too: the approval the agent read stands", () => {
     says(proj, "2");
     says(proj, "actually it is fine, go ahead");
     expect(report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]).kind).toBe("done");
   });
 
-  test("a change request takes their words as the feedback, leaving out a bare pick", () => {
+  test("a change request takes every word they said as the feedback, the pick included", () => {
     says(proj, "Request Changes");
     says(proj, "rename the handler");
     const revised = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes"]);
     expect(revised.kind, JSON.stringify(revised)).toBe("print");
-    expect(auditBlockField(events(proj, "GATE_REJECTED")[0].block, "Feedback")).toBe("rename the handler");
+    expect(auditBlockField(events(proj, "GATE_REJECTED")[0].block, "Feedback")).toBe("Request Changes\\nrename the handler");
   });
 
-  test("nothing is decided without a reply from the person since the gate was shown", () => {
+  test("nothing is decided without a reply from the person since the last decision", () => {
     const refused = stillOpen(() => report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]));
     expect(refused.message).toContain("no new human reply");
     expect(events(proj, "GATE_APPROVED")).toHaveLength(0);

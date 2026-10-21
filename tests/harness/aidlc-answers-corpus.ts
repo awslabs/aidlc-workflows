@@ -17,8 +17,8 @@ import {
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   artifactFilename, auditBlockField, authorizedVerificationCommand, currentSwarmSourceMergeChain, findStageBySlug,
-  gitCommitSourceListing, latestMainWorkflowStageRunFloorForProject, latestPersonTurn, listIntents, personsGateWords,
-  personsLatestGatePick, readActiveDirectiveMarker, readAuditShardEvents, readProtectedResponse, readUnitSourceManifest,
+  gitCommitSourceListing, latestMainWorkflowStageRunFloorForProject, latestPersonTurn, listIntents, personsGateReply,
+  readActiveDirectiveMarker, readAuditShardEvents, readProtectedResponse, readUnitSourceManifest,
   reviewArtifactFingerprint, serializeSourceListing, sourceListingSha256, stateDigest, unitSourceFingerprint,
   workspaceSourceFingerprint, workspaceSourceListing, writeActiveDirectiveMarker, writeBaselineSourceSnapshot,
   writeSessionPidEntry,
@@ -619,9 +619,12 @@ export function recorded(proj: string, item: AnswersItem): Recorded {
   switch (item.question) {
     case "stage-gate":
     case "stage-gate-accept-as-is": {
-      const gate = { stage: STAGE };
-      const pickLabel = personsLatestGatePick(proj, SESSION, gate, item.question === "stage-gate-accept-as-is");
-      return { choice: pickLabel ?? "none", words: personsGateWords(proj, SESSION, gate) };
+      // Only the agent's report records a gate's choice: the row it wrote, if any.
+      const decided = readAuditShardEvents(proj).filter((row) =>
+        (row.event === "GATE_APPROVED" || row.event === "GATE_REJECTED") && auditBlockField(row.block, "Stage") === STAGE).at(-1);
+      const choice = decided === undefined ? "none"
+        : decided.event === "GATE_REJECTED" ? "Request Changes" : auditBlockField(decided.block, "User Input") ?? "none";
+      return { choice, words: personsGateReply(proj, SESSION, STAGE).words };
     }
     case "code-plan":
     case "code-plan-grouped": {

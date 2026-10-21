@@ -45,7 +45,7 @@ import {
   writeStateFile,
   REDO_REUSE_SOURCE,
   answerModeStageStartedFields,
-  personsGateFeedback,
+  personsGateReply,
   resolveInvokingSessionId,
 } from "./aidlc-lib.js";
 
@@ -267,7 +267,7 @@ function handleReopen(args: string[]): void {
   // A change is kept in the person's own words, from the gate they answered.
   const gateStage = getField(content, "Current Stage")?.trim() ?? targetSlug;
   const changeWords = flags.via === "change"
-    ? personsGateFeedback(pd, resolveInvokingSessionId(pd), { stage: gateStage })
+    ? personsGateReply(pd, resolveInvokingSessionId(pd), gateStage).words
     : null;
   for (const unit of units) {
     emitAudit(pd, "GATE_REJECTED", {

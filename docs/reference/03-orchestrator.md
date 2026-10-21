@@ -895,7 +895,7 @@ The orchestration engine owns every transition above. The conductor reports outc
 3. **Present the approval gate** (AskUserQuestion).
 
 4. **Record the user's response**:
-   - **Approve** -> `aidlc engine orchestrate report --stage <slug> --result approved --user-input "Approve"`. Emits any missing gate row, then `GATE_APPROVED` + `STAGE_COMPLETED`, and advances. Refuses with a missing-produced-artifact error if the stage's `produces` outputs are absent.
+   - **Approve** -> `aidlc engine orchestrate report --stage <slug> --result approved --user-input "Approve"` (`--user-input` is the choice as the conductor read it, recorded as passed; `--message <id>` names the one message of the person's it read it from). Emits any missing gate row, then `GATE_APPROVED` + `STAGE_COMPLETED`, and advances. Refuses with a missing-produced-artifact error if the stage's `produces` outputs are absent.
    - **Request Changes** -> `aidlc engine orchestrate report --stage <slug> --result rejected --user-input "Request Changes"` (a reply that says what to change is its own feedback; otherwise add `--reason '<feedback>'`). The engine emits `GATE_REJECTED` + `STAGE_REVISING`, marks `[?]` → `[R]`, and increments Revision Count.
    - After re-running work for a `[R]` stage, call `aidlc engine orchestrate report --stage <slug> --result revised` to re-enter the gate (re-runs gate sensors, emits a fresh `STAGE_AWAITING_APPROVAL`, marks `[R]` → `[?]`). The approve-time unrecorded-revision backstop uses the same sensor enforcement before recovered re-entry; a blocking result leaves the durable state at `[R]`.
 
@@ -1188,7 +1188,7 @@ when no summary comes before the question; the gate shown again by a later
 stage found are answered from those files first, then the approval question is
 asked again (the `next <words>` step says so before its new-work branch).
 
-### Conditional 3-Option Gate (Ideation and Inception only)
+### Conditional Approve-and-Add Gate (Ideation and Inception only)
 
 ```
 AskUserQuestion({
@@ -1199,7 +1199,7 @@ AskUserQuestion({
     options: [
       { label: "Approve", description: "Continue to [next stage]" },
       { label: "Request Changes", description: "Provide revision feedback" },
-      { label: "Add [Skipped Stage]", description: "Include [stage] which was skipped" }
+      { label: "Approve, and add [Skipped Stage] next", description: "Include [stage], which was skipped, and start it now" }
     ]
   }]
 })
@@ -1225,7 +1225,7 @@ AskUserQuestion({
 })
 ```
 
-The "Accept as-is" option logs the decision, marks the stage complete, and overrides the NO EMERGENT BEHAVIOR RULE for that specific stage.
+The "Accept as-is" option is reported as the gate's approval and completes the stage.
 
 When the reply carries `accept_as_is: "next-revision"` (at the second request, before the escape hatch activates), the approval question includes a note: "After one more revision, an 'Accept as-is' option will become available." The conductor takes both from the reply and never counts the rounds in the chat.
 
@@ -1238,11 +1238,11 @@ Options:
   - Start New Ideation Cycle
 ```
 
-### NO EMERGENT BEHAVIOR RULE
+### Build-and-Test Failure Loop-Back
 
-Construction and Operation stages MUST use standardized 2-option completion messages. The orchestrator must NOT create 3-option menus or other emergent navigation patterns for these phases. Only Ideation and Inception stages may conditionally include a 3rd option (to add a previously skipped stage). Two sanctioned exceptions exist: the revision loop escape hatch (3+ revision cycles) and the Build-and-Test failure loop-back in the loop-back protocol module (`aidlc-common/protocols/stage-protocol-loopback.md`) with its impact-estimated halt-and-ask question.
-
-The loop-back reopens Code Generation for the Unit(s) the diagnosis names
+The Build-and-Test failure loop-back in the loop-back protocol module
+(`aidlc-common/protocols/stage-protocol-loopback.md`) ends with its
+impact-estimated halt-and-ask question. The loop-back reopens Code Generation for the Unit(s) the diagnosis names
 (`next --stage code-generation --unit <unit>`, which prints the `jump reopen`
 that moves the work back); every other Unit keeps its finished work, reviews
 and approvals. Only a cause that spans every Unit reopens it for all of them,

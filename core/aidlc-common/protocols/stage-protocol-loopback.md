@@ -9,8 +9,7 @@ generated code or an approach chosen at code-generation (not in this stage's
 own test/build scaffolding), the workflow may return to code-generation and
 repair it rather than writing the approach off or dead-ending at the gate.
 The stage's Step 9 failure-escalation ladder decides WHEN this fires; this
-subsection defines HOW. It is a sanctioned exception to the NO EMERGENT
-BEHAVIOR RULE (like the revision escape hatch) and to Critical-checklist
+subsection defines HOW. It is a sanctioned exception to Critical-checklist
 item 5's "complete the current stage before jumping": a failed build-and-test
 run is deliberately left in-flight — its gate is NOT presented and its enabled §13
 learnings ritual DEFERS to the eventual passing run (when the `learnings` module is listed, the stage diary

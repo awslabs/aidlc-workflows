@@ -45,7 +45,7 @@ import {
   auditBlockField,
   findStageBySlug,
   latestMainWorkflowStageRunFloorForProject,
-  personsLatestGatePick,
+  personsGateReply,
   readAuditShardEvents,
   readProtectedResponse,
   reviewArtifactFingerprint,
@@ -686,11 +686,11 @@ function report(proj: string, result: string, extra: string[] = []): { code: num
 describe("an answer to another question is no reply to a stage gate", () => {
   for (const policy of ["off", "strict"] as const) {
     for (const pick of ["1", "2"]) {
-      test(`${policy}: routing "${pick}" is no Approve or Request Changes pick at the gate`, () => {
+      test(`${policy}: routing "${pick}" is no reply the gate's record keeps`, () => {
         const proj = gateProject(policy);
         routingQuestionOverTheStep(proj);
         say(proj, pick);
-        expect(personsLatestGatePick(proj, SESSION, { stage: "feasibility" })).toBeNull();
+        expect((personsGateReply(proj, SESSION, "feasibility").words ?? "").split("\n")).not.toContain(pick);
       });
     }
   }

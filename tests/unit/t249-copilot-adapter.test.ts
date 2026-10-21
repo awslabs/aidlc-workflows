@@ -69,7 +69,7 @@ import {
   humanTurnState,
   markSubagentInflight,
   normalizeDriveLetter,
-  personsGateFeedback,
+  personsGateReply,
   readAuditShardEvents,
   readSessionIntentUuid,
   subagentInflightMarkerPath,
@@ -4069,13 +4069,13 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     const gate = { stage: "requirements-analysis", acceptAsIs: false };
     appendInteractionEvent(dir, "STAGE_AWAITING_APPROVAL", gate.stage);
     dispatchVsCodeSubagent(dir, session, "toolu_bdrk_01T249B");
-    expect(personsGateFeedback(dir, session, gate)).toBeNull();
+    expect(personsGateReply(dir, session, gate.stage).words).toBeNull();
     expect(keptWords(dir)).not.toContain("t249-briefing-marker");
 
     settleSubagentStarts(dir);
     typedPrompt(dir, session, "Please add a p99 latency budget of 200 ms.");
     dispatchVsCodeSubagent(dir, session, "toolu_bdrk_01T249C");
-    expect(personsGateFeedback(dir, session, gate)).toBe("Please add a p99 latency budget of 200 ms.");
+    expect(personsGateReply(dir, session, gate.stage).words).toBe("Please add a p99 latency budget of 200 ms.");
     expect(keptWords(dir)).not.toContain("t249-briefing-marker");
   });
 

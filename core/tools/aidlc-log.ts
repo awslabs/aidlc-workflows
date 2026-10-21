@@ -15,12 +15,11 @@ import { prepareReviewCopy, removeReviewCopy } from "./aidlc-kiro-review-copy.ts
 import {
   chatsSince,
   holdsQuote,
-  isMessageId,
   latestSpendingTimestamp,
   listMessages,
   messageIsReply,
   personsSaidWords,
-  readMessage,
+  proveMessage,
   type StoredMessage,
 } from "./aidlc-message-store.ts";
 import {
@@ -106,7 +105,6 @@ import {
   humanActedSinceLastAnswer,
   humanPresenceGuardDisabled,
   humanTurnMintAllowed,
-  humanTurnState,
   isReplyTurn,
   isAutonomousConstructionDecision,
   legacyReviewAppendixEchoFields,
@@ -977,61 +975,6 @@ function invokingChat(pd: string): string | null {
   } catch {
     return null;
   }
-}
-
-// LLM maps, tool proves: the agent names the message that answered a question
-// it logged after the reply arrived; the engine proves the record exists, came
-// through this chat and is not spent by a later decision, and reads no words.
-// A same-second tie with a spending row favours the message: one message can
-// give an approval and the answers beside it.
-function proveMessage(pd: string, id: string, what: "answer" | "decision"): { message: StoredMessage } | { refusal: string } {
-  const message = isMessageId(id) ? readMessage(pd, id) : null;
-  if (message === null) {
-    return {
-      refusal: `Cannot record this ${what}: no message record ${id} exists in this project. Name the id of the ` +
-        "person's message that answered (a refused answer names it), or wait for their reply.",
-    };
-  }
-  const rows = readAuditShardEvents(pd);
-  if (!messageIsReply(rows, message)) {
-    return {
-      refusal: `Cannot record this ${what}: message ${id} carried no words of the person's own (a command to AIDLC, ` +
-        "or a message with no words), so it answers nothing. Name a message that carries their reply.",
-    };
-  }
-  const spentAt = latestSpendingTimestamp(rows);
-  if (spentAt !== null && message.at < spentAt) {
-    return {
-      refusal: `Cannot record this ${what}: message ${id} arrived before the last approval or decision (${spentAt}), ` +
-        "so it is spent. Only a message the person sent after it can answer this question.",
-    };
-  }
-  const chat = invokingChat(pd);
-  const chatOf = (m: StoredMessage): string => m.session ?? "terminal";
-  if (chat !== null) {
-    if (message.session !== chat) {
-      return {
-        refusal: `Cannot record this ${what}: message ${id} came through another chat, not this one. ` +
-          "Name a message the person sent in this chat.",
-      };
-    }
-    return { message };
-  }
-  const chats = chatsSince(rows, pd, spentAt);
-  if (chats.size > 1) {
-    return {
-      refusal: `Cannot record this ${what}: the engine cannot tell which chat this command serves, and more than ` +
-        "one chat has sent messages since the last decision. Run it from the chat that asked, or wait for the " +
-        "person's reply there.",
-    };
-  }
-  if (chats.size === 1 && !chats.has(chatOf(message))) {
-    return {
-      refusal: `Cannot record this ${what}: message ${id} came through another chat, not the one that has spoken ` +
-        "since the last decision.",
-    };
-  }
-  return { message };
 }
 
 function decisionRowsInScope(rows: AuditShardEvent[], stage: string, unit: string | undefined): AuditShardEvent[] {
@@ -2288,8 +2231,8 @@ function handleAnswer(args: string[]): void {
       }
       if (!humanPresenceGuardDisabled() && !humanActedSinceLastAnswer(pd)) {
         error(
-          "Cannot record the summary choice because no human reply has arrived since their last "
-            + "answer. End the turn, wait for the human's choice, then try again."
+          "Cannot record the summary choice because no human reply has arrived since the last "
+            + "decision. End the turn, wait for the human's choice, then try again."
             + unattendedHumanPresenceHint(pd, { missedReply: false }),
         );
       }
@@ -2629,15 +2572,12 @@ function handleAnswer(args: string[]): void {
           " If they left the choice to you in their own words, record it with --on-instruction '<their words>'. " +
           "Otherwise show the question and end your turn; their next reply answers it.",
       );
-    } else if (
-      !humanActedSinceLastAnswer(pd) &&
-      !(humanTurnMintAllowed() && humanTurnState(pd, { replies: true }) === "answered")
-    ) {
+    } else if (!humanActedSinceLastAnswer(pd)) {
       // One reply answers every question that was open when it arrived, each
-      // as its own answer ("answered": only answers used it, and nothing was
-      // asked since). A question asked after it waits for the next reply,
-      // unless the person's message that answered it arrived before it was
-      // logged: then the agent names that message instead of asking again.
+      // as its own answer: an answer spends no reply. A question asked after
+      // it waits for the next reply, unless the person's message that
+      // answered it arrived before it was logged: then the agent names that
+      // message instead of asking again.
       // The steps for a reply the hooks missed hold only when the person's
       // reply did not answer this question: said bare beside a message that
       // did, they told the person an answer that had arrived was lost.

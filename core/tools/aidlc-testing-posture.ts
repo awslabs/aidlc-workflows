@@ -4089,8 +4089,7 @@ export function offersPlanApprovalOverride(error: unknown): boolean {
 export function personAskedForPlanApprovalOverride(projectDir: string): boolean {
   const offered = engineAskMark(projectDir, PLAN_APPROVAL_OVERRIDE_OFFERED);
   if (offered === null || !personRepliedAfter(projectDir, offered)) return false;
-  const state = humanTurnState(projectDir, { replies: true });
-  return state === "acted" || state === "answered";
+  return humanTurnState(projectDir, { replies: true }) === "acted";
 }
 
 /** Their words for the record: their latest reply since the offer, when the host passed any. */

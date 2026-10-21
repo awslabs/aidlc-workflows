@@ -106,10 +106,9 @@ import {
   guardRecoveryFeedbackStatus,
   selectedGuardRecoveryRemedyAction,
   normalizeGuardRecoveryText,
-  personsGateFeedback,
-  personsGateMessagePointer,
-  personsGateWords,
-  personsLatestGatePick,
+  personRepliedSinceGateShown,
+  personsGateReply,
+  repliedSinceStageStart,
   resolveInvokingSessionId,
   type GuardAttemptState,
   type StageEntry,
@@ -126,7 +125,6 @@ import {
   humanTurnMintAllowed,
   hookActivation,
   hookChildEnv,
-  personRepliedSincePresentation,
   personSpokeSinceGate,
   fenceSwitchSentence,
   decideFence,
@@ -211,8 +209,6 @@ import {
   setPhaseProgress,
   singleStageAttemptIsOpen,
   stagesInScope,
-  stageAcceptAsIsOnOffer,
-  stageGateApproval,
   swarmConvergedUnits,
   teamUnitGateStatus,
   unclaimableIgnoredSourceKeys,
@@ -257,6 +253,7 @@ import {
   sourceBoundaryRepairStep,
   sourceWalkReach,
 } from "./aidlc-lib.js";
+import { proveMessage, readMessage } from "./aidlc-message-store.ts";
 import { memoryDirFor, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
@@ -369,34 +366,43 @@ function emitAudit(
 // person's recorded words became the Feedback and the two differ. Declared at
 // module top: the command dispatch below runs before later consts initialise.
 const CONDUCTOR_SUMMARY_FIELD = "Conductor Summary";
-// The person's exact pick at a gate, or null; reading it never blocks a decision.
-function personsLatestGatePickSafe(
-  pd: string, slug: string, unit?: string, acceptAsIs = false,
-): ReturnType<typeof personsLatestGatePick> {
-  try {
-    return personsLatestGatePick(pd, resolveInvokingSessionId(pd), { stage: slug, ...(unit ? { unit } : {}) }, acceptAsIs);
-  } catch {
-    return null;
-  }
-}
-
-// The person's own words at a gate they answered: every message they typed
-// since it was shown, kept verbatim by the human-turn hook. The conductor read
-// them and reported the choice; the receipt carries both.
+// The person's own words at a gate they answered, kept whole by the human-turn
+// hook, and the message that holds them; the agent read them and reported the
+// choice, and the receipt carries both. Without `message`, every reply of theirs
+// the decision stands on (personsGateReply); with it, the one message the agent
+// named, proved by the caller.
 const PERSONS_WORDS_FIELD = "Person Reply";
 // The same field the log tool pairs with their words on a decision row.
 const PERSONS_MESSAGE_FIELD = "Message Id";
-function personsWordsFields(pd: string, slug: string, unit?: string): Record<string, string> {
+function personsWordsFields(pd: string, slug: string, message?: string): Record<string, string> {
   try {
-    const gate = { stage: slug, ...(unit ? { unit } : {}) };
-    const words = personsGateWords(pd, resolveInvokingSessionId(pd), gate);
-    if (words) return { [PERSONS_WORDS_FIELD]: words };
-    // No words means the engine could not tell which chat answered (their
-    // words are kept per chat), so the row points at the message the hook
-    // kept for them rather than saying nothing about the person at all. The
-    // pointer is the record's own; the agent never types their words here.
-    const pointer = personsGateMessagePointer(pd, gate);
-    return pointer ? { [PERSONS_MESSAGE_FIELD]: pointer } : {};
+    if (message !== undefined) {
+      const named = readMessage(pd, message);
+      return {
+        ...(named?.words && !isNonAnswer(named.words) ? { [PERSONS_WORDS_FIELD]: named.words } : {}),
+        [PERSONS_MESSAGE_FIELD]: message,
+      };
+    }
+    const reply = personsGateReply(pd, resolveInvokingSessionId(pd), slug);
+    return {
+      ...(reply.words ? { [PERSONS_WORDS_FIELD]: reply.words } : {}),
+      ...(reply.messageId ? { [PERSONS_MESSAGE_FIELD]: reply.messageId } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+// A later stage approved with the first one's question stands on the words of
+// that approval: its row's own words and message, copied.
+function approvedTogetherWordsFields(pd: string, first: string): Record<string, string> {
+  try {
+    const row = readAuditShardEvents(pd).filter((entry) =>
+      entry.event === "GATE_APPROVED" && auditBlockField(entry.block, "Stage") === first).at(-1);
+    if (row === undefined) return {};
+    const words = auditBlockField(row.block, PERSONS_WORDS_FIELD);
+    const id = auditBlockField(row.block, PERSONS_MESSAGE_FIELD);
+    return { ...(words ? { [PERSONS_WORDS_FIELD]: words } : {}), ...(id ? { [PERSONS_MESSAGE_FIELD]: id } : {}) };
   } catch {
     return {};
   }
@@ -7216,7 +7222,7 @@ function approvesTogetherFlag(args: string[], content: string, slug: string): st
   return listed;
 }
 
-// approve <slug> [--user-input <exact-choice>]
+// approve <slug> [--user-input <the choice as read>] [--message <id>]
 // Transition: [?] → [x] AND auto-advance to the next in-scope stage (or
 // complete the workflow if this was the final stage). Human judgment ends
 // at the gate response; everything after is deterministic bookkeeping, so
@@ -7231,10 +7237,14 @@ function verifyApprovalDecision(
   userInput?: string,
   forceHuman = false,
   unit?: string,
+  message?: string,
 ): { approvalInput: string | undefined; autonomousDecision: boolean; together: { first: string } | null } {
   const autonomousDecision =
     !forceHuman && isAutonomousConstructionGate(content, stage, pd);
-  let approvalInput = userInput?.trim();
+  // The choice the agent read from the person's reply, recorded as it passed
+  // it: "Approve", "Accept as-is", "Add User Stories" alike. The engine reads
+  // nothing into it.
+  const approvalInput = userInput?.trim();
   // A later stage the person's one approval listed stands on that reply.
   const together = autonomousDecision || forceHuman || humanPresenceGuardDisabled()
     ? null
@@ -7253,58 +7263,35 @@ function verifyApprovalDecision(
         "project terms instead of recording their decision.",
     );
   }
-  if (!autonomousDecision && !humanPresenceGuardDisabled()) {
-    const acceptAsIs = stageAcceptAsIsOnOffer(pd, stage.slug, unit);
-    // The conductor read the person's reply and reports the approval it made;
-    // the receipt records that choice, and the person's own words ride on it.
-    // Host cancellation text is no reply, and a latest message that is exactly
-    // Request Changes is their pick.
-    if (approvalInput && isNonAnswer(approvalInput)) {
-      refuseForAgent(
-        `Cannot approve "${stage.slug}" because the reply ${formatReceivedReply(approvalInput)} is ` +
-          "cancellation boilerplate, not a decision. Re-present the original held gate with every offered " +
-          "choice and wait for the human to choose one.",
-      );
-    }
-    const pick = personsLatestGatePickSafe(pd, stage.slug, unit, acceptAsIs);
-    if (pick === "Request Changes") {
-      refuseForAgent(
-        `The person picked Request Changes at the "${stage.slug}" gate. Report that, or ask them if you read ` +
-          "their words differently.",
-        { personDecided: true },
-      );
-    }
-    // Their exact pick names which approval it is.
-    approvalInput = pick ?? stageGateApproval(approvalInput, acceptAsIs);
-  }
-  // Once the approval question is put to the person, only their reply to it
-  // approves: a turn they sent before it (an answer to the stage's own
-  // questions, a remark while it ran) is no reply to it, as for reject below.
-  // A gate re-entered after a revision counts from the showing they first saw
-  // (their correction of a misread Request Changes came after it), and a gate
-  // the engine backfilled for their reported approval has no presentation row
-  // (gatePresentationStart): both keep the reply-since-the-last-decision rule
-  // that the rejection or the backfill already applied.
-  if (!autonomousDecision && !humanPresenceGuardDisabled() && together === null) {
-    const repliedSinceDecision = humanRepliedSinceGate(pd);
-    const repliedSinceShown = personRepliedSincePresentation(
-      pd, { stage: stage.slug, ...(unit !== undefined ? { unit } : {}) }, { firstShowing: true },
+  if (!autonomousDecision && !humanPresenceGuardDisabled() && approvalInput && isNonAnswer(approvalInput)) {
+    refuseForAgent(
+      `Cannot approve "${stage.slug}" because the reply ${formatReceivedReply(approvalInput)} is ` +
+        "cancellation boilerplate, not a decision. Re-present the original held gate with every offered " +
+        "choice and wait for the human to choose one.",
     );
-    if (repliedSinceDecision && repliedSinceShown === false) {
-      // A reply exists, but from before the gate was shown: the step is to
-      // show the gate, not to ask for anything new; their next word answers it.
-      refuseForAgent(
-        `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
-          "this approval question: the person's last reply came before the gate was shown, so " +
-          "it does not answer it. Show the gate and end your turn; their next reply answers it.",
-      );
-    }
-    if (!repliedSinceDecision) {
+  }
+  // Presence: a reply of the person's since the last decision and since the
+  // stage started (the request that started the work is no answer to what the
+  // stage made from it), and after the gate was first shown unless the agent
+  // names the message it read their choice from (an approval given at the
+  // learnings question just before the gate). Which question a reply answers
+  // is the agent's to read.
+  if (!autonomousDecision && !humanPresenceGuardDisabled() && together === null) {
+    if (!humanRepliedSinceGate(pd)) {
       refuseForAgent(
         `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
           "this approval question. Wait for the human to type their choice, then retry the " +
           `approval.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
       );
+    }
+    if (message !== undefined) {
+      const proof = proveMessage(pd, message, "approval");
+      if ("refusal" in proof) refuseForAgent(proof.refusal);
+    }
+    if (!repliedSinceStageStart(pd, stage.slug, message)) refuseForAgent(stageStartFloorRefusal("approve", stage.slug, message));
+    const gate = { stage: stage.slug, ...(unit !== undefined ? { unit } : {}) };
+    if (message === undefined && personRepliedSinceGateShown(pd, gate) === false) {
+      refuseGateShownAfterReply(pd, "approve", stage.slug);
     }
   }
   // The conductor reports the choice the person made; a report that names none
@@ -7312,8 +7299,8 @@ function verifyApprovalDecision(
   // to report the choice their reply makes, not to ask them again.
   if (!autonomousDecision && !humanPresenceGuardDisabled() && !userInput?.trim()) {
     refuseForAgent(
-      `Cannot approve "${stage.slug}" because no choice was passed. The person replied after the question ` +
-        'was shown: report the choice their reply makes with --user-input (for example "Approve"), or ask ' +
+      `Cannot approve "${stage.slug}" because no choice was passed. The person has replied since the last ` +
+        'decision: report the choice their reply makes with --user-input (for example "Approve"), or ask ' +
         "them if their reply is unclear.",
       { personDecided: true },
     );
@@ -7321,10 +7308,49 @@ function verifyApprovalDecision(
   return { approvalInput, autonomousDecision, together };
 }
 
+// A decision at a stage gate whose replies all came before the gate was shown:
+// the agent names the reply that already answered it, or shows the gate. Ids
+// and times only: the agent has the words. With a reply on record the step is
+// the agent's reading, never "show the question again": a re-ask is what the
+// person met when an agent relayed this refusal.
+function refuseGateShownAfterReply(pd: string, verb: "approve" | "request changes for", slug: string): never {
+  let replies: Array<{ id: string; at: string }> = [];
+  try {
+    replies = personsGateReply(pd, resolveInvokingSessionId(pd), slug).replies;
+  } catch {
+    replies = [];
+  }
+  const why = "no new human reply has been received for this approval question since it was shown.";
+  if (replies.length === 0) {
+    refuseForAgent(
+      `Cannot ${verb} "${slug}" because ${why} Show the gate and end your turn; their next reply answers it.`,
+    );
+  }
+  const named = replies.map((reply) => `${reply.id} (sent ${reply.at})`).join(" or ");
+  refuseForAgent(
+    `If their message ${named} answered the "${slug}" gate, run the same report with --message <id>, ` +
+      "without asking them again; otherwise show the gate and end your turn; their next reply answers it. " +
+      `Nothing is recorded yet: ${why}`,
+    { personDecided: true },
+  );
+}
+
+// A decision at a stage gate on nothing the person said since the stage
+// started: what the agent does next. With a named message, that message came
+// before the stage started.
+function stageStartFloorRefusal(verb: "approve" | "request changes for", slug: string, message?: string): string {
+  return message !== undefined
+    ? `Cannot ${verb} "${slug}" on message ${message}: it came before this stage started, so it is not the ` +
+      "person's answer to what the stage made. Name a message they sent since, or show the gate and end your " +
+      "turn; their next reply answers it."
+    : `Cannot ${verb} "${slug}" because no reply from the person is on record since this stage started, so ` +
+      "nothing they said answers what it made. Show the gate and end your turn; their next reply answers it.";
+}
+
 function handleApprove(args: string[]): void {
-  if (args.length < 1) error("Usage: aidlc-state.ts approve <slug> [--user-input <text>]");
+  if (args.length < 1) error("Usage: aidlc-state.ts approve <slug> [--user-input <text>] [--message <id>]");
   const slug = args[0];
-  const { userInput } = parseApproveFlags(args.slice(1));
+  const { userInput, message } = parseApproveFlags(args.slice(1));
 
   const pd = resolveProjectDir(projectDir);
   const preflightContent = readStateFile(pd);
@@ -7345,6 +7371,7 @@ function handleApprove(args: string[]): void {
     userInput,
     preflightTeamGate !== null,
     preflightTeamGate?.unit,
+    message,
   );
   if (preflightTeamGate) {
     admitStageAction(pd, preflightContent, preflightStage, {
@@ -7408,6 +7435,7 @@ function handleApprove(args: string[]): void {
     userInput,
     teamGate !== null,
     teamGate?.unit,
+    message,
   );
 
   if (teamGate) {
@@ -7452,7 +7480,7 @@ function handleApprove(args: string[]): void {
       emitAudit(pd, "GATE_APPROVED", {
         ...teamGateFields(stage, teamGate),
         ...(approvalInput ? { "User Input": approvalInput } : {}),
-        ...personsWordsFields(pd, slug, teamGate.unit),
+        ...personsWordsFields(pd, slug, message),
         ...briefDigestField(pd, stage, teamGate.unit),
         ...decisionsAcceptedOpenField(pd, slug, teamGate.unit),
         ...(stage.workspace_requires ? sourceWorkFields() : {}),
@@ -7637,9 +7665,9 @@ function handleApprove(args: string[]): void {
     if (approvalInput) gateFields["User Input"] = approvalInput;
     if (together) {
       // The person's one reply at the first listed stage approves this one too.
-      Object.assign(gateFields, approvedTogetherWithField(together.first), personsWordsFields(pd, together.first));
+      Object.assign(gateFields, approvedTogetherWithField(together.first), approvedTogetherWordsFields(pd, together.first));
     } else if (!autonomousDecision) {
-      Object.assign(gateFields, personsWordsFields(pd, slug), approvesTogetherFields(listedTogether));
+      Object.assign(gateFields, personsWordsFields(pd, slug, message), approvesTogetherFields(listedTogether));
     }
     if (reviewFindingDispositions) {
       gateFields[REVIEW_FINDING_DISPOSITIONS_FIELD] =
@@ -7738,14 +7766,15 @@ function getFlagValues(args: string[], flag: string): string[] {
   return values;
 }
 
-// Flag parser for approve — handles --user-input (value).
-function parseApproveFlags(args: string[]): { userInput?: string } {
+// Flag parser for approve: handles --user-input and --message (values).
+function parseApproveFlags(args: string[]): { userInput?: string; message?: string } {
   return {
     userInput: getFlagValue(args, "--user-input"),
+    message: getFlagValue(args, "--message"),
   };
 }
 
-// reject <slug> [--user-input <exact-choice>] [--feedback <text>]
+// reject <slug> [--user-input <exact-choice>] [--feedback <text>] [--message <id>]
 //   [--reject-finding <review-artifact>#R-NN=<human reason>]...
 //   [--reopen-finding <review-artifact>#R-NN=<human reason>]...
 // — transition
@@ -7758,7 +7787,7 @@ function handleReject(args: string[]): void {
   if (args.length < 1) {
     error(
       'Usage: aidlc-state.ts reject <slug> [--user-input "Request Changes"] ' +
-        "[--feedback <text>] " +
+        "[--feedback <text>] [--message <id>] " +
         "[--reject-finding <review-artifact>#R-NN=<human reason>]... " +
         "[--reopen-finding <review-artifact>#R-NN=<human reason>]...",
     );
@@ -7775,6 +7804,7 @@ function handleReject(args: string[]): void {
     args.slice(1),
     "--reopen-finding",
   );
+  const message = getFlagValue(args.slice(1), "--message");
 
   const pd = resolveProjectDir(projectDir);
   // C2b lost-update safety: validate→increment Revision Count→emit-audit→write
@@ -7824,30 +7854,31 @@ function handleReject(args: string[]): void {
     !teamGate &&
     getField(content, "Construction Checkpoints") !== "enabled" &&
     isAutonomousConstructionGate(content, stage, pd);
-  const rejectPick = !autonomousDecision && feedbackStatus === "not-applicable"
-    ? personsLatestGatePickSafe(pd, slug, teamGate?.unit, stageAcceptAsIsOnOffer(pd, slug, teamGate?.unit))
-    : null;
-  if (rejectPick === "Approve" || rejectPick === "Accept as-is") {
-    refuseForAgent(
-      `Refusing to reject "${slug}": the person picked ${rejectPick} at this gate. Report that, or ask them if you ` +
-        "read their words differently.",
-      { personDecided: true },
-    );
-  }
-  // The person's own words. When this chat's human-turn hook recorded what they
-  // typed after the stage's latest presentation, those words are the feedback,
-  // and the conductor's text, when it says something else, is kept beside them
-  // as the Conductor Summary. A guard-recovery ask binds its own feedback above,
-  // and autonomous Construction has no person at the gate. With no recorded
-  // words everything below runs exactly as before.
+  // The person's own words. Their replies since the last decision and since
+  // the stage started (or the one message the agent named), kept whole by the
+  // human-turn hook, are the feedback, and the conductor's text, when it says
+  // something else, is kept beside them as the Conductor Summary. A
+  // guard-recovery ask binds its own feedback above, and autonomous
+  // Construction has no person at the gate. With no recorded words the
+  // conductor's text is the feedback.
   const conductorFeedback = feedback;
   let personsWords: string | null = null;
+  let personsMessage: string | null = null;
   if (!autonomousDecision && feedbackStatus === "not-applicable") {
+    if (message !== undefined && !humanPresenceGuardDisabled()) {
+      const proof = proveMessage(pd, message, "change request");
+      if ("refusal" in proof) refuseForAgent(proof.refusal);
+    }
     try {
-      personsWords = personsGateFeedback(pd, resolveInvokingSessionId(pd), {
-        stage: slug,
-        ...(teamGate ? { unit: teamGate.unit } : {}),
-      });
+      if (message !== undefined) {
+        const named = readMessage(pd, message);
+        personsWords = named?.words && !isNonAnswer(named.words) ? named.words : null;
+        personsMessage = message;
+      } else {
+        const reply = personsGateReply(pd, resolveInvokingSessionId(pd), slug);
+        personsWords = reply.words;
+        personsMessage = reply.messageId;
+      }
     } catch {
       personsWords = null;
     }
@@ -7885,17 +7916,31 @@ function handleReject(args: string[]): void {
     !teamGate &&
     autonomousMode &&
     reviewRecoverySpentInCurrentAttempt(pd, content, stage);
-  // Once the approval question is put to the person, only their reply to it
-  // rejects: a turn they sent before it (an earlier question's answer, a
-  // remark while the stage ran) is no reply to it. A stage still running, and
-  // a guard-recovery choice (it binds its own reply above), keep the check
-  // above alone, so "that's wrong, redo it" mid-stage still rejects.
-  const repliedToGate = feedbackStatus !== "not-applicable" ||
-    personRepliedSincePresentation(pd, { stage: slug, ...(teamGate ? { unit: teamGate.unit } : {}) }) !== false;
+  // A change request stands on a reply of the person's since the last decision
+  // and since the stage started, as an approval does: the request that started
+  // the work asked for no change to what the stage made. A guard-recovery
+  // choice binds its own reply above.
+  const sinceStageStart = feedbackStatus !== "not-applicable" || repliedSinceStageStart(pd, slug, message);
+  if (
+    !autonomousDecision && !humanPresenceGuardDisabled() && humanRepliedSinceGate(pd) && !sinceStageStart
+  ) {
+    refuseForAgent(stageStartFloorRefusal("request changes for", slug, message));
+  }
+  // Once the gate is shown, a change request stands on a reply after it, unless
+  // the agent names the message it read the request from. A stage still
+  // running ("that's wrong, redo it" mid-stage) and a guard-recovery choice
+  // (it binds its own reply above) need only the checks around this one.
+  if (
+    !autonomousDecision && !humanPresenceGuardDisabled() && humanRepliedSinceGate(pd) &&
+    feedbackStatus === "not-applicable" && message === undefined &&
+    personRepliedSinceGateShown(pd, { stage: slug, ...(teamGate ? { unit: teamGate.unit } : {}) }) === false
+  ) {
+    refuseGateShownAfterReply(pd, "request changes for", slug);
+  }
   if (
     (!autonomousDecision || recoveryResetNeedsHuman) &&
     !humanPresenceGuardDisabled() &&
-    (!humanRepliedSinceGate(pd) || (!autonomousDecision && !repliedToGate))
+    !humanRepliedSinceGate(pd)
   ) {
     if (recoveryResetNeedsHuman) {
       refuseForAgent(
@@ -7968,6 +8013,7 @@ function handleReject(args: string[]): void {
         ...fields,
         Feedback: feedback,
         ...(conductorSummary ? { [CONDUCTOR_SUMMARY_FIELD]: conductorSummary } : {}),
+        ...(personsMessage ? { [PERSONS_MESSAGE_FIELD]: personsMessage } : {}),
         ...(reviewFindingDispositions
           ? {
               [REVIEW_FINDING_DISPOSITIONS_FIELD]:
@@ -8012,6 +8058,7 @@ function handleReject(args: string[]): void {
       Stage: slug,
       Feedback: feedback,
       ...(conductorSummary ? { [CONDUCTOR_SUMMARY_FIELD]: conductorSummary } : {}),
+      ...(personsMessage ? { [PERSONS_MESSAGE_FIELD]: personsMessage } : {}),
       ...priorAcceptedSourceFields(pd, stage),
     };
     if (reviewFindingDispositions) {
@@ -8039,10 +8086,11 @@ function handleReject(args: string[]): void {
   });
 }
 
-// reject's JSON names the feedback only when it is the person's recorded
-// words, so `report` can hand the revision exactly what they said.
+// reject's JSON says when the feedback is the person's recorded words, so
+// `report` can say they need no rewording; the words stay on the record, never
+// in an engine print.
 function personsFeedbackOutput(personsWords: string | null): Record<string, string> {
-  return personsWords === null ? {} : { feedback: personsWords, feedback_source: "person" };
+  return personsWords === null ? {} : { feedback_source: "person" };
 }
 
 // revise <slug> — fire gate-bound sensors, then transition [R] → [?]

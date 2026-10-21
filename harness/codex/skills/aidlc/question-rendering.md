@@ -174,7 +174,6 @@ Rules (both tracks):
   and add the note that it comes after one more revision. Never count the
   rounds yourself.
 - **No emergent options**: render exactly the spec's options (+ the escape).
-  The NO EMERGENT BEHAVIOR rule applies to the rendering, not just the spec.
 - **Prose response keys**: on Track 2, start every question at `1`, independent
   of numbered content earlier in the message or another question in the batch.
   Use unordered bullets for immediately preceding summaries. Visible `1` maps

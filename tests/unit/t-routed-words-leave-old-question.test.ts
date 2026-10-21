@@ -37,7 +37,6 @@ import {
   auditBlockField,
   findStageBySlug,
   latestMainWorkflowStageRunFloorForProject,
-  personsLatestGatePick,
   readAuditShardEvents,
   readProtectedResponse,
   reviewArtifactFingerprint,
@@ -380,7 +379,6 @@ describe("words sent to separate new work leave the question the work in progres
       const routing = routingQuestionOverTheStep(proj);
       say(proj, "2");
       sendToNewWork(proj, routing);
-      expect(personsLatestGatePick(proj, SESSION, { stage: "feasibility" })).toBeNull();
       expect(report(proj, "approved", ["--user-input", "Approve"]).out).toContain("no new human reply");
       say(proj, "approve");
       expect(report(proj, "approved", ["--user-input", "Approve"]).out).toContain("Committed approve");

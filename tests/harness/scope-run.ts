@@ -1860,9 +1860,22 @@ export function scopeRunProblems(run: ScopeRun, options: ProblemOptions = {}): s
 
   // 2. Every decision recorded as the person's came from the person.
   for (const line of person.ledger.unbacked()) problems.push(line);
+  // A gate's Person Reply is every reply the decision stands on, in order, one
+  // per line (the audit escapes the line breaks): each line from a message the
+  // person sent.
+  const fromTheirMessages = (reply: string): boolean => {
+    const parts = reply.split("\\n");
+    let at = 0;
+    for (const message of person.said) {
+      const lines = message.split(/\r?\n/);
+      if (lines.every((line, k) => parts[at + k] === line)) at += lines.length;
+      if (at === parts.length) return true;
+    }
+    return false;
+  };
   for (const e of events.filter((e) => e.event === "GATE_APPROVED")) {
     const reply = field(e.block, "Person Reply");
-    if (reply !== null && !person.said.includes(reply)) {
+    if (reply !== null && !fromTheirMessages(reply)) {
       problems.push(`GATE_APPROVED ${field(e.block, "Stage")} records ${JSON.stringify(reply)}, which the person never sent`);
     }
   }

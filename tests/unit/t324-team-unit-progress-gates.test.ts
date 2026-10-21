@@ -1083,7 +1083,9 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     const directive = JSON.parse((rejected.stdout ?? "").trim()) as Directive;
     expect(directive.kind, rejected.stdout + rejected.stderr).toBe("print");
     expect(directive.message).toStartWith('Recorded rejected for unit "alpha" of "functional-design".');
-    expect(directive.message).toContain(`revise from exactly what they said: ${JSON.stringify(typed)}`);
+    // Their words are on the record; the step never repeats them.
+    expect(directive.message).toContain("in the person's own words");
+    expect(directive.message).not.toContain(typed);
     const row = (event: string) => readAuditShardEvents(proj).filter((entry) => entry.event === event).at(-1)!.block;
     expect(auditBlockField(row("GATE_REJECTED"), "Unit")).toBe("alpha");
     expect(auditBlockField(row("GATE_REJECTED"), "Feedback")).toBe(typed);

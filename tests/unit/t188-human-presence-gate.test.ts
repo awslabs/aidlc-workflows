@@ -497,8 +497,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(field(proj, "Current Stage")).not.toBe(slug);
   });
 
-  // The picker returns the "(Recommended)" decorator added to the choice label.
-  // Matching may remove it, but the approval receipt must retain the human's reply.
+  // The picker returns the "(Recommended)" decorator added to the choice label;
+  // the receipt keeps the agent's report as it passed it.
   test("B2: approve COMMITS when the reply carries the (Recommended) decorator", () => {
     const slug = field(proj, "Current Stage");
     guarded(proj, ["checkbox", `${slug}=in-progress`]);
@@ -514,14 +514,14 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
     expect(
       readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-    ).toContain("**User Input**: Approve\n");
+    ).toContain("**User Input**: Approve (Recommended)\n");
     expect(field(proj, "Current Stage")).not.toBe(slug);
   });
 
   // The agent reports the approval it read from the person's reply; the
-  // receipt names Accept as-is only once the gate offers it.
+  // receipt records it as passed, whatever the revision count.
   test.each([2, 3])(
-    "decorated Accept as-is respects the revision limit at count %i",
+    "decorated Accept as-is is recorded as the agent passed it at count %i",
     (revisionCount) => {
       const slug = field(proj, "Current Stage");
       // This stage's earlier change requests, as the reject path records them.
@@ -536,13 +536,13 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(report.out).toContain('"kind":"done"');
       expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
       expect(readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block)
-        .toContain(revisionCount >= 3 ? "**User Input**: Accept as-is\n" : "**User Input**: Approve\n");
+        .toContain("**User Input**: Accept as-is (Recommended)\n");
       expect(field(proj, "Current Stage")).not.toBe(slug);
     },
   );
 
   test.each(["(Recommended)", "Approve (Recommended) extra"])(
-    "the agent's reported approval records as Approve, whatever it passes: %s",
+    "the agent's reported approval records as it passes it: %s",
     (reply) => {
       const slug = field(proj, "Current Stage");
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
@@ -552,7 +552,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(direct.rc, direct.out).toBe(0);
       expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
       expect(readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block)
-        .toContain("**User Input**: Approve\n");
+        .toContain(`**User Input**: ${reply}\n`);
     },
   );
 
@@ -1226,7 +1226,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "SUMMARY_CONFIRMATION_RECORDED")).toBe(0);
     });
 
-    test("summary confirmation needs a fresh turn after another answer", () => {
+    // An answer spends no reply: the one the follow-up stood on backs the summary too.
+    test("summary confirmation stands on the reply another answer used", () => {
       const slug = field(proj, "Current Stage");
       const questions = summaryQuestions(proj);
       expect(
@@ -1265,9 +1266,8 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
         "--details",
         "Looks correct",
       ]);
-      expect(result.rc).not.toBe(0);
-      expect(result.out).toContain("no human reply has arrived since their last answer");
-      expect(eventCount(proj, "SUMMARY_CONFIRMATION_RECORDED")).toBe(0);
+      expect(result.rc, result.out).toBe(0);
+      expect(eventCount(proj, "SUMMARY_CONFIRMATION_RECORDED")).toBe(1);
     });
 
     test("per-unit evidence requires a unit-scoped receipt", () => {
@@ -1409,7 +1409,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Deploy anywhere?", "--options", "A,B"]).rc).toBe(0);
       const late = guardedLog(proj, ["answer", "--stage", slug, "--details", "A"]);
       expect(late.rc).not.toBe(0);
-      expect(late.out).toContain("no new human reply has arrived for the question");
+      expect(late.out).toContain("came before this question was logged");
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(3);
     });
 
@@ -1568,7 +1568,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(guardedLog(proj, ["decision", "--stage", slug, "--decision", "Next question", "--options", "A,B"]).rc).toBe(0);
       const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "second answer"]);
       expect(r.rc).not.toBe(0);
-      expect(r.out).toContain("no new human reply has arrived for the question");
+      expect(r.out).toContain("came before this question was logged");
       expect(r.out).not.toContain("already recorded as an answer");
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(1);
     });
@@ -1647,10 +1647,11 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
     });
 
-    test("an unattended second answer keeps the AIDLC_UNATTENDED explanation", () => {
+    test("an unattended answer after a decision used the reply keeps the AIDLC_UNATTENDED explanation", () => {
       const slug = field(proj, "Current Stage");
       recordHumanTurn(proj);
       expect(guardedLog(proj, ["answer", "--stage", slug, "--details", "my answer"]).rc).toBe(0);
+      appendAuditEntry("GATE_REJECTED", { Stage: slug }, proj);
       const r = guardedLog(proj, ["answer", "--stage", slug, "--details", "second answer"], true);
       expect(r.rc).not.toBe(0);
       expect(r.out).toContain("Unset AIDLC_UNATTENDED");
@@ -1690,7 +1691,7 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "GATE_APPROVED")).toBe(1);
       expect(
         readAuditShardEvents(proj).find((row) => row.event === "GATE_APPROVED")?.block,
-      ).toContain("**User Input**: Approve\n");
+      ).toContain("**User Input**: Approve (Recommended)\n");
       expect(field(proj, "Current Stage")).not.toBe(slug);
     });
 

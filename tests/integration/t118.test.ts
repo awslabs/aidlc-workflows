@@ -788,7 +788,7 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(invalid.message).toContain("names no choice");
     // Their reply is on record: the agent reports the choice it read, and the
     // person is not asked again.
-    expect(invalid.message).toContain("The person has replied since the gate was shown");
+    expect(invalid.message).toContain("The person has replied since the last decision");
     expect(invalid.message).toContain("without asking them again");
     expect(invalid.message).not.toContain("show the gate");
     expect(readFileSync(statePath(p), "utf-8")).toContain("- [?] feasibility");
@@ -813,12 +813,9 @@ describe("t118 differential corpus — engine vs aidlc-jump resolve (migrated fr
     expect(eventCount(p, "GATE_REJECTED")).toBe(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("SP7-escape: Accept as-is is recorded only once it is on offer, after three revision cycles", () => {
-    const early = heldGate();
-    expect(report(early.p, early.guardedEnv, ["--result", "approved", "--user-input", "Accept as-is"]).kind).toBe("done");
-    expect(readAudit(early.p)).toContain("**User Input**: Approve\n");
-    expect(readAudit(early.p)).not.toContain("**User Input**: Accept as-is");
-
+  // The agent offers Accept as-is after three revision cycles and reports the
+  // person's pick; the record keeps the choice as the agent passed it.
+  test("SP7-escape: Accept as-is is recorded as the agent reports it, after three revision cycles", () => {
     const offered = heldGate(3);
     expect(report(offered.p, offered.guardedEnv, ["--result", "approved", "--user-input", "Accept as-is"]).kind).toBe("done");
     expect(readAudit(offered.p)).toContain("**User Input**: Accept as-is\n");
