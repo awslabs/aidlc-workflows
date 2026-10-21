@@ -29,6 +29,7 @@ import {
 } from "./aidlc-runtime-paths.ts";
 export { entrySkillInvocation, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import {
+  type EngineInvocation,
   GUARD_REMEDY_WORDING,
   guardOperationInvocation,
   guardOperationMatchesEngineArgs,
@@ -11614,15 +11615,21 @@ export function recordCopilotHumanSequence(
   });
 }
 
-// The claim identity of `next --stage <stage>`: the adapter and orchestrator
-// hash JSON.stringify([verb, ...args]) after removing the dispatcher prefix,
-// --project-dir and --aidlc-attempt-id. Null for a stage that is no identifier,
-// which no such claim carries.
-export function nextStageClaimSha256(stage: string): string | null {
+// `next --stage <stage>`, with `--unit <unit>` for one Unit's step, as the
+// engine prints it. Null for a stage or Unit that is no identifier.
+export function nextStageInvocation(stage: string, unit?: string): EngineInvocation | null {
   const operation = { kind: "restart-stage", stage } as const;
-  return isGuardRecoveryOperation(operation)
-    ? contentSha256(JSON.stringify(guardOperationInvocation(operation).args))
-    : null;
+  if (!isGuardRecoveryOperation(operation) || (unit !== undefined && !UNIT_NAME_REGEX.test(unit))) return null;
+  const invocation = guardOperationInvocation(operation);
+  return unit === undefined ? invocation : { ...invocation, args: [...invocation.args, "--unit", unit] };
+}
+
+// The claim identity of that `next --stage`: the adapter and orchestrator
+// hash JSON.stringify([verb, ...args]) after removing the dispatcher prefix,
+// --project-dir and --aidlc-attempt-id. Null where no such claim exists.
+export function nextStageClaimSha256(stage: string, unit?: string): string | null {
+  const invocation = nextStageInvocation(stage, unit);
+  return invocation === null ? null : contentSha256(JSON.stringify(invocation.args));
 }
 
 // The selected restart's own `next --stage` is matched by its claim identity
