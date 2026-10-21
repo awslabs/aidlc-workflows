@@ -21747,8 +21747,10 @@ export function freshReviewReceipts(
 
   // A Unit's re-check is spent only until the person next approves the Unit
   // at its checkpoint or starts a new attempt for it (their Request Changes
-  // there, or the Unit's step started again): either opens a fresh one. Only
-  // with checkpoints on, the one place the review request reads it.
+  // there, or the Unit's step started again): either opens a fresh one. With
+  // checkpoints on, the one place the review request reads it, a Unit with no
+  // re-check of its own has not used one: the source mark above is shared by
+  // every Unit.
   const checkpointsOn = getField(stateContent, "Construction Checkpoints") === "enabled";
   const unitRecheckReopened = new Set<string>();
   for (const unit of new Set([...unitSourceMoved.keys(), ...unitStaleProgress.keys()])) {
@@ -21756,7 +21758,7 @@ export function freshReviewReceipts(
       row.event === "REVIEW_REQUESTED" && auditBlockField(row.block, "Recovery") === "stale-receipt" &&
       auditBlockField(row.block, "Stage") === stage.slug && auditBlockField(row.block, "Unit") === unit &&
       auditBlockField(row.block, "Reviewer") === reviewer && eventMatchesClaimAttempt(projectDir, row.block, unit));
-    if (!recheck || !allEvents.some((row) =>
+    if (recheck === undefined ? !checkpointsOn : !allEvents.some((row) =>
       auditBlockField(row.block, "Unit") === unit &&
       (row.event === "GATE_APPROVED"
         ? auditBlockField(row.block, "User Input") === "Approve" &&
