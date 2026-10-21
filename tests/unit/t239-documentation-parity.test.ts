@@ -170,6 +170,14 @@ const scopeNames = readdirSync(at("core", "scopes"))
 const scopeGrid = JSON.parse(
   read("dist", "claude", ".claude", "tools", "data", "scope-grid.json"),
 ) as Record<string, { stages: Record<string, string> }>;
+// A scope's size as the person reads it: the stages it runs after
+// Initialization, of the stages after it (the plan offer and `/aidlc --help`).
+const afterSetup = (JSON.parse(read("dist", "claude", ".claude", "tools", "data", "stage-graph.json")) as Array<{
+  slug: string;
+  phase: string;
+}>).filter((stage) => stage.phase !== "initialization").map((stage) => stage.slug);
+const runsAfterSetup = (stages: Record<string, string>): number =>
+  afterSetup.filter((slug) => stages[slug] === "EXECUTE").length;
 const reviewerNames = [
   ...new Set(
     filesBelow(at("core", "aidlc-common", "stages"), ".md").flatMap((file) =>
@@ -577,9 +585,7 @@ describe("documentation parity derives current behavior from authored implementa
     for (const row of rows) {
       const stages = scopeGrid[row.scope]?.stages;
       expect(stages, `missing compiled grid entry for ${row.scope}`).toBeDefined();
-      const total = Object.keys(stages).length;
-      const executed = Object.values(stages).filter((value) => value === "EXECUTE").length;
-      expect(row.stages, `${row.scope} stage count`).toBe(`${executed} / ${total}`);
+      expect(row.stages, `${row.scope} stage count`).toBe(`${runsAfterSetup(stages)} / ${afterSetup.length}`);
 
       const scopeFile = read("core", "scopes", `aidlc-${row.scope}.md`);
       const depth = frontmatterScalar(scopeFile, "depth");
@@ -1042,8 +1048,7 @@ describe("documentation parity derives current behavior from authored implementa
     const stageCount = (scope: string): string => {
       const stages = scopeGrid[scope]?.stages;
       if (!stages) throw new Error(`missing compiled grid entry for ${scope}`);
-      const values = Object.values(stages);
-      return `${values.filter((value) => value === "EXECUTE").length} / ${values.length}`;
+      return `${runsAfterSetup(stages)} / ${afterSetup.length}`;
     };
 
     const rows = [...guide.matchAll(/^\| [^|]+ \| `\/aidlc ([a-z][a-z-]+) [^`]*` \| (\d+ \/ \d+) \|$/gm)];

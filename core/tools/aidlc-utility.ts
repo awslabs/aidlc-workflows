@@ -837,11 +837,12 @@ export function renderHelpText(): string {
   const mapping = loadScopeMapping();
   const defaultResolution = defaultScopeResolution();
   const effectiveDefaultScope = defaultResolution.error ? "" : defaultResolution.scope;
+  // The stages a scope runs after Initialization, of all the stages after it:
+  // the count its plan offer and each stage's start give.
+  const total = loadStageGraph().filter((stage) => stage.phase !== "initialization").length;
   const scopeLines = [...validScopes()].map((name) => {
     const def = mapping[name];
-    const execute = Object.values(def.stages).filter((v) => v === "EXECUTE")
-      .length;
-    const total = Object.keys(def.stages).length;
+    const execute = gridCostSummary(def.stages).shown;
     const depth = def.depth.toLowerCase();
     const ts = def.testStrategy
       ? `, ${def.testStrategy.toLowerCase()} test strategy`
@@ -8675,6 +8676,9 @@ function handleIntentCreateStateBuild(
 
   const totalInScope = executeStages.length;
   const completedInit = graph.filter((s) => s.phase === "initialization").length;
+  // The lines the person reads count the stages the plan runs after
+  // Initialization, from the list the offer and each stage's start count.
+  const shownInScope = plannedStages(stageProgress, scope).length;
 
   const firstPostInitEntry = graph.find((s) => s.slug === firstPostInit);
   const firstPostInitPhase = firstPostInitEntry
@@ -8817,11 +8821,11 @@ ${stageProgress}
     Languages: scan.languages,
     Frameworks: scan.frameworks,
     "Build System": scan.buildSystem,
-    Details: `${totalInScope} stages in scope, routing to ${firstPostInit}`,
+    Details: `${shownInScope} stages in scope, routing to ${firstPostInit}`,
   }, createdDir, createdSpace);
   appendAuditEvent(projectDir, "STAGE_COMPLETED", {
     Stage: "state-init",
-    Details: `State initialized: ${scope} scope, ${totalInScope} stages, routing to ${firstPostInit}`,
+    Details: `State initialized: ${scope} scope, ${shownInScope} stages, routing to ${firstPostInit}`,
   }, createdDir, createdSpace);
 
   // Phase hand-off: initialization → first post-init phase. The state file
@@ -8863,7 +8867,7 @@ ${stageProgress}
       : "";
   process.stdout.write(
     `Intent created: ${createdDir} (space: ${createdSpace})
-State initialized: ${scope} scope, ${totalInScope} stages, ${effectiveDepth} depth
+State initialized: ${scope} scope, ${shownInScope} stages, ${effectiveDepth} depth
 ${composedPlan ? `Plan: ${composedPlanLabel(flags["plan-name"])}, for this piece of work only (no scope file written)\n` : ""}Project type: ${projectType}${declaredType ? " (you said so)" : ""}
 ${declaredType === "Brownfield" && scan.projectType !== "Brownfield" ? `${NO_CODE_FOUND_YET}\n` : ""}Languages: ${scan.languages}
 Frameworks: ${scan.frameworks}
@@ -12505,7 +12509,10 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
       stages[stage.slug] =
         action === "EXECUTE" || (greenfieldOnly && stage.slug === "reverse-engineering") ? "EXECUTE" : "SKIP";
     }
-    const running = Object.values(stages).filter((a) => a === "EXECUTE").length;
+    // The saved plan's lines count the stages it runs after Initialization, the
+    // count its plan offer will give; the audit row keeps every stage it runs.
+    const running = gridCostSummary(stages).shown;
+    const executing = Object.values(stages).filter((a) => a === "EXECUTE").length;
 
     const depth = getField(content, "Depth") || scopeDef.depth;
     const testStrategy = getField(content, "Test Strategy");
@@ -12551,7 +12558,7 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
         appendAuditEvent(projectDir, "SCOPE_SAVED", {
           Scope: scope,
           "Saved as": name,
-          "Stages in Scope": String(running),
+          "Stages in Scope": String(executing),
         }, flags.intent, flags.space));
     } catch (error) {
       die(`Cannot save the scope: ${errorMessage(error)}`);
