@@ -5,7 +5,7 @@
 // (buildQuestion), in the tool's own install: the person's first line has the agent show the open question, then the
 // person replies, in one or two lines. Pass, per reply (section 4.1):
 //
-//   P1 the decision the person meant is on record (the row's event and its choice); for a reply that is really
+//   P1 the decision the person meant is on record (the row's event and its choice, an answer judged by meaning); for a reply that is really
 //      ambiguous, nothing is recorded and the agent asks once.
 //   P2 nothing refused and nothing asked again: questions back to the person stay within the reply's allowance, and
 //      no line the person reads names a check, a refusal, or says the work carries on while it waits (the model judge
@@ -20,7 +20,8 @@
 // model pins) and through the box's own `claude -p` (AIDLC_GATE_FUZZ_CLAUDE_BIN, the shell's models), Codex through `codex exec`,
 // Kiro CLI over ACP, opencode through `opencode run`, the Cursor agent through `agent -p`, Copilot CLI through
 // `copilot -p`. tests/e2e/t-live-gate-fuzz.serial.test.ts runs a sample; `bun tests/harness/live-gate-fuzz.ts
-// --write-corpus` writes the first corpus from the answers corpus and the measured cases.
+// --write-corpus` writes the first corpus from the answers corpus and the measured cases; `--rejudge <report dir>`
+// judges a finished run's answers again by meaning.
 
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -569,25 +570,42 @@ export function decisionsSince(proj: string, from: number, intentsBefore: number
 }
 
 /** Whether what the agent showed first offers what the reply picks from: a model reads it (the answers corpus's own setup check, by meaning). */
+/** One yes-or-no question to the model judge; null when it could not run or gave no verdict. */
+async function askJudge(rubric: string, judgeDir: string): Promise<{ ok: boolean; reason?: string } | null> {
+  const proc = Bun.spawn(["claude", "-p", rubric, "--output-format", "json", "--model", "sonnet", "--no-session-persistence", "--permission-mode", "default",
+    "--disallowedTools", "Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "Skill", "AskUserQuestion"],
+  { cwd: judgeDir, stdout: "pipe", stderr: "pipe", env: { ...process.env, CLAUDE_CONFIG_DIR: join(judgeDir, "config"), DISABLE_AUTOUPDATER: "1" } });
+  const [stdout, status] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+  if (status !== 0) return null;
+  const result = String((JSON.parse(stdout) as { result?: string }).result ?? "");
+  const verdict = /\{[^{}]*"ok"\s*:\s*(true|false)[^{}]*\}/.exec(result);
+  return verdict ? (JSON.parse(verdict[0]) as { ok: boolean; reason?: string }) : null;
+}
+
 export async function judgeShown(text: string, shows: string, judgeDir: string): Promise<string | null> {
   if (text.trim().length === 0) return "setup: the agent showed nothing before the person's reply";
-  const rubric = [
+  const parsed = await askJudge([
     "You check one thing about what an AI assistant showed a person in a software project tool, before the person replied.",
     `Does it offer ${shows}? Answer by meaning, not exact words.`,
     'Answer with one line of JSON only: {"ok": true or false, "reason": "<one sentence>"}',
     "What the assistant showed follows.",
     text.slice(-4000),
-  ].join("\n\n");
-  const proc = Bun.spawn(["claude", "-p", rubric, "--output-format", "json", "--model", "sonnet", "--no-session-persistence", "--permission-mode", "default",
-    "--disallowedTools", "Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "Skill", "AskUserQuestion"],
-  { cwd: judgeDir, stdout: "pipe", stderr: "pipe", env: { ...process.env, CLAUDE_CONFIG_DIR: join(judgeDir, "config"), DISABLE_AUTOUPDATER: "1" } });
-  const [stdout, status] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-  if (status !== 0) return "setup: the check of what was shown could not run";
-  const result = String((JSON.parse(stdout) as { result?: string }).result ?? "");
-  const verdict = /\{[^{}]*"ok"\s*:\s*(true|false)[^{}]*\}/.exec(result);
-  if (!verdict) return "setup: the check of what was shown gave no verdict";
-  const parsed = JSON.parse(verdict[0]) as { ok: boolean; reason?: string };
+  ].join("\n\n"), judgeDir);
+  if (parsed === null) return "setup: the check of what was shown gave no verdict";
   return parsed.ok ? null : `setup: the agent did not offer ${shows} (${parsed.reason ?? "no reason"})`;
+}
+
+/** Whether a recorded answer is the answer the person meant, by meaning: "sqlite please" is SQLite, "the second one" names nothing. */
+export async function sameAnswer(want: string, recorded: string[], meaning: string, judgeDir: string): Promise<boolean> {
+  const parsed = await askJudge([
+    "You check one record a software project tool kept of a person's answer to a question.",
+    `What the person meant: ${meaning}`,
+    `The answer they meant: ${JSON.stringify(want)}`,
+    `The answer(s) on record: ${recorded.map((r) => JSON.stringify(r)).join(", ")}`,
+    "Does one answer on record say that same answer, so that someone reading only the record knows what the person chose? Answer by meaning, not exact words.",
+    'Answer with one line of JSON only: {"ok": true or false, "reason": "<one sentence>"}',
+  ].join("\n\n"), judgeDir);
+  return parsed?.ok === true;
 }
 
 export interface Verdict {
@@ -620,9 +638,11 @@ export async function judge(reply: Reply, tool: LiveTool, rig: LiveRig, ex: Exch
   const wanted = [end.decision, ...(end.also ?? []).filter((a) => !/ /.test(a))].filter((d) => d !== "none");
   if (end.decision === "none" && decisions.length > 0) failures.push({ pass: "P1", what: `recorded ${decisions.join(", ")} where the person decided nothing` });
   for (const want of wanted) {
-    if (!decisions.some((d) => d === want || d.toLowerCase() === want.toLowerCase())) {
-      failures.push({ pass: "P1", what: `${want} is not on record (recorded: ${decisions.join(", ") || "nothing"})` });
-    }
+    if (decisions.some((d) => d === want || d.toLowerCase() === want.toLowerCase())) continue;
+    // An answer is the person's choice in any words: the record is judged by what it says, not by matching the label.
+    const answers = decisions.filter((d) => d.startsWith("answer:")).map((d) => d.slice("answer:".length));
+    if (want.startsWith("answer:") && answers.length > 0 && await sameAnswer(want.slice("answer:".length), answers, reply.meaning, judgeDir)) continue;
+    failures.push({ pass: "P1", what: `${want} is not on record (recorded: ${decisions.join(", ") || "nothing"})` });
   }
   // P2: the agent's words after the last line, by meaning; refusals the agent met are counted.
   const last = ex.turns.at(-1);
@@ -710,6 +730,25 @@ export function writeReport(dir: string, verdicts: Verdict[], header: string[]):
   writeFileSync(file, `${lines.join("\n")}\n`);
   writeFileSync(join(dir, "verdicts.json"), JSON.stringify(verdicts, null, 2));
   return file;
+}
+
+// `--rejudge <report dir>`: a finished run's answers judged again by meaning (sameAnswer), into <dir>/rejudged.
+if (import.meta.main && process.argv.includes("--rejudge")) {
+  const dir = process.argv[process.argv.indexOf("--rejudge") + 1];
+  const verdicts = JSON.parse(readFileSync(join(dir, "verdicts.json"), "utf-8")) as Verdict[];
+  const judgeDir = mkdtempSync(join(tmpdir(), "gate-fuzz-judge-"));
+  mkdirSync(join(judgeDir, "config"), { recursive: true });
+  for (const v of verdicts) {
+    const answers = v.decisions.filter((d) => d.startsWith("answer:")).map((d) => d.slice("answer:".length));
+    const kept: Verdict["failures"] = [];
+    for (const f of v.failures) {
+      const want = /^(answer:.*) is not on record \(recorded: /.exec(f.what)?.[1];
+      if (f.pass === "P1" && want && answers.length > 0 && await sameAnswer(want.slice("answer:".length), answers, v.reply.meaning, judgeDir)) continue;
+      kept.push(f);
+    }
+    v.failures = kept;
+  }
+  console.log(writeReport(join(dir, "rejudged"), verdicts, ["The answers judged again by meaning (live-gate-fuzz.ts --rejudge)."]));
 }
 
 if (import.meta.main && process.argv.includes("--write-corpus")) {
