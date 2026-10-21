@@ -41,7 +41,7 @@
 import { createHash } from "node:crypto";
 import {
   copyFileSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync,
-  readlinkSync, symlinkSync, writeFileSync,
+  readlinkSync, symlinkSync, utimesSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -260,7 +260,11 @@ function copyTree(src: string, dst: string, skip: ReadonlySet<string>, linkObjec
     if (stat.isSymbolicLink()) symlinkSync(readlinkSync(from), to);
     else if (stat.isDirectory()) copyTree(from, to, skip, linkObjects, here);
     else if (linkObjects && here.startsWith(".git/objects/")) linkSync(from, to);
-    else copyFileSync(from, to);
+    else {
+      copyFileSync(from, to);
+      // The engine binds some evidence to a file's modification time (the strict Reverse Engineering handoff): a copy keeps it.
+      utimesSync(to, stat.atimeMs / 1000, stat.mtimeMs / 1000);
+    }
   }
 }
 
