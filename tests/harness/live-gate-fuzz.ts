@@ -514,7 +514,7 @@ const rowsOf = (proj: string): Row[] => {
 const fieldOf = (row: Row, name: string) => lib().auditBlockField(row.block, name);
 
 /** The decisions on record after `from`, in section 4.3's words. */
-export function decisionsSince(proj: string, from: number, intentsBefore: number): string[] {
+export function decisionsSince(proj: string, from: number, intentsBefore: number, activeBefore: string | null = null): string[] {
   const out: string[] = [];
   for (const row of rowsOf(proj).slice(from)) {
     const checkpoint = fieldOf(row, "Checkpoint");
@@ -566,6 +566,11 @@ export function decisionsSince(proj: string, from: number, intentsBefore: number
     }
   }
   if (lib().listIntents(proj).length > intentsBefore) out.push("route:separate", "resume:fresh");
+  // A pick among the open pieces of work is the active work changing (no row of its own): the record folder, less its date.
+  else {
+    const now = lib().readActiveIntentCursor(proj);
+    if (now !== null && now !== activeBefore) out.push(`answer:${now.replace(/^\d{6}-/, "")}`);
+  }
   return out;
 }
 
@@ -625,9 +630,9 @@ const MOVES_ON = "Once their decision is on record the work moves on, and the ne
 const REFUSAL = /"kind"\s*:\s*"error"|Cannot (?:approve|record|reject)|Refusing to/;
 
 /** Judge one exchange against the reply: the record by script, the agent's words by the model judge. */
-export async function judge(reply: Reply, tool: LiveTool, rig: LiveRig, ex: Exchange, start: { rows: number; intents: number; cursor: ReturnType<typeof auditCursor> }, ledger: PersonTurn[], judgeDir: string): Promise<Verdict> {
+export async function judge(reply: Reply, tool: LiveTool, rig: LiveRig, ex: Exchange, start: { rows: number; intents: number; active: string | null; cursor: ReturnType<typeof auditCursor> }, ledger: PersonTurn[], judgeDir: string): Promise<Verdict> {
   const failures: Verdict["failures"] = [];
-  const decisions = decisionsSince(rig.proj, start.rows, start.intents);
+  const decisions = decisionsSince(rig.proj, start.rows, start.intents, start.active);
   const end = reply.expected.end;
   // The SDK driver refuses a drive whose decisions no turn of the person backs: that is P3.
   if (ex.error) failures.push({ pass: /recorded \d+ decision\(s\) as the person's/.test(ex.error) ? "P3" : "drive", what: ex.error });
@@ -692,7 +697,7 @@ export async function driveReply(reply: Reply, tool: LiveTool, judgeDir: string,
       spawnTool([process.execPath, join(REPO_ROOT, "dist", "claude", ".claude", "tools", "aidlc-log.ts"), "decision", "--stage", "requirements-analysis",
         "--decision", reply.beside.decision, "--options", reply.beside.options.join(","), "--project-dir", rig.proj], rig.proj, rig.env);
     }
-    const start = { rows: rowsOf(rig.proj).length, intents: lib().listIntents(rig.proj).length, cursor: auditCursor(rig.proj) };
+    const start = { rows: rowsOf(rig.proj).length, intents: lib().listIntents(rig.proj).length, active: lib().readActiveIntentCursor(rig.proj), cursor: auditCursor(rig.proj) };
     const first = firstLine(reply, tool);
     const lines = [...(first ? [first] : []), ...reply.inputs.map((line) => said(line, tool))];
     const ledger: PersonTurn[] = [];

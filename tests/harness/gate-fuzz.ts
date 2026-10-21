@@ -835,8 +835,8 @@ export function closedSet(state: State, host: ScopeHost, ctx: { choices: Array<{
       const report = (...args: string[]) => e("orchestrate", "report", "--stage", state.stage, ...args);
       calls.push({ name: "approve", valid: true, choice: "Approve", lifecycle: true, ops: [report("--result", "approved", "--user-input", "Approve")] });
       calls.push({ name: "approve and park", valid: true, choice: "Approve", lifecycle: true, ops: [report("--result", "approved", "--user-input", "Approve", "--park")] });
-      // Before the third revision the label is the agent's own account of an approval (stageGateApproval), not a choice of its own.
-      if (state.revision >= 3) calls.push({ name: "accept as-is", valid: true, choice: "Accept as-is", lifecycle: true, ops: [report("--result", "approved", "--user-input", "Accept as-is")] });
+      // --user-input lands as the agent passed it, at any revision (section 4.2, I3): "Accept as-is" is an approval in the agent's words.
+      calls.push({ name: "accept as-is", valid: true, choice: "Accept as-is", lifecycle: true, ops: [report("--result", "approved", "--user-input", "Accept as-is")] });
       calls.push({ name: "request changes", valid: true, choice: "Request Changes", lifecycle: true, ops: [report("--result", "rejected", "--user-input", "Request Changes")] });
       calls.push({ name: "request changes with a reason", valid: true, choice: "Request Changes", lifecycle: true, ops: [report("--result", "rejected", "--user-input", "Request Changes", "--reason", SHELL_REASON)] });
       if (state.plan.skipped.length > 0) calls.push({ name: `add ${state.plan.skipped[0]}`, valid: true, choice: null, lifecycle: false, ops: [e("orchestrate", "next", "--add", state.plan.skipped[0])] });
@@ -924,8 +924,8 @@ export function wrongCalls(state: State, host: ScopeHost): Call[] {
   const calls: Call[] = [];
   if (state.kind === "gate" || state.kind === "learnings") {
     for (const input of ["approve", "Approve Plan", label, "Add User Stories"]) {
-      // --user-input is the agent's own account of the approval (stageGateApproval): any words, the same approval.
-      calls.push({ name: `approve as "${input}"`, valid: true, choice: null, lifecycle: true, ops: [e("orchestrate", "report", "--stage", state.stage, "--result", "approved", "--user-input", input)] });
+      // --user-input is the agent's own account of the approval, recorded as handed (section 4.2, I3).
+      calls.push({ name: `approve as "${input}"`, valid: true, choice: input, lifecycle: true, ops: [e("orchestrate", "report", "--stage", state.stage, "--result", "approved", "--user-input", input)] });
     }
     const other = state.plan.later[0] ?? state.plan.done[0];
     if (other) calls.push({ name: `approve ${other}, not open`, valid: false, choice: "Approve", lifecycle: true, ops: [e("orchestrate", "report", "--stage", other, "--result", "approved", "--user-input", "Approve")] });
@@ -1090,6 +1090,15 @@ export function fuzzEnvironment(unattended: boolean): NodeJS.ProcessEnv {
     "CODEX_THREAD_ID", "KIRO_SESSION_ID", "AIDLC_SESSION_OVERRIDE", "AIDLC_SESSION_OVERRIDE_SOURCE", "AIDLC_UNATTENDED"]) delete env[name];
   if (unattended) env.AIDLC_UNATTENDED = "1";
   return env;
+}
+
+// A host names its chats by how many hosts this process made, so a new chat can take the name of the walk's own chat:
+// it is started again until its name is one the run has not used.
+function freshChat(host: ScopeHost, chats: string[]): void {
+  for (let tries = 0; tries < 8; tries++) {
+    host.newSession();
+    if (!chats.includes(host.session)) return;
+  }
 }
 
 function joinChat(host: ScopeHost, proj: string, session: string): void {
@@ -1306,7 +1315,7 @@ export function play(state: State, seed: number, steps: Step[], opts: { twin?: b
           break;
         }
         case "chat":
-          host.newSession();
+          freshChat(host, chats);
           chats.push(host.session);
           joinChat(host, proj, host.session);
           break;
@@ -1314,7 +1323,7 @@ export function play(state: State, seed: number, steps: Step[], opts: { twin?: b
           joinChat(host, proj, first);
           break;
         case "resume":
-          host.newSession();
+          freshChat(host, chats);
           chats.push(host.session);
           joinChat(host, proj, host.session);
           host.typed("/aidlc --resume");
@@ -1594,6 +1603,8 @@ function openAt(run: Run, at: number): boolean {
   for (const s of run.steps) {
     if (s.i >= at) break;
     if (s.landed) return false;
+    // A decision a hook recorded from a person turn, or a wrong call that landed, closes the step as much as a call.
+    if (s.rows.some((r) => SPENDING.has(r.event))) return false;
     if (s.step.kind === "resume" || s.step.kind === "chat") return false;
     if (/\*\*Status\*\*: (?:Parked|parked)/.test(s.stateAfter)) return false;
   }
