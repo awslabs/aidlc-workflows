@@ -870,9 +870,8 @@ If a stage needs re-run (changes requested after approval):
 ### Compaction Recovery
 
 `PreCompact` hook validates `aidlc-state.md` structure before compaction
-(informational-only, cannot block). Writes `.aidlc-engine/recovery.md` breadcrumb
-with last validated state (stage, timestamp). On resume, the conductor compares
-breadcrumb with state file to detect compaction-related corruption.
+(informational-only, cannot block) and records `SESSION_COMPACTED` (stage, state
+validity) in the audit trail.
 
 ### Corrupted State File Recovery
 

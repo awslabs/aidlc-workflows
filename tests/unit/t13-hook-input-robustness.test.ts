@@ -16,7 +16,7 @@
 // adversarial payload the .sh fired. Where the .sh only checked the exit code,
 // this twin is STRONGER: the injection cases also assert the injection token
 // survives VERBATIM as a literal in the artifact the hook wrote (audit.md /
-// recovery breadcrumb / statusline output) — proving the shell never
+// statusline output), proving the shell never
 // interpolated `$(whoami)` / `` `whoami` `` (verified: the audit-logger writes
 // the raw file_path into its `**File**:` field; the shell never expands it).
 //
@@ -47,7 +47,7 @@ import {
   remainingOperationTimeoutMs,
 } from "../harness/test-budget.ts";
 import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -173,10 +173,6 @@ function writeState(proj: string, body: string): void {
   writeFileSync(join(seededRecordDir(proj), "aidlc-state.md"), body, "utf-8");
 }
 
-function recoveryPath(proj: string): string {
-  return join(seededRecordDir(proj), ".aidlc-engine/recovery.md");
-}
-
 function writeJson(filePath: string): string {
   return JSON.stringify({ tool_name: "Write", tool_input: { file_path: filePath } });
 }
@@ -221,13 +217,12 @@ describe("t13 hook input robustness (mechanism cli — spawned hooks + adversari
       proj,
       "# AI-DLC State Tracking\n## Current Status\n- **Lifecycle Phase**: $(whoami)\n- **Current Stage**: `whoami`\n## Stage Progress\n### $(whoami) PHASE\n- [ ] test — EXECUTE\n",
     );
+    seedAuditShard(proj);
     const r = fireState(HOOK_VALIDATE, proj);
     expect(r.exitCode).toBe(0);
-    // validate-state writes the **Current stage** verbatim into the
-    // recovery breadcrumb; the backtick `whoami` survives, never executed.
-    const recovery = recoveryPath(proj);
-    expect(existsSync(recovery)).toBe(true);
-    expect(readFileSync(recovery, "utf-8")).toContain("`whoami`");
+    // validate-state writes the Current Stage verbatim into its SESSION_COMPACTED
+    // row; the backtick `whoami` survives, never executed.
+    expect(readShards(proj)).toContain("**Current Stage**: `whoami`");
   });
 
   test("session-start: survives shell injection in state file (exit 0, token verbatim) [.sh test 3]", () => {
@@ -294,8 +289,9 @@ describe("t13 hook input robustness (mechanism cli — spawned hooks + adversari
       spaced,
       "# AI-DLC State Tracking\n## Current Status\n- **Lifecycle Phase**: IDEATION\n- **Current Stage**: feasibility\n## Stage Progress\n### IDEATION PHASE\n- [ ] feasibility — EXECUTE\n",
     );
+    seedAuditShard(spaced);
     expect(fireState(HOOK_VALIDATE, spaced).exitCode).toBe(0);
-    expect(existsSync(recoveryPath(spaced))).toBe(true);
+    expect(readShards(spaced)).toContain("SESSION_COMPACTED");
   });
 
   test("session-start: handles a project dir with spaces (exit 0) [.sh test 8]", () => {
@@ -415,9 +411,10 @@ describe("t13 hook input robustness (mechanism cli — spawned hooks + adversari
     );
     // validate-state reads workflow content from the STATE file; an empty stdin
     // object supplies no session metadata.
+    seedAuditShard(proj);
     const r = fireStdin(HOOK_VALIDATE, "{}", proj);
     expect(r.exitCode).toBe(0);
-    expect(existsSync(recoveryPath(proj))).toBe(true);
+    expect(readShards(proj)).toContain("SESSION_COMPACTED");
   });
 
   test("session-start: ignores empty JSON on stdin (exit 0) [.sh test 18]", () => {

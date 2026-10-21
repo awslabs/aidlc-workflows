@@ -138,7 +138,7 @@ const heartbeatPath = (p: string): string =>
   join(seededRecordDir(p), ".aidlc-engine/hooks-health", "validate-state.last");
 // With NO state file the active-intent cursor does not resolve (a record without
 // aidlc-state.md is not honoured), so docsRoot() falls back to the bare SPACE
-// record root — the heartbeat lands there, not under the record.
+// record root, so the heartbeat lands there, not under the record.
 const heartbeatPathNoState = (p: string): string =>
   join(intentsDirOf(p), ".aidlc-engine/hooks-health", "validate-state.last");
 

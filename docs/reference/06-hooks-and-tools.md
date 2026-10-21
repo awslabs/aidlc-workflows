@@ -48,7 +48,7 @@ Eleven of the seventeen are **non-blocking**. Six are **flow-altering**: the `St
 | `sync-workflow-state.ts` | PostToolUse | Project-wide (settings.json) | `TaskUpdate` | Auto-sync state file on stage task activation |
 | `rebuild-stage-graph.ts` | PostToolUse | Project-wide (settings.json) | `Bash` | Bind a successful `intent-create` to that tool event's exact host session ID; when the session already owns another intent, write the one-shot fresh-session handoff receipt; then recompile `runtime-graph.json` on transition-class audit emits. First, when the Bash call was one literal engine orchestrate command whose stdout is exactly an `error` directive, relay `directive.message` byte for byte to the human (see [Engine error relay](#engine-error-relay)) |
 | `fold-usage.ts` | PreToolUse + PostToolUse | Project-wide (settings.json) | (empty) | **Claude-only.** Fold the transcript's new token usage into the durable usage ledger every llm call: PreToolUse seals the completing main call and, before an engine boundary, every completed subagent call so lifecycle rollups are current; PostToolUse supplies the normal holdback fallback. Observe-only, never blocks; the Claude-Code transcript reader is wired only in the Claude harness, so on Kiro/Codex/opencode no producer runs and the ledger stays empty (every usage consumer degrades to no-data). `AIDLC_DISABLE_USAGE_TRACKING=1` disables it. See "Token usage and cost tracking" below |
-| `validate-state.ts` | PreCompact | Project-wide (settings.json) | (empty) | Validate state file, write recovery breadcrumb |
+| `validate-state.ts` | PreCompact | Project-wide (settings.json) | (empty) | Validate state file, record `SESSION_COMPACTED` |
 | `log-subagent.ts` | SubagentStop | Project-wide (settings.json) | (empty) | Remove one background-subagent ledger entry for the completing session and log subagent completion events |
 | `aidlc-continue-workflow.ts` | Stop | Project-wide (settings.json) | (empty) | **Flow-altering.** Enforce the forwarding loop on turn-end: run `aidlc-orchestrate next`; allow terminal and human-wait outcomes, block ordinary pending work with an on-task continuation, and deliver each distinct engine `error` diagnostic exactly once with a best-effort `ERROR_LOGGED` row. Unknown directive kinds and all diagnostic-persistence failures allow the stop. Also allows the exact one-shot handoff after `intent-create`, or after `intent <name>` or `space <name>` selects another intent, when the session's original UUID and newly active UUID match the receipt that step wrote. A selected record with no `intents.json` row has no UUID, so its receipt names the space and record instead: the session must select exactly that record and carry no intent stamp (the switch clears the stamp it came from), or the stamp of the registry row the record has gained since. Allows legitimate turn stops when the current stage or active team Unit gate is awaiting approval (until the person's reply to it is on record by approve's own two presence checks) or revision, or `[-]` in-progress with either an unanswered question in the active directive's canonical or per-unit `<slug>-questions.md` or an unresolved logged `DECISION_RECORDED`; a fresh in-flight compose marker, a fresh background-subagent entry for the current session, a step that still offers the Construction autonomy choice, and conversational turns are also allowed. Foreign-session, stale, and malformed background entries do not authorize a stop. The compose and background carve-outs are suppressed under autonomous Construction; there the logged-decision carve-out allows a question the agent logged for the person who is there, and under an unattended driver (`AIDLC_UNATTENDED=1`) only a checkpoint question (the verification command, a plan approval, a summary confirmation, a Construction policy change), the conversational carve-out is read the same way as elsewhere (a person who writes mid-run is present; every turn of an unattended run touches the engine; an unattended driver, `AIDLC_UNATTENDED=1`, keeps the old guard), and the pending-file carve-out is suppressed except for unit-major code-generation's mandatory Plan Approval. The autonomy-choice carve-out reads the offer from the run-stage and from each rules part leading to it (`offer_autonomy` on the part), since the probe restarts the rules at part 1; on a rules part it lets the turn end only when the agent's own active-directive marker is at the run-stage (it reached the step that asks), so a quit after an earlier part is still pending work. Ordinary pending work is recursion-bounded (no-progress counter + `stop_hook_active` under `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP`; default 2 in an interactive run and 8 under autonomous Construction). No-op outside an AIDLC workflow |
 | `session-start.ts` | SessionStart | Project-wide (settings.json) | (empty) | Inject workflow context on session resume |
@@ -587,7 +587,7 @@ would be permanently dead; the route check does not, because `unit start` is rea
 workflow engagement.
 
 Every record a hook or tool keeps under an intent's `.aidlc-engine/` folder (the
-block counter, the recovery breadcrumb, the active-directive marker, the source
+block counter, the active-directive marker, the source
 snapshots, the hooks-health files) is written from the record's own folder
 through no link: when a link sits at that folder, at a folder under it, or at
 the file, the record is not written there. The hooks carry on without it; a step
@@ -882,14 +882,12 @@ sequenceDiagram
     participant SE as session-end.ts
     participant AF as audit/ shard
     participant SF as aidlc-state.md
-    participant RF as .aidlc-engine/recovery.md
 
     Note over CC: Session starts
     CC->>SS: SessionStart event (source=startup|resume|clear|compact)
     SS->>SF: Read state fields
     SF-->>SS: Phase, Stage, Status, Agent
     SS->>AF: Append SESSION_STARTED or SESSION_RESUMED
-    SS->>RF: Check recovery breadcrumb
     SS-->>CC: {"hookSpecificOutput": {"additionalContext": "..."}}
 
     Note over CC: Stage execution
@@ -904,7 +902,6 @@ sequenceDiagram
     Note over CC: Context compaction
     CC->>VS: PreCompact event
     VS->>SF: Validate required sections
-    VS->>RF: Write recovery breadcrumb
     VS->>AF: Append SESSION_COMPACTED
 
     Note over CC: Session ends
@@ -1302,7 +1299,7 @@ See [Runtime Graph](13-runtime-graph.md) for the compile lifecycle and the locke
 
 **Source:** `.claude/hooks/aidlc-validate-state.ts`
 **Trigger:** Before Claude Code compacts the conversation context (matcher: empty = always)
-**Purpose:** Section presence check (informational only, does not block compaction) and write a recovery breadcrumb
+**Purpose:** Section presence check (informational only, does not block compaction) and a `SESSION_COMPACTED` audit row
 
 **Processing steps:**
 
@@ -1312,9 +1309,9 @@ See [Runtime Graph](13-runtime-graph.md) for the compile lifecycle and the locke
    - `## Current Status` -- current phase, stage, and scope
    Outputs a WARNING if either section is missing (informational only -- cannot block compaction).
 3. **Directive invalidation:** When the compacting chat owns the active directive (each Copilot chat does: the Copilot adapter records which chat ran each engine command), marks it out of date (`kind: "error"`, `context_epoch` + 1), so the conductor runs `next` before it acts again; the engine's Plan Approval question stays open. A directive no chat owns is left as it is. The marker records when and why (`out_of_date`, below), and a recorded approval is kept.
-4. **Recovery breadcrumb:** Writes `.aidlc-engine/recovery.md` containing the current stage and a validation timestamp. On session resume, the framework compares this with `aidlc-state.md` to detect compaction-related state corruption.
+4. **Audit row:** Appends `SESSION_COMPACTED` (Current Stage, State Validity) when the audit trail exists; it never creates the trail.
 
-**Why this matters:** Context compaction discards conversation history. If compaction happens mid-stage, the model loses awareness of what it was doing. The recovery breadcrumb provides an external checkpoint that survives compaction.
+**Why this matters:** Context compaction discards conversation history. If compaction happens mid-stage, the model loses awareness of what it was doing; the state file, the audit trail and `next` survive it, so the work picks up from the engine.
 
 ### SubagentStop: log-subagent.ts
 
@@ -1883,9 +1880,8 @@ environment or recorded with `aidlc config flags --bypass`, writes
 4. **Session event:** Appends `SESSION_STARTED` (startup/clear) or `SESSION_RESUMED` (resume); compact emits nothing (PreCompact owns it).
 5. **Commit-provenance sweep (opt-in, off by default):** Only when `AIDLC_SESSION_ANCHOR=1` — best-effort `runAnchor` reconcile over the last 25 first-parent commits, so manual commits that landed reviewed claims gain `SOURCE_COMMITTED` anchors (idempotent; skipped on compact and rebind probes; never blocks startup). Unset, the hook writes no anchors and does no provenance work. Anchors are enrichment that `aidlc attest resolve` never reads. See [Commit Provenance](20-commit-provenance.md).
 6. **State extraction:** Reads state file and extracts 7 fields: Phase, Stage, Status, Last Completed, Next Action, Agent, Scope. When a Unit is active it adds an `Active Unit:` line with the Unit's state, pause reason, and next action, naming the Unit's own stage (the `Unit Stage` field `unit start`, `pause`, and `resume` record) when that is not Current Stage. Under solo unit-major Construction, where Current Stage stays on the first per-unit stage while each Unit works through the later ones, it also adds `Current Step: <stage> for unit <unit>`, so a new chat names the step the work is really on.
-7. **Recovery check:** If `.aidlc-engine/recovery.md` exists, includes a compaction warning note.
-7a. **Switched-off checks:** While a recorded switch keeps one of the person's checks off, the context adds a `CHECKS SWITCHED OFF` block, one line per check, for the conductor to say in its first reply. The same block follows the session line when no workflow is active. The lines come from `aidlc-recorded-switches.ts` (see the kill switches in the CLI reference).
-7b. **Active space method copy:** Writes the active space's `memory/` files into `aidlc/active-memory/`, the git-ignored copy every harness include reads (`aidlc-includes.ts`), when they differ. On Claude Code and Copilot the host read its `@`-imports before this hook ran, so when the copy was written just now (a fresh clone's first chat, or the chat after an edit of a memory file) the context says so: with the text of the files written when it fits (Claude Code keeps about 10 KB of a hook's context; measured, 9 KB arrives whole and 15 KB is cut), else by name, for the agent to read before acting on AI-DLC work. Nothing is added when the copy was current; an AI-DLC step carries its rules in full either way.
+7. **Switched-off checks:** While a recorded switch keeps one of the person's checks off, the context adds a `CHECKS SWITCHED OFF` block, one line per check, for the conductor to say in its first reply. The same block follows the session line when no workflow is active. The lines come from `aidlc-recorded-switches.ts` (see the kill switches in the CLI reference).
+7a. **Active space method copy:** Writes the active space's `memory/` files into `aidlc/active-memory/`, the git-ignored copy every harness include reads (`aidlc-includes.ts`), when they differ. On Claude Code and Copilot the host read its `@`-imports before this hook ran, so when the copy was written just now (a fresh clone's first chat, or the chat after an edit of a memory file) the context says so: with the text of the files written when it fits (Claude Code keeps about 10 KB of a hook's context; measured, 9 KB arrives whole and 15 KB is cut), else by name, for the agent to read before acting on AI-DLC work. Nothing is added when the copy was current; an AI-DLC step carries its rules in full either way.
 8. **JSON output:** Prints one context line from `hookContextLine` in `aidlc-lib.ts`, the single owner for SessionStart and UserPromptSubmit context (the human-turn hook gathers its notes for a turn into that one line, since Claude Code drops both when a hook prints two). The line carries the text twice: under `hookSpecificOutput` (`hookEventName` plus `additionalContext`), the only place Claude Code reads it (a top-level `additionalContext` reaches nothing there), and as a top-level `additionalContext`, the key adapters read and rewrap for their host, including an older adapter still installed in a project. For SessionStart, the Kiro, Kiro IDE, Codex, Cursor and Copilot adapters deliver it; opencode has no session-start injection (its plugin only marks the session handled). For UserPromptSubmit, Claude Code reads it and the Kiro IDE adapter unwraps it; the Kiro CLI, Codex, Cursor, Copilot and opencode adapters discard the human-turn hook's output.
 
 **Output format:**

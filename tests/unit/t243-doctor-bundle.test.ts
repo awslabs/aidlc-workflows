@@ -572,7 +572,7 @@ describe("t243 doctor --export diagnostic exporter (#575)", () => {
       runtimeGraphExists: true,
       runtimeGraphMtimeMs: 1,
       authoredInputsNewestMtimeMs: 0,
-      markers: { planExists: false, planParseable: null, recoveryExists: false, stopHookDirExists: false },
+      markers: { planExists: false, planParseable: null, stopHookDirExists: false },
       ...over,
     };
   }

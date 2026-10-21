@@ -69,7 +69,6 @@ import {
   readAllAuditShards,
   readRegularFileNoFollowOrThrow,
   recordDir,
-  recoveryFilePath,
   relativeRecordDir,
   runtimeGraphPath,
   stateFilePath,
@@ -649,7 +648,6 @@ export interface HookHealthSnapshot {
 export interface MarkerSnapshot {
   planExists: boolean;
   planParseable: boolean | null; // null when absent
-  recoveryExists: boolean;
   stopHookDirExists: boolean;
 }
 
@@ -1654,7 +1652,6 @@ function readMarkers(projectDir: string): NormalizedEvidence["markers"] {
   return {
     planExists,
     planParseable,
-    recoveryExists: existsSync(recoveryFilePath(projectDir)),
     stopHookDirExists: existsSync(stopDir),
     turnCounter: existsSync(turnCounterPath) ? safeRead(turnCounterPath).trim() : null,
     readonlyLatch: existsSync(latchPath),

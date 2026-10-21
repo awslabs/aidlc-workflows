@@ -244,7 +244,7 @@ Run with no arguments when a state file exists to resume.
 /aidlc
 ```
 
-**Behavior:** Reads `aidlc-state.md`, checks `.aidlc-engine/recovery.md` for corruption, then carries on from the saved checkpoint, the same as `/aidlc --resume`. Say redo, jump to a stage, or start fresh to do something else. See [Session Management](11-session-management.md) for details.
+**Behavior:** Reads `aidlc-state.md`, then carries on from the saved checkpoint, the same as `/aidlc --resume`. Say redo, jump to a stage, or start fresh to do something else. See [Session Management](11-session-management.md) for details.
 
 `/aidlc --resume` continues directly from the saved checkpoint too. Add `--stage <slug>` when the explicit target should win and route through the normal jump behavior.
 

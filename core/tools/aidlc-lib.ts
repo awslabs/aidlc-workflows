@@ -28184,7 +28184,7 @@ export function resolveConstructionRepo(
 // P9 end state has no flat `aidlc-docs/` root, so the whole tree stays on ONE
 // root per intent (state split across two roots is meaningless). The
 // state/audit/worktree helpers above are the load-bearing pair; these cover the
-// rest of the family (runtime graph, hook health, recovery breadcrumb, plan,
+// rest of the family (runtime graph, hook health, plan,
 // stop-hook guard, the bare docs dir, and a stage's per-run directory) plus the
 // per-worktree mirror copies.
 //
@@ -28693,12 +28693,6 @@ export function recordPreWorkflowHeartbeat(projectDir: string, hook: string): vo
   } catch {
     // Advisory: without it doctor keeps its "not run yet" warning.
   }
-}
-
-// `<root>/.aidlc-engine/recovery.md` - the validate-state breadcrumb the orchestrator
-// reads on resume.
-export function recoveryFilePath(projectDir: string, intent?: string, space?: string): string {
-  return join(engineDir(projectDir, intent, space), "recovery.md");
 }
 
 // `<root>/.aidlc-engine/plan.json` - `aidlc-graph resolve` output.
