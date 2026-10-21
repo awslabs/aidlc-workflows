@@ -486,6 +486,27 @@ describe("t116 per-unit {unit-name} injection", () => {
       `${RP}/inception/contract-design/contract-summary.md`,
     );
   });
+
+  test("13: a fresh code-generation worker receives every approved Refined Mockups artifact", () => {
+    const artifacts = [
+      "mockups.md",
+      "interaction-spec.md",
+      "design-system-mapping.md",
+      "accessibility-checklist.md",
+    ];
+    const { directive } = emitForWithProject(
+      "state-construction.md",
+      "code-generation",
+      (proj) => {
+        const dir = join(proj, RP, "inception", "refined-mockups");
+        mkdirSync(dir, { recursive: true });
+        for (const artifact of artifacts) writeFileSync(join(dir, artifact), `# ${artifact}\n`);
+      },
+    );
+    for (const artifact of artifacts) {
+      expect(directive.consumes).toContain(`${RP}/inception/refined-mockups/${artifact}`);
+    }
+  });
 });
 
 // ============================================================================

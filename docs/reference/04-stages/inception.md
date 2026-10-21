@@ -755,7 +755,7 @@ Changes**.
 |------------------|------------------------------------------------------------------------|
 | Phase            | Inception                                                              |
 | Stage #          | 2.5                                                                    |
-| Condition        | CONDITIONAL -- execute when user-facing UI exists and rough mockups were produced in Ideation; for APIs, refine interaction diagrams |
+| Condition        | CONDITIONAL -- execute when user-facing UI exists, refining the rough mockups when Ideation produced them (classic has no Ideation and designs from the stories and requirements); for APIs, refine interaction diagrams |
 | Lead Agent       | aidlc-design-agent                                                           |
 | Support Agents   | aidlc-product-agent (validates against stories)                              |
 | Mode             | inline                                                                 |
@@ -825,7 +825,7 @@ All artifacts written to `<record>/inception/refined-mockups/`:
 | File                            | Contents                                                    |
 |---------------------------------|-------------------------------------------------------------|
 | `mockups.md`                    | Mid-to-high fidelity mockups per user story/screen          |
-| `interaction-spec.md`           | Interaction patterns, state management, transitions          |
+| `interaction-spec.md`           | Interaction patterns, state management, transitions; one story-keyed `UX{x}.{y}.{n}` ID and source per experience decision, traced by Code Generation |
 | `design-system-mapping.md`      | Component mapping to design system / component library       |
 | `accessibility-checklist.md`    | WCAG compliance checklist and requirements                   |
 | `refined-mockups-questions.md`  | Clarifying questions with `[Answer]:` tags (input artifact)  |
@@ -840,8 +840,10 @@ Standard 2-option gate: **Approve** / **Request Changes**.
   API developer experience specification. When Rough Mockups did not run
   (classic, workshop), it designs from the stories and requirements instead.
 - For mvp scope, this stage executes only if the project has UI.
-- The mockups produced here feed into Domain Design (2.6) and ultimately
-  into Construction's Code Generation (3.5) for UI components.
+- The mockups, interaction specification, design-system mapping, and
+  accessibility checklist are optional declared inputs to Construction's Code
+  Generation (3.5), so its plan and reviewer receive the approved experience
+  when this stage ran.
 - The accessibility checklist provides testable criteria that feed into Build
   and Test (3.6).
 

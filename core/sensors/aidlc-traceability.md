@@ -44,6 +44,8 @@ opens, on the tables as they are then:
    lists and the ones the FR and NFR ID patterns find in requirements.md.
 5. Verifies deterministic targets where possible: stories, Unit mappings,
    business rules, and workspace-relative code paths.
+   Code Generation also owes every `UX{x}.{y}.{n}` experience decision that
+   `interaction-spec.md` records for its stories; without that file it owes none.
 6. Derives functional-design orphans from `rules.md` rather than
    trusting only the self-reported `reverse` array.
 
@@ -54,13 +56,14 @@ holds, and writes nothing when nothing is missing.
 
 Build and Test's coverage gate runs the same tool with `--stage build-and-test`
 and no output path. It reads every Code Generation table and prints each
-requirement and acceptance criterion as built or not: a requirement with
-sub-requirements is built when each Unit has built its own, a row for the
-parent alone not covering them; otherwise by its own row or, when User Stories
-ran, through the criteria of the stories User Stories traced it to. One that
-nothing builds is settled when the latest stage that traced it (User Stories,
-NFR Requirements, then Code Generation) marked it `N/A` with its reason in
-every table there that lists it; an `N/A` with no reason is not settled.
+requirement, acceptance criterion, and owed `UX` experience decision as built
+or not: a requirement with sub-requirements is built when each Unit has built
+its own, a row for the parent alone not covering them; otherwise by its own row
+or, when User Stories ran, through the criteria of the stories User Stories
+traced it to. One that nothing builds is settled when the latest stage that
+traced it (User Stories, NFR Requirements, then Code Generation) marked it
+`N/A` with its reason in every table there that lists it; an `N/A` with no
+reason is not settled.
 
 ## Expected JSON schema
 

@@ -24,6 +24,14 @@ consumes:
     required: true
   - artifact: code-summary
     required: true
+  - artifact: mockups
+    required: false
+  - artifact: interaction-spec
+    required: false
+  - artifact: design-system-mapping
+    required: false
+  - artifact: accessibility-checklist
+    required: false
 requires_stage:
   - code-generation
 sensors:
@@ -63,6 +71,12 @@ generating instructions. Read all applicable stage-level and per-unit sources:
 
 - every artifact under `nfr-requirements/`
 - every artifact under `nfr-design/`
+- the approved `mockups.md`, `interaction-spec.md`,
+  `design-system-mapping.md`, and `accessibility-checklist.md` under
+  `<record>/inception/refined-mockups/` when they exist. Every `UX{x}.{y}.{n}`
+  decision is a target under its own ID. Inventory each applicable interaction
+  state, design-system decision, and accessibility check needed to prove it;
+  derive a stable target ID from the source path and section when it has none.
 - every current `## Testing Contract` in `code-generation-plan.md`, including
   postapproval edits permitted by Code Generation Step 3's lowered-fence rule;
   do not describe those edits as human-approved.
@@ -131,6 +145,10 @@ Create `<record>/construction/build-and-test/build-and-test-summary.md`:
 - Coverage expectations per unit
 - A `## Target Verification Matrix` with one row per target and these columns:
   Target ID, Source, Expected, Actual, Evidence, Owning Stage, Verdict
+- Include every `UX` decision and its applicable interaction-state,
+  design-system, and accessibility checks from Step 1. A source file or
+  implementation path alone is not execution evidence; name the test or check
+  that exercised the target.
 - Each applicable target begins with Actual and Evidence `Pending`, and Verdict
   `Pending`. `N/A` is valid only when the source inventory found no applicable
   measurable target (then write one explanatory `N/A` row), or for a target the
@@ -263,8 +281,9 @@ the Build and Test Summary with a successful readiness result.
 
 This is a stage-level gate, not the Construction phase boundary. Run
 `{{INVOKE}} engine sensor-traceability --stage build-and-test`: it prints every
-requirement and acceptance criterion this run traced, whether it is built or
-marked `N/A` with its reason, and the Units and files that build it. Write
+requirement, acceptance criterion, and owed `UX` experience decision this run
+traced, whether it is built or marked `N/A` with its reason, and the Units and
+files that build it. Write
 `<record>/construction/build-and-test/cross-unit-traceability.md` from that
 output with a pass/fail verdict, per-ID coverage, owning stage/Unit, target
 file, and every uncovered element. Any uncovered ID is a build-and-test finding

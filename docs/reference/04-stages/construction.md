@@ -910,6 +910,10 @@ Code is written to the workspace root, never to
   `<record>/inception/units-generation/unit-of-work.md`
 - Story map from
   `<record>/inception/units-generation/unit-of-work-story-map.md`
+- Approved mockups, interaction specification, design-system mapping, and
+  accessibility checklist from `<record>/inception/refined-mockups/` when they
+  exist. These are optional graph inputs, so scopes that skip Refined Mockups
+  gain no new requirement.
 
 ### Steps
 
@@ -919,12 +923,14 @@ This stage has a **two-part structure**: planning followed by generation.
 
 1. **Read All Unit Artifacts** -- Read all design artifacts for the current
    unit (functional design, NFR requirements, NFR design, infrastructure
-   design, domain design, unit definition, story map).
+   design, domain design, unit definition, story map, and the approved
+   experience when Refined Mockups ran).
 
 2. **Create Code Generation Plan** -- Create a detailed plan at
    `<record>/construction/{unit-name}/code-generation/code-generation-plan.md`
    with checkboxes for each implementation step. Include story-to-code-step
-   traceability -- map each plan step back to the user story it implements.
+   traceability -- map each plan step back to the user story and `UX` experience
+   decisions it implements.
 
    Run `aidlc-testing-posture.ts render` and paste its complete
    `## Testing Contract` JSON block into the plan. The resolver reads
@@ -984,8 +990,9 @@ This stage has a **two-part structure**: planning followed by generation.
    A bare project-wide command such as `npm test` is not acceptable because
    Build and Test executes every unit's commands.
 
-   The plan opens with a short `## Summary` (Builds, Touches, Tests lines) that
-   the engine shows the person when it asks for approval.
+   The plan opens with a short `## Summary` (Builds, Touches, Tests lines, plus
+   an Experience line naming the `UX` decisions a unit implements) that the
+   engine shows the person when it asks for approval.
 
 3. **Plan Approval** -- the engine asks. When both files are written, the
    conductor runs `next`. A ready plan (non-empty plan and instructions, a
@@ -1295,6 +1302,9 @@ with the aidlc-devsecops-agent providing security testing expertise.
   `<record>/construction/*/code-generation/code-summary.md`
 - Per-unit test instructions from
   `<record>/construction/*/code-generation/unit-test-instructions.md`
+- Approved mockups, interaction specification, design-system mapping, and
+  accessibility checklist from `<record>/inception/refined-mockups/` when they
+  exist. These are optional graph inputs.
 - Every applicable artifact under each unit's `nfr-requirements/` and
   `nfr-design/` directory
 - Every current `## Testing Contract` in the stage-level or per-unit
@@ -1313,10 +1323,13 @@ with the aidlc-devsecops-agent providing security testing expertise.
 
 1. **Analyze Testing Requirements** -- Read code generation summaries and
    per-unit test instructions across all units. Build a source-complete
-   inventory of every measurable target from NFR Requirements, NFR Design, and
-   every current Testing Contract. For each target, record a stable ID, source
-   path/section, expected value, the check that produces its actual value, and
-   any later validation stage that owns it. Catalog all required test types.
+   inventory of every measurable target from NFR Requirements, NFR Design, the
+   approved experience, and every current Testing Contract. Each `UX` decision
+   keeps its own ID; inventory its applicable interaction states, design-system
+   decisions, and accessibility checks too. For each target, record a stable
+   ID, source path/section, expected value, the check that produces its actual
+   value, and any later validation stage that owns it. Catalog all required test
+   types.
 
 2. **Generate Build Instructions** -- Create
    `<record>/construction/build-and-test/build-instructions.md`:
@@ -1349,6 +1362,9 @@ with the aidlc-devsecops-agent providing security testing expertise.
    - Coverage expectations per unit
    - A Target Verification Matrix with Target ID, Source, Expected, Actual,
      Evidence, Owning Stage, and Verdict
+   - Every `UX` decision and its applicable interaction-state, design-system,
+     and accessibility checks have rows; an implementation path alone is not
+     execution evidence
    - Applicable targets begin `Pending`; `N/A` is valid only when the
      source-complete inventory found no applicable measurable target, or for a
      target the plan makes inapplicable here (the CI obligation of a plan that
@@ -1476,8 +1492,9 @@ with the aidlc-devsecops-agent providing security testing expertise.
     `aidlc engine sensor-traceability --stage build-and-test`. It reports every
     `FR` and `NFR` in `requirements.md` (a requirement with sub-requirements
     through its `FR{n}.{m}` IDs) and every `AC` in `stories.md` (when User
-    Stories ran), each built when a stage-level or per-unit Code Generation
-    `traceability.json` covers it `OK` with an existing target file. A
+    Stories ran), plus every owed `UX` decision in `interaction-spec.md`, each
+    built when a stage-level or per-unit Code Generation `traceability.json`
+    covers it `OK` with an existing target file. A
     requirement with sub-requirements is built when each Unit has built its own
     (the `NFR1.x` its NFR Requirements wrote; a row for `NFR1` alone does not
     cover them); otherwise by its own row or, when User Stories ran, through
@@ -1508,7 +1525,7 @@ with the aidlc-devsecops-agent providing security testing expertise.
 | accessibility-test-instructions.md| WCAG compliance, screen reader, keyboard nav                    | If user-facing UI  |
 | build-and-test-summary.md         | Overall status, test inventory, coverage, readiness assessment  | Always             |
 | test-results.md                   | Actual build/test execution results, pass/fail, coverage        | Always             |
-| cross-unit-traceability.md        | FR/NFR/AC coverage across all Units, verdict, uncovered IDs     | Always             |
+| cross-unit-traceability.md        | FR/NFR/AC/UX coverage across all Units, verdict, uncovered IDs  | Always             |
 
 ### Approval Gate
 

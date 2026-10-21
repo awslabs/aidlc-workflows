@@ -83,6 +83,7 @@ const ID_PATTERNS = {
   US: /\bUS\d+\.\d+\b/g,
   AC: /\bAC\d+\.\d+\.\d+\b/g,
   BR: /\bBR\d+\.\d+\b/g,
+  UX: /\bUX\d+\.\d+\.\d+\b/g,
 };
 
 function parseFlags(argv: string[]): Flags {
@@ -280,6 +281,17 @@ function criteriaOfStories(storiesContent: string, stories: Set<string>): Set<st
     if (stories.has(`US${group}.${story}`)) criteria.add(ac);
   }
   return criteria;
+}
+
+// An experience decision `UX{g}.{s}.{n}` belongs to the story `US{g}.{s}`, the
+// way an acceptance criterion does; `null` stories means the run owes them all.
+function decisionsOfStories(specContent: string, stories: Set<string> | null): Set<string> {
+  const decisions = new Set<string>();
+  for (const ux of extractIds(specContent, [ID_PATTERNS.UX])) {
+    const [group, story] = ux.slice(2).split(".");
+    if (stories === null || stories.has(`US${group}.${story}`)) decisions.add(ux);
+  }
+  return decisions;
 }
 
 function idsFromFile(path: string, patterns: RegExp[], label: string): { ids: Set<string>; reason?: string } {
@@ -634,6 +646,10 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string, 
     return result;
   }
   if (stage === "code-generation") {
+    // The experience decisions this run owes follow its stories: a Unit's own
+    // stories through the story map, every story otherwise. Without stories a
+    // Unit has no story to own a decision through, so it owes none.
+    let decisionStories: Set<string> | null | undefined;
     if (existsSync(stories)) {
       if (unit && existsSync(storyMap)) {
         const mapped = storyAssignments(storyMap, resolvedUnit.context.units, resolvedUnit.context.unitIds, [ID_PATTERNS.US]);
@@ -648,13 +664,23 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string, 
         if (storyRead.content !== null) {
           for (const ac of criteriaOfStories(storyRead.content, unitStories)) result.ids.add(ac);
         }
+        decisionStories = unitStories;
       } else {
         addSource(result, idsFromFile(stories, [ID_PATTERNS.AC], "stories.md"));
+        decisionStories = null;
       }
     } else if (unit && existsSync(storyMap)) {
       addUnitRows(result, storyMap, resolvedUnit.context, [ID_PATTERNS.FR, ID_PATTERNS.NFR]);
     } else {
       addRequirements(result, ["functional", "non-functional"], declared);
+      decisionStories = null;
+    }
+    const interactionSpec = join(docsDir, "inception", "refined-mockups", "interaction-spec.md");
+    if (decisionStories !== undefined && existsSync(interactionSpec)) {
+      const read = readText(interactionSpec);
+      if (read.content !== null) {
+        for (const id of decisionsOfStories(read.content, decisionStories)) result.ids.add(id);
+      }
     }
     for (const id of detailedNfrIds(constructionDir(docsDir, unit, "nfr-requirements"), NFR_REQUIREMENT_FILES) ?? []) {
       result.ids.add(id);
@@ -793,7 +819,8 @@ function readTable(path: string, label: string): { data?: TraceabilityData; reas
 // recorded (without a record, every one the FR and NFR patterns find in
 // requirements.md and every one User Stories traced, or when it did not run
 // every one a Code Generation table lists) and, when User Stories ran,
-// every criterion in stories.md, each built by an `OK`
+// every criterion in stories.md, plus every experience decision in
+// interaction-spec.md that Construction owes, each built by an `OK`
 // row whose file exists in some Code Generation table. A requirement with
 // sub-requirements (NFR1 over a Unit's NFR1.1) is built when each Unit has built
 // its own, and a row for the parent alone does not cover them; else it is built
@@ -813,6 +840,7 @@ function finalCoverage(projectDir: string): FinalCoverage {
   const reasons: string[] = [];
   const recorded = recordedRequirements(docsDir);
   const criteria: string[] = [];
+  const experience: string[] = [];
   const tracedByStories: string[] = [];
   const tracedByCode: string[] = [];
 
@@ -908,12 +936,21 @@ function finalCoverage(projectDir: string): FinalCoverage {
     }
   }
   if (tables === 0) reasons.push(`no Code Generation traceability.json under ${construction}`);
+  const interactionSpec = join(docsDir, "inception", "refined-mockups", "interaction-spec.md");
+  // With stories, every story-keyed decision should reach one of their Units.
+  // A zero-Unit run owes every decision too. A Unit plan keyed directly by
+  // requirement rows has no story ownership, so it owes none.
+  if (existsSync(interactionSpec) && (storyContent !== null || existsSync(join(construction, "code-generation", "traceability.json")))) {
+    const read = readText(interactionSpec);
+    if (read.reason) reasons.push(read.reason);
+    if (read.content !== null) experience.push(...extractIds(read.content, [ID_PATTERNS.UX]));
+  }
   // Without a record requirements.md's reasons are not said, as in addRequirements.
   const requirementIds = recorded !== null ? [...recorded.keys()] : [
     ...idsFromFile(join(docsDir, "inception", "requirements-analysis", "requirements.md"), [ID_PATTERNS.FR, ID_PATTERNS.NFR], "requirements.md").ids,
     ...(storyContent !== null ? tracedByStories : tracedByCode),
   ];
-  const reported = [...new Set([...withoutTracedParents(new Set(requirementIds), recorded), ...criteria])];
+  const reported = [...new Set([...withoutTracedParents(new Set(requirementIds), recorded), ...criteria, ...experience])];
 
   // A story with no criteria cannot show it is built, so it stands for itself.
   const criteriaOrStory = (story: string): string[] => {

@@ -362,6 +362,17 @@ describe("t66 graph traversal — full graph (in-process)", () => {
     expect(expected.filter((e) => !ancestors.has(e))).toEqual([]);
   });
 
+  test("Construction declares every Refined Mockups output as an optional input", () => {
+    const graph = loadGraph();
+    for (const stageSlug of ["code-generation", "build-and-test"]) {
+      const stage = graph.find((candidate) => candidate.slug === stageSlug);
+      const consumes = new Map((stage?.consumes ?? []).map((input) => [input.artifact, input.required]));
+      for (const artifact of ["mockups", "interaction-spec", "design-system-mapping", "accessibility-checklist"]) {
+        expect(consumes.get(artifact), `${stageSlug}: ${artifact}`).toBe(false);
+      }
+    }
+  });
+
   // reverse-engineering is independent of ideation (brownfield fan-out root)
   test("reverse-engineering is independent of ideation (fan-out root for brownfield path)", () => {
     const graph = loadGraph();

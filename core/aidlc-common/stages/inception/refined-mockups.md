@@ -2,7 +2,7 @@
 slug: refined-mockups
 phase: inception
 execution: CONDITIONAL
-condition: Execute when user-facing UI exists and rough mockups were produced in Ideation; for APIs, refine interaction diagrams
+condition: Execute when user-facing UI exists, refining the rough mockups when Ideation produced them (classic has no Ideation and designs from the stories and requirements); for APIs, refine interaction diagrams
 lead_agent: aidlc-design-agent
 support_agents:
   - aidlc-product-agent
@@ -76,6 +76,8 @@ Validate design decisions against user stories and requirements for consistency.
 ### Step 4: Generate Artifacts
 
 Create mid-to-high fidelity mockups (per user story/screen), interaction specification document (use `{{HARNESS_DIR}}/knowledge/aidlc-design-agent/component-spec-template.md` as the format for component-level specifications), design system mapping, responsive behavior specification, and accessibility compliance checklist.
+
+In `interaction-spec.md`, give every experience decision a story-keyed ID, `UX{x}.{y}.{n}` for story `US{x}.{y}` (the way `AC{x}.{y}.{n}` is keyed), on one line with the decision, the component it uses, the states it covers, and its source: the person's answer (`[Q<n>]`), a company document, a memory rule, or `[assumption]`. Code Generation traces these IDs to code. A component seen in the existing code shows use, not that it is the company standard; record a conflict between sources as a question, never a silent choice.
 
 For non-UI: create API developer experience specification.
 

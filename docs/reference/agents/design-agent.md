@@ -56,7 +56,7 @@ Path: `.claude/knowledge/aidlc-design-agent/`
 | File | Content |
 |------|---------|
 | accessibility-wcag.md | WCAG 2.1 AA guidelines and implementation patterns |
-| component-spec-template.md | Template for documenting component specifications (states, props, behaviour) |
+| component-spec-template.md | Template for story-keyed UX decisions and component specifications (states, props, behaviour) |
 | interaction-design-patterns.md | Interaction patterns for navigation, forms, feedback, state transitions |
 | ux-guide.md | UX design methodology and principles |
 | wireframing-guide.md | Wireframing techniques for low and high fidelity |

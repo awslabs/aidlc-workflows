@@ -691,6 +691,55 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     expect(out.result.invalid_targets).toContain("AC1.1.2: target file does not exist: src/missing.ts");
   });
 
+  function seedExperience(proj: string): void {
+    seedUserStories(proj);
+    seedUnits(proj);
+    const source = join(proj, "src", "auth.ts");
+    mkdirSync(join(source, ".."), { recursive: true });
+    writeFileSync(source, "export const auth = true;\n");
+  }
+
+  function experienceTable(proj: string, unit: string, ids: string[]): string {
+    return trace(proj, `construction/${unit}/code-generation/traceability.json`, {
+      stage: "code-generation",
+      unit,
+      upstream_ids: ids,
+      coverage: ids.map((id) => ({ id, status: "OK", target: "src/auth.ts" })),
+    });
+  }
+
+  test("code-generation owes a Unit the experience decisions of its own stories", () => {
+    const proj = project();
+    seedExperience(proj);
+    write(proj, "inception/refined-mockups/interaction-spec.md", [
+      "# Interaction Spec",
+      "",
+      "- UX1.1.1 Sign in on one page, not a wizard [Q2]",
+      "- UX1.1.2 A failed sign-in keeps the email and focuses the password [Q4]",
+      "- UX1.2.1 The reset link opens the reset form directly [Q5]",
+    ].join("\n"));
+    let out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2"]));
+    expect(out.result.pass).toBe(false);
+    expect(out.result.missing_from_upstream_ids).toEqual(["UX1.1.1", "UX1.1.2"]);
+
+    out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1", "UX1.1.2"]));
+    expect(out.result.pass, out.result.reason).toBe(true);
+
+    out = run(proj, "code-generation", experienceTable(proj, "u2-profile", ["AC1.2.1"]));
+    expect(out.result.missing_from_upstream_ids).toEqual(["UX1.2.1"]);
+  });
+
+  test("code-generation asks for no experience decision without an interaction spec, or from a Unit whose stories own none", () => {
+    const proj = project();
+    seedExperience(proj);
+    let out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2"]));
+    expect(out.result.pass, out.result.reason).toBe(true);
+
+    write(proj, "inception/refined-mockups/interaction-spec.md", "# Interaction Spec\n\n- UX1.1.1 Sign in on one page [Q2]\n");
+    out = run(proj, "code-generation", experienceTable(proj, "u2-profile", ["AC1.2.1"]));
+    expect(out.result.pass, out.result.reason).toBe(true);
+  });
+
   // A zero-Unit directive (no Unit DAG: poc, bugfix, refactor, security-patch,
   // express) writes code-generation artifacts under construction/code-generation/
   // with no Unit segment. The sensor must resolve that stage-level location
@@ -1722,6 +1771,37 @@ describe("t281 Build and Test: every requirement and criterion is built", () => 
     expect(row(out, "FR1.1")?.covered).toBe(true);
   });
 
+  test("reports every owed experience decision as built or not", () => {
+    const proj = project();
+    const tables = seedStoryPath(proj, { status: "OK", target: "src/profile/reset.ts" });
+    write(proj, "inception/refined-mockups/interaction-spec.md", [
+      "# Interaction Spec",
+      "",
+      "- UX1.1.1 Sign in on one page, not a wizard [Q2]",
+      "- UX1.2.1 The reset link opens the reset form directly [Q5]",
+    ].join("\n"));
+
+    const auth = JSON.parse(readFileSync(tables.auth, "utf-8"));
+    auth.upstream_ids.push("UX1.1.1");
+    auth.coverage.push({ id: "UX1.1.1", status: "OK", target: "src/auth/login.ts" });
+    writeFileSync(tables.auth, JSON.stringify(auth));
+
+    let out = runFinal(proj);
+    expect(out.uncovered).toEqual(["UX1.2.1"]);
+    expect(row(out, "UX1.1.1")).toEqual({ id: "UX1.1.1", covered: true, built_in: ["u1-auth: src/auth/login.ts"] });
+    expect(row(out, "UX1.2.1")).toEqual({ id: "UX1.2.1", covered: false });
+
+    const profile = JSON.parse(readFileSync(tables.profile, "utf-8"));
+    profile.upstream_ids.push("UX1.2.1");
+    profile.coverage.push({ id: "UX1.2.1", status: "OK", target: "src/profile/reset.ts" });
+    writeFileSync(tables.profile, JSON.stringify(profile));
+
+    out = runFinal(proj);
+    expect(out.pass, out.reason).toBe(true);
+    expect(out.uncovered).toEqual([]);
+    expect(row(out, "UX1.2.1")).toEqual({ id: "UX1.2.1", covered: true, built_in: ["u2-profile: src/profile/reset.ts"] });
+  });
+
   test("without stories (security-patch shape), FR leaves are built by their own rows and NFR1 through NFR1.1", () => {
     const proj = project();
     writeRequirements(proj, GROUPED);
@@ -2215,15 +2295,22 @@ describe("t281 the table the tool starts (--write-upstream)", () => {
     expect(readFileSync(path, "utf-8")).toBe(bytes);
   });
 
-  test("a Unit's table lists the Unit's own criteria, rules and NFR detail, with the Unit named", () => {
+  test("a Unit's table lists its criteria, experience decisions, rules and NFR detail, with the Unit named", () => {
     const proj = project();
     seedUserStories(proj);
     seedUnits(proj);
+    write(proj, "inception/refined-mockups/interaction-spec.md", [
+      "# Interaction Spec",
+      "",
+      "- UX1.1.1 Sign in on one page, not a wizard [Q2]",
+      "- UX1.1.2 A failed sign-in keeps the email and focuses the password [Q4]",
+      "- UX1.2.1 The reset link opens the reset form directly [Q5]",
+    ].join("\n"));
     write(proj, "construction/u1-auth/functional-design/rules.md", "# Rules\n\n- BR1.1 Validate credentials\n");
     write(proj, "construction/u1-auth/nfr-requirements/security-requirements.md", "# Security\n\n- NFR1.1 Hash passwords\n");
     const path = join(seededRecordDir(proj), "construction", "u1-auth", "code-generation", "traceability.json");
     const started = start(proj, "code-generation", path);
-    expect(started.reply.upstream_ids).toEqual(["AC1.1.1", "AC1.1.2", "NFR1.1", "BR1.1"]);
+    expect(started.reply.upstream_ids).toEqual(["AC1.1.1", "AC1.1.2", "UX1.1.1", "UX1.1.2", "NFR1.1", "BR1.1"]);
     const table = JSON.parse(readFileSync(path, "utf-8"));
     expect(table.stage).toBe("code-generation");
     expect(table.unit).toBe("u1-auth");
