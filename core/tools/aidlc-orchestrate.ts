@@ -13112,7 +13112,12 @@ function emitTeamUnitMajorRunStage(
         );
         directive.gate = false;
         directive.unit = unit;
-        emit(directive);
+        // A Unit whose work is done is named the step it still owes, as on the
+        // solo routes, never its stage body again.
+        emitUnitStepOrStage(
+          unitReceiptOnlyStep(projectDir, stage, unit, recordPrefix, codekbCtx, unitKind, ledger, refreshedState, scope),
+          directive,
+        );
         return;
       }
       const confirmation = checkSummaryConfirmationEvidence(projectDir, stage, {
