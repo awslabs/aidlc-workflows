@@ -987,6 +987,35 @@ describe("t264 (b) shipped-hook lifecycle over a real ledger", () => {
     ).toBe(0);
   });
 
+  // The traceability check's write mode writes the table its --output-path
+  // names, a declared output of the stage, so after a terminal receipt it is
+  // frozen like any other write of that table; the check alone only reads it.
+  test("the table the traceability tool starts is a write of its --output-path", () => {
+    const hostPath = (value: string): string => resolve(value);
+    expect(writeTargets("Bash", {
+      command: "bun .claude/tools/aidlc.ts engine sensor-traceability --stage user-stories --output-path aidlc/t/traceability.json --write-upstream",
+    }, "/p")).toEqual([hostPath("/p/aidlc/t/traceability.json")]);
+    expect(writeTargets("Bash", {
+      command: "aidlc engine sensor-traceability --write-upstream --output-path=/a/traceability.json --stage user-stories",
+    })).toEqual([hostPath("/a/traceability.json")]);
+    expect(writeTargets("Bash", {
+      command: "bun run .kiro/tools/aidlc-sensor-traceability.ts --stage user-stories --output-path /a/traceability.json --write-upstream",
+    })).toEqual([hostPath("/a/traceability.json")]);
+    expect(writeTargets("Bash", {
+      command: "bun .claude/tools/aidlc.ts engine sensor-traceability --stage user-stories --output-path /a/traceability.json",
+    })).toEqual([]);
+
+    const p = projBeforeGate();
+    const table = join(dirname(raArtifact(p)), "traceability.json");
+    recordReview(p, "READY");
+    openGate(p);
+    const bash = (command: string) => runHook(p, { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, cwd: p });
+    const blocked = bash(`bun .claude/tools/aidlc.ts engine sensor-traceability --stage requirements-analysis --output-path ${JSON.stringify(table)} --write-upstream`);
+    expect(blocked.code).toBe(2);
+    expect(blocked.stderr).toContain(table);
+    expect(bash(`bun .claude/tools/aidlc.ts engine sensor-traceability --stage requirements-analysis --output-path ${JSON.stringify(table)}`).code).toBe(0);
+  });
+
   test("shell redirections to produces[] block without false-positive read operands", () => {
     const p = projBeforeGate();
     const file = raArtifact(p);
