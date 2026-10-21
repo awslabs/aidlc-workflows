@@ -2450,8 +2450,10 @@ describe("t230 native review-brief dispatch", () => {
         encoding: "utf-8" as const,
         timeout: 20_000,
       };
+      // The block is for a run nobody attends (an attended, gated run ends its
+      // turn), so the native Stop is read there.
       const stopped = spawnSync(executable, ["engine", "hook", "continue-workflow"], {
-        ...options, input: "{}",
+        ...options, env: { ...options.env, AIDLC_UNATTENDED: "1" }, input: "{}",
       });
       expect(stopped.status, `${stopped.stdout}\n${stopped.stderr}`).toBe(0);
       const feedback = JSON.parse(stopped.stdout) as { decision: string; reason: string };

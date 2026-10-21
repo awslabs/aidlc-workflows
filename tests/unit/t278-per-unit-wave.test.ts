@@ -979,10 +979,11 @@ describe("t278 engine-emitted wave contract", () => {
 
   // A hook refused the agent's write mid-revision and left its own way on
   // (finish the revision) for `next` to hand on. The agent stopped instead.
-  // The Stop hook's probe sees that same own-work ask and hands the work back:
-  // the person is neither left with a quiet agent nor asked to decide about
-  // work the agent never tried.
-  test("an own-work ask a hook refusal left: the Stop hook hands it back, on Claude Code and Codex", () => {
+  // Where nobody attends, the Stop hook's probe sees that same own-work ask and
+  // hands the work back. In an attended run the turn ends, and the person's next
+  // message gets the same own-work ask from `next`: they are never asked to
+  // decide about work the agent never tried.
+  test("an own-work ask a hook refusal left: the Stop hook hands it back where nobody attends, on Claude Code and Codex", () => {
     const proj = project("functional-design", "stage-major", undefined, undefined, "team");
     seedBoltDag(proj, ["alpha"]);
     cover(proj, "alpha", "functional-design", REQUIRED_FD);
@@ -1010,7 +1011,7 @@ describe("t278 engine-emitted wave contract", () => {
       if (!existsSync(join(proj, dir))) cpSync(join(REPO_ROOT, "dist", tree, dir), join(proj, dir), { recursive: true });
     }
     let stops = 0;
-    const stop = (tree: "claude" | "codex") => spawnSync(BUN, tree === "claude"
+    const stop = (tree: "claude" | "codex", unattended: "0" | "1") => spawnSync(BUN, tree === "claude"
       ? [join(AIDLC_SRC, "tools", "aidlc.ts"), "engine", "hook", "continue-workflow"]
       : [join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "continue-workflow"], {
       cwd: proj,
@@ -1018,7 +1019,10 @@ describe("t278 engine-emitted wave contract", () => {
         hook_event_name: "Stop", stop_hook_active: false, session_id: "t278-agent-work", cwd: proj, turn_id: `t${++stops}`,
       }),
       encoding: "utf-8",
-      env: { ...env, CLAUDE_PROJECT_DIR: tree === "claude" ? proj : undefined, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined },
+      env: {
+        ...env, CLAUDE_PROJECT_DIR: tree === "claude" ? proj : undefined, CODEX_THREAD_ID: undefined, CODEX_SESSION_ID: undefined,
+        AIDLC_UNATTENDED: unattended,
+      },
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
     });
     const traces = () => {
@@ -1031,7 +1035,9 @@ describe("t278 engine-emitted wave contract", () => {
       // Each tree is one agent's stop: the hook's no-progress block count is
       // per project, so the second tree starts it afresh.
       rmSync(join(seededRecordDir(proj), ".aidlc-engine", "stop-hook", "block-count.json"), { force: true });
-      const handedBack = stop(tree);
+      const attended = stop(tree, "0");
+      expect(attended.stdout.trim(), `${tree}: ${attended.stderr}\n${traces()}`).toBe("");
+      const handedBack = stop(tree, "1");
       expect(handedBack.stdout, `${tree}: ${handedBack.stderr}\n${traces()}`).toContain('"decision":"block"');
       expect(handedBack.stdout).toContain("AI-DLC is carrying on with Functional Design for alpha.");
     }

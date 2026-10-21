@@ -1109,6 +1109,24 @@ describe("t241 OpenCode native plan-approval payloads", () => {
   });
 });
 
+// The Stop hook's nudge is for a run nobody attends (and autonomous
+// Construction); an attended, gated run ends its turn ("an attended run ...
+// sends no nudge" below). The plugin runs the hook with its own environment,
+// so these idles are read where nobody attends.
+async function idleWhereNobodyAttends(
+  adapter: Awaited<ReturnType<typeof createAdapter>>,
+  idle: Parameters<Awaited<ReturnType<typeof createAdapter>>["event"]>[0],
+): Promise<void> {
+  const before = process.env.AIDLC_UNATTENDED;
+  process.env.AIDLC_UNATTENDED = "1";
+  try {
+    await adapter.event(idle);
+  } finally {
+    if (before === undefined) delete process.env.AIDLC_UNATTENDED;
+    else process.env.AIDLC_UNATTENDED = before;
+  }
+}
+
 describe("t241 OpenCode adapter write and session lifecycle", () => {
   test("apply_patch emits audit then sensor calls for every affected path", async () => {
     const root = freshProject();
@@ -1330,7 +1348,7 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
       basename(seededRecordDir(root)),
       "switch",
     );
-    await adapter.event({
+    await idleWhereNobodyAttends(adapter, {
       event: {
         type: "session.idle",
         properties: { sessionID: "main" },
@@ -1372,13 +1390,13 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
     const adapter = await createAdapter({ client, directory: root });
     const idle = { event: { type: "session.idle", properties: { sessionID: "main" } } };
     await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "what does the lunch poll do?" }] });
-    await adapter.event(idle);
+    await idleWhereNobodyAttends(adapter, idle);
     expect(prompts).toHaveLength(0);
 
     await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "carry on" }] });
     await Bun.sleep(20);
     expect(JSON.parse(engine("main", "orchestrate", "next")).kind).not.toBe("print");
-    await adapter.event(idle);
+    await idleWhereNobodyAttends(adapter, idle);
     expect(prompts).toHaveLength(1);
     expect(prompts[0].synthetic).toBe(true);
   });
@@ -1447,11 +1465,11 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
         properties: { sessionID: "main" },
       },
     };
-    await adapter.event(idle);
+    await idleWhereNobodyAttends(adapter, idle);
     expect(prompts).toHaveLength(0);
 
     appendInteractionEvent(root, "QUESTION_ANSWERED", "requirements-analysis");
-    await adapter.event(idle);
+    await idleWhereNobodyAttends(adapter, idle);
     expect(prompts).toHaveLength(1);
     expect(prompts[0].synthetic).toBe(true);
   });
@@ -1478,13 +1496,34 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
 
     await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "/aidlc --status" }] });
     expect(engine("next", "--status").kind).toBe("print");
-    await adapter.event(idle);
+    await idleWhereNobodyAttends(adapter, idle);
     expect(prompts).toHaveLength(0);
 
     expect(engine("next").kind).not.toBe("print");
-    await adapter.event(idle);
+    await idleWhereNobodyAttends(adapter, idle);
     expect(prompts).toHaveLength(1);
     expect(prompts[0].synthetic).toBe(true);
+  });
+
+  // In an attended, gated run the agent handed work that ends its turn (a
+  // question asked in prose, a mid-stage stop) gets no hidden nudge: the person
+  // is there, and their next message carries the work on.
+  test("an attended run sends no nudge after the agent is handed work", async () => {
+    const root = freshInstalledProject();
+    seedStateFile(root, "state-brownfield-feature.md");
+    const { client, prompts } = fakeClient();
+    const adapter = await createAdapter({ client, directory: root });
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "Guide me through the questions" }] });
+    const run = Bun.spawnSync({
+      cmd: [process.execPath, join(root, ".aidlc", "tools", "aidlc.ts"), "engine", "orchestrate", "next", "--project-dir", root],
+      cwd: root,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(run.exitCode, run.stderr.toString()).toBe(0);
+    expect((JSON.parse(run.stdout.toString()) as { kind: string }).kind).not.toBe("print");
+    await adapter.event({ event: { type: "session.idle", properties: { sessionID: "main" } } });
+    expect(prompts).toHaveLength(0);
   });
 
   test("a typed summary-confirmation off in chat reaches the real record-human-turn hook, and the setter records it as the person's choice", async () => {

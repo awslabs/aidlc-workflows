@@ -494,14 +494,6 @@ export function runtimeHarnessName(
   return "claude";
 }
 
-// The tools that hide a Stop-hook block's reason from the person: Kiro CLI
-// shows none of it, opencode hands it to the agent as a hidden synthetic part,
-// and Kiro IDE (whose tree Kiro CLI v3 also runs) drops Stop output. There the
-// agent says the carrying-on line itself.
-export function hidesStopNote(harnessName: string): boolean {
-  return harnessName === "kiro" || harnessName === "kiro-ide" || harnessName === "opencode";
-}
-
 function distributionFor(harnessDir: string, projectDir = runtimeProjectDir()): string {
   return runtimeHarnessName(projectDir, harnessDir);
 }

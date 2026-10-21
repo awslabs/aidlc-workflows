@@ -308,6 +308,10 @@ function runAdapter(
         CLAUDE_PROJECT_DIR: undefined,
         CODEX_THREAD_ID: undefined,
         CODEX_SESSION_ID: undefined,
+        // The Stop hook's block is for a run nobody attends (and autonomous
+        // Construction), so its cases read it there; an attended, gated run
+        // ends its turn (1g).
+        ...(target === "continue-workflow" ? { AIDLC_UNATTENDED: "1" } : {}),
         ...envOverrides,
       } as NodeJS.ProcessEnv,
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -1085,6 +1089,26 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    }
+  });
+
+  // In an attended run the turn that engaged the work and then asked in prose
+  // ends with no note: the question stays on screen for the person.
+  test("1g: in an attended run an engaged turn ends with no stop note", () => {
+    const dir = scratchProject(true);
+    try {
+      const transcript = join(dir, "rollout-2026-10-22T00-00-00.jsonl");
+      const entry = (payload: Record<string, unknown>) => JSON.stringify({ type: "response_item", payload });
+      writeFileSync(transcript, [
+        entry({ type: "message", role: "user", content: [{ type: "input_text", text: "Guide me through the questions" }] }),
+        entry({ type: "function_call", name: "Bash", arguments: JSON.stringify({ command: "bun .codex/tools/aidlc-orchestrate.ts next" }) }),
+        entry({ type: "message", role: "assistant", content: [{ type: "output_text", text: "Who reads the greeting? 1. A person 2. A script" }] }),
+      ].join("\n") + "\n", "utf-8");
+      const r = runAdapter(dir, "continue-workflow", withCwd({ ...FIXTURES.stop, transcript_path: transcript }, dir), { AIDLC_UNATTENDED: "0" });
+      expect(r.code).toBe(0);
+      expect(r.stdout.trim()).toBe("");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 

@@ -115,6 +115,8 @@ function seedActive(proj: string, opts: { autonomy?: string } = {}): void {
 
 const markerPath = composeMarkerPath;
 
+// A run nobody attends: there the block and this carve-out still decide (an
+// attended, gated run ends its turn whether or not a compose gate is open).
 function runHook(proj: string): { rc: number; out: string } {
   const res = spawnSync(BUN, [HOOK_TS], {
     input: JSON.stringify({ stop_hook_active: false }),
@@ -123,6 +125,7 @@ function runHook(proj: string): { rc: number; out: string } {
       ...(process.env as Record<string, string>),
       CLAUDE_PROJECT_DIR: proj,
       CLAUDE_CODE_STOP_HOOK_BLOCK_CAP: "",
+      AIDLC_UNATTENDED: "1",
     },
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
   });

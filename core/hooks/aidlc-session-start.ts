@@ -92,7 +92,7 @@ import {
 } from "../tools/aidlc-lib.ts";
 import { writeCurrentTranscriptPath } from "../tools/aidlc-usage.ts";
 import { recordRulesLoad } from "../tools/aidlc-rules-held.ts";
-import { aidlcInvocation, aidlcToolInvocation, entrySkillInvocation, hidesStopNote, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
+import { aidlcInvocation, aidlcToolInvocation, entrySkillInvocation, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { switchesOffLines } from "../tools/aidlc-recorded-switches.ts";
 import { applyStatusLineDefault, statusLineHarness } from "../tools/aidlc-statusline-choice.ts";
 
@@ -637,16 +637,6 @@ try {
 }
 
 // Where the tool hides the Stop note from the person, the agent says its line.
-let hidesTheNote = false;
-try {
-  hidesTheNote = hidesStopNote(runtimeHarnessName(projectDir));
-} catch {
-  // An unreadable install keeps the default step.
-}
-const sayTheLine = hidesTheNote
-  ? ". This tool does not show that line to the person. If you had just asked them a question, record it and end your turn saying nothing; otherwise, if you carry on with the work, first say it to them once, on its own line, and nothing else about it."
-  : ", and say nothing about it.";
-
 const context = `AIDLC WORKFLOW ACTIVE
 ${rebindOffer}Scope: ${scope}
 Runtime Session: ${sessionId || "(unavailable)"}
@@ -662,7 +652,7 @@ ${unitLine}${driftNote}${switchOffContext(projectDir).trimStart()}A BARE /aidlc 
 - First: take everything the user typed after \`/aidlc\` and append it to the first \`next\` call UNCHANGED. The flags ARE the user's intent; dropping them sends the workflow to the wrong place. \`/aidlc --phase ideation\` -> you MUST run \`next --phase ideation\`, never bare \`next\`. \`/aidlc --stage X\` -> \`next --stage X\`. Before running that first \`next\`, verify: if the user's message contained \`--phase\`/\`--stage\`/\`--scope\`/\`--depth\`/freeform text, it MUST appear on your \`next\` command; a bare \`next\` when the user gave arguments is a bug.
 - When the reply names a command to run (e.g. \`aidlc engine jump execute ...\`, a scope/config change, or \`init\`): that named command is your IMMEDIATE next tool call. Run THAT EXACT command FIRST. Do NOT run \`next\` again, do NOT read more files, do NOT plan a stage until the named command has run.
 - After the named command, obey the message's ending. If it says "then stop", print the command's output and END THE TURN: no \`next\`, \`report\`, or stage work. In particular, \`/aidlc space default\` and other terminal workspace navigation stop even when the destination has an unfinished intent. Selecting it does not request resuming it. Continue only when the directive explicitly says to continue.
-- If you end a turn while this work still needs you, AI-DLC answers with one line, "AI-DLC is carrying on with <stage>." It is from AI-DLC, not the person: never record it as their answer${sayTheLine} If you just asked the person a question you have not recorded, record it with \`log decision\` and end the turn without asking it again or saying anything else; if the person asked to stop or pause, run \`${aidlcToolInvocation("orchestrate")} park --person-asked\` and end the turn; if you were doing the work of a \`run-stage\` you still hold, finish its steps and run the \`report\` built from it (its stage, plus \`--unit\` in team-owned Unit work); otherwise \`continue\` with the rules receipt you hold, or run \`next\`, and follow the step it returns.${trackedSteeringAsk ? `\n\n${trackedSteeringAsk}` : ""}`;
+- Under autonomous Construction, or in a run nobody attends, if you end a turn while this work still needs you, AI-DLC answers with one line, "AI-DLC is carrying on with <stage>." It is from AI-DLC, not the person: never record it as their answer, and say nothing about it. If you just asked the person a question you have not recorded, record it with \`log decision\` and end the turn without asking it again or saying anything else; if the person asked to stop or pause, run \`${aidlcToolInvocation("orchestrate")} park --person-asked\` and end the turn; if you were doing the work of a \`run-stage\` you still hold, finish its steps and run the \`report\` built from it (its stage, plus \`--unit\` in team-owned Unit work); otherwise \`continue\` with the rules receipt you hold, or run \`next\`, and follow the step it returns.${trackedSteeringAsk ? `\n\n${trackedSteeringAsk}` : ""}`;
 
 process.stdout.write(hookContextLine("SessionStart", `${context}${memoryHandoff}`));
 return 0;

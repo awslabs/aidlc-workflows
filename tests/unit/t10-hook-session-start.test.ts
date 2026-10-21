@@ -220,23 +220,18 @@ describe("t10 session-start SessionStart hook (mechanism cli — spawned hook + 
     );
   });
 
-  // Kiro CLI, opencode and Kiro IDE hide the note from the person, so after a
-  // compaction their context still has the agent say the line itself, on its
-  // own line, only when it carries on with the work.
-  test("after a compaction, on the tools that hide the note, the context has the agent say the line once", () => {
+  // After a compaction the context says when the carrying-on line comes (only
+  // where the work carries on by itself or nobody attends) and has the agent
+  // say nothing about it, the same on every tool.
+  test("after a compaction, the context says when the line comes and has the agent say nothing about it, on every tool", () => {
     seedStateFile(proj, MID_IDEATION);
-    for (const tool of ["kiro", "kiro-ide", "opencode"]) {
+    for (const tool of ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]) {
       const parsed = JSON.parse(fire(proj, '{"source":"compact"}', { AIDLC_HARNESS_NAME: tool }).stdout.trim());
-      // The question case comes first: the agent said the line right after its
-      // own question when the exception followed the instruction.
       expect(parsed.additionalContext, tool).toContain(
-        "This tool does not show that line to the person. If you had just asked them a question, record it and end your turn saying nothing; otherwise, if you carry on with the work, first say it to them once, on its own line, and nothing else about it.",
+        "Under autonomous Construction, or in a run nobody attends, if you end a turn while this work still needs you, " +
+          "AI-DLC answers with one line, \"AI-DLC is carrying on with <stage>.\" It is from AI-DLC, not the person: " +
+          "never record it as their answer, and say nothing about it.",
       );
-      expect(parsed.additionalContext, tool).not.toContain("and say nothing about it.");
-    }
-    for (const tool of ["claude", "codex", "copilot", "cursor"]) {
-      const parsed = JSON.parse(fire(proj, '{"source":"compact"}', { AIDLC_HARNESS_NAME: tool }).stdout.trim());
-      expect(parsed.additionalContext, tool).toContain("and say nothing about it.");
       expect(parsed.additionalContext, tool).not.toContain("This tool does not show that line to the person");
     }
   });
