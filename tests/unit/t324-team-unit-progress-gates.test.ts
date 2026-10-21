@@ -584,6 +584,51 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(unitGates.every((gate) => typeof gate.unit === "string")).toBe(true);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // A `next` before a done Unit's completion receipt (a resume, a second chat)
+  // got the stage body back, so the Unit started over. The team route names
+  // the step the Unit still owes, as the solo routes do.
+  const named = (step: Directive): string[] =>
+    [...String(step.message).matchAll(/`([^`]+)`/g)].map((match) => match[1].replace(/^bun \S*aidlc-(\w+)\.ts /, "$1 "));
+
+  test("a Unit written and reviewed, with no completion receipt, is named its receipt, then its gate", () => {
+    const proj = seedProject({ ownership: "team" });
+    const body = runNext(proj);
+    expect(body).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "alpha", gate: false });
+    expect(typeof body.reviewer).toBe("string");
+    expect(runState(proj, ["unit", "start", "--stage", "functional-design", "--unit", "alpha"]).rc).toBe(0);
+    coverUnit(proj, "alpha", "functional-design");
+    logReviewReady(proj, "functional-design", "alpha", String(body.reviewer));
+    // The Stop hook's probe still sees the Unit's stage.
+    expect(runNextWithEnv(proj, { ...ENV, AIDLC_STOP_HOOK_PROBE: "1" }))
+      .toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "alpha" });
+    const step = runNext(proj);
+    expect(step.kind, JSON.stringify(step)).toBe("print");
+    expect(named(step)).toEqual(["state unit complete --stage functional-design --unit alpha", "orchestrate next"]);
+    expect(runState(proj, ["unit", "complete", "--stage", "functional-design", "--unit", "alpha"]).rc).toBe(0);
+    expect(runNext(proj)).toMatchObject({
+      kind: "run-stage", stage: "functional-design", unit: "alpha", gate: true, unit_gate: "per-stage",
+    });
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  // A started workflow is what shows the files are this attempt's (the
+  // stage's first attempt), so the fixture records its start.
+  test("a Unit whose files are written and never reviewed is named its review, then its receipt", () => {
+    const proj = seedProject({ ownership: "team" });
+    appendAuditEntry("WORKFLOW_STARTED", { Scope: "feature" }, proj);
+    const body = runNext(proj);
+    expect(body).toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "alpha", gate: false });
+    expect(runState(proj, ["unit", "start", "--stage", "functional-design", "--unit", "alpha"]).rc).toBe(0);
+    coverUnit(proj, "alpha", "functional-design");
+    const review = runNext(proj);
+    expect(review.kind, JSON.stringify(review)).toBe("print");
+    const [request, then, ...rest] = named(review);
+    expect(request).toStartWith(`log review --stage functional-design --reviewer ${String(body.reviewer)} --unit alpha --iteration 1`);
+    expect([then, ...rest]).toEqual(["orchestrate next"]);
+    logReviewReady(proj, "functional-design", "alpha", String(body.reviewer));
+    expect(named(runNext(proj))).toEqual(["state unit complete --stage functional-design --unit alpha", "orchestrate next"]);
+    expect(runState(proj, ["unit", "complete", "--stage", "functional-design", "--unit", "alpha"]).rc).toBe(0);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   test("unit-end rhythm emits one chain gate after code-generation", () => {
     const proj = seedProject(
       { ownership: "team", rhythm: "unit-end" },
