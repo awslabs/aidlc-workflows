@@ -13717,11 +13717,14 @@ const OTHER_UNITS_KEPT =
 // and Plan Approval do not carry over). The step is the one the Unit is on or
 // paused at, the summary's step, or at a checkpoint the last step the Unit did.
 // A step the Unit has not started has nothing to reset, so next routes it.
+// `named` is a Redo that names a Unit and step: only that Unit on that step is
+// redone here, null otherwise.
 function unitMajorRedo(
   projectDir: string,
   scope: string,
   stateContent: string,
   currentSlug: string,
+  named?: { unit: string; stage: string },
 ): string | null {
   const walk = unitMajorWalkBeat(projectDir, scope, stateContent, currentSlug);
   if (!walk || walk.step.kind === "covered") return null;
@@ -13744,6 +13747,7 @@ function unitMajorRedo(
         .find((stage) => unitsWithStageWork(projectDir, stage, walk.context).includes(unit))?.slug ??
         blockSlugs[blockSlugs.length - 1]
       : step.stage.slug;
+  if (named && (named.unit !== unit || named.stage !== redone)) return null;
   if (step.kind === "work" && !unitOpenCheckpoints(projectDir, redone).some((open) => open.unit === unit)) {
     return `Redo accepted at "${redone}" for unit "${unit}". ${only} step is redone: ` +
       `${unpark ? `run ${unpark}` : ""}re-run \`next\` and do "${redone}" for unit "${unit}" from the start. ` +
@@ -16742,6 +16746,16 @@ function emitTypedResumeChoice(
       emit(errorDirective(
         `This workflow's current stage is not one AI-DLC knows, so it cannot be redone from here. Run \`${entrySkillInvocation()} --status\` to see where it stands.`,
       ));
+      return;
+    }
+    // Naming the Unit the walk is on, at the step it is on, is that Unit's
+    // Redo (#2772): `next --stage <step> --unit <it>` would only route back to
+    // where it stopped, picking its old work up again instead of redoing it.
+    const own = flags.unit !== undefined && validScopes().has(scope)
+      ? unitMajorRedo(pd, scope, stateContent, slug, { unit: flags.unit, stage: step })
+      : null;
+    if (own !== null) {
+      emit(move(printDirective(own)));
       return;
     }
     emit(move(printDirective(
