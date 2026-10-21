@@ -601,6 +601,33 @@ describe("t271 review iteration ceiling", () => {
       expect((readAllAuditShards(proj).match(/\*\*Event\*\*: ERROR_LOGGED/g) ?? []).length).toBe(before);
     });
 
+    // A backward jump starts the stage's attempt again, and the brief at its
+    // gate says what the jump changed and invalidated only as the stale brief,
+    // so the step names that one (the reviewer protocol's own choice).
+    test("after a backward jump the stage's review names the stale brief", () => {
+      const proj = seedProject("feature");
+      const sf = seededStateFile(proj);
+      writeFileSync(sf, readFileSync(sf, "utf-8")
+        .replace("- [-] requirements-analysis", "- [x] requirements-analysis")
+        .replace("- [ ] units-generation", "- [-] units-generation")
+        .replace("- **Current Stage**: requirements-analysis", "- **Current Stage**: units-generation"));
+      const jumped = spawnSync(process.execPath, [
+        join(dirname(LOG_TOOL), "aidlc-jump.ts"), "execute", "--target", "requirements-analysis",
+        "--direction", "backward", "--scope", "feature", "--project-dir", proj,
+      ], {
+        cwd: proj,
+        encoding: "utf-8",
+        env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" },
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      });
+      expect(jumped.status, `${jumped.stdout}${jumped.stderr}`).toBe(0);
+      const requested = runReview(proj, RA, NO_LEARNINGS);
+      expect(requested.status, requested.stderr).toBe(0);
+      const recorded = runReview(proj, [...RA, "--verdict", "READY"], NO_LEARNINGS);
+      expect(recorded.status, recorded.stderr).toBe(0);
+      expect(note(recorded.stdout)).toContain("aidlc-review-brief.ts review --stage requirements-analysis --why stale");
+    });
+
     // Their words come first, so on a terminal verdict too nothing runs
     // before `next`: a stop is not preceded by verification.
     test("when the person wrote while the review ran, the step is next first, and an approval in their words is recorded, not asked again", () => {
