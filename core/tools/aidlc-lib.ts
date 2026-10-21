@@ -11696,20 +11696,30 @@ export function recordCopilotHumanSequence(
   });
 }
 
-// `next --stage <stage>`, with `--unit <unit>` for one Unit's step, as the
-// engine prints it. Null for a stage or Unit that is no identifier.
-export function nextStageInvocation(stage: string, unit?: string): EngineInvocation | null {
+// The Units a `next --stage` names for a unit-major reopen: one (`--unit`) or
+// every Unit (`--every-unit`), and whether it is the person's change at the
+// open gate (`--change`).
+export interface NextStageUnits {
+  unit?: string;
+  everyUnit?: boolean;
+  change?: boolean;
+}
+
+// `next --stage <stage>` with those Units, as the engine and the protocol spell
+// it. Null for a stage or Unit that is no identifier.
+export function nextStageInvocation(stage: string, units: NextStageUnits = {}): EngineInvocation | null {
   const operation = { kind: "restart-stage", stage } as const;
-  if (!isGuardRecoveryOperation(operation) || (unit !== undefined && !UNIT_NAME_REGEX.test(unit))) return null;
+  if (!isGuardRecoveryOperation(operation) || (units.unit !== undefined && !UNIT_NAME_REGEX.test(units.unit))) return null;
   const invocation = guardOperationInvocation(operation);
-  return unit === undefined ? invocation : { ...invocation, args: [...invocation.args, "--unit", unit] };
+  const named = units.unit !== undefined ? ["--unit", units.unit] : units.everyUnit ? ["--every-unit"] : [];
+  return { ...invocation, args: [...invocation.args, ...named, ...(units.change ? ["--change"] : [])] };
 }
 
 // The claim identity of that `next --stage`: the adapter and orchestrator
 // hash JSON.stringify([verb, ...args]) after removing the dispatcher prefix,
 // --project-dir and --aidlc-attempt-id. Null where no such claim exists.
-export function nextStageClaimSha256(stage: string, unit?: string): string | null {
-  const invocation = nextStageInvocation(stage, unit);
+export function nextStageClaimSha256(stage: string, units: NextStageUnits = {}): string | null {
+  const invocation = nextStageInvocation(stage, units);
   return invocation === null ? null : contentSha256(JSON.stringify(invocation.args));
 }
 

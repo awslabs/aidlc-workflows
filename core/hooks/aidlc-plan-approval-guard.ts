@@ -31,8 +31,8 @@
 // receipt) waits while the plan does (the person's answer at the held gate and
 // the recovery remedy they picked excepted); a jump waits for the person's
 // move: the restart they picked at the recovery question, or one they asked
-// for, unless the engine's last step was superseded (a `jump execute`, or one
-// Unit's `jump reopen`, to the stage the agent's own settled `next --stage`
+// for, unless the engine's last step was superseded (a `jump execute`, or the
+// `jump reopen` it printed, to the stage the agent's own settled `next --stage`
 // claimed on this state excepted) or is its
 // Code Generation recovery question and the jump is one it offers or not the
 // choice the person just picked there. While the person is editing the plan
@@ -128,6 +128,7 @@ import {
   resolveProjectDirFromHook,
   nextStageClaimSha256,
   nextStageInvocation,
+  type NextStageUnits,
   selectedRecordIsFinished,
   stateDigest,
   stateFilePath,
@@ -1496,25 +1497,27 @@ interface EngineCommandContext {
   jumpAdmitted: (jump: JumpCommand) => boolean;
 }
 
-// The jump tool's verb (`execute` or `reopen`), its `--target` and a reopen's `--units`.
+// The jump tool's verb (`execute` or `reopen`), its `--target`, and a reopen's `--units` and `--via`.
 interface JumpCommand {
   verb: string;
   target: string | undefined;
   units: string | undefined;
+  via: string | undefined;
 }
 
 const NO_ENGINE_CONTEXT: EngineCommandContext = { gateHeld: false, marker: null, jumpAdmitted: () => false };
 
 // Whether the engine's last step leaves the jump to the person's turn: true
-// when it does; when a superseded step holds back a `jump execute`, or one
-// Unit's `jump reopen`, to a stage that is an identifier, the `next --stage`
-// its one exception admits the jump after; else false. A superseded step waits
-// for a fresh `next`, with one exception: Copilot's settle supersedes the step
-// after every print, `next --stage`'s jump print included, so a `jump execute`
-// to the stage the state-bound step's settled claim asked for with `next
-// --stage`, on the state as it is now, is the agent carrying that print out,
-// and so is the one Unit's `jump reopen` it prints for a unit-major walk (with
-// `--unit`, that Unit's only). A picked restart's own `next` is not (its claim carries the
+// when it does; when a superseded step holds back a `jump execute` or a `jump
+// reopen` to a stage that is an identifier, the `next --stage` its one
+// exception admits the jump after; else false. A superseded step waits for a
+// fresh `next`, with one exception: Copilot's settle supersedes the step after
+// every print, `next --stage`'s jump print included, so a `jump execute` to the
+// stage the state-bound step's settled claim asked for with `next --stage`, on
+// the state as it is now, is the agent carrying that print out, and so is the
+// `jump reopen` it prints for a unit-major walk: one Unit's (with `--unit`,
+// that Unit's only), every reached Unit's after `--every-unit`, and the
+// person's change (`--via change`) only after `--change`. A picked restart's own `next` is not (its claim carries the
 // pick, and the settle keeps the question only for its exact print); a
 // `next --stage` carrying anything else, a stage that is no identifier, and a
 // step with no settled claim (a compaction, a status sync) fall to the wait.
@@ -1540,11 +1543,20 @@ function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand): bool
     if (marker.delivery === "superseded") {
       const attempt = current?.active_attempt;
       const target = jump.target;
-      // One Unit's reopen: the plain print names one, and with `--unit` that one.
-      const unit = jump.verb === "reopen" && jump.units !== undefined && !jump.units.includes(",") ? jump.units : undefined;
-      if (target === undefined || (jump.verb !== "execute" && unit === undefined)) return false;
-      const wayOn = nextStageInvocation(target, unit);
-      const claims = [nextStageClaimSha256(target), ...(unit === undefined ? [] : [nextStageClaimSha256(target, unit)])];
+      // The `next --stage` forms that print this reopen: for one Unit, plain
+      // or naming it; for any number, for every Unit; each with `--change`
+      // exactly when the reopen is the person's change. The way on is the form
+      // that names its Units.
+      const units = jump.verb === "reopen" ? jump.units?.split(",") ?? [] : [];
+      if (target === undefined || (jump.verb !== "execute" && units.length === 0)) return false;
+      const change = jump.via === "change";
+      const one = units.length === 1 ? units[0] : undefined;
+      const named: NextStageUnits = jump.verb === "execute" ? {} : one === undefined ? { everyUnit: true, change } : { unit: one, change };
+      const forms: NextStageUnits[] = jump.verb === "execute"
+        ? [{}]
+        : [...(one === undefined ? [] : change ? [named] : [{}, named]), { everyUnit: true, change }];
+      const wayOn = nextStageInvocation(target, named);
+      const claims = forms.map((form) => nextStageClaimSha256(target, form));
       if (wayOn === null || claims.includes(null)) return false;
       return (attempt?.status === "settled" &&
         attempt.command_kind === "next" && claims.includes(attempt.command_sha256) &&
@@ -1668,7 +1680,7 @@ function engineCommandAdmitted(
     !(report && context.gateHeld && stage === GUARDED_STAGE && result === "approved") &&
     !guardRecoveryAnswerAdmits(context.marker, engineArgs, projectDir)
   ) return false;
-  if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted({ verb: args[1], target: lastFlag(args, "--target"), units: lastFlag(args, "--units") })) return false;
+  if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted({ verb: args[1], target: lastFlag(args, "--target"), units: lastFlag(args, "--units"), via: lastFlag(args, "--via") })) return false;
   // `next` takes no `--bypass`: on its line the token is one of the person's
   // words ("add a --bypass option"), never a check turned off, as the engine's
   // own reading says (nextLineFlags). Every other command is read whole, as its
