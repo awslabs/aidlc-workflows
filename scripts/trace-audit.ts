@@ -353,6 +353,11 @@ function readTranscript(abs: string, rel: string): TraceEvent[] {
     const message = (e.message ?? {}) as Record<string, unknown>;
     const content = message.content;
     if (e.type === "user") {
+      // Claude Code writes a hook's feedback and its own notes as user entries marked isMeta: never the person's.
+      if (e.isMeta === true) {
+        if (typeof content === "string" && content.startsWith("Stop hook feedback:")) push({ kind: "stop", text: `blocked: ${clip(oneLine(content), 300)}` });
+        return;
+      }
       if (typeof content === "string") {
         turn++;
         const args = /<command-name>([^<]*)<\/command-name>[\s\S]*?<command-args>([\s\S]*?)<\/command-args>/.exec(content);
@@ -454,7 +459,11 @@ function readCodexRollout(abs: string, rel: string): TraceEvent[] {
     const p = (e.payload ?? {}) as Record<string, unknown>;
     const push = (ev: Omit<TraceEvent, "at" | "src" | "turn" | "stage">) => events.push({ at, src, turn, stage: "", ...ev });
     const text = (Array.isArray(p.content) ? p.content : []).map((c) => str((c as Record<string, unknown>).text)).join("\n");
-    if (e.type === "response_item" && p.type === "message" && p.role === "user" && !/^<(environment_context|user_instructions)/.test(text.trim())) {
+    const hook = /^<hook_prompt\b[^>]*>([\s\S]*?)(?:<\/hook_prompt>)?\s*$/.exec(text.trim());
+    if (e.type === "response_item" && p.type === "message" && p.role === "user" && hook) {
+      // A Stop hook carrying the turn on, in a user message: the hook's words.
+      push({ kind: "stop", text: `blocked: ${clip(oneLine(hook[1]), 300)}` });
+    } else if (e.type === "response_item" && p.type === "message" && p.role === "user" && !/^<(environment_context|user_instructions)/.test(text.trim())) {
       turn++;
       push({ kind: "person", text });
     } else if (e.type === "response_item" && p.type === "message" && p.role === "assistant") {

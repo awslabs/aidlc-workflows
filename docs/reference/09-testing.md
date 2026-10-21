@@ -2280,7 +2280,8 @@ their own machine, in two layers kept apart:
 - `bun scripts/trace-audit.ts judge <out>` (`scripts/trace-audit-judge.ts`,
   instructions in `scripts/trace-audit-judge.md`) hands each test's legs to the
   maintainer's own `claude` in print mode, able only to read (`Read`, `Grep`,
-  `Glob`), with the known list (`--known`) and the open issues and pull
+  `Glob`) and only in the judged legs' own folders, never the home a session
+  folder sits in, with the known list (`--known`) and the open issues and pull
   requests (`--issues`). The model returns friction items as JSON. The tool
   counts how many legs each item was met in and writes `JUDGE.md`. `--dry-run`
   writes each group's input and calls no model; `--max-usd` and `--budget-kb`

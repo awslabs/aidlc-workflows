@@ -149,6 +149,16 @@ export function judgeInput(outDir: string, group: JudgeGroup, opts: { budgetByte
   return clip(`${head}${parts.join("")}`, budget);
 }
 
+/**
+ * The folders one group's model call may read: each judged leg's own folder,
+ * never the folder it was read from, which for a session folder is a config
+ * or Codex home holding its sign-in (the prompt carries strangers' issue
+ * titles and trace text).
+ */
+export function judgeReadDirs(group: JudgeGroup): string[] {
+  return [...new Set(group.legs.map((l) => resolve(l.root, l.dir)).filter((d, i) => d !== resolve(group.legs[i].root)))];
+}
+
 /** The person's own `claude`, in print mode, able only to read. */
 export function claudeArgs(opts: { promptFile: string; schema: string; addDirs: string[]; model?: string; maxUsd?: number; bare?: boolean }): string[] {
   return [
@@ -244,9 +254,8 @@ export async function runJudge(outDirIn: string, opts: JudgeOptions = {}): Promi
   if (opts.limit) groups = groups.slice(0, opts.limit);
   const known = opts.known && existsSync(opts.known) ? readFileSync(opts.known, "utf8") : "";
   const issues = opts.issues ? openItems() : "";
-  const roots = [...new Set(readIndex(outDir).map((l) => l.root))];
-  const call = (schema: object) => opts.command ?? ["claude", ...claudeArgs({
-    promptFile: PROMPT_FILE, schema: JSON.stringify(schema), addDirs: roots, model: opts.model, maxUsd: opts.maxUsd, bare: opts.bare,
+  const call = (schema: object, addDirs: string[]) => opts.command ?? ["claude", ...claudeArgs({
+    promptFile: PROMPT_FILE, schema: JSON.stringify(schema), addDirs, model: opts.model, maxUsd: opts.maxUsd, bare: opts.bare,
   })];
   const results: { group: JudgeGroup; items: FrictionItem[]; cost: number; model: string; error: string }[] = [];
   const queue = [...groups];
@@ -258,7 +267,7 @@ export async function runJudge(outDirIn: string, opts: JudgeOptions = {}): Promi
         writeFileSync(`${file}.input.md`, input);
         continue;
       }
-      const r = await runOnce(call(FRICTION_SCHEMA), input, outDir, opts.timeoutMs ?? 20 * 60_000);
+      const r = await runOnce(call(FRICTION_SCHEMA, judgeReadDirs(g)), input, outDir, opts.timeoutMs ?? 20 * 60_000);
       const items = (Array.isArray(r.output?.friction) ? r.output.friction : []) as FrictionItem[];
       writeFileSync(`${file}.json`, `${JSON.stringify({ key: g.key, legs: g.legs.map((l) => l.id), model: r.model, cost: r.cost, error: r.error, friction: items }, null, 1)}\n`);
       results.push({ group: g, items, cost: r.cost, model: r.model, error: r.error });
@@ -280,7 +289,7 @@ export async function runJudge(outDirIn: string, opts: JudgeOptions = {}): Promi
       "",
       ...listing,
     ].join("\n");
-    const r = await runOnce(call(CLUSTER_SCHEMA), input, outDir, opts.timeoutMs ?? 20 * 60_000);
+    const r = await runOnce(call(CLUSTER_SCHEMA, []), input, outDir, opts.timeoutMs ?? 20 * 60_000);
     clusters = (Array.isArray(r.output?.clusters) ? r.output.clusters : []) as typeof clusters;
     synthesisCost = r.cost;
     writeFileSync(join(judgeDir, "synthesis.json"), `${JSON.stringify({ model: r.model, cost: r.cost, error: r.error, clusters }, null, 1)}\n`);
