@@ -2299,7 +2299,9 @@ their own machine, in two layers kept apart:
   agent tool error, each naming its run, harness, OS, test, stage and
   evidence file and line) and one `legs/<leg>/story.md` per leg: what the
   person typed and picked, what they were asked, what the agent ran and said,
-  in time order, cut to a size budget.
+  in time order, cut to a size budget, and each decision recorded for the
+  person with the reply of theirs kept beside it, so a reader judges each
+  reply against its record.
 - `bun scripts/trace-audit.ts judge <out>` (`scripts/trace-audit-judge.ts`,
   instructions in `scripts/trace-audit-judge.md`) hands each test's legs to the
   maintainer's own `claude` in print mode, able only to read (`Read`, `Grep`,
