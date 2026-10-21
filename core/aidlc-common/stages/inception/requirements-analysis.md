@@ -52,7 +52,7 @@ scopes:
   - workshop
   - express
 inputs: RE artifacts (if brownfield), authoritative project description (project-description utility)
-outputs: requirements.md, requirements-analysis-questions.md, traceability.json (the FR and NFR IDs as requirements.md spells them; Step 10) (under this stage's record dir, engine-resolved)
+outputs: requirements.md, requirements-analysis-questions.md, traceability.json (Step 10: an `ids` list with one entry per FR and NFR ID, spelled exactly as requirements.md spells it, each with `kind` functional or non-functional and, for a sub-requirement, `of` its requirement) (under this stage's record dir, engine-resolved)
 ---
 
 # Requirements Analysis
