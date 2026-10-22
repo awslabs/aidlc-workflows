@@ -58,7 +58,6 @@ import {
   requireLiveClaimForTeamUnit,
   resolveProjectDir,
   resolveReviewClass,
-  selfAttributedDecisionMarker,
   teamSkeletonOn,
   type UnitMergeEvidence,
   type UnitMergeTransaction,
@@ -2102,15 +2101,6 @@ function gateUnitMerge(args: string[], projectDir?: string): void {
       `Refusing Unit "${unit}" merge approval: --user-input "${userInput}" is cancellation boilerplate, not a human decision.`,
     );
   }
-  const approvalAuthorship = humanPresenceGuardDisabled()
-    ? null
-    : selfAttributedDecisionMarker(userInput, "approval");
-  if (approvalAuthorship) {
-    fail(
-      `Refusing Unit "${unit}" merge approval: decision self-attribution blocked ` +
-        `(${approvalAuthorship.category}) in --user-input: "${approvalAuthorship.phrase}".`,
-    );
-  }
   const transaction = readUnitMergeTransaction(pd, unit);
   if (!transaction || !["pinned", "approved", "rejected"].includes(transaction.status)) {
     fail(`Unit "${unit}" has no pinned merge transaction.`);
@@ -2870,15 +2860,6 @@ function validateMergeRiskAcknowledgment(
   if (!humanPresenceGuardDisabled() && isNonAnswer(answer)) {
     fail(
       `Refusing Unit "${unit}" released-attempt recovery: --user-input "${answer}" is cancellation boilerplate.`,
-    );
-  }
-  const authorship = humanPresenceGuardDisabled()
-    ? null
-    : selfAttributedDecisionMarker(answer, "approval");
-  if (authorship) {
-    fail(
-      `Refusing Unit "${unit}" released-attempt recovery: decision self-attribution blocked ` +
-        `(${authorship.category}) in --user-input: "${authorship.phrase}".`,
     );
   }
   if (!humanPresenceGuardDisabled()) {

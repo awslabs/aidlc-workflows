@@ -559,17 +559,6 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
   });
 
-  test("an approval the agent says it made itself is refused, and the question stays theirs", () => {
-    says(proj, "looks fine");
-    const refused = stillOpen(() =>
-      report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Agent-initiated approval."])
-    );
-    expect(refused.message).toContain("came from the assistant");
-    expect(events(proj, "GATE_APPROVED")).toHaveLength(0);
-    // The question is theirs to answer, so the turn may end at it.
-    expect(turnEndIsOpen(proj)).toBe(true);
-  });
-
   test("their reply is on record and the agent named no choice: the step is to report it, not to ask again", () => {
     says(proj, "looks fine");
     const before = readFileSync(seededStateFile(proj), "utf-8");

@@ -44,7 +44,6 @@ import {
   resolveWorkflowSelection,
   renderChangedPaths,
   reviewArtifactFingerprint,
-  selfAttributedDecisionMarker,
   sortAttemptEvents,
   sourceClaimCovers,
   sourceListingChangedPaths,
@@ -464,8 +463,7 @@ export function rejectSwarmCheckpoint(
     const words = readProtectedResponse(pd, session)?.words;
     const reason = givenReason.trim() || changeRequestWords(words);
     const userInput = "Request Changes";
-    if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason) ||
-      selfAttributedDecisionMarker(reason, "rejection")) {
+    if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason)) {
       throw new Error("Swarm Request Changes needs what the person asked to change, on one line, in --reason.");
     }
     const after = recheck(pd, batch, units, current, selection.root, false);

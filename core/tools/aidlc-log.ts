@@ -192,8 +192,6 @@ import {
   sameWorkspaceSource,
   resolveWorkflowSelection,
   resolveReviewClass,
-  selfAttributedDecisionMarker,
-  impliedConfirmationMarker,
   stripRecommendedDecorator,
   pickerAnswerNote,
   isSummaryConfirmationChoice,
@@ -1099,19 +1097,6 @@ function handleDecision(args: string[]): void {
     error(unknownCheckpointMessage(flags.checkpoint, DECISION_CHECKPOINTS));
   }
   refusePlainSummaryConfirmation(flags, "decision");
-  // A question text that says the person already confirmed ("Continue with X
-  // (user implicitly confirmed by hook trigger)") records a choice they never
-  // made: AI-DLC's carrying-on line is not their answer. Refused with the way
-  // on; a question in the agent's own words, or one quoting the phrase, passes.
-  const implied = humanPresenceGuardDisabled() ? null : impliedConfirmationMarker(flags.decision);
-  if (implied) {
-    error(
-      `Cannot record this question for "${flags.stage}" because --decision says the person confirmed it ` +
-        `(${implied.category}: "${implied.phrase}"). AI-DLC's carrying-on line is not their answer. ` +
-        "Ask them and record what they say, or carry on with no record.",
-    );
-  }
-
   const pd = resolveActiveProjectDir(projectDir);
   if (flags.checkpoint === "plan-approval" && planApprovalAskIsOpen(pd)) {
     error(PLAN_APPROVAL_ASKED_BY_ENGINE);
@@ -2187,27 +2172,6 @@ function handleAnswer(args: string[]): void {
     const autonomousDecision = isAutonomousConstructionDecision(content, stageNode?.phase);
     const workflow =
       flags.single === "true" ? `single-stage:${flags.stage}` : undefined;
-
-    // Authorship floor (issue 742): the same interview answer the conductor
-    // wrote for itself. isNonAnswer above rejects an answer with no words; this
-    // rejects a self-attributed one ("A. Nothing to add - CONDUCTOR DEFAULT,
-    // session unattended"), which the presence check below cannot catch because
-    // a human is in the session, just not at this question. Autonomous
-    // Construction is exempt for ordinary answers. Summary confirmation remains
-    // a human-backed checkpoint below: its fresh-turn requirement is not waived
-    // by Construction autonomy even though its text is one of two exact strings.
-    const answerAuthorship =
-      (autonomousDecision && !verificationCheckpoint && !policyCheckpoint) ||
-      humanPresenceGuardDisabled()
-        ? null
-        : selfAttributedDecisionMarker(reply, "answer");
-    if (answerAuthorship) {
-      error(
-        `Cannot record this answer for "${flags.stage}" because --details says it was ` +
-          `chosen by the assistant (${answerAuthorship.category}: "${answerAuthorship.phrase}"). ` +
-          `This question must be answered by the human. Re-present it and wait for their reply.`,
-      );
-    }
 
     if (verificationCommand) {
       if (!pendingVerificationDecision(pd, flags.stage, verificationCommand.sha256)) {

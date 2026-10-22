@@ -79,7 +79,6 @@ import {
   reviewAttemptEventMatchesCurrentClaim,
   reviewAttemptWindow,
   reviewRequestBindingFromBlock,
-  selfAttributedDecisionMarker,
   setField,
   sortAttemptEvents,
   sourceListingChangedPaths,
@@ -1801,8 +1800,7 @@ export function rejectConstructionCheckpoint(
     const words = readProtectedResponse(projectDir, session)?.words;
     const reason = givenReason.trim() || changeRequestWords(words);
     const userInput = "Request Changes";
-    if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason) ||
-      selfAttributedDecisionMarker(reason, "rejection")) {
+    if (isNonAnswer(reason) || reason.length > 8192 || hasUnsafeSingleLineCharacter(reason)) {
       throw new Error("Request Changes needs what the person asked to change, on one line, in --reason.");
     }
     const rechecked = snapshot(projectDir, unit, kind);

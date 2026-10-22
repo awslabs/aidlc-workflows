@@ -186,7 +186,6 @@ import {
   removeField,
   removeSlug,
   replaceSection,
-  selfAttributedDecisionMarker,
   resolveBoltDag,
   resolveBoltIdentity,
   requireLiveClaimForTeamUnit,
@@ -7242,20 +7241,6 @@ function verifyApprovalDecision(
   const together = autonomousDecision || forceHuman || humanPresenceGuardDisabled()
     ? null
     : approvedTogetherCover(pd, stage.slug);
-  const approvalAuthorship =
-    autonomousDecision || humanPresenceGuardDisabled()
-      ? null
-      : selfAttributedDecisionMarker(approvalInput, "approval");
-  if (approvalAuthorship) {
-    refuseForAgent(
-      `Cannot approve "${stage.slug}" because --user-input says the choice came from the ` +
-        `assistant (${approvalAuthorship.category}: "${approvalAuthorship.phrase}"). ` +
-        "This check looks for explicit assistant provenance; it does not prove who wrote " +
-        "the reply. Approval is the human's decision: end the turn and let them answer, " +
-        "and if something is blocking completion, explain that blocker at the gate in " +
-        "project terms instead of recording their decision.",
-    );
-  }
   if (!autonomousDecision && !humanPresenceGuardDisabled() && approvalInput && isNonAnswer(approvalInput)) {
     refuseForAgent(
       `Cannot approve "${stage.slug}" because the reply ${formatReceivedReply(approvalInput)} is ` +
@@ -7985,27 +7970,6 @@ function handleReject(args: string[]): void {
     );
   }
 
-  // Authorship floor (issue 742). The presence check above proves a human is in
-  // the session, not that this rejection is theirs — so a conductor blocked by
-  // the review-budget/receipt ordering can satisfy it while writing its own
-  // change request, because GATE_REJECTED is the only event that restores an
-  // advisory review budget. That reopen is the single most attractive forgery in
-  // the protocol and the one seen in the field, so refuse the self-attributed
-  // rejection here rather than laundering it into the trail as the human's.
-  // Autonomous Construction is exempt (the conductor owns the decision there).
-  // The check reads the conductor's own text; recorded words are the person's.
-  const rejectionAuthorship =
-    autonomousDecision || humanPresenceGuardDisabled()
-      ? null
-      : selfAttributedDecisionMarker(conductorFeedback, "rejection");
-  if (rejectionAuthorship) {
-    refuseForAgent(
-      `Cannot request changes for "${slug}" because --feedback says it was written by the ` +
-        `assistant (${rejectionAuthorship.category}: "${rejectionAuthorship.phrase}"). ` +
-        `Requesting changes is the human's decision. Explain why another review is needed at ` +
-        `the approval question and wait for the human to choose.`,
-    );
-  }
   const reviewFindingDispositions = rejectedFindingDispositionField(
     pd,
     teamGate?.stages ?? stage,

@@ -92,12 +92,9 @@ shorter than what was said:
 
 `HUMAN_TURN` is chronological presence evidence, not authenticated decision
 content. The `--user-input`, `--feedback`, and `--details` fields recorded by
-authority-bearing tools are caller-supplied prose. A narrow defense-in-depth
-tripwire rejects recognized explicit conductor/model self-attribution, but
-unlabelled, paraphrased, localized, or otherwise unrecognized wording remains
-indistinguishable from human-authored text. `AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1`
-also disables that tripwire for deterministic recovery/tests. Audit shards are
-operational evidence, not a tamper-proof human-authorship boundary.
+authority-bearing tools are caller-supplied prose, indistinguishable from
+human-authored text. Audit shards are operational evidence, not a tamper-proof
+human-authorship boundary.
 
 ### Initialization Events (3 events — fire IN ADDITION TO `STAGE_COMPLETED`)
 
