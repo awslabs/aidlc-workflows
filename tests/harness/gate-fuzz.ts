@@ -1624,6 +1624,8 @@ function norm(run: Run, text: string): string {
   let out = text;
   for (const form of [JSON.stringify(run.proj).slice(1, -1), run.proj, run.proj.replace(/\\/g, "/")]) out = out.split(form).join("<PROJ>");
   out = out.replace(/gate-fuzz-runs-[A-Za-z0-9]+(?:\\\\|\\|\/)r-[A-Za-z0-9]+/g, "<RUN>");
+  // The walked project a state was copied from, named in a record written before the copy (a sensor's output path).
+  out = out.replace(/[^\s"'`<>]*?[\\/]+aidlc-test-[A-Za-z0-9]+/g, "<PROJ>");
   run.chats.forEach((chat, at) => {
     out = out.split(chat).join(`<CHAT${at}>`);
   });
