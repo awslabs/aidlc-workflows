@@ -37,7 +37,7 @@ A team that cannot reach the home at all works from files instead
 ([A team that cannot reach the home](#a-team-that-cannot-reach-the-home)). The
 code repos can live anywhere on disk: `repos.json` gives each one's path, and
 one person's `repos.local.json` their own
-([Declaring the repo set](03-spaces-and-intents.md#declaring-the-repo-set)). In
+([Declaring the repo set](03-spaces-and-intents.md#declaring-the-repo-set-optional-manifest)). In
 a workspace that is not a git repository, work with a recorded repo set is
 built by one session: when Construction starts, AI-DLC says in one line that
 the workspace needs to be in git for teams, and `set-unit-ownership team`
