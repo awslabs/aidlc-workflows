@@ -918,8 +918,9 @@ Lock directories are named `.aidlc-audit-<hash>.lock` and `.aidlc-subagent-<hash
 
 Run `/aidlc --doctor` first. It automatically clears only a provably-dead
 generation, a reused PID whose creation generation no longer matches, or an old
-lock whose owner stamp is genuinely missing. Matching/unknown live generations,
-malformed stamps, and unreadable stamps are reported but not removed.
+lock whose owner stamp never finished (missing, empty, or cut off). Matching or
+unknown live generations, stamps that name no valid owner, and unreadable stamps
+are reported but not removed.
 
 Before any manual cleanup, stop all AI-DLC processes using the affected locks,
 confirm ownership and that the projects are quiescent, and preserve diagnostic
