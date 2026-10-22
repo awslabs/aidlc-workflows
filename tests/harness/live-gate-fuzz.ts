@@ -405,37 +405,42 @@ export async function exchange(tool: LiveTool, rig: LiveRig, lines: string[], le
   try {
     if (tool === "claude") {
       let next = 1;
-      const shown: number[] = [];
-      const read: number[] = [];
+      // Where each line the person gave starts in the drive's prose and tool results; a line a box took is placed
+      // after the drive, at that box.
+      const starts: Array<{ text: number; tool: number } | "box"> = [{ text: 0, tool: 0 }];
       const asked: number[] = [];
       const r = await driveAidlc(lines[0], {
         // The SDK's own Claude Code is the nightly's, which takes the nightly's model pins (the newest models need a newer
         // Claude Code; the claude-tui driver runs the box's own).
         projectDir: rig.proj, permissionMode: "bypassPermissions",
         env: { DISABLE_AUTOUPDATER: "1", ...(process.env.AIDLC_GATE_FUZZ_KEEP_MODELS === "1" ? {} : CI_BEDROCK_MODELS.claude) },
-        chatAboutQuestionWhen: () => true,
+        // The first one-question box after the question was shown takes the person's next line as a person answers a
+        // box: the option it names, else their words in the box's own field. Any other box is left for the chat.
+        chatAboutQuestionWhen: (menu) => menu.questions.length !== 1 || next >= lines.length || starts.includes("box"),
+        answerScript: {
+          kind: "pick",
+          pick: (q) => {
+            const line = lines[next++];
+            starts.push("box");
+            const label = q.options.find((o) => o.label.trim().toLowerCase() === line.trim().toLowerCase())?.label;
+            return label ? { label } : { text: line };
+          },
+        },
         nextMessage: (turn) => {
-          shown.push(turn.toolResults);
-          read.push(turn.assistantText.length);
           asked.push(turn.askedQuestions);
           if (next >= lines.length) return undefined;
           if (next === 2) between?.();
+          starts.push({ text: turn.assistantText.length, tool: turn.toolResults });
           return lines[next++];
         },
         timeoutMs: remainingOperationTimeoutMs(30 * 60_000),
       });
-      // The SDK keeps the whole drive in one record; it is split at each line the person sent.
-      // The SDK keeps the whole drive in one record; each turn is the part after the line before it.
-      const ends = [...shown, r.toolResults.length];
-      const texts = [...read, r.assistantText.length];
-      let from = 0;
-      let said = 0;
-      lines.forEach((line, at) => {
-        const to = ends[at] ?? r.toolResults.length;
-        const upto = texts[at] ?? r.assistantText.length;
-        result.turns.push({ line, text: r.assistantText.slice(said, upto), tools: r.toolResults.slice(from, to).map((t) => ({ command: JSON.stringify(t.input).slice(0, 400), output: t.resultText })) });
-        from = to;
-        said = upto;
+      const box = r.toolResults.findIndex((t) => t.toolName === "AskUserQuestion");
+      const at = starts.map((x) => x === "box" ? { text: (r.assistantTextBeforeFirstAsk ?? r.assistantText).length, tool: Math.max(0, box) } : x);
+      at.forEach((from, i) => {
+        const to = at[i + 1] ?? { text: r.assistantText.length, tool: r.toolResults.length };
+        result.turns.push({ line: lines[i], text: r.assistantText.slice(from.text, to.text),
+          tools: r.toolResults.slice(from.tool, to.tool).map((t) => ({ command: JSON.stringify(t.input).slice(0, 400), output: t.resultText })) });
       });
       // Boxes opened after the person's last line: questions put to them after it.
       result.boxes = r.askedQuestions.length - (asked.at(-1) ?? 0);
