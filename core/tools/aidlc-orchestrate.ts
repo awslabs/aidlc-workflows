@@ -1603,7 +1603,11 @@ function prepareEmission(directive: Directive): PreparedEmission {
   }
   const serialized = JSON.stringify(result.data);
   const serializedBytes = Buffer.byteLength(serialized, "utf-8");
-  if (serializedBytes > directiveMaxBytes()) {
+  // The limit is what a host shows of one command result. A route check's
+  // print goes only to `unit start`'s pipe, and it skips the transport that
+  // fits the agent's own step, so the limit would turn a step the agent was
+  // handed into an error and refuse the Unit's start.
+  if (serializedBytes > directiveMaxBytes() && !isRouteCheckProbe()) {
     const message = oversizeDirectiveMessage(result.data, serializedBytes, directiveLimit());
     // A step that cannot be sent is answered with an error the person can act
     // on, which the host shows and the conductor stops on, rather than a failed

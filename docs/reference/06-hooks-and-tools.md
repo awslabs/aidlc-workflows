@@ -567,7 +567,9 @@ exactly two, both identified by an environment variable on their spawn:
 - the route check that `aidlc-state.ts unit start` and wave completion spawn
   (`AIDLC_ROUTE_CHECK=1`), a `next` plus any follow-on `continue`, which asks
   which Unit the engine would route now. A route check skips rule transport
-  entirely, so it normally reads the run-stage directive straight off stdout.
+  entirely, so it normally reads the run-stage directive straight off stdout,
+  whole: no host shows that print, so the host's size limit does not apply to
+  it.
 
 Both read the directive off stdout and never consult the durable marker
 afterwards, so writing from one buys nothing and costs correctness.
@@ -1021,10 +1023,11 @@ next step carries the text again, once. Nothing is refused and nothing is shown;
 a redirect to a file is still refused before it runs (see the Kiro IDE guide).
 
 A harness whose host keeps less of one shell result declares a smaller budget as
-`directiveMaxBytes` in its `tools/data/harness.json`, and every directive stays
-at or under it. Copilot declares 19,000 bytes: VS Code's `run_in_terminal` tool
-keeps a result whole only up to 20,000 characters and otherwise saves it to a
-file and shows a preview and the tail, which no hook can read a directive from.
+`directiveMaxBytes` in its `tools/data/harness.json`, and every directive the
+agent is handed stays at or under it. Copilot declares 19,000 bytes: VS Code's
+`run_in_terminal` tool keeps a result whole only up to 20,000 characters and
+otherwise saves it to a file and shows a preview and the tail, which no hook
+can read a directive from.
 Under that budget most shipped stages do not fit inline (their run-stage and
 rules come to 18 to 21 KB), so they arrive as one `load-steering` part and then
 the run-stage: one extra `continue`, for every stage and, in Construction, for
