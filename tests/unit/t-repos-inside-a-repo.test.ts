@@ -78,6 +78,7 @@ function workspace(
   }
   const state = readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8")
     .replace("- **Current Stage**: feasibility", "- **Current Stage**: code-generation\n- **Construction Iteration**: stage-major")
+    .replace(`- [ ] units-generation ${D} EXECUTE`, `- [x] units-generation ${D} EXECUTE`)
     .replace(`- [ ] code-generation ${D} EXECUTE`, `- [?] code-generation ${D} EXECUTE`)
     .replace(/^- \*\*Change Control\*\*: .*$/m, `- **Guard Policy**: ${options.policy ?? "strict"} (set by you)`);
   writeFileSync(join(record, "aidlc-state.md"), state);
