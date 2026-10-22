@@ -566,7 +566,12 @@ export function decisionsSince(proj: string, from: number, intentsBefore: number
         break;
     }
   }
-  if (lib().listIntents(proj).length > intentsBefore) out.push("route:separate", "resume:fresh");
+  const intents = lib().listIntents(proj);
+  if (intents.length > intentsBefore) {
+    out.push("route:separate", "resume:fresh");
+    // A plan confirmed or picked is the work created with it (no answer row of its own on today's main).
+    for (const intent of intents.slice(intentsBefore)) if (intent.scope) out.push(`answer:Go ahead with the "${intent.scope}" plan`, `answer:${intent.scope}`);
+  }
   // A pick among the open pieces of work is the active work changing (no row of its own): the record folder, less its date.
   else {
     const now = lib().readActiveIntentCursor(proj);
@@ -783,6 +788,14 @@ if (import.meta.main && process.argv.includes("--rejudge")) {
   const judgeDir = mkdtempSync(join(tmpdir(), "gate-fuzz-judge-"));
   mkdirSync(join(judgeDir, "config"), { recursive: true });
   for (const v of verdicts) {
+    // A run before decisionsSince read the plan off the work it created: the kept registry says which plan it was.
+    const registry = join(dir, "traces", v.tool, v.reply.id, "aidlc", "spaces", "default", "intents", "intents.json");
+    if (v.decisions.includes("route:separate") && existsSync(registry)) {
+      for (const intent of JSON.parse(readFileSync(registry, "utf-8")) as Array<{ scope?: string; request?: string }>) {
+        if (intent.scope && intent.request) v.decisions.push(`answer:Go ahead with the "${intent.scope}" plan`, `answer:${intent.scope}`);
+      }
+      v.failures = v.failures.filter((f) => !(f.pass === "P1" && v.decisions.includes(/^(.*) is not on record \(recorded: /.exec(f.what)?.[1] ?? "")));
+    }
     const answers = v.decisions.filter((d) => d.startsWith("answer:")).map((d) => d.slice("answer:".length));
     const kept: Verdict["failures"] = [];
     for (const f of v.failures) {
