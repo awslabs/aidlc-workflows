@@ -127,6 +127,7 @@ import { aidlcEntryWords, APPROVAL_GATE_CHOICES, protectedChoices } from "./aidl
 import {
   type AskDirective,
   type Directive,
+  type RepoFacts,
   type ErrorDirective,
   type GuardRecoveryAskDirective,
   type InvokeSwarmDirective,
@@ -378,6 +379,11 @@ import {
   relativeCodekbDir,
   intentsRegistryPath,
   MANY_REPOS,
+  codekbSourceSize,
+  repoDir,
+  repoScopeAsked,
+  REPOSITORY_ANALYSIS_MINUTES,
+  writeFileAtomic,
   relativeRecordDirForSelection,
   relativeSpaceRecordPrefix,
   reviewArtifactEntries,
@@ -4240,10 +4246,52 @@ function constructionStaffingAsk(
 }
 
 // What reading a large repo set costs, said once with the step that starts
-// Reverse Engineering when no question is put about it.
-function repoScopeCostLine(count: number): string {
-  return `Analysing all ${count} may take significant time and consume many tokens: say which repositories matter to ` +
-    "narrow the scope.";
+// Reverse Engineering when no question is put about it (that step carries the
+// time as repo_facts for the agent to word).
+function repoScopeCostLine(facts: RepoFacts): string {
+  const size = facts.lines === undefined ? "" : ` (${aboutLines(facts.lines)} of code)`;
+  return `Analysing all ${facts.repositories}${size} may take significant time and consume many tokens: say which ` +
+    "repositories matter to narrow the scope.";
+}
+
+// "about 1.2 million lines", "about 45,000 lines", "about 900 lines".
+function aboutLines(lines: number): string {
+  if (lines >= 1_000_000) return `about ${(lines / 1_000_000).toFixed(1).replace(/\.0$/, "")} million lines`;
+  const step = lines >= 10_000 ? 1000 : lines >= 1000 ? 100 : 1;
+  return `about ${(Math.round(lines / step) * step).toLocaleString("en-US")} line${lines === 1 ? "" : "s"}`;
+}
+
+// What reading these repositories covers and takes (repo_facts): git's line
+// count when every repository could be counted, and the per-repository range.
+// Counted once per repo set and kept in the record's engine folder, so a
+// resume and the later parts of a step read the same facts.
+function repoScopeFacts(projectDir: string, repos: string[]): RepoFacts {
+  const kept = join(engineDir(projectDir), "codekb-size.json");
+  const key = repos.join(",");
+  let lines: number | null | undefined;
+  try {
+    const prior = JSON.parse(readFileSync(kept, "utf-8")) as { key?: unknown; lines?: unknown };
+    if (prior.key === key) lines = typeof prior.lines === "number" ? prior.lines : null;
+  } catch {
+    // Not counted yet for this set.
+  }
+  if (lines === undefined) {
+    const sizes = repos.map((repo) => codekbSourceSize(repoDir(projectDir, repo)));
+    lines = sizes.every((size) => size !== null) ? sizes.reduce((sum, size) => sum + (size?.lines ?? 0), 0) : null;
+    if (!isReadOnlyEngineProbe()) {
+      try {
+        mkdirSync(dirname(kept), { recursive: true });
+        writeFileAtomic(kept, `${JSON.stringify({ key, lines })}\n`);
+      } catch {
+        // Counted again next time.
+      }
+    }
+  }
+  return {
+    repositories: repos.length,
+    ...(lines !== null ? { lines } : {}),
+    minutes_per_repository: { ...REPOSITORY_ANALYSIS_MINUTES },
+  };
 }
 
 // Before Reverse Engineering reads MANY_REPOS or more repos the person never
@@ -4262,17 +4310,20 @@ function reverseEngineeringScopeAsk(
   const node = nodeForSlug(slug);
   if (repos.length < MANY_REPOS || !node || pipelineLinkEvidence(projectDir, node).receipts.length > 0) return null;
   if (intentReposNamed(projectDir) || process.env.AIDLC_UNATTENDED === "1" || repoScopePassedOver(projectDir)) {
-    sayWithStepOnce(projectDir, repoScopeCostLine(repos.length));
+    sayWithStepOnce(projectDir, repoScopeCostLine(repoScopeFacts(projectDir, repos)));
     return null;
   }
   if (!isReadOnlyEngineProbe()) noteRepoScopeAsked(projectDir);
   const count = repos.length;
+  const facts = repoScopeFacts(projectDir, repos);
+  const size = facts.lines === undefined ? "" : `, ${aboutLines(facts.lines)} of code`;
   return {
     kind: "ask",
     ask_type: "repo-scope",
     response_route: "command",
-    question: `Reverse Engineering will read the ${count} repositories this work covers. Analysing all ${count} may ` +
-      `take significant time and consume many tokens. Read all ${count}, or only the ones this work needs?`,
+    question: `Reverse Engineering will read the ${count} repositories this work covers${size}. Analysing all ${count} ` +
+      `may take significant time and consume many tokens. Read all ${count}, or only the ones this work needs?`,
+    repo_facts: facts,
     choices: [
       {
         label: `Read all ${count}`,
@@ -7787,6 +7838,15 @@ function buildRunStageDirective(
       .some((path) => path.includes(REPO_PLACEHOLDER))
   ) {
     directive.repos_note = reposNote(codekbCtx);
+  }
+  // Before a large analysis starts and when no question put it to the person
+  // (a set they named, an unattended run), the step carries what it covers and
+  // takes, for the agent to say once.
+  if (
+    codekbCtx && KNOWN_CODEKB_STAGES.has(node.slug) && !singleRun && codekbCtx.repos.length >= MANY_REPOS &&
+    !repoScopeAsked(codekbCtx.projectDir) && pipelineLinkEvidence(codekbCtx.projectDir, node).receipts.length === 0
+  ) {
+    directive.repo_facts = repoScopeFacts(codekbCtx.projectDir, codekbCtx.repos);
   }
   // next_stage: the display name of the in-scope stage that follows this one, so
   // the approval gate's Approve option reads "Continue to <next_stage>" verbatim

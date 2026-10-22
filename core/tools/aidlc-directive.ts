@@ -410,6 +410,10 @@ export interface RunStageDirective {
   // Beside a code knowledge base path written once with REPO_PLACEHOLDER (a
   // work recording several repos): which repos the token stands for.
   repos_note?: string;
+  // The size of what this work covers and about how long each repository takes,
+  // said once before a large analysis starts (estimate_note says how).
+  repo_facts?: RepoFacts;
+  estimate_note?: string;
   // Exact active-space rule paths represented by the delivered rule bundle. On
   // dispatched topologies the conductor passes the already-loaded rule text to
   // every agent brief.
@@ -706,6 +710,17 @@ export interface RepoScopeAskDirective extends AskDirectiveBase {
   ask_type: "repo-scope";
   response_route: "command";
   choices: AskChoice[];
+  repo_facts?: RepoFacts;
+  estimate_note?: string;
+}
+
+// What a large analysis covers and costs in time, as facts the agent words:
+// the repositories, their lines by git where every one could be counted, and
+// about how many minutes each takes at this depth.
+export interface RepoFacts {
+  repositories: number;
+  lines?: number;
+  minutes_per_repository: { low: number; high: number };
 }
 
 // After Units Generation is approved, the work's repos changed: under Guard
@@ -999,6 +1014,8 @@ const RUN_STAGE_FIELDS = [
   "consumes",
   "produces",
   "repos_note",
+  "repo_facts",
+  "estimate_note",
   "rules_in_context",
   "rules_content",
   "rules_held",
@@ -1118,6 +1135,8 @@ const ASK_FIELDS = [
   "existing_code_command",
   "new_project_command",
   "choices",
+  "repo_facts",
+  "estimate_note",
 ] as const;
 const PRINT_FIELDS = ["kind", "message", "next_stage", "document_note", "revision_cycle", "accept_as_is"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
@@ -1217,6 +1236,19 @@ export function repoScopeQuestionNote(invocation: string): string {
     invocation + " next`. When they want only some, run `" + intent + " set-repos <names>` with the folder names " +
     "they mean, comma-separated, then `" + invocation + " next`; when their reply does not say which, ask which " +
     "ones and end your turn without running `next`. Anything else is their own words: read what they meant.";
+}
+
+// How the agent says what a large analysis covers and costs in time: the facts
+// are in repo_facts; the agent words them, with the question it goes with or
+// once before the analysis starts.
+export function repoEstimateNote(facts: RepoFacts, withQuestion: boolean): string {
+  const { low, high } = facts.minutes_per_repository;
+  const size = facts.lines === undefined ? "" : `, about ${facts.lines} lines between them by git's count`;
+  return `repo_facts: ${facts.repositories} repositories${size}; each takes about ${low} to ${high} minutes at this ` +
+    "depth, several at once when they run side by side. " +
+    (withQuestion
+      ? "Say this to the person with the question, in your own words, and what a narrower set they name would take."
+      : "Tell the person once, in your own words, before the analysis starts.");
 }
 
 // The routing question asked while no piece of work is selected: continue and
@@ -1654,6 +1686,9 @@ export function withAgentNotes<T extends object>(
       if (choices !== undefined) notes.numbered_prose_question = choices.length > 0 ? numberedProseQuestion(askPrompt(d), choices) : askPrompt(d);
     }
   }
+  if ((d.kind === "ask" || d.kind === "run-stage") && isPlainObject(d.repo_facts)) {
+    notes.estimate_note = repoEstimateNote(d.repo_facts as unknown as RepoFacts, d.kind === "ask");
+  }
   if (d.kind === "run-stage" && typeof d.stage_file === "string") {
     const modules = Array.isArray(d.protocol_modules)
       ? d.protocol_modules.filter((module): module is string =>
@@ -1773,6 +1808,8 @@ export function validateDirective(obj: unknown): ValidationResult {
     Array.isArray(o[CHANGE_NOTICES_FIELD]) && o[CHANGE_NOTICES_FIELD].length > 0, kind, errors,
   );
   checkAgentNote(o, "question_note", true, kind, errors);
+  checkOptionalRepoFacts(o, kind, errors);
+  checkAgentNote(o, "estimate_note", "repo_facts" in o, kind, errors);
   checkAgentNote(o, "document_note", true, kind, errors);
   checkAgentNote(o, "gate_note", true, kind, errors);
   checkAgentNote(o, "protocol_note", true, kind, errors);
@@ -2612,6 +2649,20 @@ function checkGate(
 // checkOptionalString — a field that may be absent, but if present must be a
 // string (e.g. conductor_persona, delivered only on the first run-stage).
 // An agent note is one non-empty sentence, and only beside the field it is about.
+function checkOptionalRepoFacts(o: Record<string, unknown>, kind: DirectiveKind, errors: string[]): void {
+  if (!("repo_facts" in o)) return;
+  const facts = o.repo_facts;
+  const count = (value: unknown): boolean => Number.isInteger(value) && (value as number) >= 0;
+  const minutes = isPlainObject(facts) ? facts.minutes_per_repository : undefined;
+  if (
+    !isPlainObject(facts) || !count(facts.repositories) ||
+    ("lines" in facts && !count(facts.lines)) ||
+    !isPlainObject(minutes) || !count(minutes.low) || !count(minutes.high)
+  ) {
+    errors.push(`${kind}: repo_facts must be { repositories, lines?, minutes_per_repository: { low, high } } of whole numbers`);
+  }
+}
+
 function checkAgentNote(
   o: Record<string, unknown>,
   field: string,

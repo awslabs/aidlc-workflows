@@ -475,6 +475,25 @@ function shownStep(stateFile: string, state: string, stage: string): { stage: st
   }
 }
 
+// How many of a long analysis's repositories are done, as the engine counted
+// them at its last link receipt (codekbReceiptNotes, aidlc-log.ts, keeps it in
+// the record's engine folder), while that stage is in progress: " 37/190".
+function analysedCount(stateFile: string, state: string, stage: string): string {
+  try {
+    const counted = JSON.parse(
+      readFileSync(join(dirname(stateFile), ".aidlc-engine", "codekb-analysed.json"), "utf-8"),
+    ) as { stage?: unknown; done?: unknown; total?: unknown };
+    const { done, total } = counted;
+    if (counted.stage !== stage || typeof done !== "number" || typeof total !== "number") return "";
+    const inProgress = new RegExp(`^-\\s*\\[-\\]\\s*${stage.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "m");
+    return Number.isInteger(done) && Number.isInteger(total) && done < total && inProgress.test(state)
+      ? ` ${done}/${total}`
+      : "";
+  } catch {
+    return "";
+  }
+}
+
 function extractField(text: string, label: string): string {
   // Match the Markdown list field pattern used throughout aidlc-state.md:
   //   - **Lifecycle Phase**: IDEATION
@@ -690,7 +709,8 @@ async function main(stdinText: string): Promise<void> {
   const shown = shownStep(stateFile, state, stage);
   const stageDisplay = shown.stage === ""
     ? ""
-    : `${STAGE_DISPLAY[shown.stage] ?? shown.stage}${shown.unit ? ` for ${shown.unit}` : ""}`;
+    : `${STAGE_DISPLAY[shown.stage] ?? shown.stage}${shown.unit ? ` for ${shown.unit}` : ""}` +
+      analysedCount(stateFile, state, shown.stage);
   // Active Agent follows Current Stage, so it is not shown beside another step.
   const agentDisplay = shown.stage === stage ? agentDisplayMap(projectDir)[agent] ?? agent : "";
   const { done, total } = phaseProgress(state, phase);

@@ -751,3 +751,84 @@ describe("t155 a team's test-results.md template is checked at Build and Test an
     });
   }
 });
+
+// At a code knowledge base gate the dispatcher fires this check once for every
+// repository's files, handing the paths on stdin behind `--paths-stdin json`:
+// each file is read as it would be alone, and each failing file is named by its
+// path, since every repository's files share their names. A call for one file
+// reads nothing on stdin and prints what it always printed.
+describe("t155 one fire over a set of files", () => {
+  function codekbSet(): { root: string; templatesDir: string; paths: string[] } {
+    const ws = makeWorkspace();
+    writeFile(join(ws.templatesDir, "dependencies.md"), "# Dependencies\n\n## Overview\n\n## Direct\n");
+    const paths: string[] = [];
+    for (const [repo, body] of [
+      ["repo-a", "# Dependencies\n\n## Overview\nA\n"],
+      ["repo-b", "# Dependencies\n\n## Overview\nB\n\n## Direct\nnone\n"],
+      ["repo-c", "# Dependencies\n\n## Direct\nnone\n"],
+    ] as const) {
+      mkdirSync(join(ws.root, "codekb", repo), { recursive: true });
+      const path = join(ws.root, "codekb", repo, "dependencies.md");
+      writeFile(path, body);
+      paths.push(path);
+    }
+    return { root: ws.root, templatesDir: ws.templatesDir, paths };
+  }
+
+  function runSet(root: string, templatesDir: string, paths: string[], stdin: string): { raw: string; status: number | null } {
+    const res = spawnSync(BUN, [
+      SENSOR, "--stage", "reverse-engineering", "--output-path", paths[0] ?? "",
+      "--templates-dir", templatesDir, "--template-eligible", "dependencies", "--paths-stdin", "json",
+    ], { cwd: root, input: stdin, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+    return { raw: res.stdout ?? "", status: res.status };
+  }
+
+  test("every file is checked once, and the failing files are named by their path", () => {
+    const { root, templatesDir, paths } = codekbSet();
+    const { raw, status } = runSet(root, templatesDir, paths, JSON.stringify(paths));
+    expect(status).toBe(0);
+    const result = JSON.parse(raw);
+    expect(result.pass).toBe(false);
+    expect(result.files_evaluated).toBe(3);
+    expect(result.findings_count).toBe(2);
+    expect(result.failed_outputs).toEqual(["codekb/repo-a/dependencies.md", "codekb/repo-c/dependencies.md"]);
+    expect(result.message).toBe(
+      "codekb/repo-a/dependencies.md is missing the `## Direct` section its template asks for. " +
+        "codekb/repo-c/dependencies.md is missing the `## Overview` section its template asks for.",
+    );
+    expect(result.files.map((file: { file: string; template_missing: string[] }) => [file.file, file.template_missing])).toEqual([
+      ["codekb/repo-a/dependencies.md", ["## Direct"]],
+      ["codekb/repo-c/dependencies.md", ["## Overview"]],
+    ]);
+  });
+
+  test("a set that meets its template passes with no message", () => {
+    const { root, templatesDir, paths } = codekbSet();
+    const result = JSON.parse(runSet(root, templatesDir, [paths[1] ?? ""], JSON.stringify([paths[1]])).raw);
+    expect(result).toEqual({ pass: true, findings_count: 0, files_evaluated: 1, failed_outputs: [], files: [] });
+  });
+
+  test("a stdin that is not a list of paths fails the fire as a script error", () => {
+    const { root, templatesDir, paths } = codekbSet();
+    for (const stdin of ["", "{}", "[]", "[1]"]) expect(runSet(root, templatesDir, paths, stdin).status).toBe(1);
+  });
+
+  test("a call for one file prints the same bytes as before and leaves stdin unread", () => {
+    const { templatesDir, paths } = codekbSet();
+    const args = [SENSOR, "--stage", "reverse-engineering", "--output-path", paths[0] ?? "",
+      "--templates-dir", templatesDir, "--template-eligible", "dependencies"];
+    const expected =
+      '{"pass":false,"h2_count":1,"headings":["## Overview"],"findings_count":1,"template":"applied",' +
+      '"template_expected":["## Overview","## Direct"],"template_missing":["## Direct"],' +
+      '"message":"dependencies.md is missing the `## Direct` section its template asks for."}\n';
+    for (const input of [undefined, JSON.stringify(paths)]) {
+      const res = spawnSync(BUN, args, {
+        ...(input === undefined ? {} : { input }),
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+      });
+      expect(res.status).toBe(0);
+      expect(res.stdout).toBe(expected);
+    }
+  });
+});

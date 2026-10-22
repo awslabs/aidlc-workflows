@@ -1430,6 +1430,13 @@ export function consumedArtifactProducerCollisions(): {
  *  stage's verdict. The dispatcher and the gate both read this set. */
 export const STAGE_WIDE_SENSOR_IDS: ReadonlySet<string> = new Set(["upstream-coverage", "claim-sources"]);
 
+/** The sensors whose script evaluates a set of output paths handed on stdin
+ *  (`--paths-stdin json`), each path as it would evaluate it alone. At a codekb
+ *  stage, whose outputs span one folder per repository, the gate fires each of
+ *  these once for the stage over every repository's files instead of once per
+ *  file or folder; every other stage keeps its fires. */
+export const PATH_SET_SENSOR_IDS: ReadonlySet<string> = new Set(["required-sections", "upstream-coverage"]);
+
 export function templateEligibleArtifacts(produces: string[]): string[] {
   return (produces ?? []).filter(
     (a) =>

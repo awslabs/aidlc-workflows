@@ -39,6 +39,8 @@ import {
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   BLOCKING_SENSOR_OVERRIDE_DECISION,
   BLOCKING_SENSOR_OVERRIDE_OPTIONS,
+  codekbDir,
+  codekbRepoName,
   setField,
 } from "../../core/tools/aidlc-lib.ts";
 
@@ -767,5 +769,87 @@ describe("t311 gate-bound sensor enforcement", () => {
     const reused = gate(fixture, overrideArgs());
     expect(reused.status).toBe(1);
     expect(reused.out).toContain("no fresh authorization receipt");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
+
+// At a code knowledge base stage the required-sections check fires once over
+// every repository's files (the paths on stdin), so a blocking binding holds
+// every file that fire reads, not only the one it is named for: a sibling that
+// changes while the check runs is refused and named, and the retry passes.
+describe("t311 a blocking check over every repository's files", () => {
+  test("a sibling changed during the one fire is refused once and named; the retry passes", () => {
+    const project = createTestProject();
+    projects.push(project);
+    const sensors = join(project, ".test-sensors");
+    const scripts = join(project, ".test-scripts");
+    mkdirSync(sensors, { recursive: true });
+    mkdirSync(scripts, { recursive: true });
+    const id = "required-sections";
+    const matches = "**/codekb/**";
+    writeFileSync(join(sensors, `aidlc-${id}.md`), [
+      "---", `id: ${id}`, "kind: deterministic", `command: bun .claude/tools/aidlc-sensor-${id}.ts`,
+      "default_severity: blocking", "fire_on: gate", "description: codekb gate fixture", "category: test",
+      `matches: "${matches}"`, `timeout_seconds: ${NATIVE_STARTUP_TIMEOUT_MS / 1000}`, "---", "",
+    ].join("\n"), "utf-8");
+    // Changes the second path it is handed, once, then passes.
+    const once = join(project, ".changed-once");
+    writeFileSync(join(scripts, `aidlc-sensor-${id}.ts`), [
+      'import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";',
+      'const paths = JSON.parse(readFileSync(0, "utf-8"));',
+      `if (!existsSync(${JSON.stringify(once)})) {`,
+      '  appendFileSync(paths[1], "\\nchanged during the check\\n");',
+      `  writeFileSync(${JSON.stringify(once)}, "");`,
+      "}",
+      'process.stdout.write(JSON.stringify({ pass: true, findings_count: 0, failed_outputs: [] }) + "\\n");',
+      "",
+    ].join("\n"), "utf-8");
+    const graph = join(project, "stage-graph.json");
+    writeFileSync(graph, `${JSON.stringify([{
+      slug: "reverse-engineering", number: "2.1", name: "Reverse Engineering", phase: "inception",
+      execution: "ALWAYS", lead_agent: "aidlc-product-agent", support_agents: [], mode: "inline",
+      produces: ["architecture", "dependencies"], optional_produces: [], consumes: [], requires_stage: [],
+      sensors: [id], scopes: ["bugfix"], inputs: "", outputs: "", rules_in_context: [],
+      sensors_applicable: [{ id, path: `.claude/sensors/aidlc-${id}.md`, fire_on: "gate", default_severity: "blocking", category: "test", matches }],
+    }], null, 2)}\n`, "utf-8");
+    writeFileSync(seededStateFile(project), [
+      "# AI-DLC State Tracking", "", "- **Workflow**: bugfix", "- **State Version**: 8", "- **Scope**: bugfix",
+      "- **Phase**: inception", "- **Current Stage**: reverse-engineering", "", "- [-] reverse-engineering \u2014 EXECUTE", "",
+    ].join("\n"), "utf-8");
+    seedAuditFile(project);
+    const store = codekbDir(project, codekbRepoName(project));
+    mkdirSync(store, { recursive: true });
+    writeFileSync(join(store, "architecture.md"), "# Architecture\n", "utf-8");
+    writeFileSync(join(store, "dependencies.md"), "# Dependencies\n", "utf-8");
+    const gateStart = (): { status: number; out: string } => {
+      const result = spawnSync(BUN, [STATE, "gate-start", "reverse-engineering", "--project-dir", project], {
+        cwd: project,
+        encoding: "utf-8",
+        env: {
+          ...process.env,
+          AIDLC_DISABLE_SENSORS: "0",
+          AIDLC_DISABLE_ENSEMBLE_EVIDENCE: "1",
+          AIDLC_ALLOW_DIRECT_STATE_TRANSITIONS: "1",
+          AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
+          AIDLC_STAGE_GRAPH: graph,
+          AIDLC_SENSORS_DIR: sensors,
+          AIDLC_SENSOR_SCRIPT_DIR: scripts,
+          AIDLC_GATE_SENSOR_DISPATCH_TIMEOUT_MS: String(NATIVE_RUNTIME_CASE_TIMEOUT_MS),
+        },
+      });
+      return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}` };
+    };
+
+    const refused = gateStart().out;
+    expect(refused).toMatch(/required-sections@[^;]*dependencies\.md: artifact changed during sensor evaluation/);
+    expect(eventCount(audit(project), "SENSOR_FIRED")).toBe(1);
+    expect(readFileSync(seededStateFile(project), "utf-8")).toContain("- [-] reverse-engineering");
+
+    const retried = gateStart();
+    expect(retried.status, retried.out).toBe(0);
+    const finalAudit = audit(project);
+    expect(eventCount(finalAudit, "SENSOR_FIRED")).toBe(2);
+    const gateRow = finalAudit.split("\n---\n").find((block) => block.includes("**Event**: STAGE_AWAITING_APPROVAL")) ?? "";
+    const rel = `aidlc/spaces/default/codekb/${basename(store)}`;
+    expect(gateRow).toContain(`**Sensor State**: required-sections@${rel}/architecture.md=passed`);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

@@ -153,6 +153,8 @@ import {
   isRegularFile,
   isoTimestamp,
   KNOWN_CODEKB_STAGES,
+  codekbStageRepos,
+  missingCodekbArtifacts,
   unitLifecycleRunFloorForProject,
   unitScopedLifecycleFloors,
   loadScopeMapping,
@@ -256,7 +258,7 @@ import {
   sourceWalkReach,
 } from "./aidlc-lib.js";
 import { proveMessage, readMessage } from "./aidlc-message-store.ts";
-import { memoryDirFor, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
+import { memoryDirFor, PATH_SET_SENSOR_IDS, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
 import {
@@ -3544,9 +3546,7 @@ function producesDirsForStage(
   stage: { slug: string; phase: string; for_each?: string }
 ): string[] {
   if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
-    const repos = intentRepos(pd);
-    const resolved = repos.length > 0 ? repos : [codekbRepoName(pd)];
-    return resolved.map((repo) => codekbDir(pd, repo));
+    return codekbStageRepos(pd).map((repo) => codekbDir(pd, repo));
   }
   const rec = recordDir(pd);
   if (rec === null) return [];
@@ -3604,14 +3604,8 @@ function producesArtifactsExist(
       }
     }
   }
+  if (KNOWN_CODEKB_STAGES.has(stage.slug)) return missingCodekbArtifacts(pd, stage).length === 0;
   const dirs = producesDirsForStage(pd, stage);
-  if (KNOWN_CODEKB_STAGES.has(stage.slug)) {
-    return dirs.length > 0 && dirs.every((dir) =>
-      produces.every((name) =>
-        isRegularFile(join(dir, artifactFilename(name)))
-      )
-    );
-  }
   for (const dir of dirs) {
     for (const name of produces) {
       if (isRegularFile(join(dir, artifactFilename(name)))) return true;
@@ -3783,25 +3777,49 @@ function gateSensorMatchesOutput(
     new Bun.Glob(sensor.matches).match(outputPath.replace(/\\/g, "/"));
 }
 
-// The deliverables the gate fires a sensor on. A stage-wide sensor evaluates
-// every deliverable in the folder of the file it is given, so it fires once per
-// folder (each Unit's folder at a per-Unit stage), on the folder's first
-// markdown deliverable that is not a questions or timestamp file; any other
-// sensor fires on each deliverable its matches glob accepts.
+// One fire of a gate sensor: the output it is fired on, and every output its
+// evaluation reads (a blocking binding fingerprints that set). A path-set fire
+// hands its covered outputs to the dispatcher on stdin.
+interface GateSensorFire {
+  outputPath: string;
+  covered: string[];
+  pathSet: boolean;
+}
+
+// The fires the gate makes for a sensor. At a codekb stage the outputs span one
+// folder per repository, so a sensor that takes a path set (PATH_SET_SENSOR_IDS)
+// fires once for the stage over every repository's files. Otherwise a
+// stage-wide sensor evaluates every deliverable in the folder of the file it is
+// given, so it fires once per folder (each Unit's folder at a per-Unit stage);
+// any other sensor fires on each deliverable its matches glob accepts. A
+// grouped fire is made on its first markdown deliverable that is not a
+// questions or timestamp file.
 function gateSensorOutputs(
   sensor: NonNullable<
     NonNullable<ReturnType<typeof findStageBySlug>>["sensors_applicable"]
   >[number],
   paths: string[],
-): string[] {
+  stageSlug: string,
+): GateSensorFire[] {
   const matching = paths.filter((path) => gateSensorMatchesOutput(sensor, path));
-  if (!STAGE_WIDE_SENSOR_IDS.has(sensor.id)) return matching;
   const isDocument = (path: string): boolean =>
     path.endsWith(".md") && templateEligibleArtifacts([basename(path, ".md")]).length === 1;
-  const byFolder = new Map<string, string>();
+  if (KNOWN_CODEKB_STAGES.has(stageSlug) && PATH_SET_SENSOR_IDS.has(sensor.id)) {
+    if (matching.length === 0) return [];
+    return [{ outputPath: matching.find(isDocument) ?? matching[0], covered: matching, pathSet: true }];
+  }
+  if (!STAGE_WIDE_SENSOR_IDS.has(sensor.id)) {
+    return matching.map((path) => ({ outputPath: path, covered: [path], pathSet: false }));
+  }
+  const byFolder = new Map<string, GateSensorFire>();
   for (const path of matching) {
-    const chosen = byFolder.get(dirname(path));
-    if (chosen === undefined || (!isDocument(chosen) && isDocument(path))) byFolder.set(dirname(path), path);
+    const fire = byFolder.get(dirname(path));
+    if (fire === undefined) {
+      byFolder.set(dirname(path), { outputPath: path, covered: [path], pathSet: false });
+      continue;
+    }
+    fire.covered.push(path);
+    if (!isDocument(fire.outputPath) && isDocument(path)) fire.outputPath = path;
   }
   return [...byFolder.values()];
 }
@@ -3869,19 +3887,21 @@ function fireGateSensors(
 
   const executable = compiledExecutable();
   const sensorTool = fileURLToPath(new URL("./aidlc-sensor.ts", import.meta.url));
+  // A blocking binding holds every output its fire reads to the bytes
+  // fingerprinted above, before and after the fire; the first that differs is named.
+  const changedOutput = (covered: string[]): string | null =>
+    covered.find((path) => {
+      const expected = fingerprints.get(path);
+      return expected === undefined || artifactFingerprint(path) !== expected;
+    }) ?? null;
   for (const sensor of sensors) {
-    for (const outputPath of gateSensorOutputs(sensor, paths)) {
-      const expectedFingerprint = fingerprints.get(outputPath);
-      if (
-        sensor.default_severity === "blocking" &&
-        (
-          expectedFingerprint === undefined ||
-          artifactFingerprint(outputPath) !== expectedFingerprint
-        )
-      ) {
+    for (const fire of gateSensorOutputs(sensor, paths, stage.slug)) {
+      const { outputPath } = fire;
+      const changedBefore = sensor.default_severity === "blocking" ? changedOutput(fire.covered) : null;
+      if (changedBefore !== null) {
         issues.push({
           sensorId: sensor.id,
-          outputPath,
+          outputPath: changedBefore,
           detailPath: null,
           reason: "artifact changed before sensor dispatch",
         });
@@ -3894,6 +3914,7 @@ function fireGateSensors(
         stage.slug,
         "--output-path",
         outputPath,
+        ...(fire.pathSet ? ["--paths-stdin", "json"] : []),
       ];
       const command = executable
         ? [executable, "engine", "sensor", ...args]
@@ -3907,12 +3928,14 @@ function fireGateSensors(
           AIDLC_PROJECT_DIR: pd,
           CLAUDE_PROJECT_DIR: pd,
         },
+        ...(fire.pathSet ? { input: JSON.stringify(fire.covered) } : {}),
       });
       if (sensor.default_severity !== "blocking") continue;
-      if (artifactFingerprint(outputPath) !== expectedFingerprint) {
+      const changedDuring = changedOutput(fire.covered);
+      if (changedDuring !== null) {
         issues.push({
           sensorId: sensor.id,
-          outputPath,
+          outputPath: changedDuring,
           detailPath: null,
           reason: "artifact changed during sensor evaluation",
         });
@@ -4818,8 +4841,10 @@ function verifyStageArtifacts(
   if (settledSwarm) return;
 
   if (!producesArtifactsExist(pd, stage)) {
-    const message =
-      `${reviewerPreconditionPrefix(stage.slug, action)}: none of its declared artifacts exist ` +
+    const message = KNOWN_CODEKB_STAGES.has(stage.slug)
+      ? `${reviewerPreconditionPrefix(stage.slug, action)}: required artifacts are missing ` +
+        `(${missingCodekbList(pd, stage)}). Write them, then run the same report again.`
+      : `${reviewerPreconditionPrefix(stage.slug, action)}: none of its declared artifacts exist ` +
         `under the intent's record directory. The stage protocol requires ${stage.name} ` +
         `to produce output before the gate. Produce the artifacts ` +
         `(declared: ${(stage.produces ?? []).join(", ") || "none"}), then run the same report again.`;
@@ -4945,6 +4970,19 @@ type ReviewerPreconditionAction = "complete" | "present-approval-gate";
 // Unit the walk happens to be on.
 function spentUnit(units: string[]): { unit?: string } {
   return units.length === 1 ? { unit: units[0] } : {};
+}
+
+// What a codekb stage's refusal names: per repository its missing files ("all
+// 9 files" when none is there), the first five repositories, then a count.
+function missingCodekbList(pd: string, stage: { produces?: string[] }): string {
+  const NAMED = 5;
+  const declared = (stage.produces ?? []).length;
+  const missing = missingCodekbArtifacts(pd, stage);
+  const named = missing.slice(0, NAMED).map(({ repo, files }) =>
+    `${repo}: ${files.length === declared && declared > 1 ? `all ${declared} files` : files.join(", ")}`
+  );
+  const more = missing.length - named.length;
+  return `${named.join("; ")}${more > 0 ? `; and ${more} more ${more === 1 ? "repository" : "repositories"}` : ""}`;
 }
 
 function reviewerPreconditionPrefix(
@@ -6797,7 +6835,7 @@ function latestGateBriefDigest(pd: string, stage: GateStage, unit: string | unde
 // detail file); a pass or a check that never ran is its `id@path` key with its
 // state, in the order the gate row spells them.
 type LatestCheckResults = {
-  failed: Array<{ id: string; rel: string; findings: string; detail: string | null }>;
+  failed: Array<{ id: string; rel: string; findings: string; detail: string | null; failedOutputs: string | null }>;
   rest: string[];
 };
 function latestCheckResults(pd: string, stage: GateStage, unit: string | null = null): LatestCheckResults {
@@ -6805,7 +6843,7 @@ function latestCheckResults(pd: string, stage: GateStage, unit: string | null = 
   const sensors = stage.sensors_applicable ?? [];
   const paths = declaredOutputsForGate(pd, stage, unit);
   if (sensors.length === 0 || paths.length === 0) return results;
-  const latest = new Map<string, { kind: "passed" | "failed"; ts: string; pos: number; findings: string; detail: string | null }>();
+  const latest = new Map<string, { kind: "passed" | "failed"; ts: string; pos: number; findings: string; detail: string | null; failedOutputs: string | null }>();
   for (const row of readAuditShardEvents(pd)) {
     if (row.event !== "SENSOR_PASSED" && row.event !== "SENSOR_FAILED") continue;
     if (auditBlockField(row.block, "Stage slug") !== stage.slug) continue;
@@ -6824,15 +6862,16 @@ function latestCheckResults(pd: string, stage: GateStage, unit: string | null = 
       pos: row.pos,
       findings: auditBlockField(row.block, "Findings count") ?? "?",
       detail: auditBlockField(row.block, "Detail path"),
+      failedOutputs: auditBlockField(row.block, "Failed outputs"),
     });
   }
   for (const sensor of sensors) {
-    for (const path of gateSensorOutputs(sensor, paths)) {
+    for (const { outputPath: path } of gateSensorOutputs(sensor, paths, stage.slug)) {
       const rel = relative(pd, path).split(sep).join("/");
       const result = latest.get(`${sensor.id}@${rel}`);
       if (result === undefined) results.rest.push(`${sensor.id}@${rel}=not-run`);
       else if (result.kind === "passed") results.rest.push(`${sensor.id}@${rel}=passed`);
-      else results.failed.push({ id: sensor.id, rel, findings: result.findings, detail: result.detail });
+      else results.failed.push({ id: sensor.id, rel, findings: result.findings, detail: result.detail, failedOutputs: result.failedOutputs });
     }
   }
   return results;
@@ -6873,6 +6912,23 @@ function sensorStateAtGate(pd: string, stage: GateStage): string {
   return `${shown.join("; ")}${more > 0 ? `; +${more} more` : ""}`;
 }
 
+// Where a failing check's findings are, said to the person: the file's name,
+// or at a codekb stage, whose files share their names across repositories,
+// `<repo>/<file>` for the first file the fire's row names (its `Failed outputs`,
+// written by the sensor dispatcher as "a, b and N more") and how many more.
+function failedCheckWhere(stage: GateStage, rel: string, failedOutputs: string | null): string {
+  if (!KNOWN_CODEKB_STAGES.has(stage.slug)) return basename(rel);
+  const repoFile = (path: string): string => path.split("/").slice(-2).join("/");
+  if (failedOutputs === null) return repoFile(rel);
+  const tail = / and (\d+) more$/.exec(failedOutputs);
+  const listed = (tail ? failedOutputs.slice(0, tail.index) : failedOutputs).split(", ").filter((p) => p !== "");
+  const others = listed.length - 1 + (tail ? Number(tail[1]) : 0);
+  if (listed.length === 0) return repoFile(rel);
+  return others > 0
+    ? `${repoFile(listed[0])} and ${others} other file${others === 1 ? "" : "s"}`
+    : repoFile(listed[0]);
+}
+
 // What the person hears when a gate opens, or is shown again, while a check
 // still fails on a declared output (#2201): one line per failing check, in
 // plain words (the agent corrects from the detail file the sensors protocol
@@ -6897,10 +6953,10 @@ export function failedCheckNotices(pd: string, stage: GateStage, unit: string | 
   } catch {
     return [];
   }
-  const lines = failed.slice(0, FAILED_CHECK_LINES).map(({ id, rel, findings }) => {
+  const lines = failed.slice(0, FAILED_CHECK_LINES).map(({ id, rel, findings, failedOutputs }) => {
     const check = id.endsWith("check") ? id : `${id} check`;
     const count = /^\d+$/.test(findings) ? `${findings} finding${findings === "1" ? "" : "s"}` : "findings";
-    return `The ${check} reports ${count} in ${basename(rel)}.`;
+    return `The ${check} reports ${count} in ${failedCheckWhere(stage, rel, failedOutputs)}.`;
   });
   const more = failed.length - lines.length;
   if (more > 0) lines.push(`${more} more check${more === 1 ? " reports" : "s report"} findings on this stage's outputs.`);

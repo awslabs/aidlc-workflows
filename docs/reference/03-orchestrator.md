@@ -595,6 +595,14 @@ dispatches (two with collaborators on; the developer's alone when they are off);
 artifacts without every current-attempt receipt they owe cannot enter or complete
 approval.
 
+Over ten or more repositories each link receipt carries `analysed` (`done` of
+`total` repositories whose chain is complete in this attempt), the count the
+status line shows; `analysed_note` asks the conductor to say the count when it
+reaches a new tenth of the set, and the receipt that completes every chain
+carries `gate_wait_note` when the report that opens the gate is estimated at ten
+seconds or more (`gateEstimateSeconds`, `aidlc-lib.ts`), for the conductor to
+say in one line before it runs that report.
+
 ### Construction Execution <a id="construction-execution"></a>
 
 New source-producing solo Unit workflows record `Construction Checkpoints:
@@ -638,8 +646,13 @@ request that already said which (all, or named ones) is that answer, and the
 question's note has the agent run the command without putting it. A
 named set, an unattended run (`AIDLC_UNATTENDED=1`) and a question passed over
 (a human turn after its ask mark with no answer) read every recorded repo, and
-the step says the cost once. From two repos the stage's progress line carries
-the count.
+the step says the cost once. The question, and the step when no question was
+put, carry `repo_facts`: the count, the lines of code by git's count
+(`codekbSourceSize`, counted once per set and left out when a repo is not a Git
+checkout) and the minutes a repository takes at this depth
+(`REPOSITORY_ANALYSIS_MINUTES`), which its `estimate_note` has the agent say in
+its own words; the line count is also in the question. From two repos the
+stage's progress line carries the count.
 
 A change to the work's repos after Units Generation was approved is asked about
 the same way, under Guard Policy `strict` only (`unitsReposAsk`, after the two
@@ -924,7 +937,7 @@ The orchestration engine owns every transition above. The conductor reports outc
 
 1. **Run completion verification** - check artifacts exist on disk, guardrails respected. This is a correctness check, not a state transition. This is also enforced deterministically: `approve` refuses a gated stage whose declared `produces` artifacts are missing (unless `AIDLC_SKIP_ARTIFACT_GUARD=1`), so a stage cannot be marked complete without its outputs (#366). Per-unit Construction stages are verified by the swarm referee instead.
 
-2. **Enter the gate**: `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. Before the state transaction opens, the engine fires each gate-bound sensor once per existing declared deliverable (`upstream-coverage` and `claim-sources` once per output folder) when a person will answer the gate; a gate the engine approves itself under Construction autonomy fires only its blocking sensors, since advisory evidence has no reader there. A blocking binding requires a verified pass; findings, unavailable execution, malformed verdicts, and timeouts refuse the transition. To override interactively, first record and present the separate `Fix findings` / `Override blocking sensors` decision through `aidlc-log.ts`, wait for and record the exact human answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`. Autonomous runs cannot override. Otherwise the engine marks `[-]` → `[?]`, emits `STAGE_AWAITING_APPROVAL`, and makes `/aidlc --status` show "Awaiting your approval on \<stage\>".
+2. **Enter the gate**: `aidlc engine orchestrate report --stage <slug> --result awaiting-approval`. Before the state transaction opens, the engine fires each gate-bound sensor once per existing declared deliverable (`upstream-coverage` and `claim-sources` once per output folder; at Reverse Engineering, `required-sections` and `upstream-coverage` once for the stage over every repository's files) when a person will answer the gate; a gate the engine approves itself under Construction autonomy fires only its blocking sensors, since advisory evidence has no reader there. A blocking binding requires a verified pass; findings, unavailable execution, malformed verdicts, and timeouts refuse the transition. To override interactively, first record and present the separate `Fix findings` / `Override blocking sensors` decision through `aidlc-log.ts`, wait for and record the exact human answer, then retry with `--override-blocking-sensors --user-input "Override blocking sensors"`. Autonomous runs cannot override. Otherwise the engine marks `[-]` → `[?]`, emits `STAGE_AWAITING_APPROVAL`, and makes `/aidlc --status` show "Awaiting your approval on \<stage\>".
 
 3. **Present the approval gate** (AskUserQuestion).
 

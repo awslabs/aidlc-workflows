@@ -32,7 +32,11 @@ before you author anything:
 - **`fire_on: gate` runs once per deliverable.** Immediately before
   `gate-start` opens its state transaction, the state tool fires each gate-bound
   sensor once for every existing declared deliverable path (`upstream-coverage` and `claim-sources`, which read
-  the whole stage's output, once per output folder); a gate the engine
+  the whole stage's output, once per output folder). At Reverse Engineering,
+  whose files repeat in every repository's code knowledge base folder,
+  `required-sections` and `upstream-coverage` fire once for the stage over every
+  repository's files, and a failing file is named with its repository
+  (`service-007/dependencies.md`). A gate the engine
   approves itself under Construction autonomy fires only blocking sensors, since
   advisory evidence has no reader there. The dispatch stays outside the
   transaction because the sensor dispatcher takes the audit lock.

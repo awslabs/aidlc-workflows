@@ -39,6 +39,7 @@ import { randomBytes } from "node:crypto";
 import {
 	existsSync,
 	mkdirSync,
+	readFileSync,
 	readdirSync,
 	realpathSync,
 	renameSync,
@@ -60,6 +61,7 @@ import {
 	loadGraph,
 	loadSensors,
 	memoryTemplatesDir,
+	PATH_SET_SENSOR_IDS,
 	producersOf,
 	STAGE_WIDE_SENSOR_IDS,
 	type SensorFile,
@@ -164,6 +166,8 @@ type FireOutcome =
 			durationMs: number;
 			findingsCount: number;
 			detailBody: string;
+			// The files a path-set fire found failing, as its script named them.
+			failedOutputs: string[];
 	  }
 	| { kind: "budget-override"; capValue: number; observedSeconds: number };
 
@@ -177,6 +181,9 @@ interface FireContext {
 	scriptArgs: string[];
 	scriptAbsPath: string; // sibling-resolved absolute path
 	timeoutMs: number;
+	// The outputs a path-set fire covers (`--paths-stdin json`), handed to the
+	// script on stdin; null for a fire on one output.
+	pathSet: string[] | null;
 }
 
 function sensorLockOwnerSnapshot(path: string): Record<string, unknown> {
@@ -598,6 +605,7 @@ function handleFire(args: string[]): void {
 			`output path "${outputPath}" does not match sensor "${id}" filter "${matches}"`,
 		);
 	}
+	const pathSet = flags["paths-stdin"] === undefined ? null : readPathSet(id, flags["paths-stdin"], outputPath, matches);
 
 	// --- 1e. Generate Fire id (8 hex chars) ---
 	const fireId = generateFireId();
@@ -714,7 +722,9 @@ function handleFire(args: string[]): void {
 		scriptArgs,
 		scriptAbsPath,
 		timeoutMs,
+		pathSet,
 	};
+	if (pathSet !== null) ctx.scriptArgs.push("--paths-stdin", "json");
 
 	// --- 4. Lock window A — emit SENSOR_FIRED ---
 	withSensorAuditLock(projectDir, ctx, "fired", () => {
@@ -747,6 +757,7 @@ function handleFire(args: string[]): void {
 		encoding: "utf-8",
 		timeout: timeoutMs,
 		cwd: projectDir,
+		...(ctx.pathSet !== null ? { input: JSON.stringify(ctx.pathSet) } : {}),
 	});
 	const elapsedMs = Date.now() - startedAt;
 
@@ -1000,6 +1011,9 @@ function decideOutcome(
 				durationMs: elapsedMs,
 				findingsCount,
 				detailBody,
+				failedOutputs: Array.isArray(out.failed_outputs)
+					? out.failed_outputs.filter((p): p is string => typeof p === "string" && p !== "")
+					: [],
 			};
 		}
 		// Branch d — PASSED
@@ -1151,6 +1165,7 @@ function emitTerminal(
 			...baseFields,
 			"Detail path": relativizePath(detailPath, projectDir),
 			"Findings count": String(outcome.findingsCount),
+			...(outcome.failedOutputs.length > 0 ? { "Failed outputs": failedOutputsField(outcome.failedOutputs) } : {}),
 		};
 		appendAuditEntryUnlocked("SENSOR_FAILED", fields, projectDir);
 		return;
@@ -1163,6 +1178,44 @@ function emitTerminal(
 		"Observed value": String(outcome.observedSeconds),
 	};
 	appendAuditEntryUnlocked("SENSOR_BUDGET_OVERRIDE", fields, projectDir);
+}
+
+// --- Path-set fire ---
+//
+// The gate at a codekb stage fires a PATH_SET_SENSOR_IDS sensor once over
+// every repository's outputs, handing the paths on stdin as a JSON list (one
+// Windows command line holds about 32k characters, not 1,710 paths). Each path
+// passes the same checks as --output-path; the fired output leads the set.
+function readPathSet(id: string, format: string, outputPath: string, matches: string | undefined): string[] {
+	if (!PATH_SET_SENSOR_IDS.has(id)) dispatchError(`sensor "${id}" does not take --paths-stdin`);
+	if (format !== "json") dispatchError(`--paths-stdin expects "json", got "${format}"`);
+	let raw: unknown;
+	try {
+		raw = JSON.parse(readFileSync(0, "utf-8"));
+	} catch (err) {
+		dispatchError(`--paths-stdin expects a JSON list of paths on stdin: ${errorMessage(err)}`);
+	}
+	if (!Array.isArray(raw) || !raw.every((p) => typeof p === "string" && p !== "")) {
+		dispatchError("--paths-stdin expects a JSON list of paths on stdin");
+	}
+	const set = [outputPath];
+	for (const entry of raw as string[]) {
+		const path = isAbsolute(entry) ? entry : pathResolve(process.cwd(), entry);
+		if (set.includes(path)) continue;
+		if (!existsSync(path)) dispatchError(`output path does not exist: ${path}`);
+		if (matches !== undefined && !matchesGlob(matches, path)) {
+			dispatchError(`output path "${path}" does not match sensor "${id}" filter "${matches}"`);
+		}
+		set.push(path);
+	}
+	return set;
+}
+
+// A failed path-set fire's row names the failing files, the first 20 and a count.
+function failedOutputsField(paths: string[]): string {
+	const SHOWN = 20;
+	const more = paths.length - SHOWN;
+	return `${paths.slice(0, SHOWN).join(", ")}${more > 0 ? ` and ${more} more` : ""}`;
 }
 
 // --- Glob matcher (capability filter) ---

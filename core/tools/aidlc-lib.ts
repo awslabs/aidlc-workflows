@@ -12722,6 +12722,12 @@ export function noteRepoScopeAsked(projectDir: string): void {
   noteEngineAskMark(projectDir, REPO_SCOPE_ASK);
 }
 
+// Whether that question was put for this work in this clone: the person heard
+// what reading the repositories takes with it.
+export function repoScopeAsked(projectDir: string): boolean {
+  return engineAskMark(projectDir, REPO_SCOPE_ASK) !== null;
+}
+
 // Which repos Reverse Engineering reads was asked for this work in this clone
 // and the person has spoken since without naming the set: every recorded repo
 // is read and the question is not put again.
@@ -22630,6 +22636,52 @@ function manifestDependencyDirs(names: readonly string[]): ReadonlySet<string> {
   return owned;
 }
 const SOURCE_FINGERPRINT_REGISTRY = ".aidlc-source-paths.json";
+
+// The size of the code a repository folder holds, by git's own count: the lines
+// of its tracked and not-ignored text files (binary files skipped), leaving out
+// what the source fingerprint leaves out (the always-excluded dependency and
+// cache names, .NET outputs beside a project file, a manifest's dependency
+// folder, tool byproduct files). One git process, no file list on its command
+// line, nothing read for meaning. Null when the folder is not a git checkout or
+// git cannot count it.
+export function codekbSourceSize(dir: string): { files: number; lines: number } | null {
+  if (!isGitRepoDir(dir)) return null;
+  const counted = spawnSync(
+    "git",
+    [
+      ...GIT_PLATFORM_ARGS, "-C", dir, "grep", "-I", "-c", "--untracked", "-e", "", "--", ".",
+      ...SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES.map((name) => `:(exclude,glob)**/${name}/**`),
+    ],
+    { encoding: "utf-8", maxBuffer: 256 * 1024 * 1024, timeout: DEFAULT_SUBPROCESS_TIMEOUT_MS },
+  );
+  // git grep exits 1 when nothing matched: an empty repository.
+  if (counted.status === 1) return { files: 0, lines: 0 };
+  if (counted.status !== 0) return null;
+  const rows: Array<{ path: string; lines: number }> = [];
+  for (const row of counted.stdout.split(/\r?\n/)) {
+    const at = row.lastIndexOf(":");
+    if (at <= 0) continue;
+    rows.push({ path: row.slice(0, at).replaceAll("\\", "/"), lines: Number(row.slice(at + 1)) || 0 });
+  }
+  const namesIn = new Map<string, string[]>();
+  for (const { path } of rows) {
+    const slash = path.lastIndexOf("/");
+    const parent = slash === -1 ? "" : path.slice(0, slash);
+    namesIn.set(parent, [...(namesIn.get(parent) ?? []), path.slice(slash + 1)]);
+  }
+  const conditionallyExcluded = (path: string): boolean => {
+    const parts = path.split("/");
+    if (sourceFingerprintHardExcludedFile(parts[parts.length - 1])) return true;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const siblings = namesIn.get(parts.slice(0, i).join("/")) ?? [];
+      if (SOURCE_FINGERPRINT_DOTNET_OUTPUT_NAMES.has(parts[i]) && holdsDotnetProject(siblings)) return true;
+      if (manifestDependencyDirs(siblings).has(parts[i])) return true;
+    }
+    return false;
+  };
+  const kept = rows.filter(({ path }) => !conditionallyExcluded(path));
+  return { files: kept.length, lines: kept.reduce((sum, row) => sum + row.lines, 0) };
+}
 
 // Git for Windows stops at MAX_PATH unless core.longpaths is on. A Bolt
 // checkout nests the whole repository, and the records AIDLC writes into it,
@@ -37665,6 +37717,67 @@ export function pipelineLinkRecord(
 
 // From this many repos a work's repos are counted, not named, in what lists them.
 export const MANY_REPOS = 10;
+
+// The repositories a codekb stage covers: the work's recorded set, or the
+// project folder's own store when it records none.
+export function codekbStageRepos(projectDir: string): string[] {
+  const repos = intentRepos(projectDir);
+  return repos.length > 0 ? repos : [codekbRepoName(projectDir)];
+}
+
+// What a codekb stage still owes, per repository it covers: the declared files
+// its knowledge-base folder lacks, in declaration order (a repository holding
+// them all is left out). The gate's refusal names these.
+export function missingCodekbArtifacts(
+  projectDir: string,
+  stage: { produces?: string[] },
+): Array<{ repo: string; files: string[] }> {
+  const files = (stage.produces ?? []).map(artifactFilename);
+  const missing: Array<{ repo: string; files: string[] }> = [];
+  for (const repo of codekbStageRepos(projectDir)) {
+    const dir = codekbDir(projectDir, repo);
+    const lacking = files.filter((file) => !isRegularFile(join(dir, file)));
+    if (lacking.length > 0) missing.push({ repo, files: lacking });
+  }
+  return missing;
+}
+
+// About how long a codekb analysis takes each repository at the depth a scope
+// runs it, from the measured analyses (3.5 to 7.1 minutes a repository on
+// Claude Code, whatever its size): the range the person hears before it starts.
+export const REPOSITORY_ANALYSIS_MINUTES = { low: 4, high: 7 } as const;
+
+// A gate wait under this many seconds is not said to the person.
+export const GATE_NOTE_SECONDS = 10;
+
+// About how many seconds the report that opens a codekb stage's approval gate
+// takes over `repos` repositories, rounded up: a fixed part plus a part per
+// repository, fitted with a margin to the gate measured on Windows Server, the
+// slower box (2.4 s at 10 repositories, 4.6 s at 50, 15.1 s at 190). An
+// estimate the agent says as "about", never a promise.
+const GATE_FIXED_SECONDS = 2;
+const GATE_SECONDS_PER_REPO = 0.075;
+export function gateEstimateSeconds(repos: number): number {
+  return Math.ceil(GATE_FIXED_SECONDS + GATE_SECONDS_PER_REPO * repos);
+}
+
+// Where the engine keeps a codekb stage's running count, in the record's
+// engine folder; the status line reads it there.
+export const CODEKB_ANALYSED_FILE = "codekb-analysed.json";
+
+// Of the repositories a pipeline stage's attempt covers, how many have every
+// link of their chain on record (a reused store counts): the running count of
+// a long analysis. Read from this attempt's receipts, so a rescan starts at 0
+// and a store published after its last link is counted with that link.
+export function codekbAnalysed(
+  projectDir: string,
+  stage: Pick<StageEntry, "slug" | "lead_agent" | "support_agents">,
+): { done: number; total: number } {
+  const evidence = pipelineLinkEvidence(projectDir, stage);
+  const open = new Set(evidence.missing.map(({ repo }) => repo));
+  const repos = evidence.repos.length > 0 ? evidence.repos : [null];
+  return { done: repos.filter((repo) => !open.has(repo)).length, total: repos.length };
+}
 
 // How many repos' owed links a reply names, and a step's `completed` lists,
 // before the rest are counted instead: a workspace of a few repos reads every

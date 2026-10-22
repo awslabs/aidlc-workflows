@@ -23,6 +23,14 @@ import {
   type StoredMessage,
 } from "./aidlc-message-store.ts";
 import {
+  CODEKB_ANALYSED_FILE,
+  codekbAnalysed,
+  engineDir,
+  gateEstimateSeconds,
+  GATE_NOTE_SECONDS,
+  KNOWN_CODEKB_STAGES,
+  MANY_REPOS,
+  writeFileAtomic,
   asksForHelp,
   answeredBeforeShownStep,
   humanRepliedSinceGate,
@@ -230,6 +238,7 @@ import {
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
 } from "./aidlc-lib.js";
 import type {
+  StageEntry,
   GuardAttemptState,
   GuardRefusal,
   TeamUnitGateResolution,
@@ -2537,6 +2546,47 @@ function handleAnswer(args: string[]): void {
   });
 }
 
+// What a link receipt at a codekb stage over many repositories tells the agent,
+// as facts it words itself: how many repositories are analysed, a note when the
+// count reaches a new tenth of the set (never after every repository), and on
+// the receipt that completes every chain, the approval gate's wait when that is
+// long. The count is kept in the record's engine folder for the status line.
+function codekbReceiptNotes(pd: string, node: StageEntry): Record<string, unknown> {
+  const notes: Record<string, unknown> = {};
+  const { done, total } = codekbAnalysed(pd, node);
+  if (total < MANY_REPOS) return notes;
+  const mark = join(engineDir(pd), CODEKB_ANALYSED_FILE);
+  let kept: { done: number; tenth: number } | null = null;
+  try {
+    const prior = JSON.parse(readFileSync(mark, "utf-8")) as { done?: unknown; tenth?: unknown; total?: unknown };
+    if (prior.total === total && typeof prior.done === "number" && typeof prior.tenth === "number") {
+      kept = { done: prior.done, tenth: prior.tenth };
+    }
+  } catch {
+    // No count kept yet for this set.
+  }
+  // A count that went down is a new attempt (a rescan): its tenths are said again.
+  const saidTenth = kept !== null && kept.done <= done ? kept.tenth : 0;
+  const tenth = Math.floor((done * 10) / total);
+  notes.analysed = { done, total };
+  if (tenth > saidTenth && done < total) {
+    notes.analysed_note = `${done} of ${total} repositories are analysed: tell the person so, in a few words of your own.`;
+  }
+  const seconds = gateEstimateSeconds(total);
+  if (done === total && kept?.done !== total && seconds >= GATE_NOTE_SECONDS) {
+    notes.gate_wait_note = `Every repository is analysed. The report that opens the approval gate checks the files of all ` +
+      `${total} repositories and takes about ${seconds} seconds: before you run it, tell the person so in one line of ` +
+      "your own.";
+  }
+  try {
+    mkdirSync(dirname(mark), { recursive: true });
+    writeFileAtomic(mark, `${JSON.stringify({ stage: node.slug, done, total, tenth: Math.max(tenth, saidTenth) })}\n`);
+  } catch {
+    // The count is a courtesy: a record that cannot take it changes nothing.
+  }
+  return notes;
+}
+
 // --- Subcommand: link ---
 // Usage:
 //   aidlc-log link --stage <slug> --link <agent> [--repo <repo>]
@@ -2568,6 +2618,8 @@ function handleLink(args: string[]): void {
   // The repo the receipt records (none for the project root).
   let recordedRepo: string | null = null;
   let alreadyRecorded = false;
+  // What the receipt tells the agent about a codekb stage over many repositories.
+  let receiptNotes: Record<string, unknown> = {};
 
   try {
     withAuditLock(pd, () => {
@@ -2727,6 +2779,7 @@ function handleLink(args: string[]): void {
       if (repo) fields.Repo = repo;
       if (singleRun) fields.Workflow = `single-stage:${flags.stage}`;
       emitAudit(pd, "PIPELINE_LINK_COMPLETED", fields, intent, space);
+      if (KNOWN_CODEKB_STAGES.has(node.slug) && !singleRun) receiptNotes = codekbReceiptNotes(pd, node);
     }, intent, space);
   } catch (e) {
     error(errorMessage(e));
@@ -2738,6 +2791,7 @@ function handleLink(args: string[]): void {
     link: flags.link,
     ...(recordedRepo ? { repo: recordedRepo } : {}),
     ...(singleRun ? { single: true } : {}),
+    ...receiptNotes,
   }));
 }
 

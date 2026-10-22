@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { asksForHelp, errorMessage, printUsageAndExit } from "./aidlc-lib.ts";
 import { sensorFireUsage } from "./aidlc-runtime-paths.ts";
 
@@ -23,6 +23,8 @@ interface Flags {
 	consumes?: string;
 	consumesPresent: boolean;
 	deliverables?: string;
+	// `--paths-stdin json`: the outputs arrive on stdin (evaluatePathSet).
+	pathsStdin?: boolean;
 }
 
 function parseFlags(argv: string[]): Flags {
@@ -40,6 +42,8 @@ function parseFlags(argv: string[]): Flags {
 			out.consumes = argv[++i] ?? "";
 		} else if (arg === "--deliverables") {
 			out.deliverables = argv[++i] ?? "";
+		} else if (arg === "--paths-stdin") {
+			out.pathsStdin = argv[++i] === "json";
 		}
 	}
 	return out;
@@ -92,11 +96,13 @@ export function main(argv: string[]): void {
 	if (asksForHelp(argv)) printUsageAndExit(`Usage: ${sensorFireUsage("upstream-coverage")}`);
 	const flags = parseFlags(argv);
 
-	if (!flags.outputPath) {
-		fail("--output-path is required");
-	}
-	if (!existsSync(flags.outputPath)) {
-		fail(`--output-path not found: ${flags.outputPath}`);
+	if (!flags.pathsStdin) {
+		if (!flags.outputPath) {
+			fail("--output-path is required");
+		}
+		if (!existsSync(flags.outputPath)) {
+			fail(`--output-path not found: ${flags.outputPath}`);
+		}
 	}
 
 	// Split, trim, drop empties. Both `--consumes ""` and an absent flag
@@ -123,6 +129,54 @@ export function main(argv: string[]): void {
 		process.exit(0);
 	}
 
+	const deliverables = (flags.deliverables ?? "")
+		.split(",")
+		.map((s) => s.trim())
+		.filter((s) => s.length > 0);
+	if (flags.pathsStdin) {
+		evaluatePathSet(consumes, deliverables);
+		process.exit(0);
+	}
+
+	const folder = evaluateFolder(resolve(flags.outputPath as string), consumes, deliverables);
+
+	// A scaffolding write can fire before any deliverable exists (stages
+	// write their questions file first). With nothing to evaluate, the
+	// check is vacuous - pass with a reason, mirroring "no upstream" -
+	// rather than reporting every consume unreferenced against an empty
+	// set. The stage's later deliverable writes re-fire and evaluate for
+	// real.
+	if (folder.scannedFiles.length === 0) {
+		const result: Result = {
+			pass: true,
+			consumes: consumes.map((c) => c.slug),
+			unreferenced: [],
+			scanned_files: [],
+			reason: "no deliverables on disk yet",
+			findings_count: 0,
+		};
+		process.stdout.write(`${JSON.stringify(result)}\n`);
+		process.exit(0);
+	}
+
+	const result: Result = {
+		pass: folder.unreferenced.length === 0,
+		consumes: consumes.map((c) => c.slug),
+		unreferenced: folder.unreferenced,
+		scanned_files: folder.scannedFiles,
+		// findings_count emitted by the script (sensor-id-agnostic dispatcher).
+		findings_count: folder.unreferenced.length,
+	};
+	process.stdout.write(`${JSON.stringify(result)}\n`);
+	process.exit(0);
+}
+
+// One folder's coverage, as the fire on `firedPath` reads it.
+function evaluateFolder(
+	firedPath: string,
+	consumes: Consume[],
+	deliverables: string[],
+): { scannedFiles: string[]; unreferenced: string[] } {
 	// Coverage is a property of the STAGE's output, not of each file: a
 	// multi-artifact stage legitimately splits its upstream citations
 	// across sibling deliverables (rules.md cites the entity
@@ -136,18 +190,8 @@ export function main(argv: string[]): void {
 	// not upstream coverage. Every fire within a stage thus converges on
 	// the same stage-level verdict. Without --deliverables (direct
 	// invocation, older dispatcher) only the fired file is read.
-	const firedPath = resolve(flags.outputPath);
 	const dir = dirname(firedPath);
-	const deliverables = (flags.deliverables ?? "")
-		.split(",")
-		.map((s) => s.trim())
-		.filter((s) => s.length > 0);
-
-	const firedBase = basename(firedPath);
-	const firedIsScaffolding =
-		firedBase === "memory.md" ||
-		firedBase.endsWith("-questions.md") ||
-		firedBase.endsWith("-timestamp.md");
+	const firedIsScaffolding = isScaffolding(firedPath);
 
 	const scanPaths: string[] = [];
 	if (deliverables.length === 0) {
@@ -176,25 +220,7 @@ export function main(argv: string[]): void {
 			// readable rather than erroring the whole fire.
 		}
 	}
-
-	// A scaffolding write can fire before any deliverable exists (stages
-	// write their questions file first). With nothing to evaluate, the
-	// check is vacuous - pass with a reason, mirroring "no upstream" -
-	// rather than reporting every consume unreferenced against an empty
-	// set. The stage's later deliverable writes re-fire and evaluate for
-	// real.
-	if (scannedFiles.length === 0) {
-		const result: Result = {
-			pass: true,
-			consumes: consumes.map((c) => c.slug),
-			unreferenced: [],
-			scanned_files: [],
-			reason: "no deliverables on disk yet",
-			findings_count: 0,
-		};
-		process.stdout.write(`${JSON.stringify(result)}\n`);
-		process.exit(0);
-	}
+	if (scannedFiles.length === 0) return { scannedFiles, unreferenced: [] };
 
 	// A consume is covered when the union body references it in any form
 	// the framework's artifacts actually use: the bare slug (anchored so
@@ -209,17 +235,51 @@ export function main(argv: string[]): void {
 			unreferenced.push(c.slug);
 		}
 	}
+	return { scannedFiles, unreferenced };
+}
 
-	const result: Result = {
-		pass: unreferenced.length === 0,
+function isScaffolding(path: string): boolean {
+	const base = basename(path);
+	return base === "memory.md" || base.endsWith("-questions.md") || base.endsWith("-timestamp.md");
+}
+
+// The gate at a codekb stage hands every repository's files on stdin, a JSON
+// list (PATH_SET_SENSOR_IDS, aidlc-graph.ts): each folder is evaluated exactly
+// as a fire on one of its files evaluates it, and one result reports them, the
+// failing folders whole, each named by the file it was read through.
+function evaluatePathSet(consumes: Consume[], deliverables: string[]): void {
+	let paths: unknown;
+	try {
+		paths = JSON.parse(readFileSync(0, "utf-8"));
+	} catch (err) {
+		fail(`--paths-stdin expects a JSON list of paths on stdin: ${errorMessage(err)}`);
+	}
+	if (!Array.isArray(paths) || paths.length === 0 || !paths.every((p) => typeof p === "string" && p !== "")) {
+		fail("--paths-stdin expects a non-empty JSON list of paths on stdin");
+	}
+	const byFolder = new Map<string, string>();
+	for (const path of (paths as string[]).map((p) => resolve(p))) {
+		if (!existsSync(path)) fail(`--output-path not found: ${path}`);
+		const chosen = byFolder.get(dirname(path));
+		if (chosen === undefined || (isScaffolding(chosen) && !isScaffolding(path))) byFolder.set(dirname(path), path);
+	}
+	const rel = (p: string) => relative(process.cwd(), p).split(sep).join("/");
+	const failing: Array<{ file: string; unreferenced: string[]; scanned_files: string[] }> = [];
+	for (const firedPath of byFolder.values()) {
+		const folder = evaluateFolder(firedPath, consumes, deliverables);
+		if (folder.unreferenced.length > 0) {
+			failing.push({ file: rel(firedPath), unreferenced: folder.unreferenced, scanned_files: folder.scannedFiles.map(rel) });
+		}
+	}
+	const findings = failing.reduce((n, f) => n + f.unreferenced.length, 0);
+	process.stdout.write(`${JSON.stringify({
+		pass: failing.length === 0,
 		consumes: consumes.map((c) => c.slug),
-		unreferenced,
-		scanned_files: scannedFiles,
-		// findings_count emitted by the script (sensor-id-agnostic dispatcher).
-		findings_count: unreferenced.length,
-	};
-	process.stdout.write(`${JSON.stringify(result)}\n`);
-	process.exit(0);
+		findings_count: findings,
+		folders_evaluated: byFolder.size,
+		failed_outputs: failing.map((f) => f.file),
+		folders: failing,
+	})}\n`);
 }
 
 if (import.meta.main) main(process.argv.slice(2));

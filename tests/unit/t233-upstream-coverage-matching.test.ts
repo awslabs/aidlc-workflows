@@ -504,3 +504,73 @@ describe("t233 a stage's cited optional inputs checked where they exist", () => 
 		expect(text).not.toContain("stage_validity");
 	});
 });
+
+// At a code knowledge base gate the dispatcher fires this check once for every
+// repository's folder, handing the paths on stdin behind `--paths-stdin json`:
+// each folder is evaluated as a fire on one of its files would be, and a
+// failing folder is named by the file standing for it.
+describe("t233 one fire over every repository's folder", () => {
+	function repoFolders(): { root: string; paths: string[] } {
+		const root = mkdtempSync(join(tmpdir(), "aidlc-t233-set-"));
+		tempDirs.push(root);
+		const paths: string[] = [];
+		for (const [repo, body] of [
+			["repo-a", "# Architecture\n\nFrom `workspace-scan.md`.\n"],
+			["repo-b", "# Architecture\n\nNo upstream named.\n"],
+		] as const) {
+			mkdirSync(join(root, "codekb", repo), { recursive: true });
+			for (const name of ["architecture.md", "dependencies.md"]) {
+				const path = join(root, "codekb", repo, name);
+				writeFileSync(path, name === "architecture.md" ? body : "# Dependencies\n", "utf-8");
+				paths.push(path);
+			}
+		}
+		return { root, paths };
+	}
+
+	function runSet(root: string, paths: string[]): { raw: string; status: number | null } {
+		const res = spawnSync(BUN, [
+			SENSOR, "--stage", "reverse-engineering", "--output-path", paths[0] ?? "",
+			"--consumes", "workspace-scan:workspace-detection", "--deliverables", "architecture,dependencies",
+			"--paths-stdin", "json",
+		], { cwd: root, input: JSON.stringify(paths), timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+		return { raw: res.stdout ?? "", status: res.status };
+	}
+
+	test("each folder is evaluated once, and a folder citing no upstream is named", () => {
+		const { root, paths } = repoFolders();
+		const { raw, status } = runSet(root, paths);
+		expect(status).toBe(0);
+		expect(JSON.parse(raw)).toEqual({
+			pass: false,
+			consumes: ["workspace-scan"],
+			findings_count: 1,
+			folders_evaluated: 2,
+			failed_outputs: ["codekb/repo-b/architecture.md"],
+			folders: [{
+				file: "codekb/repo-b/architecture.md",
+				unreferenced: ["workspace-scan"],
+				scanned_files: ["codekb/repo-b/architecture.md", "codekb/repo-b/dependencies.md"],
+			}],
+		});
+	});
+
+	test("a call for one file prints the same bytes as before", () => {
+		const { root, paths } = repoFolders();
+		const res = spawnSync(BUN, [
+			SENSOR, "--stage", "reverse-engineering", "--output-path", paths[2] ?? "",
+			"--consumes", "workspace-scan:workspace-detection", "--deliverables", "architecture,dependencies",
+		], { cwd: root, input: JSON.stringify(paths), timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8" });
+		expect(res.status).toBe(0);
+		const dir = join(root, "codekb", "repo-b");
+		expect(res.stdout).toBe(
+			`${JSON.stringify({
+				pass: false,
+				consumes: ["workspace-scan"],
+				unreferenced: ["workspace-scan"],
+				scanned_files: [join(dir, "architecture.md"), join(dir, "dependencies.md")],
+				findings_count: 1,
+			})}\n`,
+		);
+	});
+});

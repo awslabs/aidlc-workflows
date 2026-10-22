@@ -268,7 +268,15 @@ being written against the glob and an entry without a glob never fires. For
 deliverable, skip paths outside each sensor's `matches` capability, and dispatch
 only matching paths; an omitted glob accepts every deliverable. `upstream-coverage` and `claim-sources`, which
 read the whole stage's output, dispatch once per output folder, on its first
-deliverable that is not a questions or timestamp file. A gate the engine
+deliverable that is not a questions or timestamp file. At a code knowledge base
+stage (Reverse Engineering), `required-sections` and `upstream-coverage`
+(`PATH_SET_SENSOR_IDS`, `aidlc-graph.ts`) dispatch once for the stage: the fire
+names the first matching path and takes every matching path on stdin behind
+`--paths-stdin json`, the sensor evaluates each file (or folder) as it would
+alone, and a failed fire's `SENSOR_FAILED` row lists the failing files in its
+`Failed outputs` field, which the gate's check line reads to name
+`<repo>/<file>`. A blocking binding holds every path the fire covers to the bytes
+fingerprinted before it. A call for one file never reads stdin. A gate the engine
 approves itself under Construction autonomy dispatches only blocking sensors
 (advisory evidence has no reader there). All six shipped
 manifests declare a glob. The compile resolver copies it into
@@ -325,7 +333,8 @@ dispatch remains advisory.
 
 `write` is the default and preserves incremental PostToolUse feedback. `gate`
 fires once per existing declared deliverable (once per output folder for
-`upstream-coverage` and `claim-sources`) immediately before `gate-start`
+`upstream-coverage` and `claim-sources`, and once for the stage at Reverse
+Engineering for `required-sections` and `upstream-coverage`) immediately before `gate-start`
 opens the first gate, before `revise` re-enters the gate after revision work,
 and before the approve-time revision backstop performs recovered re-entry. When
 no person will answer the gate (the engine approves it itself under Construction
