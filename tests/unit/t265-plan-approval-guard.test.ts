@@ -1339,17 +1339,20 @@ describe("t265b hook lifecycle", () => {
   // #1369 follow-up: `report --result awaiting-approval` moves the state past the
   // issued run-stage directive (a checkbox is part of the state digest) and
   // publishes no successor, so the held gate has no current directive. The
-  // human's answer to that gate must still reach the engine, while generation
-  // and every other lifecycle report stay fenced. Both fence decisions are
-  // covered: strict holds, and relaxed (poc's scope default) stands aside.
-  for (const relaxed of [false, true]) {
-    test(`the held Code Generation gate admits the human's answer (${relaxed ? "relaxed" : "strict"}, #1369)`, () => {
+  // human's answer to that gate must still reach the engine, and so must the
+  // gate's own report showing it again (the step `next` prints when a reviewed
+  // file changed after the review), while every other completion report stays
+  // fenced. All three Guard Policies are covered: strict holds the rest; under
+  // relaxed (poc's scope default) and off the step the opening retired stands
+  // for every call but AI-DLC's own commands the admission holds.
+  for (const policy of ["strict", "relaxed", "off"] as const) {
+    test(`the held Code Generation gate admits the human's answer and its own report (${policy}, #1369)`, () => {
       const proj = scratchProject();
       try {
         seedState(proj);
         const statePath = join(proj, RECORD_REL, "aidlc-state.md");
-        const policy = relaxed ? "\n## Scope Configuration\n- **Guard Policy**: relaxed (from scope poc)\n" : "";
-        writeFileSync(statePath, `${readFileSync(statePath, "utf-8")}${policy}
+        const scopePolicy = policy === "strict" ? "" : `\n## Scope Configuration\n- **Guard Policy**: ${policy} (from scope poc)\n`;
+        writeFileSync(statePath, `${readFileSync(statePath, "utf-8")}${scopePolicy}
 ## Stage Progress
 - [x] requirements-analysis \u2014 EXECUTE
 - [-] code-generation \u2014 EXECUTE
@@ -1379,15 +1382,20 @@ describe("t265b hook lifecycle", () => {
           approve,
           `${report} --result rejected --user-input "Request Changes" --reason "Rename the flag."`,
           'aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"',
+          // The gate's own report showing it again, in either spelling.
+          `${report} --result awaiting-approval`,
+          "aidlc engine orchestrate report --stage code-generation --result awaiting-approval",
         ]) {
           const result = runHook(proj, BASH(command));
           expect(result.code, `${command}\n${result.stderr}`).toBe(0);
         }
         // At the held gate only the person's answer completes the stage; another
-        // completion report still waits for a current step.
+        // completion report, and AI-DLC's answer through a wrapper, still wait for
+        // a current step under every Guard Policy.
         for (const command of [
           `${report} --result completed`,
           `${report} --result approved --result completed`,
+          `env -C other ${approve}`,
         ]) {
           expect(runHook(proj, BASH(command)).code, command).toBe(2);
         }
@@ -1399,22 +1407,44 @@ describe("t265b hook lifecycle", () => {
         ]) {
           expect(runHook(proj, BASH(command)).code, command).toBe(0);
         }
-        // A write to code beside the answer, a wrapper, or code alone still waits.
-        for (const command of [
+        // The stage's own record files, read and written by file tool and by a
+        // shell the guard reads, pass under every Guard Policy.
+        const record = join(RECORD_REL, "construction", "code-generation");
+        const trace = join(record, "traceability.json");
+        writeFileSync(join(proj, trace), "{}\n");
+        for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "code-summary.md", "traceability.json"]) {
+          const write = runHook(proj, WRITE(join(proj, record, name)));
+          expect(write.code, `${name}: ${write.stderr}`).toBe(0);
+        }
+        for (const command of [`cat ${trace}`, `jq . ${trace}`, `printf '{}' > ${trace}`, `sed -i 's/a/b/' ${trace}`]) {
+          expect(runHook(proj, BASH(command)).code, command).toBe(0);
+        }
+        // Code beside the answer, a command whose writes cannot be seen, and code
+        // alone: strict waits for a current step, naming the fresh `next`;
+        // relaxed and off go on from the approved plan.
+        const code = [
           `${approve} > src/inline.ts`,
           `${approve}; printf code > src/inline.ts`,
-          `env -C other ${approve}`,
           "printf code > src/inline.ts",
-        ]) {
-          expect(runHook(proj, BASH(command)).code, command).toBe(2);
+          `python3 -c "open('${trace}','w').write('{}')"`,
+        ];
+        for (const command of code) {
+          expect(runHook(proj, BASH(command)).code, command).toBe(policy === "strict" ? 2 : 0);
         }
         const write = runHook(proj, WRITE(join(proj, "src", "inline.ts")));
-        expect(write.code).toBe(2);
-        // Either fence decision names the way back, spelled the way this tree
-        // runs it: a fresh `next` re-issues the step.
-        expect(write.stderr).toContain(
-          "Run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own",
-        );
+        expect(write.code, write.stderr).toBe(policy === "strict" ? 2 : 0);
+        if (policy === "strict") {
+          expect(write.stderr).toContain(
+            "Run `bun .claude/tools/aidlc-orchestrate.ts next` exactly as written, as a command of its own",
+          );
+        } else {
+          expect(write.stdout).toBe("");
+          // An approval that no longer lets the plan build keeps the refusal:
+          // the plan is emptied, so no approved plan stands behind the step.
+          writeFileSync(join(proj, record, "code-generation-plan.md"), "  \n");
+          expect(runHook(proj, WRITE(join(proj, "src", "inline.ts"))).code).toBe(2);
+          expect(runHook(proj, BASH("printf code > src/inline.ts")).code).toBe(2);
+        }
       } finally {
         rmSync(proj, { recursive: true, force: true });
       }

@@ -342,27 +342,68 @@ describe("the guard judges only the build: records and engine commands pass, the
     });
   }
 
-  test("S11a: at the open gate a record edit passes; the build waits for the next it names, which is admitted", async () => {
-    const state = STATES.find((builder) => builder.id === "S11a")!.build();
-    created.push(state.proj);
-    const edit = await claude.call(state.proj, state.session, {
-      tool: "Edit", path: join(stageDir(state.proj), "traceability.json"),
-    });
+  test("S11a strict: at the open gate a record edit passes; the build waits for the next it names, which is admitted", async () => {
+    const proj = openCodeGenerationGate("strict");
+    created.push(proj);
+    const edit = await claude.call(proj, SESSION, { tool: "Edit", path: join(stageDir(proj), "traceability.json") });
     expect(edit.code, edit.said).toBe(0);
     const doors: ToolCall[] = [
-      { tool: "Write", path: join(state.proj, "src", "slugify.ts") },
-      { tool: "Task", agent: DEVELOPER, prompt: developerBrief(state.proj) },
+      { tool: "Write", path: join(proj, "src", "slugify.ts") },
+      { tool: "Task", agent: DEVELOPER, prompt: developerBrief(proj) },
     ];
     for (const door of doors) {
-      const verdict = await claude.call(state.proj, state.session, door);
+      const verdict = await claude.call(proj, SESSION, door);
       expect(verdict.code, `${describeCall(door)} was admitted at the open gate`).toBe(2);
       const named = namedCommands(verdict.said).filter((command) => command.startsWith("bun ") && !/[<>]/.test(command));
       expect(named.length, `${describeCall(door)} refused with no way past: ${verdict.said}`).toBeGreaterThan(0);
       for (const command of named) {
-        const way = await claude.call(state.proj, state.session, { tool: "Bash", command: respell(command, ".claude") });
+        const way = await claude.call(proj, SESSION, { tool: "Bash", command: respell(command, ".claude") });
         expect(way.code, `${command} -> ${way.said}`).toBe(0);
       }
     }
+  });
+
+  // Under relaxed and off the opening retired the step, not the person's
+  // approval: the build's calls go on from it, each with one row, while another
+  // completion still waits for a current step.
+  test.each(["relaxed", "off"] as const)("S11a %s: at the open gate the build's calls go on from the approved plan, one row each", async (policy) => {
+    const proj = openCodeGenerationGate(policy);
+    created.push(proj);
+    const rows = () => auditEvents(proj).filter((event) => event.event === "GUARD_STOOD_ASIDE").length;
+    const before = rows();
+    const passes: ToolCall[] = [
+      { tool: "Write", path: join(proj, "src", "slugify.ts") },
+      { tool: "Task", agent: DEVELOPER, prompt: developerBrief(proj) },
+      { tool: "Bash", command: "bun -e 'console.log(1)'" },
+    ];
+    for (const call of passes) {
+      const verdict = await claude.call(proj, SESSION, call);
+      expect(verdict.code, `${describeCall(call)} -> ${verdict.said}`).toBe(0);
+    }
+    expect(rows() - before).toBe(passes.length);
+    const completed = await claude.call(proj, SESSION, {
+      tool: "Bash", command: "bun .claude/tools/aidlc-orchestrate.ts report --stage code-generation --result completed",
+    });
+    expect(completed.code, completed.said).toBe(2);
+  });
+
+  // The gate's own report showing it again passes the guard under strict too;
+  // with the plan changed after its approval the engine's own plan check is all
+  // that follows: no code is written and the stage does not complete.
+  test("S11a strict, the plan changed after its approval: the gate's own report passes, and the engine's plan step is all that follows", async () => {
+    const proj = openCodeGenerationGate("strict");
+    created.push(proj);
+    writePlan(proj, "- [ ] Step 2: handle unicode\n");
+    const again = "bun .claude/tools/aidlc-orchestrate.ts report --stage code-generation --result awaiting-approval";
+    const admitted = await claude.call(proj, SESSION, { tool: "Bash", command: again });
+    expect(admitted.code, admitted.said).toBe(0);
+    const ran = runNamed(proj, again);
+    expect((JSON.parse(ran.stdout || "{}") as Step).message).toBe(
+      "The code plan is not approved yet: run `bun .claude/tools/aidlc-orchestrate.ts next` and follow the step it prints.",
+    );
+    expect(readFileSync(seededStateFile(proj), "utf-8")).toMatch(/^- \[\?\] code-generation /m);
+    const write = await claude.call(proj, SESSION, { tool: "Write", path: join(proj, "src", "slugify.ts") });
+    expect(write.code, "a code write was admitted while the changed plan waits").toBe(2);
   });
 
   test("the recorded bypass switch waits for a person to have asked, then passes", async () => {
@@ -654,7 +695,7 @@ describe("the person's jump back from the open gate goes through on the first as
     expect(auditEvents(proj).filter((row) => row.event === "STAGE_JUMPED")).toHaveLength(1);
   });
 
-  test("still refused: a jump nobody asked for, whose way past is admitted, and the build's write after the person's ask", async () => {
+  test("still refused: a jump nobody asked for, whose way past is admitted, and under strict the build's write after the person's ask", async () => {
     const proj = gate("off", "off");
     const jump = "bun .claude/tools/aidlc-jump.ts execute --target requirements-analysis --direction backward --scope poc";
     const unasked = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
@@ -665,8 +706,11 @@ describe("the person's jump back from the open gate goes through on the first as
       const way = await claude.call(proj, SESSION, { tool: "Bash", command: respell(command, ".claude") });
       expect(way.code, `${command} -> ${way.said}`).toBe(0);
     }
-    expect(reply(proj, ASK).status).toBe(0);
-    const write = await claude.call(proj, SESSION, { tool: "Write", path: join(proj, "src", "slugify.ts") });
+    // Under relaxed and off the approved plan stands at the open gate, so only
+    // strict holds the build's write there.
+    const strict = gate("strict", "on");
+    expect(reply(strict, ASK).status).toBe(0);
+    const write = await claude.call(strict, SESSION, { tool: "Write", path: join(strict, "src", "slugify.ts") });
     expect(write.code, "the build's write was admitted at the open gate").toBe(2);
   });
 

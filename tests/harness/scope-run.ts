@@ -642,6 +642,8 @@ export interface StandInOptions {
   afterReview?: (stage: string, unit: string | null, agent: AgentStandIn) => void;
   /** While a code plan's approval waits, before the person answers. */
   beforePlanAnswer?: (unit: string | null, agent: AgentStandIn) => void;
+  /** At a stage's open gate, after it opened and before the person answers. */
+  atGate?: (stage: string, unit: string | null, agent: AgentStandIn) => void;
   /** Follow each refusal's named step instead of stopping (the guard matrix). */
   followRefusals?: boolean;
   /** The drive returns when the person stops for the day, before their next chat; `resume` carries on from there. */
@@ -689,7 +691,7 @@ export class AgentStandIn {
   readonly units: string[];
   answers: PersonAnswers;
   readonly afterApproval?: StandInOptions["afterApproval"];
-  readonly hooks: Pick<StandInOptions, "onCode" | "afterCheckpoint" | "afterReview" | "beforePlanAnswer" | "artifactText">;
+  readonly hooks: Pick<StandInOptions, "onCode" | "afterCheckpoint" | "afterReview" | "beforePlanAnswer" | "atGate" | "artifactText">;
   /** Each time an engine step sent the agent to repair the units block: where, and how many questions came before. */
   readonly unitsBlockRepairs: { where: string; asked: number }[] = [];
   private steps = 0;
@@ -714,7 +716,7 @@ export class AgentStandIn {
     this.afterApproval = options.afterApproval;
     this.hooks = {
       onCode: options.onCode, afterCheckpoint: options.afterCheckpoint,
-      afterReview: options.afterReview, beforePlanAnswer: options.beforePlanAnswer,
+      afterReview: options.afterReview, beforePlanAnswer: options.beforePlanAnswer, atGate: options.atGate,
       artifactText: options.artifactText,
     };
     this.followRefusals = options.followRefusals ?? false;
@@ -1453,6 +1455,7 @@ export class AgentStandIn {
         this.actOnPrint(opened as Directive);
       }
     }
+    this.hooks.atGate?.(stage, typeof d.unit === "string" ? d.unit : null, this);
     if (this.answers.stopAt?.(stage) && !this.stopped.has(stage)) {
       this.stopped.add(stage);
       this.stopForTheDay();
