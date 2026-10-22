@@ -314,6 +314,19 @@ export function stillOffLine(
 }
 
 /**
+ * What a settings file that still records a switch keeps, after a clear aimed
+ * at another file: the check by its label, still off, or a switch with no
+ * words of its own (usage tracking) by its name. The caller adds the command
+ * that clears it there.
+ */
+export function stillRecordedLine(name: string, file: string): string {
+  const subject = backOnSubject(name);
+  return subject === null
+    ? `${name} is still recorded in ${file}.`
+    : `${capitalized(subject.said)} ${subject.is} still off: the switch is recorded in ${file}.`;
+}
+
+/**
  * The setter's line for a check the person asked to turn back on while a
  * settings file keeps it off, or null when nothing does. On their own request
  * (`theirs`, the setter's rule) their own aidlc.settings.local.json entry is

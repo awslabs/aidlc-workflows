@@ -386,6 +386,7 @@ import {
   alreadyOffLines,
   backOnFromChatLines,
   recordSwitchChange,
+  stillRecordedLine,
   switchesOffLines,
   unrecordedSwitchLine,
 } from "./aidlc-recorded-switches.ts";
@@ -11794,7 +11795,7 @@ function settingsCommand(
 // the command that clears it there.
 function stillRecordedLines(projectDir: string, name: string, harness?: string): string[] {
   return layersRecordingBypass(projectDir, name).map((layer) =>
-    `${name} is still recorded in ${settingsFileShown(projectDir, layer)}, so it stays on. To clear it there: ${
+    `${stillRecordedLine(name, settingsFileShown(projectDir, layer))} To clear it there: ${
       settingsCommand(projectDir, "flags", ["--clear-bypass", name], layer, harness)
     }`
   );

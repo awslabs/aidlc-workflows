@@ -870,7 +870,7 @@ describe("t295 flags section", () => {
     const aimed = flags("--local", "--clear-bypass", "AIDLC_DISABLE_SENSORS", "--yes");
     expect(aimed.status, aimed.stdout + aimed.stderr).toBe(0);
     expect(aimed.stdout).toContain(
-      "AIDLC_DISABLE_SENSORS is still recorded in aidlc.settings.json, so it stays on. To clear it there: ",
+      "Sensors are still off: the switch is recorded in aidlc.settings.json. To clear it there: ",
     );
     expect(aimed.stdout).toContain("config flags --clear-bypass AIDLC_DISABLE_SENSORS --project --yes");
     // A personal bypass added on top leaves the team's switch on.
@@ -913,17 +913,22 @@ describe("t295 flags section", () => {
     expect(aimed.status, aimed.stdout + aimed.stderr).toBe(0);
     const said = aimed.stdout.trim().split("\n");
     expect(said, aimed.stdout).toHaveLength(1);
+    // The check by its own label, still off, as the person turned it.
     expect(said[0]).toStartWith(
-      "AIDLC_DISABLE_REVIEW_FREEZE_HOOK is still recorded in aidlc.settings.local.json, so it stays on. To clear it there: " +
+      "The review freeze check (it stops edits to work you already approved) is still off: " +
+        "the switch is recorded in aidlc.settings.local.json. To clear it there: " +
         "bun .claude/tools/aidlc.ts config flags --clear-bypass AIDLC_DISABLE_REVIEW_FREEZE_HOOK --local --yes",
     );
+    expect(aimed.stdout).not.toContain("stays on");
     expect(existsSync(shared)).toBe(false);
     expect(readFileSync(local, "utf-8")).toBe(recorded);
     const json = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--global", "--yes", "--json");
     expect(json.status, json.stdout + json.stderr).toBe(0);
     const data = (JSON.parse(json.stdout) as { data: { changed: boolean; notes: string[] } }).data;
     expect(data.changed).toBe(false);
-    expect(data.notes).toEqual([expect.stringContaining("still recorded in aidlc.settings.local.json")]);
+    expect(data.notes).toEqual([
+      expect.stringContaining("is still off: the switch is recorded in aidlc.settings.local.json."),
+    ]);
     // The command the line names turns the check back on.
     const there = flags("--clear-bypass", "AIDLC_DISABLE_REVIEW_FREEZE_HOOK", "--local", "--yes");
     expect(there.status, there.stdout + there.stderr).toBe(0);

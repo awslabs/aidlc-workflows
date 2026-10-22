@@ -329,8 +329,8 @@ describe("a check switched off for the project is always said, never refused", (
     expect(flags(proj, "--bypass", NAME, "--local", "--yes").status).toBe(0);
     const local = flags(proj, "--clear-bypass", NAME, "--local", "--yes");
     expect(local.status, local.stdout + local.stderr).toBe(0);
-    expect(local.stdout).toContain(`${NAME} is still recorded in aidlc.settings.json, so it stays on.`);
-    expect(local.stdout).not.toContain(`${FREEZE} is still off`);
+    expect(local.stdout).toContain(`${FREEZE} is still off: the switch is recorded in aidlc.settings.json.`);
+    expect(local.stdout.split(`${FREEZE} is still off`)).toHaveLength(2);
     expect(local.stdout).not.toContain("is on again");
     expect(resolveProjectFlag(NAME, NONE, proj)).toBe("1");
 
