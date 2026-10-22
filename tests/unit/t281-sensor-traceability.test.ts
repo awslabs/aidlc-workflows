@@ -289,8 +289,9 @@ describe("t281 runtime schema and status validation", () => {
 });
 
 describe("t281 upstream and target verification", () => {
-  // Work begun before Requirements Analysis recorded its IDs: the table's
-  // requirements are the ones it lists. A missing stories.md still fails closed.
+  // Work begun before Requirements Analysis recorded its IDs, with no
+  // requirements.md: the table's requirements are the ones it lists. A missing
+  // stories.md still fails closed.
   test("with no Requirements Analysis record a table's requirements are taken as written; a missing stories.md fails closed", () => {
     const proj = project();
     const userStories = trace(proj, "inception/user-stories/traceability.json", {
@@ -1980,7 +1981,7 @@ describe("t281 the IDs Requirements Analysis records", () => {
     expect(out.result.reason ?? "").not.toContain("no traceable IDs");
   });
 
-  test("with no record the table's requirements are taken as written, whatever requirements.md spells", () => {
+  test("with no record a table also owes the IDs requirements.md spells as FR1 and NFR1; a team's own form adds no finding", () => {
     const proj = project();
     seedUserStories(proj);
     write(proj, "inception/requirements-analysis/requirements.md", TEAM_FORM);
@@ -1989,11 +1990,11 @@ describe("t281 the IDs Requirements Analysis records", () => {
     expect(out.result.reason).toBeUndefined();
     expect(out.result.pass).toBe(true);
 
-    // No pattern reads requirements.md: FR2 is not asked for.
+    // As before the record, the ID patterns read requirements.md: FR2 is asked for.
     write(proj, "inception/requirements-analysis/requirements.md", "# Requirements\n\n- FR1 Sign up\n- FR2 Browse\n");
     out = run(proj, "user-stories", usTable(proj, ["FR1"]));
-    expect(out.result.missing_from_upstream_ids).toEqual([]);
-    expect(out.result.pass, out.result.reason).toBe(true);
+    expect(out.result.missing_from_upstream_ids).toEqual(["FR2"]);
+    expect(out.result.pass).toBe(false);
   });
 
   test("a stage that traces one kind takes only that kind from the record", () => {
@@ -2047,6 +2048,7 @@ describe("t281 the IDs Requirements Analysis records", () => {
     ]) {
       const proj = project();
       seedUserStories(proj);
+      write(proj, "inception/requirements-analysis/requirements.md", TEAM_FORM);
       record(proj, [...ids, { id: "FR-2", kind: "functional" }] as RecordedId[]);
       const out = run(proj, "user-stories", usTable(proj, ["FR-2"]));
       expect(out.result.pass, `${JSON.stringify(ids)}: ${out.result.reason}`).toBe(true);
@@ -2081,6 +2083,28 @@ describe("t281 the IDs Requirements Analysis records", () => {
     expect(out.reason).toBeUndefined();
     expect(out.pass).toBe(true);
     expect(out.coverage.map((entry) => entry.id)).toEqual(ids);
+  });
+
+  test("with no record and no stories, Build and Test reports a requirement requirements.md spells as FR2 that no table traced", () => {
+    const proj = project();
+    write(proj, "inception/requirements-analysis/requirements.md", "# Requirements\n\n- FR1 Sign up\n- FR2 Browse\n");
+    const source = join(proj, "src", "app.ts");
+    mkdirSync(join(source, ".."), { recursive: true });
+    writeFileSync(source, "export const app = true;\n");
+    trace(proj, "construction/code-generation/traceability.json", {
+      stage: "code-generation",
+      upstream_ids: ["FR1"],
+      coverage: [{ id: "FR1", status: "OK", target: "src/app.ts" }],
+    });
+    const out = JSON.parse(spawnSync("bun", [SCRIPT, "--stage", "build-and-test"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      cwd: proj,
+      env: { ...process.env, AIDLC_PROJECT_DIR: proj },
+    }).stdout) as { pass: boolean; reason?: string; uncovered: string[] };
+    expect(out.reason).toBeUndefined();
+    expect(out.uncovered).toEqual(["FR2"]);
+    expect(out.pass).toBe(false);
   });
 
   test("Requirements Analysis declares the record and says how to write it; later stages start their table with the tool", () => {
@@ -2230,19 +2254,28 @@ describe("t281 the table the tool starts (--write-upstream)", () => {
     expect(readFileSync(notAnObject, "utf-8")).toBe("[1, 2]");
   });
 
-  test("with no record it says what to list, as written", () => {
+  test("with no record it lists the IDs requirements.md spells as FR1 and NFR1, and says what to list when it finds none", () => {
     const proj = project();
     seedUserStories(proj);
     rmSync(join(seededRecordDir(proj), "inception", "requirements-analysis", "traceability.json"));
     const path = join(seededRecordDir(proj), "inception", "user-stories", "traceability.json");
-    const started = start(proj, "user-stories", path);
+    let started = start(proj, "user-stories", path);
+    expect(started.reply.written).toBe(true);
+    expect(started.reply.upstream_ids).toEqual(["FR1", "FR2", "NFR1"]);
+    expect(started.reply.reason).toBeUndefined();
+
+    const fresh = project();
+    seedUserStories(fresh);
+    rmSync(join(seededRecordDir(fresh), "inception", "requirements-analysis", "traceability.json"));
+    write(fresh, "inception/requirements-analysis/requirements.md", "# Requirements\n\n### FR-1: Sign up\n\n### NFR-1: Security\n");
+    started = start(fresh, "user-stories", join(seededRecordDir(fresh), "inception", "user-stories", "traceability.json"));
     expect(started.reply.written).toBe(false);
     expect(started.reply.upstream_ids).toEqual([]);
-    expect(readdirSync(join(seededRecordDir(proj), "inception", "user-stories"))).not.toContain("traceability.json");
+    expect(readdirSync(join(seededRecordDir(fresh), "inception", "user-stories"))).not.toContain("traceability.json");
     expect(started.reply.reason).toContain("Requirements Analysis recorded no requirement IDs");
     expect(started.reply.reason).toContain("every FR and NFR ID requirements.md defines");
 
-    const nfr = start(proj, "nfr-requirements", join(seededRecordDir(proj), "construction", "nfr-requirements", "traceability.json"));
+    const nfr = start(fresh, "nfr-requirements", join(seededRecordDir(fresh), "construction", "nfr-requirements", "traceability.json"));
     expect(nfr.reply.reason).toContain("every NFR ID requirements.md defines");
   });
 

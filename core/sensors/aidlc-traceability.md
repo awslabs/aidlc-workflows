@@ -39,7 +39,7 @@ run when the stage's gate opens, on the tables as they are then:
    `ids` Requirements Analysis records in its own traceability.json, spelled as
    requirements.md spells them (each with its `kind`, a sub-requirement `of` its
    requirement); without that record, a table's requirements are the ones it
-   lists.
+   lists and the ones the FR and NFR ID patterns find in requirements.md.
 5. Verifies deterministic targets where possible: stories, Unit mappings,
    business rules, and workspace-relative code paths.
 6. Derives functional-design orphans from `rules.md` rather than

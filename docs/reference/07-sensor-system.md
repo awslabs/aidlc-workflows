@@ -231,7 +231,8 @@ tables. Requirements Analysis imports no check for its own
 `traceability.json`: it records there the FR and NFR IDs `requirements.md`
 defines, as written (`ids`, each with its `kind` and, for a sub-requirement,
 `of`), and every later check takes those IDs from it; a record that is missing
-or not exact leaves each table's requirements as the table lists them. A later
+or not exact leaves each table's requirements as the table lists them, plus the
+IDs the FR and NFR patterns find in `requirements.md`, as before the record. A later
 stage starts its table with `engine sensor-traceability --stage <slug>
 --output-path <table> --write-upstream`, which adds every upstream ID the check
 asks for, each with a `GAP` row, and writes nothing when nothing is missing.

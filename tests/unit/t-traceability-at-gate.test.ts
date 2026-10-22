@@ -9,7 +9,9 @@
 //
 // A later stage starts its table with the tool (`--write-upstream`): the IDs
 // come from the same resolver the check uses, so a table the agent fills
-// row by row opens a gate with nothing to say.
+// row by row opens a gate with nothing to say. With no Requirements Analysis
+// record the check reads requirements.md's FR1 and NFR1 IDs, as before the
+// record: one the table leaves out is said, and a team's own form adds no line.
 //
 // The Requirements Analysis gate open across the update that adds its record to
 // what the stage produces: the review receipt it holds lists one more declared
@@ -24,7 +26,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
   auditBlockField,
@@ -238,6 +240,29 @@ describe("t-traceability-at-gate: the check reads the finished tables when the g
     const opened = openGate(proj);
     expect(String(opened.narration ?? "")).not.toContain(CHECK_LINE);
     approveMovesOn(proj);
+  });
+
+  // Work begun before Requirements Analysis recorded its IDs: the check reads
+  // requirements.md as it did before, so a requirement the table leaves out is
+  // said, and a team's own form there adds no line.
+  test("with no record, a requirement the table leaves out is said at the gate; a team's own form says nothing", () => {
+    const left = project();
+    rmSync(join(seededRecordDir(left.proj), "inception", "requirements-analysis", "traceability.json"));
+    recordFile(left.proj, "inception/requirements-analysis/requirements.md", "# Requirements\n\n- FR1 Sign up\n- FR2 Browse\n- NFR1 Security\n");
+    writeTable(left.table, [
+      { id: "FR1", status: "OK", target: "US1.1" },
+      { id: "NFR1", status: "Deferred", target: "nfr-requirements" },
+    ]);
+    expect(String(openGate(left.proj).narration ?? "")).toContain("The traceability check reports 1 finding in traceability.json.");
+
+    const team = project();
+    rmSync(join(seededRecordDir(team.proj), "inception", "requirements-analysis", "traceability.json"));
+    writeTable(team.table, [
+      { id: "FR-1", status: "OK", target: "US1.1" },
+      { id: "FR-2", status: "OK", target: "US1.1" },
+      { id: "NFR-1", status: "Deferred", target: "nfr-requirements" },
+    ]);
+    expect(String(openGate(team.proj).narration ?? "")).not.toContain(CHECK_LINE);
   });
 });
 

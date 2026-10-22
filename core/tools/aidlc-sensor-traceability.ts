@@ -70,8 +70,10 @@ interface UpstreamResolution {
   unitContext?: UnitContext;
   storyAssignments?: Map<string, Set<string>>;
   recorded: Map<string, RecordedRequirement> | null;
-  // The requirement kinds taken from the table as written, for want of a record.
+  // The requirement kinds requirements.md gave no ID of, for want of a record:
+  // the table lists them as written.
   unrecorded: RequirementKind[];
+  requirementsFile: string;
 }
 
 const ID_PATTERNS = {
@@ -226,8 +228,9 @@ function withoutTracedParents(ids: Set<string>, recorded: Map<string, RecordedRe
 // The FR and NFR IDs Requirements Analysis recorded in its own traceability.json,
 // spelled as requirements.md spells them, or null when it recorded none (work
 // begun before it did) or the record's shape is not exact. Every reader then
-// takes a table's requirements as the table lists them; nothing reads them out
-// of requirements.md.
+// takes a table's requirements as the table lists them, and the ones the FR and
+// NFR patterns find in requirements.md, as every check read them before the
+// record.
 function recordedRequirements(docsDir: string): Map<string, RecordedRequirement> | null {
   const read = readText(join(docsDir, "inception", "requirements-analysis", "traceability.json"));
   const value = read.content === null ? undefined : parseJson(read.content);
@@ -249,12 +252,21 @@ function recordedRequirements(docsDir: string): Map<string, RecordedRequirement>
   return recorded;
 }
 
+const KIND_PATTERN: Record<RequirementKind, RegExp> = { functional: ID_PATTERNS.FR, "non-functional": ID_PATTERNS.NFR };
+
 // The requirements of these kinds a stage traces: the recorded ones, or without
-// a record the ones the table lists, as written.
+// a record the ones the table lists, as written, and the ones the pattern finds
+// in requirements.md. Its reasons are not said: a team's own form (FR-1) finds
+// none and is the table's to list.
 function addRequirements(result: UpstreamResolution, kinds: RequirementKind[], declared: readonly string[]): Set<string> {
   if (result.recorded === null) {
-    for (const kind of kinds) if (!result.unrecorded.includes(kind)) result.unrecorded.push(kind);
-    return addSource(result, { ids: new Set(declared) });
+    const ids = new Set(declared);
+    for (const kind of kinds) {
+      const written = idsFromFile(result.requirementsFile, [KIND_PATTERN[kind]], "requirements.md").ids;
+      if (written.size === 0 && !result.unrecorded.includes(kind)) result.unrecorded.push(kind);
+      for (const id of written) ids.add(id);
+    }
+    return addSource(result, { ids });
   }
   const ids = [...result.recorded.values()].filter((entry) => kinds.includes(entry.kind)).map((entry) => entry.id);
   return addSource(result, { ids: new Set(ids) });
@@ -507,16 +519,17 @@ function resolveNfrUpstream(
   }
 }
 
-// `declared` is the table's own upstream_ids: the requirements it traces when
-// Requirements Analysis recorded none.
+// `declared` is the table's own upstream_ids: with requirements.md's own, the
+// requirements it traces when Requirements Analysis recorded none.
 function resolveUpstream(stage: string, projectDir: string, outputPath: string, declared: readonly string[]): UpstreamResolution {
-  const result: UpstreamResolution = { ids: new Set(), reasons: [], extraGaps: [], recorded: null, unrecorded: [] };
+  const result: UpstreamResolution = { ids: new Set(), reasons: [], extraGaps: [], recorded: null, unrecorded: [], requirementsFile: "" };
   const docsDir = recordDir(projectDir);
   if (!docsDir) {
     result.reasons.push("cannot resolve the active intent record directory");
     return result;
   }
   result.recorded = recordedRequirements(docsDir);
+  result.requirementsFile = join(docsDir, "inception", "requirements-analysis", "requirements.md");
   const stories = join(docsDir, "inception", "user-stories", "stories.md");
   const storyMap = join(docsDir, "inception", "units-generation", "unit-of-work-story-map.md");
 
@@ -777,8 +790,9 @@ function readTable(path: string, label: string): { data?: TraceabilityData; reas
 }
 
 // Build and Test's cross-Unit coverage: every requirement Requirements Analysis
-// recorded (without a record, every one User Stories traced, or when it did not
-// run every one a Code Generation table lists) and, when User Stories ran,
+// recorded (without a record, every one the FR and NFR patterns find in
+// requirements.md and every one User Stories traced, or when it did not run
+// every one a Code Generation table lists) and, when User Stories ran,
 // every criterion in stories.md, each built by an `OK`
 // row whose file exists in some Code Generation table. A requirement with
 // sub-requirements (NFR1 over a Unit's NFR1.1) is built when each Unit has built
@@ -894,7 +908,11 @@ function finalCoverage(projectDir: string): FinalCoverage {
     }
   }
   if (tables === 0) reasons.push(`no Code Generation traceability.json under ${construction}`);
-  const requirementIds = recorded !== null ? [...recorded.keys()] : storyContent !== null ? tracedByStories : tracedByCode;
+  // Without a record requirements.md's reasons are not said, as in addRequirements.
+  const requirementIds = recorded !== null ? [...recorded.keys()] : [
+    ...idsFromFile(join(docsDir, "inception", "requirements-analysis", "requirements.md"), [ID_PATTERNS.FR, ID_PATTERNS.NFR], "requirements.md").ids,
+    ...(storyContent !== null ? tracedByStories : tracedByCode),
+  ];
   const reported = [...new Set([...withoutTracedParents(new Set(requirementIds), recorded), ...criteria])];
 
   // A story with no criteria cannot show it is built, so it stands for itself.
