@@ -467,7 +467,6 @@ import {
   readUnitSourceManifest,
   unitPlainName,
   unitSkippedItsCode,
-  discoverSiblingRepos,
   waveEligible,
 } from "./aidlc-lib.ts";
 import { reviewRecoverySpentMessage } from "./aidlc-log.ts";
@@ -1489,10 +1488,15 @@ function prepareEmission(directive: Directive): PreparedEmission {
       : null;
     if (line !== null) directive.narration = line;
   }
-  if (directive.kind === "run-stage" && directive.stage === "reverse-engineering" && directive.unit === undefined) {
+  // The count follows the stage's own progress line; the gate shown again
+  // keeps saying what the stage produced.
+  if (
+    directive.kind === "run-stage" && directive.stage === "reverse-engineering" && directive.unit === undefined &&
+    directive.gate_only !== true
+  ) {
     const projectDir = emissionProjectDir(directive);
     const scope = projectDir ? reverseEngineeringScopeNarration(projectDir) : null;
-    if (scope !== null) directive.narration = scope;
+    if (scope !== null) directive.narration = directive.narration ? `${directive.narration} ${scope}` : scope;
   }
   // The plan step is the conductor's own. The stage's dispatched mode would read
   // "hand the draft to the developer" (a Kiro run did, and the guard refused the
@@ -2831,7 +2835,8 @@ function narrateSpecialistStage(node: GraphStage, scope: string, stateContent: s
 export const RE_LARGE_SCOPE_REPOS = 10;
 
 export function reverseEngineeringScopeNarration(projectDir: string): string | null {
-  const repos = discoverSiblingRepos(projectDir).length;
+  // The repos the work records, the set Reverse Engineering reads.
+  const repos = intentRepos(projectDir).length;
   if (repos <= 1) return null;
   const base = `Reverse Engineering reads ${repos} repositories here.`;
   return repos >= RE_LARGE_SCOPE_REPOS
