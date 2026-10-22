@@ -867,6 +867,9 @@ describe("t345 complete nightly coverage", () => {
       const prepare = steps(job).findIndex((step) => step.name === "Prepare separate-user live runtime");
       expect(download).toBeGreaterThanOrEqual(0);
       expect(download).toBeLessThan(prepare);
+      // download-artifact v8 fails the step on a digest mismatch; the first fetch only warns, so the
+      // unpack's own check runs and a short archive is fetched once more.
+      expect(steps(job)[download].with?.["digest-mismatch"], name).toBe("warn");
       for (const step of steps(job)) {
         expect(step.run ?? "").not.toMatch(/\b(bun|npm|npx|pnpm|yarn|pip|pip3|cargo)\s+(install|i|ci|add)\b/);
         expect(step.run ?? "").not.toContain("scripts/package.ts");
