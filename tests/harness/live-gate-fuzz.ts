@@ -698,7 +698,8 @@ export async function judge(reply: Reply, tool: LiveTool, rig: LiveRig, ex: Exch
   }
   // P4: the message record keeps each line whole, and the decision row names it.
   const messages = store().listMessages(rig.proj);
-  for (const line of reply.inputs) {
+  // A blank line has no words to keep.
+  for (const line of reply.inputs.filter((l) => l.trim().length > 0)) {
     const text = said(line, tool);
     if (!messages.some((m) => m.text === text || m.text.trim() === text.trim())) failures.push({ pass: "P4", what: `no message record holds ${JSON.stringify(text.slice(0, 80))} whole` });
   }
