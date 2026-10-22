@@ -550,7 +550,7 @@ export function decisionsSince(proj: string, from: number, intentsBefore: number
         break;
       }
       case "STAGE_JUMPED":
-        out.push("resume:jump");
+        out.push(fieldOf(row, "Direction") === "REDO" ? "resume:redo" : "resume:jump");
         break;
       case "REQUEST_ROUTED":
         out.push("route:reshape");
