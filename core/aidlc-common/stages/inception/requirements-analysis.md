@@ -242,7 +242,7 @@ them exactly rather than renumbering or replacing them with prose references.
 
 Record them in `<record>/inception/requirements-analysis/traceability.json`:
 every ID `requirements.md` defines, spelled exactly as it spells them (a
-team's own form, such as `FR-1`, stays as it is), with its `kind`, and for a
+team's own form stays as it is), with its `kind`, and for a
 sub-requirement the requirement it belongs to in `of`. Later stages trace from
 this list, so an ID left out of it is left out of their tables. The reviewer
 checks the list against `requirements.md`.

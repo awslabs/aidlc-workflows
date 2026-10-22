@@ -200,7 +200,9 @@ describe("a gate open when summary confirmation turns on", () => {
       agent.host.write(questions, summary("Looks correct"));
       agent.must("log", "answer", "--stage", RA, "--checkpoint", "summary-confirmation", "--questions-file", questions,
         "--details", "Looks correct");
+      // The agent re-saves the stage's outputs from it, as the remedy says: the document and its record.
       agent.host.write(rel("requirements.md"), requirements);
+      agent.host.write(rel("traceability.json"), readFileSync(join(dir, "traceability.json"), "utf-8"));
     });
     // The edit was taken as the stage's revision once, and approved once after it.
     const backfilled = rows.filter((e) => e.event === "GATE_REJECTED" && field(e.block, "Stage") === RA);
