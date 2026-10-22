@@ -394,18 +394,11 @@ function personsWordsFields(pd: string, slug: string, message?: string): Record<
 }
 
 // A later stage approved with the first one's question stands on the words of
-// that approval: its row's own words and message, copied.
-function approvedTogetherWordsFields(pd: string, first: string): Record<string, string> {
-  try {
-    const row = readAuditShardEvents(pd).filter((entry) =>
-      entry.event === "GATE_APPROVED" && auditBlockField(entry.block, "Stage") === first).at(-1);
-    if (row === undefined) return {};
-    const words = auditBlockField(row.block, PERSONS_WORDS_FIELD);
-    const id = auditBlockField(row.block, PERSONS_MESSAGE_FIELD);
-    return { ...(words ? { [PERSONS_WORDS_FIELD]: words } : {}), ...(id ? { [PERSONS_MESSAGE_FIELD]: id } : {}) };
-  } catch {
-    return {};
-  }
+// that approval: the covering row's own words and message, copied.
+function approvedTogetherWordsFields(row: AuditShardEvent): Record<string, string> {
+  const words = auditBlockField(row.block, PERSONS_WORDS_FIELD);
+  const id = auditBlockField(row.block, PERSONS_MESSAGE_FIELD);
+  return { ...(words ? { [PERSONS_WORDS_FIELD]: words } : {}), ...(id ? { [PERSONS_MESSAGE_FIELD]: id } : {}) };
 }
 
 // Per-stage token/cost rollup fields for STAGE_COMPLETED / WORKFLOW_COMPLETED.
@@ -7238,7 +7231,7 @@ function verifyApprovalDecision(
   forceHuman = false,
   unit?: string,
   message?: string,
-): { approvalInput: string | undefined; autonomousDecision: boolean; together: { first: string } | null } {
+): { approvalInput: string | undefined; autonomousDecision: boolean; together: { first: string; row: AuditShardEvent } | null } {
   const autonomousDecision =
     !forceHuman && isAutonomousConstructionGate(content, stage, pd);
   // The choice the agent read from the person's reply, recorded as it passed
@@ -7665,7 +7658,7 @@ function handleApprove(args: string[]): void {
     if (approvalInput) gateFields["User Input"] = approvalInput;
     if (together) {
       // The person's one reply at the first listed stage approves this one too.
-      Object.assign(gateFields, approvedTogetherWithField(together.first), approvedTogetherWordsFields(pd, together.first));
+      Object.assign(gateFields, approvedTogetherWithField(together.first), approvedTogetherWordsFields(together.row));
     } else if (!autonomousDecision) {
       Object.assign(gateFields, personsWordsFields(pd, slug, message), approvesTogetherFields(listedTogether));
     }

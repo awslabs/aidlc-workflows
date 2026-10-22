@@ -41082,11 +41082,12 @@ const APPROVED_TOGETHER_ENDS = new Set([
 
 // A later listed stage's approval stands on the person's one reply while the
 // approval that listed it still covers it: no question, rejection or decision
-// since, and no gate for a stage outside the list. Ledger order only.
+// since, and no gate for a stage outside the list. Ledger order only. The row
+// is that approval's own, so what it recorded travels with it.
 export function approvedTogetherCover(
   projectDir: string,
   slug: string,
-): { first: string } | null {
+): { first: string; row: AuditShardEvent } | null {
   let rows: AuditShardEvent[];
   try {
     rows = sortAttemptEvents(readAuditShardEvents(projectDir));
@@ -41106,7 +41107,7 @@ export function approvedTogetherCover(
       if (!listed.includes(stage)) return null;
       if (later.event === "GATE_APPROVED" && stage === slug) return null;
     }
-    return { first };
+    return { first, row };
   }
   return null;
 }
