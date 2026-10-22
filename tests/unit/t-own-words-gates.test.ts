@@ -27,6 +27,7 @@ import {
   createTestProject,
   FIXTURES_DIR,
   resetAidlcEnv,
+  seedAidlcMemory,
   seededAuditShard,
   seededRecordDir,
   seededStateFile,
@@ -513,6 +514,32 @@ describe("the stage gate records the choice the agent read, with the person's wo
       }).out.split("\n").find((line) => line.startsWith("{")) as string,
     ) as GateReply;
     expect([again.kind, again.revision_cycle, again.accept_as_is]).toEqual(["print", 3, "offered"]);
+  });
+
+  // The gate is where people stop: the step `next` shows it again with, in a
+  // new chat or after a park at the open gate, carries the count too.
+  test("the gate shown again in a new chat, or after a park at the open gate, carries the count", () => {
+    type GateStep = { kind: string; gate_only?: boolean; revision_cycle?: number; accept_as_is?: string };
+    seedAidlcMemory(proj);
+    for (let i = 0; i < 3; i++) {
+      says(proj, `tighten section ${i + 1}`);
+      report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "tighten it"]);
+      expect(report(proj, ["--stage", slug, "--result", "revised"]).kind).toBe("print");
+    }
+    const shownAgain = (args: string[]): GateStep => {
+      const r = run(ORCHESTRATE, [...args, "--project-dir", proj], { AIDLC_SESSION_OVERRIDE: OTHER_SESSION });
+      expect(r.rc, r.out).toBe(0);
+      const step = JSON.parse(r.out.split("\n").find((line) => line.startsWith("{")) as string) as GateStep;
+      return { kind: step.kind, gate_only: step.gate_only, revision_cycle: step.revision_cycle, accept_as_is: step.accept_as_is };
+    };
+    const offered = { kind: "run-stage", gate_only: true, revision_cycle: 3, accept_as_is: "offered" };
+
+    expect(shownAgain(["next"])).toEqual(offered);
+
+    says(proj, "let me think about it, stop for today");
+    expect(state(proj, ["park"]).rc).toBe(0);
+    expect(state(proj, ["unpark"]).rc).toBe(0);
+    expect(shownAgain(["next", "--resume"])).toEqual(offered);
   });
 
   test("a gate shown with no change request on record carries no count", () => {

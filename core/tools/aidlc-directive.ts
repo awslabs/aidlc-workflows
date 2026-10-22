@@ -457,6 +457,10 @@ export interface RunStageDirective {
   // Re-present an open approval gate. Body and review are settled; do not rerun
   // the stage or edit its outputs. Team gates retain their unit_gate routing.
   gate_only?: true;
+  // The open gate shown again carries the same count as the reply that opened
+  // it (PrintDirective.revision_cycle and accept_as_is).
+  revision_cycle?: number;
+  accept_as_is?: "offered" | "next-revision";
   /** Exact remaining Unit record commands; the stage body is already written. */
   unit_record_step?: string;
   // Every Unit this per-Unit stage covers was built in the current attempt, so
@@ -983,6 +987,8 @@ const RUN_STAGE_FIELDS = [
   "protocol_modules",
   "swarm_settled",
   "gate_only",
+  "revision_cycle",
+  "accept_as_is",
   "unit_record_step",
   "build_settled",
   "approve_together",
@@ -1020,6 +1026,8 @@ const DISPATCH_SUBAGENT_FIELDS = [
       field !== "protocol_modules" &&
       field !== "swarm_settled" &&
       field !== "gate_only" &&
+      field !== "revision_cycle" &&
+      field !== "accept_as_is" &&
       field !== "unit_record_step" &&
       field !== "build_settled" &&
       field !== "approve_together" &&
@@ -2024,13 +2032,7 @@ export function validateDirective(obj: unknown): ValidationResult {
     case "print":
       checkString(o, "message", kind, errors);
       checkOptionalNullableString(o, "next_stage", kind, errors);
-      checkOptionalPositiveInteger(o, "revision_cycle", kind, errors);
-      if ("accept_as_is" in o) {
-        if (typeof o.accept_as_is !== "string") {
-          errors.push(`${kind}: accept_as_is must be string, got ${describe(o.accept_as_is)}`);
-        }
-        checkEnum(o, "accept_as_is", ["offered", "next-revision"], kind, errors);
-      }
+      checkOptionalRevisionCycle(o, kind, errors);
       break;
     case "error":
       checkString(o, "message", kind, errors);
@@ -2150,6 +2152,7 @@ function checkRunStageShared(
     checkOptionalProtocolModules(o, kind, errors);
     checkOptionalTrue(o, "swarm_settled", kind, errors);
     checkOptionalTrue(o, "gate_only", kind, errors);
+    checkOptionalRevisionCycle(o, kind, errors);
     checkOptionalString(o, "unit_record_step", kind, errors);
     checkOptionalTrue(o, "build_settled", kind, errors);
     checkOptionalApproveTogether(o, kind, errors);
@@ -2861,6 +2864,21 @@ function checkOptionalPositiveInteger(
       `${kind}: ${field} must be a positive integer, got ${describe(v)}`,
     );
   }
+}
+
+// The gate's change-request count and what it opens, on the reply or step
+// that shows the gate.
+function checkOptionalRevisionCycle(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  checkOptionalPositiveInteger(o, "revision_cycle", kind, errors);
+  if (!("accept_as_is" in o)) return;
+  if (typeof o.accept_as_is !== "string") {
+    errors.push(`${kind}: accept_as_is must be string, got ${describe(o.accept_as_is)}`);
+  }
+  checkEnum(o, "accept_as_is", ["offered", "next-revision"], kind, errors);
 }
 
 function checkPositiveInteger(

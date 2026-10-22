@@ -11074,6 +11074,8 @@ function applyGateOnlyShape(
     if (narration) directive.narration = narration;
     addReviewCheckOffer(directive, projectDir, gateNode, unit);
     addContextParkOffer(directive, projectDir);
+    // Counted as the gate is reported: a Unit's own only at a team Unit gate.
+    addRevisionCycle(directive, projectDir, directive.stage, directive.unit_gate ? unit : null);
   }
   directive.protocol_modules = (directive.protocol_modules ?? []).filter(
     (module) =>

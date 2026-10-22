@@ -347,7 +347,7 @@ the checkpoint as resolved. Discuss what they want instead, then re-present the
 same structured question with every offered choice, end the turn, and wait.
 
 ### Revision loop escape hatch
-The reply that showed the gate (`report --result awaiting-approval`, or `revised`) says how many times the person asked for changes at it: `revision_cycle`, counted by the engine from the record, so it holds across a park and a new chat. Never count the rounds yourself. When that reply carries `accept_as_is: "offered"`, add a third option, with `[N]` read from `revision_cycle`:
+The reply or step that shows the gate (the reply to `report --result awaiting-approval` or `revised`, or the `gate_only` step `next` shows it again with) says how many times the person asked for changes at it: `revision_cycle`, counted by the engine from the record, so it holds across a park and a new chat. Never count the rounds yourself. When it carries `accept_as_is: "offered"`, add a third option, with `[N]` read from `revision_cycle`:
 
 ```question
 prompt: "[Stage Name] — this is revision cycle [N]. How would you like to proceed?"
