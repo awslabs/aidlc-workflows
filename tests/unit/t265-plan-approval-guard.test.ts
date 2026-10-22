@@ -1412,11 +1412,15 @@ describe("t265b hook lifecycle", () => {
         const record = join(RECORD_REL, "construction", "code-generation");
         const trace = join(record, "traceability.json");
         writeFileSync(join(proj, trace), "{}\n");
+        // A shell line names the file with forward slashes, as an agent writes it
+        // under Bash (Git Bash on Windows): a backslash there is an escape, and
+        // the line would write another file.
+        const traceLine = toPosix(trace);
         for (const name of ["code-generation-plan.md", "unit-test-instructions.md", "code-summary.md", "traceability.json"]) {
           const write = runHook(proj, WRITE(join(proj, record, name)));
           expect(write.code, `${name}: ${write.stderr}`).toBe(0);
         }
-        for (const command of [`cat ${trace}`, `jq . ${trace}`, `printf '{}' > ${trace}`, `sed -i 's/a/b/' ${trace}`]) {
+        for (const command of [`cat ${traceLine}`, `jq . ${traceLine}`, `printf '{}' > ${traceLine}`, `sed -i 's/a/b/' ${traceLine}`]) {
           expect(runHook(proj, BASH(command)).code, command).toBe(0);
         }
         // Code beside the answer, a command whose writes cannot be seen, and code
@@ -1426,7 +1430,7 @@ describe("t265b hook lifecycle", () => {
           `${approve} > src/inline.ts`,
           `${approve}; printf code > src/inline.ts`,
           "printf code > src/inline.ts",
-          `python3 -c "open('${trace}','w').write('{}')"`,
+          `python3 -c "open('${traceLine}','w').write('{}')"`,
         ];
         for (const command of code) {
           expect(runHook(proj, BASH(command)).code, command).toBe(policy === "strict" ? 2 : 0);
