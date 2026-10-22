@@ -719,6 +719,42 @@ describe("t304 executable review brief scenarios", () => {
     }
   });
 
+  // A review that says the work is ready, with Minor points: the points are
+  // the person's to weigh, not concerns that remain or actions they must take.
+  test("a READY review with only Minor open findings reads ready, with the points to weigh", () => {
+    const stage = findStageBySlug("requirements-analysis")!;
+    const one = renderReviewBrief(requirementProject([ROW_NEW]).proj, stage, "first");
+    expect(one).toContain("**Review outcome:** Ready, with 1 minor point to weigh.");
+    expect(one).not.toContain("Concerns remain");
+    expect(one).toContain("> R-01 Suggested change: Add a delivery date");
+    expect(one).not.toContain("Required action:");
+    expect(one).toContain("- **Approve** - continue with the open findings accepted.");
+    const two = renderReviewBrief(
+      requirementProject([ROW_NEW, ROW_NEW_SECOND.replace("| Major |", "| Minor |")]).proj,
+      stage,
+      "first",
+    );
+    expect(two).toContain("**Review outcome:** Ready, with 2 minor points to weigh.");
+  });
+
+  test.each([
+    ["a READY review with a Major finding", [ROW_NEW, ROW_NEW_SECOND], "READY"],
+    ["a NOT-READY review with only a Minor finding", [ROW_NEW], "NOT-READY"],
+  ] as const)("%s keeps the concerns, and its Major or not-ready points stay required", (_, rows, verdict) => {
+    const brief = renderReviewBrief(
+      requirementProject([...rows], verdict).proj,
+      findStageBySlug("requirements-analysis")!,
+      "first",
+    );
+    expect(brief).toContain("**Review outcome:** Concerns remain for your decision.");
+    if (verdict === "READY") {
+      expect(brief).toContain("> R-01 Suggested change: Add a delivery date");
+      expect(brief).toContain("> R-02 Required action: Name the accountable owner");
+    } else {
+      expect(brief).toContain("> R-01 Required action: Add a delivery date");
+    }
+  });
+
   test("re-review preserves resolved, unresolved, and new stable IDs across multiple referenced artifacts", () => {
     const first = parseReviewArtifact(
       reviewMarkdown("NOT-READY", [ROW_NEW, ROW_NEW_SECOND]),
@@ -1182,7 +1218,7 @@ describe("t304 executable review brief scenarios", () => {
     const file = project.relativeArtifact.split("/").at(-1);
     expect(brief).toContain(`| R-01 | Minor | ${file} > FR-1 | New |`);
     expect(brief).toContain("> R-01 Finding: Concern 1");
-    expect(brief).toContain("> R-01 Required action: Fix concern 1");
+    expect(brief).toContain("> R-01 Suggested change: Fix concern 1");
   });
 
   test("the single per-Unit stage gate displays exactly the open findings approval dispositions cover", () => {
@@ -1356,15 +1392,22 @@ describe("t304 executable review brief scenarios", () => {
   // #2208: the person was told the Critical was fixed and nothing reviewed the
   // fix. The record says the work changed after the review, never that they
   // accepted the risk, and nobody decided the findings: the next review re-checks
-  // them. The gate the person sees is unchanged.
+  // them. The brief says each finding the way Approve records it, and leaves the
+  // change itself to the line the gate's report already said.
   test.each(["off", "relaxed"] as const)(
     "Guard Policy %s: Approve over work changed after its review records Changed after review and the findings stay open",
     (mode) => {
-      const { proj, relativeArtifact } = fixedAfterReviewProject(mode);
+      const { proj } = fixedAfterReviewProject(mode);
       const stage = findStageBySlug("requirements-analysis")!;
       const brief = renderReviewBrief(proj, stage, "first");
-      expect(brief).toContain(`**Changed after review:** \`${relativeArtifact}\``);
-      expect(brief).toContain("- **Approve** - continue with the open findings accepted.");
+      expect(brief).toContain("| R-01 | Critical | requirements.md > FR-1 | Changed after review |");
+      expect(brief).toContain("| R-02 | Minor | requirements.md > FR-2 | Changed after review |");
+      expect(brief).not.toContain("| New |");
+      expect(brief).toContain("- **Approve** - continue with the work as changed after review.");
+      expect(brief).not.toContain("open findings accepted");
+      expect(brief).not.toContain("**Changed after review:**");
+      expect(brief).not.toContain("Reviewed content differs");
+      expect(brief).not.toContain("carrying on");
 
       approveGate(proj);
       expect(recordedDispositions(proj, "requirements-analysis")).toEqual([
@@ -1470,11 +1513,17 @@ describe("t304 executable review brief scenarios", () => {
     expect(statuses(approvalDispositionField(proj, stage, "unit-b", "person"))).toEqual([
       { artifact: unitB, id: "R-02", status: "Accepted risk" },
     ]);
+    // The stage's gate shows each finding as its approval records it.
+    const brief = renderReviewBrief(proj, stage, "first");
+    expect(brief).toContain("| R-01 | Major | entities.md > section | Changed after review |");
+    expect(brief).toContain("| R-02 | Major | entities.md > section | New |");
+    expect(brief).toContain(
+      "- **Approve** - continue with the open findings accepted and the work as changed after review.",
+    );
   });
 
   // With no Units Generation a per-Unit stage writes one set of files for the
-  // stage, so its one review is relabelled by any change to them, the same
-  // grain the brief's "Changed after review" line uses.
+  // stage, so its one review is relabelled by any change to them.
   test("a per-Unit stage with stage-level files records Changed after review for its one review", () => {
     const { proj } = requirementProject([]);
     const stage = findStageBySlug("code-generation")!;
@@ -2430,7 +2479,7 @@ describe("t304 engine-owned findings experience", () => {
     );
     expect(brief).toContain("| R-01 | Minor |");
     expect(brief).toContain("> R-01 Not re-checked this round");
-    expect(brief).toContain("Concerns remain for your decision");
+    expect(brief).toContain("**Review outcome:** Ready, with 1 minor point to weigh.");
   });
 
   test("The reviewer tries to write a decision: the report is refused and cannot change it", () => {

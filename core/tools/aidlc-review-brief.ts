@@ -83,6 +83,9 @@ export interface ReviewArtifactContext {
   reviewerResolvedCount?: number;
   // The latest review is the retried incomplete fallback: it re-checked nothing.
   incompleteReview?: boolean;
+  // The gate brief's open findings, by ID, that Approve records as `Changed
+  // after review` (reviewedWorkChanged).
+  changedAfterReview?: string[];
 }
 
 export interface ReviewFindingDisposition {
@@ -1372,6 +1375,21 @@ function latestUnitApproval(
   };
 }
 
+// Whether the work a context's review covered changed after that review and no
+// finished review has seen the change: Approve then records its open findings
+// as `Changed after review`, and the gate's brief shows them that way.
+function reviewedWorkChanged(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  context: ReviewArtifactContext,
+): boolean {
+  return acceptedReviewChanges(
+    projectDir,
+    stage.slug,
+    stage.for_each === "unit-of-work" ? context.unit : undefined,
+  ).length > 0;
+}
+
 // What an approval records for each open finding: `Accepted risk` when the
 // person approved, `Approved autonomously` when nobody did (no decision: the
 // finding stays open for the next review), and, whoever approved, `Changed
@@ -1411,11 +1429,7 @@ export function approvalDispositionField(
         finding.status === "New" || finding.status === "Unresolved"
       );
       if (open.length === 0) return [];
-      const changed = acceptedReviewChanges(
-        projectDir,
-        stage.slug,
-        stage.for_each === "unit-of-work" ? context.unit : undefined,
-      ).length > 0;
+      const changed = reviewedWorkChanged(projectDir, stage, context);
       const own = units === undefined && decider === "nobody" &&
           stage.for_each === "unit-of-work" && context.unit !== undefined
         ? latestUnitApproval(unitApprovals(), stage.slug, context.unit)
@@ -1730,7 +1744,11 @@ export function renderFindingsContext(
         ? `${finding.finding} (worse than ${finding.relatedFindingId})`
         : finding.finding;
     const displayStatus = (finding: ReviewFinding): string =>
-      finding.resolvedByReviewer ? "Resolved (reviewer)" : finding.status;
+      finding.resolvedByReviewer
+        ? "Resolved (reviewer)"
+        : context.changedAfterReview?.includes(finding.id)
+          ? "Changed after review"
+          : finding.status;
     if (audience === "copy") {
       lines.push(
         "| ID | Severity | Location | Finding | Required action | Status |",
@@ -1758,16 +1776,20 @@ export function renderFindingsContext(
         lines.push("| - | - | - | No findings |");
       }
       // A place or status too long for its cell (the person's own reason for
-      // a decision, say) is written out in full here, so nothing is cut.
+      // a decision, say) is written out in full here, so nothing is cut. A
+      // Minor point in a review that says ready is a suggestion.
       for (const finding of context.findings) {
         const where = whereText(finding.location);
         const status = displayStatus(finding);
+        const action = context.verdict === "READY" && findingSeverityRank(finding.severity) === 0
+          ? "Suggested change"
+          : "Required action";
         lines.push(
           "",
           `> ${finding.id} Finding: ${markdownCell(displayFinding(finding))}`,
           ...(where.length > SHORT_CELL_MAX ? ["", `> ${finding.id} Where: ${markdownCell(where)}`] : []),
           "",
-          `> ${finding.id} Required action: ${markdownCell(finding.requiredAction)}`,
+          `> ${finding.id} ${action}: ${markdownCell(finding.requiredAction)}`,
           ...(status.length > SHORT_CELL_MAX ? ["", `> ${finding.id} Status: ${markdownCell(status)}`] : []),
         );
       }
@@ -2150,8 +2172,7 @@ export function reviewInvalidationDetails(
 export function acceptedReviewChanges(
   projectDir: string,
   stageSlug: string,
-  // A Unit's own approval: only that Unit's changes. Each was already said once
-  // when it was kept, so another Unit's change is not said again here.
+  // A Unit's own approval: only that Unit's changes.
   unit?: string,
 ): Array<{ notice: string; changed: string[] | null }> {
   const attemptView = reviewInvalidationAttemptView(
@@ -2220,6 +2241,15 @@ export function renderReviewBrief(
     ? undefined
     : unit;
   let contexts = readReviewArtifactContexts(projectDir, stage, contextUnit, true);
+  // An open finding on work kept after its review (relaxed or off) shows as
+  // Approve records it. The change itself was said once, as change_notices,
+  // when it was recorded, so the brief does not say it again. Marked before the
+  // brief adds its own finding below, which no approval records.
+  contexts = contexts.map((context) =>
+    reviewedWorkChanged(projectDir, stage, context)
+      ? { ...context, changedAfterReview: context.findings.filter(findingIsOpen).map((finding) => finding.id) }
+      : context
+  );
   // The incomplete fallback re-checked nothing: the record says the review did
   // not finish, and the conductor's --fallback-finding, given only when what
   // the reviewer returned says why, follows it. A list carried from earlier
@@ -2269,16 +2299,20 @@ export function renderReviewBrief(
     }];
   }
   const findings = contexts.flatMap((context) => context.findings);
-  const open = findings.filter((finding) =>
-    finding.status === "New" || finding.status === "Unresolved"
-  );
+  const open = findings.filter(findingIsOpen);
   const reviewerResolved = contexts.reduce(
     (count, context) => count + (context.reviewerResolvedCount ?? 0),
     0,
   );
+  // Minor points in a review that says ready are the person's to weigh, not
+  // concerns that remain.
+  const minorPoints = contexts.every((context) => context.verdict === "READY") &&
+    open.every((finding) => findingSeverityRank(finding.severity) === 0);
   const outcome =
     open.length > 0
-      ? "Concerns remain for your decision."
+      ? minorPoints
+        ? `Ready, with ${open.length} minor ${open.length === 1 ? "point" : "points"} to weigh.`
+        : "Concerns remain for your decision."
       : reviewerResolved > 0
         ? `${reviewerResolved} ${
             reviewerResolved === 1 ? "finding" : "findings"
@@ -2295,19 +2329,6 @@ export function renderReviewBrief(
     `**Stage:** ${stage.name}`,
     `**Review outcome:** ${outcome}`,
   ];
-  // Reviewed content that changed after the review and was kept under a relaxed
-  // or off Guard Policy, and that no later finished review covered. The verdict
-  // above is the reviewer's; this tells the person what it did not see. The
-  // paths say it; the change's own sentence is said only when there are none.
-  // The final gate of a per-Unit stage omits --unit and says every Unit's change.
-  const changesFor = stage.for_each === "unit-of-work" ? unit : undefined;
-  for (const accepted of acceptedReviewChanges(projectDir, stage.slug, changesFor)) {
-    lines.push(
-      accepted.changed !== null
-        ? `**Changed after review:** ${accepted.changed.map((path) => `\`${path}\``).join(", ")}`
-        : `**Reviewed content differs:** ${accepted.notice}`,
-    );
-  }
   if (reason === "stale") {
     const invalidation = reviewInvalidationDetails(
       projectDir,
@@ -2334,17 +2355,26 @@ export function renderReviewBrief(
       );
     }
   }
+  // Approve says what it records: the open findings accepted, and those on
+  // work changed after its review as that change.
+  const openChanged = contexts.flatMap((context) =>
+    context.findings.filter(findingIsOpen).map((finding) => context.changedAfterReview?.includes(finding.id) === true)
+  );
+  const accepted = openChanged.includes(false);
+  const changed = openChanged.includes(true);
+  const approve = accepted && changed
+    ? "continue with the open findings accepted and the work as changed after review."
+    : accepted
+      ? "continue with the open findings accepted."
+      : changed
+        ? "continue with the work as changed after review."
+        : "continue; no findings are open.";
   lines.push(
     "",
     renderFindingsContext(contexts),
     "",
     "**Decision options:**",
-    // Approve says what it accepts: open findings only when there are some.
-    contexts.some((context) =>
-        context.findings.some((finding) => finding.status === "New" || finding.status === "Unresolved")
-      )
-      ? "- **Approve** - continue with the open findings accepted."
-      : "- **Approve** - continue; no findings are open.",
+    `- **Approve** - ${approve}`,
     "- **Request Changes** - return to the listed artifacts so the required actions can be addressed.",
   );
   return lines.join("\n");
