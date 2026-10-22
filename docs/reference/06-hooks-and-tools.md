@@ -946,8 +946,9 @@ These six hooks (the audit/sensor/statusline/rebuild-stage-graph/state-validatio
 2. **Status filter:** Only fires when `status` is `in_progress`. Exits silently for `completed`, `pending`, etc.
 3. **activeForm filter:** Exits silently if no `activeForm` field or no `[slug]` suffix pattern.
 4. **State file guard:** Exits silently if `aidlc-state.md` does not exist (pre-init).
-5. **Health heartbeat:** Writes to `.aidlc-engine/hooks-health/sync-workflow-state.last`.
-6. **State sync:** Calls `bun aidlc-utility.ts set-status --stage <slug>` (normally updates Phase, Stage, Agent, and checkbox). For a valid interleaved unit-major directive, it updates the transient status fields and marker digest while preserving the durable first-stage cursor, `In Progress`, and checkbox.
+5. **Isolated run filter:** Exits silently while the step in hand belongs to an isolated `--single` run (its step marker says `single`), so that run's task never moves the workflow's place.
+6. **Health heartbeat:** Writes to `.aidlc-engine/hooks-health/sync-workflow-state.last`.
+7. **State sync:** Calls `bun aidlc-utility.ts set-status --stage <slug>` (normally updates Phase, Stage, Agent, and checkbox). For a valid interleaved unit-major directive, it updates the transient status fields and marker digest while preserving the durable first-stage cursor, `In Progress`, and checkbox.
 
 **Design notes:**
 - Stage Jump tasks (no `[slug]`) and dependency-wiring TaskUpdates (no activeForm) are naturally filtered out.
