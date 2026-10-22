@@ -590,7 +590,12 @@ records that expected set so it can be reproduced with one command:
   point outside it, as `../billing` does), absolute, or `"."` for the workspace
   folder itself. With no `path` the repo is the workspace's child folder of the
   same name. A checkout already at `path` is used as it is; an empty or missing
-  folder there is cloned from `url`.
+  folder there is cloned from `url`. A repo's folder may sit inside the
+  workspace (`"src/billing"`), also when the workspace is a repo of its own that
+  records that folder as a gitlink; each file then counts once, under its own
+  repo. When the workspace folder holds files of its own that the work changes
+  (a `docs/` folder, say), list the workspace too, as `"."`: with only the repos
+  inside it listed, the reviews and change checks leave its folders out.
 - `url` is any address git clones (GitHub https or SSH, GitLab, anything else).
   A blank `url` counts as not set.
 - `org` is optional. With it, a repo with no `url` clones from
