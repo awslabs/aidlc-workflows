@@ -69,6 +69,7 @@ const ID_PATTERNS = {
   US: /\bUS\d+\.\d+\b/g,
   AC: /\bAC\d+\.\d+\.\d+\b/g,
   BR: /\bBR\d+\.\d+\b/g,
+  UX: /\bUX\d+\.\d+\.\d+\b/g,
 };
 
 function parseFlags(argv: string[]): Flags {
@@ -216,6 +217,17 @@ function criteriaOfStories(storiesContent: string, stories: Set<string>): Set<st
     if (stories.has(`US${group}.${story}`)) criteria.add(ac);
   }
   return criteria;
+}
+
+// An experience decision `UX{g}.{s}.{n}` belongs to the story `US{g}.{s}`, the
+// way an acceptance criterion does; `null` stories means the run owes them all.
+function decisionsOfStories(specContent: string, stories: Set<string> | null): Set<string> {
+  const decisions = new Set<string>();
+  for (const ux of extractIds(specContent, [ID_PATTERNS.UX])) {
+    const [group, story] = ux.slice(2).split(".");
+    if (stories === null || stories.has(`US${group}.${story}`)) decisions.add(ux);
+  }
+  return decisions;
 }
 
 function idsFromFile(path: string, patterns: RegExp[], label: string): { ids: Set<string>; reason?: string } {
@@ -569,6 +581,10 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
     return result;
   }
   if (stage === "code-generation") {
+    // The experience decisions this run owes follow its stories: a Unit's own
+    // stories through the story map, every story otherwise. Without stories a
+    // Unit has no story to own a decision through, so it owes none.
+    let decisionStories: Set<string> | null | undefined;
     if (existsSync(stories)) {
       if (unit && existsSync(storyMap)) {
         const mapped = storyAssignments(storyMap, resolvedUnit.context.units, resolvedUnit.context.unitIds, [ID_PATTERNS.US]);
@@ -583,13 +599,23 @@ function resolveUpstream(stage: string, projectDir: string, outputPath: string):
         if (storyRead.content !== null) {
           for (const ac of criteriaOfStories(storyRead.content, unitStories)) result.ids.add(ac);
         }
+        decisionStories = unitStories;
       } else {
         addSource(result, idsFromFile(stories, [ID_PATTERNS.AC], "stories.md"));
+        decisionStories = null;
       }
     } else if (unit && existsSync(storyMap)) {
       addUnitRows(result, storyMap, resolvedUnit.context, [ID_PATTERNS.FR, ID_PATTERNS.NFR]);
     } else {
       addSource(result, idsFromFile(requirements, [ID_PATTERNS.FR, ID_PATTERNS.NFR], "requirements.md"));
+      decisionStories = null;
+    }
+    const interactionSpec = join(docsDir, "inception", "refined-mockups", "interaction-spec.md");
+    if (decisionStories !== undefined && existsSync(interactionSpec)) {
+      const read = readText(interactionSpec);
+      if (read.content !== null) {
+        for (const id of decisionsOfStories(read.content, decisionStories)) result.ids.add(id);
+      }
     }
     for (const id of detailedNfrIds(constructionDir(docsDir, unit, "nfr-requirements"), NFR_REQUIREMENT_FILES) ?? []) {
       result.ids.add(id);

@@ -87,6 +87,7 @@ Read all design artifacts for the current unit:
 - Unit definition from `<record>/inception/units-generation/unit-of-work.md` (if exists)
 - Story map from `<record>/inception/units-generation/unit-of-work-story-map.md` (if exists)
 - Requirements from `<record>/inception/requirements-analysis/requirements.md` (if exists)
+- The approved experience from `<record>/inception/refined-mockups/`: `interaction-spec.md`, `design-system-mapping.md`, `accessibility-checklist.md` and `mockups.md` (if they exist); the `UX{x}.{y}.{n}` decisions of this unit's stories are inputs the plan implements
 
 Incremental scopes (bugfix, poc, refactor, security-patch) and the zero-Unit
 `express` scope skip Units Generation by design. When those inputs are absent,
@@ -116,7 +117,8 @@ When the directive already carries `plan_approval.status: "approved"`, this plan
 Create a detailed code generation plan at
 `<code-generation-record>/code-generation-plan.md` with checkboxes for each
 implementation step. Include story-to-code-step traceability — map each plan
-step back to the user story it implements.
+step back to the user story it implements, and to the `UX` experience decisions
+it implements when `interaction-spec.md` has them.
 
 Plan should cover (as applicable to the unit):
 - [ ] Business logic implementation
@@ -193,7 +195,9 @@ test file paths or an exact unit filter. A bare project-wide command like
 so an unscoped command would rerun the whole suite once per unit.
 
 Start the plan with a short `## Summary` section of three lines. The engine
-shows them to the person when it asks for approval:
+shows them to the person when it asks for approval. When the unit implements
+`UX` experience decisions, add a fourth line naming them, so the person sees the
+approved experience the plan carries:
 
 ```
 ## Summary
@@ -201,6 +205,7 @@ shows them to the person when it asks for approval:
 - Builds: <what this plan builds, in a few words>
 - Touches: <the main files or folders it creates or changes>
 - Tests: <how many tests, and of what kind>
+- Experience: <the UX IDs and components this plan implements>
 ```
 
 ### Step 3: Plan Approval
@@ -506,7 +511,8 @@ source instead. Its Step 5 files are
 Create
 `<code-generation-record>/traceability.json`.
 Enumerate every assigned AC, detailed `NFRx.y`, and `BRx.y` (or direct `FR` /
-`NFR` IDs when incremental scope skipped the design chain); a requirement with
+`NFR` IDs when incremental scope skipped the design chain), and every `UX`
+experience decision of this unit's stories in `interaction-spec.md`; a requirement with
 sub-requirements is traced through its `FR{n}.{m}` IDs and needs no row of its
 own. Every `OK` target
 must be one existing workspace-relative implementation or test file. When the

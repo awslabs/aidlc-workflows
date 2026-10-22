@@ -657,6 +657,55 @@ describe("t281 per-Unit scope, reverse derivation, and code targets", () => {
     expect(out.result.invalid_targets).toContain("AC1.1.2: target file does not exist: src/missing.ts");
   });
 
+  function seedExperience(proj: string): void {
+    seedUserStories(proj);
+    seedUnits(proj);
+    const source = join(proj, "src", "auth.ts");
+    mkdirSync(join(source, ".."), { recursive: true });
+    writeFileSync(source, "export const auth = true;\n");
+  }
+
+  function experienceTable(proj: string, unit: string, ids: string[]): string {
+    return trace(proj, `construction/${unit}/code-generation/traceability.json`, {
+      stage: "code-generation",
+      unit,
+      upstream_ids: ids,
+      coverage: ids.map((id) => ({ id, status: "OK", target: "src/auth.ts" })),
+    });
+  }
+
+  test("code-generation owes a Unit the experience decisions of its own stories", () => {
+    const proj = project();
+    seedExperience(proj);
+    write(proj, "inception/refined-mockups/interaction-spec.md", [
+      "# Interaction Spec",
+      "",
+      "- UX1.1.1 Sign in on one page, not a wizard [Q2]",
+      "- UX1.1.2 A failed sign-in keeps the email and focuses the password [Q4]",
+      "- UX1.2.1 The reset link opens the reset form directly [Q5]",
+    ].join("\n"));
+    let out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2"]));
+    expect(out.result.pass).toBe(false);
+    expect(out.result.missing_from_upstream_ids).toEqual(["UX1.1.1", "UX1.1.2"]);
+
+    out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2", "UX1.1.1", "UX1.1.2"]));
+    expect(out.result.pass, out.result.reason).toBe(true);
+
+    out = run(proj, "code-generation", experienceTable(proj, "u2-profile", ["AC1.2.1"]));
+    expect(out.result.missing_from_upstream_ids).toEqual(["UX1.2.1"]);
+  });
+
+  test("code-generation asks for no experience decision without an interaction spec, or from a Unit whose stories own none", () => {
+    const proj = project();
+    seedExperience(proj);
+    let out = run(proj, "code-generation", experienceTable(proj, "u1-auth", ["AC1.1.1", "AC1.1.2"]));
+    expect(out.result.pass, out.result.reason).toBe(true);
+
+    write(proj, "inception/refined-mockups/interaction-spec.md", "# Interaction Spec\n\n- UX1.1.1 Sign in on one page [Q2]\n");
+    out = run(proj, "code-generation", experienceTable(proj, "u2-profile", ["AC1.2.1"]));
+    expect(out.result.pass, out.result.reason).toBe(true);
+  });
+
   // A zero-Unit directive (no Unit DAG: poc, bugfix, refactor, security-patch,
   // express) writes code-generation artifacts under construction/code-generation/
   // with no Unit segment. The sensor must resolve that stage-level location

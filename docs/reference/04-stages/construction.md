@@ -975,8 +975,9 @@ This stage has a **two-part structure**: planning followed by generation.
    A bare project-wide command such as `npm test` is not acceptable because
    Build and Test executes every unit's commands.
 
-   The plan opens with a short `## Summary` (Builds, Touches, Tests lines) that
-   the engine shows the person when it asks for approval.
+   The plan opens with a short `## Summary` (Builds, Touches, Tests lines, plus
+   an Experience line naming the `UX` decisions a unit implements) that the
+   engine shows the person when it asks for approval.
 
 3. **Plan Approval** -- the engine asks. When both files are written, the
    conductor runs `next`. A ready plan (non-empty plan and instructions, a

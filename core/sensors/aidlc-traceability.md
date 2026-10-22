@@ -36,6 +36,8 @@ Deterministic element-level verification of each stage's JSON coverage table:
    expected source is missing or yields no IDs.
 5. Verifies deterministic targets where possible: stories, Unit mappings,
    business rules, and workspace-relative code paths.
+   Code Generation also owes every `UX{x}.{y}.{n}` experience decision that
+   `interaction-spec.md` records for its stories; without that file it owes none.
 6. Derives functional-design orphans from `rules.md` rather than
    trusting only the self-reported `reverse` array.
 
