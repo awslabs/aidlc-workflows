@@ -196,6 +196,19 @@ function report(args: Args): void {
     "## Groups (invariant, where it points, what), most seeds first",
     "",
   ];
+  // The code path each failure points at (the brief's grouping): its seeds, the invariants it fails, one replay.
+  const paths = new Map<string, { seeds: Set<string>; invariants: Set<string>; replay: string }>();
+  for (const g of groups.values()) {
+    const p = paths.get(g.source || "(none named)") ?? { seeds: new Set(), invariants: new Set(), replay: g.replay };
+    for (const seed of g.seeds) p.seeds.add(seed);
+    p.invariants.add(g.invariant);
+    paths.set(g.source || "(none named)", p);
+  }
+  lines.push("## By the code path the failure points at", "", "| code path | seeds | invariants | replay |", "|---|---|---|---|");
+  for (const [path, p] of [...paths.entries()].sort((a, b) => b[1].seeds.size - a[1].seeds.size)) {
+    lines.push(`| ${path} | ${p.seeds.size} | ${[...p.invariants].sort().join(" ")} | \`${p.replay}\` |`);
+  }
+  lines.push("", "## Groups in full", "");
   for (const g of [...groups.values()].sort((a, b) => b.seeds.size - a.seeds.size)) {
     lines.push(`### ${g.invariant}: ${g.what}`, "", `- Source: ${g.source || "(none named)"}`, `- Seeds: ${g.seeds.size} (${g.count} times); states: ${[...g.states].slice(0, 6).join(", ")}${g.states.size > 6 ? ", ..." : ""}`,
       `- Replay: \`bun tests/harness/gate-fuzz-run.ts --replay '${g.replay}'\``, `- One: ${g.detail.replace(/\n/g, " ").slice(0, 500)}`, "");
