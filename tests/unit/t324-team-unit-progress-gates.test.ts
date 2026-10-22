@@ -1091,6 +1091,34 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
     expect(auditBlockField(row("STAGE_REVISING"), "Feedback")).toBe(typed);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // The count Accept as-is waits on (#1083), at a team Unit's gate: the reply
+  // that shows the gate again carries this Unit's own change requests, never
+  // another Unit's at the same stage.
+  test("a team Unit gate shown again carries that Unit's change-request count", () => {
+    const proj = seedProject({ ownership: "team" }, ["alpha"]);
+    settleBody(proj, runNext(proj));
+    expect(runNext(proj)).toMatchObject({ stage: "functional-design", unit: "alpha", gate: true });
+    const args = ["--stage", "functional-design", "--unit", "alpha"];
+    expect(runReport(proj, [...args, "--result", "awaiting-approval"]).kind).toBe("print");
+    appendAuditEntry("GATE_REJECTED", { Stage: "functional-design", Unit: "beta", Feedback: "beta only" }, proj);
+    type GateReply = Directive & { revision_cycle?: number; accept_as_is?: string };
+    const shown: GateReply[] = [];
+    for (let round = 1; round <= 3; round++) {
+      const rejected = runReport(proj, [
+        ...args, "--result", "rejected", "--user-input", "Request Changes", "--reason", `change ${round}`,
+      ]);
+      expect(rejected.kind, JSON.stringify(rejected)).toBe("print");
+      // The Unit redoes its step, as the person asked, before its gate is shown again.
+      settleBody(proj, runNext(proj));
+      shown.push(runReport(proj, [...args, "--result", "revised"]) as GateReply);
+    }
+    expect(shown.map((reply) => [reply.kind, reply.revision_cycle, reply.accept_as_is])).toEqual([
+      ["print", 1, undefined],
+      ["print", 2, "next-revision"],
+      ["print", 3, "offered"],
+    ]);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // A live run (Codex): the person asked for another review at an open gate,
   // the agent showed the gate again, and the Stop hook carried the turn on into
   // a second showing. The report that shows a team Unit's open gate again ends
