@@ -780,8 +780,8 @@ export function writeReport(dir: string, verdicts: Verdict[], header: string[]):
   return file;
 }
 
-// `--rejudge <report dir>`: a finished run's answers judged again by meaning (sameAnswer), and where the run kept its
-// traces the agent's words judged again (judgeWords), into <dir>/rejudged.
+// `--rejudge <report dir> [--words]`: a finished run's answers judged again by meaning (sameAnswer), and with --words,
+// where the run kept its traces, the agent's words judged again (judgeWords), into <dir>/rejudged.
 if (import.meta.main && process.argv.includes("--rejudge")) {
   const dir = process.argv[process.argv.indexOf("--rejudge") + 1];
   const verdicts = JSON.parse(readFileSync(join(dir, "verdicts.json"), "utf-8")) as Verdict[];
@@ -806,7 +806,7 @@ if (import.meta.main && process.argv.includes("--rejudge")) {
     v.failures = kept;
     const trace = join(dir, "traces", v.tool, v.reply.id, "exchange.json");
     const ex = existsSync(trace) ? (JSON.parse(readFileSync(trace, "utf-8")) as { exchange: Exchange | null }).exchange : null;
-    if (ex && ex.turns.length > 0) {
+    if (ex && ex.turns.length > 0 && process.argv.includes("--words")) {
       const words = await judgeWords(v.reply, ex.turns.at(-2)?.text ?? "", ex.turns.at(-1)?.text ?? "", judgeDir);
       v.failures = v.failures.filter((f) => !(f.pass === "P2" && (/^the agent('s words| said nothing)|^the judge /.test(f.what) || / question\(s\) back to the person/.test(f.what))));
       if (words.failure !== null) v.failures.push({ pass: "P2", what: words.failure });
