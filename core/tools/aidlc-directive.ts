@@ -186,6 +186,9 @@ export interface RunStageWave {
 export interface RunStagePipeline {
   links: string[];
   completed: string[];
+  // Past PIPELINE_REPOS_NAMED repos, `completed` names the first ones and this
+  // counts the other repos with links on record; `record` still names what is owed.
+  completed_other_repos?: number;
   // The links this attempt still owes, in order, each with the exact command
   // that records it once its agent returns.
   record: Array<{ link: string; repo?: string; command: string }>;
@@ -404,6 +407,9 @@ export interface RunStageDirective {
   // conductor is never pointed at a path that cannot be read.
   consumes: string[];
   produces: string[];
+  // Beside a code knowledge base path written once with REPO_PLACEHOLDER (a
+  // work recording several repos): which repos the token stands for.
+  repos_note?: string;
   // Exact active-space rule paths represented by the delivered rule bundle. On
   // dispatched topologies the conductor passes the already-loaded rule text to
   // every agent brief.
@@ -961,6 +967,7 @@ const RUN_STAGE_FIELDS = [
   "memory_path",
   "consumes",
   "produces",
+  "repos_note",
   "rules_in_context",
   "rules_content",
   "rules_held",
@@ -1352,12 +1359,33 @@ export function contextNote(paths: readonly string[], consumes: readonly string[
     `listed, with your file tool, and wait for each result. Then read the stage file it names${inputs}.`;
 }
 
+// The segment a code knowledge base path carries in place of the repo when the
+// work records several: one path per artifact, whatever the number of repos.
+export const REPO_PLACEHOLDER = "{repo}";
+
+function carriesRepoPlaceholder(o: Record<string, unknown>): boolean {
+  const paths = (value: unknown): string[] => Array.isArray(value) ? value.filter((p): p is string => typeof p === "string") : [];
+  const absent = (value: unknown): string[] =>
+    Array.isArray(value) ? value.flatMap((row) => isPlainObject(row) && typeof row.path === "string" ? [row.path] : []) : [];
+  const wave = isPlainObject(o.wave) && Array.isArray(o.wave.entries) ? o.wave.entries.filter(isPlainObject) : [];
+  return [
+    ...paths(o.produces), ...paths(o.consumes), ...absent(o.consumes_absent),
+    ...wave.flatMap((entry) => [...paths(entry.produces), ...paths(entry.consumes), ...absent(entry.consumes_absent)]),
+  ].some((path) => path.includes(REPO_PLACEHOLDER));
+}
+
+// A path written once for every repo, as the person reads it.
+function inputPathInWords(path: string): string {
+  const at = path.indexOf(`/${REPO_PLACEHOLDER}/`);
+  return at < 0 ? path : `${path.slice(at + REPO_PLACEHOLDER.length + 2)} in each repository's folder of ${path.slice(0, at)}/`;
+}
+
 // A declared input whose producer ran and still left no file: one line for the
 // person, then the recovery protocol. Absence by design (a stage not on this
 // plan) is not an event in their project and carries nothing.
 export function inputsNote(paths: readonly string[]): string {
-  return `Say to the person once: "Some inputs this stage usually reads are not here: ${paths.join(", ")}. I'll go ` +
-    "on with what is here.\" Then follow stage-protocol-recovery.md for the gap.";
+  return `Say to the person once: "Some inputs this stage usually reads are not here: ${paths.map(inputPathInWords).join(", ")}. ` +
+    "I'll go on with what is here.\" Then follow stage-protocol-recovery.md for the gap.";
 }
 
 // Code Generation: the engine asks for Plan Approval itself (a plan-approval
@@ -2079,6 +2107,7 @@ function checkRunStageShared(
   checkString(o, "memory_path", kind, errors);
   checkStringArray(o, "consumes", kind, errors);
   checkStringArray(o, "produces", kind, errors);
+  checkAgentNote(o, "repos_note", carriesRepoPlaceholder(o), kind, errors);
   checkStringArray(o, "rules_in_context", kind, errors);
   if (o.rules_content !== undefined) {
     checkPathTextArray(o, "rules_content", kind, errors);
@@ -2717,12 +2746,18 @@ function checkOptionalPipeline(
   }
   const keys = Object.keys(value);
   for (const key of keys) {
-    if (key !== "links" && key !== "completed" && key !== "record") {
+    if (key !== "links" && key !== "completed" && key !== "completed_other_repos" && key !== "record") {
       errors.push(`${kind}: pipeline unknown key: ${key}`);
     }
   }
   checkStringArray(value, "links", kind, errors);
   checkStringArray(value, "completed", kind, errors);
+  if (
+    "completed_other_repos" in value &&
+    (!Number.isInteger(value.completed_other_repos) || (value.completed_other_repos as number) < 1)
+  ) {
+    errors.push(`${kind}: pipeline.completed_other_repos must be a positive integer`);
+  }
   if (!Array.isArray(value.record)) {
     errors.push(`${kind}: pipeline.record must be array, got ${describe(value.record)}`);
     return;

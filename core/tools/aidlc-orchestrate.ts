@@ -146,6 +146,7 @@ import {
   bodyRuns,
   numberedOptionLine,
   numberedProseQuestion,
+  REPO_PLACEHOLDER,
   showsGateAgain,
   validateDirective,
   withAgentNotes,
@@ -325,6 +326,8 @@ import {
   pipelineLinkEvidence,
   pipelineLinkRecord,
   pipelineLinkWayOn,
+  owedPipelineLinks,
+  completedPipelineLinks,
   parseBoltDag,
   type KnowledgeCommand,
   parseKnowledgeCommand,
@@ -358,6 +361,8 @@ import {
   kiroIdeLegacyPlanApprovalSessionId,
   kiroContextPressure,
   relativeCodekbDir,
+  intentsRegistryPath,
+  MANY_REPOS,
   relativeRecordDirForSelection,
   relativeSpaceRecordPrefix,
   reviewArtifactEntries,
@@ -609,7 +614,7 @@ function commonFolder(paths: readonly string[]): string {
   const shared: string[] = [];
   for (let index = 0; index < split[0].length; index++) {
     const segment = split[0][index];
-    if (split.some((parts) => parts[index] !== segment) || segment.includes("<")) break;
+    if (split.some((parts) => parts[index] !== segment) || segment.includes("<") || segment === REPO_PLACEHOLDER) break;
     shared.push(segment);
   }
   return shared.join("/");
@@ -620,14 +625,27 @@ function commonFolder(paths: readonly string[]): string {
 // named by its path from the folder they share (a questions file with how many
 // questions it holds and how many are answered), and that folder. A stage that
 // writes once per repo (Reverse Engineering in a workspace of sibling repos)
-// names each file by its repo, "orders-svc/architecture.md"; a single-folder
-// stage names the bare file. "" when the folder cannot be named (a stage that
-// repeats per Unit, with no Unit named).
+// names the repos whose files are all there, or how many from MANY_REPOS, in
+// one line whatever their number; a single-folder stage names the bare file.
+// "" when the folder cannot be named (a stage that repeats per Unit, with no
+// Unit named).
 function producedLine(node: GraphStage, unit: string | null, unitFolders: boolean, projectDir: string): string {
   if (unitFolders && !unit) return "";
-  const paths = resolveProduces(node, unitFolders ? unit : null, engineRelativeRecordDir(projectDir), codekbCtxFor(projectDir));
+  const ctx = codekbCtxFor(projectDir);
+  const paths = resolveProduces(node, unitFolders ? unit : null, engineRelativeRecordDir(projectDir), ctx);
   const folder = commonFolder(paths);
   if (!folder) return "";
+  if (paths.some((path) => path.includes(REPO_PLACEHOLDER))) {
+    const done = ctx.repos.filter((repo) =>
+      paths.every((path) => existsSync(join(projectDir, ...path.replace(REPO_PLACEHOLDER, repo).split("/"))))
+    );
+    if (done.length === 0) return `${node.name} is ready for your review. Its output goes in ${folder}/, one folder per repository.`;
+    const whose = done.length >= MANY_REPOS
+      ? `${done.length} repositories`
+      : done.length === 1 ? done[0] : `${done.slice(0, -1).join(", ")} and ${done[done.length - 1]}`;
+    return `${node.name} is ready for your review. It produced the code knowledge base of ${whose}, ` +
+      `${paths.length} files each, in ${folder}/, one folder per repository.`;
+  }
   const names = paths
     .filter((path) => existsSync(join(projectDir, path)))
     .map((path) => {
@@ -6936,10 +6954,6 @@ function codekbCtxFor(pd: string): CodekbCtx {
   };
 }
 
-function codekbArtifactRepos(ctx: CodekbCtx): string[] {
-  return ctx.repos.length > 1 ? ctx.repos : [ctx.codekbRepo];
-}
-
 // Resolve a single artifact vocabulary name to its canonical aidlc-docs/... path
 // UNDER THE STAGE THAT OWNS THE FILE. Non-per-unit stages map to
 // `aidlc-docs/<phase>/<stage-slug>/<name>.md`; per-unit Construction stages
@@ -6984,6 +6998,10 @@ function resolveArtifactPath(
   return `${prefix}/${owner.phase}/${owner.slug}/${filename}`;
 }
 
+// A work that records several repos names each codekb artifact once, with
+// REPO_PLACEHOLDER for the repo (repos_note says which): one path per repo
+// grew the step past what a host shows of one result from about 45 repos
+// (#2874). The completion check and the sensors resolve every repo themselves.
 function resolveArtifactPaths(
   name: string,
   owner: GraphStage,
@@ -6992,20 +7010,33 @@ function resolveArtifactPaths(
   codekbCtx?: CodekbCtx,
 ): string[] {
   if (isCodekb(owner) && codekbCtx && codekbCtx.repos.length > 1) {
-    const filename = artifactFilename(name);
-    return codekbArtifactRepos(codekbCtx).map(
-      (repo) =>
-        `${relativeCodekbDir(codekbCtx.projectDir, repo, codekbCtx.space)}/${filename}`,
-    );
+    return [`${relativeCodekbDir(codekbCtx.projectDir, REPO_PLACEHOLDER, codekbCtx.space)}/${artifactFilename(name)}`];
   }
   return [resolveArtifactPath(name, owner, unit, recordPrefix, codekbCtx)];
 }
 
+// Which repos a REPO_PLACEHOLDER path stands for, for the agent: their names
+// while there are few, else how many and where the list is.
+function reposNote(ctx: CodekbCtx): string {
+  const lead = `Each path with ${REPO_PLACEHOLDER} is one file per repository this work covers`;
+  const repos = ctx.repos;
+  if (repos.length < MANY_REPOS) {
+    return `${lead}: ${repos.slice(0, -1).join(", ")} and ${repos[repos.length - 1]}.`;
+  }
+  const registry = toPosix(relative(ctx.projectDir, intentsRegistryPath(ctx.projectDir, ctx.space)));
+  return `${lead}, ${repos.length} of them, named in the repos list of this work's row in ${registry}.`;
+}
+
+// The repos whose copy of a REPO_PLACEHOLDER path exists on disk.
+function reposWithFile(ctx: CodekbCtx, path: string): string[] {
+  return ctx.repos.filter((repo) => existsSync(join(ctx.projectDir, ...path.replace(REPO_PLACEHOLDER, repo).split("/"))));
+}
+
 // Resolve a consumed artifact under its producer. Compile enforces exactly one
 // producer for every consumed name; unconsumed shared names never reach here.
-// Multi-repo codekb producers expand to one path per registered repo; an orphan
-// consume defensively falls back to the consuming node so the directive remains
-// well formed.
+// Multi-repo codekb producers resolve to their one REPO_PLACEHOLDER path; an
+// orphan consume defensively falls back to the consuming node so the directive
+// remains well formed.
 function resolveConsumePaths(
   name: string,
   node: GraphStage,
@@ -7190,8 +7221,11 @@ function splitConsumesByPresence(
       present.push(c.path);
       continue;
     }
-    const abs = join(codekbCtx.projectDir, ...c.path.split("/"));
-    if (existsSync(abs)) {
+    // A path written once for several repos is an input while any of them has it.
+    const exists = c.path.includes(REPO_PLACEHOLDER)
+      ? reposWithFile(codekbCtx, c.path).length > 0
+      : existsSync(join(codekbCtx.projectDir, ...c.path.split("/")));
+    if (exists) {
       present.push(c.path);
       continue;
     }
@@ -7567,7 +7601,7 @@ function buildRunStageDirective(
     });
     directive.pipeline = {
       links: evidence.links,
-      completed: evidence.completed,
+      ...completedPipelineLinks(evidence.completed),
       record: pipelineLinkRecord(codekbCtx.projectDir, node, evidence, singleRun),
     };
   }
@@ -7590,6 +7624,13 @@ function buildRunStageDirective(
     }
   }
   if (absent.length > 0) directive.consumes_absent = absent;
+  if (
+    codekbCtx &&
+    [...directive.produces, ...directive.consumes, ...absent.map(({ path }) => path)]
+      .some((path) => path.includes(REPO_PLACEHOLDER))
+  ) {
+    directive.repos_note = reposNote(codekbCtx);
+  }
   // next_stage: the display name of the in-scope stage that follows this one, so
   // the approval gate's Approve option reads "Continue to <next_stage>" verbatim
   // instead of a guessed constant. Computed here at emit time: the gate is
@@ -11212,6 +11253,8 @@ function applyConstructionCheckpointShape(
     directive.stage_file = rechecked.stage_file;
     directive.consumes = rechecked.consumes;
     directive.produces = rechecked.produces;
+    if (rechecked.repos_note !== undefined) directive.repos_note = rechecked.repos_note;
+    else delete directive.repos_note;
   }
   directive.protocol_modules = checkpoint.rereview
     ? ["reviewer", "reviewer-repair", "construction", "checkpoint"]
@@ -15155,9 +15198,11 @@ const COMPLETION_RESULTS = new Set(["completed", "complete", "done"]);
 // still owes are named with their exact commands.
 function pipelineRejectedMessage(pd: string, node: GraphStage, slug: string): string {
   const record = pipelineLinkRecord(pd, node, pipelineLinkEvidence(pd, node), false);
+  const owed = owedPipelineLinks(record);
   const commands = record.length === 0
     ? ""
-    : ` Record each link with its command once its agent returns: ${record.map(({ command }) => `\`${command}\``).join(", then ")}.`;
+    : ` Record each link with its command once its agent returns: ${owed.commands}` +
+      `${owed.others ? `; then re-run \`${aidlcToolInvocation("orchestrate")} next\`${owed.others}` : ""}.`;
   if (guardPolicyAcceptsChanges(pd)) {
     return `Recorded rejected for "${slug}". The links already recorded still hold, so only the work the person's words ask ` +
       `to redo runs again; record a link again only after its agent has run again.${commands} Report revised when that work is done.`;
@@ -16041,9 +16086,7 @@ function checkPipelineLinkEvidence(
   const singleRun = options.singleRun === true;
   const evidence = pipelineLinkEvidence(pd, node, { singleRun });
   if (evidence.missing.length === 0) return { ok: true };
-  const missing = evidence.missing.map(({ link, repo }) =>
-    repo ? `${repo}:${link}` : link
-  );
+  const owed = owedPipelineLinks(pipelineLinkRecord(pd, node, evidence, singleRun));
   const refusal = singleRun
     ? `Cannot complete an isolated run of "${slug}" because these pipeline handoffs have not been recorded for this isolated run`
     : `Cannot present "${slug}" for approval because these pipeline handoffs have not been recorded for the current run`;
@@ -16053,9 +16096,9 @@ function checkPipelineLinkEvidence(
     // (dispatch, record, the same report again), so the turn goes on.
     ...(options.approval !== undefined ? { step: true as const } : {}),
     message:
-      `${refusal}: ${missing.join(", ")}. ` +
+      `${refusal}: ${owed.missing}. ` +
       pipelineLinkWayOn(pd, slug, {
-        commands: pipelineLinkRecord(pd, node, evidence, singleRun).map(({ command }) => command),
+        owed,
         singleRun,
         ...(options.approval !== undefined ? { approval: options.approval } : {}),
       }),

@@ -610,11 +610,11 @@ describe("t-copilot-directive-budget: every Copilot directive fits VS Code's ter
   // registered repo. A workspace of many repos still gets its step: the
   // commands ride for as many whole repos as fit, in order, and a link left out
   // gets its exact command from the next step or from its refusal (#2865).
-  test("Reverse Engineering for 24 registered repos fits, with whole per-repo link chains in order", async () => {
+  test("Reverse Engineering for 60 registered repos fits, with whole per-repo link chains in order", async () => {
     const proj = projectFor(COPILOT_ROOT, ".aidlc", "reverse-engineering", false);
     const statePath = seededStateFile(proj);
     writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*$/m, "- **Scope**: enterprise"));
-    const repos = Array.from({ length: 24 }, (_, index) => `svc-${String(index + 1).padStart(2, "0")}`);
+    const repos = Array.from({ length: 60 }, (_, index) => `svc-${String(index + 1).padStart(2, "0")}`);
     const registry = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
     const rows = JSON.parse(readFileSync(registry, "utf-8")) as Array<Record<string, unknown>>;
     rows[0].repos = repos;

@@ -37573,30 +37573,83 @@ export function pipelineLinkRecord(
   }));
 }
 
+// From this many repos a work's repos are counted, not named, in what lists them.
+export const MANY_REPOS = 10;
+
+// How many repos' owed links a reply names, and a step's `completed` lists,
+// before the rest are counted instead: a workspace of a few repos reads every
+// one, and one of hundreds still fits in one result.
+export const PIPELINE_REPOS_NAMED = MANY_REPOS - 1;
+
+const otherRepos = (count: number): string => count === 1 ? "the other repository" : `the other ${count} repositories`;
+
+export interface OwedPipelineLinks {
+  // `<repo>:<link>` (or the link alone), as the refusals list them.
+  missing: string;
+  // The named links' exact commands, in order.
+  commands: string;
+  // "", or the clause the step that names the rest takes: ", which names the commands for ...".
+  others: string;
+}
+
+// The owed links a reply names, for the engine's refusal, the state tool's
+// floor and the rejection reply alike: every owed repo's links in chain order
+// while PIPELINE_REPOS_NAMED or fewer owe any, else the first that many whole
+// repos and how many others owe links. `record` is pipelineLinkRecord's.
+export function owedPipelineLinks(record: ReadonlyArray<{ link: string; repo?: string; command: string }>): OwedPipelineLinks {
+  const repos = [...new Set(record.map((row) => row.repo ?? ""))];
+  const named = new Set(repos.slice(0, PIPELINE_REPOS_NAMED));
+  const shown = record.filter((row) => named.has(row.repo ?? ""));
+  const rest = repos.length - named.size;
+  return {
+    missing: shown.map(({ link, repo }) => repo ? `${repo}:${link}` : link).join(", ") +
+      (rest > 0 ? `, and the links of ${rest === 1 ? "1 other repository" : `${rest} other repositories`}` : ""),
+    commands: shown.map(({ command }) => `\`${command}\``).join(", then "),
+    others: rest > 0 ? `, which names the commands for ${otherRepos(rest)}` : "",
+  };
+}
+
+// A step's `completed` ledger under the same budget: past PIPELINE_REPOS_NAMED
+// repos with links on record, the first that many repos' entries and how many
+// others have links on record. The step's `record` names every owed link
+// that fits, so a resume never needs the rest by name.
+export function completedPipelineLinks(completed: readonly string[]): { completed: string[]; completed_other_repos?: number } {
+  const repoOf = (entry: string): string => entry.includes(":") ? entry.slice(0, entry.indexOf(":")) : "";
+  const repos = [...new Set(completed.map(repoOf))];
+  if (repos.length <= PIPELINE_REPOS_NAMED) return { completed: [...completed] };
+  const named = new Set(repos.slice(0, PIPELINE_REPOS_NAMED));
+  return {
+    completed: completed.filter((entry) => named.has(repoOf(entry))),
+    completed_other_repos: repos.length - named.size,
+  };
+}
+
 // The way on for missing pipeline handoffs, one sentence for the engine's
 // refusal and the state tool's floor: the conductor's own step. The evidence
 // switch is the person's, so neither names it. At an open gate `next` shows
 // the gate only once the links are in, so it comes last there; with the
 // person's approval in hand, `approval` (the step that applies it) comes last
-// instead, so they are never asked again. `commands` are the missing links'
-// own, from pipelineLinkRecord.
+// instead, so they are never asked again. Past the repos `owed` names, the step
+// that comes last names the rest's commands, and the sentence says so.
 export function pipelineLinkWayOn(
   projectDir: string,
   slug: string,
-  options: { commands: string[]; singleRun?: boolean; gateOpen?: boolean; approval?: string },
+  options: { owed: OwedPipelineLinks; singleRun?: boolean; gateOpen?: boolean; approval?: string },
 ): string {
   const singleRun = options.singleRun === true;
   const next = `\`${aidlcToolInvocation("orchestrate")} next${singleRun ? ` --single --stage ${slug}` : ""}\``;
-  const link = options.commands.map((command) => `\`${command}\``).join(", then ");
+  const { commands, others } = options.owed;
   const last = options.approval !== undefined
-    ? `; then run ${options.approval}: the person's approval stands, so they are not asked again`
-    : options.gateOpen ? `; then re-run ${next}, which shows the gate again` : "";
-  return (last ? "Dispatch" : `Re-run ${next} and dispatch`) +
+    ? `; then run ${options.approval}${others}: the person's approval stands, so they are not asked again`
+    : options.gateOpen
+    ? `; then re-run ${next}${others ? `${others}, and shows the gate again once every link is in` : ", which shows the gate again"}`
+    : others ? `; then re-run ${next}${others}` : "";
+  return (options.approval !== undefined || options.gateOpen ? "Dispatch" : `Re-run ${next} and dispatch`) +
     " the missing pipeline links in their declared order, carrying the human's revision feedback. " +
     (guardPolicyAcceptsChanges(projectDir)
       ? ""
       : "Rejection starts a new attempt: earlier scans and receipts cannot certify this revision, even for a targeted artifact edit. ") +
-    `After each link returns, run its command: ${link}${last}. ` +
+    `After each link returns, run its command: ${commands}${last}. ` +
     "Do not re-stamp an old handoff or disable evidence checks to reopen the gate.";
 }
 
