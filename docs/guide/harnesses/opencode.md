@@ -180,7 +180,8 @@ the project.
 - **Forwarding-loop enforcement is advisory.** The Stop seam is the
   `session.idle` event — reactive, not blocking. When the core stop hook
   answers `block`, the plugin re-engages the loop by injecting a nudge prompt
-  (marked with a sentinel so it never mints human presence). The nudge is a
+  (it knows the nudge by the id of the part it sent, so the nudge never counts
+  as your turn). The nudge is a
   synthetic part: the agent reads it, and your chat does not show it. When you
   stop a turn with Esc, or reject a command the agent asked to run, no nudge
   follows until you write again. A chatting or

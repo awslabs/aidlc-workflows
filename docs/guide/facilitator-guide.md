@@ -86,7 +86,7 @@ week before the workshop. That costs them minutes and shows whether the
 hooks, the PATH and the folder trust are wired.
 
 The `workshop` scope (`/aidlc workshop`) is for the facilitated group session
-itself. It is a 26-stage run, not a readiness check.
+itself. It is a 23-stage run, not a readiness check.
 
 ---
 
@@ -117,17 +117,17 @@ vision note.
 ## Keep side tasks small: name the scope
 
 A plain `/aidlc <description>` has the agent propose a plan from its words, or
-offer to compose one, and `classic`, the default, runs 18 of 33 stages. A bug
+offer to compose one, and `classic`, the default, runs 15 of 30 stages after setup. A bug
 report in plain words is usually proposed `bugfix`; when the agent offers to
 compose instead, the list beside the offer names `bugfix` first, and picking
 the default runs a much larger workflow. Name the scope as the first word:
 
 | The side task is... | Type | Stages |
 |---|---|---|
-| A known bug with a known fix | `/aidlc bugfix <what is broken>` | 9 / 33 |
-| A small change or a quick end-to-end try | `/aidlc express <the change>` | 10 / 33 |
+| A known bug with a known fix | `/aidlc bugfix <what is broken>` | 6 / 30 |
+| A small change or a quick end-to-end try | `/aidlc express <the change>` | 7 / 30 |
 
-`feature` runs every stage (33 / 33). It suits a production feature, not a
+`feature` runs every stage (30 / 30). It suits a production feature, not a
 side task. See [Workflow Profiles](workflow-profiles.md) for every scope.
 
 Start a side task in its own project folder, so it does not mix with the

@@ -210,7 +210,9 @@ then use the ignored local `dist/copilot/` output.
   `--doctor`) with the flags the engine names, `--version`, `--status`, and
   `--help`, AI-DLC's own checks (`engine sensor-traceability`,
   `sensor-required-sections`, `sensor-upstream-coverage`, and
-  `sensor-claim-sources`, which only read files), and the project commands in
+  `sensor-claim-sources`, which read files; the traceability check also
+  writes a stage's own coverage table in the record when the stage runs it to
+  start that table), and the project commands in
   AI-DLC's own command table (`engine log`, `engine state`, `engine runtime`,
   `engine learnings`, `engine testing-posture`, `engine intent list`,
   `engine intent add-checkout`, and the rest), in the direct, source-dispatcher, compiled, or tool-script spelling.

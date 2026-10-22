@@ -93,23 +93,33 @@ interface OpenGateSwitch {
 }
 
 /**
- * `from` runs Requirements Analysis with summary confirmation off, and the
- * person stops for the day at its open gate. In a new chat they type `line`,
- * which turns it on; then they resume. `atGate` acts at the gate shown again,
- * before the person answers it. The run stops when a third later stage starts.
+ * `from` runs a stage (Requirements Analysis unless `options.stage` names
+ * another) with summary confirmation off, and the person stops for the day at
+ * its open gate. In a new chat they type `line`, which turns it on; then they
+ * resume. `atGate` acts at the gate shown again, before the person answers it.
+ * The run stops when the stage after `options.after` (default 2) later stages
+ * starts. `options.flags` are typed with the first request.
  */
-function switchAtOpenGate(from: string, line: string, atGate?: (agent: AgentStandIn) => void): OpenGateSwitch {
+function switchAtOpenGate(
+  from: string,
+  line: string,
+  atGate?: (agent: AgentStandIn) => void,
+  options: { stage?: string; flags?: string[]; after?: number } = {},
+): OpenGateSwitch {
+  const gate = options.stage ?? RA;
+  const after = options.after ?? 2;
   let resumed = false;
   let acted = atGate === undefined;
   const later: string[] = [];
   const run = runScope(from, {
-    answers: { stopAt: (stage) => stage === RA },
+    flags: options.flags ?? [],
+    answers: { stopAt: (stage) => stage === gate },
     pauseAtStop: true,
     until: (d) => {
       if (!resumed) return false;
-      if (!acted && d.kind === "run-stage" && d.stage === RA) return true;
-      if (d.kind === "run-stage" && d.stage !== RA && !later.includes(String(d.stage))) later.push(String(d.stage));
-      return later.length > 2;
+      if (!acted && d.kind === "run-stage" && d.stage === gate) return true;
+      if (d.kind === "run-stage" && d.stage !== gate && !later.includes(String(d.stage))) later.push(String(d.stage));
+      return later.length > after;
     },
   });
   runs.push(run);
@@ -123,12 +133,12 @@ function switchAtOpenGate(from: string, line: string, atGate?: (agent: AgentStan
   resumed = true;
   let d = run.agent.resume();
   if (!acted) {
-    expect(d.stage).toBe(RA);
+    expect(d.stage).toBe(gate);
     atGate!(run.agent);
     acted = true;
     d = run.agent.drive(run.agent.next());
   }
-  expect(later.length, JSON.stringify(d)).toBeGreaterThan(2);
+  expect(later.length, JSON.stringify(d)).toBeGreaterThan(after);
   const asked = run.agent.asked.slice(askedFrom);
   return { run, rows: auditEvents(run.proj).slice(from0), asked, later, refused: run.agent.refusalsMet };
 }
@@ -190,7 +200,9 @@ describe("a gate open when summary confirmation turns on", () => {
       agent.host.write(questions, summary("Looks correct"));
       agent.must("log", "answer", "--stage", RA, "--checkpoint", "summary-confirmation", "--questions-file", questions,
         "--details", "Looks correct");
+      // The agent re-saves the stage's outputs from it, as the remedy says: the document and its record.
       agent.host.write(rel("requirements.md"), requirements);
+      agent.host.write(rel("traceability.json"), readFileSync(join(dir, "traceability.json"), "utf-8"));
     });
     // The edit was taken as the stage's revision once, and approved once after it.
     const backfilled = rows.filter((e) => e.event === "GATE_REJECTED" && field(e.block, "Stage") === RA);
@@ -214,6 +226,24 @@ function approve(agent: AgentStandIn): string {
     return error.refusal;
   }
 }
+
+describe("a per-Unit stage run at stage level, its gate open when summary confirmation turns on", () => {
+  // A tailored bugfix plan that adds Functional Design runs it with no Units
+  // Generation, so once, at stage level; summary confirmation is off from bugfix.
+  const FD = "functional-design";
+  for (const [what, line] of [
+    ["the person's own summary confirmation on", "/aidlc --summary-confirmation on"],
+    ["a switch to refactor", "/aidlc --scope refactor"],
+  ] as const) {
+    test(`a tailored plan's Functional Design gate, then ${what}: the Approve goes through`, () => {
+      const { rows, asked, refused } = switchAtOpenGate("bugfix", line, undefined, { stage: FD, flags: ["--add", FD], after: 0 });
+      expect(refused).toEqual([]);
+      expect(asked.filter((q) => q.what === "guard recovery")).toEqual([]);
+      expect(approvals(rows, FD)).toHaveLength(1);
+      expect(summaries(asked, FD)).toEqual([]);
+    }, SCOPE_RUN_TIMEOUT_MS);
+  }
+});
 
 describe("stop for the day and resume", () => {
   test("stopping at the open Build and Test gate, then resuming in a new chat: the same gate waits for the person, once", () => {

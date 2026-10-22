@@ -106,7 +106,7 @@ With this set, implicit scope resolution uses `feature`. Alternatively, record a
   ok    AWS_AIDLC_DEFAULT_SCOPE=classic (valid)
 ```
 
-`aidlc doctor` in a terminal outside Claude Code does not get the `env` block from `.claude/settings.json`, so there the same line reads `AWS_AIDLC_DEFAULT_SCOPE (unset - no project default)`. The scope a piece of work runs on shows on the `Scope:` line of `/aidlc --status`.
+`aidlc doctor` in a terminal outside Claude Code does not get the `env` block from `.claude/settings.json`, so there it shows this line only when your shell sets `AWS_AIDLC_DEFAULT_SCOPE` or a default is recorded with `aidlc config flags --default-scope`. The scope a piece of work runs on shows on the `Scope:` line of `/aidlc --status`.
 
 Why only scope and not depth or test-strategy? Each scope declares a depth, and test strategy inherits that depth unless the scope overrides it. `classic` therefore starts at Standard/Standard, `workshop` at Standard/Minimal, and `express` at Minimal/Minimal. If you need to override either, pass `--depth` or `--test-strategy` on the CLI.
 

@@ -17,6 +17,7 @@ import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
 import { STOP_HOOK_PROBE_ENV } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { codexExecTimeout, codexPersonTurn, recordCodexExec } from "./codex-test-lifecycle.ts";
 import { turnEvidence } from "./codex-turn-evidence.ts";
+import { type AgentWords, keepAgentWords, keepLegAudit } from "./leg-evidence.ts";
 import type { CapturedToolResult } from "./sdk-drive.ts";
 import { LIVE_LONG_OPERATION_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 
@@ -236,6 +237,24 @@ export function codexToolResults(stdout: string): CapturedToolResult[] {
   return results;
 }
 
+/** What Codex told the person in one `codex exec --json` turn: its finished agent messages. */
+export function codexReplies(stdout: string): AgentWords[] {
+  const replies: AgentWords[] = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("{")) continue;
+    let event: { type?: unknown; item?: { type?: unknown; text?: unknown } };
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const text = event.item?.text;
+    if (event.type !== "item.completed" || event.item?.type !== "agent_message" || typeof text !== "string" || !text.trim()) continue;
+    replies.push({ text });
+  }
+  return replies;
+}
+
 export interface CodexJsonTurn extends ExecResult {
   stdout: string;
   sessionId?: string;
@@ -309,6 +328,8 @@ export function runCopilot(proj: string, args: string): ExecResult {
       timeout: remainingOperationTimeoutMs(TEST_TIMEOUT_MS, { phase: "Copilot exec" }),
     },
   );
+  keepAgentWords("copilot", copilotReplies(result.stdout ?? "", false));
+  keepLegAudit(proj);
   return {
     rc: result.status ?? -1,
     out: `${result.stdout ?? ""}\n${result.stderr ?? ""}`,
@@ -371,10 +392,31 @@ export function copilotTurn(proj: string, line: string, options: CopilotTurnOpti
       maxBuffer: 64 * 1024 * 1024,
     },
   );
+  keepAgentWords("copilot", copilotReplies(result.stdout ?? "", options.json === true));
+  keepLegAudit(proj);
   return {
     rc: result.status ?? -1,
     out: `${result.stdout ?? ""}\n${result.stderr ?? ""}${result.error ? `\n${result.error.message}` : ""}`,
   };
+}
+
+/** What Copilot told the person in one turn: the lead's finished messages of a JSON turn, or the printed reply. */
+export function copilotReplies(stdout: string, json: boolean): AgentWords[] {
+  if (!json) return stdout.trim() ? [{ text: stdout.trim() }] : [];
+  const replies: AgentWords[] = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("{")) continue;
+    let event: { type?: unknown; timestamp?: unknown; data?: { content?: unknown; parentToolCallId?: unknown } };
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const content = event.data?.content;
+    if (event.type !== "assistant.message" || event.data?.parentToolCallId || typeof content !== "string" || !content.trim()) continue;
+    replies.push({ ...(typeof event.timestamp === "string" ? { ts: event.timestamp } : {}), text: content });
+  }
+  return replies;
 }
 
 /**
@@ -466,6 +508,24 @@ export function opencodeToolResults(stdout: string): { sessionId?: string; resul
   return { sessionId, results };
 }
 
+/** What opencode told the person in one turn: the text parts of a `--format json` turn, or the printed reply. */
+export function opencodeReplies(stdout: string, json: boolean): AgentWords[] {
+  if (!json) return stdout.trim() ? [{ text: stdout.trim() }] : [];
+  const replies: AgentWords[] = [];
+  for (const line of stdout.split("\n")) {
+    if (!line.startsWith("{")) continue;
+    let event: { type?: unknown; timestamp?: unknown; part?: { type?: unknown; text?: unknown } };
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (event.type !== "text" || typeof event.part?.text !== "string" || !event.part.text.trim()) continue;
+    replies.push({ ...(typeof event.timestamp === "number" ? { ts: new Date(event.timestamp).toISOString() } : {}), text: event.part.text });
+  }
+  return replies;
+}
+
 /** One person turn as `opencode run --format json`: a new session, or `sessionId` continued. */
 export function opencodeTurn(proj: string, line: string, options: { sessionId?: string; timeoutMs?: number } = {}): ExecResult & { stdout: string } {
   const { argv, input } = opencodeRunCommand(line, options.sessionId);
@@ -477,6 +537,8 @@ export function opencodeTurn(proj: string, line: string, options: { sessionId?: 
     timeout: remainingOperationTimeoutMs(options.timeoutMs ?? TEST_TIMEOUT_MS, { phase: "opencode turn" }),
     maxBuffer: 64 * 1024 * 1024,
   });
+  keepAgentWords("opencode", opencodeReplies(result.stdout ?? "", true));
+  keepLegAudit(proj);
   return {
     rc: result.status ?? -1,
     stdout: result.stdout ?? "",
@@ -505,6 +567,8 @@ export function runOpencode(proj: string, args: string[]): ExecResult {
       timeout: remainingOperationTimeoutMs(TEST_TIMEOUT_MS, { phase: "opencode exec" }),
     },
   );
+  keepAgentWords("opencode", opencodeReplies(result.stdout ?? "", false));
+  keepLegAudit(proj);
   return {
     rc: result.status ?? -1,
     out: `${result.stdout ?? ""}\n${result.stderr ?? ""}`,

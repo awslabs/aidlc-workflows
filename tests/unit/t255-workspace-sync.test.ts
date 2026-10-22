@@ -48,6 +48,7 @@ import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseWorkspaceManifest } from "../../core/tools/aidlc-workspace-manifest.ts";
+import { maskUserinfo } from "../../core/tools/aidlc-workspace-sync.ts";
 
 // Real git repos + bare remotes + a shimmed sleep 1 per case exceed bun's 5s default under load.
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -1381,6 +1382,60 @@ describe("t255 workspace-sync - reconcile checkout against repos.json", () => {
       "develop",
     );
     expect(existsSync(join(ws, "checkout-api", "develop.txt"))).toBe(true);
+  });
+
+  test("a token in a clone address is masked on screen while git gets the address whole", () => {
+    const sourceWs = freshRealWorkspace('{ "org": "fake-org", "repos": [] }');
+    const remote = git(makeRepo(sourceWs, "source"), "remote", "get-url", "origin");
+    const plainRemote = git(makeRepo(sourceWs, "plain"), "remote", "get-url", "origin");
+    const tokenUrl = "https://t255-user:FAKE-TOKEN-t255@example.invalid/fake-org/checkout-api.git";
+    const ws = freshRealWorkspace(
+      JSON.stringify({
+        org: "fake-org",
+        repos: [
+          { name: "checkout-api", branch: "main", url: tokenUrl },
+          { name: "checkout-web", branch: "main", url: plainRemote },
+        ],
+      }),
+    );
+    // git rewrites only this exact address to the local remote, so the clone
+    // succeeds offline only when git received it with its userinfo.
+    const result = runSync(ws, [], {
+      ...GIT_ENV,
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: `url.${remote}.insteadOf`,
+      GIT_CONFIG_VALUE_0: tokenUrl,
+    });
+    expect(result.out).not.toContain("FAKE-TOKEN");
+    expect(result.out).toContain(
+      "staging clone checkout-api from https://***@example.invalid/fake-org/checkout-api.git (branch main)",
+    );
+    expect(result.out).toContain(`staging clone checkout-web from ${plainRemote} (branch main)`);
+    expect(result.status).toBe(0);
+    expect(git(join(ws, "checkout-api"), "config", "--get", "remote.origin.url")).toBe(tokenUrl);
+  });
+
+  test("clone-failure text from git hides userinfo; addresses without it print unchanged", () => {
+    expect(
+      maskUserinfo(
+        "fatal: unable to access 'https://t255-user:FAKE-TOKEN-t255@example.invalid/fake-org/repo.git/': Could not resolve host",
+      ),
+    ).toBe("fatal: unable to access 'https://***@example.invalid/fake-org/repo.git/': Could not resolve host");
+    expect(maskUserinfo("https://FAKE-TOKEN-t255@example.invalid/fake-org/repo.git")).toBe(
+      "https://***@example.invalid/fake-org/repo.git",
+    );
+    expect(maskUserinfo("http://t255-user:p@ss-FAKE-TOKEN@127.0.0.1:9/repo.git")).toBe(
+      "http://***@127.0.0.1:9/repo.git",
+    );
+    for (const address of [
+      "git@github.com:fake-org/repo.git",
+      "https://example.invalid/fake-org/repo@v1.git",
+      "/srv/git/repo.git",
+      "C:\\git\\repo.git",
+      "file:///srv/git/repo.git",
+    ]) {
+      expect(maskUserinfo(address)).toBe(address);
+    }
   });
 
   test("orphan changes during a slow clone abort the transaction", async () => {

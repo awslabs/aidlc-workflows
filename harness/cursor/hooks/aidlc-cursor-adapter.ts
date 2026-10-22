@@ -17,7 +17,9 @@
 //      sessionStart context is {"additional_context"} (snake_case), and stop
 //      cannot block at all — only {"followup_message"} (advisory nudge).
 //   2. The shell tool is named "Shell" (tool_input.command, like Bash).
-//      Read/Write/Edit/Task already match Claude's names and input shapes.
+//      Read/Write/Edit/Task already match Claude's names and input shapes;
+//      an edit reported as "StrReplace" (tool_input.path, never captured
+//      live) is handed on as Edit.
 //   3. No duplicate delivery (unlike Codex) and a REAL sessionEnd event
 //      (unlike Codex/Copilot) — no replay cache, no heartbeat reconcile.
 //   4. subagentStart/subagentStop are documented but NEVER fire on the CLI
@@ -110,6 +112,18 @@ export async function run(
       }
       return 0;
     }
+  }
+  // A Cursor IDE report has the edit tool arriving as "StrReplace" with the
+  // file in tool_input.path (never captured live). The core hooks know that
+  // call as "Edit" with tool_input.file_path, so it is handed on as one here,
+  // before any check or the audit reads it.
+  if (cursor.tool_name === "StrReplace") {
+    const toolInput = cursor.tool_input ?? {};
+    cursor = {
+      ...cursor,
+      tool_name: "Edit",
+      tool_input: { ...toolInput, file_path: toolInput.file_path ?? toolInput.path },
+    };
   }
 
   const projectDirRaw =
@@ -554,7 +568,8 @@ export async function run(
   }
 
   // Cursor's shell tool is "Shell"; the core hooks key on Claude's "Bash".
-  // Everything else (Read/Write/Edit/Grep/Glob/Task/...) already matches.
+  // Everything else (Read/Write/Edit/Grep/Glob/Task/...) already matches, and
+  // a "StrReplace" edit was handed on as Edit when the payload was read.
   const toolName = cursor.tool_name === "Shell" ? "Bash" : (cursor.tool_name ?? "");
 
   // Cursor is the first harness with a FIRST-CLASS file-deletion tool

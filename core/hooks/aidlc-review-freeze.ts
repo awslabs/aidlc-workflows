@@ -50,13 +50,9 @@
 // redirections and operands of common mutation commands; read-only shell calls
 // do not produce targets and remain untouched.
 
-import { existsSync } from "node:fs";
-import { appendAuditEntryUnlocked } from "../tools/aidlc-audit.ts";
 import {
   hookOutsideGate,
   enterHookWorkflow,
-  acquireAuditLock,
-  auditFilePath,
   type ClaudeCodeHookInput,
   type FreshReviewReceipts,
   checkSummaryConfirmationEvidence,
@@ -84,13 +80,14 @@ import {
   readStateFile,
   recordHookDrop,
   recoveryGuidance,
-  releaseAuditLock,
   resolveReviewClass,
   resolveProjectFlag,
   resolveProjectDirFromHook,
   teamUnitGateStatus,
   type StageEntry,
   writeGuardStoodAside,
+  recordGuardBlockedRow,
+  validSessionId,
 } from "../tools/aidlc-lib.ts";
 import { writeTargets } from "./review-freeze-command.ts";
 export {
@@ -346,37 +343,17 @@ async function checkFreeze(input: string, projectDir: string): Promise<number> {
     }
   }
 
-  // Audit the refusal so the run's record shows when the freeze bit.
-  // Best-effort: an audit failure never changes the block decision. The lock
-  // acquisition deliberately keeps a short reporting budget (5 x 50ms):
-  // the block decision is already made, and a lock-starved fan-out must not
-  // stretch a fast refuse into a laggy one - a dropped advisory row is
-  // preferable to a slow block.
-  try {
-    if (existsSync(auditFilePath(projectDir))) {
-      if (acquireAuditLock(projectDir, 5, 50)) {
-        try {
-          appendAuditEntryUnlocked(
-            "REVIEW_FREEZE_BLOCKED",
-            {
-              Tool: toolName,
-              Target: verdict.target ?? "",
-              Stage: verdict.stage ?? "",
-              ...(verdict.unit ? { Unit: verdict.unit } : {}),
-            },
-            projectDir,
-          );
-        } finally {
-          releaseAuditLock(projectDir);
-        }
-      } else {
-        recordHookDrop(projectDir, HOOK_NAME, "audit lock contended; REVIEW_FREEZE_BLOCKED row dropped (block still enforced)");
-      }
-    }
-  } catch {
-    // Advisory emission only.
-  }
 
+  recordGuardBlockedRow(projectDir, {
+    eventType: "REVIEW_FREEZE_BLOCKED",
+    hook: HOOK_NAME,
+    reason: "review-receipt",
+    tool: toolName,
+    target: verdict.target ?? "",
+    stage: verdict.stage ?? "",
+    ...(verdict.unit ? { unit: verdict.unit } : {}),
+    session: validSessionId(typeof parsed.session_id === "string" ? parsed.session_id : undefined),
+  });
   const stage = blockedStage;
   const receipts = blockedReceipts;
   if (stage === null || receipts === null) {
@@ -424,8 +401,10 @@ async function checkFreeze(input: string, projectDir: string): Promise<number> {
       (typeof parsed.tool_input?.subagent_type === "string" && parsed.tool_input.subagent_type.trim().length > 0) ||
       memoryStrictHoldsGuardPolicy(projectDir, stateContent) ? "withhold" : "offer",
   });
+  // The sentence above already says to quote a suggestion at the gate, so the
+  // agent's own step to do that is never the guidance.
   const guidance =
-    evaluated.remedies.find((remedy) => remedy.executableNow)?.action ??
+    evaluated.remedies.find((remedy) => remedy.executableNow && remedy.op !== "present-findings-at-gate")?.action ??
     reviewFreezeRecoveryGuidance(projectDir, stateContent, stage.slug, recoveryGuidance, {
       ...(verdict.unit ? { unit: verdict.unit } : {}),
       ...(teamGate ? { teamGate } : {}),

@@ -51,7 +51,7 @@ const CHANGE_NOTICES_NOTE =
   "Say each change_notices line to the person once, word for word, as your own sentence with nothing in front of " +
   "it, and add nothing about why.";
 // The question note names the install's own `next` for a pick whose command returns no step.
-const questionNote = (directiveModule as unknown as { questionNote: (invocation: string) => string }).questionNote;
+const questionNote = (directiveModule as unknown as { questionNote: (invocation: string, oneChoice?: boolean) => string }).questionNote;
 const QUESTION_NOTE = questionNote("bun .claude/tools/aidlc-orchestrate.ts");
 const planOfferQuestionNote = (directiveModule as unknown as { planOfferQuestionNote: (invocation: string) => string }).planOfferQuestionNote;
 
@@ -278,7 +278,7 @@ describe("t-rules-travel-with-steps: the notes and their checks", () => {
     // The agent's own recovery work is not a question for the person.
     const own = add({ kind: "ask", ask_type: "guard-recovery", question: "q", agent_work: true }, "bun x.ts");
     expect(own.question_note).toBeUndefined();
-    expect(add({ kind: "ask", ask_type: "unit-paused", question: "q" }, "bun x.ts").question_note).toBe(questionNote("bun x.ts"));
+    expect(add({ kind: "ask", ask_type: "unit-paused", question: "q" }, "bun x.ts").question_note).toBe(questionNote("bun x.ts", true));
     expect(add({ kind: "ask", ask_type: "scope-confirm", question: "q" }, "bun x.ts").question_note).toBe(planOfferQuestionNote("bun x.ts"));
     // AIDA #2094 F1: with no skill the plan question's answer had no recording
     // step, so "looks good, build it" got the same question again.

@@ -1058,7 +1058,7 @@ describe("t304 executable review brief scenarios", () => {
     expect(context.stdout).not.toContain("Missing: Required action, Status");
     expect(context.stdout).not.toContain("as written");
 
-    expect(JSON.parse(approvalDispositionField(proj, stage)!).dispositions).toEqual([
+    expect(JSON.parse(approvalDispositionField(proj, stage, undefined, "person")!).dispositions).toEqual([
       expect.objectContaining({ artifact: relativeArtifact, id: "R-00", status: "Accepted risk" }),
     ]);
     expect(
@@ -1220,7 +1220,7 @@ describe("t304 executable review brief scenarios", () => {
     }
 
     const stage = findStageBySlug("functional-design")!;
-    const serialized = approvalDispositionField(proj, stage);
+    const serialized = approvalDispositionField(proj, stage, undefined, "person");
     expect(serialized).toBeString();
     const dispositioned = new Set(
       (
@@ -1277,7 +1277,7 @@ describe("t304 executable review brief scenarios", () => {
       ["unit-a", "unit-b"],
     );
     const stage = findStageBySlug("functional-design")!;
-    const serialized = approvalDispositionField(proj, stage, "unit-b");
+    const serialized = approvalDispositionField(proj, stage, "unit-b", "person");
     expect(serialized).toBeString();
     expect(
       (
@@ -1460,14 +1460,14 @@ describe("t304 executable review brief scenarios", () => {
     const statuses = (serialized: string | undefined) =>
       (JSON.parse(serialized!) as { dispositions: Array<{ artifact: string; id: string; status: string }> })
         .dispositions.map(({ artifact, id, status }) => ({ artifact, id, status }));
-    expect(statuses(approvalDispositionField(proj, stage))).toEqual([
+    expect(statuses(approvalDispositionField(proj, stage, undefined, "person"))).toEqual([
       { artifact: unitA, id: "R-01", status: "Changed after review" },
       { artifact: unitB, id: "R-02", status: "Accepted risk" },
     ]);
-    expect(statuses(approvalDispositionField(proj, stage, "unit-a"))).toEqual([
+    expect(statuses(approvalDispositionField(proj, stage, "unit-a", "person"))).toEqual([
       { artifact: unitA, id: "R-01", status: "Changed after review" },
     ]);
-    expect(statuses(approvalDispositionField(proj, stage, "unit-b"))).toEqual([
+    expect(statuses(approvalDispositionField(proj, stage, "unit-b", "person"))).toEqual([
       { artifact: unitB, id: "R-02", status: "Accepted risk" },
     ]);
   });
@@ -1489,11 +1489,121 @@ describe("t304 executable review brief scenarios", () => {
       },
       proj,
     );
-    const serialized = approvalDispositionField(proj, stage);
+    const serialized = approvalDispositionField(proj, stage, undefined, "person");
     expect(
       (JSON.parse(serialized!) as { dispositions: Array<{ id: string; status: string }> })
         .dispositions.map(({ id, status }) => ({ id, status })),
     ).toEqual([{ id: "R-01", status: "Changed after review" }]);
+  });
+
+  // #2208 part 2: a stage's approval nobody gave (Construction run on its own,
+  // or the bookkeeping row after every Unit's checkpoint) leaves each Unit's
+  // findings to that Unit's own approval, and never says the person accepted
+  // what nobody saw.
+  const statusesOf = (serialized: string | undefined) =>
+    serialized === undefined
+      ? []
+      : (JSON.parse(serialized) as { dispositions: Array<{ artifact: string; id: string; status: string }> })
+        .dispositions.map(({ artifact, id, status }) => ({ artifact, id, status }));
+  const unitApproval = (proj: string, fields: Record<string, string>) =>
+    appendAuditEntry(
+      "GATE_APPROVED",
+      {
+        Stage: "code-generation",
+        "Gate Scope": "unit-end",
+        "Gate Stages": "functional-design, code-generation",
+        ...fields,
+      },
+      proj,
+    );
+
+  test("a stage approval nobody gave records nothing for a finding the Unit's approval recorded, and Approved autonomously for one it did not", () => {
+    const { proj, artifacts } = perUnitReviewProject("functional-design", ["unit-a", "unit-b"]);
+    const stage = findStageBySlug("functional-design")!;
+    const unitA = artifacts.get("unit-a")!;
+    const unitB = artifacts.get("unit-b")!;
+    expect(statusesOf(approvalDispositionField(proj, stage, undefined, "nobody"))).toEqual([
+      { artifact: unitA, id: "R-01", status: "Approved autonomously" },
+      { artifact: unitB, id: "R-02", status: "Approved autonomously" },
+    ]);
+
+    // unit-a was approved on its own with R-01 as it is now; unit-b's approval
+    // came before R-02 was raised and recorded another finding.
+    unitApproval(proj, {
+      Unit: "unit-a",
+      Autonomous: "true",
+      [REVIEW_FINDING_DISPOSITIONS_FIELD]: approvalDispositionField(proj, stage, "unit-a", "nobody")!,
+    });
+    const earlier = JSON.parse(approvalDispositionField(proj, stage, "unit-b", "person")!);
+    earlier.dispositions[0].id = "R-09";
+    unitApproval(proj, {
+      Unit: "unit-b",
+      "User Input": "Approve",
+      [REVIEW_FINDING_DISPOSITIONS_FIELD]: JSON.stringify(earlier),
+    });
+    expect(statusesOf(approvalDispositionField(proj, stage, undefined, "nobody"))).toEqual([
+      { artifact: unitB, id: "R-02", status: "Approved autonomously" },
+    ]);
+
+    // Approved autonomously is no decision: R-01 stays open, so the person's
+    // own approval of the stage, which shows it, records it as theirs.
+    const contexts = readReviewArtifactContexts(proj, stage, "unit-a");
+    expect(contexts[0].findings.map((finding) => finding.status)).toEqual(["New"]);
+    const hydrated = hydrateReviewArtifactContexts(
+      contexts,
+      readReviewFindingDispositions(proj, stage.slug, "unit-a"),
+    );
+    expect(hydrated[0].findings.map((finding) => [finding.status, finding.decidedAtSeverity])).toEqual([
+      ["New", undefined],
+    ]);
+    expect(statusesOf(approvalDispositionField(proj, stage, undefined, "person"))).toEqual([
+      { artifact: unitA, id: "R-01", status: "Accepted risk" },
+      { artifact: unitB, id: "R-02", status: "Accepted risk" },
+    ]);
+  });
+
+  // An AI-DLC update between Units: a Unit approved before it has a row that
+  // records no findings. That row decides them as it says; a stage's own
+  // earlier approval is no Unit's approval.
+  test("a Unit's approval an earlier release wrote decides its findings as the row says", () => {
+    const { proj, artifacts } = perUnitReviewProject("functional-design", ["unit-a", "unit-b", "unit-c"]);
+    const stage = findStageBySlug("functional-design")!;
+    appendAuditEntry("GATE_APPROVED", { Stage: "functional-design", "User Input": "Approve" }, proj);
+    unitApproval(proj, { Unit: "unit-a", "User Input": "Approve" });
+    unitApproval(proj, { Unit: "unit-b", Autonomous: "true" });
+    expect(statusesOf(approvalDispositionField(proj, stage, undefined, "nobody"))).toEqual([
+      { artifact: artifacts.get("unit-a")!, id: "R-01", status: "Accepted risk" },
+      { artifact: artifacts.get("unit-b")!, id: "R-02", status: "Approved autonomously" },
+      { artifact: artifacts.get("unit-c")!, id: "R-03", status: "Approved autonomously" },
+    ]);
+  });
+
+  test("a swarm batch's approval is the own approval of the Units it names, and only of them", () => {
+    const { proj, artifacts } = perUnitReviewProject("code-generation", ["unit-a", "unit-b", "unit-c"]);
+    const stage = findStageBySlug("code-generation")!;
+    const batch = (fields: Record<string, string>) =>
+      appendAuditEntry(
+        "GATE_APPROVED",
+        { Checkpoint: "swarm-batch", Stage: "code-generation", "Gate Stages": "code-generation", ...fields },
+        proj,
+      );
+    batch({
+      "Batch number": "1",
+      Units: "unit-c",
+      Autonomous: "true",
+      [REVIEW_FINDING_DISPOSITIONS_FIELD]: approvalDispositionField(proj, stage, ["unit-c"], "nobody")!,
+    });
+    batch({ "Batch number": "2", Units: "unit-a, unit-b", "User Input": "Approve" });
+    expect(statusesOf(approvalDispositionField(proj, stage, ["unit-a", "unit-b"], "person"))).toEqual([
+      { artifact: artifacts.get("unit-a")!, id: "R-01", status: "Accepted risk" },
+      { artifact: artifacts.get("unit-b")!, id: "R-02", status: "Accepted risk" },
+    ]);
+    expect(statusesOf(approvalDispositionField(proj, stage, undefined, "nobody"))).toEqual([
+      { artifact: artifacts.get("unit-a")!, id: "R-01", status: "Accepted risk" },
+      { artifact: artifacts.get("unit-b")!, id: "R-02", status: "Accepted risk" },
+    ]);
+    expect(readReviewArtifactContexts(proj, stage, "unit-c")[0].findings.map((finding) => finding.status))
+      .toEqual(["New"]);
   });
 
   test("Request Changes records only explicitly rejected findings with the exact reason", () => {
@@ -2058,6 +2168,23 @@ describe("t304 executable review brief scenarios", () => {
           .map((name) => `\`${planningRelative}/${name}.md\``)
           .join(", ")
       }.`,
+    );
+  });
+
+  // traceability.json is the agent's coverage record, not a document the
+  // person confirms answers for: the brief names the person's documents only.
+  test("the summary brief leaves the coverage record out of what it will generate", () => {
+    const { proj } = requirementProject([]);
+    const stories = join(seededRecordDir(proj), "inception", "user-stories");
+    mkdirSync(stories, { recursive: true });
+    const storiesQuestions = join(stories, "user-stories-questions.md");
+    writeFileSync(storiesQuestions, "# Questions\n", "utf-8");
+    const storiesRelative = relative(proj, stories).replaceAll("\\", "/");
+    const generated = renderSummaryConfirmationBrief(proj, findStageBySlug("user-stories")!, storiesQuestions)
+      .split("before generating ")[1]
+      .split("\n")[0];
+    expect(generated).toBe(
+      `${["stories", "personas", "user-stories-assessment"].map((name) => `\`${storiesRelative}/${name}.md\``).join(", ")}.`,
     );
   });
 

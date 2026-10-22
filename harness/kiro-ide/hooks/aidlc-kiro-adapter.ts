@@ -2913,8 +2913,8 @@ function buildForward(): Forward {
       }
       const eventSessionId = ide.sessionId?.trim();
       // Who sent the turn (kiroTurnOrigin): a message Kiro's own chat record
-      // marks as its own, or one of Kiro's fixed workflow sentences (a Kiro
-      // Workflows step's brief opens with one), is the host's; a session other
+      // marks as its own, or a Kiro Workflows brief (Kiro leaves it unmarked;
+      // its opening sentence says whose it is), is the host's; a session other
       // than the chat's decides nothing by itself, so a message typed in another
       // chat tab stays the person's. A host's turn is a side worker's: it starts no session here, is not
       // remembered as the chat, opens no turn, and the core hook records it as

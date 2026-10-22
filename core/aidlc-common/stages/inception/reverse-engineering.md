@@ -209,7 +209,8 @@ Only after every repository decision has been resolved:
 - If any repo needs scanning, do not report a skip. Proceed to Steps 2-3 for
   only the full/focused scan repos; leave each reused repo's store unchanged.
   The reuse rows exempt those repos while scanned repos still require both
-  links. On an isolated run, add `--single` to every link receipt command below.
+  links. On an isolated run, the link commands in `directive.pipeline.record`
+  carry `--single`.
 
 ### Step 2: Developer Code Scan
 
@@ -222,7 +223,8 @@ The conductor owns the store/reuse decision but does NOT inspect application
 source, enumerate the repo, or precompute the file list before this dispatch.
 That duplicates the developer link. Give the developer the repo root, the
 intent, the chosen breadth, the active Minimal/Standard/Comprehensive depth,
-the exact handoff path below, and the snapshot's `head_commit` for the Run
+the exact handoff path its link command in `directive.pipeline.record` names
+(the paths below), and the snapshot's `head_commit` for the Run
 Record; the developer discovers the source surface.
 
 Brief the developer with the scan breadth chosen at the Step 1 guard (full
@@ -289,15 +291,13 @@ the handoff path and any concerns only; it does not repeat the scan body.
 
 After the developer return has been read, verify the handoff file exists and
 contains `## Developer Code Scan Results`, `### Scan Coverage`, and
-`## Handoff Summary`. Then record link 1 before dispatching the architect:
+`## Handoff Summary`. Then record link 1 with its command in
+`directive.pipeline.record` before dispatching the architect.
 
-```
-bun {{HARNESS_DIR}}/tools/aidlc-log.ts link --stage reverse-engineering --link aidlc-developer-agent --artifact "<developer scan handoff path>" [--repo <repo>] [--single]
-```
-
-Record it from the handoff this attempt wrote, at the path above; a rejection
-or resume cannot reuse an older file. Never rename, move, or edit the handoff
-afterwards: any change to it means the developer and the architect run again.
+Record it from the handoff this attempt wrote, at the path above, and never
+rename, move, or edit the handoff afterwards. Under Guard Policy strict, a
+rejection or resume cannot reuse an older file, and any change to the handoff
+means the developer and the architect run again.
 
 ### Step 3: Architect Synthesis
 
@@ -460,12 +460,9 @@ directory remains the durable per-repo code knowledge base shared across every
 intent in the space.
 
 After the architect return has been read and all 9 artifacts for that repo are
-present, record the final link (full-roster path only: on a lead-only
-run the developer already wrote the artifacts and its link is the final one):
-
-```
-bun {{HARNESS_DIR}}/tools/aidlc-log.ts link --stage reverse-engineering --link aidlc-architect-agent [--repo <repo>] [--single]
-```
+present, record the final link with its command in `directive.pipeline.record`
+(full-roster path only: on a lead-only run the developer already wrote the
+artifacts and its link is the final one).
 
 Do not report completion until every selected repo's chain has a receipt for
 each link in `directive.pipeline.links` — both links on the full-roster path,
@@ -478,7 +475,7 @@ completion sequence in this order:
 
 1. Present Step 5's announcement and per-repo summary, including any NARROWER
    warning.
-2. When `directive.protocol_modules` lists `learnings`, ask its question and
+2. When `directive.protocol_modules` lists `learnings`, ask its questions and
    end the turn; continue once the answer is logged.
 3. Open the approval gate exactly once with
    `{{INVOKE}} engine orchestrate report --stage reverse-engineering --result awaiting-approval`.

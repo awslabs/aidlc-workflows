@@ -36,7 +36,7 @@ import {
   reviewInvalidationAttemptView,
   markStageWorkLogged,
   markTurnEnd,
-  LEARNINGS_NOTE_CHOICES,
+  LEARNINGS_NOTE_QUESTION,
   learningsRitualRuns,
   ceremonyPolicyValues,
   terminalReviewVerdict,
@@ -111,6 +111,8 @@ import {
   isAutonomousConstructionDecision,
   legacyReviewAppendixEchoFields,
   isAutonomousSwarmStage,
+  unitOpenCheckpoints,
+  waveEligible,
   loadStageGraphAll,
   isNonAnswer,
   ANSWER_MODE_LABELS,
@@ -126,6 +128,8 @@ import {
   readFindingsTable,
   unreadableFindingsTableFinding,
   pipelineAttemptStartedAt,
+  developerHandoffPaths,
+  pipelineLinkCommand,
   pipelineLinkEvidence,
   pipelineLinks,
   effectiveSupportAgentsForProject,
@@ -197,6 +201,8 @@ import {
   isSummaryConfirmationChoice,
   isSummaryConfirmationOptions,
   isLearningsNoteDecision,
+  boxPicksAddANote,
+  picksAddANote,
   summaryConfirmationCommands,
   summaryConfirmationOwed,
   summaryQuestionFileRelative,
@@ -259,7 +265,7 @@ import {
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
 } from "./aidlc-testing-posture.js";
-import { aidlcDispatcherInvocation, entrySkillInvocation, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES,
   SUMMARY_CONFIRMATION_CHOICES,
@@ -1237,7 +1243,7 @@ function handleDecision(args: string[]): void {
       error(
         `--question-kind ${JSON.stringify(kind)} is not a kind log decision records. Its kinds are ` +
           `"${ANSWER_MODE_QUESTION_KIND}", for the question of how the person answers a stage's questions, and ` +
-          `"${LEARNINGS_NOTE_QUESTION_KIND}", for the learnings question "Anything to add for next time?"; leave ` +
+          `"${LEARNINGS_NOTE_QUESTION_KIND}", for the learnings question "${LEARNINGS_NOTE_QUESTION}"; leave ` +
           "the flag off for any other question.",
       );
     }
@@ -2663,13 +2669,16 @@ function handleAnswer(args: string[]): void {
       error(`Audit emission failed: ${errorMessage(e)}`);
     }
 
-    // The learnings question's Add a note (its exact option, on the question
-    // its kind names): the person's next reply answers what follows, so the
-    // turn ends at that question (stage-protocol-learnings.md section 13).
-    // Whether their reply already holds the note is the agent's to read.
+    // The learnings question's Add a note: the person's next reply answers
+    // what follows, so the turn ends at that question (stage-protocol-learnings.md
+    // section 13). A pick in a question box is read from the person's own
+    // recorded reply; a typed one from the exact option the agent recorded on
+    // the question its kind (or its two options) names. Whether their reply
+    // already holds the note is the agent's to read.
+    const fromBox = instruction === undefined && !autonomousDecision ? boxPicksAddANote(pd, named?.id) : null;
     const question = decisionRowsInScope(readAuditShardEvents(pd), flags.stage, flags.unit).at(-1);
-    const asksForNote = flags.details === LEARNINGS_NOTE_CHOICES[1] && question !== undefined &&
-      isLearningsNoteDecision(question.block);
+    const asksForNote = fromBox ?? (picksAddANote(flags.details) && question !== undefined &&
+      isLearningsNoteDecision(question.block));
     if (asksForNote) rowEndsTurn = true;
     const sayBack = taken.length > 0 ? takenFromReply(taken, flags.details) : null;
     const notes = [
@@ -2699,9 +2708,10 @@ function handleAnswer(args: string[]): void {
 //     [--artifact <path>] [--single]
 //       → PIPELINE_LINK_COMPLETED
 //
-// The receipt is emitted only after a declared pipeline link returns. Ordering,
-// duplicate prevention, and attempt freshness are checked under the audit lock
-// so two concurrent conductors cannot advance the same chain.
+// The receipt is emitted only after a declared pipeline link returns. Ordering
+// and attempt freshness are checked under the audit lock so two concurrent
+// conductors cannot advance the same chain; a link the attempt already holds
+// is answered without a second receipt.
 function handleLink(args: string[]): void {
   const { flags } = parseFlags(args);
   if (!flags.stage) error("Missing --stage <slug>");
@@ -2722,6 +2732,7 @@ function handleLink(args: string[]): void {
   const singleRun = flags.single === "true";
   // The repo the receipt records (none for the project root).
   let recordedRepo: string | null = null;
+  let alreadyRecorded = false;
 
   try {
     withAuditLock(pd, () => {
@@ -2764,13 +2775,20 @@ function handleLink(args: string[]): void {
 
       const repo = repoFlag ?? null;
       recordedRepo = repo;
-      if (evidence.receipts.some((receipt) =>
-        receipt.link === flags.link && receipt.repo === repo
-      )) {
-        throw new Error(
-          `Cannot record pipeline link for "${flags.stage}": link "${flags.link}"` +
-            `${repo ? ` for repo "${repo}"` : ""} already completed this attempt.`,
-        );
+      // A link the attempt already holds lands again with no second receipt:
+      // the agent may run a link again for the person's change, and under
+      // Guard Policy relaxed or off a rejection keeps what it holds. A lead
+      // link naming another handoff file is not that link; the handoff checks
+      // below judge it.
+      const handoffLink = flags.stage === "reverse-engineering" && flags.link === node.lead_agent;
+      const held = evidence.receipts.find((receipt) => receipt.link === flags.link && receipt.repo === repo);
+      if (
+        held !== undefined &&
+        (!handoffLink || !flags.artifact ||
+          (held.artifactPath !== null && resolve(pd, flags.artifact) === resolve(pd, held.artifactPath)))
+      ) {
+        alreadyRecorded = true;
+        return;
       }
       if (index > 0) {
         const previous = links[index - 1];
@@ -2791,27 +2809,19 @@ function handleLink(args: string[]): void {
         Link: flags.link,
         Position: `${index + 1}/${links.length}`,
       };
-      if (
-        flags.stage === "reverse-engineering" &&
-        flags.link === node.lead_agent
-      ) {
+      if (handoffLink) {
         if (!flags.artifact) {
           throw new Error(
-            'Cannot record reverse-engineering developer link: pass --artifact "<record>/inception/reverse-engineering/developer-scan[-<repo>].md".',
+            "Cannot record reverse-engineering developer link without its handoff file: run " +
+              `\`${pipelineLinkCommand(pd, node, flags.link, repo, singleRun)}\`.`,
           );
         }
-        const root = recordDir(pd);
-        if (root === null) {
+        const accepted = developerHandoffPaths(pd, repo);
+        if (accepted === null) {
           throw new Error(
             "Cannot record reverse-engineering developer link: active intent record is unavailable.",
           );
         }
-        const handoffDir = join(root, "inception", "reverse-engineering");
-        // The root's handoff may also carry the root's name, as a registered
-        // repo's does.
-        const accepted = repo
-          ? [join(handoffDir, `developer-scan-${repo}.md`)]
-          : [join(handoffDir, "developer-scan.md"), join(handoffDir, `developer-scan-${rootName}.md`)];
         const artifact = resolve(pd, flags.artifact);
         if (!accepted.includes(artifact)) {
           throw new Error(
@@ -2888,7 +2898,7 @@ function handleLink(args: string[]): void {
   }
 
   console.log(JSON.stringify({
-    emitted: "PIPELINE_LINK_COMPLETED",
+    ...(alreadyRecorded ? { already_recorded: true } : { emitted: "PIPELINE_LINK_COMPLETED" }),
     stage: flags.stage,
     link: flags.link,
     ...(recordedRepo ? { repo: recordedRepo } : {}),
@@ -3136,9 +3146,14 @@ function stageBox(state: string, stage: string): string | undefined {
 // (learningsRitualRuns), and the gate's command is the report the stage
 // protocol names. A review the person asked for past the budget (even with
 // reviews off) and the one bounded stale-receipt recovery are one-off passes:
-// their verdict is terminal whatever the class. A Unit's review, an isolated
-// single-stage run, an autonomous Construction gate and a stage no longer in
-// flight keep the step their own directive names: no note.
+// their verdict is terminal whatever the class. A Unit's last pass hands on to
+// `next`, which names its route's step, after the Unit's completion when it
+// is still open on the stage (a team's route hands the body back without it).
+// A unit-major walk keeps a later per-Unit stage's own box pending, so for a
+// Unit a pending stage is in flight too. An isolated single-stage run, a Unit
+// in a swarm Bolt or a wave (their own loop goes on), an autonomous
+// Construction gate and a stage no longer in flight keep the step their own
+// directive names: no note.
 function reviewVerdictStep(
   pd: string,
   flags: Record<string, string>,
@@ -3146,19 +3161,26 @@ function reviewVerdictStep(
   iteration: number,
   context: {
     state: string;
-    node: { slug: string; phase: string; for_each?: string; reviewer_max_iterations?: number };
+    node: { slug: string; phase: string; for_each?: string; mode?: string; reviewer_max_iterations?: number };
     reviewClass: ReviewClass | null;
+    autonomousCandidate: boolean;
+    attempt: { boltStarted: boolean };
   },
   selection: { intent: string | null; space: string },
   request: { personAsked: boolean; recovery: boolean },
 ): string | null {
   const { state, node, reviewClass } = context;
+  const unit = flags.unit;
   const oneOff = request.personAsked || request.recovery;
-  if (flags.unit !== undefined || flags.single === "true" || reviewClass === null) return null;
+  if (flags.single === "true" || reviewClass === null) return null;
+  if (unit !== undefined && context.autonomousCandidate && context.attempt.boltStarted) return null;
+  if (unit !== undefined && waveEligible(node) && getField(state, "Construction Iteration")?.trim() !== "unit-major") {
+    return null;
+  }
   if (reviewClass === "none" && !oneOff) return null;
   if (node.phase === "initialization") return null;
   const box = stageBox(state, flags.stage);
-  if (box === undefined || !REVIEW_IN_FLIGHT.has(box)) return null;
+  if (box === undefined || !(REVIEW_IN_FLIGHT.has(box) || (unit !== undefined && box === "pending"))) return null;
   const terminal = oneOff || terminalReviewVerdict(
     verdict,
     String(iteration),
@@ -3167,7 +3189,7 @@ function reviewVerdictStep(
   ) !== null;
   // What the person said while the reviewer worked comes first
   // (stage-protocol-reviewer.md): `next` names the step, with their words.
-  if (personSpokeSinceReviewRequest(pd, flags.stage, flags.reviewer, undefined, selection.intent, selection.space)) {
+  if (personSpokeSinceReviewRequest(pd, flags.stage, flags.reviewer, unit, selection.intent, selection.space)) {
     return reviewVerdictNote({ kind: "person-wrote", next: aidlcDispatcherInvocation("orchestrate next") });
   }
   if (!terminal) {
@@ -3178,8 +3200,19 @@ function reviewVerdictStep(
         projectDir: pd,
         stage: flags.stage,
         reviewer: flags.reviewer,
+        ...(unit !== undefined ? { unit } : {}),
         iteration: iteration + 1,
       }),
+    });
+  }
+  if (unit !== undefined) {
+    const open = unitOpenCheckpoints(pd, flags.stage).some((entry) => entry.unit === unit && entry.state === "in-progress");
+    return reviewVerdictNote({
+      kind: "unit",
+      next: aidlcDispatcherInvocation("orchestrate next"),
+      ...(open
+        ? { complete: aidlcDispatcherInvocation(`state unit complete --stage ${flags.stage} --unit ${quoteCommandArgument(unit)}`) }
+        : {}),
     });
   }
   if (node.phase === "construction" && isAutonomousConstructionGate(state, node, pd)) return null;
@@ -3660,8 +3693,7 @@ function handleReview(args: string[]): void {
             : receipts.stageStale);
         // With Construction checkpoints on, a review of a Unit whose reviewed
         // code changed outside any review re-checks that change: it is the
-        // recovery pass, and the person's approval of the Unit or a new attempt
-        // they start for it since the last re-check opens a fresh one.
+        // recovery pass.
         const checkpointUnit = receipts !== null && flags.unit !== undefined &&
           getField(state, "Construction Checkpoints") === "enabled";
         const unitSourceScopeStale = checkpointUnit && !artifactScopeStale &&
@@ -3675,7 +3707,10 @@ function handleReview(args: string[]): void {
           sourceScopeStale &&
           (receipts?.sourceRecoverySpent === true ||
             receipts?.sourceStaleProgress?.recoverySpent === true);
-        const recoverySpent = !(checkpointUnit && receipts.unitRecheckReopened.has(flags.unit as string)) &&
+        // The person's approval of the Unit or a new attempt they start for it
+        // since its re-check opens a fresh one (unitRecheckReopened says where).
+        const recoverySpent =
+          !(receipts !== null && flags.unit !== undefined && receipts.unitRecheckReopened.has(flags.unit)) &&
           (attempt.recoverySpent || sourceRecoverySpent);
         // A review the person asked for is never refused for want of passes:
         // the conductor says they asked (--person-asked) and the record shows

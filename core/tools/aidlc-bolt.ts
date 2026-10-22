@@ -51,6 +51,7 @@ import {
   emitError,
   errorMessage,
   claimAttemptFields,
+  findStageBySlug,
   getField,
   holdsAuditLock,
   commandTurnHint,
@@ -93,8 +94,10 @@ import {
   rejectConstructionCheckpoint,
   resolveConstructionCheckpoint,
   verifyConstructionCheckpoint,
+  type ApprovalFindingDispositions,
   type ConstructionCheckpointKind,
 } from "./aidlc-construction-checkpoints.ts";
+import { approvalDispositionField, REVIEW_FINDING_DISPOSITIONS_FIELD } from "./aidlc-review-brief.ts";
 import {
   askSwarmCheckpoint,
   approveSwarmCheckpoint,
@@ -1328,6 +1331,17 @@ const CHECKPOINT_KINDS: readonly ConstructionCheckpointKind[] = ["unit", "skelet
 const CHECKPOINT_ACTIONS: readonly string[] = ["status", "ask", "verify", "approve", "reject"];
 const SWARM_CHECKPOINT_ACTIONS: readonly string[] = ["status", "ask", "approve", "reject"];
 
+// A checkpoint's approval records the open review findings of the stages and
+// Units it covers, through the review ledger's writer.
+function checkpointFindingDispositions(pd: string): ApprovalFindingDispositions {
+  return (stages, units, decider): Record<string, string> => {
+    const field = approvalDispositionField(
+      pd, stages.flatMap((slug) => findStageBySlug(slug) ?? []), units, decider,
+    );
+    return field === undefined ? {} : { [REVIEW_FINDING_DISPOSITIONS_FIELD]: field };
+  };
+}
+
 async function handleCheckpoint(args: string[]): Promise<void> {
   // The person said to approve the Unit as it is over a review that did not
   // finish; verify reads it, and the engine checks their words are on record.
@@ -1365,6 +1379,7 @@ async function handleCheckpoint(args: string[]): Promise<void> {
     case "approve":
       result = approveConstructionCheckpoint(
         pd, flags.unit, checkpointKind, flags["user-input"], checkpointSession(pd, flags.session, flags["user-input"] !== undefined),
+        checkpointFindingDispositions(pd),
       );
       break;
     case "reject":
@@ -1397,6 +1412,7 @@ function handleSwarmCheckpoint(args: string[]): void {
     case "approve":
       result = approveSwarmCheckpoint(
         pd, batch, units, flags["user-input"], checkpointSession(pd, flags.session, flags["user-input"] !== undefined),
+        checkpointFindingDispositions(pd),
       );
       break;
     case "reject":

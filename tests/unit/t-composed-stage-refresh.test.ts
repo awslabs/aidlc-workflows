@@ -272,6 +272,16 @@ describe("a refresh after a later compose carries the plugin's additions over", 
     expect(conflicts(project)).toEqual([`.kiro/${STAGE} (locally modified or unowned)`]);
   });
 
+  test("kiro: a line the person wrote that matches one the plugin added is theirs: config keeps the conflict and the line", () => {
+    const project = composed("kiro");
+    expect(config(project, "--yes").status).toBe(0);
+    const stagePath = join(project.dir, ".kiro", STAGE);
+    edit(stagePath, "  - nfr-design\n", "  - \"nfr-design\"\n  - nfr-design\n");
+    expect(conflicts(project)).toEqual([`.kiro/${STAGE} (locally modified or unowned)`]);
+    config(project, "--yes");
+    expect(readFileSync(stagePath, "utf-8")).toContain("  - \"nfr-design\"\n");
+  });
+
   test("kiro: a project set up with no record, then a plugin update synced, then config: no conflict", () => {
     const project = composed("kiro");
     rmSync(join(project.dir, ".kiro", "tools", "data", "aidlc-manifest.json"));

@@ -22,6 +22,7 @@ import {
   isoTimestamp,
   latestStartedStageSlug,
   parseCheckboxes,
+  readActiveDirectiveMarker,
   readAllAuditShards,
   readStateFile,
   resolveProjectDirFromHook,
@@ -123,6 +124,9 @@ if (source === "ide-audit-sync") {
   if (!activeForm) return 0;
   const slugMatch = activeForm.match(/\[([a-z][a-z0-9-]*)\]$/);
   if (!slugMatch) return 0;
+  // The step in hand belongs to an isolated `--single` run: its plan step names
+  // that run, not the workflow's place.
+  if (readActiveDirectiveMarker(projectDir, readStateFile(projectDir))?.single === true) return 0;
   slug = slugMatch[1];
 }
 

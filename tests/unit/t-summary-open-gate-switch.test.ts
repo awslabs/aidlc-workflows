@@ -190,6 +190,48 @@ describe("a gate is owed the summary when nothing turned it on while the gate wa
   });
 });
 
+describe("a per-Unit stage run at stage level, its gate open when summary confirmation turned on", () => {
+  // A plan that runs Functional Design without Units Generation (a tailored
+  // bugfix, say) runs it once with no Unit; its gate is the stage's own.
+  const FD = "functional-design";
+
+  function stageLevelGate(units: "skipped" | "completed" = "skipped"): string {
+    const proj = createTestProject();
+    tempDirs.push(proj);
+    seedStateFile(proj, "state-mid-inception.md");
+    const statePath = seededStateFile(proj);
+    let state = readFileSync(statePath, "utf-8")
+      .replace("- [S] functional-design \u2014 SKIP (bugfix scope)", "- [?] functional-design \u2014 EXECUTE");
+    if (units === "completed") {
+      state = state.replace("- [S] units-generation \u2014 SKIP (bugfix scope)", "- [x] units-generation \u2014 EXECUTE");
+    }
+    state = setField(state, "Summary Confirmation", "on (set by you)");
+    writeFileSync(statePath, state);
+    const dir = join(seededRecordDir(proj), "construction", FD);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${FD}-questions.md`), "# Functional Design Questions\n\n## Q1\n\nKeep the rule?\n\n[Answer]: A\n");
+    appendAuditEntry("STAGE_STARTED", { Stage: FD, Agent: "aidlc-architect-agent" }, proj);
+    appendAuditEntry("STAGE_AWAITING_APPROVAL", { Stage: FD }, proj);
+    appendAuditEntry("CEREMONY_SET", { Key: "summary_confirmation", Old: "off", New: "on", Source: "you" }, proj);
+    return proj;
+  }
+
+  test("owes no summary after the switch", () => {
+    expect(evidence(stageLevelGate(), FD)).toEqual(notOwed);
+  });
+
+  test("Request Changes after the switch owes it as usual", () => {
+    const proj = stageLevelGate();
+    appendAuditEntry("GATE_REJECTED", { Stage: FD, Details: "tighten the rule" }, proj);
+    appendAuditEntry("STAGE_REVISING", { Stage: FD, "Revision count": "1" }, proj);
+    expect(evidence(proj, FD).ok).toBe(false);
+  });
+
+  test("with Units Generation done, the stage runs per Unit and the stage-level gate is no exemption", () => {
+    expect(evidence(stageLevelGate("completed"), FD).ok).toBe(false);
+  });
+});
+
 describe("a Unit whose stage work finished before summary confirmation turned on", () => {
   const FD = "functional-design";
 

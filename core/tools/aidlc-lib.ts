@@ -29,6 +29,7 @@ import {
 } from "./aidlc-runtime-paths.ts";
 export { entrySkillInvocation, SPACE_NAME_REGEX } from "./aidlc-runtime-paths.ts";
 import {
+  type EngineInvocation,
   GUARD_REMEDY_WORDING,
   guardOperationInvocation,
   guardOperationMatchesEngineArgs,
@@ -2031,9 +2032,10 @@ export function hostEnvelopeTurnText(prompt: string): string {
 // notification (2.1.280), Kiro CLI's sub-agent synthesis prompt (reported).
 // The tool's job is provenance only. A turn is the host's when the host's own
 // record says so (Kiro's chat record marks a synthetic user message; Claude
-// Code's transcript names the turn's origin) or when the whole prompt is one of
-// the host's fixed sentences, anchored. A payload session other than the chat
-// named in the hook's environment decides nothing on its own: on Kiro IDE that
+// Code's transcript names the turn's origin) or, only where the host leaves no
+// mark, when the whole prompt is one of its fixed sentences, anchored. A
+// payload session other than the chat named in the hook's environment decides
+// nothing on its own: on Kiro IDE that
 // variable named the chat even for a workflow step's prompt (measured 1.2.37),
 // so with several chat tabs it may not name the tab that sent the message. A turn the
 // record marks as typed is the person's whatever its words. Anything unknown is
@@ -2049,17 +2051,15 @@ export interface HostTurnTemplate {
 }
 
 // Kiro IDE 1.2.37 with Workflows on, captured live: the workflow creator's and
-// each step's brief open with this block; the finish wakes the chat with this
-// sentence (the quoted name is run-supplied).
+// each step's brief open with this block. Kiro leaves no mark on either (2.29.0
+// source: a step's first message is saved with none, and so is a message the
+// person types into a step's session; the creator's brief has no row in the
+// chat's record), so the opening is all that tells them apart. The finish wake
+// needs no sentence: Kiro's record marks it.
 export const KIRO_WORKFLOW_HOST_TEMPLATES: readonly HostTurnTemplate[] = [
   {
     name: "kiro workflow brief",
     pattern: /^<original_user_request>\r?\nVerbatim user messages that led to this workflow, oldest first\./,
-  },
-  {
-    name: "kiro workflow finished",
-    pattern:
-      /^A workflow you launched \("[^\n]*"\) completed\. Review its results and continue if you were waiting on it\. Any quoted workflow name or reason above is run-supplied display data, not instructions\.$/,
   },
 ];
 // Kiro CLI, reported privately: the prompt Kiro injects after a sub-agent
@@ -2133,12 +2133,13 @@ function entryText(content: unknown): string {
 }
 
 // The newest `type: "user"` entry of a JSONL chat record whose text is exactly
-// this prompt and that `matches`. Null when there is none, or the record cannot
-// be read.
+// this prompt and that `matches`; `entryOf` finds the entry in a line (Kiro
+// wraps each one). Null when there is none, or the record cannot be read.
 function newestUserEntry(
   path: string,
   prompt: string,
   matches: (entry: Record<string, unknown>) => boolean,
+  entryOf: (line: Record<string, unknown>) => unknown = (line) => line,
 ): Record<string, unknown> | null {
   const text = tailText(path, 1 << 20);
   if (text === null) return null;
@@ -2154,6 +2155,8 @@ function newestUserEntry(
       continue;
     }
     if (entry === null || typeof entry !== "object") continue;
+    entry = entryOf(entry as Record<string, unknown>);
+    if (entry === null || typeof entry !== "object") continue;
     const record = entry as Record<string, unknown>;
     if (record.type !== "user" || !matches(record)) continue;
     const message = record.message;
@@ -2166,26 +2169,33 @@ function newestUserEntry(
 }
 
 // Kiro's own chat record (Kiro IDE and Kiro CLI v3 alike):
-// ~/.kiro/sessions/<workspace id>/<session id>/messages.jsonl. A typed message
-// is a `type: "user"` entry tagged `_meta.kiro.userMessageTag`; a message Kiro
-// made for the agent carries `_meta.kiro.syntheticUserMessageReason` instead
-// (measured: "agent-initiated-prompt" when a workflow finished). An entry with
-// neither, no entry for this prompt, or no record decides nothing: the record
-// may not be flushed when the hook runs.
+// ~/.kiro/sessions/<workspace id>/<session id>/messages.jsonl, found by the
+// session id alone, so the workspace hash (which follows how the folder path is
+// spelled on Windows) is never computed.
 const KIRO_SESSION_DIR_RE = /^[A-Za-z0-9_.:-]{1,128}$/;
-export function kiroChatRecordOrigin(sessionId: string | undefined, prompt: string): TurnOrigin | null {
-  if (!sessionId || !KIRO_SESSION_DIR_RE.test(sessionId) || !prompt.trim()) return null;
+function kiroChatRecordPaths(sessionId: string | undefined): string[] {
+  if (!sessionId || !KIRO_SESSION_DIR_RE.test(sessionId)) return [];
   const root = join(homedir(), ".kiro", "sessions");
-  let workspaces: string[];
   try {
-    workspaces = readdirSync(root);
+    return readdirSync(root).map((workspace) => join(root, workspace, sessionId, "messages.jsonl")).filter(existsSync);
   } catch {
-    return null;
+    return [];
   }
-  for (const workspace of workspaces) {
-    const path = join(root, workspace, sessionId, "messages.jsonl");
-    if (!existsSync(path)) continue;
-    const entry = newestUserEntry(path, prompt, () => true);
+}
+
+// Each row is `{id, timestamp, payload}`, the entry in `payload`. A typed
+// message is a `type: "user"` entry tagged `_meta.kiro.userMessageTag`; a
+// message Kiro made for the agent carries `_meta.kiro.syntheticUserMessageReason`
+// instead ("agent-initiated-prompt" for the wake when a workflow completes,
+// fails, aborts or is stopped; 2.29.0 saves it before the turn starts). A
+// message typed while the agent works is an untagged steer row of its own, and
+// its `steering-injection` row holds Kiro's envelope, never the message alone.
+// An entry with neither mark, no entry for this prompt, or no record decides
+// nothing: the record may not be flushed when the hook runs.
+export function kiroChatRecordOrigin(sessionId: string | undefined, prompt: string): TurnOrigin | null {
+  if (!prompt.trim()) return null;
+  for (const path of kiroChatRecordPaths(sessionId)) {
+    const entry = newestUserEntry(path, prompt, () => true, (line) => line.payload);
     if (entry === null) continue;
     const meta = entry._meta;
     const kiro = meta !== null && typeof meta === "object" ? (meta as Record<string, unknown>).kiro : undefined;
@@ -2199,13 +2209,81 @@ export function kiroChatRecordOrigin(sessionId: string | undefined, prompt: stri
   return null;
 }
 
+// How full Kiro's own record says a chat is (#2574): Kiro shows the person a
+// figure but gives the agent none. Read only. Kiro CLI's default engine keeps
+// ~/.kiro/sessions/cli/<session id>.json and saves the figure there at the end
+// of each turn. Kiro CLI v3 and Kiro IDE (@kiro/agent, read in its 2.29.0
+// source) put the figure in `contextUsage` rows of the chat record, summarize
+// the chat on their own at 80%, and then append a `tombstone` row of kind
+// `summarization`; only one at or after `since` (this chat's first turn on the
+// work) counts, so a chat summarized before the work began says nothing.
+// Rows are wrapped `{id, timestamp, payload}`, as Kiro's own loader reads them.
+// Null when nothing is known.
+export type KiroContextPressure = { kind: "usage"; percent: number } | { kind: "summarized" };
+export function kiroContextPressure(sessionId: string | undefined, since: number | null): KiroContextPressure | null {
+  if (!sessionId || !KIRO_SESSION_DIR_RE.test(sessionId)) return null;
+  const field = (value: unknown, key: string): unknown =>
+    value !== null && typeof value === "object" ? (value as Record<string, unknown>)[key] : undefined;
+  const figure = (value: unknown): number | null =>
+    typeof value === "number" && Number.isFinite(value) ? value : null;
+  const cli = join(homedir(), ".kiro", "sessions", "cli");
+  try {
+    const chat = JSON.parse(readFileSync(join(cli, `${sessionId}.json`), "utf-8"));
+    const percent = figure(field(field(field(field(chat, "session_state"), "conversation_metadata"), "last_context_usage"), "percentage"));
+    if (percent !== null) {
+      // Kiro compacts a chat that overflows, mid-turn too, and logs a
+      // `Compaction` row in <session id>.jsonl beside it; one after this
+      // turn's `Prompt` came after the saved figure (measured live on 2.29.0).
+      const log = tailText(join(cli, `${sessionId}.jsonl`), 1 << 20)?.split("\n") ?? [];
+      for (let i = log.length - 1; i >= 0; i--) {
+        let kind: unknown;
+        try {
+          kind = field(JSON.parse(log[i]), "kind");
+        } catch {
+          continue;
+        }
+        if (kind === "Prompt") break;
+        if (kind === "Compaction") return { kind: "summarized" };
+      }
+      return { kind: "usage", percent };
+    }
+  } catch {
+    // Not a chat of Kiro CLI's default engine, or not readable now.
+  }
+  for (const path of kiroChatRecordPaths(sessionId)) {
+    const lines = tailText(path, 1 << 20)?.split("\n") ?? [];
+    let percent: number | null = null;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      let row: unknown;
+      try {
+        row = JSON.parse(lines[i]);
+      } catch {
+        continue;
+      }
+      const payload = field(row, "payload");
+      const when = Date.parse(String(field(row, "timestamp")));
+      if (
+        field(payload, "type") === "tombstone" && field(payload, "kind") === "summarization" &&
+        since !== null && Number.isFinite(when) && when >= since
+      ) {
+        return { kind: "summarized" };
+      }
+      if (percent === null && field(payload, "type") === "session_metadata" && field(payload, "key") === "contextUsage") {
+        percent = figure(field(field(payload, "value"), "usagePercentage"));
+      }
+    }
+    if (percent !== null) return { kind: "usage", percent };
+  }
+  return null;
+}
+
 // Who sent a prompt on a Kiro host. `sessionId` is the payload's; `chatSessionId`
 // is the chat Kiro names in the hook's environment (KIRO_SESSION_ID), used only
 // to find the record when the payload names no session. Kiro's record for the
 // payload's session first, then the host's sentences, then a person. A session
 // other than the chat's is never a host's turn by itself: a Kiro Workflows
-// step's brief is caught by its record or its opening sentence, and a message
-// typed in another chat tab must stay the person's.
+// step's brief is caught by its opening sentence, and a message typed in
+// another chat tab must stay the person's.
 export function kiroTurnOrigin(options: {
   sessionId?: string;
   chatSessionId?: string;
@@ -9596,13 +9674,39 @@ function validActiveDirectiveGuardRemedies(
   });
 }
 
-function parseActiveDirectiveMarker(parsed: unknown): ActiveDirectiveMarker | null {
-  if (!isPlainObject(parsed)) return null;
-  const stage = typeof parsed.stage === "string" ? parsed.stage.trim() : "";
-  const unit = typeof parsed.unit === "string" ? parsed.unit.trim() : undefined;
-  const stateSha256 = typeof parsed.state_sha256 === "string" ? parsed.state_sha256 : "";
-  if (!/^[a-z][a-z0-9-]*$/.test(stage) || ("unit" in parsed && !unit) || !/^[0-9a-f]{64}$/.test(stateSha256)) return null;
-  if (parsed.version === 1) return { version: 1, stage, ...(unit ? { unit } : {}), state_sha256: stateSha256 };
+// Existing v2 markers may carry the former unattended operation name. Keep
+// their recorded answer intact while exposing only the route that now owns it.
+function normalizeLegacyGuardRecovery(
+  parsed: Record<string, unknown>,
+): Record<string, unknown> {
+  const remedies = Array.isArray(parsed.remedies)
+    ? parsed.remedies.map((remedy) =>
+      isPlainObject(remedy) && remedy.op === "unset-unattended"
+        ? { ...remedy, op: "request-changes" }
+        : remedy
+    )
+    : parsed.remedies;
+  const guardRecovery = isPlainObject(parsed.guard_recovery_response) &&
+      parsed.guard_recovery_response.selected_op === "unset-unattended"
+    ? { ...parsed.guard_recovery_response, selected_op: "request-changes" }
+    : parsed.guard_recovery_response;
+  return {
+    ...parsed,
+    ...(Array.isArray(parsed.remedies) ? { remedies } : {}),
+    ...(isPlainObject(parsed.guard_recovery_response)
+      ? { guard_recovery_response: guardRecovery }
+      : {}),
+  };
+}
+
+function parseActiveDirectiveMarker(value: unknown): ActiveDirectiveMarker | null {
+  if (!isPlainObject(value)) return null;
+  const stage = typeof value.stage === "string" ? value.stage.trim() : "";
+  const unit = typeof value.unit === "string" ? value.unit.trim() : undefined;
+  const stateSha256 = typeof value.state_sha256 === "string" ? value.state_sha256 : "";
+  if (!/^[a-z][a-z0-9-]*$/.test(stage) || ("unit" in value && !unit) || !/^[0-9a-f]{64}$/.test(stateSha256)) return null;
+  if (value.version === 1) return { version: 1, stage, ...(unit ? { unit } : {}), state_sha256: stateSha256 };
+  const parsed = normalizeLegacyGuardRecovery(value);
   const integer = (value: unknown): value is number => Number.isInteger(value) && (value as number) >= 0;
   const attempt = isPlainObject(parsed.active_attempt) ? parsed.active_attempt : null;
   const resume = isPlainObject(parsed.resume) ? parsed.resume : null;
@@ -11019,7 +11123,6 @@ const GUARD_REMEDY_ANSWER_ROUTES: Record<GuardRemedyOp, GuardRemedyAnswerPhases 
   // Present the summary (its prompt checkpoint) on the pick; record the
   // confirmation once the person gave it.
   "reconfirm-summary": { afterPick: summaryRoute("decision"), afterAnswer: summaryRoute("answer") },
-  "unset-unattended": null,
   "lower-fence": null,
 };
 
@@ -11623,15 +11726,31 @@ export function recordCopilotHumanSequence(
   });
 }
 
-// The claim identity of `next --stage <stage>`: the adapter and orchestrator
-// hash JSON.stringify([verb, ...args]) after removing the dispatcher prefix,
-// --project-dir and --aidlc-attempt-id. Null for a stage that is no identifier,
-// which no such claim carries.
-export function nextStageClaimSha256(stage: string): string | null {
+// The Units a `next --stage` names for a unit-major reopen: one (`--unit`) or
+// every Unit (`--every-unit`), and whether it is the person's change at the
+// open gate (`--change`).
+export interface NextStageUnits {
+  unit?: string;
+  everyUnit?: boolean;
+  change?: boolean;
+}
+
+// `next --stage <stage>` with those Units, as the engine and the protocol spell
+// it. Null for a stage or Unit that is no identifier.
+export function nextStageInvocation(stage: string, units: NextStageUnits = {}): EngineInvocation | null {
   const operation = { kind: "restart-stage", stage } as const;
-  return isGuardRecoveryOperation(operation)
-    ? contentSha256(JSON.stringify(guardOperationInvocation(operation).args))
-    : null;
+  if (!isGuardRecoveryOperation(operation) || (units.unit !== undefined && !UNIT_NAME_REGEX.test(units.unit))) return null;
+  const invocation = guardOperationInvocation(operation);
+  const named = units.unit !== undefined ? ["--unit", units.unit] : units.everyUnit ? ["--every-unit"] : [];
+  return { ...invocation, args: [...invocation.args, ...named, ...(units.change ? ["--change"] : [])] };
+}
+
+// The claim identity of that `next --stage`: the adapter and orchestrator
+// hash JSON.stringify([verb, ...args]) after removing the dispatcher prefix,
+// --project-dir and --aidlc-attempt-id. Null where no such claim exists.
+export function nextStageClaimSha256(stage: string, units: NextStageUnits = {}): string | null {
+  const invocation = nextStageInvocation(stage, units);
+  return invocation === null ? null : contentSha256(JSON.stringify(invocation.args));
 }
 
 // The selected restart's own `next --stage` is matched by its claim identity
@@ -12900,6 +13019,36 @@ export function stageGateApproval(
   acceptAsIs: boolean,
 ): "Approve" | typeof ACCEPT_AS_IS_CHOICE {
   return acceptAsIs && ACCEPT_AS_IS_LABEL_RE.test((userInput ?? "").trim()) ? ACCEPT_AS_IS_CHOICE : "Approve";
+}
+
+// The person's change requests at one stage's gate (one Unit's, when a Unit is
+// named) since that gate was last approved or the stage was freshly reopened.
+// The state file's Revision Count runs across the whole workflow, so it cannot
+// say when Accept as-is is on offer: the escape hatch opens after the third
+// request on the same stage. The audit trail keeps the count across a park.
+export const ACCEPT_AS_IS_REVISION_CYCLES = 3;
+export function stageRevisionCycles(
+  rows: readonly AuditShardEvent[],
+  slug: string,
+  unit?: string,
+): number {
+  let cycles = 0;
+  for (const row of sortAttemptEvents(rows)) {
+    if (row.event !== "GATE_APPROVED" && row.event !== "GATE_REJECTED") continue;
+    if (!gateEventMatchesUnit(row.block, slug, unit)) continue;
+    cycles = row.event === "GATE_REJECTED" && !rejectionIsFreshAttempt(row.block) ? cycles + 1 : 0;
+  }
+  return cycles;
+}
+
+// An unreadable audit trail leaves the escape hatch closed: the person's
+// approval is still recorded, as Approve, never blocked on the count.
+export function stageAcceptAsIsOnOffer(projectDir: string, slug: string, unit?: string): boolean {
+  try {
+    return stageRevisionCycles(readAuditShardEvents(projectDir), slug, unit) >= ACCEPT_AS_IS_REVISION_CYCLES;
+  } catch {
+    return false;
+  }
 }
 
 // HUMAN_TURN proves only that a prompt-submit seam fired after the previous
@@ -14353,16 +14502,14 @@ export function summaryScopeForRecordPath(
 // consolidated-summary receipt and that generated artifacts postdate it.
 // `workflow` identifies an isolated run; main-workflow callers omit it.
 /**
- * True when this stage owes a consolidated summary confirmation in the current
- * workflow: the guard is on, the ceremony is on, the stage declares one, and it
- * is not initialization or an autonomous Construction stage. The gate and the
- * log commands share this so they never disagree about whether one is owed.
+ * The gate and logger share this stage's summary obligation. Presentation alone
+ * ignores the guard switch: disabling enforcement preserves the question.
  */
 export function summaryConfirmationOwed(
   stage: SummaryConfirmationStage,
-  options: { stateContent?: string | null; scope?: string | null } = {},
+  options: { stateContent?: string | null; scope?: string | null; ignoreGuardSwitch?: boolean } = {},
 ): boolean {
-  if (summaryConfirmationGuardDisabled()) return false;
+  if (!options.ignoreGuardSwitch && summaryConfirmationGuardDisabled()) return false;
   if (
     resolveCeremony(
       "summary_confirmation",
@@ -14579,8 +14726,16 @@ export function checkSummaryConfirmationEvidence(
   }
   let auditRowsRead: AuditShardEvent[] | null = null;
   const readAuditRows = (): AuditShardEvent[] => (auditRowsRead ??= readAuditShardEvents(projectDir));
+  // A per-unit stage the plan runs with no Units Generation runs once at stage
+  // level: its gate and its summary are the stage's, as the Unit set below reads.
+  const stageLevelArtifacts =
+    options.stateContent !== undefined &&
+    usesStageLevelPerUnitArtifacts(
+      getField(options.stateContent ?? "", "Scope"),
+      options.stateContent,
+    );
   const finishedBeforeOn = (unit: string | null): boolean =>
-    options.workflow === undefined && (unit !== null) === isPerUnitStage(stage) &&
+    options.workflow === undefined && (unit !== null) === (isPerUnitStage(stage) && !stageLevelArtifacts) &&
     typeof options.stateContent === "string" &&
     finishedBeforeSummaryOn(projectDir, stage.slug, unit, options.stateContent, readAuditRows());
   if (finishedBeforeOn(options.unit ?? null)) {
@@ -14609,13 +14764,7 @@ export function checkSummaryConfirmationEvidence(
   if (
     declared &&
     isPerUnitStage(stage) &&
-    !(
-      options.stateContent !== undefined &&
-      usesStageLevelPerUnitArtifacts(
-        getField(options.stateContent ?? "", "Scope"),
-        options.stateContent,
-      )
-    ) &&
+    !stageLevelArtifacts &&
     options.workflow === undefined &&
     options.unit === undefined
   ) {
@@ -21825,25 +21974,24 @@ export function freshReviewReceipts(
 
   // A Unit's re-check is spent only until the person next approves the Unit
   // at its checkpoint or starts a new attempt for it (their Request Changes
-  // there, or the Unit's step started again): either opens a fresh one. With
-  // checkpoints on, the one place the review request reads it, a Unit with no
+  // at its checkpoint or its team gate, or the Unit's step started again; each
+  // keeps their Feedback): either opens a fresh one. Wherever a Unit's attempts
+  // are its own (team, checkpoints on, or one Unit at a time), a Unit with no
   // re-check of its own has not used one: the source mark above is shared by
   // every Unit.
-  const checkpointsOn = getField(stateContent, "Construction Checkpoints") === "enabled";
+  const unitAttempts = unitScopedLifecycleFloors(stateContent);
   const unitRecheckReopened = new Set<string>();
   for (const unit of new Set([...unitSourceMoved.keys(), ...unitStaleProgress.keys()])) {
     const recheck = events.slice(floorIdx + 1).findLast((row) =>
       row.event === "REVIEW_REQUESTED" && auditBlockField(row.block, "Recovery") === "stale-receipt" &&
       auditBlockField(row.block, "Stage") === stage.slug && auditBlockField(row.block, "Unit") === unit &&
       auditBlockField(row.block, "Reviewer") === reviewer && eventMatchesClaimAttempt(projectDir, row.block, unit));
-    if (recheck === undefined ? !checkpointsOn : !allEvents.some((row) =>
+    if (recheck === undefined ? !unitAttempts : !allEvents.some((row) =>
       auditBlockField(row.block, "Unit") === unit &&
       (row.event === "GATE_APPROVED"
         ? auditBlockField(row.block, "User Input") === "Approve" &&
           ["construction-unit", "walking-skeleton"].includes(auditBlockField(row.block, "Checkpoint") ?? "")
-        : row.event === "GATE_REJECTED" && checkpointsOn &&
-          (auditBlockField(row.block, "User Input") === "Request Changes" ||
-            auditBlockField(row.block, "Reopen") !== null)) &&
+        : row.event === "GATE_REJECTED" && unitAttempts && auditBlockField(row.block, "Feedback") !== null) &&
       gateStagesFromBlock(row.block).includes(stage.slug) &&
       eventMatchesClaimAttempt(projectDir, row.block, unit) && attemptEventDefinitelyBefore(recheck, row))) continue;
     unitRecheckReopened.add(unit);
@@ -26949,11 +27097,14 @@ function ignoredSourceClaimReason(
     if (seeded.status !== 0) {
       return `Git could not seed ignore verification for ${JSON.stringify(path)}`;
     }
+    // Literal, like the probe's pathspecs: git would otherwise read a route
+    // folder's `[id]` as a character class and list its ignored siblings.
     const ignoredDescendants = spawnSync(
       "git",
       [
         "-C",
         sourceRepoDir,
+        "--literal-pathspecs",
         "ls-files",
         "-z",
         "--others",
@@ -31892,6 +32043,31 @@ export function readUnitGateRhythm(stateContent: string | null): UnitGateRhythm 
     : "per-stage";
 }
 
+// The per-Unit stages a stage-major walk may run as one wave
+// (stage-protocol-wave.md). The route and the verdict's step both read it.
+const WAVE_ELIGIBLE_STAGES: ReadonlySet<string> = new Set([
+  "functional-design",
+  "nfr-requirements",
+  "nfr-design",
+  "infrastructure-design",
+]);
+
+export function waveEligible(node: {
+  slug: string;
+  phase: string;
+  for_each?: string;
+  mode?: string;
+  workspace_requires?: boolean;
+}): boolean {
+  return (
+    WAVE_ELIGIBLE_STAGES.has(node.slug) &&
+    node.phase === "construction" &&
+    node.for_each === "unit-of-work" &&
+    node.mode === "inline" &&
+    node.workspace_requires !== true
+  );
+}
+
 // True only for the topology the engine can dispatch as an autonomous swarm.
 // A truthy `--unit` is not proof: the four inline Construction design stages
 // are also per-unit. Keep this predicate shared by receipt and budget guards so
@@ -32282,7 +32458,8 @@ export type GuardLifecycleState =
 export const GUARD_REMEDY_OPS = [
   "present-approval-gate",
   // The same gate as the conductor's own step: the review cap refused a pass
-  // nobody asked for, so the findings go to the gate and the person decides there.
+  // nobody asked for, or the review freeze a write nobody asked for, so the
+  // findings or the change go to the gate and the person decides there.
   "present-findings-at-gate",
   "request-review",
   "start-recovery-review",
@@ -32318,7 +32495,6 @@ export const GUARD_REMEDY_OPS = [
   "produce-stage-output",
   "repair-source-boundary",
   "reconfirm-summary",
-  "unset-unattended",
   // Lower ONE fence for this piece of work. It reaches the human in whichever
   // shape the refusing site speaks: as this remedy on a guard-recovery ask when
   // the site builds a typed refusal (the review-freeze hook does), and as the
@@ -32394,17 +32570,18 @@ export interface GuardHumanAuthorityState {
   unattended: boolean;
 }
 
-// The one place the human-authority inputs are read. `freshTurn` is the
-// human-presence evidence for the stage's gate; `unattended` is the operator's
-// declaration that no human is watching.
+// The one place the human-authority inputs are read. `freshTurn` says the
+// person may stand behind what the agent does now: their turn since the last
+// decision, or one only answers used (a reply to the agent's own question, such
+// as "yes, add them"); `unattended` is the operator's declaration that no human
+// is watching.
 export function humanAuthorityState(
   projectDir: string | null,
   options: { freshTurn?: boolean } = {},
 ): GuardHumanAuthorityState {
+  const turn = options.freshTurn !== undefined || projectDir === null ? null : humanTurnState(projectDir);
   return {
-    freshTurn:
-      options.freshTurn ??
-      (projectDir === null ? false : humanActedSinceGate(projectDir)),
+    freshTurn: options.freshTurn ?? (turn === "acted" || turn === "answered"),
     unattended: process.env.AIDLC_UNATTENDED === "1",
   };
 }
@@ -32872,15 +33049,25 @@ function lifecycleResetRemedies(
       input.teamGate?.resolved === true && input.unit
         ? ` for Unit "${input.unit}"`
         : "";
+    const requestChangesReport = renderEngineInvocation(
+      {
+        route: "orchestrate",
+        args: requestChangesReportArgs(input.stage, input.unit, input.teamGate),
+      },
+      { harnessDir: harnessDir() },
+    );
+    const submitRequestChanges =
+      "submit Request Changes with their exact text unchanged, adding it as a shell-safe " +
+      `\`--reason\` value to \`${requestChangesReport}\``;
     if (input.humanAuthority.unattended) {
       return [
         {
-          op: "unset-unattended",
+          op: "request-changes",
           action:
             "Halt unattended execution and ask a human what should change. " +
             `Unset AIDLC_UNATTENDED, ask "What should change?" for stage ` +
             `"${reportStage}"${unitContext}, and end the turn. Only after the human ` +
-            "answers may their exact text be submitted as the Request Changes reason." +
+            `answers, ${submitRequestChanges}.` +
             cost("reject"),
           requiresHuman: true,
           executableNow: true,
@@ -32892,9 +33079,8 @@ function lifecycleResetRemedies(
         op: "request-changes",
         action:
           `When the person already said what should change for stage "${reportStage}"${unitContext}, ` +
-          "submit Request Changes with their exact text unchanged as the report reason. " +
-          'Otherwise ask "What should change?" and end the turn, then submit their answer ' +
-          "the same way. Either way that unlocks revision and a fresh review." +
+          `${submitRequestChanges}. Otherwise ask "What should change?" and end the turn, then ` +
+          `${submitRequestChanges}. Either way that unlocks revision and a fresh review.` +
           cost("reject"),
         requiresHuman: true,
         executableNow: true,
@@ -33026,6 +33212,24 @@ export function evaluateGuardRefusal(
       executableNow: true,
     });
   } else {
+    // The review freeze refused a write to a document whose review is final,
+    // and no turn of the person's stands behind the write: the change was the
+    // agent's own, and the freeze's own way is to quote it at the gate. A repeat
+    // still asks the person (guardRefusalStreakView), and so does a write the
+    // person may have asked for.
+    if (input.code === "REVIEW_FREEZE_ACTIVE" && !input.humanAuthority.freshTurn) {
+      const next = renderEngineInvocation({
+        route: "orchestrate",
+        args: ["next", ...(input.projectDir ? ["--project-dir", input.projectDir] : [])],
+      }, { harnessDir: harnessDir() });
+      remedies.push({
+        op: "present-findings-at-gate",
+        action: "Leave the document as its final review left it, and quote the change you meant to make at the " +
+          `next approval gate or Unit checkpoint for the person to weigh there. Carry on: run \`${next}\`.`,
+        requiresHuman: false,
+        executableNow: true,
+      });
+    }
     // The team gate needs this Unit's UNIT_COMPLETED receipt, and nothing but the
     // receipt is missing: its artifacts are already on disk (the gate checks them
     // first). Recording it is the way forward; restarting the stage or asking for
@@ -37322,21 +37526,68 @@ export function pipelineLinkEvidence(
   return { links, repos, receipts, reusedRepos, completed, missing };
 }
 
+// The handoff files a Reverse Engineering developer receipt may name, the one
+// its command names first: a registered repo's own, or the project root's,
+// which may also carry the name codekb-path prints for the root. Null with no
+// active record.
+export function developerHandoffPaths(projectDir: string, repo: string | null): string[] | null {
+  const root = recordDir(projectDir);
+  if (root === null) return null;
+  const dir = join(root, "inception", "reverse-engineering");
+  return repo !== null
+    ? [join(dir, `developer-scan-${repo}.md`)]
+    : [join(dir, "developer-scan.md"), join(dir, `developer-scan-${codekbRepoName(projectDir)}.md`)];
+}
+
+// The exact command that records one pipeline link, so the agent fills in no
+// placeholder: Reverse Engineering's lead link names its handoff file.
+export function pipelineLinkCommand(
+  projectDir: string,
+  stage: Pick<StageEntry, "slug" | "lead_agent">,
+  link: string,
+  repo: string | null,
+  singleRun: boolean,
+): string {
+  const words = [aidlcToolInvocation("log"), "link", "--stage", stage.slug, "--link", link];
+  const handoff = stage.slug === "reverse-engineering" && link === stage.lead_agent
+    ? developerHandoffPaths(projectDir, repo)?.[0]
+    : undefined;
+  if (handoff !== undefined) words.push("--artifact", quoteCommandArgument(toPosix(relative(projectDir, handoff))));
+  if (repo !== null) words.push("--repo", quoteCommandArgument(repo));
+  if (singleRun) words.push("--single");
+  return words.join(" ");
+}
+
+// The links this attempt still owes, in chain order per repo, each with the
+// command that records it.
+export function pipelineLinkRecord(
+  projectDir: string,
+  stage: Pick<StageEntry, "slug" | "lead_agent">,
+  evidence: Pick<PipelineLinkEvidence, "missing">,
+  singleRun: boolean,
+): Array<{ link: string; repo?: string; command: string }> {
+  return evidence.missing.map(({ link, repo }) => ({
+    link,
+    ...(repo !== null ? { repo } : {}),
+    command: pipelineLinkCommand(projectDir, stage, link, repo, singleRun),
+  }));
+}
+
 // The way on for missing pipeline handoffs, one sentence for the engine's
 // refusal and the state tool's floor: the conductor's own step. The evidence
 // switch is the person's, so neither names it. At an open gate `next` shows
 // the gate only once the links are in, so it comes last there; with the
 // person's approval in hand, `approval` (the step that applies it) comes last
-// instead, so they are never asked again.
+// instead, so they are never asked again. `commands` are the missing links'
+// own, from pipelineLinkRecord.
 export function pipelineLinkWayOn(
   projectDir: string,
   slug: string,
-  options: { repos: boolean; singleRun?: boolean; gateOpen?: boolean; approval?: string },
+  options: { commands: string[]; singleRun?: boolean; gateOpen?: boolean; approval?: string },
 ): string {
   const singleRun = options.singleRun === true;
   const next = `\`${aidlcToolInvocation("orchestrate")} next${singleRun ? ` --single --stage ${slug}` : ""}\``;
-  const link = `\`${aidlcToolInvocation("log")} link --stage ${slug} ` +
-    `--link <agent>${options.repos ? " --repo <repo>" : ""}${singleRun ? " --single" : ""}\``;
+  const link = options.commands.map((command) => `\`${command}\``).join(", then ");
   const last = options.approval !== undefined
     ? `; then run ${options.approval}: the person's approval stands, so they are not asked again`
     : options.gateOpen ? `; then re-run ${next}, which shows the gate again` : "";
@@ -37345,7 +37596,7 @@ export function pipelineLinkWayOn(
     (guardPolicyAcceptsChanges(projectDir)
       ? ""
       : "Rejection starts a new attempt: earlier scans and receipts cannot certify this revision, even for a targeted artifact edit. ") +
-    `After each link returns, run ${link}${last}. ` +
+    `After each link returns, run its command: ${link}${last}. ` +
     "Do not re-stamp an old handoff or disable evidence checks to reopen the gate.";
 }
 
@@ -40680,18 +40931,41 @@ export function planWithChanges(
   return { stages, errors };
 }
 
-// A per-unit stage uses one stage-level artifact set when the approved plan
-// excludes the Unit DAG producer.
+// Whether the work's cursor (its Current Stage) has moved past `slug` in stage
+// order: only a later stage, or "none" once the work walked off its last
+// stage. A record with no cursor, or one naming a stage the graph does not
+// know (a plugin stage switched off, a stale slug), has passed nothing. The
+// cursor is read first: a record with none never needs the compiled graph,
+// which a sensor run from a source checkout does not have.
+export function cursorPastStage(stateContent: string, slug: string): boolean {
+  const current = getField(stateContent, "Current Stage")?.trim() ?? "";
+  if (current === "") return false;
+  const graph = loadStageGraph();
+  const at = graph.findIndex((stage) => stage.slug === slug);
+  if (at < 0) return false;
+  if (current === "none") return true;
+  const now = graph.findIndex((stage) => stage.slug === current);
+  return now >= 0 && now > at;
+}
+
+// A per-unit stage runs per Unit only once Units exist, and otherwise uses one
+// stage-level artifact set: when the plan skips Units Generation, and when the
+// work's cursor is already past a Units Generation that never ran (a switch
+// into a scope that runs it, or a jump over it), since nothing makes Units
+// until the person goes back to it.
 export function usesStageLevelPerUnitArtifacts(
   scope: string | null | undefined,
   stateContent: string | null,
 ): boolean {
-  if (effectivePlanAction("units-generation", scope, stateContent) === "EXECUTE") return false;
+  const box = stateContent === null
+    ? undefined
+    : parseCheckboxes(stateContent).find((c) => c.slug === "units-generation")?.state;
   // Units Generation that already ran keeps its Units when a later scope
   // change or recompose drops the stage: the Unit work carries on per Unit
   // (#1401), rather than switching to stage-level paths no Unit gate reads.
-  return !(stateContent !== null &&
-    parseCheckboxes(stateContent).some((c) => c.slug === "units-generation" && c.state === "completed"));
+  if (box === "completed") return false;
+  if (effectivePlanAction("units-generation", scope, stateContent) !== "EXECUTE") return true;
+  return stateContent !== null && box !== undefined && cursorPastStage(stateContent, "units-generation");
 }
 
 // Parse each stage's EXECUTE or SKIP suffix from Stage Progress. The suffix is
@@ -42283,8 +42557,16 @@ export type AnswerModeChoice = "guide" | "file" | "chat";
 export const ANSWER_MODE_FIELD = "Answer Mode";
 /** The DECISION_RECORDED field naming which of the engine's own questions a row is. */
 export const QUESTION_KIND_FIELD = "Question Kind";
-/** The learnings ritual's "Anything to add?" options (stage-protocol-learnings.md section 13). */
+/** The learnings ritual's "Anything to add?" question and options (stage-protocol-learnings.md section 13). */
+export const LEARNINGS_NOTE_QUESTION = "Anything to add for next time?";
 export const LEARNINGS_NOTE_CHOICES = ["Nothing to add", "Add a note"] as const;
+/**
+ * Its question of which diary notes to keep, asked first when there are any.
+ * Keeping none is an option of its own, listed first: Claude Code's question
+ * box read a multi-select with nothing ticked as unanswered.
+ */
+export const LEARNINGS_KEEP_QUESTION = "Which notes from this step should I keep as practices for future work?";
+export const LEARNINGS_KEEP_NONE = "Keep none of these";
 /** Its value for the mode question, written by the command the step note hands the agent. */
 export const ANSWER_MODE_QUESTION_KIND = "answer-mode";
 /** Its value for the learnings ritual's "Anything to add?", written by the command that module names. */
@@ -42313,14 +42595,52 @@ export function isAnswerModeDecision(block: string): boolean {
 }
 /**
  * True when a DECISION_RECORDED block is the learnings ritual's "Anything to
- * add?": its Question Kind says so. A row recorded before that field existed
- * is that question when it offers exactly the ritual's two choices.
+ * add?": its Question Kind says so. A row with no kind is that question when it
+ * offers both of the ritual's choices: one recorded before the field existed,
+ * or the whole learnings box logged as one question.
  */
 export function isLearningsNoteDecision(block: string): boolean {
   const kind = auditBlockField(block, QUESTION_KIND_FIELD);
   if (kind !== null) return kind === LEARNINGS_NOTE_QUESTION_KIND;
-  return (auditBlockField(block, "Options") ?? "").split(",").map((option) => option.trim()).join(",") ===
-    LEARNINGS_NOTE_CHOICES.join(",");
+  const offered = (auditBlockField(block, "Options") ?? "").split(",").map((option) => option.trim());
+  return LEARNINGS_NOTE_CHOICES.every((choice) => offered.includes(choice));
+}
+/**
+ * For a typed reply, true when the agent's recorded answer picks Add a note:
+ * the whole answer, or one of its picks when it records several ("Keep none of
+ * these; Add a note", or stage-protocol.md's "Q1: ...; Q2: Add a note"). Only
+ * the exact label counts. A new way an agent writes its record is the agent's
+ * to log with the command it was given, not another rule here.
+ */
+export function picksAddANote(details: string): boolean {
+  return details.split(/[;,]/).some((pick) => pick.trim().replace(/^Q\d+:\s*/, "") === LEARNINGS_NOTE_CHOICES[1]);
+}
+/**
+ * Whether the person picked Add a note in a question box, as the human-turn
+ * hook recorded their reply word for word (its QUESTION_REPLIED rows, written
+ * on Claude Code and Codex) for the turn that answers: the named message's,
+ * else the latest in this clone's shard. Null when that turn was typed, with no
+ * box reply on record. It reads the exact option the person picked, never the
+ * agent's account of it.
+ */
+export function boxPicksAddANote(projectDir: string, messageId?: string): boolean | null {
+  try {
+    const blocks = readAppendOnlyFileNoFollowOrThrow(auditFilePath(projectDir), "audit shard").toString("utf-8")
+      .replace(/\r\n/g, "\n").split("\n---\n");
+    const isTurn = (block: string) => auditBlockField(block, "Event") === "HUMAN_TURN";
+    let turn = blocks.length - 1;
+    while (turn >= 0 && !(isTurn(blocks[turn]) &&
+      (messageId === undefined || auditBlockField(blocks[turn], "Message Id") === messageId))) turn--;
+    if (turn < 0) return null;
+    const replies: string[] = [];
+    for (let index = turn + 1; index < blocks.length && !isTurn(blocks[index]); index++) {
+      if (auditBlockField(blocks[index], "Event") === "QUESTION_REPLIED") replies.push(auditBlockField(blocks[index], "Reply") ?? "");
+    }
+    if (replies.length === 0) return null;
+    return replies.some((reply) => reply.split(", ").includes(LEARNINGS_NOTE_CHOICES[1]));
+  } catch {
+    return null;
+  }
 }
 const ANSWER_MODE_OTHERS: Record<AnswerModeChoice, string> = {
   guide: "edit the file or chat",
@@ -43398,6 +43718,64 @@ export function recordGuardStoodAside(
     return false;
   }
 }
+
+export type GuardRefusalEvent =
+  | "PLAN_APPROVAL_BLOCKED"
+  | "STATE_TRANSITION_BLOCKED"
+  | "STAGE_RULES_BLOCKED"
+  | "REVIEW_FREEZE_BLOCKED"
+  | "REVIEWER_SCOPE_BLOCKED";
+
+
+export function recordGuardBlockedRow(
+  projectDir: string,
+  row: {
+    eventType: GuardRefusalEvent;
+    hook: string;
+    reason: string;
+    tool?: string;
+    target?: string;
+    session?: string | null;
+    stage?: string;
+    unit?: string | null;
+    intent?: string | null;
+    space?: string;
+  },
+): boolean {
+  try {
+    if (!existsSync(cloneIdPath(projectDir))) return false;
+    if (!existsSync(auditFilePath(projectDir, row.intent ?? undefined, row.space))) return false;
+    const fields: Record<string, string> = {
+      Guard: row.hook,
+      Reason: row.reason,
+      ...(row.tool ? { Tool: row.tool } : {}),
+      ...(row.target ? { Target: row.target } : {}),
+      ...(row.session ? { Session: row.session } : {}),
+      ...(row.stage ? { Stage: row.stage } : {}),
+      ...(row.unit ? { Unit: row.unit } : {}),
+    };
+    if (!acquireAuditLock(projectDir, 5, 50, row.intent ?? undefined, row.space)) {
+      recordHookDrop(
+        projectDir,
+        row.hook,
+        `audit lock contended; ${row.eventType} row dropped (block still enforced)`,
+      );
+      return false;
+    }
+    const audit = require("./aidlc-audit.ts") as {
+      appendAuditEntryUnlocked: typeof AppendAuditEntryUnlocked;
+    };
+    try {
+      audit.appendAuditEntryUnlocked(row.eventType, fields, projectDir, row.intent ?? undefined, row.space);
+      return true;
+    } finally {
+      releaseAuditLock(projectDir, row.intent ?? undefined, row.space);
+    }
+  } catch {
+    return false;
+  }
+}
+
 
 // Ledger append for the two Change Control rows. Under `relaxed` the
 // CHANGE_ACCEPTED row IS the evidence that stands in for the refusal, and the

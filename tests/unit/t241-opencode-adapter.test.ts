@@ -159,8 +159,11 @@ function copyCore(root: string, relativePath: string): void {
   }
 }
 
+// `echo`, when set, gets each prompt's parts as opencode hands them to
+// chat.message: a part keeps the id it was sent with (opencode 1.18.18).
 function fakeClient(parentBySession: Record<string, string | undefined> = {}) {
-  const prompts: Array<{ id: string; text: string; synthetic?: boolean }> = [];
+  const prompts: Array<{ id: string; text: string; synthetic?: boolean; partId?: string }> = [];
+  const echo: { to?: (sessionID: string, parts: Array<Record<string, unknown>>) => Promise<void> } = {};
   const client: PluginInput["client"] = {
     session: {
       get: async ({ path }) => ({
@@ -169,11 +172,12 @@ function fakeClient(parentBySession: Record<string, string | undefined> = {}) {
           : {},
       }),
       prompt: async ({ path, body }) => {
-        prompts.push({ id: path.id, text: body.parts[0]?.text ?? "", synthetic: body.parts[0]?.synthetic });
+        prompts.push({ id: path.id, text: body.parts[0]?.text ?? "", synthetic: body.parts[0]?.synthetic, partId: body.parts[0]?.id });
+        await echo.to?.(path.id, body.parts.map((part) => ({ ...part })));
       },
     },
   };
-  return { client, prompts };
+  return { client, prompts, echo };
 }
 
 function postTool(tool: string, args: Record<string, unknown>) {
@@ -1105,6 +1109,24 @@ describe("t241 OpenCode native plan-approval payloads", () => {
   });
 });
 
+// The Stop hook's nudge is for a run nobody attends (and autonomous
+// Construction); an attended, gated run ends its turn ("an attended run ...
+// sends no nudge" below). The plugin runs the hook with its own environment,
+// so these idles are read where nobody attends.
+async function idleWhereNobodyAttends(
+  adapter: Awaited<ReturnType<typeof createAdapter>>,
+  idle: Parameters<Awaited<ReturnType<typeof createAdapter>>["event"]>[0],
+): Promise<void> {
+  const before = process.env.AIDLC_UNATTENDED;
+  process.env.AIDLC_UNATTENDED = "1";
+  try {
+    await adapter.event(idle);
+  } finally {
+    if (before === undefined) delete process.env.AIDLC_UNATTENDED;
+    else process.env.AIDLC_UNATTENDED = before;
+  }
+}
+
 describe("t241 OpenCode adapter write and session lifecycle", () => {
   test("apply_patch emits audit then sensor calls for every affected path", async () => {
     const root = freshProject();
@@ -1326,7 +1348,7 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
       basename(seededRecordDir(root)),
       "switch",
     );
-    await adapter.event({
+    await idleWhereNobodyAttends(adapter, {
       event: {
         type: "session.idle",
         properties: { sessionID: "main" },
@@ -1334,7 +1356,7 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
     });
 
     expect(prompts).toHaveLength(1);
-    expect(prompts[0].text).toContain("[aidlc-forwarding-nudge]");
+    expect(prompts[0].synthetic).toBe(true);
   });
 
   // A live run: new work made from one chat, then a new chat on it. A plain
@@ -1368,15 +1390,15 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
     const adapter = await createAdapter({ client, directory: root });
     const idle = { event: { type: "session.idle", properties: { sessionID: "main" } } };
     await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "what does the lunch poll do?" }] });
-    await adapter.event(idle);
+    await idleWhereNobodyAttends(adapter, idle);
     expect(prompts).toHaveLength(0);
 
     await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "carry on" }] });
     await Bun.sleep(20);
     expect(JSON.parse(engine("main", "orchestrate", "next")).kind).not.toBe("print");
-    await adapter.event(idle);
+    await idleWhereNobodyAttends(adapter, idle);
     expect(prompts).toHaveLength(1);
-    expect(prompts[0].text).toContain("[aidlc-forwarding-nudge]");
+    expect(prompts[0].synthetic).toBe(true);
   });
 
   test("two chats in one opencode process: each chat's shell command acts on its own work", async () => {
@@ -1443,13 +1465,13 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
         properties: { sessionID: "main" },
       },
     };
-    await adapter.event(idle);
+    await idleWhereNobodyAttends(adapter, idle);
     expect(prompts).toHaveLength(0);
 
     appendInteractionEvent(root, "QUESTION_ANSWERED", "requirements-analysis");
-    await adapter.event(idle);
+    await idleWhereNobodyAttends(adapter, idle);
     expect(prompts).toHaveLength(1);
-    expect(prompts[0].text).toContain("[aidlc-forwarding-nudge]");
+    expect(prompts[0].synthetic).toBe(true);
   });
 
   // A live run: in a new chat on open work, a read-only /aidlc --status was
@@ -1474,13 +1496,34 @@ writeFileSync(${JSON.stringify(stopInput)}, await Bun.stdin.text(), "utf-8");
 
     await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "/aidlc --status" }] });
     expect(engine("next", "--status").kind).toBe("print");
-    await adapter.event(idle);
+    await idleWhereNobodyAttends(adapter, idle);
     expect(prompts).toHaveLength(0);
 
     expect(engine("next").kind).not.toBe("print");
-    await adapter.event(idle);
+    await idleWhereNobodyAttends(adapter, idle);
     expect(prompts).toHaveLength(1);
-    expect(prompts[0].text).toContain("[aidlc-forwarding-nudge]");
+    expect(prompts[0].synthetic).toBe(true);
+  });
+
+  // In an attended, gated run the agent handed work that ends its turn (a
+  // question asked in prose, a mid-stage stop) gets no hidden nudge: the person
+  // is there, and their next message carries the work on.
+  test("an attended run sends no nudge after the agent is handed work", async () => {
+    const root = freshInstalledProject();
+    seedStateFile(root, "state-brownfield-feature.md");
+    const { client, prompts } = fakeClient();
+    const adapter = await createAdapter({ client, directory: root });
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "Guide me through the questions" }] });
+    const run = Bun.spawnSync({
+      cmd: [process.execPath, join(root, ".aidlc", "tools", "aidlc.ts"), "engine", "orchestrate", "next", "--project-dir", root],
+      cwd: root,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(run.exitCode, run.stderr.toString()).toBe(0);
+    expect((JSON.parse(run.stdout.toString()) as { kind: string }).kind).not.toBe("print");
+    await adapter.event({ event: { type: "session.idle", properties: { sessionID: "main" } } });
+    expect(prompts).toHaveLength(0);
   });
 
   test("a typed summary-confirmation off in chat reaches the real record-human-turn hook, and the setter records it as the person's choice", async () => {
@@ -1657,8 +1700,33 @@ process.stdout.write(JSON.stringify({ decision: "block", reason: "continue" }) +
     await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ type: "text", text: "start" }] });
     await adapter.event(idle);
     expect(prompts).toHaveLength(1);
-    expect(prompts[0].text).toStartWith("[aidlc-forwarding-nudge]");
+    expect(prompts[0].text).toBe("continue");
     expect(prompts[0].synthetic).toBe(true);
+  });
+
+  test("the nudge is known by the part this plugin sent, not by its words: it is never the person's turn, and a message of theirs in any words is", async () => {
+    const { root } = nudgingProject();
+    const turns = join(root, "turns.jsonl");
+    writeHook(
+      root,
+      "aidlc-record-human-turn.ts",
+      `import { appendFileSync } from "node:fs";\nappendFileSync(${JSON.stringify(turns)}, (await Bun.stdin.text()) + "\\n");\n`,
+    );
+    const recorded = () =>
+      existsSync(turns)
+        ? readFileSync(turns, "utf-8").trim().split("\n").map((line) => (JSON.parse(line) as { prompt: string }).prompt)
+        : [];
+    const { client, prompts, echo } = fakeClient();
+    const adapter = await createTestAdapter(client, root);
+    echo.to = (sessionID, parts) => adapter["chat.message"]({ sessionID }, { parts });
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ id: "prt_p1", type: "text", text: "start" }] });
+    await adapter.event(idle);
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0].partId).toStartWith("prt_");
+    expect(recorded()).toEqual(["start"]);
+    const said = "[aidlc-forwarding-nudge] is that line from AI-DLC?";
+    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ id: "prt_p2", type: "text", text: said }] });
+    expect(recorded()).toEqual(["start", said]);
   });
 
   test("after the person stops a turn with Esc, no nudge follows until they write again", async () => {
@@ -1815,8 +1883,9 @@ writeFileSync(${JSON.stringify(recorded)}, await Bun.stdin.text(), "utf-8");
     seedStateFile(root, "state-brownfield-feature.md");
     writeSessionBinding(root, "main", "default", basename(seededRecordDir(root)));
     const template = commandTemplate(root);
-    const { client } = fakeClient();
+    const { client, prompts, echo } = fakeClient();
     const adapter = await createAdapter({ client, directory: root });
+    echo.to = (sessionID, parts) => adapter["chat.message"]({ sessionID }, { parts });
     const statePath = join(seededRecordDir(root), "aidlc-state.md");
     const ceremonyRows = () => readAuditShardEvents(root).filter((entry) => entry.event === "CEREMONY_SET");
 
@@ -1839,7 +1908,13 @@ writeFileSync(${JSON.stringify(recorded)}, await Bun.stdin.text(), "utf-8");
     const args = "config set summary-confirmation off";
     const parts: Array<Record<string, unknown>> = [{ type: "text", text: template.replace("$ARGUMENTS", args).trim() }];
     await adapter["command.execute.before"]({ command: "aidlc", sessionID: "main", arguments: args }, { parts });
-    await adapter["chat.message"]({ sessionID: "main" }, { parts: [{ id: "prt_n", type: "text", text: "[aidlc-forwarding-nudge] keep going", synthetic: true }] });
+    writeHook(
+      root,
+      "aidlc-continue-workflow.ts",
+      'await Bun.stdin.text();\nprocess.stdout.write(JSON.stringify({ decision: "block", reason: "keep going" }) + "\\n");\n',
+    );
+    await adapter.event({ event: { type: "session.idle", properties: { sessionID: "main" } } });
+    expect(prompts).toHaveLength(1);
     parts.forEach((part, i) => { part.id = `prt_c${i}`; });
     await adapter["chat.message"]({ sessionID: "main" }, { parts });
     // Their line is on record for this chat; the setter the agent runs for it

@@ -314,6 +314,7 @@ function seedOneUnitDag(proj: string, unit: string, kind?: string): void {
     state,
     readFileSync(state, "utf-8")
       .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: code-generation")
+      .replace(/^- \[ \] units-generation /m, "- [x] units-generation ")
       .replace(/^- \*\*Construction Autonomy Mode\*\*:.*$/m, "- **Construction Autonomy Mode**: autonomous")
       .replace(/^- \*\*Construction Iteration\*\*:.*$/m, "- **Construction Iteration**: stage-major")
       .replace(/^- \*\*Construction Checkpoints\*\*:.*$/m, "- **Construction Checkpoints**: disabled")

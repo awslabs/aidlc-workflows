@@ -1355,9 +1355,13 @@ severity increase into a new finding, and keeps unmentioned open rows marked
 not re-checked. A fixed finding reported as still applying is open again, or
 back to the decision made before it was fixed. A Redo row resets the list of
 each Unit whose artifacts it names, or every Unit when it names none. `GATE_APPROVED` atomically records `Accepted risk` for each
-current open finding, or `Changed after review` for one whose reviewed work
-changed after that review with no finished review since; that value is no
-decision, so the finding stays open and the next review re-checks it. A Request Changes report records `Rejected: <reason>`
+current open finding the person approved, `Approved autonomously` for one
+Construction approved on its own, or `Changed after review` for one whose
+reviewed work changed after that review with no finished review since; the
+last two are no decision, so the finding stays open and the next review
+re-checks it. A Unit's checkpoint and a swarm batch's approval record their
+Units' findings, and a stage's approval nobody gave records none that a Unit's
+own approval recorded. A Request Changes report records `Rejected: <reason>`
 only for explicit
 `--reject-finding <review-artifact>#R-NN=<exact human reason>` values. It uses
 `--reopen-finding <review-artifact>#R-NN=<exact human reason>` when the person

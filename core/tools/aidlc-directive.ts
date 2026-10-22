@@ -186,6 +186,9 @@ export interface RunStageWave {
 export interface RunStagePipeline {
   links: string[];
   completed: string[];
+  // The links this attempt still owes, in order, each with the exact command
+  // that records it once its agent returns.
+  record: Array<{ link: string; repo?: string; command: string }>;
 }
 
 export interface LegacyPlanApprovalChoices {
@@ -454,6 +457,8 @@ export interface RunStageDirective {
   // Re-present an open approval gate. Body and review are settled; do not rerun
   // the stage or edit its outputs. Team gates retain their unit_gate routing.
   gate_only?: true;
+  /** Exact remaining Unit record commands; the stage body is already written. */
+  unit_record_step?: string;
   // Every Unit this per-Unit stage covers was built in the current attempt, so
   // the beat presents the stage gate with nothing left to plan or build. Set by
   // the engine only; the conductor handles the beat as before.
@@ -971,6 +976,7 @@ const RUN_STAGE_FIELDS = [
   "protocol_modules",
   "swarm_settled",
   "gate_only",
+  "unit_record_step",
   "build_settled",
   "approve_together",
   "conductor_persona",
@@ -1007,6 +1013,7 @@ const DISPATCH_SUBAGENT_FIELDS = [
       field !== "protocol_modules" &&
       field !== "swarm_settled" &&
       field !== "gate_only" &&
+      field !== "unit_record_step" &&
       field !== "build_settled" &&
       field !== "approve_together" &&
       field !== "legacy_plan_approval_choices" &&
@@ -1143,11 +1150,15 @@ export const CHANGE_NOTICES_NOTE =
 // Every question the engine asks: whose it is, and what a pick does. A choice's
 // command answers the question; a routing command returns the next step, a
 // record command (`log answer`, `unit resume`) returns none, so `next` follows.
-export function questionNote(invocation: string): string {
-  return "This question is for the person, not for you: show it to them with its choices as given, end your turn, and " +
-    "act only on their reply. When their reply picks one of the choices (its number, its words, or their own words " +
-    "for it), run that choice's command; act on the step it returns, or run `" + invocation + " next` when it " +
-    "returns none. Anything else is their own words: read what they meant.";
+// A question with one choice is said as its numbered question, since a picker
+// such as Claude Code's takes two options or more. The engine makes that call:
+// a skill sentence that named the case was read aloud to the person.
+export function questionNote(invocation: string, oneChoice = false): string {
+  const show = oneChoice ? "say its numbered question to them as given" : "show it to them with its choices as given";
+  return `This question is for the person, not for you: ${show}, end your turn, and act only on their reply. ` +
+    "When their reply picks one of the choices (its number, its words, or their own words for it), run that " +
+    "choice's command; act on the step it returns, or run `" + invocation + " next` when it returns none. " +
+    "Anything else is their own words: read what they meant.";
 }
 
 // The routing question asked while no piece of work is selected: continue and
@@ -1257,10 +1268,13 @@ export function reviewRequestNote(
 // stage-completion verification, named here and owned there. What the person
 // wrote comes before it: their branch is `next` alone. The gate's Review brief
 // is named with its command too: an agent that no longer holds the reviewer
-// protocol (after a compaction) otherwise guesses at the tool.
+// protocol (after a compaction) otherwise guesses at the tool. A Unit's step
+// after its last pass is its route's (the next Unit, its checkpoint, a team's
+// Unit gate), so it is `next`, after the Unit's completion when it is still open.
 export type ReviewVerdictStep =
   | { kind: "person-wrote"; next: string }
   | { kind: "next-pass"; request: string }
+  | { kind: "unit"; next: string; complete?: string }
   | { kind: "learnings"; brief: string }
   | { kind: "gate"; report: string; summary: boolean; brief: string };
 const NO_FURTHER_PASS = "No further review pass follows: run stage-completion verification, then ";
@@ -1273,8 +1287,11 @@ export function reviewVerdictNote(step: ReviewVerdictStep): string {
     case "next-pass":
       return "Another review pass follows: fix what its findings name (a review that did not finish names nothing " +
         `to fix), then request the next pass with \`${step.request}\` in this turn.`;
+    case "unit":
+      return `No further review pass follows: ${step.complete === undefined ? "" : `record this Unit's completion with \`${step.complete}\`, then `}` +
+        `run \`${step.next}\` and follow the step it returns, in this turn.`;
     case "learnings":
-      return `${NO_FURTHER_PASS}say the completion summary, then run the learnings ritual and ask its question, ` +
+      return `${NO_FURTHER_PASS}say the completion summary, then run the learnings ritual and ask its questions, ` +
         `which ends the turn. The approval gate comes after their answer, with the review brief that \`${step.brief}\` prints.`;
     case "gate":
       return `${NO_FURTHER_PASS}${step.summary ? "say the completion summary, then " : ""}run ` +
@@ -1509,7 +1526,7 @@ export function knownDirectiveFieldNames(): string[] {
 // a Unit or batch checkpoint and a team gate are handled without it, and a wave
 // hands the body to its builders. Notes about the body ride only when it runs.
 export function bodyRuns(d: Record<string, unknown>): boolean {
-  if (d.gate_only === true || d.swarm_settled === true) return false;
+  if (d.gate_only === true || d.swarm_settled === true || typeof d.unit_record_step === "string") return false;
   if ("construction_checkpoint" in d || "swarm_checkpoint" in d || "unit_gate" in d || "wave" in d) return false;
   return (d.construction_policy as { completion_only?: boolean } | undefined)?.completion_only !== true;
 }
@@ -1534,19 +1551,19 @@ export function withAgentNotes<T extends object>(
     notes.change_notices_note = CHANGE_NOTICES_NOTE;
   }
   if (d.kind === "ask" && d.agent_work !== true) {
+    if (!Array.isArray(d.choices)) {
+      const choices = askChoices(d, invocation, logInvocation);
+      if (choices !== null) notes.choices = choices;
+    }
+    const choices = (notes.choices ?? d.choices) as AskChoice[] | undefined;
     notes.question_note = d.ask_type === "plan-approval"
       ? planApprovalQuestionNote(invocation, logInvocation)
       : d.ask_type === "scope-confirm"
       ? planOfferQuestionNote(invocation)
       : d.ask_type === "new-work-routing" && Array.isArray(d.available_intents)
       ? routingRecordsQuestionNote(invocation)
-      : questionNote(invocation);
-    if (!Array.isArray(d.choices)) {
-      const choices = askChoices(d, invocation, logInvocation);
-      if (choices !== null) notes.choices = choices;
-    }
+      : questionNote(invocation, choices?.length === 1);
     if (typeof d.numbered_prose_question !== "string") {
-      const choices = (notes.choices ?? d.choices) as AskChoice[] | undefined;
       // A question with no options (a guard that has no way on) is said as it is.
       if (choices !== undefined) notes.numbered_prose_question = choices.length > 0 ? numberedProseQuestion(askPrompt(d), choices) : askPrompt(d);
     }
@@ -1592,6 +1609,8 @@ export function withAgentNotes<T extends object>(
       notes.gate_note = verificationCommandRecovery(typeof d.stage === "string" ? d.stage : undefined, logInvocation, stateInvocation);
     } else if (d.gate === GATE_UNRESOLVED) {
       notes.gate_note = unresolvedGateNote(invocation);
+    } else if (typeof d.unit_record_step === "string") {
+      notes.gate_note = d.unit_record_step;
     } else if (showsGateAgain(d)) {
       notes.gate_note = gateOnlyNote();
     } else if (
@@ -2117,6 +2136,7 @@ function checkRunStageShared(
     checkOptionalProtocolModules(o, kind, errors);
     checkOptionalTrue(o, "swarm_settled", kind, errors);
     checkOptionalTrue(o, "gate_only", kind, errors);
+    checkOptionalString(o, "unit_record_step", kind, errors);
     checkOptionalTrue(o, "build_settled", kind, errors);
     checkOptionalApproveTogether(o, kind, errors);
   }
@@ -2697,12 +2717,24 @@ function checkOptionalPipeline(
   }
   const keys = Object.keys(value);
   for (const key of keys) {
-    if (key !== "links" && key !== "completed") {
+    if (key !== "links" && key !== "completed" && key !== "record") {
       errors.push(`${kind}: pipeline unknown key: ${key}`);
     }
   }
   checkStringArray(value, "links", kind, errors);
   checkStringArray(value, "completed", kind, errors);
+  if (!Array.isArray(value.record)) {
+    errors.push(`${kind}: pipeline.record must be array, got ${describe(value.record)}`);
+    return;
+  }
+  value.record.forEach((row, index) => {
+    if (
+      !isPlainObject(row) || typeof row.link !== "string" || typeof row.command !== "string" ||
+      ("repo" in row && typeof row.repo !== "string")
+    ) {
+      errors.push(`${kind}: pipeline.record[${index}] must be { link, repo?, command } strings`);
+    }
+  });
 }
 
 function checkOptionalKeptReplies(

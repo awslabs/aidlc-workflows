@@ -125,7 +125,8 @@ utility shortcuts are `/aidlc-status`, `/aidlc-jump --stage <slug>` (or
   invalid JSON, so the IDE blocks the call; malformed input also denies the
   operation. A guard that is missing or crashes refuses nothing, as on every
   other harness, and `doctor` names it. Cursor names its shell tool `Shell`; the adapter
-  maps it to the core hooks' `Bash`. Cursor's
+  maps it to the core hooks' `Bash`. An edit that arrives as `StrReplace` with the file
+  in `path` is handled as `Edit`, so it is recorded and checked like any other edit. Cursor's
     first-class `Delete` tool (unique to this harness - everywhere else deletion
     goes through the shell) is presented to the reviewer-scope guard as a write so a
     unit-scoped reviewer cannot delete a sibling unit's artifacts. Shell payloads'

@@ -136,8 +136,9 @@ import {
   submittedToPersonTurnSession,
   typedIntoPersonTurnSession,
 } from "./person-turns.ts";
-import { stateFilePathFor } from "./sdk-drive.ts";
+import { defaultChoice, stateFilePathFor } from "./sdk-drive.ts";
 import { createBunBackend } from "./tui-bun-backend.ts";
+import { keepLegAudit, keepTranscriptWords } from "./leg-evidence.ts";
 import { nativeCleanupDeadlineMs } from "./tui-bun-process.ts";
 import { selectedTuiBackend } from "./tui-runtime.ts";
 import { tuiOperationDeadline } from "./tui-time-budget.ts";
@@ -1218,7 +1219,18 @@ async function cmdCapture(backend: Backend, a: Args): Promise<void> {
 async function cmdKill(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
   writeTuiTrace(session, "kill", {});
+  let fixture: string | null = null;
+  try {
+    fixture = backend.fixtureCwd(session);
+  } catch {
+    // A session with no readable record keeps nothing more.
+  }
   await backend.kill(session);
+  // The session is over and its project still on disk (tests/harness/leg-evidence.ts).
+  if (fixture) {
+    keepLegAudit(fixture);
+    keepTranscriptWords(fixture);
+  }
   process.stdout.write(`killed session '${session}'\n`);
 }
 
@@ -1830,6 +1842,34 @@ function pickMenuOption(grid: string, label: RegExp): number | null {
   return null;
 }
 
+// The keys that move the caret of the menu on screen to the option `choose`
+// picks from its labels, and that option's label. The menu is the last run of
+// options numbered from 1 above its footer, so a numbered list earlier in the
+// chat is not read as one. Null when nothing is chosen.
+export function caretKeysTo(
+  grid: string,
+  choose: (labels: string[]) => string | undefined,
+): { keys: Array<"Up" | "Down">; label: string } | null {
+  const range = actionableMenuRange(grid);
+  if (!range) return null;
+  const lines = unglueRules(grid).split("\n").slice(0, range[1] + 1);
+  const options = parseMenuOptions(lines.join("\n"));
+  const menu = options.slice(Math.max(0, options.findLastIndex((option) => option.num === 1)));
+  const label = choose(menu.map((option) => option.label));
+  const target = menu.find((option) => option.label === label);
+  const caret = Number(/^\s*❯\s+(\d+)\./.exec(lines[range[0]])?.[1]);
+  if (!target || !Number.isFinite(caret)) return null;
+  const moves = target.num - caret;
+  return { keys: Array.from({ length: Math.abs(moves) }, () => (moves > 0 ? "Down" : "Up")), label: target.label };
+}
+
+async function sendCaretKeys(backend: Backend, session: string, keys: readonly string[]): Promise<void> {
+  for (const key of keys) {
+    await backend.send(session, key, false, true);
+    await sleep(120);
+  }
+}
+
 async function chooseNumberedMenuOption(
   backend: Backend,
   session: string,
@@ -2393,12 +2433,12 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         requestChangesNeedsSubmit,
         screen: grid,
       });
-      // The FIRST approval gate, once: select "Request changes" (option 2) rather
-      // than the highlighted "Approve" (option 1). Down moves the caret to option
-      // 2; Enter selects it → handleReject (GATE_REJECTED + STAGE_REVISING +
-      // Revision Count++). Consume the one-shot so every later gate is approved.
-      await backend.send(session, "Down", false, true);
-      await sleep(150);
+      // The FIRST approval gate, once: move the caret to "Request Changes", wherever
+      // the agent put it, rather than the approval; Enter selects it, and handleReject
+      // records GATE_REJECTED, STAGE_REVISING and Revision Count++. Consume the one-shot so
+      // every later gate is approved.
+      const reject = caretKeysTo(grid, (labels) => labels.find((label) => /\bRequest Changes\b/i.test(label)));
+      await sendCaretKeys(backend, session, reject?.keys ?? ["Down"]);
       nextPersonTurnCarriesPicks(session, requestChangesNeedsSubmit ? 0 : 1);
       await backend.send(session, "Enter", false, true);
       rejectFirstGate = false;
@@ -2418,15 +2458,20 @@ async function cmdAnswerGate(backend: Backend, a: Args): Promise<void> {
         await handleRevisionRecovery(backend, session, answered, overallDeadline);
       }
     } else {
+      // The person's default pick by its label (defaultChoice), wherever the agent
+      // put it in the menu.
+      const choice = caretKeysTo(grid, defaultChoice);
       writeTuiTrace(session, "answer_gate_action", {
         answered,
         action: "single_select_default",
+        choice: choice?.label ?? null,
         screen: grid,
       });
+      await sendCaretKeys(backend, session, choice?.keys ?? []);
       // A pick on one tab of a form is counted with the form's Submit.
       const tab = gridIsMultiTabForm(grid);
-      nextPersonTurnCarriesPicks(session, tab ? 0 : 1, tab ? "" : menuPick(grid));
-      await backend.send(session, "Enter", false, true); // select Recommended + advance
+      nextPersonTurnCarriesPicks(session, tab ? 0 : 1, tab ? "" : choice?.label ?? menuPick(grid));
+      await backend.send(session, "Enter", false, true); // select it + advance
     }
     answered++;
 

@@ -1474,6 +1474,19 @@ The runner writes these additional artifacts under its timestamped log directory
   left out by reason and lists the first of them by path.
   The live collectors copy it with the rest of the log tree and the sanitizer
   redacts it before upload.
+- `e2e-artifacts/<test>/attempt-N/leg-evidence/`: what every live leg keeps,
+  passing or not, taken by `tests/harness/leg-evidence.ts` at each driver's own
+  end point (an SDK drive, a TUI session's kill, a Codex exec, a Copilot or
+  opencode turn) while the project is still on disk. `audit/<project>/` holds a
+  copy of each audit shard of every project the leg drove, at its path in the
+  project; `words-*.ndjson` holds one line per text the agent showed the
+  person (`ts`, `harness`, `turn`, `text`), from the SDK's messages, the TUI
+  session's Claude Code transcript, or the Copilot and opencode output (Codex
+  keeps its words in its own exec logs). A text over 8 KiB and a shard over
+  256 KiB keep their start and end with the cut said between them; a leg keeps
+  at most 1 MiB here, and `not-kept.txt` says once when it reached that. Two
+  weeks of nightlies measured about 20 KB a leg. The sanitizer treats the
+  folder as a driver trace (below).
 - `e2e-worker-storage.json`: checkout pool location, estimated snapshot size,
   and whether checkout copies were retained. Windows pools use short private
   paths under the system temporary directory so deep report paths do not break
@@ -2128,6 +2141,9 @@ without one, such as Codex's, is forwarded as sent. The broker appends one line
 per request to `tests/logs/credential-broker.log` (method, path, admitted model,
 status, duration, time of the last byte, bytes, and whether the answer ended),
 never a header or a body, so a stalled stream shows in the uploaded logs.
+A response whose upstream sends no data for two minutes after its headers is
+ended (`end=idle-timeout` in that line). An SSE `:` keepalive comment is not
+data: Mantle sends one every 15 seconds, during a stall too.
 
 Claude uses documented `ANTHROPIC_BEDROCK_BASE_URL` and
 `CLAUDE_CODE_SKIP_BEDROCK_AUTH=1`; its t19 preflight checks the broker's startup
@@ -2254,8 +2270,8 @@ Linux and macOS legs turn neither on.
 
 Every full-suite `tests/logs/` upload first runs `scripts/ci-sanitize-logs.ts` and
 is blocked if sanitization fails. Full-suite and shared deterministic jobs retain
-eligible driver NDJSON, `sdk-drive*`, `tui-drive*` and `e2e-artifacts/**/traces`
-by default so tool calls, completion boundaries and timeout behavior remain
+eligible driver NDJSON, `sdk-drive*`, `tui-drive*`, `e2e-artifacts/**/traces`
+and `leg-evidence/` by default so tool calls, completion boundaries and timeout behavior remain
 available for diagnosis. Repository variable `AIDLC_NIGHTLY_UPLOAD_TRACES=0`
 opts out of trace retention. The standalone sanitizer still deletes these traces
 unless its `AIDLC_NIGHTLY_UPLOAD_TRACES` environment variable is `1`. Invalid
@@ -2265,6 +2281,42 @@ no binary/screenshot allowlist. Remaining UTF-8 text is redacted for AWS
 credentials, vendor keys, bearer tokens and Anthropic keys; links are removed
 without following targets. Redaction remains defense in depth, not proof against
 encoded secrets; retaining raw text traces increases that residual risk.
+
+### Reading every live leg: the trace audit
+
+A leg that passes can still show friction a person would meet, and the nightly
+keeps its traces. `scripts/trace-audit.ts` reads them for a maintainer, on
+their own machine, in two layers kept apart:
+
+- `bun scripts/trace-audit.ts extract --run <full-suite run id>` downloads the
+  run's `full-suite-live-*` artifacts with the maintainer's own `gh` (or
+  `--dir <folder>` reads a downloaded run, a `tests/logs` folder, or a local
+  session folder: a scratch project, a Claude Code config folder, a Codex
+  home). It only counts and matches recorded events and fields, and writes, outside the
+  folders it reads, `table.txt` and `table.json` (one row per check finding,
+  guard refusal, engine error, question handed to the person again, stage
+  file written after its approval, silence of ten minutes or more, retry and
+  agent tool error, each naming its run, harness, OS, test, stage and
+  evidence file and line) and one `legs/<leg>/story.md` per leg: what the
+  person typed and picked, what they were asked, what the agent ran and said,
+  in time order, cut to a size budget, and each decision recorded for the
+  person with the reply of theirs kept beside it, so a reader judges each
+  reply against its record.
+- `bun scripts/trace-audit.ts judge <out>` (`scripts/trace-audit-judge.ts`,
+  instructions in `scripts/trace-audit-judge.md`) hands each test's legs to the
+  maintainer's own `claude` in print mode, able only to read (`Read`, `Grep`,
+  `Glob`) and only in the judged legs' own folders, never the home a session
+  folder sits in, with the known list (`--known`) and the open issues and pull
+  requests (`--issues`). The model returns friction items as JSON. The tool
+  counts how many legs each item was met in and writes `JUDGE.md`. `--dry-run`
+  writes each group's input and calls no model; `--max-usd` and `--budget-kb`
+  bound each call.
+
+The extractor reads only what the run kept: an SDK drive trace keeps the
+first 240 characters of each tool reply, and each leg's `leg-evidence/` folder
+keeps the audit of every project it drove and what the agent told the person,
+which the story places among the leg's other events by time. A story says at
+its top when a leg kept neither.
 
 ## Kiro prompt-hook transport controls
 

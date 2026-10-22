@@ -1,7 +1,9 @@
 /** Human review of a completed native swarm batch, independent of its driver. */
 import { createHash } from "node:crypto";
 import { appendAuditEntries, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
-import { checkpointRecordForms, loadConstructionEvidence, type ConstructionEvidence } from "./aidlc-construction-checkpoints.ts";
+import {
+  checkpointRecordForms, loadConstructionEvidence, type ApprovalFindingDispositions, type ConstructionEvidence,
+} from "./aidlc-construction-checkpoints.ts";
 import { APPROVAL_GATE_CHOICES } from "./aidlc-reply-reader.ts";
 import {
   activeIntentUuid,
@@ -406,6 +408,7 @@ function recheck(
 
 export function approveSwarmCheckpoint(
   pd: string, batch: number, units: string[], reply?: string, session = "",
+  findingDispositions?: ApprovalFindingDispositions,
 ): SwarmCheckpoint {
   // The conductor read the person's reply and reports their approval; the
   // receipt records it beside the person's own words from the human-turn hook.
@@ -429,6 +432,7 @@ export function approveSwarmCheckpoint(
       ...(humanRequired ? { Session: session } : {}),
       ...(humanRequired ? { "User Input": "Approve" } : { Autonomous: "true" }),
       ...(words ? { "Person Reply": words } : {}),
+      ...findingDispositions?.([STAGE], after.result.units, humanRequired ? "person" : "nobody"),
     }, pd, selection.intent, selection.space);
     if (humanRequired) consumeProtectedQuestion(pd, session);
     const result = snapshot(pd, batch, units).result;

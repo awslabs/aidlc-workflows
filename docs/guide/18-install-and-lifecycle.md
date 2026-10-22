@@ -1048,8 +1048,9 @@ If `.aidlc-version` exists, config
 requires a source at that exact version with the matching project harness.
 
 Config recognizes directories containing `.git`, `package.json`, `Cargo.toml`,
-`go.mod`, or `pyproject.toml`. Outside those shapes, interactive mode asks for
-confirmation and non-interactive mode requires `--project-dir`.
+`go.mod`, or `pyproject.toml`, or an AI-DLC harness tree already set up there.
+Outside those shapes, interactive mode asks for confirmation and
+non-interactive mode requires `--project-dir`.
 
 Claude's optional MCP integration defaults to `none` without a TTY. A human
 TTY is prompted when no prior choice exists. `--yes` and `--json` do not grant

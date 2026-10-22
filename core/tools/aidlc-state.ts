@@ -165,6 +165,7 @@ import {
   parseRefsList,
   parseStateStageSuffixes,
   pipelineLinkEvidence,
+  pipelineLinkRecord,
   pipelineLinkWayOn,
   effectiveSupportAgentsForProject,
   producesArtifactFile,
@@ -209,6 +210,7 @@ import {
   setPhaseProgress,
   singleStageAttemptIsOpen,
   stagesInScope,
+  stageAcceptAsIsOnOffer,
   stageGateApproval,
   swarmConvergedUnits,
   teamUnitGateStatus,
@@ -375,11 +377,6 @@ function personsLatestGatePickSafe(
   } catch {
     return null;
   }
-}
-
-function revisionCountOf(content: string): number {
-  const parsed = parseInt(getField(content, "Revision Count") ?? "0", 10);
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 // The person's own words at a gate they answered: every message they typed
@@ -2609,8 +2606,8 @@ function handleUnit(args: string[]): void {
     const scope = getField(content, "Scope");
     if (usesStageLevelPerUnitArtifacts(scope, content)) {
       error(
-        `Refusing unit ${action} for "${unit}": the effective workflow plan skips ` +
-          "Units Generation, so this stage runs once at stage level.",
+        `Refusing unit ${action} for "${unit}": this work has no Units (Units Generation ` +
+          "is not on its plan, or has not run), so this stage runs once at stage level.",
       );
     }
 
@@ -5685,7 +5682,7 @@ function verifyPipelineLinkPrecondition(
     `Cannot complete "${stage.slug}" because these pipeline handoffs have not been ` +
       `recorded for the current run: ${missing.join(", ")}. ` +
       pipelineLinkWayOn(pd, stage.slug, {
-        repos: evidence.repos.length > 0,
+        commands: pipelineLinkRecord(pd, stage, evidence, false).map(({ command }) => command),
         gateOpen,
         ...(approval ? { approval: "the same approve command again" } : {}),
       });
@@ -5744,8 +5741,8 @@ function staleReviewPreconditionError(
       `--reviewer ${reviewer} --iteration <next ordinal>\`, then record the verdict ` +
       `with the same command plus \`--verdict <READY|NOT-READY>\`. After that ` +
       `review, stop editing this stage's output documents. If the recovery pass was already ` +
-      `spent, present the situation to the human at the approval gate; a human ` +
-      `Request Changes decision resets the review attempt. Do not record a rejection ` +
+      `spent: ${recoveryGuidance(pd, content, slug)} Only a human Request Changes decision ` +
+      `resets the review attempt. Do not record a rejection ` +
       `on the human's behalf.`;
   refuseStateGuard(pd, content, stage, {
     code: "ARTIFACT_REVIEW_STALE",
@@ -7258,13 +7255,7 @@ function verifyApprovalDecision(
     );
   }
   if (!autonomousDecision && !humanPresenceGuardDisabled()) {
-    const rawRevisionCount = getField(content, "Revision Count");
-    const parsedRevisionCount = rawRevisionCount
-      ? parseInt(rawRevisionCount, 10)
-      : 0;
-    const revisionCount = Number.isFinite(parsedRevisionCount)
-      ? parsedRevisionCount
-      : 0;
+    const acceptAsIs = stageAcceptAsIsOnOffer(pd, stage.slug, unit);
     // The conductor read the person's reply and reports the approval it made;
     // the receipt records that choice, and the person's own words ride on it.
     // Host cancellation text is no reply, and a latest message that is exactly
@@ -7276,7 +7267,7 @@ function verifyApprovalDecision(
           "choice and wait for the human to choose one.",
       );
     }
-    const pick = personsLatestGatePickSafe(pd, stage.slug, unit, revisionCount >= 3);
+    const pick = personsLatestGatePickSafe(pd, stage.slug, unit, acceptAsIs);
     if (pick === "Request Changes") {
       refuseForAgent(
         `The person picked Request Changes at the "${stage.slug}" gate. Report that, or ask them if you read ` +
@@ -7285,7 +7276,7 @@ function verifyApprovalDecision(
       );
     }
     // Their exact pick names which approval it is.
-    approvalInput = pick ?? stageGateApproval(approvalInput, revisionCount >= 3);
+    approvalInput = pick ?? stageGateApproval(approvalInput, acceptAsIs);
   }
   // Once the approval question is put to the person, only their reply to it
   // approves: a turn they sent before it (an answer to the stage's own
@@ -7433,6 +7424,7 @@ function handleApprove(args: string[]): void {
       pd,
       teamGate.stages,
       teamGate.unit,
+      "person",
     );
     const status = unitGateStatus(
       pd,
@@ -7601,7 +7593,12 @@ function handleApprove(args: string[]): void {
     entrypoint: "approve",
     personCall,
   });
-  const reviewFindingDispositions = approvalDispositionField(pd, stage);
+  const reviewFindingDispositions = approvalDispositionField(
+    pd,
+    stage,
+    undefined,
+    autonomousDecision ? "nobody" : "person",
+  );
 
   // Scope is required for next-stage derivation. Validate it before persisting
   // approval: a post-write routing failure would otherwise leave `[x]` as a
@@ -7829,7 +7826,7 @@ function handleReject(args: string[]): void {
     getField(content, "Construction Checkpoints") !== "enabled" &&
     isAutonomousConstructionGate(content, stage, pd);
   const rejectPick = !autonomousDecision && feedbackStatus === "not-applicable"
-    ? personsLatestGatePickSafe(pd, slug, teamGate?.unit, revisionCountOf(content) >= 3)
+    ? personsLatestGatePickSafe(pd, slug, teamGate?.unit, stageAcceptAsIsOnOffer(pd, slug, teamGate?.unit))
     : null;
   if (rejectPick === "Approve" || rejectPick === "Accept as-is") {
     refuseForAgent(
@@ -8960,7 +8957,9 @@ function handlePracticesPromote(args: string[]): void {
 
   // Step 4b: Build new project-guardrails.md by appending each rule under the
   // matching heading with a date stamp. Rules are one-per-line in the draft;
-  // empty/blank lines and comment lines are skipped.
+  // empty/blank lines and comment lines are skipped. The generated terminal
+  // date stamps are provenance, not rule identity; leave an existing rule and
+  // its original date untouched when the same text is affirmed again.
   const parseRules = (sectionContent: string): string[] => {
     return sectionContent
       .split("\n")
@@ -8977,21 +8976,27 @@ function handlePracticesPromote(args: string[]): void {
   );
   const mandatedRules = parseRules(mandatedDraft);
   const forbiddenRules = parseRules(forbiddenDraft);
+  const ruleText = (line: string): string =>
+    line.replace(/(?: \(affirmed \d{4}-\d{2}-\d{2}\))+$/, "");
 
   let newGuardrailsMd = guardrailsMd;
-  const existingGuardrailLines = new Set(
-    newGuardrailsMd.split("\n").map((line) => line.trim()),
+  const existingMandatedRules = new Set(
+    parseRules(extractMarkdownSection(guardrailsMd, "## Mandated")).map(ruleText),
+  );
+  const existingForbiddenRules = new Set(
+    parseRules(extractMarkdownSection(guardrailsMd, "## Forbidden")).map(ruleText),
   );
   for (const rule of mandatedRules) {
-    const stampedLine = `${rule} (affirmed ${today})`;
-    if (existingGuardrailLines.has(stampedLine)) continue;
+    const text = ruleText(rule);
+    if (existingMandatedRules.has(text)) continue;
+    const stampedLine = `${text} (affirmed ${today})`;
     try {
       newGuardrailsMd = appendUnderHeading(
         newGuardrailsMd,
         "## Mandated",
         `${stampedLine}\n`
       );
-      existingGuardrailLines.add(stampedLine);
+      existingMandatedRules.add(text);
       rulesAppended.mandated++;
     } catch (e) {
       fail(`appendUnderHeading failed on Mandated: ${errorMessage(e)}`);
@@ -8999,15 +9004,16 @@ function handlePracticesPromote(args: string[]): void {
     }
   }
   for (const rule of forbiddenRules) {
-    const stampedLine = `${rule} (affirmed ${today})`;
-    if (existingGuardrailLines.has(stampedLine)) continue;
+    const text = ruleText(rule);
+    if (existingForbiddenRules.has(text)) continue;
+    const stampedLine = `${text} (affirmed ${today})`;
     try {
       newGuardrailsMd = appendUnderHeading(
         newGuardrailsMd,
         "## Forbidden",
         `${stampedLine}\n`
       );
-      existingGuardrailLines.add(stampedLine);
+      existingForbiddenRules.add(text);
       rulesAppended.forbidden++;
     } catch (e) {
       fail(`appendUnderHeading failed on Forbidden: ${errorMessage(e)}`);
@@ -9018,7 +9024,7 @@ function handlePracticesPromote(args: string[]): void {
   // Step 5 & 6: Write project.md first, then team.md.
   // If the project write fails, team.md is untouched. If the team write
   // fails after project succeeded, we surface that as PRACTICES_OVERRIDE and
-  // the user re-enters the gate. Exact dated project rules are deduplicated
+  // the user re-enters the gate. Identical project rules are deduplicated
   // above, so a retry cannot accumulate copies after this partial-write path.
   try {
     writeFileSync(guardrailsPath, newGuardrailsMd, "utf-8");

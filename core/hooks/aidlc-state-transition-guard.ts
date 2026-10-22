@@ -18,9 +18,11 @@ import {
   isClaudeCodeHookInput,
   parseArgs,
   parseWorkspaceCommand,
+  recordGuardBlockedRow,
   recordGuardStoodAside,
   resolveProjectDirFromHook,
   TESTING_POSTURE_SUBCOMMANDS,
+  validSessionId,
   writeGuardStoodAside,
 } from "../tools/aidlc-lib.ts";
 import { LAUNCHER_GLOBAL_FLAGS } from "../tools/aidlc-command.ts";
@@ -1188,6 +1190,27 @@ export async function run(input: string): Promise<number> {
       "or review verdict to the main session without parking, resuming, reporting, routing, " +
       "or presenting an approval question.\n",
   );
+  try {
+    const workflow = enterHookWorkflow(resolveProjectDirFromHook(import.meta.url), parsed.session_id);
+    try {
+      if (!hookStandsOutside(workflow)) {
+        recordGuardBlockedRow(workflow.projectDir, {
+          eventType: "STATE_TRANSITION_BLOCKED",
+          hook: "state-transition-guard",
+          reason: "delegated-lifecycle",
+          tool: "Bash",
+          target: delegatedCommand,
+          session: validSessionId(typeof parsed.session_id === "string" ? parsed.session_id : undefined),
+          intent: workflow.selection?.intent ?? undefined,
+          space: workflow.selection?.space,
+        });
+      }
+    } finally {
+      workflow.restore();
+    }
+  } catch {
+    return 2;
+  }
   return 2;
 }
 

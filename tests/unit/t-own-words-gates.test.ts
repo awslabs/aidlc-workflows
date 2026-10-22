@@ -1,5 +1,6 @@
 // covers: function:isNonAnswer, function:stripRecommendedDecorator, function:formatReceivedReply
 // covers: function:exactOptionPick, function:stageGateApproval, function:personsGateWords
+// covers: function:stageRevisionCycles, function:stageAcceptAsIsOnOffer, function:ACCEPT_AS_IS_REVISION_CYCLES
 // covers: function:personsLatestGatePick, function:changeRequestWords, function:markProtectedQuestionReplied
 // covers: function:recordProtectedHumanResponse, function:requireProtectedResponse
 // covers: function:consumeSharedDirectiveAsk, function:recordGuardRecoveryChoice
@@ -432,11 +433,52 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(events(proj, "GATE_REJECTED")).toHaveLength(1);
   });
 
+  // The change requests the escape hatch counts, as the reject path records
+  // them, each followed by the revised gate shown again.
+  function changesRequested(stage: string, times: number, fields: Record<string, string> = {}): void {
+    for (let i = 0; i < times; i++) {
+      appendAuditEntry("GATE_REJECTED", { Stage: stage, Feedback: `change ${i + 1}`, ...fields }, proj);
+      appendAuditEntry("STAGE_AWAITING_APPROVAL", { Stage: stage }, proj);
+    }
+  }
+
   test("once Accept as-is is on offer, a typed 3 is that pick, whatever approval the agent reports", () => {
-    expect(state(proj, ["set", "Revision Count=3"]).rc).toBe(0);
+    changesRequested(slug, 3);
     says(proj, "3");
     expect(report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Approve"]).kind).toBe("done");
     expect(auditBlockField(events(proj, "GATE_APPROVED")[0].block, "User Input")).toBe("Accept as-is");
+  });
+
+  // The escape hatch opens after three change requests on the same stage. The
+  // state file's Revision Count runs across the workflow, so other stages'
+  // requests never put it on offer here.
+  test("other stages' change requests leave Accept as-is off: a typed 3 is no pick at a two-option gate", () => {
+    changesRequested("intent-capture", 3);
+    expect(state(proj, ["set", "Revision Count=3"]).rc).toBe(0);
+    says(proj, "3");
+    const revised = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "tighten it"]);
+    expect(revised.kind, JSON.stringify(revised)).toBe("print");
+    expect(revised.message ?? "").not.toContain("picked Accept as-is");
+    expect(events(proj, "GATE_REJECTED").filter((row) => auditBlockField(row.block, "Stage") === slug)).toHaveLength(1);
+  });
+
+  test("other stages' change requests leave Accept as-is off: the approval is recorded as Approve", () => {
+    changesRequested("intent-capture", 3);
+    expect(state(proj, ["set", "Revision Count=3"]).rc).toBe(0);
+    says(proj, "Accept as-is");
+    expect(report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Accept as-is"]).kind).toBe("done");
+    expect(auditBlockField(events(proj, "GATE_APPROVED")[0].block, "User Input")).toBe("Approve");
+  });
+
+  test("an approval or a fresh reopen of the stage starts its count again", () => {
+    changesRequested(slug, 3);
+    appendAuditEntry("GATE_APPROVED", { Stage: slug, "User Input": "Approve" }, proj);
+    changesRequested(slug, 1, { Reopen: "jump" });
+    changesRequested(slug, 2);
+    says(proj, "Accept as-is");
+    expect(report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Accept as-is"]).kind).toBe("done");
+    const approvals = events(proj, "GATE_APPROVED");
+    expect(auditBlockField(approvals[approvals.length - 1].block, "User Input")).toBe("Approve");
   });
 
   test("an exact Approve is the person's pick: a rejection is refused", () => {

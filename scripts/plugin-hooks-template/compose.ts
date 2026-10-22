@@ -123,6 +123,23 @@ interface InstalledStageSchema {
   ) => { valid: boolean; errors?: string[] };
 }
 
+// Plugin prose gets core's invocation tokens (the INVOKE and TOOL_PREFIX ones) for the
+// channel the installed tree was projected for; the installed module knows it.
+type ProjectTokens = (text: string, harnessDir: string) => string;
+// An installed tree from before projectInvocationTokens existed (not yet
+// refreshed with `aidlc config`) still composes: compose runs under Bun, so the
+// copy channel's dispatcher line works for that tree until it is refreshed.
+// Token names are assembled, not written whole: this file ships verbatim in
+// every installed tree, which must carry no unprojected invocation token.
+const tokenName = (name: string): string => `{{${name}}}`;
+const copyChannelTokens: ProjectTokens = (text, harnessDir) => text
+  .replaceAll(tokenName("HARNESS_DIR"), harnessDir)
+  .replaceAll(tokenName("INVOKE"), `bun ${harnessDir}/tools/aidlc.ts`)
+  .replaceAll(tokenName("TOOL_PREFIX"), `bun ${harnessDir}/tools/`);
+const projectPluginTokens: ProjectTokens = await import(join(HARNESS_DIR, "tools", "aidlc-command.ts"))
+  .then((m) => typeof m.projectInvocationTokens === "function" ? m.projectInvocationTokens as ProjectTokens : copyChannelTokens)
+  .catch(() => copyChannelTokens);
+
 let installedLibPromise: Promise<InstalledAidlcLib | null> | null = null;
 let installedSchemaPromise: Promise<InstalledStageSchema | null> | null = null;
 let composeOwnsWorkspaceLock = false;
@@ -1676,7 +1693,7 @@ function copyTreeNoClobber(
     const dest = join(dst, rel);
     let buf = readFileSync(file);
     if (file.endsWith(".md")) {
-      buf = Buffer.from(buf.toString("utf-8").replaceAll("{{HARNESS_DIR}}", HARNESS_LEAF));
+      buf = Buffer.from(projectPluginTokens(buf.toString("utf-8"), HARNESS_LEAF));
     }
     // The plugin's own earlier copy, unchanged since it was installed, that this
     // run replaces; put back if a precheck refuses the new copy.
@@ -2817,7 +2834,7 @@ try {
       const frags: Fragment[] = [];
       for (const meta of fragMeta) {
         const queue = blocksByAnchor.get(meta.anchor);
-        const prose = (queue && queue.length > 0 ? queue.shift()! : "").replaceAll("{{HARNESS_DIR}}", HARNESS_LEAF);
+        const prose = projectPluginTokens(queue && queue.length > 0 ? queue.shift()! : "", HARNESS_LEAF);
         if (!prose) { recordDrop(`contribution to ${target}: fragment anchor "${meta.anchor}" order ${meta.order} has no matching "## fragment: ${meta.anchor}" prose block; dropped`); continue; }
         frags.push({ ...meta, plugin, prose });
       }

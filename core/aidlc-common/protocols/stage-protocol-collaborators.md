@@ -44,4 +44,4 @@ means full agreement. Contribution files never write outside
 `contributions/`; the lead alone edits the stage's `produces[]` artifacts.
 On `pipeline` stages there are no contribution files — chain links advance
 the artifacts directly per the stage body, and the conductor records each
-returned link with `aidlc-log.ts link` before continuing.
+returned link with its command in `directive.pipeline.record` before continuing.

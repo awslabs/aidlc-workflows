@@ -11,7 +11,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import * as ts from "typescript";
 import {
@@ -2177,6 +2177,51 @@ describe("t242 state-transition ownership guard", () => {
     expect(delegated.stderr).toContain("only the main workflow session can change stage status or routing");
     expect(delegated.stderr).not.toContain("guard.state-transition off");
     expect(delegated.stderr).not.toContain("cannot be turned off from chat");
+  });
+
+  test("a delegated refusal appends STATE_TRANSITION_BLOCKED with the refused command and the chat", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    seedAuditFile(project);
+    const session = "11111111-2222-3333-4444-555555555555";
+    const delegated = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        session_id: session,
+        tool_input: { command: "bun .claude/tools/aidlc-state.ts gate-start feasibility" },
+        agent_type: "aidlc-developer-agent",
+      }),
+      encoding: "utf-8",
+      env: { ...unownedEnv(), CLAUDE_PROJECT_DIR: project },
+    });
+    expect(delegated.status).toBe(2);
+    const shard = readFileSync(seededAuditShard(project), "utf-8");
+    expect(shard).toContain("STATE_TRANSITION_BLOCKED");
+    expect(shard).toContain("**Reason**: delegated-lifecycle");
+    expect(shard).toContain("**Target**: aidlc-state.ts gate-start");
+    expect(shard).toContain(`**Session**: ${session}`);
+  });
+
+  test("a delegated refusal resolves no project writes no row and mints no clone id beside the install", () => {
+    const cloneId = join(REPO_ROOT, "dist", "claude", "aidlc", ".aidlc-clone-id");
+    rmSync(cloneId, { force: true });
+    const env = unownedEnv();
+    delete env.CLAUDE_PROJECT_DIR;
+    delete env.AIDLC_PROJECT_DIR;
+    const delegated = spawnSync(process.execPath, [HOOK], {
+      input: JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "bun .claude/tools/aidlc-state.ts gate-start feasibility" },
+        agent_type: "aidlc-developer-agent",
+      }),
+      encoding: "utf-8",
+      env,
+    });
+    expect(delegated.status).toBe(2);
+    expect(existsSync(cloneId)).toBe(false);
   });
 
   test("the state CLI rejects every unowned lifecycle verb before dispatch", () => {

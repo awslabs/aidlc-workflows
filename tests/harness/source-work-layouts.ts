@@ -250,12 +250,14 @@ function writeRecordDoc(proj: string, rel: string): void {
   writeFileSync(full, "# stub\n\n## A\n\n## B\n");
 }
 
-// Code Generation in progress with its records written: per Unit, or for the
-// whole stage when the plan skips Units Generation.
+// Code Generation in progress with its records written: per Unit, once Units
+// Generation ran, or for the whole stage when the plan skips Units Generation.
 export function startCodeGeneration(proj: string, perUnit: boolean): void {
   state(proj, ["set", "Current Stage=code-generation"]);
   state(proj, ["checkbox", "code-generation=in-progress"]);
-  if (!perUnit) {
+  if (perUnit) {
+    state(proj, ["checkbox", "units-generation=completed"]);
+  } else {
     const sp = seededStateFile(proj);
     writeFileSync(
       sp,

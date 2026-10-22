@@ -1901,6 +1901,7 @@ X. Other (please specify)
     // (satisfies layer 1) but NO source code.
     function stageCodeGenDocsOnly(): void {
       guarded(proj, ["set", "Current Stage=code-generation"]);
+      guarded(proj, ["checkbox", "units-generation=completed"]);
       guarded(proj, ["checkbox", "code-generation=in-progress"]);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/code-generation-plan.md`);
       writeRecordDoc(proj, `construction/${UNIT}/code-generation/unit-test-instructions.md`);
@@ -2058,6 +2059,7 @@ X. Other (please specify)
     }
     function stageCodeGenDocsOnly(): void {
       guarded(proj, ["set", "Current Stage=code-generation"]);
+      guarded(proj, ["checkbox", "units-generation=completed"]);
       guarded(proj, ["checkbox", "code-generation=in-progress"]);
       appendAuditEntry(
         "STAGE_STARTED",
@@ -2221,6 +2223,7 @@ X. Other (please specify)
     }
     function stageCodeGenDocsOnly(): void {
       guarded(proj, ["set", "Current Stage=code-generation"]);
+      guarded(proj, ["checkbox", "units-generation=completed"]);
       guarded(proj, ["checkbox", "code-generation=in-progress"]);
       appendAuditEntry(
         "STAGE_STARTED",
@@ -2408,6 +2411,7 @@ X. Other (please specify)
 
     function seedSwarm(converged: string[]): void {
       guarded(proj, ["set", "Current Stage=code-generation"]);
+      guarded(proj, ["checkbox", "units-generation=completed"]);
       guarded(proj, ["checkbox", "code-generation=in-progress"]);
       // Autonomy grant: append the field beside Scope (fixture ships without it).
       const statePath = seededStateFile(proj);

@@ -15,7 +15,8 @@
 // (the SDK's ephemeral CLAUDE_CONFIG_DIR, the Codex driver's CODEX_HOME, checked before the first prompt); the real
 // homes are hashed before and after, and a change in ~/.claude or ~/.codex fails the file.
 //
-// Pass, per item: the right choice is on the record (`expected.end.recorded`) with the person's words beside it, the
+// Pass, per item: the right choice is on the record (`expected.end.recorded`, read from the rows the choice wrote and
+// never from the person's words) with the person's words beside it, the
 // message record keeps their words, nothing is recorded from a non-answer, the person was asked only what the item
 // allows (a question asked twice is a miss), and what the agent told them after their reply matches the meaning and
 // the `says` rubric (a model judge, plain words, no engine terms). A report with a score per question and every miss
@@ -37,8 +38,8 @@ import { execCodex, execCodexResume } from "../harness/exec-drive.ts";
 import { AcpSession, driveKiroAcp } from "../harness/kiro-acp-drive.ts";
 import { type AnswerSpec, driveAidlc, type DriveTurnEnd } from "../harness/sdk-drive.ts";
 import {
-  HOMES, PERSON_READS_RULE, ROTATION_START, drivesHome, homeDigest, inNightly, judgeText, liveGate, liveHarnesses, liveItem, liveProject,
-  nightOf, rotateByGroup, sampleByGroup, writeLiveReport,
+  HOMES, PERSON_READS_RULE, ROTATION_START, drivesHome, homeDigest, inNightly, judgeShownQuestion, judgeText, liveGate, liveHarnesses, liveItem,
+  liveProject, nightOf, rotateByGroup, sampleByGroup, writeLiveReport,
   type HomeDigest, type LiveHarness, type LiveOutcome, type Transcript,
 } from "../harness/live-corpus.ts";
 import { codexWords } from "../harness/aidlc-input-corpus.ts";
@@ -46,6 +47,7 @@ import {
   ANSWERS, ASKED_IN_CHAT, NO_FIXTURE, buildQuestion, liveReply, messageRecord, recorded, rows, typedPrompt, waitsFor, workCarriedOn, type AnswersItem,
 } from "../harness/aidlc-answers-corpus.ts";
 import { getField, listIntents, readAuditShardEvents, stateFilePath } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { planApprovalAskState } from "../../dist/claude/.claude/tools/aidlc-plan-approval-ask.ts";
 
 setDefaultTimeout(LIVE_SETUP_TIMEOUT_MS);
 
@@ -96,13 +98,11 @@ const startOf = (proj: string): Start => ({
 });
 const rowsAfter = (proj: string, start: Start, event: string) => rows(proj, event).slice(start.rowsBefore[event] ?? 0);
 
-// The choice on record now, as the item's `end.recorded` names it: the harness's own readers first, then the audit rows
-// the agent's answer commands write. A routing reply leaves no row of its own: separate new work is a new record, and
-// "part of this work" is the open work carrying on (rows after the reply, no new record).
+// The choice on record now, as the item's `end.recorded` names it: the audit rows the answer commands write and the
+// engine's own Plan Approval question, never a reading of the person's words (a decision reaches the engine when its
+// row does). A routing reply leaves no row of its own: separate new work is a new record, and "part of this work" is
+// the open work carrying on (rows after the reply, no new record).
 function recordedNow(item: AnswersItem, proj: string, start: Start): string {
-  const choice = recorded(proj, item).choice;
-  // "unknown" is the plan question no longer open: the agent answered it, and the record is the audit row.
-  if (choice !== "none" && choice !== "unknown") return choice;
   const since = (event: string) => rowsAfter(proj, start, event).length > 0;
   const intents = listIntents(proj);
   const fresh = intents.length > start.records ? intents.at(-1) : undefined;
@@ -139,7 +139,14 @@ function recordedNow(item: AnswersItem, proj: string, start: Start): string {
     if (row) return /New Project Type\*\*: Brownfield/.test(row.block) ? "Yes, it is existing code" : "No, it stays a new project";
   }
   if (since("PLAN_APPROVAL_RECORDED")) return "approved plan";
-  if (since("GATE_APPROVED")) return "Approve";
+  // Request Changes and the edit choice land on the Plan Approval question's own record, with no row.
+  if (item.question === "code-plan" || item.question === "code-plan-grouped") {
+    const plan = planApprovalAskState(proj);
+    if (plan === "editing") return "I'll edit the files";
+    if (plan === "answered") return "Request Changes";
+  }
+  const approved = rowsAfter(proj, start, "GATE_APPROVED").at(-1);
+  if (approved) return /^accept as-is/i.test(approved["User Input"] ?? "") ? "Accept as-is" : "Approve";
   if (since("GATE_REJECTED")) return "Request Changes";
   if (since("REQUEST_ROUTED")) return "routed";
   if (since("ARTIFACT_REUSED")) return rowsAfter(proj, start, "ARTIFACT_REUSED").at(-1)?.Decision ?? "reused";
@@ -210,8 +217,9 @@ function pickerSpec(item: AnswersItem): { spec: AnswerSpec; label: string | null
   return offered ? { spec: { labelContains: label }, label } : { spec: { text: answer }, label: null };
 }
 
-// The agent's first turn must show the item's question: when what it showed offers no such choice (re-entry showed another
-// question, or none), the reply answers nothing this item judges, and the line says what was shown instead.
+// The agent's first turn must show the item's question: when it showed another question, or none, the reply answers
+// nothing this item judges, and the line says what was shown instead. A model reads what was shown (the box and its
+// options where there was one), as a person would; a judge that gives no verdict leaves the item to be judged.
 // The choice the corpus names most often for a question: the most stable wording the agent shows.
 const USUAL_CHOICE = new Map<string, string>();
 for (const question of [...new Set(ANSWERS.map((i) => i.question))]) {
@@ -223,13 +231,11 @@ for (const question of [...new Set(ANSWERS.map((i) => i.question))]) {
 function showsQuestion(item: AnswersItem, firstText: string): string | null {
   const want = item.expected.end.recorded;
   if (want === "none") return null;
-  const shown = firstText.toLowerCase();
-  const offered = (label: string): boolean => {
-    const words = label.replace(DECORATED, "").toLowerCase().split(/[^a-z0-9'-]+/).filter(Boolean);
-    return words.length === 0 || words.filter((w) => shown.includes(w)).length >= Math.ceil(words.length * 2 / 3);
-  };
-  if (offered(want) || offered(USUAL_CHOICE.get(item.question) ?? want)) return null;
-  return `setup: the agent did not show the ${item.question} question (no choice ${JSON.stringify(want)} offered); it said: ${JSON.stringify(firstText.trim().slice(-300))}`;
+  const usual = USUAL_CHOICE.get(item.question) ?? want;
+  const what = `the ${item.question.replace(/-/g, " ")} question, whose choices include ${JSON.stringify(want)}${usual === want ? "" : ` or ${JSON.stringify(usual)}`}`;
+  const verdict = judgeShownQuestion(what, firstText, judgeDir);
+  if ("failure" in verdict || verdict.shown) return null;
+  return `setup: the agent did not show the ${item.question} question (${verdict.reason}); it said: ${JSON.stringify(firstText.trim().slice(-300))}`;
 }
 
 /** What the person says first so the agent shows the question: a bare /aidlc re-enters the open work and shows the

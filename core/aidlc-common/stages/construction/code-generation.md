@@ -504,11 +504,12 @@ source instead. Its Step 5 files are
 `<record>/construction/code-generation/traceability.json`.
 
 Create
-`<code-generation-record>/traceability.json`.
-Enumerate every assigned AC, detailed `NFRx.y`, and `BRx.y` (or direct `FR` /
-`NFR` IDs when incremental scope skipped the design chain); a requirement with
-sub-requirements is traced through its `FR{n}.{m}` IDs and needs no row of its
-own. Every `OK` target
+`<code-generation-record>/traceability.json` by running
+`{{INVOKE}} engine sensor-traceability --stage code-generation --output-path <that path> --write-upstream`:
+it lists every assigned AC, detailed `NFRx.y`, and `BRx.y` (or direct `FR` /
+`NFR` IDs when incremental scope skipped the design chain), each with a `GAP`
+row; a requirement with sub-requirements is traced through its `FR{n}.{m}` IDs
+and needs no row of its own. Set each row's `status` and `target`: every `OK` target
 must be one existing workspace-relative implementation or test file. When the
 person asks to leave planned work out of this build (for example "skip the
 remaining stories"), do it: list each item they left out as `Deferred` (not

@@ -135,6 +135,10 @@ describe("t314 minimal-scope dispatch and handoff budget", () => {
     expect(pipeline.pipeline).toEqual({
       links: ["aidlc-developer-agent", "aidlc-architect-agent"],
       completed: [],
+      record: [
+        expect.objectContaining({ link: "aidlc-developer-agent" }),
+        expect.objectContaining({ link: "aidlc-architect-agent" }),
+      ],
     });
   });
 

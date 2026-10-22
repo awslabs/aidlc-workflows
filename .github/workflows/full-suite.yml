@@ -211,7 +211,7 @@ jobs:
       - name: "Install compatibility tmux"
         if: "matrix.backend == 'tmux'"
         run: "sudo apt-get update -qq && sudo apt-get install -y -qq tmux"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: full-suite-native-plan
           path: "${{ runner.temp }}"
@@ -287,11 +287,11 @@ jobs:
         with:
           bun-version: "${{ env.BUN_VERSION }}"
       - run: "bun install --frozen-lockfile"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: full-suite-native-plan
           path: "${{ runner.temp }}"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: "full-suite-native-*"
           path: "${{ runner.temp }}/native-receipts"
@@ -486,13 +486,16 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "${{ env.BUN_VERSION }}"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: "live-deps-${{ runner.os }}"
           path: "${{ runner.temp }}/live-deps"
+          digest-mismatch: warn
       # A download can end short without failing its step (run 36319045226).
       # Unpack validates the whole archive before writing anything, so a
       # truncated archive is fetched once more and unpacked again.
+      # The first download only warns on a digest mismatch, so a bad copy
+      # reaches that check and the second download too.
       - name: Validate and unpack live dependencies
         id: unpack-deps
         continue-on-error: true
@@ -502,7 +505,7 @@ jobs:
       - name: Discard the failed live dependency download
         if: steps.unpack-deps.outcome == 'failure'
         run: rm -rf "$RUNNER_TEMP/live-deps"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: steps.unpack-deps.outcome == 'failure'
         with:
           name: "live-deps-${{ runner.os }}"
@@ -646,13 +649,16 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "${{ env.BUN_VERSION }}"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: "live-deps-${{ runner.os }}"
           path: "${{ runner.temp }}/live-deps"
+          digest-mismatch: warn
       # A download can end short without failing its step (run 36319045226).
       # Unpack validates the whole archive before writing anything, so a
       # truncated archive is fetched once more and unpacked again.
+      # The first download only warns on a digest mismatch, so a bad copy
+      # reaches that check and the second download too.
       - name: Validate and unpack live dependencies
         id: unpack-deps
         continue-on-error: true
@@ -662,7 +668,7 @@ jobs:
       - name: Discard the failed live dependency download
         if: steps.unpack-deps.outcome == 'failure'
         run: rm -rf "$RUNNER_TEMP/live-deps"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: steps.unpack-deps.outcome == 'failure'
         with:
           name: "live-deps-${{ runner.os }}"
@@ -808,13 +814,16 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "${{ env.BUN_VERSION }}"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: "live-deps-${{ runner.os }}"
           path: "${{ runner.temp }}/live-deps"
+          digest-mismatch: warn
       # A download can end short without failing its step (run 36319045226).
       # Unpack validates the whole archive before writing anything, so a
       # truncated archive is fetched once more and unpacked again.
+      # The first download only warns on a digest mismatch, so a bad copy
+      # reaches that check and the second download too.
       - name: Validate and unpack live dependencies
         id: unpack-deps
         continue-on-error: true
@@ -822,7 +831,7 @@ jobs:
       - name: Discard the failed live dependency download
         if: steps.unpack-deps.outcome == 'failure'
         run: Remove-Item -LiteralPath "$env:RUNNER_TEMP/live-deps" -Recurse -Force -ErrorAction SilentlyContinue
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: steps.unpack-deps.outcome == 'failure'
         with:
           name: "live-deps-${{ runner.os }}"

@@ -5,14 +5,16 @@
 // once, approve each stage once, approve the plan once where the scope asks
 // for it, and close the session once the journey's last stage is approved.
 //
-// The person never reads the agent's prose. What they pick in a menu comes from
-// the menu itself; what they type when a turn ends comes from what the engine
-// recorded as waiting for them: a question it logged and nobody answered, a
-// stage waiting for approval, the engine's last ask, or a question in the
-// stage's questions file still without an answer (the Stop hook ends the turn
-// on that one too). When a turn ends with nothing waiting for them, the journey
-// is stuck. When the same thing reaches them twice, they were asked twice. Both
-// are failures, named in `problems`.
+// What the person picks in a menu comes from the menu itself; what they type
+// when a turn ends comes from what the engine recorded as waiting for them: a
+// question it logged and nobody answered, a stage waiting for approval, the
+// engine's last ask, or a question in the stage's questions file still without
+// an answer (the Stop hook ends the turn on that one too). When the record
+// shows nothing waiting, they read the agent's words, as a person reads the
+// screen: a model says whether a question was left there (judgeOpenQuestion),
+// and they answer it; with none, the journey is stuck. When the same thing
+// reaches them twice, they were asked twice. Both are failures, named in
+// `problems`.
 //
 // The test drives with driveAidlc (sdk-drive.ts), which already fails a drive
 // whose agent records a decision the person did not make (person-turns.ts). A
@@ -31,6 +33,8 @@ import { hasPendingQuestion } from "../../dist/claude/.claude/hooks/aidlc-contin
 import { auditBlockField, readAuditShardEvents, stageDir } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { parseDirectiveOutput } from "./directive-output.ts";
 import { declaredScope, expectedStages, sourceStages } from "./scope-run.ts";
+import type { AgentWords } from "./leg-evidence.ts";
+import { judgeFolder, judgeOpenQuestion } from "./live-corpus.ts";
 import { claudePromptProblems } from "./stock-permissions.ts";
 import {
   type AnswerSpec,
@@ -38,8 +42,10 @@ import {
   type CapturedToolResult,
   type DriveOptions,
   type DriveResult,
+  plainChoice,
   readStateField,
   readStateFile,
+  recommended,
 } from "./sdk-drive.ts";
 
 type Row = ReturnType<typeof readAuditShardEvents>[number];
@@ -65,15 +71,6 @@ export const GOLDEN_WORK_MS = 45 * 60_000;
 
 /** A person who has typed this many messages in one chat is going round in circles. */
 const MAX_TURNS = 40;
-
-/** The plain choice a person makes in each kind of menu, first match wins. */
-const PLAIN_CHOICES: RegExp[] = [
-  /^Approve Plans?\b/,
-  /^Guide me\b/i,
-  /^Looks correct\b/i,
-  /^Nothing to add\b/i,
-  /^Approve\b/,
-];
 
 export interface GoldenJourney {
   /** The project folder, already holding the AI-DLC tree and the person's files. */
@@ -101,6 +98,8 @@ export interface GoldenJourney {
    * instead; the gate offered again after the revision counts as asked once.
    */
   changeRequest?: { stage: string; words: string };
+  /** Reads the agent's words at a turn's end for a question left open; a model by default (judgeOpenQuestion). */
+  openQuestion?: (words: string) => ReturnType<typeof judgeOpenQuestion>;
 }
 
 export interface GoldenRun {
@@ -122,6 +121,14 @@ export interface GoldenRun {
 
 function norm(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+// The Plan Approval question is one question to the person, whichever record shows it (a box, a logged decision,
+// the engine's ask, the questions file), so it is reached under one key.
+const PLAN_CHOICE = /^Approve Plans?\b/;
+const planKey = (stage: string): string => `plan approval | ${stage}`;
+function questionKey(stage: string, question: string, options: readonly string[]): string {
+  return options.some((o) => PLAN_CHOICE.test(o)) ? planKey(stage) : `${stage} | ${norm(question)}`;
 }
 
 function clip(text: string, max = 400): string {
@@ -215,19 +222,6 @@ export function lastEngineStep(results: readonly CapturedToolResult[]): Record<s
   return print;
 }
 
-/** The plain choice at an approval, a mode, a summary or a learnings question. */
-function plainChoice(options: string[]): string | undefined {
-  for (const choice of PLAIN_CHOICES) {
-    const hit = options.find((o) => choice.test(o));
-    if (hit) return hit;
-  }
-  return undefined;
-}
-
-function recommended(options: string[]): string | undefined {
-  return options.find((o) => /recommended/i.test(o));
-}
-
 /**
  * The person in one golden journey. The test drives with
  * `driveAidlc(journey.request, person.driveOptions())`, so the live-test
@@ -250,6 +244,10 @@ export class GoldenPerson {
   private left: string | undefined;
   private leftOnce = false;
   private changed = false;
+  // The agent's words to the person in the turn that just ended, and how much of the SDK drive's prose came before it.
+  private words = "";
+  private wordsBefore = 0;
+  private judgeDir?: string;
 
   constructor(private readonly j: GoldenJourney) {
     this.start = auditRows(j.proj).length;
@@ -263,7 +261,11 @@ export class GoldenPerson {
       persistSession: true,
       captureStopHooks: true,
       answerScript: { kind: "pick", pick: (q) => this.pick(q) },
-      nextMessage: (turn) => this.reply(turn.turn),
+      nextMessage: (turn) => {
+        this.words = turn.assistantText.slice(this.wordsBefore);
+        this.wordsBefore = turn.assistantText.length;
+        return this.reply(turn.turn);
+      },
       stopWhen: (results) => {
         this.latest = results;
         return approved(this.j.proj, this.j.lastStage);
@@ -292,10 +294,12 @@ export class GoldenPerson {
 
   /**
    * Typed tools: what the person types after a turn whose tool calls were
-   * `results`, and whether it opens a new session. The engine steps read are
-   * this session's only, so a new session that asks nothing is "nothing asked".
+   * `results` and whose words to them were `words`, and whether it opens a new
+   * session. The engine steps read are this session's only, so a new session
+   * that asks nothing is "nothing asked".
    */
-  typedReply(turn: number, results: readonly CapturedToolResult[]): { line?: string; newSession: boolean } {
+  typedReply(turn: number, results: readonly CapturedToolResult[], words = ""): { line?: string; newSession: boolean } {
+    this.words = words;
     this.all.push(...results);
     this.session.push(...results);
     this.latest = this.session;
@@ -341,6 +345,12 @@ export class GoldenPerson {
     return false;
   }
 
+  private readsScreen(words: string): ReturnType<typeof judgeOpenQuestion> {
+    if (this.j.openQuestion) return this.j.openQuestion(words);
+    this.judgeDir ??= judgeFolder();
+    return judgeOpenQuestion(words, this.judgeDir);
+  }
+
   private ownWords(stage: string): string | undefined {
     const own = this.j.ownWords;
     if (!own || this.ownWordsUsed || stage !== own.stage) return undefined;
@@ -353,8 +363,8 @@ export class GoldenPerson {
   private pick(q: AskUserQuestionItem): AnswerSpec {
     const stage = this.stageNow();
     const labels = q.options.map((o) => o.label);
-    const again = this.reach(`${stage} | ${norm(q.question)}`, `"${q.question}" at ${stage}`);
-    if (labels.some((l) => /^Approve Plans?\b/.test(l))) {
+    const again = this.reach(questionKey(stage, q.question, labels), `"${q.question}" at ${stage}`);
+    if (labels.some((l) => PLAN_CHOICE.test(l))) {
       if (!again) this.planAsked++;
     }
     else if (labels.some((l) => /^Approve\b/.test(l)) && labels.some((l) => /^Request Changes\b/i.test(l))) {
@@ -380,8 +390,8 @@ export class GoldenPerson {
       const question = auditBlockField(decision.block, "Decision") ?? "";
       const at = stageField(decision) || stage;
       const options = decisionOptions(decision);
-      const again = this.reach(`${at} | ${norm(question)}`, `"${question}" at ${at}`);
-      if (!again && options.some((o) => /^Approve Plans?\b/.test(o))) this.planAsked++;
+      const again = this.reach(questionKey(at, question, options), `"${question}" at ${at}`);
+      if (!again && options.some((o) => PLAN_CHOICE.test(o))) this.planAsked++;
       const words = plainChoice(options) ?? this.ownWords(at) ?? recommended(options) ?? options[0] ?? "Go with what you recommend";
       this.said.push(`typed ${JSON.stringify(words)} for "${clip(question, 120)}" at ${at}`);
       return words;
@@ -408,7 +418,7 @@ export class GoldenPerson {
     }
     if (step?.kind === "ask") {
       const type = String(step.ask_type ?? "");
-      const again = this.reach(`ask | ${type} | ${stage}`, `the ${type} question at ${stage}`);
+      const again = this.reach(type === "plan-approval" ? planKey(stage) : `ask | ${type} | ${stage}`, `the ${type} question at ${stage}`);
       if (type === "plan-approval") {
         if (!again) this.planAsked++;
         this.said.push("typed \"Approve Plan\" for the plan");
@@ -424,13 +434,26 @@ export class GoldenPerson {
     const phase = (readStateField(readStateFile(this.j.proj) ?? "", "Lifecycle Phase") ?? "").toLowerCase();
     const blank = hasPendingQuestion(this.j.proj, stage, phase) ? blankQuestion(this.j.proj, phase, stage) : undefined;
     if (blank) {
-      const again = this.reach(`${stage} | ${norm(blank.question)}`, `"${blank.question}" at ${stage}`);
-      if (!again && blank.options.some((o) => /^Approve Plans?\b/.test(o))) this.planAsked++;
+      const again = this.reach(questionKey(stage, blank.question, blank.options), `"${blank.question}" at ${stage}`);
+      if (!again && blank.options.some((o) => PLAN_CHOICE.test(o))) this.planAsked++;
       const words = plainChoice(blank.options) ?? this.ownWords(stage) ?? recommended(blank.options) ?? blank.options[0] ?? "Go with what you recommend";
       this.said.push(`typed ${JSON.stringify(words)} for "${clip(blank.question, 120)}" (in the questions file) at ${stage}`);
       return words;
     }
-    this.problems.push(`turn ${turn} ended at ${stage} with nothing asked of the person; the engine's last step was ${clip(JSON.stringify(step ?? null))}`);
+    // Nothing on record waits for them, so they read the screen: a question the
+    // agent left there in its own words gets their answer.
+    const open = this.words.trim() === ""
+      ? { asked: false, question: "", reason: "the agent said nothing to the person" }
+      : this.readsScreen(this.words);
+    if (!("failure" in open) && open.asked) {
+      const question = open.question || clip(this.words, 120);
+      this.reach(`${stage} | ${norm(question)}`, `"${question}" at ${stage}`);
+      const words = this.ownWords(stage) ?? "Go with what you recommend";
+      this.said.push(`typed ${JSON.stringify(words)} for "${clip(question, 120)}" (asked in chat) at ${stage}`);
+      return words;
+    }
+    const why = "failure" in open ? open.failure : open.reason;
+    this.problems.push(`turn ${turn} ended at ${stage} with nothing asked of the person (${why}); the engine's last step was ${clip(JSON.stringify(step ?? null))}`);
     return undefined;
   }
 }
@@ -442,13 +465,18 @@ function decisionOptions(row: Row): string[] {
 /**
  * Typed tools: drive a golden journey where each line the person types is one
  * process. `turn` runs the line (in a new session when asked) and returns the
- * tool calls the agent made, in the shape the SDK drive captures them.
+ * tool calls the agent made, in the shape the SDK drive captures them, with
+ * what the agent told the person (codexReplies, copilotReplies, opencodeReplies).
  */
 export function driveTyped(
-  person: GoldenPerson, turn: (line: string, newSession: boolean) => readonly CapturedToolResult[],
+  person: GoldenPerson,
+  turn: (line: string, newSession: boolean) => readonly CapturedToolResult[] | { results: readonly CapturedToolResult[]; words: readonly AgentWords[] },
 ): GoldenRun {
   let next: { line?: string; newSession: boolean } = { line: person.request, newSession: true };
-  for (let n = 1; next.line !== undefined; n++) next = person.typedReply(n, turn(next.line, next.newSession));
+  for (let n = 1; next.line !== undefined; n++) {
+    const ran = turn(next.line, next.newSession);
+    next = "results" in ran ? person.typedReply(n, ran.results, ran.words.map((w) => w.text).join("\n")) : person.typedReply(n, ran);
+  }
   return person.typedRun();
 }
 

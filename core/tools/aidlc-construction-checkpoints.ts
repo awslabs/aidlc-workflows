@@ -103,9 +103,19 @@ import {
   rawFingerprintForm,
   committedTextSha256,
 } from "./aidlc-lib.ts";
+import type { ApprovalDecider } from "./aidlc-review-brief.ts";
 
 
 export type ConstructionCheckpointKind = "unit" | "skeleton";
+
+// The fields an approval row records for the open review findings of the
+// stages and Units it covers, from the review ledger's one writer. The caller
+// hands it in: aidlc-review-brief.ts imports this module.
+export type ApprovalFindingDispositions = (
+  stages: readonly string[],
+  units: readonly string[],
+  decider: ApprovalDecider,
+) => Record<string, string>;
 
 export function constructionCheckpointKind(
   stateContent: string,
@@ -1669,6 +1679,7 @@ export function approveConstructionCheckpoint(
   kind: ConstructionCheckpointKind,
   reply?: string,
   session = "",
+  findingDispositions?: ApprovalFindingDispositions,
 ): ConstructionCheckpoint {
   // The conductor read the person's reply and reports their approval. The
   // receipt records it beside the person's own words, kept by the human-turn
@@ -1712,14 +1723,18 @@ export function approveConstructionCheckpoint(
     // approval says so, and so does the one line they hear.
     const notFinished = rechecked.result.review_not_finished;
     if (notFinished) notices.push(`Approved. The ${reviewsNamed(notFinished.stages)} for ${unit} did not finish.`);
+    const gate = gateFields(projectDir, rechecked.result, rechecked.state);
     appendAuditEntryUnlocked("GATE_APPROVED", {
-      ...gateFields(projectDir, rechecked.result, rechecked.state),
+      ...gate,
       "Verification Id": rechecked.result.verification!.id,
       "Approved Evidence": rechecked.approvedEvidence,
       ...(humanRequired ? { Session: session } : {}),
       ...(humanRequired ? { "User Input": "Approve" } : { Autonomous: "true" }),
       ...(words ? { "Person Reply": words } : {}),
       ...(notFinished ? { Review: "not finished" } : {}),
+      ...findingDispositions?.(
+        gate["Gate Stages"].split(", ").filter(Boolean), [unit], humanRequired ? "person" : "nobody",
+      ),
     }, projectDir);
     if (humanRequired) consumeProtectedQuestion(projectDir, session);
     const result = resolveConstructionCheckpoint(projectDir, unit, kind);

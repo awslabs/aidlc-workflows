@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import { headingKey } from "./aidlc-artifact-vocabulary.ts";
-import { errorMessage, parseBoltDag, unitsBlockRepair } from "./aidlc-lib.ts";
+import { artifactFilename, headingKey } from "./aidlc-artifact-vocabulary.ts";
+import { asksForHelp, errorMessage, parseBoltDag, printUsageAndExit, unitsBlockRepair } from "./aidlc-lib.ts";
+import { sensorFireUsage } from "./aidlc-runtime-paths.ts";
 
 interface Result {
 	pass: boolean;
@@ -50,12 +51,13 @@ interface Flags {
 	// Absent or a clean miss: no template, so no heading is required. The
 	// framework ships zero defaults, so this normally misses.
 	frameworkTemplatesDir?: string;
-	// Comma-joined set of artifact NAMES (output-filename stems) this stage
-	// declares template-eligible — the `produces` entries that are NOT
-	// questions/timestamp markers. Threaded from the dispatcher, which holds the
-	// stageNode (the per-sensor script has no graph access). A resolved template
-	// applies ONLY when basename(outputPath) stem ∈ this set; otherwise it is
-	// ignored + a config warning emitted. Absent/empty → no artifact is eligible.
+	// Comma-joined set of artifact NAMES this stage declares template-eligible:
+	// the `produces` entries that are NOT questions/timestamp markers. Threaded
+	// from the dispatcher, which holds the stageNode (the per-sensor script has
+	// no graph access). A resolved template applies ONLY when the output file is
+	// one of these artifacts' files (artifactFilename: Build and Test's
+	// build-test-results writes test-results.md); otherwise it is ignored and a
+	// config warning emitted. Absent/empty: no artifact is eligible.
 	templateEligible?: string[];
 }
 
@@ -126,6 +128,7 @@ function fail(msg: string): never {
 }
 
 export function main(argv: string[]): void {
+	if (asksForHelp(argv)) printUsageAndExit(`Usage: ${sensorFireUsage("required-sections")}`);
 	const flags = parseFlags(argv);
 
 	if (!flags.outputPath) {
@@ -200,11 +203,11 @@ export function main(argv: string[]): void {
 	// sections are the questions asked this run, not a fixed shape a template
 	// could describe). The per-sensor script cannot know the stage's
 	// artifact set, so the dispatcher threads --template-eligible. A resolved
-	// template applies ONLY when the stem ∈ that set; otherwise it is ignored
-	// and an advisory config warning is emitted.
+	// template applies ONLY when the output file is one of those artifacts'
+	// files; otherwise it is ignored and an advisory config warning is emitted.
 	const templatePath = resolveTemplatePath(stem, flags);
 	if (templatePath) {
-		const eligible = (flags.templateEligible ?? []).includes(stem);
+		const eligible = (flags.templateEligible ?? []).some((name) => artifactFilename(name) === file);
 		if (!eligible) {
 			result.template = "ineligible";
 			result.config_warning =

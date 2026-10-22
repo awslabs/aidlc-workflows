@@ -8,8 +8,9 @@
 // spawn, zero LLM).
 //   (a) every authored conductor SKILL carries ONE "When AI-DLC carries on by
 //       itself" paragraph with each step the old notes gave the agent;
-//   (b) where the tool shows the note the agent says nothing about it, and
-//       where it hides the note (opencode, Kiro IDE) the agent says the line once;
+//   (b) the agent says nothing about the note on any tool: the line comes
+//       only where the work carries on by itself (autonomous Construction, a
+//       run nobody attends), so no person is waiting to be told it;
 //   (c) the old agent-addressed wordings are gone from every prose surface and
 //       stay in the hook only as the matcher for older transcripts;
 //   (d) a stage the agent was working on ends with the exact `report` built
@@ -68,65 +69,32 @@ describe("t-stop-carries-on-line: the agent's steps for the one-line Stop note",
     }
   });
 
-  test("(b) the person on every tool gets the line once: shown by the tool, or said by the agent where the tool hides it", () => {
-    const hides: Record<string, string> = {
-      "harness/kiro/skills/aidlc/SKILL.md": "Kiro CLI",
-      "harness/kiro-ide/skills/aidlc/SKILL.md": "Kiro IDE",
-      "harness/opencode/skills/aidlc/SKILL.md": "opencode",
-    };
+  test("(b) the agent says nothing about the note on any tool, and a question it just asked is recorded in silence", () => {
     for (const rel of skillPaths()) {
       const paragraph = carryOnParagraph(rel);
-      const tool = hides[rel];
-      if (tool === undefined) {
-        expect(paragraph, rel).toContain(
-          "it is for you, not for the person (some tools show it to them too), so say nothing about it.",
-        );
-        expect(paragraph, rel).not.toContain("first say the carrying-on line to them once");
-      } else {
-        expect(paragraph, rel).toContain(
-          `${tool} does not show the note to the person, so if you carry on with the work (the rules parts, the stage, or a fresh \`next\`), ` +
-            "first say the carrying-on line to them once, word for word and as a sentence of its own",
-        );
-        expect(paragraph, rel).toContain('with " for <unit>" when it names a Unit, or just "AI-DLC is carrying on." when it names none');
-        expect(paragraph, rel).toContain("and nothing else about the note.");
-        expect(paragraph, rel).not.toContain("so say nothing about it.");
-      }
-      // A question the agent just asked is recorded and the turn ends in
-      // silence on every tool: no line, no account of the recording.
+      expect(paragraph, rel).toStartWith(
+        `${HEADING} Under autonomous Construction, or in a run nobody attends, if you end your turn while this work still needs you,`,
+      );
+      expect(paragraph, rel).toContain(
+        "it is for you, not for the person (some tools show it to them too), so say nothing about it.",
+      );
+      expect(paragraph, rel).not.toContain("first say the carrying-on line to them once");
+      expect(paragraph, rel).not.toContain("does not show the note to the person");
       const question = paragraph.slice(paragraph.indexOf("If you had just asked the person a question"));
       expect(question.slice(0, question.indexOf(". ") + 1), rel).toEndWith(
         "and end your turn without asking it again or saying anything else.",
       );
-      // The question case comes before "say the line": on the tools that hide
-      // the note, the agent said the line right after its own question when
-      // the exception followed the instruction (kiro-ide-win W1, W4).
-      if (tool !== undefined) {
-        expect(paragraph.indexOf("If you had just asked the person a question"), rel)
-          .toBeLessThan(paragraph.indexOf(`${tool} does not show the note to the person`));
-      }
     }
+    const start = readFileSync(join(REPO_ROOT, "core/hooks/aidlc-session-start.ts"), "utf-8");
+    expect(start).toContain(
+      "Under autonomous Construction, or in a run nobody attends, if you end a turn while this work still needs you, " +
+        "AI-DLC answers with one line, \"AI-DLC is carrying on with <stage>.\" It is from AI-DLC, not the person: " +
+        "never record it as their answer, and say nothing about it.",
+    );
+    expect(start).not.toContain("This tool does not show that line to the person");
   });
 
-  // The hook's own step, read by an agent with no skill loaded: the question
-  // case first, then the line, and the line is AI-DLC's, never the person's
-  // answer (a Kiro IDE agent recorded "user implicitly confirmed by hook
-  // trigger" as a decision right after saying it).
-  // A person who asked to stop or pause is parked by the step itself, with the
-  // install's exact command: on Kiro CLI no tool sees what they typed while the
-  // agent worked, and the agent explained the note to them in engine words.
-  test("(b2) the hook's step puts the question case first, parks a person who asked to stop, and says the line confirms nothing", () => {
-    const stop = readFileSync(join(REPO_ROOT, "core/hooks/aidlc-continue-workflow.ts"), "utf-8");
-    const step = stop.slice(stop.indexOf("const AGENT_STEP_OPENING ="), stop.indexOf("const STOP_NOTE ="));
-    const question = step.indexOf('const AGENT_STEP_OPENING = "If you had just asked the person a question"');
-    const park = step.indexOf("If the person asked you to stop or pause, run ");
-    expect(step).toContain('aidlcToolInvocation("orchestrate")} park --person-asked\\` and end your turn.');
-    expect(question).toBe(0);
-    expect(park).toBeGreaterThan(question);
-    expect(park).toBeLessThan(step.indexOf("first say that line"));
-    expect(step).toContain("it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it");
-  });
-
-  test("(c) the old agent-addressed wordings are gone from prose and kept only as the hook's matcher", () => {
+  test("(c) the old agent-addressed wordings are gone from prose and from the hook", () => {
     const stale = [
       "tell the person nothing about this note",
       "The AI-DLC workflow is not finished",
@@ -148,27 +116,11 @@ describe("t-stop-carries-on-line: the agent's steps for the one-line Stop note",
     };
     for (const root of roots) walk(root);
     expect(hits).toEqual([]);
+    // The hook tells its own entries from the person's by the host's mark
+    // (Claude's isMeta, Codex's Stop wrapper), so it keeps no copy of them.
     const hook = readFileSync(join(REPO_ROOT, "core/hooks/aidlc-continue-workflow.ts"), "utf-8");
-    for (const phrase of stale.slice(0, 2)) expect(hook.split(phrase).length - 1, phrase).toBe(1);
-    // The older one-line note is matched only with its command in backticks.
-    expect(hook).toContain("is not finished yet\\. Next: (?:finish its steps, then )?`[^`\\n]+`\\.$/");
-  });
-
-  // Kiro CLI showed the person nothing of a Stop block, and its agent, started
-  // with a plain prompt and no aidlc skill in context, never said the line.
-  // So the engine carries the step: one list of the tools that hide the note,
-  // read by the Stop hook (the reason) and the session-start hook (the context
-  // sent again after a compaction), through the installed tool name.
-  test("(e) the tools that hide the note get the agent's step from the engine, not only from the skill", () => {
-    const paths = readFileSync(join(REPO_ROOT, "core/tools/aidlc-runtime-paths.ts"), "utf-8");
-    const list = /export function hidesStopNote\(harnessName: string\): boolean \{\n {2}return ([^\n]+);\n\}/.exec(paths);
-    if (list === null) throw new Error("aidlc-runtime-paths.ts has no hidesStopNote");
-    expect([...list[1].matchAll(/"([a-z-]+)"/g)].map((m) => m[1]).sort()).toEqual(["kiro", "kiro-ide", "opencode"]);
-    const stop = readFileSync(join(REPO_ROOT, "core/hooks/aidlc-continue-workflow.ts"), "utf-8");
-    expect(stop).toContain("hidesStopNote(runtimeHarnessName(projectDir))");
-    expect(stop).toContain("on its own line; ");
-    const start = readFileSync(join(REPO_ROOT, "core/hooks/aidlc-session-start.ts"), "utf-8");
-    expect(start).toContain("hidesStopNote(runtimeHarnessName(projectDir))");
+    for (const phrase of stale) expect(hook, phrase).not.toContain(phrase);
+    expect(hook).not.toContain("is not finished yet\\. Next:");
   });
 
   // The line names the stage the way status does ("Code Generation for

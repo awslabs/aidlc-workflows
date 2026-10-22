@@ -452,6 +452,81 @@ describe("t276 cursor adapter payload conversion", () => {
     }
   });
 
+  test("0b: an edit that arrives as StrReplace(path) gets every decision and audit row Edit(file_path) gets", () => {
+    const codeGeneration = (guardPolicy?: string): string => {
+      const proj = installedProject();
+      seedStateFile(proj, "state-construction.md");
+      const statePath = join(seededRecordDir(proj), "aidlc-state.md");
+      let state = readFileSync(statePath, "utf-8").replace(
+        /^- \*\*Current Stage\*\*:.*$/m,
+        "- **Current Stage**: code-generation",
+      );
+      if (guardPolicy) {
+        state = state
+          .replace(/^- \*\*(?:Guard Policy|Change Control)\*\*:.*\n/gm, "")
+          .replace(/^(- \*\*Scope\*\*:.*)$/m, `$1\n- **Guard Policy**: ${guardPolicy}`);
+      }
+      writeFileSync(statePath, state);
+      writeActiveDirectiveMarker(proj, {
+        kind: "run-stage",
+        stage: "code-generation",
+        state_sha256: stateDigest(state),
+      });
+      return proj;
+    };
+    const edit = (file: string) => ({ tool_name: "Edit", tool_input: { file_path: file, old_string: "a", new_string: "b" } });
+    const strReplace = (file: string) => ({ tool_name: "StrReplace", tool_input: { path: file, old_string: "a", new_string: "b" } });
+    // Each call gets its own project, so one refusal cannot change the next one's words.
+    const guard = (
+      call: (file: string) => Record<string, unknown>,
+      file: (proj: string) => string,
+      guardPolicy?: string,
+    ): { permission?: string; agent_message?: string } => {
+      const proj = codeGeneration(guardPolicy);
+      const result = runAdapter(proj, "guards", payload("preToolUseWrite", proj, call(file(proj))));
+      expect(result.code, result.stderr).toBe(0);
+      const decision = JSON.parse(result.stdout) as { permission?: string; agent_message?: string };
+      if (decision.agent_message) decision.agent_message = decision.agent_message.replaceAll(proj, "<project>");
+      return decision;
+    };
+    const code = (proj: string) => join(proj, "src", "blocked.ts");
+    const plan = (proj: string) =>
+      join(seededRecordDir(proj), "construction", "code-generation", "code-generation-plan.md");
+
+    // Code before the plan is approved: refused, with the same way on.
+    const editCode = guard(edit, code);
+    expect(editCode.permission).toBe("deny");
+    expect(guard(strReplace, code)).toEqual(editCode);
+    // The way on: the plan itself is written in the stage's own folder.
+    const editPlan = guard(edit, plan);
+    expect(editPlan.permission).toBe("allow");
+    expect(guard(strReplace, plan)).toEqual(editPlan);
+    // Guard Policy off: whatever Edit gets.
+    expect(guard(strReplace, code, "off (from scope classic)")).toEqual(guard(edit, code, "off (from scope classic)"));
+
+    // After the edit: one ARTIFACT row each.
+    const artifactRows = (call: (file: string) => Record<string, unknown>): number => {
+      const proj = installedProject();
+      seedStateFile(proj, "state-construction.md");
+      seedAuditFile(proj);
+      const dir = join(seededRecordDir(proj), "construction", "functional-design");
+      mkdirSync(dir, { recursive: true });
+      const artifact = join(dir, "design.md");
+      writeFileSync(artifact, "# design b\n");
+      const rows = () =>
+        (readFileSync(seededAuditShard(proj), "utf-8").match(/\*\*Event\*\*: ARTIFACT_(?:CREATED|UPDATED)/g) ?? []).length;
+      const before = rows();
+      const result = runAdapter(proj, "audit-and-sensors", payload("postToolUseWrite", proj, {
+        ...call(artifact),
+        tool_output: "ok",
+      }));
+      expect(result.code, result.stderr).toBe(0);
+      return rows() - before;
+    };
+    expect(artifactRows(edit)).toBe(1);
+    expect(artifactRows(strReplace)).toBe(1);
+  });
+
   test("1: sessionStart re-keys core additionalContext to Cursor's additional_context", () => {
     const proj = installedProject();
     seedStateFile(proj, "state-construction.md");

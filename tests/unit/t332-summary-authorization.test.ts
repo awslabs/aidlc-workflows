@@ -111,7 +111,7 @@ function project(
     if (options.unitsGeneration) {
       state = state.replace(
         /^- \[[^\]]+\] units-generation.*$/m,
-        `- [${options.unitsGeneration === "SKIP" ? "S" : " "}] units-generation — ${options.unitsGeneration}`,
+        `- [${options.unitsGeneration === "SKIP" ? "S" : "x"}] units-generation \u2014 ${options.unitsGeneration}`,
       );
     }
     if (options.stage === NFR_STAGE) {

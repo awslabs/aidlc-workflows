@@ -16725,9 +16725,7 @@
         "asks": 0,
         "work": "same"
       }
-    },
-    "after": "pending",
-    "documented_differs": "print: Run `bun .claude/tools/aidlc.ts engine scope change --scope enterprise` to change scope, then print its output verbatim and stop."
+    }
   },
   {
     "id": "doc-129-f",

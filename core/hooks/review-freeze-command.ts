@@ -1724,6 +1724,18 @@ function powerShellLocationChanges(command: string, depth: number): Array<string
   return out;
 }
 
+// The table the traceability check's write mode writes, however the engine is
+// run (`engine sensor-traceability` or its script): its --output-path.
+function traceabilityTableWrite(args: readonly string[]): string | undefined {
+  const at = args.findIndex((arg) => arg === "sensor-traceability" || /(?:^|[\\/])aidlc-sensor-traceability\.ts$/.test(arg));
+  if (at === -1 || !args.includes("--write-upstream")) return undefined;
+  for (let i = at + 1; i < args.length; i++) {
+    if (args[i] === "--output-path") return args[i + 1];
+    if (args[i].startsWith("--output-path=")) return args[i].slice("--output-path=".length);
+  }
+  return undefined;
+}
+
 /**
  * Concrete filesystem targets of a mutation-capable shell command. A relative
  * target is resolved from each directory `shellDirectoryRoots` collects, so
@@ -1799,6 +1811,8 @@ function shellWriteTargetsFrom(
   // The destination/in-place operands one command writes. Commands that also
   // have read-only source operands contribute only their write operands.
   const invocationTargets = (commandName: string, args: string[]): void => {
+    const table = traceabilityTableWrite(args);
+    if (table !== undefined) add(table);
     if (commandName === "dd") {
       for (const arg of args) if (arg.startsWith("of=")) add(arg);
       return;

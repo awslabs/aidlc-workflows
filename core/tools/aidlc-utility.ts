@@ -311,6 +311,7 @@ import {
   PLAN_FIELD,
   type PlanChanges,
   plannedStages,
+  cursorPastStage,
   planWithChanges,
   composedPlanLabel,
   PLAN_NAME_PATTERN,
@@ -318,6 +319,8 @@ import {
   readAllAuditShards,
   readAuditShardEvents,
   resolveBoltDag,
+  ACCEPT_AS_IS_REVISION_CYCLES,
+  stageRevisionCycles,
   unitGateStatus,
   unitLifecycleSnapshot,
   unitPlainName,
@@ -478,10 +481,12 @@ import {
   projectDiffPlan,
   recordedContributionGaps,
   type StageContribRecord,
+  stripRecordedAdds,
   syncCommand,
   tomlFragmentText,
   withFileLineEndings,
 } from "./aidlc-plugin.ts";
+import { resolveHookPath } from "./aidlc.ts";
 import { executePlan } from "./aidlc-transaction.ts";
 import {
   aidlcDispatcherInvocation,
@@ -838,11 +843,13 @@ export function renderHelpText(): string {
   const mapping = loadScopeMapping();
   const defaultResolution = defaultScopeResolution();
   const effectiveDefaultScope = defaultResolution.error ? "" : defaultResolution.scope;
+  // The stages a scope runs after Initialization, of all the stages after it:
+  // the count its plan offer gives on existing code. Help has no project, so a
+  // new project's Reverse Engineering skip is the offer's to say.
+  const total = loadStageGraph().filter((stage) => stage.phase !== "initialization").length;
   const scopeLines = [...validScopes()].map((name) => {
     const def = mapping[name];
-    const execute = Object.values(def.stages).filter((v) => v === "EXECUTE")
-      .length;
-    const total = Object.keys(def.stages).length;
+    const execute = gridCostSummary(def.stages).shown;
     const depth = def.depth.toLowerCase();
     const ts = def.testStrategy
       ? `, ${def.testStrategy.toLowerCase()} test strategy`
@@ -1107,50 +1114,6 @@ function installedStagesRoot(): string {
   return resolveHarnessPath(["aidlc-common", "stages"], { mutable: true });
 }
 
-// Remove recorded values from a `field:` block. An emptied block collapses to
-// the inline `field: []` form (the shape compose's merge expanded from); a
-// created-by-compose required_sections field is deleted outright.
-function removeListValues(content: string, field: string, values: ReadonlySet<string>, dropEmptyField: boolean): string {
-  const blockRe = new RegExp(`^${field}:\\n((?:  - .+\\n)*)`, "m");
-  const m = content.match(blockRe);
-  if (!m) return content;
-  const entries = [...m[1].matchAll(/^ {2}- (.+)$/gm)].map((x) => x[1]);
-  const removeIndexes = new Set<number>();
-  const remaining = new Set(values);
-  // Compose renders ordinary structural additions unquoted. Prefer that exact
-  // spelling so a legacy sidecar cannot remove an equivalent quoted membership
-  // that predated the plugin.
-  for (let i = 0; i < entries.length; i++) {
-    if (remaining.delete(entries[i].trim())) removeIndexes.add(i);
-  }
-  // required_sections are rendered quoted while their sidecar values are bare.
-  // Remove at most one canonical match for each recorded addition.
-  for (const value of remaining) {
-    const index = entries.findIndex((entry, i) => {
-      if (removeIndexes.has(i)) return false;
-      const bare = entry.trim().replace(/^"(.*)"$/, "$1").replace(/^'(.*)'$/, "$1");
-      return bare === value;
-    });
-    if (index !== -1) removeIndexes.add(index);
-  }
-  const kept = entries.filter((_, i) => !removeIndexes.has(i));
-  const replacement = kept.length > 0
-    ? `${field}:\n${kept.map((v) => `  - ${v}`).join("\n")}\n`
-    : dropEmptyField ? "" : `${field}: []\n`;
-  return content.replace(blockRe, replacement);
-}
-
-function removeConsumesEntries(content: string, artifacts: ReadonlySet<string>): string {
-  const blockRe = /^consumes:\n((?: {2}- artifact:.*\n(?: {4}(?:required|conditional_on):.*\n)*)*)/m;
-  const m = content.match(blockRe);
-  if (!m) return content;
-  const kept = [...m[1].matchAll(/^ {2}- artifact:\s*([\w-]+).*\n(?: {4}(?:required|conditional_on):.*\n)*/gm)]
-    .filter((entry) => !artifacts.has(entry[1]))
-    .map((entry) => entry[0]);
-  const replacement = kept.length > 0 ? `consumes:\n${kept.join("")}` : "consumes: []\n";
-  return content.replace(blockRe, replacement);
-}
-
 // Strip every sentinel-marked prose fragment this plugin spliced. The open
 // and close markers carry the plugin name, so removal needs no sidecar.
 // Anchors may themselves contain colons (after-step:9, in:Sensors), so the
@@ -1200,28 +1163,8 @@ function stripDisabledPluginContributions(
         const before = readFileSync(path, "utf-8");
         // A CRLF checkout strips as the LF text compose wrote, in its own line endings.
         const content = withFileLineEndings(before, (text) => {
-          let content = text;
           const record = manifest[f.replace(/\.md$/, "")];
-          if (record) {
-            if (record.produces?.length) content = removeListValues(content, "produces", new Set(record.produces), false);
-            if (record.sensors?.length) content = removeListValues(content, "sensors", new Set(record.sensors), false);
-            if (record.scopes?.length) content = removeListValues(content, "scopes", new Set(record.scopes), false);
-            if (record.requires_stage?.length) content = removeListValues(content, "requires_stage", new Set(record.requires_stage), false);
-            if (record.consumes?.length) {
-              const artifacts = record.consumes.flatMap((entry) =>
-                typeof entry === "string"
-                  ? [entry]
-                  : entry && typeof entry.artifact === "string"
-                    ? [entry.artifact]
-                    : []
-              );
-              content = removeConsumesEntries(content, new Set(artifacts));
-            }
-            if (record.required_sections?.length) {
-              content = removeListValues(content, "required_sections", new Set(record.required_sections), record.required_sections_created === true);
-            }
-          }
-          return removePluginFragments(content, plugin);
+          return removePluginFragments(record ? stripRecordedAdds(text, record) : text, plugin);
         });
         if (content !== before) {
           writeFileSync(path, content, "utf-8");
@@ -2055,12 +1998,20 @@ To get started:
     }
   } else if (currentCheckbox?.state === "revising") {
     const displayName = currentName;
-    const revisionCount = getField(content, "Revision Count");
-    // If the Revision Count field is missing, omit the count rather than
-    // render a literal "?" — state files authored before the field existed
-    // would otherwise render "revision ? of 3".
-    statusLine = revisionCount
-      ? `Revising ${displayName} (revision ${revisionCount} of 3)`
+    // This stage's own change requests, the count its Accept as-is waits on;
+    // the state file's Revision Count runs across the whole workflow. With no
+    // readable request on record, the count is left out.
+    let revisionCount = 0;
+    try {
+      revisionCount = stageRevisionCycles(
+        readAuditShardEvents(projectDir, flags.intent, flags.space),
+        currentStage,
+      );
+    } catch {
+      // Status remains useful when the ledger is absent or unreadable.
+    }
+    statusLine = revisionCount > 0
+      ? `Revising ${displayName} (revision ${revisionCount} of ${ACCEPT_AS_IS_REVISION_CYCLES})`
       : `Revising ${displayName}`;
   } else if (currentCheckbox?.state === "completed" && status === "Running") {
     // Post-approve window: the stage was approved (→ [x]) but the orchestrator
@@ -4338,6 +4289,19 @@ export async function collectDoctorReport(
       });
     } else {
       for (const h of expectedHooks) {
+        if (compiled) {
+          const packaged = resolveHookPath(h, undefined, projectDir);
+          const runs = packaged !== "" && existsSync(packaged);
+          const name = h.replace(/^aidlc-/, "").replace(/\.ts$/, "");
+          results.push({
+            pass: runs,
+            label: runs
+              ? `${h} present`
+              : `${h} is not in this install's runtime: \`${aidlcInvocation()} engine hook ${name}\` exits 1 without running it`,
+            fix: `\`${aidlcInvocation()} engine hook\` runs only the hooks the installed runtime ships; register a project hook in .claude/settings.json with a command that runs its own file`,
+          });
+          continue;
+        }
         const hookPath = join(projectDir, harness, "hooks", h);
         results.push({
           pass: existsSync(hookPath),
@@ -4776,26 +4740,23 @@ export async function collectDoctorReport(
   const treeVersions = harnessTreeVersionsCheck(projectDir);
   if (treeVersions) results.push(treeVersions);
 
-  // 4a. Project-default scope — real env overrides the recorded project flag.
-  // The framework fallback is not a configured project default.
+  // 4a. Project-default scope: real env overrides the recorded project flag.
+  // The framework fallback is not a configured project default, so with
+  // nothing set there is no row: in a terminal this process cannot see the
+  // value Claude Code passes from .claude/settings.json, and "unset" would be
+  // false there.
   const defaultResolution = defaultScopeResolution();
   const envScope = defaultResolution.scope;
-  if (defaultResolution.source !== "env") {
-    results.push({
-      pass: true,
-      label: "AWS_AIDLC_DEFAULT_SCOPE (unset - no project default)",
-    });
-  } else if (!defaultResolution.error && validScopes().has(envScope)) {
-    results.push({
-      pass: true,
-      label: `AWS_AIDLC_DEFAULT_SCOPE=${envScope} (valid)`,
-    });
-  } else {
-    results.push({
-      pass: false,
-      label: `AWS_AIDLC_DEFAULT_SCOPE=${envScope} (invalid)`,
-      fix: `valid values: ${[...validScopes()].join(", ")}`,
-    });
+  if (defaultResolution.source === "env") {
+    results.push(
+      !defaultResolution.error && validScopes().has(envScope)
+        ? { pass: true, label: `AWS_AIDLC_DEFAULT_SCOPE=${envScope} (valid)` }
+        : {
+          pass: false,
+          label: `AWS_AIDLC_DEFAULT_SCOPE=${envScope} (invalid)`,
+          fix: `valid values: ${[...validScopes()].join(", ")}`,
+        },
+    );
   }
 
   // 4c. Plugin selection — doctor is a full-graph consumer. Runtime consumers
@@ -8676,6 +8637,9 @@ function handleIntentCreateStateBuild(
 
   const totalInScope = executeStages.length;
   const completedInit = graph.filter((s) => s.phase === "initialization").length;
+  // The lines the person reads count the stages the plan runs after
+  // Initialization, from the list the offer and each stage's start count.
+  const shownInScope = plannedStages(stageProgress, scope).length;
 
   const firstPostInitEntry = graph.find((s) => s.slug === firstPostInit);
   const firstPostInitPhase = firstPostInitEntry
@@ -8818,11 +8782,11 @@ ${stageProgress}
     Languages: scan.languages,
     Frameworks: scan.frameworks,
     "Build System": scan.buildSystem,
-    Details: `${totalInScope} stages in scope, routing to ${firstPostInit}`,
+    Details: `${shownInScope} stages in scope, routing to ${firstPostInit}`,
   }, createdDir, createdSpace);
   appendAuditEvent(projectDir, "STAGE_COMPLETED", {
     Stage: "state-init",
-    Details: `State initialized: ${scope} scope, ${totalInScope} stages, routing to ${firstPostInit}`,
+    Details: `State initialized: ${scope} scope, ${shownInScope} stages, routing to ${firstPostInit}`,
   }, createdDir, createdSpace);
 
   // Phase hand-off: initialization → first post-init phase. The state file
@@ -8864,7 +8828,7 @@ ${stageProgress}
       : "";
   process.stdout.write(
     `Intent created: ${createdDir} (space: ${createdSpace})
-State initialized: ${scope} scope, ${totalInScope} stages, ${effectiveDepth} depth
+State initialized: ${scope} scope, ${shownInScope} stages, ${effectiveDepth} depth
 ${composedPlan ? `Plan: ${composedPlanLabel(flags["plan-name"])}, for this piece of work only (no scope file written)\n` : ""}Project type: ${projectType}${declaredType ? " (you said so)" : ""}
 ${declaredType === "Brownfield" && scan.projectType !== "Brownfield" ? `${NO_CODE_FOUND_YET}\n` : ""}Languages: ${scan.languages}
 Frameworks: ${scan.frameworks}
@@ -11731,6 +11695,15 @@ function droppedUnitWorkLine(
   return `${list.charAt(0).toUpperCase()}${list.slice(1)} ${items.length === 1 ? "is" : "are"} no longer part of the plan.`;
 }
 
+// The stages still to run on a record, whatever its plan: from the cursor on,
+// neither finished nor skipped.
+function stagesStillToRun(content: string): StageEntry[] {
+  const boxes = new Map(parseCheckboxes(content).map((c) => [c.slug, c.state]));
+  return loadStageGraph().filter((stage) =>
+    !cursorPastStage(content, stage.slug) &&
+    boxes.get(stage.slug) !== "completed" && boxes.get(stage.slug) !== "skipped");
+}
+
 function handleScopeChange(projectDir: string, flags: Record<string, string>): void {
   const newScope = flags.scope;
   if (!newScope) die("--scope is required for scope-change");
@@ -11824,11 +11797,15 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       const projectType = getField(content, "Project Type") || "Greenfield";
       reopened = stageReopenedByScopeChange(contentBefore, newScope);
 
-      // Compute adjusted mapping (greenfield reverse-engineering adjustment).
-      const adjustedMapping = { ...newScopeDef.stages };
-      if (projectType.toLowerCase() === "greenfield" && adjustedMapping["reverse-engineering"] === "EXECUTE") {
-        adjustedMapping["reverse-engineering"] = "SKIP";
-      }
+      // A scope's own stages on this project: a new project skips Reverse Engineering.
+      const gridFor = (def: { stages: Record<string, string> }): Record<string, string> => {
+        const grid = { ...def.stages };
+        if (projectType.toLowerCase() === "greenfield" && grid["reverse-engineering"] === "EXECUTE") {
+          grid["reverse-engineering"] = "SKIP";
+        }
+        return grid;
+      };
+      const adjustedMapping = gridFor(newScopeDef);
 
       const executeStages: string[] = [];
       const skipStages: string[] = [];
@@ -11953,6 +11930,12 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
       }
 
       const oldScopeDef = scopeMapping[oldScope];
+      // Switching back writes the old scope's own stages, so it is the way back
+      // only when the old plan ran those for every stage still to run: a plan
+      // tailored to the work, or recomposed, ran others.
+      const back = oldScopeDef ? gridFor(oldScopeDef) : null;
+      const switchBackRestores = back !== null && stagesStillToRun(contentBefore).every((stage) =>
+        (back[stage.slug] === "EXECUTE") === (effectivePlanAction(stage.slug, oldScope, contentBefore) === "EXECUTE"));
       const oldExecuteCount = oldScopeDef
         ? graph.filter(s => (oldScopeDef.stages[s.slug] || "SKIP") === "EXECUTE").length
         : 0;
@@ -11996,20 +11979,26 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
         });
       }
       const droppedUnitWork = droppedUnitWorkLine(projectDir, contentBefore, content, intent, space);
-      // The stages after Initialization, the count the person reads everywhere
-      // during a run (the creation line, the progress line).
-      const shownDone = updatedCheckboxes.filter(
-        (c) => c.state === "completed" && executeSlugs.has(c.slug) &&
-          graph.find((s) => s.slug === c.slug)?.phase !== "initialization",
-      ).length;
+      // The stages the work runs on the new plan, from the one list the
+      // progress line and status count, less each stage the new plan adds
+      // behind the cursor: it never runs unless the person goes back to it.
+      // Reverse Engineering owed there stays, since `next` runs it.
+      const boxes = new Map(updatedCheckboxes.map((c) => [c.slug, c.state]));
+      const reOwed = reverseEngineeringOwedBehindCursor(content, recordDir(projectDir, intent, space));
+      const shown = plannedStages(content, newScope).filter((stage) =>
+        !(cursorPastStage(content, stage.slug) && (boxes.get(stage.slug) ?? "pending") === "pending") ||
+        (stage.slug === "reverse-engineering" && reOwed));
+      const shownDone = shown.filter((stage) => boxes.get(stage.slug) === "completed").length;
+      const shownGates = gridCostSummary(Object.fromEntries(shown.map((stage) => [stage.slug, "EXECUTE" as const]))).gates;
       // What happened and how to go back, then each stage it skipped, the Unit
-      // work it dropped, and each setting whose value changed. Nothing else
-      // runs until the person asks: on finished work the stage started above
-      // is what they asked for, and `next` carries on into it.
+      // work it dropped, and each setting whose value changed. Whether the
+      // work goes on in the same turn is `next`'s call (its scope-change
+      // print); on finished work the stage started above is what they asked
+      // for, and `next` carries on into it.
       outputLines = [
-        `Switched to ${newScope} (${SCOPE_GLOSS}): ${summary.shown} stages (${shownDone} done), ` +
-          `${gates} approval gates.` +
-          (isScopeName(oldScope) ? ` You can switch back to ${oldScope} any time.` : ""),
+        `Switched to ${newScope} (${SCOPE_GLOSS}): ${shown.length} stages (${shownDone} done), ` +
+          `${shownGates} approval gates.` +
+          (isScopeName(oldScope) && switchBackRestores ? ` You can switch back to ${oldScope} any time.` : ""),
         ...skippedNow.map(({ slug, was }) =>
           `Skipped ${findStageBySlug(slug)?.name ?? slug} (${was}): ${newScope} does not run it. ` +
             "You can still run it on its own any time."),
@@ -12506,7 +12495,11 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
       stages[stage.slug] =
         action === "EXECUTE" || (greenfieldOnly && stage.slug === "reverse-engineering") ? "EXECUTE" : "SKIP";
     }
-    const running = Object.values(stages).filter((a) => a === "EXECUTE").length;
+    // The saved plan's lines count the stages it runs after Initialization, the
+    // count its plan offer gives on existing code (the plan keeps Reverse
+    // Engineering for the next project); the audit row keeps every stage it runs.
+    const running = gridCostSummary(stages).shown;
+    const executing = Object.values(stages).filter((a) => a === "EXECUTE").length;
 
     const depth = getField(content, "Depth") || scopeDef.depth;
     const testStrategy = getField(content, "Test Strategy");
@@ -12552,7 +12545,7 @@ function handleScopeSave(projectDir: string, flags: Record<string, string>, rawA
         appendAuditEvent(projectDir, "SCOPE_SAVED", {
           Scope: scope,
           "Saved as": name,
-          "Stages in Scope": String(running),
+          "Stages in Scope": String(executing),
         }, flags.intent, flags.space));
     } catch (error) {
       die(`Cannot save the scope: ${errorMessage(error)}`);

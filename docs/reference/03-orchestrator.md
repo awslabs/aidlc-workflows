@@ -458,6 +458,19 @@ no current part and the stored route could not be verified. Issue a fresh
 `next --scope <scope> --stage <stage>`, adding `--single` if it was a single run.
 See [Rule delivery and the continuation cursor](06-hooks-and-tools.md#rule-delivery-and-the-continuation-cursor).
 
+### Code Generation Unit record recovery
+
+When a Unit's files are written and its remaining step is a review or completion
+record, Code Generation keeps a `run-stage` directive naming that Unit and
+carries the exact commands in `unit_record_step` (also its `gate_note`). The
+conductor runs those commands and `next`, without rebuilding the stage body or
+presenting the whole stage's gate. Normal directive publication refreshes stale
+state authority before the Plan Approval hook sees the command. Normal plan
+routing still applies: a changed or unapproved plan gets its repair or approval
+step instead of a completion command. Unit artifacts, fresh review, and the
+completion receipt keep their existing checks. Other stages retain their short
+`print` recovery step; read-only routing probes publish nothing.
+
 ### Lines carried to the next spoken step
 
 Some person-facing lines arrive on a step the agent passes through without
@@ -541,8 +554,9 @@ The 6-step process:
 4. **Apply the topology.** Use blind spokes for subagent supports, ordered links
    for pipeline, and blind support contributions plus the bounded objection
    round for mob. After each pipeline return, mint the current-attempt
-   `PIPELINE_LINK_COMPLETED` receipt before dispatching the next link; resume
-   from `directive.pipeline.completed`, and add `--single` on an isolated run.
+   `PIPELINE_LINK_COMPLETED` receipt with that link's command in
+   `directive.pipeline.record` before dispatching the next link, and resume
+   from `directive.pipeline.completed`.
 5. **Collect durable output.** The lead owns `produces[]`; dispatched
    subagent/mob supports each write an identity-marked contribution file.
 6. **Complete through the engine.** Verify artifacts/evidence and present the
@@ -553,7 +567,7 @@ The 6-step process:
 Some stages involve multiple agents: a lead agent and one or more support agents. The coordination pattern follows `directive.mode` — the stage's communication topology — and is always orchestrator-mediated:
 
 1. Execute the lead agent's work first, producing primary artifacts.
-2. Bring in each support agent per the topology. On an `inline` stage the orchestrator takes on the lead's persona from `directive.lead_persona`, reads every support entry in `directive.inline_context_paths` and adopts those perspectives rather than dispatching them. On `mob`, it takes on the lead's persona, reads the lead's knowledge roster and performs the lead work inline, while each support is a real dispatch. On `subagent` (hub-and-spoke) and `pipeline` (chain), the lead and supports are dispatched: mutually-blind spokes on subagent, ordered enrichment hops on pipeline, and parallel blind contributions plus a bounded objection round on mob (`stage-protocol-ensemble.md`). Every returned pipeline hop is recorded with `aidlc-log.ts link`; multi-repo chains include `--repo`, isolated runs include `--single`, and repo-scoped reuse rows suppress dispatch for reused stores.
+2. Bring in each support agent per the topology. On an `inline` stage the orchestrator takes on the lead's persona from `directive.lead_persona`, reads every support entry in `directive.inline_context_paths` and adopts those perspectives rather than dispatching them. On `mob`, it takes on the lead's persona, reads the lead's knowledge roster and performs the lead work inline, while each support is a real dispatch. On `subagent` (hub-and-spoke) and `pipeline` (chain), the lead and supports are dispatched: mutually-blind spokes on subagent, ordered enrichment hops on pipeline, and parallel blind contributions plus a bounded objection round on mob (`stage-protocol-ensemble.md`). Every returned pipeline hop is recorded with its command in `directive.pipeline.record` (`aidlc-log.ts link`, already carrying the developer's handoff path, `--repo` for multi-repo chains and `--single` for isolated runs), and repo-scoped reuse rows suppress dispatch for reused stores.
 3. Synthesize all agent outputs into the final stage artifacts — dispatched support agents write contribution files (Contribution + Positions, `stage-protocol-collaborators.md`) that the lead integrates; the lead alone edits the `produces[]` artifacts (pipeline links advance them directly); unresolved mob judgment calls surface to the human mid-stage, and maintained dissent is quoted verbatim at the gate.
 4. Agents do NOT invoke each other -- only the orchestrator delegates. Authored core and Claude personas enforce this with `disallowedTools: Task`; harness projections use their native tool policy instead where needed. Kiro omits that unsupported Markdown key and excludes the `subagent` tool from delegate JSON/frontmatter allowlists.
 
@@ -729,9 +743,14 @@ prompt; report `awaiting-approval` then `approved` without `--user-input`, then
 per-Unit iteration still writes its Unit receipt and calls `next`. While
 `plan_approval` is on, Plan Approval remains human-required under every
 completion policy (with it off, as poc and express ship, a ready plan goes on
-and records `PLAN_APPROVAL_SKIPPED`); pre-generation summary
-confirmation applies only when
-`directive.ceremony.summary_confirmation === "on"`.
+and records `PLAN_APPROVAL_SKIPPED`). Code Generation declares no summary
+confirmation: Plan Approval is its confirmation. The emitted
+`directive.ceremony.summary_confirmation` says `on` only when the stage owes
+a summary under the shared gate/logger check, including its stage declaration,
+scope or intent setting and Construction autonomy. Disabling the summary
+confirmation check does not disable the question; the step ignores only that
+enforcement switch. Its ceremony
+note, agent brief and summary protocol module follow that effective value.
 
 **Autonomy offer.** `offer_autonomy: true` offers **Continue automatically** /
 **Review each checkpoint**, mapped by `bolt set-autonomy` to `autonomous` /

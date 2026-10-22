@@ -14,6 +14,8 @@ review_class: advisory
 produces:
   - requirements
   - requirements-analysis-questions
+optional_produces:
+  - traceability
 consumes:
   - artifact: intent-statement
     required: false
@@ -51,7 +53,7 @@ scopes:
   - workshop
   - express
 inputs: RE artifacts (if brownfield), authoritative project description (project-description utility)
-outputs: requirements.md, requirements-analysis-questions.md (under this stage's record dir, engine-resolved)
+outputs: requirements.md, requirements-analysis-questions.md, traceability.json (Step 10: an `ids` list with one entry per FR and NFR ID, spelled exactly as requirements.md spells it, each with `kind` functional or non-functional and, for a sub-requirement, `of` its requirement) (under this stage's record dir, engine-resolved)
 ---
 
 # Requirements Analysis
@@ -238,6 +240,24 @@ Create `<record>/inception/requirements-analysis/requirements.md` containing:
 These IDs are permanent traceability keys. Downstream stages must preserve
 them exactly rather than renumbering or replacing them with prose references.
 
+Record them in `<record>/inception/requirements-analysis/traceability.json`:
+every ID `requirements.md` defines, spelled exactly as it spells them (a
+team's own form stays as it is), with its `kind`, and for a
+sub-requirement the requirement it belongs to in `of`. Later stages trace from
+this list, so an ID left out of it is left out of their tables. The reviewer
+checks the list against `requirements.md`.
+
+```json
+{
+  "stage": "requirements-analysis",
+  "ids": [
+    { "id": "FR1", "kind": "functional" },
+    { "id": "FR1.1", "kind": "functional", "of": "FR1" },
+    { "id": "NFR1", "kind": "non-functional" }
+  ]
+}
+```
+
 Keep review lifecycle content in the separate review file returned by the
 review request. A newly generated `requirements.md` must not contain a
 `## Review` section, a pending-review placeholder, or a reviewer verdict.
@@ -280,7 +300,7 @@ IF User Stories is NOT set to SKIP: use standard 2-option approval (Approve / Re
 
 ## Sensors
 
-This stage's outputs are markdown artefacts under `<record>/inception/requirements-analysis/`.
+This stage's outputs are markdown artefacts under `<record>/inception/requirements-analysis/`, plus its `traceability.json` record of the IDs.
 
 Imports: `required-sections`, `upstream-coverage`.
 

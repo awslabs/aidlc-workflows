@@ -46,7 +46,7 @@ import {
 } from "../harness/test-budget.ts";
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AIDLC_SRC, toPortablePath } from "../harness/fixtures.ts";
@@ -702,4 +702,52 @@ describe("t155 #2721: no rule the instructions do not give, and a plain reason",
       `unit-of-work-dependency.md is missing the \`## Risks\` section its template asks for. ${unitsBlockRepair(parsed.reason, parsed.detail)}`,
     );
   });
+});
+
+// Build and Test's and Performance Validation's results are artifacts whose
+// file is not named after them: both write test-results.md. The dispatcher
+// passes each stage's eligible artifact NAMES, so a team's
+// templates/test-results.md has to be matched through the artifact's file, or
+// the team's own template is never checked.
+describe("t155 a team's test-results.md template is checked at Build and Test and Performance Validation", () => {
+  const GRAPH = JSON.parse(readFileSync(join(AIDLC_SRC, "tools", "data", "stage-graph.json"), "utf-8")) as Array<{
+    slug: string;
+    produces?: string[];
+    optional_produces?: string[];
+  }>;
+  const eligibleFor = (slug: string): string[] => {
+    const node = GRAPH.find((stage) => stage.slug === slug);
+    if (!node) throw new Error(`stage ${slug} is not in the shipped graph`);
+    return templateEligibleArtifacts([...(node.produces ?? []), ...(node.optional_produces ?? [])]);
+  };
+
+  for (const stage of ["build-and-test", "performance-validation"]) {
+    test(`${stage}: a test-results.md missing the template's sections fails and names them`, () => {
+      const ws = makeWorkspace();
+      writeFile(join(ws.templatesDir, "test-results.md"), "# Test Results\n\n## Summary\n\n## Failures\n\n## Coverage\n");
+      const out = join(ws.outDir, "test-results.md");
+      writeFile(out, "# Test Results\n\n## Summary\nAll 12 tests pass.\n");
+      const r = runSensor({ stage, outputPath: out, templatesDir: ws.templatesDir, eligible: eligibleFor(stage) });
+      expect(r.template).toBe("applied");
+      expect(r.config_warning).toBeUndefined();
+      expect(r.pass).toBe(false);
+      expect(r.template_missing).toEqual(["## Failures", "## Coverage"]);
+      expect(r.findings_count).toBe(2);
+      expect(r.message).toBe(
+        "test-results.md is missing 2 sections its template asks for: `## Failures`, `## Coverage`.",
+      );
+      expect(r.status).toBe(0);
+    });
+
+    test(`${stage}: a test-results.md with every template section passes`, () => {
+      const ws = makeWorkspace();
+      writeFile(join(ws.templatesDir, "test-results.md"), "# Test Results\n\n## Summary\n\n## Failures\n");
+      const out = join(ws.outDir, "test-results.md");
+      writeFile(out, "# Test Results\n\n## Summary\nAll pass.\n\n## Failures\nNone.\n");
+      const r = runSensor({ stage, outputPath: out, templatesDir: ws.templatesDir, eligible: eligibleFor(stage) });
+      expect(r.template).toBe("applied");
+      expect(r.pass).toBe(true);
+      expect(r.findings_count).toBe(0);
+    });
+  }
 });

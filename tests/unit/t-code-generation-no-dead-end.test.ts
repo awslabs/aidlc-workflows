@@ -20,7 +20,6 @@
 //
 // The states and the seven shapes live in tests/harness/code-generation-states.ts.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { cleanupTestProject, seededStateFile } from "../harness/fixtures.ts";
@@ -31,6 +30,9 @@ import {
   auditEvents,
   type BuiltState,
   cleanupWorktreeFixtures,
+  copilotAdapter,
+  copilotRuns,
+  copilotStep,
   DEVELOPER,
   latestHumanTurnWords,
   namedCommands,
@@ -52,7 +54,7 @@ import {
   type Verdict,
   writePlan,
 } from "../harness/code-generation-states.ts";
-import { stateDigest, writeActiveDirectiveMarker, writeSessionPidEntry } from "../../dist/copilot/.aidlc/tools/aidlc-lib.ts";
+import { stateDigest, writeActiveDirectiveMarker } from "../../dist/copilot/.aidlc/tools/aidlc-lib.ts";
 
 setDefaultTimeout(600_000);
 
@@ -683,61 +685,6 @@ describe("the person's jump back from the open gate goes through on the first as
   });
 });
 
-// Copilot's adapter around one command, as VS Code runs it: the claim before
-// (the adapter may rewrite the command), the terminal, the settle after.
-const COPILOT_CHAT = "copilot-recovery-jump";
-let copilotCall = 0;
-
-function copilotAdapter(proj: string, target: string, payload: Record<string, unknown>) {
-  if (target === "record-human-turn") writeSessionPidEntry(proj, process.pid, COPILOT_CHAT);
-  const run = spawnSync(process.execPath, [join(proj, ".aidlc", "hooks", "aidlc-copilot-adapter.ts"), target], {
-    cwd: proj, input: JSON.stringify({ cwd: proj, session_id: COPILOT_CHAT, ...payload }), encoding: "utf-8",
-    env: { ...process.env, AIDLC_UNATTENDED: undefined, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined },
-  });
-  return { stdout: run.stdout ?? "", stderr: run.stderr ?? "", code: run.status ?? -1 };
-}
-
-// The terminal a command runs in: Git's bash on Windows, as VS Code users there run it, and /bin/sh elsewhere.
-function terminal(proj: string, command: string) {
-  const sh = process.platform === "win32"
-    ? join(process.env.ProgramFiles ?? "C:\\Program Files", "Git", "bin", "bash.exe")
-    : "/bin/sh";
-  const run = spawnSync(sh, [process.platform === "win32" ? "-lc" : "-c", command], {
-    cwd: proj, encoding: "utf-8",
-    env: { ...process.env, AIDLC_UNATTENDED: undefined, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined },
-  });
-  return { stdout: run.stdout ?? "", stderr: run.stderr ?? "", code: run.status ?? -1 };
-}
-
-/** One command through Copilot's adapter: the guard's refusal, or what the terminal printed after the settle. */
-function copilotRuns(proj: string, command: string): { refused: string | null; stdout: string } {
-  const id = `recovery-jump-${++copilotCall}`;
-  const pre = copilotAdapter(proj, "guard-tool-call", {
-    hook_event_name: "PreToolUse", tool_use_id: id, tool_name: "Bash", tool_input: { command },
-  });
-  const decided = JSON.parse(pre.stdout.trim() || "{}") as {
-    modifiedArgs?: { command?: string };
-    hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string };
-  };
-  if (decided.hookSpecificOutput?.permissionDecision === "deny") {
-    return { refused: decided.hookSpecificOutput.permissionDecisionReason ?? "", stdout: "" };
-  }
-  const rewritten = decided.modifiedArgs?.command ?? command;
-  const ran = terminal(proj, rewritten);
-  expect(ran.code, `${rewritten}\n${ran.stderr}`).toBe(0);
-  copilotAdapter(proj, "post-tool", {
-    hook_event_name: "PostToolUse", tool_use_id: id, tool_name: "Bash", tool_input: { command: rewritten },
-    tool_result: { result_type: "success", text_result_for_llm: `${ran.stdout.trim()}\n<shellId: t completed with exit code 0>` },
-  });
-  return { refused: null, stdout: ran.stdout };
-}
-
-function copilotStep(proj: string, args: string): Step {
-  const ran = copilotRuns(proj, `bun .aidlc/tools/aidlc-orchestrate.ts ${args}`);
-  expect(ran.refused).toBeNull();
-  return JSON.parse(ran.stdout.trim()) as Step;
-}
-
 describe("the person's jump at an open recovery question goes through on the first ask", () => {
   const claude = SHAPES[0];
   const copilot = SHAPES.find((shape) => shape.name === "copilot") as Shape;
@@ -816,9 +763,11 @@ describe("the person's jump at an open recovery question goes through on the fir
     }
   });
 
-  // A Unit reopen the question offers waits for a pick it has no path to; on
-  // Copilot, running `next --stage` first does not carry it past that wait.
-  test("Copilot, through its adapter: a Unit reopen the question offers stays refused after next --stage", () => {
+  // After Copilot's settle the `next --stage` print leaves no sign of the
+  // question it replaced, so this reopen cannot be told from the person's own
+  // redo of a built Unit, which the same print names; and the person asked for
+  // it. It runs.
+  test("Copilot, through its adapter: the Unit reopen the person asked for runs after next --stage", () => {
     const proj = question();
     copilot.install(proj);
     writeActiveDirectiveMarker(proj, {
@@ -835,10 +784,7 @@ describe("the person's jump at an open recovery question goes through on the fir
     expect(said.code, said.stderr).toBe(0);
     copilotStep(proj, "next --stage code-generation");
     const reopen = copilotRuns(proj, "bun .aidlc/tools/aidlc-jump.ts reopen --target code-generation --units api");
-    expect(reopen.refused, "the offered Unit reopen ran on Copilot").not.toBeNull();
-    // `next --stage` lets no reopen through, so the refusal keeps the plain `next`.
-    expect(namedCommands(reopen.refused as string).filter((command) => command.startsWith("bun ") && !/[<>]/.test(command)))
-      .toEqual(["bun .aidlc/tools/aidlc-orchestrate.ts next"]);
+    expect(reopen.refused, "the Unit reopen the person asked for was refused on Copilot").toBeNull();
   });
 
   test("still refused: a jump nobody asked for, whose way past is admitted, and a jump after the person picked Request Changes", async () => {

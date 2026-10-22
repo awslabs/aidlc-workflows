@@ -304,8 +304,40 @@ interface RequestNote {
   dropped: boolean;
 }
 
-/** One line per request: what was asked and how its answer ended, never a header or a body. */
-function logged(request: Request, response: Response, started: number, note: RequestNote, log: (line: string) => void): Response {
+// A healthy stream sends data at least every few seconds: the longest wait for
+// a real event measured on 2026-10-21 was 52 s (a hard puzzle at xhigh
+// reasoning effort), and CI's own requests took 1 to 6 s. Mantle sends a
+// ':' keepalive comment every 15 s while a response is open, the reasoning-
+// summary stall included, so a keepalive is not data. Copilot CLI retries a cut
+// stream 5 times, so a stall that repeats ends its turn in about 12 minutes
+// instead of holding the test file for an hour.
+const UPSTREAM_IDLE_TIMEOUT_MS = 120_000;
+
+/** Whether an SSE chunk carries data: anything but ':' comment lines and blank lines. */
+function sseData(chunk: Uint8Array, line: { start: boolean; comment: boolean }): boolean {
+  let data = false;
+  for (const byte of chunk) {
+    if (byte === 10 || byte === 13) {
+      line.start = true;
+      line.comment = false;
+    } else {
+      if (line.start) line.comment = byte === 58;
+      line.start = false;
+      data ||= !line.comment;
+    }
+  }
+  return data;
+}
+
+/**
+ * Ends a started response whose upstream sends no data for the idle time, and
+ * writes one line per request: what was asked and how its answer ended, never
+ * a header or a body.
+ */
+function watched(
+  request: Request, response: Response, started: number, note: RequestNote,
+  idleTimeoutMs: number, log?: (line: string) => void,
+): Response {
   let path = "-";
   try {
     path = new URL(request.url).pathname.slice(0, 200);
@@ -313,8 +345,8 @@ function logged(request: Request, response: Response, started: number, note: Req
   let bytes = 0;
   let lastByte = Date.now();
   let written = false;
-  const write = (end: "complete" | "incomplete") => {
-    if (written) return;
+  const write = (end: "complete" | "incomplete" | "idle-timeout") => {
+    if (written || !log) return;
     written = true;
     try {
       log(`${new Date(started).toISOString()} ${request.method} ${path} model=${note.model} status=${response.status} ` +
@@ -329,21 +361,37 @@ function logged(request: Request, response: Response, started: number, note: Req
     return response;
   }
   const reader = response.body.getReader();
+  const sse = /^text\/event-stream\b/i.test(response.headers.get("content-type") ?? "");
+  const line = { start: true, comment: false };
+  let lastData = Date.now();
   return new Response(new ReadableStream<Uint8Array>({
     async pull(controller) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const idle = new Promise<"idle">((resolve) => {
+        timer = setTimeout(resolve, lastData + idleTimeoutMs - Date.now(), "idle");
+      });
       try {
-        const { done, value } = await reader.read();
-        if (done) {
+        const result = await Promise.race([reader.read(), idle]);
+        if (result === "idle") {
+          write("idle-timeout");
+          controller.error(new Error("Upstream sent no data for the idle time"));
+          reader.cancel().catch(() => {});
+          return;
+        }
+        if (result.done) {
           write("complete");
           controller.close();
           return;
         }
-        bytes += value.byteLength;
+        bytes += result.value.byteLength;
         lastByte = Date.now();
-        controller.enqueue(value);
+        if (!sse || sseData(result.value, line)) lastData = lastByte;
+        controller.enqueue(result.value);
       } catch (error) {
         write("incomplete");
         controller.error(error);
+      } finally {
+        clearTimeout(timer);
       }
     },
     cancel(reason) {
@@ -356,7 +404,7 @@ function logged(request: Request, response: Response, started: number, note: Req
 /** Keeps credentials private; only explicitly permitted inference requests can be signed. */
 export async function startCredentialBroker(
   credentials: { accessKeyId: string; secretAccessKey: string; sessionToken: string; region: string },
-  options: { upstream?: string; stsUpstream?: string; mantleUpstream?: string; log?: (line: string) => void } = {},
+  options: { upstream?: string; stsUpstream?: string; mantleUpstream?: string; log?: (line: string) => void; idleTimeoutMs?: number } = {},
 ): Promise<{ port: number; account: string; arn: string; stop(): void }> {
   const held = validateCredentials(credentials);
   const upstream = upstreamUrl(options.upstream, "bedrock-runtime", held.region);
@@ -450,8 +498,8 @@ export async function startCredentialBroker(
     async fetch(request) {
       const started = Date.now();
       const note: RequestNote = { model: "-", dropped: false };
-      const response = await forward(request, note);
-      return options.log ? logged(request, response, started, note, options.log) : response;
+      return watched(request, await forward(request, note), started, note,
+        options.idleTimeoutMs ?? UPSTREAM_IDLE_TIMEOUT_MS, options.log);
     },
   });
   return {

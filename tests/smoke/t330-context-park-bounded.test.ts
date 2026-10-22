@@ -26,6 +26,12 @@
 // Design note: the positive pins are substring/regex matches on the load-
 // bearing clause, not the full sentence, so ordinary copy-editing does not
 // fail the guard while a removal of the bound does.
+//
+// Kiro (#2574): Kiro shows the person how full the chat is but gives the agent
+// no figure, so the bound could never be met there. The engine now reads
+// Kiro's own record and offers the person a new chat itself
+// (t-kiro-context-offer), so the two Kiro skills drop the bound and say the
+// conductor never parks for context on its own.
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
@@ -37,6 +43,7 @@ const REPO_ROOT = join(import.meta.dir, "..", "..");
 // HARNESS_MATRIX fails at import time unless it exactly covers every
 // manifest-backed harness, so a newly shipped harness cannot be skipped.
 const HARNESSES = HARNESS_MATRIX.map((harness) => harness.name);
+const ENGINE_OFFERS = new Set(["kiro", "kiro-ide"]);
 
 function skillPath(harness: string): string {
   return join(REPO_ROOT, "harness", harness, "skills", "aidlc", "SKILL.md");
@@ -72,19 +79,28 @@ describe("t330 (smoke) parking for context needs a measured figure, not a feelin
         expect(/cannot measure your own context window/i.test(t)).toBe(true);
       });
 
-      test("binds context-parking to a surfaced numeric threshold", () => {
-        const t = readSkill(harness);
-        // A number must survive: a bound with no figure is not a bound. 80 is
-        // the floor the issue asked for, and it sits above the statusline's own
-        // red line (75), so the two can never contradict.
-        expect(/at or above 80%/i.test(t)).toBe(true);
-        expect(/only when the harness has actually surfaced a usage figure/i.test(t)).toBe(true);
-      });
+      if (ENGINE_OFFERS.has(harness)) {
+        test("leaves the context offer to the engine and never parks for context itself", () => {
+          const t = readSkill(harness);
+          expect(/only when the harness has actually surfaced a usage figure/i.test(t)).toBe(false);
+          expect(/never park for context on your own/i.test(t)).toBe(true);
+          expect(/offers the person once to pause and carry on in a new chat/i.test(t)).toBe(true);
+        });
+      } else {
+        test("binds context-parking to a surfaced numeric threshold", () => {
+          const t = readSkill(harness);
+          // A number must survive: a bound with no figure is not a bound. 80 is
+          // the floor the issue asked for, and it sits above the statusline's own
+          // red line (75), so the two can never contradict.
+          expect(/at or above 80%/i.test(t)).toBe(true);
+          expect(/only when the harness has actually surfaced a usage figure/i.test(t)).toBe(true);
+        });
 
-      test("tells the conductor to keep going when it has no figure", () => {
-        const t = readSkill(harness);
-        expect(/absent such a figure you have no grounds to park/i.test(t)).toBe(true);
-      });
+        test("tells the conductor to keep going when it has no figure", () => {
+          const t = readSkill(harness);
+          expect(/absent such a figure you have no grounds to park/i.test(t)).toBe(true);
+        });
+      }
 
       test("still permits the user-initiated park (the fix removed a trigger, not the feature)", () => {
         const t = readSkill(harness);

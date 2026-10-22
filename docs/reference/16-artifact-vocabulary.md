@@ -133,9 +133,10 @@ same consumed concept is emitted by two stages, pick distinct names that
 disambiguate.
 
 Shared names are valid when no stage consumes them. The shipped `traceability`
-artifact follows this pattern: eight stages each write their own
+artifact follows this pattern: nine stages each write their own
 `traceability.json` under their own record directory, and no downstream stage
-resolves `traceability` through `producersOf()`.
+resolves `traceability` through `producersOf()` (the traceability check reads
+Requirements Analysis' record by its path).
 
 Today's one example: both `build-and-test` (Construction) and
 `performance-validation` (Operation) write a file called `test-results.md`.
@@ -143,8 +144,10 @@ The canonical names are split so the two never collide on the wire:
 
 - `build-test-results` — emitted by `build-and-test`. Pairs with
   sibling names in that stage: `build-instructions`,
-  `integration-test-instructions`, `performance-test-instructions`,
-  `security-test-instructions`, `build-and-test-summary`.
+  `build-and-test-summary`, and the strategy-dependent
+  `integration-test-instructions`, `performance-test-instructions` and
+  `security-test-instructions`, which that stage declares under
+  `optional_produces`.
 - `unit-test-instructions` is produced per-unit by `code-generation` and
   consumed by `build-and-test`.
 - `source-manifest.json` is the engine-required per-unit companion to

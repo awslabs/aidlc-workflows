@@ -12,11 +12,13 @@ the same scopes are explained in user-facing terms.
 
 Core ships 11 named scopes. Each scope defines a stage set, a default depth level, and a default Guard Policy value (strict on `enterprise`; off on the rest; see [Guard Policy](13-customization.md#guard-policy) for what the value does and how to set it). Plugin installs can add more scopes, and an install can narrow which plugin scopes are visible with `aidlc engine plugin select <names>`. When a `plugins` selection disables core (`aidlc` omitted), the core scope files remain installed but are not valid runtime scopes until core is re-enabled; the Initialization stages still run for every enabled scope.
 
+Each scope's stage count below is the stages it runs after Initialization's three setup stages, which every scope runs first: the count `/aidlc --help` gives, and the count its plan offer and each stage's start give on existing code. On a new project the offer leaves out Reverse Engineering, so for a scope that runs it the offer says one fewer.
+
 ### enterprise
 
 **Use when:** Building a regulated enterprise feature that requires full audit trail, compliance review, and production-grade operations.
 
-- **Stages:** All 33
+- **Stages:** All 30
 - **Default depth:** Comprehensive
 - **Includes:** Full compliance, security, and operations stages
 
@@ -24,7 +26,7 @@ Core ships 11 named scopes. Each scope defines a stage set, a default depth leve
 
 **Use when:** Building a new feature of any size with the full 33-stage lifecycle. Select it explicitly with `--scope feature` or `/aidlc-feature`.
 
-- **Stages:** All 33
+- **Stages:** All 30
 - **Default depth:** Standard
 - **Includes:** All stages, standard artifact detail
 
@@ -32,15 +34,15 @@ Core ships 11 named scopes. Each scope defines a stage set, a default depth leve
 
 **Use when:** Building a greenfield minimum viable product. Skips late-stage operations but retains full design and construction.
 
-- **Stages:** 23 of 33
+- **Stages:** 20 of 30
 - **Default depth:** Standard
-- **Skips:** All 7 Operation stages (deployment pipeline, environment provisioning, deployment execution, observability, incident response, performance validation, feedback) plus Market Research, Team Formation, and Approval Handoff from Ideation (10 skipped, 23 executed)
+- **Skips:** All 7 Operation stages (deployment pipeline, environment provisioning, deployment execution, observability, incident response, performance validation, feedback) plus Market Research, Team Formation, and Approval Handoff from Ideation (10 skipped, 20 executed)
 
 ### poc
 
 **Use when:** Proving feasibility quickly. Skips most Ideation and Inception stages, focuses on getting to code fast.
 
-- **Stages:** 8 of 33
+- **Stages:** 5 of 30
 - **Default depth:** Minimal
 - **Skips:** Market Research, Feasibility, Team Formation, Mockups, User Stories, most Operation stages
 - **Plan approval:** Off. Once a code plan is written you see one line naming it, code generation starts, and the line asks whether you want to look at the plan first; you can also ask to see a plan before it is built, or to be asked about every plan
@@ -49,7 +51,7 @@ Core ships 11 named scopes. Each scope defines a stage set, a default depth leve
 
 **Use when:** Fixing a specific bug. Streamlined path from intent capture through code generation and testing.
 
-- **Stages:** 9 of 33
+- **Stages:** 6 of 30
 - **Default depth:** Minimal
 - **Includes:** Deployment Pipeline and Deployment Execution so the verified fix ships
 - **Skips:** Market Research, Feasibility, Team Formation, Mockups, most design and architecture stages, environment provisioning, and broader operational readiness
@@ -59,7 +61,7 @@ Core ships 11 named scopes. Each scope defines a stage set, a default depth leve
 
 **Use when:** Cleaning up or restructuring existing code without changing functionality.
 
-- **Stages:** 10 of 33
+- **Stages:** 7 of 30
 - **Default depth:** Minimal
 - **Includes:** Functional Design plus Deployment Pipeline and Deployment Execution
 - **Skips:** Similar to bugfix — focused on code analysis, design, implementation, and deployment through the existing path
@@ -68,7 +70,7 @@ Core ships 11 named scopes. Each scope defines a stage set, a default depth leve
 
 **Use when:** Making infrastructure changes (new environments, CDK/CloudFormation updates, cost optimization).
 
-- **Stages:** 13 of 33
+- **Stages:** 10 of 30
 - **Default depth:** Standard
 - **Skips:** User-facing stages (stories, mockups, user flows) — focuses on architecture, infrastructure, and deployment
 
@@ -76,7 +78,7 @@ Core ships 11 named scopes. Each scope defines a stage set, a default depth leve
 
 **Use when:** Responding to a CVE or security vulnerability. Fast path through security-relevant stages.
 
-- **Stages:** 10 of 33
+- **Stages:** 7 of 30
 - **Default depth:** Minimal
 - **Skips:** Market Research, Team Formation, Mockups, non-security design stages
 
@@ -84,7 +86,7 @@ Core ships 11 named scopes. Each scope defines a stage set, a default depth leve
 
 **Use when:** You want v1-style ceremony: Inception and Construction, with a human approval at each stage (in Construction, per Unit when the work has Units). Conditional stages adapt to the project at runtime; Operation remains a placeholder. Stage-declared execution modes are unchanged; collaborators are off, so each stage runs with its lead agent only (`/aidlc --collaborators on` brings the support agents in).
 
-- **Stages:** 18 of 33
+- **Stages:** 15 of 30
 - **Default depth:** Standard
 - **Default test strategy:** Standard
 - **Skips:** All Ideation stages (1.1-1.7), CI Pipeline (3.7), and all Operation stages (4.1-4.7)
@@ -142,7 +144,7 @@ Preserve a production Standard test strategy if needed by adding
 **Use when:** Running a facilitated workshop or training lab with the established
 full Inception-through-Operation lifecycle and a lighter teaching test floor.
 
-- **Stages:** 26 of 33
+- **Stages:** 23 of 30
 - **Default depth:** Standard
 - **Default test strategy:** Minimal
 - **Skips:** All Ideation stages (1.1-1.7)
@@ -152,7 +154,7 @@ full Inception-through-Operation lifecycle and a lighter teaching test floor.
 
 **Use when:** You want the lightest path from requirements through code and test to a conditional deploy tail, with no design pass or reviewer dispatch.
 
-- **Stages:** 10 of 33
+- **Stages:** 7 of 30
 - **Default depth:** Minimal
 - **Review cap:** None
 - **Includes:** Initialization, conditional Reverse Engineering, Requirements Analysis, Code Generation, Build and Test, and the conditional Deployment Pipeline, Deployment Execution, and Observability Setup stages

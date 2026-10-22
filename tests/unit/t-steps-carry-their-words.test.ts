@@ -355,7 +355,8 @@ describe("the engine renders every question it asks", () => {
     expect(note).toContain(`run \`${INVOCATION} next\` when it returns none`);
     expect(note).toContain("read what they meant");
     expect(namesAField(note)).toEqual([]);
-    expect(str(notes(ask("unit-paused")).question_note)).toBe(note);
+    // A paused Unit has one choice, Resume: its note says to say the numbered question instead.
+    expect(str(notes(ask("unit-paused")).question_note)).toBe(questionNote(INVOCATION, true));
     // The plan offer's "Use a different plan" needs the plan named: the note says to show the plans the step lists,
     // each with its length, and run the one named; the menu itself stays three choices plus Other.
     const offer = str(notes(ask("scope-confirm")).question_note);
