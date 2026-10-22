@@ -536,11 +536,11 @@ describe("t161 per-intent lock independence", () => {
     (kind) => {
       const projectDir = `${PD}-successor-${kind}`;
       const lockDir = auditLockDir(projectDir);
-      let successor: string | null = null;
+      const successor = { stamp: "" };
       _setAuditLockFaultHooksForTests({
         beforeAcquirerOwnerStamp: () => {
           mkdirSync(lockDir, { recursive: true });
-          if (kind === "stamped") successor = seedLiveOwner(lockDir);
+          if (kind === "stamped") successor.stamp = seedLiveOwner(lockDir);
         },
       });
       try {
@@ -548,7 +548,7 @@ describe("t161 per-intent lock independence", () => {
         if (kind === "empty") {
           expect(readdirSync(lockDir)).toEqual([]);
         } else {
-          expect(readFileSync(join(lockDir, "owner.json"), "utf-8")).toBe(successor);
+          expect(readFileSync(join(lockDir, "owner.json"), "utf-8")).toBe(successor.stamp);
           expect(readdirSync(lockDir)).toHaveLength(2);
         }
         expect(readdirSync(tmpdir()).some((entry) =>
