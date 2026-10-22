@@ -42,7 +42,7 @@ function eligible(tool: LiveTool): Reply[] {
 const sample = (tool: LiveTool) => {
   const picked = sampleByGroup(eligible(tool), process.env.AIDLC_GATE_FUZZ_SAMPLE ?? "1", process.env.AIDLC_GATE_FUZZ_SEED, (reply) => reply.wait);
   const also = (process.env.AIDLC_GATE_FUZZ_ALSO ?? "").split(",").filter(Boolean);
-  return [...picked, ...eligible(tool).filter((reply) => also.includes(reply.id) && !picked.includes(reply))];
+  return [...picked, ...eligible(tool).filter((reply) => also.includes(reply.id) && !picked.some((p) => p.id === reply.id))];
 };
 
 const verdicts: Verdict[] = [];
