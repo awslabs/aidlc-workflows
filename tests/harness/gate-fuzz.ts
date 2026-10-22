@@ -1067,7 +1067,8 @@ function recordFiles(proj: string): Record<string, string> {
         if (name !== "audit") walkDir(path);
       } else if (stat.isFile() && stat.size < 256_000) {
         const text = readFileSync(path, "utf-8");
-        if (!text.includes("\u0000")) files[relative(proj, path)] = text;
+        // Keyed with forward slashes on every platform, so the checks that match a record's path match on Windows too.
+        if (!text.includes("\u0000")) files[relative(proj, path).replace(/\\/g, "/")] = text;
       }
     }
   };
@@ -1435,7 +1436,7 @@ function sourceFiles(): Array<{ file: string; lines: string[] }> {
   for (const dir of dirs) {
     if (!existsSync(dir)) continue;
     for (const name of readdirSync(dir)) {
-      if (name.endsWith(".ts")) sources.push({ file: relative(REPO_ROOT, join(dir, name)), lines: readFileSync(join(dir, name), "utf-8").split("\n") });
+      if (name.endsWith(".ts")) sources.push({ file: relative(REPO_ROOT, join(dir, name)).replace(/\\/g, "/"), lines: readFileSync(join(dir, name), "utf-8").split("\n") });
     }
   }
   return sources;
@@ -1652,7 +1653,7 @@ export function recordView(run: Run): Map<string, string> {
     for (const [k, v] of row.fields) if (!WORD_FIELDS.has(k)) view.set(`row${at}.${k}`, MINTED_FIELD.test(k) ? "<N>" : clean(v));
   });
   view.set("state", clean(run.finalState));
-  for (const [path, text] of Object.entries(run.files)) view.set(`file ${norm(run, path).replace(/\\/g, "/")}`, clean(text));
+  for (const [path, text] of Object.entries(run.files)) view.set(`file ${norm(run, path)}`, clean(text));
   // Messages that land in one second sort by their random ids, so the sources are compared as a set.
   view.set("messages", run.messages.map((m) => `${m.source}${m.cut ? " cut" : ""}`).sort().join(","));
   return view;

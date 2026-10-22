@@ -467,6 +467,12 @@ export async function exchange(tool: LiveTool, rig: LiveRig, lines: string[], le
       session = made.stdout.trim().split("\n").at(-1)?.trim();
     }
     if (tool === "copilot") session = randomUUID();
+    // A turn whose tool process failed before the agent said a word is the rig's, not the agent's: the drive stops there.
+    const died = (rc: number, words: string, out: string): boolean => {
+      if (rc === 0 || words.trim().length > 0) return false;
+      result.error = `${DIED} (${tool} exit ${rc}): ${out.trim().slice(-300)}`;
+      return true;
+    };
     for (const [at, line] of lines.entries()) {
       if (at === 2) between?.();
       if (at > 0) sent(line);
@@ -479,23 +485,29 @@ export async function exchange(tool: LiveTool, rig: LiveRig, lines: string[], le
         } catch {
           text = "";
         }
+        if (died(r.rc, text, r.out)) break;
         result.turns.push({ line, text, tools: r.results.map((t) => ({ command: String(t.input.command ?? ""), output: t.resultText })) });
       } else if (tool === "claude-cli") {
         const r = spawnTool([claudeBinary(), "-p", line, "--output-format", "stream-json", "--verbose", "--permission-mode", "bypassPermissions",
           ...(at === 0 ? ["--session-id", session ?? ""] : ["--resume", session ?? ""])], rig.proj, rig.env);
-        result.turns.push({ line, ...claudeStream(r.stdout) });
+        const turn = claudeStream(r.stdout);
+        if (died(r.rc, turn.text, r.out)) break;
+        result.turns.push({ line, ...turn });
       } else if (tool === "opencode") {
         const { argv, input } = opencodeRunCommand(line, session);
         const r = spawnTool([process.env.AIDLC_OPENCODE_BIN ?? "opencode", ...argv], rig.proj, rig.env, input);
         const parsed = opencodeToolResults(r.stdout);
         session ??= parsed.sessionId;
+        if (died(r.rc, opencodeText(r.stdout), r.out)) break;
         result.turns.push({ line, text: opencodeText(r.stdout), tools: parsed.results.map((t) => ({ command: String(t.input.command ?? JSON.stringify(t.input)), output: t.resultText })) });
       } else if (tool === "cursor") {
         const r = spawnTool([process.env.AIDLC_CURSOR_BIN ?? "agent", "-p", line, "--trust", "--model", process.env.AIDLC_CURSOR_MODEL ?? "auto",
           "--output-format", "text", ...(session ? ["--resume", session] : [])], rig.proj, rig.env);
+        if (died(r.rc, r.stdout, r.out)) break;
         result.turns.push({ line, text: r.out, tools: [] });
       } else {
         const r = copilotTurn(rig.proj, line, { copilotHome: rig.home ?? "", sessionId: session ?? randomUUID(), resume: at > 0, json: true, stdin: true });
+        if (died(r.rc, copilotText(r.out), r.out)) break;
         result.turns.push({ line, text: copilotText(r.out), tools: copilotToolResults(r.out).map((t) => ({ command: String(t.input.command ?? ""), output: t.resultText })) });
       }
     }
@@ -636,6 +648,7 @@ export interface Verdict {
 }
 
 const CARRYING_ON = /AI-DLC is carrying on/;
+const DIED = "the tool's turn failed before the agent said anything";
 /**
  * The agent's words after the person's reply, judged by meaning with what the person had been shown before it, so the
  * next stage's own opening question reads as the work moving on and not as a question back.
@@ -672,6 +685,8 @@ export async function judge(reply: Reply, tool: LiveTool, rig: LiveRig, ex: Exch
   const end = reply.expected.end;
   // The SDK driver refuses a drive whose decisions no turn of the person backs: that is P3.
   if (ex.error) failures.push({ pass: /recorded \d+ decision\(s\) as the person's/.test(ex.error) ? "P3" : "drive", what: ex.error });
+  // A dead turn judges nothing about the reply: the drive line stands alone.
+  if (ex.error?.startsWith(DIED)) return { reply, tool, failures, decisions, refusalsMet: 0, asks: null, read: "" };
   // A reply to a list the agent never showed judges nothing about the reply: the setup line stands alone.
   if (reply.shows && ex.turns.length > reply.inputs.length) {
     const setup = await judgeShown(ex.turns[0].text, reply.shows, judgeDir);
@@ -786,8 +801,10 @@ export function writeReport(dir: string, verdicts: Verdict[], header: string[]):
   return file;
 }
 
-// `--rejudge <report dir> [--words]`: a finished run's answers judged again by meaning (sameAnswer), and with --words,
-// where the run kept its traces, the agent's words judged again (judgeWords), into <dir>/rejudged.
+// `--rejudge <report dir> [--answers] [--words]`: a finished run read again by the rules added since it ran (the plan off
+// the registry, a dead tool turn as a drive miss), into <dir>/rejudged; --answers asks the model again whether a recorded
+// answer is the one meant (sameAnswer, for a run judged before it existed) and --words judges the agent's words again
+// (judgeWords, where the run kept its traces). Without them the rejudge asks no model, so it gives the same numbers each time.
 if (import.meta.main && process.argv.includes("--rejudge")) {
   const dir = process.argv[process.argv.indexOf("--rejudge") + 1];
   const verdicts = JSON.parse(readFileSync(join(dir, "verdicts.json"), "utf-8")) as Verdict[];
@@ -806,12 +823,19 @@ if (import.meta.main && process.argv.includes("--rejudge")) {
     const kept: Verdict["failures"] = [];
     for (const f of v.failures) {
       const want = /^(answer:.*) is not on record \(recorded: /.exec(f.what)?.[1];
-      if (f.pass === "P1" && want && answers.length > 0 && await sameAnswer(want.slice("answer:".length), answers, v.reply.meaning, judgeDir)) continue;
+      if (process.argv.includes("--answers") && f.pass === "P1" && want && answers.length > 0 && await sameAnswer(want.slice("answer:".length), answers, v.reply.meaning, judgeDir)) continue;
       kept.push(f);
     }
     v.failures = kept;
     const trace = join(dir, "traces", v.tool, v.reply.id, "exchange.json");
     const ex = existsSync(trace) ? (JSON.parse(readFileSync(trace, "utf-8")) as { exchange: Exchange | null }).exchange : null;
+    // A run kept before dead turns were drive misses: a turn with no words and no tool call is one (its exit code was not kept).
+    const dead = ex?.turns.find((t) => t.text.trim().length === 0 && t.tools.length === 0);
+    if (dead) {
+      v.failures = [{ pass: "drive", what: `${DIED} (no words and no tool call after ${JSON.stringify(dead.line)}; exit code not kept)` }];
+      v.asks = null;
+      continue;
+    }
     if (ex && ex.turns.length > 0 && process.argv.includes("--words")) {
       const words = await judgeWords(v.reply, ex.turns.at(-2)?.text ?? "", ex.turns.at(-1)?.text ?? "", judgeDir);
       v.failures = v.failures.filter((f) => !(f.pass === "P2" && (/^the agent('s words| said nothing)|^the judge /.test(f.what) || / question\(s\) back to the person/.test(f.what))));
