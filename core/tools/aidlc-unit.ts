@@ -5793,8 +5793,9 @@ function quietFetch(dir: string, args: string[]): GitResult {
 // address into AI-DLC's own refs), so nobody has to fetch to see what the other
 // side sent. Once per chat, at every step that shows or acts on the claims
 // (`now`), and with `sincePerson` again after each message of the person's
-// once the last fetch reached the home. `unreached` is the remote or address
-// that could not be reached: the last fetch stands.
+// once the last fetch reached the home (both stamps are to the second, so a
+// message in the fetch's own second counts as after it). `unreached` is the
+// remote or address that could not be reached: the last fetch stands.
 const CLAIMS_FETCHED_FILE = "claims-fetched.json";
 
 export function refreshHomeClaims(
@@ -5815,7 +5816,7 @@ export function refreshHomeClaims(
   const noted = chats[id8];
   const last = typeof noted === "string" ? { chat: noted, at: "", reached: false } : noted;
   const spoke = options.sincePerson === true && last?.chat === chat && last.reached &&
-    readAuditShardEvents(pd).some((row) => isRequestTurn(row) && row.timestamp > last.at);
+    readAuditShardEvents(pd).some((row) => isRequestTurn(row) && row.timestamp >= last.at);
   if (!options.now && !spoke && last?.chat === chat) return { fetched: false, unreached: null };
   const into = isGitAddress(target) ? `refs/aidlc/home/${id8}/claim/${id8}` : `refs/remotes/${target}/claim/${id8}`;
   const at = isoTimestamp();

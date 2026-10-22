@@ -11,7 +11,7 @@
 import { NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
@@ -40,6 +40,27 @@ setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
 afterEach(cleanupTeamBuild);
 
 const field = (content: string, name: string) => new RegExp(`^- \\*\\*${name}\\*\\*: ?(.*)$`, "m").exec(content)?.[1]?.trim();
+
+// The looks at the work's claims a step ran, from git's own trace.
+const looks = (trace: string): number => existsSync(trace)
+  ? readFileSync(trace, "utf-8").split("\n").filter((line) => line.includes('"event":"start"'))
+    .map((line) => (JSON.parse(line) as { argv: string[] }).argv)
+    .filter((argv) => (argv.includes("ls-remote") || argv.includes("fetch")) && argv.some((arg) => arg.includes("claim/"))).length
+  : 0;
+
+// The second the person's last message was recorded in, `by` seconds on.
+const lastTurn = (dir: string, by = 0): string => {
+  const at = readAuditShardEvents(dir).filter((row) => row.event === "HUMAN_TURN").at(-1)!.timestamp;
+  return new Date(Date.parse(at) + by * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
+};
+
+// The chat's last look at the claims, put in the given second: on a fast
+// machine the person's message lands in the very second of that look.
+const lookedAt = (dir: string, at: string) => {
+  const mark = join(dir, "aidlc", ".aidlc-sessions", "claims-fetched.json");
+  const looked = JSON.parse(readFileSync(mark, "utf-8")) as Record<string, { at: string }>;
+  writeFileSync(mark, JSON.stringify(Object.fromEntries(Object.entries(looked).map(([id, look]) => [id, { ...look, at }]))));
+};
 
 // Solo work on machine A, one Unit at a time, refunds under way there (and,
 // with `refundsDone`, refunds finished and reporting under way), pushed.
@@ -136,11 +157,27 @@ describe("the lead's own chat hears a teammate's take that comes after it looked
     next(home.dir, chat);
     expect(run(UNIT, ["take", "checkout-ui", "--home", HOME_RECORD], cloneOf(home.remote, "bob")).status).toBe(0);
     typed(home.dir);
+    lookedAt(home.dir, lastTurn(home.dir));
     const step = next(home.dir, chat);
-    expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(
-      "Your teammate bob took checkout-ui; this session carries on with the rest, one Unit at a time.",
-    );
+    const notice = "Your teammate bob took checkout-ui; this session carries on with the rest, one Unit at a time.";
+    expect((step.change_notices ?? []) as string[], JSON.stringify(step)).toContain(notice);
     expect(field(stateOf(home.dir), "Unit Ownership")).toBe("team");
+    const after = next(home.dir, chat);
+    expect((after.change_notices ?? []) as string[], JSON.stringify(after)).not.toContain(notice);
+  });
+
+  test("a message in the second of a look is looked for once more, and never after a look in a later second", () => {
+    const home = soloAtA(true);
+    typed(home.dir);
+    next(home.dir, chat);
+    const trace = join(tempDir("trace"), "trace2.json");
+    const traced = { ...chat, GIT_TRACE2_EVENT: trace };
+    lookedAt(home.dir, lastTurn(home.dir));
+    next(home.dir, traced);
+    expect(looks(trace)).toBe(1);
+    lookedAt(home.dir, lastTurn(home.dir, 1));
+    next(home.dir, traced);
+    expect(looks(trace)).toBe(1);
   });
 
   test("before the session starts its next Unit: a Unit a teammate took meanwhile is never started here", () => {
@@ -169,12 +206,6 @@ describe("a solo home looks for a teammate's take only once its Unit walk has be
   afterEach(() => {
     while (servers.length > 0) servers.pop()!();
   });
-  // The looks at the work's claims a step ran, from git's own trace.
-  const looks = (trace: string): number => existsSync(trace)
-    ? readFileSync(trace, "utf-8").split("\n").filter((line) => line.includes('"event":"start"'))
-      .map((line) => (JSON.parse(line) as { argv: string[] }).argv)
-      .filter((argv) => (argv.includes("ls-remote") || argv.includes("fetch")) && argv.some((arg) => arg.includes("claim/"))).length
-    : 0;
   const traced = (): { trace: string; env: NodeJS.ProcessEnv } => {
     const trace = join(tempDir("trace"), "trace2.json");
     return { trace, env: { ...ENV, GIT_TRACE2_EVENT: trace, AIDLC_SESSION_OVERRIDE: "solo-chat" } };
