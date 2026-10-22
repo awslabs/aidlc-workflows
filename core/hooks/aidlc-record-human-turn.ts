@@ -305,7 +305,7 @@ function unansweredPickerProse(picker: PlanApprovalPickerQuestion | undefined): 
   if (!question || options === null || options === undefined || options.length === 0) return null;
   const lines = [
     "The question box closed with no answer, so nothing was answered or recorded. " +
-      "Ask this same question again in your reply as numbered options, not in the question box, " +
+      "Ask the same question again in your reply as numbered options, not in the question box, " +
       "then end the turn; never pick an answer for the person.",
     "",
     question,
@@ -627,16 +627,20 @@ try {
       // `picker_reply` and sets `tool_response` to the selected label (empty on
       // a dismissed box), so the emptiness test reads `picker_reply` first, the
       // same order `pickerReplies` uses; a host that puts the whole picker
-      // result in `tool_response` is still read from there. `picked` keeps
-      // reading `tool_response`/`toolResponse` as before (the Picked field's
-      // source is unchanged); it is empty anyway when the box was dismissed.
+      // result in `tool_response` is still read from there. `picked` and
+      // `severalPicks` keep reading `tool_response`/`toolResponse`: in the raw
+      // Codex box a note the person added is a second answer beside their
+      // pick, which is still one pick.
       const pickerResult = parsed.picker_reply ?? parsed.tool_response ?? parsed.toolResponse;
       pickerUnanswered = emptyPickerResult(pickerResult);
       picked = pickerUnanswered ? [] : pickedLabels(parsed.tool_response ?? parsed.toolResponse);
       pickerQuestion = {
         question: questionText,
         options: extractOptionLabels(parsed.tool_input ?? parsed.toolInput),
-        severalPicks: carriesSeveralPicks(parsed.tool_input ?? parsed.toolInput, pickerResult),
+        severalPicks: carriesSeveralPicks(
+          parsed.tool_input ?? parsed.toolInput,
+          parsed.tool_response ?? parsed.toolResponse,
+        ),
       };
     }
     const supplied = suppliedTurnOrigin(parsed.origin);
