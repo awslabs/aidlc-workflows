@@ -2245,7 +2245,10 @@ aidlc engine bolt checkpoint --action approve --unit "<unit>" --kind <unit|skele
 aidlc engine bolt checkpoint --action reject --unit "<unit>" --kind <unit|skeleton> --user-input 'Request Changes' --reason '<human feedback>'
 ```
 
-The action consumes the response. Re-running `verify` withdraws every open
+When the person answered while another engine question was on screen (where
+their words belong, a new-work offer), their reply is not kept for the checkpoint;
+the refusal names that message, and `--message <id>` on approve or reject records
+it as their reply. The action consumes the response. Re-running `verify` withdraws every open
 checkpoint question and captured checkpoint response for this intent, in any
 session; ask again only after the new verification reports `verified: true`.
 A response to an older proof cannot approve a newer one, even if its fingerprint
@@ -2361,7 +2364,8 @@ aidlc engine bolt swarm-checkpoint --action reject --batch <N> --units "<Units>"
 ```
 
 The action consumes the response; a changed checkpoint needs a new question and
-answer. Re-running `finalize` withdraws every open checkpoint question and captured
+answer. As for a Unit checkpoint, `--message <id>` records a reply the person
+sent while another engine question was on screen. Re-running `finalize` withdraws every open checkpoint question and captured
 response for this intent, in any session; after fresh verification and source
 landing, confirm `ready: true` and ask again. A response captured before `finalize`
 cannot approve the new evidence. Automatic completion omits `--user-input` and
@@ -2413,8 +2417,9 @@ words and the agent records the choice they made with `aidlc engine log answer
 `"Request Changes"`, or `"I'll edit the files"`), adding `--units
 "<unit>,<unit>"` for some of the Units and then recording the rest: "approve
 all" approves every Unit, and a change that names a Unit ("change billing: use
-Stripe") sends just that Unit back with those words and approves the rest. An
-exact "Approve all" is recorded as soon as it is typed. Every Unit still gets its
+Stripe") sends just that Unit back with those words and approves the rest. A
+pick of "Approve all" in a question box is recorded as soon as it is made; a
+typed "Approve all" is the agent's to record like any reply. Every Unit still gets its
 own approval record bound to its own plan. The older recorded-batch commands
 (`aidlc engine log decision|answer --stage code-generation --checkpoint
 plan-approval --batch-file <manifest>`) remain only so a grouped approval

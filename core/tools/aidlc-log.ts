@@ -40,7 +40,6 @@ import {
   ceremonyPolicyValues,
   terminalReviewVerdict,
   isAutonomousConstructionGate,
-  releaseTakenGuardRecoveryReply,
   assertNoSymlinkInChainOrThrow,
   codekbRepoName,
   auditBlockField,
@@ -54,6 +53,7 @@ import {
   mintProtectedQuestion,
   protectedTargetDigest,
   readProtectedResponse,
+  protectedReplyFloor,
   requireProtectedResponse,
   consumeProtectedQuestion,
   withdrawProtectedQuestions,
@@ -224,6 +224,7 @@ import {
   writeWorkspaceSourceSnapshot,
   PLAN_APPROVAL_ASKED_BY_ENGINE,
   planApprovalAskIsOpen,
+  LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
 } from "./aidlc-lib.js";
 import type {
   GuardAttemptState,
@@ -262,6 +263,7 @@ import {
   recordPlanApprovalBatchReceipts,
   recordPlanApprovalOverrideReceipt,
   recordPlanApprovalReceipt,
+  recordPlanApprovalLegacyRecoveryAnswer,
 } from "./aidlc-testing-posture.js";
 import { aidlcDispatcherInvocation, entrySkillInvocation, quoteCommandArgument, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import {
@@ -1768,6 +1770,40 @@ const PARK_FAILED_SAID = {
   edit: "their choice to edit the files is saved",
 } as const;
 
+// The person's yes to the legacy Kiro window's recovery question, read by the
+// agent in any words. The chat is the one this command serves, or with none
+// nameable the one chat that has spoken since the last decision.
+function answerLegacyPlanApprovalRecovery(pd: string, flags: Record<string, string>): void {
+  let session = flags.session?.trim() || null;
+  if (session === null) {
+    try {
+      session = resolveInvokingSessionId(pd);
+    } catch {
+      session = null;
+    }
+  }
+  if (session === null) {
+    const rows = readAuditShardEvents(pd);
+    const chats = chatsSince(rows, pd, latestSpendingTimestamp(rows));
+    if (chats.size === 1 && !chats.has("terminal")) session = [...chats][0];
+  }
+  const next = aidlcDispatcherInvocation("orchestrate next");
+  const result = session === null ? "no-question" : recordPlanApprovalLegacyRecoveryAnswer(pd, session);
+  if (result === "no-question") {
+    error(`No question to bring the code plan back is waiting in this chat. Run \`${next}\` and follow what it returns.`);
+  }
+  if (result === "no-reply") {
+    error(
+      "The person has not replied since they were asked whether to bring the code plan back. Show the question if " +
+        "you have not, end the turn, and record their answer once they reply.",
+    );
+  }
+  console.log(JSON.stringify({
+    recorded: "legacy-plan-approval-recovery",
+    message: `Recorded. Run \`${next}\` now: it brings the code plan question back.`,
+  }));
+}
+
 // The conductor records what the person chose at the engine's Plan Approval
 // question, as it read their reply: approve, request changes, or edit the files
 // themselves, for every Unit asked about or the ones named in --unit/--units.
@@ -1797,15 +1833,7 @@ function answerEnginePlanApproval(
     if (message === null) {
       error("No Code Generation plan is about to be built, so there is no plan step to hold. Show them the plan file.");
     }
-    // One reply answers one question: a request to see the plan is not also
-    // the answer to an open recovery question.
-    const released = releaseTakenGuardRecoveryReply(pd);
-    console.log(JSON.stringify({
-      recorded: "review-request",
-      message: message + (released
-        ? " Their reply was not taken as the answer to the open recovery question, which still waits for one."
-        : ""),
-    }));
+    console.log(JSON.stringify({ recorded: "review-request", message }));
     return;
   }
   const choice = picked.choice === "Request Changes"
@@ -1865,6 +1893,14 @@ function answerEnginePlanApproval(
     return;
   }
   console.log(JSON.stringify({ recorded: choice, message }));
+}
+
+// The person's message the agent names (--message) as the reply to the
+// verification command or a Construction policy question: after the stage started.
+function namedProtectedReply(
+  pd: string, stage: string, message: string | undefined,
+): { message: string; floor: string | null } | undefined {
+  return message === undefined ? undefined : { message, floor: protectedReplyFloor(pd, [stage]) };
 }
 
 function handleAnswer(args: string[]): void {
@@ -1938,8 +1974,10 @@ function handleAnswer(args: string[]): void {
     const message = picked.op !== "request-changes"
       ? `Recorded that the person chose "${picked.action}". Carry it out now.`
       : picked.awaitingWords
-        ? 'Recorded that the person chose Request Changes. Ask "What should change?" and end the turn; their ' +
-          `next reply is what should change. Then ${report}`
+        ? 'Recorded that the person chose Request Changes. Ask "What should change?" and end the turn. When ' +
+          `they reply, record what they said with \`${aidlcDispatcherInvocation("log answer")} --stage ` +
+          `${picked.stage} --checkpoint guard-recovery --details 'Request Changes: <their words>'\`, ` +
+          `then ${report}`
         : `Recorded that the person chose Request Changes. Now ${report}`;
     console.log(JSON.stringify({ recorded: picked.op, message }));
     return;
@@ -1951,6 +1989,10 @@ function handleAnswer(args: string[]): void {
   // plan before it is built: the conductor records the choice the person made.
   // A break-glass override keeps its own path below: the engine does not ask
   // when the workspace source cannot be bound, which is when the override exists.
+  if (planCheckpoint && offeredChoiceLabel(flags.details, [LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE]) !== null) {
+    answerLegacyPlanApprovalRecovery(resolveActiveProjectDir(projectDir), flags);
+    return;
+  }
   if (planCheckpoint && flags.override === undefined && flags["override-file"] === undefined) {
     const pd = resolveActiveProjectDir(projectDir);
     if (planApprovalAskIsOpen(pd) || offeredChoiceLabel(flags.details, [PLAN_REVIEW_CHOICE]) !== null ||
@@ -2176,7 +2218,7 @@ function handleAnswer(args: string[]): void {
         kind: "verification-command",
         targetDigest: protectedTargetDigest({ commandSha256: verificationCommand.sha256 }),
         choice: flags.details,
-      });
+      }, namedProtectedReply(pd, flags.stage, flags.message));
       Object.assign(fields, protectedPersonsWords(pd, fields.Session));
       const emitted = flags.details === "Approve" ? "VERIFICATION_COMMAND_RECORDED" : "QUESTION_ANSWERED";
       if (flags.details === "Approve") emitAudit(pd, "VERIFICATION_COMMAND_RECORDED", fields);
@@ -2194,7 +2236,7 @@ function handleAnswer(args: string[]): void {
         kind: "construction-policy",
         targetDigest: protectedTargetDigest({ field: fields.Field, value: fields.Value }),
         choice: flags.details,
-      });
+      }, namedProtectedReply(pd, flags.stage, flags.message));
       Object.assign(fields, protectedPersonsWords(pd, fields.Session));
       const emitted = flags.details === "Approve" ? "CONSTRUCTION_POLICY_RECORDED" : "QUESTION_ANSWERED";
       // Append first: a failed append leaves the human's one-shot answer retryable.

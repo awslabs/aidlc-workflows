@@ -3785,14 +3785,30 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
   }
 
   /** The engine asks about the plan, and the person approves it in chat. */
+  // The agent's record of the plan answer it read from the person's reply.
+  function recordPlanAnswer(dir: string, choice = "Approve Plan"): void {
+    const recordedByAgent = spawnSync(process.execPath, [
+      join(dir, ".aidlc", "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+      "--details", choice, "--project-dir", dir,
+    ], {
+      cwd: dir,
+      encoding: "utf-8",
+      env: { ...process.env, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(recordedByAgent.status, `${recordedByAgent.stdout}${recordedByAgent.stderr}`).toBe(0);
+  }
+
   function approvePlan(dir: string, session: string, recorded: () => unknown[]): void {
     const ask = runLifecycle(dir, session, "direct", ["next"], `${session}-ask`);
     expect(ask.directive).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
-    // An exact pick: the hook records it, with no step for the conductor.
+    // A typed "1": the hook keeps it, and the agent records the choice it read.
     const approved = runAdapter(dir, "record-human-turn", {
       ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "1",
     });
     expect(approved.code, approved.stderr).toBe(0);
+    expect(recorded()).toHaveLength(0);
+    recordPlanAnswer(dir);
     expect(recorded()).toHaveLength(1);
   }
 
@@ -3945,6 +3961,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       ...FIXTURES.userPromptSubmit, cwd: dir, session_id: session, prompt: "1",
     });
     expect(approved.code, approved.stderr).toBe(0);
+    recordPlanAnswer(dir);
     expect(recorded()).toHaveLength(1);
     expect(answer()).toBe("[Answer]: A. Approve Plan");
     const build = runLifecycle(dir, session, "direct", ["next"], "compact-before-reply-build");

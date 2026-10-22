@@ -7,11 +7,14 @@
 // started). The hook records presence and order;
 // it does not authenticate who launched the dispatcher.
 //
-// Presence remains the gate signal; the prompt payload also answers the single
-// active protected challenge (plan, verification command, policy, or checkpoint).
-// The hook records the person's message whole and applies nothing: a setting
-// typed as a flag is the agent's to read and the setter's to apply, once the
-// agent runs the command `next` names.
+// Presence remains the gate signal; the reply is also kept as the reply to the
+// engine's open question (the code plan, a verification command, a policy, a
+// checkpoint, guard recovery), with no choice read from its words: the agent
+// reads it and records the choice through the question's own command. Only a
+// pick in a question box, the host's own structure, is recorded as a choice
+// here, and a legacy Kiro IDE window's nonce label, its one way to pick. The hook records the person's message whole, as typed, and applies
+// nothing: a setting typed as a flag is the agent's to read and the setter's to
+// apply, once the agent runs the command `next` names.
 // appendAuditEntryUnlocked uses the workflow selection enterHookWorkflow pins
 // for this chat. No workflow state means nothing to gate, so the hook skips
 // ledger writes (same self-gate as aidlc-session-start.ts) - otherwise every
@@ -72,13 +75,10 @@ import {
   getField,
   hookStandsOutside,
   hostEnvelopeTurnText,
-  clearPlanApprovalChallenge,
   planApprovalChallengeRelativePath,
-  protectedQuestionRelativePath,
-  withdrawProtectedQuestions,
   COMMAND_TURN_REPLY,
+  OPEN_QUESTION_FIELD,
   consumeSharedDirectiveAsk,
-  forgetGateWords,
   hookContextLine,
   hooksHealthDir,
   hostTemplateOrigin,
@@ -110,11 +110,7 @@ import {
   recordPlanApprovalHumanResponse,
   recordProtectedHumanResponse,
 } from "../tools/aidlc-testing-posture.ts";
-import {
-  engineQuestionHoldsReplies,
-  notePlanApprovalAskReply,
-  notePlanApprovalFileAnswer,
-} from "../tools/aidlc-plan-approval-ask.ts";
+import { notePlanApprovalAskReply, openEngineQuestion } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcEntryWords, isAidlcCommandPrompt } from "../tools/aidlc-reply-reader.ts";
 import { MESSAGE_PICKER_MAX_CHARS, MESSAGE_TEXT_MAX_CHARS, saveMessage, type StoredMessage } from "../tools/aidlc-message-store.ts";
 
@@ -586,16 +582,19 @@ try {
     const prompt = ownTurn(parsed.prompt);
     const userPrompt = ownTurn(parsed.user_prompt);
     const message = ownTurn(parsed.message);
-    for (const candidate of [
-      prompt,
-      userPrompt,
-      message,
-      parsed.tool_response,
-      parsed.toolResponse,
-    ]) {
-      const extracted = extractResponseText(candidate);
-      if (extracted) {
-        humanResponseText = extracted;
+    // What the person typed is kept as they typed it, whatever it looks like;
+    // only a question box's payload (the host's own structure) is unwrapped.
+    for (const typed of [prompt, userPrompt, message]) {
+      const text = typeof typed === "string" ? typed.trim() : extractResponseText(typed);
+      if (text) {
+        humanResponseText = text;
+        break;
+      }
+    }
+    for (const payload of humanResponseText ? [] : [parsed.tool_response, parsed.toolResponse]) {
+      const text = extractResponseText(payload);
+      if (text) {
+        humanResponseText = text;
         break;
       }
     }
@@ -823,12 +822,12 @@ try {
         ? typedParse.words
         : null;
       const replyText = entryReply ?? humanResponseText;
-      // Another engine question on top (where the work belongs, which plan)
-      // takes this reply: it answers no question beneath it, so no
-      // checkpoint, verification command, gate, or legacy plan question keeps
-      // it, and decisions on those skip it as they skip a command.
-      const answersEngineQuestion = replyText !== "" && engineQuestionHoldsReplies(projectDir);
-      let keptWordsOffset: number | null = null;
+      // Another engine question on top (where the work belongs, a new-work
+      // offer, which record) was on screen when this came: the row names it,
+      // and no question beneath keeps the message unless the agent names it
+      // for one with --message. Structure only: which question it answers is
+      // the agent's to read.
+      const openQuestion = replyText !== "" && !notAReply ? openEngineQuestion(projectDir) : null;
       try {
         withAuditLock(projectDir, () => {
           // A turn that is only a command to AIDLC is no reply to an open
@@ -839,46 +838,40 @@ try {
             ...(sessionId ? { Session: sessionId } : {}),
             Origin: "person",
             ...(promptSubmitted ? { Source: "typed" } : pickerQuestion !== undefined ? { Source: "picker" } : {}),
-            ...(notAReply || answersEngineQuestion ? { Reply: COMMAND_TURN_REPLY } : {}),
+            ...(notAReply ? { Reply: COMMAND_TURN_REPLY } : {}),
+            ...(openQuestion !== null ? { [OPEN_QUESTION_FIELD]: openQuestion } : {}),
             ...(picked.length > 0 ? { Picked: JSON.stringify(picked) } : {}),
             ...(messageId ? { "Message Id": messageId } : {}),
           }, projectDir);
           // Keep what the person typed in this chat (recordGateWords in
           // aidlc-lib.ts). A command to AIDLC instructs the framework; of a
           // picker reply, free text typed into it counts. Never blocks the turn.
-          const typedWords = answersEngineQuestion ? "" : typedPrompt
+          const typedWords = openQuestion !== null ? "" : typedPrompt
             ? (notAReply ? "" : entryReply ?? typedPrompt)
             : pickerFreeText(humanResponseText, pickerQuestion);
           if (sessionId && typedWords) {
             try {
-              keptWordsOffset = recordGateWords(projectDir, sessionId, typedWords);
+              recordGateWords(projectDir, sessionId, typedWords);
             } catch {
               // The words are a convenience; the turn and its HUMAN_TURN stand.
             }
           }
-          // An open question keeps that the person replied to it and their
-          // exact words. The conductor reads them and records the choice the
-          // person made; nothing here reads meaning into them. The engine's own
-          // Plan Approval question takes the reply from whichever chat it
-          // arrives in.
-          const engineQuestionOwnsReply = replyText !== "" && !notAReply &&
+          // Each open question keeps that the person replied to it and their
+          // exact words: the engine's own Plan Approval question (from whichever
+          // chat the reply arrives in), this chat's question that needs their
+          // own reply (a checkpoint, the verification command), or with none
+          // here the one another chat asked, and the older plan question; a
+          // message sent while another engine question was on screen only the
+          // code plan's own record keeps. Nothing here pairs the reply with one
+          // of them or reads meaning into it: the conductor reads it and records
+          // the choice on the question it answers.
+          if (replyText !== "" && !notAReply) {
             notePlanApprovalAskReply(projectDir, sessionId, replyText, pickerQuestion);
-          if (!engineQuestionOwnsReply && sessionId && replyText && !answersEngineQuestion) {
+          }
+          if (sessionId && replyText && !notAReply && openQuestion === null) {
             const plan = existsSync(join(projectDir, planApprovalChallengeRelativePath(projectDir, sessionId)));
-            const protectedQuestion = existsSync(join(projectDir, protectedQuestionRelativePath(projectDir, sessionId)));
-            if (plan && protectedQuestion) {
-              clearPlanApprovalChallenge(projectDir, sessionId);
-              withdrawProtectedQuestions(projectDir, sessionId);
-            } else if (protectedQuestion) {
-              if (!notAReply) recordProtectedHumanResponse(projectDir, sessionId, replyText, questionText, pickerQuestion);
-            } else if (!notAReply) {
-              // With no question of its own here, a question another chat asked
-              // that needs the person's own reply (a checkpoint, the verification
-              // command) takes this one: the person may answer it in any chat.
-              if (plan || !recordProtectedHumanResponse(projectDir, sessionId, replyText, questionText, pickerQuestion).recorded) {
-                recordPlanApprovalHumanResponse(projectDir, sessionId, replyText, pickerQuestion);
-              }
-            }
+            const kept = recordProtectedHumanResponse(projectDir, sessionId, replyText, questionText, pickerQuestion).recorded;
+            if (plan || !kept) recordPlanApprovalHumanResponse(projectDir, sessionId, replyText, pickerQuestion);
           }
           // What the question box carried back goes on the record, question
           // by question, so the person's reply stands even when no answer is
@@ -900,34 +893,10 @@ try {
         // Authority bookkeeping remains fail-open for the human's turn.
       }
       try {
-        // The questions file invites the person to answer on its `[Answer]:`
-        // line and say done. Their turn and their words are on record now, so
-        // an exact choice they wrote there is recorded the way an exact pick
-        // typed in chat is, and anything else they wrote is named for the
-        // agent to read. Never blocks the turn.
-        // Another engine question on screen owns the reply, and the plan
-        // question's own record is bound to its own marker, so this reads the
-        // file only while the plan question is the open step.
-        if (!notAReply && !answersEngineQuestion && replyText) {
-          const fileAnswer = notePlanApprovalFileAnswer(projectDir, sessionId, replyText);
-          if (fileAnswer !== null) notes.push(fileAnswer);
-        }
-      } catch {
-        // Their words stay on the line; the agent reads them.
-      }
-      try {
-        // A reply the engine's guard-recovery ask took as its answer is that
-        // ask's, not revision feedback for a stage gate.
-        const offset = keptWordsOffset;
-        // A command, or several picks, is no one remedy.
-        const recoveryReply = notAReply || pickerQuestion?.severalPicks ? "" : replyText;
-        if (consumeSharedDirectiveAsk(projectDir, recoveryReply) && offset !== null) {
-          try {
-            withAuditLock(projectDir, () => forgetGateWords(projectDir, sessionId, offset));
-          } catch {
-            // The words are a convenience; the turn stands.
-          }
-        }
+        // The engine's guard-recovery ask keeps that the person replied; a
+        // pick in a question box that offered its remedies is the host's own
+        // structure. A command is no reply.
+        if (!notAReply) consumeSharedDirectiveAsk(projectDir, replyText, pickerQuestion);
       } catch {
         // Non-authority marker consumption is independently best-effort.
       }

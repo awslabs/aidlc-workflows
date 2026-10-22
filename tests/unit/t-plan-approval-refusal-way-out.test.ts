@@ -469,8 +469,9 @@ describe("the person answered the plan question another way, and the agent write
     const proj = project("off");
     writePlan(proj);
     expect(next(proj)).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
-    // "I'll edit the files" is the question's own choice: the hook records it as typed.
+    // The person says they will edit the files; the agent records that choice.
     say(proj, "I'll edit the files");
+    expect(answer(proj, "I'll edit the files")).toContain("Recorded");
     const write = said(guard(proj, "Write", { file_path: join(stageDir(proj, null), "code-generation-plan.md"), content: "x\n" }));
     expect(write).toContain("The person is editing the plan files themselves: leave those files to them.");
     expect(write).not.toContain("Show them the question from the last");

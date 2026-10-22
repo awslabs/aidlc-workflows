@@ -144,7 +144,6 @@ import {
   type ScopeCommandRow,
   type StageValidityAdvisory,
   bodyRuns,
-  numberedOptionLine,
   numberedProseQuestion,
   REPO_PLACEHOLDER,
   showsGateAgain,
@@ -295,6 +294,7 @@ import {
   workToPickUp,
   readProjectDescriptionAuthority,
   LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
+  MESSAGE_SPENDING_EVENTS,
   loadScopeMetadata,
   maximalAttemptEvents,
   resolveReviewClass,
@@ -561,7 +561,6 @@ import {
   publishPlanApprovalAsk,
   publishPlanApprovalSkip,
   routeCodeGenerationPlanApproval,
-  saidDone,
   settleBuiltPlanReviews,
   withBuiltPlanReviews,
 } from "./aidlc-plan-approval-ask.ts";
@@ -1974,8 +1973,7 @@ function legacyPlanApprovalRecoveryDirective(): AskDirective {
     ask_type: "legacy-plan-approval-recovery",
     response_route: "next",
     recovery_choice: LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
-    question:
-      "This legacy Kiro window must recover the current Code Generation Plan Approval capability before it can be reissued. Choose exactly: Recover Plan Approval",
+    question: "Before I build, I need you to confirm the code plan again in this window. Shall I bring it back?",
   };
 }
 
@@ -3147,7 +3145,7 @@ function fillStoredSettings(flags: ParsedFlags, question: StoredQuestion): boole
  * The plan question the person was asked and has not answered: the latest copy
  * this engine kept, when it is one of its own front questions and nothing was
  * started from it. A question whose answer created work is answered, and a
- * routing question is read back by its own options.
+ * routing question has its own step (openRoutingQuestion).
  */
 function openFrontQuestion(
   projectDir: string,
@@ -3354,20 +3352,14 @@ function selectCommands(
   }));
 }
 
-// `commands` replaces each record's select command with the one a chosen
-// route runs for it (a routing question's reshape), keyed the same way.
-function intentPickAskDirective(
-  question: string,
-  availableIntents: string[],
-  commands: Array<{ selector: string; command: string }> = selectCommands(availableIntents),
-): AskDirective {
+function intentPickAskDirective(question: string, availableIntents: string[]): AskDirective {
   return {
     kind: "ask",
     ask_type: "intent-pick",
     response_route: "next",
     question,
     available_intents: availableIntents,
-    select_commands: commands,
+    select_commands: selectCommands(availableIntents),
   };
 }
 
@@ -3402,8 +3394,8 @@ function unitPausedAskDirective(
 }
 
 // The new-work routing ask's own options about an active workflow, in its
-// numbered order. The numbered rendering and routingOptionReply share them, so
-// a reply that echoes the ask's own wording is always read as that answer.
+// numbered order. The numbered rendering and the step that hands a reply to the
+// agent (routingQuestionReplyDirective) share them.
 type NewWorkRoute = "continue" | "separate" | "reshape";
 type RoutingOption = { readonly route: NewWorkRoute; readonly label: string; readonly detail: (scope: string) => string };
 const NEW_WORK_ROUTING_OPTIONS: readonly RoutingOption[] = [
@@ -3456,119 +3448,6 @@ const EXISTING_WORK_ROUTING_OPTIONS: readonly RoutingOption[] = [
     detail: (_scope: string) => "Select one of the above, then reshape its remaining plan",
   },
 ];
-
-function newWorkRoutingOptionLine(
-  index: number,
-  scope: string,
-  options: readonly RoutingOption[] = NEW_WORK_ROUTING_OPTIONS,
-): string {
-  const option = options[index];
-  return numberedOptionLine(index, option.label, option.detail(scope));
-}
-
-// A reply that is only one of the routing ask's options: its number (`1`,
-// `1.`, `(1)`), its label, or its numbered line as rendered. Anything more is
-// the person's own words, never cut down to an option. `numeric` marks a bare
-// number, which could also answer some other numbered question.
-function routingOptionReply(
-  text: string,
-  scope: string,
-  options: readonly RoutingOption[] = NEW_WORK_ROUTING_OPTIONS,
-): { route: NewWorkRoute; numeric: boolean } | null {
-  const normalize = (value: string): string =>
-    value.replace(/\*/g, "").replace(/\s+/g, " ").trim().toLowerCase().replace(/[.!]$/, "");
-  const reply = normalize(text);
-  const numbered = reply.match(/^\(?([1-3])\)?[.):]?(?:\s+(.*))?$/);
-  if (numbered && numbered[2] === undefined) {
-    return { route: options[Number(numbered[1]) - 1].route, numeric: true };
-  }
-  const index = options.findIndex((option, i) => {
-    const label = normalize(option.label);
-    const line = normalize(newWorkRoutingOptionLine(i, scope, options));
-    return numbered ? Number(numbered[1]) - 1 === i && (normalize(numbered[2]) === label || reply === line) : reply === label;
-  });
-  return index === -1 ? null : { route: options[index].route, numeric: false };
-}
-
-// The routing question a reply that only names one of its options answers: the
-// question stored most recently. Separate new work acts on none of the work it
-// listed, so it answers whatever happened to that work. Asked about an active
-// workflow, continue and reshape run the question's own late answer, which acts
-// only while that workflow (same folder and uuid) is the one selected, however
-// far it has moved on, and asks again otherwise. Asked while none was selected,
-// they get the records it listed that are still there with the same identity,
-// none selected (`records`). A bare number also needs nothing asked after it:
-// no question logged since, and no turn of the person's besides this reply.
-// Anything else is the person's own words, asked about as usual.
-function routingQuestionAnswer(
-  projectDir: string,
-  text: string,
-): { question: StoredQuestion; route: NewWorkRoute; records: UnselectedRecords | null } | null {
-  try {
-    const question = latestQuestion(projectDir);
-    const askedAbout = question?.askedAbout;
-    // A digest marks a question asked with options to answer; the words an open
-    // stage question hands on are stored without one.
-    if (question?.origin !== "routing" || question.stateSha256 === undefined || !askedAbout) return null;
-    const pick = askedAbout.pick === true;
-    const option = routingOptionReply(
-      text,
-      question.proposedScope,
-      pick ? EXISTING_WORK_ROUTING_OPTIONS : routingAskedAboutScope(question) ? SCOPE_CHANGE_ROUTING_OPTIONS : NEW_WORK_ROUTING_OPTIONS,
-    );
-    if (!option) return null;
-    // Once the request it stopped has started work, the question is spent:
-    // the person's words are their own again. Asked with work selected or
-    // none, the same.
-    if (question.approvedRequest && intentStartedByQuestion(projectDir, question.approvedRequest)) return null;
-    let records: UnselectedRecords | null = null;
-    if (pick) {
-      const now = option.route === "separate" ? null : unselectedRecords(projectDir, ({ intent, selector }) =>
-        askedAbout.targets.some((target) => target.intent === selector && target.uuid === (intent.uuid ?? "")));
-      records = now !== null && now.space === askedAbout.space && now.selectable.length > 0 ? now : null;
-    }
-    if (option.numeric) {
-      const asked = Date.parse(question.createdAt);
-      const since = readAuditShardEvents(projectDir).filter((row) => Date.parse(row.timestamp) > asked);
-      if (
-        since.some((row) => row.event === "DECISION_RECORDED") ||
-        since.filter((row) => row.event === "HUMAN_TURN").length > 1
-      ) {
-        return null;
-      }
-    }
-    return { question, route: option.route, records };
-  } catch {
-    return null;
-  }
-}
-
-// "Part of existing work" or "Reshape existing work" said back while the
-// question listed more than one record: the person chose the option, not yet
-// which work. Ask only that, as the typed record picker: each listed record
-// still there a choice, and its command the one the question would have run
-// for it. Record names stay data in the
-// choices and in the question's list, never in an instruction.
-function pickedRouteRecordAsk(
-  question: StoredQuestion,
-  route: "continue" | "reshape",
-  records: UnselectedRecords,
-): AskDirective {
-  const existingWork = (question.settings?.existingWork ?? []).map((token) => ` ${token}`).join("");
-  const selectors = records.selectable.map(({ selector }) => selector);
-  if (route === "continue") {
-    return intentPickAskDirective(
-      `Which piece of work is this part of: ${records.list}?`,
-      selectors,
-      routingSelectCommands(question.id, selectors, existingWork),
-    );
-  }
-  return intentPickAskDirective(
-    `Which piece of work should I reshape: ${records.list}?`,
-    selectors,
-    selectors.map((selector) => ({ selector, command: routingReshapeCommand(question.id, selector, existingWork) })),
-  );
-}
 
 // The stage `next` directs for the solo unit-major walk's stop at Current
 // Stage: a Unit's work or summary at its own stage, a Unit's checkpoint at the
@@ -3674,9 +3553,9 @@ function openQuestionAnswer(stage: string, block: string): string {
         batch && units ? ` --batch ${shellArg(batch)} --units ${shellArg(units)}` : ""]
       : [null, ""];
   // A question that needs the person's own reply names the choices it
-  // offered, numbered as the human-turn hook reads a number typed for them
-  // (protectedQuestionPick), so "/aidlc 2" reads in a chat that never saw it
-  // asked. A row from before rows named their options offered both.
+  // offered, numbered as they were offered, so the agent in a chat that never
+  // saw it asked can read "/aidlc 2" against them. A row from before rows named
+  // their options offered both.
   const options = questionOptions(block);
   const offered = options.length === 0 ? APPROVAL_GATE_CHOICES : protectedChoices(options);
   const numbered = offered === null ? ""
@@ -3774,6 +3653,8 @@ function openPlanQuestionReplyDirective(
   settings: string[] = [],
   // A setting read from their words: the setter names those words.
   needsWords = false,
+  // Every plan has its answer and nothing is built yet: their words may change it.
+  answered = false,
 ): PrintDirective {
   const orchestrate = aidlcToolInvocation("orchestrate");
   // Settings typed on the same line ("/aidlc --guard-policy off approve the
@@ -3786,11 +3667,18 @@ function openPlanQuestionReplyDirective(
       `${needsWords ? `${PERSON_WORDS_FILL},` : ""} first and print its output ` +
       "verbatim; if the words are new work, the settings ride with them."
     : "";
+  const record = `\`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval ` +
+    '--details "<their choice>"`';
   const answer = editing
     ? `The person is editing the code plan files themselves. If their reply says they are done, run bare \`${orchestrate} next\`.${typed}`
-    : "The code plan question is open, and the person's reply may answer it. Read it. If it does, record the choice " +
-      `they made with \`${aidlcToolInvocation("log")} answer --stage code-generation --checkpoint plan-approval ` +
-      `--details "<their choice>"\`, then run bare \`${orchestrate} next\`.${typed}`;
+    : answered
+    ? "The person answered the code plan question earlier, and nothing is built yet. Read their reply. If it " +
+      `changes that answer, record the choice they make now with ${record} ("Review the plan" brings the question ` +
+      `back before anything is built), then run bare \`${orchestrate} next\`; if it only confirms it, run bare ` +
+      `\`${orchestrate} next\`.${typed}`
+    : "The code plan question is open, and the person's reply may answer it. Read it, with the `[Answer]:` line of " +
+      `the plan's questions file when they say they answered there. If it does, record the choice they made with ` +
+      `${record}, then run bare \`${orchestrate} next\`.${typed}`;
   return printDirective(
     `${undo}${answer} If it asks to skip Code Generation, run \`${orchestrate} next --skip code-generation\` and ` +
       "follow what it returns. If it is about something else, such as new work or a change to the plan, run " +
@@ -4007,10 +3895,124 @@ function routingSelectCommands(
   }));
 }
 
+// The routing question's answers, each with its command: what the ask carries
+// when it opens, and what the step that hands a reply to the agent names
+// (routingQuestionReplyDirective), built from the question's stored copy.
+function routingAnswerCommands(
+  questionId: string,
+  proposedScope: string,
+  carried: RoutingCarried,
+  availableIntents?: string[],
+): {
+  route: Record<NewWorkRoute, string | undefined>;
+  newIntent: string;
+  compose: string;
+  continue: string;
+  select: Array<{ selector: string; command: string }>;
+  reshape: Array<{ selector: string; command: string }>;
+} {
+  const tool = aidlcToolInvocation("orchestrate");
+  // With no plan proposed, the separate-work answer reaches the plan proposal
+  // step, which asks the plan next.
+  const newIntentCommand =
+    `${tool} next --new-intent${proposedScope ? ` --scope ${scopeArg(proposedScope)}` : ""} --request ${questionId}${carried.newWork}${carried.planChanges}`;
+  // Beside active work this reshapes it; with records to pick it composes
+  // the new work, like a plan offer's compose answer.
+  const composeCommand =
+    `${tool} next compose --request ${questionId}${availableIntents ? carried.creation : carried.existingWork}`;
+  const continueCommand = `${tool} next --continue --request ${questionId}${carried.existingWork}` +
+    (carried.continueScope ? ` --scope ${scopeArg(carried.continueScope)}` : "");
+  // With records to pick, the continue and reshape answers act on the piece the
+  // person names, so with several listed those two carry none (the agent asks
+  // which); with one listed that piece is meant, and its own command rides the
+  // answer (the person is never asked which of one).
+  const select = availableIntents ? routingSelectCommands(questionId, availableIntents, carried.existingWork) : [];
+  const reshape = (availableIntents ?? []).map((selector) => ({
+    selector,
+    command: routingReshapeCommand(questionId, selector, carried.existingWork),
+  }));
+  const sole = availableIntents?.length === 1;
+  return {
+    route: {
+      continue: availableIntents ? (sole ? select[0]?.command : undefined) : continueCommand,
+      separate: newIntentCommand,
+      reshape: availableIntents ? (sole ? reshape[0]?.command : undefined) : composeCommand,
+    },
+    newIntent: newIntentCommand,
+    compose: composeCommand,
+    continue: continueCommand,
+    select,
+    reshape,
+  };
+}
+
+// The options a stored routing question was asked with, in its numbered order.
+function routingQuestionOptions(question: StoredQuestion): readonly RoutingOption[] {
+  if (question.askedAbout?.pick === true) return EXISTING_WORK_ROUTING_OPTIONS;
+  return routingAskedAboutScope(question) ? SCOPE_CHANGE_ROUTING_OPTIONS : NEW_WORK_ROUTING_OPTIONS;
+}
+
+// The routing question the person was asked and has not answered: the latest
+// question this engine kept, asked with options (its digest marks that), with
+// nothing started from it, and no other question put to them or decision
+// recorded since. It answers however far the work it named has moved on (its
+// commands act on that work or ask again). Words handed to `next` while it is
+// open may be its answer, which only the agent can tell.
+function openRoutingQuestion(projectDir: string): StoredQuestion | null {
+  try {
+    const question = latestQuestion(projectDir);
+    if (question?.origin !== "routing" || question.stateSha256 === undefined || !question.askedAbout) return null;
+    if (intentStartedByQuestion(projectDir, question.id) !== null) return null;
+    if (question.approvedRequest && intentStartedByQuestion(projectDir, question.approvedRequest)) return null;
+    const asked = Date.parse(question.createdAt);
+    const movedOn = readAuditShardEvents(projectDir).some((row) =>
+      (row.event === "DECISION_RECORDED" || row.event === "STAGE_AWAITING_APPROVAL" ||
+        MESSAGE_SPENDING_EVENTS.has(row.event)) && Date.parse(row.timestamp) > asked);
+    return movedOn ? null : question;
+  } catch {
+    return null;
+  }
+}
+
+// Words handed to `next` while the routing question is open: the agent has the
+// person's chat and reads whether they answer it. The step names each of the
+// question's answers with its own command, as the question gave them, so the
+// agent runs the one the person chose; nothing runs from the words themselves.
+// Null when the settings the question kept no longer parse: the words are then
+// asked about as usual.
+function routingQuestionReplyDirective(question: StoredQuestion, words: string): PrintDirective | null {
+  let carried = carriedFromQuestion(question, parseNextFlags([]));
+  if (carried !== null && routingAskedAboutScope(question)) {
+    const existing = parseNextFlags(question.settings?.existingWork ?? []);
+    carried = existing.parseError ? null : { ...carried, continueScope: existing.scope };
+  }
+  if (carried === null) return null;
+  const tool = `${aidlcToolInvocation("orchestrate")} next`;
+  const pick = question.askedAbout?.pick === true;
+  const commands = routingAnswerCommands(
+    question.id,
+    question.proposedScope,
+    carried,
+    pick ? question.askedAbout?.targets.map(({ intent }) => intent) : undefined,
+  );
+  const answers = routingQuestionOptions(question).map((option) => {
+    const command = commands.route[option.route];
+    if (command !== undefined) return `"${option.label}": \`${command}\``;
+    const each = option.route === "continue" ? commands.select : commands.reshape;
+    return `"${option.label}": the command for the work they named, one of ${each.map(({ command: c }) => `\`${c}\``).join(", ")}`;
+  });
+  return printDirective(
+    "The person has not answered the question about where their words belong, so `next` cannot tell their reply " +
+    "from a new request and took nothing from the line. If their words answer that question, run the command for " +
+    `their choice: ${answers.join("; ")}. If they are asking for something else, run ` +
+    `\`${tool} -- ${quoteCommandArgument(words)}\`, which keeps every word of theirs. ` +
+    "If you cannot tell, ask them once in plain words.",
+  );
+}
+
 function newWorkRoutingAskDirective(
   question: string,
-  // The prose rendering: its prompt, and the options in the order a numbered
-  // reply is read against (routingOptionReply reads the same list).
+  // The prose rendering: its prompt, and the options in their numbered order.
   routing: { prompt: string; options: readonly RoutingOption[] },
   description: string,
   proposedScope: string,
@@ -4036,30 +4038,7 @@ function newWorkRoutingAskDirective(
     routingSettings(carried), approvedRequest,
   );
   const tool = aidlcToolInvocation("orchestrate");
-  // With no plan proposed, the separate-work answer reaches the plan proposal
-  // step, which asks the plan next.
-  const newIntentCommand =
-    `${tool} next --new-intent${proposedScope ? ` --scope ${scopeArg(proposedScope)}` : ""} --request ${stored.id}${carried.newWork}${carried.planChanges}`;
-  // Beside active work this reshapes it; with records to pick it composes
-  // the new work, like a plan offer's compose answer.
-  const composeCommand =
-    `${tool} next compose --request ${stored.id}${availableIntents ? carried.creation : carried.existingWork}`;
-  const continueCommand = `${tool} next --continue --request ${stored.id}${carried.existingWork}` +
-    (carried.continueScope ? ` --scope ${scopeArg(carried.continueScope)}` : "");
-  // Each choice's command, in the rendering's order. With records to pick, the
-  // continue and reshape answers act on the piece the person names, so with
-  // several listed those two carry none (the agent asks which); with one listed
-  // that piece is meant, and its own command rides the choice (the person is
-  // never asked which of one).
-  const selectCommands = availableIntents ? routingSelectCommands(stored.id, availableIntents, carried.existingWork) : [];
-  const sole = availableIntents?.length === 1 ? availableIntents[0] : null;
-  const routeCommand: Record<NewWorkRoute, string | undefined> = {
-    continue: availableIntents ? (sole === null ? undefined : selectCommands[0]?.command) : continueCommand,
-    separate: newIntentCommand,
-    reshape: availableIntents
-      ? (sole === null ? undefined : routingReshapeCommand(stored.id, sole, carried.existingWork))
-      : composeCommand,
-  };
+  const commands = routingAnswerCommands(stored.id, proposedScope, carried, availableIntents);
   const options = routing.options.map((option) => ({ label: option.label, detail: option.detail(proposedScope) }));
   return {
     kind: "ask",
@@ -4067,29 +4046,23 @@ function newWorkRoutingAskDirective(
     response_route: "next",
     question,
     numbered_prose_question: numberedProseQuestion(routing.prompt, options),
+    // Each choice's command, in the rendering's order.
     choices: options.map((option, index) => {
-      const command = routeCommand[routing.options[index].route];
+      const command = commands.route[routing.options[index].route];
       return command === undefined ? option : { ...option, command };
     }),
     new_work_description: authoritativeRequest(description),
     proposed_scope: proposedScope,
-    new_intent_command: newIntentCommand,
+    new_intent_command: commands.newIntent,
     scope_commands: scopeCommands(`${tool} next --new-intent`, stored.id, carried.newWork, projectDir).map((entry) =>
       entry.scope === proposedScope ? { ...entry, command: `${entry.command}${carried.planChanges}` } : entry),
-    compose_command: composeCommand,
+    compose_command: commands.compose,
     // With a record to pick, the human continues it through its select command
     // and reshapes it through its reshape command; otherwise the question named
     // the active workflow.
     ...(availableIntents
-      ? {
-        available_intents: availableIntents,
-        select_commands: selectCommands,
-        reshape_commands: availableIntents.map((selector) => ({
-          selector,
-          command: routingReshapeCommand(stored.id, selector, carried.existingWork),
-        })),
-      }
-      : { continue_command: continueCommand }),
+      ? { available_intents: availableIntents, select_commands: commands.select, reshape_commands: commands.reshape }
+      : { continue_command: commands.continue }),
   };
 }
 
@@ -8905,7 +8878,7 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   }
 
   if (flags.untakenFlag !== undefined) {
-    const open = openPlanApprovalQuestion(resolveProjectDir(projectDir), "");
+    const open = openPlanApprovalQuestion(resolveProjectDir(projectDir));
     const next = `${aidlcToolInvocation("orchestrate")} next`;
     const named = flags.untakenFlagValue === undefined
       ? `\`${flags.untakenFlag}\``
@@ -8950,27 +8923,27 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     if (engagesWorkflow && !isReadOnlyEngineProbe()) pruneExpiredQuestions(questionDir);
   };
 
-  // A reply given back as prose that only names one of the open routing
-  // question's options is that option's own command, run exactly as the ask
-  // supplied it: the person already answered, so asking again would only
-  // repeat the question. Its continue and reshape still act only on the work
-  // the question named, and ask again otherwise.
-  const onlyProse = flags.intent !== undefined &&
-    Object.entries(flags).every(([key, value]) =>
-      key === "intent" || key === "markedWords" || value === undefined || value === false);
-  const routingAnswer = onlyProse ? routingQuestionAnswer(questionDir, flags.intent!) : null;
   // A reply typed while one of this engine's own questions is still open is
   // that question's reply, never a new request: before this, "yes" after the
   // plan offer became work named "yes" and the same offer came back, a loop the
   // person could sit in, and their word was spent as a name. Only the agent has
   // their chat and can tell a reply from a new request, so both readings go to
-  // it and nothing is created first. A question whose answer already started
-  // work is not open, and a routing question answers itself above.
-  // Words behind the delimiter are already marked as the person's own request,
-  // which is the agent's answer to this very print: it must not come back.
-  const openFront = routingAnswer === null && onlyProse && flags.markedWords !== true
-    ? openFrontQuestion(questionDir)
-    : null;
+  // it and nothing is created or run first: a "2" at the routing question is
+  // the agent's to read against what it showed, never an option `next` picks.
+  // A question whose answer already started work is not open. Words behind the
+  // delimiter are already marked as the person's own request, which is the
+  // agent's answer to this very print: it must not come back.
+  const onlyProse = flags.intent !== undefined &&
+    Object.entries(flags).every(([key, value]) =>
+      key === "intent" || key === "markedWords" || value === undefined || value === false);
+  const unmarkedProse = onlyProse && flags.markedWords !== true;
+  const openRouting = unmarkedProse ? openRoutingQuestion(questionDir) : null;
+  const routingStep = openRouting === null ? null : routingQuestionReplyDirective(openRouting, flags.intent ?? "");
+  if (routingStep !== null) {
+    emit(routingStep);
+    return;
+  }
+  const openFront = unmarkedProse ? openFrontQuestion(questionDir) : null;
   if (openFront !== null) {
     const tool = `${aidlcToolInvocation("orchestrate")} next`;
     const open = openFront.question;
@@ -8994,52 +8967,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     ));
     return;
   }
-  // Asked while no work was selected, continue and reshape act on a record the
-  // person picks from the ones the question listed that are still there: with
-  // one listed, that is the one; with more, only which one is left to ask.
-  // With none of them left, or work selected since, they run the question's
-  // own late answer below (`--continue` / `compose --request`), which acts on
-  // the listed work selected now or asks again, keeping the request.
-  const pickedRecords = routingAnswer?.route === "separate" ? null : routingAnswer?.records ?? null;
-  if (
-    routingAnswer && pickedRecords &&
-    (routingAnswer.question.askedAbout?.targets.length ?? 0) > 1
-  ) {
-    emit(pickedRouteRecordAsk(routingAnswer.question, routingAnswer.route as "continue" | "reshape", pickedRecords));
-    return;
-  }
-  // Settings typed with the request ride a continue answer to the record it
-  // picks; with none, it is that record's plain select command.
-  const typedForExistingWork = (routingAnswer?.question.settings?.existingWork.length ?? 0) > 0;
-  if (routingAnswer && pickedRecords && routingAnswer.route === "continue" && !typedForExistingWork) {
-    // Its select command, exactly as the question supplied it.
-    flags.intent = undefined;
-    const picked = parseNextFlags(["--pick", pickedRecords.selectable[0].selector]);
-    flags.workspaceCommand = picked.workspaceCommand;
-    flags.carryOn = picked.carryOn;
-  } else if (routingAnswer) {
-    flags.intent = undefined;
-    flags.request = routingAnswer.question.id;
-    if (routingAnswer.route === "continue") {
-      flags.continue = true;
-      if (pickedRecords) flags.record = pickedRecords.selectable[0].selector;
-    } else if (routingAnswer.route === "reshape") {
-      flags.compose = true;
-      if (pickedRecords) flags.record = pickedRecords.selectable[0].selector;
-    } else {
-      flags.newIntent = true;
-      flags.scope = routingAnswer.question.proposedScope;
-    }
-    // The settings typed with the request ride this answer as they ride the
-    // option's command: the question it names fills them in below.
-  }
   // A bare --resume with one piece of work here and none selected (a
   // teammate's clone): that piece is what they asked to pick up, so it is
   // picked up the way the pick question's answer picks it, not asked about.
   // Anything typed with it (a stage to jump to, a setting) keeps its own
   // route; two pieces, words on the line, or a record that cannot be selected
   // here keep the question.
-  if (args.length === 1 && args[0] === "--resume" && !routingAnswer && !flags.workspaceCommand && !flags.intent?.trim()) {
+  if (args.length === 1 && args[0] === "--resume" && !flags.workspaceCommand && !flags.intent?.trim()) {
     const records = unselectedRecords(resolveProjectDir(projectDir));
     const only = records !== null && records.presentCount === 1 && records.selectable.length === 1 ? records.selectable[0] : null;
     if (only !== null) {
@@ -9126,11 +9060,10 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       emit(started);
       return;
     }
-    // An answer that arrived without its option's command (a reply naming the
-    // option, or the plain `next --request` an open stage question hands on)
-    // gets the stored settings; the ask's own commands already carry theirs.
-    const bare = routingAnswer !== null ||
-      (!flags.newIntent && !flags.continue && !flags.compose && flags.record === undefined);
+    // An answer that arrived without its option's command (the plain `next
+    // --request` an open stage question hands on) gets the stored settings; the
+    // ask's own commands already carry theirs.
+    const bare = !flags.newIntent && !flags.continue && !flags.compose && flags.record === undefined;
     if (bare && !fillStoredSettings(flags, found)) {
       emit(errorDirective(QUESTION_UNAVAILABLE));
       return;
@@ -10607,9 +10540,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // Prose while the current stage has a question the person has not answered
   // may be its answer, so the conductor reads which it is (see
   // openQuestionReplyDirective). Raw prose only: a stored request asked about
-  // again keeps its route here, and a reply that only names one of the routing
-  // question's options already became that option's command (see
-  // routingQuestionAnswer).
+  // again keeps its route here, and words at an open routing question went to
+  // the agent's step above (routingQuestionReplyDirective).
   const routingTargets = () => [{ intent: selection.intent ?? "", uuid: intentUuidForSelection(pd, selection) ?? "" }];
   if (
     flags.intent && !flags.scope && !flags.positionalScope && !flags.resume && question === undefined &&
@@ -10621,45 +10553,19 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     const undo = approvedPlanUndoReading(pd, stateContent);
     // The engine's own code plan question takes the reply from any chat, so
     // words beside it ("approve the code plan", typed in a new chat) are read
-    // as its answer first, never asked about as new work.
-    const planQuestion = openPlanApprovalQuestion(pd, flags.intent);
+    // as its answer first, never asked about as new work. Once it is answered
+    // and nothing is built yet, their words may change that answer.
+    const planQuestion = openPlanApprovalQuestion(pd);
     if (planQuestion !== null) {
-      // A later pick against the one on record: their latest word stands.
-      if (planQuestion.answered && planQuestion.isChoice && planQuestion.overrules !== null) {
-        const log = aidlcToolInvocation("log");
-        emit(printDirective(planQuestion.picked === "edit"
-          ? "The person answered the code plan question earlier and now says they will edit the files, and nothing " +
-            `is built yet. Run \`${log} answer --stage code-generation --checkpoint plan-approval --details ` +
-            `"I'll edit the files"\`, tell them where the files are, and wait for them to say done.`
-          : planQuestion.overrules === "request-changes"
-          ? "The person asked for changes to the code plan earlier and now approves it. Run " +
-            `\`${log} answer --stage code-generation --checkpoint plan-approval --details 'Approve Plan'\`, then bare ` +
-            `\`${aidlcToolInvocation("orchestrate")} next\`: it builds the plan.`
-          : "The person approved the code plan earlier and now picks another choice, and nothing is built yet. Run " +
-            `\`${log} answer --stage code-generation --checkpoint plan-approval --details 'Review the plan'\`, then bare ` +
-            `\`${aidlcToolInvocation("orchestrate")} next\`: the plan question comes back before anything is built. ` +
-            "Ask what they want changed when they did not say."));
-        return;
-      }
-      // Exactly one of its choices, already recorded from their reply; or they
-      // answered on the questions file's own `[Answer]:` line and said done,
-      // which is recorded the same way.
-      if (planQuestion.answered && (planQuestion.isChoice || saidDone(args.join(" ")))) {
-        emit(printDirective(
-          "The person's reply answered the code plan question, and it is recorded. Run bare " +
-            `\`${aidlcToolInvocation("orchestrate")} next\`: it carries out their choice.`,
-        ));
-        return;
-      }
-      if (!planQuestion.answered) {
-        const words = saveQuestion(
-          pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
-          undefined, routingSettings(carriedRoutingFlags(flags)),
-        );
-        const settings = typedSettingModifiers(flags);
-        emit(openPlanQuestionReplyDirective(planQuestion.editing, words.id, undo, settings, settingNeedsTheirWords(pd, settings)));
-        return;
-      }
+      const words = saveQuestion(
+        pd, flags.intent, "", "routing", { space: selection.space, targets: routingTargets() }, false, undefined,
+        undefined, routingSettings(carriedRoutingFlags(flags)),
+      );
+      const settings = typedSettingModifiers(flags);
+      emit(openPlanQuestionReplyDirective(
+        planQuestion.editing, words.id, undo, settings, settingNeedsTheirWords(pd, settings), planQuestion.answered,
+      ));
+      return;
     }
     const open = openStageQuestion(pd, stateContent);
     if (open !== null) {
@@ -17645,7 +17551,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // While the engine's Plan Approval question is the open one, the gate is
     // not what the person is answering: the way on is that question's answer
     // command, whether or not they have replied to it yet.
-    const plan = openPlanApprovalQuestion(pd, "");
+    const plan = openPlanApprovalQuestion(pd);
     emit(plan !== null && !plan.editing
       ? printDirective(
         `${refused}, and the open question is the Plan Approval question, not the gate for "${slug}". ${planApprovalAnswerStep()}`,

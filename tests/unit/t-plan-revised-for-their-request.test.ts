@@ -158,6 +158,20 @@ function reply(proj: string, prompt: string): void {
   expect(result.status, result.stderr).toBe(0);
 }
 
+// The agent's record of the choice it read from the person's reply.
+function agentRecords(proj: string, choice: string): void {
+  const result = spawnSync(BUN, [
+    join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+    "--details", choice, "--project-dir", proj,
+  ], {
+    cwd: proj,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0" },
+    encoding: "utf-8",
+    timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+}
+
 /** The person's own Request Changes at the gate: the row `report --result rejected` writes. */
 function rejectedAtGate(proj: string, feedback: string, unit: string | null = null): void {
   appendAuditEntry("GATE_REJECTED", {
@@ -259,6 +273,7 @@ function approved(proj: string, unit: string | null = null): void {
   expect(ask.kind, JSON.stringify(ask)).toBe("ask");
   expect(ask.ask_type).toBe("plan-approval");
   reply(proj, "1");
+  agentRecords(proj, "Approve Plan");
   expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
   expect(next(proj).plan_approval).toEqual({ status: "approved" });
 }

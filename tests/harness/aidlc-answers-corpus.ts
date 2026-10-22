@@ -41,7 +41,7 @@ export interface EngineExpectation {
   recorded: string;
   /** The typed text that must be kept verbatim (null for a non-answer, which keeps nothing as a reply). */
   words: string | null;
-  /** `recorded`: an exact pick on record; `reading-step`: the question's own print carrying the words (an /aidlc
+  /** `recorded`: a box pick on record; `reading-step`: the question's own print carrying the words (an /aidlc
    * line); `none`: plain chat, nothing to run; `command`: the ask's own command. */
   step: "recorded" | "reading-step" | "none" | "command";
   no_ask: boolean;
@@ -628,12 +628,12 @@ export function recorded(proj: string, item: AnswersItem): Recorded {
     }
     case "code-plan":
     case "code-plan-grouped": {
-      const open = openPlanApprovalQuestion(proj, item.input);
+      const open = openPlanApprovalQuestion(proj);
       if (open === null) return { choice: "unknown", words: turn };
       if (open.editing) return { choice: "I'll edit the files", words: turn };
       if (!open.answered) return { choice: "none", words: turn };
       const approve = item.question === "code-plan-grouped" ? "Approve all" : "Approve Plan";
-      return { choice: open.picked === "approve" ? approve : open.picked === "request-changes" ? "Request Changes" : open.picked === "edit" ? "I'll edit the files" : "answered", words: turn };
+      return { choice: open.recorded === "approve" ? approve : open.recorded === "request-changes" ? "Request Changes" : open.recorded === "edit" ? "I'll edit the files" : "answered", words: turn };
     }
     case "unit-checkpoint":
     case "batch-checkpoint":

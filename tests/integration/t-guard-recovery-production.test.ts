@@ -72,7 +72,7 @@ type Run = { code: number; stdout: string; stderr: string };
 type Json = Record<string, unknown>;
 type ToolInput = Record<string, unknown>;
 type GuardResult = Run & { guard: string };
-type Remedy = { op: string; action: string; executableNow: boolean };
+type Remedy = { op: string; label?: string; action: string; executableNow: boolean };
 type PendingReview = {
   iteration: number;
   draft: string;
@@ -744,7 +744,9 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     const change = remedies.find((remedy) => remedy.op === "request-changes");
     expect(change).toBeDefined();
     expect(change?.executableNow).toBe(true);
-    p.pick(ask.question as string, remedies.map((remedy) => remedy.action), change!.action);
+    // The question box shows each remedy as the ask labels it.
+    const shown = (remedy: Remedy): string => remedy.label ?? remedy.action;
+    p.pick(ask.question as string, remedies.map(shown), shown(change!));
     expect(p.marker().guard_recovery_response).toMatchObject({
       status: "awaiting-feedback", selected_op: "request-changes",
     });
@@ -756,12 +758,16 @@ describe("production guards: summary, terminal review, and recovery compose", ()
     ]);
     expect(premature.kind, JSON.stringify(premature)).toBe("print");
     expect(String(premature.message)).toContain(`The question for "${STAGE}" is still open.`);
-    expect(String(premature.message)).toContain("not revision feedback");
+    expect(String(premature.message)).toContain("is not on the recovery record yet");
     expect(p.state()).toBe(beforeRejection);
     expect(p.events("GATE_REJECTED", STAGE)).toHaveLength(0);
 
     const feedback = "Keep saved searches private by default; add an explicit team sharing action.";
     p.humanPrompt(feedback);
+    // The agent records what they said should change.
+    succeeded(p.tool("log", [
+      "answer", "--stage", STAGE, "--checkpoint", "guard-recovery", "--details", `Request Changes: ${feedback}`,
+    ]), "Record the Request Changes the person gave");
     expect(p.marker().guard_recovery_response).toMatchObject({
       status: "ready", selected_op: "request-changes",
     });

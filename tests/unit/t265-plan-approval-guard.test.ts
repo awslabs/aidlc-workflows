@@ -41,7 +41,6 @@ import {
   mutationBlockReason,
   promptStageMarkers,
   promptUnitMarkers,
-  questionsFileApproved,
   questionsFileHasPendingPlanApproval,
   normalizeStageName,
   type UnitEvidence,
@@ -332,64 +331,6 @@ describe("t265a plan-approval decision table", () => {
         "AIDLC-STAGE: Code Generation\nAIDLC-STAGE: code-generation\nmention AIDLC-STAGE: other",
       ),
     ).toEqual(["code-generation"]);
-  });
-
-  test("only an explicit answer on the Plan Approval question authorizes generation", () => {
-    expect(questionsFileApproved("## Plan Approval\n[Answer]:\n")).toBe(false);
-    expect(questionsFileApproved("## Plan Approval\n[Answer]: ___\n")).toBe(false);
-    expect(questionsFileApproved("## Plan Approval\n[Answer]: A. Approve Plan\n")).toBe(true);
-    expect(questionsFileApproved("## Q1: Plan Approval\n[Answer]: A. Approve Plan\n")).toBe(true);
-    expect(
-      questionsFileApproved("## Question 1 - Plan Approval\n[Answer]: A. Approve Plan\n"),
-    ).toBe(true);
-    expect(
-      questionsFileApproved(
-        "## Q1\n\nPlan Approval\n\nA. Approve Plan\nB. Request Changes\n[Answer]: A. Approve Plan\n",
-      ),
-    ).toBe(true);
-    expect(
-      questionsFileApproved("## Question 1\n\n**Plan Approval**\n[Answer]: A. Approve Plan\n"),
-    ).toBe(true);
-    expect(
-      questionsFileApproved("## Q1\n\nPlan Approval\n[Answer]: B. Request Changes\n"),
-    ).toBe(false);
-    expect(questionsFileApproved("## Plan Approval\n[Answer]: B. Request Changes\n")).toBe(false);
-    expect(
-      questionsFileApproved(
-        "## Implementation Question\n[Answer]: A. Approve Plan\n## Plan Approval\n[Answer]:\n",
-      ),
-    ).toBe(false);
-    expect(
-      questionsFileApproved(
-        "## Plan Approval\n[Answer]: A. Approve Plan\n## Notes\n[Answer]: B. Request Changes\n",
-      ),
-    ).toBe(true);
-    expect(
-      questionsFileApproved(
-        "## Plan Approval\n[Answer]: A. Approve Plan\n## Q2\n\nPlan Approval\n[Answer]:\n",
-      ),
-    ).toBe(false);
-    expect(
-      questionsFileApproved(
-        "## Q1\n\nWhich checkpoint applies?\n\nA. Plan Approval\n[Answer]: A. Approve Plan\n",
-      ),
-    ).toBe(false);
-    expect(
-      questionsFileApproved(
-        "<!--\n## Plan Approval\n[Answer]: A. Approve Plan\n-->\n## Plan Approval\n[Answer]:\n",
-      ),
-    ).toBe(false);
-    expect(
-      questionsFileApproved(
-        "```markdown\n## Plan Approval\n[Answer]: A. Approve Plan\n```\n",
-      ),
-    ).toBe(false);
-    expect(
-      questionsFileApproved(
-        "~~~markdown\n## Q1\nPlan Approval\n[Answer]: A. Approve Plan\n~~~\n",
-      ),
-    ).toBe(false);
-    expect(questionsFileApproved("")).toBe(false);
   });
 
   test("only a blank visible Plan Approval section is a pending mandatory stop", () => {
@@ -688,7 +629,15 @@ function publishRestartRecovery(
   });
 }
 
-function recordRecoverySelection(proj: string, prompt = "Restart code-generation."): void {
+// The person's reply to the recovery question, then the agent's record of the
+// remedy it read from it (`details`, by default the reply's own words; null when
+// the reply names none). A record that names no offered remedy is refused and
+// records nothing, as the agent's would be.
+function recordRecoverySelection(
+  proj: string,
+  prompt = "Restart code-generation.",
+  details: string | null = prompt,
+): void {
   const started = performance.now();
   const result = spawnSync(
     BUN,
@@ -714,6 +663,21 @@ function recordRecoverySelection(proj: string, prompt = "Restart code-generation
     stdout: result.stdout,
     stderr: result.stderr,
   })).toBe(0);
+  if (details === null) return;
+  spawnSync(
+    BUN,
+    [join(AIDLC_SRC, "tools", "aidlc-log.ts"), "answer", "--stage", "code-generation", "--checkpoint", "guard-recovery",
+      "--details", details, "--project-dir", proj],
+    {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      cwd: proj,
+      env: {
+        ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_UNATTENDED: "0",
+        AIDLC_SESSION_OVERRIDE: "01995000-0265-7000-8000-000000000001",
+      },
+      encoding: "utf-8",
+    },
+  );
 }
 
 function seedUnit(
@@ -1112,8 +1076,13 @@ describe("t265b hook lifecycle", () => {
       expect(withBom.status, withBom.stderr).toBe(0);
       expect(withBom.stdout.endsWith(readFileSync(instructionsPath, "utf-8"))).toBe(true);
       expect(withBom.stdout).toContain("\n\n\uFEFF# Unit Test Instructions");
-      // And the brief refuses before approval, so it can never precede authority.
+      // And the brief refuses before approval, so it can never precede authority:
+      // the engine's receipt is the approval, and none is on record now.
       seedUnit(proj, "todo-core", { plan: true, answer: null });
+      const receipts = dirname(planApprovalRuntimeFile(proj, "receipt.json"));
+      for (const name of readdirSync(receipts).filter((entry) => /^receipt-.*\.json$/.test(entry))) {
+        rmSync(join(receipts, name));
+      }
       const unapproved = spawnSync(
         BUN,
         [
@@ -1684,8 +1653,8 @@ describe("t265b hook lifecycle", () => {
         // Offered but not answered: the report is the engine's own command,
         // and the engine refuses an answer nobody gave.
         expect(runHook(proj, BASH(reject)).code).toBe(0);
-        // With Request Changes the only choice, the person's words are the feedback.
-        recordRecoverySelection(proj, "Rework the payload contract.");
+        // The agent records the person's words as the Request Changes they asked for.
+        recordRecoverySelection(proj, "Rework the payload contract.", "Request Changes: Rework the payload contract.");
         for (const admitted of [
           reject,
           reject.replace("aidlc engine orchestrate", "bun .claude/tools/aidlc-orchestrate.ts"),
@@ -1737,7 +1706,7 @@ describe("t265b hook lifecycle", () => {
         const revised = "aidlc engine orchestrate report --stage code-generation --result revised";
         expect(runHook(proj, BASH(revised)).code).toBe(2);
         expect(runHook(proj, WRITE(plan)).code).toBe(0);
-        recordRecoverySelection(proj, "1");
+        recordRecoverySelection(proj, "1", "finish-revision");
         expect(runHook(proj, BASH(revised)).code).toBe(0);
         expect(runHook(proj, WRITE(plan)).code).toBe(0);
         expect(runHook(proj, BASH(reject)).code).toBe(0);
@@ -3253,11 +3222,13 @@ describe("t265b hook lifecycle", () => {
         answer: "Approve Plan",
         receipt: false,
       });
+      // The line in the file approves nothing: only the engine's receipt does.
       const approval = evaluateCodeGenerationApproval(proj, { unit: null });
       expect(approval.ok).toBe(false);
-      expect(approval.approved).toBe(true);
-      expect(approval.receiptValid).toBe(false);
-      expect(approval.reason).toContain("no current Plan Approval receipt matches this question, target");
+      expect(approval.approved).toBe(false);
+      // Nothing approved it, so the receipt check is never reached.
+      expect(approval.receiptValid).toBeNull();
+      expect(approval.reason).toContain("the plan is not approved yet");
       const authority = resolveCodeGenerationAuthority(proj, { unit: null });
       const questionsPath = join(
         codeGenerationRecordDir(proj, null),
@@ -4081,7 +4052,8 @@ describe("t265b hook lifecycle", () => {
       seedActiveDirective(proj, "code-generation", "auth");
       const crossTarget = evaluateCodeGenerationApproval(proj, { unit: "auth" });
       expect(crossTarget.ok).toBe(false);
-      expect(crossTarget.fingerprintValid).toBe(false);
+      // No approval of the engine's is for that target: the copied bytes approve nothing there.
+      expect(crossTarget.approved).toBe(false);
 
       // Re-issuing the directive for the SAME target and attempt, on the other
       // hand, must leave the approval standing. The engine reissues constantly (a

@@ -77,6 +77,7 @@ import {
   formatReceivedReply,
   isNonAnswer,
   offeredProtectedChoices,
+  pickerOffersChoices,
   type ProtectedChoice,
   protectedChoiceDigests,
   stripRecommendedDecorator,
@@ -5230,11 +5231,13 @@ export interface ProtectedResponse {
   version: 1;
   session: string;
   challengeId: string;
-  /** The offered choice the person's latest reply picked exactly, read by the hook; the other is refused. */
+  /** The offered choice the person picked in a question box that offered this question's choices, as the host returned it. */
   choice?: "Approve" | "Request Changes";
   responseSha256: string;
   /** Every message the person typed under this question, in order, verbatim. */
   words?: string;
+  /** When the latest reply it holds was kept: a decision recorded after that used it. */
+  at?: string;
 }
 
 /** The longest run of a person's words a protected response keeps. */
@@ -5339,6 +5342,8 @@ export interface PlanApprovalLegacyRecoveryChallenge {
   intentId: string;
   markerRevision: number;
   challengeId: string;
+  /** When the question was asked: a reply of theirs after it is what the agent's record of their yes stands on. */
+  createdAt?: string;
 }
 
 export interface PlanApprovalLegacyRecoveryResponse {
@@ -5635,6 +5640,7 @@ export function readProtectedResponse(projectDir: string, session: string): Prot
     typeof value.challengeId === "string" && /^[a-f0-9]{32}$/.test(value.challengeId) &&
     (value.choice === undefined || value.choice === "Approve" || value.choice === "Request Changes") &&
     (value.words === undefined || typeof value.words === "string") &&
+    (value.at === undefined || typeof value.at === "string") &&
     typeof value.responseSha256 === "string" && /^[a-f0-9]{64}$/.test(value.responseSha256)
     ? value : null;
 }
@@ -5670,6 +5676,7 @@ export function withdrawProtectedReplyWords(projectDir: string, text: string): v
       ...(lastKept && response.choice !== undefined ? { choice: response.choice } : {}),
       responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
       words,
+      ...(response.at === undefined ? {} : { at: response.at }),
     });
   }
 }
@@ -5677,6 +5684,10 @@ export function withdrawProtectedReplyWords(projectDir: string, text: string): v
 export function requireProtectedResponse(
   projectDir: string, session: string,
   expected: { kind: ProtectedQuestion["kind"]; targetDigest: string; choice: string },
+  // The message the agent named (--message) as the person's reply, and the
+  // question's own floor (protectedReplyFloor): a message of theirs after it,
+  // unspent, in this chat, is the reply, whichever question was on screen.
+  named?: { message: string; floor: string | null },
 ): void {
   const question = readProtectedQuestion(projectDir, session);
   const response = readProtectedResponse(projectDir, session);
@@ -5685,9 +5696,10 @@ export function requireProtectedResponse(
     : `Re-ask with ${aidlcToolInvocation("bolt")} checkpoint --action ask --unit "<unit>" --kind <unit|skeleton> or ` +
       `${aidlcToolInvocation("bolt")} swarm-checkpoint --action ask --batch <number> --units "<units>", then wait for Approve or Request Changes.`;
   // The person replied to this exact question (the hook's record); the choice
-  // is the one the conductor read from their words. That reply is the
-  // person's presence: with it on record, a misrecord is corrected by
-  // recording the choice they made, never by asking them again.
+  // is the one the conductor read from their words, or from their pick in a
+  // question box. That reply is the person's presence: with it on record, a
+  // misrecord is corrected by recording the choice they made, never by asking
+  // them again.
   const replied = question !== null && response !== null && response.challengeId === question.challengeId;
   if (!question || existsSync(planApprovalChallengePath(projectDir, session))) {
     throw new Error(`${expected.kind} requires the person's reply to this question, and no such question is open for this session. ${recovery}`);
@@ -5710,17 +5722,79 @@ export function requireProtectedResponse(
         `is right, ask about it as it is now. ${recovery}`,
     );
   }
+  if (named !== undefined) {
+    const { proveMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+    const proof = proveMessage(projectDir, named.message, "answer");
+    if ("refusal" in proof) throw new Error(proof.refusal);
+    if (named.floor !== null && proof.message.at < named.floor) {
+      throw new Error(
+        `${expected.kind} requires the person's reply to this question, and message ${named.message} came before ` +
+          "it was asked about this work. Name a message they sent since, or show the question if you have not, " +
+          "end the turn, and record the choice they make.",
+      );
+    }
+    const words = proof.message.words ?? "";
+    markProtectedQuestionReplied(projectDir, question);
+    writeProtectedResponse(projectDir, {
+      version: 1, session, challengeId: question.challengeId,
+      responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
+      ...(words ? { words } : {}),
+      at: proof.message.at,
+    });
+    return;
+  }
   if (!replied || response === null) {
     throw new Error(
-      `${expected.kind} requires the person's reply to this question, and none is on record yet. Show it if ` +
-        "you have not, end the turn, and record the choice they make.",
+      `${expected.kind} requires the person's reply to this question, and none is on record yet. ` +
+        `${protectedOpenQuestionRetry(projectDir, session)}Show it if you have not, end the turn, and record the ` +
+        "choice they make.",
     );
   }
-  if (response.choice !== undefined && response.choice !== expected.choice) {
+  // One message backs one lifecycle decision: a reply another decision used
+  // since it was kept (one reply kept by two open questions) is no reply to
+  // this one. A response from before the time was kept has nothing to compare.
+  const keptAt = response.at;
+  if (keptAt !== undefined && readAuditShardEvents(projectDir).some((row) =>
+    MESSAGE_SPENDING_EVENTS.has(row.event) && row.timestamp > keptAt)) {
     throw new Error(
-      `The person picked "${response.choice}" for this question. Record that choice, or ask them if you read ` +
-        "their words differently.",
+      `${expected.kind} requires the person's reply to this question, and the reply on record was used by ` +
+        "another decision since. Show it if you have not, end the turn, and record the choice they make.",
     );
+  }
+}
+
+// The person's messages in this chat since the last decision that came while
+// another engine question was on screen: the agent names the one that answered
+// this question with --message. Ids and times only; "" when there are none.
+function protectedOpenQuestionRetry(projectDir: string, session: string): string {
+  try {
+    const rows = readAuditShardEvents(projectDir);
+    const spent = rows.findLastIndex((row) => MESSAGE_SPENDING_EVENTS.has(row.event));
+    const held = rows.slice(spent + 1).filter((row) =>
+      row.event === "HUMAN_TURN" && auditBlockField(row.block, "Session") === session &&
+      auditBlockField(row.block, OPEN_QUESTION_FIELD) !== null && auditBlockField(row.block, "Message Id") !== null);
+    if (held.length === 0) return "";
+    const named = held.map((row) => `${auditBlockField(row.block, "Message Id")} (sent ${row.timestamp})`).join(" or ");
+    return `If their message ${named}, sent while another question was on screen, answered this one, run the same ` +
+      "command with --message <id>, without asking them again. Otherwise: ";
+  } catch {
+    return "";
+  }
+}
+
+// A protected question's floor for a reply the agent names: the latest review
+// requested for one of `units` in `stages` (what the person typed while it ran
+// answers the checkpoint after it), else the latest start of one of `stages`.
+export function protectedReplyFloor(projectDir: string, stages: readonly string[], units: readonly string[] = []): string | null {
+  try {
+    const rows = readAuditShardEvents(projectDir);
+    const inStages = (row: AuditShardEvent): boolean => stages.includes(auditBlockField(row.block, "Stage") ?? "");
+    const review = rows.findLast((row) => row.event === "REVIEW_REQUESTED" && inStages(row) &&
+      (units.length === 0 || units.includes(auditBlockField(row.block, "Unit") ?? "")));
+    if (review !== undefined) return review.timestamp;
+    return rows.findLast((row) => row.event === "STAGE_STARTED" && inStages(row))?.timestamp ?? null;
+  } catch {
+    return null;
   }
 }
 
@@ -9362,6 +9436,7 @@ function ensurePlanApprovalLegacyRecoveryChallenge(
     intentId,
     markerRevision,
     challengeId,
+    createdAt: isoTimestamp(),
   });
 }
 
@@ -10742,15 +10817,17 @@ function guardRecoveryTextSha256(text: string): string | null {
 
 // The person replied to a guard-recovery ask. The hook keeps that they replied,
 // bound to the ask by the digest of their words; the conductor reads the reply
-// and records the remedy they picked (recordGuardRecoveryChoice). When the
-// picked remedy waits for the person's words (what should change), their next
-// reply is those words. A new reply before the picked remedy runs is the person
-// speaking again, so the earlier pick is withdrawn and the conductor reads the
-// new reply. Both survive a later `next` that re-issues the same ask, because
-// the router retains a consumed ask marker for an unchanged state.
+// and records the remedy they chose (recordGuardRecoveryChoice). When that
+// remedy waits for their words (what should change), their next reply is kept
+// the same way and the conductor records the remedy once more with them. A pick
+// in a question box that offered the ask's remedies is the host's own
+// structure and is kept as the choice. Both survive a later `next` that
+// re-issues the same ask, because the router retains a consumed ask marker for
+// an unchanged state.
 export function consumeSharedDirectiveAsk(
   projectDir: string,
   humanResponseText = "",
+  picker?: { options?: string[] | null; severalPicks?: boolean },
 ): boolean {
   return transactActiveDirective(projectDir, (marker, target) => {
     let stateContent: string;
@@ -10771,67 +10848,15 @@ export function consumeSharedDirectiveAsk(
     if (!currentGuardRecovery) {
       return { marker, result: false, preserve: true };
     }
-    const response = marker.guard_recovery_response;
-    // A reply that is exactly one remedy ("2", its label) is the person's pick:
-    // syntax, recorded now. Any other reply waits for the conductor's reading.
-    // The person sees each remedy by its number and the name the engine wrote
-    // for them (`label`); an older rendering showed the op as written or in
-    // plain words ("Request Changes"), or its action text.
-    const remedies = marker.remedies ?? [];
-    const pick = exactOptionPick(humanResponseText, remedies.map((remedy) => remedy.label ?? remedy.action)) ??
-      exactOptionPick(humanResponseText, remedies.map((remedy) => remedy.action)) ??
-      exactOptionPick(humanResponseText, remedies.map((remedy) => remedy.op)) ??
-      exactOptionPick(humanResponseText, remedies.map((remedy) => remedy.op.replace(/-/g, " ")));
-    const picked = pick === null ? null : remedies[pick];
-    // The picked remedy is waiting for the person's words: this reply is them,
-    // unless it is a remedy pick. The same remedy again changes nothing; a
-    // different one is the person picking again, recorded below.
-    if (
-      marker.delivery === "consumed" &&
-      response?.status === "awaiting-feedback" &&
-      response.selected_op !== undefined && response.selected_op !== null
-    ) {
-      if (picked?.op === response.selected_op) return { marker, result: true, preserve: true };
-      if (picked === null) {
-        return {
-          marker: {
-            ...marker,
-            revision: (marker.revision ?? 0) + 1,
-            guard_recovery_response: { ...response, status: "ready", feedback_sha256: responseSha256 },
-          },
-          result: true,
-        };
-      }
-    }
-    if (response?.selection_sha256 === responseSha256 && marker.delivery === "consumed") {
+    if (marker.guard_recovery_response?.selection_sha256 === responseSha256 && marker.delivery === "consumed") {
       return { marker, result: true, preserve: true };
     }
-    // The only way forward is Request Changes, and its text asks what should
-    // change: a reply that is not the bare pick answers that question, so it is
-    // the feedback, and a later reply replaces it until the reject runs
-    // (#1290). Picking the option again keeps the words already given.
-    if (remedies.length === 1 && remedies[0].op === "request-changes") {
-      if (picked !== null && response?.status === "ready" && marker.delivery === "consumed") {
-        return { marker, result: true, preserve: true };
-      }
-      if (picked === null) {
-        return {
-          marker: {
-            ...marker,
-            revision: (marker.revision ?? 0) + 1,
-            delivery: "consumed",
-            guard_recovery_response: {
-              status: "ready",
-              selection_sha256: responseSha256,
-              selected_op: "request-changes",
-              feedback_sha256: responseSha256,
-              picked_by: "person",
-            },
-          },
-          result: true,
-        };
-      }
-    }
+    const remedies = marker.remedies ?? [];
+    const labels = remedies.map((remedy) => remedy.label ?? remedy.action);
+    const offered = picker?.options ?? [];
+    const boxed = offered.length > 0 && picker?.severalPicks !== true && pickerOffersChoices(offered, labels);
+    const pick = boxed ? exactOptionPick(humanResponseText, labels) : null;
+    const picked = pick === null ? null : remedies[pick];
     return {
       marker: {
         ...marker,
@@ -10855,30 +10880,6 @@ export function consumeSharedDirectiveAsk(
       },
       result: true,
     };
-  });
-}
-
-/**
- * The conductor read the person's latest reply as something other than the
- * answer to the open recovery question (a request to look at the plan, say).
- * When Request Changes is the question's only choice, the hook took that reply
- * as what should change; this releases it, so the question still waits for its
- * answer. A Request Changes the person picked, then said what, stays. Returns
- * whether a reply was released.
- */
-export function releaseTakenGuardRecoveryReply(projectDir: string): boolean {
-  return transactActiveDirective(projectDir, (marker) => {
-    const response = marker?.guard_recovery_response;
-    if (
-      marker?.version !== 2 || marker.kind !== "ask" || marker.ask_type !== GUARD_RECOVERY_ASK_TYPE ||
-      (marker.remedies ?? []).length !== 1 || response?.picked_by !== "person" ||
-      response.selected_op !== "request-changes" || response.feedback_sha256 === undefined ||
-      response.feedback_sha256 !== response.selection_sha256
-    ) {
-      return { marker, result: false, preserve: true };
-    }
-    const { guard_recovery_response: _taken, ...waiting } = marker;
-    return { marker: { ...waiting, revision: (marker.revision ?? 0) + 1, delivery: "delivered" }, result: true };
   });
 }
 
@@ -10949,26 +10950,19 @@ export function recordGuardRecoveryChoice(
           `the person picked: ${(marker.remedies ?? []).map((offered) => `"${offered.op}"`).join(", ")}.`,
       );
     }
-    // The person's exact pick stands; the conductor's own earlier reading can
-    // be corrected when the person says it misread them.
-    if (response.picked_by === "person" && response.selected_op && response.selected_op !== remedy.op) {
-      const theirs = (marker.remedies ?? []).find((offered) => offered.op === response.selected_op);
-      throw new Error(
-        `The person picked "${theirs?.label ?? theirs?.action ?? response.selected_op}" on this question. Carry that out, or ask ` +
-          "them if they meant something else.",
-      );
-    }
-    if (response.picked_by === "person" && response.selected_op === remedy.op) {
+    // The same remedy again, already on record for this reply, changes nothing.
+    if (response.selected_op === remedy.op && response.status === "ready") {
       return {
         marker,
         preserve: true,
         result: {
-          op: remedy.op, action: remedy.action, awaitingWords: response.status === "awaiting-feedback",
+          op: remedy.op, action: remedy.action, awaitingWords: false,
           stage: marker.stage, ...(marker.unit ? { unit: marker.unit } : {}),
         },
       };
     }
-    // The latest reply: a later one may already have been taken as feedback.
+    // The latest reply of theirs; the remedy stands on it, so the record says
+    // the person chose it.
     const latest = response.feedback_sha256 ?? response.selection_sha256;
     const awaitingWords = remedy.op === "request-changes"
       ? !withWords
@@ -10982,7 +10976,7 @@ export function recordGuardRecoveryChoice(
           selection_sha256: latest,
           selected_op: remedy.op,
           ...(remedy.op === "request-changes" && !awaitingWords ? { feedback_sha256: latest } : {}),
-          picked_by: "conductor",
+          picked_by: "person",
         },
       },
       result: {
@@ -12567,12 +12561,21 @@ export const QUESTION_TURN_REPLY = "question";
 // the words that handed it over (log answer --on-instruction).
 export const ANSWER_SOURCE_ON_INSTRUCTION = "chosen by the agent as the person asked";
 
-// A human turn that replied: more than a command to AIDLC (or, on an older
-// record, a question about a switch).
+// The HUMAN_TURN field naming the engine question that was on screen when the
+// message came (its ask type: where the work belongs, a new-work offer, which
+// record), written by the human-turn hook from the engine's own ask records.
+export const OPEN_QUESTION_FIELD = "Open Question";
+
+// A human turn that replied to the question beneath: more than a command to
+// AIDLC (or, on an older record, a question about a switch), sent while no
+// other engine question was open. A message sent while one was open answers
+// that one unless the agent names it (`--message <id>`) for another: by
+// default no decision, presence check or word window takes it.
 export function isReplyTurn(row: { event: string; block: string }): boolean {
   if (row.event !== "HUMAN_TURN") return false;
   const mark = auditBlockField(row.block, "Reply");
-  return mark !== COMMAND_TURN_REPLY && mark !== QUESTION_TURN_REPLY;
+  return mark !== COMMAND_TURN_REPLY && mark !== QUESTION_TURN_REPLY &&
+    auditBlockField(row.block, OPEN_QUESTION_FIELD) === null;
 }
 
 // A human turn that can carry a request (a command or a reply): anything but an
@@ -29720,9 +29723,13 @@ export interface GateReply {
   words: string | null;
   messageId: string | null;
   replies: Array<{ id: string; at: string }>;
+  // Their messages in the same window sent while another engine question was
+  // on screen: none of the above, for the agent to name with --message when
+  // one answered this gate.
+  elsewhere: Array<{ id: string; at: string }>;
 }
 export function personsGateReply(projectDir: string, session: string | null, stage: string): GateReply {
-  const none: GateReply = { words: null, messageId: null, replies: [] };
+  const none: GateReply = { words: null, messageId: null, replies: [], elsewhere: [] };
   try {
     const { mine, others } = ownShardRows(projectDir);
     let from = stageReplyFloor(mine, stage);
@@ -29733,17 +29740,25 @@ export function personsGateReply(projectDir: string, session: string | null, sta
     // second is not spent by it, as the message record reads a tie.
     const spentElsewhere = others.reduce<string | null>((latest, row) =>
       MESSAGE_SPENDING_EVENTS.has(row.event) && (latest === null || row.timestamp > latest) ? row.timestamp : latest, null);
-    let turns = mine.slice(from + 1).filter((row) =>
-      isReplyTurn(row) && (spentElsewhere === null || row.timestamp >= spentElsewhere));
+    const unspent = mine.slice(from + 1).filter((row) =>
+      row.event === "HUMAN_TURN" && (spentElsewhere === null || row.timestamp >= spentElsewhere));
     const chatOf = (row: AuditShardEvent): string => auditBlockField(row.block, "Session") ?? "";
+    let turns = unspent.filter((row) => isReplyTurn(row));
+    let held = unspent.filter((row) =>
+      auditBlockField(row.block, OPEN_QUESTION_FIELD) !== null && auditBlockField(row.block, "Message Id") !== null);
     if (session !== null) {
       turns = turns.filter((row) => chatOf(row) === session);
-    } else if (new Set(turns.map(chatOf)).size > 1) {
+      held = held.filter((row) => chatOf(row) === session);
+    } else if (new Set([...turns, ...held].map(chatOf)).size > 1) {
       return none;
     }
-    const tied = session !== null;
-    if (turns.length === 0) return none;
     const { readMessage } = require("./aidlc-message-store.ts") as typeof import("./aidlc-message-store.ts");
+    const elsewhere = held.map((row) => {
+      const id = auditBlockField(row.block, "Message Id") as string;
+      return { id, at: readMessage(projectDir, id)?.at ?? row.timestamp };
+    });
+    const tied = session !== null;
+    if (turns.length === 0) return { ...none, elsewhere };
     const replies: GateReply["replies"] = [];
     const said: string[] = [];
     let whole = true;
@@ -29762,6 +29777,7 @@ export function personsGateReply(projectDir: string, session: string | null, sta
       words: tied && whole && said.length > 0 ? said.join("\n") : null,
       messageId: replies.at(-1)?.id ?? null,
       replies,
+      elsewhere,
     };
   } catch {
     return none;
@@ -29838,7 +29854,8 @@ export function keptRepliesSinceStageStart(
       }
     } else if (event === "DECISION_RECORDED" && ours) {
       asked = auditBlockField(block, "Decision");
-    } else if (event === "HUMAN_TURN" && auditBlockField(block, "Reply") === null) {
+    } else if (event === "HUMAN_TURN" && auditBlockField(block, "Reply") === null &&
+      auditBlockField(block, OPEN_QUESTION_FIELD) === null) {
       const raw = auditBlockField(block, "Picked");
       let labels: unknown = null;
       try {
@@ -29967,15 +29984,12 @@ function pickedLabels(raw: string | null): string | null {
   return labels.length > 0 ? labels.map((label) => label.trim()).join(", ") : null;
 }
 
-const APPROVAL_GATE_LABELS = ["Approve", "Request Changes"] as const;
-
 // The person's words at an Approve / Request Changes question as what to
-// change: their lines, leaving out a line that is only an option pick. Syntax
-// only. Empty when nothing is left.
+// change: every line of theirs, whole, on one line. When their reply only
+// picked Request Changes, the agent asks what should change before it records
+// (stage-protocol-checkpoint.md, stage-protocol-swarm.md).
 export function changeRequestWords(words: string | undefined): string {
-  return (words ?? "").split(/\r?\n/).map((line) => line.trim())
-    .filter((line) => line.length > 0 && exactOptionPick(line, APPROVAL_GATE_LABELS) === null)
-    .join(" ");
+  return (words ?? "").split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0).join(" ");
 }
 
 // `<root>/.aidlc-engine/reviewer-dispatch.json` - the per-unit reviewer dispatch

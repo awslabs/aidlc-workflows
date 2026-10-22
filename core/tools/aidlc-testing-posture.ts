@@ -133,6 +133,7 @@ import {
   runtimeSessionHint,
   writePlanApprovalResponse,
   writeProtectedResponse,
+  isoTimestamp,
   markProtectedQuestionReplied,
   readProtectedResponse,
   PROTECTED_RESPONSE_WORDS_MAX_CHARS,
@@ -157,6 +158,7 @@ import {
   TESTING_POSTURE_SUBCOMMANDS,
 } from "./aidlc-lib.ts";
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
+import { noReplySince } from "./aidlc-message-store.ts";
 import { aidlcToolInvocation, entrySkillInvocation, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES, exactOptionPick, isNonAnswer, isOneOfChoices, pickerOffersChoices, protectedQuestionPick,
@@ -570,17 +572,12 @@ export function recordedApprovalFingerprint(questions: string): string | null {
   }
   return null;
 }
-// "Plan approval off" is the engine's own record for a plan built without
-// asking. It grants nothing alone: every reader also needs the engine's receipt.
-const APPROVE_PLAN_RE = /^(?:(?:[A-Z][.)][ \t]*)?["']?Approve Plan["']?|Plan approval off)$/i;
-
 /**
  * The label on a recorded `[Answer]:` line: the option letter the engine's own
  * recorder writes ("A. Approve Plan") or a picker echoes ("B) Request Changes",
- * "a. Approve Plan": APPROVE_PLAN_RE reads the letter in either case, so this
- * does too), and quotes around the label, are not the answer. Every reader
- * compares the label, so the engine's recorded line and a hand-written one
- * read the same.
+ * "a. Approve Plan", in either case), and quotes around the label, are not the
+ * answer. Whether a plan is approved is the engine's receipt's to say, never
+ * this line's.
  */
 export function planApprovalAnswerLabel(answer: string): string {
   return answer.trim().replace(/^[A-Za-z][.)][ \t]*/, "").replace(/^["']|["']$/g, "").trim();
@@ -2450,15 +2447,6 @@ function latestPlanApproval(body: string): {
   };
 }
 
-export function questionsFileApproved(body: string): boolean {
-  const latest = latestPlanApproval(body);
-  return (
-    latest.found &&
-    latest.answer !== null &&
-    APPROVE_PLAN_RE.test(latest.answer)
-  );
-}
-
 export function questionsFileHasPendingPlanApproval(body: string): boolean {
   const latest = latestPlanApproval(body);
   return (
@@ -2818,6 +2806,24 @@ export function codeGenerationRecordDir(
     : join(root, "code-generation");
 }
 
+// The latest answer on record to the plan question for this target and plan:
+// an approval, or plan approval off building it without asking.
+function planApprovedOnRecord(projectDir: string, targetId: string, fingerprint: string): boolean {
+  const last = readAuditShardEvents(projectDir)
+    .filter((row) =>
+      (row.event === "PLAN_APPROVAL_RECORDED" || row.event === "PLAN_APPROVAL_SKIPPED" ||
+        row.event === "QUESTION_ANSWERED") &&
+      auditBlockField(row.block, "Plan Target") === targetId &&
+      auditBlockField(row.block, "Approval Fingerprint") === fingerprint)
+    .sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? -1 : 1;
+      if (a.shardIndex !== b.shardIndex) return a.shardIndex - b.shardIndex;
+      return a.pos - b.pos;
+    })
+    .at(-1);
+  return last !== undefined && last.event !== "QUESTION_ANSWERED";
+}
+
 function codeGenerationApprovalArtifacts(
   projectDir: string,
   authority: CodeGenerationAuthority,
@@ -2847,7 +2853,16 @@ function codeGenerationApprovalArtifacts(
     : "";
   const planExists = plan.trim().length > 0;
   const instructionsExist = instructions.trim().length > 0;
-  const approvedAnswer = questionsFileApproved(questions);
+  const recordedFingerprint = questionsFileApprovalFingerprint(questions);
+  // The engine's own records say this question was approved (asked, built
+  // without asking, or overridden): its receipt for this target, attempt and
+  // plan, or its audit row for the target and the plan the file names, so an
+  // approval whose receipt went missing or whose attempt moved on still reads
+  // as approved and is checked as one. The label on the file's `[Answer]:`
+  // line, the person's own words included, decides nothing.
+  const approvedAnswer = recordedFingerprint !== null && (readPlanApprovalReceipt(projectDir, {
+    targetId: authority.targetId, runFloor: authority.runFloor, fingerprint: recordedFingerprint,
+  })?.choice === "Approve Plan" || planApprovedOnRecord(projectDir, authority.targetId, recordedFingerprint));
   const embedded = planExists ? parseTestingContract(plan) : null;
   const current = planExists ? resolveTestingPosture(contractProjectDir) : null;
   const contractHash = embedded?.contract_sha256 ?? null;
@@ -2874,7 +2889,7 @@ function codeGenerationApprovalArtifacts(
     contractValid,
     contractHash,
     expectedFingerprint,
-    recordedFingerprint: questionsFileApprovalFingerprint(questions),
+    recordedFingerprint,
     questionsPath,
   };
 }
@@ -2980,7 +2995,7 @@ function earlierPlanApproval(
   // A checkout that changed its line endings has not changed the answer.
   const questions = readFileSync(questionsPath, "utf-8").replace(/\r\n/g, "\n");
   const fingerprint = questionsFileApprovalFingerprint(questions);
-  if (!fingerprint || !approvalFingerprintIsCurrentFormat(fingerprint) || !questionsFileApproved(questions)) return null;
+  if (!fingerprint || !approvalFingerprintIsCurrentFormat(fingerprint)) return null;
   const promptSha256 = createHash("sha256")
     .update(`${questions.replace(/^\[Answer\]:[ \t]*.*$/gm, "[Answer]:").trimEnd()}\n`, "utf-8")
     .digest("hex");
@@ -3919,18 +3934,18 @@ export function recordPlanApprovalHumanResponse(
     const previous = readPlanApprovalResponse(projectDir, session);
     const earlier = previous?.challengeId === challenge.challengeId ? previous.words : undefined;
     const words = (earlier ? `${earlier}\n${text}` : text).slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
-    // A reply that is exactly one offered option is the person's pick; a
-    // record of the other choice is refused. Legacy nonce labels are hashed.
+    // Legacy nonce labels are a capability the engine minted for the chat that
+    // shows them: a window with no question box sends the person's pick as the
+    // label's text, and only its hash gives this question a reply (another chat
+    // of the same window shares its session). Anywhere else a pick in a
+    // question box that asked this question is the host's own structure, and a
+    // typed reply, grouped approval included, is the conductor's to read.
     const pick = challenge.hashedOptionLabels
       ? challenge.options.indexOf(
         createHash("sha256").update(stripRecommendedDecorator(text).toLowerCase(), "utf-8").digest("hex"),
       )
-      : exactOptionPick(text, challenge.options);
-    // Legacy nonce labels and grouped approval accept only an exact pick: the
-    // picker is the only way those windows answer. Any other reply may still
-    // be the legacy recovery choice below.
-    const exactOnly = challenge.hashedOptionLabels || challenge.requireExactOptionLabels;
-    if (!exactOnly || (pick !== null && pick >= 0)) {
+      : picker === undefined ? null : exactOptionPick(text, challenge.options);
+    if (!challenge.hashedOptionLabels || (pick !== null && pick >= 0)) {
       writePlanApprovalResponse(projectDir, {
         version: 1,
         session,
@@ -3942,25 +3957,47 @@ export function recordPlanApprovalHumanResponse(
       return { recorded: true };
     }
   }
-  const recovery = readPlanApprovalLegacyRecoveryChallenge(
-    projectDir,
-    session,
-  );
+  // The legacy recovery question's one choice, picked in a question box; a
+  // typed yes is the conductor's to read and record
+  // (recordPlanApprovalLegacyRecoveryAnswer).
+  const recovery = readPlanApprovalLegacyRecoveryChallenge(projectDir, session);
   if (
-    recovery &&
-    responseText.trim() === LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE
+    recovery && text && picker !== undefined && picker.severalPicks !== true &&
+    pickerOffersChoices(picker.options ?? [], [LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE]) &&
+    exactOptionPick(text, [LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE]) === 0
   ) {
-    writePlanApprovalLegacyRecoveryResponse(projectDir, {
-      version: 1,
-      session,
-      challengeId: recovery.challengeId,
-      responseSha256: createHash("sha256")
-        .update(LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE, "utf-8")
-        .digest("hex"),
-    });
+    writeLegacyRecoveryChoice(projectDir, session, recovery.challengeId);
     return { recorded: true };
   }
   return { recorded: false };
+  });
+}
+
+function writeLegacyRecoveryChoice(projectDir: string, session: string, challengeId: string): void {
+  writePlanApprovalLegacyRecoveryResponse(projectDir, {
+    version: 1,
+    session,
+    challengeId,
+    responseSha256: createHash("sha256").update(LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE, "utf-8").digest("hex"),
+  });
+}
+
+/**
+ * The person's yes to the legacy recovery question, as the conductor read it
+ * from their reply in any words: the engine writes the response from its own
+ * choice, once a reply of theirs came in this chat after the question was asked
+ * (a question an older engine asked, with no time kept, takes any reply).
+ */
+export function recordPlanApprovalLegacyRecoveryAnswer(
+  projectDir: string,
+  session: string,
+): "recorded" | "no-question" | "no-reply" {
+  return withAuditLock(projectDir, () => {
+    const recovery = readPlanApprovalLegacyRecoveryChallenge(projectDir, session);
+    if (recovery === null) return "no-question";
+    if (noReplySince(projectDir, session, recovery.createdAt ?? new Date(0).toISOString())) return "no-reply";
+    writeLegacyRecoveryChoice(projectDir, session, recovery.challengeId);
+    return "recorded";
   });
 }
 
@@ -4044,16 +4081,17 @@ export function recordProtectedHumanResponse(
     const previous = readProtectedResponse(projectDir, session);
     const earlier = previous?.challengeId === question.challengeId ? previous.words : undefined;
     const words = (earlier ? `${earlier}\n${text}` : text).slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
-    // A reply that is exactly one of the choices this question offered is the
-    // person's pick, kept so a record of the other choice is refused; any
-    // other reply is the conductor's to read, and the latest reply decides.
-    const pick = protectedQuestionPick(question, text);
+    // A pick in a question box that asked this question (or, with no question
+    // text, the one question open) is the host's own structure and is kept as
+    // the choice; a typed reply, in any words, is the conductor's to read.
+    const pick = picker !== undefined ? protectedQuestionPick(question, text) : null;
     markProtectedQuestionReplied(projectDir, question);
     writeProtectedResponse(projectDir, {
       version: 1, session, challengeId: question.challengeId,
       ...(pick === null ? {} : { choice: pick }),
       responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
       words,
+      at: isoTimestamp(),
     });
     return { recorded: true };
   });
@@ -4959,7 +4997,6 @@ export function bindCodeGenerationWorktreeApproval(
     if (childAuthority.intentId !== current.receipt.intentId || childAuthority.runFloor !== current.receipt.runFloor ||
       (copied.expectedFingerprint !== current.receipt.fingerprint &&
         !(current.continuing && decideFence(current.parent, "plan-approval").decision === "stand-aside")) ||
-      !copied.approvedAnswer ||
       copied.recordedFingerprint !== current.receipt.fingerprint ||
       hashObject(finalParent.receipt) !== hashObject(current.receipt) ||
       current.files.some((file) => !readRegularFileNoFollowOrThrow(file.from, "approved parent plan record").equals(file.bytes)) ||
@@ -5002,7 +5039,6 @@ function worktreeDelegationParent(
       provenance.intentUuid !== authority.intentId || provenance.intentUuid !== receipt.intentId ||
     parentAuthority.intentId !== receipt.intentId || parentAuthority.runFloor !== receipt.runFloor ||
     parentAuthority.targetId !== receipt.targetId || parentPrompt !== receipt.promptSha256 ||
-    !questionsFileApproved(parentQuestions) ||
     questionsFileApprovalFingerprint(parentQuestions) !== receipt.fingerprint ||
     hashObject(parentReceipt) !== origin.parentReceiptSha256 ||
     hashObject(copiedReceipt) !== hashObject(parentReceipt) ||
@@ -5553,15 +5589,8 @@ export function main(argv: string[]): void {
         const questions = existsSync(questionsPath)
           ? readFileSync(questionsPath, "utf-8")
           : null;
-        // The approved questions file, or null when nothing stands approved.
-        const standing = questions !== null && questionsFileApproved(questions)
-          ? questions
-          : null;
-        if (standing !== null) {
-          throw new Error(
-            "reset the Plan Approval [Answer]: to blank before regenerating its fingerprint",
-          );
-        }
+        // Regenerating changes nothing approved: the same plan in the same
+        // attempt prints the fingerprint its approval already binds.
         const embedded = parseTestingContract(plan);
         const current = resolveTestingPosture(projectDir);
         if (

@@ -1567,8 +1567,11 @@ export class AgentStandIn {
       const question = String(d.question ?? d.prompt ?? "Approve the code plan?");
       const offered = ((d.options as { label?: string }[] | undefined) ?? []).map((o) => String(o.label ?? o));
       this.hooks.beforePlanAnswer?.(unit, this);
-      this.askPerson("plan approval", "code-generation", question,
+      const choice = this.askPerson("plan approval", "code-generation", question,
         offered.length ? offered : ["Approve Plan", "Request Changes"], this.answers.plan(unit));
+      // The agent records the choice it read; a pick in a question box is on
+      // record already, and recording the same choice again changes nothing.
+      this.must("log", "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", choice);
       return;
     }
     if (type === "construction-staffing") {

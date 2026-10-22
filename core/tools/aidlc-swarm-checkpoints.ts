@@ -23,6 +23,7 @@ import {
   withdrawProtectedQuestions,
   changeRequestWords,
   readProtectedResponse,
+  protectedReplyFloor,
   requireProtectedResponse,
   protectedTargetDigest,
   mintProtectedQuestion,
@@ -406,9 +407,17 @@ function recheck(
   return after;
 }
 
+// A batch checkpoint's reply the agent names: after a review was requested
+// for one of its Units, else after Code Generation started.
+function namedReply(pd: string, units: readonly string[], message: string | undefined) {
+  return message === undefined ? undefined : { message, floor: protectedReplyFloor(pd, [STAGE], units) };
+}
+
 export function approveSwarmCheckpoint(
   pd: string, batch: number, units: string[], reply?: string, session = "",
   findingDispositions?: ApprovalFindingDispositions,
+  // The message the agent read the approval from, when it names one.
+  message?: string,
 ): SwarmCheckpoint {
   // The conductor read the person's reply and reports their approval; the
   // receipt records it beside the person's own words from the human-turn hook.
@@ -420,7 +429,7 @@ export function approveSwarmCheckpoint(
     if (humanRequired) {
       requireProtectedResponse(pd, session, {
         kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current.result, current.commandSha256s)), choice: "Approve",
-      });
+      }, namedReply(pd, units, message));
       words = readProtectedResponse(pd, session)?.words;
     } else if (current.result.approved) {
       return current.result;
@@ -442,6 +451,7 @@ export function approveSwarmCheckpoint(
 
 export function rejectSwarmCheckpoint(
   pd: string, batch: number, units: string[], _reply: string, givenReason: string, session = "",
+  message?: string,
 ): SwarmCheckpoint {
   // The conductor read the person's reply as a change request. The reason is
   // the conductor's --reason when given, otherwise the person's own words.
@@ -450,7 +460,7 @@ export function rejectSwarmCheckpoint(
     if (!current.enabled) throw new Error("Swarm checkpoints are not enabled for this execution policy.");
     requireProtectedResponse(pd, session, {
       kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current.result, current.commandSha256s)), choice: "Request Changes",
-    });
+    }, namedReply(pd, units, message));
     const words = readProtectedResponse(pd, session)?.words;
     const reason = givenReason.trim() || changeRequestWords(words);
     const userInput = "Request Changes";

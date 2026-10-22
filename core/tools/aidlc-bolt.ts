@@ -1379,12 +1379,13 @@ async function handleCheckpoint(args: string[]): Promise<void> {
     case "approve":
       result = approveConstructionCheckpoint(
         pd, flags.unit, checkpointKind, flags["user-input"], checkpointSession(pd, flags.session, flags["user-input"] !== undefined),
-        checkpointFindingDispositions(pd),
+        checkpointFindingDispositions(pd), flags.message,
       );
       break;
     case "reject":
       result = rejectConstructionCheckpoint(
         pd, flags.unit, checkpointKind, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true),
+        flags.message,
       );
       break;
     default:
@@ -1412,11 +1413,13 @@ function handleSwarmCheckpoint(args: string[]): void {
     case "approve":
       result = approveSwarmCheckpoint(
         pd, batch, units, flags["user-input"], checkpointSession(pd, flags.session, flags["user-input"] !== undefined),
-        checkpointFindingDispositions(pd),
+        checkpointFindingDispositions(pd), flags.message,
       );
       break;
     case "reject":
-      result = rejectSwarmCheckpoint(pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true));
+      result = rejectSwarmCheckpoint(
+        pd, batch, units, flags["user-input"] ?? "", flags.reason ?? "", checkpointSession(pd, flags.session, true), flags.message,
+      );
       break;
     default:
       error(`swarm-checkpoint --action must be one of: ${SWARM_CHECKPOINT_ACTIONS.join(", ")}`);
@@ -1468,12 +1471,14 @@ function boltUsage(subcommand: string | undefined): string {
       `${invoke("checkpoint")} --unit <name> [--action ${CHECKPOINT_ACTIONS.join("|")}]`,
       "  The Unit's Construction checkpoint. Required: --unit. --action defaults to status.",
       `  --kind: ${CHECKPOINT_KINDS.join(", ")} (default unit). --over-unfinished-review and --timeout-ms <milliseconds> go with --action verify.`,
-      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject)",
+      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject),",
+      "  --message <id> (approve, reject: the person's message the choice was read from)",
     ],
     "swarm-checkpoint": [
       `${invoke("swarm-checkpoint")} --batch <n> --units <unit,unit> [--action ${SWARM_CHECKPOINT_ACTIONS.join("|")}]`,
       "  A swarm batch's checkpoint. Required: --batch, --units. --action defaults to status.",
-      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject)",
+      "  Options: --session <id>, --user-input <the person's words>, --reason <text> (reject),",
+      "  --message <id> (approve, reject: the person's message the choice was read from)",
     ],
     "dispatch-event": [
       `${invoke("dispatch-event")} --event ${DISPATCH_EVENTS.join("|")} --slug <kebab-slug>`,

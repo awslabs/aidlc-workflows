@@ -1256,7 +1256,8 @@ describe("t335 (3) never relaxed: the human gate, the plan stop, and an in-progr
     const selfAnswered = run(LOG_TOOL, ["answer", ...identity, "--details", "Approve Plan"], proj, env);
     expect(selfAnswered.status, selfAnswered.stdout).not.toBe(0);
     expect(selfAnswered.stderr).toContain("requires the person's reply to this prompt, in this session");
-    assertBlocked("Plan Approval");
+    // The answer line written in the file approves nothing: the engine's receipt decides.
+    assertBlocked("the plan is not approved yet");
     const human = runHook(join(TOOLS, "aidlc.ts"), proj, {
       hook_event_name: "UserPromptSubmit", session_id: session, cwd: proj, prompt: "Approve Plan",
     }, env, ["engine", "hook", "record-human-turn"]);

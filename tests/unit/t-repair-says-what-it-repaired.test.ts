@@ -201,6 +201,7 @@ describe("a repair the person did not cause never claims their edit", () => {
     const proj = project();
     askFor(proj);
     reply(proj, "3");
+    expect(answer(proj, "I'll edit the files").code).toBe(0);
     expect(next(proj).plan_approval?.editing).toBe(true);
     writeFileSync(planPath(proj), "", "utf-8");
     reply(proj, "done");
@@ -221,6 +222,7 @@ describe("a repair the person did not cause never claims their edit", () => {
     const proj = project();
     askFor(proj);
     reply(proj, "3");
+    expect(answer(proj, "I'll edit the files").code).toBe(0);
     expect(next(proj).plan_approval?.editing).toBe(true);
     writeFileSync(instructionsPath(proj), "", "utf-8");
     reply(proj, "done, stop for today");
@@ -236,6 +238,7 @@ describe("a repair the person did not cause never claims their edit", () => {
     const proj = project();
     askFor(proj);
     reply(proj, "3");
+    expect(answer(proj, "I'll edit the files").code).toBe(0);
     expect(next(proj).plan_approval).toMatchObject({ editing: true });
     writeFileSync(planPath(proj), readFileSync(planPath(proj), "utf-8").replace('"version": 1', '"version": 1,,'), "utf-8");
     reply(proj, "done");

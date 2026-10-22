@@ -1936,7 +1936,7 @@
         "settings": [],
         "no_ask": true,
         "names": [
-          "recorded"
+          "record the choice they made"
         ]
       },
       "end": {
@@ -1961,7 +1961,7 @@
         "settings": [],
         "no_ask": true,
         "names": [
-          "recorded"
+          "record the choice they made"
         ]
       },
       "end": {
@@ -1985,7 +1985,7 @@
         "settings": [],
         "no_ask": true,
         "names": [
-          "recorded"
+          "record the choice they made"
         ]
       },
       "end": {
@@ -7074,7 +7074,7 @@
         ],
         "no_ask": true,
         "names": [
-          "recorded"
+          "record the choice they made"
         ]
       },
       "end": {
@@ -7488,8 +7488,7 @@
         "settings": [],
         "no_ask": true,
         "names": [
-          "intent create",
-          "--scope bugfix"
+          "--new-intent --scope bugfix"
         ]
       },
       "end": {
@@ -7539,7 +7538,7 @@
         "settings": [],
         "no_ask": true,
         "names": [
-          "intent create"
+          "--new-intent"
         ]
       },
       "end": {

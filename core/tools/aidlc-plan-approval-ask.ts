@@ -33,13 +33,13 @@ import {
   errorMessage,
   fenceSwitchSentence,
   getField,
-  GUARD_RECOVERY_ASK_TYPE,
   isoTimestamp,
   isReplyTurn,
   personAtOwnTerminal,
   personRepliedAfter,
   latestMainWorkflowStageRunFloorForProject,
   memoryStrictHoldsGuardPolicy,
+  GUARD_RECOVERY_ASK_TYPE,
   PLAN_APPROVAL_ASK_TYPE,
   planApprovalRuntimeFile,
   readActiveDirectiveMarker,
@@ -47,7 +47,6 @@ import {
   readBaselineSourceSnapshot,
   readPlanApprovalReceipt,
   readPlanApprovalRuntimeRecord,
-  readProtectedQuestion,
   readWorkspaceSourceSnapshot,
   recordedSourceListingUnderCurrentBoundary,
   rejectionAtRunFloor,
@@ -1207,38 +1206,25 @@ function currentPlanApprovalAsk(
 
 /**
  * The engine's Plan Approval question while it is the open step: whether every
- * plan it asks about has an answer, whether the person is editing the files,
- * whether `words` are exactly one of its choices ("1", "Approve Plan"), the
- * choice they pick, and, when they pick against the recorded answer, that
- * answer ("approve" or "request-changes", or null when they pick what is
- * recorded). Null when it is not the open step.
+ * plan it asks about has an answer, the choice on record when every plan has
+ * the same one, and whether the person is editing the files. It reads none of
+ * the person's words: the conductor reads their reply and records the choice.
+ * Null when it is not the open step.
  */
 export function openPlanApprovalQuestion(
   projectDir: string,
-  words: string,
-): {
-  answered: boolean;
-  editing: boolean;
-  isChoice: boolean;
-  picked: PlanApprovalAnswerChoice | null;
-  overrules: "approve" | "request-changes" | null;
-} | null {
+): { answered: boolean; editing: boolean; recorded: PlanApprovalAnswerChoice | null } | null {
   try {
     const open = currentPlanApprovalAsk(projectDir, "all");
     if (open === null) return null;
     const { record } = open;
-    const pick = exactOptionPick(words, record.choices);
-    const picked: PlanApprovalAnswerChoice | null =
-      pick === 0 ? "approve" : pick === 1 ? "request-changes" : pick === 2 ? "edit" : null;
-    const recorded = record.mode === "editing" ? null
-      : (record.results ?? []).find((result) => (result.choice === "request-changes" ? "request-changes" : "approve") !== picked);
+    const answered = record.targets.every((target) => record.results?.some((result) => result.unit === target.unit));
+    const choices = new Set((record.results ?? []).map((result) => result.choice));
+    const only = choices.size === 1 ? [...choices][0] : null;
     return {
-      answered: record.targets.every((target) => record.results?.some((result) => result.unit === target.unit)),
+      answered,
       editing: record.mode === "editing",
-      isChoice: pick !== null,
-      picked,
-      overrules: picked === null || recorded === undefined || recorded === null ? null
-        : recorded.choice === "request-changes" ? "request-changes" : "approve",
+      recorded: record.mode === "editing" ? "edit" : answered && only !== null && only !== "repair" ? only : null,
     };
   } catch {
     return null;
@@ -1480,8 +1466,11 @@ function pickerAsksThisQuestion(picker: PlanApprovalPickerQuestion, record: Plan
 
 /**
  * The human-turn hook's part while the engine's Plan Approval question is
- * open: keep the person's message. True when the question owns the reply; false
- * when no question is open or a picker answered some other question.
+ * open: keep the person's message, for the conductor to read and record the
+ * choice it makes. A pick in a question box that offered this question's
+ * choices is the host's own structure and is recorded now. True when the
+ * question kept the reply; false when no question is open or a picker answered
+ * some other question.
  */
 export function notePlanApprovalAskReply(
   projectDir: string,
@@ -1500,11 +1489,6 @@ export function notePlanApprovalAskReply(
       record.targets.every((target) => record.results?.some((result) => result.unit === target.unit));
     if (answeredAll && !record.results?.some((result) => result.choice === "request-changes")) return false;
     if (picker && !pickerAsksThisQuestion(picker, record)) return false;
-    // A typed reply in a chat where the agent has asked a question of its own
-    // since the plan question was last shown there, still open (the
-    // verification command, say), answers that one.
-    if (picker === undefined && session && readProtectedQuestion(projectDir, session) !== null &&
-      askedAfter(projectDir, shownInChat(record, session), session)) return false;
     const reply = text.trim();
     if (!reply || isNonAnswer(reply)) return true;
     const replies = [
@@ -1512,10 +1496,9 @@ export function notePlanApprovalAskReply(
       { session: session || "unidentified-session", text: reply.slice(0, ASK_REPLY_MAX_CHARS) },
     ].slice(-ASK_REPLIES_MAX);
     writePlanApprovalAsk(projectDir, { ...record, replies });
-    // An exact pick ("1", "Approve Plan", "3") is syntax: record it now, so
-    // the conductor only runs next. A grouped change request still needs to
-    // know which plan, so the conductor reads that one.
-    const pick = exactOptionPick(reply, record.choices);
+    // A grouped change request still needs to know which plan, so the
+    // conductor reads that one.
+    const pick = picker === undefined ? null : exactOptionPick(reply, record.choices);
     const choice: PlanApprovalAnswerChoice | null = pick === 0 ? "approve"
       : pick === 1 && record.targets.length === 1 ? "request-changes"
       : pick === 2 ? "edit"
@@ -1528,72 +1511,6 @@ export function notePlanApprovalAskReply(
       }
     }
     return true;
-  });
-}
-
-/**
- * The person's message is exactly "done", the word the questions file's own
- * instructions name. That is syntax, like an exact option pick, so a tool may
- * act on it; every other way of saying it ("I put my answer in the file") is
- * the agent's to read, and the stage rule tells it to read the file then.
- */
-export function saidDone(words: string): boolean {
-  return /^["'`*_\s]*done[.!]*["'`*_\s]*$/i.test(words ?? "");
-}
-
-/**
- * The hook's second part while the engine's Plan Approval question is open: the
- * person wrote their answer on the questions file's `[Answer]:` line, as the
- * file invites, and said done. An exact choice there (its label, its number,
- * or its letter: the file shows the options lettered) is recorded now, through
- * the same path an exact pick typed in chat takes; anything else they wrote is
- * the agent's to read, and the line says where it is. Null when there is
- * nothing to say. Call after the turn's HUMAN_TURN and kept reply are on
- * record, so the recorded answer stands on their own turn.
- */
-export function notePlanApprovalFileAnswer(
-  projectDir: string,
-  session: string,
-  words: string,
-): string | null {
-  if (!saidDone(words)) return null;
-  return withAuditLock(projectDir, () => {
-    const open = currentPlanApprovalAsk(projectDir);
-    // Edit mode is the agent's to read: the person may have changed the plan
-    // files too, and the file can still hold the engine's own earlier answer.
-    if (open === null || open.record.mode !== "ask") return null;
-    const { record } = open;
-    const written = record.targets.map((target) => ({
-      unit: target.unit,
-      path: join(codeGenerationRecordDir(projectDir, target.unit), QUESTIONS_FILE),
-    })).map((target) => ({
-      ...target,
-      answer: answerWrittenInFile(readText(target.path)),
-    })).filter((target) => target.answer !== "" && !isNonAnswer(target.answer));
-    if (written.length === 0) return null;
-    const where = written.map((target) => toPosix(relative(projectDir, target.path))).join(", ");
-    const answers = [...new Set(written.map((target) => target.answer))];
-    const pick = answers.length === 1 ? exactOptionPick(answers[0], record.choices, true) : null;
-    const choice: PlanApprovalAnswerChoice | null = pick === 0 ? "approve"
-      : pick === 1 && record.targets.length === 1 ? "request-changes"
-      : pick === 2 ? "edit"
-      : null;
-    // Every plan the question asks about needs its own written answer before one
-    // choice can stand for all of them.
-    if (choice === null || written.length !== record.targets.length) {
-      return `AIDLC Plan Approval: the person wrote an answer in ${where}: ${
-        answers.map((answer) => `"${answer.slice(0, 200)}"`).join(", ")
-      }. Read it with their message and record the choice they made.`;
-    }
-    try {
-      const result = recordPlanApprovalAnswer(projectDir, session, { choice, exactPick: true });
-      return `AIDLC Plan Approval: the answer the person wrote in ${where}, "${answers[0].slice(0, 200)}", ` +
-        `is recorded. ${result.message}`;
-    } catch {
-      // Their words stay on the line; the agent reads them and records the choice.
-      return `AIDLC Plan Approval: the person wrote their answer in ${where}: "${answers[0].slice(0, 200)}". ` +
-        "Read it with their message and record the choice they made.";
-    }
   });
 }
 
@@ -1626,7 +1543,7 @@ export interface PlanApprovalAnswer {
   units?: string[];
   /** What to change, when the conductor states it; the person's words otherwise. */
   feedback?: string;
-  /** The person's reply was the option itself, so their words say nothing about what to change. */
+  /** A pick in a question box, so their words say nothing about what to change. */
   exactPick?: true;
   /**
    * Request Changes only: this chat's message the question opened for, proved by the answer command as
@@ -1720,8 +1637,7 @@ function correctReadRequestChanges(
  * shown. An instruction given with an approval ("approve, but add a test")
  * goes into the plan, and the approval then covers the plan as it stands.
  * Never the questions file, another plan's files, or code; empty before a
- * reply, while the person edits the files themselves, and in a question about
- * several plans while their latest reply is only a pick.
+ * reply and while the person edits the files themselves.
  */
 export function planApprovalReplyEditableFiles(projectDir: string): string[] {
   try {
@@ -1731,11 +1647,6 @@ export function planApprovalReplyEditableFiles(projectDir: string): string[] {
     // Kept words can be a question about the switch ("skip plan approval?"),
     // which is no reply: the files open only after a reply to the question.
     if (open.record.repliesFrom && !personRepliedAfter(projectDir, open.record.repliesFrom)) return [];
-    // In a question about several plans a bare pick ("2") does not say which
-    // plan: nothing opens until the person says more in their own words.
-    if (open.record.targets.length > 1 && exactOptionPick(replies[replies.length - 1].text, open.record.choices) !== null) {
-      return [];
-    }
     const answered = new Set((open.record.results ?? []).map((result) => result.unit));
     return open.record.targets.filter((target) => !answered.has(target.unit)).flatMap((target) => {
       const dir = codeGenerationRecordDir(projectDir, target.unit);
@@ -1750,8 +1661,8 @@ export function planApprovalReplyEditableFiles(projectDir: string): string[] {
 // belongs, the new-work offers, which record or plan) is the open question
 // from when it is asked until `next` names another step, until the engine
 // asks another question after it (a checkpoint or verification question asked
-// again, a gate shown again), which then owns the person's reply, or until
-// its answer sent their words to other work.
+// again, a gate shown again), or until its answer sent their words to other
+// work.
 interface OpenEngineQuestion {
   version: 1;
   askType: string;
@@ -1762,14 +1673,12 @@ interface OpenEngineQuestion {
 const LATER_QUESTION_EVENTS = new Set(["DECISION_RECORDED", "STAGE_AWAITING_APPROVAL"]);
 
 // Whether a question was asked after `since`, the second the one in hand was
-// shown (in `session` alone, when one is named): that later question owns the
-// person's reply. A routing answer can only follow its question, so the same
-// second counts for it.
-function askedAfter(projectDir: string, since: string, session?: string): boolean {
+// shown: that later question is the open one. A routing answer can only follow
+// its question, so the same second counts for it.
+function askedAfter(projectDir: string, since: string): boolean {
   return readAuditShardEvents(projectDir).some((row) =>
-    (session === undefined || auditBlockField(row.block, "Session") === session) &&
-    (LATER_QUESTION_EVENTS.has(row.event) ? row.timestamp > since
-      : row.event === "REQUEST_ROUTED" && row.timestamp >= since));
+    LATER_QUESTION_EVENTS.has(row.event) ? row.timestamp > since
+      : row.event === "REQUEST_ROUTED" && row.timestamp >= since);
 }
 
 // The Plan Approval question is shown now, in `session`'s chat. Showing the
@@ -1782,15 +1691,6 @@ function shownNow(
   const issuedAt = isoTimestamp();
   const earlier = record === null ? {} : record.shownIn ?? { "": record.issuedAt };
   return { issuedAt, shownIn: { ...earlier, [session || ""]: issuedAt } };
-}
-
-// When the Plan Approval question was last shown in this chat, or in a chat
-// the engine could not name; "" when it never was.
-function shownInChat(record: PlanApprovalAskRecord, session: string): string {
-  const shown = record.shownIn ?? { "": record.issuedAt };
-  const here = shown[session] ?? "";
-  const unnamed = shown[""] ?? "";
-  return here > unnamed ? here : unnamed;
 }
 
 function openEngineQuestionPath(projectDir: string): string {
@@ -1807,23 +1707,26 @@ export function noteOpenEngineQuestion(projectDir: string, marker: { ask_type?: 
 }
 
 /**
- * Whether such an engine question is the open step. The person's reply
- * answers it, so no question it was asked over keeps it.
+ * The ask type of such an engine question when it is the open step, else null:
+ * a message sent now was sent while it was on screen. Structure only (the
+ * engine's own ask records); the message's words are the agent's to read.
  */
-export function engineQuestionHoldsReplies(projectDir: string): boolean {
+export function openEngineQuestion(projectDir: string): string | null {
   try {
     const marker = readActiveDirectiveMarker(projectDir, readFileSync(stateFilePath(projectDir), "utf-8"));
     if (
       marker?.version !== 2 || marker.kind !== "ask" || typeof marker.ask_type !== "string" ||
       marker.ask_type === PLAN_APPROVAL_ASK_TYPE || marker.ask_type === GUARD_RECOVERY_ASK_TYPE
     ) {
-      return false;
+      return null;
     }
     const noted = readPlanApprovalRuntimeRecord<OpenEngineQuestion>(openEngineQuestionPath(projectDir), "Open engine question");
-    if (noted?.version !== 1 || noted.askType !== marker.ask_type || noted.stateSha256 !== marker.state_sha256) return true;
-    return !askedAfter(projectDir, noted.askedAt);
+    if (noted?.version !== 1 || noted.askType !== marker.ask_type || noted.stateSha256 !== marker.state_sha256) {
+      return marker.ask_type;
+    }
+    return askedAfter(projectDir, noted.askedAt) ? null : marker.ask_type;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -1949,8 +1852,8 @@ export function recordPlanApprovalAnswer(
           : null;
         if (corrected) return corrected;
         throw new Error(
-          `The person picked "${ANSWER_LABELS[theirs]}" for this plan question, and that is recorded. Run next; if ` +
-            'they meant something else, record "Review the plan" and the question comes back.',
+          `"${ANSWER_LABELS[theirs]}" is recorded for this plan question. Run next; if the person's reply since ` +
+            'changes that, record "Review the plan" and the question comes back.',
         );
       }
       // From their own terminal no reply can be kept, so name the step that
@@ -1979,19 +1882,8 @@ export function recordPlanApprovalAnswer(
           `'${PERSON_WORDS_SLOT}'\`${PERSON_WORDS_FILL}, and say so in one line. Then record the choice they make.`,
       );
     }
-    // A reply that is exactly Request Changes is the person's pick for these
-    // plans: it binds until a later reply says otherwise.
-    if (answer.choice !== "request-changes" && exactOptionPick(replies[replies.length - 1].text, record.choices) === 1) {
-      throw new Error(
-        `The person picked "Request Changes" for ${labels(record.targets.map((target) => target.unit))}. Record ` +
-          "that for the plan(s) they meant (ask which, when they did not say), or ask them if you read their words " +
-          "differently.",
-      );
-    }
+    // Their words, whole: what to change when they asked for changes.
     const words = replies.map((reply) => reply.text).join("\n");
-    // What to change: their messages, leaving out a message that is only an option pick.
-    const said = replies.filter((reply) => exactOptionPick(reply.text, record.choices) === null)
-      .map((reply) => reply.text).join("\n");
     const who = session || replies[replies.length - 1].session;
     const units = record.targets.map((target) => target.unit);
     const answered = new Set((record.results ?? []).map((result) => result.unit));
@@ -2023,7 +1915,7 @@ export function recordPlanApprovalAnswer(
     for (const unit of chosen) {
       if (answer.choice === "request-changes") {
         results.push(requestChangesFor(
-          projectDir, record, unit, who, answer.feedback?.trim() || (answer.exactPick ? undefined : said || undefined), words,
+          projectDir, record, unit, who, answer.feedback?.trim() || (answer.exactPick ? undefined : words || undefined), words,
         ));
         continue;
       }

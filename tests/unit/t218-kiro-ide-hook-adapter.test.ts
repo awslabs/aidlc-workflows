@@ -318,6 +318,36 @@ function runIde(
   };
 }
 
+// The agent's record of the person's yes to the legacy recovery question, the
+// command its one choice runs: the hook takes no typed phrase as that yes.
+function recordRecoveryYes(
+  projectDir: string,
+  envOverrides: Record<string, string | undefined> = {},
+): { stdout: string; stderr: string; code: number } {
+  const r = spawnSync(
+    "bun",
+    [
+      join(projectDir, ".kiro", "tools", "aidlc-log.ts"),
+      "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+      "--details", "Recover Plan Approval", "--project-dir", projectDir,
+    ],
+    {
+      cwd: projectDir,
+      input: "",
+      encoding: "utf-8",
+      env: {
+        ...process.env,
+        CLAUDE_PROJECT_DIR: projectDir,
+        VSCODE_IPC_HOOK: `test-ipc:${projectDir}`,
+        VSCODE_PID: "218",
+        ...envOverrides,
+      } as NodeJS.ProcessEnv,
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    },
+  );
+  return { stdout: r.stdout ?? "", stderr: r.stderr ?? "", code: r.status ?? -1 };
+}
+
 function legacySessionId(
   projectDir: string,
   ipc = `test-ipc:${projectDir}`,
@@ -4182,6 +4212,19 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
           ).code,
           target,
         ).toBe(0);
+        // The phrase typed is a reply like any other: only the agent's record
+        // of the yes it read recovers.
+        const typedPhrase = runIde(
+          dir,
+          "plan-approval-guard",
+          JSON.stringify({ toolName: "execute_bash", toolArgs: {} }),
+        );
+        expect(typedPhrase.code, target).toBe(2);
+        expect(typedPhrase.stderr, target).toContain(
+          "recovery requires a human response",
+        );
+        const yes = recordRecoveryYes(dir);
+        expect(yes.code, `${target} ${yes.stdout}${yes.stderr}`).toBe(0);
         const recovered = runIde(
           dir,
           "plan-approval-guard",
@@ -4204,7 +4247,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     }
   });
 
-  test("legacy offer corruption or deletion requires exact human recovery before replacement", () => {
+  test("legacy offer corruption or deletion requires human recovery before replacement", () => {
     for (const mode of ["corrupt", "delete"] as const) {
       const dir = scratchProject(true);
       try {
@@ -4266,10 +4309,12 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
           runIde(
             dir,
             "record-human-turn",
-            JSON.stringify({ prompt: "Recover Plan Approval" }),
+            JSON.stringify({ prompt: "Yes, bring it back." }),
           ).code,
           mode,
         ).toBe(0);
+        const yes = recordRecoveryYes(dir);
+        expect(yes.code, `${mode} ${yes.stdout}${yes.stderr}`).toBe(0);
         const recovered = runIde(
           dir,
           "plan-approval-guard",
@@ -4350,10 +4395,12 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         runIde(
           dir,
           "record-human-turn",
-          JSON.stringify({ prompt: "Recover Plan Approval" }),
+          JSON.stringify({ prompt: "Yes, bring it back." }),
           recoveryHost,
         ).code,
       ).toBe(0);
+      const yes = recordRecoveryYes(dir, recoveryHost);
+      expect(yes.code, yes.stdout + yes.stderr).toBe(0);
       const recovered = runIde(
         dir,
         "plan-approval-guard",

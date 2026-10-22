@@ -1,4 +1,4 @@
-// covers: function:publishPlanApprovalAsk, function:notePlanApprovalFileAnswer, function:requestPlanApprovalReviewNow, hook:aidlc-record-human-turn
+// covers: function:publishPlanApprovalAsk, function:requestPlanApprovalReviewNow, hook:aidlc-record-human-turn
 //
 // The Plan Approval questions file says "write your answer after `[Answer]:`
 // and tell me in chat when you are done". These cases drive the real `next` and the real human-turn
@@ -8,13 +8,14 @@
 //
 //   - an answer the person wrote in the file is still there when `next` shows
 //     the question again (nothing they wrote is thrown away);
-//   - when they say done, an exact choice in the file is recorded as their
-//     pick, like "1" typed in chat, and the next `next` builds (or revises);
-//   - words that are not one of the choices are not read by a tool: the hook
-//     names the file for the agent, which reads them and records the choice;
-//   - a turn that does not say done leaves the file unread and kept;
+//   - when they say they are done, in whatever words, no tool reads the file:
+//     the agent reads the line and records the choice it says, and the next
+//     `next` builds (or revises), the person's words beside the record;
+//   - a choice typed in chat and one written in the file are both the agent's
+//     to read;
 //   - an answer the engine wrote itself (a recorded approval the person then
-//     asked to review) is never read back as theirs.
+//     asked to review) is never read back as theirs, and the line approves
+//     nothing on its own.
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -181,68 +182,70 @@ describe("an answer written in the Plan Approval questions file", () => {
   });
 
   for (const policy of ["off", "strict"] as const) {
-    test(`Approve Plan in the file, then done in chat: recorded, and the next next builds (Guard Policy ${policy})`, () => {
+    test(`Approve Plan in the file, then done in chat: the agent records it, and the next next builds (Guard Policy ${policy})`, () => {
       const proj = project(policy);
       askFor(proj);
       writeAnswer(proj, "Approve Plan");
       const context = reply(proj, "done");
+      expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+      expect(context).not.toContain("is recorded");
+      const recorded = answer(proj, "Approve Plan");
+      expect(recorded.code, recorded.message).toBe(0);
       expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
       expect(auditText(proj)).toContain("**Person Reply**: done");
-      expect(context).toContain("is recorded");
-      expect(context).toContain("code-generation-questions.md");
-      expect(answerLine(proj)).toBe("[Answer]: A. Approve Plan");
       expect(answer(proj, "Approve Plan").message).toContain("already recorded");
-      expect(answer(proj, "Request Changes").code).not.toBe(0);
       expect(next(proj).plan_approval).toEqual({ status: "approved" });
     });
   }
 
-  test("the file's choice is read the way a chat pick is: its letter, its number, or its label", () => {
-    for (const written of ["A. Approve Plan", "1", "approve plan", "A"]) {
+  test("done in other words: no tool reads the file, and the agent's record of the line is recorded", () => {
+    for (const said of ["Done.", "finished", "ok I'm done, it's in the file", "fertig"]) {
       const proj = project();
       askFor(proj);
-      writeAnswer(proj, written);
-      reply(proj, "Done.");
-      expect(auditText(proj), written).toContain("**Event**: PLAN_APPROVAL_RECORDED");
-      expect(next(proj).plan_approval, written).toEqual({ status: "approved" });
+      writeAnswer(proj, "A. Approve Plan");
+      reply(proj, said);
+      expect(auditText(proj), said).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+      const recorded = answer(proj, "Approve Plan");
+      expect(recorded.code, `${said}: ${recorded.message}`).toBe(0);
+      expect(next(proj).plan_approval, said).toEqual({ status: "approved" });
     }
   });
 
-  test("done with the choice recorded: next with the word says to run bare next", () => {
+  test("done while the question waits: next with the word names the record step", () => {
     const proj = project();
     askFor(proj);
     writeAnswer(proj, "Approve Plan");
     reply(proj, "done");
     const read = next(proj, ["done"]);
     expect(read.kind, JSON.stringify(read)).toBe("print");
-    expect(read.message).toContain("it is recorded");
+    expect(read.message).toContain("[Answer]:");
+    expect(read.message).toContain("--checkpoint plan-approval");
+    expect(answer(proj, "Approve Plan").code).toBe(0);
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
-  test("Request Changes in the file, then done: the plan goes back for revision", () => {
+  test("Request Changes in the file, then done: the agent records it, and the plan goes back for revision", () => {
     const proj = project();
     askFor(proj);
     writeAnswer(proj, "B. Request Changes");
     reply(proj, "done");
-    expect(auditText(proj)).toContain("**Details**: Request Changes");
-    expect(answerLine(proj)).toBe("[Answer]: B. Request Changes");
-    expect(next(proj).plan_approval).toEqual({ status: "revise" });
+    expect(auditText(proj)).not.toContain("**Details**: Request Changes");
+    expect(answer(proj, "Request Changes").code).toBe(0);
+    expect(next(proj).plan_approval?.status).toBe("revise");
   });
 
-  test("words in the file that are not a choice: nothing is recorded by a tool; the agent is told where they are", () => {
+  test("words in the file that are not a choice: the agent reads them and records the change", () => {
     const proj = project();
     askFor(proj);
     writeAnswer(proj, "use a lookup table");
-    const context = reply(proj, "done");
+    reply(proj, "done");
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
     expect(auditText(proj)).not.toContain("**Details**: Request Changes");
-    expect(context).toContain("code-generation-questions.md");
-    expect(context).toContain("use a lookup table");
     expect(answer(proj, "Request Changes", ["--reason", "use a lookup table"]).message).toContain('Recorded "Request Changes"');
     expect(next(proj).plan_approval).toEqual({ status: "revise", feedback: "use a lookup table" });
   });
 
-  test("a turn that does not say done leaves the file's answer unread, and kept", () => {
+  test("a turn about something else leaves the file's answer unread, and kept", () => {
     const proj = project();
     askFor(proj);
     writeAnswer(proj, "Approve Plan");
@@ -251,24 +254,26 @@ describe("an answer written in the Plan Approval questions file", () => {
     expect(next(proj).kind).toBe("ask");
     expect(answerLine(proj)).toBe("[Answer]: Approve Plan");
     reply(proj, "done");
-    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    expect(answer(proj, "Approve Plan").code).toBe(0);
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
-  test("a choice typed in chat wins over the file: the file's older answer is not read", () => {
+  test("a choice typed in chat and the file's older answer are both the agent's to read", () => {
     const proj = project();
     askFor(proj);
     writeAnswer(proj, "Approve Plan");
     reply(proj, "2");
-    expect(auditText(proj)).toContain("**Details**: Request Changes");
+    expect(auditText(proj)).not.toContain("**Details**: Request Changes");
     expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
-    expect(next(proj).plan_approval).toEqual({ status: "revise" });
+    expect(answer(proj, "Request Changes").code).toBe(0);
+    expect(next(proj).plan_approval?.status).toBe("revise");
   });
 
   test("an answer the engine wrote is never read back as the person's: after Review the plan the line is blank", () => {
     const proj = project();
     askFor(proj);
     reply(proj, "1");
+    expect(answer(proj, "Approve Plan").code).toBe(0);
     expect(answerLine(proj)).toBe("[Answer]: A. Approve Plan");
     expect(answer(proj, "Review the plan").code).toBe(0);
     expect(next(proj).kind).toBe("ask");
@@ -282,6 +287,7 @@ describe("an answer written in the Plan Approval questions file", () => {
     const proj = project();
     askFor(proj);
     reply(proj, "3");
+    expect(answer(proj, "I'll edit the files").code).toBe(0);
     expect(next(proj).plan_approval?.editing).toBe(true);
     writeAnswer(proj, "Approve Plan");
     reply(proj, "done");
@@ -309,7 +315,7 @@ describe("the same answer through Kiro CLI's userPromptSubmit hook", () => {
   }
 
   for (const policy of ["off", "strict"] as const) {
-    test(`Approve Plan in the file, then done in Kiro CLI chat: recorded, and the build arrives (Guard Policy ${policy})`, () => {
+    test(`Approve Plan in the file, then done in Kiro CLI chat: the agent records it, and the build arrives (Guard Policy ${policy})`, () => {
       const proj = createTestProject();
       created.push(proj);
       cpSync(join(REPO_ROOT, "dist", "kiro", "aidlc"), join(proj, "aidlc"), { recursive: true });
@@ -357,11 +363,14 @@ describe("the same answer through Kiro CLI's userPromptSubmit hook", () => {
       // Without a word from the person, next shows the question again and keeps their answer.
       expect(engine(proj, kiro, ["next"]).kind).toBe("ask");
       expect(answerLine(proj)).toBe("[Answer]: Approve Plan");
-      // The person types "done" in Kiro CLI chat; its userPromptSubmit hook reads it.
+      // The person types "done" in Kiro CLI chat; its userPromptSubmit hook keeps it, and the agent reads the file.
       const context = tool(proj, kiro, ["aidlc.ts", "engine", "adapter", "kiro", "verb-intercept"], JSON.stringify({
         hook_event_name: "userPromptSubmit", cwd: proj, session_id: SESSION, prompt: "done",
       }));
-      expect(context).toContain("is recorded");
+      expect(context).not.toContain("is recorded");
+      expect(auditText(proj)).not.toContain("**Event**: PLAN_APPROVAL_RECORDED");
+      tool(proj, kiro, ["aidlc-log.ts", "answer", "--stage", "code-generation", "--checkpoint", "plan-approval",
+        "--details", "Approve Plan", "--project-dir", proj]);
       expect(answerLine(proj)).toBe("[Answer]: A. Approve Plan");
       expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
       let directive = engine(proj, kiro, ["next"]);

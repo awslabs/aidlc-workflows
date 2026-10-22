@@ -269,11 +269,12 @@ describe("t-checkpoint-answer-any-chat: what a new chat is told to do", () => {
     expect(print.message).not.toContain("session you asked with");
   });
 
-  test("\"/aidlc 2\" in a new chat is Request Changes, and the step names the choices a number picks", () => {
+  test("\"/aidlc 2\" in a new chat is kept as the reply, and the step names the numbered choices to read it against", () => {
     const p = fixture();
     expect(checkpoint(p, ["--action", "ask", "--session", OLD]).status).toBe(0);
     person(p, "/aidlc 2", NEW);
-    expect(readProtectedResponse(p, NEW)?.choice).toBe("Request Changes");
+    expect(readProtectedResponse(p, NEW)?.choice).toBeUndefined();
+    expect(readProtectedResponse(p, NEW)?.words).toBe("2");
     const print = next(p, ["2"]);
     expect(print.kind, JSON.stringify(print)).toBe("print");
     expect(print.message).toContain(
@@ -324,9 +325,10 @@ describe("t-checkpoint-answer-any-chat: a batch checkpoint answered in a new cha
     });
   }
 
-  // What the step names and what the hook takes a number for are the same
-  // choices: "/aidlc 1" in a new chat at that batch is Request Changes.
-  test("\"/aidlc 1\" in a new chat at a batch offering Request Changes alone is Request Changes", () => {
+  // The step names the batch's own numbered choices, and the agent reads a
+  // number against them: "/aidlc 1" in a new chat at that batch is kept as the
+  // reply its Request Changes stands on.
+  test("\"/aidlc 1\" in a new chat at a batch offering Request Changes alone is the reply the agent's Request Changes stands on", () => {
     const p = fixture();
     const target = { kind: "batch", batch: 1, units: ["alpha", "beta"], fingerprint: "sha256:batch", commandSha256s: {} };
     appendAuditEntry("DECISION_RECORDED", {
@@ -336,7 +338,8 @@ describe("t-checkpoint-answer-any-chat: a batch checkpoint answered in a new cha
     mintProtectedQuestion(p, { kind: "checkpoint-approval", session: OLD, target, choices: ["Request Changes"] });
     person(p, "/aidlc 1", NEW);
     expect(readProtectedQuestion(p, OLD)).toBeNull();
-    expect(readProtectedResponse(p, NEW)?.choice).toBe("Request Changes");
+    expect(readProtectedResponse(p, NEW)?.choice).toBeUndefined();
+    expect(readProtectedResponse(p, NEW)?.words).toBe("1");
     expect(() => requireProtectedResponse(p, NEW, {
       kind: "checkpoint-approval", targetDigest: protectedTargetDigest(target), choice: "Request Changes",
     })).not.toThrow();
@@ -406,13 +409,12 @@ for (const which of Object.keys(PROTECTED) as (keyof typeof PROTECTED)[]) {
       expect(answer(p, which, NEW).status).not.toBe(0);
     });
 
-    test("the other choice than the one they picked is not recorded", () => {
+    test("the choice the agent read is recorded as it hands it; no tool holds it to a reading of the words", () => {
       const p = askedInOldChat(which);
       person(p, "Request Changes", NEW);
-      const refused = answer(p, which, NEW);
-      expect(refused.status).not.toBe(0);
-      expect(JSON.parse(refused.out.trim()).error).toContain('The person picked "Request Changes"');
-      expect(answer(p, which, NEW, "Request Changes").status).toBe(0);
+      const recorded = answer(p, which, NEW, "Request Changes");
+      expect(recorded.status, recorded.out).toBe(0);
+      expect(recorded.out).not.toContain("The person picked");
     });
   });
 }

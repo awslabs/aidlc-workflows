@@ -14,9 +14,8 @@ what they say, in their own words and in context, and do it.
   colleague would. A question they ask is answered, and their next reply
   decides.
 - Never make them repeat themselves, retype an option, or confirm what they
-  already said. A reply that is exactly one option ("1", "Approve Plan") is
-  already recorded where the engine asks; recording the same choice again is
-  fine.
+  already said. A pick in a question box is already recorded where the engine
+  asks; recording the same choice again is fine.
 - If they say you recorded the wrong choice, fix it in one step and say so.
   After a wrong Request Changes at a gate, `{{INVOKE}} engine orchestrate report
   --stage <slug> --result revised` shows the gate again. After a wrong approval,

@@ -1556,8 +1556,13 @@ function askChoices(d: Record<string, unknown>, invocation: string, logInvocatio
         }));
     case "unit-claim":
       return strings("claimable_units").map((unit) => ({ label: unit, command: `${invocation} next --claim ${shellArg(unit)}` }));
-    case "legacy-plan-approval-recovery":
-      return [{ label: String(d.recovery_choice ?? "Recover Plan Approval"), command: `${invocation} next` }];
+    case "legacy-plan-approval-recovery": {
+      const label = String(d.recovery_choice ?? "Recover Plan Approval");
+      return [{
+        label,
+        command: `${logInvocation} answer --stage code-generation --checkpoint plan-approval --details ${fixedLabelArg(label)}`,
+      }];
+    }
     default:
       return null;
   }

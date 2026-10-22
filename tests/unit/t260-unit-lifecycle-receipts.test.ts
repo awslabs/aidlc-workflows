@@ -54,6 +54,7 @@ import {
   activeUnitCheckpoint,
   artifactFilename,
   consumeSharedDirectiveAsk,
+  recordGuardRecoveryChoice,
   currentUnitLifecycleMode,
   latestMainWorkflowStageRunFloor,
   latestMainWorkflowStageRunFloorForProject,
@@ -476,14 +477,16 @@ describe("t260 single active unit", () => {
     expect(unitVerb(proj, "complete", "unit-a").rc).not.toBe(0);
     // Picked for another Unit whose artifacts are missing: still checked.
     expect(consumeSharedDirectiveAsk(proj, "1")).toBe(true);
+    recordGuardRecoveryChoice(proj, "record-unit-completion", false);
     const missing = unitVerb(proj, "complete", "unit-b");
     expect(missing.rc).not.toBe(0);
     expect(missing.out).toContain("required artifacts are missing");
     publish("unit-a", [record("unit-a")]);
     // Offered but not yet picked: still refused.
     expect(unitVerb(proj, "complete", "unit-a").rc).not.toBe(0);
-    // The person picks it, as the human-turn hook records a reply.
+    // The person picks it: the hook keeps their reply, and the agent records the remedy it read.
     expect(consumeSharedDirectiveAsk(proj, "1")).toBe(true);
+    recordGuardRecoveryChoice(proj, "record-unit-completion", false);
     const done = unitVerb(proj, "complete", "unit-a");
     expect(done.rc, done.out).toBe(0);
     expect(done.out).toContain("UNIT_COMPLETED");

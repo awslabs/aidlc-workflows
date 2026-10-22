@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
-import { APPROVAL_GATE_CHOICES, protectedQuestionPick } from "./aidlc-reply-reader.ts";
+import { APPROVAL_GATE_CHOICES } from "./aidlc-reply-reader.ts";
 import {
   activeIntentUuid,
   attemptEventDefinitelyBefore,
@@ -43,6 +43,8 @@ import {
   requireProtectedResponse,
   protectedTargetDigest,
   gateWordsSinceUnitReview,
+  protectedReplyFloor,
+  isoTimestamp,
   markProtectedQuestionReplied,
   mintProtectedQuestion,
   PROTECTED_RESPONSE_WORDS_MAX_CHARS,
@@ -1635,7 +1637,8 @@ export function askConstructionCheckpoint(
     // The person may have answered while the Unit's review ran: their words
     // typed in this chat after it was asked for and before any other question
     // was asked (gateWordsSinceUnitReview), read before this question's own
-    // row, are its reply, kept as a reply typed after it is.
+    // row, are its reply, kept as a reply typed after it is, for the conductor
+    // to read.
     const earlier = gateWordsSinceUnitReview(projectDir, session, unit, current.result.stages);
     withdrawProtectedQuestions(projectDir, session);
     appendAuditEntryUnlocked("DECISION_RECORDED", {
@@ -1661,16 +1664,23 @@ export function askConstructionCheckpoint(
     };
     if (earlier === null) return result;
     const words = earlier.join("\n").slice(-PROTECTED_RESPONSE_WORDS_MAX_CHARS);
-    const pick = protectedQuestionPick(question, earlier.at(-1));
     markProtectedQuestionReplied(projectDir, question);
     writeProtectedResponse(projectDir, {
       version: 1, session, challengeId: question.challengeId,
-      ...(pick === null ? {} : { choice: pick }),
       responseSha256: createHash("sha256").update(words, "utf-8").digest("hex"),
       words,
+      at: isoTimestamp(),
     });
     return { ...result, earlier_reply: words };
   });
+}
+
+// A Unit checkpoint's reply the agent names: after the Unit's review was
+// requested in the checkpoint's stages, else after their start.
+function namedReply(
+  projectDir: string, stages: readonly string[], unit: string, message: string | undefined,
+): { message: string; floor: string | null } | undefined {
+  return message === undefined ? undefined : { message, floor: protectedReplyFloor(projectDir, stages, [unit]) };
 }
 
 export function approveConstructionCheckpoint(
@@ -1680,6 +1690,8 @@ export function approveConstructionCheckpoint(
   reply?: string,
   session = "",
   findingDispositions?: ApprovalFindingDispositions,
+  // The message the agent read the approval from, when it names one.
+  message?: string,
 ): ConstructionCheckpoint {
   // The conductor read the person's reply and reports their approval. The
   // receipt records it beside the person's own words, kept by the human-turn
@@ -1702,7 +1714,7 @@ export function approveConstructionCheckpoint(
     } else if (humanRequired) {
       requireProtectedResponse(projectDir, session, {
         kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: "Approve",
-      });
+      }, namedReply(projectDir, current.result.stages, unit, message));
       words = readProtectedResponse(projectDir, session)?.words;
     } else if (current.result.approved) {
       return current.result;
@@ -1773,6 +1785,7 @@ export function rejectConstructionCheckpoint(
   _reply: string,
   givenReason: string,
   session = "",
+  message?: string,
 ): ConstructionCheckpoint {
   // The conductor read the person's reply as a change request. What they said
   // to change is the reason: the conductor's --reason when given, otherwise the
@@ -1784,7 +1797,7 @@ export function rejectConstructionCheckpoint(
     }
     requireProtectedResponse(projectDir, session, {
       kind: "checkpoint-approval", targetDigest: protectedTargetDigest(approvalTarget(current)), choice: "Request Changes",
-    });
+    }, namedReply(projectDir, current.result.stages, unit, message));
     const words = readProtectedResponse(projectDir, session)?.words;
     const reason = givenReason.trim() || changeRequestWords(words);
     const userInput = "Request Changes";

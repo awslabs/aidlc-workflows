@@ -205,6 +205,29 @@ function printedCommand(message: string): string {
   return command!.replace('"<2-3 word kebab essence>"', "pending-work").replace("'<their words>'", `'${APPROVAL}'`);
 }
 
+// The person names a routing option in chat: `next` runs none of them; it
+// names each option's own command, and the agent runs the one they chose.
+function routeNamed(words: string): { kind: string; message: string } {
+  const named = JSON.parse(next([words]).stdout.trim());
+  expect(named.kind, JSON.stringify(named).slice(0, 300)).toBe("print");
+  expect(String(named.message)).toContain("took nothing from the line");
+  return named;
+}
+
+// The commands the step names for one option, in the order it names them.
+function namedCommands(message: string, label: string): string[] {
+  const at = message.indexOf(`"${label}": `);
+  expect(at, message).toBeGreaterThanOrEqual(0);
+  const rest = message.slice(at + label.length + 4);
+  const end = rest.search(/; "|\. If they are asking/);
+  return [...rest.slice(0, end === -1 ? undefined : end).matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+}
+
+function agentRuns(words: string, label: string) {
+  const [command] = namedCommands(routeNamed(words).message, label);
+  return JSON.parse(runEmittedCommand(command).stdout.trim());
+}
+
 function createdDescription(): string {
   const active = readFileSync(cursorPath(proj), "utf-8").trim();
   const state = readFileSync(join(intentsDir(proj), active, "aidlc-state.md"), "utf-8");
@@ -814,7 +837,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(again.continue_command).not.toBe(ask.continue_command);
     });
 
-    test("a routing continue said in prose re-asks, like its command, when another workflow is selected", () => {
+    test("a routing continue said in prose re-asks through its own command, when another workflow is selected", () => {
       expect(util(["intent-create", "--scope", "poc", "--arguments", "first", "--label", "first"]).status).toBe(0);
       expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
       const asked = readFileSync(cursorPath(proj), "utf-8").trim();
@@ -823,28 +846,28 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(ask.ask_type).toBe("new-work-routing");
       expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent switch ${other}`).status).toBe(0);
       const stateBefore = readFileSync(join(intentsDir(proj), other, "aidlc-state.md"), "utf-8");
-      const again = JSON.parse(next(["1"]).stdout.trim());
+      const again = agentRuns("1", "Part of the active work");
       expect(again.ask_type, JSON.stringify(again).slice(0, 300)).toBe("new-work-routing");
       expect(again.new_work_description).toBe("rename the settings page");
       expect(readFileSync(join(intentsDir(proj), other, "aidlc-state.md"), "utf-8")).toBe(stateBefore);
     });
 
-    test("separate new work said in prose starts, whichever workflow is selected since", () => {
-      expect(util(["intent-create", "--scope", "poc", "--arguments", "first", "--label", "first"]).status).toBe(0);
-      expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
-      const asked = readFileSync(cursorPath(proj), "utf-8").trim();
-      const other = recordDirs(proj).find((record) => record !== asked)!;
-      const ask = asWork("rename the settings page");
-      expect(ask.ask_type).toBe("new-work-routing");
-      expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent switch ${other}`).status).toBe(0);
-      for (const reply of ["2", "Separate new piece of work"]) {
-        const started = JSON.parse(next([reply]).stdout.trim());
+    for (const reply of ["2", "Separate new piece of work"]) {
+      test(`separate new work said in prose (${reply}) starts, whichever workflow is selected since`, () => {
+        expect(util(["intent-create", "--scope", "poc", "--arguments", "first", "--label", "first"]).status).toBe(0);
+        expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
+        const asked = readFileSync(cursorPath(proj), "utf-8").trim();
+        const other = recordDirs(proj).find((record) => record !== asked)!;
+        const ask = asWork("rename the settings page");
+        expect(ask.ask_type).toBe("new-work-routing");
+        expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent switch ${other}`).status).toBe(0);
+        const started = agentRuns(reply, "Separate new piece of work");
         expect(started.ask_type, JSON.stringify(started).slice(0, 300)).toBeUndefined();
         expect(started).toEqual(JSON.parse(runEmittedCommand(ask.new_intent_command).stdout.trim()));
-      }
-    });
+      });
+    }
 
-    test("a routing reshape said in prose re-asks, like its command, when another workflow is selected", () => {
+    test("a routing reshape said in prose re-asks through its own command, when another workflow is selected", () => {
       expect(util(["intent-create", "--scope", "poc", "--arguments", "first", "--label", "first"]).status).toBe(0);
       expect(util(["intent-create", "--scope", "feature", "--arguments", "second", "--label", "second"]).status).toBe(0);
       const asked = readFileSync(cursorPath(proj), "utf-8").trim();
@@ -853,21 +876,23 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(ask.ask_type).toBe("new-work-routing");
       expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent switch ${other}`).status).toBe(0);
       const stateBefore = readFileSync(join(intentsDir(proj), other, "aidlc-state.md"), "utf-8");
-      const again = JSON.parse(next(["3"]).stdout.trim());
+      const again = agentRuns("3", "Reshape the active work");
       expect(again.ask_type, JSON.stringify(again).slice(0, 300)).toBe("new-work-routing");
       expect(again.new_work_description).toBe("rename the settings page");
       expect(readFileSync(join(intentsDir(proj), other, "aidlc-state.md"), "utf-8")).toBe(stateBefore);
     });
 
     for (const reply of ["1", "3"]) {
-      test(`a routing option said in prose (${reply}) asks again, never creates, when the workflow it named is gone`, () => {
+      test(`a routing option said in prose (${reply}) creates nothing when the workflow it named is gone`, () => {
         expect(util(["intent-create", "--scope", "poc", "--arguments", "first", "--label", "first"]).status).toBe(0);
         const [asked] = recordDirs(proj);
         const ask = asWork("rename the settings page");
         expect(ask.ask_type).toBe("new-work-routing");
         expect(runEmittedCommand(`bun .claude/tools/aidlc.ts engine intent archive ${asked}`).status).toBe(0);
-        const again = JSON.parse(next([reply]).stdout.trim());
-        expect(again.kind, JSON.stringify(again).slice(0, 300)).toBe("ask");
+        // The option's own command finds the work gone and asks about the request again.
+        const again = agentRuns(reply, reply === "1" ? "Part of the active work" : "Reshape the active work");
+        expect(again.kind, JSON.stringify(again).slice(0, 300)).not.toBe("error");
+        expect(JSON.stringify(again)).toContain("rename the settings page");
         expect(recordDirs(proj), "no work is created unasked").toEqual([asked]);
       });
     }
@@ -962,6 +987,9 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
       expect(refused.kind).toBe("error");
     });
 
+    // `next` reads none of these replies: it names each option's own command, and
+    // the agent runs the one the person chose (agentRuns), or for continue and
+    // reshape with several records the one for the work they named.
     describe("a reply that only names one of the no-selection routing question's options", () => {
       const DESCRIPTION = "fix the broken login button";
       const routingAsk = () => {
@@ -975,7 +1003,10 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         ask.numbered_prose_question.split("\n").find((line) => line.startsWith(`${n}. `))!;
       const reply = (ask: { numbered_prose_question: string }, text: string): string =>
         text.startsWith("<line ") ? numberedLine(ask, Number(text[6])) : text;
-      const directive = (text: string) => JSON.parse(next([text]).stdout.trim());
+      const CONTINUE = "Part of existing work";
+      const SEPARATE = "Separate new piece of work";
+      const RESHAPE = "Reshape existing work";
+      const commandsOf = (rows: Array<{ command: string }>) => rows.map((row) => row.command);
       // The same line marked as a request of their own. With a question of ours
       // already open, a bare words line is read as a possible reply to it
       // (t-three-ways-to-read-a-line), so a case about a REQUEST says so.
@@ -1012,7 +1043,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         test(`the separate-work option (${JSON.stringify(text)}) runs the question's own new-work command`, () => {
           seedTwoIntentsNoCursor();
           const ask = routingAsk();
-          const d = directive(reply(ask, text));
+          const d = agentRuns(reply(ask, text), SEPARATE);
           expect(d.kind, JSON.stringify(d).slice(0, 300)).toBe("print");
           expect(d).toEqual(emitted(ask.new_intent_command));
         });
@@ -1023,16 +1054,12 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         ["reshape", "reshape_commands", ["3", "Reshape existing work", "<line 3>"]],
       ] as const) {
         for (const text of texts) {
-          test(`the ${route} option (${JSON.stringify(text)}) with two records asks only which one, each record's own command a typed choice`, () => {
+          test(`the ${route} option (${JSON.stringify(text)}) with two records names each record's own command, each a typed choice`, () => {
             seedTwoIntentsNoCursor();
             const ask = routingAsk();
             const before = questionCount();
-            const d = directive(reply(ask, text));
-            expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("intent-pick");
-            expect(d.question).toContain(route === "continue" ? "Which piece of work is this part of: " : "Which piece of work should I reshape: ");
-            for (const selector of ask.available_intents) expect(d.question).toContain(selector);
-            expect(d.available_intents).toEqual(ask.available_intents);
-            expect(d.select_commands).toEqual(ask[field]);
+            const named = routeNamed(reply(ask, text));
+            expect(namedCommands(named.message, route === "continue" ? CONTINUE : RESHAPE)).toEqual(commandsOf(ask[field]));
             expect(questionCount(), "no new question is asked").toBe(before);
             if (route === "continue") {
               const [target] = ask.select_commands;
@@ -1049,7 +1076,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const ask = routingAsk();
         expect(ask.available_intents).toEqual([record]);
         for (const text of ["1", "Part of existing work"]) {
-          expect(directive(text)).toEqual(emitted(ask.select_commands[0].command));
+          expect(agentRuns(text, CONTINUE)).toEqual(emitted(ask.select_commands[0].command));
         }
       });
 
@@ -1060,7 +1087,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
         // Its select command carries the setting, and a reply naming the option runs the same.
         expect(ask.select_commands[0].command).toContain("--depth comprehensive");
-        for (const text of ["1", "Part of existing work"]) expect(directive(text)).toEqual(emitted(ask.select_commands[0].command));
+        for (const text of ["1", "Part of existing work"]) expect(agentRuns(text, CONTINUE)).toEqual(emitted(ask.select_commands[0].command));
         // It selects the record, then continues it with the setting.
         const step = emitted(ask.select_commands[0].command);
         expect(step.kind, JSON.stringify(step).slice(0, 300)).toBe("print");
@@ -1113,25 +1140,23 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const first = JSON.parse(next(["--depth", "comprehensive", DESCRIPTION]).stdout.trim());
         const ask = JSON.parse(runEmittedCommand(first.confirm_command).stdout.trim());
         for (const row of ask.select_commands) expect(row.command).toContain(`--record ${row.selector} --depth comprehensive`);
-        const which = directive("1");
-        expect(which.ask_type).toBe("intent-pick");
-        expect(which.select_commands).toEqual(ask.select_commands);
+        expect(namedCommands(routeNamed("1").message, CONTINUE)).toEqual(commandsOf(ask.select_commands));
       });
 
       test("with one record listed, the reshape option reshapes it, exactly as its reshape command does", () => {
         seedOneIntentNoCursor();
         const ask = routingAsk();
         for (const text of ["3", "Reshape existing work"]) {
-          expect(directive(text)).toEqual(emitted(ask.reshape_commands[0].command));
+          expect(agentRuns(text, RESHAPE)).toEqual(emitted(ask.reshape_commands[0].command));
         }
       });
 
-      test("an option followed by more words is the person's own words, asked about", () => {
-        seedTwoIntentsNoCursor();
-        const ask = routingAsk();
-        const d = directive("Separate new piece of work, and add CSV export");
-        expect(d.kind).toBe("ask");
-        expect(d).not.toEqual(emitted(ask.new_intent_command));
+      test("an option followed by more words runs nothing: the agent reads them, and their own words stay whole", () => {
+        const records = seedTwoIntentsNoCursor();
+        routingAsk();
+        const d = routeNamed("Separate new piece of work, and add CSV export");
+        expect(d.message).toContain("which keeps every word of theirs");
+        expect(recordDirs(proj)).toEqual(records);
       });
 
       // Work moving on in another chat is no change to the question's records,
@@ -1151,18 +1176,16 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const record = seedOneIntentNoCursor();
         const ask = routingAsk();
         progressRecord(record);
-        expect(directive("1")).toEqual(emitted(ask.select_commands[0].command));
-        expect(directive("Reshape existing work")).toEqual(emitted(ask.reshape_commands[0].command));
+        expect(agentRuns("1", CONTINUE)).toEqual(emitted(ask.select_commands[0].command));
+        expect(agentRuns("Reshape existing work", RESHAPE)).toEqual(emitted(ask.reshape_commands[0].command));
       });
 
       for (const [text, field] of [["1", "select_commands"], ["3", "reshape_commands"]] as const) {
-        test(`${JSON.stringify(text)} with two records listed, after one progressed, still asks only which one`, () => {
+        test(`${JSON.stringify(text)} with two records listed, after one progressed, still names both`, () => {
           const records = seedTwoIntentsNoCursor();
           const ask = routingAsk();
           progressRecord(records[0]);
-          const d = directive(text);
-          expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("intent-pick");
-          expect(d.select_commands).toEqual(ask[field]);
+          expect(namedCommands(routeNamed(text).message, text === "1" ? CONTINUE : RESHAPE)).toEqual(commandsOf(ask[field]));
         });
       }
 
@@ -1171,7 +1194,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
           seedTwoIntentsNoCursor();
           const ask = routingAsk();
           addRecordUnselected();
-          expect(directive(text)).toEqual(emitted(ask.new_intent_command));
+          expect(agentRuns(text, SEPARATE)).toEqual(emitted(ask.new_intent_command));
         });
       }
 
@@ -1181,24 +1204,22 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         ["3", "reshape_commands"],
         ["Reshape existing work", "reshape_commands"],
       ] as const) {
-        test(`${JSON.stringify(text)} after other work was added keeps the route and offers the listed work, each choice usable`, () => {
+        test(`${JSON.stringify(text)} after other work was added names the listed work, each choice usable`, () => {
           seedTwoIntentsNoCursor();
           const ask = routingAsk();
           addRecordUnselected();
           const before = questionCount();
-          const d = directive(text);
-          expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("intent-pick");
-          expect(d.available_intents).toEqual(ask.available_intents);
-          expect(d.select_commands).toEqual(ask[field]);
+          const named = namedCommands(routeNamed(text).message, field === "select_commands" ? CONTINUE : RESHAPE);
+          expect(named).toEqual(commandsOf(ask[field]));
           expect(questionCount(), "no new question is asked").toBe(before);
-          for (const { command } of d.select_commands as Array<{ command: string }>) {
+          for (const command of named) {
             const chosen = emitted(command);
             expect(chosen.kind, JSON.stringify(chosen).slice(0, 300)).toBe("print");
           }
         });
       }
 
-      test("the continue option after the sole listed record was replaced asks again with the request kept, never selects it unasked", () => {
+      test("the continue option after the sole listed record was replaced selects nothing itself: the step names the listed record's command", () => {
         const record = seedOneIntentNoCursor();
         const ask = routingAsk();
         const registryPath = join(intentsDir(proj), "intents.json");
@@ -1206,11 +1227,10 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         const [uuid] = registry.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/) ?? [];
         expect(uuid).toBeDefined();
         writeFileSync(registryPath, registry.replaceAll(uuid!, "01a10000-0000-7000-8000-000000000000"), "utf-8");
-        const d = directive("Part of existing work");
-        expect(d.ask_type, JSON.stringify(d).slice(0, 300)).toBe("new-work-routing");
-        expect(d.new_work_description).toBe(DESCRIPTION);
-        expect(d.available_intents).toEqual([record]);
+        const named = namedCommands(routeNamed("Part of existing work").message, CONTINUE);
+        expect(named).toEqual(commandsOf(ask.select_commands));
         expect(ask.select_commands).toHaveLength(1);
+        expect(ask.available_intents).toEqual([record]);
         expect(existsSync(cursorPath(proj)), "nothing is selected unasked").toBe(false);
       });
 
@@ -1218,7 +1238,8 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
         seedTwoIntentsNoCursor();
         const ask = emittedIn("chat-a", inSession("chat-a", DESCRIPTION).confirm_command);
         expect(ask.ask_type, JSON.stringify(ask).slice(0, 300)).toBe("new-work-routing");
-        expect(inSession("chat-b", "2")).toEqual(emittedIn("chat-b", ask.new_intent_command));
+        const [named] = namedCommands(String(inSession("chat-b", "2").message), SEPARATE);
+        expect(emittedIn("chat-b", named)).toEqual(emittedIn("chat-b", ask.new_intent_command));
       });
 
       // The follow-up question after a plan composed and approved in a fresh
@@ -1232,7 +1253,7 @@ describe("t171 creation gate consults the intent registry (Blocker B1)", () => {
           personApproves();
           const ask = JSON.parse(next(["--scope", "bugfix", "--request", composed, ...PLAN]).stdout.trim());
           expect(ask.ask_type).toBe("new-work-routing");
-          const creation = directive(text);
+          const creation = agentRuns(text, SEPARATE);
           expect(creation.kind, JSON.stringify(creation).slice(0, 300)).toBe("print");
           expect(creation).toEqual(emitted(ask.new_intent_command));
           expect(creation.message).toContain("--skip deployment-pipeline,deployment-execution --add functional-design");

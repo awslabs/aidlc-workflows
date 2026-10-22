@@ -532,8 +532,8 @@ describe("a typed line and their own terminal stay theirs", () => {
       const routing = asked.directive as { ask_type?: string; continue_command?: string };
       expect(routing.ask_type, asked.out).toBe("new-work-routing");
       said(proj, answer);
-      // A number answers the question itself; other words are the agent's to map to the continue route.
-      const route = answer === "1" ? ["1"] : String(routing.continue_command).split(" ").slice(3);
+      // A number or other words: the agent maps the reply to the continue route.
+      const route = String(routing.continue_command).split(" ").slice(3);
       const step = runOrchestrateNext(ORCHESTRATE, proj, route, { env: env(proj, SESSION) });
       const message = String((step.directive as { message?: unknown } | null)?.message);
       expect(message).toContain("config set learnings off` to update the configuration");
@@ -549,9 +549,11 @@ describe("a typed line and their own terminal stay theirs", () => {
     const task = "skip the market research for this work";
     said(proj, `/aidlc --sensors off ${task}`);
     const asked = runOrchestrateNext(ORCHESTRATE, proj, ["--sensors", "off", task], { env: env(proj, SESSION) });
-    expect((asked.directive as { ask_type?: string }).ask_type, asked.out).toBe("new-work-routing");
+    const routing = asked.directive as { ask_type?: string; compose_command?: string };
+    expect(routing.ask_type, asked.out).toBe("new-work-routing");
     said(proj, "3");
-    const step = runOrchestrateNext(ORCHESTRATE, proj, ["3"], { env: env(proj, SESSION) });
+    // The agent reads "3" and runs the reshape answer's own command.
+    const step = runOrchestrateNext(ORCHESTRATE, proj, String(routing.compose_command).split(" ").slice(3), { env: env(proj, SESSION) });
     const message = String((step.directive as { message?: unknown } | null)?.message);
     expect(message).toContain("config set sensors off` to apply the settings typed with this request to the work being reshaped");
     expect(configSet(proj, ["sensors", "off"]).status).toBe(0);

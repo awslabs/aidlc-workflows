@@ -420,11 +420,13 @@ export const STATES: StateBuilder[] = [
       next(proj);
       askOpen(proj);
       reply(proj, "I'll edit the files");
+      const edit = answer(proj, "I'll edit the files");
+      if (edit.status !== 0) throw new Error(`the edit choice was not recorded:\n${edit.stdout}${edit.stderr}`);
       const step = next(proj);
       if (step.kind !== "ask" || step.plan_approval?.editing !== true) {
         throw new Error(`expected edit mode, got ${JSON.stringify(step)}`);
       }
-      return { proj, session: SESSION, approved: false, how: "reply I'll edit the files, next shows edit mode" };
+      return { proj, session: SESSION, approved: false, how: "reply I'll edit the files, the agent records it, next shows edit mode" };
     },
   },
   {
@@ -434,6 +436,8 @@ export const STATES: StateBuilder[] = [
       next(proj);
       askOpen(proj);
       reply(proj, "I'll edit the files");
+      const edit = answer(proj, "I'll edit the files");
+      if (edit.status !== 0) throw new Error(`the edit choice was not recorded:\n${edit.stdout}${edit.stderr}`);
       next(proj);
       reply(proj, "you finish it");
       return { proj, session: SESSION, approved: false, how: "edit mode, then the person said: you finish it" };

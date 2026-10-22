@@ -133,8 +133,8 @@ When the Unit `ask` returns `earlier_reply`, the person already answered in
 this chat while the Unit's review ran: do not show the question, and run
 `approve` or `reject` as their words chose; when their words answer nothing,
 show the question and wait. Otherwise present **Approve** / **Request
-Changes** and wait. The human's exact reply
-to this checkpoint question authorizes the matching action, in that chat or a
+Changes** and wait. The human's reply
+to this checkpoint question authorizes the action the conductor reads from it, in that chat or a
 new one: with no question of its own, a new chat's reply is kept for the
 checkpoint question another chat asked, while it is the newest question asked
 and still open. An unrelated reply, the agent's own words, or a reply to a
@@ -986,21 +986,19 @@ This stage has a **two-part structure**: planning followed by generation.
    and **I'll edit the files**. The engine writes `code-generation-questions.md`
    (the question, both tags, and a blank `[Answer]:`) and records the question
    in the protected runtime directory; the conductor shows it and ends the turn.
-   The human-turn hook keeps the person's reply, from any chat on this piece of
-   work, except one typed in a chat where the agent has asked a question of its
-   own since the plan question was last shown in that chat, still open (the
-   verification command, say), which answers that question; the conductor
-   reads it and records their choice with `answer --checkpoint plan-approval`,
+   The human-turn hook keeps every reply of the person's after the question,
+   from any chat on this piece of work, and picks nothing from typed words (a
+   pick in a question box is the host's own structure); the conductor reads
+   which question a reply answers and records their choice with
+   `answer --checkpoint plan-approval`,
    which takes the fingerprint of the files as they
    are then and writes the answer, the receipt, and the `PLAN_APPROVAL_RECORDED`
    row with the person's words. The person may instead write their answer on the
    questions file's own `[Answer]:` line, as that file invites, and say so: the
    engine never overwrites an answer they wrote there while the same question
-   stands, and on an exact "done" it reads that line and records an answer that
-   is one of the choices, the same way it records an exact pick typed in chat,
-   naming the file in one line for the conductor. When the person says it in
-   their own words instead ("I put my answer in the file"), the conductor reads
-   the line and records the choice they made. When the person's message in
+   stands. When they say so, in any words ("done", "I put my answer in the
+   file"), the conductor reads the line and records the choice they made; the
+   line itself approves nothing, the engine's receipt does. When the person's message in
    this chat that the question opened for already asked for a change ("go back
    to code generation: also accept -S", on finished work too) and no decision
    has used it, the conductor records it as that question's Request Changes,

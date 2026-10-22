@@ -233,9 +233,8 @@ When both files from Step 2 are written, run `next`:
   When the person says they answered in the file, in whatever words they use
   ("done", "I put my answer in the file", "my answer is in the questions file"),
   their answer is on the `[Answer]:` line of `questions_path`: read it and record
-  the choice they made, exactly as you would a reply typed in chat. An answer
-  there that is one of the choices is already recorded for you, and the engine
-  says so in one line; never ask them to type it again in chat.
+  the choice they made, exactly as you would a reply typed in chat; never ask
+  them to type it again in chat.
 - **Edit mode.** For "I'll edit the files", `next` returns the question with
   `plan_approval.editing: true`. Tell the person they can change `plan_path` and
   `instructions_path`; then end the turn and wait for them to say done. While

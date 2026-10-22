@@ -1041,7 +1041,9 @@ describe("t341 verification command consent", () => {
       const challenge = readProtectedQuestion(dir, session);
       const response = readProtectedResponse(dir, session);
       expect(challenge).not.toBeNull();
-      expect(response?.choice).toBe(choice);
+      // A typed reply is kept as their words; the conductor records the choice it read.
+      expect(response?.words).toBe(choice);
+      expect(response?.choice).toBeUndefined();
       const shard = seededAuditShard(dir);
       const before = readFileSync(shard, "utf-8");
       const answer = ["answer", ...identity, "--details", choice];
@@ -1128,16 +1130,20 @@ describe("t341 verification command consent", () => {
     expect(cli(dir, "log", ["answer", ...identity, "--command", "exit 2", "--details", "Approve"], env).code).not.toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("Request Changes cannot be changed into Approve by the conductor", () => {
+  // A typed reply is the conductor's to read: its record of Request Changes
+  // authorizes nothing, and a choice the question did not offer is refused.
+  test("a typed Request Changes is recorded as the conductor read it, and authorizes no command", () => {
     const dir = project();
     const identity = ["--stage", "code-generation", "--checkpoint", "verification-command", "--command", "exit 0", "--session", "t341-command"];
     const env = { ...process.env };
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
     expect(cli(dir, "log", ["decision", ...identity, "--decision", "Use this command?", "--options", "Approve,Request Changes"], env).code).toBe(0);
     submitCommandChoice(dir, "t341-command", "Request Changes", env);
-    const refused = cli(dir, "log", ["answer", ...identity, "--details", "Approve"], env);
-    expect(refused.code).not.toBe(0);
-    expect(refused.out).toContain('The person picked \\"Request Changes\\" for this question');
+    expect(readProtectedResponse(dir, "t341-command")?.choice).toBeUndefined();
+    expect(cli(dir, "log", ["answer", ...identity, "--details", "Maybe"], env).code).not.toBe(0);
+    const recorded = cli(dir, "log", ["answer", ...identity, "--details", "Request Changes"], env);
+    expect(recorded.code, recorded.out).toBe(0);
+    expect(recorded.out).not.toContain("The person picked");
     expect(readAuditShardEvents(dir).some((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toBe(false);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1157,7 +1163,7 @@ describe("t341 verification command consent", () => {
     expect(readProtectedResponse(dir, "t341-command")?.choice).toBeUndefined();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a choice sent from Kiro Crew binds the command; text ahead of Crew's request header does not", () => {
+  test("a reply sent from Kiro Crew is kept as its own turn; text ahead of Crew's request header is not", () => {
     // Kiro Crew delivers its context blocks and the person's turn as one prompt
     // (captured 2026-10-04). Only the text after the last request header is
     // the person's reply; a replayed "Approve" ahead of it must not bind.
@@ -1178,7 +1184,8 @@ describe("t341 verification command consent", () => {
     expect(readProtectedResponse(dir, "t341-command")?.choice).toBeUndefined();
     const answer = ["answer", ...identity, "--details", "Approve"];
     submitCommandChoice(dir, "t341-command", crew("Approve"), env);
-    expect(readProtectedResponse(dir, "t341-command")?.choice).toBe("Approve");
+    expect(readProtectedResponse(dir, "t341-command")?.words).toBe("What does this command do?\nApprove");
+    expect(readProtectedResponse(dir, "t341-command")?.choice).toBeUndefined();
     const approved = cli(dir, "log", answer, env);
     expect(approved.code, approved.out).toBe(0);
     expect(readAuditShardEvents(dir).filter((row) => row.event === "VERIFICATION_COMMAND_RECORDED")).toHaveLength(1);
@@ -1435,9 +1442,6 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton")).toThrow("requires the person's reply to this question");
     expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint")).toThrow();
     expect(approvals(dir)).toEqual([]);
-    // An exact pick is the person's: the conductor cannot record the other choice.
-    human(dir, "skeleton", "Request Changes");
-    expect(() => approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint")).toThrow('picked "Request Changes"');
     // The conductor read their approval; the receipt carries their own words.
     human(dir, "skeleton", "looks right, ship it");
     const approved = approveConstructionCheckpoint(dir, "alpha", "skeleton", "Approve", "t341-checkpoint");
@@ -1540,10 +1544,9 @@ describe("t341 human authority, attempt boundaries, and scoped approval", () => 
     approveConstructionCheckpoint(dir, "beta", "unit");
     expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", "Fix alpha", "t341-checkpoint")).toThrow();
     expect(readAuditShardEvents(dir).filter((entry) => entry.event === "GATE_REJECTED")).toEqual([]);
-    human(dir, "unit", "Approve");
-    expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", "Fix alpha", "t341-checkpoint")).toThrow('picked "Approve"');
     human(dir, "unit", "Request Changes");
-    expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", " ", "t341-checkpoint")).toThrow("reason");
+    // With no reason passed, the person's own words are the reason; one on more than one line is refused.
+    expect(() => rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", "first\nsecond", "t341-checkpoint")).toThrow("reason");
     const priorFloor = latestMainWorkflowStageRunFloorForProject(dir, STAGES[0], true, "beta");
     const rejected = rejectConstructionCheckpoint(dir, "alpha", "unit", "Request Changes", "Fix alpha", "t341-checkpoint");
     expect(rejected.approved).toBe(false);
@@ -1836,7 +1839,7 @@ describe("t341 response-bound checkpoint decisions", () => {
     expect(readProtectedResponse(pd, "t341-checkpoint")).toBeNull();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("presence bypass never replaces a response and rejection requires its own choice", async () => {
+  test("presence bypass never replaces a response", async () => {
     const pd = project(true);
     await pass(pd);
     const bypass = { ...env, AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1" };
@@ -1846,8 +1849,6 @@ describe("t341 response-bound checkpoint decisions", () => {
     const autonomous = cli(pd, "bolt", ["checkpoint", "--unit", "alpha", "--kind", "unit", "--action", "approve"], env);
     expect(autonomous.code, autonomous.out).toBe(0);
     expect(cli(pd, "bolt", [...route(), "--action", "ask"], env).code).toBe(0);
-    submitCommandChoice(pd, session, "Approve", env);
-    expect(reject().code).not.toBe(0);
     submitCommandChoice(pd, session, "Request Changes", env);
     expect(reject().code).toBe(0);
     expect(readProtectedResponse(pd, session)).toBeNull();
@@ -1868,7 +1869,7 @@ describe("t341 response-bound checkpoint decisions", () => {
     expect(readProtectedQuestion(pd, session)?.kind).toBe(activePolicy ? "construction-policy" : "verification-command");
     expect(readProtectedResponse(pd, session)).toBeNull();
     submitCommandChoice(pd, session, "Approve", env);
-    expect(readProtectedResponse(pd, session)?.choice).toBe("Approve");
+    expect(readProtectedResponse(pd, session)?.words).toBe("Approve");
     const answer = (identity: string[]) => cli(pd, "log", ["answer", ...identity, "--details", "Approve"], env);
     // Try the retired question both before and after consuming the active one.
     expect(answer(first).code).not.toBe(0);
@@ -1926,7 +1927,7 @@ describe("t341 protected question interleaving", () => {
     }
     expect(readProtectedQuestion(pd, session)).toBeNull();
     expect(readProtectedQuestion(pd, "other")?.challengeId ?? null).toBe(interleaving === "same-session" ? other.challengeId : null);
-    expect(readProtectedResponse(pd, "other")?.choice ?? null).toBe(interleaving === "same-session" ? "Approve" : null);
+    expect(readProtectedResponse(pd, "other")?.words ?? null).toBe(interleaving === "same-session" ? "Approve" : null);
     submitCommandChoice(pd, session, "Approve", env);
     expect(readProtectedResponse(pd, session)).toBeNull();
     const refused = answer(pd);
@@ -2061,12 +2062,12 @@ describe("t341 protected question interleaving", () => {
     expect(readPlanApprovalChallenge(pd, session)).toBeNull();
     expect(readPlanApprovalResponse(pd, session)).toBeNull();
     submitCommandChoice(pd, session, "Approve", env);
-    expect(readProtectedResponse(pd, session)?.choice).toBe("Approve");
+    expect(readProtectedResponse(pd, session)?.words).toBe("Approve");
     writePlanApprovalChallenge(pd, plan);
     expect(readProtectedQuestion(pd, session)).toBeNull();
     expect(readProtectedResponse(pd, session)).toBeNull();
     submitCommandChoice(pd, session, "Approve Plan", env);
-    expect(readPlanApprovalResponse(pd, session)?.choice).toBe("Approve Plan");
+    expect(readPlanApprovalResponse(pd, session)?.words).toBe("Approve Plan");
     // Ordinary decisions deliberately do not withdraw mature Plan Approval.
     const ordinary = cli(pd, "log", ["decision", "--stage", "code-generation", "--decision", "Another question?", "--session", session], env);
     expect(ordinary.code, ordinary.out).toBe(0);

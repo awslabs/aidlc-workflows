@@ -317,8 +317,8 @@ function presentPlan(
     "# Unit Test Instructions\n\n## Command\n\n`bun test unit.test.ts`\n",
   );
   const questions = join(recordDir, "code-generation-questions.md");
-  // A re-presentation blanks the previous answer first: the fingerprint command
-  // refuses to regenerate while an approval answer is still recorded.
+  // A re-presentation blanks the previous answer, as the conductor writes the
+  // section anew.
   if (existsSync(questions)) {
     writeFileSync(
       questions,
@@ -720,8 +720,8 @@ describe("t328 (3) the approval does not carry where it should not", () => {
 
     // The next `next` is the engine asking the person about the new attempt.
     // If the conductor writes the approval answer back ITSELF without asking
-    // anyone, nothing is approved, and the reason names the attempt rather than
-    // reading as "you never approved this".
+    // anyone, nothing is approved: the line approves nothing, and the step is
+    // next, which asks.
     const { directive: asked } = deliver(p);
     expect(asked).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     writeFileSync(
@@ -731,10 +731,12 @@ describe("t328 (3) the approval does not carry where it should not", () => {
         "[Answer]: Approve Plan",
       ),
     );
-    expect(approval(p, target).reason).toContain("earlier stage attempt");
+    expect(approval(p, target)).toEqual({ ok: false, reason: "the plan is not approved yet; run next" });
 
-    // The real remedy: the person answers the question.
+    // The real remedy: the person answers the question, and the agent records it.
     expect(p.humanTurn("Approve Plan").code).toBe(0);
+    const recorded = spawn([BUN, p.tool("log"), "answer", ...presentation.decisionArgs, "--details", "Approve Plan"], p.env, p.dir);
+    expect(recorded.code, recorded.stderr).toBe(0);
     expect(approval(p, target)).toEqual({ ok: true, reason: "approved" });
   });
 

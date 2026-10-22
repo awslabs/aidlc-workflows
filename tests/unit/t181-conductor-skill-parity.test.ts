@@ -226,7 +226,7 @@ describe("an approved code plan is built as it is", () => {
       "When the person says they answered in the file, in whatever words they use " +
         "(\"done\", \"I put my answer in the file\", \"my answer is in the questions file\"), " +
         "their answer is on the `[Answer]:` line of `questions_path`: read it and record the choice they made, " +
-        "exactly as you would a reply typed in chat.",
+        "exactly as you would a reply typed in chat; never ask them to type it again in chat.",
     );
   });
 });

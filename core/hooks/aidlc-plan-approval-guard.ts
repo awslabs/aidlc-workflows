@@ -168,10 +168,7 @@ import {
 } from "../tools/aidlc-testing-posture.ts";
 import { refuseRuntimeIntegrityViolation } from "./runtime-integrity.ts";
 
-export {
-  questionsFileApproved,
-  questionsFileHasPendingPlanApproval,
-} from "../tools/aidlc-testing-posture.ts";
+export { questionsFileHasPendingPlanApproval } from "../tools/aidlc-testing-posture.ts";
 
 const HOOK_NAME = "plan-approval-guard";
 

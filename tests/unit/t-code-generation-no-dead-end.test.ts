@@ -831,7 +831,7 @@ describe("the person's jump at an open recovery question goes through on the fir
     expect(reopen.refused, "the Unit reopen the person asked for was refused on Copilot").toBeNull();
   });
 
-  test("still refused: a jump nobody asked for, whose way past is admitted, and a jump after the person picked Request Changes", async () => {
+  test("still refused: a jump nobody asked for, whose way past is admitted, and a jump after their Request Changes is recorded", async () => {
     const proj = question();
     const jump = "bun .claude/tools/aidlc-jump.ts execute --target requirements-analysis --direction backward --scope poc";
     const unasked = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
@@ -843,13 +843,19 @@ describe("the person's jump at an open recovery question goes through on the fir
       expect(way.code, `${command} -> ${way.said}`).toBe(0);
     }
     expect(reply(proj, "Request Changes").status).toBe(0);
+    // The agent records the Request Changes it read from their reply.
+    const recorded = runNamed(proj, "bun .claude/tools/aidlc-log.ts answer --stage code-generation --checkpoint guard-recovery --details request-changes");
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     const picked = await claude.call(proj, SESSION, { tool: "Bash", command: jump });
     expect(picked.code, "a jump went through against the person's pick").toBe(2);
   });
 
-  test("the person's next words after an exact pick lift it: the jump they then ask for runs", async () => {
+  test("the person's next words after their recorded pick lift it: the jump they then ask for runs", async () => {
     const proj = question();
     expect(reply(proj, "Request Changes").status).toBe(0);
+    // The agent records the Request Changes it read from their reply.
+    const recorded = runNamed(proj, "bun .claude/tools/aidlc-log.ts answer --stage code-generation --checkpoint guard-recovery --details request-changes");
+    expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     expect(reply(proj, ASK).status).toBe(0);
     const verdict = await claude.call(proj, SESSION, { tool: "Bash", command: jumpFor(proj, "requirements-analysis") });
     expect(verdict.code, verdict.said).toBe(0);

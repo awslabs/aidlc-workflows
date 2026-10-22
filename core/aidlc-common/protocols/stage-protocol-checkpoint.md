@@ -210,7 +210,8 @@ first, as the reviewer module asks after a recovery verdict:
 The human's reply to this checkpoint question, in this chat or a new one,
 authorizes the action you read from it: approve, or reject with what they asked
 to change (their words are kept with the record; add `--reason` when you want to
-say more). A reply typed in a new chat is kept for the question while it is the
+say more). When their reply only picked Request Changes, ask what should change
+before you record it. A reply typed in a new chat is kept for the question while it is the
 newest question asked; run the approve or reject command there, with no session,
 and never ask it again. A reply to a different question does not count. When they approved and asked for a change,
 approve, then make the change and say in one line what you changed. The response is

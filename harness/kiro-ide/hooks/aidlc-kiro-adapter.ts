@@ -544,7 +544,8 @@ function legacyRecoveryBlockReason(
   if (recovery.recoveryRequired) {
     return (
       "Legacy Plan Approval recovery requires a human response. " +
-      "Present exactly `Recover Plan Approval`, end the turn, then retry recovery. " +
+      "Ask the directive's question in plain words and end the turn; when the person says yes, in any words, " +
+      "run its choice's command, then retry recovery. " +
       `The unknown original shell command remains blocked. Directive: ${recovery.detail}`
     );
   }

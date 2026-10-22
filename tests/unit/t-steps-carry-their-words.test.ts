@@ -309,7 +309,10 @@ describe("the engine renders every question it asks", () => {
       ["auth", `${INVOCATION} next --claim auth`],
       ["notes", `${INVOCATION} next --claim notes`],
     ]);
-    expect(by("legacy-plan-approval-recovery")).toEqual([["Recover Plan Approval", `${INVOCATION} next`]]);
+    // The recovery question's one choice is the agent's record of the person's yes, then `next`.
+    expect(by("legacy-plan-approval-recovery")).toEqual([
+      ["Recover Plan Approval", `${LOG} answer --stage code-generation --checkpoint plan-approval --details "Recover Plan Approval"`],
+    ]);
     expect(by("compose-offer")).toEqual([
       ["Tailor a plan to this task", `${INVOCATION} next compose --request a1b2c3d4`],
       ["The bugfix plan", `${INVOCATION} next --scope bugfix --request a1b2c3d4`],

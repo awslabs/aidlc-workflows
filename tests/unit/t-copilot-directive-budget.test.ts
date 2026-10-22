@@ -807,6 +807,14 @@ function reply(proj: string, prompt: string): void {
   expect(status, out).toBe(0);
 }
 
+// The agent's record of the choice it read from the person's reply.
+function agentRecords(proj: string, choice: string): void {
+  const { status, out } = copilotTool(proj, ["tools", "aidlc-log.ts"], [
+    "answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", choice, "--project-dir", proj,
+  ]);
+  expect(status, out).toBe(0);
+}
+
 // The agent writes the code the plan names; the plan approval guard decides.
 function writeCode(proj: string): { status: number; out: string } {
   return copilotTool(proj, ["hooks", "aidlc-plan-approval-guard.ts"], [], JSON.stringify({
@@ -863,6 +871,7 @@ describe("t-copilot-directive-budget: Code Generation's rules in parts keep Plan
       expect(asked.at(-1), JSON.stringify(asked.at(-1))).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
       expect(buildAllowed(proj)).toBe(false);
       reply(proj, "1");
+      agentRecords(proj, "Approve Plan");
       const approved = () => readFileSync(join(codeGenerationDir(proj), "code-generation-questions.md"), "utf-8");
       expect(approved()).toContain("[Answer]: A. Approve Plan");
       // Even the stock rules do not fit beside the build under the budget.

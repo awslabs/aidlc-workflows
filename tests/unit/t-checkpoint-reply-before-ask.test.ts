@@ -266,18 +266,21 @@ describe("t-checkpoint-reply-before-ask: the person answers before the Unit's qu
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
-  // A number typed while the review runs picks from the choices the Unit's
-  // question offers, Approve and Request Changes, as a reply after it does.
-  test("\"2\" typed while the review runs is kept as Request Changes for alpha", () => {
+  // A number typed while the review runs is the person's reply, kept whole:
+  // the agent reads it against the choices the Unit's question offers, and its
+  // reading is recorded, as for a reply after the question.
+  test("\"2\" typed while the review runs is kept as the reply, and the agent's reading of it is recorded", () => {
     const p = fixture("strict");
     const file = requestReview(p);
     says(p, "2");
     const asked = verifyAndAsk(p, file);
     expect(asked.earlier_reply).toBe("2");
-    expect(readProtectedResponse(p, SESSION)?.choice).toBe("Request Changes");
-    const refused = checkpoint(p, "approve", ["--user-input", "Approve"]);
-    expect(refused.status).not.toBe(0);
-    expect(refused.out).toContain('picked \\"Request Changes\\"');
+    expect(readProtectedResponse(p, SESSION)?.choice).toBeUndefined();
+    expect(readProtectedResponse(p, SESSION)?.words).toBe("2");
+    const rejected = checkpoint(p, "reject", ["--user-input", "2", "--reason", "rename the handler"]);
+    expect(rejected.status, rejected.out).toBe(0);
+    expect(rejected.out).not.toContain("picked");
+    expect(auditBlockField(unitGates(p, "GATE_REJECTED")[0].block, "Person Reply")).toBe("2");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // A question asked since and not answered yet holds what the person types

@@ -67,6 +67,7 @@ import {
   isTeamUnitOwnership,
   normalizeGuardRecoveryText,
   maximalAttemptEvents,
+  recordGuardRecoveryChoice,
   recordGuardRefusal,
   readActiveDirectiveMarker,
   readAllAuditShards,
@@ -2783,6 +2784,8 @@ describe("AttemptView projections and refusal streaks", () => {
     });
     const feedback = "split the latency requirement in two";
     expect(consumeSharedDirectiveAsk(project, feedback)).toBe(true);
+    // The agent records the Request Changes it read, with what should change.
+    recordGuardRecoveryChoice(project, `Request Changes: ${feedback}`, true);
     const answered = readActiveDirectiveMarker(project, content)!;
     const markerPath = join(seededRecordDir(project), ".aidlc-engine", "active-directive.json");
     const legacy = JSON.parse(readFileSync(markerPath, "utf-8"));
@@ -3008,7 +3011,9 @@ describe("AttemptView projections and refusal streaks", () => {
     );
   });
 
-  test("guard-recovery selections resolve only to an offered remedy", () => {
+  // A typed reply picks nothing at the hook; the agent's record of the remedy
+  // it read resolves only to one the question offered, by op, label or action.
+  test("guard-recovery: a typed reply picks nothing, and the agent's record resolves only to an offered remedy", () => {
     const commonRemedies: ActiveDirectiveGuardRemedy[] = [
       { op: "reconfirm-summary", action: "Present the current summary again" },
       { op: "request-changes", action: "Ask what should change" },
@@ -3016,62 +3021,25 @@ describe("AttemptView projections and refusal streaks", () => {
     const cases: Array<{
       name: string;
       remedies: ActiveDirectiveGuardRemedy[];
-      response: string;
+      details: string;
       selectedOp: GuardRemedyOp | null;
       feedbackStatus: GuardRecoveryFeedbackStatus;
     }> = [
-      {
-        name: "literal op",
-        remedies: commonRemedies,
-        response: "request-changes",
-        selectedOp: "request-changes",
-        feedbackStatus: "awaiting-feedback",
-      },
-      {
-        name: "plain number",
-        remedies: commonRemedies,
-        response: "2",
-        selectedOp: "request-changes",
-        feedbackStatus: "awaiting-feedback",
-      },
-      {
-        name: "number with punctuation",
-        remedies: commonRemedies,
-        response: "2)",
-        selectedOp: "request-changes",
-        feedbackStatus: "awaiting-feedback",
-      },
-      {
-        name: "number with a terminal dot",
-        remedies: commonRemedies,
-        response: "2.",
-        selectedOp: "request-changes",
-        feedbackStatus: "awaiting-feedback",
-      },
-      {
-        name: "unmatched text",
-        remedies: commonRemedies,
-        response: "Do something else",
-        selectedOp: null,
-        feedbackStatus: "other-remedy",
-      },
+      { name: "literal op", remedies: commonRemedies, details: "request-changes", selectedOp: "request-changes", feedbackStatus: "awaiting-feedback" },
+      { name: "op in words", remedies: commonRemedies, details: "request changes", selectedOp: "request-changes", feedbackStatus: "awaiting-feedback" },
+      { name: "the action shown", remedies: commonRemedies, details: "Ask what should change", selectedOp: "request-changes", feedbackStatus: "awaiting-feedback" },
+      { name: "unmatched text", remedies: commonRemedies, details: "Do something else", selectedOp: null, feedbackStatus: "other-remedy" },
       {
         name: "ambiguous duplicate action",
         remedies: [
           { op: "reconfirm-summary" as const, action: "Choose this remedy" },
           { op: "request-changes" as const, action: "Choose this remedy" },
         ],
-        response: "Choose this remedy",
+        details: "Choose this remedy",
         selectedOp: null,
         feedbackStatus: "other-remedy",
       },
-      {
-        name: "terminal ask",
-        remedies: [],
-        response: "Request Changes",
-        selectedOp: null,
-        feedbackStatus: "other-remedy",
-      },
+      { name: "terminal ask", remedies: [], details: "Request Changes", selectedOp: null, feedbackStatus: "other-remedy" },
     ];
 
     for (const scenario of cases) {
@@ -3086,24 +3054,20 @@ describe("AttemptView projections and refusal streaks", () => {
         state_sha256: stateDigest(state),
         remedies: scenario.remedies,
       });
-
-      expect(consumeSharedDirectiveAsk(project, scenario.response), scenario.name).toBe(true);
-      const marker = JSON.parse(
+      const selected = () => (JSON.parse(
         readFileSync(join(seededRecordDir(project), ".aidlc-engine/active-directive.json"), "utf-8"),
-      ) as {
-        guard_recovery_response?: { selected_op?: string | null };
-      };
-      expect(marker.guard_recovery_response?.selected_op, scenario.name).toBe(
-        scenario.selectedOp,
-      );
+      ) as { guard_recovery_response?: { selected_op?: string | null } }).guard_recovery_response?.selected_op ?? null;
+
+      expect(consumeSharedDirectiveAsk(project, "2"), scenario.name).toBe(true);
+      expect(selected(), scenario.name).toBeNull();
+      try {
+        recordGuardRecoveryChoice(project, scenario.details, false);
+      } catch {
+        // Names no offered remedy: nothing is recorded.
+      }
+      expect(selected(), scenario.name).toBe(scenario.selectedOp);
       expect(
-        guardRecoveryFeedbackStatus(
-          project,
-          state,
-          "functional-design",
-          undefined,
-          "anything",
-        ),
+        guardRecoveryFeedbackStatus(project, state, "functional-design", undefined, "anything"),
         scenario.name,
       ).toBe(scenario.feedbackStatus);
     }
@@ -3139,6 +3103,8 @@ describe("AttemptView projections and refusal streaks", () => {
       // No selection yet: nothing to bind to.
       expect(status("functional-design", undefined)).toBe("not-applicable");
       expect(consumeSharedDirectiveAsk(project, "Ask what should change")).toBe(true);
+      // The agent records the Request Changes it read.
+      recordGuardRecoveryChoice(project, "request-changes", false);
 
       const stageLevel = status("functional-design", undefined);
       const unitLevel = status("functional-design", "alpha");
@@ -3152,8 +3118,9 @@ describe("AttemptView projections and refusal streaks", () => {
       expect(status("functional-design", "beta")).toBe("not-applicable");
       expect(status("nfr-requirements", undefined)).toBe("not-applicable");
 
-      // The human's separate feedback, then the conductor's exact or altered copy.
+      // The human's separate feedback, which the agent records once more, then the conductor's exact or altered copy.
       expect(consumeSharedDirectiveAsk(project, "Split the  save-search\nflow")).toBe(true);
+      recordGuardRecoveryChoice(project, "Request Changes: Split the save-search flow", true);
       const bound = ownership === "solo" ? undefined : "alpha";
       expect(status("functional-design", bound, "Split the save-search flow")).toBe("match");
       expect(status("functional-design", bound, "Split the save search flow")).toBe("mismatch");

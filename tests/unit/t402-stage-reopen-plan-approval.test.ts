@@ -150,6 +150,13 @@ function says(p: string, prompt: string, session = SESSION): void {
   expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
 }
 
+// The person answers "1" at the plan question; the agent records the choice it read.
+function approves(p: string): void {
+  says(p, "1");
+  const recorded = tool(p, "log", ["answer", "--stage", "code-generation", "--checkpoint", "plan-approval", "--details", "Approve Plan"]);
+  expect(recorded.status, recorded.out).toBe(0);
+}
+
 function next(p: string, args: string[] = []): Directive {
   const result = runOrchestrateNext(join(AIDLC_SRC, "tools/aidlc-orchestrate.ts"), p, args, { env: agentEnv() });
   expect(result.directive, result.out).not.toBeNull();
@@ -177,7 +184,7 @@ function approvePlan(p: string): void {
   const ask = next(p);
   expect(ask.kind, JSON.stringify(ask).slice(0, 800)).toBe("ask");
   expect(ask.ask_type).toBe("plan-approval");
-  says(p, "1");
+  approves(p);
   expect(next(p).plan_approval, "plan approved").toEqual({ status: "approved" });
 }
 
@@ -249,7 +256,7 @@ function builtAndVerified(p: string): void {
 // The person approves the plan the engine asks about; the Unit is built,
 // reviewed and approved at its checkpoint, which closes its gate.
 function approveAndFinish(p: string): void {
-  says(p, "1");
+  approves(p);
   expect(next(p).plan_approval).toEqual({ status: "approved" });
   build(p);
   reviewReady(p, 1);

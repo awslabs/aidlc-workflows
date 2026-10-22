@@ -433,7 +433,8 @@ describe("Request Changes records the person's own words", () => {
     expect(field(proj, "GATE_REJECTED", "Feedback")).toBe(`use todo.json for the name\\n${TYPED}`);
   });
 
-  test("a reply to a guard-recovery ask for another stage is not kept for a checkpoint, and rides along here", () => {
+  // Every open question keeps a reply as typed; the agent reads which one it answers.
+  test("a reply to a guard-recovery ask for another stage is kept as typed, and rides along here", () => {
     const state = readFileSync(seededStateFile(proj), "utf-8");
     writeActiveDirectiveMarker(proj, {
       kind: "ask", ask_type: GUARD_RECOVERY_ASK_TYPE, stage: "functional-design", state_sha256: stateDigest(state),
@@ -443,7 +444,7 @@ describe("Request Changes records the person's own words", () => {
       ],
     });
     says(proj, "split the save-search flow into two steps");
-    expect(keptTexts(proj)).toEqual([]);
+    expect(keptTexts(proj)).toEqual(["split the save-search flow into two steps"]);
     rmSync(join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json"), { force: true });
     says(proj, TYPED);
     rejectWith(proj, slug, ["--reason", PARAPHRASE]);

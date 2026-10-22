@@ -7270,16 +7270,19 @@ function verifyApprovalDecision(
   // learnings question just before the gate). Which question a reply answers
   // is the agent's to read.
   if (!autonomousDecision && !humanPresenceGuardDisabled() && together === null) {
-    if (!humanRepliedSinceGate(pd)) {
-      refuseForAgent(
-        `Cannot approve "${stage.slug}" because no new human reply has been received for ` +
-          "this approval question. Wait for the human to type their choice, then retry the " +
-          `approval.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
-      );
-    }
+    // A message the agent names is their reply since the last decision once it
+    // is proved, whichever question was on screen when it came.
     if (message !== undefined) {
       const proof = proveMessage(pd, message, "approval");
       if ("refusal" in proof) refuseForAgent(proof.refusal);
+    } else if (!humanRepliedSinceGate(pd)) {
+      const why = "no new human reply has been received for this approval question.";
+      const retry = openQuestionRetry(pd, stage.slug, why);
+      if (retry !== null) refuseForAgent(retry, { personDecided: true });
+      refuseForAgent(
+        `Cannot approve "${stage.slug}" because ${why} Wait for the human to type their choice, then retry the ` +
+          `approval.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
+      );
     }
     if (!repliedSinceStageStart(pd, stage.slug, message)) refuseForAgent(stageStartFloorRefusal("approve", stage.slug, message));
     const gate = { stage: stage.slug, ...(unit !== undefined ? { unit } : {}) };
@@ -7309,7 +7312,8 @@ function verifyApprovalDecision(
 function refuseGateShownAfterReply(pd: string, verb: "approve" | "request changes for", slug: string): never {
   let replies: Array<{ id: string; at: string }> = [];
   try {
-    replies = personsGateReply(pd, resolveInvokingSessionId(pd), slug).replies;
+    const reply = personsGateReply(pd, resolveInvokingSessionId(pd), slug);
+    replies = [...reply.replies, ...reply.elsewhere].sort((a, b) => a.at.localeCompare(b.at));
   } catch {
     replies = [];
   }
@@ -7326,6 +7330,23 @@ function refuseGateShownAfterReply(pd: string, verb: "approve" | "request change
       `Nothing is recorded yet: ${why}`,
     { personDecided: true },
   );
+}
+
+// A decision at a stage gate with no reply of theirs since the last decision
+// but messages they sent while another engine question was on screen: the
+// agent names the one that answered this gate, if one did. Ids and times only.
+function openQuestionRetry(pd: string, slug: string, why: string): string | null {
+  let held: Array<{ id: string; at: string }> = [];
+  try {
+    held = personsGateReply(pd, resolveInvokingSessionId(pd), slug).elsewhere;
+  } catch {
+    held = [];
+  }
+  if (held.length === 0) return null;
+  const named = held.map((reply) => `${reply.id} (sent ${reply.at})`).join(" or ");
+  return `If their message ${named}, sent while another question was on screen, answered the "${slug}" gate, run ` +
+    "the same report with --message <id>, without asking them again; otherwise show the gate and end your turn; " +
+    `their next reply answers it. Nothing is recorded yet: ${why}`;
 }
 
 // A decision at a stage gate on nothing the person said since the stage
@@ -7829,18 +7850,27 @@ function handleReject(args: string[]): void {
       slug,
       teamGate?.unit,
     );
+    // No remedy on the person's latest reply (none recorded yet, or a reply of
+    // theirs came after one was): the agent records the one it read from it.
     refuseForAgent(
-      `Refusing to reject "${slug}": the recovery-question choice was not Request Changes.` +
-        (selectedAction ? ` The selected action was "${selectedAction}".` : "") +
-        " Carry out that action, or re-present the recovery question and wait for the human to choose Request Changes.",
+      selectedAction
+        ? `Refusing to reject "${slug}": the recovery-question choice was not Request Changes. The selected action ` +
+          `was "${selectedAction}". Carry it out, or re-present the recovery question and wait for the human to ` +
+          "choose Request Changes."
+        : `Refusing to reject "${slug}": no recovery choice is recorded on the person's latest reply yet. ` +
+          "Record the one you read from it with " +
+          `\`${aidlcToolInvocation("log")} answer --stage ${slug} --checkpoint guard-recovery ` +
+          "--details 'Request Changes: <their words>'` (or the remedy they chose), then retry.",
       { personDecided: true },
     );
   }
   if (feedbackStatus === "awaiting-feedback") {
     refuseForAgent(
-      `Refusing to reject "${slug}": the guard-recovery choice is not revision ` +
-        `feedback. Ask "What should change?", end the turn, and wait for the ` +
-        "human's separate response before retrying.",
+      `Refusing to reject "${slug}": what the person asked to change is not on the recovery record yet. ` +
+        "When they have said it, record it with " +
+        `\`${aidlcToolInvocation("log")} answer --stage ${slug} --checkpoint guard-recovery ` +
+        "--details 'Request Changes: <their words>'` and retry; when they have not, ask \"What should change?\" " +
+        "and end the turn.",
     );
   }
   const autonomousDecision =
@@ -7914,8 +7944,12 @@ function handleReject(args: string[]): void {
   // the work asked for no change to what the stage made. A guard-recovery
   // choice binds its own reply above.
   const sinceStageStart = feedbackStatus !== "not-applicable" || repliedSinceStageStart(pd, slug, message);
+  // A message the agent named (proved above) is their reply since the last
+  // decision, whichever question was on screen when it came.
+  const repliedHere = (message !== undefined && feedbackStatus === "not-applicable" && !autonomousDecision) ||
+    humanRepliedSinceGate(pd);
   if (
-    !autonomousDecision && !humanPresenceGuardDisabled() && humanRepliedSinceGate(pd) && !sinceStageStart
+    !autonomousDecision && !humanPresenceGuardDisabled() && repliedHere && !sinceStageStart
   ) {
     refuseForAgent(stageStartFloorRefusal("request changes for", slug, message));
   }
@@ -7924,7 +7958,7 @@ function handleReject(args: string[]): void {
   // running ("that's wrong, redo it" mid-stage) and a guard-recovery choice
   // (it binds its own reply above) need only the checks around this one.
   if (
-    !autonomousDecision && !humanPresenceGuardDisabled() && humanRepliedSinceGate(pd) &&
+    !autonomousDecision && !humanPresenceGuardDisabled() && repliedHere &&
     feedbackStatus === "not-applicable" && message === undefined &&
     personRepliedSinceGateShown(pd, { stage: slug, ...(teamGate ? { unit: teamGate.unit } : {}) }) === false
   ) {
@@ -7933,7 +7967,7 @@ function handleReject(args: string[]): void {
   if (
     (!autonomousDecision || recoveryResetNeedsHuman) &&
     !humanPresenceGuardDisabled() &&
-    !humanRepliedSinceGate(pd)
+    !repliedHere
   ) {
     if (recoveryResetNeedsHuman) {
       refuseForAgent(
@@ -7942,9 +7976,11 @@ function handleReject(args: string[]): void {
           `the situation at the approval question and wait for a typed Request Changes choice.${unattendedHumanPresenceHint(pd)}`,
       );
     }
+    const why = "no new human reply has been received for this approval question.";
+    const retry = feedbackStatus === "not-applicable" ? openQuestionRetry(pd, slug, why) : null;
+    if (retry !== null) refuseForAgent(retry, { personDecided: true });
     refuseForAgent(
-      `Cannot request changes for "${slug}" because no new human reply has been received ` +
-        `for this approval question. Wait for the human to type Request Changes and their ` +
+      `Cannot request changes for "${slug}" because ${why} Wait for the human to type Request Changes and their ` +
         `feedback, then retry.${commandTurnHint(pd)}${unattendedHumanPresenceHint(pd)}`,
     );
   }

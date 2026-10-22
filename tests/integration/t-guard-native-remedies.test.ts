@@ -327,6 +327,11 @@ class Fixture {
     return output;
   }
 
+  // The agent's record of the recovery remedy it read from the person's reply.
+  recordRemedy(op: string): Run {
+    return this.tool("log", ["answer", "--stage", "code-generation", "--checkpoint", "guard-recovery", "--details", op]);
+  }
+
   marker(): ActiveDirectiveMarker | null {
     const path = join(seededRecordDir(this.project), ".aidlc-engine", "active-directive.json");
     return existsSync(path) ? JSON.parse(readFileSync(path, "utf-8")) as ActiveDirectiveMarker : null;
@@ -614,6 +619,7 @@ describe("source and native guard remedies execute their owning operations", () 
       succeeded(harness.name === "copilot"
         ? p.copilotAdapter("record-human-turn", human)
         : p.hook("record-human-turn", human));
+      succeeded(p.recordRemedy(remedy.op));
       const selected = p.marker();
       expect(selected).toMatchObject({
         kind: "ask", delivery: "consumed", needs_rehydrate: false,
@@ -704,6 +710,7 @@ describe("source and native guard remedies execute their owning operations", () 
     succeeded(p.copilotAdapter("record-human-turn", {
       hook_event_name: "UserPromptSubmit", prompt: remedy.op,
     }));
+    succeeded(p.recordRemedy(remedy.op));
     const selected = p.marker();
     expect(selected).toMatchObject({
       kind: "ask", delivery: "consumed", needs_rehydrate: false,
@@ -749,6 +756,7 @@ describe("source and native guard remedies execute their owning operations", () 
       succeeded(p.copilotAdapter("record-human-turn", {
         hook_event_name: "UserPromptSubmit", prompt: remedy.op,
       }));
+      succeeded(p.recordRemedy(remedy.op));
       expect(p.marker()?.guard_recovery_response?.selected_op).toBe("redo-jump");
       // Obtain a real returned jump for the later denial assertion. Like the
       // conductor, select first; this read does not consume or replace the ask.
@@ -809,6 +817,7 @@ describe("source and native guard remedies execute their owning operations", () 
     succeeded(p.copilotAdapter("record-human-turn", {
       hook_event_name: "UserPromptSubmit", prompt: remedy.op,
     }));
+    succeeded(p.recordRemedy(remedy.op));
     const selectedJump = returnedJump(json(p.exact(remedy.command!)));
     const settled = (id: string, delivered?: string) => {
       const input = {
@@ -840,6 +849,7 @@ describe("source and native guard remedies execute their owning operations", () 
         hook_event_name: "UserPromptSubmit",
         prompt: choice === "wrong" ? "Approve Plan" : remedy.op,
       }));
+      if (choice === "stale") succeeded(p.recordRemedy(remedy.op));
       if (choice === "wrong") {
         expect(p.marker()?.guard_recovery_response?.selected_op).toBeNull();
       } else {
