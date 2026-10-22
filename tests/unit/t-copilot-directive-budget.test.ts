@@ -1,4 +1,5 @@
 // covers: function:harnessDirectiveLimit, function:releasedHarnessData, function:directiveLimitFor, subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:continue
+// covers: subcommand:aidlc-state:unit
 //
 // #1411: VS Code's Copilot `run_in_terminal` tool keeps a command result whole
 // only up to 20,000 characters (MAX_OUTPUT_LENGTH in microsoft/vscode
@@ -27,6 +28,14 @@
 // reads that project file, so after `aidlc update` it takes the budget from the
 // copy of the same harness in the runtime it ships beside itself. A Bun engine
 // reads all of its data from its own tree, so it needs nothing more.
+//
+// `unit start` asks which Unit the engine routes with a `next` of its own
+// (AIDLC_ROUTE_CHECK=1) and reads the answer off its pipe. That `next` skips
+// the rules delivery, so it prints the whole step: the conductor persona on the
+// workflow's opening stage, and a lead persona the agent's step lists as a file
+// once a team has grown it. No host shows that print, so the last cases pin
+// that a step the agent was handed whole starts its Unit, on Copilot and past
+// the common limit on Claude.
 
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -51,6 +60,7 @@ import {
   createTestProject,
   FIXTURES_DIR,
   REPO_ROOT,
+  seedBoltDag,
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
@@ -81,6 +91,8 @@ type RuleContent = { path: string; text: string };
 type Printed = {
   kind: string;
   stage?: string;
+  unit?: string;
+  lead_persona?: string;
   part?: number;
   parts?: number;
   receipt?: string;
@@ -598,14 +610,16 @@ describe("t-copilot-directive-budget: every Copilot directive fits VS Code's ter
   // registered repo. A workspace of many repos still gets its step: the
   // commands ride for as many whole repos as fit, in order, and a link left out
   // gets its exact command from the next step or from its refusal (#2865).
-  test("Reverse Engineering for 24 registered repos fits, with whole per-repo link chains in order", async () => {
+  test("Reverse Engineering for 60 registered repos fits, with whole per-repo link chains in order", async () => {
     const proj = projectFor(COPILOT_ROOT, ".aidlc", "reverse-engineering", false);
     const statePath = seededStateFile(proj);
     writeFileSync(statePath, readFileSync(statePath, "utf-8").replace(/^- \*\*Scope\*\*: .*$/m, "- **Scope**: enterprise"));
-    const repos = Array.from({ length: 24 }, (_, index) => `svc-${String(index + 1).padStart(2, "0")}`);
+    const repos = Array.from({ length: 60 }, (_, index) => `svc-${String(index + 1).padStart(2, "0")}`);
     const registry = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
     const rows = JSON.parse(readFileSync(registry, "utf-8")) as Array<Record<string, unknown>>;
     rows[0].repos = repos;
+    // Named by the person, so Reverse Engineering starts without asking which to read.
+    rows[0].repos_named = true;
     writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
     for (const repo of repos) mkdirSync(join(proj, repo, "src"), { recursive: true });
 
@@ -959,4 +973,109 @@ describe("t-copilot-directive-budget: Code Generation's rules in parts keep Plan
       expect(buildAllowed(proj)).toBe(true);
     });
   }
+});
+
+// A feature at Construction with two Units, built one at a time, Functional
+// Design for alpha next. "opening": no stage before it has finished, so its step
+// carries the conductor persona; "after-inception": Units Generation is done,
+// as in a run that got here.
+function unitProject(root: string, harnessDir: string, shape: "opening" | "after-inception", policy = "off"): string {
+  const proj = createTestProject();
+  projects.push(proj);
+  cpSync(join(root, harnessDir), join(proj, harnessDir), { recursive: true });
+  cpSync(join(root, "aidlc"), join(proj, "aidlc"), { recursive: true });
+  const construction = ["functional-design", "nfr-requirements", "nfr-design", "infrastructure-design", "code-generation"];
+  writeFileSync(seededStateFile(proj), [
+    "# AI-DLC State Tracking",
+    "## Project Information",
+    "- **Project**: Unit route",
+    "- **Project Type**: Greenfield",
+    "- **Project Type Source**: you",
+    "- **Scope**: feature",
+    "- **State Version**: 8",
+    "## Runtime State",
+    "- **Revision Count**: 0",
+    "- **Skeleton Stance**: off",
+    "- **Construction Iteration**: unit-major",
+    "- **Unit Ownership**: solo",
+    "- **Construction Checkpoints**: enabled",
+    "- **Construction Execution**: serial",
+    "- **Construction Autonomy Mode**: gated",
+    "- **Review Override**: none",
+    `- **Guard Policy**: ${policy}`,
+    "## Scope Configuration",
+    "- **Stages to Execute**: all",
+    "- **Stages to Skip**: none",
+    "- **Depth**: Standard",
+    "- **Test Strategy**: Standard",
+    "## Stage Progress",
+    ...(shape === "after-inception" ? ["### INCEPTION PHASE", "- [x] units-generation \u2014 EXECUTE"] : []),
+    "### CONSTRUCTION PHASE",
+    ...construction.map((stage) => `- [${stage === "functional-design" ? "-" : " "}] ${stage} \u2014 EXECUTE`),
+    "- [ ] build-and-test \u2014 EXECUTE",
+    "## Current Status",
+    "- **Lifecycle Phase**: CONSTRUCTION",
+    "- **Current Stage**: functional-design",
+    "- **Status**: Running",
+    "",
+  ].join("\n"), "utf-8");
+  seedBoltDag(proj, ["alpha", "beta"]);
+  return proj;
+}
+
+// A team's own practices added to the lead's persona: 150 lines, about 10 KB.
+function growPersona(proj: string, harnessDir: string, agent: string, lines: number): void {
+  appendFileSync(
+    join(proj, harnessDir, "agents", `${agent}.md`),
+    `\n## Team practices\n${
+      Array.from({ length: lines }, (_, index) => `- Practice ${index}: keep the design notes short and name the trade-off.\n`)
+        .join("")
+    }`,
+  );
+}
+
+// The agent's own steps to alpha's Functional Design, then `unit start` as the
+// stage says. The route check `unit start` runs prints more than `limit`.
+async function startAlpha(proj: string, harnessDir: string, limit: number): Promise<Delivery> {
+  const delivery = await deliverIn(proj, harnessDir, "functional-design");
+  expect(delivery.final, JSON.stringify(delivery.final).slice(0, 400))
+    .toMatchObject({ kind: "run-stage", stage: "functional-design", unit: "alpha" });
+  const routed = await orchestrate(proj, projectEngine(proj, harnessDir), ["next"], { AIDLC_ROUTE_CHECK: "1" });
+  expect(Buffer.byteLength(routed, "utf-8")).toBeGreaterThan(limit);
+  const state: Engine = (args) => [process.execPath, join(proj, harnessDir, "tools", "aidlc-state.ts"), ...args];
+  const started = await runEngine(proj, state, ["unit", "start", "--stage", "functional-design", "--unit", "alpha"]);
+  expect(started.code, `${started.stdout}${started.stderr}`).toBe(0);
+  expect(JSON.parse(started.stdout)).toMatchObject({ emitted: "UNIT_STARTED", stage: "functional-design", unit: "alpha" });
+  return delivery;
+}
+
+describe("t-copilot-directive-budget: a Unit whose step is longer than one command result still starts", () => {
+  for (const policy of ["off", "relaxed", "strict"]) {
+    test(`the workflow's opening stage, with the conductor persona, starts its Unit (Guard Policy ${policy})`, async () => {
+      const proj = unitProject(COPILOT_ROOT, ".aidlc", "opening", policy);
+      const delivery = await startAlpha(proj, ".aidlc", copilotBudget());
+      expectWholeDeliveries([delivery]);
+      expect(delivery.results[0]?.directive.conductor_persona ?? "").toContain("conductor");
+    });
+  }
+
+  const teams: Array<[string, (proj: string) => void]> = [
+    ["a grown lead persona", (proj) => growPersona(proj, ".aidlc", "aidlc-architect-agent", 150)],
+    ["130 knowledge files for the lead", (proj) => addKnowledge(proj, ".aidlc", "aidlc-architect-agent", 130)],
+  ];
+  for (const [label, team] of teams) {
+    test(`after Inception, ${label}: the agent's step lists the persona and fits, and the Unit starts`, async () => {
+      const proj = unitProject(COPILOT_ROOT, ".aidlc", "after-inception");
+      team(proj);
+      const delivery = await startAlpha(proj, ".aidlc", copilotBudget());
+      expectWholeDeliveries([delivery]);
+      expect(delivery.final.lead_persona).toBeUndefined();
+    });
+  }
+
+  test("on Claude, a lead persona grown past the common limit still starts its Unit", async () => {
+    const proj = unitProject(CLAUDE_ROOT, ".claude", "after-inception");
+    growPersona(proj, ".claude", "aidlc-architect-agent", 300);
+    await startAlpha(proj, ".claude", 28 * 1024);
+  });
 });

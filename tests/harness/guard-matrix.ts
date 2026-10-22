@@ -80,6 +80,8 @@ export const GUARD_CHANGES = {
   "plan-edit-after-approval-hand": "the person hand-edits Unit 1's approved code plan",
   /** While Unit 2 builds, Unit 1's functional design is deleted: it has to be made again. */
   "doc-delete": "Unit 1's functional design is deleted",
+  /** At the open Code Generation gate, after the review, the agent fixes its traceability record and shows the gate again. */
+  "gate-record-fix": "the agent fixes its reviewed traceability record at the open Code Generation gate",
 } as const;
 export type GuardChange = keyof typeof GUARD_CHANGES | "none";
 
@@ -230,6 +232,16 @@ export function changeHooks(change: GuardChange): Partial<ScopeRunOptions> {
       return whileExtraBuilds((agent) => appendBy(agent, corePlan(agent), "- [x] Step 3: Note added by hand"));
     case "doc-delete":
       return whileExtraBuilds((agent) => rmSync(join(agent.host.proj, design(agent))));
+    case "gate-record-fix":
+      return {
+        atGate: (stage: string, _unit: string | null, agent: AgentStandIn) => once(stage === "code-generation", () => {
+          const step = [...agent.worked].reverse().find((d) => d.stage === "code-generation");
+          const trace = ((step?.produces as string[] | undefined) ?? []).find((p) => p.endsWith("traceability.json"));
+          if (!trace) agent.fail("Code Generation wrote no traceability.json");
+          agentAppends(agent, trace, "");
+          agent.report("code-generation", "--result", "awaiting-approval");
+        }),
+      };
     case "engine-update":
       return {
         afterCheckpoint: (unit, _kind, agent) => once(unit === "core", () => agent.stopForTheDay(() => updateEngine(agent.host.proj))),
@@ -433,7 +445,7 @@ export function runCell(cell: GuardCell, change: GuardChange, options: CellOptio
       flags: composed ? ["--plan-approval", cell.plan] : options.shipped ? [] : cellFlags(cell, change),
       units: MATRIX_UNITS,
       followRefusals: true,
-      fullHost: options.fullHost ?? change === "review-while-plan-waits",
+      fullHost: options.fullHost ?? (change === "review-while-plan-waits" || change === "gate-record-fix"),
       ...hooks,
       afterApproval: afterAnyApproval,
       ...(composed
@@ -509,6 +521,12 @@ export function cellProblems(c: CellRun): string[] {
     const extraPlan = rows.findIndex((e) => e.event === "PLAN_APPROVAL_RECORDED" && field(e.block, "Unit") === MATRIX_UNITS[1]);
     if (done === -1) problems.push(`the review of ${MATRIX_UNITS[0]} the person asked for never completed`);
     else if (extraPlan !== -1 && extraPlan < done) problems.push(`the review of ${MATRIX_UNITS[0]} ran only after the plan was approved`);
+  }
+
+  // The fix at the open gate happened: the gate's own report ran again after it.
+  if (c.change === "gate-record-fix" &&
+    run.host.calls.filter((call) => /orchestrate report --stage code-generation --result awaiting-approval/.test(call.what)).length < 2) {
+    problems.push("the agent never fixed its record at an open Code Generation gate");
   }
 
   // What the person met because of the change.

@@ -77,7 +77,7 @@ export const FIXTURE_CLONE_ID = "fixturecloneid01";
 export const AIDLC_MEMORY_SRC = join(REPO_ROOT, "dist", "claude", "aidlc");
 export const FIXTURES_DIR = join(REPO_ROOT, "tests", "fixtures");
 
-const RETRYABLE_RM_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
+export const RETRYABLE_RM_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
 
 function resetSelectionSensitiveCaches(): void {
   // fixtures.ts is imported by sandbox tests that copy no core/ tree, so core/

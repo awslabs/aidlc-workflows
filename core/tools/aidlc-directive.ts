@@ -186,6 +186,9 @@ export interface RunStageWave {
 export interface RunStagePipeline {
   links: string[];
   completed: string[];
+  // Past PIPELINE_REPOS_NAMED repos, `completed` names the first ones and this
+  // counts the other repos with links on record; `record` still names what is owed.
+  completed_other_repos?: number;
   // The links this attempt still owes, in order, each with the exact command
   // that records it once its agent returns.
   record: Array<{ link: string; repo?: string; command: string }>;
@@ -404,6 +407,9 @@ export interface RunStageDirective {
   // conductor is never pointed at a path that cannot be read.
   consumes: string[];
   produces: string[];
+  // Beside a code knowledge base path written once with REPO_PLACEHOLDER (a
+  // work recording several repos): which repos the token stands for.
+  repos_note?: string;
   // Exact active-space rule paths represented by the delivered rule bundle. On
   // dispatched topologies the conductor passes the already-loaded rule text to
   // every agent brief.
@@ -457,6 +463,10 @@ export interface RunStageDirective {
   // Re-present an open approval gate. Body and review are settled; do not rerun
   // the stage or edit its outputs. Team gates retain their unit_gate routing.
   gate_only?: true;
+  // The open gate shown again carries the same count as the reply that opened
+  // it (PrintDirective.revision_cycle and accept_as_is).
+  revision_cycle?: number;
+  accept_as_is?: "offered" | "next-revision";
   /** Exact remaining Unit record commands; the stage body is already written. */
   unit_record_step?: string;
   // Every Unit this per-Unit stage covers was built in the current attempt, so
@@ -689,6 +699,15 @@ export interface ConstructionStaffingAskDirective extends AskDirectiveBase {
   choices: AskChoice[];
 }
 
+// Before Reverse Engineering reads a large set of repos the person never named:
+// all of them, or only some. "Read all" is one complete command; for "Only
+// some" the agent runs `intent set-repos` with the names the person gives.
+export interface RepoScopeAskDirective extends AskDirectiveBase {
+  ask_type: "repo-scope";
+  response_route: "command";
+  choices: AskChoice[];
+}
+
 export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   ask_type: "new-work-routing";
   response_route: "next";
@@ -794,6 +813,7 @@ export type AskDirective =
   | UnitPausedAskDirective
   | ProjectTypeAskDirective
   | ConstructionStaffingAskDirective
+  | RepoScopeAskDirective
   | NewWorkRoutingAskDirective
   | UnitClaimAskDirective
   | LegacyPlanApprovalRecoveryAskDirective
@@ -813,6 +833,13 @@ export interface PrintDirective {
   // a plan change made during the stage is in it. null = the final in-scope
   // stage. Same meaning as run-stage's next_stage.
   next_stage?: string | null;
+  // On the same gate reply: the person's change requests at this gate since it
+  // was last approved, counted from the audit trail so a park keeps it; absent
+  // when there are none. accept_as_is says when that count opens the third
+  // option: "offered" adds Accept as-is to this question, "next-revision" adds
+  // the note that it comes after one more round of changes.
+  revision_cycle?: number;
+  accept_as_is?: "offered" | "next-revision";
 }
 
 // error — stop with an error (unknown scope, mutually-exclusive flags, init
@@ -961,6 +988,7 @@ const RUN_STAGE_FIELDS = [
   "memory_path",
   "consumes",
   "produces",
+  "repos_note",
   "rules_in_context",
   "rules_content",
   "rules_held",
@@ -976,6 +1004,8 @@ const RUN_STAGE_FIELDS = [
   "protocol_modules",
   "swarm_settled",
   "gate_only",
+  "revision_cycle",
+  "accept_as_is",
   "unit_record_step",
   "build_settled",
   "approve_together",
@@ -1013,6 +1043,8 @@ const DISPATCH_SUBAGENT_FIELDS = [
       field !== "protocol_modules" &&
       field !== "swarm_settled" &&
       field !== "gate_only" &&
+      field !== "revision_cycle" &&
+      field !== "accept_as_is" &&
       field !== "unit_record_step" &&
       field !== "build_settled" &&
       field !== "approve_together" &&
@@ -1077,7 +1109,7 @@ const ASK_FIELDS = [
   "new_project_command",
   "choices",
 ] as const;
-const PRINT_FIELDS = ["kind", "message", "next_stage", "document_note"] as const;
+const PRINT_FIELDS = ["kind", "message", "next_stage", "document_note", "revision_cycle", "accept_as_is"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
 const DONE_FIELDS = ["kind", "reason", "workflow_continues"] as const;
 const PARKED_FIELDS = ["kind", "reason", "stage"] as const;
@@ -1159,6 +1191,22 @@ export function questionNote(invocation: string, oneChoice = false): string {
     "When their reply picks one of the choices (its number, its words, or their own words for it), run that " +
     "choice's command; act on the step it returns, or run `" + invocation + " next` when it returns none. " +
     "Anything else is their own words: read what they meant.";
+}
+
+// Which repos Reverse Engineering reads: the names are the person's, the
+// command takes them exactly; the engine checks each one. "Only some" has no
+// command of its own, so `next` waits until the names are set. A request that
+// already said which is that answer: the person is not asked it again.
+export function repoScopeQuestionNote(invocation: string): string {
+  const intent = invocation.replace(/aidlc-orchestrate\.ts$/, "aidlc-utility.ts intent").replace(/ orchestrate$/, " intent");
+  return "When the person's own words already said which repositories to read, all of them or named ones, do not " +
+    "put this question: run `" + intent + " set-repos --all` or `" + intent + " set-repos <names>`, then `" +
+    invocation + " next`. Otherwise this question is for the person, not for you: show it to them with its " +
+    "choices as given, end your turn, " +
+    "and act only on their reply. When they want all of the repositories, run the Read all choice's command, then `" +
+    invocation + " next`. When they want only some, run `" + intent + " set-repos <names>` with the folder names " +
+    "they mean, comma-separated, then `" + invocation + " next`; when their reply does not say which, ask which " +
+    "ones and end your turn without running `next`. Anything else is their own words: read what they meant.";
 }
 
 // The routing question asked while no piece of work is selected: continue and
@@ -1352,12 +1400,33 @@ export function contextNote(paths: readonly string[], consumes: readonly string[
     `listed, with your file tool, and wait for each result. Then read the stage file it names${inputs}.`;
 }
 
+// The segment a code knowledge base path carries in place of the repo when the
+// work records several: one path per artifact, whatever the number of repos.
+export const REPO_PLACEHOLDER = "{repo}";
+
+function carriesRepoPlaceholder(o: Record<string, unknown>): boolean {
+  const paths = (value: unknown): string[] => Array.isArray(value) ? value.filter((p): p is string => typeof p === "string") : [];
+  const absent = (value: unknown): string[] =>
+    Array.isArray(value) ? value.flatMap((row) => isPlainObject(row) && typeof row.path === "string" ? [row.path] : []) : [];
+  const wave = isPlainObject(o.wave) && Array.isArray(o.wave.entries) ? o.wave.entries.filter(isPlainObject) : [];
+  return [
+    ...paths(o.produces), ...paths(o.consumes), ...absent(o.consumes_absent),
+    ...wave.flatMap((entry) => [...paths(entry.produces), ...paths(entry.consumes), ...absent(entry.consumes_absent)]),
+  ].some((path) => path.includes(REPO_PLACEHOLDER));
+}
+
+// A path written once for every repo, as the person reads it.
+function inputPathInWords(path: string): string {
+  const at = path.indexOf(`/${REPO_PLACEHOLDER}/`);
+  return at < 0 ? path : `${path.slice(at + REPO_PLACEHOLDER.length + 2)} in each repository's folder of ${path.slice(0, at)}/`;
+}
+
 // A declared input whose producer ran and still left no file: one line for the
 // person, then the recovery protocol. Absence by design (a stage not on this
 // plan) is not an event in their project and carries nothing.
 export function inputsNote(paths: readonly string[]): string {
-  return `Say to the person once: "Some inputs this stage usually reads are not here: ${paths.join(", ")}. I'll go ` +
-    "on with what is here.\" Then follow stage-protocol-recovery.md for the gap.";
+  return `Say to the person once: "Some inputs this stage usually reads are not here: ${paths.map(inputPathInWords).join(", ")}. ` +
+    "I'll go on with what is here.\" Then follow stage-protocol-recovery.md for the gap.";
 }
 
 // Code Generation: the engine asks for Plan Approval itself (a plan-approval
@@ -1562,6 +1631,8 @@ export function withAgentNotes<T extends object>(
       ? planOfferQuestionNote(invocation)
       : d.ask_type === "new-work-routing" && Array.isArray(d.available_intents)
       ? routingRecordsQuestionNote(invocation)
+      : d.ask_type === "repo-scope"
+      ? repoScopeQuestionNote(invocation)
       : questionNote(invocation, choices?.length === 1);
     if (typeof d.numbered_prose_question !== "string") {
       // A question with no options (a guard that has no way on) is said as it is.
@@ -1789,7 +1860,7 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalString(o, "proposed_scope", kind, errors);
       checkOptionalStringArray(o, "available_intents", kind, errors);
       checkOptionalString(o, "numbered_prose_question", kind, errors);
-      checkChoices(o, kind, errors, o.ask_type === "scope-confirm" || o.ask_type === "construction-staffing");
+      checkChoices(o, kind, errors, o.ask_type === "scope-confirm" || o.ask_type === "construction-staffing" || o.ask_type === "repo-scope");
       checkOptionalString(o, "recovery_choice", kind, errors);
       checkOptionalString(o, "existing_code_command", kind, errors);
       checkOptionalString(o, "new_project_command", kind, errors);
@@ -1807,10 +1878,11 @@ export function validateDirective(obj: unknown): ValidationResult {
           "plan-approval",
           "project-type",
           "construction-staffing",
+          "repo-scope",
         ].includes(o.ask_type)
       ) {
         errors.push(
-          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type | construction-staffing, got ${String(o.ask_type)}`,
+          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type | construction-staffing | repo-scope, got ${String(o.ask_type)}`,
         );
       }
       if ("plan_approval" in o && o.ask_type !== "plan-approval") {
@@ -1919,6 +1991,11 @@ export function validateDirective(obj: unknown): ValidationResult {
           errors.push(`${kind}: construction-staffing response_route must be "command"`);
         }
         rejectUnexpected("construction-staffing", {});
+      } else if (o.ask_type === "repo-scope") {
+        if (o.response_route !== "command") {
+          errors.push(`${kind}: repo-scope response_route must be "command"`);
+        }
+        rejectUnexpected("repo-scope", {});
       } else if (o.ask_type === "new-work-routing") {
         if (o.response_route !== "next") {
           errors.push(`${kind}: new-work-routing response_route must be "next"`);
@@ -2017,6 +2094,7 @@ export function validateDirective(obj: unknown): ValidationResult {
     case "print":
       checkString(o, "message", kind, errors);
       checkOptionalNullableString(o, "next_stage", kind, errors);
+      checkOptionalRevisionCycle(o, kind, errors);
       break;
     case "error":
       checkString(o, "message", kind, errors);
@@ -2079,6 +2157,7 @@ function checkRunStageShared(
   checkString(o, "memory_path", kind, errors);
   checkStringArray(o, "consumes", kind, errors);
   checkStringArray(o, "produces", kind, errors);
+  checkAgentNote(o, "repos_note", carriesRepoPlaceholder(o), kind, errors);
   checkStringArray(o, "rules_in_context", kind, errors);
   if (o.rules_content !== undefined) {
     checkPathTextArray(o, "rules_content", kind, errors);
@@ -2136,6 +2215,7 @@ function checkRunStageShared(
     checkOptionalProtocolModules(o, kind, errors);
     checkOptionalTrue(o, "swarm_settled", kind, errors);
     checkOptionalTrue(o, "gate_only", kind, errors);
+    checkOptionalRevisionCycle(o, kind, errors);
     checkOptionalString(o, "unit_record_step", kind, errors);
     checkOptionalTrue(o, "build_settled", kind, errors);
     checkOptionalApproveTogether(o, kind, errors);
@@ -2717,12 +2797,18 @@ function checkOptionalPipeline(
   }
   const keys = Object.keys(value);
   for (const key of keys) {
-    if (key !== "links" && key !== "completed" && key !== "record") {
+    if (key !== "links" && key !== "completed" && key !== "completed_other_repos" && key !== "record") {
       errors.push(`${kind}: pipeline unknown key: ${key}`);
     }
   }
   checkStringArray(value, "links", kind, errors);
   checkStringArray(value, "completed", kind, errors);
+  if (
+    "completed_other_repos" in value &&
+    (!Number.isInteger(value.completed_other_repos) || (value.completed_other_repos as number) < 1)
+  ) {
+    errors.push(`${kind}: pipeline.completed_other_repos must be a positive integer`);
+  }
   if (!Array.isArray(value.record)) {
     errors.push(`${kind}: pipeline.record must be array, got ${describe(value.record)}`);
     return;
@@ -2847,6 +2933,21 @@ function checkOptionalPositiveInteger(
       `${kind}: ${field} must be a positive integer, got ${describe(v)}`,
     );
   }
+}
+
+// The gate's change-request count and what it opens, on the reply or step
+// that shows the gate.
+function checkOptionalRevisionCycle(
+  o: Record<string, unknown>,
+  kind: DirectiveKind,
+  errors: string[],
+): void {
+  checkOptionalPositiveInteger(o, "revision_cycle", kind, errors);
+  if (!("accept_as_is" in o)) return;
+  if (typeof o.accept_as_is !== "string") {
+    errors.push(`${kind}: accept_as_is must be string, got ${describe(o.accept_as_is)}`);
+  }
+  checkEnum(o, "accept_as_is", ["offered", "next-revision"], kind, errors);
 }
 
 function checkPositiveInteger(

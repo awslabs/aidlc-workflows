@@ -1139,6 +1139,43 @@ describe("the engine asks for Plan Approval", () => {
     expect(next(proj).plan_approval).toEqual({ status: "approved" });
   });
 
+  // A note the person adds in Codex's box comes back as a second entry beside
+  // their pick: still one pick, so the plan is approved, not asked again.
+  test("a Codex picker pick with the person's note approves the plan", () => {
+    const proj = project();
+    const ask = askFor(proj);
+    cpSync(join(REPO_ROOT, "dist", "codex", ".codex"), join(proj, ".codex"), { recursive: true });
+    const session = "codex-plan-approval-session-note";
+    writeSessionPidEntry(proj, process.pid, session);
+    const result = spawnSync(BUN, [join(proj, ".codex", "hooks", "aidlc-codex-adapter.ts"), "record-human-turn"], {
+      cwd: proj,
+      input: JSON.stringify({
+        hook_event_name: "PostToolUse",
+        session_id: session,
+        turn_id: "codex-turn-note",
+        cwd: proj,
+        tool_name: "request_user_input",
+        tool_input: {
+          questions: [{
+            id: "plan",
+            question: ask.question,
+            options: ["Approve Plan (Recommended)", "Request Changes", "I'll edit the files"],
+          }],
+        },
+        tool_response: JSON.stringify({
+          answers: { plan: { answers: ["Approve Plan (Recommended)", "user_note: keep the old helper"] } },
+        }),
+        tool_use_id: "request-codex-turn-note",
+      }),
+      env: { ...process.env, AIDLC_UNATTENDED: undefined, CLAUDE_PROJECT_DIR: undefined } as NodeJS.ProcessEnv,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(auditText(proj)).toContain("**Event**: PLAN_APPROVAL_RECORDED");
+    expect(next(proj).plan_approval).toEqual({ status: "approved" });
+  });
+
   // In a conversation that is not in English the question is translated, and
   // the choice labels stay exactly as given, so the pick still records.
   test("a Codex picker pick under a translated question approves the plan", () => {

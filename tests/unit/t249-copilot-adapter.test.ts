@@ -324,6 +324,12 @@ function withCwd(payload: Record<string, unknown>, dir: string): Record<string, 
   return { ...payload, cwd: dir };
 }
 
+// The Stop hook's block is for a run nobody attends (and autonomous
+// Construction), so its cases read it there; an attended, gated run ends its
+// turn ("1b").
+const STOP_NOBODY = (target: string): NodeJS.ProcessEnv =>
+  target === "continue-workflow" ? { AIDLC_UNATTENDED: "1" } : {};
+
 function runAdapter(
   projectDir: string,
   target: string,
@@ -348,6 +354,7 @@ function runAdapter(
         AIDLC_PROJECT_DIR: undefined,
         CLAUDE_PROJECT_DIR: undefined,
         AIDLC_COMPILED_EXECUTABLE: COMPILED_BINARY ?? undefined,
+        ...STOP_NOBODY(target),
         ...envOverrides,
       } as NodeJS.ProcessEnv,
       timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
@@ -367,7 +374,7 @@ async function runAdapterAsync(projectDir: string, target: string, payload: unkn
     stdin: Buffer.from(JSON.stringify(payload)),
     stdout: "pipe",
     stderr: "pipe",
-    env: { ...process.env, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined },
+    env: { ...process.env, AIDLC_PROJECT_DIR: undefined, CLAUDE_PROJECT_DIR: undefined, ...STOP_NOBODY(target) },
   });
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited,
@@ -761,6 +768,14 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(parsed.hookSpecificOutput?.hookEventName).toBe("Stop");
     expect(parsed.hookSpecificOutput?.decision).toBe("block");
     expect(parsed.hookSpecificOutput?.reason).toBe(parsed.reason);
+  });
+
+  // In an attended run the stop with pending work says nothing in either shape.
+  test("1b: in an attended run stop with pending work is a silent allow", () => {
+    const dir = scratchProject(true);
+    const r = runAdapter(dir, "continue-workflow", withCwd(FIXTURES.stop, dir), { AIDLC_UNATTENDED: "0" });
+    expect(r.code).toBe(0);
+    expect(r.stdout.trim()).toBe("");
   });
 
   test("2: stop without workflow state is a silent allow", () => {
@@ -3628,7 +3643,7 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
       cwd: dir,
       input: JSON.stringify({ session_id: "plain-non-copilot", stop_hook_active: false }),
       encoding: "utf-8",
-      env: { ...process.env, AIDLC_PROJECT_DIR: dir, CLAUDE_PROJECT_DIR: dir, AIDLC_COPILOT_SESSION_ID: undefined } as NodeJS.ProcessEnv,
+      env: { ...process.env, AIDLC_PROJECT_DIR: dir, CLAUDE_PROJECT_DIR: dir, AIDLC_COPILOT_SESSION_ID: undefined, ...STOP_NOBODY("continue-workflow") } as NodeJS.ProcessEnv,
     });
     expect((JSON.parse(directCore.stdout) as { decision?: string }).decision).toBe("block");
   });

@@ -1340,6 +1340,7 @@ export const INTENT_VERBS: ReadonlySet<string> = new Set([
   "unarchive",
   "add-repo",
   "remove-repo",
+  "set-repos",
   "add-checkout",
   "remove-checkout",
 ]);
@@ -1356,9 +1357,11 @@ export const SPACE_VERBS: ReadonlySet<string> = new Set([
 export type IntentLifecycleVerb = "archive" | "unarchive";
 
 // The verbs that change where a piece of work's code is, by name: `add-repo`
-// and `remove-repo` its sibling repos, `add-checkout` and `remove-checkout` a
-// checkout outside the review's reach (they take a path).
-export type IntentRepoVerb = "add-repo" | "remove-repo" | "add-checkout" | "remove-checkout";
+// and `remove-repo` one of its sibling repos, `set-repos` the whole set (an
+// exact list, or `--all` to keep the recorded set as the person's),
+// `add-checkout` and `remove-checkout` a checkout outside the review's reach
+// (they take a path).
+export type IntentRepoVerb = "add-repo" | "remove-repo" | "set-repos" | "add-checkout" | "remove-checkout";
 
 export type WorkspaceCommand =
   // `all` is only ever set (true) for `intent list --all`; a plain list omits
@@ -1390,7 +1393,9 @@ function missingWorkspaceName(
 ): WorkspaceCommand {
   const usage = verb === "space-create"
     ? "space-create <name>"
-    : `${noun} ${verb} ${verb === "add-checkout" || verb === "remove-checkout" ? "<path>" : "<name>"}`;
+    : `${noun} ${verb} ${
+      verb === "add-checkout" || verb === "remove-checkout" ? "<path>" : verb === "set-repos" ? "<name,...|--all>" : "<name>"
+    }`;
   return {
     kind: "error",
     noun,
@@ -1425,7 +1430,8 @@ function isIntentLifecycleVerb(token: string | undefined): token is IntentLifecy
 }
 
 function isIntentRepoVerb(token: string | undefined): token is IntentRepoVerb {
-  return token === "add-repo" || token === "remove-repo" || token === "add-checkout" || token === "remove-checkout";
+  return token === "add-repo" || token === "remove-repo" || token === "set-repos" || token === "add-checkout" ||
+    token === "remove-checkout";
 }
 
 // `intent list [--json] [--all]` / `space list [--json]`. The flags may appear
@@ -1483,7 +1489,7 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     }
     if (isIntentLifecycleVerb(verbOrName) || isIntentRepoVerb(verbOrName)) {
       const name = tokens[2];
-      if (name === undefined || name.startsWith("--")) {
+      if (name === undefined || (name.startsWith("--") && !(verbOrName === "set-repos" && name === "--all"))) {
         return missingWorkspaceName(noun, verbOrName);
       }
       return { kind: verbOrName, noun, name, rest: tokens.slice(3) };
@@ -1535,6 +1541,7 @@ export function workspaceCommandUtilityArgv(
     case "unarchive":
     case "add-repo":
     case "remove-repo":
+    case "set-repos":
     case "add-checkout":
     case "remove-checkout":
       // The lifecycle and repo verbs forward verbatim, trailing flags included:
@@ -4568,6 +4575,9 @@ export interface IntentRegistryEntry {
   dirName?: string;
   scope?: string;
   repos?: string[];
+  // The person named this repo set (`--repos` at creation, or `intent
+  // set-repos`); absent for a set found on disk. Read by intentReposNamed.
+  repos_named?: true;
   status: string;
   // The engine question whose answer started this intent, so a repeated
   // answer finds the work it already started instead of creating it twice.
@@ -8408,6 +8418,7 @@ export function registerIntentRecord(
   repos?: string[],
   sessionId?: string,
   request?: string,
+  reposNamed = false,
 ): void {
   appendIntentToRegistry(
     projectDir,
@@ -8417,6 +8428,7 @@ export function registerIntentRecord(
       dirName: minted.dirName,
       scope,
       repos: repos && repos.length > 0 ? repos : undefined,
+      ...(reposNamed && repos && repos.length > 0 ? { repos_named: true as const } : {}),
       status: "in-flight",
       ...(request ? { request } : {}),
     },
@@ -12686,7 +12698,24 @@ export function noteConstructionStaffingAsked(projectDir: string): void {
 // (an answer, their own words, or a command) without a pick being recorded:
 // the default stands and the question is not put again.
 export function constructionStaffingPassedOver(projectDir: string): boolean {
-  const asked = engineAskMark(projectDir, CONSTRUCTION_STAFFING_ASK);
+  return engineAskPassedOver(projectDir, CONSTRUCTION_STAFFING_ASK);
+}
+
+const REPO_SCOPE_ASK = "repo-scope-ask.json";
+
+export function noteRepoScopeAsked(projectDir: string): void {
+  noteEngineAskMark(projectDir, REPO_SCOPE_ASK);
+}
+
+// Which repos Reverse Engineering reads was asked for this work in this clone
+// and the person has spoken since without naming the set: every recorded repo
+// is read and the question is not put again.
+export function repoScopePassedOver(projectDir: string): boolean {
+  return engineAskPassedOver(projectDir, REPO_SCOPE_ASK);
+}
+
+function engineAskPassedOver(projectDir: string, name: string): boolean {
+  const asked = engineAskMark(projectDir, name);
   if (asked === null) return false;
   try {
     const shardPath = auditFilePath(projectDir);
@@ -28311,6 +28340,16 @@ export function intentRepos(
   return [];
 }
 
+// Whether the person named the active intent's repo set rather than the engine
+// finding it on disk: the same row intentRepos reads.
+export function intentReposNamed(projectDir: string): boolean {
+  const selection = resolveWorkflowSelection(projectDir);
+  const dirName = selection.intent;
+  if (!dirName) return false;
+  return readIntentRegistry(projectDir, selection.space)
+    .some((entry) => recordDirMatches(entry, dirName) && entry.repos_named === true);
+}
+
 // Teams each owning a Unit need the code in this project's own repo, so work
 // with recorded repos is built by one session for now. What the person hears,
 // from the engine as Construction starts and from the ownership setter alike.
@@ -37573,30 +37612,83 @@ export function pipelineLinkRecord(
   }));
 }
 
+// From this many repos a work's repos are counted, not named, in what lists them.
+export const MANY_REPOS = 10;
+
+// How many repos' owed links a reply names, and a step's `completed` lists,
+// before the rest are counted instead: a workspace of a few repos reads every
+// one, and one of hundreds still fits in one result.
+export const PIPELINE_REPOS_NAMED = MANY_REPOS - 1;
+
+const otherRepos = (count: number): string => count === 1 ? "the other repository" : `the other ${count} repositories`;
+
+export interface OwedPipelineLinks {
+  // `<repo>:<link>` (or the link alone), as the refusals list them.
+  missing: string;
+  // The named links' exact commands, in order.
+  commands: string;
+  // "", or the clause the step that names the rest takes: ", which names the commands for ...".
+  others: string;
+}
+
+// The owed links a reply names, for the engine's refusal, the state tool's
+// floor and the rejection reply alike: every owed repo's links in chain order
+// while PIPELINE_REPOS_NAMED or fewer owe any, else the first that many whole
+// repos and how many others owe links. `record` is pipelineLinkRecord's.
+export function owedPipelineLinks(record: ReadonlyArray<{ link: string; repo?: string; command: string }>): OwedPipelineLinks {
+  const repos = [...new Set(record.map((row) => row.repo ?? ""))];
+  const named = new Set(repos.slice(0, PIPELINE_REPOS_NAMED));
+  const shown = record.filter((row) => named.has(row.repo ?? ""));
+  const rest = repos.length - named.size;
+  return {
+    missing: shown.map(({ link, repo }) => repo ? `${repo}:${link}` : link).join(", ") +
+      (rest > 0 ? `, and the links of ${rest === 1 ? "1 other repository" : `${rest} other repositories`}` : ""),
+    commands: shown.map(({ command }) => `\`${command}\``).join(", then "),
+    others: rest > 0 ? `, which names the commands for ${otherRepos(rest)}` : "",
+  };
+}
+
+// A step's `completed` ledger under the same budget: past PIPELINE_REPOS_NAMED
+// repos with links on record, the first that many repos' entries and how many
+// others have links on record. The step's `record` names every owed link
+// that fits, so a resume never needs the rest by name.
+export function completedPipelineLinks(completed: readonly string[]): { completed: string[]; completed_other_repos?: number } {
+  const repoOf = (entry: string): string => entry.includes(":") ? entry.slice(0, entry.indexOf(":")) : "";
+  const repos = [...new Set(completed.map(repoOf))];
+  if (repos.length <= PIPELINE_REPOS_NAMED) return { completed: [...completed] };
+  const named = new Set(repos.slice(0, PIPELINE_REPOS_NAMED));
+  return {
+    completed: completed.filter((entry) => named.has(repoOf(entry))),
+    completed_other_repos: repos.length - named.size,
+  };
+}
+
 // The way on for missing pipeline handoffs, one sentence for the engine's
 // refusal and the state tool's floor: the conductor's own step. The evidence
 // switch is the person's, so neither names it. At an open gate `next` shows
 // the gate only once the links are in, so it comes last there; with the
 // person's approval in hand, `approval` (the step that applies it) comes last
-// instead, so they are never asked again. `commands` are the missing links'
-// own, from pipelineLinkRecord.
+// instead, so they are never asked again. Past the repos `owed` names, the step
+// that comes last names the rest's commands, and the sentence says so.
 export function pipelineLinkWayOn(
   projectDir: string,
   slug: string,
-  options: { commands: string[]; singleRun?: boolean; gateOpen?: boolean; approval?: string },
+  options: { owed: OwedPipelineLinks; singleRun?: boolean; gateOpen?: boolean; approval?: string },
 ): string {
   const singleRun = options.singleRun === true;
   const next = `\`${aidlcToolInvocation("orchestrate")} next${singleRun ? ` --single --stage ${slug}` : ""}\``;
-  const link = options.commands.map((command) => `\`${command}\``).join(", then ");
+  const { commands, others } = options.owed;
   const last = options.approval !== undefined
-    ? `; then run ${options.approval}: the person's approval stands, so they are not asked again`
-    : options.gateOpen ? `; then re-run ${next}, which shows the gate again` : "";
-  return (last ? "Dispatch" : `Re-run ${next} and dispatch`) +
+    ? `; then run ${options.approval}${others}: the person's approval stands, so they are not asked again`
+    : options.gateOpen
+    ? `; then re-run ${next}${others ? `${others}, and shows the gate again once every link is in` : ", which shows the gate again"}`
+    : others ? `; then re-run ${next}${others}` : "";
+  return (options.approval !== undefined || options.gateOpen ? "Dispatch" : `Re-run ${next} and dispatch`) +
     " the missing pipeline links in their declared order, carrying the human's revision feedback. " +
     (guardPolicyAcceptsChanges(projectDir)
       ? ""
       : "Rejection starts a new attempt: earlier scans and receipts cannot certify this revision, even for a targeted artifact edit. ") +
-    `After each link returns, run its command: ${link}${last}. ` +
+    `After each link returns, run its command: ${commands}${last}. ` +
     "Do not re-stamp an old handoff or disable evidence checks to reopen the gate.";
 }
 

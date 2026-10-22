@@ -28,8 +28,9 @@
 // turns a check off, four config settings that can take a check away, and a
 // release fetched or applied, pass once a person has asked; a Code Generation
 // completion (a report that opens or passes the gate, a Unit's completion
-// receipt) waits while the plan does (the person's answer at the held gate and
-// the recovery remedy they picked excepted); a jump waits for the person's
+// receipt) waits while the plan does (at the held gate its own report showing
+// it again and the person's answer, and the recovery remedy they picked,
+// excepted); a jump waits for the person's
 // move: the restart they picked at the recovery question, or one they asked
 // for, unless the engine's last step was superseded (a `jump execute`, or the
 // `jump reopen` it printed, to the stage the agent's own settled `next --stage`
@@ -152,6 +153,7 @@ import {
   beginCodeGeneration,
   beginCodeGenerationBatch,
   codeGenerationExecutionAllowed,
+  codeGenerationGateHeld,
   type CodeGenerationIssuance,
   codeGenerationIssuance,
   codeGenerationPlanApprovalFence,
@@ -1421,13 +1423,6 @@ function installedEngineArgs(
   return route ? ["engine", route, ...toolArgs] : null;
 }
 
-function codeGenerationGateHeld(state: string): boolean {
-  return normalizeStageName(getField(state, "Current Stage") ?? "") === GUARDED_STAGE &&
-    parseCheckboxes(state).some(
-      (entry) => entry.slug === GUARDED_STAGE && entry.state === "awaiting-approval",
-    );
-}
-
 function isSelectedGuardRestartContinuation(
   projectDir: string,
   cwd: string,
@@ -1489,8 +1484,9 @@ function isSelectedGuardRestartContinuation(
 }
 
 // What AI-DLC's own command still waits on in the step and the state at hand:
-// the Code Generation completion gate held open (the person's answer to it
-// passes), and whether a jump is the person's move (jumpIsPersonsMove).
+// the Code Generation completion gate held open (its own report showing it
+// again and the person's answer to it pass), and whether a jump is the
+// person's move (jumpIsPersonsMove).
 interface EngineCommandContext {
   gateHeld: boolean;
   marker: ActiveDirectiveMarker | null;
@@ -1658,10 +1654,10 @@ function configToolAdmitted(projectDir: string, rest: readonly string[]): boolea
 // keep theirs. Two more have no other owner: a Code Generation completion (a
 // report that opens the gate or completes the stage, a Unit's completion
 // receipt; neither tool checks the plan's approval) waits while the plan does,
-// the person's answer at the held gate and the remedy they picked at the
-// recovery question excepted; and a jump (the jump tool checks no pick and no
-// person) waits for the person's move (jumpIsPersonsMove). Every other engine
-// command is the engine's to judge.
+// the gate's own report showing it again and the person's answer at the held
+// gate, and the remedy they picked at the recovery question, excepted; and a
+// jump (the jump tool checks no pick and no person) waits for the person's move
+// (jumpIsPersonsMove). Every other engine command is the engine's to judge.
 function engineCommandAdmitted(
   projectDir: string,
   engineArgs: readonly string[],
@@ -1677,7 +1673,7 @@ function engineCommandAdmitted(
     (stage === undefined || stage === GUARDED_STAGE) &&
     ((report && CODE_GENERATION_COMPLETIONS.has(result)) ||
       (args[0] === "state" && args[1] === "unit" && args[2] === "complete")) &&
-    !(report && context.gateHeld && stage === GUARDED_STAGE && result === "approved") &&
+    !(report && context.gateHeld && stage === GUARDED_STAGE && (result === "approved" || result === "awaiting-approval")) &&
     !guardRecoveryAnswerAdmits(context.marker, engineArgs, projectDir)
   ) return false;
   if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted({ verb: args[1], target: lastFlag(args, "--target"), units: lastFlag(args, "--units"), via: lastFlag(args, "--via") })) return false;
@@ -2141,9 +2137,9 @@ async function evaluate(
   // admits: the refusal stands with the fence on, and a lowered fence stands
   // aside for it as for any other write of an approved plan.
   let swarmBatchOut = false;
-  // Under Guard Policy off, the build step a compaction or a state sync set
-  // aside since it was issued, when the person's approval for it still stands:
-  // the last instruction on record, so its work goes on as it did before.
+  // The build step set aside since it was issued, when the fence is lowered and
+  // the person's approval for it still stands (setAsideBuildUnderOff): the last
+  // instruction on record, so its work goes on as it did before.
   let setAside: ReturnType<typeof setAsideBuildUnderOff> = null;
   // Why that step went out of date, for the row its pass leaves.
   let setAsideWhy = "";
@@ -2269,10 +2265,11 @@ async function evaluate(
     if (!existsSync(statePath)) return 0; // no workflow - fail open
     state = readFileSync(statePath, "utf-8");
     const currentStage = getField(state, "Current Stage") ?? "";
-    const activeDirective = readActiveDirectiveMarker(projectDir, state);
+    let activeDirective = readActiveDirectiveMarker(projectDir, state);
     const durableStage = normalizeStageName(currentStage);
-    const directiveStage = normalizeStageName(activeDirective?.stage ?? "");
-    setAside = activeDirective?.version === 2 && directiveStage === GUARDED_STAGE
+    let directiveStage = normalizeStageName(activeDirective?.stage ?? "");
+    setAside = (activeDirective === null && durableStage === GUARDED_STAGE) ||
+        (activeDirective?.version === 2 && directiveStage === GUARDED_STAGE)
       ? setAsideBuildUnderOff(projectDir, activeDirective)
       : null;
     if (setAside !== null) {
@@ -2280,7 +2277,7 @@ async function evaluate(
     }
     const issuance = activeDirective?.version === 2 && directiveStage === GUARDED_STAGE
       ? codeGenerationIssuance(activeDirective) ?? setAside
-      : null;
+      : setAside;
     if (issuance !== null) briefTargets = issuanceTargets(issuance);
     const dispatchPrompt = [toolInput.prompt, toolInput.description]
       .filter((value): value is string => typeof value === "string")
@@ -2382,6 +2379,16 @@ async function evaluate(
       return 0;
     }
 
+    // At the held gate the step its own report retired stands
+    // (setAsideBuildUnderOff) for every call but AI-DLC's own commands the
+    // admission holds, which wait for a current step.
+    if (activeDirective === null && setAside !== null) {
+      if (mutation.engineRefused) setAside = null;
+      else {
+        activeDirective = readIssuedDirectiveMarker(projectDir);
+        directiveStage = normalizeStageName(activeDirective?.stage ?? "");
+      }
+    }
     rulesArriving = codeGenerationRulesArrivingReason(activeDirective);
     if (
       activeDirective?.version !== 2 ||

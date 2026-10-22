@@ -230,24 +230,31 @@ reference the specific skipped stage.
 
 ### Revision Escape Hatch
 
-After 3 "Request Changes" cycles on the same stage, the 4th and subsequent
-approval gates add a third option:
+The engine counts the person's "Request Changes" at a stage's gate (one
+Unit's, at a Unit gate) from the audit trail and puts the count on the reply
+that shows the gate (`report --result awaiting-approval` or `revised`):
+`revision_cycle`, with `accept_as_is: "offered"` from the third request on and
+`accept_as_is: "next-revision"` at the second. The conductor reads both from
+that reply and never counts in the chat, so the count holds across a park.
+With `accept_as_is: "offered"`, the gate adds a third option:
 
 ```
 { label: "Accept as-is", description: "Archive current version and move on" }
 ```
 
-The question text changes to include the cycle count:
+The question text changes to include the cycle count, `[N]` from
+`revision_cycle`:
 `"[Stage Name] -- this is revision cycle [N]. How would you like to proceed?"`
 
 **When "Accept as-is" is selected:** report it as the gate's approval
 (`report --stage <slug> --result approved --user-input "Accept as-is"`); the
 engine records the choice and completes the stage. This overrides the
-No Emergent Behavior Rule for Construction stages only when the threshold is
-reached.
+No Emergent Behavior Rule for Construction stages only when the reply carries
+`accept_as_is: "offered"`.
 
-**Pre-activation notice:** After the 2nd cycle, include: "After one more
-revision, an 'Accept as-is' option will become available."
+**Pre-activation notice:** When the reply carries
+`accept_as_is: "next-revision"`, include: "After one more revision, an
+'Accept as-is' option will become available."
 
 ### Approval Gate Flow
 

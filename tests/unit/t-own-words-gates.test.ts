@@ -1,6 +1,6 @@
 // covers: function:isNonAnswer, function:stripRecommendedDecorator, function:formatReceivedReply
 // covers: function:exactOptionPick, function:stageGateApproval, function:personsGateWords
-// covers: function:stageRevisionCycles, function:stageAcceptAsIsOnOffer, function:ACCEPT_AS_IS_REVISION_CYCLES
+// covers: function:stageRevisionCycles, function:stageAcceptAsIsOnOffer, function:ACCEPT_AS_IS_REVISION_CYCLES, function:addRevisionCycle
 // covers: function:personsLatestGatePick, function:changeRequestWords, function:markProtectedQuestionReplied
 // covers: function:recordProtectedHumanResponse, function:requireProtectedResponse
 // covers: function:consumeSharedDirectiveAsk, function:recordGuardRecoveryChoice
@@ -27,6 +27,7 @@ import {
   createTestProject,
   FIXTURES_DIR,
   resetAidlcEnv,
+  seedAidlcMemory,
   seededAuditShard,
   seededRecordDir,
   seededStateFile,
@@ -71,6 +72,7 @@ const ORCHESTRATE = join(AIDLC_SRC, "tools", "aidlc-orchestrate.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
 const SESSION = "01995000-7a11-7000-8000-00000000f00d";
+const OTHER_SESSION = "01995000-7a11-7000-8000-00000000beef";
 
 function run(tool: string, args: string[], extra: Record<string, string> = {}): { rc: number; out: string } {
   const env: Record<string, string | undefined> = {
@@ -479,6 +481,72 @@ describe("the stage gate records the choice the agent read, with the person's wo
     expect(report(proj, ["--stage", slug, "--result", "approved", "--user-input", "Accept as-is"]).kind).toBe("done");
     const approvals = events(proj, "GATE_APPROVED");
     expect(auditBlockField(approvals[approvals.length - 1].block, "User Input")).toBe("Approve");
+  });
+
+  // The conductor offers Accept as-is from the gate reply, never from its own
+  // count in the chat, so the offer survives a park and a new chat.
+  test("the gate reply carries this stage's change-request count, and a park keeps it", () => {
+    type GateReply = { kind: string; revision_cycle?: number; accept_as_is?: string };
+    const shown: GateReply[] = [];
+    for (let i = 0; i < 2; i++) {
+      says(proj, `tighten section ${i + 1}`);
+      const rejected = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "tighten it"]);
+      expect(rejected.kind, JSON.stringify(rejected)).toBe("print");
+      shown.push(report(proj, ["--stage", slug, "--result", "revised"]) as GateReply);
+    }
+    expect(shown.map((r) => [r.kind, r.revision_cycle, r.accept_as_is])).toEqual([
+      ["print", 1, undefined],
+      ["print", 2, "next-revision"],
+    ]);
+
+    says(proj, "tighten it once more, then let's stop for today");
+    const third = report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "tighten it"]);
+    expect(third.kind, JSON.stringify(third)).toBe("print");
+    expect(state(proj, ["park"]).rc).toBe(0);
+    expect(events(proj, "WORKFLOW_PARKED")).toHaveLength(1);
+
+    // A new chat picks the revision up: the gate shown again still counts three.
+    const resumed = run(ORCHESTRATE, ["next", "--resume", "--project-dir", proj], { AIDLC_SESSION_OVERRIDE: OTHER_SESSION });
+    expect(resumed.rc, resumed.out).toBe(0);
+    const again = JSON.parse(
+      run(ORCHESTRATE, ["report", "--stage", slug, "--result", "revised", "--project-dir", proj], {
+        AIDLC_SESSION_OVERRIDE: OTHER_SESSION,
+      }).out.split("\n").find((line) => line.startsWith("{")) as string,
+    ) as GateReply;
+    expect([again.kind, again.revision_cycle, again.accept_as_is]).toEqual(["print", 3, "offered"]);
+  });
+
+  // The gate is where people stop: the step `next` shows it again with, in a
+  // new chat or after a park at the open gate, carries the count too.
+  test("the gate shown again in a new chat, or after a park at the open gate, carries the count", () => {
+    type GateStep = { kind: string; gate_only?: boolean; revision_cycle?: number; accept_as_is?: string };
+    seedAidlcMemory(proj);
+    for (let i = 0; i < 3; i++) {
+      says(proj, `tighten section ${i + 1}`);
+      report(proj, ["--stage", slug, "--result", "rejected", "--user-input", "Request Changes", "--reason", "tighten it"]);
+      expect(report(proj, ["--stage", slug, "--result", "revised"]).kind).toBe("print");
+    }
+    const shownAgain = (args: string[]): GateStep => {
+      const r = run(ORCHESTRATE, [...args, "--project-dir", proj], { AIDLC_SESSION_OVERRIDE: OTHER_SESSION });
+      expect(r.rc, r.out).toBe(0);
+      const step = JSON.parse(r.out.split("\n").find((line) => line.startsWith("{")) as string) as GateStep;
+      return { kind: step.kind, gate_only: step.gate_only, revision_cycle: step.revision_cycle, accept_as_is: step.accept_as_is };
+    };
+    const offered = { kind: "run-stage", gate_only: true, revision_cycle: 3, accept_as_is: "offered" };
+
+    expect(shownAgain(["next"])).toEqual(offered);
+
+    says(proj, "let me think about it, stop for today");
+    expect(state(proj, ["park"]).rc).toBe(0);
+    expect(state(proj, ["unpark"]).rc).toBe(0);
+    expect(shownAgain(["next", "--resume"])).toEqual(offered);
+  });
+
+  test("a gate shown with no change request on record carries no count", () => {
+    const opened = report(proj, ["--stage", slug, "--result", "awaiting-approval"]) as Record<string, unknown>;
+    expect(opened.kind, JSON.stringify(opened)).toBe("print");
+    expect("revision_cycle" in opened).toBe(false);
+    expect("accept_as_is" in opened).toBe(false);
   });
 
   test("an exact Approve is the person's pick: a rejection is refused", () => {

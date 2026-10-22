@@ -1084,7 +1084,10 @@ interface HookResult {
  * CLAUDE_CODE_STOP_HOOK_BLOCK_CAP set, capture stdout, return exit code. `cap`
  * empty-string => env var unset (default cap). `rewriteMarker` makes the mock
  * publish its directive into an existing marker, witnessing whether the hook
- * probed before evaluating a resume wait.
+ * probed before evaluating a resume wait. The run is one nobody attends
+ * (AIDLC_UNATTENDED=1) unless `extraEnv` names it: an attended, gated run ends
+ * its turn whenever the carve-outs find no wait ("(s4)" below), so the block
+ * and every carve-out are read where the work carries on by itself.
  */
 function runHook(
   proj: string,
@@ -1105,6 +1108,7 @@ function runHook(
     MOCK_UNIT: unit,
     MOCK_STAGE: stage,
     MOCK_MARKER_PATH: join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"),
+    AIDLC_UNATTENDED: "1",
     ...extraEnv,
   };
   if (rewriteMarker) env.MOCK_REWRITE_MARKER = "1";
@@ -1267,31 +1271,18 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(reason).not.toMatch(/`|requirements-analysis|hook|forwarding|directive|receipt|run-stage|loop|the person/i);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  // The person on every tool gets the line once. Claude Code, Codex, Copilot
-  // and Cursor show the reason, so it is the plain line alone. Kiro CLI,
-  // opencode and Kiro IDE hide it, so after the line (still first) comes the
-  // agent's step: a person who asked to stop or pause is parked with this
-  // install's exact command, and the agent says the line itself, on its own
-  // line, only when it carries on with the work. It reaches the agent even
-  // when the aidlc skill is not loaded.
-  test("(a) the reason is the plain line where the tool shows it, and the line plus the agent's step where it hides it", () => {
+  // The reason is the same plain line on every tool, with no step for the
+  // agent after it: it comes only where the work carries on by itself, so no
+  // tool has a person waiting to be told it.
+  test("(a) the reason is the same plain line on every tool", () => {
     const line = "AI-DLC is carrying on with Requirements Analysis.";
-    const agentStep =
-      "If you had just asked the person a question, record it with `log decision` and end your turn saying nothing. " +
-      "If the person asked you to stop or pause, run `bun .claude/tools/aidlc-orchestrate.ts park --person-asked` and end your turn. " +
-      "Otherwise, if you carry on with the work, first say that line to the person once, on its own line; " +
-      "it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it. " +
-      "Say nothing else about this note.";
     for (const tool of ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]) {
       const proj = makeProject();
       seedActive(proj, "requirements-analysis");
       const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "requirements-analysis", "", false, {
         AIDLC_HARNESS_NAME: tool,
       });
-      const reason = (JSON.parse(r.out) as { reason: string }).reason;
-      const hides = tool === "kiro" || tool === "kiro-ide" || tool === "opencode";
-      expect(reason, tool).toBe(hides ? `${line}\n${agentStep}` : line);
-      expect(reason.split("\n")[0], tool).toBe(line);
+      expect((JSON.parse(r.out) as { reason: string }).reason, tool).toBe(line);
     }
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -3594,10 +3585,11 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     // engine, so this evidence never releases one).
     seedInProgressWithQuestions(proj, { autonomy: "autonomous" });
     const tp = seedTranscript(proj, { format: "claude", engineCall: false });
+    const present = { AIDLC_UNATTENDED: "0" };
     const r = runHook(
       proj,
       JSON.stringify({ stop_hook_active: false, transcript_path: tp }),
-      "run-stage",
+      "run-stage", "", "", "requirements-analysis", "", false, present,
     );
     expect(r.rc, r.diagnostic).toBe(0);
     expect(r.out).toBe("");
@@ -3606,7 +3598,7 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     const nudged = runHook(
       proj,
       JSON.stringify({ stop_hook_active: false, transcript_path: engaged }),
-      "run-stage",
+      "run-stage", "", "", "requirements-analysis", "", false, present,
     );
     expect((JSON.parse(nudged.out) as { decision?: string }).decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -3747,12 +3739,13 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     // moves the human-turn marker, so an unattended run is never released here.
     seedInProgressWithQuestions(proj, { autonomy: "autonomous" });
     seedTurnMarkers(proj, { humanNewer: true });
-    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    const present = { AIDLC_UNATTENDED: "0" };
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "requirements-analysis", "", false, present);
     expect(r.rc, r.diagnostic).toBe(0);
     expect(r.out).toBe("");
     // The engine's step newer than the person's turn is the unattended shape: nudged.
     seedTurnMarkers(proj, { humanNewer: false });
-    const nudged = runHook(proj, '{"stop_hook_active":false}', "run-stage");
+    const nudged = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "requirements-analysis", "", false, present);
     expect((JSON.parse(nudged.out) as { decision?: string }).decision).toBe("block");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -5121,8 +5114,8 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
       marker.human_sequence = 2;
       marker.engine_sequence = 1;
     });
-    expect(runCopilotStop(autonomous, "8").out).toBe("");
-    expect((JSON.parse(runCopilotStop(autonomous, "8").out) as { decision?: string }).decision).toBe("block");
+    expect(runCopilotStop(autonomous, "8", { AIDLC_UNATTENDED: "0" }).out).toBe("");
+    expect((JSON.parse(runCopilotStop(autonomous, "8", { AIDLC_UNATTENDED: "0" }).out) as { decision?: string }).decision).toBe("block");
 
     const bounded = makeProject();
     seedActive(bounded);
@@ -5156,5 +5149,103 @@ describe("t121 aidlc-continue-workflow hook — forwarding-loop enforcement (mig
     expect(stopped.out).toBe("");
     expect(readFileSync(markerPath, "utf-8")).toBe(before);
     expect(statSync(lockDir).isDirectory()).toBe(true);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+});
+
+// (s4) An attended, gated run: a person is there (no AIDLC_UNATTENDED=1) and
+// Construction is not autonomous. When none of the carve-outs above finds a
+// wait, the record cannot tell a question the agent asked in prose from a
+// quit, and the line was wrong for the first (Kiro CLI v3 showed it as the
+// agent speaking while it waited), so the turn ends and the person's next
+// message carries the work on. The block stays where the work carries on by
+// itself; the problem line stays in every run.
+describe("t121 (s4) an attended, gated run ends the turn when nothing on record says it waits", () => {
+  const ATTENDED = { AIDLC_UNATTENDED: "0" };
+  const PENDING = ["run-stage", "load-steering", "dispatch-subagent", "invoke-swarm", "present-gate", "print", "rehydrate"];
+  const trace = (proj: string): string =>
+    readFileSync(join(seededRecordDir(proj), ".aidlc-engine/hooks-health", "continue-workflow.trace"), "utf-8");
+
+  test("(s4) every tool and every pending step: the turn ends, with a trace line and no block counted", () => {
+    for (const tool of ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]) {
+      for (const kind of PENDING) {
+        const proj = makeProject();
+        seedActive(proj, "requirements-analysis");
+        const r = runHook(proj, '{"stop_hook_active":false}', kind, "", "", "requirements-analysis", "", false, {
+          ...ATTENDED, AIDLC_HARNESS_NAME: tool,
+        });
+        expect(r.rc, r.diagnostic).toBe(0);
+        expect(r.out, `${tool} ${kind}`).toBe("");
+        expect(trace(proj), `${tool} ${kind}`).toContain("attended-run carve-out");
+        expect(existsSync(guardFilePath(proj)), `${tool} ${kind}`).toBe(false);
+      }
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(s4) an engaged Claude Code turn draws no Stop frame, and an engaged Kiro turn says nothing", () => {
+    const claude = makeProject();
+    seedActiveWithCheckbox(claude, "-");
+    const transcript = seedTranscriptEntries(claude, "claude", [
+      { kind: "human", text: "Guide me through the questions" },
+      { kind: "bash", command: "bun .claude/tools/aidlc.ts engine orchestrate next" },
+      { kind: "text" },
+    ]);
+    const c = runHook(claude, JSON.stringify({ stop_hook_active: false, transcript_path: transcript }), "run-stage", "", "", "requirements-analysis", "", false, {
+      ...ATTENDED, AIDLC_HARNESS_NAME: "claude",
+    });
+    expect(c.out).toBe("");
+    const kiro = makeProject();
+    const env = addKiroLayout(kiro);
+    seedActiveWithCheckbox(kiro, "-");
+    seedTurnMarkers(kiro, { humanNewer: false });
+    const k = runHook(kiro, '{"stop_hook_active":false}', "run-stage", "", "", "requirements-analysis", "", false, {
+      ...ATTENDED, ...env, AIDLC_HARNESS_NAME: "kiro",
+    });
+    expect(k.out).toBe("");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(s4) the person's reply to an open gate stays on record when the turn ends", () => {
+    const proj = makeProject();
+    seedActiveWithCheckbox(proj, "?", "build-and-test");
+    const rows = `## STAGE_AWAITING_APPROVAL\n**Timestamp**: 2026-10-13T22:02:49Z\n**Event**: STAGE_AWAITING_APPROVAL\n**Stage**: build-and-test\n\n---\n` +
+      `## HUMAN_TURN\n**Timestamp**: 2026-10-13T22:02:50Z\n**Event**: HUMAN_TURN\n**Origin**: person\n**Source**: picker\n**Picked**: ["Approve"]\n\n---\n`;
+    seedAuditShard(proj, rows);
+    const before = readFileSync(pinnedShardPath(proj), "utf-8");
+    const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "build-and-test", "", false, ATTENDED);
+    expect(r.out).toBe("");
+    expect(readFileSync(pinnedShardPath(proj), "utf-8")).toBe(before);
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(s4) autonomous Construction still carries the turn on, with the same plain line on every tool", () => {
+    for (const tool of ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"]) {
+      const proj = makeProject();
+      seedInProgressWithQuestions(proj, { slug: "code-generation", phase: "construction", autonomy: "autonomous" });
+      const r = runHook(proj, '{"stop_hook_active":false}', "run-stage", "", "", "code-generation", "", false, {
+        ...ATTENDED, AIDLC_HARNESS_NAME: tool,
+      });
+      const parsed = JSON.parse(r.out || "{}") as { decision?: string; reason?: string };
+      expect(parsed.decision, tool).toBe("block");
+      expect(parsed.reason, tool).toBe("AI-DLC is carrying on with Code Generation.");
+    }
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(s4) a problem the engine hit is still said once in an attended run", () => {
+    const proj = makeProject();
+    seedActive(proj, "requirements-analysis");
+    const message = "State file has no Scope field.";
+    const stop = () => runHook(proj, '{"session_id":"attended-error","stop_hook_active":false}', "error", "", "", "requirements-analysis", "", false, {
+      ...ATTENDED, MOCK_MESSAGE: message,
+    });
+    expect(JSON.parse(stop().out)).toEqual({ decision: "block", reason: `The last AI-DLC step stopped on a problem: ${message}` });
+    expect(stop().out).toBe("");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("(s4) Copilot's retained step ends an attended turn without counting a stop", () => {
+    const proj = makeProject();
+    seedActive(proj);
+    seedCopilotDirective(proj);
+    const r = runCopilotStop(proj, "2", ATTENDED);
+    expect(r.out).toBe("");
+    const marker = JSON.parse(readFileSync(join(seededRecordDir(proj), ".aidlc-engine/active-directive.json"), "utf-8")) as { stop_count?: number };
+    expect(marker.stop_count).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 });

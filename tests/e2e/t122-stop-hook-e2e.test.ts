@@ -191,14 +191,20 @@ const TURN_END_RECORD = "the engine's last step ended the turn";
 /** Pipe a real Stop payload into the SHIPPED hook with the project's REAL
  *  engine resolved via CLAUDE_PROJECT_DIR. Returns exit code + trimmed stdout
  *  (a block rides stdout; an allow is empty). */
+// A run nobody attends (AIDLC_UNATTENDED=1) unless `extraEnv` names it: an
+// attended, gated run ends its turn whenever the carve-outs find no wait, so
+// the block and the carve-outs are read where the work carries on by itself.
 function runRealHook(
   proj: string,
   payload: string,
   cap?: string,
+  extraEnv: Record<string, string> = {},
 ): { rc: number; out: string } {
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     CLAUDE_PROJECT_DIR: proj,
+    AIDLC_UNATTENDED: "1",
+    ...extraEnv,
   };
   if (cap !== undefined) env.CLAUDE_CODE_STOP_HOOK_BLOCK_CAP = cap;
   const res = spawnSync(BUN, [join(proj, ".claude", "hooks", "aidlc-continue-workflow.ts")], {
@@ -451,6 +457,27 @@ describe("t122 Stop hook end-to-end — real hook, real engine (sdk+cli)", () =>
         expect(/ignore|override|disregard|bypass/i.test(hookFraming)).toBe(
           false,
         );
+      } finally {
+        cleanupTestProject(proj);
+      }
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  // The same pending stage in an attended, gated run: nothing on record says
+  // the agent waits, the person is there, and the turn ends with no line.
+  test(
+    "(real engine) an attended run ends the turn at a pending stage: empty stdout, exit 0",
+    () => {
+      const proj = setupIntegrationProject({
+        withState: "state-final-stage.md",
+        withAudit: true,
+      });
+      try {
+        const r = runRealHook(proj, '{"stop_hook_active":false}', undefined, { AIDLC_UNATTENDED: "0" });
+        expect(r.rc).toBe(0);
+        expect(r.out).toBe("");
+        expect(readFileSync(tracePath(proj), "utf-8")).toContain("attended-run carve-out");
       } finally {
         cleanupTestProject(proj);
       }

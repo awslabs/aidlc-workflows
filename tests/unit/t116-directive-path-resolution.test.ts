@@ -560,7 +560,7 @@ describe("t116 consumes presence split (consumes_absent)", () => {
     );
   });
 
-  test("17: multi-repo codekb consumes enumerate every present registered-repo path", () => {
+  test("17: multi-repo codekb consumes name each present artifact once, for every registered repo", () => {
     const repos = ["repo-a", "repo-b"];
     const dir = emitFor(
       "state-brownfield-feature.md",
@@ -595,19 +595,12 @@ describe("t116 consumes presence split (consumes_absent)", () => {
       },
     );
 
-    for (const repo of repos) {
-      expect(dir.consumes).toContain(
-        `aidlc/spaces/${DEFAULT_SPACE}/codekb/${repo}/architecture.md`,
-      );
-      expect(dir.consumes).toContain(
-        `aidlc/spaces/${DEFAULT_SPACE}/codekb/${repo}/component-inventory.md`,
-      );
-    }
-    expect(
-      allConsumePaths(dir).some((path) =>
-        /\/codekb\/[^/]+\/(?:architecture|component-inventory)\.md$/.test(path)
-      ),
-    ).toBe(true);
+    const codekb = allConsumePaths(dir).filter((path) => path.includes("/codekb/"));
+    expect(codekb.sort()).toEqual([
+      `aidlc/spaces/${DEFAULT_SPACE}/codekb/{repo}/architecture.md`,
+      `aidlc/spaces/${DEFAULT_SPACE}/codekb/{repo}/component-inventory.md`,
+    ]);
+    expect(dir.consumes).toEqual(expect.arrayContaining(codekb));
   });
 
   test("18: [S] without conditional-skip provenance does not make an on-path producer's absence expected", () => {

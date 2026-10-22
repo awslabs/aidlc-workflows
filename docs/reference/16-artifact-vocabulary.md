@@ -235,7 +235,12 @@ every intent in the space, keyed by repo rather than by intent. The path is
 resolved outside the record-relative rule via the `isCodekb` branch in
 `resolveArtifactPath` (`core/tools/aidlc-orchestrate.ts`), and
 the same directory is printed by the read-only native route
-`aidlc engine workspace codekb`.
+`aidlc engine workspace codekb`. In a piece of work that records more than one
+repo, a step names each of these artifacts once, as
+`aidlc/spaces/<space>/codekb/{repo}/<name>.md`, and its `repos_note` says which
+repos `{repo}` stands for (`resolveArtifactPaths`), so a workspace of any size
+fits in one step; the completion check and the sensors still read every repo's
+files.
 
 **Canonical name ≠ filename for collisions.** Where a collision is split
 (see above), the on-disk filename may keep the pre-split form

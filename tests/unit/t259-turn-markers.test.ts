@@ -300,10 +300,12 @@ describe("t259 the engine's last word ended the turn", () => {
     tempDirs.push(proj);
     const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
     delete env[STOP_HOOK_PROBE_ENV];
-    const run = (args: string[], input?: string) =>
-      spawnSync(process.execPath, [".claude/tools/aidlc.ts", ...args], { cwd: proj, input, encoding: "utf-8", env });
+    const run = (args: string[], input?: string, extra: Record<string, string> = {}) =>
+      spawnSync(process.execPath, [".claude/tools/aidlc.ts", ...args], { cwd: proj, input, encoding: "utf-8", env: { ...env, ...extra } });
+    // A run nobody attends, where the hook still carries handed-out work on (an
+    // attended, gated run ends its turn there too).
     const stop = () =>
-      run(["engine", "hook", "continue-workflow"], JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-stop" }));
+      run(["engine", "hook", "continue-workflow"], JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-stop" }), { AIDLC_UNATTENDED: "1" });
     markHumanTurn(proj);
     await Bun.sleep(20);
     // Words alone first get the re-entry readings; the agent reads them as new
@@ -344,7 +346,9 @@ describe("t259 the engine's last word ended the turn", () => {
         run(
           ["engine", "hook", "continue-workflow"],
           JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-stop" }),
-          copilot ? { AIDLC_COPILOT_SESSION_ID: "t259-stop" } : {},
+          // A run nobody attends, where the hook still carries handed-out work
+          // on (an attended, gated run ends its turn there too).
+          { AIDLC_UNATTENDED: "1", ...(copilot ? { AIDLC_COPILOT_SESSION_ID: "t259-stop" } : {}) },
         );
       // The scope change is typed at the stage's open gate, as in the live run.
       const statePath = stateFilePath(proj);
@@ -385,10 +389,12 @@ describe("t259 the engine's last word ended the turn", () => {
     tempDirs.push(proj);
     const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
     delete env[STOP_HOOK_PROBE_ENV];
-    const run = (args: string[], input?: string) =>
-      spawnSync(process.execPath, [".claude/tools/aidlc.ts", ...args], { cwd: proj, input, encoding: "utf-8", env });
+    const run = (args: string[], input?: string, extra: Record<string, string> = {}) =>
+      spawnSync(process.execPath, [".claude/tools/aidlc.ts", ...args], { cwd: proj, input, encoding: "utf-8", env: { ...env, ...extra } });
+    // A run nobody attends, where the hook still carries handed-out work on (an
+    // attended, gated run ends its turn there too).
     const stop = () =>
-      run(["engine", "hook", "continue-workflow"], JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-stop" }));
+      run(["engine", "hook", "continue-workflow"], JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-stop" }), { AIDLC_UNATTENDED: "1" });
     markHumanTurn(proj);
     await Bun.sleep(20);
     const midStage = JSON.parse(run(["engine", "orchestrate", "next", "--depth", "minimal"]).stdout);
@@ -433,7 +439,7 @@ describe("t259 the engine's last word ended the turn", () => {
   // A live run: the person switched scope while Requirements Analysis ran,
   // the turn ended, and the agent asked them to say go on. A switch over a
   // running stage, with nothing waiting on the person, hands the agent back to
-  // `next` as a setting does; the Stop hook keeps the turn going.
+  // `next` as a setting does.
   test("a scope switch typed while the stage runs hands the agent back to next", async () => {
     const proj = setupIntegrationProject({ withState: "state-mid-ideation.md", stripEnvScope: true });
     tempDirs.push(proj);
@@ -449,10 +455,15 @@ describe("t259 the engine's last word ended the turn", () => {
     expect(switched.message).not.toContain("and stop");
     expect(switched.narration).toBeUndefined();
     expect(existsSync(turnEndMarkerPath(proj))).toBe(false);
-    const stopped = run(
-      ["engine", "hook", "continue-workflow"],
-      JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-stop" }),
-    );
+    // Read where nobody attends, where the hook still carries handed-out work
+    // on (an attended, gated run ends its turn there; the print is what sends
+    // the agent back to `next`).
+    const stopped = spawnSync(process.execPath, [".claude/tools/aidlc.ts", "engine", "hook", "continue-workflow"], {
+      cwd: proj,
+      input: JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-stop" }),
+      encoding: "utf-8",
+      env: { ...env, AIDLC_UNATTENDED: "1" },
+    });
     expect(stopped.stdout).toContain('"decision":"block"');
   });
 
@@ -507,10 +518,12 @@ describe("t259 a switch leaves the engine mark on the work it selects", () => {
   function tools(proj: string) {
     const env: Record<string, string | undefined> = { ...process.env, CLAUDE_PROJECT_DIR: proj };
     delete env[STOP_HOOK_PROBE_ENV];
-    const run = (tool: string, args: string[], input?: string) =>
-      spawnSync(process.execPath, [`.claude/tools/${tool}`, ...args], { cwd: proj, input, encoding: "utf-8", env });
+    const run = (tool: string, args: string[], input?: string, extra: Record<string, string> = {}) =>
+      spawnSync(process.execPath, [`.claude/tools/${tool}`, ...args], { cwd: proj, input, encoding: "utf-8", env: { ...env, ...extra } });
+    // A run nobody attends, where the hook still carries handed-out work on (an
+    // attended, gated run ends its turn there too).
     const stop = () =>
-      run("aidlc.ts", ["engine", "hook", "continue-workflow"], JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-switch" }));
+      run("aidlc.ts", ["engine", "hook", "continue-workflow"], JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: "t259-switch" }), { AIDLC_UNATTENDED: "1" });
     return { run, stop };
   }
 

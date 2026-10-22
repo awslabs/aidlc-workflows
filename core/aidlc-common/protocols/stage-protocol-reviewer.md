@@ -262,8 +262,8 @@ through normal recovery; do not rewrite receipts or assume a new receipt format.
    recovery review on its own (a review the person asks for still runs, as
    above): the gate or completion records one `CHANGE_ACCEPTED` row, the engine's `report`
    directive (or the tool's JSON) carries one `change_notices` line for the
-   human, and the Review brief below says `Changed after review` with the
-   changed paths (a Unit's own brief, with `--unit`, says only that Unit's). The reviewer's verdict is never altered. Under `relaxed` or
+   human, and the Review brief below marks each open finding on that work
+   `Changed after review` (a Unit's own brief, with `--unit`, marks only that Unit's). The reviewer's verdict is never altered. Under `relaxed` or
    `off`, a change the person asks for after the verdict ("rename the handler",
    "fix that answer") is made directly, with no Request Changes round and no
    new review; the gate then shows the change as above. The freeze stays this

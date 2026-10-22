@@ -7,8 +7,8 @@
 // t335 - Guard Policy at the review-receipt and summary-confirmation
 // checkpoints, and the checkpoints it never bypasses. Under `relaxed` (and
 // `off`) a terminal review receipt whose reviewed content changed afterwards
-// stays valid for the gate: the gate presentation says the reviewed content
-// differs and names the diff, one CHANGE_ACCEPTED row is written, and the
+// stays valid for the gate: the gate's report says once that the reviewed
+// content changed and names the diff, one CHANGE_ACCEPTED row is written, and the
 // reviewer's verdict is never altered. An output saved without the current
 // summary confirmation is recorded and the stage continues. The review-freeze
 // fence holds under strict and stands aside under relaxed and off, one
@@ -284,19 +284,23 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(readAllAuditShards(proj)).not.toContain("Recovery: stale-receipt");
   });
 
-  // The change's own sentence is the line the gate's report already says; the
-  // review block names the paths once.
+  // The change is said once, by the gate's report; the brief after it names
+  // the reviewed file only as the review it shows.
   test("the gate presentation names what changed after the review, once", () => {
     const proj = project("relaxed");
     recordReadyReview(proj);
     expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
     editReviewedArtifact(proj);
-    expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
+    const gate = run(STATE_TOOL, ["gate-start", STAGE], proj);
+    expect(gate.status, gate.stderr).toBe(0);
+    expect(printedNotices(gate.stdout)).toEqual([
+      `${artifactRelative(proj)} changed after the Requirements Analysis review; carrying on.`,
+    ]);
     const brief = run(BRIEF_TOOL, ["review", "--stage", STAGE, "--why", "first"], proj);
     expect(brief.status, brief.stderr).toBe(0);
-    expect(brief.stdout).toContain(`**Changed after review:** \`${artifactRelative(proj)}\``);
+    expect(brief.stdout).not.toContain("Changed after review");
     expect(brief.stdout).not.toContain("Reviewed content differs");
-    expect(brief.stdout.split(artifactRelative(proj)).length - 1).toBe(2);
+    expect(brief.stdout.split(artifactRelative(proj)).length - 1).toBe(1);
     expect(brief.stdout).toContain("**Decision options:**");
   });
 
@@ -327,7 +331,9 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     expect(brief.stdout).not.toContain("Reviewed content differs");
   });
 
-  test("a re-check that did not finish covers nothing: the change line stays", () => {
+  // The change stays unreviewed, and the brief's own finding about the re-check
+  // is not one Approve records, so it keeps its status.
+  test("a re-check that did not finish covers nothing: its finding stays open and the change is not said again", () => {
     const proj = project("relaxed");
     recordReadyReview(proj);
     expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
@@ -342,22 +348,25 @@ describe("t335 (1) review receipt: relaxed keeps the verdict and carries the cha
     const brief = run(BRIEF_TOOL, ["review", "--stage", STAGE, "--why", "revision"], proj);
     expect(brief.status, brief.stderr).toBe(0);
     expect(brief.stdout).toContain("The review did not finish");
-    expect(brief.stdout).toContain(`**Changed after review:** \`${artifactRelative(proj)}\``);
+    expect(brief.stdout).toContain("| R-01 | Major | requirements.md > review completion | Unresolved |");
+    expect(brief.stdout).not.toContain("Changed after review");
   });
 
-  // A hand edit names no file, so its sentence is the one line.
+  // A hand edit names no file, so its sentence is the one line, said once.
   test("a change with no paths keeps its sentence as the one line", () => {
     const proj = project("relaxed");
     recordReadyReview(proj);
     expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
     appendFileSync(artifact(proj), "\nA requirement added by hand.\n", "utf-8");
-    expect(run(STATE_TOOL, ["gate-start", STAGE], proj).status).toBe(0);
+    const gate = run(STATE_TOOL, ["gate-start", STAGE], proj);
+    expect(gate.status, gate.stderr).toBe(0);
+    expect(printedNotices(gate.stdout)).toEqual([
+      "The Requirements Analysis documents changed after they were reviewed; carrying on.",
+    ]);
     const brief = run(BRIEF_TOOL, ["review", "--stage", STAGE, "--why", "first"], proj);
     expect(brief.status, brief.stderr).toBe(0);
-    expect(brief.stdout).toContain(
-      "**Reviewed content differs:** The Requirements Analysis documents changed after they were reviewed; carrying on.",
-    );
-    expect(brief.stdout).not.toContain("Changed after review");
+    expect(brief.stdout).not.toContain("Reviewed content differs");
+    expect(brief.stdout).not.toContain("carrying on");
   });
 
   // An edit made in an editor leaves no write record, so no file can be named:
@@ -1070,7 +1079,9 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
     expect(acceptedRows(proj)).toHaveLength(1);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
-  test("a Unit's own brief says only that Unit's accepted change; the final gate's brief says every Unit's", () => {
+  // Each Unit's kept change was said once, when it was kept: neither the Unit's
+  // own brief nor the stage's final gate says it again.
+  test("a Unit's kept change is said once, when it is kept, and no brief repeats it", () => {
     const proj = teamProject("relaxed");
     settleUnit(proj);
     editReviewedUnitArtifact(proj);
@@ -1091,12 +1102,15 @@ describe("t335 (5) a team-owned Unit gate runs the same checkpoint", () => {
     );
     const own = run(BRIEF_TOOL, ["review", "--stage", UNIT_STAGE, "--unit", UNIT, "--why", "first"], proj, UNIT_ENV);
     expect(own.status, own.stderr).toBe(0);
-    expect(own.stdout).toContain(`**Changed after review:** \`${relativeArtifact}\``);
+    expect(printedNotices(gate.stdout)).toEqual([
+      `${relativeArtifact} changed after the alpha Unit was reviewed; carrying on.`,
+    ]);
+    expect(own.stdout).not.toContain("Changed after review");
     expect(own.stdout).not.toContain("src/beta.js");
     const final = run(BRIEF_TOOL, ["review", "--stage", UNIT_STAGE, "--why", "first"], proj, UNIT_ENV);
     expect(final.status, final.stderr).toBe(0);
-    expect(final.stdout).toContain(`**Changed after review:** \`${relativeArtifact}\``);
-    expect(final.stdout).toContain("**Changed after review:** `src/beta.js`");
+    expect(final.stdout).not.toContain("Changed after review");
+    expect(final.stdout).not.toContain("src/beta.js");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("strict is today's refusal for the Unit", () => {

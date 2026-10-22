@@ -275,6 +275,12 @@ function appendStageStarted(dir: string, slug: string, ts: string): void {
 
 /** Run the IDE adapter with USER_PROMPT set (the 0.12 context channel). stdin
  *  is closed empty — the 0.12 IDE never wrote it. */
+// The Stop hook's block is for a run nobody attends (and autonomous
+// Construction), so its cases read it there; an attended, gated run ends its
+// turn ("9b").
+const STOP_NOBODY = (target: string): Record<string, string> =>
+  target === "continue-workflow" ? { AIDLC_UNATTENDED: "1" } : {};
+
 function runIde(
   projectDir: string,
   target: string,
@@ -286,6 +292,7 @@ function runIde(
     CLAUDE_PROJECT_DIR: projectDir,
     VSCODE_IPC_HOOK: `test-ipc:${projectDir}`,
     VSCODE_PID: "218",
+    ...STOP_NOBODY(target),
     ...envOverrides,
   };
   if (userPrompt === null) {
@@ -368,6 +375,7 @@ function runIdeStdin(
     ...process.env,
     AIDLC_UNATTENDED: undefined,
     CLAUDE_PROJECT_DIR: projectDir,
+    ...STOP_NOBODY(target),
     ...envOverrides,
   };
   delete (env as Record<string, string | undefined>).USER_PROMPT;
@@ -456,7 +464,7 @@ function runIdeDispatcherStdin(
   target: string,
   stdinPayload: string,
 ): { stdout: string; stderr: string; code: number } {
-  const env: Record<string, string> = { ...process.env, CLAUDE_PROJECT_DIR: projectDir };
+  const env: Record<string, string> = { ...process.env, CLAUDE_PROJECT_DIR: projectDir, ...STOP_NOBODY(target) };
   delete (env as Record<string, string | undefined>).USER_PROMPT;
   const r = spawnSync(
     "bun",
@@ -2250,25 +2258,28 @@ describe("t218 Kiro IDE hook adapter (USER_PROMPT env context)", () => {
     }
   });
 
-  test("9: stop blocks with a reason while the workflow has pending work", () => {
+  test("9: where nobody attends, stop blocks with the one plain line while the workflow has pending work", () => {
     const dir = scratchProject(true);
     try {
       const r = runIde(dir, "continue-workflow", null);
       expect(r.code).toBe(0);
       const out = JSON.parse(r.stdout) as { decision?: string; reason?: string };
       expect(out.decision).toBe("block");
-      // Kiro IDE drops Stop output and Kiro CLI v3 (same tree) hides it, so
-      // after the line comes the agent's step to say it, on its own line.
-      const [line, step, ...rest] = (out.reason ?? "").split("\n");
-      expect(line).toMatch(/^AI-DLC is carrying on(?: with [^\n]+)?\.$/);
-      expect(step).toBe(
-        "If you had just asked the person a question, record it with `log decision` and end your turn saying nothing. " +
-          "If the person asked you to stop or pause, run `bun .kiro/tools/aidlc-orchestrate.ts park --person-asked` and end your turn. " +
-          "Otherwise, if you carry on with the work, first say that line to the person once, on its own line; " +
-          "it is AI-DLC's line, not the person's, and confirms nothing, so record nothing as theirs because of it. " +
-          "Say nothing else about this note.",
-      );
-      expect(rest).toEqual([]);
+      expect(out.reason ?? "").toMatch(/^AI-DLC is carrying on(?: with [^\n]+)?\.$/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // measure-kiro-loops F2 (Kiro CLI v3 runs this tree): the carrying-on line
+  // showed as the agent speaking while it waited for the person. In an
+  // attended run the stop says nothing.
+  test("9b: in an attended run stop says nothing while the workflow has pending work", () => {
+    const dir = scratchProject(true);
+    try {
+      const r = runIde(dir, "continue-workflow", null, { AIDLC_UNATTENDED: "0" });
+      expect(r.code).toBe(0);
+      expect(r.stdout.trim()).toBe("");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -2416,7 +2427,7 @@ async function runIdeOpenStdin(
     [join(projectDir, ".kiro", "hooks", "aidlc-kiro-adapter.ts"), target],
     userPrompt,
     killAfterMs,
-    extraEnv,
+    { ...STOP_NOBODY(target), ...extraEnv },
   );
 }
 
@@ -2438,7 +2449,7 @@ async function runIdeDispatcherOpenStdin(
     ],
     userPrompt,
     killAfterMs,
-    extraEnv,
+    { ...STOP_NOBODY(target), ...extraEnv },
   );
 }
 

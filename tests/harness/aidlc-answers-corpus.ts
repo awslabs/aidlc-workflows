@@ -11,7 +11,7 @@ import { join } from "node:path";
 import corpus from "../fixtures/aidlc-answers/corpus.json";
 import { AIDLC_SRC, FIXTURES_DIR, REPO_ROOT, createOrchestrationTestProject, proposalFollowUp, recordArtifactWriteViaHook, seedBoltDag, seedBoltDagBatches, seededRecordDir, seededStateFile } from "./fixtures.ts";
 import {
-  LOG, ORCHESTRATE, SESSION, UTILITY, buildState, env, exec, messageRecord, next, say,
+  LOG, ORCHESTRATE, SESSION, UTILITY, buildState, env, exec, messageRecord, next, reviewedStage, say,
   type Directive, type Exec, type Harness, type StoredRecord,
 } from "./aidlc-input-corpus.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -364,10 +364,9 @@ export async function buildQuestion(proj: string, question: Question): Promise<v
       return;
     }
     case "stage-gate-sensor-failure":
-      // The report refused on a blocking sensor, so the gate is NOT open (stage-protocol.md, Part 0: Enter the approval gate): the stage still runs
-      // and the agent asks the two-option question.
-      workOpen(proj);
-      writeStageFiles(proj, false);
+      // The stage reviewed as a run leaves it, then the report refused on a blocking sensor, so the gate is NOT open
+      // (stage-protocol.md, Part 0: Enter the approval gate): the stage still runs and the agent asks the two-option question.
+      await reviewedStage(proj);
       return askInChat(proj, "Blocking gate sensor failure", "Fix findings,Override blocking sensors");
     case "code-plan":
       return buildState(proj, "plan-question-open");

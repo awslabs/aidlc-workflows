@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, statSync, writeFileSyn
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
-import { REPO_ROOT, cleanupTestProject, seedAidlcMemory, seedWorkspaceShell, setupIntegrationProject } from "./fixtures.ts";
+import { REPO_ROOT, RETRYABLE_RM_CODES, cleanupTestProject, seedAidlcMemory, seedWorkspaceShell, setupIntegrationProject } from "./fixtures.ts";
 import { setupCodexProject } from "./exec-drive.ts";
 import { cleanupTuiProject, setupTuiProject } from "./tui-fixtures.ts";
 
@@ -101,6 +101,8 @@ export function toolVersion(harness: LiveHarness): string {
 }
 
 export interface HomeDigest { digest: string; files: Map<string, string> }
+// The last segment after either separator: a Windows path is matched as a POSIX one is.
+export const homeDigestSkips = (path: string): boolean => /(^|[\\/])(logs?|cache|caches|telemetry|tmp|shell-snapshots|projects|statsig|todos|sessions|backups|file-history|teams|plugins|paste-cache|history\.jsonl|\.last-cleanup|\.[a-z-]+-active)$/.test(path);
 // The real homes, listed and hashed: path, size and mtime of every file outside logs and caches.
 export function homeDigest(dir: string): HomeDigest {
   const files = new Map<string, string>();
@@ -112,7 +114,7 @@ export function homeDigest(dir: string): HomeDigest {
       // ephemeral CLAUDE_CONFIG_DIR: the tool's doing, not AI-DLC's, so it is left out like the logs.
       // Claude Code also writes its own session artifacts into the real home (teams/<session>, plugins/store, a
       // plugin's marker dotfile) under an ephemeral CLAUDE_CONFIG_DIR: the tool's doing, left out like the logs.
-      if (/(^|\/)(logs?|cache|caches|telemetry|tmp|shell-snapshots|projects|statsig|todos|sessions|backups|file-history|teams|plugins|paste-cache|history\.jsonl|\.last-cleanup|\.[a-z-]+-active)$/.test(path)) continue;
+      if (homeDigestSkips(path)) continue;
       if (entry.isDirectory()) walk(path);
       else if (entry.isFile()) {
         const s = statSync(path);
@@ -141,23 +143,38 @@ export async function liveItem<T>(drive: () => Promise<LiveOutcome<T>>, outcomes
   return { outcome, owed: reportOnly ? [] : outcome.failures };
 }
 
+/** A scratch folder Windows still holds once the removal's retries run out (EBUSY) is left on disk with a note in the
+ * log: the item's verdict is already reached, and the folder is not what it judged. Any other cleanup failure still fails
+ * the item. */
+export function leaveBusyFolder(remove: () => void, path: string): () => void {
+  return () => {
+    try {
+      remove();
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (typeof code !== "string" || !RETRYABLE_RM_CODES.has(code)) throw error;
+      console.warn(`[live] ${path} left on disk (${code} after the cleanup retries); remove it by hand`);
+    }
+  };
+}
 export interface LiveProject { proj: string; home?: string; cleanup: () => void }
 /** A scratch project on the harness's shipped tree, with a scratch home where the driver takes one (Codex). */
 export function liveProject(harness: LiveHarness): LiveProject {
   if (harness === "claude") {
     const proj = setupIntegrationProject();
-    return { proj, cleanup: () => cleanupTestProject(proj) };
+    return { proj, cleanup: leaveBusyFolder(() => cleanupTestProject(proj), proj) };
   }
   if (harness === "codex") {
     const codex = setupCodexProject({ workspaceWrite: true });
     seedAidlcMemory(codex.proj);
     seedWorkspaceShell(codex.proj);
-    return { proj: codex.proj, home: codex.home, cleanup: () => cleanupTestProject(codex.root) };
+    return { proj: codex.proj, home: codex.home, cleanup: leaveBusyFolder(() => cleanupTestProject(codex.root), codex.root) };
   }
   if (harness === "kiro") {
     const proj = setupTuiProject({ harness: "kiro", noAidlcDocs: true });
     seedAidlcMemory(proj);
     seedWorkspaceShell(proj);
+    // Not leaveBusyFolder: cleanupTuiProject checks the drive's decisions only after the folder is gone.
     return { proj, cleanup: () => cleanupTuiProject(proj) };
   }
   throw new Error(`no drive for harness ${JSON.stringify(harness)}`);

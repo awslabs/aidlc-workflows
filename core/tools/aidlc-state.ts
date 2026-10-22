@@ -167,6 +167,7 @@ import {
   pipelineLinkEvidence,
   pipelineLinkRecord,
   pipelineLinkWayOn,
+  owedPipelineLinks,
   effectiveSupportAgentsForProject,
   producesArtifactFile,
   readAllAuditShards,
@@ -5669,9 +5670,7 @@ function verifyPipelineLinkPrecondition(
   }
   const evidence = pipelineLinkEvidence(pd, stage);
   if (evidence.missing.length === 0) return;
-  const missing = evidence.missing.map(({ link, repo }) =>
-    repo ? `${repo}:${link}` : link
-  );
+  const owed = owedPipelineLinks(pipelineLinkRecord(pd, stage, evidence, false));
   const content = readStateFile(pd);
   const gateOpen = parseCheckboxes(content).find((entry) => entry.slug === stage.slug)
     ?.state === "awaiting-approval";
@@ -5680,9 +5679,9 @@ function verifyPipelineLinkPrecondition(
   // prints the ask alone.
   const message =
     `Cannot complete "${stage.slug}" because these pipeline handoffs have not been ` +
-      `recorded for the current run: ${missing.join(", ")}. ` +
+      `recorded for the current run: ${owed.missing}. ` +
       pipelineLinkWayOn(pd, stage.slug, {
-        commands: pipelineLinkRecord(pd, stage, evidence, false).map(({ command }) => command),
+        owed,
         gateOpen,
         ...(approval ? { approval: "the same approve command again" } : {}),
       });

@@ -247,7 +247,7 @@ After three rounds of **Request Changes** on the same stage, the question says w
 | 2nd | Standard 2-option gate, plus a note: "After one more revision, an 'Accept as-is' option will become available." |
 | 3rd and beyond | 3-option gate with Accept as-is |
 
-The revision count resets when you move to the next stage.
+The revision count resets when you move to the next stage. AI-DLC keeps it in its record of the work, not in the chat, so stopping and resuming, or continuing in a new chat, keeps it too.
 
 ---
 
