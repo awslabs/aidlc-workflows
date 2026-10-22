@@ -180,6 +180,33 @@ describe("a question the stage's questions file holds", () => {
   });
 });
 
+describe("the plan question is one question, whichever record shows it", () => {
+  // The Copilot golden of 2026-10-22 (nightly 39678180458, attempt 1): the first session ends with the plan question
+  // the agent showed from the engine's note, so the person finds it in the questions file; the new session's /aidlc
+  // shows it as the engine's ask. The person met it once in each session, as the journey asks.
+  const PLAN_FILE = [
+    "# Code Generation Plan Approval", "", "## Plan Approval", "", "Approve the code plan?", "",
+    "- Builds: the greeting uses the name.", "", "- A. Approve Plan", "- B. Request Changes", "- C. I'll edit the files", "",
+    "[Answer]:", "",
+  ].join("\n");
+  const RUN_STAGE = shell("bun .aidlc/tools/aidlc-orchestrate.ts continue EGu2NsTK", { kind: "run-stage", stage: "code-generation", phase: "construction" });
+
+  test("left for the day from the questions file, it comes back as the engine's ask in the new session and counts once", () => {
+    const dir = createTestProject();
+    projects.push(dir);
+    writeFileSync(seededStateFile(dir), "# AI-DLC State\n\n- **Lifecycle Phase**: CONSTRUCTION\n- **Current Stage**: code-generation\n");
+    const file = join(seededRecordDir(dir), "construction", "code-generation", "code-generation-questions.md");
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, PLAN_FILE);
+    const person = new GoldenPerson(journey(dir, { newSessionAtPlan: "/aidlc" }));
+    expect(person.typedReply(6, [RUN_STAGE])).toEqual({ line: "/aidlc", newSession: true });
+    expect(person.typedReply(7, [PLAN_ASK])).toEqual({ line: "Approve Plan", newSession: false });
+    expect(person.problems).toEqual([]);
+    expect(person.planAsked).toBe(1);
+    expect(person.typedRun().problems).not.toContain("the plan question left for the day was never offered again in the new session");
+  });
+});
+
 describe("a question the agent asked in chat with nothing on record", () => {
   const ASKED = "Which persona should the stories start with? A) the admin B) a guest";
   const reads = (verdict: { asked: boolean; question: string; reason: string } | { failure: string }) => {

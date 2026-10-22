@@ -123,6 +123,14 @@ function norm(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
+// The Plan Approval question is one question to the person, whichever record shows it (a box, a logged decision,
+// the engine's ask, the questions file), so it is reached under one key.
+const PLAN_CHOICE = /^Approve Plans?\b/;
+const planKey = (stage: string): string => `plan approval | ${stage}`;
+function questionKey(stage: string, question: string, options: readonly string[]): string {
+  return options.some((o) => PLAN_CHOICE.test(o)) ? planKey(stage) : `${stage} | ${norm(question)}`;
+}
+
 function clip(text: string, max = 400): string {
   return text.length > max ? `${text.slice(0, max)}...` : text;
 }
@@ -355,8 +363,8 @@ export class GoldenPerson {
   private pick(q: AskUserQuestionItem): AnswerSpec {
     const stage = this.stageNow();
     const labels = q.options.map((o) => o.label);
-    const again = this.reach(`${stage} | ${norm(q.question)}`, `"${q.question}" at ${stage}`);
-    if (labels.some((l) => /^Approve Plans?\b/.test(l))) {
+    const again = this.reach(questionKey(stage, q.question, labels), `"${q.question}" at ${stage}`);
+    if (labels.some((l) => PLAN_CHOICE.test(l))) {
       if (!again) this.planAsked++;
     }
     else if (labels.some((l) => /^Approve\b/.test(l)) && labels.some((l) => /^Request Changes\b/i.test(l))) {
@@ -382,8 +390,8 @@ export class GoldenPerson {
       const question = auditBlockField(decision.block, "Decision") ?? "";
       const at = stageField(decision) || stage;
       const options = decisionOptions(decision);
-      const again = this.reach(`${at} | ${norm(question)}`, `"${question}" at ${at}`);
-      if (!again && options.some((o) => /^Approve Plans?\b/.test(o))) this.planAsked++;
+      const again = this.reach(questionKey(at, question, options), `"${question}" at ${at}`);
+      if (!again && options.some((o) => PLAN_CHOICE.test(o))) this.planAsked++;
       const words = plainChoice(options) ?? this.ownWords(at) ?? recommended(options) ?? options[0] ?? "Go with what you recommend";
       this.said.push(`typed ${JSON.stringify(words)} for "${clip(question, 120)}" at ${at}`);
       return words;
@@ -410,7 +418,7 @@ export class GoldenPerson {
     }
     if (step?.kind === "ask") {
       const type = String(step.ask_type ?? "");
-      const again = this.reach(`ask | ${type} | ${stage}`, `the ${type} question at ${stage}`);
+      const again = this.reach(type === "plan-approval" ? planKey(stage) : `ask | ${type} | ${stage}`, `the ${type} question at ${stage}`);
       if (type === "plan-approval") {
         if (!again) this.planAsked++;
         this.said.push("typed \"Approve Plan\" for the plan");
@@ -426,8 +434,8 @@ export class GoldenPerson {
     const phase = (readStateField(readStateFile(this.j.proj) ?? "", "Lifecycle Phase") ?? "").toLowerCase();
     const blank = hasPendingQuestion(this.j.proj, stage, phase) ? blankQuestion(this.j.proj, phase, stage) : undefined;
     if (blank) {
-      const again = this.reach(`${stage} | ${norm(blank.question)}`, `"${blank.question}" at ${stage}`);
-      if (!again && blank.options.some((o) => /^Approve Plans?\b/.test(o))) this.planAsked++;
+      const again = this.reach(questionKey(stage, blank.question, blank.options), `"${blank.question}" at ${stage}`);
+      if (!again && blank.options.some((o) => PLAN_CHOICE.test(o))) this.planAsked++;
       const words = plainChoice(blank.options) ?? this.ownWords(stage) ?? recommended(blank.options) ?? blank.options[0] ?? "Go with what you recommend";
       this.said.push(`typed ${JSON.stringify(words)} for "${clip(blank.question, 120)}" (in the questions file) at ${stage}`);
       return words;
