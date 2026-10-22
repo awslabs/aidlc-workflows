@@ -474,6 +474,20 @@ describe("t230 dispatcher route parity", () => {
       fixture: true,
     },
     {
+      name: "intent set-repos maps through workspace parser with its names",
+      routerArgs: ["engine", "intent", "set-repos", "repo-a,repo-b"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["intent", "set-repos", "repo-a,repo-b"],
+      fixture: true,
+    },
+    {
+      name: "intent set-repos --all maps through workspace parser",
+      routerArgs: ["engine", "intent", "set-repos", "--all"],
+      tool: "aidlc-utility.ts",
+      toolArgs: ["intent", "set-repos", "--all"],
+      fixture: true,
+    },
+    {
       name: "intent list --all maps through workspace parser",
       routerArgs: ["engine", "intent", "list", "--all"],
       tool: "aidlc-utility.ts",
@@ -743,6 +757,29 @@ describe("t230 dispatcher route parity", () => {
       expectSameRun(routed, old, item.name);
     });
   }
+
+  // The commands Reverse Engineering's repo question hands the agent, through
+  // the entry it names: the list is recorded exactly, and --all keeps every repo.
+  test("intent set-repos through the dispatcher sets the list, and --all keeps every repo", () => {
+    const projectDir = makeProject();
+    seedStateFile(projectDir, "state-mid-inception.md");
+    const registry = join(projectDir, "aidlc", "spaces", "default", "intents", "intents.json");
+    const rows = JSON.parse(readFileSync(registry, "utf-8")) as Array<Record<string, unknown>>;
+    rows[0].repos = ["repo-a", "repo-b", "repo-c"];
+    writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
+    for (const repo of ["repo-a", "repo-b", "repo-c"]) mkdirSync(join(projectDir, repo, ".git"), { recursive: true });
+    const recorded = () => JSON.parse(readFileSync(registry, "utf-8"))[0] as { repos: string[]; repos_named?: boolean };
+
+    const all = viaDispatcher(["engine", "intent", "set-repos", "--all"], projectDir);
+    expect(all.exitCode, `${all.stdout}${all.stderr}`).toBe(0);
+    expect(all.stdout.toString().trim()).toBe("This work covers all 3 of its repositories.");
+    expect(recorded()).toMatchObject({ repos: ["repo-a", "repo-b", "repo-c"], repos_named: true });
+
+    const some = viaDispatcher(["engine", "intent", "set-repos", "repo-a,repo-c"], projectDir);
+    expect(some.exitCode, `${some.stdout}${some.stderr}`).toBe(0);
+    expect(some.stdout.toString().trim()).toBe("This work now covers repo-a and repo-c. repo-b can be added back any time.");
+    expect(recorded().repos).toEqual(["repo-a", "repo-c"]);
+  });
 
   test("space create mutates the same observable tree as space-create", () => {
     const directProject = makeProject();

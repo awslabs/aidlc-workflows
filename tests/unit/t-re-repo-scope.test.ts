@@ -151,8 +151,12 @@ describe("the question before Reverse Engineering reads ten or more repositories
 
   test("picking all records the set as the person's, and it is never asked again", () => {
     const { proj, repos } = workspace(12);
-    expect(next(proj).ask_type).toBe("repo-scope");
-    const all = setRepos(proj, "--all");
+    const asked = next(proj);
+    expect(asked.ask_type).toBe("repo-scope");
+    // The Read all choice's own command, run as the agent runs it.
+    const [, ...words] = String((asked.choices as Array<{ command?: string }>)[0].command).split(" ");
+    const ran = spawnSync(process.execPath, words, { cwd: proj, env: childEnv(), encoding: "utf-8" });
+    const all = { status: ran.status ?? -1, stdout: `${ran.stdout ?? ""}${ran.stderr ?? ""}` };
     expect(all.status, all.stdout).toBe(0);
     expect(all.stdout.trim()).toBe("This work covers all 12 of its repositories.");
     expect(row(proj).repos).toEqual(repos);

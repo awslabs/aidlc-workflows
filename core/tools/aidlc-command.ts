@@ -198,13 +198,14 @@ const DISPATCHER_INTENT_VERBS = new Set([
   "unarchive",
   "add-repo",
   "remove-repo",
+  "set-repos",
   "add-checkout",
   "remove-checkout",
 ]);
 const DISPATCHER_SPACE_VERBS = new Set(["list", "switch", "create"]);
 
 type DispatcherIntentLifecycleVerb = "archive" | "unarchive";
-type DispatcherIntentRepoVerb = "add-repo" | "remove-repo" | "add-checkout" | "remove-checkout";
+type DispatcherIntentRepoVerb = "add-repo" | "remove-repo" | "set-repos" | "add-checkout" | "remove-checkout";
 
 export type DispatcherWorkspaceCommand =
   | { kind: "list"; noun: DispatcherWorkspaceNoun; json: boolean; all?: true }
@@ -236,7 +237,9 @@ function missingDispatcherWorkspaceName(
 ): DispatcherWorkspaceCommand {
   const usage = verb === "space-create"
     ? "space-create <name>"
-    : `${noun} ${verb} ${verb === "add-checkout" || verb === "remove-checkout" ? "<path>" : "<name>"}`;
+    : `${noun} ${verb} ${
+      verb === "add-checkout" || verb === "remove-checkout" ? "<path>" : verb === "set-repos" ? "<name,...|--all>" : "<name>"
+    }`;
   return {
     kind: "error",
     noun,
@@ -259,7 +262,8 @@ function isDispatcherIntentLifecycleVerb(
 function isDispatcherIntentRepoVerb(
   token: string | undefined,
 ): token is DispatcherIntentRepoVerb {
-  return token === "add-repo" || token === "remove-repo" || token === "add-checkout" || token === "remove-checkout";
+  return token === "add-repo" || token === "remove-repo" || token === "set-repos" || token === "add-checkout" ||
+    token === "remove-checkout";
 }
 
 // `intent list [--json] [--all]` / `space list [--json]`: the flags may appear
@@ -314,7 +318,7 @@ export function parseDispatcherWorkspaceCommand(
     }
     if (isDispatcherIntentLifecycleVerb(verbOrName) || isDispatcherIntentRepoVerb(verbOrName)) {
       const name = tokens[2];
-      return name === undefined || name.startsWith("--")
+      return name === undefined || (name.startsWith("--") && !(verbOrName === "set-repos" && name === "--all"))
         ? missingDispatcherWorkspaceName(noun, verbOrName)
         : { kind: verbOrName, noun, name, rest: tokens.slice(3) };
     }
@@ -360,6 +364,7 @@ export function dispatcherWorkspaceUtilityArgv(
     case "unarchive":
     case "add-repo":
     case "remove-repo":
+    case "set-repos":
     case "add-checkout":
     case "remove-checkout":
       // Lifecycle and repo verbs forward verbatim, trailing flags included:
