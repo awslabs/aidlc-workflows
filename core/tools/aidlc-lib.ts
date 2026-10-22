@@ -29568,6 +29568,23 @@ export function repliedSinceStageStart(projectDir: string, stage: string, messag
   }
 }
 
+// A decision on nothing the person said since the stage started: what the
+// agent does next. With a named message, that message came before the stage
+// started.
+export function stageStartFloorRefusal(
+  verb: "approve" | "request changes for" | "confirm the summary of",
+  slug: string,
+  message?: string,
+  shown = "the gate",
+): string {
+  return message !== undefined
+    ? `Cannot ${verb} "${slug}" on message ${message}: it came before this stage started, so it is not the ` +
+      `person's answer to what the stage made. Name a message they sent since, or show ${shown} and end your ` +
+      "turn; their next reply answers it."
+    : `Cannot ${verb} "${slug}" because no reply from the person is on record since this stage started, so ` +
+      `nothing they said answers what it made. Show ${shown} and end your turn; their next reply answers it.`;
+}
+
 // What the person said to a stage gate, for its record: every reply turn of
 // theirs in `session` on this clone's shard after the later of the last
 // decision that spent a reply (MESSAGE_SPENDING_EVENTS) and the stage's latest
@@ -29642,6 +29659,51 @@ export function personsGateReply(projectDir: string, session: string | null, sta
   } catch {
     return none;
   }
+}
+
+// The step that lets the agent name the message that already answered a
+// question it is about to record: the message ids and their times, never the
+// person's words (the agent has them). `note` says where the messages came
+// from when that is not the plain case.
+export function messageRetryStep(
+  replies: ReadonlyArray<{ id: string; at: string }>,
+  decision: { question: string; shown: string; command: string; why: string },
+  note = "",
+): string {
+  const named = replies.map((reply) => `${reply.id} (sent ${reply.at})`).join(" or ");
+  return `If their message ${named}${note} answered ${decision.question}, run the same ${decision.command} with ` +
+    `--message <id>, without asking them again; otherwise show ${decision.shown} and end your turn; their next ` +
+    `reply answers it. Nothing is recorded yet: ${decision.why}`;
+}
+
+// A decision whose replies all came before its question was shown (a stage
+// gate, the summary confirmation): the agent names the reply that already
+// answered it, or shows the question. The ids are this chat's replies the
+// decision may stand on and its messages sent while another engine question
+// was on screen (personsGateReply), oldest first. With a reply on record the
+// step is the agent's reading, never "show the question again": a re-ask is
+// what the person met when an agent relayed this refusal. `named` says whether
+// a reply was listed.
+export function answeredBeforeShownStep(
+  projectDir: string,
+  stage: string,
+  decision: { refused: string; question: string; shown: string; command: string; why: string },
+): { step: string; named: boolean } {
+  let replies: GateReply["replies"] = [];
+  try {
+    const reply = personsGateReply(projectDir, resolveInvokingSessionId(projectDir), stage);
+    replies = [...reply.replies, ...reply.elsewhere].sort((a, b) => a.at.localeCompare(b.at));
+  } catch {
+    replies = [];
+  }
+  if (replies.length === 0) {
+    return {
+      step: `${decision.refused} because ${decision.why} Show ${decision.shown} and end your turn; their next ` +
+        "reply answers it.",
+      named: false,
+    };
+  }
+  return { step: messageRetryStep(replies, decision), named: true };
 }
 
 // What the person replied in any chat since the stage started, after the

@@ -106,9 +106,12 @@ import {
   guardRecoveryFeedbackStatus,
   selectedGuardRecoveryRemedyAction,
   normalizeGuardRecoveryText,
+  answeredBeforeShownStep,
+  messageRetryStep,
   personRepliedSinceGateShown,
   personsGateReply,
   repliedSinceStageStart,
+  stageStartFloorRefusal,
   resolveInvokingSessionId,
   type GuardAttemptState,
   type StageEntry,
@@ -7290,31 +7293,16 @@ function verifyApprovalDecision(
 }
 
 // A decision at a stage gate whose replies all came before the gate was shown:
-// the agent names the reply that already answered it, or shows the gate. Ids
-// and times only: the agent has the words. With a reply on record the step is
-// the agent's reading, never "show the question again": a re-ask is what the
-// person met when an agent relayed this refusal.
+// the agent names the reply that already answered it, or shows the gate.
 function refuseGateShownAfterReply(pd: string, verb: "approve" | "request changes for", slug: string): never {
-  let replies: Array<{ id: string; at: string }> = [];
-  try {
-    const reply = personsGateReply(pd, resolveInvokingSessionId(pd), slug);
-    replies = [...reply.replies, ...reply.elsewhere].sort((a, b) => a.at.localeCompare(b.at));
-  } catch {
-    replies = [];
-  }
-  const why = "no new human reply has been received for this approval question since it was shown.";
-  if (replies.length === 0) {
-    refuseForAgent(
-      `Cannot ${verb} "${slug}" because ${why} Show the gate and end your turn; their next reply answers it.`,
-    );
-  }
-  const named = replies.map((reply) => `${reply.id} (sent ${reply.at})`).join(" or ");
-  refuseForAgent(
-    `If their message ${named} answered the "${slug}" gate, run the same report with --message <id>, ` +
-      "without asking them again; otherwise show the gate and end your turn; their next reply answers it. " +
-      `Nothing is recorded yet: ${why}`,
-    { personDecided: true },
-  );
+  const { step, named } = answeredBeforeShownStep(pd, slug, {
+    refused: `Cannot ${verb} "${slug}"`,
+    question: `the "${slug}" gate`,
+    shown: "the gate",
+    command: "report",
+    why: "no new human reply has been received for this approval question since it was shown.",
+  });
+  refuseForAgent(step, { personDecided: named });
 }
 
 // A decision at a stage gate with no reply of theirs since the last decision
@@ -7328,22 +7316,8 @@ function openQuestionRetry(pd: string, slug: string, why: string): string | null
     held = [];
   }
   if (held.length === 0) return null;
-  const named = held.map((reply) => `${reply.id} (sent ${reply.at})`).join(" or ");
-  return `If their message ${named}, sent while another question was on screen, answered the "${slug}" gate, run ` +
-    "the same report with --message <id>, without asking them again; otherwise show the gate and end your turn; " +
-    `their next reply answers it. Nothing is recorded yet: ${why}`;
-}
-
-// A decision at a stage gate on nothing the person said since the stage
-// started: what the agent does next. With a named message, that message came
-// before the stage started.
-function stageStartFloorRefusal(verb: "approve" | "request changes for", slug: string, message?: string): string {
-  return message !== undefined
-    ? `Cannot ${verb} "${slug}" on message ${message}: it came before this stage started, so it is not the ` +
-      "person's answer to what the stage made. Name a message they sent since, or show the gate and end your " +
-      "turn; their next reply answers it."
-    : `Cannot ${verb} "${slug}" because no reply from the person is on record since this stage started, so ` +
-      "nothing they said answers what it made. Show the gate and end your turn; their next reply answers it.";
+  return messageRetryStep(held, { question: `the "${slug}" gate`, shown: "the gate", command: "report", why },
+    ", sent while another question was on screen,");
 }
 
 function handleApprove(args: string[]): void {

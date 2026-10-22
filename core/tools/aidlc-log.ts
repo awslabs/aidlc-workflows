@@ -24,7 +24,10 @@ import {
 } from "./aidlc-message-store.ts";
 import {
   asksForHelp,
+  answeredBeforeShownStep,
   humanRepliedSinceGate,
+  repliedSinceStageStart,
+  stageStartFloorRefusal,
   printUsageAndExit,
   NoGuardRecoveryAskError,
   recordGuardRecoveryChoice,
@@ -1608,11 +1611,10 @@ function pendingSummaryDecision(
     return { pending: false, humanAfterDecision: false };
   }
 
-  // The person's reply since their last answer is theirs to give whenever the
-  // conductor recorded the question: the conductor says which question it
-  // answers, and the caller proves the reply. This says only whether it came
-  // after the question's record; a turn in another shard at the record's own
-  // second proves neither.
+  // Whether a reply turn of the person's came after the question's record: the
+  // confirmation stands on one, unless the conductor names the message it read
+  // it from (the caller proves that message). A turn in another shard at the
+  // record's own second proves neither.
   const humans = entries.filter((entry) => entry.event === "HUMAN_TURN");
   const humanRelations = humans.map((human) =>
     latestActions.map((decision) => follows(human, decision))
@@ -2242,9 +2244,35 @@ function handleAnswer(args: string[]): void {
             + unattendedHumanPresenceHint(pd, { missedReply: false }),
         );
       }
+      // The confirmation stands on a reply after the summary's own question
+      // record, as a stage gate's does on one after its showing, or on the
+      // message the agent names: the one it read the confirmation from when it
+      // showed the summary before recording the question. The engine proves a
+      // named message and never reads its words.
+      let named: StoredMessage | null = null;
+      if (flags.message !== undefined) {
+        const proof = proveMessage(pd, flags.message, "answer");
+        if ("refusal" in proof) error(proof.refusal);
+        named = proof.message;
+      }
+      if (!humanPresenceGuardDisabled()) {
+        if (named !== null && !repliedSinceStageStart(pd, flags.stage, named.id)) {
+          error(stageStartFloorRefusal("confirm the summary of", flags.stage, named.id, "the summary"));
+        }
+        if (named === null && !pending.humanAfterDecision) {
+          error(answeredBeforeShownStep(pd, flags.stage, {
+            refused: "Cannot record the summary choice",
+            question: `the "${flags.stage}" summary`,
+            shown: "the summary",
+            command: "log answer",
+            why: "no reply of the person's has arrived since the summary question was recorded.",
+          }).step);
+        }
+      }
       // Their words go on the receipt. A reply that came before the question
       // was recorded is the conductor's reading, so the engine says it back.
-      const words = latestPersonTurn(pd)?.words;
+      const words = named !== null ? named.words : latestPersonTurn(pd)?.words;
+      if (named !== null) fields["Message Id"] = named.id;
       if (words && !isNonAnswer(words)) fields["Person Reply"] = words;
       const kept = words && !isNonAnswer(words) ? `"${words.replace(/\s+/g, " ").trim()}"` : "reply";
       const sayBack = pending.question !== undefined ? `Recorded your ${kept} for "${pending.question}".` : null;

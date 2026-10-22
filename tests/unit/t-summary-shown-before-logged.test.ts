@@ -1,22 +1,25 @@
-// covers: subcommand:aidlc-log:decision, subcommand:aidlc-log:answer, audit:SUMMARY_CONFIRMATION_RECORDED
+// covers: subcommand:aidlc-log:decision, subcommand:aidlc-log:answer, audit:SUMMARY_CONFIRMATION_RECORDED, function:answeredBeforeShownStep, function:stageStartFloorRefusal
 //
 // The agent showed a stage's summary confirmation ("Does this all look correct
 // before I generate the artifact?") before recording the question, and the
-// person answered "looks correct". The answer was refused because no reply had
-// arrived after the question's record, and the person was told "Your answer was
-// not recorded, so you don't need to answer again", then asked for one more
-// message (a live Kiro IDE run). The tool proves only that the person replied
-// since the last decision and keeps their words; the agent says which question
-// the reply answers. A reply that came before the question's record is the
-// agent's reading, so the engine says it back once; an answer spends no reply,
-// so the one the stage's answers stood on backs the summary too. No reply since
-// the last decision still records nothing, with no line about a missed reply.
+// person answered "looks correct". The answer was refused and the person was
+// told "Your answer was not recorded, so you don't need to answer again", then
+// asked for one more message (a live Kiro IDE run). The summary counts a reply
+// that came after its question was recorded, as a stage gate does; when the
+// agent showed it first, it names the message that answered (--message), and
+// the engine says that reply back once. The refusal names the person's message
+// ids and times, never their words, so the agent retries without asking them
+// again; a message from before the stage started cannot be named. No reply
+// since the last decision still records nothing, with no line about a missed
+// reply.
 
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { readMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import {
   AIDLC_SRC, cleanupTestProject, createTestProject, seedAidlcMemory, seededRecordDir, seededStateFile, seedStateFile,
 } from "../harness/fixtures.ts";
@@ -33,14 +36,14 @@ afterEach(() => {
   while (created.length > 0) cleanupTestProject(created.pop()!);
 });
 
-function project(policy: "off" | "strict"): { proj: string; questions: string } {
+function project(policy: "off" | "relaxed" | "strict"): { proj: string; questions: string } {
   const proj = createTestProject();
   created.push(proj);
   seedAidlcMemory(proj);
   seedStateFile(proj, "state-mid-inception.md");
   const state = seededStateFile(proj);
   writeFileSync(state, readFileSync(state, "utf-8").replace("- **Change Control**: strict (from scope bugfix)",
-    policy === "off" ? "- **Guard Policy**: off (from scope bugfix)" : "- **Guard Policy**: strict (set by you)"));
+    policy === "off" ? "- **Guard Policy**: off (from scope bugfix)" : `- **Guard Policy**: ${policy} (set by you)`));
   const dir = join(seededRecordDir(proj), "inception", STAGE);
   mkdirSync(dir, { recursive: true });
   const questions = join(dir, `${STAGE}-questions.md`);
@@ -99,10 +102,39 @@ const askSummary = (proj: string, questions: string) =>
 
 function answerSummary(
   proj: string, questions: string, choice: "Looks correct" | "Request changes", details: string = choice,
+  message?: string,
 ) {
   writeFileSync(questions, readFileSync(questions, "utf-8").replace(/\[Answer\]:[^\n]*\n$/, `[Answer]: ${choice}\n`));
   return log(proj, ["answer", "--checkpoint", "summary-confirmation", "--stage", STAGE, "--questions-file", questions,
-    "--details", details]);
+    "--details", details, ...(message === undefined ? [] : ["--message", message])]);
+}
+
+// The message the person's latest turn kept: its id and when they sent it.
+function latestMessage(proj: string): { id: string; at: string } {
+  const id = auditBlockField(events(proj, "HUMAN_TURN").at(-1)!.block, "Message Id")!;
+  return { id, at: readMessage(proj, id)!.at };
+}
+
+// The refusal as the agent reads it: the message of the error the tool printed.
+function refusal(out: string): string {
+  const line = out.split("\n").find((entry) => entry.trim().startsWith("{") && entry.includes('"error"'));
+  return line ? String((JSON.parse(line) as { error?: unknown }).error) : out;
+}
+
+// What the hooks do when the agent ends its turn.
+function stop(proj: string): string {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj, AIDLC_SESSION_OVERRIDE: SESSION,
+    CLAUDE_CODE_STOP_HOOK_BLOCK_CAP: "",
+  };
+  for (const name of ["AIDLC_UNATTENDED", "AIDLC_STOP_HOOK_PROBE", "AIDLC_SESSION_OVERRIDE_SOURCE"]) delete env[name];
+  const result = Bun.spawnSync({
+    cmd: [process.execPath, DISPATCHER, "engine", "hook", "continue-workflow"], cwd: proj, env,
+    stdin: new TextEncoder().encode(JSON.stringify({ hook_event_name: "Stop", stop_hook_active: false, session_id: SESSION })),
+    stdout: "pipe", stderr: "pipe", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  expect(result.exitCode, result.stderr.toString()).toBe(0);
+  return result.stdout.toString().trim();
 }
 
 const said = (out: string): unknown => {
@@ -111,18 +143,38 @@ const said = (out: string): unknown => {
 };
 
 describe("t-summary-shown-before-logged: a summary answered before its question was recorded", () => {
-  for (const policy of ["off", "strict"] as const) {
-    test(`the reply already given confirms it, with their words, said back once (Guard Policy ${policy})`, () => {
+  for (const policy of ["off", "relaxed", "strict"] as const) {
+    test(`a reply given before the question was recorded is refused with the retry: its id and time, none of its words (Guard Policy ${policy})`, () => {
       const { proj, questions } = project(policy);
       questionsLeftToTheAgent(proj);
       // The summary is shown, not yet recorded, and the person replies to it.
       says(proj, "looks correct");
+      const reply = latestMessage(proj);
+      expect(askSummary(proj, questions).status).toBe(0);
+      const refused = answerSummary(proj, questions, "Looks correct");
+      expect(refused.status).not.toBe(0);
+      const first = refusal(refused.out).split(";")[0];
+      expect(first).toStartWith("If their message ");
+      expect(first).toContain(`${reply.id} (sent ${reply.at})`);
+      expect(first).toContain("run the same log answer with --message <id>");
+      expect(refusal(refused.out)).not.toContain("looks correct");
+      expect(refusal(refused.out)).not.toContain("go with the recommended");
+      expect(events(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(0);
+    });
+
+    test(`the agent names the reply it read the confirmation from, and it is recorded on that message, said back once (Guard Policy ${policy})`, () => {
+      const { proj, questions } = project(policy);
+      questionsLeftToTheAgent(proj);
+      says(proj, "looks correct");
+      const reply = latestMessage(proj);
       const turns = events(proj, "HUMAN_TURN").length;
       expect(askSummary(proj, questions).status).toBe(0);
-      const recorded = answerSummary(proj, questions, "Looks correct");
+      expect(answerSummary(proj, questions, "Looks correct").status).not.toBe(0);
+      const recorded = answerSummary(proj, questions, "Looks correct", "Looks correct", reply.id);
       expect(recorded.status, recorded.out).toBe(0);
       const receipts = events(proj, "SUMMARY_CONFIRMATION_RECORDED");
       expect(receipts).toHaveLength(1);
+      expect(auditBlockField(receipts[0].block, "Message Id")).toBe(reply.id);
       expect(auditBlockField(receipts[0].block, "Person Reply")).toBe("looks correct");
       expect(said(recorded.out)).toBe(`Recorded your "looks correct" for "${SUMMARY}".`);
       expect(events(proj, "HUMAN_TURN")).toHaveLength(turns);
@@ -140,7 +192,7 @@ describe("t-summary-shown-before-logged: a summary answered before its question 
       expect(said(recorded.out)).toBeUndefined();
     });
 
-    test(`after a change request, the reply to the summary shown again confirms it (Guard Policy ${policy})`, () => {
+    test(`after a change request, the reply to the summary shown again confirms it when the agent names it (Guard Policy ${policy})`, () => {
       const { proj, questions } = project(policy);
       questionsLeftToTheAgent(proj);
       expect(askSummary(proj, questions).status).toBe(0);
@@ -150,17 +202,51 @@ describe("t-summary-shown-before-logged: a summary answered before its question 
       writeFileSync(questions, readFileSync(questions, "utf-8").replace(/\[Answer\]: Request changes\n$/, "[Answer]:\n"));
       // The revised summary is shown again, not yet recorded, and the person replies to it.
       says(proj, "looks correct now");
+      const reply = latestMessage(proj);
       expect(askSummary(proj, questions).status).toBe(0);
-      const recorded = answerSummary(proj, questions, "Looks correct");
+      const recorded = answerSummary(proj, questions, "Looks correct", "Looks correct", reply.id);
       expect(recorded.status, recorded.out).toBe(0);
       expect(events(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(2);
       expect(said(recorded.out)).toBe(`Recorded your "looks correct now" for "${SUMMARY}".`);
     });
 
-    test(`the reply the stage's answers stood on backs the summary confirmation too (Guard Policy ${policy})`, () => {
+    // An answer spends no reply, but the summary asked after it is a question
+    // they have not seen yet: the retry names the reply, for the agent to read.
+    test(`the reply the stage's answers stood on does not confirm the summary asked after it (Guard Policy ${policy})`, () => {
+      const { proj, questions } = project(policy);
+      questionsLeftToTheAgent(proj);
+      const reply = latestMessage(proj);
+      expect(askSummary(proj, questions).status).toBe(0);
+      const refused = answerSummary(proj, questions, "Looks correct");
+      expect(refused.status).not.toBe(0);
+      expect(refusal(refused.out)).toStartWith(`If their message ${reply.id} (sent ${reply.at}) answered`);
+      expect(refusal(refused.out)).not.toContain("go with the recommended");
+      expect(events(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(0);
+    });
+
+    test(`the request that started the stage cannot be named to confirm its summary (Guard Policy ${policy})`, () => {
+      const { proj, questions } = project(policy);
+      says(proj, "the greeting shows a blank title, fix it");
+      const request = latestMessage(proj);
+      appendAuditEntry("STAGE_STARTED", { Stage: STAGE }, proj);
+      questionsLeftToTheAgent(proj);
+      expect(askSummary(proj, questions).status).toBe(0);
+      const refused = answerSummary(proj, questions, "Looks correct", "Looks correct", request.id);
+      expect(refused.status).not.toBe(0);
+      expect(refusal(refused.out)).toContain(`on message ${request.id}: it came before this stage started`);
+      expect(refusal(refused.out)).toContain("show the summary and end your turn");
+      expect(events(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(0);
+    });
+
+    // The refusal's other way on is the person's next reply: the question stays
+    // open, the turn ends there, and their reply confirms it.
+    test(`after the refusal the turn ends at the summary and their next reply confirms it (Guard Policy ${policy})`, () => {
       const { proj, questions } = project(policy);
       questionsLeftToTheAgent(proj);
       expect(askSummary(proj, questions).status).toBe(0);
+      expect(answerSummary(proj, questions, "Looks correct").status).not.toBe(0);
+      expect(stop(proj)).toBe("");
+      says(proj, "looks correct");
       const recorded = answerSummary(proj, questions, "Looks correct");
       expect(recorded.status, recorded.out).toBe(0);
       expect(events(proj, "SUMMARY_CONFIRMATION_RECORDED")).toHaveLength(1);
