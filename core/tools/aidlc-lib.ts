@@ -35220,7 +35220,11 @@ function reapPrivateDir(lockDir: string, claimToken: string): string {
 // The one way an owner-stamped folder (a lock or its coordination gate) is
 // published: built and stamped under a private name, then renamed into place,
 // so it appears with its stamp complete or not at all. A process killed on the
-// way leaves only its private candidate folder, which nothing reads.
+// way leaves only its private candidate folder, which nothing reads. The caller
+// holds what excludes other publishers (the gate for a lock, the native mutex
+// for a gate), so the name cannot be taken between the check and the rename;
+// the check makes a taken name a lost round on every platform, since POSIX
+// rename replaces an empty directory and Windows refuses any existing one.
 function tryCreateOwnerStampedDir(
   dir: string,
   reapLiveOwnerAfterStale: boolean,
@@ -35243,6 +35247,7 @@ function tryCreateOwnerStampedDir(
     }
     const owner = writeOwnerStamp(candidate, reapLiveOwnerAfterStale, token);
     if (!owner?.token) throw new Error("owner stamp failed");
+    if (existsSync(dir)) throw new Error("the name is taken");
     renameSync(candidate, dir);
     return {
       lockDir: dir,
