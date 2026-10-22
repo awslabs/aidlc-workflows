@@ -1373,7 +1373,9 @@ export function play(state: State, seed: number, steps: Step[], opts: { twin?: b
     }
     run.liveness = { ok, out: clip(`${res.stdout}${res.stderr}`, 1200) };
   } catch (error) {
-    run.error = error instanceof Error ? clip(error.message, 1500) : String(error);
+    // A guard's refusal outside a call keeps its own words: they say why the run could not go on.
+    const why = error instanceof ScopeRunRefused ? `: ${error.refusal}` : "";
+    run.error = error instanceof Error ? clip(`${error.message}${why}`, 1500) : String(error);
   }
   if (host instanceof OpencodeScopeHost) host.dispose();
   run.rows = readRows(proj);
