@@ -149,6 +149,9 @@ function copyCore(root: string, relativePath: string): void {
       "aidlc-guard-operation.ts",
       "aidlc-reply-reader.ts",
       "aidlc-runtime-budget.ts",
+      "aidlc-workspace-manifest.ts",
+      "aidlc-unit-teams.ts",
+      "aidlc-workspace-repos.ts",
       "aidlc-lock-line.ts",
     ]) {
       copyFileSync(

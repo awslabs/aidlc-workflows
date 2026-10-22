@@ -413,6 +413,10 @@ describe("t07 audit-logger PostToolUse hook (mechanism cli — spawned hook + st
       join(AIDLC_SRC, "tools", "aidlc-audit.ts"),
       join(proj, ".claude", "tools", "aidlc-audit.ts"),
     );
+    copyFileSync(
+      join(AIDLC_SRC, "tools", "aidlc-workspace-manifest.ts"),
+      join(proj, ".claude", "tools", "aidlc-workspace-manifest.ts"),
+    );
     fire(writeJson(join(recordRoot, "test.md")), proj, localHook, /* setEnv */ false);
     const heartbeat = join(recordRoot, ".aidlc-engine/hooks-health", "write-audit-log.last");
     expect(existsSync(heartbeat)).toBe(true);

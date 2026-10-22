@@ -208,6 +208,14 @@ unit at a time"): the agent switches it at once and says how to undo it, and
 the Units already finished keep their work. See
 [Construction order and execution](12-cli-commands.md#construction-order-and-execution).
 
+When a participant opens the facilitator's solo work in their own clone while
+the facilitator builds it, AI-DLC offers them an open Unit to take as their
+own, the whole work to carry on, or to follow along. When they take one, the
+facilitator's next step says so in one line ("Your teammate <name> took
+checkout-ui; this session carries on with the rest, one Unit at a time.") and
+the work carries on as team work, with nothing asked again. See
+[A second person on solo work](workshop-mode.md#a-second-person-on-solo-work-and-the-leads-sign-off).
+
 ---
 
 ## Recovery playbook

@@ -1682,7 +1682,10 @@ without a word: a shell command that names no file it writes and is not AI-DLC's
 own (a read such as `sed -n` or `find`, a scan, a test run, `python script.py`),
 a file-tool or shell write whose every target is outside the project (the
 path as written and the real path of its deepest existing folder both lie
-outside the project; a link from outside into the project counts as inside),
+outside the project; a link from outside into the project counts as inside;
+a repo `repos.json` or `repos.local.json` maps to a path of its own counts as
+the project wherever it sits, so a build writing into it waits for its plan as
+one writing into a repo inside the workspace does),
 and on the kiro-ide row a call to one of the person's MCP servers (the Kiro
 adapter marks it `aidlc_external_tool: "mcp"`; Kiro's own approval card and the
 person's Kiro settings decide whether it runs).
@@ -1959,13 +1962,13 @@ The audit trail (the intent's `audit/` shards) uses the event taxonomy defined i
 | **Session Lifecycle** | 6 | `SESSION_STARTED`, `SESSION_RESUMED`, `SESSION_COMPACTED`, `SESSION_ENDED`, `HUMAN_TURN`, `HOST_TURN` | Hooks (session-start, validate-state PreCompact, session-end, human-presence mint; `HOST_TURN` is the mint's advisory row for a prompt the host made) |
 | **Workflow Lifecycle** | 6 | `WORKFLOW_STARTED`, `WORKFLOW_COMPLETED`, `WORKFLOW_PARKED`, `WORKFLOW_UNPARKED`, `WORKFLOW_ARCHIVED`, `WORKFLOW_UNARCHIVED` | `aidlc-utility.ts intent-create` and `intent archive`/`unarchive`; `aidlc-orchestrate.ts report`/`park` through internal state emitters |
 | **Phase** | 4 | `PHASE_STARTED`, `PHASE_COMPLETED`, `PHASE_VERIFIED`, `PHASE_SKIPPED` | `aidlc-utility.ts intent-create`; lifecycle outcomes reported through `aidlc-orchestrate.ts` |
-| **Stage** | 8 | `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `STAGE_REVISING`, `STAGE_COMPLETED`, `STAGE_SKIPPED`, `STAGE_JUMPED`, `STAGE_DEFINITION_CHANGED`, `SOURCE_WORK_NOT_FOUND` | `aidlc-orchestrate.ts report` (internal state emitters), `aidlc-jump.ts`, `aidlc-orchestrate.ts` (`STAGE_DEFINITION_CHANGED`), `aidlc-state.ts` (`SOURCE_WORK_NOT_FOUND`, from Code Generation's source-work check) |
+| **Stage** | 9 | `STAGE_STARTED`, `STAGE_AWAITING_APPROVAL`, `STAGE_REVISING`, `STAGE_COMPLETED`, `STAGE_SKIPPED`, `STAGE_JUMPED`, `STAGE_DEFINITION_CHANGED`, `SHARED_INPUT_AMENDED`, `SOURCE_WORK_NOT_FOUND` | `aidlc-orchestrate.ts report` (internal state emitters), `aidlc-jump.ts`, `aidlc-orchestrate.ts` (`STAGE_DEFINITION_CHANGED`), `aidlc-state.ts` (`SOURCE_WORK_NOT_FOUND`, from Code Generation's source-work check) |
 | **Initialization** | 3 | `WORKSPACE_SCAFFOLDED`, `WORKSPACE_SCANNED`, `WORKSPACE_INITIALISED` | `aidlc-utility.ts intent-create` |
 | **Interaction** | 13 | `DECISION_RECORDED`, `GATE_APPROVED`, `GATE_REJECTED`, `QUESTION_ANSWERED`, `QUESTION_REPLIED`, `QUESTION_UNANSWERED`, `REQUEST_ROUTED`, `SUMMARY_CONFIRMATION_RECORDED`, `PLAN_APPROVAL_RECORDED`, `PLAN_APPROVAL_SKIPPED`, `REVIEW_REQUESTED`, `REVIEW_COMPLETED`, `PIPELINE_LINK_COMPLETED` | `aidlc-log.ts`, `aidlc-state.ts`, `aidlc-plan-approval-ask.ts`, `aidlc-orchestrate.ts` (`REQUEST_ROUTED`), `aidlc-record-human-turn.ts` (hook) |
 | **Navigation** | 9 | `SCOPE_CHANGED`, `SCOPE_DETECTED`, `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `RECOMPOSED`, `WORKSPACE_RECLASSIFIED`, `SCOPE_SAVED`, `PLUGIN_SELECTION_CHANGED` | `aidlc-utility.ts` |
 | **Guard Policy** | 5 | `GUARD_POLICY_SET`, `CHANGE_CONTROL_SET` (its retired name, read only), `CHANGE_ACCEPTED`, `GUARD_RESTORED`, `GUARD_STOOD_ASIDE` | `aidlc-utility.ts` builds `GUARD_POLICY_SET` batches for `config-change` / `scope-change` and the `GUARD_RESTORED` row for a fence switched back on, including an override above the policy word; `aidlc-lib.ts` observes effective memory changes through `appendGuardPolicySetRow`, records accepted changes at the three governed checkpoints, and writes `GUARD_STOOD_ASIDE` from `recordGuardStoodAside` when a fence stands aside |
 | **Ceremony** | 1 | `CEREMONY_SET` | `aidlc-utility.ts` builds changed-setting rows for `config-change` / `scope-change`, appended together through `appendAuditEntries` before the state write |
-| **Unit configuration/lifecycle** | 9 | `UNIT_OWNERSHIP_SET`, `UNIT_GATE_RHYTHM_SET`, `CONSTRUCTION_POLICY_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, `UNIT_MERGED` | `aidlc-state.ts`, `aidlc-unit.ts` |
+| **Unit configuration/lifecycle** | 12 | `UNIT_OWNERSHIP_SET`, `UNITS_ASSIGNED`, `UNIT_TAKEN_IN`, `UNIT_PUSHED`, `UNIT_GATE_RHYTHM_SET`, `CONSTRUCTION_POLICY_SET`, `UNIT_STARTED`, `UNIT_PAUSED`, `UNIT_RESUMED`, `UNIT_COMPLETED`, `UNIT_SKIPPED`, `UNIT_MERGED` | `aidlc-state.ts`, `aidlc-unit.ts` |
 | **Artifact** | 3 | `ARTIFACT_CREATED`, `ARTIFACT_UPDATED`, `ARTIFACT_REUSED` | write-audit-log hook, `aidlc-state.ts reuse-artifact`, `aidlc-jump.ts reopen --via redo` |
 | **Subagent** | 3 | `SUBAGENT_COMPLETED`, `SUBAGENT_PROMPT_UNMATCHED`, `REVIEW_VERDICT_DICTATED` | log-subagent hook; Copilot adapter (advisory); no longer written (earlier releases' plan-approval-guard hook; the reviewer's own `**Verdict Dictated:**` line now rides `REVIEW_COMPLETED`) |
 | **Reviewer enforcement** | 2 | `REVIEWER_SCOPE_BLOCKED`, `REVIEW_FREEZE_BLOCKED` | reviewer-scope hook, review-freeze hook |

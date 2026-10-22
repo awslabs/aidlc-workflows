@@ -286,6 +286,9 @@ const manifest: HarnessManifest = {
           // The variant shipped before the block ignored .kiro/agents/aidlc-scoped-review-*.md
           // (a review's reviewer copy).
           "sha256:f9d49a8c823df8174ea7d8a83209380202e5673b5ee8c1ff6b9cce90bcfd550e",
+          // The variant shipped before the block ignored repos.local.json (one
+          // person's own repo paths).
+          "sha256:e7c17271c65f778895fe75352413c03da8a3c37c37bca2b8bcb1c447f4c8b8f3",
         ],
       },
     },

@@ -462,7 +462,7 @@ describe("t256 workspace-doctor - advisory manifest rows", () => {
 
   test("schema-invalid repos.json is not reported as synchronized", () => {
     for (const body of [
-      '{ "repos": [{ "name": "checkout-api" }] }',
+      '{ "org": 7, "repos": [{ "name": "checkout-api" }] }',
       '{ "org": "acme", "repos": [{ "name": "../escaped" }] }',
       '{ "org": "acme", "repos": [{ "name": "api", "branch": "" }] }',
       '{ "org": "acme", "repos": [{ "name": "api" }, { "name": "api" }] }',

@@ -578,9 +578,10 @@ function completionReceiptsFromAudit(audit: string): CompletionReceipts {
       renewed.delete(stage);
       continue;
     }
-    if (event.event === "STAGE_DEFINITION_CHANGED") {
-      // The stage itself changed after it finished: its receipt for the new
-      // definition stands in for the one it finished with.
+    if (event.event === "STAGE_DEFINITION_CHANGED" || event.event === "SHARED_INPUT_AMENDED") {
+      // The stage itself changed after it finished, or an input it used was
+      // amended by the person who owns it: its receipt for that stands in for
+      // the one it finished with.
       const basis = parseStageValidationBasis(auditBlockField(event.block, VALIDATION_BASIS_FIELD));
       if (basis && latestKnown.has(stage)) {
         latestKnown.set(stage, basis);
@@ -875,6 +876,11 @@ export function stageDefinitionChangedFields(
     [VALIDATION_BASIS_FIELD]: canonicalJson(basis),
     Details: line ?? "Not said: the stage needs nothing it did not need when it ran.",
   };
+}
+
+/** The record of a stage's receipt renewed for an amended shared input. */
+export function sharedInputAmendedFields(stage: string, basis: StageValidationBasis, input: string): Record<string, string> {
+  return { Stage: stage, [VALIDATION_BASIS_FIELD]: canonicalJson(basis), Input: input };
 }
 
 export function codeArrivedStageLine(name: string): string {

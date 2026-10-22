@@ -107,6 +107,7 @@ Based on the approved plan, generate 4 artifacts in `<record>/inception/units-ge
 - Relative complexity estimate per unit (S/M/L/XL)
 - Unit kind per unit: `service` | `spec` | `ui` | `packaging` | `library` (what the unit IS, which drives which construction design artifacts apply to it: a spec owes no scalability doc, a packaging unit no business-logic model). `service` = a deployed executable; `spec` = a contract/schema consumed in place; `ui` = a frontend surface; `packaging` = build/distribution artefacts; `library` = reusable code with no standalone runtime. Omit only if none genuinely fits; an untagged unit receives the full design-artifact matrix.
 - Implementation notes and constraints per unit
+- Likely repos per unit, when this work records repos (`/aidlc intent --json` lists them as `repos`): the repos each Unit will probably change, or in one big repo the folders inside it (`platform/services/billing`). A guide for whoever builds the Unit, easy to change: what a Unit changes is whatever its build writes
 
 **unit-of-work-dependency.md:**
 - Dependency DAG between units (directed edges: "A depends on B"). Must be cycle-free.
@@ -115,12 +116,13 @@ Based on the approved plan, generate 4 artifacts in `<record>/inception/units-ge
 - When skeleton-on applies, identify the first resolved DAG Unit as the integrated slice and explain how it can run before later Units. A marker only in `bolt-plan.md` cannot change the runtime DAG order.
 - A REQUIRED fenced `yaml` edge block (below) — the machine-readable mirror of the prose DAG. The downstream batch fan-out is computed from this block, not the prose, so it must be present, well-formed, and cycle-free. The engine reads it before this stage's review and before its gate, and when it cannot, it hands back the exact defect to fix first; the `required-sections` sensor also checks it at the gate.
 
-The fenced block lists every unit with its direct dependencies (the unit names it depends on) and, optionally, each unit's `kind`. Independent units carry `depends_on: []`. Author new Unit names as lowercase path-segment identifiers: a lowercase letter followed by lowercase letters, digits, or hyphens, with a maximum of 64 characters. The runtime also preserves safe legacy single-segment names beginning with a digit or containing uppercase letters, underscores, or dots; autonomous swarms map those names to deterministic internal Bolt slugs while retaining the original Unit identity in directives and audit records. Do not rename an in-flight legacy Unit merely to normalize its spelling. Name each unit exactly once; every name in a `depends_on` list must be a declared unit; no unit may depend on itself; the edges must be acyclic. Each `kind:`, when present, must be one of `service | spec | ui | packaging | library` (an invalid value fails the edge-block sensor at this gate); omit it to keep the unit on the full construction design-artifact matrix:
+The fenced block lists every unit with its direct dependencies (the unit names it depends on) and, optionally, each unit's `kind`. Independent units carry `depends_on: []`. Author new Unit names as lowercase path-segment identifiers: a lowercase letter followed by lowercase letters, digits, or hyphens, with a maximum of 64 characters. The runtime also preserves safe legacy single-segment names beginning with a digit or containing uppercase letters, underscores, or dots; autonomous swarms map those names to deterministic internal Bolt slugs while retaining the original Unit identity in directives and audit records. Do not rename an in-flight legacy Unit merely to normalize its spelling. Name each unit exactly once; every name in a `depends_on` list must be a declared unit; no unit may depend on itself; the edges must be acyclic. Each `kind:`, when present, must be one of `service | spec | ui | packaging | library` (an invalid value fails the edge-block sensor at this gate); omit it to keep the unit on the full construction design-artifact matrix. When this work records repos, give each unit its likely repos as `repos:`, the same list as in `unit-of-work.md` (a repo name, or a folder inside one); omit it otherwise:
 
 ```yaml
 units:
   - name: <unit-name>
     kind: service
+    repos: [<repo>, <repo>/<folder>]
     depends_on: []
   - name: <another-unit>
     kind: spec

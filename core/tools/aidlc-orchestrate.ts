@@ -125,6 +125,7 @@ import {
 import { latestMessage, noReplySince } from "./aidlc-message-store.ts";
 import { aidlcEntryWords, APPROVAL_GATE_CHOICES, protectedChoices } from "./aidlc-reply-reader.ts";
 import {
+  type AskChoice,
   type AskDirective,
   type Directive,
   type ErrorDirective,
@@ -260,6 +261,9 @@ import {
   harnessDirectiveLimit,
   installedKiroLayout,
   intentRepos,
+  repoDir,
+  discoverSiblingRepos,
+  teamSkeletonOn,
   codekbStoreIsCurrent,
   inspectContinuationCursor,
   isPerUnitStage,
@@ -284,7 +288,14 @@ import {
   isArchivedIntent,
   isCompletedIntent,
   listIntents,
+  type IntentInfo,
   listSpaces,
+  auditShardName,
+  clearEngineAskMark,
+  engineAskMark,
+  noteEngineAskMark,
+  personRepliedAfter,
+  DEFAULT_SPACE,
   finishedWork,
   workStanding,
   workToPickUp,
@@ -433,6 +444,7 @@ import {
   withdrawProtectedReplyWords,
   writeActiveDirectiveMarker,
   writeEngineFileNoFollow,
+  writeFileAtomic,
   ANSWER_TEXT_DIR,
   writeRecordFileNoFollow,
   type PlanApprovalLegacyOfferCandidate,
@@ -480,8 +492,28 @@ import {
 } from "./aidlc-construction-checkpoints.ts";
 import { resolveSwarmCheckpoint } from "./aidlc-swarm-checkpoints.ts";
 import {
+  amendAskName,
+  buildClaimNotes,
+  handFileActedOn,
+  reopenTurnedDownBuild,
+  leadSignOffOn,
+  signOffAskName,
+  switchSoloToTeams,
   cachedUnitClaimOverview,
+  checkTeamResults,
   localUnitClaimOverviewForIntent,
+  openingStatusFrom,
+  pushRemotesToPick,
+  assignRetryCommand,
+  changedInputs,
+  type ToldMerge,
+  writeProposedText,
+  refreshHomeClaims,
+  refreshListedHome,
+  earlyBaseMerged,
+  moveRefusedMark,
+  unitBranchInTheWay,
+  unitsTaken,
   type UnitClaimOverview,
 } from "./aidlc-unit.ts";
 import {
@@ -530,7 +562,37 @@ import {
   resolveHarnessPath,
   resolveHarnessRoot,
   runtimeHarnessName,
+  workspaceSyncInvocation,
 } from "./aidlc-runtime-paths.ts";
+import { localRepoOverrideLines, REPOS_FILE } from "./aidlc-workspace-manifest.ts";
+import { noteReposManifestOffered, reposManifestOffered } from "./aidlc-workspace-repos.ts";
+import {
+  builtFromAnotherMachine,
+  lastCommittedByThisPerson,
+  findUnitBuild,
+  homeLocation,
+  inputName,
+  soloUnitsProgress,
+  teamSpaceOf,
+  teamUnitStageApplies,
+  unitsBuiltBeforeTeams,
+  parseHandFile,
+  unitLikelyReposFrom,
+  workspaceHomeLocation,
+  writesByRepo,
+  mergedStatus,
+  renderUnitBoard,
+  type UnitBoardRow,
+  UNIT_PUSH_FIELD,
+  isHomesCopiedWork,
+  unitBuildOf,
+  unitDependencies,
+  unitLikelyRepos,
+  unitsAssignedSinceTeams,
+  assignmentNotHeld,
+  unitsInPlanOrder,
+  unknownLikelyReposLine,
+} from "./aidlc-unit-teams.ts";
 import { terminalDispatcherArgv } from "./aidlc.ts";
 import { appendAuditEntries, appendAuditEntry } from "./aidlc-audit.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
@@ -1448,6 +1510,13 @@ function prepareEmission(directive: Directive): PreparedEmission {
       ...directive,
       stage_validity: activeStageValidityAdvisory,
     } as Directive;
+  }
+  // At a team home every step carries the team commands, so the lead's word
+  // about a team's Unit is recorded from whatever step the chat is at.
+  if (directive.kind !== "load-steering" && directive.kind !== "error" && !("board_note" in directive) &&
+    engineProjectDir && atTeamHome(engineProjectDir)) {
+    const noted = { ...directive, board_note: teamCommandsNote() } as Directive;
+    if (Buffer.byteLength(JSON.stringify(noted), "utf-8") <= directiveMaxBytes()) directive = noted;
   }
   // Per-unit Construction beats: `unit` is attached by callers after the
   // run-stage is built, so the builder's stage-entry line is wrong here (the
@@ -4068,6 +4137,79 @@ function turnEndingPrint(message: string): PrintDirective {
   return directive;
 }
 
+type StepOffer = NonNullable<PrintDirective["offers"]>[number];
+
+// For the agent at a team home: the commands for the lead's words about the
+// teams' Units, whatever the step is.
+function teamCommandsNote(): string {
+  const unitTool = aidlcToolInvocation("unit");
+  return "When the person says a repo turned a Unit down, run " +
+    `\`${unitTool} turned-down <unit> --repo <repo> --person-words '<their words>'\`; when they say a repo merged it ` +
+    `where the board does not see it, run \`${unitTool} merged <unit> --repo <repo> --person-words '<their words>'\`. ` +
+    `When they sign a team's result off, run \`${unitTool} sign-off <unit> --person-words '<their words>'\`; when they ` +
+    `answer a team's proposed change, run \`${unitTool} amend <unit> --input <file> --answer <approve|reject> ` +
+    "--person-words '<their words>'`. " +
+    `When they ask for their sign-off on every team's result, run \`${unitTool} lead-sign-off on\` (\`off\` to stop); ` +
+    `when they ask to free a Unit a team holds, run \`${unitTool} release <unit>\`. ` +
+    `When they ask to hand a Unit off by file, run \`${unitTool} hand-off <unit> --team <team> --person-words '<their words>'\`; ` +
+    `when they ask to take in a team's result or progress file, run \`${unitTool} take-in <file>\`. Say the notice line ` +
+    "each prints.";
+}
+
+// The offers a step has not put to the person in this chat yet; each is put
+// once. A step with no work selected (a clone's take step) keeps the chat's
+// note in the workspace's sessions folder, where the person's heard lines,
+// which belong to a piece of work, cannot go.
+const OFFERS_PUT_FILE = "offers-put.json";
+function offersOnce(projectDir: string, offers: StepOffer[]): StepOffer[] {
+  const chat = engineSessionId;
+  if (!chat) return offers;
+  if (engineSelection(projectDir).intent) {
+    const fresh = offers.filter((offer) => !personLineHeard(projectDir, chat, offer.question));
+    if (!isReadOnlyEngineProbe()) markPersonLinesHeard(projectDir, chat, fresh.map((offer) => offer.question));
+    return fresh;
+  }
+  const path = join(sessionsDir(projectDir), OFFERS_PUT_FILE);
+  let put: Record<string, string[]> = {};
+  try {
+    put = JSON.parse(readFileSync(path, "utf-8")) as Record<string, string[]>;
+  } catch {
+    // Nothing put yet.
+  }
+  const fresh = offers.filter((offer) => !(put[chat] ?? []).includes(offer.question));
+  if (fresh.length > 0 && !isReadOnlyEngineProbe()) {
+    try {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileAtomic(path, `${JSON.stringify({ ...put, [chat]: [...(put[chat] ?? []), ...fresh.map((offer) => offer.question)] })}\n`);
+    } catch {
+      // Unnoted, the offer comes once more.
+    }
+  }
+  return fresh;
+}
+
+// The work selected here is the home of Units teams build (not a team's build).
+function atTeamHome(projectDir: string): boolean {
+  const state = loadStateFileIfPresent(projectDir);
+  return state !== null && isTeamUnitOwnership(state) && homeLocation(state) !== null && unitBuildOf(state) === null;
+}
+
+// A step of teams building Units that says where things stand and ends the
+// turn, with what the person may answer: a print, which every orchestrator
+// skill's step table handles from a fresh chat. The person's line rides as
+// narration, as data; the message is the engine's own.
+function lineEndingTurn(line: string | null, offers: StepOffer[] = [], boardNote?: string): PrintDirective {
+  const step = turnEndingPrint(offers.length === 0
+    ? "Say the line above, then end the turn."
+    : `${line === null ? "Put" : "Say the line above, then put"} each offer below to the person as a plain question in ` +
+      "its own words, with its choices as given and the one marked recommended first, and end the turn. When they " +
+      "answer one, run the command of the choice they picked, filling in their words; a choice with no command runs nothing.");
+  if (line !== null) step.narration = line;
+  if (offers.length > 0) step.offers = offers;
+  if (boardNote !== undefined) step.board_note = boardNote;
+  return step;
+}
+
 // The question for a folder set up as a new project that now holds code.
 // Null when the type was the person's word, Construction has started, or the
 // folder still scans as a new project.
@@ -4105,6 +4247,31 @@ function projectTypeAskDirective(
   };
 }
 
+// The one offer to write repos.json from the repos found here (decision 21):
+// at a stage boundary, the first time the work records repos or teams are
+// chosen (open question 7), in a workspace that has none, once per clone. One
+// person's work on one repo is never offered it. Null when the step goes on.
+function reposManifestAsk(projectDir: string, stateContent: string): AskDirective | null {
+  if (existsSync(join(projectDir, REPOS_FILE)) || reposManifestOffered(projectDir)) return null;
+  if (homeLocation(stateContent) === null && intentRepos(projectDir).length === 0) return null;
+  const found = discoverSiblingRepos(projectDir);
+  const names = found.length > 0 ? found : existsSync(join(projectDir, ".git")) ? [basename(resolve(projectDir))] : [];
+  if (names.length === 0) return null;
+  if (!isReadOnlyEngineProbe()) noteReposManifestOffered(projectDir);
+  const listed = names.length === 1 ? `the repo found here (${names[0]})` : `the ${names.length} repos found here (${names.join(", ")})`;
+  return {
+    kind: "ask",
+    ask_type: "repos-manifest",
+    response_route: "command",
+    question: `Write repos.json from ${listed}? It lists each one's folder and the address its origin points to, ` +
+      "so a teammate's clone knows where they go.",
+    choices: [
+      { label: "Write it", detail: "You can edit or commit it like any file.", command: `${workspaceSyncInvocation()} --write-manifest` },
+      { label: "Not now", detail: "I won't ask again.", command: `${aidlcToolInvocation("orchestrate")} next` },
+    ],
+  };
+}
+
 // Who builds a plan of two or more Units is the person's to say, once, as
 // Inception ends: at the first step into a per-Unit Construction stage, while
 // nothing is built (a jump there meets the same rule). A pick records Unit
@@ -4119,11 +4286,16 @@ function constructionStaffingAsk(
   stateContent: string | null,
   slug: string,
   scope: string,
-): AskDirective | null {
+): AskDirective | PrintDirective | null {
   const node = nodeForSlug(slug);
   if (stateContent === null || !node || node.phase !== "construction" || !isPerUnit(node)) return null;
   if (usesStageLevelPerUnitArtifacts(scope, stateContent)) return null;
   const ownership = (getField(stateContent, UNIT_OWNERSHIP_FIELD) ?? "").trim();
+  // Teams building each Unit as work of their own: who builds which Unit is
+  // the one question, asked once at the home.
+  if (ownership === "team" && homeLocation(stateContent) !== null) {
+    return unitAssignmentAsk(projectDir, stateContent);
+  }
   const teams = ownership === "team" && getField(stateContent, "Unit Gate Rhythm") === null;
   if (ownership !== "" && !teams) return null;
   const evidence = routingEvidenceFor(projectDir, stateContent);
@@ -4149,7 +4321,7 @@ function constructionStaffingAsk(
   }
   const order = readConstructionIteration(stateContent) === "unit-major" ? "one after another" : "stage by stage";
   const repos = intentRepos(projectDir);
-  if (repos.length > 0) {
+  if (repos.length > 0 && workspaceHomeLocation(projectDir) === null) {
     if (speaks) sayWithStepOnce(projectDir, teamsAcrossReposLine(repos.length, units));
     return null;
   }
@@ -4184,6 +4356,70 @@ function constructionStaffingAsk(
     ],
   };
 }
+
+// Who builds which Unit, asked once at the home after the person chose teams,
+// before any Unit starts: the person answers in their own words and the agent
+// records them as one claim per named Unit; a Unit left out stays open for any
+// team to take later. The walking skeleton, when on, is built here first and
+// is not asked about. Null when the step goes on.
+function unitAssignmentAsk(projectDir: string, stateContent: string): AskDirective | PrintDirective | null {
+  if (readApplicableTeamUnitScopeStamp(projectDir, stateContent) !== null) return null;
+  const evidence = routingEvidenceFor(projectDir, stateContent);
+  const rows = evidence?.allRows ?? readAuditShardEvents(projectDir);
+  if (rows.some((row) => row.event === "UNIT_STARTED")) return null;
+  // The lead's answer, kept while the home could not be reached: holding it again is offered.
+  const kept = assignmentNotHeld(rows);
+  if (kept !== null) {
+    const question = "Who builds which Unit is kept, but nothing is held for the teams yet: the home could not be reached. " +
+      "Do you want me to try again?";
+    return lineEndingTurn(null, [{ question, choices: [{ label: "Try again", command: assignRetryCommand(kept.pairs, kept.open) }, { label: "Not now" }] }]);
+  }
+  if (unitsAssignedSinceTeams(rows)) return null;
+  const dag = resolveBoltBatches(projectDir, evidence);
+  if (dag.state !== "ok" || dag.units.length < 2) return null;
+  const skeleton = teamSkeletonOn(stateContent) ? dag.batches[0][0] : null;
+  const likely = unitLikelyRepos(projectDir);
+  const dependencies = unitDependencies(projectDir);
+  const units = unitsInPlanOrder(projectDir, dag.units).filter((unit) => unit !== skeleton);
+  const described = units.map((unit) => {
+    const notes = [
+      ...(likely.has(unit) ? [`likely ${likely.get(unit)!.join(", ")}`] : []),
+      ...((dependencies.get(unit) ?? []).length > 0 ? [`waits on ${dependencies.get(unit)!.join(", ")}`] : []),
+    ];
+    return notes.length > 0 ? `${unit} (${notes.join("; ")})` : unit;
+  });
+  const unitTool = aidlcToolInvocation("unit");
+  const question = `${skeleton !== null ? `${skeleton} is the walking skeleton, built here first. ` : ""}` +
+    `Who builds which Unit? ${described.join(", ")}. Name a team for each, or leave a Unit open for any team ` +
+    "to take later.";
+  const assignCommand = `${unitTool} assign <unit>=<team> [<unit>=<team> ...] --person-words '<their words>'`;
+  const open = { label: "Leave them all open", detail: "Any team takes a Unit when it is ready.", command: `${unitTool} assign --open` };
+  // Asked once: after the lead spoke without naming teams, the step is where
+  // it stands, with the same choice, and nothing is built here meanwhile.
+  const mark = engineAskMark(projectDir, UNIT_ASSIGNMENT_ASK);
+  if (mark !== null && personRepliedAfter(projectDir, mark)) {
+    const waits = "Who builds which Unit is still yours to say, so nothing is built yet: name a team for each Unit, or " +
+      "leave them all open for any team.";
+    return lineEndingTurn(null, [{ question: waits, choices: [{ label: "Name the teams", command: assignCommand }, open] }]);
+  }
+  if (!isReadOnlyEngineProbe()) noteEngineAskMark(projectDir, UNIT_ASSIGNMENT_ASK);
+  return {
+    kind: "ask",
+    ask_type: "unit-assignment",
+    response_route: "command",
+    question,
+    choices: [
+      {
+        label: "Name the teams",
+        detail: "Which team builds which Unit, in your own words; a Unit you leave out stays open for any team.",
+      },
+      open,
+    ],
+    assign_command: assignCommand,
+  };
+}
+
+const UNIT_ASSIGNMENT_ASK = "unit-assignment.json";
 
 // A line for the person said with the step this `next` emits, once per chat.
 function sayWithStepOnce(projectDir: string, line: string): void {
@@ -4928,6 +5164,7 @@ export interface ParsedFlags {
   propose?: string;
   continue?: boolean; // --continue: a routing question's "part of that work" answer
   record?: string; // --record <selector>: the listed record a routing question's reshape answer chose
+  handFile?: string; // --hand-file <path>: a hand-off, progress or result file the person pointed at
   workspaceCommand?: WorkspaceCommand; // leading workspace command (space/space-create/intent)
   carryOn?: boolean; // the pick question's answer: select the record, then carry on in the same turn
   pickedUp?: string; // --resume picking up the only work here: the person's one line for it
@@ -5206,6 +5443,12 @@ export function parseNextFlags(argv: string[]): ParsedFlags {
         flags.parseError = "--record requires <record selector>.";
       } else {
         flags.record = value;
+      }
+    } else if (a === "--hand-file") {
+      if (value === undefined) {
+        flags.parseError = "--hand-file requires the file's path.";
+      } else {
+        flags.handFile = value;
       }
     } else if (a === "--scope" && value !== undefined) {
       flags.scope = value;
@@ -6235,6 +6478,470 @@ function unselectedRecordsDigest(selectable: UnselectedRecords["selectable"]): s
   return createHash("sha256")
     .update(selectable.map(({ intent, selector }) => `${selector}\n${intent.uuid ?? ""}`).join("\n"), "utf-8")
     .digest("hex");
+}
+
+// Teams building each Unit as work of their own: with no work of the person's
+// own here, what they can take or carry on, read from what this workspace
+// has (each home's plan, its claims as the home has them now, the builds
+// here). Taking one checks the home itself. When every Unit only waits, the
+// line says so and offers nothing, so no step of the home's own work runs in
+// this clone. Null when there is nothing to take, carry on or wait for, or the
+// person has other work here to pick up.
+function unitTakeAsk(projectDir: string): AskDirective | PrintDirective | null {
+  // Each home's claims once per chat; while nothing is ready the person waits,
+  // so each look fetches them again.
+  let looked = unitTakeLook(projectDir, false);
+  if (looked.choices.length === 0 && looked.sentences.length > 0 && looked.stale) looked = unitTakeLook(projectDir, true);
+  const { sentences, choices, homeHere } = looked;
+  const active = engineSelection(projectDir).space;
+  if (choices.length === 0 && sentences.length === 0) return null;
+  // Other work of the person's own here is theirs to pick up first.
+  const ownWork = workToPickUp(projectDir, active, null)?.filter(({ intent, state }) =>
+    !homeHere.some((home) => home.dirName === intent.dirName) && unitBuildOf(state) === null) ?? [];
+  if (ownWork.length > 0) return null;
+  if (choices.length === 0) {
+    // Whoever led the work (by their own git identity) can still carry it on
+    // here as its home: offered to them once in a chat, and to nobody else.
+    return lineEndingTurn(`${sentences.join(" ")} Nothing is ready to take yet.`, offersOnce(projectDir, homeHere
+      .filter((home) => lastCommittedByThisPerson(projectDir, join("aidlc", "spaces", active, "intents", home.dirName!)))
+      .map((home) => {
+        const label = intentDisplayLabel(home);
+        return {
+          question: `Do you want me to carry on ${label} here, as its home? I'd carry it on here, since you led it so far.`,
+          choices: [
+            { label: `Carry on ${label} here, as its home`, command: selectCommands([home.dirName!])[0].command, recommended: true as const },
+            { label: "Not now" },
+          ],
+        };
+      })));
+  }
+  for (const home of homeHere) {
+    choices.push({
+      label: `Carry on ${intentDisplayLabel(home)} here, as its home`,
+      detail: "Where its Units are given out and come back.",
+      command: selectCommands([home.dirName!])[0].command,
+    });
+  }
+  return {
+    kind: "ask",
+    ask_type: "unit-take",
+    response_route: "command",
+    question: `${sentences.join(" ")} Taking a Unit starts it as your team's own piece of work here, from what the home approved.`.trim(),
+    choices,
+  };
+}
+
+function unitTakeLook(
+  projectDir: string,
+  now: boolean,
+): { sentences: string[]; choices: AskChoice[]; homeHere: IntentInfo[]; stale: boolean } {
+  const active = engineSelection(projectDir).space;
+  const team = active === DEFAULT_SPACE ? null : active;
+  const unitTool = aidlcToolInvocation("unit");
+  const sentences: string[] = [];
+  const choices: AskChoice[] = [];
+  const homeHere: IntentInfo[] = [];
+  // A home whose claims this look did not fetch (fetched earlier in the chat).
+  let stale = false;
+  for (const { name: space } of listSpaces(projectDir)) {
+    for (const intent of listIntents(projectDir, space)) {
+      if (!intent.dirName || !intent.uuid) continue;
+      let state: string;
+      let dependencyBody: string;
+      try {
+        state = readStateFile(projectDir, intent.dirName, space);
+        if (!isTeamUnitOwnership(state) || homeLocation(state) === null) continue;
+        dependencyBody = readFileSync(unitDependencyPath(projectDir, intent.dirName, space), "utf-8");
+      } catch {
+        continue;
+      }
+      if (!isReadOnlyEngineProbe()) {
+        const refreshed = refreshListedHome(projectDir, intent.dirName, space, { sessionId: engineSessionId, now });
+        if (!refreshed.fetched && refreshed.unreached === null) stale = true;
+        if (refreshed.unreached !== null) {
+          sayWithStepOnce(projectDir, `${intentDisplayLabel(intent)}'s home could not be reached just now, so what is ready to take may be behind.`);
+        }
+      }
+      let opening: ReturnType<typeof openingStatusFrom>;
+      let overview: UnitClaimOverview;
+      try {
+        opening = openingStatusFrom(state, dependencyBody);
+        overview = localUnitClaimOverviewForIntent(projectDir, { space, intentUuid: intent.uuid, stateContent: state, dependencyBody });
+      } catch {
+        continue;
+      }
+      if (space === active && !isHomesCopiedWork(projectDir, state)) homeHere.push(intent);
+      const take = `${unitTool} take %s --home ${shellArg(intent.dirName)}` +
+        (space === DEFAULT_SPACE ? "" : ` --home-space ${shellArg(space)}`);
+      const likely = unitLikelyRepos(projectDir, intent.dirName, space);
+      // A Unit no team holds that the home started is the home's.
+      const startedAtHome = soloUnitsProgress(readAuditShardEvents(projectDir, intent.dirName, space), "").started;
+      // The teams the lead named: an open Unit is started for one of them, or another the person names.
+      const named = [...new Set([...overview.claims.values()].filter((claim) => claim.status === "claimed").map((claim) => claim.owner))];
+      const forTeams = (unit: string, holder: string | null, label: string, detail: string, extra = ""): AskChoice[] => {
+        const command = (forTeam: string) => `${take.replace("%s", shellArg(unit))}${extra} --team ${forTeam}`;
+        if (holder !== null) return [{ label, detail, command: `${take.replace("%s", shellArg(unit))}${extra}` }];
+        if (team !== null) return [{ label, detail, command: command(shellArg(team)) }];
+        return [
+          ...named.map((owner) => ({ label: `${label} for ${owner}`, detail, command: command(shellArg(owner)) })),
+          { label: named.length > 0 ? `${label} for another team` : label, detail: `${detail} I'll ask which team builds it.`, command: command("'<their team>'") },
+        ];
+      };
+      // The walking skeleton, while the home builds it, is the home's: every
+      // other Unit waits on it.
+      const skeleton = teamSkeletonOn(state) && !opening.completed.has(opening.skeleton) ? opening.skeleton : null;
+      const ready: string[] = [];
+      const waiting: string[] = [];
+      const building: string[] = [];
+      const others: string[] = [];
+      for (const unit of unitsInPlanOrder(projectDir, opening.units)) {
+        if (opening.completed.has(unit) || unit === skeleton) continue;
+        const built = findUnitBuild(projectDir, intent.uuid, unit);
+        const claim = overview.claims.get(unit);
+        // The claim is the one record of who holds a Unit.
+        const holder = claim?.status === "claimed" ? claim.owner : null;
+        if (built !== null) {
+          choices.push({ label: `Carry on ${unit}`, detail: `The ${built.space} team's build of it, here.`, command: take.replace("%s", shellArg(unit)) });
+          continue;
+        }
+        if (claim?.payload.taken_by !== undefined) {
+          building.push(`${unit} (by ${claim.payload.taken_by} for ${claim.owner})`);
+          continue;
+        }
+        if (holder === null && startedAtHome.has(unit)) {
+          building.push(`${unit} (at the home)`);
+          continue;
+        }
+        if (team !== null && holder !== null && teamSpaceOf(holder) !== team) {
+          others.push(`${unit} (for ${holder})`);
+          continue;
+        }
+        const blockers = [...new Set((opening.blockers.get(unit) ?? [])
+          .map((dep) => (dep === "walking-skeleton" ? skeleton ?? dep : dep))
+          .filter((dep) => overview.claims.get(dep)?.payload.done !== true))];
+        if (blockers.length > 0) {
+          waiting.push(`${unit} (${holder !== null ? `for ${holder}; ` : ""}on ${blockers.join(", ")})`);
+          // Every Unit it waits on is pushed: it can start early on their branches.
+          if (blockers.every((dep) => overview.claims.get(dep)?.payload.result !== undefined)) {
+            choices.push(...forTeams(
+              unit,
+              holder,
+              `Start ${unit} early`,
+              `On the pushed branches of ${blockers.join(" and ")}; ${blockers.length === 1 ? "it" : "they"} may still change before merging.`,
+              " --early",
+            ));
+          }
+          continue;
+        }
+        const notes = [holder !== null ? `for ${holder}` : "open", ...(likely.has(unit) ? [`likely ${likely.get(unit)!.join(", ")}`] : [])];
+        ready.push(`${unit} (${notes.join("; ")})`);
+        choices.push(...forTeams(
+          unit,
+          holder,
+          `Start ${unit}`,
+          holder !== null ? `For the ${holder} team.` : `Open: for ${team !== null ? `the ${team} team` : "a team"}.`,
+        ));
+      }
+      const elsewhere = isHomesCopiedWork(projectDir, state) ? ` (its home is ${homeLocation(state)})` : "";
+      const label = intentDisplayLabel(intent);
+      if (ready.length > 0 || waiting.length > 0 || building.length > 0 || others.length > 0) {
+        sentences.push(
+          `${label}${elsewhere} is built by teams, one Unit each.` +
+            (skeleton !== null ? ` The walking skeleton, ${skeleton}, is built at the home first.` : "") +
+            (ready.length > 0 ? ` Ready to take: ${ready.join(", ")}.` : "") +
+            (waiting.length > 0 ? ` Waiting: ${waiting.join(", ")}.` : "") +
+            (building.length > 0 ? ` Being built: ${building.join(", ")}.` : "") +
+            (others.length > 0 ? ` Held for other teams: ${others.join(", ")}.` : ""),
+        );
+      }
+    }
+  }
+  return { sentences, choices, homeHere, stale };
+}
+
+// The person's words are just the path of a hand-off file: the offer to start
+// the Unit in it. The path of a team's result or progress file is taken in, at
+// the home it was sent to. A file already acted on here is "done": the words
+// asked for nothing more (the turn keeps them for every `next` in it). Null for
+// any other words.
+function handFileStep(projectDir: string, words: string): AskDirective | PrintDirective | "done" | null {
+  // The whole of their words, as one path: it may hold spaces.
+  const path = words.replace(/^["']|["']$/g, "");
+  if (path === "") return null;
+  let file: ReturnType<typeof parseHandFile>;
+  try {
+    file = parseHandFile(readFileSync(resolve(projectDir, path), "utf-8"));
+  } catch {
+    return null;
+  }
+  if (file === null) return null;
+  if (handFileActedOn(projectDir, file)) return "done";
+  if (file.kind !== "handoff") {
+    return {
+      kind: "print",
+      message: `Run \`${aidlcToolInvocation("unit")} take-in ${shellArg(path)}\`, then tell the person its notice line in one ` +
+        "line and re-run `next` to continue.",
+    };
+  }
+  const unit = file.fields.Unit ?? "";
+  const likely = unitLikelyReposFrom(file.files.get("inception/units-generation/unit-of-work-dependency.md") ?? "").get(unit) ?? [];
+  const here = likely.filter((repo) => existsSync(join(repoDir(projectDir, repo.split("/")[0]), ".git")));
+  const repos = likely.length === 0 ? "" : ` It likely changes ${likely.join(", ")}` +
+    (here.length === likely.length ? ", already here." : `; ${likely.filter((repo) => !here.includes(repo)).join(", ")} not here yet.`);
+  return {
+    kind: "ask",
+    ask_type: "unit-handoff",
+    response_route: "command",
+    question: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is yours, handed off from ${file.fields["Home Label"] ?? "its home"} by its ` +
+      `lead on ${(file.fields["Handed Off"] ?? "").slice(0, 10)}.${repos}`,
+    choices: [
+      { label: `Start ${unit}`, detail: "As a piece of work of its own here, from what the home approved.", command: `${aidlcToolInvocation("unit")} take --file ${shellArg(path)}` },
+      { label: "Not now", detail: "Nothing is started." },
+    ],
+  };
+}
+
+// A Unit the home turned down, at the end of its build: the way back to Code
+// Generation asked once, with why; after that, where it stands, with the same
+// offer for the agent.
+function turnedDownStep(projectDir: string, unit: string, repo: string): AskDirective | PrintDirective {
+  const back = {
+    label: `Take ${unit} back to Code Generation`,
+    detail: "Its code stays as it is; you change what the home asked for, then push it again.",
+    command: `${aidlcToolInvocation("orchestrate")} report --result resumed --choice redo --target code-generation`,
+  };
+  const askName = `unit-turned-down-${unit}`;
+  if (engineAskMark(projectDir, askName) !== null) {
+    const question = `${unit} is not finished: it was turned down at the home and waits for your change and a new push. ` +
+      "Do you want me to take it back to Code Generation?";
+    return lineEndingTurn(null, [{ question, choices: [back, { label: "Not now" }] }]);
+  }
+  noteEngineAskMark(projectDir, askName);
+  return {
+    kind: "ask",
+    ask_type: "unit-turned-down",
+    response_route: "command",
+    question: `Do you want me to take ${unit} back to Code Generation so you can change it and push it again? ` +
+      `That is what I'd do: ${repo} needs the change before ${unit} can merge.`,
+    choices: [
+      back,
+      { label: "Not now", detail: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} stays turned down until you come back to it.` },
+    ],
+  };
+}
+
+// An input of a Unit's build whose copy the team changed here: asked once per
+// its text whether to send it home for the shared plan's owner to approve.
+// Null when nothing changed, or each change was asked about already.
+function unitProposeAsk(projectDir: string, stateContent: string): AskDirective | null {
+  const build = unitBuildOf(stateContent);
+  if (build === null) return null;
+  const byFile = getField(stateContent, "Home Result")?.trim() === "by file";
+  for (const changed of changedInputs(projectDir, stateContent)) {
+    const askName = `unit-propose-${changed.path.replace(/[^A-Za-z0-9.-]+/g, "_")}-${changed.fingerprint.slice("sha256:".length, 19)}.json`;
+    if (engineAskMark(projectDir, askName) !== null) continue;
+    noteEngineAskMark(projectDir, askName);
+    if (byFile) {
+      sayWithStepOnce(projectDir, `You changed the ${changed.name} here. The home takes no push from here, so send your change to the lead with your result file.`);
+      continue;
+    }
+    return {
+      kind: "ask",
+      ask_type: "unit-propose",
+      response_route: "command",
+      question: `You changed the ${changed.name} here. Do you want me to send your change to the home for its owner to approve? ` +
+        "I'd send it, so every team builds from the same version.",
+      choices: [
+        {
+          label: "Send it to the home",
+          detail: `${build.unit} carries on with your version meanwhile.`,
+          command: `${aidlcToolInvocation("unit")} propose --input ${shellArg(changed.path)} --person-words '<their words>'`,
+        },
+        { label: "Keep it here only", detail: `${build.unit} is built with your version; the home's stays as it is.` },
+      ],
+    };
+  }
+  return null;
+}
+
+// A Unit this build started early on, now merged at the home: the offer to move
+// the build onto the integration branch, once per Unit, and once more when the
+// build was pushed since (its next push then needs their own force push).
+function unitMoveOntoAsk(projectDir: string, stateContent: string): AskDirective | null {
+  const build = unitBuildOf(stateContent);
+  if (build === null) return null;
+  const unit = build.unit;
+  const pushed = getField(stateContent, UNIT_PUSH_FIELD)?.trim() === "pushed";
+  const askName = (dep: string): string => `unit-move-onto-${dep}${pushed ? "-pushed" : ""}`;
+  const asked = (dep: string): boolean => engineAskMark(projectDir, askName(dep)) !== null;
+  const refused = (dep: string): boolean => engineAskMark(projectDir, moveRefusedMark(dep)) !== null;
+  // A move git refused for their own changes comes back once nothing of theirs is in the way.
+  for (const dep of earlyBaseMerged(projectDir, stateContent, (dep) => asked(dep) && !refused(dep), refused)) {
+    clearEngineAskMark(projectDir, moveRefusedMark(dep.unit));
+    noteEngineAskMark(projectDir, askName(dep.unit));
+    const into = joinRepoNames([...new Set(dep.repos.map((repo) => repo.onto.slice(repo.remote.length + 1)))]);
+    return {
+      kind: "ask",
+      ask_type: "unit-move-onto",
+      response_route: "command",
+      question: `${dep.unit} is merged into ${into}. Do you want me to move ${unit} onto ${into} now?` +
+        (pushed
+          ? ` ${unit} is pushed already, so after the move its branch differs from what was pushed, and its next push needs ` +
+            "a force push of your own; AI-DLC never forces a push."
+          : "") +
+        ` I'd move it now, so ${unit} is built on what is merged instead of ${dep.unit}'s branch.`,
+      choices: [
+        {
+          label: `Move ${unit} onto ${into}`,
+          detail: "Only its own commits move, with your own git; nothing is pushed.",
+          command: `${aidlcToolInvocation("unit")} rebase`,
+        },
+        { label: "Not now", detail: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} stays on ${dep.unit}'s branch.` },
+      ],
+    };
+  }
+  return null;
+}
+
+// The end of a Unit's build: the offer to push it home, until the person asked
+// for the push or said not now (then the end says it once). Null for other work.
+function unitPushAsk(projectDir: string, stateContent: string | null): AskDirective | null {
+  const build = unitBuildOf(stateContent);
+  if (build === null || stateContent === null) return null;
+  const push = getField(stateContent, UNIT_PUSH_FIELD)?.trim();
+  const unit = build.unit;
+  if (push === "later") {
+    sayWithStepOnce(projectDir, `${unit} is built and approved, and not pushed yet. Do you want me to push it now?`);
+    return null;
+  }
+  if (!unitPushToOffer(projectDir, stateContent)) return null;
+  const unitTool = aidlcToolInvocation("unit");
+  if (push === "unsent") {
+    return {
+      kind: "ask",
+      ask_type: "unit-push",
+      response_route: "command",
+      question: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is pushed, but the home did not take its result just now. ` +
+        "Do you want me to send it again?",
+      choices: [
+        { label: "Send it again", detail: "Nothing new is committed; the result goes to the home.", command: `${unitTool} push` },
+        { label: "Not now", detail: "The home sees it once you send it.", command: `${unitTool} push --later` },
+      ],
+    };
+  }
+  const manifest = readUnitSourceManifest(projectDir, "code-generation", unit);
+  const byRepo = manifest.ok ? writesByRepo(projectDir, manifest.manifest.writes) : new Map<string, string[]>();
+  const repos = [...byRepo.keys()];
+  // Their own changes in the way of the Unit's branch: the push would be
+  // refused the same way, so it is offered once they are out of the way.
+  const inTheWay = unitBranchInTheWay(projectDir, unit, byRepo);
+  if (inTheWay.length > 0) {
+    sayWithStepOnce(projectDir, `${unit} is built and approved, and not pushed: changes of yours in ${joinRepoNames(inTheWay)} are in the way ` +
+      "of its branch there. Once they are committed or put aside, do you want me to push it?");
+    return null;
+  }
+  const names = repos.map((repo) => (repo === "." ? "the repo" : repo));
+  const changed = names.length === 0 ? "" : ` It changed ${names.length === 1 ? names[0] : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`}.`;
+  // A repo with several remotes and none set for pushing: which one is theirs to say.
+  const pick = pushRemotesToPick(projectDir, unit, repos);
+  const detail = "Only the files its Code Generation wrote; nothing else of yours is committed.";
+  const pushes = pick.length === 0
+    ? [{ label: "Push", detail, command: `${unitTool} push` }]
+    : pick[0].remotes.map((remote) => {
+      const pairs = pick.filter((entry) => entry.remotes.includes(remote)).map((entry) => `${entry.repo}=${remote}`);
+      return { label: `Push to ${remote}`, detail, command: `${unitTool} push --remote ${shellArg(pairs.join(","))}` };
+    });
+  const several = pick.length === 0 ? "" : ` ${pick.map((entry) => (entry.repo === "." ? "The repo" : entry.repo)).join(" and ")} ` +
+    `${pick.length === 1 ? "has" : "have"} several remotes and none is set for pushing.`;
+  return {
+    kind: "ask",
+    ask_type: "unit-push",
+    response_route: "command",
+    question: `${unit.charAt(0).toUpperCase()}${unit.slice(1)} is built and you approved it.${changed}${several} Commit its changes on ` +
+      `branch ${unit} in ${names.length > 1 ? "each" : "it"} and push ${names.length > 1 ? "them" : "it"}?`,
+    choices: [
+      ...pushes,
+      { label: "Not now", detail: "Nothing is pushed until you want it to be.", command: `${unitTool} push --later` },
+    ],
+  };
+}
+
+// A Unit's build whose end still has its push to offer: not pushed and not put
+// off, a result the home did not take, or pushed and built again since.
+function unitPushToOffer(projectDir: string, stateContent: string): boolean {
+  const build = unitBuildOf(stateContent);
+  const push = getField(stateContent, UNIT_PUSH_FIELD)?.trim();
+  return build !== null && push !== "later" && (push !== "pushed" || redoneSincePush(projectDir, build.unit));
+}
+
+// Code Generation approved again since the build's last push (the redo after
+// a turn-down): there is new work to push, and the turn-down is answered. A
+// Unit's build is solo work with one Unit, so its approval names no Unit.
+function redoneSincePush(projectDir: string, unit: string): boolean {
+  const rows = sortAttemptEvents(readAuditShardEvents(projectDir));
+  const pushed = rows.findLastIndex((row) => row.event === "UNIT_PUSHED");
+  return pushed >= 0 && rows.slice(pushed + 1).some((row) => row.event === "GATE_APPROVED" &&
+    auditBlockField(row.block, "Stage") === "code-generation" && (auditBlockField(row.block, "Unit") ?? unit) === unit);
+}
+
+function joinRepoNames(repos: string[]): string {
+  const names = repos.map((repo) => (repo === "." ? "the repo" : repo));
+  return names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
+// The selected work's own name, for the lines the person reads.
+function workLabel(projectDir: string): string {
+  const selection = engineSelection(projectDir);
+  const intent = listIntents(projectDir, selection.space).find((entry) => entry.dirName === selection.intent);
+  return intent ? intentDisplayLabel(intent) : selection.intent ?? "this work";
+}
+
+// Solo work being built from another machine, opened in a teammate's clone:
+// take an open Unit as their own, carry the whole work on here (the other
+// person stopped), or follow along. Null for any other work.
+function soloElsewhereAsk(projectDir: string): AskDirective | null {
+  const space = engineSelection(projectDir).space;
+  const location = workspaceHomeLocation(projectDir);
+  if (location === null || location === "local") return null;
+  const own = auditShardName(projectDir);
+  for (const { intent, state } of workToPickUp(projectDir, space, null) ?? []) {
+    if (!intent.dirName) continue;
+    const rows = readAuditShardEvents(projectDir, intent.dirName, space);
+    const at = builtFromAnotherMachine(state, rows, own);
+    if (at === null) continue;
+    // The same person on another of their machines carries on as before.
+    if (lastCommittedByThisPerson(projectDir, at.shard)) continue;
+    const finalStage = unitMajorConstructionStageSlugs(getField(state, "Scope") ?? "", state, true).at(-1) ?? "code-generation";
+    const progress = soloUnitsProgress(rows, finalStage);
+    const dependencies = unitDependencies(projectDir, intent.dirName, space);
+    // A Unit another teammate took is theirs: its claims as the home has them now.
+    if (!isReadOnlyEngineProbe()) refreshListedHome(projectDir, intent.dirName, space, { sessionId: engineSessionId });
+    const taken = intent.uuid ? unitsTaken(projectDir, space, intent.uuid) : new Set<string>();
+    const open = [...dependencies.keys()].filter((unit) =>
+      !progress.started.has(unit) && !progress.done.has(unit) && !taken.has(unit) &&
+      (dependencies.get(unit) ?? []).every((dep) => progress.done.has(dep))
+    );
+    const take = `${aidlcToolInvocation("unit")} take %s --home ${shellArg(intent.dirName)}` +
+      (space === DEFAULT_SPACE ? "" : ` --home-space ${shellArg(space)}`);
+    const label = intentDisplayLabel(intent);
+    return {
+      kind: "ask",
+      ask_type: "unit-take",
+      response_route: "command",
+      question: `${label} is being built from another machine, on ${at.unit} (${stageLabel(nodeForSlug(at.stage), at.stage) ?? at.stage}). ` +
+        "Carry on the whole work here, take an open Unit as your own, or follow along?",
+      choices: [
+        { label: `Carry on ${label} here`, detail: "For when the other person has stopped.", command: selectCommands([intent.dirName])[0].command },
+        ...open.map((unit) => ({
+          label: `Take ${unit}`,
+          detail: "It moves to you as a piece of work of its own here; everything done so far is kept.",
+          command: take.replace("%s", shellArg(unit)),
+        })),
+        { label: "Follow along", detail: "See where it stands, without changing anything.", command: `${aidlcToolInvocation("utility")} status --space ${shellArg(space)} --intent ${shellArg(intent.dirName)}` },
+      ],
+    };
+  }
+  return null;
 }
 
 // Guard the creation gate against a DUPLICATE intent on a fresh clone of a
@@ -9457,7 +10164,11 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     intent: engineSelection(pd).intent ?? undefined, space: engineSelection(pd).space,
   });
   if (settledPolicy?.line) settledNotices.push(settledPolicy.line);
+  // Solo work a teammate took a Unit of from another machine switches to teams
+  // here, at this home's step, before anything routes.
+  const switchedToTeams = switchSoloToTeams(pd, engineSessionId);
   const stateContent = loadStateFileIfPresent(pd);
+  if (switchedToTeams !== null) sayWithStepOnce(pd, switchedToTeams);
   activeRetiredGuardPolicyNotice = stateContent === null ? null : retiredGuardPolicyNotice(pd, stateContent);
   // Runtime state-version guard (see staleStateVersionError): refuse to advance
   // a pre-v8 state up front rather than silently routing until it hits the
@@ -9591,6 +10302,33 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       emit(errorDirective(stale));
       return;
     }
+  }
+  // A file the person pointed at (the exact path the agent hands as
+  // --hand-file, or their words when they are just its path): a hand-off
+  // file's Unit to start as their own piece of work, or a team's result or
+  // progress file to take in.
+  const handFile = handFileStep(pd, flags.handFile ?? flags.intent?.trim() ?? "");
+  if (handFile === "done") flags.intent = undefined;
+  else if (handFile) {
+    emit(handFile);
+    return;
+  } else if (flags.handFile !== undefined) {
+    emit(errorDirective(`${flags.handFile} is not a file AI-DLC wrote for a hand-off, its progress or its result.`));
+    return;
+  }
+  // What the home said about a Unit's build reaches its team once, on any step.
+  for (const line of stateContent ? buildClaimNotes(pd, stateContent, engineSessionId) : []) sayWithStepOnce(pd, line);
+  // A copy the team changed is theirs to send home, offered once per its text.
+  const propose = stateContent !== null && !isReadOnlyEngineProbe() ? unitProposeAsk(pd, stateContent) : null;
+  if (propose) {
+    emit(propose);
+    return;
+  }
+  // A Unit it started early on, merged at the home: moving onto what merged is offered once.
+  const moveOnto = stateContent !== null && !isReadOnlyEngineProbe() ? unitMoveOntoAsk(pd, stateContent) : null;
+  if (moveOnto) {
+    emit(moveOnto);
+    return;
   }
   // Archived is terminal for routing, including scoped Unit checkouts. Keep
   // this before Unit jump/park handling so every next shape returns the same
@@ -10414,6 +11152,13 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       emit(pickFollows ? printDirective(kept) : turnEndingPrint(kept));
       return;
     }
+    // A Unit to take or carry on, for a team member opening a workspace with no
+    // work of their own here.
+    const take = unitTakeAsk(pd) ?? soloElsewhereAsk(pd);
+    if (take) {
+      emit(take);
+      return;
+    }
     // Work in progress here with none selected (a teammate's fresh clone, or a
     // conversation that has not joined the record it found) is put to the
     // person by name, never answered as if there were none.
@@ -10660,9 +11405,12 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     return;
   }
 
+  // Teams building each Unit as work of their own: the home walks the Units no
+  // team holds, and shows the board once none is left to it (the walk below).
   if (
     stateContent &&
-    isTeamUnitOwnership(stateContent)
+    isTeamUnitOwnership(stateContent) &&
+    homeLocation(stateContent) === null
   ) {
     if (unitScope) {
       try {
@@ -10911,7 +11659,25 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     stateContent,
   );
   if (!next) {
+    // A Unit's build ends with its push home, when the person asks for it.
+    const push = unitPushAsk(pd, stateContent);
+    if (push) {
+      emit(push);
+      return;
+    }
+    // A Unit the home turned down is not finished: the team is asked once
+    // whether to take it back to Code Generation, and after that hears where
+    // it stands.
+    const build = stateContent ? unitBuildOf(stateContent) : null;
+    // Once the redo's Code Generation is approved the push answers it, never the redo again.
+    const redone = build !== null && redoneSincePush(pd, build.unit);
+    const down = build !== null && !redone ? reopenTurnedDownBuild(pd, stateContent!) : null;
+    if (build !== null && down !== null) {
+      emit(turnedDownStep(pd, build.unit, down.repo));
+      return;
+    }
     // No stage left to run — the workflow is complete.
+    const notPushed = build !== null && (getField(stateContent ?? "", UNIT_PUSH_FIELD)?.trim() !== "pushed" || redone);
     emit({
       kind: "done",
       reason: `Workflow complete — no in-scope stage remains after ${currentSlug} (scope: ${scope}).${NEW_WORK_HINT}`,
@@ -10919,8 +11685,21 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
       // loop bookkeeping (a report landed, a read-only command already ran) and
       // stay silent: the user did not ask about the round-trip.
       narration: "That is everything on the plan. Your work is finished and written up.",
+      ...(notPushed ? { done_note: `When the person says push, run \`${aidlcToolInvocation("unit")} push\` and say its notice line.` } : {}),
     });
     return;
+  }
+  const reposOffer = reposManifestAsk(pd, stateContent);
+  if (reposOffer) {
+    emit(reposOffer);
+    return;
+  }
+  if (intentRepos(pd).length > 0) {
+    for (const line of localRepoOverrideLines(pd)) sayWithStepOnce(pd, line);
+  }
+  if (currentSlug === "units-generation") {
+    const unknown = unknownLikelyReposLine(pd);
+    if (unknown !== null) sayWithStepOnce(pd, unknown);
   }
   // Same swarm guard on the advance path: an eligible per-unit build stage
   // under autonomy fans out as a batch rather than a single run-stage. Off the
@@ -12744,15 +13523,6 @@ export interface TeamUnitProgressModel {
   mergedUnits: Set<string>;
 }
 
-function teamUnitStageApplies(
-  stage: GraphStage,
-  unitKind: string | null,
-): boolean {
-  const names = stage.produces ?? [];
-  return names.length > 0 &&
-    applicableProduceNames(stage, unitKind, false).length > 0;
-}
-
 function unitProgressOwners(stateContent: string): Map<string, string> {
   const heading = /^## Unit Progress\r?$/m.exec(stateContent);
   if (!heading) return new Map();
@@ -12872,6 +13642,13 @@ function teamUnitProgressModel(
   const stageCells = new Map<string, CheckboxState[]>(
     block.map((stage) => [stage.slug, []]),
   );
+  // A Unit a team built as work of its own is done here once it merged: its
+  // stages ran, and were approved, in the team's build.
+  const builtElsewhere = new Set(
+    auditRows.filter((row) => row.event === "UNIT_MERGED" && auditBlockField(row.block, "Built By") !== null)
+      .map((row) => auditBlockField(row.block, "Unit") ?? "")
+      .filter((unit) => mergedUnits.has(unit)),
+  );
 
   for (const unit of units) {
     const unitKind = kinds?.get(unit) ?? null;
@@ -12903,7 +13680,7 @@ function teamUnitProgressModel(
         auditRows,
       );
       let state: CheckboxState;
-      if (!applies) state = "completed";
+      if (!applies || builtElsewhere.has(unit)) state = "completed";
       else if (rhythm === "per-stage" && gate === "approved") state = "completed";
       else if (rhythm === "per-stage" && gate === "revising") state = "revising";
       else if (settled && rhythm === "per-stage") state = "awaiting-approval";
@@ -12921,7 +13698,8 @@ function teamUnitProgressModel(
     }
 
     let gateState: CheckboxState = "pending";
-    if (rhythm === "per-stage") {
+    if (builtElsewhere.has(unit)) gateState = "completed";
+    else if (rhythm === "per-stage") {
       if (allStageGatesApproved) gateState = "completed";
       else if (anyRevising) gateState = "revising";
       else if (anyAwaiting) gateState = "awaiting-approval";
@@ -13043,6 +13821,9 @@ export function deriveTeamUnitProgressModel(
     },
   );
   const mergedReceipts = unitMergedReceipts(projectDir, orderedAuditRows);
+  // Units built here one at a time before teams joined are done here.
+  const builtBefore = unitsBuiltBeforeTeams(orderedAuditRows, block[block.length - 1].slug);
+  if (builtBefore.size > 0) mergedUnitOverrides = new Set([...(mergedUnitOverrides ?? []), ...builtBefore]);
   const transactions = unitMergeTransactions(projectDir);
   const mergeTracking =
     transactions.length > 0 ||
@@ -13134,6 +13915,129 @@ function refreshTeamUnitProgress(
   return readStateFile(projectDir);
 }
 
+// The teams' Units as a team home has them now: the claims (fetched once per
+// chat, at each step that shows or acts on them), and each pushed result
+// checked against its repos. A merge the home saw, a verdict it could not send
+// and a home it could not reach are each said once. A query (`query`, for
+// `team-board`) fetches now and writes nothing.
+function teamHomeClaims(
+  projectDir: string,
+  teamHome: boolean,
+  query = false,
+): { overview: UnitClaimOverview | null; results: ReturnType<typeof checkTeamResults>; heldElsewhere: Set<string> } {
+  const readOverview = () => teamHome && hasAnyUnitClaimRefs(projectDir)
+    ? cachedUnitClaimOverview(projectDir, { writeCache: !query && !isReadOnlyEngineProbe() })
+    : null;
+  let overview = readOverview();
+  const unreached: string[] = [];
+  if (teamHome && !isReadOnlyEngineProbe()) {
+    // No Unit left to take is the board, except while the home builds the
+    // walking skeleton, which every other Unit waits on.
+    const board = overview !== null && overview.claimable.length === 0 &&
+      !overview.waiting.some((row) => row.blockedBy.includes("walking-skeleton"));
+    const now = query || (overview !== null && (board || [...overview.claims.values()].some((claim) =>
+      claim.status === "claimed" && !claim.payload.done &&
+      (claim.payload.result !== undefined || (claim.payload.proposals ?? []).some((entry) => entry.answer === undefined))
+    )));
+    const refreshed = refreshHomeClaims(projectDir, { sessionId: engineSessionId, now });
+    if (refreshed.unreached !== null) unreached.push(refreshed.unreached);
+    if (refreshed.fetched) overview = readOverview();
+  }
+  const heldElsewhere = new Set(overview?.claimed.map((row) => row.unit) ?? []);
+  // What came back from the teams, checked against each repo once per step
+  // (with the home unreached, the board is the last fetch's).
+  let results: ReturnType<typeof checkTeamResults> = new Map();
+  const unsent: string[] = [];
+  const told: ToldMerge[] = [];
+  if (heldElsewhere.size > 0 && !isReadOnlyEngineProbe() && unreached.length === 0) {
+    try {
+      results = checkTeamResults(projectDir, unreached, unsent, told, query);
+    } catch (e) {
+      sayWithStepOnce(projectDir, `The teams' results could not be checked just now: ${errorMessage(e)}`);
+    }
+  }
+  // A merge the home saw is the one thing it writes for the teams: said once, in plain words.
+  for (const merge of told) {
+    sayWithStepOnce(projectDir, merge.done
+      ? `I've told the teams ${merge.unit} is merged.`
+      : `I've told the teams ${joinRepoNames(merge.repos)} merged ${merge.unit}.`);
+  }
+  if (unsent.length > 0) {
+    sayWithStepOnce(projectDir, `What the board shows here could not be sent to ${unsent[0]} just now; the teams may not see it yet, and the next step sends it again.`);
+  }
+  if (unreached.length > 0) {
+    sayWithStepOnce(projectDir, `${[...new Set(unreached)].join(", ")} could not be reached just now, so the board may be behind: it shows what your last fetch brought.`);
+  }
+  return { overview, results, heldElsewhere };
+}
+
+// The Units merged at a team home, read from the audit too when no progress
+// model was derived (a read-only probe, the route check of `unit start`).
+function homeMergedUnits(projectDir: string, model: TeamUnitProgressModel | null, auditRows: readonly AuditShardEvent[], finalStage: string): Set<string> {
+  return model?.mergedUnits ?? new Set([...unitMergedReceipts(projectDir, auditRows), ...unitsBuiltBeforeTeams(auditRows, finalStage)]);
+}
+
+// Where each Unit of a team home stands: the board's rows, the one builder for
+// the home's step and for `team-board`.
+function unitBoardRows(
+  projectDir: string,
+  stateContent: string,
+  planUnits: string[],
+  overview: UnitClaimOverview | null,
+  results: ReturnType<typeof checkTeamResults>,
+  mergedHere: ReadonlySet<string>,
+): { rows: UnitBoardRow[]; heldNotTaken: Array<{ unit: string; team: string }> } {
+  const heldNotTaken: Array<{ unit: string; team: string }> = [];
+  const dependencies = unitDependencies(projectDir);
+  const rows = unitsInPlanOrder(projectDir, planUnits).map((unit): UnitBoardRow => {
+    const claim = overview?.claims.get(unit);
+    const team = claim?.status === "claimed" ? claim.owner : null;
+    if (mergedHere.has(unit)) return { unit, team: team ?? "here", status: "done" };
+    if (team === null) {
+      const waits = (dependencies.get(unit) ?? []).filter((dep) => !mergedHere.has(dep));
+      return { unit, team: "here", status: waits.length > 0 ? `waits on ${waits.join(", ")}` : "built here" };
+    }
+    const payload = claim!.payload;
+    if (payload.turned_down) return { unit, team, status: `turned down in ${payload.turned_down.repo}, back with ${team}` };
+    if (payload.result) {
+      const verdicts = results.get(unit)?.verdicts ?? payload.verdicts ??
+        payload.result.repos.map((repo) => ({ repo: repo.repo, merged: false }));
+      const waiting = leadSignOffOn(stateContent) && !payload.signoff ? ", waiting for your sign-off" : "";
+      return { unit, team, status: `${mergedStatus(verdicts)}${waiting}` };
+    }
+    if (payload.by_file) {
+      const at = payload.progress?.stage ? stageLabel(findStageBySlug(payload.progress.stage), payload.progress.stage) : null;
+      return { unit, team, status: at ? `handed off by file, at ${at}` : "handed off by file" };
+    }
+    if (payload.taken_by) {
+      const early = (payload.early_on ?? []).map((dep) => dep.unit);
+      return { unit, team, status: `building${early.length > 0 ? ` early on ${early.join(", ")}` : ""}, taken by ${payload.taken_by}` };
+    }
+    heldNotTaken.push({ unit, team });
+    return { unit, team, status: `held for ${team}, not taken yet` };
+  });
+  return { rows, heldNotTaken };
+}
+
+// `team-board` at a team home: the home's own board, from the same builders as
+// its step, with the lines a look says once; a query, so nothing is written.
+function teamHomeBoardText(projectDir: string, stateContent: string): string {
+  const dag = resolveBoltBatches(projectDir, routingEvidenceFor(projectDir, stateContent));
+  if (dag.state !== "ok") throw new Error("The work's Units could not be read for its board.");
+  const { overview, results } = teamHomeClaims(projectDir, true, true);
+  const auditRows = sortAttemptEvents(readAuditShardEvents(projectDir));
+  const finalStage = unitMajorConstructionStageSlugs(getField(stateContent, "Scope") ?? "", stateContent, true).at(-1) ?? "";
+  let model: TeamUnitProgressModel | null = null;
+  try {
+    model = deriveTeamUnitProgressModel(projectDir, stateContent, auditRows);
+  } catch {
+    // The audit alone says what merged.
+  }
+  const { rows } = unitBoardRows(projectDir, stateContent, dag.batches.flat(), overview, results,
+    homeMergedUnits(projectDir, model, auditRows, finalStage));
+  return [renderUnitBoard(workLabel(projectDir), rows), ...settledNotices].join("\n");
+}
+
 function emitTeamUnitMajorRunStage(
   projectType: "brownfield" | "greenfield" | null,
   scope: string,
@@ -13153,7 +14057,13 @@ function emitTeamUnitMajorRunStage(
       return;
     }
   }
-  const units = scopeStamp ? [scopeStamp.unit] : resolution.batches.flat();
+  // Teams build their Units as work of their own: the home walks only the
+  // Units no team holds, as the home has them now. The claims are fetched once
+  // per chat, and at each step that shows or acts on them: the board (nothing
+  // left for the home to build now), a result to check, a change to answer.
+  const teamHome = !scopeStamp && homeLocation(stateContent) !== null;
+  const { overview, results, heldElsewhere } = teamHomeClaims(projectDir, teamHome);
+  const units = scopeStamp ? [scopeStamp.unit] : resolution.batches.flat().filter((unit) => !heldElsewhere.has(unit));
   const kinds = resolution.unitKinds;
   const rhythm = effectiveUnitGateRhythm(projectDir, stateContent);
   const auditRows = readAuditShardEvents(projectDir).sort((a, b) => {
@@ -13215,8 +14125,22 @@ function emitTeamUnitMajorRunStage(
   }
 
   const finalStage = block[block.length - 1];
+  // The Units merged here, read from the audit too when this run derives no
+  // progress model (a read-only probe, the route check of `unit start`).
+  const mergedHere = homeMergedUnits(projectDir, model, auditRows, finalStage?.slug ?? "");
+  // A Unit of the home's that waits, directly or through another, on a Unit a
+  // team still builds is not started here yet.
+  const dependencies = heldElsewhere.size > 0 ? unitDependencies(projectDir) : new Map<string, string[]>();
+  const waitsOnTeam = (unit: string, seen = new Set<string>()): boolean =>
+    (dependencies.get(unit) ?? []).some((dep) => {
+      if (heldElsewhere.has(dep) && !mergedHere.has(dep)) return true;
+      if (seen.has(dep)) return false;
+      seen.add(dep);
+      return waitsOnTeam(dep, seen);
+    });
   for (const unit of units) {
-    if (model?.mergedUnits.has(unit)) continue;
+    if (mergedHere.has(unit)) continue;
+    if (waitsOnTeam(unit)) continue;
     const unitKind = kinds?.get(unit) ?? null;
     for (const stage of block) {
       if (!teamUnitStageApplies(stage, unitKind)) continue;
@@ -13352,6 +14276,108 @@ function emitTeamUnitMajorRunStage(
 
   if (!finalStage) {
     emit(errorDirective("Team unit-major mode has no active per-unit Construction stages."));
+    return;
+  }
+  // Every Unit left to the home is built: while a team still builds one, the
+  // board is the step.
+  // A team proposed a change to a shared input: the owner of the plan is asked
+  // once; after they spoke without answering, the step says it waits.
+  const proposal = [...(overview?.claims.values() ?? [])].flatMap((claim) =>
+    claim.status === "claimed" ? (claim.payload.proposals ?? []).filter((entry) => entry.answer === undefined).map((entry) => ({ claim, entry })) : []
+  )[0];
+  if (proposal && !isReadOnlyEngineProbe()) {
+    const askName = amendAskName(proposal.claim.unit, proposal.entry.input);
+    const mark = engineAskMark(projectDir, askName);
+    const name = inputName(proposal.entry.input);
+    if (mark === null || !personRepliedAfter(projectDir, mark)) {
+      noteEngineAskMark(projectDir, askName);
+      const at = writeProposedText(projectDir, proposal.claim, proposal.entry.input);
+      emit({
+        kind: "ask",
+        ask_type: "unit-amend",
+        response_route: "command",
+        question: `${proposal.claim.owner} proposes a change to the ${name} for ${proposal.claim.unit}` +
+          `${proposal.entry.words ? ` ("${proposal.entry.words}")` : ""}.${at !== null ? ` Their version is at ${at}.` : ""} ` +
+          "Approve it for every Unit that uses it, or turn it down?",
+        choices: [
+          { label: "Approve it", detail: "The home's copy changes; each team building with it hears it once and carries on." },
+          { label: "Not now", detail: "It waits for your answer." },
+          { label: "Turn it down", detail: `${proposal.claim.owner} carries on with the approved one, and hears your words.` },
+        ],
+        amend_command: `${aidlcToolInvocation("unit")} amend ${shellArg(proposal.claim.unit)} --input ${shellArg(proposal.entry.input)} ` +
+          "--answer <approve|reject> --person-words '<their words>'",
+      });
+      return;
+    }
+    sayWithStepOnce(projectDir, `The change ${proposal.claim.owner} proposed to the ${name} waits for your answer: approve it or turn it down when you are ready.`);
+  }
+  // The lead's sign-off, when it is on: asked once as a team's result arrives.
+  const toSignOff = leadSignOffOn(stateContent)
+    ? [...(overview?.claims.values() ?? [])].find((claim) => claim.status === "claimed" && claim.payload.result && !claim.payload.signoff)
+    : undefined;
+  if (toSignOff && !isReadOnlyEngineProbe()) {
+    const askName = signOffAskName(toSignOff.unit);
+    const mark = engineAskMark(projectDir, askName);
+    if (mark === null || !personRepliedAfter(projectDir, mark)) {
+      noteEngineAskMark(projectDir, askName);
+      const verdicts = results.get(toSignOff.unit)?.verdicts ?? toSignOff.payload.verdicts ??
+        toSignOff.payload.result!.repos.map((repo) => ({ repo: repo.repo, merged: false }));
+      emit({
+        kind: "ask",
+        ask_type: "unit-signoff",
+        response_route: "command",
+        question: `${toSignOff.unit} came back from ${toSignOff.owner}: ${mergedStatus(verdicts)}. Sign it off?`,
+        choices: [
+          { label: "Sign it off", detail: "It counts as done once every repo it changed has merged." },
+          { label: "Not now", detail: "It waits for your sign-off." },
+        ],
+        signoff_command: `${aidlcToolInvocation("unit")} sign-off ${shellArg(toSignOff.unit)} --person-words '<their words>'`,
+      });
+      return;
+    }
+  }
+  if ([...heldElsewhere].some((unit) => !mergedHere.has(unit))) {
+    const { rows, heldNotTaken } = unitBoardRows(projectDir, stateContent, resolution.batches.flat(), overview, results, mergedHere);
+    // A team the home holds a Unit for may not reach this workspace: the lead
+    // is offered once to hand the Unit to them as a file.
+    const unitTool = aidlcToolInvocation("unit");
+    const offers = heldNotTaken.map(({ unit, team }) => ({
+      question: `If ${team} cannot reach this workspace, I can hand ${unit} to them as a file they build it from. Do you want me to?`,
+      choices: [
+        { label: `Hand ${unit} to ${team} as a file`, command: `${unitTool} hand-off ${unit} --team ${shellArg(team)} --person-words '<their words>'` },
+        { label: `Keep ${unit} for ${team} here`, recommended: true as const },
+      ],
+    }));
+    // A sign-off or a proposal the lead was asked about once stays theirs to answer, from the board.
+    const answers = [...(overview?.claims.values() ?? [])].filter((claim) => claim.status === "claimed").flatMap((claim) => [
+      ...(claim.payload.proposals ?? []).filter((entry) => entry.answer === undefined).map((entry) => {
+        const amend = `${unitTool} amend ${shellArg(claim.unit)} --input ${shellArg(entry.input)} --answer`;
+        return {
+          question: `${claim.owner} proposes a change to the ${inputName(entry.input)} for ${claim.unit}. Approve it for every Unit that uses it, or turn it down?`,
+          choices: [
+            { label: "Approve it", command: `${amend} approve --person-words '<their words>'` },
+            { label: "Turn it down", command: `${amend} reject --person-words '<their words>'` },
+            { label: "Not now" },
+          ],
+        };
+      }),
+      ...(leadSignOffOn(stateContent) && claim.payload.result && !claim.payload.signoff
+        ? [{
+          question: `${claim.unit} came back from ${claim.owner}. Sign it off?`,
+          choices: [
+            { label: "Sign it off", command: `${unitTool} sign-off ${shellArg(claim.unit)} --person-words '<their words>'` },
+            { label: "Not now" },
+          ],
+        }]
+        : []),
+    ]);
+    // Each offer is put once in a chat; its command stays in the board's note.
+    const allOffers = offersOnce(projectDir, [...answers, ...offers]);
+    emit(lineEndingTurn(
+      renderUnitBoard(workLabel(projectDir), rows),
+      allOffers,
+      `Show the board as it is. ${teamCommandsNote()}`,
+    ));
     return;
   }
   if (scopeStamp) {
@@ -16827,9 +17853,10 @@ function stageOfPlan(slug: string, scope: string, stateContent: string | null): 
   return at < 0 ? "" : ` (stage ${at + 1} of ${planned.length})`;
 }
 
+// A Unit's build that finished its stages still has its push to offer.
 function workflowContinues(pd: string): { workflow_continues?: true } {
   const after = loadStateFileIfPresent(pd);
-  return after !== null && getField(after, "Status")?.trim() !== "Completed"
+  return after !== null && (getField(after, "Status")?.trim() !== "Completed" || unitPushToOffer(pd, after))
     ? { workflow_continues: true }
     : {};
 }
@@ -18042,6 +19069,11 @@ function handleTeamBoard(
     if (!isTeamUnitOwnership(stateContent)) {
       throw new Error("Team Construction board requires Unit Ownership: team.");
     }
+    if (homeLocation(stateContent) !== null && selectedSpace === defaultSelection.space && intentDir === defaultSelection.intent) {
+      process.stdout.write(`${teamHomeBoardText(pd, stateContent)}\n`);
+      return;
+    }
+    if (homeLocation(stateContent) !== null) refreshListedHome(pd, intentDir, selectedSpace, { now: true });
     board =
       selectedSpace === defaultSelection.space &&
           intent.dirName === defaultSelection.intent
@@ -18058,6 +19090,11 @@ function handleTeamBoard(
     stateContent = readStateFile(pd);
     if (!isTeamUnitOwnership(stateContent)) {
       throw new Error("Team Construction board requires Unit Ownership: team.");
+    }
+    // A home teams build for: its own board, as its step shows it.
+    if (homeLocation(stateContent) !== null) {
+      process.stdout.write(`${teamHomeBoardText(pd, stateContent)}\n`);
+      return;
     }
     board = buildTeamConstructionBoard(pd, stateContent, {
       readOnly: true,

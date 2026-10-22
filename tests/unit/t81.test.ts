@@ -201,7 +201,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     expect(auditField(f, "PRACTICES_OVERRIDE", "Bolt slug")).toBe("t81-bolt-1");
   });
 
-  test("3: framework event count pinned at 123", () => {
+  test("3: framework event count pinned at 127", () => {
     // Pin the count against the SOURCE OF TRUTH - VALID_EVENT_TYPES in
     // aidlc-audit.ts (the real count, not a sibling test's transcription of it).
     // REVIEW_VERDICT_DICTATED is kept registered so earlier audits read.
@@ -212,7 +212,7 @@ describe("t81 aidlc-state practices-event — bolt-plan-marker-conflict override
     const block = auditSrc.match(/const VALID_EVENT_TYPES = new Set\(\[([\s\S]*?)\]\)/);
     expect(block).not.toBeNull();
     const count = (block ? block[1].match(/"[A-Z0-9_]+"/g) : null)?.length ?? -1;
-    expect(count).toBe(123);
+    expect(count).toBe(127);
   });
 
   test("4: PRACTICES_OVERRIDE coexists across both Reason discriminators", () => {

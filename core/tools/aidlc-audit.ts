@@ -69,6 +69,7 @@ const VALID_EVENT_TYPES = new Set([
   // A finished stage AI-DLC itself now does differently: the row carries its
   // receipt for the new definition (aidlc-validity.ts).
   "STAGE_DEFINITION_CHANGED",
+  "SHARED_INPUT_AMENDED",
   // A code-producing stage's source-work check found no new code where it
   // looked, and what it did: the agent's first report refused, the approval
   // question put to the person, or Guard Policy off standing aside.
@@ -247,6 +248,9 @@ const VALID_EVENT_TYPES = new Set([
   "BOLT_FAILED",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
+  "UNITS_ASSIGNED",
+  "UNIT_TAKEN_IN",
+  "UNIT_PUSHED",
   "UNIT_GATE_RHYTHM_SET",
   "CONSTRUCTION_POLICY_SET",
   "UNIT_MERGED",
@@ -306,6 +310,7 @@ const EVENT_HEADINGS: Record<string, string> = {
   STAGE_REVISING: "Stage Revising",
   STAGE_COMPLETED: "Stage Completion",
   STAGE_DEFINITION_CHANGED: "Stage Definition Changed",
+  SHARED_INPUT_AMENDED: "Shared Input Amended",
   SOURCE_WORK_NOT_FOUND: "Source Work Not Found",
   STAGE_JUMPED: "Stage Jump",
   STAGE_SKIPPED: "Stage Skip",
@@ -391,6 +396,9 @@ const EVENT_HEADINGS: Record<string, string> = {
   BOLT_FAILED: "Bolt Failed",
   AUTONOMY_MODE_SET: "Autonomy Mode Set",
   UNIT_OWNERSHIP_SET: "Unit Ownership Set",
+  UNITS_ASSIGNED: "Units Assigned",
+  UNIT_TAKEN_IN: "Unit Taken In",
+  UNIT_PUSHED: "Unit Pushed",
   UNIT_GATE_RHYTHM_SET: "Unit Gate Rhythm Set",
   CONSTRUCTION_POLICY_SET: "Construction Policy Set",
   UNIT_MERGED: "Unit Merged",
@@ -516,6 +524,7 @@ export interface AuditEntryInput {
 export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "STAGE_COMPLETED",
   "STAGE_DEFINITION_CHANGED",
+  "SHARED_INPUT_AMENDED",
   // The check's own record of a first refusal opens the gate on the next
   // report; a forged one would skip the agent's refusal.
   "SOURCE_WORK_NOT_FOUND",
@@ -539,6 +548,9 @@ export const CLI_PROTECTED_EVENT_TYPES = new Set([
   "SWARM_SOURCE_MERGED",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
+  "UNITS_ASSIGNED",
+  "UNIT_TAKEN_IN",
+  "UNIT_PUSHED",
   "UNIT_GATE_RHYTHM_SET",
   // The applied Construction policy decides which stage starts are attempt
   // boundaries for Unit receipts, so only its typed setters may record it.
@@ -635,6 +647,8 @@ const MERGE_PROTECTED_EVENT_TYPES = new Set([
   "SOURCE_WORK_NOT_FOUND",
   "AUTONOMY_MODE_SET",
   "UNIT_OWNERSHIP_SET",
+  "UNITS_ASSIGNED",
+  "UNIT_TAKEN_IN",
   "UNIT_GATE_RHYTHM_SET",
   "CONSTRUCTION_POLICY_SET",
   // Routing-trusted unit lifecycle receipts.

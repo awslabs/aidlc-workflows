@@ -273,7 +273,7 @@ Verifies the orchestrator's structural correctness without invoking the LLM. If 
 - Scope-stage mapping, graph consistency, stage I/O contract chains, protocol compliance (integration)
 - Stage output-to-step validation: all declared outputs referenced in instruction steps (integration, deterministic via the `aidlc-validate.ts` CLI tool)
 - Scope runs: every shipped scope driven from the person's first request to done (integration, `tests/integration/t-scope-run-*`; see below)
-- Scope-host runs: one classic journey on every harness tree (Claude, Codex, Copilot CLI, Kiro CLI, Kiro IDE, Cursor, opencode), through each tree's own hooks (integration, `tests/integration/t-scope-host-*`; see below)
+- Scope-host runs: one classic journey on every harness tree (Claude, Codex, Copilot CLI, Kiro CLI, Kiro IDE, Cursor, opencode), through each tree's own hooks, and the teams journey with a team on every tree (integration, `tests/integration/t-scope-host-*`; see below)
 - Guard matrix: what the person meets when files change under approved work, per Guard Policy, review cap and plan approval (integration, `tests/integration/t-guard-matrix-*`; see below)
 
 **Run:** `bun tests/run-tests.ts --no-llm`. The default profile includes the
@@ -350,7 +350,22 @@ clone holds, the first clone's audit shard sorting last), and carries on in a
 second chat with `/aidlc --resume`. The journey checks what the scope runs
 check, plus two audit shards, two chats, each Unit's checkpoint asked once, and
 no detour the person should not meet (such as being told to resume work they
-just picked up). CI runs them as their
+just picked up).
+
+`t-scope-host-team-journey.test.ts` is one piece of work built by teams, with a
+team on every tree: the home is the lead's clone on Claude Code, and each team
+works in its own clone with its own tree laid in, through that tree's hooks. Each
+team is offered its Unit at `/aidlc`, takes it, builds it with the stand-in
+(Functional Design and Code Generation, each gate and the code plan approved by
+the person), and pushes it; its repos merge by squash, merge commit or rebase
+(`mergeOnHost`, `tests/harness/team-build.ts`), and one team keeps its repos
+outside the workspace in its own `repos.local.json`. The home sees every merge
+with no fetch by the lead, records each Unit done, opens the Unit that waited
+and runs Build and Test. `tests/integration/t-unit-teams-scenarios.test.ts` runs
+the RFC's six scenarios at the engine level, each team on another tree (the
+repos side by side, the monorepo beside and inside the workspace, a team's own
+workspace repo, the hand-off file round trip, solo then a second person, and
+what goes wrong), in the ordinary integration tier. CI runs the scope-host files as their
 own integration job (`scope-hosts`): Linux on pull requests and in the merge
 queue, and Linux, macOS and Windows in the nightly Full Suite (its `scope_runs`
 job) and in a `full_verification` Full Suite.

@@ -689,6 +689,86 @@ export interface ConstructionStaffingAskDirective extends AskDirectiveBase {
   choices: AskChoice[];
 }
 
+// The one offer to write repos.json from the repos found here. Each choice is
+// one complete command.
+export interface ReposManifestAskDirective extends AskDirectiveBase {
+  ask_type: "repos-manifest";
+  response_route: "command";
+  choices: AskChoice[];
+}
+
+// Who builds which Unit, answered in the person's own words: the agent fills
+// assign_command with one <unit>=<team> per Unit they named.
+export interface UnitAssignmentAskDirective extends AskDirectiveBase {
+  ask_type: "unit-assignment";
+  response_route: "command";
+  choices: AskChoice[];
+  assign_command: string;
+}
+
+// A Unit a team can take, or carry on, as a piece of work of its own here. Each
+// choice is one complete command.
+export interface UnitTakeAskDirective extends AskDirectiveBase {
+  ask_type: "unit-take";
+  response_route: "command";
+  choices: AskChoice[];
+}
+
+// A team's proposed change to a shared input, at the home: the person's own
+// words answer it; the agent fills amend_command with the answer and them.
+export interface UnitAmendAskDirective extends AskDirectiveBase {
+  ask_type: "unit-amend";
+  response_route: "command";
+  choices: AskChoice[];
+  amend_command: string;
+}
+
+// The lead's sign-off of a team's result, in their own words.
+export interface UnitSignoffAskDirective extends AskDirectiveBase {
+  ask_type: "unit-signoff";
+  response_route: "command";
+  choices: AskChoice[];
+  signoff_command: string;
+}
+
+// A hand-off file the person pointed at: start its Unit, or not now.
+export interface UnitHandoffAskDirective extends AskDirectiveBase {
+  ask_type: "unit-handoff";
+  response_route: "command";
+  choices: AskChoice[];
+}
+
+// A team's Unit the home turned down, at the end of its build: back to Code
+// Generation, or not now.
+export interface UnitTurnedDownAskDirective extends AskDirectiveBase {
+  ask_type: "unit-turned-down";
+  response_route: "command";
+  choices: AskChoice[];
+}
+
+// A copy a team changed, offered once per its text: send it home for the
+// shared plan's owner to approve, or keep it here only.
+export interface UnitProposeAskDirective extends AskDirectiveBase {
+  ask_type: "unit-propose";
+  response_route: "command";
+  choices: AskChoice[];
+}
+
+// A Unit this build started early on, merged at the home: move the build onto
+// the integration branch, or not now.
+export interface UnitMoveOntoAskDirective extends AskDirectiveBase {
+  ask_type: "unit-move-onto";
+  response_route: "command";
+  choices: AskChoice[];
+}
+
+// The end of a Unit's build: push it home, or not now.
+export interface UnitPushAskDirective extends AskDirectiveBase {
+  ask_type: "unit-push";
+  response_route: "command";
+  choices: AskChoice[];
+}
+
 export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   ask_type: "new-work-routing";
   response_route: "next";
@@ -794,6 +874,16 @@ export type AskDirective =
   | UnitPausedAskDirective
   | ProjectTypeAskDirective
   | ConstructionStaffingAskDirective
+  | ReposManifestAskDirective
+  | UnitAssignmentAskDirective
+  | UnitTakeAskDirective
+  | UnitPushAskDirective
+  | UnitHandoffAskDirective
+  | UnitTurnedDownAskDirective
+  | UnitProposeAskDirective
+  | UnitMoveOntoAskDirective
+  | UnitAmendAskDirective
+  | UnitSignoffAskDirective
   | NewWorkRoutingAskDirective
   | UnitClaimAskDirective
   | LegacyPlanApprovalRecoveryAskDirective
@@ -813,6 +903,12 @@ export interface PrintDirective {
   // a plan change made during the stage is in it. null = the final in-scope
   // stage. Same meaning as run-stage's next_stage.
   next_stage?: string | null;
+  // On a step that says where things stand and ends the turn, for the agent:
+  // the commands for what the person may say back to the board, and each offer
+  // the step makes the person, in their words as a question, with the choices
+  // and what each runs.
+  board_note?: string;
+  offers?: Array<{ question: string; choices: Array<{ label: string; command?: string; recommended?: true }> }>;
 }
 
 // error — stop with an error (unknown scope, mutually-exclusive flags, init
@@ -834,6 +930,8 @@ export interface DoneDirective {
   narration?: NarrationField;
   reason: string;
   workflow_continues?: true;
+  // For the agent: a Unit's build not pushed yet, and the command for the person's "push".
+  done_note?: string;
 }
 
 // parked - the workflow was intentionally parked mid-flow (a human resumes it
@@ -1050,6 +1148,9 @@ const ASK_FIELDS = [
   "ask_type",
   "response_route",
   "confirm_command",
+  "assign_command",
+  "amend_command",
+  "signoff_command",
   "compose_command",
   "scope_commands",
   "select_commands",
@@ -1077,9 +1178,9 @@ const ASK_FIELDS = [
   "new_project_command",
   "choices",
 ] as const;
-const PRINT_FIELDS = ["kind", "message", "next_stage", "document_note"] as const;
+const PRINT_FIELDS = ["kind", "message", "next_stage", "document_note", "offers"] as const;
 const ERROR_FIELDS = ["kind", "message"] as const;
-const DONE_FIELDS = ["kind", "reason", "workflow_continues"] as const;
+const DONE_FIELDS = ["kind", "reason", "workflow_continues", "done_note"] as const;
 const PARKED_FIELDS = ["kind", "reason", "stage"] as const;
 const NOTICE_FIELDS = ["kind", "message"] as const;
 
@@ -1093,13 +1194,15 @@ const STAGE_VALIDITY_FIELD = "stage_validity" as const;
 const CHANGE_NOTICES_FIELD = "change_notices" as const;
 const STAGE_VALIDITY_NOTE_FIELD = "stage_validity_note" as const;
 const CHANGE_NOTICES_NOTE_FIELD = "change_notices_note" as const;
+// At a team home, every step's commands for the lead's words about the teams' Units.
+const BOARD_NOTE_FIELD = "board_note" as const;
 
 // Every kind's set gains `narration`, so the per-kind literals above stay the
 // record of what is kind-SPECIFIC and this one helper adds what is universal.
 function withNarration(fields: readonly string[]): readonly string[] {
   return [
     ...fields, NARRATION_FIELD, STAGE_VALIDITY_FIELD, CHANGE_NOTICES_FIELD,
-    STAGE_VALIDITY_NOTE_FIELD, CHANGE_NOTICES_NOTE_FIELD,
+    STAGE_VALIDITY_NOTE_FIELD, CHANGE_NOTICES_NOTE_FIELD, BOARD_NOTE_FIELD,
   ];
 }
 
@@ -1159,6 +1262,19 @@ export function questionNote(invocation: string, oneChoice = false): string {
     "When their reply picks one of the choices (its number, its words, or their own words for it), run that " +
     "choice's command; act on the step it returns, or run `" + invocation + " next` when it returns none. " +
     "Anything else is their own words: read what they meant.";
+}
+
+// A proposed change to a shared input: the person's own words answer it.
+export function unitAmendQuestionNote(invocation: string): string {
+  return questionNote(invocation) + " Their words answer it: when they approve or turn it down, run amend_command " +
+    "with --answer approve or --answer reject and their words, single-quoted, as --person-words; anything else leaves it waiting.";
+}
+
+// Who builds which Unit: the person's own words name a team per Unit.
+export function unitAssignmentQuestionNote(invocation: string): string {
+  return questionNote(invocation) + " Their words name who builds which Unit: run assign_command with one " +
+    "<unit>=<team> for each Unit they gave a team (the team as they named it) and their words, single-quoted, as " +
+    "--person-words; a Unit they left out or called open stays open.";
 }
 
 // The routing question asked while no piece of work is selected: continue and
@@ -1412,6 +1528,9 @@ export function ceremonyNote(state: "on" | "off"): string {
 // numbers the options and ends with Other and a reply hint. The engine owns
 // the numbers: a reply of "2" is read against this order, and the agent
 // renders nothing of its own. One builder, so every question has one shape.
+// Engine questions answered by running the picked choice's command.
+const COMMAND_CHOICE_ASKS = new Set(["construction-staffing", "repos-manifest", "unit-assignment", "unit-take", "unit-push", "unit-handoff", "unit-turned-down", "unit-propose", "unit-move-onto", "unit-amend", "unit-signoff"]);
+
 export interface AskChoice {
   label: string;
   /** One line after the label, as the person sees it. */
@@ -1562,6 +1681,12 @@ export function withAgentNotes<T extends object>(
       ? planOfferQuestionNote(invocation)
       : d.ask_type === "new-work-routing" && Array.isArray(d.available_intents)
       ? routingRecordsQuestionNote(invocation)
+      : d.ask_type === "unit-assignment"
+      ? unitAssignmentQuestionNote(invocation)
+      : d.ask_type === "unit-amend"
+      ? unitAmendQuestionNote(invocation)
+      : d.ask_type === "unit-signoff"
+      ? questionNote(invocation, choices?.length === 1) + " Their words sign it off: when they do, run signoff_command with their words, single-quoted, as --person-words; anything else leaves it waiting."
       : questionNote(invocation, choices?.length === 1);
     if (typeof d.numbered_prose_question !== "string") {
       // A question with no options (a guard that has no way on) is said as it is.
@@ -1789,7 +1914,7 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalString(o, "proposed_scope", kind, errors);
       checkOptionalStringArray(o, "available_intents", kind, errors);
       checkOptionalString(o, "numbered_prose_question", kind, errors);
-      checkChoices(o, kind, errors, o.ask_type === "scope-confirm" || o.ask_type === "construction-staffing");
+      checkChoices(o, kind, errors, o.ask_type === "scope-confirm" || COMMAND_CHOICE_ASKS.has(String(o.ask_type)));
       checkOptionalString(o, "recovery_choice", kind, errors);
       checkOptionalString(o, "existing_code_command", kind, errors);
       checkOptionalString(o, "new_project_command", kind, errors);
@@ -1806,11 +1931,11 @@ export function validateDirective(obj: unknown): ValidationResult {
           "guard-recovery",
           "plan-approval",
           "project-type",
-          "construction-staffing",
+          ...COMMAND_CHOICE_ASKS,
         ].includes(o.ask_type)
       ) {
         errors.push(
-          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type | construction-staffing, got ${String(o.ask_type)}`,
+          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type | ${[...COMMAND_CHOICE_ASKS].join(" | ")}, got ${String(o.ask_type)}`,
         );
       }
       if ("plan_approval" in o && o.ask_type !== "plan-approval") {
@@ -1841,6 +1966,9 @@ export function validateDirective(obj: unknown): ValidationResult {
         "detail",
         "existing_code_command",
         "new_project_command",
+        "assign_command",
+        "amend_command",
+        "signoff_command",
       ] as const;
       const rejectUnexpected = (
         askType: string,
@@ -1914,11 +2042,16 @@ export function validateDirective(obj: unknown): ValidationResult {
           "project-type",
           { existing_code_command: true, new_project_command: true },
         );
-      } else if (o.ask_type === "construction-staffing") {
+      } else if (COMMAND_CHOICE_ASKS.has(String(o.ask_type))) {
         if (o.response_route !== "command") {
-          errors.push(`${kind}: construction-staffing response_route must be "command"`);
+          errors.push(`${kind}: ${o.ask_type} response_route must be "command"`);
         }
-        rejectUnexpected("construction-staffing", {});
+        const commandField = o.ask_type === "unit-assignment" ? "assign_command"
+          : o.ask_type === "unit-amend" ? "amend_command"
+          : o.ask_type === "unit-signoff" ? "signoff_command"
+          : null;
+        if (commandField !== null) checkString(o, commandField, kind, errors);
+        rejectUnexpected(String(o.ask_type), commandField !== null ? { [commandField]: true } : {});
       } else if (o.ask_type === "new-work-routing") {
         if (o.response_route !== "next") {
           errors.push(`${kind}: new-work-routing response_route must be "next"`);
@@ -2017,6 +2150,8 @@ export function validateDirective(obj: unknown): ValidationResult {
     case "print":
       checkString(o, "message", kind, errors);
       checkOptionalNullableString(o, "next_stage", kind, errors);
+      if (o.board_note !== undefined) checkString(o, "board_note", kind, errors);
+      if (o.offers !== undefined && !Array.isArray(o.offers)) errors.push(`${kind}: offers must be an array`);
       break;
     case "error":
       checkString(o, "message", kind, errors);
@@ -2024,6 +2159,7 @@ export function validateDirective(obj: unknown): ValidationResult {
     case "done":
       checkString(o, "reason", kind, errors);
       checkOptionalTrue(o, "workflow_continues", kind, errors);
+      if (o.done_note !== undefined) checkString(o, "done_note", kind, errors);
       break;
     case "parked":
       checkString(o, "reason", kind, errors);

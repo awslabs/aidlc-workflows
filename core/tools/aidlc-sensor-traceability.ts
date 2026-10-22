@@ -14,6 +14,7 @@ import {
   usesStageLevelPerUnitArtifacts,
 } from "./aidlc-lib.ts";
 import { aidlcDispatcherInvocation, sensorFireUsage } from "./aidlc-runtime-paths.ts";
+import { insideProject, workspaceTargetPath } from "./aidlc-workspace-repos.ts";
 
 const VALID_STATUSES = new Set(["OK", "GAP", "ORPHAN", "Deferred", "N/A"]);
 
@@ -342,6 +343,15 @@ function stageDidNotRun(stateContent: string | null, slug: string): boolean {
 }
 
 const NFR_REQUIREMENT_FILES = ["performance-requirements.md", "security-requirements.md", "scalability-requirements.md", "reliability-requirements.md"];
+
+// The cross-Unit coverage check runs at this stage and reads these files of
+// each Unit's folder; a team's result brings them home (unitOutputsHomeReads).
+export const CROSS_UNIT_COVERAGE_STAGE = "build-and-test";
+const UNIT_CODE_TABLE = "code-generation/traceability.json";
+const UNIT_NFR_TABLE = "nfr-requirements/traceability.json";
+export function crossUnitCoverageReads(): string[] {
+  return [UNIT_CODE_TABLE, UNIT_NFR_TABLE, ...NFR_REQUIREMENT_FILES.map((name) => `nfr-requirements/${name}`)];
+}
 const NFR_DESIGN_FILES = ["performance-design.md", "security-design.md", "scalability-design.md", "reliability-design.md", "logical-components.md"];
 
 // NFRx.y IDs from one NFR stage's artifacts, or null when none of them exists.
@@ -739,9 +749,8 @@ function verifyTargets(
   }
 
   if (stage === "code-generation") {
-    const projectRoot = resolve(projectDir);
     for (const entry of okEntries) {
-      const problem = codeTargetProblem(projectRoot, entry.target);
+      const problem = codeTargetProblem(projectDir, entry.target);
       if (problem) invalidTargets.push(`${entry.id}: ${problem}`);
     }
   }
@@ -749,15 +758,15 @@ function verifyTargets(
   return { invalidTargets, derivedOrphans, reasons };
 }
 
-// Why a Code Generation `OK` target is not one existing workspace-relative file.
-function codeTargetProblem(projectRoot: string, rawTarget: string | undefined): string | null {
+// Why a Code Generation `OK` target is not one existing workspace-relative file
+// (in a repo repos.json maps elsewhere, `<repo>/<path>` or its path from the workspace).
+function codeTargetProblem(projectDir: string, rawTarget: string | undefined): string | null {
   const target = normalizePath(rawTarget?.trim() ?? "");
   if (target === "" || isAbsolute(target) || /^[A-Za-z]:\//.test(target)) {
     return "target must be a workspace-relative file path";
   }
-  const absolute = resolve(projectRoot, target);
-  const rel = relative(projectRoot, absolute);
-  if (rel.startsWith("..") || isAbsolute(rel)) return "target escapes the project directory";
+  const absolute = workspaceTargetPath(projectDir, target);
+  if (!insideProject(projectDir, absolute)) return "target escapes the project directory";
   try {
     if (!existsSync(absolute) || !statSync(absolute).isFile()) return `target file does not exist: ${target}`;
   } catch {
@@ -875,13 +884,13 @@ function finalCoverage(projectDir: string): FinalCoverage {
     builtBy.set(owner, built);
     const where = (stage: string) => (owner === "code-generation" ? stage : `${owner}/${stage}`);
     // Read only for its `N/A` rows: an unreadable one settles nothing.
-    const nfrTable = join(dir, "nfr-requirements", "traceability.json");
+    const nfrTable = join(dir, ...UNIT_NFR_TABLE.split("/"));
     if (existsSync(nfrTable)) {
       for (const entry of readTable(nfrTable, `${owner} NFR Requirements traceability.json`).data?.coverage ?? []) {
         traced(1, where("nfr-requirements"), entry);
       }
     }
-    const path = join(dir, "code-generation", "traceability.json");
+    const path = join(dir, ...UNIT_CODE_TABLE.split("/"));
     if (!existsSync(path)) continue;
     tables++;
     const read = readTable(path, `${owner} Code Generation traceability.json`);
@@ -1081,7 +1090,7 @@ export function main(argv: string[]): void {
     writeUpstream(flags.stage, flags.outputPath);
     return;
   }
-  if (flags.stage === "build-and-test" && !flags.outputPath) {
+  if (flags.stage === CROSS_UNIT_COVERAGE_STAGE && !flags.outputPath) {
     process.stdout.write(`${JSON.stringify(finalCoverage(resolveProjectDir()))}\n`);
     return;
   }

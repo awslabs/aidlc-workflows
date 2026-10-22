@@ -59,8 +59,8 @@ const DEFAULT_LINE = "This session builds the 2 Units one after another. To have
   "instead, say so before the first Unit is built.";
 const APPROVALS_LINE = "Each team will approve its Unit after every stage. Do you want them to approve once at the " +
   "end of each Unit instead? I'd keep after every stage, so a wrong turn is caught at the stage where it happens.";
-const REPOS_LINE = "This work spans 2 repos, so this session builds its 2 Units: teams each owning a Unit is " +
-  "not available yet for work across repos.";
+const REPOS_LINE = "This work spans 2 repos and this workspace is not a git repository, so this session builds " +
+  "its 2 Units: for teams to each own a Unit, put the workspace in git first.";
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -405,7 +405,7 @@ describe("who builds the Units is asked once as Inception ends", () => {
     expect(isStaffingAsk(next(proj))).toBe(true);
   });
 
-  test("work that spans several repos is not asked: one true line, once", () => {
+  test("work that spans several repos in a workspace not in git is not asked: one true line, once", () => {
     const proj = project();
     const registryPath = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
     const registry = JSON.parse(readFileSync(registryPath, "utf-8")) as Array<Record<string, unknown>>;
@@ -418,8 +418,8 @@ describe("who builds the Units is asked once as Inception ends", () => {
     const before = state(proj);
     const teams = runState(proj, ["set-unit-ownership", "team"]);
     expect(teams.rc).not.toBe(0);
-    expect(teams.out).toContain("This work spans 2 repos, so this session builds its Units: teams each owning " +
-      "a Unit is not available yet for work across repos. Carry on with `/aidlc`.");
+    expect(teams.out).toContain("This work spans 2 repos and this workspace is not a git repository, so this " +
+      "session builds its Units: for teams to each own a Unit, put the workspace in git first. Carry on with `/aidlc`.");
     expect(state(proj)).toBe(before);
   });
 

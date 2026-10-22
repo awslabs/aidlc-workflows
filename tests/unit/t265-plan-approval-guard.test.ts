@@ -567,6 +567,11 @@ function scratchProject(): string {
     "aidlc-runtime-budget.ts",
     "aidlc-lock-line.ts",
     "aidlc-guard-fences.ts",
+    // repos.json, and the rule that a repo the person mapped counts as the project.
+    "aidlc-workspace-manifest.ts",
+    "aidlc-workspace-repos.ts",
+    // The lib lists a Unit's build with the registry through this.
+    "aidlc-unit-teams.ts",
     // The hook reads the plan approval setting when it refuses (the setting
     // decides the refusal's last clause); the setting resolver and what it imports.
     "aidlc-guard-switch.ts",

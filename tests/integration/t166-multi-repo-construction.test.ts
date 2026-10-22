@@ -2372,13 +2372,10 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
 });
 
 // ===========================================================================
-// A recorded repo name becomes a working DIRECTORY through repoDir — an
-// immediate child of the workspace root. That holds for the sibling layout
-// above and fails whenever the workspace root IS the repository, where no such
-// child exists. Recording `repos` is exactly what a developer reaches for when
-// the codekb store is named after a git worktree rather than the repository, so
-// the unchecked path was reachable by following the only documented lever.
-// The resolved cwd is verified, and the message names the path.
+// A recorded repo name becomes a working DIRECTORY through repoDir: an
+// immediate child of the workspace root unless repos.json gives it a path. A
+// checkout missing there is verified, and the message says where AI-DLC looked
+// and the way forward.
 // ===========================================================================
 describe("recorded repo whose directory is absent dead-ends with the resolved path", () => {
   const proj = freshWorkspace();
@@ -2388,6 +2385,6 @@ describe("recorded repo whose directory is absent dead-ends with the resolved pa
     const r = runWorktree(proj, "create", "--slug", "u1", "--base", "main");
     expect(r.status, r.out).not.toBe(0);
     expect(emittedError(r)).toContain(join(proj, "ghost"));
-    expect(emittedError(r)).toContain("does not exist");
+    expect(emittedError(r)).toContain("ghost is not at ghost in this workspace. Clone it there, or list it in repos.json with its path.");
   });
 });

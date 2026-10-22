@@ -22,15 +22,19 @@ import {
   discoverSiblingRepos,
   DOCTOR_RUN_AUDIT_EVENTS,
   errorMessage,
+  isGitRepoDir,
+  repoDir,
   REQUEST_TEXT_DIR,
 } from "./aidlc-lib.ts";
 import { committedRecordIgnoreConflicts } from "./aidlc-gitignore.ts";
-import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
+import { workspaceSyncInvocation } from "./aidlc-runtime-paths.ts";
 import {
   parseWorkspaceManifest,
+  readWorkspaceRepos,
+  type WorkspaceManifest,
   WORKSPACE_GITIGNORE_GATE_BEGIN as GATE_BEGIN,
   WORKSPACE_GITIGNORE_GATE_END as GATE_END,
-  WORKSPACE_RECOVERY_GITIGNORE,
+  workspaceGitignoreEntries,
 } from "./aidlc-workspace-manifest.ts";
 
 /** One --doctor report row. Structurally matches collectDoctorReport's results[]. */
@@ -51,7 +55,7 @@ export interface DoctorCheck {
  */
 export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   const results: DoctorCheck[] = [];
-  const syncCmd = aidlcToolInvocation("workspace-sync");
+  const syncCmd = workspaceSyncInvocation();
 
   // W1c first - Request files git can see: one committed before the folder
   // was ignored stays tracked, so each later request changes it in git, and a
@@ -218,11 +222,9 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
   if (existsSync(reposManifestPath)) {
     // Parse through the exact schema used by sync so doctor never reports a
     // manifest as synchronized when sync would reject it.
-    let manifestNames: string[] | null = null;
+    let manifest: WorkspaceManifest | null = null;
     try {
-      manifestNames = parseWorkspaceManifest(
-        readFileSync(reposManifestPath, "utf-8"),
-      ).repos.map((repo) => repo.name);
+      manifest = parseWorkspaceManifest(readFileSync(reposManifestPath, "utf-8"));
     } catch (e) {
       results.push({
         pass: true,
@@ -230,15 +232,18 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
       });
     }
 
-    if (manifestNames) {
-      // W2 - Manifest vs disk drift. discoverSiblingRepos scans the disk for
-      // .git siblings - the SAME set the runtime uses at intent creation - so a
-      // mismatch is exactly what the agent would (in)visibly see. Disk wins at
+    if (manifest) {
+      const manifestNames = manifest.repos.map((repo) => repo.name);
+      // W2 - Manifest vs disk drift: each declared repo at the path repoDir
+      // gives it (this person's repos.local.json included), and every immediate
+      // child repo the runtime would also find at intent creation. Disk wins at
       // runtime; the manifest only drives sync, so this row nudges, never fails.
       const declared = new Set(manifestNames);
-      const onDisk = new Set(discoverSiblingRepos(projectDir));
-      const notCloned = [...declared].filter((n) => !onDisk.has(n)).sort();
-      const notDeclared = [...onDisk].filter((n) => !declared.has(n)).sort();
+      const declaredDirs = new Set(manifestNames.map((name) => repoDir(projectDir, name)));
+      const notCloned = [...declared].filter((n) => !isGitRepoDir(repoDir(projectDir, n))).sort();
+      const notDeclared = discoverSiblingRepos(projectDir)
+        .filter((n) => !declared.has(n) && !declaredDirs.has(join(projectDir, n)))
+        .sort();
       if (notCloned.length === 0 && notDeclared.length === 0) {
         results.push({
           pass: true,
@@ -268,10 +273,7 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
       const gi = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
       const b = gi.indexOf(GATE_BEGIN);
       const e = gi.indexOf(GATE_END);
-      const expected = [
-        WORKSPACE_RECOVERY_GITIGNORE,
-        ...[...manifestNames].sort().map((n) => `/${n}/`),
-      ].sort();
+      const expected = workspaceGitignoreEntries(manifest).sort();
       if (b === -1 || e === -1 || e < b) {
         results.push({
           pass: true,
@@ -294,6 +296,16 @@ export function workspaceManifestChecks(projectDir: string): DoctorCheck[] {
           label: inSync
             ? `Workspace .gitignore: managed block matches repos.json (${manifestNames.length} repo dir(s))`
             : `Workspace .gitignore: managed block stale vs repos.json (advisory - run \`${syncCmd}\` to regenerate it)`,
+        });
+      }
+
+      // W4 - This person's repos.local.json: what in it is not read.
+      const local = readWorkspaceRepos(projectDir);
+      const localLines = [...(local.localError === undefined ? [] : [local.localError]), ...local.ignored];
+      if (localLines.length > 0) {
+        results.push({
+          pass: true,
+          label: `Your repos.local.json: ${localLines.join(" ")} (advisory)`,
         });
       }
     }

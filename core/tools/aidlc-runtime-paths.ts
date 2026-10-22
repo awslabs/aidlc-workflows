@@ -356,6 +356,12 @@ export function aidlcToolInvocation(
   return `bun ${path}`;
 }
 
+// The workspace-sync tool, which the dispatcher keeps in the system namespace.
+export function workspaceSyncInvocation(): string {
+  const invoke = aidlcInvocation();
+  return invoke.startsWith("bun ") ? aidlcToolInvocation("workspace-sync") : `${invoke} system workspace-sync`;
+}
+
 function explicitRuntimeProjectDir(): string | null {
   const internal = process.env.AIDLC_RUNTIME_PROJECT_DIR;
   if (internal) {

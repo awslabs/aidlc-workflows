@@ -1412,8 +1412,8 @@ describe("t324 team-owned unit progress and per-unit gates", () => {
 
     const result = runState(proj, ["set-unit-ownership", "team"]);
     expect(result.rc).not.toBe(0);
-    expect(result.out).toContain("This work spans 2 repos, so this session builds its Units: teams each owning a " +
-      "Unit is not available yet for work across repos. Carry on with `/aidlc`.");
+    expect(result.out).toContain("This work spans 2 repos and this workspace is not a git repository, so this " +
+      "session builds its Units: for teams to each own a Unit, put the workspace in git first. Carry on with `/aidlc`.");
     expect(state(proj)).toBe(stateBefore);
     expect(readAllAuditShards(proj)).toContain("**Event**: ERROR_LOGGED");
     expect(readAllAuditShards(proj)).not.toContain(

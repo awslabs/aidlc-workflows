@@ -174,11 +174,11 @@ describe("intent add-repo / remove-repo", () => {
     writeFileSync(join(shaped, "config"), "[core]\n\tbare = false\n\tworktree = .\n");
     const r = utility(["intent", "add-repo", "vendor"]);
     expect(r.rc).not.toBe(0);
-    expect(r.out).toContain("is not a Git checkout under the workspace folder");
+    expect(r.out).toContain("is not a Git checkout");
     expect(repos()).toEqual(["app-a"]);
     const missing = utility(["intent", "add-repo", "nowhere"]);
     expect(missing.rc).not.toBe(0);
-    expect(missing.out).toContain("is not a Git checkout under the workspace folder");
+    expect(missing.out).toContain("nowhere is not at nowhere in this workspace. Clone it there, or list it in repos.json with its path.");
   });
 
   test("refuses when the piece of work records no repos: the workspace folder is its repo", () => {

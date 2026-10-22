@@ -86,6 +86,7 @@ import {
   renderSourcePathKeys,
   governedChangeControl,
   intentRepos,
+  repoDir,
   resolveBoltDag,
   resolveBoltIdentity,
   resolveAuditWorktreePath,
@@ -2090,7 +2091,7 @@ export function codeGenerationResume(
     // A multi-repo intent's plan may name paths inside a repository, and a step
     // may name one of this stage's own record files. A bare file name (no
     // folder) is in the project when a file of that name is anywhere in it.
-    const roots = [projectDir, ...intentRepos(projectDir).map((repo) => join(projectDir, repo)), authority.stageDir];
+    const roots = [projectDir, ...intentRepos(projectDir).map((repo) => repoDir(projectDir, repo)), authority.stageDir];
     let names: Set<string> | null = null;
     const anywhere = (name: string): boolean => {
       names ??= new Set(renderSourcePathKeys(workspaceSourceState(projectDir)?.listing.keys() ?? []).map((path) => basename(path)));
