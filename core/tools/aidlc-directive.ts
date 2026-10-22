@@ -695,6 +695,15 @@ export interface ConstructionStaffingAskDirective extends AskDirectiveBase {
   choices: AskChoice[];
 }
 
+// Before Reverse Engineering reads a large set of repos the person never named:
+// all of them, or only some. "Read all" is one complete command; for "Only
+// some" the agent runs `intent set-repos` with the names the person gives.
+export interface RepoScopeAskDirective extends AskDirectiveBase {
+  ask_type: "repo-scope";
+  response_route: "command";
+  choices: AskChoice[];
+}
+
 export interface NewWorkRoutingAskDirective extends AskDirectiveBase {
   ask_type: "new-work-routing";
   response_route: "next";
@@ -800,6 +809,7 @@ export type AskDirective =
   | UnitPausedAskDirective
   | ProjectTypeAskDirective
   | ConstructionStaffingAskDirective
+  | RepoScopeAskDirective
   | NewWorkRoutingAskDirective
   | UnitClaimAskDirective
   | LegacyPlanApprovalRecoveryAskDirective
@@ -1166,6 +1176,22 @@ export function questionNote(invocation: string, oneChoice = false): string {
     "When their reply picks one of the choices (its number, its words, or their own words for it), run that " +
     "choice's command; act on the step it returns, or run `" + invocation + " next` when it returns none. " +
     "Anything else is their own words: read what they meant.";
+}
+
+// Which repos Reverse Engineering reads: the names are the person's, the
+// command takes them exactly; the engine checks each one. "Only some" has no
+// command of its own, so `next` waits until the names are set. A request that
+// already said which is that answer: the person is not asked it again.
+export function repoScopeQuestionNote(invocation: string): string {
+  const intent = invocation.replace(/aidlc-orchestrate\.ts$/, "aidlc-utility.ts intent").replace(/ orchestrate$/, " intent");
+  return "When the person's own words already said which repositories to read, all of them or named ones, do not " +
+    "put this question: run `" + intent + " set-repos --all` or `" + intent + " set-repos <names>`, then `" +
+    invocation + " next`. Otherwise this question is for the person, not for you: show it to them with its " +
+    "choices as given, end your turn, " +
+    "and act only on their reply. When they want all of the repositories, run the Read all choice's command, then `" +
+    invocation + " next`. When they want only some, run `" + intent + " set-repos <names>` with the folder names " +
+    "they mean, comma-separated, then `" + invocation + " next`; when their reply does not say which, ask which " +
+    "ones and end your turn without running `next`. Anything else is their own words: read what they meant.";
 }
 
 // The routing question asked while no piece of work is selected: continue and
@@ -1590,6 +1616,8 @@ export function withAgentNotes<T extends object>(
       ? planOfferQuestionNote(invocation)
       : d.ask_type === "new-work-routing" && Array.isArray(d.available_intents)
       ? routingRecordsQuestionNote(invocation)
+      : d.ask_type === "repo-scope"
+      ? repoScopeQuestionNote(invocation)
       : questionNote(invocation, choices?.length === 1);
     if (typeof d.numbered_prose_question !== "string") {
       // A question with no options (a guard that has no way on) is said as it is.
@@ -1817,7 +1845,7 @@ export function validateDirective(obj: unknown): ValidationResult {
       checkOptionalString(o, "proposed_scope", kind, errors);
       checkOptionalStringArray(o, "available_intents", kind, errors);
       checkOptionalString(o, "numbered_prose_question", kind, errors);
-      checkChoices(o, kind, errors, o.ask_type === "scope-confirm" || o.ask_type === "construction-staffing");
+      checkChoices(o, kind, errors, o.ask_type === "scope-confirm" || o.ask_type === "construction-staffing" || o.ask_type === "repo-scope");
       checkOptionalString(o, "recovery_choice", kind, errors);
       checkOptionalString(o, "existing_code_command", kind, errors);
       checkOptionalString(o, "new_project_command", kind, errors);
@@ -1835,10 +1863,11 @@ export function validateDirective(obj: unknown): ValidationResult {
           "plan-approval",
           "project-type",
           "construction-staffing",
+          "repo-scope",
         ].includes(o.ask_type)
       ) {
         errors.push(
-          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type | construction-staffing, got ${String(o.ask_type)}`,
+          `${kind}: ask_type must be one of scope-confirm | compose-offer | intent-pick | unit-paused | new-work-routing | unit-claim | legacy-plan-approval-recovery | guard-recovery | plan-approval | project-type | construction-staffing | repo-scope, got ${String(o.ask_type)}`,
         );
       }
       if ("plan_approval" in o && o.ask_type !== "plan-approval") {
@@ -1947,6 +1976,11 @@ export function validateDirective(obj: unknown): ValidationResult {
           errors.push(`${kind}: construction-staffing response_route must be "command"`);
         }
         rejectUnexpected("construction-staffing", {});
+      } else if (o.ask_type === "repo-scope") {
+        if (o.response_route !== "command") {
+          errors.push(`${kind}: repo-scope response_route must be "command"`);
+        }
+        rejectUnexpected("repo-scope", {});
       } else if (o.ask_type === "new-work-routing") {
         if (o.response_route !== "next") {
           errors.push(`${kind}: new-work-routing response_route must be "next"`);

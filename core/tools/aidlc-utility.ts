@@ -350,6 +350,7 @@ import {
   keepPlanApprovalAskOverStateWrite,
   refreshActiveDirectiveMarker,
   resolveIntentRepoSet,
+  MANY_REPOS,
   isGitRepoDir,
   resolveProjectDir,
   setActiveIntentCursor,
@@ -777,6 +778,7 @@ Utilities:
   intent unarchive <name>  Bring an archived intent back as it was (in-flight or complete)
   intent add-repo <name>  Add a sibling repo to the active piece of work (until Units Generation is approved)
   intent remove-repo <name>  Take a sibling repo out of the active piece of work (never the last one)
+  intent set-repos <name,...> | --all  Set exactly which sibling repos the active piece of work covers, or keep them all (until Units Generation is approved)
   intent add-checkout <path>  Record a checkout outside the review's reach (a harness-folder worktree, or one outside the project) so the review covers the code there
   intent remove-checkout <path>  Take a recorded checkout out of the active piece of work's review
   space list        List spaces (read-only; --json for structured output)
@@ -8466,6 +8468,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
       repos,
       initialSelection.sessionId ?? undefined,
       questionId,
+      (flags.repos ?? "").trim().length > 0,
     );
     failIntentCreateAt("after-list");
     if (teamKeptCheck !== null && initialSelection.sessionId) {
@@ -9006,6 +9009,11 @@ function handleIntent(
     handleIntentRepos(projectDir, verbOrTarget, positional[2]);
     return;
   }
+  if (verbOrTarget === "set-repos") {
+    // Every word after the verb: "a, b" typed with a space is still both names.
+    handleIntentSetRepos(projectDir, positional.slice(2).join(","), flags.all === "true");
+    return;
+  }
   if (verbOrTarget === "add-checkout" || verbOrTarget === "remove-checkout") {
     handleIntentCheckouts(projectDir, verbOrTarget, positional[2]);
     return;
@@ -9438,6 +9446,86 @@ function handleIntentRepos(
       break;
   }
   process.stdout.write(`${lines.join(" ")}\n`);
+}
+
+// `/aidlc intent set-repos <name,...>`: the whole repo set at once, the exact
+// names the agent read from the person's words (Reverse Engineering's question,
+// or their own "only these"); `--all` keeps the set recorded. Either way the set
+// is then the person's (`repos_named`), so that question is not put again. Each
+// name passes add-repo's checks before anything changes; same locks,
+// audit-first order and Units Generation cut-off as add-repo.
+function handleIntentSetRepos(projectDir: string, list: string | undefined, all: boolean): void {
+  const names = all ? null : [...new Set((list ?? "").split(",").map((name) => name.trim()).filter((name) => name.length > 0))].sort();
+  if (names !== null && names.length === 0) die("Usage: aidlc-utility intent set-repos <name,...> | --all");
+  for (const name of names ?? []) {
+    if (!isValidRepoName(name)) {
+      die(`intent set-repos refused: "${name}" is not a repo name (one folder name under the workspace, no separators). Nothing was changed.`);
+    }
+  }
+  const selection = resolveWorkflowSelection(projectDir);
+  const space = selection.space;
+  const dirName = selection.intent;
+  if (!dirName) {
+    die(`No piece of work is active in space "${space}"; switch to one first (${entrySkillInvocation()} intent list).`);
+  }
+  const outcome = withAuditLock(projectDir, () =>
+    withAuditLock(projectDir, () => {
+      const rows = readIntentRegistry(projectDir, space);
+      const row = rows.find((entry) => recordDirMatches(entry, dirName));
+      if (!row) {
+        die(`Intent "${dirName}" has no intents.json row in space "${space}"; nothing was changed. Repair the registry first (${entrySkillInvocation()} --doctor names the mismatch).`);
+      }
+      const current = row.repos ?? [];
+      if (current.length === 0) {
+        die("intent set-repos refused: this piece of work treats the workspace folder itself as its code repo, so it records no repos to change.");
+      }
+      const next = names ?? current;
+      const added = next.filter((repo) => !current.includes(repo));
+      const removed = current.filter((repo) => !next.includes(repo));
+      const state = readStateFile(projectDir, dirName, space);
+      const boxes = new Map(parseCheckboxes(state).map((box) => [box.slug, box.state]));
+      if ((added.length > 0 || removed.length > 0) && boxes.get("units-generation") === "completed") {
+        return { kind: "cutoff" as const, next };
+      }
+      for (const name of added) {
+        if (!isGitRepoDir(repoDir(projectDir, name))) {
+          die(`intent set-repos refused: "${name}" is not a Git checkout under the workspace folder (no .git entry at ${repoDir(projectDir, name)}). Nothing was changed.`);
+        }
+      }
+      appendAuditEntryUnlocked(
+        "INTENT_REPOS_CHANGED",
+        {
+          Stage: (getField(state, "Current Stage") ?? "").trim() || "none",
+          ...(added.length > 0 ? { Added: added.join(", ") } : {}),
+          ...(removed.length > 0 ? { Removed: removed.join(", ") } : {}),
+          Repos: next.join(", "),
+          Named: "by the person",
+        },
+        projectDir,
+        dirName,
+        space,
+      );
+      row.repos = next;
+      row.repos_named = true;
+      writeIntentRegistry(projectDir, rows, space);
+      return { kind: "changed" as const, next, removed };
+    }, dirName, space),
+  );
+  const named = (repos: string[]): string =>
+    repos.length >= MANY_REPOS ? `${repos.length} repositories`
+    : repos.length === 1 ? repos[0]
+    : `${repos.slice(0, -1).join(", ")} and ${repos[repos.length - 1]}`;
+  if (outcome.kind === "cutoff") {
+    process.stdout.write(
+      `Units Generation is already approved, so its Units are written for the repos this work recorded. Do you want me to go back to Units Generation with ${named(outcome.next)}?\n`,
+    );
+    return;
+  }
+  const covers = all ? `This work covers all ${outcome.next.length} of its repositories.` : `This work now covers ${named(outcome.next)}.`;
+  const back = outcome.removed.length === 0 ? ""
+    : outcome.removed.length === 1 ? ` ${outcome.removed[0]} can be added back any time.`
+    : ` The ${outcome.removed.length} left out can be added back any time.`;
+  process.stdout.write(`${covers}${back}\n`);
 }
 
 // `/aidlc intent add-checkout <path>` / `/aidlc intent remove-checkout <path>`:

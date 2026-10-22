@@ -37,6 +37,7 @@ diagnostic and lifecycle routes.
 | `/aidlc intent [name]` | List intents in the active space (`--all` includes archived), or switch to an existing intent |
 | `/aidlc intent archive <name>` | Retire an in-flight or completed intent without deleting its record; `unarchive <name>` brings it back |
 | `/aidlc intent add-repo <name>` | Add a sibling repo to the active piece of work, until Units Generation is approved; `remove-repo <name>` takes one out (never the last) |
+| `/aidlc intent set-repos <name,...>` | Set exactly which sibling repos the active piece of work covers, until Units Generation is approved; `--all` keeps every recorded repo |
 | `/aidlc intent add-checkout <path>` | Have the review cover code kept in a worktree in the harness folder or outside the project; `remove-checkout <path>` takes it out |
 | `/aidlc space [name]` | List spaces, or switch to an existing space |
 | `/aidlc space-create <name>` | Create a new space that starts from the default space's org rules and empty team and project practices |
@@ -409,6 +410,23 @@ Units Generation is the cut-off: once it is approved, each Unit names its repo,
 so the command changes nothing and asks instead whether to go back to Units
 Generation with the repo added (or without it). Say yes and the agent reopens
 Units Generation and runs the change again.
+
+### `/aidlc intent set-repos <name,...>`: say exactly which repos the work covers
+
+In a workspace of many repos, say which ones this work needs ("only orders
+and payments") and the agent runs `/aidlc intent set-repos orders,payments`:
+the work then covers exactly those, each name checked the way `add-repo`
+checks it, and one line says what changed and that the rest can be added back.
+`/aidlc intent set-repos --all` keeps every repo the work records. Either way
+the set is then yours, as one named with `--repos` when the work was created.
+
+When a work records ten or more repos AI-DLC found on disk and you never named
+them, Reverse Engineering asks once, before it reads any, whether to read all
+of them or only some, since reading many can take a long time and use many
+tokens. A set you named, and an unattended run, are not asked: the step says
+the cost once and reads every repo. When your request already said which
+repos (all of them, or named ones), the agent sets them for you instead of
+asking. The same cut-off as `add-repo` applies.
 
 ### `/aidlc intent add-checkout <path>`: have the review cover code kept in another checkout
 

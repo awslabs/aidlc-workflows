@@ -37,7 +37,7 @@ const ARTIFACTS = [
   "technology-stack", "dependencies", "code-quality-assessment", "reverse-engineering-timestamp",
 ];
 const STATE_FIXTURE = readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8");
-const STAGE_LINE = /^- \[[ x-]\] ([a-z0-9-]+) — EXECUTE$/gm;
+const STAGE_LINE = /^- \[[ x-]\] ([a-z0-9-]+) \u2014 EXECUTE$/gm;
 const FIXTURE_STAGES = [...STATE_FIXTURE.matchAll(STAGE_LINE)].map((match) => match[1] ?? "");
 
 const projects: string[] = [];
@@ -90,6 +90,9 @@ function workspace(tree: Tree, shape: Shape): { proj: string; repos: string[] } 
   const registry = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
   const rows = JSON.parse(readFileSync(registry, "utf-8"));
   rows[0].repos = repos;
+  // The person chose to read all of them; the question before that is
+  // t-re-repo-scope's.
+  rows[0].repos_named = true;
   writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
   for (const repo of repos) {
     mkdirSync(join(proj, repo, ".git"), { recursive: true });

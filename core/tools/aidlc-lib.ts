@@ -1340,6 +1340,7 @@ export const INTENT_VERBS: ReadonlySet<string> = new Set([
   "unarchive",
   "add-repo",
   "remove-repo",
+  "set-repos",
   "add-checkout",
   "remove-checkout",
 ]);
@@ -1356,9 +1357,11 @@ export const SPACE_VERBS: ReadonlySet<string> = new Set([
 export type IntentLifecycleVerb = "archive" | "unarchive";
 
 // The verbs that change where a piece of work's code is, by name: `add-repo`
-// and `remove-repo` its sibling repos, `add-checkout` and `remove-checkout` a
-// checkout outside the review's reach (they take a path).
-export type IntentRepoVerb = "add-repo" | "remove-repo" | "add-checkout" | "remove-checkout";
+// and `remove-repo` one of its sibling repos, `set-repos` the whole set (an
+// exact list, or `--all` to keep the recorded set as the person's),
+// `add-checkout` and `remove-checkout` a checkout outside the review's reach
+// (they take a path).
+export type IntentRepoVerb = "add-repo" | "remove-repo" | "set-repos" | "add-checkout" | "remove-checkout";
 
 export type WorkspaceCommand =
   // `all` is only ever set (true) for `intent list --all`; a plain list omits
@@ -1390,7 +1393,9 @@ function missingWorkspaceName(
 ): WorkspaceCommand {
   const usage = verb === "space-create"
     ? "space-create <name>"
-    : `${noun} ${verb} ${verb === "add-checkout" || verb === "remove-checkout" ? "<path>" : "<name>"}`;
+    : `${noun} ${verb} ${
+      verb === "add-checkout" || verb === "remove-checkout" ? "<path>" : verb === "set-repos" ? "<name,...|--all>" : "<name>"
+    }`;
   return {
     kind: "error",
     noun,
@@ -1425,7 +1430,8 @@ function isIntentLifecycleVerb(token: string | undefined): token is IntentLifecy
 }
 
 function isIntentRepoVerb(token: string | undefined): token is IntentRepoVerb {
-  return token === "add-repo" || token === "remove-repo" || token === "add-checkout" || token === "remove-checkout";
+  return token === "add-repo" || token === "remove-repo" || token === "set-repos" || token === "add-checkout" ||
+    token === "remove-checkout";
 }
 
 // `intent list [--json] [--all]` / `space list [--json]`. The flags may appear
@@ -1483,7 +1489,7 @@ export function parseWorkspaceCommand(tokens: readonly string[]): WorkspaceComma
     }
     if (isIntentLifecycleVerb(verbOrName) || isIntentRepoVerb(verbOrName)) {
       const name = tokens[2];
-      if (name === undefined || name.startsWith("--")) {
+      if (name === undefined || (name.startsWith("--") && !(verbOrName === "set-repos" && name === "--all"))) {
         return missingWorkspaceName(noun, verbOrName);
       }
       return { kind: verbOrName, noun, name, rest: tokens.slice(3) };
@@ -1535,6 +1541,7 @@ export function workspaceCommandUtilityArgv(
     case "unarchive":
     case "add-repo":
     case "remove-repo":
+    case "set-repos":
     case "add-checkout":
     case "remove-checkout":
       // The lifecycle and repo verbs forward verbatim, trailing flags included:
@@ -4568,6 +4575,9 @@ export interface IntentRegistryEntry {
   dirName?: string;
   scope?: string;
   repos?: string[];
+  // The person named this repo set (`--repos` at creation, or `intent
+  // set-repos`); absent for a set found on disk. Read by intentReposNamed.
+  repos_named?: true;
   status: string;
   // The engine question whose answer started this intent, so a repeated
   // answer finds the work it already started instead of creating it twice.
@@ -8408,6 +8418,7 @@ export function registerIntentRecord(
   repos?: string[],
   sessionId?: string,
   request?: string,
+  reposNamed = false,
 ): void {
   appendIntentToRegistry(
     projectDir,
@@ -8417,6 +8428,7 @@ export function registerIntentRecord(
       dirName: minted.dirName,
       scope,
       repos: repos && repos.length > 0 ? repos : undefined,
+      ...(reposNamed && repos && repos.length > 0 ? { repos_named: true as const } : {}),
       status: "in-flight",
       ...(request ? { request } : {}),
     },
@@ -12686,7 +12698,24 @@ export function noteConstructionStaffingAsked(projectDir: string): void {
 // (an answer, their own words, or a command) without a pick being recorded:
 // the default stands and the question is not put again.
 export function constructionStaffingPassedOver(projectDir: string): boolean {
-  const asked = engineAskMark(projectDir, CONSTRUCTION_STAFFING_ASK);
+  return engineAskPassedOver(projectDir, CONSTRUCTION_STAFFING_ASK);
+}
+
+const REPO_SCOPE_ASK = "repo-scope-ask.json";
+
+export function noteRepoScopeAsked(projectDir: string): void {
+  noteEngineAskMark(projectDir, REPO_SCOPE_ASK);
+}
+
+// Which repos Reverse Engineering reads was asked for this work in this clone
+// and the person has spoken since without naming the set: every recorded repo
+// is read and the question is not put again.
+export function repoScopePassedOver(projectDir: string): boolean {
+  return engineAskPassedOver(projectDir, REPO_SCOPE_ASK);
+}
+
+function engineAskPassedOver(projectDir: string, name: string): boolean {
+  const asked = engineAskMark(projectDir, name);
   if (asked === null) return false;
   try {
     const shardPath = auditFilePath(projectDir);
@@ -28309,6 +28338,16 @@ export function intentRepos(
     return entry.repos ?? [];
   }
   return [];
+}
+
+// Whether the person named the active intent's repo set rather than the engine
+// finding it on disk: the same row intentRepos reads.
+export function intentReposNamed(projectDir: string): boolean {
+  const selection = resolveWorkflowSelection(projectDir);
+  const dirName = selection.intent;
+  if (!dirName) return false;
+  return readIntentRegistry(projectDir, selection.space)
+    .some((entry) => recordDirMatches(entry, dirName) && entry.repos_named === true);
 }
 
 // Teams each owning a Unit need the code in this project's own repo, so work

@@ -618,6 +618,8 @@ describe("t-copilot-directive-budget: every Copilot directive fits VS Code's ter
     const registry = join(proj, "aidlc", "spaces", "default", "intents", "intents.json");
     const rows = JSON.parse(readFileSync(registry, "utf-8")) as Array<Record<string, unknown>>;
     rows[0].repos = repos;
+    // Named by the person, so Reverse Engineering starts without asking which to read.
+    rows[0].repos_named = true;
     writeFileSync(registry, `${JSON.stringify(rows, null, 2)}\n`);
     for (const repo of repos) mkdirSync(join(proj, repo, "src"), { recursive: true });
 

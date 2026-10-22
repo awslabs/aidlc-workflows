@@ -625,6 +625,22 @@ Units and how to ask for teams. Work with recorded repos is never asked: the
 first step carries `teamsAcrossReposLine` instead, the line the setter's
 refusal also says.
 
+Which repos Reverse Engineering reads is asked the same way, once per work
+(`reverseEngineeringScopeAsk`). When the step `next` would route is Reverse
+Engineering on existing code, not started (no link on record), and the work
+records ten or more repos (`MANY_REPOS`) that the person never named, an
+attended `next` returns `ask_type: repo-scope`: **Read all N** runs `intent
+set-repos --all`, and for **Only some** the agent runs `intent set-repos
+<names>` with the names the person gives, which the utility checks against the
+workspace. Either answer marks the set as the person's (`repos_named` on the
+registry row, as `intent create --repos` does), so it is never asked again; a
+request that already said which (all, or named ones) is that answer, and the
+question's note has the agent run the command without putting it. A
+named set, an unattended run (`AIDLC_UNATTENDED=1`) and a question passed over
+(a human turn after its ask mark with no answer) read every recorded repo, and
+the step says the cost once. From two repos the stage's progress line carries
+the count.
+
 When skeleton-on applies, the first DAG Unit must be planned as the smallest
 working integrated slice. It completes its applicable per-unit stages before
 later Units even under stage-major. The engine then emits a `run-stage` with

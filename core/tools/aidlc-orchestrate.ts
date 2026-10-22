@@ -269,6 +269,9 @@ import {
   noteProjectTypeAsked,
   constructionStaffingPassedOver,
   noteConstructionStaffingAsked,
+  noteRepoScopeAsked,
+  repoScopePassedOver,
+  intentReposNamed,
   teamsAcrossReposLine,
   isRefusedModifierNextArgv,
   isRetiredOnlyNextArgv,
@@ -1505,16 +1508,6 @@ function prepareEmission(directive: Directive): PreparedEmission {
       ? codeGenerationResumeNarration(projectDir, unit, issued) ?? codeGenerationStartNarration(projectDir, unit)
       : null;
     if (line !== null) directive.narration = line;
-  }
-  // The count follows the stage's own progress line; the gate shown again
-  // keeps saying what the stage produced.
-  if (
-    directive.kind === "run-stage" && directive.stage === "reverse-engineering" && directive.unit === undefined &&
-    directive.gate_only !== true
-  ) {
-    const projectDir = emissionProjectDir(directive);
-    const scope = projectDir ? reverseEngineeringScopeNarration(projectDir) : null;
-    if (scope !== null) directive.narration = directive.narration ? `${directive.narration} ${scope}` : scope;
   }
   // The plan step is the conductor's own. The stage's dispatched mode would read
   // "hand the draft to the developer" (a Kiro run did, and the guard refused the
@@ -2850,18 +2843,6 @@ function narrateSpecialistStage(node: GraphStage, scope: string, stateContent: s
 //
 // The placeholder unit (a scope with no unit DAG) is not a real name, so it
 // falls back to the stage alone rather than saying the token out loud.
-export const RE_LARGE_SCOPE_REPOS = 10;
-
-export function reverseEngineeringScopeNarration(projectDir: string): string | null {
-  // The repos the work records, the set Reverse Engineering reads.
-  const repos = intentRepos(projectDir).length;
-  if (repos <= 1) return null;
-  const base = `Reverse Engineering reads ${repos} repositories here.`;
-  return repos >= RE_LARGE_SCOPE_REPOS
-    ? `${base} Analysing all ${repos} may take significant time and consume many tokens: say which repositories matter to narrow the scope, or continue and all ${repos} are analysed.`
-    : base;
-}
-
 function narratePerUnitBeat(directive: RunStageDirective): string | null {
   if (directive.gate !== false) return null;
   const unit = directive.unit;
@@ -4220,6 +4201,54 @@ function constructionStaffingAsk(
           "stage, or once at the end of the Unit if you say so." +
           (order === "stage by stage" ? " Each Unit is then built start to finish, one at a time, instead of stage by stage." : ""),
         command: `${state} set-unit-ownership team`,
+      },
+    ],
+  };
+}
+
+// What reading a large repo set costs, said once with the step that starts
+// Reverse Engineering when no question is put about it.
+function repoScopeCostLine(count: number): string {
+  return `Analysing all ${count} may take significant time and consume many tokens: say which repositories matter to ` +
+    "narrow the scope.";
+}
+
+// Before Reverse Engineering reads MANY_REPOS or more repos the person never
+// named, once per work: all of them, or only some (#2874). A set they named, an
+// unattended run and a question they passed over read every recorded repo,
+// with the cost said once; a scan already under way is never asked about.
+function reverseEngineeringScopeAsk(
+  projectDir: string,
+  stateContent: string | null,
+  slug: string,
+): AskDirective | null {
+  if (slug !== "reverse-engineering" || stateContent === null || projectTypeFrom(stateContent) !== "brownfield") return null;
+  const box = checkboxForSlug(stateContent, slug);
+  if (!box || (box.state !== "pending" && box.state !== "in-progress") || !box.suffix.startsWith("EXECUTE")) return null;
+  const repos = intentRepos(projectDir);
+  const node = nodeForSlug(slug);
+  if (repos.length < MANY_REPOS || !node || pipelineLinkEvidence(projectDir, node).receipts.length > 0) return null;
+  if (intentReposNamed(projectDir) || process.env.AIDLC_UNATTENDED === "1" || repoScopePassedOver(projectDir)) {
+    sayWithStepOnce(projectDir, repoScopeCostLine(repos.length));
+    return null;
+  }
+  if (!isReadOnlyEngineProbe()) noteRepoScopeAsked(projectDir);
+  const count = repos.length;
+  return {
+    kind: "ask",
+    ask_type: "repo-scope",
+    response_route: "command",
+    question: `Reverse Engineering will read the ${count} repositories this work covers. Analysing all ${count} may ` +
+      `take significant time and consume many tokens. Read all ${count}, or only the ones this work needs?`,
+    choices: [
+      {
+        label: `Read all ${count}`,
+        detail: "Reverse Engineering reads every repository this work covers.",
+        command: aidlcDispatcherInvocation("intent set-repos --all"),
+      },
+      {
+        label: "Only some",
+        detail: "Say which ones: Reverse Engineering reads only those, and you can add others back later.",
       },
     ],
   };
@@ -7754,6 +7783,10 @@ function buildRunStageDirective(
     node.mode === "subagent" || node.mode === "pipeline"
       ? narrateSpecialistStage(node, scope, stateContent)
       : narrateStageEntry(node, scope, firstOfWorkflow, directive.gate, stateContent);
+  // A stage that writes once per repo says how many it covers.
+  if (isCodekb(node) && codekbCtx && codekbCtx.repos.length > 1) {
+    directive.narration = directive.narration.replace(/\.$/, `, across the ${codekbCtx.repos.length} repositories this work covers.`);
+  }
   if (codekbCtx) {
     runStageRoutes.set(directive, {
       node,
@@ -10955,7 +10988,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
     // (one unit per `next`, gate suppressed on every uncovered unit with the real
     // gate only on the all-covered re-entry; issue #368) and emits a single
     // directive for every other stage.
-    const staffing = constructionStaffingAsk(pd, stateContent, currentSlug, scope);
+    const staffing = constructionStaffingAsk(pd, stateContent, currentSlug, scope) ??
+      reverseEngineeringScopeAsk(pd, stateContent, currentSlug);
     if (staffing) {
       emit(staffing);
       return;
@@ -10990,7 +11024,8 @@ function routeNext(agentArgs: string[], projectDir: string | undefined): void {
   // swarm path, emitForSlug drives the engine's per-unit for_each loop for a
   // per-unit Construction stage (issue #368) and emits a single directive
   // otherwise.
-  const staffing = constructionStaffingAsk(pd, stateContent, next.slug, scope);
+  const staffing = constructionStaffingAsk(pd, stateContent, next.slug, scope) ??
+    reverseEngineeringScopeAsk(pd, stateContent, next.slug);
   if (staffing) {
     emit(staffing);
     return;
@@ -16593,7 +16628,7 @@ function unknownWorkspaceWordStep(
 ): string {
   const { noun, name } = command;
   const verbs = noun === "intent"
-    ? "list, switch <name>, create, archive <name>, unarchive <name>, add-repo <name>, remove-repo <name>, add-checkout <path>, remove-checkout <path>"
+    ? "list, switch <name>, create, archive <name>, unarchive <name>, add-repo <name>, remove-repo <name>, set-repos <name,...>, add-checkout <path>, remove-checkout <path>"
     : "list, switch <name>, create <name>";
   const recent = recentWorkspaceRecordNames(pd, noun);
   const records = recent.names.length === 0
