@@ -5,8 +5,9 @@
 // live; a stage question and learnings keep to their replies typed with `/aidlc` while the drive cannot judge the
 // agent's words after a chat reply. The verification command comes back at its own checkpoint step, which the fixture
 // does not reach, so only its replies typed with `/aidlc` are driven; its answer typed in a fresh chat is recorded there.
-// Guard recovery's fixture cannot be met, so it is not driven live at all. And the open work carrying on after a routing
-// reply is counted from that reply, not from the rows the chat writes as it opens.
+// Guard recovery's fixture cannot be met, so it is not driven live at all. The open work carrying on after a routing
+// reply is counted from that reply, not from the rows the chat writes as it opens. And a gate a blocking sensor refused
+// is met as a run leaves it, the summary confirmed and the review READY, so the override the person picks opens it.
 //
 // Mechanism: function - the live pool over the corpus, and the engine's own steps on the fixtures (the human-turn
 // hook, the session-start hook, `next`); no agent runs.
@@ -15,7 +16,7 @@ import { join } from "node:path";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { listIntents, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import {
-  ANSWERS, ASKED_IN_CHAT, NOT_LIVE, SESSION, buildQuestion, env, exec, liveReply, next, say, workCarriedOn,
+  ANSWERS, ASKED_IN_CHAT, NOT_LIVE, SESSION, STAGE, buildQuestion, env, exec, liveReply, next, say, workCarriedOn,
 } from "../harness/aidlc-answers-corpus.ts";
 import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
@@ -115,5 +116,22 @@ describe("the live answers check in a fresh chat", () => {
     expect(workCarriedOn(proj, records, reply)).toBe(false);
     appendAuditEntry("STAGE_STARTED", { Stage: "requirements-analysis" }, proj);
     expect(workCarriedOn(proj, records, reply)).toBe(true);
+  });
+
+  test("after \"just approve it\" at a gate a blocking sensor refused, the override the person picked opens the gate", async () => {
+    const proj = project();
+    await buildQuestion(proj, "stage-gate-sensor-failure");
+    await say(proj, "just approve it", "claude");
+    // The agent's two steps for the override (stage-protocol-sensors.md): the answer, then the same report again.
+    const tool = (name: string, args: string[]) =>
+      exec([process.execPath, join(proj, ".claude", "tools", name), ...args, "--project-dir", proj], { cwd: proj, env: env(proj) });
+    const answered = await tool("aidlc-log.ts", ["answer", "--stage", STAGE, "--details", "Override blocking sensors"]);
+    expect(answered.status, answered.stdout + answered.stderr).toBe(0);
+    const reported = await tool("aidlc-orchestrate.ts", ["report", "--stage", STAGE, "--result", "awaiting-approval",
+      "--override-blocking-sensors", "--user-input", "Override blocking sensors"]);
+    const out = reported.stdout + reported.stderr;
+    expect(reported.status, out).toBe(0);
+    expect(out).not.toContain('"ask_type":"guard-recovery"');
+    expect(readAuditShardEvents(proj).at(-1)?.event, out).toBe("STAGE_AWAITING_APPROVAL");
   });
 });

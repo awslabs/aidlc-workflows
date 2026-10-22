@@ -2,18 +2,21 @@
 //
 // The answers corpus in the nightly: the Claude SDK family's Linux live job opens the live check (no switch of its
 // own reaches a live file there), drives one item per question by a date rotation, and reports every miss without
-// failing. The summary it writes beside its report is what the nightly report reads.
+// failing. The summary it writes beside its report is what the nightly report reads. And what a live run owes on any
+// platform: the real home's digest leaves out the tool's own writes on a Windows path too, and a scratch folder Windows
+// still holds after the drive is a note in the log, not the item's verdict.
 //
 // Mechanism: function - the rotation, the nightly switch, the judge's verdict, an item's owed misses and the summary,
 // read back from an evidence folder laid out as the live job uploads it; no agent runs.
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix, win32 } from "node:path";
 import { collectAnswers } from "../../scripts/ci-preview-test-report.ts";
 import { ANSWERS } from "../harness/aidlc-answers-corpus.ts";
 import {
-  inNightly, judgeVerdict, type LiveOutcome, type LiveReport, liveItem, liveSummary, missKinds, nightOf, ROTATION_START, rotateByGroup,
+  homeDigestSkips, inNightly, judgeVerdict, leaveBusyFolder, type LiveOutcome, type LiveReport, liveItem, liveSummary, missKinds, nightOf,
+  ROTATION_START, rotateByGroup,
 } from "../harness/live-corpus.ts";
 
 interface Item { id: string; meaning: string; group: string }
@@ -76,6 +79,43 @@ describe("the answers corpus in the nightly", () => {
     expect(outcomes).toHaveLength(2);
     await expect(liveItem(async () => { throw new Error("the driver crashed"); }, outcomes, true)).rejects.toThrow("the driver crashed");
     expect(outcomes).toHaveLength(2);
+  });
+
+  test("the real home's digest leaves out the tool's own folders on a Windows path as on a POSIX one", () => {
+    for (const [home, at] of [["C:\\Users\\Administrator\\.claude", win32.join], ["/home/u/.claude", posix.join]] as const) {
+      for (const name of ["projects", "sessions", "backups", "teams", "plugins", "logs", "history.jsonl"]) {
+        expect(homeDigestSkips(at(home, name)), at(home, name)).toBe(true);
+      }
+      expect(homeDigestSkips(at(home, "settings.json")), at(home, "settings.json")).toBe(false);
+    }
+  });
+
+  test("a scratch folder still held after the drive is a note in the log; the item's verdict stands", async () => {
+    const folder = "C:\\Users\\Administrator\\AppData\\Local\\Temp\\aidlc-test-x";
+    const busy = leaveBusyFolder(() => {
+      throw Object.assign(new Error(`EBUSY: resource busy or locked, rmdir '${folder}'`), { code: "EBUSY" });
+    }, folder);
+    const outcomes: LiveOutcome<Item>[] = [];
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // Shaped as the corpus drives end: the outcome returned, the scratch project removed in `finally`.
+      const drive = async () => {
+        try {
+          return outcome(item("gs-14", "stage-gate-sensor-failure"), []);
+        } finally {
+          busy();
+        }
+      };
+      expect((await liveItem(drive, outcomes, false)).owed).toEqual([]);
+      expect(outcomes.map((o) => o.item.id)).toEqual(["gs-14"]);
+      expect(warn.mock.calls.map((call) => String(call[0]))).toEqual([expect.stringContaining(folder)]);
+    } finally {
+      warn.mockRestore();
+    }
+    // Any other cleanup failure is still the item's.
+    expect(leaveBusyFolder(() => {
+      throw Object.assign(new Error(`EACCES: permission denied, rmdir '${folder}'`), { code: "EACCES" });
+    }, folder)).toThrow("EACCES");
   });
 
   test("a verdict the judge wrote that does not parse is the judge's miss, counted as words, not a throw", () => {
