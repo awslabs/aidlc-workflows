@@ -3,6 +3,7 @@ id: traceability
 kind: deterministic
 command: {{INVOKE}} engine sensor-traceability
 default_severity: advisory
+fire_on: gate
 description: Verifies element-level upstream coverage, downstream targets, and derived orphans in traceability.json
 category: document-traceability
 matches: "**/traceability.json"
@@ -24,7 +25,8 @@ timeout_seconds: 300
 
 # traceability sensor
 
-Deterministic element-level verification of each stage's JSON coverage table:
+Deterministic element-level verification of each stage's JSON coverage table,
+run when the stage's gate opens, on the tables as they are then:
 
 1. Validates the runtime JSON shape and the closed status set.
 2. Fails on `GAP`, `ORPHAN`, missing coverage rows, or undeclared upstream IDs.
@@ -33,11 +35,20 @@ Deterministic element-level verification of each stage's JSON coverage table:
 3. Requires non-empty targets for `OK`, `Deferred`, and `N/A`; for `Deferred`
    and `N/A` the target is the reason.
 4. Resolves upstream IDs from the authored artifacts and fails closed when the
-   expected source is missing or yields no IDs.
+   expected source is missing or yields no IDs. FR and NFR IDs come from the
+   `ids` Requirements Analysis records in its own traceability.json, spelled as
+   requirements.md spells them (each with its `kind`, a sub-requirement `of` its
+   requirement); without that record, a table's requirements are the ones it
+   lists and the ones the FR and NFR ID patterns find in requirements.md.
 5. Verifies deterministic targets where possible: stories, Unit mappings,
    business rules, and workspace-relative code paths.
 6. Derives functional-design orphans from `rules.md` rather than
    trusting only the self-reported `reverse` array.
+
+A later stage starts its table with the same tool, `--stage <slug> --output-path
+<its traceability.json> --write-upstream`: it adds every upstream ID this check
+asks for to `upstream_ids`, each with a `GAP` row, keeps what the table already
+holds, and writes nothing when nothing is missing.
 
 Build and Test's coverage gate runs the same tool with `--stage build-and-test`
 and no output path. It reads every Code Generation table and prints each

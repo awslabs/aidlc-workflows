@@ -210,6 +210,7 @@ import {
   setPhaseProgress,
   singleStageAttemptIsOpen,
   stagesInScope,
+  stageAcceptAsIsOnOffer,
   stageGateApproval,
   swarmConvergedUnits,
   teamUnitGateStatus,
@@ -376,11 +377,6 @@ function personsLatestGatePickSafe(
   } catch {
     return null;
   }
-}
-
-function revisionCountOf(content: string): number {
-  const parsed = parseInt(getField(content, "Revision Count") ?? "0", 10);
-  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 // The person's own words at a gate they answered: every message they typed
@@ -2610,8 +2606,8 @@ function handleUnit(args: string[]): void {
     const scope = getField(content, "Scope");
     if (usesStageLevelPerUnitArtifacts(scope, content)) {
       error(
-        `Refusing unit ${action} for "${unit}": the effective workflow plan skips ` +
-          "Units Generation, so this stage runs once at stage level.",
+        `Refusing unit ${action} for "${unit}": this work has no Units (Units Generation ` +
+          "is not on its plan, or has not run), so this stage runs once at stage level.",
       );
     }
 
@@ -5745,8 +5741,8 @@ function staleReviewPreconditionError(
       `--reviewer ${reviewer} --iteration <next ordinal>\`, then record the verdict ` +
       `with the same command plus \`--verdict <READY|NOT-READY>\`. After that ` +
       `review, stop editing this stage's output documents. If the recovery pass was already ` +
-      `spent, present the situation to the human at the approval gate; a human ` +
-      `Request Changes decision resets the review attempt. Do not record a rejection ` +
+      `spent: ${recoveryGuidance(pd, content, slug)} Only a human Request Changes decision ` +
+      `resets the review attempt. Do not record a rejection ` +
       `on the human's behalf.`;
   refuseStateGuard(pd, content, stage, {
     code: "ARTIFACT_REVIEW_STALE",
@@ -7259,13 +7255,7 @@ function verifyApprovalDecision(
     );
   }
   if (!autonomousDecision && !humanPresenceGuardDisabled()) {
-    const rawRevisionCount = getField(content, "Revision Count");
-    const parsedRevisionCount = rawRevisionCount
-      ? parseInt(rawRevisionCount, 10)
-      : 0;
-    const revisionCount = Number.isFinite(parsedRevisionCount)
-      ? parsedRevisionCount
-      : 0;
+    const acceptAsIs = stageAcceptAsIsOnOffer(pd, stage.slug, unit);
     // The conductor read the person's reply and reports the approval it made;
     // the receipt records that choice, and the person's own words ride on it.
     // Host cancellation text is no reply, and a latest message that is exactly
@@ -7277,7 +7267,7 @@ function verifyApprovalDecision(
           "choice and wait for the human to choose one.",
       );
     }
-    const pick = personsLatestGatePickSafe(pd, stage.slug, unit, revisionCount >= 3);
+    const pick = personsLatestGatePickSafe(pd, stage.slug, unit, acceptAsIs);
     if (pick === "Request Changes") {
       refuseForAgent(
         `The person picked Request Changes at the "${stage.slug}" gate. Report that, or ask them if you read ` +
@@ -7286,7 +7276,7 @@ function verifyApprovalDecision(
       );
     }
     // Their exact pick names which approval it is.
-    approvalInput = pick ?? stageGateApproval(approvalInput, revisionCount >= 3);
+    approvalInput = pick ?? stageGateApproval(approvalInput, acceptAsIs);
   }
   // Once the approval question is put to the person, only their reply to it
   // approves: a turn they sent before it (an answer to the stage's own
@@ -7836,7 +7826,7 @@ function handleReject(args: string[]): void {
     getField(content, "Construction Checkpoints") !== "enabled" &&
     isAutonomousConstructionGate(content, stage, pd);
   const rejectPick = !autonomousDecision && feedbackStatus === "not-applicable"
-    ? personsLatestGatePickSafe(pd, slug, teamGate?.unit, revisionCountOf(content) >= 3)
+    ? personsLatestGatePickSafe(pd, slug, teamGate?.unit, stageAcceptAsIsOnOffer(pd, slug, teamGate?.unit))
     : null;
   if (rejectPick === "Approve" || rejectPick === "Accept as-is") {
     refuseForAgent(

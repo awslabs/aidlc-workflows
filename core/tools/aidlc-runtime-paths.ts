@@ -334,6 +334,13 @@ export function swarmUnitTestCommand(unit: string): string {
   return aidlcDispatcherInvocation(`swarm check ${quoteCommandArgument(unit)} --show-output`);
 }
 
+// The command that runs one check by hand, in the sensor tool's usage and each
+// check script's: the dispatcher hands the script the stage's templates and
+// inputs and records the result, which the script run bare does not.
+export function sensorFireUsage(id = "<id>"): string {
+  return aidlcDispatcherInvocation(`sensor fire ${id} --stage <slug> --output-path <path>`);
+}
+
 export function aidlcToolInvocation(
   route: string,
   sourceTool?: string,

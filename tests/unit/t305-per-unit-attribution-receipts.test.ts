@@ -1096,6 +1096,7 @@ function runtimeFixture(): { project: string; record: string } {
   let state = readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8");
   state = state
     .replace("- **Current Stage**: feasibility", "- **Current Stage**: code-generation\n- **Construction Iteration**: stage-major")
+    .replace("- [ ] units-generation \u2014 EXECUTE", "- [x] units-generation \u2014 EXECUTE")
     .replace("- [ ] code-generation — EXECUTE", "- [?] code-generation — EXECUTE");
   writeFileSync(join(record, "aidlc-state.md"), state, "utf-8");
   const dag = join(record, "inception", "units-generation");

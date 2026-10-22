@@ -973,10 +973,13 @@ function legRows(leg: TraceLeg, gapMs: number): TraceRow[] {
 
 // --- What a leg was like for the person -----------------------------------------
 
-function stamp(e: TraceEvent, origin: number | null): string {
-  if (e.at === null || origin === null) return `[turn ${e.turn}]`;
-  const s = Math.max(0, Math.round((e.at - origin) / 1000));
+function clock(at: number, origin: number): string {
+  const s = Math.max(0, Math.round((at - origin) / 1000));
   return `[${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}]`;
+}
+
+function stamp(e: TraceEvent, origin: number | null): string {
+  return e.at === null || origin === null ? `[turn ${e.turn}]` : clock(e.at, origin);
 }
 
 function eventLine(e: TraceEvent): string | null {
@@ -1014,8 +1017,28 @@ function notKept(leg: TraceLeg): string[] {
   return missing.length ? [`Not kept for this leg: ${missing.join(" and ")}.`] : [];
 }
 
+// The audit rows that record a decision for the person: each is shown with the choice as recorded and the reply kept
+// beside it, so a reader sees each reply against its record.
+const DECISION_EVENTS = new Set([
+  "GATE_APPROVED", "GATE_REJECTED", "PLAN_APPROVAL_RECORDED", "QUESTION_ANSWERED", "SUMMARY_CONFIRMATION_RECORDED",
+  "VERIFICATION_COMMAND_RECORDED", "CONSTRUCTION_POLICY_RECORDED", "REQUEST_ROUTED", "ARTIFACT_REUSED", "WORKSPACE_RECLASSIFIED",
+]);
+
+function recordedLine(r: AuditRow, origin: number | null): string {
+  const f = r.fields;
+  const when = r.at === null || origin === null ? "" : `${clock(r.at, origin)} `;
+  const where = [f.Stage ?? f["Stage slug"], f.Unit].filter(Boolean).join(" ");
+  const choice = f["User Input"] ?? f.Details ?? f.Feedback ?? f.Decision ?? f.Choice ?? f["New Project Type"];
+  const reply = f["Person Reply"] ?? f["Person Words"];
+  return `${when}${r.event}${where ? ` ${where}` : ""}: ${choice === undefined ? "" : `recorded ${JSON.stringify(clip(choice, 200))}; `}` +
+    (reply === undefined ? "no reply of theirs kept" : `their reply ${JSON.stringify(clip(reply, 300))}`) + ` (${r.src})`;
+}
+
 /** The leg as the person lived it, within `budget` bytes: calls and replies are cut from the middle first. */
 export function storyText(leg: TraceLeg, budget = 40_000, gapMinutes = 10): string {
+  const timed = leg.events.filter((e) => e.at !== null);
+  const origin = timed.length ? Math.min(...timed.map((e) => e.at!)) : null;
+  const decisions = leg.audit.filter((r) => DECISION_EVENTS.has(r.event));
   const head = [
     `# ${leg.test}${leg.attempt !== null ? ` attempt ${leg.attempt}` : ""}: ${leg.harness || "unknown harness"} ${leg.os}, run ${leg.run}${leg.status ? `, ${leg.status}` : ""}`,
     "",
@@ -1025,10 +1048,9 @@ export function storyText(leg: TraceLeg, budget = 40_000, gapMinutes = 10): stri
     "## Rows",
     ...(leg.rows.length ? leg.rows.map(rowLine) : ["(none)"]),
     "",
+    ...(decisions.length ? ["## Recorded for the person", ...decisions.map((r) => recordedLine(r, origin)), ""] : []),
     "## What happened",
   ];
-  const timed = leg.events.filter((e) => e.at !== null);
-  const origin = timed.length ? Math.min(...timed.map((e) => e.at!)) : null;
   type Line = { text: string; prio: number; src: string };
   const body: Line[] = [];
   let prev: TraceEvent | null = null;

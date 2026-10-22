@@ -133,9 +133,10 @@ same consumed concept is emitted by two stages, pick distinct names that
 disambiguate.
 
 Shared names are valid when no stage consumes them. The shipped `traceability`
-artifact follows this pattern: eight stages each write their own
+artifact follows this pattern: nine stages each write their own
 `traceability.json` under their own record directory, and no downstream stage
-resolves `traceability` through `producersOf()`.
+resolves `traceability` through `producersOf()` (the traceability check reads
+Requirements Analysis' record by its path).
 
 Today's one example: both `build-and-test` (Construction) and
 `performance-validation` (Operation) write a file called `test-results.md`.

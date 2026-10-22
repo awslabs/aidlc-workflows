@@ -689,8 +689,13 @@ report awaiting-approval  →  [?] AwaitingApproval
 ```
 
 `Revision Count` lives in the state file and increments on each rejected
-report. The conductor uses this to detect the revision-loop escape hatch
-(default is 3 cycles before offering to skip).
+report, across the whole workflow. The revision-loop escape hatch counts per
+stage instead: Accept as-is is on offer once the same stage's gate (one
+Unit's, at a Unit gate) has 3 `GATE_REJECTED` rows since it was last approved
+or freshly reopened (`stageRevisionCycles` in `aidlc-lib.ts`, read from the
+audit trail, so a park keeps the count). Only then does the engine record an
+approval as Accept as-is or read a reply of exactly `3` as that pick, and
+`/aidlc --status` shows the same per-stage count as `revision N of 3`.
 
 When a revision changes a reviewed output or bound question content on a stage whose directive
 carries a reviewer, the conductor re-runs the `stage-protocol-reviewer.md` §12a step before
@@ -766,7 +771,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 
 | Event | Emitter | Notes |
 |---|---|---|
-| `GATE_APPROVED` | `tools/aidlc-state.ts`, `tools/aidlc-unit.ts gate` | `User Input` records the choice the person's reply names. On a stage approval (`tools/aidlc-state.ts`), `Person Reply` carries their own words when the engine knows which chat ran the command, and `Message Id` names the message the hook kept for their latest reply after the gate was shown, in this machine's own shard, when it does not (one chat only, and never both fields); a Unit merge gate carries neither. On reviewer-backed gates, the same atomic row stores `Accepted risk` for every open finding in the engine-owned list when the person approved, `Approved autonomously` when Construction approved on its own, or `Changed after review` for one whose reviewed work changed after that review with no finished review since (the last two are not a decision, so the finding stays open for the next review). A Unit's checkpoint approval and a swarm batch's approval record their own Units' findings; a stage's approval nobody gave records none that a Unit's own approval recorded, and a Unit approval an earlier release wrote, which records none, stands for its own decision. Each version 1 disposition keeps its existing artifact, ID, fingerprint, and status fields, with optional decided-at severity and reviewed record path/digest additions that attach the decision to the paired review. Unit merge gates also bind Pinned OID, Attempt Generation, Strategy, and Target branch. |
+| `GATE_APPROVED` | `tools/aidlc-state.ts`, `tools/aidlc-unit.ts gate` | `User Input` records the choice the person's reply names. On a stage approval (`tools/aidlc-state.ts`), `Person Reply` carries their own words when the engine knows which chat ran the command, and `Message Id` names the message the hook kept for their latest reply after the gate was shown, in this machine's own shard, when it does not (one chat only, and never both fields); a Unit merge gate carries neither. On reviewer-backed gates, the same atomic row stores `Accepted risk` for every open finding in the engine-owned list when the person approved, `Approved autonomously` when Construction approved on its own, or `Changed after review` for one whose reviewed work changed after that review with no finished review since (the last two are not a decision, so the finding stays open for the next review). A Unit's checkpoint approval and a swarm batch's approval record their own Units' findings; a stage's approval nobody gave records none that a Unit's own approval recorded, and a Unit approval that records none (an earlier release wrote it, or nothing was open) stands for its own decision only on a finding whose review finished before it, and one a review raised afterwards, such as a reviewer that finished after the person approved the Unit as it is, is recorded as `Approved autonomously`. Each version 1 disposition keeps its existing artifact, ID, fingerprint, and status fields, with optional decided-at severity and reviewed record path/digest additions that attach the decision to the paired review. Unit merge gates also bind Pinned OID, Attempt Generation, Strategy, and Target branch. |
 | `GATE_REJECTED` | `tools/aidlc-state.ts`, `tools/aidlc-unit.ts gate` | At a stage gate, `Feedback` holds the words the human-turn hook recorded for the rejecting chat after the stage's latest `STAGE_AWAITING_APPROVAL` and after any other question answered since: each message verbatim, in order, without messages that only pick a choice (`Request Changes`, `2`) or cancel, and never questions alone. When a bare Request Changes pick is followed by more than questions, only the messages after the latest pick count. Like `HUMAN_TURN`, this is the prompt text the harness delivered to the hook for that chat; it does not authenticate who typed it. The conductor's `--feedback`/`--reason`, when it says something else, is kept in `Conductor Summary`, and `STAGE_REVISING` carries the same `Feedback`. With no recorded words (a harness that passes no prompt text or session, a guard-recovery ask, autonomous Construction, a gate never presented), `--feedback` captures the rejection reason exactly as before. Explicit `--reject-finding <review-artifact>#R-NN=<reason>` values store `Rejected: <reason>` for open findings. Explicit `--reopen-finding <review-artifact>#R-NN=<reason>` values reopen only `Resolved (reviewer)` findings, and one ID cannot appear in both flags. The version 1 disposition additions record decided-at severity and the reviewed record when available. Generic revision feedback changes no finding decision. Gate rows without dispositions change no finding. Unit merge gates bind the same pinned transaction fields. A row `aidlc-jump.ts reopen` writes carries `Reopen`: `jump`, `redo` for a Redo on re-entry (the person asked to redo that Unit's step, not to change it at a gate), or `change` for a change they asked for at the one late question (`--via change`: Feedback holds their words, User Input is Request Changes). |
 
 Under `Unit Ownership: team`, these rows additionally carry `Unit`, `Gate
@@ -1549,7 +1554,7 @@ closed `op` from `GUARD_REMEDY_OPS` in `aidlc-lib.ts` (`present-approval-gate`,
 `restore-or-jump`, `restart-stage`, `redo-unit-step`, `reopen-unit-step`,
 `review-advisory-gate`, `change-scope`, `restore-scope`, `abort-bolt`, `record-unit-completion`,
 `finish-unit-step`, `dispatch-pipeline-links`, `produce-stage-output`, `repair-source-boundary`,
-`reconfirm-summary`, `unset-unattended`, `lower-fence`). Routing decisions compare `op` and never the
+`reconfirm-summary`, `lower-fence`). Routing decisions compare `op` and never the
 remedy sentence; the directive contract refuses an unknown `op`. These refusals
 are the conductor's own step: a missing pipeline handoff
 (`PIPELINE_EVIDENCE_MISSING`) offers `dispatch-pipeline-links`, whose action is
@@ -1609,7 +1614,7 @@ reopen, or, with no Unit on record, asks the person which Unit does the step
 again with `/aidlc --stage <stage> --unit <name>`.
 The first block stage still offers `restart-stage`, which is no forward jump,
 with its cost. The stage-wide resets offered in other states (`request-changes`,
-`unset-unattended`, `redo-jump`, `restore-or-jump`) say in their action that
+`redo-jump`, `restore-or-jump`) say in their action that
 they throw away every Unit's finished work and that each Unit then redoes it and
 needs its approvals again. A `skipped` stage, which the walk never routes,
 stage-major, and team walks keep their remedies.
@@ -1984,7 +1989,10 @@ plans, validity resolves one stage-level artifact instance under
 `<record>/construction/<stage>/` and does not inspect a Bolt DAG or stale
 per-Unit directories. Units Generation that already completed is the
 exception: a later scope change or recompose that skips it keeps its Units, so
-per-Unit stages keep resolving per Unit (#1401). When Units Generation executes, normal Bolt DAG expansion
+per-Unit stages keep resolving per Unit (#1401). Work whose cursor is already
+past a Units Generation that never ran (a scope change into a scope that runs
+it, or a jump over it) has no Units either, and resolves stage-level the same
+way until a jump back runs Units Generation. When Units Generation executes, normal Bolt DAG expansion
 and the legacy no-DAG directory fallback remain unchanged. Missing or ambiguous
 plan state makes receipt capture or inspection unavailable with a non-blocking
 warning rather than reporting false drift.

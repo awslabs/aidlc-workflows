@@ -90,6 +90,7 @@ import {
 	aidlcDispatcherInvocation,
 	compiledExecutable,
 	resolveHarnessPath,
+	sensorFireUsage,
 } from "./aidlc-runtime-paths.ts";
 import { parseSensorManifest, type SensorManifest } from "./aidlc-sensor-schema.ts";
 import {
@@ -443,7 +444,8 @@ function handleDescribe(args: string[]): void {
 //   - codekb producers (reverse-engineering): glob every repo dir under the
 //     space-level codekb root.
 //   - per-unit Construction producers (for_each: unit-of-work): use the
-//     stage-level directory when the effective plan skips Units Generation;
+//     stage-level directory when the work has no Units (the plan skips Units
+//     Generation, or the work passed it without running it);
 //     otherwise glob every <record>/construction/<unit>/<slug>/.
 //   - everything else: <record>/<phase>/<slug>/<name>.md.
 //
@@ -1232,7 +1234,7 @@ function sensorUsage(subcommand: string | undefined): string {
 			"  Prints one sensor's manifest fields. Required: <id>.",
 		],
 		fire: [
-			`${invoke("fire")} <id> --stage <slug> --output-path <path>`,
+			sensorFireUsage(),
 			"  Fires a sensor against a stage output; emits SENSOR_FIRED and its paired result row.",
 			"  Required: <id>, --stage, --output-path. Options: --unit <name> (named on both rows)",
 		],

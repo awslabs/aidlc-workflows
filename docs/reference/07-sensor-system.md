@@ -226,6 +226,17 @@ edit.
 | 4 per-Unit construction-design stages (`functional-design`, `infrastructure-design`, `nfr-design`, `nfr-requirements`) | `[required-sections, upstream-coverage, linter, type-check, traceability]` |
 | `code-generation` | `[required-sections, traceability]` (`linter` and `type-check` not imported: they ran on every file write and nothing read their results) |
 
+`traceability` runs at the gate (`fire_on: gate`), on each stage's finished
+tables. Requirements Analysis imports no check for its own
+`traceability.json`: it records there the FR and NFR IDs `requirements.md`
+defines, as written (`ids`, each with its `kind` and, for a sub-requirement,
+`of`), and every later check takes those IDs from it; a record that is missing
+or not exact leaves each table's requirements as the table lists them, plus the
+IDs the FR and NFR patterns find in `requirements.md`, as before the record. A later
+stage starts its table with `engine sensor-traceability --stage <slug>
+--output-path <table> --write-upstream`, which adds every upstream ID the check
+asks for, each with a `GAP` row, and writes nothing when nothing is missing.
+
 Forks customise stages by editing the stage's `sensors:` list directly
 — the binding lives next to the thing being customised. A manifest is a
 pure capability descriptor; it carries no stage-targeting field (there is

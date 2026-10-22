@@ -121,19 +121,20 @@ Generate the following in `<record>/construction/{unit-name}/functional-design/`
 - **frontend-components.md** (CONDITIONAL — only if unit includes frontend/UI): Component hierarchy, props/state design, interaction flows, form validation rules, API integration points
 
 Create
-`<record>/construction/{unit-name}/functional-design/traceability.json`.
-List in `upstream_ids` every ID this Unit answers for:
+`<record>/construction/{unit-name}/functional-design/traceability.json` by running
+`{{INVOKE}} engine sensor-traceability --stage functional-design --output-path <that path> --write-upstream`:
+it lists in `upstream_ids` every ID this Unit answers for, each with a `GAP` row:
 
 - With both `stories.md` and `unit-of-work-story-map.md`: every `ACx.y.z` of
   every story the story map assigns to this Unit, including the criteria of a
   shared story that another Unit delivers.
 - Otherwise, with `unit-of-work-story-map.md`: every `FR` on this Unit's rows.
-- Otherwise: every `FR` in `requirements.md`.
+- Otherwise: every `FR` Requirements Analysis recorded.
 
 A requirement with sub-requirements is traced through its `FR{n}.{m}` IDs and
 needs no row of its own.
 
-Give each ID one `coverage` row: `OK` with a `target` naming one or more
+Set each ID's `coverage` row: `OK` with a `target` naming one or more
 `BRx.y` IDs that exist in `rules.md`; `N/A` with the reason as its `target`
 (for example `delivered by u2-profile`); `Deferred` with the later stage that
 covers it as its `target`; or `GAP` while this design does not cover it. Use

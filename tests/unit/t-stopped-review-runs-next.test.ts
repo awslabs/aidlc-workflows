@@ -32,6 +32,10 @@ import {
   artifactFilename, auditBlockField, findStageBySlug, latestMainWorkflowStageRunFloorForProject,
   readAuditShardEvents, reviewArtifactFingerprint, sourceBaselineAuditFields,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  hydrateReviewArtifactContexts, readReviewArtifactContexts, readReviewFindingDispositions,
+  REVIEW_FINDING_DISPOSITIONS_FIELD,
+} from "../../dist/claude/.claude/tools/aidlc-review-brief.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -463,7 +467,10 @@ describe("(b) the NOT-READY fallback the agent records reads as a review that di
 // The person stopped alpha's review and approved alpha as it is, but the
 // reviewer was still running (on Claude Code, Esc does not stop a helper in
 // the background). Its verdict comes in later and the agent records it: it is
-// on record, and alpha stays approved, so nothing asks about alpha again.
+// on record, and alpha stays approved, so nothing asks about alpha again. The
+// person never saw a finding it raises: the stage's own row, which nobody
+// gave, records it as Approved autonomously, and it stays open for the next
+// review.
 describe("a verdict that comes in after the person approved the Unit as it is", () => {
   function approvedAsItIs(p: string): string {
     build(p, "alpha");
@@ -488,6 +495,17 @@ describe("a verdict that comes in after the person approved the Unit as it is", 
     expect(recorded.status, recorded.out).toBe(0);
   }
 
+  function stageDispositions(p: string): Array<{ id: string; status: string }> {
+    const rows = events(p, "GATE_APPROVED").filter((row) =>
+      auditBlockField(row.block, "Stage") === CG && auditBlockField(row.block, "Unit") === null);
+    expect(rows).toHaveLength(1);
+    const field = auditBlockField(rows[0].block, REVIEW_FINDING_DISPOSITIONS_FIELD);
+    return field === null
+      ? []
+      : (JSON.parse(field) as { dispositions: Array<{ id: string; status: string }> })
+        .dispositions.map(({ id, status }) => ({ id, status }));
+  }
+
   const cases: Array<[Policy, "advisory" | "adversarial", "READY" | "NOT-READY"]> = [
     ["off", "advisory", "READY"], ["off", "advisory", "NOT-READY"],
     ["strict", "advisory", "READY"], ["strict", "advisory", "NOT-READY"],
@@ -504,6 +522,14 @@ describe("a verdict that comes in after the person approved the Unit as it is", 
       expect(after).toMatchObject({ stage: CG, unit: "beta" });
       walkCarriesOn(p);
       expect(unitApprovals(p, "alpha")).toHaveLength(1);
+      const late = verdict === "READY" ? [] : [{ id: "R-01", status: "New" }];
+      expect(stageDispositions(p)).toEqual(late.map(({ id }) => ({ id, status: "Approved autonomously" })));
+      const contexts = readReviewArtifactContexts(p, findStageBySlug(CG)!, "alpha");
+      const statuses = (list: typeof contexts): Array<{ id: string; status: string }> =>
+        list.flatMap((context) => context.findings).map(({ id, status }) => ({ id, status }));
+      expect(statuses(contexts)).toEqual(late);
+      expect(statuses(hydrateReviewArtifactContexts(contexts, readReviewFindingDispositions(p, CG, "alpha"))))
+        .toEqual(late);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 });

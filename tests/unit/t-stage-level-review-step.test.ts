@@ -148,12 +148,13 @@ describe("stage-level review step: next names the step the review log accepts", 
   });
 });
 
-// Per Unit, units-generation planned, and no Unit DAG yet: the stage-level route.
+// Per Unit, Units Generation done, and no Unit DAG on disk: the stage-level route.
 function noDagFixture(extra: string): string {
   const p = createOrchestrationTestProject();
   projects.push(p);
   const state = readFileSync(join(FIXTURES_DIR, "state-brownfield-feature.md"), "utf-8")
     .replace(/^- \*\*Current Stage\*\*:.*$/m, "- **Current Stage**: code-generation")
+    .replace("- [ ] units-generation", "- [x] units-generation")
     .replace("- **Change Control**: strict (from scope feature)", `- **Change Control**: strict (from scope feature)\n- **Review Override**: adversarial${extra}`);
   writeFileSync(seededStateFile(p), state, "utf-8");
   const dir = codeGenerationRecordDir(p, null);

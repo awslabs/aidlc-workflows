@@ -2704,7 +2704,7 @@ export function compileStageGraph(): {
     if (!consumer) continue;
 
     // Shared artifact names are legal when unconsumed: traceability is
-    // produced by eight stages and consumed by none, so only consumed names
+    // produced by nine stages and consumed by none, so only consumed names
     // require a unique producer.
     const producerList = producers
       .map(({ file, slug }) => `${file} (stage "${slug}")`)

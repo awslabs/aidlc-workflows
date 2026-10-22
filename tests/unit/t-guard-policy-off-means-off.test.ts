@@ -84,6 +84,7 @@ function project(policy: Policy, source = "from scope feature"): { project: stri
   const state = readFileSync(join(FIXTURES_DIR, "state-mid-ideation.md"), "utf-8")
     .replace("- **Change Control**: strict (from scope feature)", `- **Guard Policy**: ${policy} (${source})`)
     .replace("- **Current Stage**: feasibility", "- **Current Stage**: code-generation\n- **Construction Iteration**: stage-major")
+    .replace("- [ ] units-generation \u2014 EXECUTE", "- [x] units-generation \u2014 EXECUTE")
     .replace("- [ ] code-generation — EXECUTE", "- [?] code-generation — EXECUTE");
   writeFileSync(join(record, "aidlc-state.md"), state, "utf-8");
   const dag = join(record, "inception", "units-generation");

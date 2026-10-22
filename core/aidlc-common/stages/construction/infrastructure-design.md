@@ -152,11 +152,13 @@ Generate the following in `<record>/construction/{unit-name}/infrastructure-desi
 **3. `cicd-pipeline.md`** — the delivery pipeline: build stages, test-automation integration, deployment strategy (blue-green / canary / rolling), rollback procedures, environment promotion, and secrets management in CI/CD. Steps are inherently sequential, so prose or an ordered list is fine here; use a table for the stage→gate mapping where it helps.
 
 Create
-`<record>/construction/{unit-name}/infrastructure-design/traceability.json`.
-Enumerate every `NFRx.y` design decision that requires infrastructure and map
-it to the concrete resource or configuration (if NFR Design did not run, take
-the `NFRx.y` IDs from NFR Requirements; if NFR Requirements did not run,
-enumerate every `NFRn` in `requirements.md` instead):
+`<record>/construction/{unit-name}/infrastructure-design/traceability.json` by running
+`{{INVOKE}} engine sensor-traceability --stage infrastructure-design --output-path <that path> --write-upstream`:
+it lists every `NFRx.y` of this Unit's NFR design (if NFR Design did not run,
+of NFR Requirements; if NFR Requirements did not run, every `NFRn`
+Requirements Analysis recorded), each with a `GAP` row. Map each design decision
+that requires infrastructure to the concrete resource or configuration, and
+mark one that needs none `N/A` with the reason:
 
 ```json
 {

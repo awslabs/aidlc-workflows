@@ -544,6 +544,7 @@ All artifacts written to `<record>/inception/requirements-analysis/`:
 |--------------------------------------|---------------------------------------------------------|
 | `requirements.md`                    | Formal requirements: intent analysis, functional/non-functional requirements, constraints, assumptions, out-of-scope, open questions |
 | `requirements-analysis-questions.md` | Clarifying questions with `[Answer]:` tags (input artifact) |
+| `traceability.json`                  | The FR and NFR IDs `requirements.md` defines, spelled as it spells them, each with its `kind` and, for a sub-requirement, the requirement it belongs to (`of`); later stages trace from this list |
 
 ### Approval Gate
 

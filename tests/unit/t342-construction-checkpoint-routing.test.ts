@@ -2574,6 +2574,70 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
     expect(copilotRuns(p, reopen!).refused).toBeNull();
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
+  // `next --stage --every-unit` prints the reopen of every Unit that reached
+  // the step, and `--change` makes a reopen the person's change: each runs as
+  // printed, and one with no such claim is told the `next --stage` that
+  // prints it.
+  function bothBuilt(policy: string): string {
+    const p = policyFixture("classic", `${policy} (set by you)`, "adversarial");
+    COPILOT.install(p);
+    buildReviewed(p, "alpha");
+    approve(p, "alpha");
+    buildReviewed(p, "beta");
+    copilotSays(p, "carry on");
+    expect(copilotNext(p, "next")).toMatchObject({ construction_checkpoint: { unit: "beta" } });
+    return p;
+  }
+  const reopenedAs = (p: string) =>
+    auditBlockField(readAuditShardEvents(p).filter((row) => row.event === "GATE_REJECTED").at(-1)?.block ?? "", "Reopen");
+
+  for (const policy of ["strict", "off"]) {
+    test(`Copilot, Guard Policy ${policy}: the person's redo for every Unit runs the reopen next --stage --every-unit prints`, () => {
+      const p = bothBuilt(policy);
+      copilotSays(p, "Redo Code Generation for every Unit, please.");
+      const reopen = printedReopen(copilotNext(p, "next --stage code-generation --every-unit"));
+      expect(reopen).toContain("--units alpha,beta");
+      expect(copilotRuns(p, reopen!).refused, "the redo for every Unit was refused on Copilot").toBeNull();
+      expect(copilotNext(p, "next")).toMatchObject({ kind: "run-stage", stage: "code-generation", unit: "alpha" });
+    }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+  }
+
+  test("Copilot: the person's change for every Unit runs as their change", () => {
+    const p = bothBuilt("strict");
+    copilotSays(p, "Change Code Generation for every Unit: greet with hello.");
+    const reopen = printedReopen(copilotNext(p, "next --stage code-generation --every-unit --change"));
+    expect(reopen).toContain("--units alpha,beta");
+    expect(reopen).toContain("--via change");
+    expect(copilotRuns(p, reopen!).refused).toBeNull();
+    expect(reopenedAs(p)).toBe("change");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Copilot: one Unit's change at its checkpoint runs as their change", () => {
+    const p = policyFixture("classic", "strict (set by you)", "adversarial");
+    COPILOT.install(p);
+    buildReviewed(p, "alpha");
+    copilotSays(p, "carry on");
+    copilotNext(p, "next");
+    copilotSays(p, "Change Code Generation for alpha: greet with hello.");
+    const reopen = printedReopen(copilotNext(p, "next --stage code-generation --unit alpha --change"));
+    expect(reopen).toContain("--units alpha --scope classic --via change");
+    expect(copilotRuns(p, reopen!).refused).toBeNull();
+    expect(reopenedAs(p)).toBe("change");
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
+  test("Copilot: a reopen of every Unit after next --stage for one is told next --stage --every-unit, which lets it through", () => {
+    const p = bothBuilt("strict");
+    copilotSays(p, "Redo Code Generation for every Unit, please.");
+    const one = printedReopen(copilotNext(p, "next --stage code-generation"));
+    expect(one).toContain("--units beta --scope classic");
+    const refused = copilotRuns(p, one!.replace("--units beta", "--units alpha,beta")).refused;
+    expect(refused, "a reopen of every Unit ran on a claim that printed one").not.toBeNull();
+    expect(namedCommands(refused!)).toContain("bun .aidlc/tools/aidlc-orchestrate.ts next --stage code-generation --every-unit");
+    const every = printedReopen(copilotNext(p, "next --stage code-generation --every-unit"));
+    expect(every).toContain("--units alpha,beta");
+    expect(copilotRuns(p, every!).refused).toBeNull();
+  }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
+
   // A side-by-side build was prepared (a Bolt opened per Unit) and the person
   // asked to build the Units one at a time instead: each Unit is then built,
   // reviewed and checked in the project itself. The prepared Bolts are closed

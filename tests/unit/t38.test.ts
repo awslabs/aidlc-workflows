@@ -13,8 +13,8 @@
 //   - current stage's checkbox == [?] (awaiting-approval) ->
 //       statusLine = `Awaiting your approval on <displayName>`
 //   - current stage's checkbox == [R] (revising) ->
-//       statusLine = `Revising <displayName> (revision <N> of 3)` when the
-//       Revision Count field is present, else `Revising
+//       statusLine = `Revising <displayName> (revision <N> of 3)`, N being
+//       this stage's own change requests on record, else `Revising
 //       <displayName>` - never a literal "?" count.
 //   - current stage's checkbox == [-] (in-progress) -> statusLine stays the
 //       raw Status value ("Running"), no gate phrase leaks.
@@ -325,10 +325,30 @@ describe("t38 aidlc-utility status — gate awareness (migrated from t38-utility
   test("3: [R] revision count 2 of 3 shown", () => {
     const p = seededProj();
     sedState(p, /^- \[-\] feasibility/m, "- [R] feasibility");
-    sedState(p, /^- \*\*Revision Count\*\*: .*/m, "- **Revision Count**: 2");
+    seedAudit(p, [
+      { timestamp: "2026-01-01T00:00:01Z", event: "GATE_REJECTED" },
+      { timestamp: "2026-01-01T00:00:02Z", event: "GATE_REJECTED" },
+    ]);
     const r = status(p);
     expect(r.status).toBe(0);
     expect(r.out).toContain("(revision 2 of 3)");
+  });
+
+  // The count is this stage's own change requests: the state file's Revision
+  // Count runs across the whole workflow.
+  test("3b: [R] revision count counts only this stage's change requests", () => {
+    const p = seededProj();
+    sedState(p, /^- \[-\] feasibility/m, "- [R] feasibility");
+    sedState(p, /^- \*\*Revision Count\*\*: .*/m, "- **Revision Count**: 4");
+    seedAudit(p, [
+      { timestamp: "2026-01-01T00:00:01Z", event: "GATE_REJECTED", stage: "intent-capture" },
+      { timestamp: "2026-01-01T00:00:02Z", event: "GATE_REJECTED", stage: "intent-capture" },
+      { timestamp: "2026-01-01T00:00:03Z", event: "GATE_REJECTED", stage: "intent-capture" },
+      { timestamp: "2026-01-01T00:00:04Z", event: "GATE_REJECTED" },
+    ]);
+    const r = status(p);
+    expect(r.status).toBe(0);
+    expect(r.out).toContain("(revision 1 of 3)");
   });
 
   test("4: [-] normal state doesn't leak gate phrases", () => {

@@ -18,6 +18,13 @@ leg starts with a line `LEG <id>` and holds:
   findings, refusals, engine errors, the same question asked twice, files
   changed after approval, silences, retries, the agent's tool errors). These
   are counted for you: never count them again, use them as pointers;
+- `## Recorded for the person`, when the leg kept its audit: each decision
+  recorded for them (an approval, a change request, an answer, a plan
+  approval) with the choice as recorded and the reply of theirs kept beside
+  it. Read each reply against its record and what they were shown: a record
+  that says something the reply did not (a "3" that picked "Add User Stories"
+  recorded as an approval) is the record saying something they did not
+  decide;
 - `## What happened`: the leg in time order: `PERSON typed`, `PERSON picked`,
   `ASKED`, `AGENT ran` (with `->` the reply), `AGENT said`, `STOP hook`,
   `(silent N min)`, `NOTE`. Long legs are cut in the middle; the cut line names
@@ -47,8 +54,11 @@ wrong, or that a person reporting from the field would have written up:
 
 Not friction: the test harness itself (the scripted person's own words, the
 driver's bookkeeping, how the test sets up its project), and noise from the CI
-machine that a person would never see. When a leg failed, its failure is
-already triaged: report from it only what the failure note would have missed.
+machine that a person would never see. A difference between runs of the same
+test (other wording, options in another order, a choice offered one night and
+not another) is not friction by itself: judge each leg by what its person met.
+When a leg failed, its failure is already triaged: report from it only what
+the failure note would have missed.
 
 ## How to judge
 

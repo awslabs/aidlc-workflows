@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
-import { errorMessage } from "./aidlc-lib.ts";
+import { asksForHelp, errorMessage, printUsageAndExit } from "./aidlc-lib.ts";
+import { sensorFireUsage } from "./aidlc-runtime-paths.ts";
 
 interface Result {
 	pass: boolean;
@@ -88,6 +89,7 @@ function parseConsume(entry: string): Consume {
 }
 
 export function main(argv: string[]): void {
+	if (asksForHelp(argv)) printUsageAndExit(`Usage: ${sensorFireUsage("upstream-coverage")}`);
 	const flags = parseFlags(argv);
 
 	if (!flags.outputPath) {

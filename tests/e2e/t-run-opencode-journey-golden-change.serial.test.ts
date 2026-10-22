@@ -35,7 +35,7 @@ import { existsSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { CI_BEDROCK_MODELS } from "../../scripts/ci-credential-broker.ts";
-import { opencodeToolResults, opencodeTurn, setupOpencodeProject } from "../harness/exec-drive.ts";
+import { opencodeReplies, opencodeToolResults, opencodeTurn, setupOpencodeProject } from "../harness/exec-drive.ts";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 import {
   driveTyped,
@@ -133,7 +133,7 @@ describe("t-run-opencode-journey-golden-change: fix existing code on opencode, t
           const { sessionId: id, results } = opencodeToolResults(turn.stdout);
           if (sessionId !== undefined && id !== undefined && id !== sessionId) throw new Error(`"${line}" went to session ${id}, not the person's ${sessionId}`);
           sessionId ??= id;
-          return results;
+          return { results, words: opencodeReplies(turn.stdout, true) };
         });
         problems.push(...run.problems, ...goldenPathProblems(journey, run));
         const recorded = recordedPersonLines(proj);

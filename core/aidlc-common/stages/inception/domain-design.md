@@ -156,9 +156,10 @@ Number ADRs sequentially (`ADR-001`, `ADR-002`, …). Where a decision came from
 
 ### Step 6: Record Traceability
 
-Create `<record>/inception/domain-design/traceability.json`. When
-`stories.md` exists, enumerate every `USx.y`; otherwise enumerate every `FR`
-from `requirements.md` (a requirement with sub-requirements is traced through its `FR{n}.{m}` IDs and needs no row of its own). Map each upstream ID to the **component or entity**
+Create `<record>/inception/domain-design/traceability.json` by running
+`{{INVOKE}} engine sensor-traceability --stage domain-design --output-path <that path> --write-upstream`:
+when `stories.md` exists it lists every `USx.y`, otherwise every `FR`
+Requirements Analysis recorded (a requirement with sub-requirements is traced through its `FR{n}.{m}` IDs and needs no row of its own), each with a `GAP` row. Map each upstream ID to the **component or entity**
 in `components.md` that realizes it — those are the only identifiers this
 stage's source of truth defines (it does not name services or public methods;
 method- and API-level targets are pinned later in Contract Design and

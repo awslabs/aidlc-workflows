@@ -2171,6 +2171,23 @@ describe("t304 executable review brief scenarios", () => {
     );
   });
 
+  // traceability.json is the agent's coverage record, not a document the
+  // person confirms answers for: the brief names the person's documents only.
+  test("the summary brief leaves the coverage record out of what it will generate", () => {
+    const { proj } = requirementProject([]);
+    const stories = join(seededRecordDir(proj), "inception", "user-stories");
+    mkdirSync(stories, { recursive: true });
+    const storiesQuestions = join(stories, "user-stories-questions.md");
+    writeFileSync(storiesQuestions, "# Questions\n", "utf-8");
+    const storiesRelative = relative(proj, stories).replaceAll("\\", "/");
+    const generated = renderSummaryConfirmationBrief(proj, findStageBySlug("user-stories")!, storiesQuestions)
+      .split("before generating ")[1]
+      .split("\n")[0];
+    expect(generated).toBe(
+      `${["stories", "personas", "user-stories-assessment"].map((name) => `\`${storiesRelative}/${name}.md\``).join(", ")}.`,
+    );
+  });
+
   test("the shipped CLI renders the same summary brief", () => {
     const { proj, questions } = requirementProject([]);
     const result = run(

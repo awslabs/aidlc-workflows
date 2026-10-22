@@ -239,13 +239,15 @@ describe("at the open gate the person's plan stands", () => {
   });
 });
 
-// A feature project at Code Generation for one Unit, built through `next`.
+// A feature project at Code Generation for one Unit, after Units Generation
+// ran, built through `next`.
 function perUnit(policy: "relaxed" | "strict" = "relaxed"): string {
   const proj = createCodeGenerationProject(policy);
   created.push(proj);
   const stateFile = seededStateFile(proj);
   writeFileSync(stateFile, readFileSync(stateFile, "utf-8")
     .replace("- **Scope**: poc", "- **Scope**: feature")
+    .replace("- [ ] units-generation", "- [x] units-generation")
     .replace("- [ ] code-generation", "- [-] code-generation"), "utf-8");
   seedBoltDagBatches(proj, [["alpha"]]);
   const step = next(proj);

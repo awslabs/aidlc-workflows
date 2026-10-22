@@ -951,6 +951,9 @@
         "requirements",
         "requirements-analysis-questions"
       ],
+      "optional_produces": [
+        "traceability"
+      ],
       "consumes": [
         {
           "artifact": "intent-statement",
@@ -1011,7 +1014,7 @@
       "review_class": "advisory",
       "summary_confirmation": "required",
       "inputs": "RE artifacts (if brownfield), authoritative project description (project-description utility)",
-      "outputs": "requirements.md, requirements-analysis-questions.md (under this stage's record dir, engine-resolved)",
+      "outputs": "requirements.md, requirements-analysis-questions.md, traceability.json (Step 10: an `ids` list with one entry per FR and NFR ID, spelled exactly as requirements.md spells it, each with `kind` functional or non-functional and, for a sub-requirement, `of` its requirement) (under this stage's record dir, engine-resolved)",
       "rules_in_context": [
         {
           "path": "aidlc/spaces/default/memory/org.md",
@@ -1149,7 +1152,7 @@
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
-          "fire_on": "write",
+          "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
           "matches": "**/traceability.json"
@@ -1358,7 +1361,7 @@
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
-          "fire_on": "write",
+          "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
           "matches": "**/traceability.json"
@@ -1461,7 +1464,7 @@
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
-          "fire_on": "write",
+          "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
           "matches": "**/traceability.json"
@@ -1825,7 +1828,7 @@
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
-          "fire_on": "write",
+          "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
           "matches": "**/traceability.json"
@@ -1975,7 +1978,7 @@
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
-          "fire_on": "write",
+          "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
           "matches": "**/traceability.json"
@@ -2138,7 +2141,7 @@
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
-          "fire_on": "write",
+          "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
           "matches": "**/traceability.json"
@@ -2307,7 +2310,7 @@
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
-          "fire_on": "write",
+          "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
           "matches": "**/traceability.json"
@@ -2429,7 +2432,7 @@
         {
           "id": "traceability",
           "path": ".claude/sensors/aidlc-traceability.md",
-          "fire_on": "write",
+          "fire_on": "gate",
           "default_severity": "advisory",
           "category": "document-traceability",
           "matches": "**/traceability.json"

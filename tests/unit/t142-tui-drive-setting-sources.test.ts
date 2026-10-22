@@ -35,6 +35,7 @@ import {
 } from "../harness/custom-harness.ts";
 import {
   adaptWindowsLaunch,
+  caretKeysTo,
   fileSignalMet,
   gridHasOption,
   gridIsApprovalGate,
@@ -49,6 +50,7 @@ import {
   resolvePortablePathPattern,
   TurnWatch,
 } from "../harness/tui-drive.ts";
+import { defaultChoice } from "../harness/sdk-drive.ts";
 import {
   cleanupTuiProject,
   cleanupTuiProjectAfterKill,
@@ -624,6 +626,41 @@ What should I change about the reverse-engineering knowledge base?
 
 Enter to select
 `;
+
+describe("tui-drive picks a menu option by its label, wherever the agent put it", () => {
+  const menu = (options: string[]) => `
+I asked for a fix earlier:
+1. Fix the login
+2. Add a test
+
+Approve the stage and continue?
+
+${options.map((label, i) => `${i === 0 ? "❯" : " "} ${i + 1}. ${label}\n  Something about it.`).join("\n")}
+  ${options.length + 1}. Type something.
+────────────────────────────────────────────────────────────────
+Enter to select · ↑/↓ to navigate · Esc to cancel
+`;
+  const requestChanges = (labels: string[]) => labels.find((label) => /\bRequest Changes\b/i.test(label));
+
+  test("the default person approves a gate shown in any order", () => {
+    expect(caretKeysTo(menu(["Approve", "Request Changes"]), defaultChoice)).toEqual({ keys: [], label: "Approve" });
+    expect(caretKeysTo(menu(["Request Changes", "Approve (Recommended)"]), defaultChoice))
+      .toEqual({ keys: ["Down"], label: "Approve (Recommended)" });
+    expect(caretKeysTo(menu(["Approve, and add User Stories next", "Request Changes", "Approve"]), defaultChoice))
+      .toEqual({ keys: ["Down", "Down"], label: "Approve" });
+  });
+
+  test("a first-gate rejection moves to Request Changes wherever it is", () => {
+    expect(caretKeysTo(menu(["Approve", "Request Changes"]), requestChanges)).toEqual({ keys: ["Down"], label: "Request Changes" });
+    expect(caretKeysTo(menu(["Request Changes", "Approve"]), requestChanges)).toEqual({ keys: [], label: "Request Changes" });
+  });
+
+  test("an agent question with no plain choice takes the recommended option, and the caret can move up", () => {
+    expect(caretKeysTo(menu(["PostgreSQL", "SQLite (Recommended)"]), defaultChoice)).toEqual({ keys: ["Down"], label: "SQLite (Recommended)" });
+    const caretOnSecond = menu(["PostgreSQL (Recommended)", "SQLite"]).replace("❯ 1.", "  1.").replace("  2. SQLite", "❯ 2. SQLite");
+    expect(caretKeysTo(caretOnSecond, defaultChoice)).toEqual({ keys: ["Up"], label: "PostgreSQL (Recommended)" });
+  });
+});
 
 describe("tui-drive turn-end detection (#1369)", () => {
   test("recognizes every captured sign of work in flight", () => {

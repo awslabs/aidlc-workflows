@@ -1328,6 +1328,24 @@ interface UnitApproval {
   // What it recorded for the Unit's findings; null when it carries no field.
   recorded: ReviewFindingDisposition[] | null;
   decider: ApprovalDecider;
+  row: AuditShardEvent;
+}
+
+// Whether the review a Unit's list was last read from finished before `row`.
+// A list a legacy `## Review` section seeded names no review: that section is
+// from before review records, so it stands with the approval as it did.
+function reviewedBefore(
+  projectDir: string,
+  stage: ReviewFingerprintStage,
+  context: ReviewArtifactContext,
+  row: AuditShardEvent,
+): boolean {
+  const ref = context.reviewRecord;
+  if (ref === undefined) return true;
+  const review = pairedReviews(projectDir, stage, context.unit).find((pair) =>
+    pair.ref.path === ref.path && pair.ref.digest === ref.digest
+  );
+  return review !== undefined && attemptEventDefinitelyBefore(review.event, row);
 }
 
 // The Unit's own latest approval of a stage: its checkpoint or team gate, or
@@ -1350,6 +1368,7 @@ function latestUnitApproval(
         auditBlockField(row.block, "Autonomous") !== "true"
       ? "person"
       : "nobody",
+    row,
   };
 }
 
@@ -1362,8 +1381,10 @@ function latestUnitApproval(
 // `units` are the Units a Unit's own approval covers. A stage's approval
 // nobody gave leaves each Unit's findings to the Unit's own approval: it
 // records nothing for a finding that approval recorded as it is now, and a
-// Unit approval that records none (an earlier release wrote it) stands for its
-// own decision.
+// Unit approval that records none (an earlier release wrote it, or nothing was
+// open) stands for its own decision only on a finding whose review finished
+// before it. One a review raised afterwards, such as a reviewer that finished
+// after the person approved the Unit as it is, nobody saw.
 export function approvalDispositionField(
   projectDir: string,
   stages: ReviewDispositionStages,
@@ -1399,7 +1420,8 @@ export function approvalDispositionField(
           stage.for_each === "unit-of-work" && context.unit !== undefined
         ? latestUnitApproval(unitApprovals(), stage.slug, context.unit)
         : null;
-      const decidedBy = own !== null && own.recorded === null
+      const decidedBy = own !== null && own.recorded === null &&
+          reviewedBefore(projectDir, stage, context, own.row)
         ? own.decider
         : decider;
       return open.flatMap((finding): ReviewFindingDisposition[] => {
@@ -2348,8 +2370,11 @@ export function renderSummaryConfirmationBrief(
       `Summary confirmation questions file must exist inside the active intent record: ${questionsFile}`,
     );
   }
-  // The questions file is what the person confirms, never one of the files made from it.
-  const entries = (reviewArtifactEntries(projectDir, stage, unit) ?? []).filter((entry) => !entry.summaryInput);
+  // The questions file is what the person confirms, never one of the files made
+  // from it; and the brief names the person's documents, not the agent's own
+  // coverage record (traceability.json).
+  const entries = (reviewArtifactEntries(projectDir, stage, unit) ?? [])
+    .filter((entry) => !entry.summaryInput && entry.logicalPath.endsWith(".md"));
   const artifacts = entries.map((entry) =>
     `\`${workspaceArtifactPath(projectDir, entry)}\``
   );

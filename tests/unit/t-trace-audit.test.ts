@@ -301,6 +301,27 @@ describe("the story of a leg is what the person lived, clipped to a budget", () 
     expect(codex).toContain("PERSON typed: Approve");
   });
 
+  test("each decision recorded for the person is shown with the reply of theirs kept beside it", () => {
+    const root = scratch();
+    const leg = join(root, "1-full-suite-live-codex-1-Linux", "2026-10-20T21-00-00Z-p1", "e2e-artifacts", "t-exec-codex-x.serial", "attempt-1");
+    put(join(leg, "sdk-drive-7.ndjson"), jsonl([
+      { ts: at(0), event: "start", prompt: "/aidlc fix the greeter", projectDir: "/home/x/proj" },
+      { ts: at(5), event: "next_message", turn: 2, message: "3" },
+      { ts: at(9), event: "end", timedOut: false },
+    ]));
+    put(join(leg, "retained-fixtures", "proj", "aidlc", "spaces", "default", "intents", "261020-greet", "audit", "host-1.md"), [
+      "## Human Turn\n**Timestamp**: 2026-10-20T21:05:00Z\n**Event**: HUMAN_TURN\n**Origin**: person\n",
+      "## Gate Approved\n**Timestamp**: 2026-10-20T21:06:00Z\n**Event**: GATE_APPROVED\n**Stage**: requirements-analysis\n**User Input**: Approve\n**Person Reply**: 3\n",
+      "## Question Answered\n**Timestamp**: 2026-10-20T21:07:00Z\n**Event**: QUESTION_ANSWERED\n**Stage**: user-stories\n**Details**: Guide me\n",
+    ].join("\n---\n"));
+    const story = storyText(auditFolder(root).legs[0]);
+    const recorded = story.slice(story.indexOf("## Recorded for the person"), story.indexOf("## What happened"));
+    expect(recorded).toContain('[06:00] GATE_APPROVED requirements-analysis: recorded "Approve"; their reply "3"');
+    expect(recorded).toContain('[07:00] QUESTION_ANSWERED user-stories: recorded "Guide me"; no reply of theirs kept');
+    expect(recorded).not.toContain("HUMAN_TURN");
+    expect(storyText(auditFolder(nightly()).legs.find((l) => l.test === "t-journey-b.sdk")!)).not.toContain("## Recorded for the person");
+  });
+
   test("a story over budget keeps the person's lines and cuts calls from the middle", () => {
     const root = scratch();
     const leg = join(root, "9-full-suite-live-claude-sdk-1-Linux", "s", "e2e-artifacts", "t-long.sdk", "attempt-1");

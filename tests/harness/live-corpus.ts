@@ -6,8 +6,8 @@
 // stays in its own file.
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "./test-budget.ts";
 import { REPO_ROOT, cleanupTestProject, seedAidlcMemory, seedWorkspaceShell, setupIntegrationProject } from "./fixtures.ts";
@@ -215,13 +215,8 @@ export async function judgeText(input: JudgeInput, text: string, judgeDir: strin
     "The reply to judge follows.",
     text.slice(-4000),
   ].join("\n\n");
-  const proc = Bun.spawn(
-    ["claude", "-p", rubric, "--output-format", "json", "--model", "sonnet", "--no-session-persistence", "--permission-mode", "default",
-      "--disallowedTools", "Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "Skill", "AskUserQuestion"],
-    // DISABLE_AUTOUPDATER: the judge is Claude Code as well, and a scratch config dir carries no autoUpdates setting,
-    // so without this one judge run can update the install under the agents this check is measuring.
-    { cwd: judgeDir, stdout: "pipe", stderr: "pipe", env: { ...process.env, CLAUDE_CONFIG_DIR: join(judgeDir, "config"), DISABLE_AUTOUPDATER: "1" } },
-  );
+  const judge = judgeCommand(rubric, judgeDir);
+  const proc = Bun.spawn(judge.argv, { cwd: judgeDir, stdout: "pipe", stderr: "pipe", env: judge.env });
   const timer = setTimeout(() => proc.kill(), remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS));
   try {
     const [stdout, stderr, status] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
@@ -230,6 +225,74 @@ export async function judgeText(input: JudgeInput, text: string, judgeDir: strin
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** The judge: `claude -p` with no tools, from `judgeDir` with its own config dir under it. */
+function judgeCommand(rubric: string, judgeDir: string): { argv: string[]; env: NodeJS.ProcessEnv } {
+  return {
+    argv: ["claude", "-p", rubric, "--output-format", "json", "--model", "sonnet", "--no-session-persistence", "--permission-mode", "default",
+      "--disallowedTools", "Bash", "Edit", "Write", "Read", "Glob", "Grep", "WebFetch", "WebSearch", "Agent", "Skill", "AskUserQuestion"],
+    // DISABLE_AUTOUPDATER: the judge is Claude Code as well, and a scratch config dir carries no autoUpdates setting,
+    // so without this one judge run can update the install under the agents this check is measuring.
+    env: { ...process.env, CLAUDE_CONFIG_DIR: join(judgeDir, "config"), DISABLE_AUTOUPDATER: "1" },
+  };
+}
+
+/** A scratch folder for the judge to run from, with its config dir. */
+export function judgeFolder(): string {
+  const dir = mkdtempSync(join(tmpdir(), "aidlc-judge-"));
+  mkdirSync(join(dir, "config"), { recursive: true });
+  return dir;
+}
+
+/** One yes-or-no question to the judge about the agent's words: the JSON line it answers, or why it gave none. */
+function askJudge(rubric: string, key: string, judgeDir: string): { yes: boolean; reason: string; fields: Record<string, unknown> } | { failure: string } {
+  const judge = judgeCommand(rubric, judgeDir);
+  const r = spawnSync(judge.argv[0], judge.argv.slice(1), {
+    cwd: judgeDir, encoding: "utf-8", env: judge.env, timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+  });
+  if (r.status !== 0) return { failure: `the judge could not run (exit ${r.status ?? r.signal ?? r.error?.message}): ${(r.stderr ?? "").slice(0, 200)}` };
+  let result = "";
+  try {
+    result = String((JSON.parse(r.stdout) as { result?: string }).result ?? "");
+  } catch {
+    return { failure: `the judge gave no verdict: ${r.stdout.slice(0, 200)}` };
+  }
+  const line = new RegExp(`\\{[^{}]*"${key}"\\s*:\\s*(true|false)[^{}]*\\}`).exec(result);
+  try {
+    const fields = JSON.parse(line?.[0] ?? "") as Record<string, unknown>;
+    return { yes: fields[key] === true, reason: String(fields.reason ?? ""), fields };
+  } catch {
+    return { failure: `the judge gave no verdict: ${result.slice(0, 200)}` };
+  }
+}
+
+/**
+ * Whether what the agent said to the person at the end of its turn leaves them a question to answer before the work
+ * goes on, as a model reads it (a person reads the screen, not the record). `question` is that question in a few words.
+ */
+export function judgeOpenQuestion(words: string, judgeDir: string): { asked: boolean; question: string; reason: string } | { failure: string } {
+  const verdict = askJudge([
+    "You read what an AI assistant in a software project tool said to a person at the end of its turn.",
+    "Does it leave the person a question to answer, or a choice to make, before the work can go on? A closing offer such as \"let me know if you need anything\" is not one.",
+    'Answer with one line of JSON only, nothing else: {"asked": true or false, "question": "<the question in a few words, empty when none>", "reason": "<one sentence>"}',
+    "What the assistant said follows.",
+    words.slice(-4000),
+  ].join("\n\n"), "asked", judgeDir);
+  return "failure" in verdict ? verdict : { asked: verdict.yes, question: String(verdict.fields.question ?? ""), reason: verdict.reason };
+}
+
+/** Whether the agent showed the person a given question (`what`, in plain words), in any words or form, as a model reads it. */
+export function judgeShownQuestion(what: string, shown: string, judgeDir: string): { shown: boolean; reason: string } | { failure: string } {
+  const verdict = askJudge([
+    `You check one step of a test. An AI assistant in a software project tool was meant to put this question to a person: ${what}.`,
+    "Below is everything it showed the person before they replied: its words, and any question box with its options.",
+    "Did it put that question to the person, in any words or form (a box, a numbered list, a plain question)? Another question in its place is a no.",
+    'Answer with one line of JSON only, nothing else: {"shown": true or false, "reason": "<one sentence>"}',
+    "What it showed follows.",
+    shown.slice(-4000),
+  ].join("\n\n"), "shown", judgeDir);
+  return "failure" in verdict ? verdict : { shown: verdict.yes, reason: verdict.reason };
 }
 
 /** The judge's verdict line in its reply. A line that looks like one but is not JSON (a reason with a bare quote in it)

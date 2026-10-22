@@ -524,7 +524,10 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
     "decorated Accept as-is respects the revision limit at count %i",
     (revisionCount) => {
       const slug = field(proj, "Current Stage");
-      expect(guarded(proj, ["set", `Revision Count=${revisionCount}`]).rc).toBe(0);
+      // This stage's earlier change requests, as the reject path records them.
+      for (let i = 0; i < revisionCount; i++) {
+        appendAuditEntry("GATE_REJECTED", { Stage: slug, Feedback: `change ${i + 1}` }, proj);
+      }
       guarded(proj, ["checkbox", `${slug}=in-progress`]);
       guarded(proj, ["gate-start", slug]);
       recordHumanTurn(proj);
