@@ -1,0 +1,48 @@
+=== date -u ===
+Fri Oct 23 01:25:28 UTC 2026
+=== git HEAD ===
+907c218069b2a4ec24807ccf07b9c7ff2ec77876
+=== branch ===
+feat/devin-harness
+=== git status --short ===
+ M README.md
+ M core/aidlc-common/protocols/stage-protocol-ensemble.md
+ M core/tools/aidlc-devin-version.ts
+ M core/tools/aidlc-init.ts
+ M core/tools/aidlc-model-policy.ts
+ M core/tools/aidlc-tiers.ts
+ M core/tools/aidlc-utility.ts
+ M docs/guide/13-customization.md
+ M docs/guide/harnesses/devin.md
+ M docs/reference/05-agent-system.md
+ M docs/reference/09-testing.md
+ M docs/reference/research/devin/03-agent-profiles-models-and-tools.md
+ M docs/reference/research/devin/14-regression-and-evidence.md
+ M docs/reference/research/devin/index.md
+ M harness/devin/onboarding.fills.ts
+ M tests/e2e/t-acp-devin-journey.serial.test.ts
+ M tests/harness/devin-acp-drive.ts
+ M tests/unit/t-devin-acp-protocol.test.ts
+ M tests/unit/t293-config-models.test.ts
+ M tests/unit/t331-devin-packaging.test.ts
+?? core/tools/aidlc-config-command.ts
+?? evidence/devin-e2e-run/acp-journey-run/
+?? tests/e2e/t-exec-devin-subagent-model.serial.test.ts
+=== git diff --stat ===
+ 20 files changed, 1128 insertions(+), 161 deletions(-)
+=== uncommitted diff sha256 (tracked files) ===
+2aad70c79c7f0e42cd9de5679a9bf4bae8c2cb78c1180580c2da439704bf565a  -
+=== devin --version ===
+devin 3000.11.92 (7f4e64980e22)
+=== bun --version ===
+1.3.14
+=== python3 --version ===
+Python 3.10.12
+=== uname -a ===
+Linux GalaxyBook 5.15.167.4-microsoft-standard-WSL2 #1 SMP Tue Nov 5 00:21:55 UTC 2024 x86_64 x86_64 x86_64 GNU/Linux
+=== human-mode io dir ===
+tests/logs/devin-acp-human-20261023T010259Z
+=== raw files kept on the host (sha256) ===
+f6deec04ceab3403a82aff529c216d5fd64fd1d0d483e1d73c0feaa7e2fd47c5  chat.log
+68ded547dec3772c6473997686adb560cc98437ee2ddf7b3258a5c880b03d213  trace.ndjson
+a83a37633106db9d6a6fff169ed0e62a8dde170b647af9a4c71882a10e222824  events.log

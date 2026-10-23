@@ -1,0 +1,33 @@
+=== inspect.ts <journey-root>/proj (sessions.db, working_directory match) ===
+
+session vintage-tomato parent model=fusion-claude-opus-5-5-high-sidekick-swe-2-high
+  main chain models: claude-opus-5-5-high
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=aidlc-developer-agent agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=aidlc-product-lead-agent agent=?
+  dispatch profile=aidlc-product-lead-agent agent=?
+  dispatch profile=aidlc-architecture-reviewer-agent agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=aidlc-composer-agent agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=undefined agent=?
+  dispatch profile=aidlc-product-lead-agent agent=?
+  dispatch profile=undefined agent=?
+  subagent 0df5f519: reply="**Reviewer:** aidlc-product-lead-agent **Verdict: READY** (" generation_model=claude-opus-5-5-high
+  subagent 67a10c9d: reply="## Subagent Summary: Code Generation The expense tracker is" generation_model=claude-opus-5-5-high
+  subagent 7c31136e: reply="**Reviewer:** aidlc-product-lead-agent **Verdict: READY.** " generation_model=claude-opus-5-5-high
+  subagent 86139c9b: reply="The plan is to use the stock **`poc`** scope as it is, with " generation_model=claude-opus-5-5-high
+  subagent 9b19dd55: reply="**Reviewer:** aidlc-product-lead-agent **Verdict: READY.** " generation_model=claude-opus-5-5-high
+  subagent df89bbf2: reply="**Reviewer:** aidlc-architecture-reviewer-agent **Verdict: " generation_model=claude-opus-5-5-high
+
+=== profile model: lines (retained project copy) ===
+     14 model: inherit

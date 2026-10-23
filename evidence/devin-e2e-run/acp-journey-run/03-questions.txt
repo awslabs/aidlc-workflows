@@ -1,0 +1,42 @@
+Verbose mode: logging to <home>/sources/aidlc-workflows/tests/logs/2026-10-22T23-08-34Z-p18620
+Debug driver traces: <home>/sources/aidlc-workflows/tests/logs/2026-10-22T23-08-34Z-p18620/{sdk,tui,kiro-acp,devin-acp}-drive-*.ndjson
+WARNING: claude CLI not found -- live integration/e2e tests may fail or skip
+AI-DLC Testing Harness
+======================
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+
+## E2E Tests (full lifecycle)
+
+=== START t-acp-devin-questions.serial.test.ts ===
+Debug artifacts for t-acp-devin-questions.serial.test.ts:
+  log: logs/2026-10-22T23-08-34Z-p18620/t-acp-devin-questions.serial.log
+  driver traces: logs/2026-10-22T23-08-34Z-p18620/{sdk,tui,kiro-acp,devin-acp}-drive-*.ndjson
+Test budget: {"caseDefaultMs":600000,"fileAllowanceMs":7199999,"fileDeadlineMs":1792717714574,"cleanupReserveMs":300000,"runDeadlineMs":null}
+bun test v1.3.14 (0d9b296a)
+
+tests/e2e/t-acp-devin-questions.serial.test.ts:
+(pass) t-acp-devin-questions — the person's words through the elicitation channel > 1. own words kept: a free-text plan-offer answer is stored verbatim, never "Other" [35567.02ms]
+(pass) t-acp-devin-questions — the person's words through the elicitation channel > 2. a declined question stays open: the turn ends, no intent is made, and a typed follow-up answers it [37098.46ms]
+
+ 2 pass
+ 0 fail
+ 20 expect() calls
+Ran 2 tests across 1 file. [72.79s]
+--- PASS: t-acp-devin-questions.serial.test.ts ---
+=== DONE t-acp-devin-questions.serial.test.ts (PASS) ===
+
+==============================
+SUMMARY
+==============================
+Guard profile: fixture (synthetic guard skips and direct audit authority enabled)
+Test files: 1
+Failed files: 0
+Total assertions: 2
+Failed assertions: 0
+Coverage: COMPLETE
+Executed test cases: 2
+Skipped test cases: 0
+Skipped files: 0
+Log directory: logs/2026-10-22T23-08-34Z-p18620
+==============================
+RESULT: PASS
