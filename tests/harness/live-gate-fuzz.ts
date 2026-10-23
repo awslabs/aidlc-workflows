@@ -1,9 +1,10 @@
 // live-gate-fuzz.ts - real agents on real tools, replies as people give them, judged by what the person got.
 //
 // The live half of the reading design's test program (the design lead's section 4.3). Each reply in the corpus
-// (tests/fixtures/gate-fuzz/replies.json) is met at its wait point, built as the answers corpus builds it
-// (buildQuestion), in the tool's own install: the person's first line has the agent show the open question, then the
-// person replies, in one or two lines. Pass, per reply (section 4.1):
+// (tests/fixtures/gate-fuzz/replies.json) is met at its wait point in the tool's own install (seedWait): the question
+// open, built as the answers corpus builds it (buildQuestion), and the person's first line has the agent show it; where
+// the question is the engine's answer to that line (the routing question, the plan offer), the work as it stands
+// before the line, which opens it. Then the person replies, in one or two lines. Pass, per reply (section 4.1):
 //
 //   P1 the decision the person meant is on record (the row's event and its choice, an answer judged by meaning); for a reply that is really
 //      ambiguous, nothing is recorded and the agent asks once.
@@ -30,6 +31,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { ANSWERS, type AnswersItem, buildQuestion, type Question } from "./aidlc-answers-corpus.ts";
+import { buildState, type State } from "./aidlc-input-corpus.ts";
 import { turnEvidence } from "./codex-turn-evidence.ts";
 import { cleanupTestProject, REPO_ROOT, seedAidlcMemory, seedWorkspaceShell } from "./fixtures.ts";
 import {
@@ -309,13 +311,19 @@ export interface Exchange {
   error: string | null;
 }
 
-/** The person's first line, which has the agent show the open question (the answers corpus's own shape). */
+/**
+ * The waits whose question is the engine's answer to the person's first line: that line (the answers corpus's own),
+ * and the work as it stands before they type it (the first step of the corpus's fixture for the question).
+ */
+const OPENED_BY_FIRST_LINE: Partial<Record<Question, { line: string; before: State }>> = {
+  routing: { line: "/aidlc fix the login", before: "work-open" },
+  "plan-offer": { line: "/aidlc fix the login: it rejects a correct password", before: "fresh" },
+  "scope-confirm": { line: "/aidlc fix the login timeout", before: "fresh" },
+};
+
+/** The person's first line, which opens the question (OPENED_BY_FIRST_LINE) or has the agent show the open one. */
 export function firstLine(reply: Reply, tool: LiveTool): string | null {
-  const lines: Partial<Record<Question, string | null>> = {
-    routing: "/aidlc fix the login", "plan-offer": "/aidlc fix the login: it rejects a correct password",
-    "scope-confirm": "/aidlc fix the login timeout", "resume-reentry": null, "jump-target": null,
-  };
-  const line = reply.wait in lines ? lines[reply.wait] ?? null : "/aidlc";
+  const line = OPENED_BY_FIRST_LINE[reply.wait]?.line ?? (reply.wait === "resume-reentry" || reply.wait === "jump-target" ? null : "/aidlc");
   return line === null ? null : tool === "codex" ? line.replace(/^\/aidlc/, "$aidlc") : line;
 }
 
@@ -739,9 +747,14 @@ export async function judge(reply: Reply, tool: LiveTool, rig: LiveRig, ex: Exch
   return { reply, tool, failures, decisions, refusalsMet, asks, read: read.slice(-1500) };
 }
 
-/** The project as the person's chat finds it at the reply's wait. */
+/**
+ * The project as the person's chat finds it at the reply's wait: the question open, or for a question their first line
+ * opens, the work before that line. Seeded open, the question was asked where nobody sees it, and the line typed again
+ * met the engine's step for an unanswered question, which an agent could answer for the person.
+ */
 export async function seedWait(proj: string, wait: Question): Promise<void> {
-  return buildQuestion(proj, wait);
+  const opened = OPENED_BY_FIRST_LINE[wait];
+  return opened === undefined ? buildQuestion(proj, wait) : buildState(proj, opened.before);
 }
 
 /** Drive and judge one reply on one tool. */
