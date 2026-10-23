@@ -602,7 +602,7 @@ ask targeted follow-up. Do NOT proceed until resolved.
   the piece of work: the agent runs `config set summary-confirmation off
   --message <id>` on that message, says in one line that it is off and can be
   turned back on, and generates. An isolated run reads only its own scope's
-  summary setting, so it still asks.
+  summary setting, so it still asks when its scope asks.
 
 ### Plan and Question File Location
 

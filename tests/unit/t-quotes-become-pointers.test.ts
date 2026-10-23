@@ -184,6 +184,20 @@ describe.each(POLICIES)("Guard Policy %s: a choice left to the agent names the m
     ask(proj);
     const r = log(proj, ["answer", "--stage", STAGE, "--details", "Q5: A; Q6: A; Q7: A", "--on-instruction", "--message", id]);
     expect(r.status, r.out).toBe(0);
+    // The unit tier's fixture profile skips the summary check for this whole
+    // process; the check is read here as it ships, then the profile's value comes back.
+    const owed = () => {
+      const skip = process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+      process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = "0";
+      try {
+        const state = readFileSync(seededStateFile(proj), "utf-8");
+        return checkSummaryConfirmationEvidence(proj, findStageBySlug(STAGE)!, { stateContent: state });
+      } finally {
+        if (skip === undefined) delete process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD;
+        else process.env.AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD = skip;
+      }
+    };
+    expect(owed()).toMatchObject({ ok: false });
     const off = run(proj, [DISPATCHER, "engine", "config", "set", "summary-confirmation", "off", "--message", id,
       "--project-dir", proj]);
     expect(off.status, off.out).toBe(0);
@@ -192,9 +206,8 @@ describe.each(POLICIES)("Guard Policy %s: a choice left to the agent names the m
     expect(field(row, "Key")).toBe("summary_confirmation");
     expect(field(row, "Source")).toBe("you");
     expect(field(row, "Message Id")).toBe(id);
-    const state = readFileSync(seededStateFile(proj), "utf-8");
-    expect(checkSummaryConfirmationEvidence(proj, findStageBySlug(STAGE)!, { stateContent: state }))
-      .toMatchObject({ ok: true, required: false });
+    expect(getField(readFileSync(seededStateFile(proj), "utf-8"), "Summary Confirmation")).toBe("off (set by you)");
+    expect(owed()).toMatchObject({ ok: true, required: false });
   });
 
   test("the old value form is the agent's own text: recorded, no claim, no refusal", () => {
