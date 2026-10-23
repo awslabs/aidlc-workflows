@@ -110,7 +110,7 @@
     "t-gate-fuzz-2.test.ts": 143.5,
     "t-gate-fuzz-3.test.ts": 102.1,
     "t-gate-fuzz-4.test.ts": 123.1,
-    "t-gate-fuzz-harness.test.ts": 10.0,
+    "t-gate-fuzz-harness.test.ts": 16.0,
     "t-gate-names-failed-checks.test.ts": 11.1,
     "t-gate-names-what-it-produced.test.ts": 8.9,
     "t-gate-shown-again.test.ts": 45,

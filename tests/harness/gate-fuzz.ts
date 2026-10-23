@@ -374,7 +374,13 @@ function revisionCount(proj: string): number {
   }
 }
 
-/** Set a fixture's Guard Policy the way its state file carries it (test setup, before anyone acts). */
+/**
+ * Set a fixture's Guard Policy the way a setting the person typed sets it (test setup, before anyone acts): the
+ * engine's own line, and the step the template left open (the code plan's question) kept open over the write, as
+ * `writeSettings` keeps it. The marker is bound to the state's digest, which binds the line's value and source, so a
+ * line rewritten by hand left the question stale and the person's reply to it unkept. A line that already holds the
+ * policy stays as it is, its source label with it.
+ */
 function setPolicy(proj: string, policy: Policy): boolean {
   if (policy === "default") return true;
   let file: string;
@@ -385,10 +391,11 @@ function setPolicy(proj: string, policy: Policy): boolean {
   }
   if (!existsSync(file)) return false;
   const text = readFileSync(file, "utf-8");
-  const field = /^- \*\*(?:Change Control|Guard Policy)\*\*:.*$/m;
-  writeFileSync(file, field.test(text)
-    ? text.replace(field, `- **Guard Policy**: ${policy}`)
-    : text.replace(/(## Runtime State\r?\n)/, `$1- **Guard Policy**: ${policy}\n`), "utf-8");
+  const field = lib().guardPolicyStateField(text);
+  if (field && lib().parseGuardPolicyStateLine(lib().getField(text, field))?.value === policy) return true;
+  const written = lib().setGuardPolicyLine(text, lib().formatGuardPolicy(policy, "you"));
+  writeFileSync(file, written, "utf-8");
+  lib().keepActiveDirectiveOverSettingWrite(proj, text, written);
   return true;
 }
 

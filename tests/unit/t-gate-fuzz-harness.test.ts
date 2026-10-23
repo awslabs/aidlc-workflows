@@ -1,9 +1,10 @@
 // The gate fuzz's own model of a run (tests/harness/gate-fuzz.ts) agrees with the engine where the fuzz once said a
 // break that was its own: a blank typed message is a turn the engine counts for presence (a host may drop a prompt's
 // words, so an empty prompt stands as the person's turn), and an unattended driver's AIDLC_UNATTENDED reaches the
-// opencode plugin's hooks, so no person turn is minted there.
+// opencode plugin's hooks, so no person turn is minted there; and a fixture's Guard Policy set over an open step keeps
+// that step open, as the engine's own setter does, so the person's reply to it still counts.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { checkRun, cleanupRuns, cleanupStates, fixtureState, play, type Run } from "../harness/gate-fuzz.ts";
+import { checkRun, cleanupRuns, cleanupStates, fixtureState, play, type Run, stepsFor } from "../harness/gate-fuzz.ts";
 
 setDefaultTimeout(10 * 60_000);
 
@@ -44,5 +45,16 @@ describe("an unattended driver's variable reaches the tool's hooks", () => {
     const run = play(state, 7, [{ kind: "person", channel: "typed", shape: "sentence", seed: 11 }]);
     expect(run.error).toBeNull();
     expect(run.rows.slice(run.start).filter((r) => r.event === "HUMAN_TURN").length).toBe(0);
+  });
+});
+
+describe("a fixture's Guard Policy over an open step", () => {
+  test("at the code plan's question under strict, the person's reply backs the agent's Request Changes", async () => {
+    // The long run's replay fx:code-plan:claude:strict@20878706~12: the person types, the agent reads the question again,
+    // then records Request Changes; under the default policy the same seed lands.
+    const state = await fixtureState("code-plan", "claude", "strict");
+    const run = play(state, 20878706, stepsFor(state, 20878706, 12));
+    const answer = run.steps.find((s) => s.call?.name === "plan Request Changes");
+    expect(answer?.landed).toBe(true);
   });
 });
