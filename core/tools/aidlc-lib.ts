@@ -12492,7 +12492,7 @@ export const BLOCKING_SENSOR_OVERRIDE_OPTIONS = [
 
 // The person's picks at a stage's blocking-sensor question: each answer that
 // closes an open "Blocking gate sensor failure" decision offering both choices
-// (the nextOpenDecision pairing), in the decision's shard with a HUMAN_TURN
+// (the nextOpenDecision pairing, per shard), with a HUMAN_TURN in that shard
 // between the two, read as the option it names: its label, or its number on
 // the decision's own Options. The override's authorization and the review
 // attempt floor both read this one pairing.
@@ -12501,16 +12501,18 @@ export function blockingSensorPicks(
   slug: string,
 ): Map<AuditShardEvent, (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number]> {
   const picks = new Map<AuditShardEvent, (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number]>();
-  let open: AuditShardEvent | null = null;
+  // Each clone's shard keeps its own append order, so a teammate's question in
+  // another shard never takes the place of the one this answer closes.
+  const open = new Map<string, AuditShardEvent>();
   for (const row of sortAttemptEvents(rows.filter((row) =>
     DECISION_PAIRING_EVENTS.has(row.event) && auditBlockField(row.block, "Stage") === slug &&
     !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")
   ))) {
-    const decision = open;
-    if (row.event === "DECISION_RECORDED") open = row;
-    else if (nextOpenDecision(decision?.block ?? null, row.event, row.block) === null) open = null;
+    const decision = open.get(row.shard);
+    if (row.event === "DECISION_RECORDED") open.set(row.shard, row);
+    else if (nextOpenDecision(decision?.block ?? null, row.event, row.block) === null) open.delete(row.shard);
     if (
-      decision === null || row.event !== "QUESTION_ANSWERED" || decision.shard !== row.shard ||
+      decision === undefined || row.event !== "QUESTION_ANSWERED" ||
       auditBlockField(decision.block, "Decision") !== BLOCKING_SENSOR_OVERRIDE_DECISION
     ) continue;
     const offered = (auditBlockField(decision.block, "Options") ?? "").split(",").map((option) => option.trim());
@@ -19796,6 +19798,8 @@ export interface AttemptView {
   allEvents: AuditShardEvent[];
   events: AuditShardEvent[];
   floorIdx: number;
+  // The person's Fix findings picks for this stage (blockingSensorFixes).
+  sensorFixes: ReadonlySet<AuditShardEvent>;
   mergedBoltUnits: Set<string>;
   openBoltUnits: Set<string>;
 }
@@ -20039,6 +20043,7 @@ export function reviewAttemptWindow(
     allEvents,
     events,
     floorIdx,
+    sensorFixes,
     mergedBoltUnits,
     openBoltUnits,
   };
@@ -20129,7 +20134,7 @@ export function reviewAttemptAccounting(
     eventFilter?: (event: AuditShardEvent) => boolean;
   } = {},
 ): ReviewAttemptAccounting {
-  const sensorFixes = blockingSensorFixes(attemptView.allEvents, stage.slug);
+  const { sensorFixes } = attemptView;
   const events = sortAttemptEvents(
     attemptView.allEvents.filter(
       (row) =>
@@ -21008,7 +21013,7 @@ export function freshReviewReceipts(
   const attemptWindow =
     options.attemptWindow ??
     reviewAttemptWindow(projectDir, stateContent, stage);
-  const { allEvents, events, floorIdx, mergedBoltUnits, openBoltUnits } =
+  const { allEvents, events, floorIdx, mergedBoltUnits, openBoltUnits, sensorFixes } =
     attemptWindow;
   empty.mergedBoltUnits = mergedBoltUnits;
   empty.openBoltUnits = openBoltUnits;
@@ -21229,7 +21234,9 @@ export function freshReviewReceipts(
     ) {
       continue;
     }
-    if (unitScopedRejections && e.event === "GATE_REJECTED") {
+    // A Unit's Fix findings pick at a blocking gate check starts that Unit's
+    // new attempt the way its Request Changes does.
+    if (unitScopedRejections && (e.event === "GATE_REJECTED" || sensorFixes.has(e))) {
       const rejectedUnit = auditBlockField(e.block, "Unit");
       if (!rejectedUnit || !gateStagesFromBlock(e.block).includes(stage.slug)) {
         continue;

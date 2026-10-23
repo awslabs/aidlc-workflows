@@ -873,7 +873,7 @@ export const ALLOWED: Record<string, Allowed> = {
   "core/tools/aidlc-jump.ts#handleReopen": { use: "keeps", why: "the audit writer: a reopen for a change keeps their words as Feedback" },
   [`${STATE}#parkedWords`]: { use: "keeps", why: "the audit writer: the park row's Person Reply" },
   // The recorded answer's Details is the choice the agent recorded, never the file's [Answer]: line (S2a's R31).
-  [`${LIB}#offeredChoiceLabel`]: { use: "decides", why: "the agent's --details, or a recorded answer's Details, against the labels the question offered (O4)", from: ["core/tools/aidlc-sensor-claim-sources.ts#assumptionsAcceptedOnRecord"] },
+  [`${LIB}#offeredChoiceLabel`]: { use: "decides", why: "the agent's --details, or a recorded answer's Details, against the labels the question offered (O4)", from: [`${LIB}#blockingSensorPicks`, "core/tools/aidlc-sensor-claim-sources.ts#assumptionsAcceptedOnRecord"] },
   "core/tools/aidlc-sensor-claim-sources.ts#assumptionsAcceptedOnRecord": { use: "decides", why: "the claim-sources sensor reads whether the Intent Capture assumptions were accepted from the recorded answer to that question" },
   [`${STATE}#requireHumanConstructionPolicyChange`]: { use: "keeps", why: "the audit writer: the Construction policy row's Person Reply" },
   [`${STATE}#emitConstructionPolicySet`]: { use: "keeps", why: "the audit writer: the Construction policy row", from: [`${STATE}#handleSetConstructionIteration`, `${STATE}#handleSetConstructionPolicy`, `${STATE}#handleSetUnitOwnership`] },
@@ -972,7 +972,7 @@ export const ALLOWED: Record<string, Allowed> = {
   // The agent's own recorded answer (O4): the agent-argument checks over what the agent recorded, never a message.
   [`${LIB}#latestRecordedAnswerMode`]: { use: "decides", why: "O4: the answer mode the agent recorded (QUESTION_ANSWERED Details)" },
   [`${LIB}#answerModeFromReply`]: { use: "decides", why: "O4: reads the agent's recorded answer mode", from: [`${LIB}#latestRecordedAnswerMode`] },
-  [`${STATE}#hasBlockingSensorOverrideAuthorization`]: { use: "decides", why: "O4: the agent's recorded override choice (QUESTION_ANSWERED Details) against the engine's label" },
+  [`${LIB}#blockingSensorPicks`]: { use: "decides", why: "O4: the agent's recorded Fix findings or override choice (QUESTION_ANSWERED Details) against the engine's labels or their number on the decision's own Options list" },
 };
 
 /**

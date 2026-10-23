@@ -1787,6 +1787,7 @@ describe("AttemptView projections and refusal streaks", () => {
       allEvents: rows,
       events: rows,
       floorIdx: 0,
+      sensorFixes: new Set(),
       mergedBoltUnits: new Set(),
       openBoltUnits: new Set(["alpha"]),
     };
@@ -1818,6 +1819,7 @@ describe("AttemptView projections and refusal streaks", () => {
       allEvents: rows,
       events: rows,
       floorIdx: 0,
+      sensorFixes: new Set(),
       mergedBoltUnits: new Set(),
       openBoltUnits: new Set(),
     };
@@ -1857,6 +1859,7 @@ describe("AttemptView projections and refusal streaks", () => {
         allEvents: all,
         events: all,
         floorIdx: 0,
+        sensorFixes: new Set(),
         mergedBoltUnits: new Set(),
         openBoltUnits: new Set(),
       };
@@ -1916,6 +1919,7 @@ describe("AttemptView projections and refusal streaks", () => {
           allEvents: rows.slice(0, count),
           events: rows.slice(0, count),
           floorIdx: 0,
+          sensorFixes: new Set(),
           mergedBoltUnits: new Set(),
           openBoltUnits: new Set(),
         };
@@ -2046,6 +2050,7 @@ describe("AttemptView projections and refusal streaks", () => {
       allEvents: rows,
       events: rows,
       floorIdx: 2,
+      sensorFixes: new Set(),
       mergedBoltUnits: new Set(),
       openBoltUnits: new Set(),
     };
