@@ -1,4 +1,4 @@
-// covers: function:codeGenerationPlanWaits, function:handleReport, function:handleUnit
+// covers: function:codeGenerationPlanWaits, function:handleReport, function:handleUnit, function:engineCommandAdmitted
 //
 // A Code Generation completion waits for the plan it builds from. Through the
 // real engine, with no hook in front: while the plan is not written, written and
@@ -8,23 +8,29 @@
 // that names `next`; nothing moves. Once the plan is approved (or plan approval
 // is off) they go through, the refusal never comes back after its step, and the
 // gate shown again after a review (the step its opening retired) goes through.
+// The engine is the hold's one owner: the plan-approval guard in front of the
+// same commands, on every harness, admits them, says nothing and records nothing.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { cleanupTestProject, seedBoltDagBatches, seededStateFile } from "../harness/fixtures.ts";
+import { cleanupTestProject, seedBoltDagBatches, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import {
   answer,
   auditEvents,
   createCodeGenerationProject,
   next,
+  openCodeGenerationGate,
   reply,
   runNamed,
   SESSION,
+  SHAPES,
   stageDir,
   STATES,
   type Step,
   writePlan,
 } from "../harness/code-generation-states.ts";
+import { invalidateActiveDirectiveContext, stateDigest, writeActiveDirectiveMarker } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(600_000);
 
@@ -74,7 +80,7 @@ function built(proj: string, review: { iteration: number; personAsked?: boolean 
 
 // A poc project with Code Generation in progress (the previous stage's
 // approval marks it so) and its records stage-level.
-function inProgress(policy: "relaxed" | "strict" = "relaxed", planApproval: "on" | "off" = "on"): string {
+function inProgress(policy: "relaxed" | "strict" | "off" = "relaxed", planApproval: "on" | "off" = "on"): string {
   const proj = createCodeGenerationProject(policy, planApproval);
   created.push(proj);
   const stateFile = seededStateFile(proj);
@@ -308,5 +314,238 @@ describe("a Unit's Code Generation completes once its plan is approved", () => {
     const gate = report(proj, "awaiting-approval");
     // The plan does not hold it (strict's own source checks still speak here).
     expect(gate.step.message ?? "", JSON.stringify(gate.step)).not.toBe(WAITS);
+  });
+});
+
+// The hold has one owner. In each plan state a run can be in, built the way the
+// run leaves it, the plan-approval guard admits every Code Generation completion
+// with nothing said and nothing recorded, and the engine's own command is where
+// the hold is said: while the plan waits it answers with the plan step and the
+// state file is not touched; once the plan lets the build go, the same command
+// moves the state. Under every Guard Policy, with plan approval on and off.
+type HoldState = { name: string; waits: boolean; command: "open" | "approve" | "unit"; build: () => string };
+
+function compacted(proj: string): void {
+  const marker = JSON.parse(readFileSync(join(seededRecordDir(proj), ".aidlc-engine", "active-directive.json"), "utf-8")) as
+    { owner_session?: string };
+  if (!invalidateActiveDirectiveContext(proj, readFileSync(seededStateFile(proj), "utf-8"), marker.owner_session ?? SESSION)) {
+    throw new Error("the build step could not be set aside as a compaction sets it aside");
+  }
+}
+
+const POLICIES = ["strict", "relaxed", "off"] as const;
+const UNIT_START = "bun .claude/tools/aidlc.ts engine state unit start --stage code-generation --unit alpha";
+const UNIT_COMPLETE = "bun .claude/tools/aidlc.ts engine state unit complete --stage code-generation --unit alpha";
+const CHANGED = "- [ ] Step 2: handle unicode\n";
+
+const HOLD_STATES: HoldState[] = [
+  { name: "no plan yet", waits: true, command: "open", build: () => {
+    const proj = inProgress();
+    built(proj, null);
+    return proj;
+  } },
+  { name: "the plan written, not yet asked", waits: true, command: "open", build: () => {
+    const proj = inProgress();
+    writePlan(proj);
+    built(proj);
+    return proj;
+  } },
+  ...POLICIES.map((policy): HoldState => ({ name: `the plan question open (${policy})`, waits: true, command: "open", build: () => {
+    const proj = inProgress(policy);
+    writePlan(proj);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    built(proj);
+    return proj;
+  } })),
+  { name: "the plan sent back with Request Changes", waits: true, command: "open", build: () => {
+    const proj = inProgress();
+    writePlan(proj);
+    next(proj);
+    reply(proj, "rename slugify to toSlug");
+    expect(answer(proj, "Request Changes").status).toBe(0);
+    built(proj);
+    return proj;
+  } },
+  ...POLICIES.map((policy): HoldState => ({ name: `the plan approved (${policy})`, waits: false, command: "open", build: () => {
+    const proj = inProgress(policy);
+    writePlan(proj);
+    next(proj);
+    approvePlan(proj);
+    expect(next(proj).plan_approval?.status).toBe("approved");
+    built(proj);
+    return proj;
+  } })),
+  // The engine's recovery question over the open plan question, written as the
+  // engine writes it: a completion the person did not pick there waits too.
+  { name: "a recovery question left open while the plan waits", waits: true, command: "open", build: () => {
+    const proj = inProgress();
+    writePlan(proj);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    writeActiveDirectiveMarker(proj, {
+      kind: "ask", ask_type: "guard-recovery", stage: "code-generation",
+      remedies: [{ op: "request-changes", action: 'Ask "What should change?"', interaction: "human-input" }],
+      state_sha256: stateDigest(readFileSync(seededStateFile(proj), "utf-8")),
+    });
+    built(proj);
+    return proj;
+  } },
+  { name: "the plan approved, then the chat compacted", waits: false, command: "open", build: () => {
+    const proj = inProgress();
+    writePlan(proj);
+    next(proj);
+    approvePlan(proj);
+    next(proj);
+    compacted(proj);
+    built(proj);
+    return proj;
+  } },
+  { name: "the plan approved, the gate reported before next", waits: false, command: "open", build: () => {
+    const proj = inProgress();
+    writePlan(proj);
+    next(proj);
+    approvePlan(proj);
+    built(proj);
+    return proj;
+  } },
+  ...POLICIES.map((policy): HoldState => ({
+    name: `the plan changed after its approval (${policy})`, waits: policy === "strict", command: "open", build: () => {
+      const proj = inProgress(policy);
+      writePlan(proj);
+      next(proj);
+      approvePlan(proj);
+      next(proj);
+      writePlan(proj, CHANGED);
+      built(proj);
+      return proj;
+    },
+  })),
+  { name: "plan approval off for this work", waits: false, command: "open", build: () => {
+    const proj = inProgress("relaxed", "off");
+    writePlan(proj);
+    expect(next(proj).plan_approval?.status).toBe("approved");
+    built(proj);
+    return proj;
+  } },
+  { name: "plan approval turned off at the open plan question", waits: false, command: "open", build: () => {
+    const proj = inProgress();
+    writePlan(proj);
+    expect(next(proj).ask_type).toBe("plan-approval");
+    const stateFile = seededStateFile(proj);
+    writeFileSync(stateFile, readFileSync(stateFile, "utf-8")
+      .replace("- **Plan Approval**: on (set by you)", "- **Plan Approval**: off (set by you)"), "utf-8");
+    built(proj);
+    return proj;
+  } },
+  ...POLICIES.map((policy): HoldState => ({ name: `the open gate, the person approves (${policy})`, waits: false, command: "approve",
+    build: () => openCodeGenerationGate(policy) })),
+  { name: "the open gate, the plan changed after its approval (strict)", waits: true, command: "open", build: () => {
+    const proj = openCodeGenerationGate("strict");
+    writePlan(proj, CHANGED);
+    return proj;
+  } },
+  ...(["strict", "relaxed"] as const).map((policy): HoldState => ({ name: `a Unit before its plan is approved (${policy})`, waits: true,
+    command: "unit", build: () => {
+      const proj = perUnit(policy);
+      expect(runNamed(proj, UNIT_START).status).toBe(0);
+      return proj;
+    } })),
+  ...(["strict", "relaxed"] as const).map((policy): HoldState => ({ name: `a Unit with its plan approved (${policy})`, waits: false,
+    command: "unit", build: () => {
+      const proj = perUnit(policy);
+      expect(next(proj).ask_type).toBe("plan-approval");
+      reply(proj, "approve");
+      expect(answer(proj, "Approve Plan", ["--session", SESSION]).status).toBe(0);
+      expect(next(proj).plan_approval?.status).toBe("approved");
+      expect(runNamed(proj, UNIT_START).status).toBe(0);
+      return proj;
+    } })),
+  ...(["strict", "relaxed"] as const).map((policy): HoldState => ({
+    name: `a Unit whose plan changed after its approval (${policy})`, waits: policy === "strict", command: "unit", build: () => {
+      const proj = perUnit(policy);
+      expect(next(proj).ask_type).toBe("plan-approval");
+      reply(proj, "approve");
+      expect(answer(proj, "Approve Plan", ["--session", SESSION]).status).toBe(0);
+      next(proj);
+      expect(runNamed(proj, UNIT_START).status).toBe(0);
+      writePlan(proj, CHANGED, "alpha");
+      return proj;
+    },
+  })),
+];
+
+
+const REPORT = "bun .claude/tools/aidlc.ts engine orchestrate report --stage code-generation --result";
+const STAGE_COMPLETIONS = [
+  `${REPORT} awaiting-approval`,
+  `${REPORT} completed`,
+  `${REPORT} approved --user-input "Approve"`,
+  `${REPORT} revised`,
+];
+const GUARD_ROWS = new Set(["PLAN_APPROVAL_BLOCKED", "GUARD_STOOD_ASIDE"]);
+
+// What the plan-approval guard does with a completion command, as Claude Code
+// delivers it: its exit, what it printed, and the refusal or stand-aside rows it wrote.
+function guardOn(proj: string, command: string): string {
+  const rows = () => auditEvents(proj).filter((row) => GUARD_ROWS.has(row.event)).length;
+  const before = rows();
+  const ran = spawnSync(process.execPath, [join(proj, ".claude", "hooks", "aidlc-plan-approval-guard.ts")], {
+    cwd: proj,
+    encoding: "utf-8",
+    input: JSON.stringify({ hook_event_name: "PreToolUse", session_id: SESSION, cwd: proj, tool_name: "Bash", tool_input: { command } }),
+    env: { ...process.env, AIDLC_UNATTENDED: undefined, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj } as NodeJS.ProcessEnv,
+  });
+  return `exit ${ran.status}; stdout ${JSON.stringify(ran.stdout.trim())}; stderr ${JSON.stringify(ran.stderr.trim())}; rows ${rows() - before}`;
+}
+const ADMITTED = 'exit 0; stdout ""; stderr ""; rows 0';
+
+// The engine's own answer to the state's completion: whether it said the plan
+// step, and the state file after it.
+function engineCompletion(proj: string, command: HoldState["command"]): { waited: boolean; said: string } {
+  if (command === "unit") {
+    const ran = runNamed(proj, UNIT_COMPLETE);
+    const error = ran.status === 0 ? "" : (JSON.parse(ran.stderr || "{}") as { error?: string }).error ?? ran.stderr;
+    return { waited: error === `Refusing to complete unit "alpha" for "code-generation": ${WAITS}`, said: error || ran.stdout };
+  }
+  if (command === "approve") reply(proj, "approve");
+  const ran = command === "approve" ? report(proj, "approved", ' --user-input "Approve"') : report(proj, "awaiting-approval");
+  return { waited: ran.step.message === WAITS, said: JSON.stringify(ran.step) };
+}
+
+describe("one owner: the engine's own completion holds while the plan waits, and only then", () => {
+  for (const state of HOLD_STATES) {
+    test(`${state.name}: ${state.waits ? "the plan step, nothing written" : "the completion goes through"}`, () => {
+      const proj = state.build();
+      created.push(proj);
+      for (const command of state.command === "unit" ? [UNIT_COMPLETE] : STAGE_COMPLETIONS) {
+        expect(guardOn(proj, command), command).toBe(ADMITTED);
+      }
+      const before = readFileSync(seededStateFile(proj), "utf-8");
+      const engine = engineCompletion(proj, state.command);
+      expect(engine.waited, engine.said).toBe(state.waits);
+      if (state.waits) expect(readFileSync(seededStateFile(proj), "utf-8")).toBe(before);
+      else expect(readFileSync(seededStateFile(proj), "utf-8"), engine.said).not.toBe(before);
+      if (state.command === "unit") {
+        expect(auditEvents(proj).some((row) => row.event === "UNIT_COMPLETED")).toBe(!state.waits);
+      }
+    });
+  }
+
+  test("every harness's guard admits a completion while the plan waits: the engine says the plan step", async () => {
+    const proj = HOLD_STATES.find((state) => state.name === "the plan question open (relaxed)")!.build();
+    created.push(proj);
+    const refused: string[] = [];
+    for (const shape of SHAPES) {
+      shape.install(proj);
+      for (const command of STAGE_COMPLETIONS) {
+        const verdict = await shape.call(proj, SESSION, { tool: "Bash", command });
+        if (verdict.code !== 0 || verdict.said !== "") refused.push(`[${shape.name}] ${command} -> ${verdict.code} ${verdict.said}`);
+      }
+    }
+    expect(refused).toEqual([]);
+    SHAPES[0].install(proj);
+    expect(engineCompletion(proj, "open").waited).toBe(true);
+    // A report that names no stage is the current stage's: the same step.
+    const unnamed = runNamed(proj, "bun .claude/tools/aidlc.ts engine orchestrate report --result awaiting-approval");
+    expect((JSON.parse(unnamed.stdout || "{}") as Step).message, unnamed.stdout).toBe(WAITS);
   });
 });

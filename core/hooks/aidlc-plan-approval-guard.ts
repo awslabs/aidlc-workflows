@@ -23,23 +23,22 @@
 // AI-DLC's own bookkeeping never meets this guard: a write whose every target is
 // a stage's record output under aidlc/spaces (not the engine's own files there)
 // passes, and so does a direct, unwrapped invocation of the installed engine,
-// whose verbs the engine judges itself. Where no tool of the engine's owns the
-// call, a condition stays here (engineCommandAdmitted): a recorded switch that
-// turns a check off, four config settings that can take a check away, and a
-// release fetched or applied, pass once a person has asked; a Code Generation
-// completion (a report that opens or passes the gate, a Unit's completion
-// receipt) waits while the plan does (at the held gate its own report showing
-// it again and the person's answer, and the recovery remedy they picked,
-// excepted); a jump waits for the person's
-// move: the restart they picked at the recovery question, or one they asked
-// for, unless the engine's last step was superseded (a `jump execute`, or the
-// `jump reopen` it printed, to the stage the agent's own settled `next --stage`
-// claimed on this state excepted) or is its
-// Code Generation recovery question and the jump is one it offers or not the
-// choice the person just picked there. While the person is editing the plan
-// files themselves, those files are theirs (personIsEditingPlanFile). Three
-// kinds of files pass too: the composer's grid proposal, a person's answer text
-// and a person's request file, which the engine reads and nothing else.
+// whose verbs the engine judges itself (a Code Generation completion waits for
+// its plan in `report`, codeGenerationCompletionWaits, and in `unit complete`,
+// codeGenerationCompletionPlanWaits).
+// Where no tool of the engine's owns the call, a condition stays here
+// (engineCommandAdmitted): a recorded switch that turns a check off, four config
+// settings that can take a check away, and a release fetched or applied, pass
+// once a person has asked; a jump waits for the person's move: the restart
+// they picked at the recovery question, or one they asked for, unless the
+// engine's last step was superseded (a `jump execute`, or the `jump reopen` it
+// printed, to the stage the agent's own settled `next --stage` claimed on this
+// state excepted) or is its Code Generation recovery question and the jump is
+// one it offers or not the choice the person just picked there. While the
+// person is editing the plan files themselves, those files are theirs
+// (personIsEditingPlanFile). Three kinds of files pass too: the composer's grid
+// proposal, a person's answer text and a person's request file, which the
+// engine reads and nothing else.
 //
 // How the hook decides: the active directive is the approval authority. A
 // directive with `unit` selects construction/<unit>/code-generation; a
@@ -100,7 +99,6 @@ import {
   errorMessage,
   getField,
   GUARD_RECOVERY_ASK_TYPE,
-  guardRecoveryAnswerAdmits,
   loadScopeMapping,
   loadStageGraph,
   nextLineFlags,
@@ -158,7 +156,6 @@ import {
   beginCodeGeneration,
   beginCodeGenerationBatch,
   codeGenerationExecutionAllowed,
-  codeGenerationGateHeld,
   type CodeGenerationIssuance,
   codeGenerationIssuance,
   codeGenerationPlanApprovalFence,
@@ -1485,13 +1482,9 @@ function isSelectedGuardRestartContinuation(
   return continuation.direction === (targetIndex === currentIndex ? "redo" : "backward");
 }
 
-// What AI-DLC's own command still waits on in the step and the state at hand:
-// the Code Generation completion gate held open (its own report showing it
-// again and the person's answer to it pass), and whether a jump is the
-// person's move (jumpIsPersonsMove).
+// What AI-DLC's own command still waits on in the step at hand: whether a jump
+// is the person's move (jumpIsPersonsMove).
 interface EngineCommandContext {
-  gateHeld: boolean;
-  marker: ActiveDirectiveMarker | null;
   jumpAdmitted: (jump: JumpCommand) => boolean;
 }
 
@@ -1503,7 +1496,7 @@ interface JumpCommand {
   via: string | undefined;
 }
 
-const NO_ENGINE_CONTEXT: EngineCommandContext = { gateHeld: false, marker: null, jumpAdmitted: () => false };
+const NO_ENGINE_CONTEXT: EngineCommandContext = { jumpAdmitted: () => false };
 
 // Whether the engine's last step leaves the jump to the person's turn: true
 // when it does; when a superseded step holds back a `jump execute` or a `jump
@@ -1595,9 +1588,6 @@ function jumpIsPersonsMove(
   return typeof last === "boolean" || runtimeHarnessName(projectDir) === "copilot" ? last : false;
 }
 
-// The results that open the Code Generation gate or complete the stage.
-const CODE_GENERATION_COMPLETIONS = new Set(["awaiting-approval", "approved", "completed", "revised"]);
-
 // The last value given for a flag, as `--flag value` or `--flag=value`.
 function lastFlag(args: readonly string[], name: string): string | undefined {
   let value: string | undefined;
@@ -1653,13 +1643,10 @@ function configToolAdmitted(projectDir: string, rest: readonly string[]): boolea
 // person has asked since the last decision, because its setter never refuses
 // and the next tool call would pass under the switch. As `config flags` it is
 // judged whole (recordedSwitchChangeAdmitted); the config tool's two forms above
-// keep theirs. Two more have no other owner: a Code Generation completion (a
-// report that opens the gate or completes the stage, a Unit's completion
-// receipt; neither tool checks the plan's approval) waits while the plan does,
-// the gate's own report showing it again and the person's answer at the held
-// gate, and the remedy they picked at the recovery question, excepted; and a
-// jump (the jump tool checks no pick and no person) waits for the person's move
-// (jumpIsPersonsMove). Every other engine command is the engine's to judge.
+// keep theirs. One more has no other owner: a jump (the jump tool checks no pick
+// and no person) waits for the person's move (jumpIsPersonsMove). Every other
+// engine command is the engine's to judge, a Code Generation completion
+// included: `report` and `unit complete` hold it while its plan waits.
 function engineCommandAdmitted(
   projectDir: string,
   engineArgs: readonly string[],
@@ -1668,16 +1655,6 @@ function engineCommandAdmitted(
   const configArgs = configToolArgs(engineArgs);
   if (configArgs !== null && !configToolAdmitted(projectDir, configArgs)) return false;
   const args = configArgs !== null ? ["config", ...configArgs] : engineArgs[0] === "engine" ? engineArgs.slice(1) : engineArgs;
-  const stage = lastFlag(args, "--stage");
-  const result = lastFlag(args, "--result") ?? "";
-  const report = args[0] === "orchestrate" && args[1] === "report";
-  if (
-    (stage === undefined || stage === GUARDED_STAGE) &&
-    ((report && CODE_GENERATION_COMPLETIONS.has(result)) ||
-      (args[0] === "state" && args[1] === "unit" && args[2] === "complete")) &&
-    !(report && context.gateHeld && stage === GUARDED_STAGE && (result === "approved" || result === "awaiting-approval")) &&
-    !guardRecoveryAnswerAdmits(context.marker, engineArgs, projectDir)
-  ) return false;
   if (args[0] === "jump" && (args[1] === "execute" || args[1] === "reopen") && !context.jumpAdmitted({ verb: args[1], target: lastFlag(args, "--target"), units: lastFlag(args, "--units"), via: lastFlag(args, "--via") })) return false;
   // `next` takes no `--bypass`: on its line the token is one of the person's
   // words ("add a --bypass option"), never a check turned off, as the engine's
@@ -2328,8 +2305,6 @@ async function evaluate(
             // Set by the adapter that ran the tool, outside the agent's input.
             parsed.aidlc_shell === "powershell",
             {
-              gateHeld: codeGenerationGateHeld(state),
-              marker: activeDirective,
               jumpAdmitted: (jump) => {
                 const move = toolName === "Bash" &&
                   jumpIsPersonsMove(projectDir, cwd, toolInput.command, state ?? "", activeDirective, jump);

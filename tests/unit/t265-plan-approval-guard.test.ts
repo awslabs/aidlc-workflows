@@ -1281,11 +1281,12 @@ describe("t265b hook lifecycle", () => {
         const result = runHook(proj, BASH(command));
         expect(result.code, `${command}\n${result.stderr}`).toBe(0);
       }
-      // A direct state advance is the state-transition guard's. A completion
-      // report waits for the plan: the report tool does not check it.
+      // A direct state advance is the state-transition guard's, and a
+      // completion report the engine's: `report` holds it while the plan waits.
       expect(runHook(proj, BASH("aidlc engine state advance")).code).toBe(0);
-      expect(runHook(proj, BASH("aidlc engine orchestrate report --stage code-generation --result completed")).code)
-        .toBe(2);
+      const completion = runHook(proj, BASH("aidlc engine orchestrate report --stage code-generation --result completed"));
+      expect(completion.code, completion.stderr).toBe(0);
+      expect(completion.stderr).toBe("");
       for (const command of [
         "./aidlc engine orchestrate next",
         "PATH=. aidlc engine orchestrate next",
@@ -1310,10 +1311,11 @@ describe("t265b hook lifecycle", () => {
   // publishes no successor, so the held gate has no current directive. The
   // human's answer to that gate must still reach the engine, and so must the
   // gate's own report showing it again (the step `next` prints when a reviewed
-  // file changed after the review), while every other completion report stays
-  // fenced. All three Guard Policies are covered: strict holds the rest; under
-  // relaxed (poc's scope default) and off the step the opening retired stands
-  // for every call but AI-DLC's own commands the admission holds.
+  // file changed after the review); every completion report is the engine's,
+  // which holds it while the plan waits. All three Guard Policies are covered:
+  // strict holds the rest; under relaxed (poc's scope default) and off the step
+  // the opening retired stands for every call but AI-DLC's own commands the
+  // admission holds.
   for (const policy of ["strict", "relaxed", "off"] as const) {
     test(`the held Code Generation gate admits the human's answer and its own report (${policy}, #1369)`, () => {
       const proj = scratchProject();
@@ -1330,10 +1332,9 @@ describe("t265b hook lifecycle", () => {
         const report = "bun .claude/tools/aidlc.ts engine orchestrate report --stage code-generation";
         const approve = `${report} --result approved --user-input "Approve"`;
         seedUnit(proj, null, { plan: true, answer: null });
-        // Before Plan Approval, completing Code Generation waits like the build:
-        // `report` would open the gate or complete the stage without checking the
-        // plan's approval, so this guard keeps that one condition.
-        expect(runHook(proj, BASH(approve)).code).toBe(2);
+        // Before Plan Approval, completing Code Generation is still the engine's
+        // own command: `report` holds it while the plan waits.
+        expect(runHook(proj, BASH(approve)).code).toBe(0);
 
         seedUnit(proj, null, { plan: true, answer: "Approve Plan" });
         expect(evaluateCodeGenerationApproval(proj, { unit: null }).ok).toBe(true);
@@ -1358,16 +1359,13 @@ describe("t265b hook lifecycle", () => {
           const result = runHook(proj, BASH(command));
           expect(result.code, `${command}\n${result.stderr}`).toBe(0);
         }
-        // At the held gate only the person's answer completes the stage; another
-        // completion report, and AI-DLC's answer through a wrapper, still wait for
-        // a current step under every Guard Policy.
-        for (const command of [
-          `${report} --result completed`,
-          `${report} --result approved --result completed`,
-          `env -C other ${approve}`,
-        ]) {
-          expect(runHook(proj, BASH(command)).code, command).toBe(2);
+        // At the held gate another completion report is the engine's to answer
+        // too; AI-DLC's answer through a wrapper is no installed command and
+        // still waits for a current step under every Guard Policy.
+        for (const command of [`${report} --result completed`, `${report} --result approved --result completed`]) {
+          expect(runHook(proj, BASH(command)).code, command).toBe(0);
         }
+        expect(runHook(proj, BASH(`env -C other ${approve}`)).code).toBe(2);
         // Another stage's report is the engine's to refuse, and a direct state
         // verb is the state-transition guard's and the state tool's.
         for (const command of [
@@ -1665,14 +1663,14 @@ describe("t265b hook lifecycle", () => {
           expect(result.code, `[${checkbox}] ${admitted}\n${result.stderr}`).toBe(0);
         }
         const plan = join(proj, RECORD_REL, "construction", "code-generation", "code-generation-plan.md");
-        // A completion the person did not pick waits for the plan: the report
-        // tool does not check it.
+        // A completion the person did not pick is the engine's to refuse:
+        // `report` holds it while the plan waits.
         for (const completion of [
           reject.replace("--result rejected", "--result approved"),
           reject.replace("--result rejected", "--result revised"),
         ]) {
           const result = runHook(proj, BASH(completion));
-          expect(result.code, `[${checkbox}] ${completion}\n${result.stderr}`).toBe(2);
+          expect(result.code, `[${checkbox}] ${completion}\n${result.stderr}`).toBe(0);
         }
         // Other reports and a direct state verb are the engine's to judge.
         for (const other of [
@@ -1703,8 +1701,10 @@ describe("t265b hook lifecycle", () => {
         publishAsk(proj, [
           { op: "finish-revision", action: "Finish the revision.", interaction: "external-work" },
         ]);
+        // The revision's report is the engine's own command before the pick as
+        // after it: `report` holds it until the person picks the remedy.
         const revised = "aidlc engine orchestrate report --stage code-generation --result revised";
-        expect(runHook(proj, BASH(revised)).code).toBe(2);
+        expect(runHook(proj, BASH(revised)).code).toBe(0);
         expect(runHook(proj, WRITE(plan)).code).toBe(0);
         recordRecoverySelection(proj, "1", "finish-revision");
         expect(runHook(proj, BASH(revised)).code).toBe(0);
@@ -1742,11 +1742,11 @@ describe("t265b hook lifecycle", () => {
         // guard lets it say so.
         ["bolt prepare --unit u1", 0],
         ["state approve code-generation", 0],
-        // A completion waits for the plan: neither tool checks it. Before
-        // approval only a picked recovery may complete a Unit.
-        ["state unit complete --stage code-generation --unit u1", 2],
-        ["orchestrate report --stage code-generation --result approved --user-input Approve", 2],
-        ["orchestrate report --skeleton-stance off --result completed", 2],
+        // A completion is the engine's too: `report` and `unit complete` hold
+        // it while the plan waits. A stance report completes nothing.
+        ["state unit complete --stage code-generation --unit u1", 0],
+        ["orchestrate report --stage code-generation --result approved --user-input Approve", 0],
+        ["orchestrate report --skeleton-stance off --result completed", 0],
       ];
       for (const [route, code] of cases) {
         const [noun, ...rest] = route.split(" ");
@@ -2335,10 +2335,14 @@ describe("t265b hook lifecycle", () => {
         const record = join(proj, RECORD_REL, "construction", "code-generation");
         const questions = runHook(proj, WRITE(join(record, "code-generation-questions.md")));
         expect(questions.code, questions.stderr).toBe(0);
-        // The build waits as before: code, the developer, and a completion
-        // report, which the report tool does not check against the plan.
+        // A completion report is the engine's own command: `report` holds it
+        // while the plan waits.
+        const completion = runHook(proj,
+          BASH('aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"'));
+        expect(completion.code, completion.stderr).toBe(0);
+        expect(completion.stderr).toBe("");
+        // The build waits as before: code and the developer.
         for (const payload of [
-          BASH('aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"'),
           WRITE(join(proj, "src", "inline.ts")),
           BASH("echo 'export const x = 1;' > src/inline.ts"),
           STAGE_DISPATCH(proj, "Build the plan."),
@@ -2482,10 +2486,14 @@ describe("t265b hook lifecycle", () => {
               expect(result.code, `${state}: ${JSON.stringify(payload.tool_input)}\n${result.stderr}`).toBe(0);
               expect(result.stderr, `${state}: ${JSON.stringify(payload.tool_input)}`).toBe("");
             }
-            // The build still waits: code, a shell write to code, the developer,
-            // and a completion report, which the report tool does not check.
+            // A completion report is the engine's own command: `report` holds
+            // it while the plan waits.
+            const completion = runHook(proj,
+              BASH('aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"'));
+            expect(completion.code, `${state}: ${completion.stderr}`).toBe(0);
+            expect(completion.stderr, state).toBe("");
+            // The build still waits: code, a shell write to code, the developer.
             for (const payload of [
-              BASH('aidlc engine orchestrate report --stage code-generation --result approved --user-input "Approve"'),
               WRITE(join(proj, "src", "new.ts")),
               BASH("echo 'export const x = 1;' > src/inline.ts"),
               DISPATCH(proj, "Build the plan."),
@@ -2624,9 +2632,11 @@ describe("t265b hook lifecycle", () => {
           const result = runHook(proj, BASH(command));
           expect(result.code, `${command}\n${result.stderr}`).toBe(0);
         }
-        // A completion report waits for the plan: the report tool does not check it.
-        expect(runHook(proj, BASH(`bun ${entry} engine orchestrate report --stage code-generation --result completed`)).code)
-          .toBe(2);
+        // A completion report is the engine's to judge too: `report` holds it
+        // while the plan waits.
+        const completion = runHook(proj, BASH(`bun ${entry} engine orchestrate report --stage code-generation --result completed`));
+        expect(completion.code, completion.stderr).toBe(0);
+        expect(completion.stderr).toBe("");
         // Every other engine verb through the installed entry point is the
         // engine's to judge (the checkpoint refuses --check-cmd itself).
         for (const command of [

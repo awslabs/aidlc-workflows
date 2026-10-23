@@ -536,9 +536,23 @@ describe("t340 grouped Plan Approval lifecycle and guard composition", () => {
       });
       publish(pd, "run-stage");
       for (const unit of UNITS) expect(evaluateCodeGenerationApproval(pd, { unit }).ok).toBe(false);
-      // A completion report waits for the plan: the report tool does not check it.
-      const report = guard(pd, "aidlc engine orchestrate report --stage code-generation --result completed --approved");
-      expect(report.code, `${report.out}\n${report.err}`).toBe(2);
+      // A completion is the engine's own command: the guard admits it, and
+      // through the engine neither the stage's report nor a Unit's completion
+      // records anything here (the plan's own step is pinned by
+      // t-code-generation-completion-owner).
+      for (const completion of [
+        "aidlc engine orchestrate report --stage code-generation --result completed --approved",
+        "aidlc engine state unit complete --stage code-generation --unit alpha",
+      ]) {
+        const admitted = guard(pd, completion);
+        expect(admitted.code, `${completion}\n${admitted.err}`).toBe(0);
+        expect(admitted.err, completion).toBe("");
+      }
+      const before = readFileSync(seededStateFile(pd), "utf-8");
+      const reported = tool(pd, "tools/aidlc-orchestrate.ts", ["report", "--stage", STAGE, "--result", "completed"]);
+      const unitComplete = tool(pd, "tools/aidlc-state.ts", ["unit", "complete", "--stage", STAGE, "--unit", "alpha"]);
+      expect(unitComplete.code, unitComplete.out).not.toBe(0);
+      expect(readFileSync(seededStateFile(pd), "utf-8"), `${reported.out}\n${unitComplete.err}`).toBe(before);
       const checkpoint = guard(pd, "aidlc engine bolt swarm-checkpoint --action status --batch 1 --units alpha,beta");
       expect(checkpoint.code, `${checkpoint.out}\n${checkpoint.err}`).toBe(0);
       expect(gates(pd)).toBe(0);

@@ -3813,7 +3813,13 @@ describe("Code Generation receipt recovery through the Plan Approval hook", () =
       runInstalled(proj, "bun .claude/tools/aidlc-state.ts set-skeleton-stance scope-dependent");
       expect(readActiveDirectiveMarker(proj, readFileSync(seededStateFile(proj), "utf-8"))).toBeNull();
       const complete = "bun .claude/tools/aidlc-state.ts unit complete --stage code-generation --unit unit-a";
-      expect(guardBash(proj, complete).code).toBe(2);
+      // A Unit's completion is the engine's own command, before `next` as
+      // after: `unit complete` judges the Unit's approved plan itself.
+      const early = guardBash(proj, complete);
+      expect(early.code, early.stderr).toBe(0);
+      expect(early.stderr).toBe("");
+      // To the Codex tree's guard the `.claude` spelling is no installed command
+      // of its own, so the build's check holds it until `next` refreshes the step.
       const staleCodex = codexGuard(proj, complete, "before-next");
       expect(staleCodex.status, String(staleCodex.stderr)).toBe(2);
       const probe = runOrchestrateNext(ORCHESTRATE, proj, [], {
@@ -3881,8 +3887,18 @@ describe("Code Generation receipt recovery through the Plan Approval hook", () =
     const recovered = next(proj);
     expect(recovered).toMatchObject({ kind: "ask", ask_type: "plan-approval" });
     expect(JSON.stringify(recovered)).not.toContain("unit_record_step");
-    const blocked = guardBash(proj, "bun .claude/tools/aidlc-state.ts unit complete --stage code-generation --unit unit-a");
-    expect(blocked.code, blocked.stderr).toBe(2);
+    // The guard admits the Unit's completion; `unit complete` holds it itself
+    // while the changed plan waits for the person.
+    const complete = "bun .claude/tools/aidlc-state.ts unit complete --stage code-generation --unit unit-a";
+    const admitted = guardBash(proj, complete);
+    expect(admitted.code, admitted.stderr).toBe(0);
+    expect(admitted.stderr).toBe("");
+    const held = spawnSync(BUN, [STATE, "unit", "complete", "--stage", "code-generation", "--unit", "unit-a", "--project-dir", proj], {
+      cwd: proj, encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      env: { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj },
+    });
+    expect(held.status, held.stderr).not.toBe(0);
+    expect(held.stderr).toContain("The code plan is not approved yet");
     expect(unitCompletedReceipts(proj, "code-generation").has("unit-a")).toBe(false);
   });
 });
