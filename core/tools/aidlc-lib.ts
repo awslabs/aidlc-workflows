@@ -12963,10 +12963,11 @@ export function personSpokeSinceGate(
 // The person asked for what the agent runs now: their chat turn, which no
 // decision has used yet, stands behind it, and it is not only a question about
 // a switch. An unattended driver has no person behind it. Turning one of the
-// person's checks off from the agent's command needs this, wherever it is asked.
-export function personAskedSinceGate(projectDir: string): boolean {
+// person's checks off from the agent's command needs this, wherever it is asked,
+// and so does a change to the plan while Construction carries on by itself.
+export function personAskedSinceGate(projectDir: string, work: { intent?: string; space?: string } = {}): boolean {
   return process.env.AIDLC_UNATTENDED !== "1" &&
-    personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true });
+    personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true, ...work });
 }
 
 // The person asked for the lowering the agent's command carries out: they ran

@@ -444,7 +444,7 @@ import {
   OWN_TERMINAL_PRESENCE_STEP,
   personAtOwnTerminal,
   personAskedForThisLowering,
-  personSpokeSinceGate,
+  personAskedSinceGate,
   personSaidProjectType,
   clearProjectTypeAsked,
   readAnswerTextFile,
@@ -11809,9 +11809,7 @@ function handleScopeChange(projectDir: string, flags: Record<string, string>): v
     // The person's own request for the change, on this work's record, with no
     // unattended driver in the way. One reply that approves and asks for the
     // change does both: the approval recorded from it does not use it up.
-    const personAsked = (): boolean =>
-      process.env.AIDLC_UNATTENDED !== "1" &&
-      personSpokeSinceGate(projectDir, { requests: true, outlivesApproval: true, intent, space });
+    const personAsked = (): boolean => personAskedSinceGate(projectDir, { intent, space });
     // Under "Continue automatically" the person's own scope change goes
     // through like any other, and the remaining work keeps their autonomy
     // choice. Only a change nobody asked for (an unattended driver) is
@@ -12294,16 +12292,12 @@ function handleRecompose(projectDir: string, flags: Record<string, string>, rawA
   withAuditLock(projectDir, () => {
     let content = readStateFile(projectDir, flags.intent, flags.space);
     const before = content;
-    // AUTONOMY GUARD (mirrors the park guard's shape in aidlc-state.ts): an
-    // unattended autonomous Construction run has no human at the gate, so a
-    // conductor that drifts into "improving the plan" must not flip pending
-    // stages on its own. The SKILL.md prose says plan-reshape never runs under
-    // autonomous Construction on any harness; this is the deterministic anchor
-    // that enforcement was missing (the strict validator catches starvation and
-    // anchor moves, but not the absence of a human). Refuse outright; a
-    // legitimate unattended-recompose story, if one ever arrives, comes as an
-    // explicit flag, not the default.
-    if (getField(content, "Construction Autonomy Mode")?.trim() === "autonomous") {
+    // Under "Continue automatically" the person's own plan change goes through,
+    // as their scope change does (handleScopeChange), and the work keeps their
+    // autonomy choice. A change nobody asked for (an unattended driver, or a
+    // conductor that drifts into "improving the plan") is refused, naming the
+    // setter that lets it through.
+    if (isAutonomousMode(content) && !personAskedSinceGate(projectDir, { intent: flags.intent, space: flags.space })) {
       die(
         "Cannot change the plan while Construction runs unattended (Construction Autonomy Mode is " +
           "autonomous) with nobody here to approve it. Run " +
