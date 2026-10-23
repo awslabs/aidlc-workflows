@@ -5,8 +5,8 @@
 // there (resolveProjectFlag owns that, and nothing here changes it). The
 // person drives: the engine never refuses or re-asks their switch. What it
 // owes them is to say, in plain words, which check is off, since when, how it
-// was set, and the one phrase that turns it back on. Whether a person's chat
-// turn stood behind the change decides only that wording. The record lives in
+// was set, and the one phrase that turns it back on. Whether the command named
+// the person's message decides only that wording. The record lives in
 // the clone's protected runtime directory, and every read or write of it
 // fails open: it can only ever change a sentence.
 import { existsSync, mkdirSync, statSync } from "node:fs";
@@ -23,15 +23,14 @@ import {
   SWITCHABLE_GUARD_FENCES,
   delegatedWorktreeIntent,
   isoTimestamp,
-  latestPersonTurn,
   memoryGuardPolicyDeclarations,
   normalizeDriveLetter,
-  personSpokeSinceGate,
   readRegularFileNoFollowOrThrow,
   commandAtPersonsTerminal,
   sessionsDir,
   writeFileAtomic,
 } from "./aidlc-lib.ts";
+import { proveMessage, type StoredMessage } from "./aidlc-message-store.ts";
 import { aidlcInvocation, quoteCommandArgument } from "./aidlc-runtime-paths.ts";
 import {
   type AidlcSettingsFile,
@@ -59,7 +58,7 @@ export interface RecordedSwitch {
   name: RecordableProjectBypass;
   target: SettingsTarget;
   since: string;
-  // "chat": a person's turn no decision had used was on record when it was set.
+  // "chat": the command named the message the person asked in, proved theirs.
   how: "chat" | "other";
   words?: string;
   // When a directive carried the line, so it is said once per change.
@@ -572,31 +571,38 @@ export function markSwitchOffNoticesSaid(projectDir: string, env: NodeJS.Process
  * the write succeeded, and return what the person should read now: a line for
  * each check it turned off, and one for each it turned back on. A caller that
  * already names the other files still recording a cleared switch passes
- * `otherFiles: false`, so the person reads that once.
+ * `otherFiles: false`, so the person reads that once. `message` is the id the
+ * command named with `--message`, the message the person asked in.
  */
 export function recordSwitchChange(
   projectDir: string,
   target: SettingsTarget,
   previous: AidlcSettingsFile | null,
   next: AidlcSettingsFile | null,
-  { env = process.env, otherFiles = true }: { env?: NodeJS.ProcessEnv; otherFiles?: boolean } = {},
+  { env = process.env, otherFiles = true, message }: {
+    env?: NodeJS.ProcessEnv; otherFiles?: boolean; message?: string;
+  } = {},
 ): string[] {
   const before = new Set<string>(previous?.flags?.bypasses ?? []);
   const after = new Set<string>(next?.flags?.bypasses ?? []);
   const added = PERSON_CHECK_SWITCHES.filter((name) => after.has(name) && !before.has(name));
   const removed = PERSON_CHECK_SWITCHES.filter((name) => before.has(name) && !after.has(name));
   if (added.length === 0 && removed.length === 0) return [];
-  // Their words are behind a switch the agent set from their chat. A command they
-  // ran themselves, at their own terminal, belongs to no chat, so the record
-  // claims none and a later chat quotes no message at them.
-  let turn: ReturnType<typeof latestPersonTurn> = null;
-  if (added.length > 0 && !commandAtPersonsTerminal()) {
+  // Their words are behind a switch the agent set from their chat only through
+  // the message the command named, proved theirs; with none named the record
+  // claims nothing of theirs. A command they ran themselves, at their own
+  // terminal, belongs to no chat, so the record claims none and a later chat
+  // quotes no message at them.
+  let said: StoredMessage | null = null;
+  if (added.length > 0 && message !== undefined && !commandAtPersonsTerminal()) {
     try {
-      turn = personSpokeSinceGate(projectDir) ? latestPersonTurn(projectDir) : null;
+      const proof = proveMessage(projectDir, message, "setting", { request: true });
+      said = "message" in proof ? proof.message : null;
     } catch {
-      turn = null;
+      said = null;
     }
   }
+  const words = said?.words ?? null;
   const since = isoTimestamp();
   const changed = new Set<string>([...added, ...removed]);
   const switches = readRecord(projectDir)
@@ -606,9 +612,9 @@ export function recordSwitchChange(
       name,
       target,
       since,
-      how: turn ? "chat" : "other",
+      how: said ? "chat" : "other",
       // Only what the line can show is kept (one more character marks a cut).
-      ...(turn?.words ? { words: turn.words.replace(/\s+/g, " ").trim().slice(0, QUOTE_MAX_CHARS + 1) } : {}),
+      ...(words ? { words: words.replace(/\s+/g, " ").trim().slice(0, QUOTE_MAX_CHARS + 1) } : {}),
     });
   }
   writeRecord(projectDir, switches);

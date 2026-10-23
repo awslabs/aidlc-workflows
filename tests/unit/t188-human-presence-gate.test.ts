@@ -2381,19 +2381,23 @@ describe("t188: what the person's message asks for outlives the approval given i
 
   test("the message that answered a question still asks for the grant; a second grant waits for the person to say it again", () => {
     const slug = openGate();
-    recordHumanTurn(proj);
+    recordTypedReply(proj, "approve");
     expect(guarded(proj, ["approve", slug, "--user-input", "Approve"]).rc).toBe(0);
     const next = field(proj, "Current Stage");
     expect(guardedLog(proj, ["decision", "--stage", next, "--decision", "Which name?", "--options", "A,B"]).rc).toBe(0);
-    recordHumanTurn(proj);
+    const id = recordTypedReply(proj, "A, and run Construction on its own from here");
+    tick();
     expect(guardedLog(proj, ["answer", "--stage", next, "--details", "A"]).rc).toBe(0);
     // The answer they gave in that message is not a second decision: the rest
     // of the message, read by the agent as the grant, still stands, once.
-    const granted = autonomy("autonomous");
+    const granted = autonomy("autonomous", id);
     expect(granted.rc, granted.out).toBe(0);
     expect(autonomyMode()).toBe("autonomous");
     expect(autonomy("gated").rc).toBe(0);
-    expect(autonomy("autonomous").rc).not.toBe(0);
+    tick();
+    const again = autonomy("autonomous", id);
+    expect(again.rc).not.toBe(0);
+    expect(again.out).toContain(`message ${id} arrived before the last approval or decision`);
     expect(autonomyMode()).toBe("gated");
   });
 

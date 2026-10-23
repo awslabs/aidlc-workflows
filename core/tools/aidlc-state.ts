@@ -52,7 +52,6 @@ import {
   verificationCommandRecovery,
   constructionPolicyChangeAuthority,
   CONSTRUCTION_POLICY_RECOVERY,
-  latestPersonTurn,
   leftOutLine,
   PERSON_ASKED_SKIP_REASON,
   auditShardName,
@@ -129,7 +128,6 @@ import {
   humanTurnMintAllowed,
   hookActivation,
   hookChildEnv,
-  personSpokeSinceGate,
   fenceSwitchSentence,
   decideFence,
   ENGINE_OWNED_STATE_TRANSITIONS,
@@ -256,7 +254,9 @@ import {
   sourceBoundaryRepairStep,
   sourceWalkReach,
 } from "./aidlc-lib.js";
-import { proveMessage, readMessage } from "./aidlc-message-store.ts";
+import {
+  personTurnStands, proveMessage, readMessage, requestMessageStep, standingPersonTurn, type StoredMessage,
+} from "./aidlc-message-store.ts";
 import { memoryDirFor, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
@@ -1271,15 +1271,16 @@ function setConstructionPolicyField(content: string, field: string, value: strin
 
 // These typed setters change runtime preferences, like the existing iteration
 // setter; they cannot mutate lifecycle fields or grant autonomy.
-function handleSetConstructionPolicy(field: string, args: string[]): void {
+function handleSetConstructionPolicy(field: string, given: string[]): void {
+  const { values: args, message } = withMessageArg(given);
   if (args.length !== 1) error(`${field} requires exactly one value.`);
   const pd = resolveProjectDir(projectDir);
   withAuditLock(pd, () => {
     const content = readStateFile(pd);
     const updated = setConstructionPolicyField(content, field, args[0]);
     if (updated !== content) {
-      const words = requireHumanConstructionPolicyChange(pd, content, field, args[0]);
-      emitConstructionPolicySet(pd, content, updated, field, args[0], words);
+      const asked = requireHumanConstructionPolicyChange(pd, content, field, args[0], message);
+      emitConstructionPolicySet(pd, content, updated, field, args[0], asked);
       if (field === "Construction Execution" && args[0] === "serial") closePreparedBolts(pd, updated);
     }
     writeStateFile(pd, updated);
@@ -1359,7 +1360,7 @@ function constructionPolicyNotice(before: string, after: string, field: string):
 // on keeps the Units already finished: a stage start recorded while stage
 // starts were attempt boundaries stays the boundary it was.
 function emitConstructionPolicySet(
-  pd: string, before: string, after: string, field: string, value: string, words: string | null = null,
+  pd: string, before: string, after: string, field: string, value: string, asked: PolicyAsk | null = null,
 ): void {
   const current = (content: string, name: string): string => getField(content, name)?.trim() || "unset";
   emitAudit(pd, "CONSTRUCTION_POLICY_SET", {
@@ -1368,30 +1369,54 @@ function emitConstructionPolicySet(
     "Previous Value": current(before, field),
     "Construction Iteration": current(after, "Construction Iteration"),
     "Construction Checkpoints": current(after, "Construction Checkpoints"),
-    ...(words ? { [PERSONS_WORDS_FIELD]: words } : {}),
+    ...(asked?.words ? { [PERSONS_WORDS_FIELD]: asked.words } : {}),
+    ...(asked ? { [PERSONS_MESSAGE_FIELD]: asked.message } : {}),
   });
 }
 
-// During Construction a policy change is the person's: they asked for it in
-// their own words since the last decision (the conductor read it), or chose it
-// at an older policy question. Returns the words of the turn that asked, for
-// the record, or null.
-function requireHumanConstructionPolicyChange(pd: string, content: string, field: string, value: string): string | null {
+// The message that asked for a Construction policy change, for its row.
+interface PolicyAsk {
+  words: string | null;
+  message: string;
+}
+
+// A setter's own values, and the message the person asked in (--message <id>)
+// that makes the change theirs.
+function withMessageArg(args: string[]): { values: string[]; message?: string } {
+  const at = args.indexOf("--message");
+  if (at === -1) return { values: args };
+  const message = args[at + 1];
+  if (message === undefined || message.startsWith("--")) error("--message needs the id of the person's message.");
+  return { values: [...args.slice(0, at), ...args.slice(at + 2)], message };
+}
+
+// During Construction a policy change is the person's: the agent names the
+// message they asked for it in (--message, proved), or they chose it at an
+// older policy question. Returns that message, for the record, or null.
+function requireHumanConstructionPolicyChange(
+  pd: string, content: string, field: string, value: string, message: string | undefined,
+): PolicyAsk | null {
   if (getField(content, "Lifecycle Phase")?.toLowerCase() !== "construction") return null;
   // An unattended run never changes it on its own, whatever presence bypass is
   // in force: only a choice the person recorded earlier counts there.
-  if (process.env.AIDLC_UNATTENDED === "1" && constructionPolicyChangeAuthority(pd, content, field, value) !== "receipt") {
+  if (process.env.AIDLC_UNATTENDED === "1" && constructionPolicyChangeAuthority(pd, content, field, value, false) !== "receipt") {
     error(`An unattended run does not change ${field}: it changes when the person asks for it. ` + CONSTRUCTION_POLICY_RECOVERY);
   }
   if (humanPresenceGuardDisabled()) return null;
-  const authority = constructionPolicyChangeAuthority(pd, content, field, value);
+  let named: StoredMessage | undefined;
+  if (message !== undefined) {
+    const proof = proveMessage(pd, message, "setting", { request: true });
+    if ("refusal" in proof) error(proof.refusal);
+    named = proof.message;
+  }
+  const authority = constructionPolicyChangeAuthority(pd, content, field, value, named !== undefined);
   if (authority === null) {
     error(
-      `No message from the person since the last decision asks to change ${field}. Change it only when they ask ` +
-        "for it, never to clear a refusal or on your own. " + CONSTRUCTION_POLICY_RECOVERY,
+      requestMessageStep(pd, `No message of the person's that asks to change ${field} is named. Change it only ` +
+        "when they ask for it, never to clear a refusal or on your own.") + ` ${CONSTRUCTION_POLICY_RECOVERY}`,
     );
   }
-  return authority === "asked" ? latestPersonTurn(pd)?.words ?? null : null;
+  return authority === "asked" && named !== undefined ? { words: named.words ?? named.text, message: named.id } : null;
 }
 
 // set-skeleton-stance <on|off|scope-dependent> — record the conductor's
@@ -1446,7 +1471,8 @@ function handleSetSkeletonStance(args: string[]): void {
 // as CONSTRUCTION_POLICY_SET so finished Units keep their receipts across it.
 // The classify round-trip is initiated by the delivery-planning stage prose (or
 // set directly by a human); the engine writes nothing itself.
-function handleSetConstructionIteration(args: string[]): void {
+function handleSetConstructionIteration(given: string[]): void {
+  const { values: args, message } = withMessageArg(given);
   // Declared inside the handler for the same TDZ reason as skeleton stance:
   // main() runs at module load before a module-level const would initialise.
   const constructionIterationValues = ["unit-major", "stage-major"];
@@ -1485,8 +1511,8 @@ function handleSetConstructionIteration(args: string[]): void {
     value,
   );
   if (updated !== content) {
-    const words = requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value);
-    emitConstructionPolicySet(pd, content, updated, "Construction Iteration", value, words);
+    const asked = requireHumanConstructionPolicyChange(pd, content, "Construction Iteration", value, message);
+    emitConstructionPolicySet(pd, content, updated, "Construction Iteration", value, asked);
   }
   writeStateFile(pd, updated);
   keepPlanQuestionOver(pd, content, updated);
@@ -1598,7 +1624,8 @@ function hasCurrentTeamUnitActivity(
   return false;
 }
 
-function handleSetUnitOwnership(args: string[]): void {
+function handleSetUnitOwnership(given: string[]): void {
+  const { values: args, message } = withMessageArg(given);
   const values = ["team", "solo"];
   if (args.length < 1) {
     error(`Usage: aidlc-state.ts set-unit-ownership <${values.join("|")}>`);
@@ -1643,10 +1670,10 @@ function handleSetUnitOwnership(args: string[]): void {
     // teams is their request for one Unit at a time: a stage-by-stage plan
     // switches here by the two setters' own rules and records, after every
     // refusal and before any write.
-    const switches: Array<{ from: string; to: string; field: string; value: string; words: string | null }> = [];
+    const switches: Array<{ from: string; to: string; field: string; value: string; asked: PolicyAsk | null }> = [];
     const switchTo = (field: string, next: string, updated: string): void => {
-      const words = requireHumanConstructionPolicyChange(pd, content, field, next);
-      switches.push({ from: content, to: updated, field, value: next, words });
+      const asked = requireHumanConstructionPolicyChange(pd, content, field, next, message);
+      switches.push({ from: content, to: updated, field, value: next, asked });
       content = updated;
     };
     if (value === "team" && getField(content, "Construction Iteration")?.trim() !== "unit-major") {
@@ -1663,7 +1690,7 @@ function handleSetUnitOwnership(args: string[]): void {
       );
     }
     for (const change of switches) {
-      emitConstructionPolicySet(pd, change.from, change.to, change.field, change.value, change.words);
+      emitConstructionPolicySet(pd, change.from, change.to, change.field, change.value, change.asked);
     }
     content = setOrInsertField(
       content,
@@ -2356,7 +2383,7 @@ export interface ParkResult {
 
 // A park the person asked for, in their own words, is theirs. Who asked is the
 // conductor's reading of those words (--person-asked); the tool proves only that
-// a reply of theirs is on record since the last gate resolution. Their stop wins
+// a turn of theirs in this chat stands behind it (personTurnStands). Their stop wins
 // over the autonomous grant and is recorded as theirs. On a host whose hooks can
 // miss a reply (its hookActivation says so), a stop they asked for in an
 // attended session under the autonomous grant is theirs too, with a note that no
@@ -2377,8 +2404,9 @@ function handlePark(args: string[]): void {
       `\`${aidlcToolInvocation("orchestrate")} next\` and carry on.`;
     exitWithError({ message, auditMessage: message, agentGuidance: "person-decided" });
   }
-  // Their stop outlives the run's own approvals after it (personSpokeSinceGate).
-  const replied = asked && attendedSession && personSpokeSinceGate(pd, { outlivesApproval: true });
+  // Their stop outlives the run's own approvals after it and the one decision
+  // the same message gave (personTurnStands).
+  const replied = asked && attendedSession && personTurnStands(pd, "request");
   const activation = hookActivation();
   const missedReply = asked && attendedSession && !replied &&
     (activation?.missedReply !== undefined || activation?.missesReplies === true) && autonomous();
@@ -2395,10 +2423,11 @@ function handlePark(args: string[]): void {
 // The person's words that stop the work here, and the message that holds them,
 // kept on the park row as the approval row keeps them: every reply of theirs
 // in this chat that no decision has used yet (personsGateReply) when a reply of
-// theirs stands behind this park (the reading handlePark uses), else the words
-// of the approval that same reply gave (after "approve, and stop here" the
-// approval used it, so the row is where they are). None when none were kept (a
-// slash line, a no-text turn), when they are a non-answer, or when no reply of
+// theirs stands behind this park (the reading handlePark uses), else the
+// message of that standing reply (a decision it gave, or the run's own
+// approvals, came after it), else the words of the approval that same reply
+// gave (its message gone with the day). None when none were kept (a slash
+// line, a no-text turn), when they are a non-answer, or when no reply of
 // theirs is behind the park. Nothing here reads meaning into them: the step that resumes
 // at the parked stage hands them to the agent, who does.
 function parkedWords(pd: string, stage: string): Record<string, string> {
@@ -2407,9 +2436,15 @@ function parkedWords(pd: string, stage: string): Record<string, string> {
       ? { [PERSONS_WORDS_FIELD]: words, ...(id ? { [PERSONS_MESSAGE_FIELD]: id } : {}) }
       : {};
   try {
-    if (!personSpokeSinceGate(pd, { replies: true, outlivesApproval: true })) return {};
+    const standing = standingPersonTurn(pd, "request", { replies: true });
+    if (standing === null) return {};
     const reply = personsGateReply(pd, resolveInvokingSessionId(pd), stage);
     if (reply.words && !isNonAnswer(reply.words)) return { ...fields(reply.words, reply.messageId), ...windowMessageIds(reply) };
+    const standingId = auditBlockField(standing.block, PERSONS_MESSAGE_FIELD);
+    const standingMessage = standingId === null ? null : readMessage(pd, standingId);
+    if (standingMessage !== null && standingMessage.words !== null) {
+      return fields(standingMessage.words, standingId);
+    }
     const rows = sortAttemptEvents(readAuditShardEvents(pd));
     let turnAt = -1;
     for (let i = 0; i < rows.length; i++) if (rows[i].event === "HUMAN_TURN") turnAt = i;
@@ -2568,7 +2603,7 @@ function handleUnit(args: string[]): void {
   const VALID_UNIT_ACTIONS = new Set(["start", "pause", "resume", "complete"]);
   if (!action || !VALID_UNIT_ACTIONS.has(action)) {
     error(
-      `Usage: aidlc-state.ts unit <start|pause|resume|complete> --stage <slug> --unit <name> [--reason <text>] [--next-action <text>] [--set-aside-for <unit>] [--wave]`,
+      `Usage: aidlc-state.ts unit <start|pause|resume|complete> --stage <slug> --unit <name> [--reason <text>] [--next-action <text>] [--set-aside-for <unit>] [--wave] [--message <id>]`,
     );
   }
   const rest = args.slice(1);
@@ -2578,6 +2613,8 @@ function handleUnit(args: string[]): void {
   const rawNextAction = getFlagValue(rest, "--next-action");
   const waveMode = rest.includes("--wave");
   const setAsideFor = getFlagValue(rest, "--set-aside-for")?.trim();
+  // The message the person said to go on without the Unit's review in.
+  const namedMessage = getFlagValue(rest, "--message");
   const reason = rawReason?.trim();
   const nextAction = rawNextAction?.trim();
   if (!slug) error("Missing --stage <slug>");
@@ -2784,14 +2821,21 @@ function handleUnit(args: string[]): void {
     if (action === "complete" && !waveMode && !completionPicked) {
       const owed = openUnitReview(pd, content, stage, unit);
       const theirsMayWin = owed !== null && personMayApproveOverUnfinishedReview(pd, content);
-      if (owed !== null && !(theirsMayWin && personSpokeSinceGate(pd, { requests: true }))) {
+      // Their words are the message the agent names (--message), proved.
+      let theirsSaid = false;
+      if (theirsMayWin && namedMessage !== undefined) {
+        const proof = proveMessage(pd, namedMessage, "request", { request: true });
+        if ("refusal" in proof) error(proof.refusal);
+        theirsSaid = true;
+      }
+      if (owed !== null && !(theirsMayWin && theirsSaid)) {
         const request =
           `${aidlcToolInvocation("log")} review --stage ${slug} --reviewer ${owed.reviewer} ` +
           `--unit ${unit} --iteration ${owed.iteration}`;
         const theirs = theirsMayWin
-          ? " If the person said to go on without this review, run this completion again: their words let it " +
-            "record, and their approval (the Unit checkpoint's `verify --over-unfinished-review`, or the stage gate) " +
-            "goes over the review."
+          ? ` ${requestMessageStep(pd, "If the person says to go on without this review, run this completion again " +
+            "with --message <id>, the message they said it in.")} Their approval (the Unit checkpoint's ` +
+            "`verify --over-unfinished-review`, or the stage gate) goes over the review."
           : " Finish it first, without asking the person: your team set Guard Policy to strict for everyone on " +
             "this repo, so their words do not go over this review.";
         error(

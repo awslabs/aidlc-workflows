@@ -1,4 +1,4 @@
-// covers: function:lowerFenceRemedy, function:lowerFenceSentence, function:personSpokeSinceGate, function:evaluateGuardRefusal
+// covers: function:lowerFenceRemedy, function:lowerFenceSentence, function:personTurnStands, function:evaluateGuardRefusal
 //
 // The person drives. When a guard offers turning a check off and the person
 // picks it, or asks for it in their own words, the agent runs the existing
@@ -19,9 +19,9 @@ import {
   guardRecoveryAskForRefusal,
   lowerFenceSentence,
   MESSAGE_FILL,
-  personSpokeSinceGate,
   readAuditShardEvents,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { personTurnStands } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { guardOperationMatchesCommand } from "../../dist/claude/.claude/tools/aidlc-guard-operation.ts";
 import { validateDirective } from "../../dist/claude/.claude/tools/aidlc-directive.ts";
 import { SWITCHABLE_GUARD_FENCES } from "../../dist/claude/.claude/tools/aidlc-guard-fences.ts";
@@ -189,9 +189,9 @@ describe("a guard's turn-it-off choice is a command the agent runs", () => {
 describe("the setter carries out the person's choice", () => {
   test("with the person's message named, the agent's setter turns the check off", () => {
     const { proj, state } = project();
-    expect(personSpokeSinceGate(proj)).toBe(false);
+    expect(personTurnStands(proj, "request")).toBe(false);
     const id = says(proj, "yes, turn the review freeze off for this");
-    expect(personSpokeSinceGate(proj)).toBe(true);
+    expect(personTurnStands(proj, "request")).toBe(true);
     // Their turn alone carries nothing: the refusal names the retry with their message.
     const bare = run(UTILITY, turnOff, proj);
     expect(bare.status).toBe(1);

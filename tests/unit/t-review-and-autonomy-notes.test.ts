@@ -53,7 +53,9 @@ describe("the autonomy choice is a step the engine names", () => {
     expect(note).toContain("How should I continue building the remaining work?");
     expect(note).toContain("Continue automatically");
     expect(note).toContain("Review each checkpoint");
-    expect(note).toContain("bun .claude/tools/aidlc-bolt.ts set-autonomy --mode <autonomous|gated>");
+    // The grant names the message the person chose it in.
+    expect(note).toContain("bun .claude/tools/aidlc-bolt.ts set-autonomy --mode autonomous --message <id>");
+    expect(note).toContain("`--mode gated`");
     expect(note).toContain("never answer it yourself");
   });
 
@@ -77,7 +79,7 @@ describe("the autonomy choice is a step the engine names", () => {
       "aidlc engine orchestrate",
     ) as Record<string, unknown>;
     expect(String(directive.construction_policy_note ?? "")).toContain(
-      "aidlc engine bolt set-autonomy --mode <autonomous|gated>",
+      "aidlc engine bolt set-autonomy --mode autonomous --message <id>",
     );
   });
 });

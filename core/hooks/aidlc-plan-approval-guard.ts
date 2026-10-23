@@ -115,7 +115,6 @@ import {
   isClaudeCodeHookInput,
   isoTimestamp,
   personAskedSinceGate,
-  personSpokeSinceGate,
   readActiveDirectiveMarker,
   readIssuedDirectiveMarker,
   spacesRoot,
@@ -148,6 +147,7 @@ import {
   LOCK_FOLDER_HELD_SAID_KEY,
   lockFolderHeldGoesOnStep,
 } from "../tools/aidlc-lock-line.ts";
+import { personTurnStands } from "../tools/aidlc-message-store.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../tools/aidlc-settings.ts";
@@ -1524,8 +1524,10 @@ const NO_ENGINE_CONTEXT: EngineCommandContext = { jumpAdmitted: () => false };
 // another jump goes against that pick. Any other jump is their own move. The
 // report that opens the gate moves the state and writes no
 // step, so the step the person answers there is the one the engine issued last
-// (readIssuedDirectiveMarker); whether their words still stand is
-// personSpokeSinceGate's. With no step on record there is nothing to wait for.
+// (readIssuedDirectiveMarker); whether their turn still stands is
+// personTurnStands's (no decision after it, so the approval they just gave
+// never also reopens what it approved). With no step on record there is
+// nothing to wait for.
 // Parked work's last step is the park, which no issued step outlives.
 function lastStepAdmitsPersonsMoves(projectDir: string, jump: JumpCommand): boolean | EngineInvocation {
   try {
@@ -1586,7 +1588,7 @@ function jumpIsPersonsMove(
   jump: JumpCommand,
 ): boolean | EngineInvocation {
   if (typeof command === "string" && isSelectedGuardRestartContinuation(projectDir, cwd, command, state, marker)) return true;
-  if (!personSpokeSinceGate(projectDir, { requests: true })) return false;
+  if (!personTurnStands(projectDir, "plain", { requests: true })) return false;
   const last = lastStepAdmitsPersonsMoves(projectDir, jump);
   return typeof last === "boolean" || runtimeHarnessName(projectDir) === "copilot" ? last : false;
 }

@@ -1300,8 +1300,9 @@ export function autonomyChoiceNote(boltInvocation: string): string {
     'work?", with the choices "Continue automatically" (through the ordinary completion checkpoints; plans, enabled ' +
     'summaries, the verification command and failures still come to them) and "Review each checkpoint" (they approve ' +
     `each one). It is theirs to answer: never answer it yourself and never infer it from silence. Record what they ` +
-    `say with \`${boltInvocation} set-autonomy --mode <autonomous|gated>\` (Continue automatically is autonomous, ` +
-    "Review each checkpoint is gated), then run `next` again for the policy that now applies.";
+    `say with \`${boltInvocation} set-autonomy --mode autonomous --message <id>\` (Continue automatically, with ` +
+    "<id> the message they chose it in) or `--mode gated` (Review each checkpoint), then run `next` again for the policy " +
+    "that now applies.";
 }
 
 /**

@@ -4,16 +4,18 @@
 // before its verdict, or it came back NOT-READY with a pass left) and the
 // person says "approve it as it is". Under Guard Policy off, relaxed, and a
 // strict set for this piece of work, the Unit goes on, as at a stage gate: its
-// checkpoint is verified as usual and their words are the approval (no second
-// question), recorded with the review shown as not finished, and the person
-// hears one line. The walk then carries on to the next Unit and the stage
-// closes with no further question.
+// checkpoint is verified as usual with the agent naming the message they said
+// it in (--message), their words are the approval (no second question),
+// recorded with the review shown as not finished, and the person hears one
+// line. The walk then carries on to the next Unit and the stage closes with no
+// further question.
 //
-// What stays: the person's words must be on record (the agent alone cannot let
-// a Unit skip its review), a review never asked for is still required, and
-// under a strict the team locks the review finishes first, with no question
-// to the person. Every refusal names the step that works, and `next` names the retry
-// of an interrupted review, so the agent is never left without one.
+// What stays: the person's message must be named (the agent alone, or their
+// turn with no message named, cannot let a Unit skip its review), a review
+// never asked for is still required, and under a strict the team locks the
+// review finishes first, with no question to the person. Every refusal names
+// the step that works, and `next` names the retry of an interrupted review, so
+// the agent is never left without one.
 import {
   NATIVE_FIXTURE_SETUP_TIMEOUT_MS,
   NATIVE_STARTUP_TIMEOUT_MS,
@@ -115,23 +117,29 @@ function agentEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-function tool(p: string, name: string, args: string[]) {
+function tool(p: string, name: string, args: string[], env: NodeJS.ProcessEnv = {}) {
   const result = spawnSync(process.execPath, [
     join(AIDLC_SRC, `tools/aidlc-${name}.ts`), ...args, "--project-dir", p,
-  ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: agentEnv() });
+  ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: { ...agentEnv(), ...env } });
   const last = (result.stdout ?? "").trim().split(/\r?\n/).at(-1) ?? "";
   let json: Record<string, unknown> | null = null;
   try { json = JSON.parse(last); } catch { json = null; }
   return { status: result.status, json, out: `${result.stdout}${result.stderr}` };
 }
 
-function says(p: string, prompt: string, session = SESSION): void {
+// The person types `prompt`; the shipped human-turn hook keeps it. Returns the
+// id of the message it kept, which the agent names with --message.
+function says(p: string, prompt: string, session = SESSION): string {
   const env: NodeJS.ProcessEnv = { ...agentEnv(), AIDLC_PROJECT_DIR: p, CLAUDE_PROJECT_DIR: p };
   const result = spawnSync(process.execPath, [join(AIDLC_SRC, "tools/aidlc.ts"), "engine", "hook", "record-human-turn"], {
     timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", cwd: p, env,
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
   });
   expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  const turn = events(p, "HUMAN_TURN").at(-1);
+  const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+  expect(id).not.toBeNull();
+  return id as string;
 }
 
 function recordCommand(p: string): void {
@@ -208,8 +216,11 @@ function next(p: string): Directive {
   return result.directive as Directive;
 }
 
+// Run from the person's chat, so the message the agent names is proved against it.
 function checkpoint(p: string, unit: string, action: string, extra: string[] = []) {
-  return tool(p, "bolt", ["checkpoint", "--unit", unit, "--kind", "unit", "--action", action, "--session", SESSION, ...extra]);
+  return tool(p, "bolt", ["checkpoint", "--unit", unit, "--kind", "unit", "--action", action, "--session", SESSION, ...extra], {
+    AIDLC_SESSION_OVERRIDE: SESSION,
+  });
 }
 
 const events = (p: string, name: string) => readAuditShardEvents(p).filter((row) => row.event === name);
@@ -218,11 +229,11 @@ const unitApprovals = (p: string, unit: string) => events(p, "GATE_APPROVED")
 const questionsAsked = (p: string, unit: string) => events(p, "DECISION_RECORDED")
   .filter((row) => auditBlockField(row.block, "Checkpoint") === "Construction Unit Approval" && auditBlockField(row.block, "Unit") === unit);
 
-// The person's "approve it as it is" is the approval: verify, then approve
-// with no question asked. Alpha is approved over the unfinished review, with
-// their words on the record.
-function approvedInWords(p: string): void {
-  const verified = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
+// The person's "approve it as it is" is the approval: verify naming their
+// message, then approve with no question asked. Alpha is approved over the
+// unfinished review, with their words on the record.
+function approvedInWords(p: string, message: string): void {
+  const verified = checkpoint(p, "alpha", "verify", ["--over-unfinished-review", "--message", message]);
   expect(verified.status, verified.out).toBe(0);
   expect(verified.json?.verified).toBe(true);
   expect(verified.json?.review_not_finished).toEqual({ stages: [CG], approved_in_words: true });
@@ -246,8 +257,7 @@ function approvedInWords(p: string): void {
 }
 
 function approveAsItIs(p: string): void {
-  says(p, AS_IT_IS);
-  approvedInWords(p);
+  approvedInWords(p, says(p, AS_IT_IS));
 }
 
 // After alpha: beta is built, reviewed and approved as usual, and one bare
@@ -350,8 +360,8 @@ describe("approving a Unit as it is over a review that did not finish", () => {
       lockStrict(p);
       build(p, "alpha");
       review(p, "alpha", 1);
-      says(p, AS_IT_IS);
-      const refused = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
+      const asItIs = says(p, AS_IT_IS);
+      const refused = checkpoint(p, "alpha", "verify", ["--over-unfinished-review", "--message", asItIs]);
       expect(refused.status).not.toBe(0);
       expect(refused.out).toContain(`Finish it first, without asking the person: request it again with \``);
       expect(refused.out).toContain([...reviewArgs("alpha", 1), "--retry-pending"].join(" "));
@@ -365,8 +375,8 @@ describe("approving a Unit as it is over a review that did not finish", () => {
   test("a review never asked for stays required", () => {
     const p = fixture("off");
     build(p, "alpha");
-    says(p, AS_IT_IS);
-    const refused = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
+    const asItIs = says(p, AS_IT_IS);
+    const refused = checkpoint(p, "alpha", "verify", ["--over-unfinished-review", "--message", asItIs]);
     expect(refused.status).not.toBe(0);
     expect(refused.out).toContain("terminal review evidence is required");
     expect(refused.json?.verified ?? false).toBe(false);
@@ -385,8 +395,8 @@ describe("approving a Unit as it is over a review that did not finish", () => {
       expect(step.construction_checkpoint?.rereview?.command).toContain(first);
       expect(step.construction_checkpoint?.rereview?.command).not.toContain("--retry-pending");
       expect(step.reviewer).toBe(REVIEWER);
-      says(p, AS_IT_IS);
-      const refused = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
+      const asItIs = says(p, AS_IT_IS);
+      const refused = checkpoint(p, "alpha", "verify", ["--over-unfinished-review", "--message", asItIs]);
       expect(refused.status).not.toBe(0);
       expect(refused.out).toContain(first);
       expect(refused.out).not.toContain("verify with --over-unfinished-review");
@@ -456,8 +466,8 @@ describe("approving a Unit as it is over a review that did not finish", () => {
     const p = fixture("strict");
     lockStrict(p);
     recoveryInterrupted(p);
-    says(p, AS_IT_IS);
-    const refused = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
+    const asItIs = says(p, AS_IT_IS);
+    const refused = checkpoint(p, "alpha", "verify", ["--over-unfinished-review", "--message", asItIs]);
     expect(refused.status).not.toBe(0);
     expect(refused.out).toContain("Finish it first, without asking the person:");
     expect(refused.out).toContain(reviewArgs("alpha", 2).join(" "));
@@ -472,6 +482,11 @@ describe("approving a Unit as it is over a review that did not finish", () => {
     const refused = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
     expect(refused.status).not.toBe(0);
     expect(refused.out).toContain("--retry-pending");
+    // Their turn on record is not enough: the step names the message to name.
+    says(p, AS_IT_IS);
+    const unnamed = checkpoint(p, "alpha", "verify", ["--over-unfinished-review"]);
+    expect(unnamed.status).not.toBe(0);
+    expect(unnamed.out).toContain("verify with --over-unfinished-review --message <id>");
     expect(unitApprovals(p, "alpha")).toHaveLength(0);
     expect(questionsAsked(p, "alpha")).toHaveLength(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);

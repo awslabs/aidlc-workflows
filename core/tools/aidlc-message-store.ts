@@ -8,6 +8,8 @@ import {
   HOOK_HEARTBEAT_STALE_SLACK_MS,
   hookLiveness,
   humanTurnMintAllowed,
+  isReplyTurn,
+  isRequestTurn,
   MESSAGE_SPENDING_EVENTS,
   promptHookRanRecently,
   readAuditShardEvents,
@@ -440,15 +442,22 @@ function windowChat(
 // that names a message earlier than this one was not backed by it, and a row
 // that names none was the decision its window held. It reads
 // ids, times and the engine's own rows, never words or what kind of reply it
-// was.
-function onlyItsOwnDecisionAfter(pd: string, rows: readonly AuditShardEvent[], message: StoredMessage): boolean {
+// was. `after` says which rows came after the message: by default those of a
+// later second; the presence read orders by the turn's own row
+// (personTurnStands).
+function onlyItsOwnDecisionAfter(
+  pd: string,
+  rows: readonly AuditShardEvent[],
+  message: Pick<StoredMessage, "id" | "at" | "session">,
+  after: (row: AuditShardEvent) => boolean = (row) => row.timestamp > message.at,
+): boolean {
   const decisions = new Set<string>();
   // One jump over several Units is one decision, as one plan answer over
   // several Units is.
   let jump: { key: string; units: Set<string> } | null = null;
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index];
-    if (row.timestamp <= message.at) continue;
+    if (!after(row)) continue;
     // A grant of autonomous Construction uses up the message that gave it.
     if (row.event === "AUTONOMY_MODE_SET" && auditBlockField(row.block, "Mode") === "autonomous") return false;
     if (!MESSAGE_SPENDING_EVENTS.has(row.event)) continue;
@@ -562,4 +571,88 @@ function messageProof(
     };
   }
   return { message };
+}
+
+// Whether `a` comes after `b` on the record: a later second, or the same second
+// and a later place in the same shard. Rows of one second in two shards are
+// unordered; `crossShard` says how such a pair reads.
+function rowAfter(a: AuditShardEvent, b: AuditShardEvent, crossShard: boolean): boolean {
+  if (a.timestamp !== b.timestamp) return a.timestamp > b.timestamp;
+  return a.shardIndex === b.shardIndex ? a.pos > b.pos : crossShard;
+}
+
+/**
+ * Presence for what a command asks for, by the one spend rule: the person's
+ * latest turn on the work's record still stands behind it. `request` is the
+ * message proof's request form (at most one decision of theirs after the turn:
+ * a stop, a scope change, a check a host lets through); `plain` stands only
+ * while no decision follows the turn (going back to an approved plan, what the
+ * folder is, a jump), so the approval a message gave never also stands behind
+ * work the agent undoes on its own. An answer never spends either. With
+ * `replies` the turn is a reply; with `requests`, anything but an older
+ * record's question about a switch, which ends the reach of the turns before
+ * it; with neither, any turn. Presence is a fact about the turn, not its words:
+ * a command line, a host that passed no text and a record the store pruned all
+ * count, ordered by the row's place in its shard. The turn is this chat's when
+ * the engine and the row both name a chat, else the latest whatever its chat,
+ * so a missing fact fails toward the person. It reads ids, times and the
+ * engine's own rows, never words. A command that names its message proves that
+ * one (proveMessage) instead.
+ */
+export function personTurnStands(
+  pd: string,
+  mode: "request" | "plain",
+  options: { replies?: boolean; requests?: boolean; intent?: string; space?: string } = {},
+): boolean {
+  return standingPersonTurn(pd, mode, options) !== null;
+}
+
+/**
+ * The turn personTurnStands reads, when it stands: its HUMAN_TURN row (whose
+ * Message Id names the message behind what the command does), else null.
+ */
+export function standingPersonTurn(
+  pd: string,
+  mode: "request" | "plain",
+  options: { replies?: boolean; requests?: boolean; intent?: string; space?: string } = {},
+): AuditShardEvent | null {
+  try {
+    const unreadable: string[] = [];
+    const rows = readAuditShardEvents(pd, options.intent, options.space, unreadable);
+    if (unreadable.length > 0) return null;
+    const chat = invokingChat(pd);
+    let turn: AuditShardEvent | undefined;
+    for (const row of rows) {
+      if (row.event !== "HUMAN_TURN") continue;
+      const session = auditBlockField(row.block, "Session");
+      if (chat !== null && session !== null && session !== chat) continue;
+      if (options.replies === true && !isReplyTurn(row)) continue;
+      if (turn === undefined || rowAfter(row, turn, row.shardIndex > turn.shardIndex)) turn = row;
+    }
+    if (turn === undefined || (options.requests === true && !isRequestTurn(turn))) return null;
+    const of = turn;
+    // A row of the turn's own second in another shard cannot be ordered
+    // against it, so it reads as after: the record cannot say it came first.
+    const after = (row: AuditShardEvent): boolean => row !== of && rowAfter(row, of, true);
+    if (mode === "plain") {
+      // Words sent on to separate new work reply to no question here: what
+      // they asked for still stands, unless the turn read is a reply.
+      return rows.some((row) =>
+        after(row) &&
+        ((MESSAGE_SPENDING_EVENTS.has(row.event) && (row.event !== "REQUEST_ROUTED" || options.replies === true)) ||
+          (row.event === "AUTONOMY_MODE_SET" && auditBlockField(row.block, "Mode") === "autonomous")))
+        ? null
+        : of;
+    }
+    const id = auditBlockField(of.block, "Message Id");
+    const kept = id === null ? null : readMessage(pd, id);
+    return onlyItsOwnDecisionAfter(
+      pd,
+      rows,
+      kept ?? { id: id ?? "", at: of.timestamp, session: auditBlockField(of.block, "Session") },
+      after,
+    ) ? of : null;
+  } catch {
+    return null;
+  }
 }

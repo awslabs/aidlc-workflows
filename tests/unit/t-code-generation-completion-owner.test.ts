@@ -56,7 +56,11 @@ function stageLine(proj: string): string {
 function reviewed(proj: string, iteration: number, { personAsked, unit }: { personAsked?: boolean; unit?: string } = {}): void {
   const request = `bun .claude/tools/aidlc.ts engine log review --stage code-generation${unit ? ` --unit ${unit}` : ""}` +
     ` --reviewer ${REVIEWER} --iteration ${iteration}`;
-  const requested = runNamed(proj, `${request}${personAsked ? " --person-asked" : ""}`);
+  // A review the person asked for names the message they asked in.
+  const turn = auditEvents(proj).filter((row) => row.event === "HUMAN_TURN" && /\*\*Message Id\*\*: /.test(row.block)).at(-1);
+  const id = /\*\*Message Id\*\*: (\S+)/.exec(turn?.block ?? "")?.[1] ?? "";
+  const asked = personAsked ? ` --person-asked --message ${id}` : "";
+  const requested = runNamed(proj, `${request}${asked}`);
   const reviewFile = (JSON.parse(requested.stdout || "{}") as { reviewFile?: string }).reviewFile;
   if (requested.status !== 0 || !reviewFile) throw new Error(`no review file named:\n${requested.stdout}${requested.stderr}`);
   mkdirSync(dirname(join(proj, reviewFile)), { recursive: true });

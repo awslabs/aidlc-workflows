@@ -10,6 +10,7 @@ import { closeSync, existsSync, lstatSync, mkdtempSync, openSync, readSync, rmdi
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { appendAuditEntryUnlocked } from "./aidlc-audit.ts";
+import { proveMessage } from "./aidlc-message-store.ts";
 import { aidlcToolInvocation } from "./aidlc-runtime-paths.ts";
 import { APPROVAL_GATE_CHOICES } from "./aidlc-reply-reader.ts";
 import {
@@ -61,7 +62,6 @@ import {
   maximalAttemptEvents,
   personMayApproveOverUnfinishedReview,
   parseCheckboxes,
-  personSpokeSinceGate,
   readAuditShardEvents,
   readRegularFileNoFollowOrThrow,
   readStateFile,
@@ -1385,8 +1385,9 @@ function requireReady(current: Snapshot): void {
         : ` The ${reviewsNamed([step.stage])} for ${result.unit} ` +
           `${step.unfinished === "no-verdict" ? "did not finish" : "is NOT-READY with a pass left"}. ` +
           (current.overAllowed
-            ? `If the person said to approve ${result.unit} as it is (their words since the last question), verify ` +
-              `with --over-unfinished-review; otherwise finish the review: ${finish}.`
+            ? `If the person said to approve ${result.unit} as it is, verify with --over-unfinished-review ` +
+              "--message <id>, the id of the message they said it in; " +
+              `otherwise finish the review: ${finish}.`
             : `Finish it first, without asking the person: ${finish}.`);
     throw new Error(`Construction checkpoint is not ready: ${result.errors.join(" ")}${rereview}`);
   }
@@ -1433,11 +1434,18 @@ export async function verifyConstructionCheckpoint(
   projectDir: string,
   unit: string,
   kind: ConstructionCheckpointKind,
-  options: { overUnfinishedReview?: boolean; timeoutMs?: number } = {},
+  options: { overUnfinishedReview?: boolean; timeoutMs?: number; message?: string } = {},
 ): Promise<ConstructionCheckpoint> {
+  // The person's "approve it as it is": the message the agent names
+  // (--message), proved, is what lets the Unit go on without its review.
+  let over = false;
+  if (options.overUnfinishedReview === true && options.message !== undefined) {
+    const proof = proveMessage(projectDir, options.message, "request", { request: true });
+    if ("refusal" in proof) throw new Error(proof.refusal);
+    over = true;
+  }
   // A check that formats or regenerates the Unit's files changes what it
   // checked, so it runs once more against the files as they are now.
-  const over = options.overUnfinishedReview === true;
   const timeoutMs = verificationTimeoutMs(options.timeoutMs);
   const first = await verifyOnce(projectDir, unit, kind, false, over, timeoutMs);
   if (!first.rerun) return first.result;
@@ -1459,9 +1467,7 @@ async function verifyOnce(
   overUnfinishedReview: boolean,
   timeoutMs: number,
 ): Promise<{ result: ConstructionCheckpoint; rerun: boolean }> {
-  // The agent passes on the person's "approve it as it is"; their words since
-  // the last decision are what let the Unit go on without its review.
-  const personAllows = overUnfinishedReview && personSpokeSinceGate(projectDir, { requests: true });
+  const personAllows = overUnfinishedReview;
   const before = locked(projectDir, () => {
     withdrawProtectedQuestions(projectDir, "*");
     const current = snapshot(projectDir, unit, kind, undefined, undefined, personAllows);

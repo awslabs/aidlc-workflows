@@ -1,5 +1,5 @@
 // covers: function:switchesOff, function:switchOffLine, function:switchesOffLines, function:switchOffNotices
-// covers: function:recordSwitchChange, function:clearSwitchCommand, function:latestPersonTurn, function:personSpokeSinceGate
+// covers: function:recordSwitchChange, function:clearSwitchCommand, function:latestPersonTurn
 // covers: function:PERSON_CHECK_SWITCHES, function:PERSON_CHECK_SWITCH_LABELS
 // covers: function:killSwitchSource, function:isKillSwitchSource
 //
@@ -11,7 +11,8 @@
 // since when, how it was set, and the one phrase that turns it back on. The
 // engine's next directive says it once per change; every session start says it
 // while it stays off; `config flags --show` and the doctor Flags row always do.
-// Whether a person's chat turn stood behind the change decides only the words.
+// Whether the command named the message the person asked in decides only the
+// words.
 
 import { afterAll, afterEach, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -29,8 +30,9 @@ import {
 import { NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { flagsDoctorCheck } from "../../dist/claude/.claude/tools/aidlc-config-diagnostics.ts";
 import {
+  auditBlockField,
   latestPersonTurn,
-  personSpokeSinceGate,
+  readAuditShardEvents,
   resolveProjectFlag,
   STOP_HOOK_PROBE_ENV,
   stateFilePath,
@@ -169,6 +171,18 @@ function flags(proj: string, ...args: string[]) {
   return result;
 }
 
+// The agent's command from the chat, naming the message the person asked in.
+function flagsAsked(proj: string, ...args: string[]) {
+  const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+  expect(id).not.toBeNull();
+  const result = dispatch(proj, ["config", "flags", "--project-dir", proj, ...args, "--message", id as string], undefined, {
+    AIDLC_SESSION_OVERRIDE: SESSION,
+  });
+  invalidateSettingsCache();
+  return result;
+}
+
 
 function notices(proj: string, extra: Record<string, string | undefined> = {}): string[] {
   const result = runOrchestrateNext(ORCHESTRATE, proj, [], { cwd: proj, env: quietEnv(extra) });
@@ -202,10 +216,9 @@ describe("a check switched off for the project is always said, never refused", (
   test("asked for in the chat: off at once, and the person hears their own words", () => {
     const proj = installedProject();
     says(proj, ASKED);
-    expect(personSpokeSinceGate(proj)).toBe(true);
     expect(latestPersonTurn(proj)?.words).toBe(ASKED);
 
-    const recorded = flags(proj, "--bypass", NAME, "--local", "--yes");
+    const recorded = flagsAsked(proj, "--bypass", NAME, "--local", "--yes");
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     expect(recorded.stdout).toContain(OFF);
     expect(recorded.stdout).toContain(FROM_CHAT);
@@ -259,7 +272,7 @@ describe("a check switched off for the project is always said, never refused", (
     const proj = installedProject();
     const long = `turn the review freeze check off ${"and keep going ".repeat(40)}`;
     says(proj, long);
-    const recorded = flags(proj, "--bypass", NAME, "--local", "--yes");
+    const recorded = flagsAsked(proj, "--bypass", NAME, "--local", "--yes");
     expect(recorded.status, recorded.stdout + recorded.stderr).toBe(0);
     expect(recorded.stdout).toMatch(/because you said: "turn the review freeze check off and keep going [^"]*\.\.\."/);
     const [entry] = JSON.parse(readFileSync(recordFile(proj), "utf-8")).switches as Array<{ words: string }>;

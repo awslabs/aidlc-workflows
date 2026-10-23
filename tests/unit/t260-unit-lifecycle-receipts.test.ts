@@ -38,7 +38,6 @@ import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFile
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
   AIDLC_SRC,
   cleanupTestProject,
@@ -53,6 +52,7 @@ import {
 import {
   activeUnitCheckpoint,
   artifactFilename,
+  auditBlockField,
   consumeSharedDirectiveAsk,
   recordGuardRecoveryChoice,
   currentUnitLifecycleMode,
@@ -1373,11 +1373,33 @@ describe("t260 finished Units keep their receipts across a Construction policy c
 
 // The receipt waits for the Unit's review: a request open with no verdict is a
 // finding still owed, so a completion over it would hand the walk on with the
-// finding lost. Only that case refuses; the person's words, their pick on a
-// recovery ask, and every freshness question stay outside this check.
+// finding lost. Only that case refuses; the person's message the agent names
+// (--message), their pick on a recovery ask, and every freshness question stay
+// outside this check.
 describe("t260 the receipt waits for the Unit's review", () => {
   const REVIEWER = "aidlc-architecture-reviewer-agent";
   const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
+  const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
+
+  // The person types `prompt`; the shipped human-turn hook keeps it. Returns
+  // the id of the message it kept.
+  function said(prompt: string): string {
+    const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: proj, AIDLC_PROJECT_DIR: proj };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    delete env.AIDLC_UNATTENDED;
+    const r = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      cwd: proj,
+      env,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "t260-person", prompt }),
+    });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+    const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+    expect(id).not.toBeNull();
+    return id as string;
+  }
 
   function review(args: string[], env: NodeJS.ProcessEnv = {}): { rc: number; out: string } {
     const r = spawnSync(
@@ -1430,7 +1452,9 @@ describe("t260 the receipt waits for the Unit's review", () => {
     expect(early.out).toContain("its review (iteration 1) is still waiting for a verdict. Record it with");
     expect(early.out).toContain(`review --stage ${SLUG} --reviewer ${REVIEWER} --unit unit-a --iteration 1 --verdict <READY|NOT-READY>`);
     expect(early.out).toContain("--retry-pending");
-    expect(early.out).toContain("If the person said to go on without this review");
+    expect(early.out).toContain(
+      "If the person says to go on without this review, run this completion again with --message <id>, the message they said it in.",
+    );
     expect(readAllAuditShards(proj)).not.toContain("UNIT_COMPLETED");
   });
 
@@ -1443,13 +1467,19 @@ describe("t260 the receipt waits for the Unit's review", () => {
     expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
   });
 
-  test("the person's words since the last question let the receipt record over the open review", () => {
+  test("the person's message, named, lets the receipt record over the open review", () => {
     constructionProject();
     startedAndRequested();
     // Their "approve it as it is": the Unit's checkpoint takes it with
     // --over-unfinished-review, and that checkpoint needs this receipt first.
-    appendAuditEntry("HUMAN_TURN", {}, proj);
-    const done = unitVerb(proj, "complete", "unit-a");
+    const id = said("approve it as it is, skip the rest of the review");
+    // Naming no message, the refusal leads with the retry that names theirs.
+    const unnamed = unitVerb(proj, "complete", "unit-a");
+    expect(unnamed.rc).not.toBe(0);
+    expect(unnamed.out).toContain(`If their message ${id} (sent `);
+    expect(unnamed.out).toContain("run the same command with --message <id>");
+    expect(readAllAuditShards(proj)).not.toContain("UNIT_COMPLETED");
+    const done = unitVerb(proj, "complete", "unit-a", ["--message", id]);
     expect(done.rc, done.out).toBe(0);
     expect(unitCompletedReceipts(proj, SLUG).has("unit-a")).toBe(true);
   });
@@ -1458,7 +1488,7 @@ describe("t260 the receipt waits for the Unit's review", () => {
   // where personMayApproveOverUnfinishedReview says so: a strict the team
   // locked in a memory layer keeps the review required for everyone on the
   // repo, so the receipt the checkpoint needs first stays refused there too.
-  test("a strict the team locked in memory keeps the receipt refused after the person spoke, and the refusal says so", () => {
+  test("a strict the team locked in memory keeps the receipt refused over the person's named message, and the refusal says so", () => {
     constructionProject();
     const reviewFile = startedAndRequested();
     const space = seededStateFile(proj).match(/^(.*[\\/]spaces[\\/][^\\/]+)[\\/]/)?.[1];
@@ -1470,8 +1500,8 @@ describe("t260 the receipt waits for the Unit's review", () => {
     writeFileSync(layer, existing.includes("## Guard Policy\n")
       ? existing.replace("## Guard Policy\n", "## Guard Policy\n\nMode: strict\n")
       : `${existing.trimEnd()}\n\n## Guard Policy\n\nMode: strict\n`, "utf-8");
-    appendAuditEntry("HUMAN_TURN", {}, proj);
-    const refused = unitVerb(proj, "complete", "unit-a");
+    const id = said("approve it as it is, skip the rest of the review");
+    const refused = unitVerb(proj, "complete", "unit-a", ["--message", id]);
     expect(refused.rc).not.toBe(0);
     expect(refused.out).toContain("still waiting for a verdict");
     expect(refused.out).toContain(

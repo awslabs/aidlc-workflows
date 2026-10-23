@@ -407,8 +407,8 @@ export interface SettingProof {
 /**
  * The chat half of settingTheirs: their typed line in this chat or the message
  * the agent named, never their own terminal. What the folder is
- * (`project-type`) is read this way too: the line keeps it as the route's
- * project type, not a setting.
+ * (`project-type`) and the scope (`scope`) are read this way too: the line
+ * keeps each in its route, not as a setting.
  */
 export function saidInChat(
   projectDir: string,
@@ -447,8 +447,13 @@ export function saidInChat(
       message.session === chat && (spentAt === null || message.at >= spentAt));
     if (latest !== null && !lines.some((message) => message.id === latest.id)) lines.push(latest);
     const names = key === "plan-approval" || key === "guard.plan-approval" ? ["plan-approval", "guard.plan-approval"] : [key];
+    // A scope typed on their line counts for the work their chat was on: a
+    // scope change acts on running work, whose record names the line's turn.
+    const onThisWork = (message: StoredMessage): boolean => rows.some((row) =>
+      row.event === "HUMAN_TURN" && auditBlockField(row.block, "Message Id") === message.id);
     if (lines.some((message) => message.settings.some((setting) => names.includes(setting.key) && setting.value === value) ||
       (key === "project-type" && message.route.projectType === value) ||
+      (key === "scope" && message.route.scope === value && onThisWork(message)) ||
       names.some((name) => setterCommandNames(message.text, name, value)))) {
       return { words: null };
     }

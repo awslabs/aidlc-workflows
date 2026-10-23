@@ -103,7 +103,6 @@ import {
   sourceListingSha256,
   parseSourceListing,
   parseCheckboxes,
-  personSpokeSinceGate,
   structuredField,
   structuredFieldSpan,
   toPosix,
@@ -161,7 +160,7 @@ import {
   TESTING_POSTURE_SUBCOMMANDS,
 } from "./aidlc-lib.ts";
 import { CHECK_GLOSS } from "./aidlc-guard-fences.ts";
-import { noReplySince } from "./aidlc-message-store.ts";
+import { noReplySince, personTurnStands, proveMessage, requestMessageStep } from "./aidlc-message-store.ts";
 import { aidlcToolInvocation, entrySkillInvocation, swarmUnitTestCommand } from "./aidlc-runtime-paths.ts";
 import {
   APPROVAL_GATE_CHOICES, exactOptionPick, isNonAnswer, isOneOfChoices, pickerOffersChoices, protectedQuestionPick,
@@ -1849,16 +1848,21 @@ export function approvedPlanChangeLine(
 
 /**
  * Write the approved plan, test instructions and answer back: the person said
- * to go back to the plan they approved. Their word since their last decision
- * stands behind it: the agent going back on its own would undo an edit that
- * may be the person's.
+ * to go back to the plan they approved. Their turn with no decision after it
+ * stands behind it, or the message the agent names (`message`, the request
+ * form: "approve, and go back" in one message): the agent going back on its
+ * own would undo an edit that may be the person's.
  */
-export function restoreApprovedPlan(projectDir: string, target: CodeGenerationTarget): string {
-  if (!personSpokeSinceGate(projectDir, { requests: true })) {
-    throw new Error(
+export function restoreApprovedPlan(projectDir: string, target: CodeGenerationTarget, message?: string): string {
+  if (message !== undefined) {
+    const proof = proveMessage(projectDir, message, "request", { request: true });
+    if ("refusal" in proof) throw new Error(proof.refusal);
+  } else if (!personTurnStands(projectDir, "plain", { requests: true })) {
+    throw new Error(requestMessageStep(
+      projectDir,
       "The person has not said to go back to the plan they approved. Ask them \"" + APPROVED_PLAN_UNDO_QUESTION +
         "\" and run this again only after they say yes.",
-    );
+    ));
   }
   const authority = resolveCodeGenerationAuthority(projectDir, target);
   const copy = readApprovedPlanCopy(projectDir, authority);
@@ -5543,6 +5547,15 @@ function targetFromArgs(
   throw new Error(`${subcommand} requires exactly one of --unit <unit> or --stage-level`);
 }
 
+// The message the agent names with `--message <id>`, the one the person asked in.
+function messageFromArgs(args: string[]): string | undefined {
+  const at = args.lastIndexOf("--message");
+  if (at < 0) return undefined;
+  const id = args[at + 1];
+  if (!id || id.startsWith("--")) throw new Error("--message requires the id of the person's message");
+  return id;
+}
+
 // What the human-turn hook recorded for the pending Plan Approval question,
 // as the same notice line the hook adds. Several harnesses never show the
 // conductor that line, so this read gives them the same next step.
@@ -5713,7 +5726,7 @@ export function main(argv: string[]): void {
         console.log(recordedPlanApprovalReply(projectDir, replySession(projectDir, argv)));
         return;
       case "restore":
-        console.log(restoreApprovedPlan(projectDir, targetFromArgs(argv, "restore")));
+        console.log(restoreApprovedPlan(projectDir, targetFromArgs(argv, "restore"), messageFromArgs(argv)));
         return;
       default:
         throw new Error(

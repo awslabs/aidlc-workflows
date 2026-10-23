@@ -1,4 +1,4 @@
-// covers: cli:aidlc-audit(append-protected,append-batch-protected,append-raw-event-line,reserved-field-keys), function:findAllEvents, subcommand:aidlc-bolt:set-autonomy, function:humanActedSinceGate, function:hasUnsafeSingleLineCharacter, function:isNonAnswer, function:formatReceivedReply, function:isAutonomousConstructionDecision
+// covers: cli:aidlc-audit(append-protected,append-batch-protected,append-raw-event-line,reserved-field-keys), function:findAllEvents, subcommand:aidlc-bolt:set-autonomy, function:proveMessage, function:humanActedSinceGate, function:hasUnsafeSingleLineCharacter, function:isNonAnswer, function:formatReceivedReply, function:isAutonomousConstructionDecision
 //
 // t261 — the authority floor on the audit surface (issue 681, claims 3/4/7/8).
 // Five related guarantees, each with a REFUSE case and an ALLOW case so the
@@ -12,10 +12,10 @@
 //      `**Event**:` line would spoof the multiline event queries). Diagnostic
 //      events and free-form notes stay CLI-appendable; fixtures mint receipts
 //      through the same library API used by their owning emitters.
-//   2. `aidlc-bolt set-autonomy --mode autonomous` requires a fresh HUMAN_TURN
-//      (the ladder answer) and the grant CONSUMES the turn (a second
-//      escalation without a new turn refuses); de-escalation to gated never
-//      needs presence.
+//   2. `aidlc-bolt set-autonomy --mode autonomous` requires the person's
+//      message that chose it (the ladder answer), named with --message and
+//      proved, and the grant CONSUMES that message (a second escalation on it
+//      refuses); de-escalation to gated never needs presence.
 //   3. humanActedSinceGate fails CLOSED when a candidate human turn shares one
 //      second-precision timestamp with any latest resolution in a DIFFERENT
 //      shard (filename order carries no execution order), while same-shard
@@ -38,7 +38,7 @@
 //
 // Source under test (dist/claude/.claude/tools/):
 //   aidlc-audit.ts  CLI_PROTECTED_EVENT_TYPES + RESERVED_FIELD_KEYS floors,
-//   aidlc-bolt.ts   handleSetAutonomy presence gate,
+//   aidlc-bolt.ts   handleSetAutonomy message proof,
 //   aidlc-lib.ts    humanActedSinceGate (per-shard, cross-shard fail-closed),
 //   aidlc-log.ts    handleAnswer non-answer floor,
 //   aidlc-state.ts  handleApprove / handleReject non-answer floors.
@@ -62,10 +62,12 @@ import {
 } from "../harness/fixtures.ts";
 import { appendAuditEntry, CLI_PROTECTED_EVENT_TYPES } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import {
+  auditBlockField,
   findAllEvents,
   humanActedSinceGate,
   isAutonomousConstructionDecision,
   readAllAuditShards,
+  readAuditShardEvents,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 setDefaultTimeout(NATIVE_MULTI_WORKTREE_CASE_TIMEOUT_MS);
@@ -75,6 +77,7 @@ const AUDIT = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const BOLT = join(AIDLC_SRC, "tools", "aidlc-bolt.ts");
 const LOG = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const STATE = join(AIDLC_SRC, "tools", "aidlc-state.ts");
+const DISPATCHER = join(AIDLC_SRC, "tools", "aidlc.ts");
 const FIXTURES = join(import.meta.dir, "..", "fixtures");
 
 // Spawn a tool with the two authority bypasses CLEARED (the artifact-guard
@@ -102,11 +105,13 @@ function guardedAsync(
   tool: string,
   args: string[],
   proj: string,
+  extraEnv: Record<string, string> = {},
 ): Promise<{ rc: number; out: string }> {
   return new Promise((resolve) => {
     const env = { ...process.env };
     delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
     delete env.AIDLC_ALLOW_DIRECT_AUDIT_EVENTS;
+    Object.assign(env, extraEnv);
     const child = spawn(BUN, [tool, ...args, "--project-dir", proj], {
       env,
       stdio: ["ignore", "pipe", "pipe"],
@@ -367,7 +372,36 @@ describe("t261 public audit CLI refuses authority-bearing receipts", () => {
   });
 });
 
-describe("t261 set-autonomy escalation requires and consumes a human turn", () => {
+describe("t261 set-autonomy escalation requires and consumes the person's message", () => {
+  // Every command runs from the one chat the person types in.
+  const CHAT = "01995000-7a11-7000-8000-000000000261";
+  const inChat = { AIDLC_SESSION_OVERRIDE: CHAT };
+  const bolt = (args: string[]) => guarded(BOLT, args, proj, inChat);
+  const grant = (message?: string) =>
+    bolt(["set-autonomy", "--mode", "autonomous", ...(message === undefined ? [] : ["--message", message])]);
+  // The engine's times are to the second, and a grant in the same second as
+  // the message is no decision after it: a grant that uses it up comes later.
+  const tick = () => Bun.sleepSync(1100);
+
+  // The person types `prompt` in the chat; the shipped human-turn hook keeps
+  // it. Returns the id of the message it kept.
+  function said(p: string, prompt: string): string {
+    const env: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: p, AIDLC_PROJECT_DIR: p, ...inChat };
+    delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
+    const r = spawnSync(BUN, [DISPATCHER, "engine", "hook", "record-human-turn"], {
+      cwd: p,
+      input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: CHAT, prompt }),
+      env,
+      encoding: "utf-8",
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+    });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    const turn = readAuditShardEvents(p).filter((row) => row.event === "HUMAN_TURN").at(-1);
+    const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+    expect(id).not.toBeNull();
+    return id as string;
+  }
+
   function constructionProject(): string {
     const p = createTestProject();
     // Deliberately NOT seeding `Construction Autonomy Mode`. The fixture omits
@@ -384,37 +418,54 @@ describe("t261 set-autonomy escalation requires and consumes a human turn", () =
     return p;
   }
 
-  test("escalation without a human turn refuses; after a turn it commits", () => {
+  test("escalation naming no message refuses; their message named commits it", () => {
     proj = constructionProject();
-    const refused = guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj);
+    const refused = grant();
     expect(refused.rc).not.toBe(0);
     expect(refused.out).toContain("Refusing to switch Construction to autonomous");
     // Run when the person chooses it; never a scripted re-ask.
-    expect(refused.out).toContain("Run it after they choose it.");
+    expect(refused.out).toContain("Run it with --message <id> after they choose it.");
     expect(refused.out).not.toContain("Ask the human to confirm");
 
-    mintHumanTurn(proj);
-    const granted = guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj);
-    expect(granted.rc).toBe(0);
+    const id = said(proj, "Run it on its own from here.");
+    // With their message on record, the refusal leads with the retry naming it.
+    const unnamed = grant();
+    expect(unnamed.rc).not.toBe(0);
+    expect(unnamed.out).toContain(`If their message ${id} (sent `);
+    expect(unnamed.out).toContain("run the same command with --message <id>");
+    expect(unnamed.out).not.toContain("Run it on its own from here.");
+
+    const granted = grant(id);
+    expect(granted.rc, granted.out).toBe(0);
     expect(granted.out).toContain('"state_updated":true');
+    const row = readAuditShardEvents(proj).filter((r) => r.event === "AUTONOMY_MODE_SET").at(-1);
+    expect(row === undefined ? null : auditBlockField(row.block, "Mode")).toBe("autonomous");
+    expect(row === undefined ? null : auditBlockField(row.block, "Message Id")).toBe(id);
   });
 
-  // The grant answers the ladder prompt: a turn that was only a command to
-  // AIDLC ("skip plan approval?") is no answer to it.
-  test("escalation after only a command turn refuses; the person's reply commits it", () => {
+  // The grant answers the ladder prompt: a message that was only a command to
+  // AIDLC is no answer to it.
+  test("a command to AIDLC named as the message refuses; the person's reply commits it", () => {
     proj = constructionProject();
-    appendAuditEntry("HUMAN_TURN", { Reply: "command" }, proj);
-    const refused = guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj);
+    const command = said(proj, "/aidlc --status");
+    const refused = grant(command);
     expect(refused.rc).not.toBe(0);
-    expect(refused.out).toContain("a command to AIDLC, not a reply to this question");
-    mintHumanTurn(proj);
-    expect(guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj).rc).toBe(0);
+    expect(refused.out).toContain(`message ${command} carried no words of the person's own (a command to AIDLC`);
+    // Nothing of theirs a grant can stand on, so the refusal names no message.
+    const unnamed = grant();
+    expect(unnamed.rc).not.toBe(0);
+    expect(unnamed.out).toContain("Run it with --message <id> after they choose it.");
+    expect(unnamed.out).not.toContain("If their message");
+    const reply = said(proj, "Yes, run it on its own.");
+    const granted = grant(reply);
+    expect(granted.rc, granted.out).toBe(0);
   });
 
-  test("the grant consumes the turn: re-escalation refuses without a fresh turn", () => {
+  test("the grant consumes the message: re-escalation on it refuses", () => {
     proj = constructionProject();
-    mintHumanTurn(proj);
-    expect(guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj).rc).toBe(0);
+    const id = said(proj, "Run it on its own from here.");
+    tick();
+    expect(grant(id).rc).toBe(0);
     // flip back to gated so a second escalation is a real transition
     const statePath = seededStateFile(proj);
     writeFileSync(
@@ -425,21 +476,23 @@ describe("t261 set-autonomy escalation requires and consumes a human turn", () =
       ),
       "utf-8",
     );
-    const again = guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj);
+    const again = grant(id);
     expect(again.rc).not.toBe(0);
+    expect(again.out).toContain(`message ${id} arrived before the last approval or decision`);
   });
 
   test("de-escalation to gated never needs presence", () => {
     proj = constructionProject();
-    expect(guarded(BOLT, ["set-autonomy", "--mode", "gated"], proj).rc).toBe(0);
+    expect(bolt(["set-autonomy", "--mode", "gated"]).rc).toBe(0);
   });
 
-  test("concurrent grants consume one turn exactly once", async () => {
+  test("concurrent grants on one message consume it exactly once", async () => {
     proj = constructionProject();
-    mintHumanTurn(proj);
+    const id = said(proj, "Run it on its own from here.");
+    tick();
     const results = await Promise.all([
-      guardedAsync(BOLT, ["set-autonomy", "--mode", "autonomous"], proj),
-      guardedAsync(BOLT, ["set-autonomy", "--mode", "autonomous"], proj),
+      guardedAsync(BOLT, ["set-autonomy", "--mode", "autonomous", "--message", id], proj, inChat),
+      guardedAsync(BOLT, ["set-autonomy", "--mode", "autonomous", "--message", id], proj, inChat),
     ]);
     expect(results.filter((result) => result.rc === 0).length).toBe(1);
     expect(results.filter((result) => result.rc !== 0).length).toBe(1);
@@ -459,8 +512,8 @@ describe("t261 set-autonomy escalation requires and consumes a human turn", () =
     const before = readFileSync(seededStateFile(proj), "utf-8");
     expect(before).not.toContain("Construction Autonomy Mode");
 
-    mintHumanTurn(proj);
-    expect(guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj).rc).toBe(0);
+    const id = said(proj, "Run it on its own from here.");
+    expect(grant(id).rc).toBe(0);
 
     const after = readFileSync(seededStateFile(proj), "utf-8");
     // Section membership, not line ordering: the insert lands at the end of the
@@ -476,9 +529,9 @@ describe("t261 set-autonomy escalation requires and consumes a human turn", () =
 
   test("a second grant updates the field in place instead of duplicating it", () => {
     proj = constructionProject();
-    mintHumanTurn(proj);
-    expect(guarded(BOLT, ["set-autonomy", "--mode", "autonomous"], proj).rc).toBe(0);
-    expect(guarded(BOLT, ["set-autonomy", "--mode", "gated"], proj).rc).toBe(0);
+    const id = said(proj, "Run it on its own from here.");
+    expect(grant(id).rc).toBe(0);
+    expect(bolt(["set-autonomy", "--mode", "gated"]).rc).toBe(0);
 
     const after = readFileSync(seededStateFile(proj), "utf-8");
     expect(after.match(/Construction Autonomy Mode/g)?.length).toBe(1);
@@ -494,7 +547,7 @@ describe("t261 set-autonomy escalation requires and consumes a human turn", () =
       readFileSync(statePath, "utf-8").replace("## Current Status", "## Current Status Renamed"),
       "utf-8",
     );
-    const refused = guarded(BOLT, ["set-autonomy", "--mode", "gated"], proj);
+    const refused = bolt(["set-autonomy", "--mode", "gated"]);
     expect(refused.rc).not.toBe(0);
     expect(refused.out).toContain("State update failed");
     expect(readFileSync(statePath, "utf-8")).not.toContain(

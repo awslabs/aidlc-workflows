@@ -181,10 +181,10 @@ applies all companion intent settings in the same transaction; the hook applies
 nothing. A malformed command or invalid companion changes nothing.
 When the person asks in their own words to lower a check, or picks a guard's
 `lower-fence` remedy, the conductor runs the setter itself.
-CLI setters perform no switch-authority session lookup. They lower when a
-person's turn is on record since the last gate resolution
-(`personSpokeSinceGate`), after the memory-strict and unattended checks; an
-empty ledger does not count. An already-off fence or identical policy word
+CLI setters perform no switch-authority session lookup. They lower when the
+command names the message the person asked in (`--message <id>`, proved by
+`proveMessage`), when the person typed the switch on their own line, or ran the
+setter at their own terminal, after the memory-strict and unattended checks. An already-off fence or identical policy word
 already marked `set by you` needs no key, and `fenceKeyBypassed` (the fixture or
 harness-launch presence bypass) still applies.
 Hooks run on Windows too, so every harness that forwards the prompt supports
@@ -2178,7 +2178,7 @@ them.
 | `scope-change` | Re-plan which stages execute and apply any of the twelve setting flags in one atomic update. A same-scope request still applies settings. Scope-owned ceremony rows follow new defaults without asking; a scope-owned Guard Policy follows a stricter default, and a lower one only when the person asked for the scope change (otherwise one line says what stayed); human overrides and absent legacy rows are preserved. Explicit fence or policy lowering follows the same no-op or fixture/harness-launch presence-bypass rule as `config-change`. Memory-enforced strict still controls the effective value while the scope-owned Guard Policy row follows the new default. A real scope change replaces any composed plan with the new scope's grid and drops the `Plan` field. | `SCOPE_CHANGED` when scope changes, plus changed-setting events |
 | `scope-save` | Keep the selected piece of work's current plan as a reusable scope (`aidlc engine scope save --name <name> [--keywords <word,...>]`): writes its stages, depth, Guard Policy, ceremony settings, and review level to the durable record `aidlc/scopes/<name>.md` and compiles its projection under the workspace lock, rolling both back if the compile fails so the name stays free. Refuses a malformed or taken name (taken is checked under the lock), a keyword that is not one word, and any call from a subagent; a keyword another scope already has is saved as asked, with one line naming that scope. The running work is unchanged. | `SCOPE_SAVED` |
 | `config-get`, `config-list` | Read all thirteen workflow settings: `depth`, `test-strategy`, `review`, `guard-policy`, `sensors`, `learnings`, `summary-confirmation`, `plan-approval`, `collaborators`, and the four `guard.<fence>` keys (`guard.plan-approval` reads as `plan-approval`). Guard Policy, fence, and ceremony values include effective sources; the retired key `change-control` resolves to `guard-policy`. `config-list --json` emits the structured shape. | none |
-| `config-change` | The single intent-settings setter. Accepts any combination of the twelve setting flags, plus `--intent`, `--space`, and `--project-dir`; requires at least one setting and refuses invalid values or unknown flags before mutation. It lowers when a person's turn is on record since the last decision (`personSpokeSinceGate`), which is how the conductor carries out a plain-words request; an already-off fence or matching policy line with source `you` needs no key, and without that turn only `fenceKeyBypassed` lowers, through the fixture/harness-launch presence bypass. Memory-held strict refuses first, and unattended lowering is refused. A typed lowering switch goes through the same settings transaction when the agent runs it; the hook saves nothing and applies nothing. All `aidlc engine config set <key> <value>` routes use this setter. | `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `GUARD_POLICY_SET`, `CEREMONY_SET` for changed settings, plus `GUARD_DISABLED` or `GUARD_RESTORED` per switched fence |
+| `config-change` | The single intent-settings setter. Accepts any combination of the twelve setting flags, plus `--intent`, `--space`, and `--project-dir`; requires at least one setting and refuses invalid values or unknown flags before mutation. It lowers when the command names the message the person asked in (`--message <id>`, proved by `proveMessage`), which is how the conductor carries out a plain-words request, or when they typed it on their own line or ran it at their own terminal; an already-off fence or matching policy line with source `you` needs no key, and without one of those only `fenceKeyBypassed` lowers, through the fixture/harness-launch presence bypass. Memory-held strict refuses first, and unattended lowering is refused. A typed lowering switch goes through the same settings transaction when the agent runs it; the hook saves nothing and applies nothing. All `aidlc engine config set <key> <value>` routes use this setter. | `DEPTH_CHANGED`, `TEST_STRATEGY_CHANGED`, `REVIEW_CLASS_CHANGED`, `GUARD_POLICY_SET`, `CEREMONY_SET` for changed settings, plus `GUARD_DISABLED` or `GUARD_RESTORED` per switched fence |
 | `plugin-list` | List installed plugins with enabled/disabled state; `--json` emits `plugins` plus `selectionActive`. | none |
 | `plugin-sync` | Compose installed plugin roots by running each plugin's `hooks/compose.ts`; no configured roots is a clean no-op, while configured roots without a compose hook fail and mixed sets warn for each skipped root. | none |
 | `set-status` | Low-level state-field sync (called by `sync-workflow-state.ts` hook on TaskUpdate) | — |
@@ -2360,8 +2360,10 @@ engine keeps a copy beside the approval receipt) and prints "Back to the plan yo
 approved." (once the build has started, "Back to the plan you approved. I am
 building it again from that plan.", because the `next` after it builds from that
 plan); the conductor runs it when the person says to go back to the plan
-they approved. It refuses unless a turn of the person's, since their last
-decision, is on record. While a plan they approved has changed, words typed in
+they approved. It refuses unless a turn of the person's in this chat is on
+record with no decision after it, or `--message <id>` names the message they
+asked in (one that also approved, "approve, and go back"); when a message of
+theirs can stand behind it, the refusal names that retry with its id and time. While a plan they approved has changed, words typed in
 any chat or after the entry command make `next` name this restore for each plan
 that changed, for the conductor to run when the words say to go back; no phrase
 is matched. The plan-approval guard lets it through before approval and while a

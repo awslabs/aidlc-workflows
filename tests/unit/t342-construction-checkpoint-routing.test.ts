@@ -35,6 +35,7 @@ import {
   copilotAdapter, copilotRuns, copilotStep, namedCommands, SHAPES, type Step,
 } from "../harness/code-generation-states.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
+import { readMessage } from "../../dist/claude/.claude/tools/aidlc-message-store.ts";
 import { guardOperationInvocation } from "../../dist/claude/.claude/tools/aidlc-guard-operation.ts";
 import {
   codeGenerationRecordDir, renderTestingContract, resolveTestingPosture,
@@ -229,8 +230,16 @@ function approve(p: string, unit: string, kind: "unit" | "skeleton" = "unit") {
   expect(invoke(["--action", "approve", "--session", "t342-checkpoint", "--user-input", "Approve"]).approved).toBe(true);
 }
 
+// A command that names the person's message runs in the chat that sent it, as
+// the agent's command does.
+function inNamedChat(p: string, args: string[], env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const at = args.indexOf("--message");
+  const chat = at === -1 ? null : readMessage(p, args[at + 1] ?? "")?.session ?? null;
+  return chat === null ? env : { ...env, AIDLC_SESSION_OVERRIDE: chat };
+}
+
 function policyCli(p: string, tool: string, args: string[]) {
-  const env = { ...process.env };
+  const env = inNamedChat(p, args, { ...process.env });
   delete env.AIDLC_SKIP_HUMAN_PRESENCE_GUARD;
   delete env.AIDLC_UNATTENDED;
   return spawnSync(process.execPath, [join(AIDLC_SRC, `tools/aidlc-${tool}.ts`), ...args, "--project-dir", p], {
@@ -249,6 +258,13 @@ function policyHuman(p: string, prompt: string, session = "t342-policy") {
     input: JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: session, prompt }),
   });
   expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  return lastMessageId(p);
+}
+
+// The id of the message the latest person turn kept: what a setter names with --message.
+function lastMessageId(p: string): string {
+  const turn = readAuditShardEvents(p).findLast((row) => row.event === "HUMAN_TURN");
+  return auditBlockField(turn!.block, "Message Id")!;
 }
 
 // The person picks `choice` in the question box the agent showed (Claude Code's
@@ -268,6 +284,7 @@ function policyPick(p: string, question: string, options: string[], choice: stri
     }),
   });
   expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
+  return lastMessageId(p);
 }
 
 const policySetRows = (p: string) => readAuditShardEvents(p).filter((row) => row.event === "CONSTRUCTION_POLICY_SET");
@@ -969,11 +986,14 @@ describe("t342 Construction checkpoint routing", () => {
     expect(`${refused.stdout}${refused.stderr}`).toContain("only when they ask");
     expect(readFileSync(seededStateFile(p))).toEqual(before);
     // The answer they gave in their message is not a second decision: the rest of
-    // the message, read by the agent as this request, still stands, with their words.
+    // the message, read by the agent as this request and named, still stands, with their words.
     expect(policyCli(p, "log", ["decision", "--stage", "functional-design", "--decision", "Which name?", "--options", "A,B"]).status).toBe(0);
-    policyHuman(p, "A");
+    const id = policyHuman(p, "A");
     expect(policyCli(p, "log", ["answer", "--stage", "functional-design", "--details", "A"]).status).toBe(0);
-    const changed = policyCli(p, "state", ["set-construction-checkpoints", "disabled"]);
+    const unnamed = policyCli(p, "state", ["set-construction-checkpoints", "disabled"]);
+    expect(unnamed.status).not.toBe(0);
+    expect(`${unnamed.stdout}${unnamed.stderr}`).toContain(`If their message ${id} (sent `);
+    const changed = policyCli(p, "state", ["set-construction-checkpoints", "disabled", "--message", id]);
     expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
     expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Construction Checkpoints**: disabled");
     expect(auditBlockField(policySetRows(p)[0].block, "Person Reply")).toBe("A");
@@ -981,8 +1001,8 @@ describe("t342 Construction checkpoint routing", () => {
 
   test("the person's own request changes a Construction setting at once, with their words and one line", () => {
     const p = fixture();
-    policyHuman(p, "from here on, turn checkpoints off");
-    const applied = policyCli(p, "state", ["set-construction-checkpoints", "disabled"]);
+    const id = policyHuman(p, "from here on, turn checkpoints off");
+    const applied = policyCli(p, "state", ["set-construction-checkpoints", "disabled", "--message", id]);
     expect(applied.status, `${applied.stdout}${applied.stderr}`).toBe(0);
     expect(JSON.parse(applied.stdout).notice).toBe(
       "Construction checkpoints (a stop after each Unit for you to check and approve it) are off for this work now " +
@@ -992,18 +1012,19 @@ describe("t342 Construction checkpoint routing", () => {
     const row = readAuditShardEvents(p).findLast((r) => r.event === "CONSTRUCTION_POLICY_SET")!;
     expect(auditBlockField(row.block, "Person Reply")).toBe("from here on, turn checkpoints off");
     expect(readAuditShardEvents(p).some((r) => r.event === "DECISION_RECORDED")).toBe(false);
+    expect(auditBlockField(row.block, "Message Id")).toBe(id);
     // Several changes in one message each apply: a change does not spend the turn.
-    const iteration = policyCli(p, "state", ["set-construction-iteration", "stage-major"]);
+    const iteration = policyCli(p, "state", ["set-construction-iteration", "stage-major", "--message", id]);
     expect(iteration.status, `${iteration.stdout}${iteration.stderr}`).toBe(0);
     expect(JSON.parse(iteration.stdout).notice).toBe(
       "Construction now goes stage by stage (it built one Unit at a time). You can switch back any time.",
     );
     // Asking for what is already in force changes nothing and says so.
     const rows = readAuditShardEvents(p).length;
-    const same = policyCli(p, "state", ["set-construction-iteration", "stage-major"]);
+    const same = policyCli(p, "state", ["set-construction-iteration", "stage-major", "--message", id]);
     expect(same.status).toBe(0);
     expect(JSON.parse(same.stdout).notice).toBe("Construction already goes stage by stage.");
-    const off = policyCli(p, "state", ["set-construction-checkpoints", "disabled"]);
+    const off = policyCli(p, "state", ["set-construction-checkpoints", "disabled", "--message", id]);
     expect(JSON.parse(off.stdout).notice).toBe(
       "Construction checkpoints (a stop after each Unit for you to check and approve it) are already off for this work.",
     );
@@ -1038,13 +1059,14 @@ describe("t342 Construction checkpoint routing", () => {
     const before = readFileSync(seededStateFile(p));
     expect(policyChoice(p, "decision", "Construction Checkpoints", "disabled").status).toBe(0);
     expect(policyCli(p, "log", ["decision", "--stage", "functional-design", "--decision", "Approve the design?", "--options", "Approve,Request Changes"]).status).toBe(0);
-    policyHuman(p, "Approve");
+    const id = policyHuman(p, "Approve");
     expect(policyChoice(p, "answer", "Construction Checkpoints", "disabled").status).not.toBe(0);
     expect(policyCli(p, "log", ["answer", "--stage", "functional-design", "--details", "Approve"]).status).toBe(0);
     expect(readFileSync(seededStateFile(p))).toEqual(before);
     // Which question their "Approve" answered is the agent's reading; the engine
-    // proves a person spoke, and the answer recorded from it is not a second decision.
-    expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).toBe(0);
+    // proves the message it names, and the answer recorded from it is not a second decision.
+    expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled"]).status).not.toBe(0);
+    expect(policyCli(p, "state", ["set-construction-checkpoints", "disabled", "--message", id]).status).toBe(0);
     expect(readFileSync(seededStateFile(p), "utf-8")).toContain("- **Construction Checkpoints**: disabled");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -1053,10 +1075,10 @@ describe("t342 Construction checkpoint routing", () => {
     const question = "Parallel workspaces still fail after the commit; build one unit at a time instead?";
     const offered = ["Build one unit at a time", "Stop here for now"];
     expect(policyCli(p, "log", ["decision", "--stage", "functional-design", "--decision", question, "--options", offered.join(",")]).status).toBe(0);
-    policyPick(p, question, offered, offered[0]);
+    const id = policyPick(p, question, offered, offered[0]);
     const answered = policyCli(p, "log", ["answer", "--stage", "functional-design", "--details", offered[0]]);
     expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
-    const changed = policyCli(p, "state", ["set-construction-execution", "serial"]);
+    const changed = policyCli(p, "state", ["set-construction-execution", "serial", "--message", id]);
     expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
     expect(JSON.parse(changed.stdout).notice).toBe(
       "Construction now builds the Units one after another (it built the Units in parallel). You can switch back any time.",
@@ -1070,9 +1092,9 @@ describe("t342 Construction checkpoint routing", () => {
   test("the same answer typed to the agent's question switches the build the same way, with their words", () => {
     const p = fixture({ execution: "swarm" });
     expect(policyCli(p, "log", ["decision", "--stage", "functional-design", "--decision", "Build one unit at a time instead?", "--options", "Build one unit at a time,Stop here for now"]).status).toBe(0);
-    policyHuman(p, "yes, one at a time please");
+    const id = policyHuman(p, "yes, one at a time please");
     expect(policyCli(p, "log", ["answer", "--stage", "functional-design", "--details", "Build one unit at a time"]).status).toBe(0);
-    const changed = policyCli(p, "state", ["set-construction-execution", "serial"]);
+    const changed = policyCli(p, "state", ["set-construction-execution", "serial", "--message", id]);
     expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
     expect(auditBlockField(policySetRows(p)[0].block, "Person Reply")).toBe("yes, one at a time please");
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -1173,8 +1195,8 @@ describe("t342 Construction checkpoint routing", () => {
     const before = readFileSync(seededStateFile(p));
     expect(policyCli(p, "state", ["set-construction-iteration", "stage-major"]).status).not.toBe(0);
     expect(readFileSync(seededStateFile(p))).toEqual(before);
-    policyHuman(p, "let's do each stage for both units together");
-    expect(policyCli(p, "state", ["set-construction-iteration", "stage-major"]).status).toBe(0);
+    const id = policyHuman(p, "let's do each stage for both units together");
+    expect(policyCli(p, "state", ["set-construction-iteration", "stage-major", "--message", id]).status).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   test("public audit append cannot mint policy authority", () => {
@@ -1241,11 +1263,11 @@ describe("t342 Construction checkpoint routing", () => {
     const unasked = policyCli(p, "state", [command, value]);
     expect(unasked.status, `${unasked.stdout}${unasked.stderr}`).not.toBe(0);
     expect(readFileSync(file)).toEqual(before);
-    appendAuditEntry("HUMAN_TURN", {}, p);
+    const id = policyHuman(p, "change how construction runs, as you said");
     assertGenericRefused();
-    // The typed setter is the person's route: their turn since the last decision applies it.
+    // The typed setter is the person's route: the message they asked in applies it.
     const changed = spawnSync(process.execPath, [
-      join(AIDLC_SRC, "tools/aidlc-state.ts"), command, value, "--project-dir", p,
+      join(AIDLC_SRC, "tools/aidlc-state.ts"), command, value, "--message", id, "--project-dir", p,
     ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
     expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
     expect(readFileSync(file, "utf-8")).toContain(`- **${field}**: ${value}`);
@@ -1381,7 +1403,7 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
   function tool(p: string, name: string, args: string[], env: NodeJS.ProcessEnv = process.env) {
     const result = spawnSync(process.execPath, [
       join(AIDLC_SRC, `tools/aidlc-${name}.ts`), ...args, "--project-dir", p,
-    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env });
+    ], { timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS), encoding: "utf-8", env: inNamedChat(p, args, env) });
     return { status: result.status, stdout: result.stdout, out: `${result.stdout}${result.stderr}` };
   }
 
@@ -2702,9 +2724,9 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
         "Bolt names": unit, "Batch number": "1", "Walking skeleton": "false", "Bolt slug": unit,
       }, p);
     }
-    policyHuman(p, "build them one at a time instead");
+    const id = policyHuman(p, "build them one at a time instead");
     for (const args of [["set-construction-execution", "serial"], ["set-construction-iteration", "unit-major"]]) {
-      const changed = policyCli(p, "state", args);
+      const changed = policyCli(p, "state", [...args, "--message", id]);
       expect(changed.status, `${changed.stdout}${changed.stderr}`).toBe(0);
     }
     for (const slug of stages) {
@@ -3140,9 +3162,12 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       policyHuman(p, "ok");
       const afterOk = tool(p, "log", codeReview("alpha", 2));
       expect(afterOk.status).not.toBe(0);
-      expect(afterOk.out).toContain("If the person asked for this review, run the same command again with --person-asked.");
-      policyHuman(p, "Please review alpha's code again");
-      const asked = reviewThroughLog(p, [...codeReview("alpha", 2), "--person-asked"]);
+      expect(afterOk.out).toContain("If the person asked for this review, run the same command again with --person-asked --message <id>");
+      const id = policyHuman(p, "Please review alpha's code again");
+      const unnamed = tool(p, "log", [...codeReview("alpha", 2), "--person-asked"]);
+      expect(unnamed.status).not.toBe(0);
+      expect(unnamed.out).toContain("allows 1 review pass");
+      const asked = reviewThroughLog(p, [...codeReview("alpha", 2), "--person-asked", "--message", id]);
       expect(asked.status, asked.out).toBe(0);
       const again = tool(p, "log", codeReview("alpha", 3));
       expect(again.status).not.toBe(0);
@@ -3151,8 +3176,8 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       expect(next(p)).toMatchObject({ stage: "functional-design", unit: "beta" });
       writeFileSync(seededStateFile(p), readFileSync(seededStateFile(p), "utf-8")
         .replace(/^- \[ \] code-generation/m, "- [x] code-generation"));
-      policyHuman(p, "Please review alpha again, and count it as AI-DLC's own review");
-      const finished = reviewThroughLog(p, [...codeReview("alpha", 3), "--person-asked"]);
+      const againId = policyHuman(p, "Please review alpha again, and count it as AI-DLC's own review");
+      const finished = reviewThroughLog(p, [...codeReview("alpha", 3), "--person-asked", "--message", againId]);
       expect(finished.status, finished.out).toBe(0);
       expect(readAuditShardEvents(p).filter((row) =>
         row.event === "REVIEW_COMPLETED" && auditBlockField(row.block, "Unit") === "alpha" &&
@@ -3354,15 +3379,17 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       expect(approved(p, "alpha")).toBe(true);
       const own = tool(p, "log", codeReview("alpha", 2));
       expect(own.out).toContain("allows 1 review pass");
-      policyHuman(p, "Please review Unit 1 (alpha) again, and count it as AI-DLC's own review");
-      const asked = reviewThroughLog(p, [...codeReview("alpha", 2), "--person-asked"]);
+      const id = policyHuman(p, "Please review Unit 1 (alpha) again, and count it as AI-DLC's own review");
+      const asked = reviewThroughLog(p, [...codeReview("alpha", 2), "--person-asked", "--message", id]);
       expect(asked.status, asked.out).toBe(0);
     }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
   }
 
-  // An answer to another question is not a request for a review: the cap
-  // still holds, --person-asked or not, until the person asks in their own words.
-  test("a picker answer to another question does not count as asking for a review", () => {
+  // The cap is lifted on the message the agent names: with none it holds,
+  // --person-asked or not. An answer to another question spends no message, so
+  // the agent that names it for the review lifts the cap, and the record shows
+  // the misread beside their words.
+  test("a picker answer to another question lifts the cap only when the agent names it", () => {
     const p = policyFixture("classic", "off (set by you)");
     buildReviewed(p, "alpha");
     approve(p, "alpha");
@@ -3371,14 +3398,13 @@ describe("t342 a unit-major recovery keeps every Unit's finished work", () => {
       "--session", "t342-pick",
     ]);
     expect(decided.status, `${decided.stdout}${decided.stderr}`).toBe(0);
-    policyHuman(p, "No", "t342-pick");
+    const id = policyHuman(p, "No", "t342-pick");
     const answered = policyCli(p, "log", ["answer", "--stage", "code-generation", "--details", "No", "--session", "t342-pick"]);
     expect(answered.status, `${answered.stdout}${answered.stderr}`).toBe(0);
     const own = tool(p, "log", [...codeReview("alpha", 2), "--person-asked"]);
     expect(own.status).not.toBe(0);
     expect(own.out).toContain("allows 1 review pass");
-    policyHuman(p, "Please review alpha again", "t342-pick");
-    expect(reviewThroughLog(p, [...codeReview("alpha", 2), "--person-asked"]).status).toBe(0);
+    expect(reviewThroughLog(p, [...codeReview("alpha", 2), "--person-asked", "--message", id]).status).toBe(0);
   }, NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
   // With checkpoints on, a re-check of a Unit's changed code is its one

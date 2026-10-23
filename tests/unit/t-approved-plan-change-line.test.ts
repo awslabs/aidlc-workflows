@@ -1,5 +1,5 @@
 // covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-testing-posture:restore,
-// function:approvedPlanChangeLine, function:approvedPlanChangeText, function:restoreApprovedPlan
+// function:approvedPlanChangeLine, function:approvedPlanChangeText, function:restoreApprovedPlan, function:personTurnStands
 //
 // An approved code plan that changes before the build is named for the person
 // in one line, and they can go back to the plan they approved. A resumed build
@@ -43,6 +43,8 @@ import {
   renderTestingContract,
   resolveTestingPosture,
 } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
+import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
 
@@ -207,6 +209,14 @@ function startBuild(proj: string, unit: string | null = UNIT): void {
   expect(dispatch.status, String(dispatch.stderr)).toBe(0);
 }
 
+// The id of the message the hook kept for the person's latest turn.
+function latestMessageId(proj: string): string {
+  const turn = readAuditShardEvents(proj).filter((row) => row.event === "HUMAN_TURN").at(-1);
+  const id = turn === undefined ? null : auditBlockField(turn.block, "Message Id");
+  expect(id).not.toBeNull();
+  return id as string;
+}
+
 function restore(proj: string, unit: string | null = UNIT): string {
   const result = run(proj, [POSTURE, "restore", ...targetArgs(unit), "--project-dir", proj]);
   expect(result.status, String(result.stderr)).toBe(0);
@@ -273,6 +283,42 @@ describe("an approved plan that changed before the build is named, and can be un
       expect(readFileSync(instructionsPath(proj), "utf-8")).not.toBe(INSTRUCTIONS);
       say(proj, "yes, go back");
       expect(restore(proj)).toBe("Back to the plan you approved.");
+    });
+
+    // An answer never uses their message up: the yes that also answered the
+    // agent's own question still stands behind going back.
+    test(`${policy}: a yes that also answered the agent's question restores the plan`, () => {
+      const proj = project(policy);
+      approvedPlan(proj);
+      const approved = readFileSync(planPath(proj), "utf-8");
+      rewrite(proj);
+      next(proj);
+      say(proj, "yes, go back, and keep the cart model as it is");
+      appendAuditEntry("QUESTION_ANSWERED", {
+        Stage: "code-generation", Details: "Q1: keep the cart model", "Message Id": latestMessageId(proj),
+      }, proj);
+      expect(restore(proj)).toBe("Back to the plan you approved.");
+      expect(readFileSync(planPath(proj), "utf-8")).toBe(approved);
+    });
+
+    // The approval their message gave uses it up for going back on its own:
+    // the refusal leads with naming that message, and named, it restores.
+    test(`${policy}: going back on the message that approved takes that message named`, () => {
+      const proj = project(policy);
+      approvedPlan(proj);
+      const approved = readFileSync(planPath(proj), "utf-8");
+      const id = latestMessageId(proj);
+      rewrite(proj);
+      next(proj);
+      const refused = run(proj, [POSTURE, "restore", "--unit", UNIT, "--project-dir", proj]);
+      expect(refused.status, String(refused.stdout)).not.toBe(0);
+      expect(String(refused.stderr)).toContain(`If their message ${id} (sent `);
+      expect(String(refused.stderr)).toContain("run the same command with --message <id>");
+      expect(String(refused.stderr)).not.toContain("approve\"");
+      const named = run(proj, [POSTURE, "restore", "--unit", UNIT, "--message", id, "--project-dir", proj]);
+      expect(named.status, String(named.stderr)).toBe(0);
+      expect(String(named.stdout).trim()).toBe("Back to the plan you approved.");
+      expect(readFileSync(planPath(proj), "utf-8")).toBe(approved);
     });
   }
 

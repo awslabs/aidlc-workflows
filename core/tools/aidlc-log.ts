@@ -146,6 +146,8 @@ import {
   personsGateReply,
   windowMessageIds,
   personSpokeSinceReviewRequest,
+  messageSinceReviewRequest,
+  messageFill,
   ANSWER_SOURCE_ON_INSTRUCTION,
   CONDUCTOR_SUMMARY_FIELD,
   unitSkippedUnits,
@@ -3560,21 +3562,40 @@ function handleReview(args: string[]): void {
           !(receipts !== null && flags.unit !== undefined && receipts.unitRecheckReopened.has(flags.unit)) &&
           (attempt.recoverySpent || sourceRecoverySpent);
         // A review the person asked for is never refused for want of passes:
-        // the conductor says they asked (--person-asked) and the record shows
-        // they spoke since it was last requested. The lift goes on the row.
+        // the conductor says they asked (--person-asked) and names the message
+        // they asked in (--message, proved), sent since the review was last
+        // requested. The lift goes on the row.
         let spoke: boolean | null = null;
         const personSpoke = (): boolean =>
           (spoke ??= personSpokeSinceReviewRequest(pd, flags.stage as string, flags.reviewer as string, flags.unit, intent, space));
         const saysPersonAsked = flags["person-asked"] === "true";
+        let asked: boolean | null = null;
+        const askedInNamedMessage = (): boolean => {
+          if (asked === null) {
+            if (!saysPersonAsked || flags.message === undefined) {
+              asked = false;
+            } else {
+              const proof = proveMessage(pd, flags.message, "request", { request: true });
+              if ("refusal" in proof) error(proof.refusal);
+              asked = messageSinceReviewRequest(
+                pd, flags.stage as string, flags.reviewer as string, flags.unit, proof.message, intent, space,
+              );
+            }
+          }
+          return asked;
+        };
         let lifted = false;
         const boundStands = (): boolean => {
-          if (!saysPersonAsked || !personSpoke()) return true;
+          if (!askedInNamedMessage()) return true;
           lifted = true;
           return false;
         };
-        const personMayHaveAsked = (): boolean => !saysPersonAsked && personSpoke();
+        const personMayHaveAsked = (): boolean => !askedInNamedMessage() && personSpoke();
         const personAskedRetry = (): string | null =>
-          !personMayHaveAsked() ? null : iteration === expected ? "--person-asked" : `--person-asked --iteration ${expected}`;
+          !personMayHaveAsked()
+            ? null
+            : `--person-asked --message <id>${iteration === expected ? "" : ` --iteration ${expected}`}` +
+              messageFill(pd);
         const refuseAttemptGuard = (
           code: string,
           invariant: string,

@@ -237,7 +237,8 @@ describe("another review the person asks for at a Unit's checkpoint", () => {
         ?.reviewer as string;
       person.say("Please review extra's code again before I approve it");
       const review = ["log", "review", "--stage", "code-generation", "--reviewer", reviewer, "--iteration", "2", "--unit", "extra"];
-      const request = host.engine(...review, "--person-asked");
+      // The agent names the message they asked in, as the hook's line names it.
+      const request = host.engine(...review, "--person-asked", "--message", agent.latestMessageId());
       expect(request.status, request.stdout + request.stderr).toBe(0);
       host.write(String((JSON.parse(request.stdout) as Directive).reviewFile),
         `## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewer}\n**Date:** 2026-01-01T00:00:00Z\n**Iteration:** 2\n\n` +
