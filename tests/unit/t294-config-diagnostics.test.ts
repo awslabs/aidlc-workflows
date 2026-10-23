@@ -2391,7 +2391,8 @@ describe("t294 trust diagnostics", () => {
       expect(repair).toContain("config --harness claude");
       expect(repair).not.toContain("--force");
       if (source === DIST) {
-        expect(repair).toContain("bun .claude/tools/aidlc.ts config --harness claude --from");
+        expect(repair).toContain("bun .claude/tools/aidlc.ts config --harness claude --download");
+        expect(repair).toContain("--from and the runtime/claude folder you copied AI-DLC from");
       }
       expect(unwired.failed).toBeGreaterThan(pristine.failed);
       expect(unwired.status).toBe(1);

@@ -39,6 +39,8 @@ import {
   blockReason,
   handoffBlockReason,
   mutationBlockReason,
+  shellRunsHiddenCommand,
+  shellUsesDynamicEvaluation,
   promptStageMarkers,
   promptUnitMarkers,
   questionsFileApproved,
@@ -4396,6 +4398,292 @@ describe("t265b the composer's grid proposal during Code Generation", () => {
     } finally {
       rmSync(proj, { recursive: true, force: true });
     }
+  });
+});
+
+// #1593: a refusal says what would let the call through. A read whose shell
+// form hides what it runs is refused because the guard cannot see it, not
+// because it writes, and the same read written out is allowed; a refusal the
+// agent meets again and again is counted the way the review freeze counts its
+// own, so the next `next` can ask the person instead of the agent going round.
+describe("t265b #1593 a refusal while a Unit plan waits names what would let the call through", () => {
+  test("a Write to source is refused and the plain read is allowed", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: null });
+      expect(runHook(proj, WRITE(join(proj, "src", "app.ts"))).code).toBe(2);
+      expect(runHook(proj, BASH("cat src/app.ts")).code).toBe(0);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  for (const [form, command] of [["$(...)", "cat $(ls src)"], ["backticks", "cat `ls src`"]]) {
+    test(`#1593: a read through ${form} is refused as a read the guard cannot see, and the refusal names the plain form`, () => {
+      const proj = scratchProject();
+      try {
+        seedState(proj);
+        seedUnit(proj, "todo-core", { plan: true, answer: null });
+        const refused = runHook(proj, BASH(command));
+        // Still refused: what the substitution runs is not known before it runs.
+        expect(refused.code, refused.stderr).toBe(2);
+        expect(refused.stderr).not.toContain("mutation-capable shell commands");
+        // It says the read passes once the files are named without a substitution.
+        expect(refused.stderr).toMatch(/\$\(|backtick/);
+        expect(refused.stderr).toMatch(/\b(?:name|list|write)s? (?:the|each) files?\b|\bwritten out\b/i);
+      } finally {
+        rmSync(proj, { recursive: true, force: true });
+      }
+    });
+  }
+
+  // What counts as a hidden command depends on the shell the command is read
+  // in: in PowerShell a backtick escapes the next character, it runs nothing.
+  // The opaque-command rule is security-relevant: one reader now answers both
+  // questions (#1593), and its conservative answer must be exactly the old one.
+  test("#1593: the shared shell reader's conservative answer is unchanged", () => {
+    const before = (command: string): boolean => {
+      let quote: "'" | '"' | null = null;
+      let escaped = false;
+      for (let i = 0; i < command.length; i++) {
+        const ch = command[i];
+        if (escaped) { escaped = false; continue; }
+        if (ch === "\\" && quote !== "'") { escaped = true; continue; }
+        if (quote === "'") { if (ch === "'") quote = null; continue; }
+        if (ch === '"') { quote = quote === '"' ? null : '"'; continue; }
+        if (ch === "'" && quote === null) { quote = "'"; continue; }
+        if (ch === "`" || ch === "$") return true;
+        if ((ch === "$" || ch === "<" || ch === ">") && command[i + 1] === "(") return true;
+      }
+      return false;
+    };
+    const corpus = [
+      "cat src/app.ts", "cat $(ls src)", "cat `ls src`", "echo $HOME", "echo '$HOME'", `echo "$HOME"`,
+      "cat src/app.ts # was $(ls src)", "cat a # don't\necho '$x'", "cat a # it's\necho $x",
+      "echo $((1 + 2))", `echo "'$(ls src)'"`, "diff <(ls a) <(ls b)", "cat > out.txt", "cat a\\$b",
+      "Get-Content src/My` File.txt", "cat src/app.ts;# $(ignored)", `echo "a # b $(ls)"`, "",
+    ];
+    for (const command of corpus) expect(shellUsesDynamicEvaluation(command), command).toBe(before(command));
+  });
+
+  test("#1593: a hidden command is a substitution in the dialect the command is read in", () => {
+    expect(shellRunsHiddenCommand("cat $(ls src)")).toBe(true);
+    expect(shellRunsHiddenCommand("cat `ls src`")).toBe(true);
+    expect(shellRunsHiddenCommand("cat '$(ls src)' src/app.ts")).toBe(false);
+    expect(shellRunsHiddenCommand("cat src/app.ts")).toBe(false);
+    expect(shellRunsHiddenCommand("Get-Content src/My` File.txt", true)).toBe(false);
+    expect(shellRunsHiddenCommand("Get-Content `$(Get-Date) src/app.ts", true)).toBe(false);
+    expect(shellRunsHiddenCommand("Get-Content $(Get-ChildItem src)", true)).toBe(true);
+    expect(shellRunsHiddenCommand(null)).toBe(false);
+    // In double quotes a substitution still runs, an apostrophe is literal, and `#` is text.
+    expect(shellRunsHiddenCommand(`echo "'$(ls src)'"`)).toBe(true);
+    expect(shellRunsHiddenCommand(`echo "a # b $(ls src)"`)).toBe(true);
+    expect(shellRunsHiddenCommand(`echo "it's fine" && cat src/app.ts`)).toBe(false);
+    expect(shellRunsHiddenCommand(`Write-Output "x $(Get-ChildItem src)"`, true)).toBe(true);
+    // A comment runs nothing; a substitution on the next line still does.
+    expect(shellRunsHiddenCommand("cat src/app.ts # was $(ls src)")).toBe(false);
+    expect(shellRunsHiddenCommand("cat src/app.ts;# $(ignored)")).toBe(false);
+    expect(shellRunsHiddenCommand("cat src/a#$(ls src)")).toBe(true);
+    expect(shellRunsHiddenCommand("cat src/app.ts # note\ncat $(ls src)")).toBe(true);
+    expect(shellRunsHiddenCommand("Get-Content src/app.ts # was `ls`", true)).toBe(false);
+    // Arithmetic runs no command; a substitution inside it still does.
+    expect(shellRunsHiddenCommand("echo $((1 + 2)) && cat src/app.ts")).toBe(false);
+    expect(shellRunsHiddenCommand("echo $(( $(wc -l < src/app.ts) + 1 ))")).toBe(true);
+  });
+
+  test("#1593: an authority refusal is counted for the Unit its stale directive names", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: null });
+      // The Unit's directive goes out of date: the state moved past it.
+      const marker = join(proj, RECORD_REL, ".aidlc-engine", "active-directive.json");
+      const raw = JSON.parse(readFileSync(marker, "utf-8")) as Record<string, unknown>;
+      raw.state_sha256 = "0".repeat(64);
+      writeFileSync(marker, JSON.stringify(raw), "utf-8");
+      const said = [0, 1, 2].map(() => runHook(proj, WRITE(join(proj, "src", "app.ts"))).stderr);
+      expect(said[1]).not.toContain("stop retrying");
+      expect(said[2]).toContain("has been refused 3 times");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("#1593: under Guard Policy off the refusal it does not release never grows a repeat line", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: null });
+      const statePath = join(proj, RECORD_REL, "aidlc-state.md");
+      writeFileSync(
+        statePath,
+        readFileSync(statePath, "utf-8").replace("## Project Information\n", "## Project Information\n- **Guard Policy**: off (from scope bugfix)\n"),
+        "utf-8",
+      );
+      // Off does not release a missing directive: still refused, every time alike.
+      rmSync(join(proj, RECORD_REL, ".aidlc-engine", "active-directive.json"), { force: true });
+      const said = [0, 1, 2, 3].map(() => runHook(proj, WRITE(join(proj, "src", "app.ts"))));
+      for (const refused of said) {
+        expect(refused.code).toBe(2);
+        expect(refused.stderr).not.toContain("stop retrying");
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("#1593: an authority refusal whose Unit cannot be told is never counted as a repeat", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: null });
+      // No directive at all: nothing names which Unit the call is for.
+      rmSync(join(proj, RECORD_REL, ".aidlc-engine", "active-directive.json"), { force: true });
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const refused = runHook(proj, WRITE(join(proj, "src", "app.ts")));
+        expect(refused.code).toBe(2);
+        expect(refused.stderr).not.toContain("stop retrying");
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("#1593: a different refused call starts its own count, so it is never told it repeated", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: null });
+      expect(runHook(proj, WRITE(join(proj, "src", "app.ts"))).code).toBe(2);
+      expect(runHook(proj, WRITE(join(proj, "src", "app.ts"))).code).toBe(2);
+      const other = runHook(proj, WRITE(join(proj, "src", "other.ts")));
+      expect(other.code).toBe(2);
+      expect(other.stderr).not.toContain("stop retrying");
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("#1593: past the repetition cap the refusal tells the agent to stop retrying and run next, and leaves no question", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: null });
+      const said: string[] = [];
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const refused = runHook(proj, WRITE(join(proj, "src", "app.ts")));
+        expect(refused.code).toBe(2);
+        said.push(refused.stderr);
+      }
+      // Said once: the fourth identical refusal reads like the first.
+      expect(said[3]).toBe(said[0]);
+      // The first refusals are the refusal alone; the third names the stop.
+      expect(said[0]).not.toContain("stop retrying");
+      expect(said[1]).not.toContain("stop retrying");
+      expect(said[2]).toContain("has been refused 3 times as things stand: stop retrying it and run");
+      expect(said[2]).toMatch(/`[^`]*orchestrate[^`]* next`/);
+      // `next` already puts the waiting plan to the person, so the record keeps
+      // no recovery question that would stand in front of it.
+      const dir = join(proj, RECORD_REL, ".aidlc-engine", "guard-refusals");
+      for (const name of readdirSync(dir).filter((entry) => entry.endsWith(".json"))) {
+        expect(JSON.parse(readFileSync(join(dir, name), "utf-8")).pendingAsk).toBeUndefined();
+      }
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  test("#1593: the same plan-approval refusal met again is counted in the work's guard-refusals record", () => {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: null });
+      for (let attempt = 0; attempt < 3; attempt++) {
+        expect(runHook(proj, WRITE(join(proj, "src", "app.ts"))).code).toBe(2);
+      }
+      const dir = join(proj, RECORD_REL, ".aidlc-engine", "guard-refusals");
+      const records = existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith(".json")) : [];
+      expect(records.length).toBe(1);
+      // How the shared record counts is the shared model's; here only that the repeat is counted.
+      const record = JSON.parse(readFileSync(join(dir, records[0]), "utf-8")) as { count: number };
+      expect(record.count).toBeGreaterThan(1);
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  });
+});
+
+// #1593 leftover: Plan Approval's "ambiguous" and "stale" share one sentence.
+// Four authority states print one identical refusal today — no marker, a marker
+// naming another stage, a pre-v2 marker, and a current marker only out of date —
+// and for the out-of-date one the reason it gives is false: a matching v2
+// code-generation directive does exist. The remedy half is already right (it
+// names a `next` that runs), so every case here pins it unchanged: these say
+// which cause the refusal found, not which step ends it.
+describe("t265b #1593 an authority refusal names which authority state it found", () => {
+  // Bent after the plan and its fingerprints are written: both need a current
+  // directive to resolve, so the fixture earns one first and loses it after.
+  function authorityRefusal(bend: "missing" | "other-stage" | "out-of-date"): string {
+    const proj = scratchProject();
+    try {
+      seedState(proj);
+      seedUnit(proj, "todo-core", { plan: true, answer: null });
+      const marker = join(proj, RECORD_REL, ".aidlc-engine", "active-directive.json");
+      if (bend === "missing") {
+        rmSync(marker, { force: true });
+      } else if (bend === "other-stage") {
+        seedActiveDirective(proj, "functional-design");
+      } else {
+        const raw = JSON.parse(readFileSync(marker, "utf-8")) as Record<string, unknown>;
+        raw.state_sha256 = "0".repeat(64);
+        writeFileSync(marker, JSON.stringify(raw), "utf-8");
+      }
+      const refused = runHook(proj, WRITE(join(proj, "src", "app.ts")));
+      expect(refused.code, refused.stderr).toBe(2);
+      return refused.stderr;
+    } finally {
+      rmSync(proj, { recursive: true, force: true });
+    }
+  }
+
+  // The hedge itself, and the lowercase join it comes from ("stale. the current
+  // state has..."), which is the lead sentence meeting authorityRemedy's reason.
+  function keepsTheStepAndReadsAsProse(said: string, bend: string): void {
+    expect(said, bend).toContain("aidlc-orchestrate.ts next");
+    expect(said, bend).not.toContain("ambiguous or stale");
+    expect(said, bend).not.toMatch(/\.\s+(?:the|a|an)\s/);
+  }
+
+  // Each case says which state it found, so dropping the cause cannot answer
+  // the hedge: a bare "Code generation cannot start. Run <next>." satisfies
+  // every negative assertion while naming nothing, and that refusal would be
+  // worse than today's, which at least carries a reason.
+  const ambiguousStates: Array<["missing" | "other-stage", string, RegExp]> = [
+    // Today's reason already says "has no matching ... directive", so this
+    // pins the cause against removal rather than asking for new words.
+    ["missing", "a directive that is missing", /\bno\b[^.]*\bdirective\b|\bdirective\b[^.]*\b(?:missing|absent)\b/i],
+    // The marker names functional-design, and naming it is the only evidence
+    // the refusal told this apart from a directive that is absent entirely.
+    ["other-stage", "a directive naming another stage", /functional[- ]design/i],
+  ];
+  for (const [bend, label, namesTheState] of ambiguousStates) {
+    test(`#1593: ${label} is named as that, never as stale`, () => {
+      const said = authorityRefusal(bend);
+      keepsTheStepAndReadsAsProse(said, bend);
+      expect(said).not.toMatch(/\bstale\b/);
+      expect(said, bend).toMatch(namesTheState);
+    });
+  }
+
+  test("#1593: a directive only out of date is named out of date, not absent or ambiguous", () => {
+    const said = authorityRefusal("out-of-date");
+    keepsTheStepAndReadsAsProse(said, "out-of-date");
+    expect(said).not.toMatch(/\bambiguous\b/);
+    // The false claim: it sends the agent looking for a directive that is there.
+    expect(said).not.toContain("no matching v2 code-generation active directive");
+    // activeDirectiveOutOfDateReason already knows this; the write path ignores it.
+    expect(said).toMatch(/\bout of date\b|\bstale\b/);
   });
 });
 

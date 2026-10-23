@@ -1816,7 +1816,9 @@ the person, prints the human sentence and `Next:` with the `next` command
 instead, and leaves the ask in its refusal record: the next `next` asks it once,
 after any open gate or engine question, while the step is still open and
 unapproved, the same reset boundary holds, and the check would still refuse; a
-read-only probe reads it without taking it. The `.aidlc-engine/guard-refusals/` record beside the other
+read-only probe reads it without taking it. The plan-approval hook counts its refusals in the same
+record but leaves no question there, because `next` already puts the waiting plan to the person; past
+the repetition cap its refusal tells the agent to stop retrying and run `next`. The `.aidlc-engine/guard-refusals/` record beside the other
 gitignored runtime files counts repetitions of one guard state (stage, Unit,
 lifecycle state, attempt fields, the latest session/workflow/jump/rejection
 boundary, and the resource fingerprints); it carries no authority, and an

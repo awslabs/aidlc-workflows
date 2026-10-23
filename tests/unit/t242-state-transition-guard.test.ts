@@ -12,7 +12,7 @@ import {
 import { afterAll, describe, expect, test, setDefaultTimeout } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import * as ts from "typescript";
 import {
   DELEGATE_ADMITTED_VERBS,
@@ -27,6 +27,7 @@ import { ENGINE_OWNED_STATE_TRANSITIONS, UTILITY_COMMANDS } from "../../dist/cla
 import { RECORDABLE_PROJECT_BYPASSES } from "../../dist/claude/.claude/tools/aidlc-settings.ts";
 import {
   cleanupTestProject,
+  createOrchestrationTestProject,
   createTestProject,
   FIXTURES_DIR,
   seededStateFile,
@@ -2242,6 +2243,167 @@ describe("t242 state-transition ownership guard", () => {
         `Stage status cannot be changed with aidlc-state.ts ${verb}`,
       );
     }
+  });
+
+  // #1593: a refusal names a step that works when run. The person's own
+  // reply is the one slot the agent fills in; every other part of the step is
+  // written out, so the agent runs it as printed instead of guessing.
+  const refusalText = (r: { stdout: string; stderr: string }): string => {
+    const said = `${r.stdout}${r.stderr}`.trim();
+    try {
+      return String((JSON.parse(said) as { error?: unknown }).error ?? said);
+    } catch {
+      return said;
+    }
+  };
+  const unfilledSlots = (text: string): string[] =>
+    text.replaceAll("<their words>", "").match(/<[^<>\s][^<>]*>/g) ?? [];
+  const OWNING_STEP = /(?:aidlc-orchestrate\.ts|\baidlc(?:\.exe)? engine orchestrate) (?:next|report)\b/;
+  const SWITCH_OFFER = "offer to turn the state-transition check off";
+
+  test("#1593: the state tool's refusal leaves no part of its step for the agent to fill in, for every lifecycle verb", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    const unfilled: Record<string, string[]> = {};
+    for (const verb of ENGINE_OWNED) {
+      const r = spawnSync(process.execPath, [STATE, verb, "feasibility", "--project-dir", project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: { ...unownedEnv(), CLAUDE_PROJECT_DIR: project },
+      });
+      expect(r.status, `${verb}: ${r.stdout}${r.stderr}`).toBe(1);
+      const slots = unfilledSlots(refusalText(r));
+      if (slots.length > 0) unfilled[verb] = slots;
+    }
+    expect(unfilled).toEqual({});
+  });
+
+  test("#1593: a decision refused through the state tool names the report the engine records a given answer with, then next", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    const said = (verb: string, ...extra: string[]): string => refusalText(
+      spawnSync(process.execPath, [STATE, verb, "feasibility", ...extra, "--project-dir", project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: { ...unownedEnv(), CLAUDE_PROJECT_DIR: project },
+      }),
+    );
+    for (const [verb, result] of [
+      ["approve", "--result approved --user-input Approve"],
+      ["reject", '--result rejected --user-input "Request Changes"'],
+      ["revise", "--result revised"],
+      ["gate-start", "--result awaiting-approval"],
+    ] as const) {
+      const text = said(verb);
+      const report = `\`bun .claude/tools/aidlc-orchestrate.ts report --stage feasibility ${result} --project-dir ${project}\``;
+      expect(text, verb).toContain(report);
+      // The report comes first, so a person who already answered is not asked again.
+      expect(text.indexOf(report), verb).toBeLessThan(text.indexOf(`orchestrate.ts next --project-dir`));
+      expect(unfilledSlots(text), verb).toEqual([]);
+    }
+    // The Unit of the refused call travels with it.
+    expect(said("approve", "--unit", "u1")).toContain("--result approved --user-input Approve --unit u1 --project-dir");
+    // A Request Changes is the engine's own (requestChangesReportArgs): outside a
+    // team Unit's gate it reports the stage alone, as the engine refuses --unit there.
+    expect(said("reject", "--unit", "u1")).toContain(
+      `report --stage feasibility --result rejected --user-input "Request Changes" --project-dir ${project}\``,
+    );
+    // No such stage: next alone.
+    expect(refusalText(
+      spawnSync(process.execPath, [STATE, "approve", "not-a-stage", "--project-dir", project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: { ...unownedEnv(), CLAUDE_PROJECT_DIR: project },
+      }),
+    )).not.toContain("orchestrate.ts report --stage");
+  });
+
+  test("#1593: a stage skip refused through the state tool keeps the engine's skip route", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    const said = (...rest: string[]): string => refusalText(
+      spawnSync(process.execPath, [STATE, "skip", ...rest, "--project-dir", project], {
+        timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+        encoding: "utf-8",
+        env: { ...unownedEnv(), CLAUDE_PROJECT_DIR: project },
+      }),
+    );
+    const stage = said("feasibility");
+    expect(stage).toContain(`\`bun .claude/tools/aidlc-orchestrate.ts next --skip feasibility --project-dir ${project}\``);
+    expect(stage.indexOf("next --skip")).toBeLessThan(stage.indexOf(`orchestrate.ts next --project-dir`));
+    expect(unfilledSlots(stage)).toEqual([]);
+    // A Unit's skip, or a slug that is no stage, names next alone.
+    expect(said("feasibility", "--unit", "u1")).not.toContain("--skip");
+    expect(said("not-a-stage")).not.toContain("--skip");
+  });
+
+  test("#1593: a pause refused through the state tool keeps its own step, so a person's stop is not turned into carrying on", () => {
+    const project = createTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    const r = spawnSync(process.execPath, [STATE, "park", "feasibility", "--project-dir", project], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env: { ...unownedEnv(), CLAUDE_PROJECT_DIR: project },
+    });
+    expect(r.status).toBe(1);
+    const text = refusalText(r);
+    expect(text).toContain(`\`bun .claude/tools/aidlc-orchestrate.ts park --person-asked --project-dir ${project}\``);
+    expect(text.indexOf("park --person-asked")).toBeLessThan(text.indexOf("orchestrate.ts next"));
+    expect(unfilledSlots(text)).toEqual([]);
+  });
+
+  test("#1593: the state tool's refusal names the engine's own step ahead of the switch, and that step runs as printed", () => {
+    const project = createOrchestrationTestProject();
+    projects.push(project);
+    seedStateFile(project, join(FIXTURES_DIR, "state-mid-ideation.md"));
+    seedAuditFile(project);
+    const env = { ...unownedEnv(), CLAUDE_PROJECT_DIR: project };
+    const refused = spawnSync(process.execPath, [STATE, "advance", "feasibility", "--project-dir", project], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      encoding: "utf-8",
+      env,
+    });
+    expect(refused.status).toBe(1);
+    // advance, a verb whose owning step is next: a decision verb's first step is
+    // the report that records the person's given answer, which only runs once
+    // they replied (pinned by the decision test above).
+    const text = refusalText(refused);
+    // The step is a command written out in full: quoted, as every runnable
+    // step in a refusal is, and the engine's own (next or report), not the switch.
+    const steps = [...text.matchAll(/`([^`]+)`/g)].map((m) => m[1]).filter((c) => OWNING_STEP.test(c));
+    expect(steps, text).not.toEqual([]);
+    const step = steps[0];
+    // The engine's step comes first; the switch stays the person's option after it.
+    expect(text.indexOf(step), text).toBeLessThan(
+      text.includes(SWITCH_OFFER) ? text.indexOf(SWITCH_OFFER) : Number.POSITIVE_INFINITY,
+    );
+    expect(unfilledSlots(step)).toEqual([]);
+    // Run the step exactly as printed, from the project, against the tree the
+    // project has installed: the launcher, the tool path and every argument are
+    // the refusal's own. Only the shell is ours, so the step must be one plain
+    // command (no wrapper, pipe or second command) that this tree spells.
+    expect(step, text).toMatch(/^bun \.claude\/tools\/aidlc-orchestrate\.ts (?:next|report)(?: [^;&|<>`$]*)?$/);
+    const words = step.match(/'[^']*'|\S+/g)?.map((w) => w.replace(/^'(.*)'$/, "$1")) ?? [];
+    const at = words.indexOf("--project-dir");
+    if (at >= 0) expect(resolve(project, words[at + 1] ?? ""), step).toBe(resolve(project));
+    cpSync(join(REPO_ROOT, "dist", "claude", ".claude"), join(project, ".claude"), { recursive: true });
+    const tool = join(project, words[1]);
+    expect(existsSync(tool), tool).toBe(true);
+    const ran = spawnSync(process.execPath, [tool, ...words.slice(2)], {
+      timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS),
+      cwd: project,
+      encoding: "utf-8",
+      env,
+    });
+    expect(ran.status, `${ran.stdout}${ran.stderr}`).toBe(0);
+    // The engine answers with a directive, the way a step it owns does, and
+    // one the agent can act on: an error directive also exits 0.
+    expect(() => JSON.parse(ran.stdout.trim()), ran.stdout).not.toThrow();
+    expect((JSON.parse(ran.stdout.trim()) as { kind?: unknown }).kind, ran.stdout).not.toBe("error");
   });
 
   test("the state CLI honors a lowered state-transition fence without corrupting JSON stdout", () => {

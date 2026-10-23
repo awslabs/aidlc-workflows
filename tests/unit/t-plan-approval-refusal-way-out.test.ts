@@ -336,7 +336,7 @@ describe("a stale build step after approval: the refusal names the way back", ()
     expect(write).toMatch(why);
     expect(write).toContain(`The plan for the zero-Unit stage-level implementation ${ALREADY_APPROVED}`);
     expect(write).toContain(`Run \`${SOURCE_NEXT}\` ${ON_ITS_OWN}, and follow the step it prints.`);
-    if (policy === "strict") expect(write).toContain("Plan Approval authority is ambiguous or stale");
+    if (policy === "strict") expect(write).toContain("Code generation cannot start because workspace mutation cannot select one approval target");
     else expect(write).toContain("The plan-approval setting is unchanged.");
 
     // The developer handoff gets the same way back, not "not approved yet".

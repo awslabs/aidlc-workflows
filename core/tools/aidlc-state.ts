@@ -205,6 +205,7 @@ import {
   setCheckbox,
   setField,
   setFieldStrict,
+  requestChangesReportArgs,
   setOrInsertField,
   setPhaseProgress,
   singleStageAttemptIsOpen,
@@ -256,7 +257,7 @@ import {
 import { proveMessage, readMessage } from "./aidlc-message-store.ts";
 import { memoryDirFor, STAGE_WIDE_SENSOR_IDS, templateEligibleArtifacts } from "./aidlc-graph.ts";
 import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
-import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation } from "./aidlc-runtime-paths.ts";
+import { aidlcDispatcherInvocation, aidlcToolInvocation, compiledExecutable, entrySkillInvocation, quoteCommandArgument } from "./aidlc-runtime-paths.ts";
 import {
   stageValidationAuditFields,
   VALIDATION_WARNING_FIELD,
@@ -921,10 +922,11 @@ export function main(argv: string[]): void {
     } else {
       exitWithError(
         `Stage status cannot be changed with aidlc-state.ts ${subcommand} because that bypasses ` +
-          "the workflow's completion and approval checks. Use aidlc-orchestrate.ts report " +
-          "--stage <slug> --result " +
-          "<awaiting-approval|approved|rejected|revised|completed|skipped>; use " +
-          "aidlc-orchestrate.ts park to pause, and next/jump to move through the workflow. " +
+          "the workflow's completion and approval checks. " +
+          // #1593: one step written out in full, the engine's own, which names
+          // and checks the stage's next move (its report, a pause, or a jump),
+          // so nothing is left for the agent to fill in or guess.
+          ownedTransitionStep(pd, subcommand, args.slice(1)) +
           // The way out is named here, so the human is not told to go and find it.
           fenceSwitchSentence(pd, "state-transition"),
       );
@@ -1096,6 +1098,72 @@ export function main(argv: string[]): void {
     }
     exitWithError(errorMessage(e));
   }
+}
+
+// The engine-owned step for a lifecycle verb refused through the state tool
+// (#1593): written out in full, for the project the refused call named. `next`
+// comes first; a gate answer the person's reply already gave is recorded the
+// way the engine records one (only the choice: the engine keeps their words),
+// with the stage and Unit of the refused call (a Request Changes as the engine
+// renders it: requestChangesReportArgs). A pause and a whole-stage skip keep
+// their own routes, so a stop or a skip is never turned into carrying on.
+const DECISION_REPORTS: Readonly<Record<string, string>> = {
+  approve: "--result approved --user-input Approve",
+  revise: "--result revised",
+  "gate-start": "--result awaiting-approval",
+};
+
+// A value as a command argument this host's shell carries whole; null when
+// cmd.exe could split it (the step then relies on the project's own folder).
+function carriedArgument(value: string): string | null {
+  if (/^[A-Za-z0-9_./:\\@%+=,-]+$/.test(value)) return value;
+  return process.platform === "win32" ? null : quoteCommandArgument(value, "posix");
+}
+
+function ownedTransitionStep(pd: string, subcommand: string, rest: string[] = []): string {
+  // The selector the refused call was given, as this tool parsed it (after a
+  // host such as Kiro's Command Prompt rejoined its words).
+  const selector = projectDir ? carriedArgument(projectDir) : null;
+  const project = selector ? ` --project-dir ${selector}` : "";
+  const orchestrate = aidlcToolInvocation("orchestrate");
+  const step = (args: string): string => `\`${orchestrate} ${args}${project}\``;
+  const next = `${step("next")}: it prints this stage's next step. `;
+  if (subcommand === "park") {
+    return `If the person asked to stop, run ${step("park --person-asked")}; if not, run ${next}`;
+  }
+  const stage = rest[0];
+  const isStage = stage !== undefined && SLUG_RE.test(stage) && Boolean(findStageBySlug(stage));
+  if (subcommand === "skip" && !rest.includes("--unit") && isStage) {
+    return `If the person asked to skip this stage, run ${step(`next --skip ${stage}`)}; if not, run ${next}`;
+  }
+  const at = rest.indexOf("--unit");
+  const rawUnit = at >= 0 ? rest[at + 1] : undefined;
+  let report: string | null = null;
+  if (subcommand === "reject" && isStage) {
+    // A team Unit's gate reports at its gate stage; a solo walk reports the
+    // stage alone, since the engine refuses --unit there.
+    let teamGate: ReturnType<typeof teamUnitGateStatus>;
+    try {
+      teamGate = rawUnit ? teamUnitGateStatus(pd, readStateFile(pd), stage, rawUnit) : undefined;
+    } catch {
+      teamGate = undefined;
+    }
+    const words = requestChangesReportArgs(stage, rawUnit, teamGate)
+      .map((arg) => (arg === rawUnit ? carriedArgument(arg) : /\s/.test(arg) ? `"${arg}"` : arg));
+    report = words.includes(null) ? null : words.join(" ");
+  } else if (DECISION_REPORTS[subcommand] !== undefined && isStage) {
+    const unit = rawUnit ? carriedArgument(rawUnit) : null;
+    if (at < 0 || unit !== null) {
+      report = `report --stage ${stage} ${DECISION_REPORTS[subcommand]}${unit ? ` --unit ${unit}` : ""}`;
+    }
+  }
+  if (report !== null) {
+    // The report first: a person who already answered is not shown the gate
+    // again (the report's own checks still prove they replied).
+    return `If the person's reply already answered this stage's question, record it with ` +
+      `${step(report)} and run \`next\` again; if not, run ${next}`;
+  }
+  return `Run ${next}`;
 }
 
 if (import.meta.main) {

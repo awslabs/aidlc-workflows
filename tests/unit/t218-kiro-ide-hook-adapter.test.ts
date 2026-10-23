@@ -2518,6 +2518,19 @@ stdin.on = function (event, ...args) {
   return { code: proc.exitCode, stdinProbed, stdout, stderr, timedOut: false };
 }
 
+// Each call in a verdict-parity check starts from no refusal count. Kiro's
+// shell tools reach the core guard as the same call, so the third would be a
+// repeat and say so once (#1593, pinned in t265); here only the verdict each
+// tool name gets is compared.
+function firstRefusal(dir: string, ...rest: Parameters<typeof runIdeStdin> extends [string, ...infer R] ? R : never) {
+  for (const entry of readdirSync(dir, { recursive: true }) as string[]) {
+    if (entry.replaceAll("\\", "/").endsWith(".aidlc-engine/guard-refusals")) {
+      rmSync(join(dir, entry), { recursive: true, force: true });
+    }
+  }
+  return runIdeStdin(dir, ...rest);
+}
+
 describe("t218 Kiro IDE plan-approval enforcement", () => {
   test("plan-approval guard calls carry the payload session id", () => {
     const dir = scratchProject(true);
@@ -2940,7 +2953,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
     const dir = scratchProject(true);
     try {
       seedCodeGenerationDirective(dir);
-      const named = runIdeStdin(
+      const named = firstRefusal(
         dir,
         "plan-approval-guard",
         dispatchPayload(dir, "subagent_aidlc-developer-agent", { prompt: PIPELINE_PROMPT }),
@@ -2953,7 +2966,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
           { name: "generate", role: "aidlc-developer-agent" },
         ],
       ]) {
-        const r = runIdeStdin(
+        const r = firstRefusal(
           dir,
           "plan-approval-guard",
           dispatchPayload(dir, "orchestrate_subagent", pipeline(...stages)),
@@ -3167,7 +3180,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       // file it writes, such as `bun run build`, is not the plan's business).
       const blocked = SHELL_NAMES.map((toolName) => ({
         toolName,
-        ...runIdeStdin(dir, "plan-approval-guard", shellPayload(dir, toolName, "echo blocked > src/blocked.ts")),
+        ...firstRefusal(dir, "plan-approval-guard", shellPayload(dir, toolName, "echo blocked > src/blocked.ts")),
       }));
       expect(blocked[0].code).toBe(2);
       expect(blocked[0].stderr).toContain("Code generation");
@@ -3179,7 +3192,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
       // Allowed: the framework's own engine read is never a mutation.
       const allowed = SHELL_NAMES.map((toolName) => ({
         toolName,
-        ...runIdeStdin(dir, "plan-approval-guard", shellPayload(dir, toolName, ORCHESTRATE_NEXT)),
+        ...firstRefusal(dir, "plan-approval-guard", shellPayload(dir, toolName, ORCHESTRATE_NEXT)),
       }));
       expect(allowed[0].code, allowed[0].stderr).toBe(0);
       for (const variant of allowed.slice(1)) {
@@ -3188,7 +3201,7 @@ describe("t218 Kiro IDE plan-approval enforcement", () => {
         expect(variant.stderr, variant.toolName).toBe(allowed[0].stderr);
       }
       // A non-shell payload without a target path stays blocked in the window.
-      const custom = runIdeStdin(
+      const custom = firstRefusal(
         dir,
         "plan-approval-guard",
         JSON.stringify({ hook_event_name: "PreToolUse", cwd: dir, tool_name: "provider_action", tool_input: { action: "deploy" } }),

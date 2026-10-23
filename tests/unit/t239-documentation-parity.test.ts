@@ -1121,7 +1121,7 @@ describe("documentation parity derives current behavior from authored implementa
       "Hooks have never executed although this workflow has progressed",
       "Hook heartbeat data",
       "Your replies are not being recorded: ",
-      "Plan Approval authority is ambiguous or stale",
+      "Code generation cannot start because",
       "cannot select one approval target",
       "Select Construction Execution: serial",
       "AIDLC_DISABLE_PLAN_APPROVAL_GUARD",

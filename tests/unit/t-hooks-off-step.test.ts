@@ -1131,8 +1131,9 @@ describe("claude: a .claude/settings.json that is missing or not valid JSON gets
   const restart = "then exit Claude Code and start it again in this folder, and type /aidlc";
   const MISSING =
     ".claude/settings.json is missing from this project, so Claude Code runs none of AI-DLC's hooks here. In a " +
-    "terminal in this folder, run `bun .claude/tools/aidlc.ts config --harness claude --from <the runtime/claude " +
-    `root you copied from>\` to put back AI-DLC's hooks (your own hooks are kept), ${restart}`;
+    "terminal in this folder, run `bun .claude/tools/aidlc.ts config --harness claude --download` to put back " +
+    "AI-DLC's hooks (your own hooks are kept), or run it with --from and the runtime/claude folder you copied " +
+    `AI-DLC from instead of --download, ${restart}`;
   const INVALID =
     "Claude Code cannot read this project's .claude/settings.json because it is not valid JSON, so it runs none " +
     `of AI-DLC's hooks here. Correct the file, ${restart}`;

@@ -342,7 +342,8 @@ Claude, verify that `.claude/settings.json` contains the expected `hooks`
 events. For a native project, complete active workflows,
 then run `aidlc config --harness claude` to restore the shipped registrations;
 your own hook entries are kept. A copy-channel project instead uses
-`bun .claude/tools/aidlc.ts config --harness claude --from <the runtime/claude root you copied from>`.
+`bun .claude/tools/aidlc.ts config --harness claude --download`, or the same command with `--from` and the
+`runtime/claude` folder you copied AI-DLC from in place of `--download`.
 No `--force` is needed. Notes tell you when registrations were restored.
 Doctor fails when a flow-altering registration changes its event, matcher, or
 command, or when a shipped hook is no longer wired. Drift in other AI-DLC
