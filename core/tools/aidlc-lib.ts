@@ -31046,6 +31046,14 @@ export function effectiveUnitGateRhythm(
 // open gate while still catching a stranded marker.
 export const COMPOSE_MARKER_TTL_MS = 24 * 60 * 60 * 1000;
 
+// Whether an in-flight compose proposal waits on the person's approve, edit or
+// reject: its marker is on disk and fresh. A stale orphan is no open question,
+// as the Stop hook reads it. A failed read throws; each caller decides.
+export function composeGateOpen(projectDir: string): boolean {
+  const marker = composeMarkerPath(projectDir);
+  return existsSync(marker) && Date.now() - statSync(marker).mtimeMs <= COMPOSE_MARKER_TTL_MS;
+}
+
 // `<projectDir>/aidlc/.aidlc-subagent-inflight`: the workspace-level background
 // dispatch ledger. Entries are session-scoped and reference-counted so
 // overlapping workers cannot clear or authorize each other. The file remains

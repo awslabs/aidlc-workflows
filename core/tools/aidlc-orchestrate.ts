@@ -180,8 +180,7 @@ import {
   auditFilePath,
   REDO_REUSE_SOURCE,
   boltSlugForUnit,
-  composeMarkerPath,
-  COMPOSE_MARKER_TTL_MS,
+  composeGateOpen,
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   type CheckboxState,
   CHANGE_CONTROL_FIELD,
@@ -4820,8 +4819,7 @@ function settingEndsTurn(pd: string, scope: string, stateContent: string): boole
     // Stop hook honours the same marker as a turn-stop while it is fresh, so a
     // setting typed under it must not hand the agent back to the work and walk
     // past their pick. A stale orphan is no gate, exactly as the hook reads it.
-    const marker = composeMarkerPath(pd);
-    if (existsSync(marker) && Date.now() - statSync(marker).mtimeMs <= COMPOSE_MARKER_TTL_MS) return true;
+    if (composeGateOpen(pd)) return true;
     if (openPendingDecision(pd, slug) !== null) return true;
     const walk = scope ? unitMajorWalkBeat(pd, scope, stateContent, slug) : null;
     if (walk !== null && walk.step.kind !== "work") return true;
