@@ -19,6 +19,7 @@ import {
   ANSWERS, ASKED_IN_CHAT, NOT_LIVE, SESSION, STAGE, buildQuestion, env, exec, liveReply, next, say, workCarriedOn,
 } from "../harness/aidlc-answers-corpus.ts";
 import { cleanupTestProject, setupIntegrationProject } from "../harness/fixtures.ts";
+import { seedWait } from "../harness/live-gate-fuzz.ts";
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS } from "../harness/test-budget.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS);
@@ -96,7 +97,8 @@ describe("the live answers check in a fresh chat", () => {
 
   test("the work carrying on after a routing reply is counted from the reply, not from the chat's opening rows", async () => {
     const proj = project();
-    await buildQuestion(proj, "routing");
+    // Seeded as the live check seeds it: the open work, before the person types the line that asks the routing question.
+    await seedWait(proj, "routing");
     const start = readAuditShardEvents(proj).length;
     const records = listIntents(proj).length;
     // The chat opens: the shipped session-start hook writes its row before the person says anything.

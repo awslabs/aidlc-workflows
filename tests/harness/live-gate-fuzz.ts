@@ -321,6 +321,11 @@ const OPENED_BY_FIRST_LINE: Partial<Record<Question, { line: string; before: Sta
   "scope-confirm": { line: "/aidlc fix the login timeout", before: "fresh" },
 };
 
+/** The line that opens the wait's question, for a wait the person's first line opens; else null. The live answers check reads it too. */
+export function openingLine(wait: Question): string | null {
+  return OPENED_BY_FIRST_LINE[wait]?.line ?? null;
+}
+
 /** The person's first line, which opens the question (OPENED_BY_FIRST_LINE) or has the agent show the open one. */
 export function firstLine(reply: Reply, tool: LiveTool): string | null {
   const line = OPENED_BY_FIRST_LINE[reply.wait]?.line ?? (reply.wait === "resume-reentry" || reply.wait === "jump-target" ? null : "/aidlc");
