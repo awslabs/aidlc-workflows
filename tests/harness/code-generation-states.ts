@@ -555,6 +555,16 @@ export const STATES: StateBuilder[] = [
     }),
   },
   {
+    id: "S11c", name: "the open gate after the agent changed its reviewed record",
+    build: () => {
+      // The agent's own fix of a review finding before the person answers: `next`
+      // names the gate's own report, and that report has to be let through.
+      const proj = openCodeGenerationGate();
+      writeFileSync(join(stageDir(proj), "traceability.json"), `${JSON.stringify({ unit: null })}\n`, "utf-8");
+      return { proj, session: SESSION, approved: true, how: "S11a, then the agent changed its reviewed traceability.json" };
+    },
+  },
+  {
     id: "S11b", name: "no current step: the chat compacted",
     build: () => {
       const proj = createCodeGenerationProject();

@@ -308,10 +308,17 @@ own, so a new scope is covered the day it ships. `t-scope-run-moves-*` cover the
 person's own words, settings typed with new work, a switch mid-run, and a stop
 for the day then a resume. A stage with a new kind of step fails its run until
 the stand-in learns that step. A known engine block the runs exempt is listed in
-`KNOWN_STOP_BLOCKS` with a `test.todo` named after it. CI runs the scope runs as
-their own integration job: Linux on pull requests and in the merge queue, and
-Linux, macOS and Windows in the nightly Full Suite (its `scope_runs` job) and in
-a `full_verification` Full Suite.
+`KNOWN_STOP_BLOCKS` with a `test.todo` named after it.
+`t-scope-run-moves-own-file-*` walk bugfix, and classic with two Units built
+stage by stage, under each Guard Policy (`tests/harness/own-file-moves.ts`): at
+every point the agent hands the turn to the person it changes one file the open
+stage produced and shows the step again or runs `next`; each move passes when the
+person is asked again or the work moves on, with no refusal coming back after
+its step. CI runs the scope runs as their own integration job: Linux on pull
+requests and in the merge queue, and Linux, macOS and Windows in the nightly Full
+Suite (its `scope_runs` job) and in a `full_verification` Full Suite; the three
+classic own-file files run apart as `own-file-moves`, in the merge queue and
+those Full Suites but not on pull requests.
 
 ### Scope runs on every harness tree
 
@@ -890,15 +897,17 @@ called by the preview are never cancelled this way.
 `.github/workflows/deterministic-tests.yml`. Callers select the immutable `ref`,
 runner, tier, unit or integration shard, an optional file `filter` and `exclude` (both empty
 by default, so the whole tier runs) and artifact label. Both split integration
-in five jobs: the scope runs (`filter`, `t-scope-run-*`), the scope-host runs
-(`filter`, `t-scope-host-*`), the guard matrix in two duration-balanced shards
-(`filter: ^t-guard-matrix-`, `integration-shard: 1/2` or `2/2`) and
-everything else (`exclude` of all three). PR CI selects Linux smoke, ten
-weighted unit shards, and the five integration jobs; a `full_verification` Full
-Suite selects smoke, sixteen unit shards per OS, the five integration jobs, and
-isolated E2E on Linux/macOS/Windows. The nightly Full Suite runs no
-deterministic tier; its `scope_runs` job calls the shared workflow for the scope
-runs, the scope-host runs and the guard matrix on all three. Integration and
+in six jobs: the scope runs (`filter`, `t-scope-run-*`, with `exclude` of the
+classic own-file files), those classic own-file files (`own-file-moves`), the
+scope-host runs (`filter`, `t-scope-host-*`), the guard matrix in two
+duration-balanced shards (`filter: ^t-guard-matrix-`, `integration-shard: 1/2`
+or `2/2`) and everything else (`exclude` of all three). PR CI selects Linux
+smoke, ten weighted unit shards, and every integration job except
+`own-file-moves`, which only the merge queue adds; a `full_verification` Full Suite selects smoke,
+sixteen unit shards per OS, the six integration jobs, and isolated E2E on
+Linux/macOS/Windows. The nightly Full Suite runs no deterministic tier; its
+`scope_runs` job calls the shared workflow for the scope runs, `own-file-moves`,
+the scope-host runs and the guard matrix on all three. Integration and
 E2E run as independent jobs per OS, each with a fresh Bun runner process.
 Every call owns a fresh checkout, installs frozen dependencies under Bun 1.4.2,
 regenerates projections once, and invokes the Bash wrapper with `--debug -P 8
@@ -2000,9 +2009,10 @@ Artifacts are `full-suite-native-plan`, `full-suite-native-<job>` (complete log
 stamp directories and JUnit), `full-suite-native-result`,
 `full-suite-production-guards`,
 `full-suite-deterministic-<suite>-<OS>` (suite is `smoke`, `unit-1` through
-`unit-16`, `integration`, `scope-runs`, `scope-hosts`, `guard-matrix-1`,
-`guard-matrix-2`, or `e2e`), `full-suite-scope-runs-<OS>`,
-`full-suite-scope-hosts-<OS>`, `full-suite-guard-matrix-1-<OS>` and
+`unit-16`, `integration`, `scope-runs`, `own-file-moves`, `scope-hosts`,
+`guard-matrix-1`, `guard-matrix-2`, or `e2e`), `full-suite-scope-runs-<OS>`,
+`full-suite-own-file-moves-<OS>`, `full-suite-scope-hosts-<OS>`,
+`full-suite-guard-matrix-1-<OS>` and
 `full-suite-guard-matrix-2-<OS>` (the release
 `scope_runs` job), `full-suite-live-<family>-<slice-number>-<OS>`,
 `full-suite-live-release-contract-Windows`, and the purpose-specific result
@@ -2038,7 +2048,8 @@ Shared deterministic artifacts contain `tests/logs/<stamp>/` and
 artifacts use `ci-deterministic-<suite>-<OS>`, where suite is smoke on expanded
 macOS/Windows runs, unit-1 through unit-10 on Linux, unit-1 through unit-16 on Windows and manual
 macOS, unit-1 through unit-2 on merge-queue macOS, integration, scope-runs,
-scope-hosts, guard-matrix-1, guard-matrix-2, or e2e (expanded matrix only).
+own-file-moves (expanded matrix only), scope-hosts, guard-matrix-1,
+guard-matrix-2, or e2e (expanded matrix only).
 Linux smoke and production-guard evidence instead share `ci-check-evidence`,
 including `tmp/ci-smoke/`, `tmp/ci-guard-contract/` and `tests/logs/`.
 An upload requires both log locations

@@ -430,8 +430,10 @@ describe("t345 complete nightly coverage", () => {
       const runners = evaluate(matrix.runner as string) as string[];
       const excluded = evaluate(matrix.exclude!) as Array<{ runner?: string; suite: { name: string; tier: string } }>;
       // The scope runs, the scope-host runs and the guard matrix stay on Linux
-      // in the queue; the nightly runs them on every OS.
-      const scopeRuns = { name: "scope-runs", tier: "integration", filter: "^t-scope-run-" };
+      // in the queue; the nightly runs them on every OS. The classic own-file
+      // move walks run in the queue only.
+      const scopeRuns = { name: "scope-runs", tier: "integration", filter: "^t-scope-run-", exclude: "^t-scope-run-moves-own-file-classic-" };
+      const ownFileMoves = { name: "own-file-moves", tier: "integration", filter: "^t-scope-run-moves-own-file-classic-" };
       const scopeHosts = { name: "scope-hosts", tier: "integration", filter: "^t-scope-host-" };
       const guardMatrix1 = { name: "guard-matrix-1", tier: "integration", filter: "^t-guard-matrix-", partition: "1/2" };
       const guardMatrix2 = { name: "guard-matrix-2", tier: "integration", filter: "^t-guard-matrix-", partition: "2/2" };
@@ -446,21 +448,22 @@ describe("t345 complete nightly coverage", () => {
       expect(excluded).toEqual([{ runner: "ubuntu-latest", suite: { name: "smoke", tier: "smoke" } }, ...linuxUnitsLeftOut, ...(expanded
         ? [
           { runner: "macos-15", suite: scopeRuns }, { runner: "windows-latest", suite: scopeRuns },
+          { runner: "macos-15", suite: ownFileMoves }, { runner: "windows-latest", suite: ownFileMoves },
           { runner: "macos-15", suite: scopeHosts }, { runner: "windows-latest", suite: scopeHosts },
           { runner: "macos-15", suite: guardMatrix1 }, { runner: "windows-latest", suite: guardMatrix1 },
           { runner: "macos-15", suite: guardMatrix2 }, { runner: "windows-latest", suite: guardMatrix2 },
           ...(queue ? macosUnitsLeftOut : []),
         ]
-        : [{ suite: { name: "e2e", tier: "e2e" } }])]);
+        : [{ suite: ownFileMoves }, { suite: { name: "e2e", tier: "e2e" } }])]);
       const suitesOn = (runner: string) => matrix.suite!.filter((suite) =>
         !excluded.some((row) => (row.runner ?? runner) === runner && row.suite.name === suite.name && row.suite.tier === suite.tier));
       const suites = suitesOn("ubuntu-latest");
       expect(runners).toEqual(expanded ? ["ubuntu-latest", "macos-15", "windows-latest"] : ["ubuntu-latest"]);
-      expect(suites.map((suite) => suite.tier)).toEqual([...Array(10).fill("unit"), ...Array(5).fill("integration"), ...(expanded ? ["e2e"] : [])]);
+      expect(suites.map((suite) => suite.tier)).toEqual([...Array(10).fill("unit"), ...Array(expanded ? 6 : 5).fill("integration"), ...(expanded ? ["e2e"] : [])]);
       expect(suites.filter((suite) => suite.tier === "unit").map((suite) => suite.index)).toEqual(Array.from({ length: 10 }, (_, index) => index + 1));
-      expect(new Set(runners.flatMap((runner) => suitesOn(runner).map((suite) => `${runner}/${suite.name}`))).size).toBe(queue ? 40 : expanded ? 54 : 15);
+      expect(new Set(runners.flatMap((runner) => suitesOn(runner).map((suite) => `${runner}/${suite.name}`))).size).toBe(queue ? 41 : expanded ? 55 : 15);
       if (expanded) {
-        expect(suitesOn("windows-latest").map((suite) => suite.name)).toEqual(matrixOf(workflow.jobs.deterministic).suite!.map((suite) => suite.name).filter((name) => !["scope-runs", "scope-hosts", "guard-matrix-1", "guard-matrix-2"].includes(name)));
+        expect(suitesOn("windows-latest").map((suite) => suite.name)).toEqual(matrixOf(workflow.jobs.deterministic).suite!.map((suite) => suite.name).filter((name) => !["scope-runs", "own-file-moves", "scope-hosts", "guard-matrix-1", "guard-matrix-2"].includes(name)));
         expect(suitesOn("macos-15").map((suite) => suite.name)).toEqual(queue
           ? ["smoke", "unit-1", "unit-2", "integration", "e2e"]
           : suitesOn("windows-latest").map((suite) => suite.name));
@@ -482,25 +485,29 @@ describe("t345 complete nightly coverage", () => {
       }
     }
     // One integration job runs everything but the scope runs, the scope-host
-    // runs and the guard matrix; the other four run only those, the guard
+    // runs and the guard matrix; the other five run only those, the classic
+    // own-file move walks apart from the other scope runs, and the guard
     // matrix in two weighted partitions of the same filtered inventory.
     const integration = matrix.suite!.filter((suite) => suite.tier === "integration");
     expect(integration.map(({ name, filter, exclude }) => [name, filter, exclude])).toEqual([
       ["integration", undefined, "^t-(scope-run|scope-host|guard-matrix)-"],
-      ["scope-runs", "^t-scope-run-", undefined],
+      ["scope-runs", "^t-scope-run-", "^t-scope-run-moves-own-file-classic-"],
+      ["own-file-moves", "^t-scope-run-moves-own-file-classic-", undefined],
       ["scope-hosts", "^t-scope-host-", undefined],
       ["guard-matrix-1", "^t-guard-matrix-", undefined],
       ["guard-matrix-2", "^t-guard-matrix-", undefined],
     ]);
     // The runner matches a filter against a file's base name, stem and
     // tier-qualified stem (run-tests.ts matchesE2eFilter): every integration
-    // file lands in exactly one of the five jobs.
+    // file lands in exactly one of the six jobs.
     const names = (file: string) => [file, file.replace(/\.test\.ts$/, ""), `integration-${file.replace(/\.test\.ts$/, "")}`];
     const files = readdirSync(join(REPO_ROOT, "tests", "integration")).filter((file) => file.endsWith(".test.ts"));
     const left = new RegExp(integration[0].exclude!);
     const scoped = new RegExp(integration[1].filter!);
-    const hosted = new RegExp(integration[2].filter!);
-    const halves = integration.slice(3).map((suite) => {
+    const apart = new RegExp(integration[1].exclude!);
+    const moves = new RegExp(integration[2].filter!);
+    const hosted = new RegExp(integration[3].filter!);
+    const halves = integration.slice(4).map((suite) => {
       const result = spawnSync(process.execPath, [
         "tests/run-tests.ts", "--integration", "--isolated-files", "--e2e-plan",
         "--filter", suite.filter!, "--shard", suite.partition!,
@@ -513,17 +520,21 @@ describe("t345 complete nightly coverage", () => {
     for (const file of files) {
       const jobs = [
         !names(file).some((name) => left.test(name)),
-        names(file).some((name) => scoped.test(name)),
+        names(file).some((name) => scoped.test(name)) && !names(file).some((name) => apart.test(name)),
+        names(file).some((name) => moves.test(name)),
         names(file).some((name) => hosted.test(name)),
         ...halves.map((half) => half.has(file)),
       ];
+      const classicMoves = file.startsWith("t-scope-run-moves-own-file-classic-");
       expect([file, jobs.filter(Boolean).length], file).toEqual([file, 1]);
-      expect([file, jobs[1], jobs[2], jobs[3] || jobs[4]], file)
-        .toEqual([file, file.startsWith("t-scope-run-"), file.startsWith("t-scope-host-"), file.startsWith("t-guard-matrix-")]);
-      if (jobs[3]) halfFiles[0].push(file);
-      if (jobs[4]) halfFiles[1].push(file);
+      expect([file, jobs[1], jobs[2], jobs[3], jobs[4] || jobs[5]], file).toEqual([
+        file, file.startsWith("t-scope-run-") && !classicMoves, classicMoves, file.startsWith("t-scope-host-"), file.startsWith("t-guard-matrix-"),
+      ]);
+      if (jobs[4]) halfFiles[0].push(file);
+      if (jobs[5]) halfFiles[1].push(file);
     }
     expect(halfFiles.map((half) => half.length > 0)).toEqual([true, true]);
+    expect(files.filter((file) => file.startsWith("t-scope-run-moves-own-file-classic-")).length).toBeGreaterThan(0);
     // An existing caller that names no filter runs its whole tier, as before.
     expect(deterministic.on.workflow_call.inputs.filter).toMatchObject({ default: "", type: "string" });
     expect(deterministic.on.workflow_call.inputs.filter.required).toBeUndefined();
@@ -2186,7 +2197,8 @@ describe("t345 complete nightly coverage", () => {
     expect(matrix.runner).toEqual(["ubuntu-latest", "macos-15", "windows-latest"]);
     // Its legs name no tier: the job runs integration for both.
     expect(matrix.suite as unknown[]).toEqual([
-      { name: "scope-runs", filter: "^t-scope-run-" },
+      { name: "scope-runs", filter: "^t-scope-run-", exclude: "^t-scope-run-moves-own-file-classic-" },
+      { name: "own-file-moves", filter: "^t-scope-run-moves-own-file-classic-" },
       { name: "scope-hosts", filter: "^t-scope-host-" },
       { name: "guard-matrix-1", filter: "^t-guard-matrix-", partition: "1/2" },
       { name: "guard-matrix-2", filter: "^t-guard-matrix-", partition: "2/2" },
@@ -2195,10 +2207,12 @@ describe("t345 complete nightly coverage", () => {
     const deterministic = matrixOf(workflow.jobs.deterministic).suite!;
     for (const suite of matrix.suite!) {
       expect(deterministic.find((entry) => entry.name === suite.name)?.filter).toBe(suite.filter);
+      expect(deterministic.find((entry) => entry.name === suite.name)?.exclude).toBe(suite.exclude);
     }
     expect(job.with).toEqual({
       ref: `\${{ needs.plan.outputs.sha }}`, runner: `\${{ matrix.runner }}`, tier: "integration",
-      filter: `\${{ matrix.suite.filter }}`, "integration-shard": `\${{ matrix.suite.partition || '' }}`, "artifact-label": `full-suite-\${{ matrix.suite.name }}`,
+      filter: `\${{ matrix.suite.filter }}`, "integration-shard": `\${{ matrix.suite.partition || '' }}`,
+      exclude: `\${{ matrix.suite.exclude || '' }}`, "artifact-label": `full-suite-\${{ matrix.suite.name }}`,
     });
     // A release result requires it; the other purposes leave it out.
     expect(FULL_SUITE_JOBS).toContain("scope_runs");
@@ -2210,8 +2224,8 @@ describe("t345 complete nightly coverage", () => {
 
   test("Full Suite bounds deterministic concurrency and interleaves platforms without dropping matrix jobs", () => {
     for (const [jobName, concurrency, totalJobs] of [
-      ["deterministic", 12, 69],
-      ["scope_runs", 3, 12],
+      ["deterministic", 12, 72],
+      ["scope_runs", 3, 15],
     ] as const) {
       const job = workflow.jobs[jobName];
       const matrix = matrixOf(job);
@@ -2239,10 +2253,12 @@ describe("t345 complete nightly coverage", () => {
     expect(matrix.runner).toEqual(["ubuntu-latest", "macos-15", "windows-latest"]);
     const suites = matrix.suite!;
     expect(suites.filter((suite) => suite.tier === "smoke")).toHaveLength(1);
-    // Integration runs as five jobs: the scope runs, the scope-host runs, the guard matrix in two halves, and everything else.
+    // Integration runs as six jobs: the scope runs, the classic own-file move walks, the scope-host runs, the guard
+    // matrix in two halves, and everything else.
     expect(suites.filter((suite) => suite.tier === "integration")).toEqual([
       { name: "integration", tier: "integration", exclude: "^t-(scope-run|scope-host|guard-matrix)-" },
-      { name: "scope-runs", tier: "integration", filter: "^t-scope-run-" },
+      { name: "scope-runs", tier: "integration", filter: "^t-scope-run-", exclude: "^t-scope-run-moves-own-file-classic-" },
+      { name: "own-file-moves", tier: "integration", filter: "^t-scope-run-moves-own-file-classic-" },
       { name: "scope-hosts", tier: "integration", filter: "^t-scope-host-" },
       { name: "guard-matrix-1", tier: "integration", filter: "^t-guard-matrix-", partition: "1/2" },
       { name: "guard-matrix-2", tier: "integration", filter: "^t-guard-matrix-", partition: "2/2" },

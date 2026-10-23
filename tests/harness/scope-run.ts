@@ -571,7 +571,7 @@ export function recoveryAsk(said: string): Directive | null {
  * Any other remedy (request-changes needs feedback the scope run never gives)
  * stops the run as the stand-in's limit, never as the engine's deadlock.
  */
-const REMEDY_PREFERENCE = [
+export const REMEDY_PREFERENCE = [
   "finish-unit-step", "produce-stage-output", "present-findings-at-gate", "present-approval-gate",
   "start-recovery-review", "request-review",
 ];
