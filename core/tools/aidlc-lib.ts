@@ -37751,14 +37751,15 @@ export const REPOSITORY_ANALYSIS_MINUTES = { low: 4, high: 7 } as const;
 export const GATE_NOTE_SECONDS = 10;
 
 // About how many seconds the report that opens a codekb stage's approval gate
-// takes over `repos` repositories, rounded up: a fixed part plus a part per
-// repository, fitted with a margin to the gate measured on Windows Server, the
-// slower box (2.4 s at 10 repositories, 4.6 s at 50, 15.1 s at 190). An
-// estimate the agent says as "about", never a promise.
+// takes over `repos` repositories, rounded up: a fixed part plus a second for
+// every ten repositories, fitted with a margin to the gate measured on
+// live-shaped projects on Windows Server, the slower box (6.0 s at 50
+// repositories, 18.9 s at 190, the report with its hooks). An estimate the
+// agent says as "about", never a promise.
 const GATE_FIXED_SECONDS = 2;
-const GATE_SECONDS_PER_REPO = 0.075;
+const GATE_REPOS_PER_SECOND = 10;
 export function gateEstimateSeconds(repos: number): number {
-  return Math.ceil(GATE_FIXED_SECONDS + GATE_SECONDS_PER_REPO * repos);
+  return Math.ceil(GATE_FIXED_SECONDS + repos / GATE_REPOS_PER_SECOND);
 }
 
 // Where the engine keeps a codekb stage's running count, in the record's

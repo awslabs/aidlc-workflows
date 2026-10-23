@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, function:resolveArtifactPaths, function:splitConsumesByPresence, function:producedLine, function:commonFolder, function:owedPipelineLinks, function:pipelineLinkWayOn, function:fitPipelineRecord, function:reposNote
+// covers: subcommand:aidlc-orchestrate:next, subcommand:aidlc-orchestrate:report, function:resolveArtifactPaths, function:splitConsumesByPresence, function:producedLine, function:commonFolder, function:owedPipelineLinks, function:pipelineLinkWayOn, function:fitPipelineRecord, function:reposNote, function:withinProduceRoots
 //
 // #2874: a workspace of very many sibling repositories. Reverse Engineering
 // writes nine files per repository, and the step used to list each of them,
@@ -21,6 +21,7 @@ import { cleanupTestProject, createTestProject, FIXTURES_DIR, REPO_ROOT, seededS
 import { NATIVE_FIXTURE_SETUP_TIMEOUT_MS, NATIVE_STARTUP_TIMEOUT_MS, remainingOperationTimeoutMs } from "../harness/test-budget.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
 import { auditBlockField, readAuditShardEvents } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import { withinProduceRoots } from "../../dist/claude/.claude/tools/aidlc-state.ts";
 
 setDefaultTimeout(NATIVE_FIXTURE_SETUP_TIMEOUT_MS * 4);
 
@@ -302,6 +303,28 @@ describe("the owed link commands in a reply", () => {
   });
 });
 
+// Every gate confirms that each file it checks is inside the stage's produce
+// folders, and a codekb stage has one per repository: comparing each file with
+// every folder took 14 s of a live 190-repository gate on Windows. A file in
+// its own produce folder is now placed at once; a file deeper down, or outside
+// every folder, is decided as before.
+describe("the gate's produce folders at hundreds of repositories", () => {
+  test("each file is placed in its own folder at once, and the containment answers are unchanged", () => {
+    const base = join(REPO_ROOT, "produce-roots");
+    const roots = Array.from({ length: 1000 }, (_, index) => join(base, "codekb", `repo-${index}`));
+    const within = withinProduceRoots(roots);
+    const files = roots.flatMap((root) => ARTIFACTS.map((name) => join(root, `${name}.md`)));
+    const started = performance.now();
+    expect(files.every((file) => within(file))).toBe(true);
+    expect(performance.now() - started).toBeLessThan(1500);
+    expect(within(join(roots[5] ?? "", "nested", "deeper.md"))).toBe(true);
+    expect(within(roots[7] ?? "")).toBe(true);
+    expect(within(join(base, "codekb", "repo-6000", "architecture.md"))).toBe(false);
+    expect(within(join(base, "codekb", "architecture.md"))).toBe(false);
+    expect(within(join(base, "elsewhere", "repo-1", "architecture.md"))).toBe(false);
+  });
+});
+
 // The gate used to fire each check once per file (1,900 fires at 190
 // repositories, seven minutes on Windows); it now reads every repository's
 // files in one fire per check, and a failing file is named with its repository,
@@ -451,7 +474,7 @@ describe("the running count of a long analysis", () => {
     expect(last.analysed_note).toBeUndefined();
     expect(last.gate_wait_note).toBe(
       "Every repository is analysed. The report that opens the approval gate checks the files of all 190 " +
-        "repositories and takes about 17 seconds: before you run it, tell the person so in one line of your own.",
+        "repositories and takes about 21 seconds: before you run it, tell the person so in one line of your own.",
     );
     expect("gate_wait_note" in link(proj, "service-189", FINAL)).toBe(false);
     expect(statusLine(proj)).toContain("> Reverse Engineering --");

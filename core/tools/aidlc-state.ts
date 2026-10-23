@@ -3642,6 +3642,16 @@ function pathIsWithin(root: string, candidate: string): boolean {
     (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
+// Whether a canonical path lies inside one of a stage's canonical produce
+// folders. A stage's files sit directly in their folder, so that folder is
+// looked up first and every folder is compared only on a miss: a codekb stage
+// has one folder per repository, and comparing each of its files with every
+// folder grew with the square of their count.
+export function withinProduceRoots(roots: readonly string[]): (canonical: string) => boolean {
+  const own = new Set(roots);
+  return (canonical) => own.has(dirname(canonical)) || roots.some((root) => pathIsWithin(root, canonical));
+}
+
 // Resolve every existing declared deliverable, reusing the same stage directory
 // placement as producesArtifactsExist. --artifacts may name resolved paths or
 // filenames; it supplements the graph walk for optional/custom emitters but
@@ -3681,6 +3691,7 @@ function existingDeclaredArtifactPaths(
     }
     return [canonical];
   });
+  const withinRoots = withinProduceRoots(roots);
   const found = new Set<string>();
   const addIfDeclaredFile = (candidate: string): void => {
     if (!declaredFilenames.has(basename(candidate)) || !existsSync(candidate)) {
@@ -3693,7 +3704,7 @@ function existingDeclaredArtifactPaths(
     } catch {
       return;
     }
-    if (!roots.some((root) => pathIsWithin(root, canonical))) {
+    if (!withinRoots(canonical)) {
       error(
         `Refusing gate sensor artifact "${candidate}" for "${stage.slug}": ` +
           "the canonical path is outside the stage's resolved produce directories.",
