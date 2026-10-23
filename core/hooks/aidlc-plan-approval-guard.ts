@@ -134,6 +134,7 @@ import {
   stateDigest,
   stateFilePath,
   worktreesDir,
+  writeGuardAgentContext,
   writeGuardStoodAside,
   ActiveDirectiveLockFolderHeldError,
   activeDirectiveLockHeldAfterStepLine,
@@ -144,7 +145,11 @@ import {
   recordGuardBlockedRow,
   validSessionId,
 } from "../tools/aidlc-lib.ts";
-import { LOCK_FOLDER_HELD_SAID_KEY } from "../tools/aidlc-lock-line.ts";
+import {
+  LOCK_FOLDER_HELD_GUARD_STEP_KEY,
+  LOCK_FOLDER_HELD_SAID_KEY,
+  lockFolderHeldGoesOnStep,
+} from "../tools/aidlc-lock-line.ts";
 import type { planApprovalAskState } from "../tools/aidlc-plan-approval-ask.ts";
 import { aidlcToolInvocation, quoteCommandArgument, runtimeHarnessName } from "../tools/aidlc-runtime-paths.ts";
 import { RECORDABLE_PROJECT_BYPASSES } from "../tools/aidlc-settings.ts";
@@ -2195,10 +2200,20 @@ async function evaluate(
     }
   };
   // Once a turn, whichever of its lines: it stays true until the program stops.
+  // The program is most often one the agent, or the agent it sent, left
+  // running, so where the harness hands the agent a line on a call that goes
+  // on, the turn's first hit is the agent's step (lockFolderHeldGoesOnStep) and
+  // its second, the folder still held, is the person's line.
   const sayLockHeldOnce = (line: string | null): void => {
     if (line === null) return;
     const session = typeof parsed?.session_id === "string" ? parsed.session_id : "";
     if (session && personLineHeardThisTurn(projectDir, session, LOCK_FOLDER_HELD_SAID_KEY)) return;
+    if (!session || !personLineHeardThisTurn(projectDir, session, LOCK_FOLDER_HELD_GUARD_STEP_KEY)) {
+      if (writeGuardAgentContext(lockFolderHeldGoesOnStep(line))) {
+        if (session) markPersonLineHeardThisTurn(projectDir, session, LOCK_FOLDER_HELD_GUARD_STEP_KEY);
+        return;
+      }
+    }
     writeGuardStoodAside(line);
     if (session) markPersonLineHeardThisTurn(projectDir, session, LOCK_FOLDER_HELD_SAID_KEY);
   };

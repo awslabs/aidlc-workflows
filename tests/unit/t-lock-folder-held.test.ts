@@ -59,6 +59,7 @@ import {
   _setLockFolderHeldPlatformForTests,
   LOCK_FOLDER_HELD_GIVE_UP_MS,
   lockFolderHeldAgentStep,
+  lockFolderHeldGoesOnStep,
   lockFolderHeldLine,
 } from "../../core/tools/aidlc-lock-line.ts";
 import { renderTestingContract, resolveTestingPosture } from "../../dist/claude/.claude/tools/aidlc-testing-posture.ts";
@@ -155,6 +156,22 @@ const AGENT_STEP = `${STOP_YOURS} If neither of you started one, show the person
 const AGENT_STEP_UNCOUNTED = `${STOP_YOURS} If neither of you started one, or the step stops again after it was stopped, ` +
   `show the person this line and end your turn: "${WINDOWS_HELD}"`;
 const PERSON_STEP = `Show the person this line and end your turn: "${WINDOWS_HELD}"`;
+// Where the guard lets the call go on: the same step around the go-on or
+// went-through line, with no command to run again.
+const GOES_ON_STOP =
+  "A program is holding the project folder, so AI-DLC cannot update its record of this work and each step waits on " +
+  "it; this call goes ahead. If you, or an agent you sent, started a dev server, a file watcher or another " +
+  "long-running program over the project in this conversation, and the person did not ask to keep it running, stop " +
+  "it and everything it started (on Windows, stopping an npx or npm parent leaves the server running: stop the whole " +
+  "process tree by its Windows process id, for example `taskkill //T //F //PID <pid>` in Git Bash, or the node " +
+  "process whose command line names the server), then carry on.";
+const goesOnStep = (line: string | null) =>
+  `${GOES_ON_STOP} If neither of you started one, tell the person this line once and carry on: "${line}"`;
+// On Claude Code the agent reads a PreToolUse hook's additionalContext on a call
+// that goes on, and the person reads its systemMessage.
+const toAgent = (step: string) =>
+  JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: step } });
+const toPerson = (line: string | null) => JSON.stringify({ systemMessage: line });
 
 describe("the lock line", () => {
   test("says what the person meets, on Windows only", () => {
@@ -189,6 +206,8 @@ describe("the lock line", () => {
     expect(lockFolderHeldAgentStep(line, "again")).toBe(PERSON_STEP);
     expect(lockFolderHeldAgentStep(line, "uncounted")).toBe(AGENT_STEP_UNCOUNTED);
     for (const step of [AGENT_STEP, PERSON_STEP, AGENT_STEP_UNCOUNTED]) expect(step).toEndWith(`"${line}"`);
+    expect(lockFolderHeldGoesOnStep(GUARD_GOES_ON as string)).toBe(goesOnStep(GUARD_GOES_ON));
+    expect(lockFolderHeldGoesOnStep(GUARD_WENT_THROUGH as string)).toBe(goesOnStep(GUARD_WENT_THROUGH));
   });
 });
 
@@ -419,6 +438,7 @@ function guard(
   fault: Fault,
   platform: NodeJS.Platform = "win32",
   command?: string,
+  harness?: string,
 ): { code: number; stdout: string; stderr: string } {
   // Outside the project: a file there would count as source changed since approval.
   const preload = join(tmpdir(), `aidlc-lfh-faults-${randomUUID()}.ts`);
@@ -434,7 +454,9 @@ function guard(
   ].join("\n"));
   if (fault === "held" && !existsSync(lockDirOf(proj))) seedDeadOwner(lockDirOf(proj));
   const result = spawnSync(BUN, ["--preload", preload, join(proj, ".claude", "hooks", "aidlc-plan-approval-guard.ts")], {
-    cwd: proj, env: env(proj, { AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS: "300" }), encoding: "utf-8",
+    cwd: proj,
+    env: env(proj, { AIDLC_ACTIVE_DIRECTIVE_LOCK_TIMEOUT_MS: "300", ...(harness ? { AIDLC_HARNESS_NAME: harness } : {}) }),
+    encoding: "utf-8",
     input: JSON.stringify({
       hook_event_name: "PreToolUse", session_id: SESSION, cwd: proj,
       ...(command === undefined
@@ -457,28 +479,47 @@ function started(proj: string): void {
 
 describe("the plan-approval guard meets a held lock folder", () => {
   for (const policy of ["off", "relaxed"] as const) {
-    test(`Guard Policy ${policy}: the write goes on with the line, once a turn, and no row claims a start`, () => {
+    test(`Guard Policy ${policy}: the write goes on; the agent gets its step, the person the line on a second hit, once a turn`, () => {
       const proj = guardProject(policy);
       started(proj);
       const rows = asideRows(proj);
       const first = guard(proj, "b.ts", "held");
       expect(first.code, first.stderr).toBe(0);
-      expect(first.stdout).toContain(JSON.stringify({ systemMessage: GUARD_GOES_ON }));
-      const again = guard(proj, "c.ts", "held");
-      expect(again.code, again.stderr).toBe(0);
-      expect(again.stdout).not.toContain("A program is watching");
+      expect(first.stdout.trim()).toBe(toAgent(goesOnStep(GUARD_GOES_ON)));
+      // Still held after the agent's turn to stop its program: the person hears the line.
+      const second = guard(proj, "c.ts", "held");
+      expect(second.code, second.stderr).toBe(0);
+      expect(second.stdout.trim()).toBe(toPerson(GUARD_GOES_ON));
+      const third = guard(proj, "c2.ts", "held");
+      expect(third.code, third.stderr).toBe(0);
+      expect(third.stdout).not.toContain("A program is");
       say(proj, "is it done yet?");
       const nextTurn = guard(proj, "d.ts", "held");
       expect(nextTurn.code, nextTurn.stderr).toBe(0);
-      expect(nextTurn.stdout).toContain(JSON.stringify({ systemMessage: GUARD_GOES_ON }));
+      expect(nextTurn.stdout.trim()).toBe(toAgent(goesOnStep(GUARD_GOES_ON)));
       expect(asideRows(proj)).toBe(rows);
       // Without the Windows line the write still goes on, and nothing is said, on a turn that could say it.
       say(proj, "and now?");
       const plain = guard(proj, "e.ts", "held", "linux");
       expect(plain.code, plain.stderr).toBe(0);
       expect(plain.stdout).not.toContain("systemMessage");
+      expect(plain.stdout).not.toContain("additionalContext");
     });
   }
+
+  // Codex, Copilot, Cursor, Kiro CLI and opencode drop this hook's output on a
+  // call that goes on, and Kiro IDE does not read PreToolUse stdout, so no line
+  // reaches their agent: the guard writes the person's line as before.
+  test("on a harness with no channel to the agent here, the guard writes the line as before", () => {
+    const proj = guardProject("off");
+    started(proj);
+    const first = guard(proj, "b.ts", "held", "win32", undefined, "codex");
+    expect(first.code, first.stderr).toBe(0);
+    expect(first.stdout.trim()).toBe(GUARD_GOES_ON as string);
+    const again = guard(proj, "c.ts", "held", "win32", undefined, "codex");
+    expect(again.code, again.stderr).toBe(0);
+    expect(again.stdout).not.toContain("A program is");
+  });
 
   test("Guard Policy strict: refused with the line; once the program stops the write goes through and next moves on", () => {
     const proj = guardProject("strict");
@@ -514,19 +555,19 @@ describe("the plan-approval guard meets a held lock folder", () => {
     expect(write.stderr.trim()).toBe(WINDOWS_HELD as string);
   });
 
-  test("the guard whose own call went through says so, and what the next step meets, once a turn", () => {
+  test("the guard whose own call went through gives the agent its step, and the person the line on a second hit", () => {
     const proj = guardProject("off");
     started(proj);
     const held = guard(proj, "b.ts", "release");
     expect(held.code, held.stderr).toBe(0);
-    expect(held.stdout).toContain(JSON.stringify({ systemMessage: GUARD_WENT_THROUGH }));
-    // The next step meets the held folder: the same cause is said once a turn.
+    expect(held.stdout.trim()).toBe(toAgent(goesOnStep(GUARD_WENT_THROUGH)));
+    // The next step meets the held folder: the second hit of the turn is the person's.
     const next1 = guard(proj, "c.ts", "held");
     expect(next1.code, next1.stderr).toBe(0);
-    expect(next1.stdout).not.toContain("A program is watching");
+    expect(next1.stdout.trim()).toBe(toPerson(GUARD_GOES_ON));
     say(proj, "how is it going?");
     const nextTurn = guard(proj, "d.ts", "held");
-    expect(nextTurn.stdout).toContain(JSON.stringify({ systemMessage: GUARD_GOES_ON }));
+    expect(nextTurn.stdout.trim()).toBe(toAgent(goesOnStep(GUARD_GOES_ON)));
     // Under strict it says nothing: the next write is refused with the line, which is then true.
     const strict = guardProject("strict");
     started(strict);

@@ -43583,6 +43583,22 @@ export function writeGuardStoodAside(line: string): void {
 }
 
 /**
+ * A line for the agent on a PreToolUse call that goes on, where the harness
+ * delivers one: Claude Code reads the hook's additionalContext there (2.1.9 and
+ * later; measured on 2.1.309) and shows the person none of it. The Codex,
+ * Copilot, Cursor, Kiro CLI and opencode adapters drop this hook's output on a
+ * call that goes on, and Kiro IDE does not read PreToolUse stdout, so there it
+ * writes nothing and returns false.
+ */
+export function writeGuardAgentContext(line: string): boolean {
+  if (runtimeHarnessName() !== "claude") return false;
+  process.stdout.write(
+    `${JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: line } })}\n`,
+  );
+  return true;
+}
+
+/**
  * Harnesses whose PostToolUse hook stdout reaches the human. Claude Code shows
  * a `systemMessage` as a warning box; Codex surfaces it as a warning in the UI
  * or event stream; the opencode plugin turns the same line into a TUI toast.
