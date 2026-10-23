@@ -4991,9 +4991,12 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
         expect(out.hookSpecificOutput?.permissionDecision, `${shell}: ${lead}`).toBe("allow");
         expect(out.hookSpecificOutput?.updatedInput?.command, `${shell}: ${lead}`).toBe(`${lead}${next} --aidlc-attempt-id ${attempt}`);
       }
-      // A cd anywhere else changes where the command runs, so the plan still holds it.
+      // A cd anywhere else changes where the command runs: the installed engine
+      // takes that folder as the project. The plan-approval guard reads it as
+      // `next` run there, which it does not hold, and the adapter vouches only
+      // for the project's own `next`, so Copilot's own prompt decides.
       const elsewhere = decide(`cd ${join(dir, "src")}; ${next}`, shell, `cd-elsewhere-${index}`);
-      expect(elsewhere.hookSpecificOutput?.permissionDecision, String(shell)).toBe("deny");
+      expect(elsewhere.hookSpecificOutput?.permissionDecision, String(shell)).toBeUndefined();
       expect(elsewhere.hookSpecificOutput?.updatedInput, String(shell)).toBeUndefined();
     }
   });
