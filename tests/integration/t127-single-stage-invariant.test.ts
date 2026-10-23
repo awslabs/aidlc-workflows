@@ -52,6 +52,7 @@ import {
   seedAuditFile,
   seededAuditShard,
   seededRecordDir,
+  seededStateFile,
   seedStateFile,
 } from "../harness/fixtures.ts";
 import { appendAuditEntry } from "../../dist/claude/.claude/tools/aidlc-audit.ts";
@@ -76,6 +77,15 @@ const STATE_TOOL = join(AIDLC_SRC, "tools", "aidlc-state.ts");
 const AUDIT_TOOL = join(AIDLC_SRC, "tools", "aidlc-audit.ts");
 const LOG_TOOL = join(AIDLC_SRC, "tools", "aidlc-log.ts");
 const STATE_FIXTURE = "state-mid-ideation.md";
+
+// These legs write no plan, so plan approval is off for the work and the
+// isolated report closes the run; with it on, an isolated Code Generation run
+// waits for its plan first (t-code-generation-completion-owner).
+function planApprovalOff(proj: string): void {
+  const file = seededStateFile(proj);
+  writeFileSync(file, readFileSync(file, "utf-8")
+    .replace("- **Revision Count**: 0", "- **Revision Count**: 0\n- **Plan Approval**: off (set by you)"));
+}
 
 function activeDirectiveMarkerPath(proj: string): string {
   return join(seededRecordDir(proj), ".aidlc-engine/active-directive.json");
@@ -217,6 +227,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
   test("6: report --single emits a done directive [.sh 6]", () => {
     const proj = freshProject();
     seedStateFile(proj, STATE_FIXTURE);
+    planApprovalOff(proj);
     startSingle(proj, "code-generation");
     const r = run(TOOL, [
       "report", "--single", "--stage", "code-generation", "--result", "completed",
@@ -230,6 +241,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
   test("7: report --single leaves the main Current Stage untouched [.sh 7]", () => {
     const proj = freshProject();
     seedStateFile(proj, STATE_FIXTURE);
+    planApprovalOff(proj);
     startSingle(proj, "code-generation");
     run(TOOL, [
       "report", "--single", "--stage", "code-generation", "--result", "completed",
@@ -247,6 +259,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
   test("8: next --single commits exactly one STAGE_STARTED [.sh 8]", () => {
     const proj = freshProject();
     seedStateFile(proj, STATE_FIXTURE);
+    planApprovalOff(proj);
     seedAuditFile(proj);
     startSingle(proj, "code-generation");
     run(TOOL, [
@@ -259,6 +272,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
   test("9: report --single commits exactly one STAGE_COMPLETED [.sh 9]", () => {
     const proj = freshProject();
     seedStateFile(proj, STATE_FIXTURE);
+    planApprovalOff(proj);
     seedAuditFile(proj);
     startSingle(proj, "code-generation");
     run(TOOL, [
@@ -271,6 +285,7 @@ describe("t127 --single pointer invariant (migrated from t127-single-stage-invar
   test("10: the synthetic pair is tagged with the single-stage workflow id [.sh 10]", () => {
     const proj = freshProject();
     seedStateFile(proj, STATE_FIXTURE);
+    planApprovalOff(proj);
     seedAuditFile(proj);
     startSingle(proj, "code-generation");
     run(TOOL, [
