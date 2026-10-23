@@ -244,6 +244,8 @@ function routingAsk(records: boolean): Json {
   };
 }
 
+const REPO_FACTS: Json = { repositories: 12, lines: 1200, minutes_per_repository: { low: 4, high: 7 } };
+
 const ASK_TYPES = [
   "scope-confirm", "compose-offer", "intent-pick", "unit-paused", "project-type", "plan-approval", "guard-recovery",
   "unit-claim", "legacy-plan-approval-recovery",
@@ -517,6 +519,9 @@ describe("a stage step carries its instructions, not the fields to branch on", (
       notes(runStage()),
       ...ASK_TYPES.map((type) => notes(ask(type))),
       notes(routingAsk(true)),
+      // What reading many repositories takes, with the question and on the step.
+      notes(ask("project-type", { ask_type: "repo-scope", repo_facts: REPO_FACTS })),
+      notes(runStage({ stage: "reverse-engineering", repo_facts: REPO_FACTS })),
     ];
     const leaks: string[] = [];
     for (const step of steps) {

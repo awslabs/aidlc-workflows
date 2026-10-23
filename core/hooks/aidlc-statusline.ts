@@ -28,6 +28,7 @@ type IntentRow = {
   slug?: unknown;
   status?: unknown;
   dirName?: unknown;
+  repos?: unknown;
 };
 
 type StatuslineIntent = {
@@ -477,14 +478,17 @@ function shownStep(stateFile: string, state: string, stage: string): { stage: st
 
 // How many of a long analysis's repositories are done, as the engine counted
 // them at its last link receipt (codekbReceiptNotes, aidlc-log.ts, keeps it in
-// the record's engine folder), while that stage is in progress: " 37/190".
+// the record's engine folder), while that stage is in progress: " 37/190". A
+// count of another set than the one the work records now (the person changed
+// it since) says nothing until a receipt counts the new set.
 function analysedCount(stateFile: string, state: string, stage: string): string {
   try {
     const counted = JSON.parse(
       readFileSync(join(dirname(stateFile), ".aidlc-engine", "codekb-analysed.json"), "utf-8"),
-    ) as { stage?: unknown; done?: unknown; total?: unknown };
+    ) as { stage?: unknown; done?: unknown; total?: unknown; repos?: unknown };
     const { done, total } = counted;
     if (counted.stage !== stage || typeof done !== "number" || typeof total !== "number") return "";
+    if (!Array.isArray(counted.repos) || counted.repos.join("\n") !== recordedRepos(stateFile).join("\n")) return "";
     const inProgress = new RegExp(`^-\\s*\\[-\\]\\s*${stage.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "m");
     return Number.isInteger(done) && Number.isInteger(total) && done < total && inProgress.test(state)
       ? ` ${done}/${total}`
@@ -492,6 +496,16 @@ function analysedCount(stateFile: string, state: string, stage: string): string 
   } catch {
     return "";
   }
+}
+
+// The repositories the work whose state file this is records, sorted: its row
+// in the space's intents.json, beside the work's own folder.
+function recordedRepos(stateFile: string): string[] {
+  const record = dirname(stateFile);
+  const rows = JSON.parse(readFileSync(join(dirname(record), "intents.json"), "utf-8")) as unknown;
+  if (!Array.isArray(rows)) return [];
+  const row = (rows as IntentRow[]).find((entry) => recordDirMatches(entry, basename(record)));
+  return Array.isArray(row?.repos) ? row.repos.filter((repo): repo is string => typeof repo === "string").sort() : [];
 }
 
 function extractField(text: string, label: string): string {

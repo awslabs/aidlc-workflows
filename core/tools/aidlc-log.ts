@@ -2550,16 +2550,19 @@ function handleAnswer(args: string[]): void {
 // as facts it words itself: how many repositories are analysed, a note when the
 // count reaches a new tenth of the set (never after every repository), and on
 // the receipt that completes every chain, the approval gate's wait when that is
-// long. The count is kept in the record's engine folder for the status line.
+// long. The count is kept in the record's engine folder for the status line,
+// with the repositories it counts, so a set the person changes since is a new
+// count and the status line shows no old one.
 function codekbReceiptNotes(pd: string, node: StageEntry): Record<string, unknown> {
   const notes: Record<string, unknown> = {};
-  const { done, total } = codekbAnalysed(pd, node);
+  const { done, total, repos } = codekbAnalysed(pd, node);
   if (total < MANY_REPOS) return notes;
   const mark = join(engineDir(pd), CODEKB_ANALYSED_FILE);
   let kept: { done: number; tenth: number } | null = null;
   try {
-    const prior = JSON.parse(readFileSync(mark, "utf-8")) as { done?: unknown; tenth?: unknown; total?: unknown };
-    if (prior.total === total && typeof prior.done === "number" && typeof prior.tenth === "number") {
+    const prior = JSON.parse(readFileSync(mark, "utf-8")) as { done?: unknown; tenth?: unknown; total?: unknown; repos?: unknown };
+    const sameSet = Array.isArray(prior.repos) && prior.repos.join("\n") === repos.join("\n");
+    if (sameSet && prior.total === total && typeof prior.done === "number" && typeof prior.tenth === "number") {
       kept = { done: prior.done, tenth: prior.tenth };
     }
   } catch {
@@ -2580,7 +2583,7 @@ function codekbReceiptNotes(pd: string, node: StageEntry): Record<string, unknow
   }
   try {
     mkdirSync(dirname(mark), { recursive: true });
-    writeFileAtomic(mark, `${JSON.stringify({ stage: node.slug, done, total, tenth: Math.max(tenth, saidTenth) })}\n`);
+    writeFileAtomic(mark, `${JSON.stringify({ stage: node.slug, done, total, tenth: Math.max(tenth, saidTenth), repos })}\n`);
   } catch {
     // The count is a courtesy: a record that cannot take it changes nothing.
   }

@@ -37769,15 +37769,20 @@ export const CODEKB_ANALYSED_FILE = "codekb-analysed.json";
 // Of the repositories a pipeline stage's attempt covers, how many have every
 // link of their chain on record (a reused store counts): the running count of
 // a long analysis. Read from this attempt's receipts, so a rescan starts at 0
-// and a store published after its last link is counted with that link.
+// and a store published after its last link is counted with that link. `repos`
+// names the set counted, sorted, so a count of another set is never shown.
 export function codekbAnalysed(
   projectDir: string,
   stage: Pick<StageEntry, "slug" | "lead_agent" | "support_agents">,
-): { done: number; total: number } {
+): { done: number; total: number; repos: string[] } {
   const evidence = pipelineLinkEvidence(projectDir, stage);
   const open = new Set(evidence.missing.map(({ repo }) => repo));
   const repos = evidence.repos.length > 0 ? evidence.repos : [null];
-  return { done: repos.filter((repo) => !open.has(repo)).length, total: repos.length };
+  return {
+    done: repos.filter((repo) => !open.has(repo)).length,
+    total: repos.length,
+    repos: evidence.repos.filter((repo): repo is string => typeof repo === "string").sort(),
+  };
 }
 
 // How many repos' owed links a reply names, and a step's `completed` lists,

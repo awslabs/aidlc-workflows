@@ -465,6 +465,29 @@ describe("the running count of a long analysis", () => {
     expect(statusLine(proj)).toContain("> Reverse Engineering 4/20");
   });
 
+  test("a repository set changed mid-analysis shows no old count; the next receipt counts the new set", () => {
+    const { proj, repos } = workspace(tree, { repos: 20, stage: RE, stores: true, scope: "enterprise" });
+    recordEveryLink(proj, repos.slice(0, 1), [LEAD, FINAL]);
+    for (const repo of repos.slice(1, 4)) {
+      link(proj, repo, LEAD);
+      link(proj, repo, FINAL);
+    }
+    expect(statusLine(proj)).toContain("> Reverse Engineering 4/20");
+    const setRepos = (names: string[]): void => {
+      const res = spawnSync(process.execPath, [
+        join(proj, tree.dir, "tools", "aidlc-utility.ts"), "intent", "set-repos", names.join(","), "--project-dir", proj,
+      ], { cwd: proj, env: childEnv(), encoding: "utf-8", timeout: remainingOperationTimeoutMs(NATIVE_STARTUP_TIMEOUT_MS) });
+      expect(res.status, `${res.stdout}${res.stderr}`).toBe(0);
+    };
+    setRepos(repos.slice(0, 9));
+    expect(statusLine(proj)).not.toMatch(/Reverse Engineering \d/);
+    setRepos(repos.slice(0, 15));
+    expect(statusLine(proj)).not.toMatch(/Reverse Engineering \d/);
+    link(proj, repos[4] ?? "", LEAD);
+    expect(link(proj, repos[4] ?? "", FINAL).analysed).toEqual({ done: 5, total: 15 });
+    expect(statusLine(proj)).toContain("> Reverse Engineering 5/15");
+  });
+
   test("the receipt that completes every chain says once how long the gate's report takes", () => {
     const { proj, repos } = workspace(tree, { repos: 190, stage: RE, stores: true, scope: "enterprise" });
     recordEveryLink(proj, repos.slice(0, 189), [LEAD, FINAL]);

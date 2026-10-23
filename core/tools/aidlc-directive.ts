@@ -1244,8 +1244,8 @@ export function repoScopeQuestionNote(invocation: string): string {
 export function repoEstimateNote(facts: RepoFacts, withQuestion: boolean): string {
   const { low, high } = facts.minutes_per_repository;
   const size = facts.lines === undefined ? "" : `, about ${facts.lines} lines between them by git's count`;
-  return `repo_facts: ${facts.repositories} repositories${size}; each takes about ${low} to ${high} minutes at this ` +
-    "depth, several at once when they run side by side. " +
+  return `Reading them covers ${facts.repositories} repositories${size}; each takes about ${low} to ${high} minutes ` +
+    "at this depth, several at once when they run side by side. " +
     (withQuestion
       ? "Say this to the person with the question, in your own words, and what a narrower set they name would take."
       : "Tell the person once, in your own words, before the analysis starts.");
