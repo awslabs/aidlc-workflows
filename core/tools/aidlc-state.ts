@@ -8562,6 +8562,9 @@ function handleSkip(args: string[]): void {
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
   }
+  // The stage the person asked to skip spends what they typed for it, as a
+  // Unit's step does.
+  if (reason === PERSON_ASKED_SKIP_REASON) clearGateWords(pd);
 
   writeStateFile(pd, content);
   if (!nextStage) {
