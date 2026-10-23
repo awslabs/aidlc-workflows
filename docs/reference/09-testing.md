@@ -1051,6 +1051,21 @@ Evidence committed to the repository is minimal by policy:
 | `AIDLC_INPUT_PARALLEL` | `6` | Fixture pool size of the unit input check. |
 | `AIDLC_DEVIN_ACP_LIVE` | unset | Set to `1` to run the live Devin ACP tier (`tests/e2e/t-acp-devin-calibration.serial.test.ts` known-answer driver self-checks, `tests/e2e/t-acp-devin-questions.serial.test.ts` elicitation-channel checks, `tests/e2e/t-acp-devin-journey.serial.test.ts` full-intent journey). These drive the person's signed-in Devin CLI (`devin acp`) and spend Devin credits; the journey takes about 30 minutes (28 minutes on 3000.11.92). `AIDLC_DEVIN_BIN` overrides the binary. |
 | `AIDLC_KIRO_IDE_LIVE` | unset | Set to `1` to run the signed-in Kiro IDE desktop journey on macOS or Windows. |
+
+**Driving a Devin intent as a person.** `tests/harness/devin-acp-drive.ts` is
+scripted by default, but its `human` CLI mode is the explicit
+person-in-the-loop path (owner decision 2026-10-22): run it directly, not
+through `run-tests.ts` — it applies the **production** guard profile (no
+`AIDLC_SKIP_*`/`AIDLC_DISABLE_*` bypasses), answers host permission prompts
+only through the person, spends Devin credits on the signed-in CLI, and
+leaves the project in place when it ends. `human start [--io DIR] [--project
+DIR]` spawns `devin acp` and exposes the session as files in the io dir;
+`human next [--wait-s N]` blocks until the person is needed (an unanswered
+`question-N.json` or `permission-N.json`, or a finished turn awaiting a
+prompt) and prints the new chat; `human answer <question-N|permission-N>
+<value>` writes the answer (a `DevinAnswer` JSON, or an offered optionId);
+`human say "<text>"` writes the next prompt and `human stop` ends the
+session.
 | `AIDLC_KIRO_IDE_BIN` | platform default | Override the Kiro IDE executable. Defaults to `/Applications/Kiro.app/Contents/MacOS/Electron` on macOS and `%LOCALAPPDATA%\Programs\Kiro\Kiro.exe` on Windows. |
 | `AIDLC_KIRO_IDE_SEED` | generated seed | Optional Kiro user-data directory. The test copies it to a disposable temp directory before launch and never mutates the source profile. |
 | `AIDLC_KIRO_IDE_DIAGNOSTICS` | unset | Optional per-file NDJSON diagnostic path. Includes up to 64 lifecycle records per IDE launch: owned PID, timestamps, browser-close protocol events, child exit/close and fallback signals. Records exclude endpoints, profile contents, raw error text and environment values; diagnostic I/O failures do not replace test failures. |

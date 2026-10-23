@@ -355,7 +355,11 @@ describe("t-acp-devin-journey — a full intent through devin acp", () => {
         expect(typed.length).toBeGreaterThanOrEqual(closedTurns);
       } finally {
         session.close();
-        rmSync(root, { recursive: true, force: true });
+        if (process.env.AIDLC_KEEP_TEMP === "1") {
+          process.stderr.write(`[t-acp-devin-journey] AIDLC_KEEP_TEMP=1 — preserved ${root}\n`);
+        } else {
+          rmSync(root, { recursive: true, force: true });
+        }
       }
     },
     TEST_TIMEOUT_MS,

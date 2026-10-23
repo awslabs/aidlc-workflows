@@ -1,7 +1,9 @@
 // devin-acp-drive.ts — the Devin ACP harness driver: the scripted "logic
 // half" for the Devin harness over the Agent Client Protocol (`devin acp`:
-// JSON-RPC 2.0, newline-delimited, over stdio). SCRIPTED ONLY by owner
-// decision — there is no interactive CLI/daemon mode here.
+// JSON-RPC 2.0, newline-delimited, over stdio). Scripted by default; the
+// `human` CLI mode below is the explicit person-in-the-loop path — a file
+// bridge where the person answers every question AND every host permission
+// prompt (owner decision 2026-10-22).
 //
 // WIRE CONTRACT (verified against a captured full-intent run on devin
 // 3000.11.3 and re-run on 3000.11.92):
@@ -48,15 +50,17 @@
 //   - session/request_permission params.options carry allow_once (kind
 //     allow_once), allow_session/allow_always/allow_always_global/
 //     switch_bypass (all kind allow_always — these WRITE the person's Devin
-//     settings and are never chosen), reject_once. Reply
-//     {outcome:{outcome:"selected", optionId}}.
+//     settings), reject_once. Reply {outcome:{outcome:"selected", optionId}}.
+//     With a `permission` answerer the driver offers the whole list — which
+//     option to take is the person's call, including the session/always
+//     options. The default driver still only picks allow_once/reject_once.
 //   - Any other server→client request gets a -32601 method-not-found reply
 //     and is recorded. Vendor notifications (_cognition.ai/*) and the other
 //     session/update kinds (usage_update, session_info_update,
 //     config_option_update, current_mode_update, available_commands_update)
 //     are traced by name, not depended on.
 
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { PersonTurnLedger, unbackedFailure } from "./person-turns.ts";
@@ -187,7 +191,31 @@ export interface DevinPermissionRequest {
   options: Array<{ optionId: string; name?: string; kind?: string }>;
   /** The optionId the driver answered with, or "(cancelled)" when no safe option existed. */
   answered: string;
+  /** The exec call's rawInput.command when the request names one. */
+  command?: string;
+  /** Who picked: the injected answerer or the driver's default policy. */
+  by: "answerer" | "driver";
+  /** Set when the answerer returned an optionId the request did not offer. */
+  error?: string;
 }
+
+/** One permission prompt offered to the person: the params the host sent
+ *  plus the tool name and exec command the driver recorded for the call. */
+export interface DevinPermissionAsk {
+  toolCallId?: string;
+  /** _meta inferenceToolName of the named tool call (exec, read, …). */
+  tool?: string;
+  title?: string;
+  /** rawInput.command for an exec call. */
+  command?: string;
+  options: Array<{ optionId: string; name?: string; kind?: string }>;
+}
+
+/** Answers a permission request with one of the OFFERED optionIds — the
+ *  person's choice, session/always options included. May be async. */
+export type DevinPermissionAnswerer = (
+  ask: DevinPermissionAsk,
+) => string | Promise<string>;
 
 export interface DevinAcpDriveOptions {
   projectDir: string;
@@ -200,6 +228,12 @@ export interface DevinAcpDriveOptions {
   timeoutMs?: number;
   /** Answers the elicitation/create requests; undefined return = no answer. */
   answer?: DevinAnswerer;
+  /** Answers session/request_permission with an offered optionId. Without
+   *  it the driver's default policy (allow_once, else reject_once) stands. */
+  permission?: DevinPermissionAnswerer;
+  /** Observer: called for EVERY session/update of the turn, before the
+   *  driver's own handling. Pure side-channel (chat logs, progress). */
+  onUpdate?: (update: Record<string, unknown>) => void;
   /** Send session/cancel once an exec call whose rawInput.command matches
    *  reaches status "completed". Devin honours it: the turn ends and
    *  session/prompt resolves with stopReason "cancelled" (verified live on
@@ -285,7 +319,7 @@ export class DevinAcpSession {
     });
     respond({ action: "cancel" });
   };
-  onPermission: (params: Record<string, unknown>) => string = (params) =>
+  onPermission: (params: Record<string, unknown>) => string | Promise<string> = (params) =>
     choosePermissionOption(
       (params.options as Array<{ optionId: string; kind?: string }>) ?? [],
     );
@@ -395,16 +429,19 @@ export class DevinAcpSession {
         return;
       }
       if (method === "session/request_permission") {
-        const optionId = this.onPermission(params);
-        writeAcpTrace(this.tracePath, "permission", {
-          optionId,
-          options: params.options,
+        // The answerer may be async (a person writing an answer file); the
+        // reply still goes on the wire exactly once.
+        void Promise.resolve(this.onPermission(params)).then((optionId) => {
+          writeAcpTrace(this.tracePath, "permission", {
+            optionId,
+            options: params.options,
+          });
+          if (optionId === "") {
+            this.replyResult(id, { outcome: { outcome: "cancelled" } });
+          } else {
+            this.replyResult(id, { outcome: { outcome: "selected", optionId } });
+          }
         });
-        if (optionId === "") {
-          this.replyResult(id, { outcome: { outcome: "cancelled" } });
-        } else {
-          this.replyResult(id, { outcome: { outcome: "selected", optionId } });
-        }
         return;
       }
       // Anything else we did not advertise: log in full, refuse method-not-found.
@@ -742,6 +779,11 @@ export async function driveDevinAcp(opts: DevinAcpDriveOptions): Promise<DevinAc
   let cancelled = false;
 
   session.onUpdate = (u) => {
+    try {
+      opts.onUpdate?.(u);
+    } catch {
+      /* an observer's bug never eats the driver's own handling */
+    }
     const kind = u.sessionUpdate as string;
     if (kind === "agent_message_chunk") {
       const c = u.content as { type?: string; text?: string } | undefined;
@@ -910,10 +952,57 @@ export async function driveDevinAcp(opts: DevinAcpDriveOptions): Promise<DevinAc
     })();
   };
 
-  session.onPermission = (params) => {
+  session.onPermission = async (params) => {
     const options = (params.options as DevinPermissionRequest["options"]) ?? [];
+    const toolCall = (params.toolCall ?? {}) as { toolCallId?: unknown; id?: unknown; title?: unknown };
+    const toolCallId = typeof toolCall.toolCallId === "string"
+      ? toolCall.toolCallId
+      : typeof toolCall.id === "string" ? toolCall.id : undefined;
+    const named = toolCallId !== undefined ? byId.get(toolCallId) : undefined;
+    const ask: DevinPermissionAsk = {
+      ...(toolCallId !== undefined ? { toolCallId } : {}),
+      ...(named?.tool ? { tool: named.tool } : {}),
+      ...(typeof toolCall.title === "string" ? { title: toolCall.title } : {}),
+      ...(typeof (named?.rawInput as { command?: unknown } | null)?.command === "string"
+        ? { command: (named!.rawInput as { command: string }).command }
+        : {}),
+      options,
+    };
+    if (opts.permission) {
+      let optionId = "";
+      let error: string | undefined;
+      try {
+        optionId = await opts.permission(ask);
+      } catch (e) {
+        error = e instanceof Error ? e.message : String(e);
+      }
+      if (optionId === "" || !options.some((o) => o.optionId === optionId)) {
+        // A non-offered optionId can never be selected — cancel and record.
+        const why = error ?? `answerer returned unoffered optionId "${optionId}"`;
+        permissionRequests.push({
+          options,
+          answered: "(cancelled)",
+          ...(ask.command !== undefined ? { command: ask.command } : {}),
+          by: "answerer",
+          error: why,
+        });
+        return "";
+      }
+      permissionRequests.push({
+        options,
+        answered: optionId,
+        ...(ask.command !== undefined ? { command: ask.command } : {}),
+        by: "answerer",
+      });
+      return optionId;
+    }
     const answered = choosePermissionOption(options);
-    permissionRequests.push({ options, answered: answered === "" ? "(cancelled)" : answered });
+    permissionRequests.push({
+      options,
+      answered: answered === "" ? "(cancelled)" : answered,
+      ...(ask.command !== undefined ? { command: ask.command } : {}),
+      by: "driver",
+    });
     return answered;
   };
   session.onUnhandledRequest = (method) => {
@@ -1022,4 +1111,375 @@ export function storedPersonMessages(projectDir: string): {
     })
     .sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
     .map(({ name: _name, ...rest }) => rest);
+}
+
+
+// --- Human mode: the person-in-the-loop file bridge --------------------------
+//
+// `human start` spawns a live `devin acp` session and exposes the whole
+// conversation as files in an io dir: the person reads chat.log, and answers
+// questions/permissions by writing answer files (`human answer`), and drives
+// turns by writing prompt files (`human say` / `human stop`). Every pending
+// file is written atomically (tmp + rename) so the other side never reads a
+// half-written file.
+
+export interface DevinHumanBridge {
+  answer: DevinAnswerer;
+  permission: DevinPermissionAnswerer;
+  onUpdate: (update: Record<string, unknown>) => void;
+  /** Block until prompt-<turn>.txt appears; returns its text ("STOP" ends). */
+  nextPrompt: (turn: number) => Promise<string>;
+  log: (line: string) => void;
+}
+
+function writeAtomic(path: string, content: string): void {
+  const tmp = `${path}.tmp-${process.pid}`;
+  writeFileSync(tmp, content);
+  renameSync(tmp, path);
+}
+
+async function waitForFile(path: string): Promise<string> {
+  while (!existsSync(path)) await new Promise((r) => setTimeout(r, 1000));
+  return readFileSync(path, "utf-8");
+}
+
+export function createFileHumanBridge(ioDir: string): DevinHumanBridge {
+  mkdirSync(ioDir, { recursive: true });
+  const log = (line: string): void =>
+    appendFileSync(join(ioDir, "events.log"), `${new Date().toISOString()} ${line}\n`);
+  const chat = (text: string): void => appendFileSync(join(ioDir, "chat.log"), text);
+  let questionCount = 0;
+  let permissionCount = 0;
+
+  const answer: DevinAnswerer = async (elicitation) => {
+    const n = ++questionCount;
+    const pending = join(ioDir, `question-${n}.json`);
+    const answerFile = join(ioDir, `question-${n}.answer.json`);
+    const errorFile = join(ioDir, `question-${n}.error.txt`);
+    writeAtomic(pending, JSON.stringify({
+      message: elicitation.message,
+      allowOther: elicitation.allowOther,
+      questions: elicitation.questions,
+    }, null, 2));
+    log(`QUESTION ${n} waiting (${elicitation.questions.length} keys)`);
+    for (;;) {
+      const raw = await waitForFile(answerFile);
+      let reply: DevinAnswer;
+      try {
+        reply = JSON.parse(raw) as DevinAnswer;
+      } catch (e) {
+        writeAtomic(errorFile, `question-${n}.answer.json is not JSON: ${e instanceof Error ? e.message : String(e)}\n`);
+        rmSilently(answerFile);
+        continue;
+      }
+      if (!validAnswer(elicitation, reply)) {
+        writeAtomic(errorFile, `question-${n}.answer.json is not a valid DevinAnswer for this elicitation\n`);
+        rmSilently(answerFile);
+        continue;
+      }
+      rmSilently(errorFile);
+      log(`QUESTION ${n} answered -> ${reply.action}`);
+      return reply;
+    }
+  };
+
+  const permission: DevinPermissionAnswerer = async (ask) => {
+    const n = ++permissionCount;
+    const pending = join(ioDir, `permission-${n}.json`);
+    const answerFile = join(ioDir, `permission-${n}.answer`);
+    const errorFile = join(ioDir, `permission-${n}.error.txt`);
+    writeAtomic(pending, JSON.stringify({
+      tool: ask.tool,
+      command: ask.command,
+      title: ask.title,
+      options: ask.options,
+    }, null, 2));
+    log(`PERMISSION ${n} waiting tool=${ask.tool ?? "?"} command=${ask.command?.slice(0, 120) ?? "-"}`);
+    for (;;) {
+      const optionId = (await waitForFile(answerFile)).trim();
+      if (!ask.options.some((o) => o.optionId === optionId)) {
+        writeAtomic(errorFile, `permission-${n}.answer names "${optionId}", which was not offered (${ask.options.map((o) => o.optionId).join(", ")})\n`);
+        rmSilently(answerFile);
+        continue;
+      }
+      rmSilently(errorFile);
+      log(`PERMISSION ${n} answered -> ${optionId}`);
+      return optionId;
+    }
+  };
+
+  const onUpdate = (u: Record<string, unknown>): void => {
+    const kind = u.sessionUpdate as string;
+    if (kind === "agent_message_chunk") {
+      const c = u.content as { type?: string; text?: string } | undefined;
+      if (c?.type === "text" && c.text) chat(c.text);
+      return;
+    }
+    if (kind === "tool_call") {
+      const meta = (u._meta ?? {}) as Record<string, unknown>;
+      const tool = String(meta["cognition.ai/inferenceToolName"] ?? "");
+      const raw = u.rawInput as Record<string, unknown> | undefined;
+      const detail = tool === "exec"
+        ? String(raw?.command ?? "").slice(0, 200)
+        : tool === "run_subagent"
+        ? `profile=${String(raw?.profile ?? "")}`
+        : String(u.title ?? "");
+      chat(`\n  [tool ${tool}] ${detail}\n`);
+    }
+  };
+
+  const nextPrompt = async (turn: number): Promise<string> => {
+    const path = join(ioDir, `prompt-${turn}.txt`);
+    const text = (await waitForFile(path)).trim();
+    if (text === "STOP") return "STOP";
+    chat(`\n\n===== PERSON (turn ${turn}): ${text}\n\n`);
+    log(`TURN ${turn} prompt: ${text.slice(0, 200)}`);
+    return text;
+  };
+
+  return { answer, permission, onUpdate, nextPrompt, log };
+}
+
+function rmSilently(path: string): void {
+  rmSync(path, { force: true });
+}
+
+// --- human CLI ---------------------------------------------------------------
+//
+//   bun tests/harness/devin-acp-drive.ts human <verb>
+//
+// Runs OUTSIDE tests/run-tests.ts on the production guard profile — no
+// AIDLC_SKIP_*/AIDLC_DISABLE_* bypasses. It spends real Devin credits on the
+// person's own signed-in devin CLI.
+
+const HUMAN_HELP = `bun tests/harness/devin-acp-drive.ts human <verb>
+
+Drive a Devin acp session as a person through files in an io dir.
+
+verbs:
+  start [--io DIR] [--project DIR]   spawn the session (io default:
+                                     tests/logs/devin-acp-human-<UTC>/)
+  next  [--io DIR] [--wait-s N=270]  block until the person is needed; prints
+                                     new chat + the pending item.
+                                     exit 0 pending / 2 timeout / 3 ended
+  answer <question-N|permission-N> <value> [--io DIR]
+                                     write the answer file (question value is
+                                     DevinAnswer JSON, permission an optionId)
+  say "<text>" [--io DIR]            write the next prompt-<N>.txt
+  stop [--io DIR]                    write STOP as the next prompt
+
+The person sees chat.log (assistant prose + [tool] lines), pending files
+question-N.json / permission-N.json, and events.log. The project is left in
+place when the session ends. This spends Devin credits and runs the
+production guard profile — no test bypasses.
+`;
+
+interface HumanArgs { verb: string; io?: string; project?: string; waitS: number; rest: string[] }
+
+function humanArgs(argv: string[]): HumanArgs {
+  const out: HumanArgs = { verb: "", waitS: 270, rest: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    if (a === "--io") { out.io = argv[++i]; continue; }
+    if (a === "--project") { out.project = argv[++i]; continue; }
+    if (a === "--wait-s") { out.waitS = Number(argv[++i] ?? "270"); continue; }
+    if (!out.verb) { out.verb = a; continue; }
+    out.rest.push(a);
+  }
+  return out;
+}
+
+function newestIoDir(): string | undefined {
+  const logs = join(REPO_ROOT, "tests", "logs");
+  if (!existsSync(logs)) return undefined;
+  const dirs = readdirSync(logs)
+    .filter((d) => d.startsWith("devin-acp-human-"))
+    .sort();
+  return dirs.length > 0 ? join(logs, dirs[dirs.length - 1]!) : undefined;
+}
+
+function humanIo(given: string | undefined): string {
+  const io = given ?? newestIoDir();
+  if (!io || !existsSync(io)) {
+    throw new Error(`no io dir — pass --io DIR or run 'human start' first (newest tests/logs/devin-acp-human-*)`);
+  }
+  return io;
+}
+
+function nextPromptNumber(io: string): number {
+  const files = readdirSync(io).filter((f) => /^prompt-\d+\.txt$/.test(f));
+  return files.length + 1;
+}
+
+async function humanStart(io: string, projectArg: string | undefined): Promise<void> {
+  const { setupDevinProject } = await import("./exec-drive.ts");
+  const { testGuardEnvironment } = await import("./runner-profile.ts");
+  mkdirSync(io, { recursive: true });
+  // Human mode runs the production profile: any AIDLC_SKIP_*/DISABLE_* the
+  // caller's env carries is forced off before devin is spawned.
+  Object.assign(process.env, testGuardEnvironment(process.env, "production"));
+  if (!process.env.AIDLC_ACP_TRACE_FILE) {
+    process.env.AIDLC_ACP_TRACE_FILE = join(io, "trace.ndjson");
+  }
+  let projectDir = projectArg;
+  if (!projectDir) {
+    if (!existsSync(join(REPO_ROOT, "dist", "devin"))) {
+      throw new Error("dist/devin missing — run `bun scripts/package.ts` first");
+    }
+    projectDir = setupDevinProject().proj;
+  }
+  const bridge = createFileHumanBridge(io);
+  bridge.log(`project ${projectDir}`);
+  const session = await openDevinAcpSession(projectDir, { timeoutMs: 10 * 60_000 });
+  const ver = spawnSync(DEVIN_BIN, ["--version"], { encoding: "utf-8" });
+  writeAtomic(join(io, "session.json"), JSON.stringify({
+    project: projectDir,
+    sessionId: session.sessionId,
+    devinVersion: (ver.stdout ?? "").trim() || null,
+    guardProfile: "production",
+    startedAt: new Date().toISOString(),
+  }, null, 2));
+  bridge.log(`session ${session.sessionId} guardProfile=production`);
+  for (let turn = 1; ; turn++) {
+    bridge.log(`TURN ${turn} waiting for prompt-${turn}.txt`);
+    const prompt = await bridge.nextPrompt(turn);
+    if (prompt === "STOP") break;
+    const r = await driveDevinAcp({
+      projectDir,
+      session,
+      prompt,
+      timeoutMs: 3 * 60 * 60_000,
+      answer: bridge.answer,
+      permission: bridge.permission,
+      onUpdate: bridge.onUpdate,
+    });
+    writeAtomic(join(io, `turn-${turn}.result.json`), JSON.stringify({
+      turn,
+      stopReason: r.stopReason,
+      tools: r.toolCalls.length,
+      toolCallIssues: r.toolCallIssues.map((c) => ({ tool: c.tool, status: c.status, out: c.output.slice(0, 300) })),
+      subagents: r.subagents,
+      elicitations: r.elicitations.map((x) => ({ outcome: x.outcome, headers: x.elicitation.questions.map((q) => q.header), error: x.error })),
+      permissionRequests: r.permissionRequests,
+      unhandledRequests: r.unhandledRequests,
+      auditTail: (r.auditEvents ?? []).slice(-15),
+    }, null, 2));
+    bridge.log(`TURN ${turn} ended stopReason=${r.stopReason}`);
+  }
+  session.close();
+  writeAtomic(join(io, "session-end.json"), `${JSON.stringify({ endedAt: new Date().toISOString() })}\n`);
+  bridge.log("closed");
+  console.log(`session ended. project left in place: ${projectDir}`);
+}
+
+async function humanNext(io: string, waitS: number): Promise<number> {
+  const offsetFile = join(io, ".chat-offset");
+  const chatPath = join(io, "chat.log");
+  const stat = () => (existsSync(chatPath) ? readFileSync(chatPath, "utf-8").length : 0);
+  const pending = (): { file: string; kind: string } | null => {
+    if (existsSync(join(io, "session-end.json"))) return { file: "session-end.json", kind: "ended" };
+    // An asked file stays as the record; it is pending until its answer exists.
+    for (const f of readdirSync(io).filter((n) => /^question-\d+\.json$/.test(n)).sort()) {
+      if (!existsSync(join(io, f.replace(/\.json$/, ".answer.json")))) return { file: f, kind: "question" };
+    }
+    for (const f of readdirSync(io).filter((n) => /^permission-\d+\.json$/.test(n)).sort()) {
+      if (!existsSync(join(io, f.replace(/\.json$/, ".answer")))) return { file: f, kind: "permission" };
+    }
+    const turns = readdirSync(io)
+      .filter((n) => /^turn-\d+\.result\.json$/.test(n))
+      .map((n) => Number(n.replace(/^turn-/, "").replace(/\.result\.json$/, "")))
+      .sort((a, b) => a - b);
+    const last = turns.at(-1) ?? 0;
+    if (!existsSync(join(io, `prompt-${last + 1}.txt`))) {
+      return { file: last === 0 ? "prompt-1.txt (write the first prompt with 'human say')" : `turn-${last}.result.json (next: 'human say' or 'human stop')`, kind: "prompt" };
+    }
+    return null;
+  };
+  const deadline = Date.now() + waitS * 1000;
+  let hit = pending();
+  while (!hit && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1000));
+    hit = pending();
+  }
+  const off = existsSync(offsetFile) ? Number(readFileSync(offsetFile, "utf-8").trim()) : 0;
+  const size = stat();
+  const fresh = existsSync(chatPath) ? readFileSync(chatPath, "utf-8").slice(off) : "";
+  const lines = fresh.split("\n");
+  const toolLines = lines.filter((l) => l.startsWith("  [tool "));
+  const prose = lines.filter((l) => !l.startsWith("  [tool ")).join("\n");
+  writeAtomic(offsetFile, `${size}`);
+  console.log("===== CHAT (new) =====");
+  console.log(prose.slice(-6000));
+  console.log("===== TOOLS (new, last 12) =====");
+  for (const l of toolLines.slice(-12)) console.log(l);
+  if (!hit) {
+    console.log("===== nothing pending yet =====");
+    const events = join(io, "events.log");
+    if (existsSync(events)) console.log(readFileSync(events, "utf-8").split("\n").filter(Boolean).slice(-3).join("\n"));
+    return 2;
+  }
+  if (hit.kind === "ended") {
+    console.log("===== SESSION ENDED =====");
+    return 3;
+  }
+  console.log(`===== PENDING: ${hit.file} =====`);
+  if (existsSync(join(io, hit.file))) {
+    console.log(readFileSync(join(io, hit.file), "utf-8"));
+  }
+  return 0;
+}
+
+if (import.meta.main) {
+  const argv = process.argv.slice(2);
+  if (argv[0] === "human" && (argv.includes("--help") || argv[1] === undefined)) {
+    console.log(HUMAN_HELP);
+    process.exit(argv[1] === undefined ? 1 : 0);
+  }
+  if (argv[0] === "human") {
+    const args = humanArgs(argv.slice(1));
+    try {
+      if (args.verb === "start") {
+        const io = args.io ?? join(
+          REPO_ROOT, "tests", "logs",
+          `devin-acp-human-${new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "Z")}`,
+        );
+        await humanStart(io, args.project);
+        process.exit(0);
+      }
+      const io = humanIo(args.io);
+      if (args.verb === "next") process.exit(await humanNext(io, args.waitS));
+      if (args.verb === "answer") {
+        const [name, value] = args.rest;
+        if (!name || value === undefined) throw new Error("usage: human answer <question-N|permission-N> <value>");
+        const target = name.startsWith("question-")
+          ? join(io, `${name}.answer.json`)
+          : join(io, `${name}.answer`);
+        const asked = join(io, `${name}.json`);
+        if (!existsSync(asked)) throw new Error(`${name}.json is not pending in ${io}`);
+        writeAtomic(target, `${value}\n`);
+        console.log(`${target} written`);
+        process.exit(0);
+      }
+      if (args.verb === "say") {
+        const text = args.rest.join(" ");
+        if (!text) throw new Error("usage: human say \"<text>\"");
+        const n = nextPromptNumber(io);
+        writeAtomic(join(io, `prompt-${n}.txt`), `${text}\n`);
+        console.log(`prompt-${n}.txt written to ${io}`);
+        process.exit(0);
+      }
+      if (args.verb === "stop") {
+        const n = nextPromptNumber(io);
+        writeAtomic(join(io, `prompt-${n}.txt`), "STOP\n");
+        console.log(`prompt-${n}.txt (STOP) written to ${io}`);
+        process.exit(0);
+      }
+      console.error(`unknown verb: ${args.verb}`);
+      console.log(HUMAN_HELP);
+      process.exit(1);
+    } catch (e) {
+      console.error(e instanceof Error ? e.message : String(e));
+      process.exit(1);
+    }
+  }
 }

@@ -7,15 +7,17 @@
 // 3000.11.3/3000.11.92 (run2 trace). No devin binary, no network, no credits.
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   cleanDevinOutput,
+  createFileHumanBridge,
   driveDevinAcp,
   storedPersonMessages,
   type DevinAcpProcess,
   type DevinAnswerer,
+  type DevinPermissionAsk,
 } from "../harness/devin-acp-drive.ts";
 
 type Packet = Record<string, unknown>;
@@ -141,6 +143,11 @@ function elicitationParams(questions: Record<string, unknown>, opts: { allowOthe
     },
     ...(opts.allowOther === false ? {} : { _meta: { "cognition.ai/allowOther": true } }),
   };
+}
+
+async function waitFor(cond: () => boolean, tries = 200): Promise<void> {
+  for (let i = 0; i < tries && !cond(); i++) await new Promise((r) => setTimeout(r, 25));
+  if (!cond()) throw new Error("waitFor timed out");
 }
 
 const UPDATE = (u: Packet) => ({
@@ -485,3 +492,154 @@ describe("t-devin-acp-protocol — scripted fake ACP server", () => {
     expect(storedPersonMessages(join(dir, "nope"))).toEqual([]);
   });
 });
+
+  test("12. an async permission answerer sees the exec command, toolCallId and options, and its pick goes on the wire", async () => {
+    const dir = directory();
+    const seen: DevinPermissionAsk[] = [];
+    const fake = fakeAcpServer(async (ctx) => {
+      ctx.emit(UPDATE({
+        sessionUpdate: "tool_call",
+        toolCallId: "tc-exec-1",
+        title: "Ran bun",
+        kind: "execute",
+        rawInput: { command: "bun .devin/tools/aidlc.ts engine next" },
+        _meta: { "cognition.ai/inferenceToolName": "exec" },
+      }));
+      const reply = await ctx.requestClient("session/request_permission", {
+        sessionId: "fake-session",
+        toolCall: { toolCallId: "tc-exec-1", title: "Ran bun" },
+        options: [
+          { optionId: "allow_once", kind: "allow_once" },
+          { optionId: "allow_session", kind: "allow_always" },
+          { optionId: "reject_once", kind: "reject_once" },
+        ],
+      });
+      expect((reply.result as { outcome: { outcome: string; optionId?: string } }).outcome)
+        .toEqual({ outcome: "selected", optionId: "allow_session" });
+    });
+    const r = await driveDevinAcp({
+      projectDir: dir,
+      prompt: "p",
+      spawn: fake.spawn,
+      permission: async (ask) => {
+        seen.push(ask);
+        await new Promise((res) => setTimeout(res, 50));
+        return "allow_session";
+      },
+    });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.toolCallId).toBe("tc-exec-1");
+    expect(seen[0]!.tool).toBe("exec");
+    expect(seen[0]!.command).toBe("bun .devin/tools/aidlc.ts engine next");
+    expect(seen[0]!.options.map((o) => o.optionId)).toContain("allow_session");
+    expect(r.permissionRequests).toHaveLength(1);
+    expect(r.permissionRequests[0]).toMatchObject({
+      answered: "allow_session", by: "answerer",
+      command: "bun .devin/tools/aidlc.ts engine next",
+    });
+  });
+
+  test("13. an answerer's non-offered optionId replies cancelled and records the error", async () => {
+    const dir = directory();
+    const fake = fakeAcpServer(async (ctx) => {
+      const reply = await ctx.requestClient("session/request_permission", {
+        sessionId: "fake-session",
+        toolCall: { toolCallId: "tc-1", title: "Ran rm" },
+        options: [{ optionId: "allow_once", kind: "allow_once" }],
+      });
+      expect((reply.result as { outcome: { outcome: string } }).outcome.outcome).toBe("cancelled");
+    });
+    const r = await driveDevinAcp({
+      projectDir: dir,
+      prompt: "p",
+      spawn: fake.spawn,
+      permission: () => "bogus_option",
+    });
+    expect(r.permissionRequests[0]).toMatchObject({
+      answered: "(cancelled)", by: "answerer",
+    });
+    expect(r.permissionRequests[0]!.error).toContain("bogus_option");
+  });
+
+  test("14. with no answerer the default still picks allow_once and marks by: driver", async () => {
+    const dir = directory();
+    const fake = fakeAcpServer(async (ctx) => {
+      const reply = await ctx.requestClient("session/request_permission", {
+        sessionId: "fake-session",
+        toolCall: { toolCallId: "tc-1", title: "Ran ls" },
+        options: [{ optionId: "allow_once", kind: "allow_once" }, { optionId: "allow_session", kind: "allow_always" }],
+      });
+      expect((reply.result as { outcome: { outcome: string; optionId?: string } }).outcome)
+        .toEqual({ outcome: "selected", optionId: "allow_once" });
+    });
+    const r = await driveDevinAcp({ projectDir: dir, prompt: "p", spawn: fake.spawn });
+    expect(r.permissionRequests[0]).toMatchObject({ answered: "allow_once", by: "driver" });
+  });
+
+  test("15. the onUpdate observer sees every update before the driver handles it", async () => {
+    const dir = directory();
+    const seen: string[] = [];
+    const fake = fakeAcpServer((ctx) => {
+      ctx.emit(UPDATE({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "hello " },
+      }));
+      ctx.emit(UPDATE({
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "world" },
+      }));
+    });
+    const r = await driveDevinAcp({
+      projectDir: dir,
+      prompt: "p",
+      spawn: fake.spawn,
+      onUpdate: (u) => seen.push(String(u.sessionUpdate)),
+    });
+    expect(seen.filter((k) => k === "agent_message_chunk")).toHaveLength(2);
+    expect(r.assistantText).toBe("hello world");
+  });
+
+  test("16. the file bridge answers a question (bad file then good), a permission, and prompts", async () => {
+    const io = join(directory(), "io");
+    const bridge = createFileHumanBridge(io);
+    const elicitation = {
+      id: "srv-1",
+      message: "msg",
+      allowOther: false,
+      raw: {},
+      questions: [{
+        key: "q0", header: "H", question: "Pick", required: true, multiSelect: false,
+        options: [{ label: "Red" }, { label: "Blue" }],
+      }],
+    };
+    const pending = bridge.answer(elicitation, { turn: 1, previous: [] });
+    await waitFor(() => existsSync(join(io, "question-1.json")));
+    // An invalid answer file: error file appears, answer file removed, still waiting.
+    writeFileSync(join(io, "question-1.answer.json"), "{not json");
+    await waitFor(() => existsSync(join(io, "question-1.error.txt")));
+    expect(existsSync(join(io, "question-1.answer.json"))).toBe(false);
+    writeFileSync(join(io, "question-1.answer.json"), JSON.stringify({ action: "accept", answers: { q0: "Blue" } }));
+    const reply = await pending;
+    expect(reply).toEqual({ action: "accept", answers: { q0: "Blue" } });
+    // The asked file and the answer stay as the record; the error file goes.
+    expect(existsSync(join(io, "question-1.json"))).toBe(true);
+    expect(existsSync(join(io, "question-1.error.txt"))).toBe(false);
+
+    // Permission round trip: the ask is written, the offered optionId returns.
+    const perm = bridge.permission({
+      tool: "exec", command: "rm -rf x", title: "Ran rm",
+      options: [{ optionId: "allow_once" }, { optionId: "reject_once" }],
+    });
+    await waitFor(() => existsSync(join(io, "permission-1.json")));
+    const asked = JSON.parse(readFileSync(join(io, "permission-1.json"), "utf-8")) as { command?: string };
+    expect(asked.command).toBe("rm -rf x");
+    writeFileSync(join(io, "permission-1.answer"), "reject_once\n");
+    expect(await perm).toBe("reject_once");
+    expect(existsSync(join(io, "permission-1.json"))).toBe(true);
+
+    // Prompts: text then STOP.
+    writeFileSync(join(io, "prompt-1.txt"), "build it\n");
+    expect(await bridge.nextPrompt(1)).toBe("build it");
+    writeFileSync(join(io, "prompt-2.txt"), "STOP\n");
+    expect(await bridge.nextPrompt(2)).toBe("STOP");
+  });
