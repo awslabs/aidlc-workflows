@@ -201,9 +201,9 @@ describe("a per-Unit stage run at stage level, its gate open when summary confir
     seedStateFile(proj, "state-mid-inception.md");
     const statePath = seededStateFile(proj);
     let state = readFileSync(statePath, "utf-8")
-      .replace("- [S] functional-design \u2014 SKIP (bugfix scope)", "- [?] functional-design \u2014 EXECUTE");
+      .replace("- [ ] functional-design \u2014 SKIP (bugfix scope)", "- [?] functional-design \u2014 EXECUTE");
     if (units === "completed") {
-      state = state.replace("- [S] units-generation \u2014 SKIP (bugfix scope)", "- [x] units-generation \u2014 EXECUTE");
+      state = state.replace("- [ ] units-generation \u2014 SKIP (bugfix scope)", "- [x] units-generation \u2014 EXECUTE");
     }
     state = setField(state, "Summary Confirmation", "on (set by you)");
     writeFileSync(statePath, state);

@@ -282,7 +282,7 @@ function seedProject(scope: "bugfix" | "feature" | "classic" | "express"): strin
         "- **Scope**: bugfix",
         `- **Scope**: ${scope}`
       ).replace(
-        "- [S] units-generation — SKIP (bugfix scope)",
+        "- [ ] units-generation — SKIP (bugfix scope)",
         "- [ ] units-generation — EXECUTE",
       ),
     );
@@ -688,7 +688,7 @@ describe("t271 review iteration ceiling", () => {
         // earlier design stage was approved by the person.
         let state = readFileSync(sf, "utf-8").replace("- [ ] code-generation", "- [-] code-generation");
         if (autonomous) {
-          state = `${state.replace("- [S] functional-design — SKIP (bugfix scope)", "- [x] functional-design — EXECUTE")}\n` +
+          state = `${state.replace("- [ ] functional-design — SKIP (bugfix scope)", "- [x] functional-design — EXECUTE")}\n` +
             "- **Construction Autonomy Mode**: autonomous\n";
         }
         writeFileSync(sf, state);

@@ -3474,7 +3474,7 @@ function zeroUnitProject(scope: "refactor" | "bugfix"): string {
   if (scope === "refactor") {
     state = state
       .replace("- **Scope**: bugfix", "- **Scope**: refactor")
-      .replace("- [S] functional-design \u2014 SKIP (bugfix scope)", "- [x] functional-design \u2014 EXECUTE")
+      .replace("- [ ] functional-design \u2014 SKIP (bugfix scope)", "- [x] functional-design \u2014 EXECUTE")
       .replaceAll("SKIP (bugfix scope)", "SKIP (refactor scope)");
   }
   writeFileSync(seededStateFile(proj), state, "utf-8");

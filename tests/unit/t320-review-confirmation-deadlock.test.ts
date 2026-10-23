@@ -582,10 +582,6 @@ describe("t320 recovery guidance", () => {
       .replace(
         "## Stage Progress\n\n",
         "## Stage Progress\n<!-- Checkbox states -->\n",
-      )
-      .replace(
-        "- [S] user-stories — SKIP (bugfix scope)",
-        "- [ ] user-stories — SKIP (bugfix scope)",
       );
     writeFileSync(statePath, skippedState);
     const skippedGuidance = recoveryGuidance(
