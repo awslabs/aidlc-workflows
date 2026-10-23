@@ -850,10 +850,11 @@ export function kiroV3OfferNavigation(screen: string): "Up" | "Down" | "Enter" |
  * Kiro's snooze date (v3Prompt.snoozeUntil in its data.sqlite3), none of its
  * configs, so no fixture gate applies; the release journey's project is not
  * one. The other two answers change the machine's Kiro and are never sent:
- * Enter goes only on a settled screen with "Remind me later" selected. No
+ * Enter goes only on a settled screen with "Remind me later" selected, and
+ * only one key is ever on its way, so the painted caret is Kiro's own. No
  * one-attempt marker: an offer painted again was not taken, and answering it
- * again is right. The keys go through the person-turn record like the trust
- * prompt's; at launch that turn comes before every gate, so it backs nothing.
+ * again is right. The Enter goes into the drive's record of the person's turns
+ * as one more empty turn at its start, the same as the trust prompt's Enter.
  */
 export async function remindKiroV3OfferLater(
   backend: Pick<Backend, "capture" | "send">,
@@ -886,7 +887,19 @@ export async function remindKiroV3OfferLater(
     if (moves.length === 2) break;
     moves.push(navigation);
     await backend.send(session, navigation, false, true);
-    await pause(POLL_INTERVAL_MS);
+    // A frame painted before this key arrived still shows the old caret; a key
+    // that never paints may be late rather than lost, so it is not sent again.
+    const paintBy = Math.min(now() + ANSWER_REPAINT_WAIT_MS, deadline);
+    let painted: ReturnType<typeof kiroV3OfferNavigation> = navigation;
+    while (painted === navigation && now() < paintBy) {
+      await pause(POLL_INTERVAL_MS);
+      screen = await backend.capture(session, false, "physical");
+      painted = kiroV3OfferNavigation(screen);
+    }
+    if (painted === navigation) {
+      throw new Error(`Kiro did not paint ${navigation} on its V3 offer; refusing another key\n---- last pane ----\n${screen}`);
+    }
+    previous = "";
   }
   throw new Error(`Kiro's V3 offer never settled on Remind me later; refusing Enter\n---- last pane ----\n${screen}`);
 }

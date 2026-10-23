@@ -230,6 +230,30 @@ describe("Kiro CLI's V3 offer at launch", () => {
       expect(keys).toEqual(move ? [move, "Enter"] : ["Enter"]);
     }
 
+    // A loaded host paints a move after the settle time, or loses the key: the
+    // old frame is never read as the moved caret, and no second key goes while
+    // one may still be on its way (it could land on "Don't ask again" unseen).
+    for (const [lagMs, lost, expected] of [[1000, 0, ["Down", "Enter"]], [0, 1, ["Down"]]] as const) {
+      let caret = 0;
+      let movedAt = 0;
+      let losing: number = lost;
+      const keys: string[] = [];
+      const slow = {
+        capture: () => kiroV3Offer(now - movedAt >= lagMs ? caret : caret - 1),
+        send: (_session: string, key: string) => {
+          keys.push(key);
+          if (key === "Enter") return expect(caret).toBe(1);
+          if (losing-- > 0) return;
+          caret += key === "Down" ? 1 : -1;
+          movedAt = now;
+        },
+      };
+      const answered = remindKiroV3OfferLater(slow, "kiro", kiroV3Offer(0), timing);
+      if (lost) await expect(answered).rejects.toThrow(/did not paint Down/);
+      else expect(await answered).toBe(true);
+      expect(keys).toEqual([...expected]);
+    }
+
     // A caret that jumps past Remind me later gets no Enter.
     let caret = 0;
     const keys: string[] = [];
