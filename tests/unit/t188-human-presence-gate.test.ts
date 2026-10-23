@@ -1629,6 +1629,47 @@ describe("t188: human-presence approval gate (ledger-event design)", () => {
       expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(2);
     });
 
+    // A proposal shows its basis: what each choice rests on is kept beside the
+    // answer, for the agent's choice and for one the person settled after
+    // seeing the proposals. Context only: nothing is refused for lacking it.
+    test("the basis of a proposed choice is kept beside the answer, and is never required", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      const proposed = guardedLog(proj, [
+        "answer", "--stage", slug, "--details", "Q1: A; Q2: B", "--on-instruction", "choose the recommended answers",
+        "--basis", "Q1: intent.md says  \"staff sign in with the corporate SSO\"; Q2: assumption",
+      ]);
+      expect(proposed.rc, proposed.out).toBe(0);
+      let audit = readAllAuditShards(proj);
+      expect(audit).toContain("**Basis**: Q1: intent.md says \"staff sign in with the corporate SSO\"; Q2: assumption");
+      expect(audit).toContain("**Answer Source**: chosen by the agent as the person asked");
+      // The person's own reply to shown proposals, in their words, with the basis.
+      recordHumanTurn(proj);
+      const settled = guardedLog(proj, [
+        "answer", "--stage", slug, "--details", "Q1: A; Q2: C", "--basis", "Q1: your Q1 answer",
+      ]);
+      expect(settled.rc, settled.out).toBe(0);
+      audit = readAllAuditShards(proj);
+      expect(audit).toContain("**Basis**: Q1: your Q1 answer");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(2);
+      // No basis, no refusal.
+      recordHumanTurn(proj);
+      expect(guardedLog(proj, ["answer", "--stage", slug, "--details", "Q3: A"]).rc).toBe(0);
+    });
+
+    test("a blank basis, or a basis on a checkpoint, is refused", () => {
+      const slug = field(proj, "Current Stage");
+      recordHumanTurn(proj);
+      const blank = guardedLog(proj, ["answer", "--stage", slug, "--details", "A", "--basis", "  "]);
+      expect(blank.rc).not.toBe(0);
+      expect(blank.out).toContain("--basis needs what the choice rests on");
+      const checkpoint = guardedLog(proj, [
+        "answer", "--stage", slug, "--checkpoint", "summary-confirmation", "--details", "Looks correct", "--basis", "x",
+      ]);
+      expect(checkpoint.out).toContain("--basis is for a stage question's proposed choices");
+      expect(eventCount(proj, "QUESTION_ANSWERED")).toBe(0);
+    });
+
     test("with nothing the person said, blank words, a checkpoint, or an unattended run, it stays theirs", () => {
       const slug = field(proj, "Current Stage");
       const unsaid = guardedLog(proj, ["answer", "--stage", slug, "--details", "A", "--on-instruction", "up to you"]);
