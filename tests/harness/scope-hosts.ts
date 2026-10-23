@@ -223,8 +223,8 @@ export abstract class NativeScopeHost extends ScopeHost {
   private uses = 0;
   protected turn = "";
 
-  constructor(proj: string, base?: NodeJS.ProcessEnv) {
-    super(proj, base);
+  constructor(proj: string, base?: NodeJS.ProcessEnv, opts: { unattended?: boolean } = {}) {
+    super(proj, base, opts);
     // The tool gives its hooks and the agent's shell the project as their folder, and no Claude variable.
     delete this.env.CLAUDE_PROJECT_DIR;
     this.fullHost = true;
@@ -956,8 +956,8 @@ export class OpencodeScopeHost extends ScopeHost {
    */
   release: string | null = null;
 
-  constructor(proj: string, base?: NodeJS.ProcessEnv) {
-    super(proj, base);
+  constructor(proj: string, base?: NodeJS.ProcessEnv, opts: { unattended?: boolean } = {}) {
+    super(proj, base, opts);
     delete this.env.CLAUDE_PROJECT_DIR;
     this.fullHost = true;
     this.session = this.sessionName(1);
@@ -1115,16 +1115,19 @@ function parseJson(text: string): Record<string, unknown> | null {
 // Projects
 // ---------------------------------------------------------------------------
 
-/** The host that plays a tool on a project; `base` is the environment the person's machine gives it. */
-export function hostFor(name: "claude" | HostName, proj: string, base?: NodeJS.ProcessEnv): ScopeHost {
+/**
+ * The host that plays a tool on a project; `base` is the environment the person's machine gives it, and `unattended`
+ * says an unattended driver starts it.
+ */
+export function hostFor(name: "claude" | HostName, proj: string, base?: NodeJS.ProcessEnv, opts: { unattended?: boolean } = {}): ScopeHost {
   switch (name) {
-    case "claude": return new ScopeHost(proj, base);
-    case "codex": return new CodexScopeHost(proj, base);
-    case "copilot": return new CopilotScopeHost(proj, base);
-    case "kiro": return new KiroCliScopeHost(proj, base);
-    case "kiro-ide": return new KiroIdeScopeHost(proj, base);
-    case "cursor": return new CursorScopeHost(proj, base);
-    case "opencode": return new OpencodeScopeHost(proj, base);
+    case "claude": return new ScopeHost(proj, base, opts);
+    case "codex": return new CodexScopeHost(proj, base, opts);
+    case "copilot": return new CopilotScopeHost(proj, base, opts);
+    case "kiro": return new KiroCliScopeHost(proj, base, opts);
+    case "kiro-ide": return new KiroIdeScopeHost(proj, base, opts);
+    case "cursor": return new CursorScopeHost(proj, base, opts);
+    case "opencode": return new OpencodeScopeHost(proj, base, opts);
   }
 }
 

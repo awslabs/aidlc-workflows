@@ -14,6 +14,7 @@
 // Copilot's run, the Kiro CLI adapter's run, the Kiro IDE adapter's messageOrigin). Those keep their names on
 // ALLOWED_UNREACHED, held to their use if a typed read appears.
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { sep } from "node:path";
 import {
   AGENT_ARGUMENT_CHECKS, ALLOWED, ALLOWED_UNREACHED, type Found, pinFixtureFiles, RECORD_COPIES, scanPersonsWords,
   STILL_TO_GO,
@@ -50,6 +51,12 @@ describe("the scanner sees each shape a reader of the person's words has taken",
     const places = found();
     expect(places.get("tests/fixtures/persons-words-pin/keepers.ts#personReplyFields")?.use).toBe("keeps");
     expect(places.has("tests/fixtures/persons-words-pin/keepers.ts#messageStamp")).toBe(false);
+  });
+
+  test("a file named as the compiler does not write it (Windows: a drive letter and backslashes) is still scanned", () => {
+    // The compiler writes each file's name its own way (forward slashes, no "." step); the scan must key by that.
+    const written = pinFixtureFiles().map((file) => file.replace(/[\\/](readers|keepers)\.ts$/, (_, name: string) => `${sep}.${sep}${name}.ts`));
+    expect(scanPersonsWords({ files: written }).get("tests/fixtures/persons-words-pin/readers.ts#approvedByWords")?.use).toBe("decides");
   });
 
   test("an unlisted reader fails the pin, named with how it reads", () => {

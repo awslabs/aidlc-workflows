@@ -236,11 +236,16 @@ export class ScopeHost {
    */
   launcher: readonly string[] | null = null;
 
-  /** `base` is the environment the person's machine gives the tool; this process's by default. */
-  constructor(readonly proj: string, base: NodeJS.ProcessEnv = process.env) {
+  /**
+   * `base` is the environment the person's machine gives the tool; this process's by default. The tool's own profile
+   * clears AIDLC_UNATTENDED; an unattended driver (`unattended`) sets it on the tool it starts, so every process the
+   * tool starts has it, a plugin started with the tool included.
+   */
+  constructor(readonly proj: string, base: NodeJS.ProcessEnv = process.env, opts: { unattended?: boolean } = {}) {
     const env = testGuardEnvironment({ ...base, CLAUDE_PROJECT_DIR: proj }, "production");
     delete env.AWS_AIDLC_DEFAULT_SCOPE;
     delete env.AIDLC_UNATTENDED;
+    if (opts.unattended === true) env.AIDLC_UNATTENDED = "1";
     env.GIT_AUTHOR_NAME = "Scope Run";
     env.GIT_AUTHOR_EMAIL = "scope-run@example.invalid";
     env.GIT_COMMITTER_NAME = "Scope Run";

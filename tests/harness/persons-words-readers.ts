@@ -31,7 +31,7 @@
 // S3's R32 have their own tests).
 
 import { existsSync, readdirSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import * as ts from "typescript";
 import { REPO_ROOT } from "./fixtures.ts";
 
@@ -114,6 +114,11 @@ const NONWORD = ts.TypeFlags.BooleanLike | ts.TypeFlags.NumberLike | ts.TypeFlag
 const WORDS = "W";
 
 const posix = (path: string) => path.split(sep).join("/");
+// A file as the compiler names it: forward slashes and no "." or ".." step (Windows: "C:/..."), whatever form it was given in.
+const fileKey = (path: string) => {
+  const key = resolve(path).replace(/\\/g, "/");
+  return process.platform === "win32" ? key.toLowerCase() : key;
+};
 
 /** The files the pin scans in this repository: the shipped engine and its hosts' surfaces. */
 function shippedFiles(root: string): { program: string[]; options: ts.CompilerOptions; scanned: Map<string, string> } {
@@ -148,13 +153,15 @@ export function scanPersonsWords(options: { root?: string; files?: string[] } = 
   if (options.files) {
     programFiles = options.files;
     compilerOptions = shippedFiles(root).options;
-    scannedNames = new Map(options.files.map((file) => [file, posix(relative(root, file))]));
+    scannedNames = new Map(options.files.map((file) => [fileKey(file), posix(relative(root, resolve(file)))]));
   } else {
-    ({ program: programFiles, options: compilerOptions, scanned: scannedNames } = shippedFiles(root));
+    let shipped: Map<string, string>;
+    ({ program: programFiles, options: compilerOptions, scanned: shipped } = shippedFiles(root));
+    scannedNames = new Map([...shipped].map(([file, name]) => [fileKey(file), name]));
   }
   const program = ts.createProgram(programFiles, compilerOptions);
   const checker = program.getTypeChecker();
-  const scanned = program.getSourceFiles().filter((sf) => scannedNames.has(sf.fileName));
+  const scanned = program.getSourceFiles().filter((sf) => scannedNames.has(fileKey(sf.fileName)));
   const scannedSet = new Set(scanned);
   // Sources live in the engine whether or not it is scanned: a fixture reads them too.
   const engineFiles = program.getSourceFiles().filter((sf) => /[\\/]core[\\/](?:tools|hooks)[\\/][^\\/]+\.ts$/.test(sf.fileName));
@@ -743,7 +750,7 @@ export function scanPersonsWords(options: { root?: string; files?: string[] } = 
     if (!grew) break;
   }
   const places = new Map<string, Found>();
-  const placeOf = (sf: ts.SourceFile, n: ts.Node): string => `${scannedNames.get(sf.fileName)}#${unitName(n)}`;
+  const placeOf = (sf: ts.SourceFile, n: ts.Node): string => `${scannedNames.get(fileKey(sf.fileName))}#${unitName(n)}`;
   for (const sf of scanned) {
     valueNodes(sf, (n) => {
       const ls = label(n);

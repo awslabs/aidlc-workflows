@@ -1137,9 +1137,8 @@ export function play(state: State, seed: number, steps: Step[], opts: { twin?: b
   }
   copyTree(state.dir, proj, new Set(), false);
   if (opts.policy && opts.policy !== state.policy) setPolicy(proj, opts.policy);
-  const host = hostFor(state.host, proj, fuzzEnvironment(state.unattended));
-  // The host's own profile clears the variable; an unattended driver sets it on every process it starts.
-  if (state.unattended) host.env.AIDLC_UNATTENDED = "1";
+  // An unattended driver starts the tool with AIDLC_UNATTENDED (the tool's own profile clears it).
+  const host = hostFor(state.host, proj, fuzzEnvironment(state.unattended), { unattended: state.unattended });
   joinChat(host, proj, state.session);
   const first = state.session;
   const chats = [first];
@@ -1411,10 +1410,15 @@ const lastIndex = <T>(list: readonly T[], test: (item: T) => boolean, before: nu
   return -1;
 };
 
-/** The person's reply turns on record (the copy's own and the run's), by the design's rule. */
-function replyTurns(run: Run): Array<{ index: number; chat: string | null; message: string | null }> {
+/**
+ * The person's reply turns on record (the copy's own and the run's), by the design's rule. For presence (I1) a blank
+ * typed message is one: the engine counts an empty prompt as the person's turn, since a host may drop its words.
+ */
+function replyTurns(run: Run, opts: { blankIsPresence?: boolean } = {}): Array<{ index: number; chat: string | null; message: string | null }> {
   const blank = new Set<string>();
-  for (const m of run.messages) if (isBlank(m.text) || (m.words === null && isBareCommand(m.text))) blank.add(m.id);
+  for (const m of run.messages) {
+    if ((isBlank(m.text) && opts.blankIsPresence !== true) || (m.words === null && isBareCommand(m.text))) blank.add(m.id);
+  }
   const ran = new Map(run.turns.map((t) => [t.at, t]));
   return run.rows.filter((row) => row.event === "HUMAN_TURN").filter((row) => {
     if (field(row, "Origin") === "host") return false;
@@ -1497,8 +1501,10 @@ export function checkRun(run: Run): Failure[] {
   const failures: Failure[] = [];
   const { state } = run;
   const turns = replyTurns(run);
+  const present = replyTurns(run, { blankIsPresence: true });
   const rows = run.rows;
   const chatsSpoke = (from: number, to: number) => new Set(turns.filter((t) => t.index > from && t.index < to).map((t) => t.chat));
+  const chatsPresent = (from: number, to: number) => new Set(present.filter((t) => t.index > from && t.index < to).map((t) => t.chat));
   if (run.error) failures.push({ invariant: "RUN", what: "the run could not be played", source: "", step: null, detail: run.error });
   for (const s of run.steps) {
     for (const row of s.rows) {
@@ -1506,8 +1512,8 @@ export function checkRun(run: Run): Failure[] {
       // I1: an unspent reply since the last spending row, in this chat or the one chat that spoke since. The rows one
       // call writes are one decision (a batch reject writes one GATE_REJECTED per Unit), so the count starts before them.
       const lastSpend = lastIndex(rows, (r) => SPENDING.has(r.event), s.from);
-      const backing = turns.filter((t) => t.index > lastSpend && t.index < row.index);
-      const spoke = chatsSpoke(lastSpend, row.index);
+      const backing = present.filter((t) => t.index > lastSpend && t.index < row.index);
+      const spoke = chatsPresent(lastSpend, row.index);
       const backed = backing.some((t) => t.chat === s.chat) || (backing.length > 0 && spoke.size === 1);
       if (state.unattended) failures.push({ invariant: "I1", what: `${row.event} under AIDLC_UNATTENDED`, source: "", step: s.i, detail: s.label });
       else if (!backed) failures.push({ invariant: "I1", what: `${row.event} with no unspent reply of the person's`, source: "", step: s.i, detail: `${s.label}; rows since the last spending row: ${rows.slice(lastSpend + 1, row.index).map((r) => r.event).join(", ")}` });
