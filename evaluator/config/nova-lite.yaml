@@ -1,0 +1,4 @@
+# Nova Lite — override executor model only; all other settings inherit from default.yaml
+models:
+  executor:
+    model_id: "us.amazon.nova-lite-v1:0"

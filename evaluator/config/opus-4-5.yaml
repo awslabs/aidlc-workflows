@@ -1,0 +1,4 @@
+# Claude Opus 4.5 — override executor model only; all other settings inherit from default.yaml
+models:
+  executor:
+    model_id: "global.anthropic.claude-opus-4-5-20251101-v1:0"
