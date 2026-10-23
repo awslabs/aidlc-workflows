@@ -1694,8 +1694,9 @@ shell or evaluator (`bash -c`, `sh -c`, `eval`, `source`, `pwsh`, a shell
 script run by name such as `./run.sh` or `deploy.ps1`, or a runtime given its
 program on the command line such as `bun -e` or `python -c`), or a PowerShell
 command it cannot read as plain PowerShell. A line that starts with `cd <folder>`
-joined to the rest by `&&`, `;` or a newline (read as PowerShell, also
-`Set-Location`, `sl`, `chdir`, `pushd` or `Push-Location`) is read as the rest of
+joined to the rest by `&&`, `;` or a newline (and, in a line read as plain
+PowerShell, joined by `;`, also `Set-Location`, `sl`, `chdir`, `pushd` or
+`Push-Location`) is read as the rest of
 the line run from that folder when the folder is certain: one absolute path with
 no glob, `.` or `..`, naming a folder that exists and, on Windows, on the drive
 the shell is on (`leadingDirectoryChange` in review-freeze-command.ts). Any other
