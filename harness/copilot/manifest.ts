@@ -197,6 +197,8 @@ const manifest: HarnessManifest = {
           // The variant whose Guards paragraph said the clear with no file named clears a
           // switch everywhere it is recorded (from a chat it now leaves the shared file).
           "sha256:b0f5e39317a501be8567bbb0ecbdff651116abc28a500b9c451b732ca8f2e088",
+          // The variant shipped before the onboarding listed Google Antigravity.
+          "sha256:b87a3ec2c39cb24074c6fa37f626e9d150d435d18069fbd0c762fdbd70719c5c",
         ],
       },
     },

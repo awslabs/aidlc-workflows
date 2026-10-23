@@ -1782,6 +1782,7 @@ describe("t293 doctor model policy advisory", () => {
     // The names are fixed in the tools so a project file cannot change them;
     // they must still say what each harness calls itself.
     for (const [harness, dir] of [
+      ["antigravity", ".agents"],
       ["claude", ".claude"],
       ["codex", ".codex"],
       ["copilot", ".aidlc"],
@@ -1796,7 +1797,7 @@ describe("t293 doctor model policy advisory", () => {
       expect(HARNESS_PRODUCT_NAMES[harness], harness).toBe(shipped.productName);
     }
     expect(Object.keys(HARNESS_PRODUCT_NAMES).sort()).toEqual(
-      ["claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"],
+      ["antigravity", "claude", "codex", "copilot", "cursor", "kiro", "kiro-ide", "opencode"],
     );
   });
 

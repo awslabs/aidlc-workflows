@@ -80,6 +80,7 @@ const HARNESS_NAMES = readdirSync(join(REPO, "harness"), { withFileTypes: true }
 // and Copilot deliberately root skills OUTSIDE their engine dir (.agents/ and
 // .github/ respectively) because their hosts only discover skills there.
 const SKILL_REL: Record<string, string> = {
+  antigravity: ".agents/skills",
   claude: ".claude/skills",
   codex: ".agents/skills",
   copilot: ".github/skills",

@@ -50,6 +50,7 @@ const HARNESSES = readdirSync(EXPECTED_ROOT)
   .filter((name) => statSync(join(EXPECTED_ROOT, name)).isDirectory())
   .sort();
 const EXPECTED_HARNESSES = [
+  "antigravity",
   "claude",
   "codex",
   "copilot",

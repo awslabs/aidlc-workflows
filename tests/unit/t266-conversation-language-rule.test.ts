@@ -445,6 +445,12 @@ describe("t266 conversation-language rule layer", () => {
           surface = join(harness.engineRoot, "rules", "aidlc.mdc");
           required = `- ${COPY_DIR}/org.md`;
           break;
+        case "antigravity-rule":
+          // Antigravity: the always-on rule lists the method files as plain
+          // paths (no @-import expansion).
+          surface = join(harness.engineRoot, "rules", "aidlc.md");
+          required = `- ${COPY_DIR}/org.md`;
+          break;
         case "kiro-steering":
           // The IDE's real surface: an always-included steering file that
           // carries the memory text itself (Kiro IDE does not expand
