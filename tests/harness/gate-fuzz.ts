@@ -1625,6 +1625,9 @@ export function checkRun(run: Run): Failure[] {
           // The resume re-show hands the agent the replies a stage kept: the one carrier of their words the design
           // allows in a step (reading-lead, 2026-10-23).
           if (path === "kept_replies.replies[#]") continue;
+          // The persona is conductor.md as authored, never the person's text: a reply that copies one of its phrases
+          // (a typo of "Request Changes") matches it without the engine handing their words back.
+          if (path === "conductor_persona") continue;
           failures.push({ invariant: "I9", what: `the person's words in an engine output ${path ? `at ${path}` : `(${t.shape})`}`, source: locate(op.out.split(words).join(" ")) ?? "", step: s.i, detail: clip(op.what, 160) });
           break;
         }
