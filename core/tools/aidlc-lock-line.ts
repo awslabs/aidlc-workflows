@@ -53,22 +53,22 @@ export const LOCK_FOLDER_HELD_SAID_KEY = "lock folder held by a program";
 
 // What the agent reads where an engine command stopped on the held folder
 // (`personLine` is the `stopped` line). The program is most often one the
-// agent left running itself to check the app (Vite, after a kill that reached
-// only npx), and only the agent knows whether it did: no tool reads its
-// conversation or picks a process, and AI-DLC stops nothing. So it stops its
-// own and runs the command again, and the person hears the line only when it
-// started none. `again`: the step already stopped once this turn, so the line
+// agent, or the agent it sent (Code Generation's developer), left running to
+// check the app (Vite, after a kill that reached only npx), and only the agent
+// knows whether it did: no tool reads its conversation or picks a process, and
+// AI-DLC stops nothing. So it stops that one and runs the command again, and
+// the person hears the line only when neither started one. `again`: the step already stopped once this turn, so the line
 // goes to the person. `uncounted`: no chat reached the engine to count the
 // turn's stops, so the words bound the retry.
 export function lockFolderHeldAgentStep(personLine: string, retry: "first" | "again" | "uncounted"): string {
   const show = `show the person this line and end your turn: "${personLine}"`;
   if (retry === "again") return `Show the person this line and end your turn: "${personLine}"`;
-  return "A program is holding the project folder, so this step stopped. If you started a dev server, a file " +
-    "watcher or another long-running program over the project in this conversation, and the person did not ask " +
-    "you to keep it running, stop it and everything it started (on Windows, stopping an npx or npm parent leaves " +
-    "the server running: stop the whole process tree by its Windows process id, for example " +
+  return "A program is holding the project folder, so this step stopped. If you, or an agent you sent, started " +
+    "a dev server, a file watcher or another long-running program over the project in this conversation, and the " +
+    "person did not ask to keep it running, stop it and everything it started (on Windows, stopping an npx or npm " +
+    "parent leaves the server running: stop the whole process tree by its Windows process id, for example " +
     "`taskkill //T //F //PID <pid>` in Git Bash, or the node process whose command line names the server), then " +
-    `run the same command again. If you started none, ${retry === "uncounted" ? "or the step stops again after you stopped yours, " : ""}${show}`;
+    `run the same command again. If neither of you started one, ${retry === "uncounted" ? "or the step stops again after it was stopped, " : ""}${show}`;
 }
 
 // Counts this turn's stops on the held folder, apart from the line said once a

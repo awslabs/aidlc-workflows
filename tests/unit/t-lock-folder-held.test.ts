@@ -139,18 +139,20 @@ const WINDOWS_GOES_ON = lockFolderHeldLine("goes-on", 300_000, "win32");
 const GUARD_GOES_ON = lockFolderHeldLine("goes-on", 300, "win32");
 // A guard whose own call went through, then could not move the folder.
 const GUARD_WENT_THROUGH = lockFolderHeldLine("went-through", 300, "win32");
-// Where an engine command stopped: the agent stops a program it left running
-// itself and runs the command again; the person hears the line only when it
-// started none, or when the step stops again in the same turn.
+// Where an engine command stopped: the agent stops a program it, or an agent it
+// sent (Code Generation's developer), left running and runs the command again;
+// the person hears the line only when neither started one, or when the step
+// stops again in the same turn.
 const STOP_YOURS =
-  "A program is holding the project folder, so this step stopped. If you started a dev server, a file watcher or " +
-  "another long-running program over the project in this conversation, and the person did not ask you to keep it " +
-  "running, stop it and everything it started (on Windows, stopping an npx or npm parent leaves the server running: " +
-  "stop the whole process tree by its Windows process id, for example `taskkill //T //F //PID <pid>` in Git Bash, or " +
-  "the node process whose command line names the server), then run the same command again.";
-const AGENT_STEP = `${STOP_YOURS} If you started none, show the person this line and end your turn: "${WINDOWS_HELD}"`;
+  "A program is holding the project folder, so this step stopped. If you, or an agent you sent, started a dev " +
+  "server, a file watcher or another long-running program over the project in this conversation, and the person did " +
+  "not ask to keep it running, stop it and everything it started (on Windows, stopping an npx or npm parent leaves " +
+  "the server running: stop the whole process tree by its Windows process id, for example " +
+  "`taskkill //T //F //PID <pid>` in Git Bash, or the node process whose command line names the server), then run " +
+  "the same command again.";
+const AGENT_STEP = `${STOP_YOURS} If neither of you started one, show the person this line and end your turn: "${WINDOWS_HELD}"`;
 // Where no chat reaches the engine to count the turn's stops, the words bound the retry.
-const AGENT_STEP_UNCOUNTED = `${STOP_YOURS} If you started none, or the step stops again after you stopped yours, ` +
+const AGENT_STEP_UNCOUNTED = `${STOP_YOURS} If neither of you started one, or the step stops again after it was stopped, ` +
   `show the person this line and end your turn: "${WINDOWS_HELD}"`;
 const PERSON_STEP = `Show the person this line and end your turn: "${WINDOWS_HELD}"`;
 
