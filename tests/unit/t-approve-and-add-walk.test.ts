@@ -41,13 +41,12 @@ afterAll(() => {
   for (const proj of [...projects, ...templateProjects()]) cleanupTestProject(proj);
 });
 
-// The Requirements Analysis gate open on a bugfix plan, its skipped stages written as intent creation writes them.
+// The Requirements Analysis gate open on a bugfix plan (the fixture's skipped stages read as intent creation writes them).
 async function gateAt(policy: Policy): Promise<string> {
   const proj = await projectAt("stage-gate");
   projects.push(proj);
   const file = seededStateFile(proj);
-  const engineRows = readFileSync(file, "utf-8").replace(/^- \[S\] (\S+) \u2014 SKIP \(bugfix scope\)$/gm, "- [ ] $1 \u2014 SKIP");
-  writeFileSync(file, setGuardPolicyLine(engineRows, `${policy} (set by you)`));
+  writeFileSync(file, setGuardPolicyLine(readFileSync(file, "utf-8"), `${policy} (set by you)`));
   return proj;
 }
 
