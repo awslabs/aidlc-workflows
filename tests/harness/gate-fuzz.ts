@@ -1347,7 +1347,7 @@ export function play(state: State, seed: number, steps: Step[], opts: { twin?: b
           return null;
         }
       })();
-      const carriedOn = call !== null && call.name.startsWith("pick ") && ["run-stage", "done", "ask"].includes(stepKind ?? "");
+      const carriedOn = call?.name.startsWith("pick ") === true && ["run-stage", "done", "ask"].includes(stepKind ?? "");
       const landed = call === null ? null : landedRows.length > 0 || carriedOn ||
         (stateAfter !== stateBefore && /parked/i.test(stateAfter) && !/parked/i.test(stateBefore));
       const refusal = call !== null && !landed ? clip(ops.map((op) => op.out).join("\n"), 1500) : null;
