@@ -73,7 +73,14 @@ const PROMPT_FIELDS = new Set(["prompt", "user_prompt", "message", "tool_respons
 export const RECORD_COPIES: ReadonlyArray<{ file: string; type: string; field: string }> = [
   { file: "core/tools/aidlc-lib.ts", type: "ProtectedResponse", field: "words" },
   { file: "core/tools/aidlc-plan-approval-ask.ts", type: "PlanApprovalAskReply", field: "text" },
+  { file: "core/tools/aidlc-question-store.ts", type: "StoredQuestion", field: "text" },
 ];
+/**
+ * The person's free text as `next`'s flag parse hands it out: the request the agent forwards (`intent`), the words a
+ * flag-shaped token rode with (`personWords`) and the one line a `--resume` picked up (`pickedUp`). The closed-set
+ * flags (a scope, a stage, a setting) are structure.
+ */
+const NEXT_FREE_TEXT = new Set(["intent", "personWords", "pickedUp"]);
 /** The audit row fields the writer puts the words in, before the scan adds any it finds. */
 const AUDIT_WORD_FIELDS = ["Person Reply", "Feedback", "Reason", "Details", "Picked"];
 /**
@@ -298,6 +305,9 @@ export function scanPersonsWords(options: { root?: string; files?: string[] } = 
           ts.forEachChild(k, inner);
         };
         inner(n);
+      }
+      if (ts.isInterfaceDeclaration(n) && n.name.text === "ParsedFlags" && file.endsWith("/aidlc-orchestrate.ts")) {
+        for (const m of n.members) if (m.name && ts.isIdentifier(m.name) && NEXT_FREE_TEXT.has(m.name.text)) seed(symOf(m.name), `next's free text ${m.name.text}`);
       }
       if (ts.isInterfaceDeclaration(n)) {
         for (const copy of RECORD_COPIES) {
@@ -893,7 +903,7 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${LIB}#consumeSharedDirectiveAsk`]: { use: "decides", why: "guard recovery: the box's pick when the box offered the remedies, and the reply's digest the recovery record keeps", from: [`${HOOK}#respond`] },
   [`${POSTURE}#recordProtectedHumanResponse`]: { use: "decides", why: "the protected question's response: the box's pick only, and the words kept with presence", from: [`${HOOK}#respond`] },
   [`${READER}#protectedQuestionPick`]: { use: "decides", why: "a question box's pick of the protected question's choices", from: [`${POSTURE}#recordProtectedHumanResponse`] },
-  [`${ASK}#notePlanApprovalAskReply`]: { use: "decides", why: "Plan Approval: the box's pick only, and the replies after the ask kept for the record", from: [`${HOOK}#respond`] },
+  [`${ASK}#notePlanApprovalAskReply`]: { use: "decides", why: "Plan Approval: the box's pick only, and the replies after the ask kept for the record", from: [`${HOOK}#respond`, `${ORCH}#emit`] },
   [`${READER}#exactOptionPick`]: { use: "decides", why: "a box's pick matched to the engine's list the box offered (DESIGN 2.2 item 6)", from: [`${LIB}#consumeSharedDirectiveAsk`, `${ASK}#notePlanApprovalAskReply`, `${READER}#protectedQuestionPick`, `${POSTURE}#recordPlanApprovalHumanResponse`] },
   [`${UNIT_CP}#askConstructionCheckpoint`]: { use: "keeps", why: "the audit writer: the replies typed while the review ran become the checkpoint's response" },
   [`${UNIT_CP}#rejectConstructionCheckpoint`]: { use: "keeps", why: "the audit writer: the checkpoint reject's Feedback and Reason" },
@@ -901,6 +911,50 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${LIB}#changeRequestWords`]: { use: "keeps", why: "the reject's lines joined as the change to make", from: [`${UNIT_CP}#rejectConstructionCheckpoint`, `${SWARM_CP}#rejectSwarmCheckpoint`] },
   [`${LIB}#requireProtectedResponse`]: { use: "keeps", why: "the audit writer: a named message's words become the protected response's" },
   [`${ASK}#recordPlanApprovalAnswer`]: { use: "keeps", why: "the audit writer: the plan answer keeps the replies' words" },
+  // The request the agent forwards to next (its free text) and the question store that keeps it: shown back, quoted
+  // into a command, kept; each with its reason.
+  "core/tools/aidlc-runtime-paths.ts#quoteCommandArgument": { use: "decides", why: "shell-quotes their words into a command the agent runs", from: [`${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`] },
+  [`${LIB}#parseLiteralShellInvocation`]: { use: "decides", why: "as above", from: [`${LIB}#isTerminalConfigurationDispatch`] },
+  [`${LIB}#isTerminalConfigurationDispatch`]: { use: "decides", why: "reads the engine's own step message (which may quote their request) for a configuration command" },
+  [`${LIB}#addPendingPersonLines`]: { use: "keeps", why: "keeps a step's narration for the person's next line", from: [`${ORCH}#sayPendingPersonLines`] },
+  [`${LIB}#writeRecordFileNoFollow`]: { use: "keeps", why: "bytes to a record file", from: [`${ORCH}#projectTypeWordsArg`] },
+  [`${LIB}#authoritativeProjectDescription`]: { use: "decides", why: "a shape read: splits a pasted <document> block, exact markers, from the directions around it", from: [`${ORCH}#authoritativeRequest`, `${ORCH}#documentSplitSentence`, `${ORCH}#namedDocumentNote`, `${ORCH}#pastedDocumentNote`] },
+  [`${LIB}#writeBufferAtomic`]: { use: "keeps", why: "bytes to a file", from: [`${LIB}#writeRecordFileNoFollow`] },
+  "core/tools/aidlc-question-store.ts#parseQuestion": { use: "keeps", why: "the question store's own read: checks a record's shape" },
+  "core/tools/aidlc-question-store.ts#saveQuestion": { use: "keeps", why: "the question store's writer: keeps the request as the question's text", from: [`${ORCH}#composeOfferAskDirective`, `${ORCH}#createPrintDirective`, `${ORCH}#newWorkRoutingAskDirective`, `${ORCH}#planProposalDirective`, `${ORCH}#routeNext`, `${ORCH}#scopeConfirmAskDirective`] },
+  "core/tools/aidlc-utility.ts#handleIntentCreate": { use: "keeps", why: "creates the work with the request's words (the question's text)" },
+  [`${ORCH}#isKeptRequest`]: { use: "keeps", why: "the presence shape: whether next carries a request" },
+  [`${ORCH}#noteRestartRequest`]: { use: "keeps", why: "keeps a new chat's request for the step that asks about it" },
+  [`${ORCH}#speaksToPerson`]: { use: "keeps", why: "as above" },
+  [`${ORCH}#withPickUpLine`]: { use: "keeps", why: "as above: the line a --resume picked up" },
+  [`${ORCH}#withPhaseRulesAddedLine`]: { use: "keeps", why: "as above" },
+  [`${ORCH}#sayPendingPersonLines`]: { use: "keeps", why: "a step's narration, which may carry their request" },
+  [`${ORCH}#prepareEmission`]: { use: "decides", why: "the step's text cut at a character boundary" },
+  [`${ORCH}#authoritativeRequest`]: { use: "decides", why: "the request a question shows back: its directions outside a pasted document", from: [`${ORCH}#composeDispatchDirective`, `${ORCH}#newWorkRoutingAskDirective`, `${ORCH}#requestPreview`] },
+  [`${ORCH}#requestPreview`]: { use: "decides", why: "the request a question shows back, cut to 240 characters", from: [`${ORCH}#freshWorkOfferDirective`, `${ORCH}#intentPickPromptIfRecordsExist`, `${ORCH}#planProposalDirective`, `${ORCH}#routeNext`] },
+  [`${ORCH}#documentSplitSentence`]: { use: "decides", why: "the one line a question adds when the request carries a pasted document", from: [`${ORCH}#createPrintDirective`, `${ORCH}#freshWorkOfferDirective`, `${ORCH}#intentPickPromptIfRecordsExist`, `${ORCH}#planProposalDirective`, `${ORCH}#routeNext`] },
+  [`${ORCH}#scopeConfirmAskDirective`]: { use: "keeps", why: "as above (the scope confirmation)", from: [`${ORCH}#freshWorkOfferDirective`] },
+  [`${ORCH}#namedDocumentNote`]: { use: "decides", why: "as above, for the compose offer", from: [`${ORCH}#composeOfferAskDirective`] },
+  [`${ORCH}#composeOfferAskDirective`]: { use: "decides", why: "as above (the compose offer)", from: [`${ORCH}#freshWorkOfferDirective`] },
+  [`${ORCH}#routingQuestionReplyDirective`]: { use: "decides", why: "the routing question's reply step hands their words back, quoted, in its command", from: [`${ORCH}#routeNext`] },
+  [`${ORCH}#newWorkRoutingAskDirective`]: { use: "decides", why: "as above (the routing question)", from: [`${ORCH}#intentPickPromptIfRecordsExist`, `${ORCH}#routeNext`] },
+  [`${ORCH}#printDirective`]: { use: "keeps", why: "prints a step, which may carry their request", from: [`${ORCH}#emitTypedResumeChoice`, `${ORCH}#routeNext`, `${ORCH}#routingQuestionReplyDirective`] },
+  [`${ORCH}#projectTypeWordsArg`]: { use: "keeps", why: "hands their words on to the project-type record, trimmed", from: [`${ORCH}#routeNext`] },
+  [`${ORCH}#projectTypeIsWholeRequest`]: { use: "keeps", why: "the presence shape: the line is only the project type" },
+  [`${ORCH}#parkedDirective`]: { use: "keeps", why: "a step's narration, which may carry their words", from: [`${ORCH}#parkAfterApproval`] },
+  [`${ORCH}#parkAfterApproval`]: { use: "keeps", why: "as above" },
+  [`${ORCH}#nextArgsAreOnlyWords`]: { use: "keeps", why: "the presence shape: next carries only words" },
+  [`${ORCH}#freshWorkOfferDirective`]: { use: "decides", why: "as above (the plan offer)" },
+  [`${ORCH}#createPrintDirective`]: { use: "decides", why: "a question that shows their request back and keeps it in the question store" },
+  [`${ORCH}#planNamedAloneStep`]: { use: "keeps", why: "as above" },
+  [`${ORCH}#pastedDocumentNote`]: { use: "decides", why: "as above, for the composer", from: [`${ORCH}#composeDispatchDirective`] },
+  [`${ORCH}#composeDispatchDirective`]: { use: "decides", why: "as above (the composer's step)" },
+  [`${ORCH}#intentPickPromptIfRecordsExist`]: { use: "decides", why: "as above (the pick question)" },
+  [`${ORCH}#buildRunStageDirective`]: { use: "keeps", why: "as above" },
+  [`${ORCH}#applyGateOnlyShape`]: { use: "keeps", why: "as above" },
+  [`${ORCH}#emitTypedResumeChoice`]: { use: "keeps", why: "as above" },
+  [`${ORCH}#handleReport`]: { use: "keeps", why: "as above" },
+  [`${ORCH}#main`]: { use: "keeps", why: "as above: clears the kept restart request" },
   // The shape reads: the blank test and the `/aidlc` parse (BOUNDARY), with the callers that run them.
   [`${HOOK}#messageParse`]: { use: "keeps", why: "the /aidlc parse: the flags the engine's own parser finds, and the words after them", from: [`${HOOK}#respond`] },
   [`${HOOK}#helpRelay`]: { use: "keeps", why: "the /aidlc parse: a typed help request relays AI-DLC's help", from: [`${HOOK}#respond`] },
@@ -952,6 +1006,11 @@ export const STILL_TO_GO: Record<string, ToGo> = {
   // S2b: the ids.
   [`${ORCH}#takePersonsOwnLine`]: { use: "decides", slice: "S2b", row: "R7 (reading-lead: S2b)", why: "\"already read\" compares the person's words with the words a reading step kept; S2b compares the message id; the line itself stays the /aidlc parse (then ALLOWED)" },
   "core/tools/aidlc-question-store.ts#wordsAlreadyRead": { use: "decides", slice: "S2b", row: "R7 (reading-lead: S2b)", why: "as above", from: [`${ORCH}#takePersonsOwnLine`] },
+  [`${ORCH}#emit`]: { use: "decides", slice: "S6", row: "R28 (lean, reading-lead to confirm)", why: "a routed request's words withdrawn from the plan ask's replies by text, and handed to notePlanApprovalAskReply" },
+  [`${ORCH}#withdrawRoutedWords`]: { use: "decides", slice: "S6", row: "R28 (lean, reading-lead to confirm)", why: "drops kept reply lines equal to a routed request's words; as withdrawSettingWords" },
+  [`${ORCH}#planProposalDirective`]: { use: "decides", slice: "S2b", row: "R7 (lean, reading-lead to confirm)", why: "reuses a kept question whose text equals the request; S2b compares the message id" },
+  [`${ORCH}#freshWorkRoute`]: { use: "decides", slice: "S2b", row: "R7 (lean, reading-lead to confirm)", why: "as above", from: [`${ORCH}#routeNext`] },
+  [`${ORCH}#routeNext`]: { use: "decides", slice: "S2b", row: "R7 (lean, reading-lead to confirm)", why: "next itself: through planProposalDirective; otherwise it quotes and previews their request (then ALLOWED)" },
   // S6: quotes become pointers; the setters name their message.
   [`${STORE}#personsSaidWords`]: { use: "decides", slice: "S6", row: "R27", why: "gathers everything they said for a quote to be found in" },
   [`${STORE}#holdsQuote`]: { use: "decides", slice: "S6", row: "R27", why: "finds the agent's quote inside their words", from: [`${LOG}#handleAnswer`] },
@@ -963,8 +1022,8 @@ export const STILL_TO_GO: Record<string, ToGo> = {
   [`${LIB}#guardRecoveryFeedbackStatus`]: { use: "decides", slice: "S6", row: "R29", why: "the reject's --feedback matched to the recovery reply's digest", from: [`${STATE}#handleReject`] },
   [`${STATE}#handleReject`]: { use: "decides", slice: "S6", row: "R29", why: "the guard-recovery digest match; its duplicate check (Conductor Summary left off when it equals their words) stays, then ALLOWED as the writer" },
   [`${ORCH}#withdrawSettingWords`]: { use: "decides", slice: "S6", row: "R28 (reading-lead: S6a)", why: "drops kept reply lines equal to the latest turn's words; S6 withdraws by the message id" },
-  [`${LIB}#withdrawProtectedReplyWords`]: { use: "decides", slice: "S6", row: "R28 (reading-lead: S6a)", why: "as above, for the protected response", from: [`${ORCH}#withdrawSettingWords`] },
-  [`${ASK}#withdrawPlanApprovalReplies`]: { use: "decides", slice: "S6", row: "R28 (reading-lead: S6a)", why: "as above, for the plan ask's replies", from: [`${ORCH}#withdrawSettingWords`] },
+  [`${LIB}#withdrawProtectedReplyWords`]: { use: "decides", slice: "S6", row: "R28 (reading-lead: S6a)", why: "as above, for the protected response", from: [`${ORCH}#withdrawRoutedWords`, `${ORCH}#withdrawSettingWords`] },
+  [`${ASK}#withdrawPlanApprovalReplies`]: { use: "decides", slice: "S6", row: "R28 (reading-lead: S6a)", why: "as above, for the plan ask's replies", from: [`${ORCH}#emit`, `${ORCH}#withdrawRoutedWords`, `${ORCH}#withdrawSettingWords`] },
 };
 
 /**
