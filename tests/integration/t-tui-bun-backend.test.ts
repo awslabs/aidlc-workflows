@@ -717,6 +717,8 @@ setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});
 
   // Kiro CLI 2.33.1 paints its V3 offer before the chat, with the caret on
   // "Switch to V3 and upgrade my configs"; the live Kiro files only wait.
+  // After the answer the offer stays painted while Kiro starts its chat, whose
+  // first screen (the trust-all-tools warning) takes a stray Enter as "No, exit".
   test("Kiro's V3 offer at launch is answered Remind me later before the wait matches", async () => {
     const session = `kiro-v3-${randomUUID()}`;
     const picked = join(root, `${session}-picked`);
@@ -741,7 +743,7 @@ process.stdin.on("data", bytes => {
   else if (key === "\\r") {
     answered = true;
     writeFileSync(${JSON.stringify(picked)}, options[caret]);
-    process.stdout.write(esc+"[2J"+esc+"[H"+"›  ask a question or describe a task ↵");
+    setTimeout(() => process.stdout.write(esc+"[2J"+esc+"[H"+"›  ask a question or describe a task ↵"), 1500);
   } else writeFileSync(${JSON.stringify(unexpected)}, JSON.stringify(key));
 });
 setTimeout(() => process.exit(99), ${PROGRAM_BACKSTOP_MS});

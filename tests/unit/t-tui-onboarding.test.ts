@@ -267,6 +267,25 @@ describe("Kiro CLI's V3 offer at launch", () => {
     await expect(remindKiroV3OfferLater(skipping, "kiro", kiroV3Offer(0), timing)).rejects.toThrow(/Remind me later/);
     expect(keys).not.toContain("Enter");
 
+    // Kiro takes a while to start its chat after the answer, with the offer
+    // still painted: the answer returns only once it is gone, with one Enter.
+    {
+      let answeredAt: number | null = null;
+      const keys: string[] = [];
+      const slowExit = {
+        capture: () => answeredAt !== null && now - answeredAt >= 1500
+          ? "Warning: Kiro is running in trust all tools mode\n❯ No, exit\n  Yes, I accept"
+          : kiroV3Offer(1),
+        send: (_session: string, key: string) => {
+          keys.push(key);
+          answeredAt ??= now;
+        },
+      };
+      expect(await remindKiroV3OfferLater(slowExit, "kiro", kiroV3Offer(1), timing)).toBe(true);
+      expect(keys).toEqual(["Enter"]);
+      expect(slowExit.capture()).not.toContain("Remind me later");
+    }
+
     const ordinary = { capture: () => "Approve this workflow?\n❯ 1. Yes\n  2. No", send: () => { throw new Error("no key expected"); } };
     expect(await remindKiroV3OfferLater(ordinary, "kiro", "Approve this workflow?\n❯ 1. Yes\n  2. No", timing)).toBe(false);
   });
