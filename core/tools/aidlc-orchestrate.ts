@@ -13642,11 +13642,19 @@ function planChangeWalk(projectDir: string, scope: string, stateContent: string)
     return { stage: walk.step.stage, unit: walk.step.checkpoint.unit, at: "paused", steps, others: true, worked: false, alone };
   }
   const { stage, unit } = walk.step;
-  const done = new Set(unitsWithStageWork(projectDir, stage, walk.context));
+  const others = unitsOwingStage(projectDir, stage, walk.context, stateContent).some((u) => u !== unit);
+  const worked = unitsWithStageWork(projectDir, stage, walk.context).some((u) => u !== unit);
+  return { stage: stage.slug, unit, at: walk.step.kind, steps, others, worked, alone };
+}
+
+// The Units that still owe a step of the walk: not done with it, not skipped
+// for it, and not exempt from it by their kind. A plan change reads it for
+// whether another Unit still owes the step, and the person's skip for every
+// Unit from here skips it for each of them.
+function unitsOwingStage(projectDir: string, stage: GraphStage, context: UnitWorkContext, stateContent: string): string[] {
+  const done = new Set(unitsWithStageWork(projectDir, stage, context));
   const skipped = unitSkippedUnits(projectDir, stage.slug, undefined, stateContent);
-  const others = walk.context.units.some((u) => u !== unit && !done.has(u) && !skipped.has(u) &&
-    !kindVacuous(stage, walk.context.kinds?.get(u) ?? null));
-  return { stage: stage.slug, unit, at: walk.step.kind, steps, others, worked: [...done].some((u) => u !== unit), alone };
+  return context.units.filter((u) => !done.has(u) && !skipped.has(u) && !kindVacuous(stage, context.kinds?.get(u) ?? null));
 }
 
 // A Code Generation completion (the gate opening or shown again, the stage
@@ -14718,6 +14726,10 @@ function planChangeDirective(
       : everyUnit.includes(slug) ? `${name(slug)} for every Unit from here` : name(slug);
   const listed = (names: string[]): string =>
     names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  // Walk steps a skip for one Unit waits on: that Unit's own turn at them.
+  const oneUnitOnly = (slugs: string[]): string =>
+    `${listed(slugs.map(name))} can be skipped for one Unit while that Unit is working on it`;
+  const notNow = (slugs: string[]): string => `${oneUnitOnly(slugs)}; the ${unitName} Unit is ${unitIsAt} now.`;
   const summary = [
     ...(skip.length > 0 ? [`skipped ${listed(skip.map(skipName))}`] : []),
     ...(add.length > 0 ? [`added ${named(add)}`] : []),
@@ -14756,7 +14768,7 @@ function planChangeDirective(
     const onlyLine = `Skipped ${listed([`${step} for the ${unitName} Unit`, ...restOther.map(name)])}${added}${stillGet}. ` +
       `${forTheUnit}${restOther.length > 0 || add.length > 0 ? " You can undo the rest any time." : ""}` +
       (restWalk.length > 0
-        ? ` ${listed(restWalk.map(name))} can be skipped for one Unit while that Unit is working on it.`
+        ? ` ${oneUnitOnly(restWalk)}.`
         : "");
     const walkNamed = [...(firstSkip === null ? [] : [firstStep!]), ...planSkip.filter((slug) => walk!.steps.includes(slug))];
     const otherNamed = planSkip.filter((slug) => !walk!.steps.includes(slug));
@@ -14781,7 +14793,7 @@ function planChangeDirective(
         `"${onlyLine}${parkedTail}" ` +
         "and re-run `next` to carry on with the work. " +
         (unitStep.alone ? "" : "If they name another Unit, run nothing and tell them in one line: " +
-          `"${step} can be skipped for one Unit while that Unit is working on it; the ${unitName} Unit is on ${step} now." ` +
+          `"${notNow([unitStep.stage])}" ` +
           "and stop. ") +
         `If they name no Unit, they mean every Unit from here, the ${unitName} Unit included: run ${fromHere}, then ` +
         `tell the person in one line: "${everyLine}${parkedTail}" and stop. ` +
@@ -14814,8 +14826,7 @@ function planChangeDirective(
   const aheadNote = notHere.length === 0 ? ""
     : `${listed(notHere.map(name))} ${notHere.length === 1 ? "is a step" : "are steps"} each Unit takes, so this ` +
       "change covers every Unit. If the person's words mean one Unit only, run nothing and tell them in one line: " +
-      `"${listed(notHere.map(name))} can be skipped for one Unit while that Unit is working on it; the ${unitName} Unit is ` +
-      `${unitIsAt} now." and stop. Otherwise: `;
+      `"${notNow(notHere)}" and stop. Otherwise: `;
   const lead = `${aheadNote}${before === null ? run : `Run \`${before}\`${filled} and print its output verbatim, ${run}`}`;
   // The way back: a plan flip is undone by the opposite flip while the work
   // runs; a stage skipped where it stood is run on its own, the route
@@ -17169,10 +17180,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     // stage, one by one. A unit that already did the stage keeps that work for
     // the stage's approval.
     if (beat && personAsked && !unit && slug === beat.stage.slug && slug === currentSlug) {
-      const done = new Set(unitsWithStageWork(pd, beat.stage, beat.context));
-      const skippedBefore = unitSkippedUnits(pd, slug, undefined, stateContent);
-      const fromHere = [beat.unit, ...beat.context.units.filter((u) => u !== beat.unit && !done.has(u) &&
-        !skippedBefore.has(u) && !kindVacuous(beat.stage, beat.context.kinds?.get(u) ?? null))];
+      const fromHere = [beat.unit, ...unitsOwingStage(pd, beat.stage, beat.context, stateContent).filter((u) => u !== beat.unit)];
       for (const each of fromHere) {
         const res = spawnState(pd, ["skip", slug, "--reason", reason, "--unit", each]);
         if (res.exitCode !== 0) {
