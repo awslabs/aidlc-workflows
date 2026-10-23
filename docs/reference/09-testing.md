@@ -2372,10 +2372,12 @@ A shard runs its files one at a time, except on a platform the weights file caps
 under `parallel` (macOS, whose merge-queue unit shards set how fast the queue
 moves). There a shard starts up to that many files at once, never more than
 `-P`; more would not help, because the heaviest single file sets the floor.
-Side by side, an affinity group runs as one job in one worker, in order, and
-files start longest-first by that platform's weights. Each file already runs in
-its own process with its own temporary folders, and no unit file writes the
-shared `dist/`: a file that changes an installed tree changes its own copy.
+Side by side, an affinity group runs first and alone, in its order: t238 builds
+the binary t249 reads, and its release packaging (`scripts/package-release.ts`)
+regenerates the shared `dist/` and `dist-release/` in place, so a file reading
+them at that moment would find them missing. The other files start
+longest-first by that platform's weights, each in its own process with its own
+temporary folders.
 `AIDLC_TEST_UNIT_PARALLEL=<n>` sets the cap for one run on any platform, for a
 trial off macOS; nothing in CI sets it. A run without `--shard` stays serial.
 

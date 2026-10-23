@@ -17,7 +17,7 @@ export function shardConfigForPlatform(config: ShardConfig, platform: string): S
   return { ...config, weights: { ...config.weights, ...config.platformWeights?.[platform] } };
 }
 
-export interface WeightedGroup {
+interface WeightedGroup {
   files: string[];
   weight: number;
 }
@@ -88,47 +88,11 @@ export function assignWeightedShards(
 
   validateShardConfig(files, config);
   const originalOrder = new Map(files.map((file, index) => [file, index]));
-  const groups = weightedGroups(files, config);
-
-  if (total > groups.length) {
-    throw new Error(
-      `--shard count ${total} exceeds ${groups.length} assignable test groups`,
-    );
-  }
-
-  const shards = Array.from({ length: total }, (_, index) => ({
-    index,
-    weight: 0,
-    files: [] as string[],
-  }));
-  for (const group of groups) {
-    const target = [...shards].sort(
-      (a, b) => a.weight - b.weight || a.index - b.index,
-    )[0];
-    target.files.push(...group.files);
-    target.weight += group.weight;
-  }
-
-  return shards.map((shard) =>
-    shard.files.sort(
-      (a, b) => (originalOrder.get(a) ?? 0) - (originalOrder.get(b) ?? 0),
-    ),
-  );
-}
-
-/**
- * The files as jobs, longest first: each affinity group with a file present is
- * one job, its files in group order and its weight their sum; every other file
- * is its own job.
- */
-export function weightedGroups(files: string[], config: ShardConfig): WeightedGroup[] {
-  const present = new Set(files);
   const assigned = new Set<string>();
   const groups: WeightedGroup[] = [];
 
   for (const affinity of config.affinityGroups) {
-    const members = affinity.filter((file) => present.has(file));
-    if (members.length === 0) continue;
+    const members = affinity.filter((file) => originalOrder.has(file));
     for (const file of members) assigned.add(file);
     groups.push({
       files: members,
@@ -147,8 +111,33 @@ export function weightedGroups(files: string[], config: ShardConfig): WeightedGr
     });
   }
 
-  return groups.sort(
+  if (total > groups.length) {
+    throw new Error(
+      `--shard count ${total} exceeds ${groups.length} assignable test groups`,
+    );
+  }
+
+  groups.sort(
     (a, b) => b.weight - a.weight || a.files[0].localeCompare(b.files[0]),
+  );
+
+  const shards = Array.from({ length: total }, (_, index) => ({
+    index,
+    weight: 0,
+    files: [] as string[],
+  }));
+  for (const group of groups) {
+    const target = [...shards].sort(
+      (a, b) => a.weight - b.weight || a.index - b.index,
+    )[0];
+    target.files.push(...group.files);
+    target.weight += group.weight;
+  }
+
+  return shards.map((shard) =>
+    shard.files.sort(
+      (a, b) => (originalOrder.get(a) ?? 0) - (originalOrder.get(b) ?? 0),
+    ),
   );
 }
 

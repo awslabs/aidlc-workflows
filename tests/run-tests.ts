@@ -54,7 +54,6 @@ import {
   shardConfigForPlatform,
   type ShardConfig,
   unitFileWorkers,
-  weightedGroups,
 } from "./lib/test-sharding.ts";
 import type { E2eWorker } from "./lib/e2e-workers.ts";
 import { createE2eNativeRoot, createE2eTemporaryRoot } from "./lib/e2e-workers.ts";
@@ -1424,25 +1423,21 @@ async function runFileWithRetry(file: string, parallelMode: boolean): Promise<Fi
   return second;
 }
 
-/** A job's files run in order in one worker: a file can read what an earlier one built. */
 async function runFileBand(
   effectiveParallel: number,
   serialFiles: string[],
-  parallelJobs: string[][],
+  parallelFiles: string[],
 ): Promise<void> {
   for (const file of serialFiles) await runFileWithRetry(file, false);
   if (effectiveParallel <= 1) {
-    for (const file of parallelJobs.flat()) await runFileWithRetry(file, false);
+    for (const file of parallelFiles) await runFileWithRetry(file, false);
     return;
   }
 
-  const runJob = async (job: string[]): Promise<void> => {
-    for (const file of job) await runFileWithRetry(file, true);
-  };
-  const executing = new Set<Promise<void>>();
+  const executing = new Set<Promise<FileExecution | undefined>>();
   try {
-    for (const job of parallelJobs) {
-      const p = runJob(job).finally(() => {
+    for (const file of parallelFiles) {
+      const p = runFileWithRetry(file, true).finally(() => {
         executing.delete(p);
       });
       executing.add(p);
@@ -1467,12 +1462,19 @@ async function runFilesPartitioned(
   effectiveParallel: number,
   excludes: string[] = [],
 ): Promise<void> {
+  const unit = level === "unit" && effectiveParallel > 1 ? unitShardConfig() : undefined;
+  // Side by side, an affinity group runs first and alone, in its order: t238 builds
+  // what t249 reads, and its release packaging (scripts/package-release.ts)
+  // regenerates the shared dist/ in place.
+  const alone = unit?.affinityGroups.flat() ?? [];
   const serialFiles: string[] = [];
   const parallelFiles: string[] = [];
   const liveSerialFiles: string[] = [];
   const liveParallelFiles: string[] = [];
 
-  for (const file of levelFiles(level, excludes)) {
+  const files = levelFiles(level, excludes);
+  for (const file of files) {
+    if (alone.includes(basename(file))) continue;
     const serial = basename(file).includes(".serial.");
     if (serial) {
       (isClaudeRequiredFile(file) ? liveSerialFiles : serialFiles).push(file);
@@ -1481,16 +1483,11 @@ async function runFilesPartitioned(
     }
   }
 
+  serialFiles.push(...alone.flatMap((name) => files.filter((file) => basename(file) === name)));
+
   const order = level === "integration" && effectiveParallel > 1 ? integrationOrderWeights() : undefined;
-  const unit = level === "unit" && effectiveParallel > 1 ? unitShardConfig() : undefined;
-  const admit = (files: string[]): string[][] => {
-    if (unit) {
-      // Longest first, and an affinity group (a file that reads what another builds) as one job.
-      const byName = new Map(files.map((file) => [basename(file), file]));
-      return weightedGroups([...byName.keys()], unit).map((group) => group.files.map((name) => byName.get(name)!));
-    }
-    return (order ? orderLongestFirst(files, legacyResultName, order) : files).map((file) => [file]);
-  };
+  const admit = (files: string[]): string[] => unit ? orderLongestFirst(files, (file) => basename(file), unit)
+    : order ? orderLongestFirst(files, legacyResultName, order) : files;
   await runFileBand(effectiveParallel, serialFiles, admit(parallelFiles));
   await runFileBand(effectiveParallel, liveSerialFiles, admit(liveParallelFiles));
 }

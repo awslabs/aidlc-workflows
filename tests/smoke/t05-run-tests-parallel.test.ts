@@ -57,7 +57,6 @@ import {
   shardConfigForPlatform,
   type ShardConfig,
   unitFileWorkers,
-  weightedGroups,
 } from "../lib/test-sharding.ts";
 
 // The runner lives at <repo>/tests/run-tests.sh. We invoke it with `bash` to
@@ -276,22 +275,20 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
     expect(unitFileWorkers(UNIT_SHARD_CONFIG, "linux", 8, "not a number")).toBe(1);
   });
 
-  test("side-by-side unit files keep the binary affinity as one job and start the longest first", () => {
-    const files = readdirSync(join(TESTS_ROOT, "unit"))
-      .filter((file) => file.endsWith(".test.ts"))
-      .sort();
-    const jobs = weightedGroups(files, UNIT_SHARD_CONFIG);
-    expect(jobs.flatMap((job) => job.files).sort()).toEqual(files);
-    const weight = (file: string) => UNIT_SHARD_CONFIG.weights[file] ?? UNIT_SHARD_CONFIG.defaultSeconds;
-    const pair = jobs.find((job) => job.files.includes("t238-build-binaries.test.ts"));
-    expect(pair?.files).toEqual(["t238-build-binaries.test.ts", "t249-copilot-adapter.test.ts"]);
-    expect(pair?.weight).toBe(weight("t238-build-binaries.test.ts") + weight("t249-copilot-adapter.test.ts"));
-    const weights = jobs.map((job) => job.weight);
-    expect(weights).toEqual([...weights].sort((a, b) => b - a));
-    // A run holding none of a group's files has no job for it.
-    expect(weightedGroups(["t06-claude-md-paths.test.ts"], UNIT_SHARD_CONFIG).map((job) => job.files))
-      .toEqual([["t06-claude-md-paths.test.ts"]]);
-  });
+  test("side by side, the affinity group runs first and alone, in its order", () => {
+    const group = UNIT_SHARD_CONFIG.affinityGroups[0];
+    expect(group).toEqual(["t238-build-binaries.test.ts", "t249-copilot-adapter.test.ts"]);
+    const others = orderLongestFirst(["t-agent-conduct.test.ts", "t-answer-text-file.test.ts"], (name) => name, UNIT_SHARD_CONFIG);
+    const stems = [...group, ...others].map((name) => name.replace(/\.test\.ts$/, ""));
+    const r = run(["--unit", "--shard", "1/1", "-P", "4", "--no-llm", "--filter", `^(${stems.join("|")})$`], {
+      AIDLC_TEST_PACKAGE_READY: "1", AIDLC_TEST_UNIT_PARALLEL: "4",
+      // Each file loads and runs none of its cases: the order is the subject.
+      BUN_OPTIONS: "--test-name-pattern=t05-selects-no-case",
+    });
+    const markers = [...r.out.matchAll(/^=== (START|DONE) (\S+)/gm)].map((match) => `${match[1]} ${match[2]}`);
+    expect(markers.slice(0, 4), r.out).toEqual([`START ${group[0]}`, `DONE ${group[0]}`, `START ${group[1]}`, `DONE ${group[1]}`]);
+    expect(markers.slice(4, 6)).toEqual(others.map((name) => `START ${name}`));
+  }, PER_TEST_TIMEOUT);
 
   test.each([
     ["a shard with a trial cap", ["--shard", "1/1"], { AIDLC_TEST_UNIT_PARALLEL: "2" }, 2],
@@ -326,7 +323,7 @@ describe("t05 run-tests.sh --parallel flag (migrated from t05-run-tests-parallel
 
   test("side-by-side unit files start longest first by the unit weights", () => {
     const pair = ["t-agent-conduct.test.ts", "t-answer-text-file.test.ts"];
-    const expected = weightedGroups(pair, UNIT_SHARD_CONFIG).flatMap((job) => job.files);
+    const expected = orderLongestFirst(pair, (name) => name, UNIT_SHARD_CONFIG);
     // The pair proves the order only while its weights reverse name order.
     expect(expected, "pick two unit files whose weights reverse name order").toEqual([...pair].reverse());
     const r = run(["--unit", "--shard", "1/1", "-P", "2", "--no-llm", "--filter", "^(t-agent-conduct|t-answer-text-file)$"], {
