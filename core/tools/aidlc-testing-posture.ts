@@ -132,9 +132,11 @@ import {
   writeApprovedPlanCopy,
   writePlanApprovalReceipt,
   runtimeSessionHint,
+  scopeArg,
   writePlanApprovalResponse,
   writeProtectedResponse,
   isoTimestamp,
+  isScopeName,
   markProtectedQuestionReplied,
   readProtectedResponse,
   PROTECTED_RESPONSE_REPLIES_MAX,
@@ -3229,11 +3231,15 @@ export function codeGenerationPlanWaits(projectDir: string, units: ReadonlyArray
 
 /**
  * The step a completion gets while its plan waits: the plan's question is
- * `next`'s, and an isolated run's is its own `next`, since a bare `next` routes
- * the main workflow.
+ * `next`'s, and an isolated run's is its own `next` with the scope it started
+ * with, since a bare `next` routes the main workflow and, with no workflow,
+ * `next` takes the default scope, which the open attempt refuses. A recorded
+ * scope that is not a scope name is not put in a command.
  */
-export function codeGenerationPlanWaitsStep(isolated = false): string {
-  const next = isolated ? "next --stage code-generation --single" : "next";
+export function codeGenerationPlanWaitsStep(isolated?: { scope: string }): string {
+  const next = isolated === undefined
+    ? "next"
+    : `next --stage code-generation --single${isScopeName(isolated.scope) ? ` --scope ${scopeArg(isolated.scope)}` : ""}`;
   return `The code plan is not approved yet: run \`${aidlcToolInvocation("orchestrate")} ${next}\` and follow the step it prints.`;
 }
 

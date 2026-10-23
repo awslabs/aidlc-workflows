@@ -13,7 +13,7 @@
 // same commands, on every harness, admits them, says nothing and records nothing.
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { cleanupTestProject, seedBoltDagBatches, seededRecordDir, seededStateFile } from "../harness/fixtures.ts";
 import {
@@ -558,14 +558,16 @@ describe("one owner: the engine's own completion holds while the plan waits, and
 
 // An isolated run (`next --stage code-generation --single`) asks the same plan
 // question; its `report --single` waits for the same plan, and the guard leaves
-// that to it as well. Its step names the run's own `next`, since a bare `next`
-// routes the main workflow. The run closes outside the main workflow, so its
-// record is its STAGE_COMPLETED row.
+// that to it as well. Its step names the run's own `next` with the scope it
+// started with, since a bare `next` routes the main workflow and, with no
+// workflow, `next` takes the default scope, which the open attempt refuses. The
+// run closes outside the main workflow, so its record is its STAGE_COMPLETED row.
 describe("one owner: an isolated Code Generation run completes only once its plan lets it build", () => {
   const SINGLE = ["--stage", "code-generation", "--single"];
   const SINGLE_REPORT = "bun .claude/tools/aidlc.ts engine orchestrate report --single --stage code-generation --result completed";
-  const SINGLE_WAITS = "The code plan is not approved yet: run " +
-    "`bun .claude/tools/aidlc-orchestrate.ts next --stage code-generation --single` and follow the step it prints.";
+  const singleWaits = (scope: string) => "The code plan is not approved yet: run " +
+    `\`bun .claude/tools/aidlc-orchestrate.ts next --stage code-generation --single --scope ${scope}\` and follow the step it prints.`;
+  const SINGLE_WAITS = singleWaits("poc");
   const completions = (proj: string) => auditEvents(proj).filter((row) => row.event === "STAGE_COMPLETED").length;
   const ISOLATED: Array<{ name: string; waits: boolean; build: () => string }> = [
     { name: "no plan yet", waits: true, build: () => {
@@ -637,6 +639,25 @@ describe("one owner: an isolated Code Generation run completes only once its pla
     });
     expect(completions(proj)).toBe(before);
     expect(readFileSync(stateFile, "utf-8")).toBe(state);
+  });
+
+  test("no workflow and a scope typed for the run: the early report's step keeps that scope", () => {
+    const proj = createCodeGenerationProject();
+    created.push(proj);
+    unlinkSync(seededStateFile(proj));
+    const scoped = [...SINGLE, "--scope", "bugfix"];
+    next(proj, scoped);
+    writePlan(proj);
+    next(proj, scoped);
+    const rows = auditEvents(proj).length;
+    const ran = runNamed(proj, SINGLE_REPORT);
+    const step = JSON.parse(ran.stdout || "{}") as Step;
+    expect(step.message, ran.stdout).toBe(singleWaits("bugfix"));
+    const followed = runNamed(proj, namedCommands(step.message ?? "")[0]);
+    const after = JSON.parse(followed.stdout || "{}") as Step;
+    expect(after.kind, followed.stdout).not.toBe("error");
+    expect(after.stage, followed.stdout).toBe("code-generation");
+    expect(auditEvents(proj)).toHaveLength(rows);
   });
 });
 

@@ -13935,7 +13935,7 @@ function unitsOwingStage(projectDir: string, stage: GraphStage, context: UnitWor
 // its plan does, after the stage's own completion checks; the plan's question is
 // `next`'s. The remedy the person picked at the recovery question is theirs.
 // An isolated run builds the zero-Unit target, outside the main workflow's
-// Units, and its step names its own `next`. Null when it may go on.
+// Units, and its step names its own `next` with its scope. Null when it may go on.
 function codeGenerationCompletionWaits(
   projectDir: string,
   node: GraphStage,
@@ -13951,7 +13951,7 @@ function codeGenerationCompletionWaits(
   return codeGenerationCompletionPlanWaits(
     projectDir, stateContent, isolated ? [null] : codeGenerationReportTargets(projectDir, node, scope, stateContent, unit),
   )
-    ? printDirective(codeGenerationPlanWaitsStep(isolated))
+    ? printDirective(codeGenerationPlanWaitsStep(isolated ? { scope } : undefined))
     : null;
 }
 
