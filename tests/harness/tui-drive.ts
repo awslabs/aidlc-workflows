@@ -825,6 +825,72 @@ export async function declineOwnedModelUpgrade(
   return true;
 }
 
+const KIRO_V3_OFFER_TITLE_RE = /You're using Kiro CLI V2\.\s+Switch to V3 today\./;
+const KIRO_V3_OFFER_OPTIONS = ["Switch to V3 and upgrade my configs", "Remind me later", "Don't ask again"];
+const KIRO_V3_REMIND_LATER = 1;
+
+/** The key that moves Kiro CLI's V3 offer (2.33.1, at launch) to "Remind me later", or takes it. */
+export function kiroV3OfferNavigation(screen: string): "Up" | "Down" | "Enter" | null {
+  // The offer paints before the chat; an agent's reply quoting it sits above the input footer.
+  if (!KIRO_V3_OFFER_TITLE_RE.test(screen) || /ask a question or describe a task/.test(screen)) return null;
+  const options = screen.split(/\r?\n/).flatMap((line) => {
+    const match = /^\s*(❯\s*)?(Switch to V3 and upgrade my configs|Remind me later|Don't ask again)\s*$/.exec(line);
+    return match ? [{ selected: !!match[1], label: match[2] }] : [];
+  });
+  if (
+    options.map((option) => option.label).join("\0") !== KIRO_V3_OFFER_OPTIONS.join("\0") ||
+    options.filter((option) => option.selected).length !== 1
+  ) return null;
+  const selected = options.findIndex((option) => option.selected);
+  return selected === KIRO_V3_REMIND_LATER ? "Enter" : KIRO_V3_REMIND_LATER > selected ? "Down" : "Up";
+}
+
+/**
+ * Answer Kiro CLI's V3 offer "Remind me later", the answer the live legs give: it writes only
+ * Kiro's snooze date (v3Prompt.snoozeUntil in its data.sqlite3), none of its
+ * configs, so no fixture gate applies; the release journey's project is not
+ * one. The other two answers change the machine's Kiro and are never sent:
+ * Enter goes only on a settled screen with "Remind me later" selected. No
+ * one-attempt marker: an offer painted again was not taken, and answering it
+ * again is right. The keys go through the person-turn record like the trust
+ * prompt's; at launch that turn comes before every gate, so it backs nothing.
+ */
+export async function remindKiroV3OfferLater(
+  backend: Pick<Backend, "capture" | "send">,
+  session: string,
+  screen: string,
+  timing: FixtureMenuTiming = {},
+): Promise<boolean> {
+  if (!kiroV3OfferNavigation(screen)) return false;
+  const now = timing.now ?? Date.now;
+  const pause = timing.sleep ?? sleep;
+  const deadline = now() + remainingOperationTimeoutMs(LIVE_STARTUP_TIMEOUT_MS, { deadlineMs: timing.deadlineMs, phase: "Kiro V3 offer" })!;
+  let previous = "";
+  let stableSince = now();
+  const moves: string[] = [];
+  while (now() < deadline) {
+    screen = await backend.capture(session, false, "physical");
+    const navigation = kiroV3OfferNavigation(screen);
+    if (!navigation) return false;
+    if (screen !== previous) stableSince = now();
+    previous = screen;
+    if (now() - stableSince < DEFAULT_STABLE_MS) {
+      await pause(POLL_INTERVAL_MS);
+      continue;
+    }
+    if (navigation === "Enter") {
+      await backend.send(session, "Enter", false, true);
+      writeTuiTrace(session, "kiro_v3_offer_remind_later", { keys: [...moves, "Enter"], screen });
+      return true;
+    }
+    if (moves.length === 2) break;
+    moves.push(navigation);
+    await backend.send(session, navigation, false, true);
+    await pause(POLL_INTERVAL_MS);
+  }
+  throw new Error(`Kiro's V3 offer never settled on Remind me later; refusing Enter\n---- last pane ----\n${screen}`);
+}
+
 type TuiPatternView = TuiTextLayout | "auto";
 
 function patternView(a: Args): TuiPatternView {
@@ -886,7 +952,10 @@ async function cmdWait(backend: Backend, a: Args): Promise<void> {
     }
     lastViews = views;
     const screen = views.physical;
-    if (await declineOwnedModelUpgrade(backend, session, screen, deadline)) {
+    if (
+      await declineOwnedModelUpgrade(backend, session, screen, deadline) ||
+      await remindKiroV3OfferLater(backend, session, screen, { deadlineMs: deadline })
+    ) {
       prev = "";
       stableSince = 0;
       continue;
