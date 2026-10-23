@@ -62,6 +62,7 @@ import {
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
   BLOCKING_SENSOR_OVERRIDE_DECISION,
   BLOCKING_SENSOR_OVERRIDE_OPTIONS,
+  blockingSensorPicks,
   BoltIdentityError,
   type CheckboxState,
   checkSummaryConfirmationEvidence,
@@ -4045,46 +4046,18 @@ function hasBlockingSensorOverrideAuthorization(
     row.event === "DECISION_RECORDED" ||
     row.event === "QUESTION_ANSWERED"
   );
-  const answers = interactions.filter((row) =>
-    row.event === "QUESTION_ANSWERED" &&
-    auditField(row.block, "Details") === BLOCKING_SENSOR_OVERRIDE_CHOICE
-  );
-
-  for (const answer of answers) {
+  for (const [answer, choice] of blockingSensorPicks(rows, slug)) {
+    if (choice !== BLOCKING_SENSOR_OVERRIDE_CHOICE) continue;
     if (!boundaries.every((boundary) => auditEventIsAfter(answer, boundary))) {
       continue;
     }
     if (
-      !interactions.every((row) =>
+      interactions.every((row) =>
         row === answer || auditEventIsAfter(answer, row)
       )
     ) {
-      continue;
+      return true;
     }
-    const decision = interactions.findLast((row) => {
-      if (
-        row.event !== "DECISION_RECORDED" ||
-        row.shard !== answer.shard ||
-        row.pos >= answer.pos ||
-        auditField(row.block, "Decision") !== BLOCKING_SENSOR_OVERRIDE_DECISION
-      ) {
-        return false;
-      }
-      const options = (auditField(row.block, "Options") ?? "")
-        .split(",")
-        .map((option) => option.trim());
-      return BLOCKING_SENSOR_OVERRIDE_OPTIONS.every((option) =>
-        options.includes(option)
-      );
-    });
-    if (!decision) continue;
-    const humanTurn = rows.some((row) =>
-      row.event === "HUMAN_TURN" &&
-      row.shard === answer.shard &&
-      row.pos > decision.pos &&
-      row.pos < answer.pos
-    );
-    if (humanTurn) return true;
   }
   return false;
 }

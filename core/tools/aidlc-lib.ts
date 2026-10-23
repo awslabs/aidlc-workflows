@@ -12490,6 +12490,54 @@ export const BLOCKING_SENSOR_OVERRIDE_OPTIONS = [
   BLOCKING_SENSOR_OVERRIDE_CHOICE,
 ] as const;
 
+// The person's picks at a stage's blocking-sensor question: each answer that
+// closes an open "Blocking gate sensor failure" decision offering both choices
+// (the nextOpenDecision pairing), in the decision's shard with a HUMAN_TURN
+// between the two, read as the option it names: its label, or its number on
+// the decision's own Options. The override's authorization and the review
+// attempt floor both read this one pairing.
+export function blockingSensorPicks(
+  rows: ReadonlyArray<AuditShardEvent>,
+  slug: string,
+): Map<AuditShardEvent, (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number]> {
+  const picks = new Map<AuditShardEvent, (typeof BLOCKING_SENSOR_OVERRIDE_OPTIONS)[number]>();
+  let open: AuditShardEvent | null = null;
+  for (const row of sortAttemptEvents(rows.filter((row) =>
+    DECISION_PAIRING_EVENTS.has(row.event) && auditBlockField(row.block, "Stage") === slug &&
+    !auditBlockField(row.block, "Workflow")?.startsWith("single-stage:")
+  ))) {
+    const decision = open;
+    if (row.event === "DECISION_RECORDED") open = row;
+    else if (nextOpenDecision(decision?.block ?? null, row.event, row.block) === null) open = null;
+    if (
+      decision === null || row.event !== "QUESTION_ANSWERED" || decision.shard !== row.shard ||
+      auditBlockField(decision.block, "Decision") !== BLOCKING_SENSOR_OVERRIDE_DECISION
+    ) continue;
+    const offered = (auditBlockField(decision.block, "Options") ?? "").split(",").map((option) => option.trim());
+    if (!BLOCKING_SENSOR_OVERRIDE_OPTIONS.every((option) => offered.includes(option))) continue;
+    if (!rows.some((turn) =>
+      turn.event === "HUMAN_TURN" && turn.shard === row.shard && turn.pos > decision.pos && turn.pos < row.pos
+    )) continue;
+    const details = auditBlockField(row.block, "Details") ?? "";
+    const numbered = /^(\d+)[.)]?$/.exec(details);
+    const named = numbered
+      ? offered[Number(numbered[1]) - 1]
+      : offeredChoiceLabel(details, BLOCKING_SENSOR_OVERRIDE_OPTIONS)?.choice;
+    const choice = BLOCKING_SENSOR_OVERRIDE_OPTIONS.find((option) => option === named);
+    if (choice !== undefined) picks.set(row, choice);
+  }
+  return picks;
+}
+
+// The answers where the person picked Fix findings: each starts a new review
+// attempt for the stage, as a Request Changes does, because the fix rewrites
+// the reviewed document and the review before it no longer covers it.
+export function blockingSensorFixes(rows: ReadonlyArray<AuditShardEvent>, slug: string): Set<AuditShardEvent> {
+  return new Set([...blockingSensorPicks(rows, slug)].flatMap(([row, choice]) =>
+    choice === BLOCKING_SENSOR_OVERRIDE_OPTIONS[0] ? [row] : []
+  ));
+}
+
 const GATE_RESOLUTION_EVENTS = new Set([
   "GATE_APPROVED",
   "GATE_REJECTED",
@@ -19781,8 +19829,9 @@ export function reviewAttemptWindow(
   auditRows?: AuditShardEvent[],
 ): AttemptView {
   const allEvents = auditRows ?? readAuditShardEvents(projectDir);
+  const sensorFixes = blockingSensorFixes(allEvents, stage.slug);
   const events = sortAttemptEvents(
-    allEvents.filter((row) => REVIEW_RECEIPT_EVENTS.has(row.event)),
+    allEvents.filter((row) => REVIEW_RECEIPT_EVENTS.has(row.event) || sensorFixes.has(row)),
   );
   const perUnit = stage.for_each === "unit-of-work";
   const artifactPerUnit =
@@ -19811,7 +19860,7 @@ export function reviewAttemptWindow(
       (event.event === "STAGE_JUMPED" && stageJumpReaches(event.block, stage.slug));
     if (!boundary && auditBlockField(event.block, "Stage") === stage.slug) {
       boundary =
-        (event.event === "GATE_REJECTED" &&
+        ((event.event === "GATE_REJECTED" || sensorFixes.has(event)) &&
           !(unitScopedRejections && auditBlockField(event.block, "Unit"))) ||
         (event.event === "STAGE_STARTED" &&
           !unitMajor && !unitFloored?.has(event) &&
@@ -20065,7 +20114,7 @@ const REVIEW_ACCOUNTING_EVENTS = new Set([
 
 // Count requests in the current stage/unit attempt. The same chronological
 // floors used by receipt freshness reset the budget on workflow start, jump,
-// stage re-entry, or gate rejection. A matching BOLT_STARTED is a stronger
+// stage re-entry, gate rejection, or a Fix findings pick. A matching BOLT_STARTED is a stronger
 // per-unit floor because the forked audit inherits the main workflow's prior
 // rows; it is also the proof that `--unit` belongs to an actual Bolt attempt.
 export function reviewAttemptAccounting(
@@ -20080,10 +20129,11 @@ export function reviewAttemptAccounting(
     eventFilter?: (event: AuditShardEvent) => boolean;
   } = {},
 ): ReviewAttemptAccounting {
+  const sensorFixes = blockingSensorFixes(attemptView.allEvents, stage.slug);
   const events = sortAttemptEvents(
     attemptView.allEvents.filter(
       (row) =>
-        REVIEW_ACCOUNTING_EVENTS.has(row.event) &&
+        (REVIEW_ACCOUNTING_EVENTS.has(row.event) || sensorFixes.has(row)) &&
         (options.eventFilter?.(row) ?? true),
     ),
   );
@@ -20206,7 +20256,7 @@ export function reviewAttemptAccounting(
       boltSlug = null;
       continue;
     }
-    if (entry.event === "GATE_REJECTED") {
+    if (entry.event === "GATE_REJECTED" || sensorFixes.has(entry)) {
       const gateStages = (
         auditBlockField(entry.block, "Gate Stages") ??
           auditBlockField(entry.block, "Stage") ??

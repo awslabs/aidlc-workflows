@@ -312,7 +312,10 @@ override decision. The conductor records a `DECISION_RECORDED` offering
 the exact `QUESTION_ANSWERED`, then retries the gate report with
 `--override-blocking-sensors --user-input "Override blocking sensors"`. A bare
 flag, an unoffered/paraphrased choice, a missing human-backed receipt, or
-autonomous mode is refused. A successful override records the sensor ids,
+autonomous mode is refused. The recorded answer names its option by label or
+by its number on the offered list. Fix findings starts a new attempt the way
+Request Changes does: the reviewed outputs open for the fix, and the retried
+report needs a fresh review. A successful override records the sensor ids,
 optional detail paths, and evaluation reasons on `STAGE_AWAITING_APPROVAL`.
 Revalidating an already-open gate emits a fresh row with `Revalidated: true`,
 consuming the authorization receipt instead of leaving it reusable.
