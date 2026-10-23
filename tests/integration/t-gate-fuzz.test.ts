@@ -8,9 +8,10 @@
 // wiring and every walked scope, and replays any run by its id.
 //
 // Today's main still has tools that read the words, so a run fails in known ways. Each such group (its invariant and
-// what fails) is listed in tests/fixtures/gate-fuzz/baseline.json, and this test fails only on a group that is not
-// there: a new reader fails at once. The slice that removes a reader deletes its lines; at zero the file goes and every
-// failure fails. AIDLC_GATE_FUZZ_WRITE_BASELINE=1 writes the groups this run met as the baseline instead, and only those.
+// what fails) is listed in tests/fixtures/gate-fuzz/baseline.json with the code path behind it, and this test fails
+// only on a group that is not there: a new reader fails at once. The slice that removes a reader deletes its lines; at
+// zero the file goes and every failure fails. AIDLC_GATE_FUZZ_WRITE_BASELINE=1 writes the groups this run met as the
+// baseline instead, and only those, keeping the reason of each group already listed.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -37,7 +38,9 @@ describe("the engine does not read the person's words (gate fuzz, short mode)", 
   });
 
   test(`${RUNS} seeded runs at the questions the engine knows`, async () => {
-    const known = new Set<string>(existsSync(BASELINE) ? (JSON.parse(readFileSync(BASELINE, "utf-8")) as { groups: string[] }).groups : []);
+    // Each known group with its one-line reason: the code path on main that makes a run fail that way.
+    const reasons: Record<string, string> = existsSync(BASELINE) ? (JSON.parse(readFileSync(BASELINE, "utf-8")) as { groups: Record<string, string> }).groups : {};
+    const known = new Set<string>(Object.keys(reasons));
     const questions = Object.keys(FIXTURES);
     const fresh: string[] = [];
     const met = new Set<string>();
@@ -58,7 +61,8 @@ describe("the engine does not read the person's words (gate fuzz, short mode)", 
     console.log(`gate fuzz: ${RUNS} runs, ${failing} with a failure, ${fresh.length} outside the baseline; groups met: ${[...met].sort().join(" | ")}`);
     if (process.env.AIDLC_GATE_FUZZ_WRITE_BASELINE === "1") {
       mkdirSync(join(BASELINE, ".."), { recursive: true });
-      writeFileSync(BASELINE, `${JSON.stringify({ seed: SEED, runs: RUNS, groups: [...met].sort() }, null, 2)}\n`);
+      const groups = Object.fromEntries([...met].sort().map((name) => [name, reasons[name] ?? ""]));
+      writeFileSync(BASELINE, `${JSON.stringify({ seed: SEED, runs: RUNS, groups }, null, 2)}\n`);
       return;
     }
     expect(fresh, "a failure group outside tests/fixtures/gate-fuzz/baseline.json: a tool reads the person's words or refuses them in a new way").toEqual([]);

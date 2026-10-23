@@ -1,16 +1,14 @@
 {
   "seed": 20261022,
   "runs": 24,
-  "groups": [
-    "I1 GATE_REJECTED with no unspent reply of the person's",
-    "I2 GATE_APPROVED names no message",
-    "I2 GATE_REJECTED names no message",
-    "I2 QUESTION_ANSWERED names no message",
-    "I2 SUMMARY_CONFIRMATION_RECORDED names no message",
-    "I2 VERIFICATION_COMMAND_RECORDED names no message",
-    "I2 the gate-words record dropped some of the person's words",
-    "I5 the person's words copied into GATE_REJECTED.Reason",
-    "I7 one reply backed GATE_REJECTED and GATE_REJECTED",
-    "STOP the Stop hook kept an attended turn from ending (nothing on record that the agent waits)"
-  ]
+  "groups": {
+    "I1 GATE_REJECTED with no unspent reply of the person's": "rejectSwarmCheckpoint (core/tools/aidlc-swarm-checkpoints.ts) writes one GATE_REJECTED per Unit of the batch from one reply, so each row after the first stands on a reply the first already spent",
+    "I2 GATE_REJECTED names no message": "rejectSwarmCheckpoint writes the batch reject's GATE_REJECTED rows with the protected response's words (readProtectedResponse) and no Message Id; `bolt swarm-checkpoint --action reject` takes no --message",
+    "I2 QUESTION_ANSWERED names no message": "handleAnswer (core/tools/aidlc-log.ts) with no --message and no question Message Id to inherit takes Person Reply from latestPersonTurn and writes no Message Id",
+    "I2 SUMMARY_CONFIRMATION_RECORDED names no message": "the summary confirmation in handleAnswer (core/tools/aidlc-log.ts) takes Person Reply from latestPersonTurn and writes no Message Id",
+    "I2 VERIFICATION_COMMAND_RECORDED names no message": "the verification command answer in handleAnswer (core/tools/aidlc-log.ts) takes Person Reply from the protected response (protectedPersonsWords) and writes no Message Id",
+    "I2 the gate-words record dropped some of the person's words": "recordGateWords (core/tools/aidlc-lib.ts) keeps no message over GATE_WORDS_MAX_CHARS (8000) and at most GATE_WORDS_MAX_MESSAGES (8) a chat, and marks the rest dropped",
+    "I5 the person's words copied into GATE_REJECTED.Reason": "rejectSwarmCheckpoint with no --reason writes changeRequestWords of the person's words into Reason and Feedback",
+    "I7 one reply backed GATE_REJECTED and GATE_REJECTED": "rejectSwarmCheckpoint's one GATE_REJECTED per Unit of the batch: one reply backs every row"
+  }
 }
