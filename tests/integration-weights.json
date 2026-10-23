@@ -5,7 +5,6 @@
     "t-custom-harness-compile": 42.6,
     "t-e2e-isolated-runner": 243.5,
     "t-e2e-native-cancellation": 94.7,
-    "t-gate-fuzz": 168.2,
     "t-guard-matrix-classic": 817.9,
     "t-guard-matrix-composed": 295.2,
     "t-guard-matrix-doc-delete": 1070.9,

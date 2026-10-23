@@ -815,7 +815,6 @@ export const ALLOWED: Record<string, Allowed> = {
   [`${HOOK}#pickedLabels`]: { use: "decides", why: "a question box's payload, host structure: the labels the box reports picked, for the HUMAN_TURN row's Picked", from: [`${HOOK}#respond`] },
   [`${HOOK}#carriesSeveralPicks`]: { use: "decides", why: "a question box's payload, host structure: whether the box reports more than one pick", from: [`${HOOK}#respond`] },
   [`${LIB}#emptyPickerResult`]: { use: "decides", why: "a question box's payload, host structure: whether a dismissed box carried any answer", from: [`${HOOK}#respond`] },
-  [`${HOOK}#pickerFreeText`]: { use: "decides", why: "a question box's payload, host structure: a box's free text that is one of the box's own labels is that pick", from: [`${HOOK}#respond`] },
   [`${LIB}#boxPicksAddANote`]: { use: "decides", why: "a question box's pick, host structure (reading-lead, S7a answers Q3): the latest box reply's labels, never typed words" },
   [`${LIB}#recordGateWords`]: { use: "keeps", why: "the gate-words record's writer: keeps a typed message for the stage gate's record" },
   [`${LIB}#readGateWords`]: { use: "keeps", why: "the gate-words record's own read: checks the file's shape" },
@@ -927,6 +926,7 @@ export const STILL_TO_GO: Record<string, ToGo> = {
   [`${ASK}#recordPlanApprovalAnswer`]: { use: "decides", slice: "S3", row: "R8", why: "the plan answer checked against a pick read from the kept replies" },
   [`${ASK}#planApprovalReplyEditableFiles`]: { use: "decides", slice: "S3", row: "R8", why: "a pick read from the latest kept reply" },
   [`${READER}#exactOptionPick`]: { use: "decides", slice: "S3", row: "R4, R6, R8, R12, R3", why: "the exact-pick reader over typed words; after S3 only a box's labels reach it (then ALLOWED as host structure)", from: [`${LIB}#changeRequestWords`, `${LIB}#consumeSharedDirectiveAsk`, `${ASK}#notePlanApprovalAskReply`, `${ASK}#planApprovalReplyEditableFiles`, `${ASK}#recordPlanApprovalAnswer`, `${READER}#protectedQuestionPick`, `${POSTURE}#recordPlanApprovalHumanResponse`] },
+  [`${HOOK}#pickerFreeText`]: { use: "decides", slice: "S2a", row: "R34", why: "reads a box's free text as a pick when it equals a label, decoration and case aside", from: [`${HOOK}#respond`] },
   [`${LIB}#changeRequestWords`]: { use: "decides", slice: "S3", row: "R3", why: "the line-is-only-a-pick filter over the checkpoint reject's words", from: [`${UNIT_CP}#rejectConstructionCheckpoint`, `${SWARM_CP}#rejectSwarmCheckpoint`] },
   // S9: the confession tripwires go (R30 over the checkpoint rejects' kept words; O3 over the agent's text).
   [`${LIB}#selfAttributedDecisionMarker`]: { use: "decides", slice: "S9", row: "R30", why: "a phrase list over the checkpoint reject's kept words", from: [`${UNIT_CP}#rejectConstructionCheckpoint`, `${STATE}#handleReject`, `${SWARM_CP}#rejectSwarmCheckpoint`] },
@@ -956,3 +956,24 @@ export const STILL_TO_GO: Record<string, ToGo> = {
   [`${LIB}#withdrawProtectedReplyWords`]: { use: "decides", slice: "S6", row: "R28 (reading-lead: S6a)", why: "as above, for the protected response", from: [`${ORCH}#withdrawSettingWords`] },
   [`${ASK}#withdrawPlanApprovalReplies`]: { use: "decides", slice: "S6", row: "R28 (reading-lead: S6a)", why: "as above, for the plan ask's replies", from: [`${ORCH}#withdrawSettingWords`] },
 };
+
+/**
+ * The text-blind fuzz's failure groups today's main still has (tests/harness/text-blind-fuzz.ts), each named with the
+ * slice that removes it; `group` is the failure's group as the fuzz prints it. A group no row names fails the fuzz.
+ */
+export interface FuzzRow {
+  group: string;
+  slice: Slice;
+  row: string;
+  why: string;
+}
+export const FUZZ_STILL_TO_GO: readonly FuzzRow[] = [
+  { group: "I2 QUESTION_ANSWERED names no message", slice: "S2a", row: "R24", why: "handleAnswer with no --message takes Person Reply from latestPersonTurn and names no message; the window names it" },
+  { group: "I2 SUMMARY_CONFIRMATION_RECORDED names no message", slice: "S2a", row: "R25", why: "the summary confirmation takes Person Reply from latestPersonTurn and names no message" },
+  { group: "I2 VERIFICATION_COMMAND_RECORDED names no message", slice: "S2a", row: "R24", why: "the verification answer takes Person Reply from the protected response and names no message" },
+  { group: "I2 GATE_REJECTED names no message", slice: "S3", row: "R5", why: "a batch reject (rejectSwarmCheckpoint) writes the protected response's words with no Message Id; S3 gives the checkpoint commands --message" },
+  { group: "I2 GATE_APPROVED names no message", slice: "S3", row: "R5", why: "a Unit or batch checkpoint approval writes the protected response's words with no Message Id; as above" },
+  { group: "I2 REQUEST_ROUTED names no message", slice: "S3", row: "R13", why: "a routing pick records no Message Id; S3 has the agent run the choice's own command on the message" },
+  { group: "I5 the person's words copied into QUESTION_ANSWERED.User Input", slice: "S3", row: "R8", why: "a plan's Request Changes copies their words into User Input; S3 records the agent's choice as handed" },
+  { group: "I5 the record differs in file aidlc/spaces/default/intents/fixture-<HEX>/.aidlc-engine/gate-words/<CHAT#>.json", slice: "S2a", row: "R34", why: "pickerFreeText: a box's free text equal to a label (decoration aside) is taken as a pick, so its words are not kept" },
+];
